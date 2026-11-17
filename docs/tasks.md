@@ -89,24 +89,18 @@ than the stage's expected time. A person's own task is Late only after its due d
 
 ## Asks and OKs
 
-An ask is a requirement with a person's name on it, added to one task for this visit to its stage. The task does not
-leave the stage until it is answered, withdrawn or pushed past. There are two kinds:
-
-- **Answer:** a question, with choices or free text.
-- **OK:** approve, or send back with notes. The notes go to the bot word for word.
+An ask is an OK: a requirement with a person's name on it, added to one task for this visit to its stage. The task does
+not leave the stage until it is answered, withdrawn or pushed past. The person approves, or sends it back with notes,
+and the notes go to the bot word for word. A question is not an ask: a bot asks it in chat, with a ❓ (below).
 
 ```sh
-tico task ask <id> --to <person> "Which plan do new signups get?" --choices basic,pro --version N
 tico task ask <id> --to <person> --kind ok "Approve the launch post" --show page:12 --version N
 tico task ask <id> --withdraw -m "why"
 ```
 
-An ask may carry a short title of at most 60 characters (`--title "Launch note tone"`). The decision view shows it as
-the heading, with the full question once under it; an ask without one is headed by its question.
-
 A bot has one ask of its own open on a task at a time: asking again replaces it. An ask never expires. A person
-answers it from Needs you. A bot named on one answers with `tico task answer <id> <requirement> ok|no|again|<answer>`,
-or gives it to someone else with `tico task give <id> <requirement> --to <person>`.
+answers it from Needs you. A bot named on one answers with `tico task answer <id> <requirement> ok|no`, or gives it to
+someone else with `tico task give <id> <requirement> --to <person>`.
 
 Something that leaves the company or spends money (send this email, publish this, spend this) waits on an OK bound to
 exactly what the person was shown. The person OKs it from its preview, by their own click; an Assistant or a token
@@ -114,6 +108,30 @@ acting for them does not count. The OK is used once, for that content only. A ch
 there is no task, Tico files one in General.
 
 Work a person has to go and do is a sub-task for them, not an ask. An @ in the conversation never makes a task wait.
+
+### ❓ on a bot's message
+
+A bot that needs one person's reply marks its own chat message ❓ for them. Nothing is filed and nothing is sent: the
+message shows a small, muted "?" at its top right and is in that person's Needs you, under its task's title (or the
+bot's name in a direct chat). In Flow the item is that chat, at the marked message, with its composer: a reply there
+clears it and Flow moves on.
+
+```sh
+tico task ask <id> --to <person> "Should the launch note go out on Friday?"   # on the task's chat
+tico chat ask --to <person> "Should the launch note go out on Friday?"        # in a direct chat
+```
+
+- Only a bot marks, only its own message, and only for a person who can read that chat. The message follows the "Asks
+  to a person" rule like any ask.
+- A bot has one open ❓ per chat: a new one replaces it, and the bot is told so. It puts every question to a person in
+  one ❓, numbered when there are several.
+- A bot can't say done, move its task on or close it while its own ❓ there is open: it waits for the reply, or takes
+  the question back first by deleting its message (`tico thread delete <message id>`).
+- It clears when that person replies in the chat (or their Assistant does, on their word), when the task is done,
+  closed, merged or deleted, or when the message is deleted.
+- While it is open the never-stuck ladder does not chase the bot. Once the person replies, the reply is progress and
+  the task is back on the ladder; a bot's snooze of the task ends.
+- Give to… hands it to another person; Snooze hides it from you until then, and a new ❓ is a new item.
 
 ## Snooze
 
@@ -189,7 +207,7 @@ A person hands a task back to its owner with **Try again** (`POST /api/v2/tasks/
 
 ## Needs you
 
-Needs you is the one list a person checks, and it holds only what someone asks of them: every open question and OK
+Needs you is the one list a person checks, and it holds only what someone asks of them: every open ❓ and OK
 with their name, every @ of them by a person until they reply, and two things only they can fix before a task can move:
 every Paused cause they can fix (one row per cause, not per task) and a private task that waits on someone being let
 in. A task they own with nothing asked of them is in Tasks, not Needs you, and so is a task the never-stuck ladder could
@@ -203,13 +221,9 @@ BotOps asks for it while it cannot run. The question goes when the task moves on
 
 `GET /api/v2/needs-you` returns the list; `?count=true` returns its one number (beside Flow in the Tasks header; the sidebar shows Flow's mark while it is above 0, and a phone's Flow tab turns jade).
 
-When Flow (the screen that walks the list one ask at a time) opens, Tico gives its opinion on each ask: the button it
-would press and one line of 80 characters or fewer saying why, with a note ready when it would send back, plus a
-hidden score the screen sorts by. It is worked out then, not on a timer, with the same model as the daily update
-drafts, from the task alone, never from who is looking. So one opinion per ask is shared by everyone the ask waits
-on, for 24 hours or until the ask's words, choices or shown page change. Tico only advises: a person presses the
-button. With no model, the ask shows plain buttons. `POST /api/v2/flow/opinions` takes up to 30 Needs-you ids and
-answers at once: `ready`, `pending` (ask again) or `none`.
+When Flow (the screen that walks the list one ask at a time) opens, it orders the items by a hidden score that the
+screen never shows. The score is worked out then, not on a timer, from the task alone, never from who is looking. Flow
+shows no suggestion, pick or note: a person reads the ask and presses the button.
 
 Flow no longer suggests rules at All done. Rules people added there before keep binding their page check: Jev still
 asks each of the next page judged at that check, as one more yes/no part beside the check's own. To add a rule now,
@@ -219,7 +233,7 @@ rule (`skills/add-to-flow/SKILL.md`).
 **Want more? Ping your bots.** All done offers this button: each bot you manage gets one message from you pointing
 at Tico's `skills/add-to-flow/SKILL.md`, and the screen says "Asking your bots" while their questions come in. A bot
 reads what is written down first and asks only what would change what it does next: at most three, each its own task
-of its own with one free-form ask to you, so they arrive in Flow as they are filed. Asking nothing is a good result.
+with one question to you (a ❓ on the task's chat), so they arrive in Flow as they are filed. Asking nothing is a good result.
 The Flow mark on a bot's page, or a team's, opens Flow on that bot's (or team's bots') items only, and its ping goes to
 them, whoever manages them. A pinged bot asks the person who pinged it, for a day, even when they are not its manager
 ([Reach](reach.md)); a bot that uses the skill unprompted asks its own supervisor. A supervisor bot answers only from a
@@ -251,8 +265,8 @@ tico task tree <id>
 A bot can have another model look at its work without a second bot:
 
 ```sh
-tico task child <parent-id> --check-model grok --role review --title "Review PR 655" --body "https://github.com/..."
-tico task child <parent-id> --check-model codex:gpt-6.1-sol --title "Check the migration plan" --body "..."
+tico task child <parent-id> --check-model grok --role review --title "Review PR 655" --message "https://github.com/..."
+tico task child <parent-id> --check-model codex:gpt-6.1-sol --title "Check the migration plan" --message "..."
 ```
 
 `--check-model` takes a runtime or `runtime:model`. With no value it takes the company's check model (Settings >
@@ -272,10 +286,10 @@ both tasks can do this; bots cannot.
 
 | Part of the dropped task | After the merge |
 |---|---|
-| Description, files and pages | Added to the kept task under "From #N", with its title. Files and pages are linked, not copied |
+| First message, files and pages | Added to the kept task under "From #N", with its title. Files and pages are linked, not copied |
 | Open sub-tasks | Move under the kept task, before the close, so they stay open |
 | Comments | Stay on the dropped task. The kept task's note says how many |
-| Open asks and OKs | End with it. The kept task's note lists each question, so its owner can ask again |
+| Open asks, OKs and ❓ | End with it. The kept task's note lists each one, so its owner can ask again |
 | Followers and requesters | Added to the kept task. Teammates who asked for the merged task also follow the kept one, so they hear when it is done |
 | Labels and related links | Added to the kept task. Its own stage, due date and pipeline stay; the other's due date is in the note |
 | The task itself | Closed with "Archiving this one as a duplicate of #N; its details were added there.", related as `duplicate_of` |
@@ -333,10 +347,10 @@ tico task comment <id> "Use the August numbers." --steer
 tico task comment <id> "For later." --defer 4h
 ```
 
-A comment that names a bot's open question on the task (`ask`: its requirement id, in `POST
+A comment that names a bot's open OK on the task (`ask`: its requirement id, in `POST
 /api/v2/tasks/{id}/comments`) is a reply to it: it is written to the bot that asked and wakes it, even when that bot is
-not the one the task's comments go to first, and the question stays open. The person the question waits on may wake
-the bot this way. In Flow, Ask back (under ⋯ on a question) sends the answer box's words this way; Send answers it.
+not the one the task's comments go to first, and the OK stays open. The person the OK waits on may wake the bot this
+way. A bot's ❓ is answered by a reply in its chat, not by a comment.
 
 A comment is talk. It is not progress: a bot that only comments has still stopped early.
 
@@ -372,7 +386,7 @@ Besides its owner, a task can list people or bots under a **role**, a short name
 
 A task may name one **Human**: the person accountable for it, whoever owns it, such as the developer on a ticket a bot
 owns. It is optional. The owner still has the work and is the one woken; the Human is the person the task falls to
-first. An OK, a page or a question that names nobody goes to them and is in their Needs you, and the owner bot's wake
+first. An OK or a page that names nobody goes to them and is in their Needs you, and the owner bot's wake
 tells it to ask them. Naming one who cannot read a private task
 is refused (it adds no reader). A Human who left, cannot sign in or can no longer read the task is passed over for the
 rest of the ladder. Task create and update take `"human": "human:charlie"` (`""` takes them off); the task carries
@@ -521,14 +535,16 @@ tico task reassign --from "Dev/Ideas" <owner>                      # a person's:
 tico task snooze --from "Dev/Ideas" [--until date]                 # a person's: every open task in a stage
 tico task close <id> -m "why" --version N
 tico task reassign <id> <owner> -m "why" --version N
-tico task ask <id> --to <person> "line" [--title "short"] [--kind ok] [--choices a,b] [--show page:12] --version N
+tico task ask <id> --to <person> "line" [--kind ok] [--show page:12] --version N
 tico task ask <id> --withdraw
-tico task answer <id> <requirement> ok|no|again|<answer> [-m "note"] --version N
+tico task ask <id> --to <person> "line"          # a ❓ on the task's chat
+tico chat ask --to <person> "line" [--conversation <id>]
+tico task answer <id> <requirement> ok|no [-m "note"] --version N
 tico task give <id> <requirement> --to <person> --version N
 tico task file --parent <id> [--pipeline general] [--owner X] "title"
 tico task snooze <id> [--until date] -m "why" --version N
 tico task create --owner X --title "..." [--pipeline general] [--parent <id>]
-tico task update <id> [--title] [--body] [--due] [--label] [--goal] --version N
+tico task update <id> [--title] [--due] [--label] [--goal] --version N
 tico task list [--status open|done|closed] [--owner X] [--snoozed only|all]
 ```
 
@@ -540,7 +556,7 @@ refusal never counts toward a bot's quarantine.
 
 | Route | Body | Does |
 |---|---|---|
-| `POST /api/v2/tasks` | `title, body, owner, pipeline?, parent?, due?, labels?, private?` | create |
+| `POST /api/v2/tasks` | `title, message, owner, pipeline?, parent?, due?, labels?, private?` | create |
 | `GET /api/v2/tasks/{id}` | | the task, full |
 | `GET /api/v2/tasks` | | brief rows |
 | `POST /api/v2/tasks/{id}` | `version` + fields | field edits only |
@@ -554,13 +570,15 @@ refusal never counts toward a bot's quarantine.
 | `POST /api/v2/tasks/{id}/snooze` | `until?, why?, version` | snooze |
 | `POST /api/v2/tasks/{id}/unsnooze` | `why?` | unsnooze |
 | `POST /api/v2/tasks/{id}/try-again` | `why?` | a person hands a task back to its owner |
-| `POST /api/v2/tasks/{id}/asks` | `to, line, kind?, choices?, show?, version` | ask a person |
+| `POST /api/v2/tasks/{id}/asks` | `to, line, kind?, show?, version` | ask a person |
 | `DELETE /api/v2/tasks/{id}/asks/{requirement_id}` | `why?` | withdraw |
-| `POST /api/v2/tasks/{id}/asks/{requirement_id}/answer` | `value, note?, version` | ok, no, again, or an answer |
+| `POST /api/v2/tasks/{id}/asks/{requirement_id}/answer` | `value, note?, version` | ok or no |
 | `POST /api/v2/tasks/{id}/asks/{requirement_id}/give` | `to, version` | give it to another person |
-| `POST /api/v2/tasks/{id}/asks/{requirement_id}/thumbs` | `up, note?` | was this worth asking |
 | `POST /api/v2/answers/{id}/undo` | | take an answer back |
 | `POST /api/v2/task-bulk` | `filter, action, ...` | people only |
+| `POST /api/v2/tasks/{id}/questions` | `to, text` | a bot's ❓ on the task's chat |
+| `POST /api/v2/questions` | `to, text, conversation_id?` | a bot's ❓ in a direct chat |
+| `POST /api/v2/questions/{id}/give` | `to` | give a ❓ to another person |
 | `GET /api/v2/needs-you` | | Needs you |
 | `GET /api/v2/pipelines`, `GET/POST /api/v2/pipelines/{id}`, `POST /api/v2/pipelines/{id}/retire` | | settings |
 

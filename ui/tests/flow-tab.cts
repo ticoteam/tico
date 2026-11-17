@@ -21,16 +21,17 @@ const brief = (id: string, stage: string) => ({id, title: `Task ${id}`, number: 
   owner_id: 'bot:pm', requester_id: 'human:ana', assignee_id: null, due_at: null, late: null, snoozed: false,
   turn: {state: 'person', who: 'human:ana', line: 'Waiting on Ana', since: '2026-11-09T10:00:00Z', until: null, ask: true, requirement_id: null},
   version: 3});
-const question = (n: number, stage: string, line: string) => ({kind: 'ask', id: `r${n}`, task_id: `t${n}`, requirement_id: `r${n}`, line,
+// A bot's plain OK (GET /v2/oks/{rid} 404: nothing of its own to show).
+const ask = (n: number, stage: string, line: string) => ({kind: 'ask', id: `r${n}`, task_id: `t${n}`, requirement_id: `r${n}`, line,
   since: `2026-11-09T1${n}:00:00Z`, task: brief(`t${n}`, stage),
-  ask: {requirement_id: `r${n}`, kind: 'answer', line, who: 'human:ana', asked_by: 'bot:pm', choices: ['Yes', 'No'], may: ['answer'],
+  ask: {requirement_id: `r${n}`, kind: 'ok', line, who: 'human:ana', asked_by: 'bot:pm', may: ['ok', 'no'],
     met: false, shows: [], standing: 'waiting', answer: null}});
 const stage = (id: string, name: string) => ({id, name, purpose: '', owner: null, by_hand: false, task_limit: null, expected_minutes: null,
   expected_bots_only: false, on_enter: {}, requirements: []});
 const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager_id: null, owner_id: 'human:ana', private: false,
   factory_id: null, preset: null, settings_version: 1, retired_at: null, stages: [stage('spec', 'Spec'), stage('build', 'Build')],
   done: {id: 'done', name: 'Done'}, closed: {id: 'closed', name: 'Closed'}, may_change: true};
-const Q = ['Which plan do new signups get?', 'Ship on Monday?'];
+const Q = ['OK the signup plan?', 'Ship on Monday?'];
 
 (async () => {
   const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL ?? 'chrome') as string});
@@ -57,6 +58,7 @@ const Q = ['Which plan do new signups get?', 'Ship on Monday?'];
         if (p === '/api/v2/needs-you') return json({actor: 'human:ana', count: needs.length, items: needs, version: 'v' + needs.length, next: null});
         if (p === '/api/v2/threads/rail') return json({pinned: [], threads: [], catch_up: 3, catch_up_ids: ['a', 'b', 'c'], next_cursor: null, dms: {}});
         if (p === '/api/v2/flow/opinions') return json({opinions: []});
+        if (p.startsWith('/api/v2/oks/')) return route.fulfill({status: 404, contentType: 'application/json', body: JSON.stringify({error: 'not_found'})});
         if (r.method() !== 'GET' && p.startsWith('/api/') && !p.startsWith('/api/v2/flow/')) writes.push(`${r.method()} ${p}`);
         if (p.endsWith('/watch') || p === '/api/v2/events') return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
         return json(unrouted(p));
@@ -126,7 +128,7 @@ const Q = ['Which plan do new signups get?', 'Ship on Monday?'];
       assert.equal(await page.locator('#mobile-more').evaluate(b => b.classList.contains('cur')), true, 'More is the current tab on Threads');
 
       // Something waits: the mark turns jade, and the tab starts Flow on the first item.
-      needs = [question(1, 'spec', Q[0]!), question(2, 'build', Q[1]!)];
+      needs = [ask(1, 'spec', Q[0]!), ask(2, 'build', Q[1]!)];
       await page.evaluate(() => v2Refresh());
       await page.locator('#mobile-flow[data-waiting]').waitFor({state: 'attached'});
       // The page's 1 ms transition on fill (reduced motion) ends: then the mark holds still.
@@ -136,7 +138,7 @@ const Q = ['Which plan do new signups get?', 'Ship on Monday?'];
       assert.equal(await page.locator('#mobile-flow .nav-badge, #mobile-flow .tnum').count(), 0, 'still no number');
       await shot(page, 'phone-something-waiting');
       await page.locator('#mobile-flow').tap();
-      await dialog(page).locator('.dc-q', {hasText: Q[0]!}).waitFor();
+      await dialog(page).locator('.dc-q', {hasText: Q[0]!}).waitFor({state: 'attached'});   // an OK opens on its Task tab
       assert.equal(await page.evaluate(() => decideLive(DEC).length), 2, 'it walks everything');
       await page.keyboard.press('Escape');
       await dialog(page).waitFor({state: 'hidden'});
@@ -149,7 +151,7 @@ const Q = ['Which plan do new signups get?', 'Ship on Monday?'];
       needs = [];
       const page = await open(false, '#/updates');
       assert.equal(await page.locator('#side .nav-flow').isVisible(), false, 'nothing waiting: no mark');
-      needs = [question(1, 'spec', Q[0]!), question(2, 'build', Q[1]!)];
+      needs = [ask(1, 'spec', Q[0]!), ask(2, 'build', Q[1]!)];
       await page.evaluate(() => v2Refresh());
       const mark = page.locator('#side').getByRole('button', {name: 'Flow', exact: true});
       await mark.waitFor();
@@ -157,14 +159,14 @@ const Q = ['Which plan do new signups get?', 'Ship on Monday?'];
       assert.ok(Math.abs((at.y + at.height / 2) - (link.y + link.height / 2)) <= 1, 'the mark sits on the Tasks row');
       await shot(page, 'desktop-sidebar');
       await mark.click();
-      await dialog(page).locator('.dc-q', {hasText: Q[0]!}).waitFor();
+      await dialog(page).locator('.dc-q', {hasText: Q[0]!}).waitFor({state: 'attached'});   // an OK opens on its Task tab
       assert.equal(await page.evaluate(() => location.hash), '#/updates', 'the mark does not follow the Tasks link');
       await page.keyboard.press('Escape');
       await dialog(page).waitFor({state: 'hidden'});
       // From the keyboard too, and focus comes back to it.
       await mark.focus();
       await page.keyboard.press('Enter');
-      await dialog(page).locator('.dc-q', {hasText: Q[0]!}).waitFor();
+      await dialog(page).locator('.dc-q', {hasText: Q[0]!}).waitFor({state: 'attached'});   // an OK opens on its Task tab
       await page.keyboard.press('Escape');
       await dialog(page).waitFor({state: 'hidden'});
       assert.equal(await focused(page, '#side .nav-flow'), true);

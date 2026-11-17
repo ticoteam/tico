@@ -97,7 +97,7 @@ UPGRADE_TESTS = (
 #   (`--file signups.csv`) fails it when the test writes no stand-in for that kind of file (#3598, fixed by #3684).
 #   A change under clients/commands/ picks it.
 # - UI_SHELL_SIZE builds the whole UI bundle and fails when a cold open of Home downloads more JavaScript than its ceiling
-#   (backend/ui_bundle.py SHELL_JS_CEILING, P05b). Any UI source, ui/parts.json, a vendor script, the bundler, the UI
+#   (backend/ui_build.py SHELL_JS_CEILING, P05b). Any UI source, ui/parts.json, a vendor script, the bundler, the UI
 #   build or the npm lockfile (esbuild's version decides the minified bytes) can move that number: each picks it.
 #   Between P05's two pull requests the shell crept from 341 to 383 KB with no check noticing.
 RELEASE_SHOTS = "scripts/tests/test_release_shots.py"
@@ -105,9 +105,7 @@ CLI_SPEC = "clients/tests/test_cli_spec.py"
 CLI_COMMANDS = "clients/commands/"
 UI_SHELL_SIZE = "backend/tests/test_ui_shell_size.py"
 UI_SHELL_INPUTS = (
-    "backend/ui_bundle.py",
     "backend/ui_build.py",
-    "backend/ui_compression.py",
     "scripts/build-ui.cjs",
     "package.json",
     "package-lock.json",
@@ -1206,7 +1204,7 @@ def script_srcs(path, diff):
             src = src.split("?", 1)[0].split("#", 1)[0]
             if src and not src.startswith("//") and not re.match(r"[a-z][a-z0-9+.-]*:", src, re.IGNORECASE):
                 # The page names its scripts by URL: /tico/ui/x is ui/x and /vendor/x is ui/vendor/x
-                # (backend/ui_bundle.py); a relative name sits beside the page.
+                # (scripts/build-ui.cjs); a relative name sits beside the page.
                 for mount, there in SCRIPT_MOUNTS:
                     if src.startswith(mount):
                         src = there + src[len(mount) :]
@@ -1723,6 +1721,22 @@ def narrow_budget(shards):
     return shards * WORKERS * (NARROW_SHARD_SECONDS - SETUP_SECONDS["python"])
 
 
+API_CONTRACT = ("backend/openapi_v2.py", "backend/api_contract.py")
+
+
+def shapes_the_api(name, root=ROOT):
+    """True for a file the v2 API document is made from: the generator, the contract, a schema (backend/api_schemas/), a
+    routes module, or any backend module that declares a route (`**api_v2(` on its decorator)."""
+    if not (name.startswith("backend/") and name.endswith(".py")) or "/tests/" in name:
+        return False
+    if name in API_CONTRACT or name.startswith("backend/api_schemas/") or name.endswith("_routes.py"):
+        return True
+    try:
+        return "**api_v2(" in (root / name).read_text()
+    except OSError:
+        return False
+
+
 def reach_levels(names, depth, added=None, root=ROOT, graph=None):
     """{file: level} for the files a change reaches within `depth` levels (see NARROW): 0 for the changed files, 1 for
     what uses one directly, 2 for what runs a level-1 file that is not a hub."""
@@ -1734,9 +1748,9 @@ def reach_levels(names, depth, added=None, root=ROOT, graph=None):
         first |= set(graph.run_by.get(name, ())) | graph.readers(name, added) | graph.fixture_users(name, True)
         if owned := owned_data(name):
             first |= set(owned[1])
-        if name == "backend/openapi_v2.py" or (name.startswith("backend/") and name.endswith("_routes.py")):
+        if shapes_the_api(name, root):
             # The contract test reads every route through the app's imports (a hub, not followed within a depth) and
-            # no longer reads a committed spec file, so a route or generator change names it directly.
+            # no longer reads a committed spec file, so a change to a route, its declaration or the generator names it.
             first.add("backend/tests/test_openapi_v2.py")
         if Path(name).name == "conftest.py":  # rule 2: the tests below it while they are few, and its fixtures' users
             below = graph.below(name)

@@ -43,6 +43,8 @@ EMPTY = (
     "growth_customer_loads",
     # A file from before the Pipelines v3 cut-over still has the old OKs; the copy's first start drops the table.
     "approvals",
+    # Questions from before ❓ marks, waiting for a start to post them as ❓ (backend/old_questions.py).
+    "old_questions",
     # Provider jobs and send grants never become actionable in a rehearsal copy.
     "letter_sources",
     "letter_proofs",
@@ -130,8 +132,6 @@ EMPTY = (
     "compact_first",
     "model_logins",
     "model_login_cleared",
-    "computer_keys",
-    "model_login_key_off",
     # Deletion retries and enrollment failures belong to live HQ machines; a copy must never resume them.
     "cloud_machine_deletions",
     "cloud_machine_enrollment_failures",
@@ -204,6 +204,7 @@ EMPTY = (
     "google_connects",
     "slack_credentials",
     "slack_posts",
+    "slack_requests",  # bots' Slack reads waiting on the gateway (backend/slack_requests.py): a copy answers none
     "slack_events",
     "slack_threads",
     # Tools > Settings > Email: the Workspace key (sealed), setup codes and the OAuth client secret (sealed). A copy holds
@@ -264,6 +265,8 @@ EMPTY = (
     # A listening's sources are part of its automation (kept with it); the posts they saved never.
     "listening_sources",
     "listening_items",
+    # The run guard's holds before migration 20261117112358_holds_automation_guard moves them into `holds` (after it,
+    # prune deletes the automations' holds there): the copy's runs are gone, so nothing is held.
     "automation_guard_holds",
     "automation_turn_answers",
     # Task cap counts are today's sends; the caps themselves are kept.
@@ -387,6 +390,10 @@ KEEP = (
             "blob_media",
             "blobs",
             "bot_agent_instructions",
+            # Computer keys before migration 20261117085930_drop_computer_keys moves the ones in use into subscriptions
+            # and drops both tables: a copy is pruned before its first start runs it, so emptied here they would be lost.
+            "computer_keys",
+            "model_login_key_off",
             # Run-budget holds before migration 20261117061834_holds_runaway moves them into `holds`: a copy is pruned
             # before its first start runs that migration, so an unlisted table here would be emptied and its holds lost.
             "bot_budget",
@@ -417,7 +424,6 @@ KEEP = (
             "strategy_actions",
             "ask_ingest_items",
             "ask_ingest_settings",
-            "strategy_merges",
             "changes",
             "chat_goals",
             "schema_migrations",
@@ -559,7 +565,6 @@ KEEP = (
             "settings_changes",
             "slack_channels",
             "slack_digests",
-            "slack_reads",
             "memory_tidy_cards",
             "memory_tidy_keeps",
             "storage_moves",
@@ -649,6 +654,8 @@ KEEP = (
             "message_mentions",
             "message_reactions",
             "message_revisions",
+            # A ❓ on a bot's chat message (backend/question_marks.py): kept with its message.
+            "question_marks",
             "sequences",
             "teammate_accesses",
             "thread_followers",
@@ -858,6 +865,8 @@ def prune(c, days, keep_automations=False):
         for table, count in finance.scrub_dev_copy(c, now()).items():
             if count:
                 removed[table] = removed.get(table, 0) + count
+    if "holds" in present:
+        delete("holds", "holdable_type='automation'")  # the run guard's: the runs it held are emptied above
     if "jobs" in present:
         delete("jobs", "state IN (%s)" % ",".join("?" * len(OPEN_JOBS)), OPEN_JOBS)
     if "attempts" in present:
@@ -915,6 +924,7 @@ def prune(c, days, keep_automations=False):
             "message_mentions",
             "message_reactions",
             "message_revisions",
+            "question_marks",
         ):
             if table in present:
                 delete(table, "message_id NOT IN (SELECT id FROM messages)")

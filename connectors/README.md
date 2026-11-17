@@ -8,12 +8,12 @@ curl, not with a vendor SDK, not from an employee's own `software/`. The policy 
 log, and the retry handling live in the tools (for mail and calendar, on the server); a direct call
 skips all three and is a policy violation, not a shortcut.
 
-- `slack.py` - read and post to Slack, and DM the team. Token: `SLACK_BOT_TOKEN`, from the
-  Tools credential granted to the bot.
+- `slack.py` - read and post to Slack, and DM the team. It holds no token: it asks Tico
+  (`backend/slack_bots.py`), and Tico's Slack gateway does the Slack calls.
 - `slack-app-manifest.yaml` - the Slack app definition the owner installs, with exactly the scopes
-  `slack.py` and the server's Slack gateway use, Socket Mode on, and the events the gateway
+  the server's Slack gateway uses, Socket Mode on, and the events the gateway
   subscribes to (`app_mention`, `message.im`, `message.channels`, `message.groups`, `link_shared`). The gateway itself is `backend/slack_gateway.py`
-  on the API host (`docs/slack-gateway.md`); it is the one other thing that holds the token.
+  on the API host (`docs/slack-gateway.md`); it is the one thing that holds the token.
 - Mail and calendar are not here: they run on the Tico server (`backend/gmail_live.py`, `backend/gcal_live.py`,
   `backend/gmail_watch.py`, shared helpers in `backend/mail_lib/`). Bots and people use them through `tico email` and
   `tico calendar`. The Google key and each person's Connect Google grant stay sealed on the server, so no computer
@@ -60,28 +60,21 @@ all, and which mailbox it may act as, is the `access:` block in its own `employe
    because nothing calls us. For the gateway, also mint an **App-Level Token** with
    `connections:write` under **Basic Information** (starts with `xapp-`); it opens the Socket
    Mode connection.
-5. Save the bot token in **Tools > Credentials** with **Bot variable name** `SLACK_BOT_TOKEN`, and
-   grant it to the bots that use Slack. For the gateway, paste both tokens in the server's
-   **Tools > Slack**, or put them in the secret named by `TICO_SLACK_SECRET_ARN`
-   (`docs/slack-gateway.md`, Running it).
+5. Paste both tokens in the server's **Tools > Slack**, or put them in the secret named by
+   `TICO_SLACK_SECRET_ARN` (`docs/slack-gateway.md`, Running it), and start the gateway. Bots need no
+   token of their own. (A computer still on v0.6.0-rc.1 runs the old connector, which needs the bot token
+   granted as `SLACK_BOT_TOKEN` in **Tools > Credentials**: older computers only.)
 6. Never paste the token into an Issue, a commit, a Slack message, or a bot prompt.
-7. Invite the bot to every channel the bots read. Public channels can be joined by the bot itself
-   (`connectors/slack.py join --channel <id>`); **private channels must be invited by a human**:
-   in each channel type `/invite @Tico`. Today that is `#release_notes`, `#sales`,
-   `#support`, `#engineering`, `#marketing`, `#marketing-alerts`, and `#agents`.
-8. Verify:
-
-       SLACK_BOT_TOKEN=xoxb-... connectors/slack.py doctor
-
-   It prints the workspace, the bot user, and every channel the bot is a member of, and exits 1 if
-   anything is wrong. Then list the channels the bots use: Settings > Tools > Slack channels (an
-   owner or admin), or `tico slack channel add '#name' --reader <bot>`. A channel listed by name gets its id from Slack.
+7. Invite the bot to every channel the bots read: in each channel a person types `/invite @Tico`.
+8. List the channels the bots use: Settings > Tools > Slack (an owner or admin), or
+   `tico slack channel add '#name' --reader <bot>`. A channel listed by name gets its id from Slack.
+   A bot's `connectors/slack.py doctor` says whether the gateway is connected.
 
 ## Using it (bots)
 
-`$HUB` is `~/tico-work/tico`. The token is already in your environment; never print it.
+`$HUB` is `~/tico-work/tico`. Every call goes to Tico as your run (`HUB_API_URL`, `HUB_TOKEN`).
 
-    # is Slack working, and where am I?
+    # is Tico's Slack gateway up?
     $HUB/connectors/slack.py doctor
 
     # yesterday in one channel, with every thread, as markdown for reading
@@ -94,87 +87,42 @@ all, and which mailbox it may act as, is the `access:` block in its own `employe
     # a fixed window, machine-readable
     $HUB/connectors/slack.py history --channel <channel-id> --since 2026-09-01T09:00 --until 2026-09-01T17:00 --format json
 
-    # list what the bot can see
+    # the Slack channel list
     $HUB/connectors/slack.py channels
 
-    # post (only if your employee.yaml allows it and the channel does not say post: false)
-    $HUB/connectors/slack.py post --as doc-updater --channel '#agents' --text 'Shipped 3 doc updates.'
-    printf '%s\n' "$BODY" | $HUB/connectors/slack.py post --as mention-desk --channel '#marketing' --text -
+    # post (only with `post` in your Slack tools entry, to a listed channel with posting on)
+    $HUB/connectors/slack.py post --channel '#agents' --text 'Shipped 3 doc updates.'
+    printf '%s\n' "$BODY" | $HUB/connectors/slack.py post --channel '#marketing' --text -
 
-Exit codes: `0` ok, `1` failure (bad token, network, Slack error), `2` a hub policy refused the
+Exit codes: `0` ok, `1` failure (Tico or Slack unreachable, the gateway off), `2` Tico refused the
 action. Add `--json` (or `--format json`) to get errors as `{"ok": false, "error", "hint"}`.
 
-A refusal is an answer, not an obstacle. If the tool says the channel is not in the registry, the
+A refusal is an answer, not an obstacle. If Tico says the channel is not on the list, the
 employee lacks `post` access, or the channel is externally shared, do not work around it: put the
-draft on the Issue and, if it really needs to change, open an Issue with `owner:ana` and
-`type:decision`.
+draft on the task and, if it really needs to change, ask the owner.
 
-Every accepted post is appended to `~/tico-work/runtime/slack-audit.jsonl` with the timestamp,
-the employee slug, the channel, and the first 200 characters.
+Every post is a message in the bot's room in Tico, and Tico records what was sent.
 
-## DMs and the bot's inbox
+## DMs
 
-Slack DMs are the one place a human and a bot talk directly.
+**What a human can do.** DM **@Tico** in Slack, or `@Tico` in a channel it is in. The gateway routes the message
+to the bot it is for, which wakes and answers in the same thread (`docs/slack-gateway.md`).
 
-**What a human can do.** DM **@Tico** in Slack like any colleague, or add it to a group DM.
-Nothing in Slack wakes a bot: there are no event subscriptions, and Slack never calls us. The
-message sits there until the next scheduled or manual run of whichever employee polls `inbox`
-reads it - the dispatcher's run, or a bot's own run. If it is urgent, say it in an Issue.
-
-**What a bot may do.** DM the humans in `registry/hub-access.yaml` (`owner` plus `allowed`) and
-nobody else. Every recipient is resolved to a real Slack account and checked against that list
-before a single message is sent; anyone else is refused with exit `2`. This is not an outbound
-send - it is one internal Slack message to a colleague (`policies/shared-rules.md`) - but the
-company list is the whole boundary, so do not try to route around it. Adding someone to
-`hub-access.yaml` is the owner's call: open an Issue with `owner:ana` and `type:decision`.
-
-The gates `dm` runs, all of them in code and all before any network call reaches Slack:
-
-1. the employee's `employee.yaml` declares `access:` service `slack` with `post` in `can`
-   (the same verb that gates channel posts);
-2. every `--to` resolves to a Slack user whose email is in `registry/hub-access.yaml`;
-3. bots and deactivated accounts are refused (bots talk to each other through Issues);
-4. the message is 4000 characters or fewer.
+**What a bot may do.** DM one person on the company's roster who may sign in to Tico and has a Slack account Tico
+knows. The DM is the bot's message to that person in Tico, which the gateway copies into their Slack DM unless they
+keep bot messages in Tico. It needs `post` in the bot's Slack tools entry and is at most 3,800 characters.
 
 ```bash
-# DM one person - a work email is exact, and the only form that cannot pick the wrong human
-$HUB/connectors/slack.py dm --as doc-updater --to cara@acme.example --text 'Pricing doc is live.'
+$HUB/connectors/slack.py dm --to cara@acme.example --text 'Pricing doc is live.'
+printf '%s\n' "$BODY" | $HUB/connectors/slack.py dm --to ana@acme.example --text -
 
-# @handle and U-id work too, resolved through the cached directory
-$HUB/connectors/slack.py dm --as doc-updater --to '@cara' --text 'Pricing doc is live.'
-
-# several people = one group DM (mpim), not several DMs
-$HUB/connectors/slack.py dm --as doc-updater --to cara@acme.example,ana@acme.example --text 'Standup?'
-
-# long body from stdin
-printf '%s\n' "$BODY" | $HUB/connectors/slack.py dm --as doc-updater --to ana@acme.example --text -
-
-# read what people sent the bot, then mark it seen so the next run only gets newer messages
-$HUB/connectors/slack.py inbox --since 24h --format md --mark
-
-# open a screenshot someone shared: the `[file F...]` line in inbox or history names it
-$HUB/connectors/slack.py file --as doc-updater --id F0123ABCD
-
-# answer in the thread of the message you just read (`reply` is an alias for `dm`)
-$HUB/connectors/slack.py reply --as doc-updater --to cara@acme.example \
-    --thread 1756742400.000100 --text 'On it - Issue #214.'
+# open a screenshot someone shared: the `[file F...]` line in history or a routed message names it
+$HUB/connectors/slack.py file --id F0123ABCD
 ```
-
-`inbox` lists every DM and group DM the bot is in, one markdown section per person, oldest first,
-with each message's `ts` and a ready-made `reply` line. The bot's own messages, Slackbot, and
-other apps are skipped. `--mark` advances the per-conversation watermark in
-`~/tico-work/runtime/slack-inbox.json`; without it the same messages come back next time.
-`--since` (default `24h`) is only the floor for a conversation with no watermark yet, so a first
-run does not drag in a year of history. `--format json` gives the same thing structured.
-
-Accepted DMs land in the same audit log with `"kind": "dm"` and the recipients' emails.
-`connectors/slack.py doctor` reports how many DM conversations the bot has and says plainly when
-the DM scopes are missing (the app needs reinstalling - see the install steps above).
 
 ## Tests
 
     python3 -m unittest discover -s connectors -v
 
-Covers the pure parts - time parsing, markdown rendering, the policy checks (posting, DMs, and
-the `access:` allow-lists), the inbox watermark and the audit lines - with the HTTP layer mocked.
-No network, no token needed.
+Covers time parsing, markdown rendering, saving files and each command against Tico's answers, with Tico mocked.
+No network, no token needed. The rules themselves are tested on the server (`backend/tests/test_slack_bots.py`).

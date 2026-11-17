@@ -6,6 +6,7 @@ import pytest
 from backend.tests.helpers.api import assign, runner, setup_attempt, post, get, expire, ready, claim, headers
 from backend import bot_settings as BS
 from backend.tests.helpers.task_lanes import RUNNER_CAPABILITIES
+from backend.tests.helpers.held_runs import no_start_wait
 from backend.tests.helpers.execution_review import (
     add_recovery_reviewer,
     aged,
@@ -23,13 +24,22 @@ from backend.tests.helpers.execution_review import (
 )
 
 
+def botops_words(c, where="owner_id='bot:botops'", args=()):
+    """What Tico gave BotOps on each task matching `where` (tasks have no description: its instructions)."""
+    from backend.store import H
+
+    return [
+        {**dict(r), "body": H.task_words(c, r["id"])}
+        for r in c.execute(f"SELECT id,owner_id FROM tasks WHERE {where} ORDER BY rowid", args)
+    ]
+
+
 @pytest.mark.parametrize("acknowledge_start", [False, True])
 def test_pre_start_retry_limit_fails_unstarted_jobs_and_preserves_running_work(api, monkeypatch, acknowledge_start):
     from backend import execution
 
     monkeypatch.setattr(execution, "PRE_START_TRIES", 2)
-    # A lapse now waits before the job goes out again (execution.handed_back_until); not what this test is about.
-    monkeypatch.setattr(execution, "HAND_BACK_WAIT", 0)
+    no_start_wait(monkeypatch)  # a lapse's wait before the next try is not what this test is about
     machine, message, first = setup_attempt(api)
     get(api, "credential-runtime", first["token"])
     expire(api, first["id"])
@@ -574,9 +584,7 @@ def test_a_stopped_run_that_used_tools_is_held_until_reviewed(api):
     aged(api, again['id'])
     assert [d['state'] for d in sweep(api)] == ['canceled']
     with api.app.state.store.read() as c:
-        task = c.execute(
-            "SELECT owner_id,body FROM tasks WHERE title=?", ("Find why ops's runs keep stopping",)
-        ).fetchone()
+        task = next(iter(botops_words(c, "title=?", ("Find why ops's runs keep stopping",))), None)
     assert task and task['owner_id'] == H.bot_actor(H.FLEET_MAINTAINER) and message['body'] not in task['body']
     assert get(api, 'bots/ops/execution-review')['jobs'] == []
 
@@ -1016,9 +1024,7 @@ def test_a_run_that_used_a_tool_that_writes_waits_and_its_review_lists_the_calls
     aged(api, attempt['id'])
     assert sweep(api) == [] and sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
     with api.app.state.store.read() as c:
-        handed = c.execute(
-            "SELECT owner_id,body FROM tasks WHERE title=?", ("Review ops's stopped runs held for a check",)
-        ).fetchall()
+        handed = botops_words(c, "title=?", ("Review ops's stopped runs held for a check",))
         holds = c.execute(
             "SELECT count(*) FROM events WHERE action='job.held' AND target=?", (attempt['id'],)
         ).fetchone()[0]
@@ -1512,8 +1518,7 @@ def test_a_person_writing_or_try_now_lifts_a_usage_limit_cooldown_once(api):
 def test_a_claim_that_lapsed_before_its_run_started_does_not_count_as_stopping_partway(api, monkeypatch):
     from backend import execution
 
-    # A lapse now waits before the job goes out again (execution.handed_back_until); not what this test is about.
-    monkeypatch.setattr(execution, "HAND_BACK_WAIT", 0)
+    no_start_wait(monkeypatch)  # a lapse's wait before the next try is not what this test is about
     machine, message, lapsed = setup_attempt(api)
     expire(api, lapsed['id'])  # the computer never started it: back in the queue
     ready(api, machine, ['ops'])
@@ -1539,8 +1544,7 @@ def test_a_claim_expires_lapsed_leases_in_its_own_write_and_rechecks_one_job_und
     from backend import execution
     from backend.execution import Execution
 
-    # A lapse now waits before the job goes out again (execution.handed_back_until); not what this test is about.
-    monkeypatch.setattr(execution, "HAND_BACK_WAIT", 0)
+    no_start_wait(monkeypatch)  # a lapse's wait before the next try is not what this test is about
     machine, message, lapsed = setup_attempt(api)
     expire(api, lapsed['id'])
     ready(api, machine, ['ops'])
@@ -2592,7 +2596,7 @@ def test_restart_with_named_merge_is_held_immediately_and_review_names_it(api):
     assert 'merge pull request' in review['reason'] and review['stopped'] == 'changed'
     assert 'private-marker-42' not in review['reason'] and '--squash' not in review['reason']
     with api.app.state.store.read() as c:
-        tasks = c.execute("SELECT body FROM tasks WHERE owner_id='bot:botops'").fetchall()
+        tasks = botops_words(c)
     assert len(tasks) == 1 and 'merge pull request' in tasks[0]['body']
     assert 'private-marker-42' not in tasks[0]['body'] and '--squash' not in tasks[0]['body']
 
@@ -2747,7 +2751,7 @@ def test_restart_shell_actions_use_real_runner_events(api, case, host):
         review = get(api, 'bots/ops/execution-review')['jobs'][0]
         assert all(label in review['reason'] for label in payload['outside_actions'])
         with api.app.state.store.read() as c:
-            body = c.execute("SELECT body FROM tasks WHERE owner_id='bot:botops'").fetchone()[0]
+            body = botops_words(c)[0]['body']
         assert all(label in body for label in payload['outside_actions'])
         assert 'synthetic-private-marker' not in body + review['reason']
     else:

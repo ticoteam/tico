@@ -12,7 +12,8 @@ SCHEMAS.update(
                 "private": "b",
                 "id": "s",
                 "title": "s",
-                "body": "s",
+                # A task is a title and a chat: its request is the first message on its chat, on a full read only.
+                "request": {"oneOf": [obj({"id": "s", "from": "s", "text": "s", "at": "s"}), {"type": "null"}]},
                 "requester_id": "s",
                 "owner_id": "n",
                 "assignee_id": "n",
@@ -80,6 +81,11 @@ SCHEMAS.update(
                 "oneOf": [obj({"id": "s", "name": "s"}), {"type": "null"}],
                 "description": "On the task's own read: the pipeline it is in",
             },
+            label={
+                "type": ["string", "null"],
+                "description": "On the task's own read: its label, the letters it was made with and its number (\"O561\"); "
+                "null when it has no number",
+            },
             stage={
                 "oneOf": [
                     obj({"id": "s", "name": "s", "kind": {"enum": ["work", "done", "closed"]}, "by_hand": "b"}),
@@ -91,12 +97,20 @@ SCHEMAS.update(
                 "type": "boolean",
                 "description": "On a list row: it entered its stage pushed past a requirement",
             },
-            blocked_by=items(obj({"id": "n", "number": {"type": ["integer", "null"]}}))
+            blocked_by=items(
+                obj(
+                    {"id": "n", "number": {"type": ["integer", "null"]}, "label": "n", "title": "n"},
+                    required=["id", "number"],
+                )
+            )
             | {
-                "description": "On a list row with a dependency: the open tasks it depends on (\"Blocked by #304\"), oldest "
-                "first; one the reader may not open has a null id and number. Absent when there are none"
+                "description": "On a list row with a dependency: the open tasks it depends on (\"Blocked by E304\"), oldest "
+                "first, each with its label (null with no number) and the start of its title; one the reader may not open "
+                "has a null id, number, label and title. Absent when there are none"
             },
-            blocks=items(obj({"id": "s", "number": {"type": ["integer", "null"]}}))
+            blocks=items(
+                obj({"id": "s", "number": {"type": ["integer", "null"]}, "label": "n"}, required=["id", "number"])
+            )
             | {
                 "description": "On a list row: the open tasks that depend on it and the reader may open (\"Blocks #307\"). "
                 "Absent when there are none"
@@ -230,19 +244,6 @@ SCHEMAS.update(
                 "standing": "s",
                 "who": "n",
                 "asked_by": "n",
-                "choices": {"type": ["array", "null"], "items": {"type": "string"}},
-                # A bot's question to a person: why it matters, a line per choice on what happens (in the choices' order)
-                # and the choice it recommends (backend/ask_shape.py). Absent on an ask that carried none.
-                "brief": obj(
-                    {
-                        "why": "s",
-                        "details": {"type": ["array", "null"], "items": {"type": "string"}},
-                        "recommend": "n",
-                    },
-                    required=["why", "details", "recommend"],
-                ),
-                # The ask's short title (at most 60 characters), the decision view's heading. Absent on an ask without one.
-                "title": "s",
                 "shows": items({"type": "string"}),
                 # A page requirement: the page attached now, at the version an OK of it is for.
                 "page": obj({"file_id": "s", "version": "i", "ref": "s"}, required=["file_id", "version", "ref"]),
@@ -281,17 +282,7 @@ SCHEMAS.update(
                 "answer": {
                     "oneOf": [obj({"id": "s", "value": "s", "note": "n", "by": "s", "at": "s"}), {"type": "null"}]
                 },
-                # A stage's answer: how it is named and what it takes. Absent on every other requirement.
-                "typed": obj(
-                    {
-                        "name": "s",
-                        "type": {"enum": ["text", "number", "choice"]},
-                        "min": {"type": ["integer", "null"]},
-                        "max": {"type": ["integer", "null"]},
-                        "question": "s",
-                    }
-                ),
-                "may": items({"enum": ["done", "ok", "no", "again", "answer", "give", "undo", "withdraw", "thumbs"]})
+                "may": items({"enum": ["done", "ok", "no", "give", "undo", "withdraw"]})
                 | {"description": "What this reader may do with it: a hint, the engine decides"},
             },
             required=[
@@ -302,7 +293,6 @@ SCHEMAS.update(
                 "standing",
                 "who",
                 "asked_by",
-                "choices",
                 "shows",
                 "answer",
                 "may",

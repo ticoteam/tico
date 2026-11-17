@@ -18,6 +18,7 @@ from backend import dream_auto as DA
 from backend import hubdb as H
 from backend import maintenance as M
 from backend import maintenance_limits as L
+from backend import task_wakes
 from backend.maintenance_steps import dream as dream_step
 from backend.scheduler import Scheduler
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner  # noqa: F401  (fixtures)
@@ -187,9 +188,10 @@ def test_memory_commits_reported_with_no_run_are_not_corrections_and_the_dream_i
     assert started == [verdict(api, "ops", now()).name]
     [row] = dream_rows(api, "ops")
     assert row["requester_id"] == "human:ben" and H.task_labels(row) == ["dream"] and row["title"] == "Dream"
-    first_line, _, _ = row["body"].partition("\n")
-    assert first_line.startswith("Auto dream: 0 turns and 2 corrections from people since ")
     with api.app.state.store.read() as c:
+        first_line, _, _ = task_wakes.instructions(c, row["id"]).partition("\n")
+        assert first_line.startswith("Auto dream: 0 turns and 2 corrections from people since ")
+        assert H.task_request(c, row["id"]) is None  # Tico's steps, not Ben's words: nothing on the chat
         assert dream.auto_event(c, row)["reason"] == first_line
     view = get(api, "bots/ops/dream", token="ben-test")["dream"]
     assert view["auto"] is True and view["reason"] == first_line
@@ -253,16 +255,7 @@ def test_an_auto_dreams_question_reaches_its_manager_without_ask_ingest(gate):
     plate(api, 15)  # a plate full enough that ingest would send a question back
     assert len(run(api)) == 1
     [row] = dream_rows(api, "ops")
-    r = api.post(
-        f"/api/v2/tasks/{row['id']}/asks",
-        json={
-            "to": "human:ben",
-            "line": QUESTIONS,
-            "version": row["version"],
-            "why": "It sets what goes out on launch day.",
-        },
-        headers=headers(token),
-    )
+    r = api.post(f"/api/v2/tasks/{row['id']}/questions", json={"to": "ben", "text": QUESTIONS}, headers=headers(token))
     assert r.status_code == 200, r.text
     assert "ingest" not in r.json() and [x for x in model.calls if x["label"] != "rule-check@1"] == []
     with api.app.state.store.read() as c:

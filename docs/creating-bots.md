@@ -320,16 +320,16 @@ Then, in this order:
 
 Every run is the same shape, and `AGENTS.md` should say so plainly:
 
-1. **Read the task and its thread** through the run's `tico` CLI. The task is the instruction;
-   the thread is the context, and the task's notes say where the last run stopped.
+1. **Read the task's chat** through the run's `tico` CLI. The task's first message is the instruction;
+   the rest of the chat is the context, and the task's notes say where the last run stopped.
 2. **Check `memory/learnings.md` and the playbook the task names** when the session is new or was compacted. A
    resumed turn already has them in context: reading them again on every run costs a full context of tokens each time.
 3. **Do the work**, updating `knowledge/` as it learns rather than at the end.
 4. **Report in the task thread.** The result goes in the task's completion note, first line
    first. A chart or a mockup can go with the comment as a titled [visual](visuals.md); every bot's instructions already say when to add one ([When a bot adds a visual](visuals.md#when-a-bot-adds-a-visual)), so `AGENTS.md` needn't. Put the ask first and stay under 120 words. The lint checks that the first line is not empty; it does not judge its meaning.
-5. **When it needs a person, ask on the task** (`tico task ask`), having read the record first, since most
+5. **When it needs a person, ask them** (`tico task ask`: a ❓ in the task's chat, or an OK with `--kind ok`), having read the record first, since most
    questions a bot wants to ask are already answered there. One sentence, readable on its own: it is the only thing
-   the person has to read. A bot has one open ask per task; asking again replaces it. Internal routing, task closure,
+   the person has to read. A bot has one open question per chat and one open OK per task; asking again replaces it. Internal routing, task closure,
    branches and draft pull requests are the bot's work, not questions for a person. An OK (`--kind ok`) can clarify
    an uncertain action; granted Tools and the outbound send switch govern access.
 6. **Commit, then mark the stage's work done with a result note** (`tico task done <id> -m "..."`). A bot never
@@ -397,7 +397,7 @@ See the shared approvals policy. In addition:
 - Never invent a number. A figure you did not read in a dated source stays out.
 
 ## Starting a run
-1. Read the task and its conversation.
+1. Read the task's chat.
 2. In a new session or after a compaction, read `memory/learnings.md`, the playbook the task names and
    `knowledge/README.md`. A resumed turn already has them.
 

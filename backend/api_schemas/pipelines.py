@@ -44,6 +44,7 @@ SCHEMAS.update(
                                         "manager_id": "n",
                                         "in": obj({"day": "i", "week": "i"}),
                                         "out": obj({"day": "i", "week": "i"}),
+                                        "moved_into": items({"type": "string"}),
                                         "stages": items(
                                             obj(
                                                 {

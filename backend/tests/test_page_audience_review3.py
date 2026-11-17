@@ -59,7 +59,7 @@ def test_native_and_runner_gate_recheck_askers_inherited_read(api):
         restrict(c, "ops", see={"everyone": True}, read={"people": ["ben"]}, write={"everyone": True})
     with api.app.state.store.read() as c:
         task = H.task(c, tid)
-        assert "42 deals" in task["body"]  # Queued text must be gated even before any scrubber runs.
+        assert "42 deals" in H.task_words(c, tid)  # Queued text must be gated even before any scrubber runs.
         copied = counsel.page_copies(c)[tid]
         assert not counsel.page_copy_readable(c, copied, auth=api.app.state.auth)
         assert not counsel.page_copy_readable(c, copied)

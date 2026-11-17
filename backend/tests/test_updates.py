@@ -11,6 +11,7 @@ from backend import threads, updates
 from backend.auth import Identity
 from backend.store import H, Problem, digest
 from backend.tests.helpers.api import get, headers, post, setup_attempt  # noqa: F401
+from backend.tests.helpers.engine import ok_ask
 
 MORNING = datetime(2026, 9, 29, 13, 0, tzinfo=timezone.utc)  # Tuesday 06:00 Pacific
 FRIDAY = datetime(2026, 10, 2, 13, 0, tzinfo=timezone.utc)
@@ -394,18 +395,14 @@ def test_a_persons_draft_is_written_from_only_what_everyone_can_see_and_never_ov
     say(api, "My salary talks are next week")  # her private Assistant chat
     store = api.app.state.store
     with store.transaction() as c:
-        # Her answers are the engine's: one on the shared budget, one on her private raise plan, which stays out.
-        ask = H.task_ask(
-            c,
-            "bot:ops",
-            budget["id"],
-            "human:ana",
-            "Search or social first?",
-            seen_version=H.task(c, budget["id"])["version"],
+        # Her answers are the engine's, to OKs asked of her, with her words: one on the shared budget, one on her
+        # private raise plan, which stays out.
+        ask = ok_ask(c, budget["id"], "bot:ops", "human:ana", "OK search ads first?")
+        H.task_answer(c, "human:ana", budget["id"], ask["requirement_id"], "ok", "Search ads first")
+        on_raise = ok_ask(c, raise_plan["id"], H.KEEPER, "human:ana", "OK the raise to wait?")
+        H.task_answer(
+            c, "human:ana", raise_plan["id"], on_raise["requirement_id"], "no", "Mixed answer about the raise"
         )
-        H.task_answer(c, "human:ana", budget["id"], ask["requirement_id"], "Search ads first")
-        on_raise = H.task_ask(c, H.KEEPER, raise_plan["id"], "human:ana", "Can the raise wait?")
-        H.task_answer(c, "human:ana", raise_plan["id"], on_raise["requirement_id"], "Mixed answer about the raise")
     for task in (budget, raise_plan, audit):  # her decisions and comments, on each kind of task
         post(api, f"tasks/{task['id']}/comments", {"text": "Comment on " + task["title"]})
         post(api, f"tasks/{task['id']}/done", {"version": get(api, f"tasks/{task['id']}")["task"]["version"]})

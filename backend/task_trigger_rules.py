@@ -244,6 +244,8 @@ def _run(conn, item, rule, params):
                 for k in ("id", "title", "body", "note", "status", "owner", "requester", "pipeline_id", "stage_id")
             },
         }
+        # A task has no description: {{task.body}} is what it was asked with (its request and Tico's instructions).
+        values["task"]["body"] = values["task"]["body"] or H.task_words(conn, row["id"])
         if action in R.EVENT_RUNNERS:
             revision = f"task-rule:{rule['id']}:{item['event']}:{item['revision']}"
             result = R.EVENT_RUNNERS[action](

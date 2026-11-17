@@ -2,7 +2,7 @@
 
 import pytest
 
-from backend import company_billing
+from backend import company_billing, company_pause, holds
 from backend.store import H
 from backend.tests.helpers.api import get, post, restrict  # noqa: F401
 from backend.tests.helpers.openapi_v2 import headers
@@ -27,11 +27,14 @@ def _pause_record_and_legacy_fallback(api, monkeypatch):
     assert paused['state'] == 'paused'
     assert paused['paused_by']['name']
     assert paused['paused_by']['at'].endswith('Z')
-    with api.app.state.store.transaction() as c:
-        c.execute("DELETE FROM events WHERE target='ops' AND action='bot.pause'")
+    with api.app.state.store.read() as c:  # the pause is a hold on the bot, by the person who paused it
+        hold = holds.get(c, holds.PAUSED, 'bot', 'ops')
+        assert hold['created_by_id'] == 'human:ana' and paused['paused_by']['at'] == hold['created_at']
+    with api.app.state.store.transaction() as c:  # a pause Tico opened names no person
+        c.execute("UPDATE holds SET created_by_id=? WHERE id=?", (H.KEEPER, hold['id']))
     assert read(api).json()['paused_by'] is None
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bots SET state='active' WHERE id='ops'")
+        company_pause.resume_bot(c, 'human:ana', 'ops')
 
 
 def _only_readable_open_tasks_count_and_no_new_control_permission(api, monkeypatch):

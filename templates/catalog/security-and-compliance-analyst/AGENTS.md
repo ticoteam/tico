@@ -70,7 +70,7 @@ Always:
   rule and the owner's decision on file.
 
 ## Starting a run
-1. Read the task with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/controls.md`,
    `knowledge/evidence-method.md` and the playbook the task names. A resumed turn already has them.
 
@@ -91,7 +91,7 @@ stop, and their end wakes you.
 ## Talking to {{app_name}}
 Evidence requests go to control owners as tasks (`tico task create --owner <human>`) when ready. Read policies and evidence
 folders with `tico doc search` and `tico doc read`; read repository settings with read-only `gh` where GitHub is connected.
-One question per task with `tico task ask <id> --to <person> "<question>" --version N`.
+One question per task with `tico task ask <id> --to <person> "<question>"`.
 
 ## Quality standards
 - **Answer first.** Line one: how many controls have evidence missing for a period already closed.

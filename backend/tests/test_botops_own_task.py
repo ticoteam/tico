@@ -94,7 +94,7 @@ def test_botops_files_a_subtask_for_a_person_on_its_own_task(api, botops):
         assert (made["owner_id"], made["requester_id"]) == ("bot:botops", "bot:botops")
         assert TR.parent_of(c, made["id"]) == task["id"]
     [item] = [i for i in get(api, "needs-you", "ana-test")["items"] if i.get("task_id") == made["id"]]
-    assert item["kind"] == "ask"
+    assert item["kind"] == "question"  # its ❓ to her
 
 
 def test_a_subtask_for_a_bot_or_with_no_parent_is_not_botops_own_ask(api, botops):

@@ -312,7 +312,7 @@ interface PageWin { computerClosed?: Promise<void>; presenceDraft?: HTMLTextArea
     await row('box').locator('.machine-name').click();
     await dialog.locator('[data-login-warning=codex]').waitFor();
     assert.match(await dialog.locator('[data-login-warning=codex]').innerText(), /API credit is not checked/);
-    assert.equal(await codex.getByRole('button', {name: 'Switch to subscription', exact: true}).isEnabled(), true);
+    assert.equal(await codex.getByRole('button', {name: 'Switch account', exact: true}).isEnabled(), true);
     await page.setViewportSize({width: 390, height: 844});
     assert.equal(await dialog.locator('[data-login-warning=codex]').isVisible(), true);
     assert.equal(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth), true);

@@ -190,8 +190,9 @@ def setup_docs(c, auth, who, body):
         c,
         who.actor,
         title,
-        docs_text(sources, note),
+        note,  # the person's own words are the request; the steps are the Librarian's instructions, in its run
         "bot:" + L.LIBRARIAN,
+        instructions=docs_text(sources, note),
         allow_planned=True,
         labels=["docs-setup"],
         conversation_id=rooms.task_conversation_id(c, auth, "bot:" + L.LIBRARIAN, who.actor),

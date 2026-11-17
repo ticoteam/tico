@@ -104,8 +104,7 @@ Close calls that change behavior, C1 to C31. They are part of sign-off A. Text i
 - **C1.** A bot should give an end date when it snoozes, and its wake says so. It is not required. A bot's snooze with
   no end date shows as "Snoozed", the manager bot is told once, and it is listed on the manager's rail. After 3 snoozes
   by a bot in one stage, the next goes to the manager bot. *Draft 4 refused a bot's snooze with no end date.*
-- **C2.** A snoozed task gives up its slot in a stage that has a limit, and so does one that waits only on a person's
-  OK or answer ("Limits").
+- **C2.** A snoozed task gives up its slot in a stage that has a limit, and so does one that waits only on a person's OK ("Limits").
 - **C3.** Push past is off by default for **PR merged** and **In a release** only. It is on for everything else, Checks
   pass included. A task that can't be pushed past can still be moved back or closed.
 - **C4.** What counts as progress, and resets the 3 tries: a move, a requirement changing state, a new commit, a new
@@ -145,8 +144,6 @@ Close calls that change behavior, C1 to C31. They are part of sign-off A. Text i
 - **C19.** A task waits only on requirements. An ask is a requirement with a person on it: set on the stage, or added to
   one task. Work a person has to go and do is a sub-task. *Draft 6 kept a bot's question in its own table.*
 - **C20.** Sub-tasks nest at most 5 deep.
-- **C21.** A rule made from a 👎 on an ask stops the next ask like it. On the third 👎 on one bot's asks in 30 days, the
-  sheet opens with the rule already drafted. *Today a rule made from a 👎 lets the work through with a note.*
 - **C22.** Your OK is for the commits you were shown. A rebase or conflict fix after it that changes the same lines
   keeps it. One that changes other lines is read by Reviewer 2 first: its OK keeps yours, and the PR merges without
   asking you again. Its send back goes to the Builder, and you are asked again after the next read. The task shows
@@ -163,18 +160,15 @@ Close calls that change behavior, C1 to C31. They are part of sign-off A. Text i
 - **C26.** Done and Closed are not columns on a pipeline. They are behind the archive button, with Snoozed.
 - **C27.** A stage header is a name and a number: how many tasks, or "2/3" where the stage has a limit. Against a limit
   the number counts tasks that hold a slot, and beside it a person mark and a number count those waiting only on a
-  person's OK or answer; the words ("15 wait on a person") are its label and tooltip only, on desktop and phone. The
+  person's OK; the words ("15 wait on a person") are its label and tooltip only, on desktop and phone. The
   setting is called Limit. The word "pool" is gone.
 - **C28.** Needs you is the one place to check, and it holds only what someone asks of you: every requirement with your
   name, and every @ of you by a person, on a task or in a channel, until you reply. A task you own with nothing asked of
   you is in Tasks. A bot's @ on a task only marks it unread: a bot that
   needs you has to use a requirement. A task never waits on an @, and an @ sends no push. A bot that @s someone and stops
   is still the one whose turn it is. *Today an @ on a task reaches no list. Channels are not changed.*
-- **C29.** Only a requirement a person can meet with a button can name a person: OK from someone, a page's OK, Answer
-  from someone. "Checks pass" can't. If a person has to make it pass, that is a sub-task.
-- **C30.** Anyone working a task can add an OK or an answer from someone to it. It lasts for this stage. A stage can
-  ask for an answer too: named and typed, from the task's owner or a named person (kind 6). *Before typed answers, an
-  answer was never set on a stage.*
+- **C29.** Only a requirement a person can meet with a button can name a person: OK from someone, a page's OK. "Checks pass" can't. If a person has to make it pass, that is a sub-task.
+- **C30.** Anyone working a task can add an OK from someone to it. It lasts for this stage.
 - **C31.** In a release on a repo that publishes no releases is met once the PR merged, with the line "This repo
   doesn't publish releases". A repo publishes releases once Tico has read one published release of it (a pre-release
   counts). Until Tico has read the repo's releases once, the line is "Reading releases". *Before, the task waited in
@@ -194,7 +188,7 @@ General, Product, Engineering and the Growth and Success pipelines are presets b
   Closed.
 - **Stage.** A name, a one-line purpose, an owner, what a task needs to leave, an expected time, and an optional limit on
   how many tasks it holds.
-- **Requirement.** One thing a task needs before it leaves a stage. Nine kinds, listed below. It is set on the stage, or
+- **Requirement.** One thing a task needs before it leaves a stage. Six kinds, listed below. It is set on the stage, or
   added to one task. It can name a person.
 - **Task.** One pipeline, one stage, one owner right now. Stored: stage, owner, version. Everything else you see is
   worked out from those and the metadata.
@@ -254,15 +248,7 @@ That gives three kinds of stage, and no others:
    - **In a release.** Every merge is inside a published release.
 5. **Linked work done.** Every task filed during this visit to the stage ended Done, not Closed. Zero tasks filed means
    not met.
-6. **Answer from someone.** A question for a named person, or on a stage for the task's owner when it names nobody.
-   Added to one task, it is a line with optional choices. On a stage it has a name (`confidence`: lower case, unique in
-   the pipeline) and a type: text, a whole number (with a min and a max) or a choice (one of its choices, strictly).
-   The value is kept in one exact form ("080" is 80) and a value that does not fit is refused in one line
-   ("Confidence is a whole number from 0 to 100"). A new visit asks again; the newest answer wins, and the task's read
-   carries each name's newest answer (`values`). The owner, the manager or any person answers the owner's; it takes no
-   thumb and can't be given away. A bot answers with `tico task answer <id> confidence 80`. "Only when" and "Met when"
-   (routing on answers) are not built yet and are refused at save.
-7. **Related input.** Jev picks the one or two bots the work touches, and each comments once. It never blocks. See
+6. **Related input.** Jev picks the one or two bots the work touches, and each comments once. It never blocks. See
    [Related input](#related-input).
 
 Two switches sit on a requirement:
@@ -280,7 +266,7 @@ quarantining a bot: not a requirement, room, a cap or a rule.
 Kind `related_input` (backend/related_input.py), on the Product pipeline's Related input stage. Before a person OKs a
 spec, the bots whose areas the work touches get one say.
 
-- **Jev scores.** A Heartbeat step (`related_input`) sends Jev the task's pitch (title and description) and the
+- **Jev scores.** A Heartbeat step (`related_input`) sends Jev the task's pitch (title and first message) and the
   newest page attached in an earlier stage (the Spec page), with the company's bots: each one's name, job line and
   team. Jev scores each bot from 0 to 1 (`questions/related-bots.json`, one question per bot). No transaction is held
   during the call. Jev writes no prose, so each score's "why" is the bot's own job line.
@@ -303,13 +289,13 @@ spec, the bots whose areas the work touches get one say.
 
 ### A requirement on one task
 
-- Anyone working a task can add a requirement to it: an OK or an answer from a named person (C30).
+- Anyone working a task can add a requirement to it: an OK from a named person (C30).
 - It lasts for this visit to the stage. The task doesn't leave until it is answered, withdrawn, or pushed past with a
   reason.
 - A bot can have one open per task. Asking again replaces it (C15).
 - Moving back or closing ends it. Nothing is left behind.
 - A bot takes back only an ask a bot added. An ask a person added is taken back by a person.
-- Only an OK or an answer can name a person (C29). To hand it to someone else, put their name on it.
+- Only an OK can name a person (C29). To hand it to someone else, put their name on it.
 
 The three ways to reach a person are in [Reaching a person](#reaching-a-person).
 
@@ -490,7 +476,7 @@ change), but the note is handed on, so the next stage and the person who OKs QA 
 ### Limits
 
 - A stage's limit counts its open tasks that are not snoozed and hold a slot. A task holds a slot unless every wait on
-  it is a person's OK or an answer it asks a person for, and none is a bot's, Jev's, GitHub's or a sub-task's: bots
+  it is a person's OK it asks a person for, and none is a bot's, Jev's, GitHub's or a sub-task's: bots
   keep working while people review. A task the ladder brought to a person, or whose bot is Paused, still holds its slot:
   that is stuck work, not review. Every check for room counts this way: requests leaving Ideas,
   filling free slots, moves by hand and by the engine, "No room in …" and the Heartbeat's over-the-limit check.
@@ -545,7 +531,7 @@ change), but the note is handed on, so the next stage and the person who OKs QA 
 ### Handoff: Product to Engineering
 
 - Entering In development files one Engineering task, linked. The owner may file more.
-- The filed task has the Product task's title and body, and a link to the Spec page at the version that was OK'd
+- The filed task has the Product task's title and first message, and a link to the Spec page at the version that was OK'd
   (`page:<file id>@<version>`), then what each person said with their OK, marked as their notes on the spec. Its
   requester is the Product Owner. It starts in On deck.
 - After any sign-off, what the person said with their OK is in every wake of the stages that follow, up to the next
@@ -693,7 +679,7 @@ Three ways, by weight. A task waits on the last two and never on the first.
 - The task doesn't wait. A bot that @s someone and stops still has the turn, and the check wakes it again (C28).
 - No push.
 
-**A requirement with your name.** Examples: "OK from Ana." "Answer from Ana: which plan?"
+**A requirement with your name.** Example: "OK from Ana."
 
 - The task stays in its stage until you answer, or someone pushes past with a reason.
 - It is in your list as one sentence, with buttons.
@@ -709,6 +695,8 @@ Three ways, by weight. A task waits on the last two and never on the first.
 You don't have to tell the last two apart. Both are one sentence in your list. It can't be
 snoozed by itself: snoozing it snoozes the task. Talk about it is the task's conversation.
 
+A bot's question is none of these. It is a ❓ on the bot's chat message: the person's reply in that chat answers it, and nothing is added to the task.
+
 ### What lands in your list
 
 Five kinds on one screen. Only a requirement added to one task stores anything. The rest are read from what already
@@ -719,7 +707,7 @@ A task you own with nothing asked of you is not in the list: it is in Tasks.
 
 - **Approve:** a stage's requirement names you, or a rule holds an action such as "Send this email?". Buttons: Approve,
   Send back.
-- **Answer:** a question added to a task. Buttons are the choices, plus a box to type something else.
+- **Answer:** a bot's ❓ in its task's chat. There are no buttons: a reply in the chat answers it.
 - **Do:** a bot can't run and you can fix it, such as Connect Google. One per cause, not one per task. It goes when the
   cause goes. A stage reading PRs with no GitHub App installed is one: **Connect GitHub**, for the company's owner,
   links to Tools, GitHub (**Choose a repository** once installed with none In use); its tasks wake nobody until then,
@@ -730,7 +718,7 @@ A task you own with nothing asked of you is not in the list: it is in Tasks.
 A task the never-stuck ladder could take no further is in no list: it stays with its bot, and the quiet-task rule tells
 the pipeline's manager, who asks a person when it needs one.
 
-Stored: a requirement added to one task (a question, a held action, an OK someone added). Read: a stage's OK (from the
+Stored: a requirement added to one task (a held action, an OK someone added). Read: a stage's OK (from the
 stage), Do (from the bot's state), Let them see (from the task's readers).
 
 ### The shape of an ask
@@ -746,46 +734,18 @@ stage), Do (from the bot's state), Let them see (from the task's readers).
 - **Approve:** the requirement is met. If it was the last one, the task moves in the same step. Undo shows for 10 seconds
   and is an ordinary move back.
 - **Send back:** the task stays in its stage and it is the bot's turn, with your notes. The next version comes back
-  marked with what changed, next to your notes.
-- **Answer:** saved on the task. The bot is woken once with it. A paused bot gets it when it can run.
+  marked with what changed, next to your notes. On a stage's OK, the owner saying done again asks you again: it is back
+  in your Needs you.
+- **Answer:** the reply in the chat is saved as the answer and clears the ❓. The bot is woken once with it. A paused bot gets it when it can run.
 - **Give to…:** the requirement gets the other person's name and moves to their list.
-- **While a question is open** the task stays in its stage, even if everything else is met.
 - **If the task moves back or closes,** the ask ends with it and leaves your list.
 
 The screen, in all five kinds, is [S3](#s3-the-ask-screen).
 
-### Thumbs down, and rules
-
-Thumbs exist today on bot messages, on tasks a bot filed and on approvals, and a 👎 can already make a rule. v3 puts them
-on every ask and makes the rule stop the next one. *Since Nov 14 Flow (the ask screen, S3) shows no 👍 or 👎, so the sheet
-below is not reachable from it; the server routes stay.*
-
-- **👍** is one tap. It goes on the bot's record.
-- **👎** opens a small sheet: what was wrong, in a tap or a few words. Then two buttons.
-- **Send back** deals with this one. The bot gets your words and the ask leaves your list. For a task a bot filed for
-  you, the button is Close. For "Wrong person" it is Give to….
-- **Make a rule** deals with the next one. Tico drafts one sentence from what you wrote. You can edit it, and pick this
-  bot or all bots.
-- **The third time:** on the third 👎 on one bot's asks in 30 days, the sheet opens with the rule already drafted and Make
-  a rule as the main button (C21).
-
-#### How a rule stops the next one
-
-- **A question, or a task a bot files for you:** the rule check that reads what bots send today also reads their asks. An
-  ask a rule covers is refused back to the bot with the rule's words. The bot acts on the rule instead of asking.
-- **An action a rule holds** (send, spend, publish): the sheet's second button reads "Stop holding this". It changes the
-  rule that held the action. "Support may send replacement emails under $50 without asking."
-- **A stage's OK** (approve the spec): the sheet offers the requirement's own settings: Jev only, or a different person.
-  That is a pipeline setting, not a rule.
-- Each rule counts the asks it stopped, so you can see it working.
-- The rule check runs when the bot makes the ask, not in the 10-second check. If it can't be reached, the ask goes
-  through. Better one extra ask than a lost one.
-
 ### What this replaces
 
 - **The requirement review queue.** Gone. Those reviews are in Needs you. Its play button stays, as Flow.
-- **Question tasks.** Today a bot's question is a separate task that holds the first one. Now it is a requirement on the
-  same task.
+- **Question tasks.** Today a bot's question is a separate task that holds the first one. Now it is a ❓ in the bot's chat.
 - **Approvals** (send, spend, publish, merge and the rest). Today they are their own objects. Now each is an Approve ask
   on a task (C11).
 - **Stuck.** Today a sweep files a question task. Now it is the last step of the ladder: the task itself, in a person's
@@ -1160,7 +1120,7 @@ same metadata and the rest is identical.
 - `item_metadata.py`: the saved metadata of every source's items, and what waits on it.
 - `source_actions.py`: a source's actions on entering a stage (act), their undo, and the retries.
 - `stage_effects.py`: file a linked task, queue and dequeue PRs, undo.
-- `answers.py`: a person's answer, Give to…, and the 👎 with its rule. Needs you itself is a read of `waiting_on()`.
+- `answers.py`: a person's answer, Give to…, and undo. Needs you itself is a read of `waiting_on()`.
 - `pipeline_settings.py`: one record for a pipeline, its stages and requirements. One schema for the editor, the API, hub
   and MCP. Versioned, with who changed what.
 
@@ -1171,7 +1131,7 @@ pipelines     name, goal, manager, private, factory, settings_version
 stages        pipeline, position, kind (work | done | closed), name, purpose,
               owner (a bot | a person | 'assignee'), by_hand, limit, expected_minutes, on_enter
 requirements  stage or visit, kind, source, condition (on an item), settings, can_push_past, who_oks (none | people_only | people_with_exceptions),
-              person, added_by, line, shows (page + version | email | PR | action), choices, withdrawn_at
+              person, added_by, line, shows (page + version | email | PR | action), withdrawn_at
               on a stage: every task. on a visit: this task, this time. unique (visit, added_by) for a bot
 tasks         pipeline, stage, owner, assignee, version, status (open | done | closed; written by move() only),
               prefix (its label's letters, from the pipeline it was made in; kept when it moves)
@@ -1179,7 +1139,6 @@ visits        task, stage, entered_at, left_at, how (met | pushed_past | back | 
               tries, level (owner | manager | person), next_try_at, progress_mark, last_change_at,
               late_told_at, late_person_at, bot_snoozes
 answers       visit, requirement, by, answer, notes, page_version, at
-feedbacks     exists today: person, subject, rating, reason, rule. Asks become a subject.
 snoozes       task, by, why, until (empty = no end), ended_at
 links         from_task, to_task, visit, kind (sub-task | handoff)
 item_metadata source, item type, item key, title, fields, metadata_version, read_at
@@ -1364,8 +1323,7 @@ late. Nothing depends on the exact 10 seconds.
   task_check_backs, stale_review, stranded_resume, task_loops, task_allocator, auto_tasks, task_roundup,
   milestone_waits, question_tasks, ask_deadlines, approval_expiry, blocker_asks, ticket_notices, still_wanted,
   task_snooze (rewritten small).
-- **Not changed:** Jev, factories and their counts, pipeline stats, who may see what, quarantine, the runner, thumbs and
-  the rule check (asks are added to what they cover).
+- **Not changed:** Jev, factories and their counts, pipeline stats, who may see what, quarantine, the runner.
 
 Each of these is listed with where its behavior goes in the [tick list](#tick-list-every-task-and-pipeline-feature).
 
@@ -1392,7 +1350,7 @@ These words are used in every screen below.
 - **Mark:** at the left of a row, before the title. One of: a green spinner, an amber circle with "!", a red dot, or an
   empty space the same width (no mark), so titles line up.
 - **Late tag:** a small rounded tag reading "Late", in amber, right after the title.
-- **Avatar:** a small round picture of who has the task, at the right of a row.
+- **Avatar:** a small round picture of the task's owner, at the right of a row (the mark and the line say whose turn it is).
 - **Age:** a short, dimmed time at the far right of a row: how long, such as "58m", "2d", "30h".
 - **Main button:** filled green. Other buttons are outlined. Where a list below names the main button, it says "(main)".
 - **Icons** (no words beside them): search (a magnifier), filter (the shared filter icon), list view, columns view,
@@ -1404,14 +1362,14 @@ These words are used in every screen below.
 Each look is one row, on one line, in this order: mark, title, anything after the title, avatar, age.
 
 1. **A bot is working:** spinner · "Phone view shows one stage" · avatar · "58m".
-2. **Needs a person:** amber "!" · "Checkout flow" · the person's avatar · "2d".
+2. **Needs a person:** amber "!" · "Checkout flow" · the owner's avatar · "2d".
 3. **Can't run:** red dot · "Refund flow" · avatar · "1h".
 4. **Nothing needed:** no mark · "Saved carts" · avatar · "5h".
 5. **Late:** spinner · "Calibration export" · Late tag · avatar · "30h".
 6. **Pointed at:** no mark · "Assistant can approve a spec" · a small dark tooltip "Builder · missing Checks pass" ·
    avatar · "2h".
 7. **In your list:** "Approve the spec for Checkout flow" · avatar · "2h". No mark and no mark space.
-8. **Two choices:** "Raise Home Pro to $479 for December?" · button "Yes" (main) · button "No" · avatar · "1d".
+8. **A question:** "Should the launch note go out on Friday?" · avatar · "1d". No buttons: a reply in the chat answers it.
 9. **One tap:** "Connect Google for Scout" · button "Connect" (main) · avatar · "3h".
 10. **Snoozed:** "Carrier contract", dimmed · "Nov 14". No mark, no avatar.
 11. **Done, Closed:** "Saved carts", dimmed · "Nov 9". No mark, no avatar.
@@ -1461,28 +1419,19 @@ Tasks header (a pipeline's items on a pipeline, all of Needs you elsewhere) and 
 
 - **Top bar,** one line: where you are ("All mine", "All mine / Product" or "All mine / Product / Spec"), a menu of the
   pipelines and stages where something waits on you (and Other, for items in no stage), each opening that walk; Flow's
-  mark, which moves while Tico is still thinking about the item on screen; a quiet mic (voice is not built: pressing it
-  shows a wave and "Voice is coming soon"); Tico's line on the item, one line (two on a phone), whose pick on an OK is
-  the main button (a question's choices never change for it: no choice looks chosen before a tap; a send back's note
-  fills Notes only when it is empty and untouched); while Tico still thinks about another
-  ask, that ask's short title, faint (not on a phone); then ‹ (previous), › (next), ✕ (close). No count, and no score.
-  While Tico still thinks about an ask, none of its answers is the main button, so the main one never changes under the
-  person; with no line (none, or Tico not there) the buttons are as they always were. Tico's lines come from
-  `POST /api/v2/flow/opinions`, one request of at most 30 asks every 2 seconds or so; an ask that changes is asked
-  again. In a walk of more than 5, items not yet seen this visit come highest score first; the one on screen and the
-  ones seen keep their place.
+  mark; a quiet mic (voice is not built: pressing it shows a wave and "Voice is coming soon"); then ‹ (previous), › (next),
+  ✕ (close). No count, and no score is shown. In a walk of more than 5, items not yet seen this visit come highest score
+  first; the one on screen and the ones seen keep their place.
 - **Left, the page itself,** shown in full: the heading "Checkout flow: spec", then "Guests can pay without making an
   account. The order summary stays visible on every step." The second sentence is highlighted: it changed since the
   version you last saw. The rest of the page follows.
 - **Right: the task's chat.** Its own thread, as on the task page (a message here is there too, and the reverse), with
   the ask as the asker's last message: who asked and when on one line (the name cut first), "#80 ↗" at its right end
   (a paused or stuck asker is a small mark, never a card), then "Approve the spec for Checkout
-  flow", its one why line and any choices to tap. Under the chat's box only "Approve" (main; "Approve with comments"
+  flow". Under the chat's box only "Approve" (main; "Approve with comments"
   while the box has words, which go with the approval, as its note or, on an OK bound to exactly what it shows, as a
   comment after it), the snooze icon and ⋯. The box's arrow sends the words: on an OK that is its send back (the
-  answer "no", the words its note, as before); on a bot's question a reply named for it, which wakes the bot, and the
-  question leaves your Flow until the bot writes on the task again (or a week passes): the bot takes the reply as the
-  answer and withdraws its question, or asks again; a person's or a stage's question takes the words as its answer.
+  answer "no", the words its note, as before). A bot's ❓ is answered by a reply in its chat, and the reply clears it.takes the words as its answer.
   A page's OK always asks its question ("OK the spec?"), then one line of what changed (else Jev's take) and your
   points; your note on the version before is your own message above the ask, never inside it. A Validate or QA OK
   shows its question, then the verdict as up to 3 short check rows (what the decision model passed on the page it
@@ -1502,7 +1451,7 @@ Tasks header (a pipeline's items on a pipeline, all of Needs you elsewhere) and 
 
 **Opening a task opens its ask.** A task waiting on your own answer (any of its waits, not only the first) opens on this screen from anywhere (the board, a
 task list, a `#/task/<id>` link, a link in chat, a bot's page), with ‹ › through the rest of Needs you; any other task
-opens its page. "Open task #N ↗" opens the task's page, which stays open; its Answer comes back here.
+opens its page. "Open task #N ↗" opens the task's page, which stays open; its ask comes back here.
 
 The chat's box is the one every chat has. A file added with 📎 goes up to the task's Files when the arrow sends, and
 the words end with each file's name and id, so the bot's wake lists them; one that fails is named and nothing is sent.
@@ -1513,12 +1462,7 @@ The phone view is in [S17](#s17-on-a-phone). What changed since the version you 
 
 - **An email to approve:** heading "Send this email to Dana about her replacement?". The email itself: "To: Dana", "Subject: Your replacement order", "Hi Dana, your replacement ships Monday…".
   "Approve" (main); a reply in the chat sends it back.
-- **A question from a bot:** in its task's chat, "Which plan do new signups get?", the bot's why line, and a card per
-  choice ("Free", "Pro trial", "Ask at signup"), each with its line on what happens, every card alike, and only the
-  "Recommended" tag on the one the bot recommends. A tap answers; a reply in the chat goes to the bot (above).
-- **A question from a person:** the same, its choices as buttons; a reply in the chat is its answer.
-- **A stage's typed answer** (a number, a choice, text) keeps its own boxes: a number has the number box and a Notes
-  box, whose words go with the number as its note, or, alone, back to whoever asked.
+- **A question from a bot (❓):** the chat at the marked message, with its composer. A reply there answers it and clears the ❓.
 - **A one-tap fix:** heading "Connect Google for Scout". Line "Its Google login expired Nov 8." Button "Connect" (main).
 - **A stuck task:** heading "Export retries is stuck". Line "Checks fail: lint, unit. Builder and Eng Manager each tried 3
   times." Buttons "Try again" (main), "Reassign", "Move back", "Close".
@@ -1527,9 +1471,8 @@ The phone view is in [S17](#s17-on-a-phone). What changed since the version you 
   closes the task with what is typed in the item's box as the reason, with no confirm, and moves on; ↶ reopens it. The
   reason goes on the close in the task's history, and a bot that asked for the task (not the one that owns it) hears
   "Closed: <title>" with it on its next run.
-- **After an answer:** the next item shows at once, and Tico's line reads "✓ Approved with comments · Undo" (what was
-  done) for about 5 seconds, then the new item's line; it stays while Undo has the keyboard's focus. Tico's line wraps
-  to two lines and is never cut; a green thumb leads it when Tico would approve.
+- **After an answer:** the next item shows at once, and a line reads "✓ Approved with comments · Undo" (what was
+  done) for about 5 seconds; it stays while Undo has the keyboard's focus. The line wraps to two lines and is never cut.
 - **Snooze:** one menu, 1 hour, 1 day, 1 week, 1 month (each exactly that long from now) and Other (a date and time of
   your own, in the same menu). On an ask it is a quiet clock icon at the end of the answer row, in Skip's place, and
   snoozes the ask for you alone (#3769): it stays in everyone else's Needs you and its bot is not told. It leaves Flow
@@ -1537,7 +1480,7 @@ The phone view is in [S17](#s17-on-a-phone). What changed since the version you 
 - **The end:** "All done", and "2 snoozed" counting every ask you have snoozed; it opens their list, each with ↩ to
   bring it back now.
 
-Flow has no 👍 or 👎; the rules are in [Thumbs down, and rules](#thumbs-down-and-rules).
+Flow has no 👍 or 👎.
 
 ### S4. The task
 
@@ -1546,7 +1489,7 @@ Today: the task window, in two columns.
 - Same window as today, same two columns.
 - Left, in order: title, one line, description, conversation.
 - Right: the fields, what the stage needs, sub-tasks, links, history.
-- New: a person's face on a requirement that waits on them. + adds an OK or an answer from someone.
+- New: a person's face on a requirement that waits on them. + adds an OK from someone.
 - @ from a person puts the task in that person's Needs you until they reply. From a bot it only marks it unread.
 - Gone: Status, Type and Step menus, Public text, Runs on. The last two move under ⋯.
 
@@ -1672,7 +1615,7 @@ Rules:
 Examples, as drawn: "Ideas 12", "Spec 2/2", "Build 2/3", "Review 1 0".
 
 - A name and a number. Where the stage has a limit, the number is "how many hold a slot / the limit", then a person
-  mark and how many wait only on a person's OK or answer, when any do (C27). Its label and tooltip say "15 wait on a
+  mark and how many wait only on a person's OK, when any do (C27). Its label and tooltip say "15 wait on a
   person"; the phone's head shows the same mark for the stage on screen.
 - No other words. Tapping it opens the stage's settings (S11).
 
@@ -1809,8 +1752,8 @@ Filed by: P-12 Checkout flow
 tico task done E-214 -m "note"
 tico task move E-214 next|<stage> -m "why"
 tico task close E-214 -m "why"
-tico task ask E-214 --to chris "one line"
-     [--choices a,b] [--show page:12]
+tico task ask E-214 --to chris "one line"       # a ❓ on the task's chat
+tico task ask E-214 --to chris --kind ok "one line" [--show page:12]
 tico task attach E-214 --req "Review page" page:12 --version 4
 tico task file --parent E-214 --pipeline general "title"
 tico task snooze E-214 [--until 2026-11-14] -m "why"
@@ -1837,11 +1780,10 @@ MCP tools mirror these one for one. There is no `tico card`.
 
 Four phone screens:
 
-1. **Tasks › You.** Header: "Tasks"; "You 7 ▾" with the 7 in amber; at the right, play and +. Group "Answer", 3: "Raise
-   Home Pro to $479 for December?" · "1d"; "Which plan do new signups get?" · "2h". Group "Review", 2: "Approve the spec
+1. **Tasks › You.** Header: "Tasks"; "You 7 ▾" with the 7 in amber; at the right, play and +. Group "Answer", 3: "Should the launch note go out on Friday?" · "1d"; "Which plan do new signups get?" · "2h". Group "Review", 2: "Approve the spec
    for Checkout flow" · "2h"; "Send this email to Dana about her replacement?" · "3m". Rows show the title and age only:
    no buttons, no avatar.
-2. **An ask.** Top bar: "All mine", Flow's mark, the mic, ‹, ›, ✕; Tico's line under it. The heading "Approve the spec for Checkout flow". The page:
+2. **An ask.** Top bar: "All mine", Flow's mark, the mic, ‹, ›, ✕. The heading "Approve the spec for Checkout flow". The page:
    "Checkout flow: spec", "Guests can pay without making an account. The order summary stays visible." with the second
    sentence highlighted. A "Notes" box. Buttons "Approve" (main) and "Send back".
 3. **A pipeline.** Header: "Tasks"; "Engineering ▾"; at the right, search and +. A row of stage tabs: "On deck 2",
@@ -1856,7 +1798,7 @@ Rules:
 - A long sentence wraps on a phone.
 - On an ask the screen scrolls as one: the thing asked about, then the question, Notes and Attach. Approve, Send back
   and Snooze (or the ask's own buttons) sit in a bar pinned to the bottom, solid, above the keyboard when it is up.
-  "✓ Approved · Undo" shows in Tico's line, never over that bar. An ask with nothing to show opens on its question.
+  "✓ Approved · Undo" shows above that bar, never over it. An ask with nothing to show opens on its question.
 - On a phone Send back is always on; with Notes empty it sends nothing and puts the cursor in Notes, "Say what to change".
 - After an answer or Skip, the next item's buttons take no taps for 400 ms, so a second tap does not answer it unread.
 - A pipeline shows one stage at a time.
@@ -1912,7 +1854,7 @@ into a test in phase 1.
   Release QA itself is dropped (D46).
 - **F6. Asks that never leave.** Prevented. An ask belongs to one visit and ends when the task moves, goes back or
   closes. One question per bot per task, so no copies. "Reconnect" rows are read from the bot's state, one per cause, and
-  go when the cause goes. A 👎 with a rule stops the repeat.
+  go when the cause goes.
 - **F7. The Writer woken on every release.** Tightened. In the engine a bot is woken once per visit. A release updates
   metadata and wakes nobody. New: the docs automation (D46) keeps one open task and adds later releases to it.
 - **F8. The review gate refuses moves, and a second mover retries.** Prevented. One mover. Nothing retries a refused
@@ -1980,7 +1922,7 @@ The list names them without describing them, so they are not re-checked here.
 How each one works on the engine.
 
 - **A quick to-do for yourself.** A General task you own. It sits in Yours. Nobody chases it.
-- **A question.** Not a task. It is an ask on the task the bot is working on.
+- **A question.** Not a task. It is a ❓ on the bot's chat message.
 - **A bot needs a person to do real work.** A General task filed for that person. The bot's task waits on it.
 - **A bot asking a bot.** A General task filed as a sub-task. The asking bot's task waits on it and is woken when it
   ends.
@@ -2001,7 +1943,7 @@ How each one works on the engine.
   reads only that way shares nothing: it adds no reader, gives the task to nobody, and what it files from the task is
   private with the task's readers, for itself or for someone who already reads the task. The filer keeps reading what
   it filed after it leaves the stage, as any requester does, and shares that no more than the task it came from. On a pipeline holding an open private task only a person changes who holds a stage.
-  Anyone else a stage needs (a person asked for an OK or an answer, an assignee, the General Manager) must already
+  Anyone else a stage needs (a person asked for an OK, an assignee, the General Manager) must already
   read the task: until someone shares it, the task waits and the line names who can.
 - **Work that needs no code but was filed in Engineering.** Closed with a reason, or moved to General.
 - **An idea you don't want yet.** Snooze it with no end date. It leaves the stage's count.
@@ -2017,8 +1959,7 @@ Each feature that exists today, and where it goes.
 - **D1.** Sub-tasks. Closing a parent closes its open sub-tasks. A parent waits on the sub-tasks it filed.
 - **D2.** Snooze, with "no end date" added. The owner is woken once when it ends.
 - **D3.** Due dates. Shown, and they set Late. No reminders.
-- **D4.** Tags, private tasks, followers, who can see, pages, files, sessions, runs, the per-task model. Thumbs too, now
-  on every ask (rules).
+- **D4.** Tags, private tasks, followers, who can see, pages, files, sessions, runs, the per-task model. 
 - **D5.** "Done looks like" on a task. It moves under Details.
 - **D6.** The daily cap on how many tasks one sender can give another.
 - **D7.** Quarantine. A quarantined bot's tasks say Paused.
@@ -2040,7 +1981,7 @@ Each feature that exists today, and where it goes.
 - **D20.** Follow-up times a bot sets on a task. Now Snooze to a date.
 - **D21.** Waiting for a PR to merge or a release. In Engineering these are requirements. Elsewhere the task waits on the
   task that owns the PR, or snoozes.
-- **D22.** Question tasks. Now an ask on the task.
+- **D22.** Question tasks. Now a ❓ on the bot's chat.
 - **D23.** Approvals for send, spend, publish, merge and the rest. Now an Approve ask on a task.
 - **D24.** Reconnect, repo, settings and shared-blocker asks. Now one row per cause, read from the bot's state.
 - **D25.** Status words: Open, Doing, Waiting, In review, Ready to ship, Declined. Now the state line. The database keeps
@@ -2074,6 +2015,9 @@ Each feature that exists today, and where it goes.
 - **D46.** The QA wake after a release, and Post Release QA. The docs task becomes an automation on "release published".
   It keeps one open task and adds later releases to it.
 - **D47.** "Still wanted?" asks. Already unused. Deleted.
+- **D48.** Structured questions: choices, typed answers, "Recommended", Tico's pick and line (its hidden score stays),
+  "Look again", 👍 and 👎 with their rules, and the Strategy Owner's duplicate merge. A question is a ❓ in the bot's
+  chat.
 
 ### Where each old pipeline mover goes
 
@@ -2106,7 +2050,7 @@ A, B and C are approved. This page is the build spec in the repo, and the checks
 ### Phase 1: the engine and General
 
 - **Builds:** the tables and the database trigger. `move()`. `waiting_on()`. The never-stuck check with the ladder, Late
-  and Paused. Snooze. Asks, with 👍, 👎 and rules. The General preset. The tico task commands. Screens S1 to S6 and S13 to
+  and Paused. Snooze. Asks. The General preset. The tico task commands. Screens S1 to S6 and S13 to
   S17. The fault rig.
 - **Deletes, in the same phase:** every other writer of stage, owner and status, the 17 upkeep files, question tasks,
   approval objects, stale checks, and the old pipeline movers. Product and Engineering pipelines don't run on main until
@@ -2151,9 +2095,9 @@ failure can be replayed exactly. It runs in CI, not on your machine.
   stage or a person's turn. Nothing may be left waiting on a bot forever.
 - **It counts runs.** No task may use more than 7 bot runs without a change before a person is asked.
 
-### Scenarios the rig and the spot checks must pass (52)
+### Scenarios the rig and the spot checks must pass (49)
 
-Numbered in order so they can be cited (scenario 1 to 52).
+Numbered in order so they can be cited (scenario 1 to 49).
 
 1. A bot stops early with nothing changed: woken at 15 min, 15 min and 50 min, then the manager, then the ladder rests
    and the quiet-task rule tells the manager. At most 7 runs.
@@ -2201,23 +2145,20 @@ Numbered in order so they can be cited (scenario 1 to 52).
 38. A sub-task six levels deep: refused.
 39. A task is reassigned while the old owner is running: the old owner's next command is refused, and its queued wake is
     dropped.
-40. A bot asks a question and the checks then pass: the task stays until the question is answered, withdrawn or pushed
-    past.
+40. A bot asks a question (a ❓) and the checks then pass: the task moves on as its requirements say. The ❓ stays in the
+    person's Needs you until they reply.
 41. A task with an open ask moves back: the ask leaves the person's list in the same step.
 42. A bot @s a person in the conversation and stops: it is still the bot's turn. The ladder runs as for any early stop.
 43. A person @s another person on a task: it is in their Needs you until they reply. The task's turn doesn't change.
 44. Someone puts a person's name on Checks pass: refused, offered a sub-task.
 45. A person adds "OK from Steven" to one task: it is in Steven's list, the task stays in its stage, and it ends when the
     task leaves.
-46. A bot adds a second question to a task: the first is replaced. Never two from one bot.
-47. A 👎 with Send back on an ask: the bot gets the words and the ask leaves the list.
-48. A third 👎 on one bot's asks in 30 days: the sheet opens with a drafted rule.
-49. A bot makes an ask that a rule covers: refused with the rule's words. With the rule check down: the ask goes through.
-50. A closed task's PR merges anyway: the task shows it and the manager bot is told once.
-51. A commit lands after the person's OK: a rebase with the same lines keeps the OK; other changes are read by
+46. A bot marks a second ❓ in the same chat: the first is replaced. Never two from one bot in one chat.
+47. A closed task's PR merges anyway: the task shows it and the manager bot is told once.
+48. A commit lands after the person's OK: a rebase with the same lines keeps the OK; other changes are read by
     Reviewer 2, whose OK keeps it and whose send back asks the person again after the next read. The task shows
     "Changed after OK".
-52. A linked task is deleted: the waiting task treats it as Closed.
+49. A linked task is deleted: the waiting task treats it as Closed.
 
 ### Ten real tasks
 

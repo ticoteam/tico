@@ -30,8 +30,8 @@ import score  # (the BotOps scorers)
 # A task is finished in one of these. A replayed task has also settled when its turn is a person's (the bot asked
 # someone and stopped), once its bot is not running.
 SETTLED = ("done", "closed")
-# What a person answers on a task: a question the bot asked them, or an OK (an ask, or the stage's own).
-ASKS = ("answer", "ok")
+# What a person answers through an ask: an OK (a bot's, or the stage's own). A bot's question is a ❓ message instead.
+ASKS = ("ok",)
 # Lower is better for each; minutes are reported but too noisy to decide a verdict.
 NUMBERS = ("person_steps", "jargon", "duplicates", "sent_elsewhere", "runs")
 # Common shapes of what a case may never hold once signed: provider keys, bearer tokens, a password, a password in a
@@ -90,25 +90,42 @@ def _person(actor):
 
 
 def questions(detail, bot):
-    """What waits on a person on one task: each question or OK of its stage that a person answers (the bot's asks
-    and the stage's own OKs), with whether it is still open, in the task's order. Read from the task's `to_leave`
-    (docs/dev/pipelines-v3.md: requirements and asks)."""
+    """What waits on a person on one task, in the task's order: each OK of its stage that a person answers (the bot's
+    asks and the stage's own OKs), read from the task's `to_leave` (docs/dev/pipelines-v3.md: requirements and asks),
+    then each ❓ message still open (refs.question {id, to}: the message's text is the question, the person's reply in
+    the task's chat answers it). A cleared ❓ leaves no mark on its message, so only open ones are seen."""
     task = detail.get("task") or {}
     # An answered ask names who answered it; an open one, who it waits on.
     who = lambda r: r.get("who") or (r.get("answer") or {}).get("by")
-    return [
+    found = [
         {
             "id": r["requirement_id"],
             "task": task.get("id"),
             "to": who(r),
             "kind": r["kind"],
-            "choices": r.get("choices") or [],
             "by_bot": r.get("asked_by") == "bot:" + bot,
             "open": not r.get("met"),
         }
         for r in task.get("to_leave") or []
         if r.get("kind") in ASKS and _person(who(r))
     ]
+    for m in sorted((detail.get("messages") or []) + (detail.get("comments") or []), key=lambda m: m["created_at"]):
+        refs = m.get("refs")
+        refs = json.loads(refs) if isinstance(refs, str) and refs else refs
+        mark = (refs or {}).get("question") if isinstance(refs, dict) else None
+        if mark and _person(mark.get("to")) and not m.get("deleted_at"):
+            found.append(
+                {
+                    "id": mark.get("id"),
+                    "task": task.get("id"),
+                    "to": mark["to"],
+                    "kind": "question",
+                    "text": m.get("body") or "",
+                    "by_bot": m.get("sender_id") == "bot:" + bot,
+                    "open": True,
+                }
+            )
+    return found
 
 
 def filed(child_details, bot):

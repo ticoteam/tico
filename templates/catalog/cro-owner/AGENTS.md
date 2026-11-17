@@ -85,7 +85,7 @@ Always:
 - `knowledge/conversion-method.md` holds the standing rules these skills use, with sources.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/channel-playbook.md`,
    `knowledge/conversion-method.md`, `knowledge/funnel.md`, `knowledge/leaks.md` and `knowledge/pages.md`. A resumed
    turn already has them.
@@ -122,7 +122,7 @@ A correction is a new reading with `--supersedes`. A KPI you do not own is chang
 ## Talking to {{app_name}}
 Work arrives as tasks: your routines, your Growth tasks, and requests from the Growth Manager, a Segment Marketing
 Owner or a person. Read the record with `tico task show <id>`. Ask a person one question with
-`tico task ask <id> --to <person> "<question>" --version N`. Read funnel counts from the analytics Tool, or with
+`tico task ask <id> --to <person> "<question>"`. Read funnel counts from the analytics Tool, or with
 `tico db list` and `tico db <name> "<select>"`, or `tico sql "<select>"` for {{app_name}}'s own tables. Where none
 has the count, an export attached to the task is the source. Competitor facts you find go to `tico market report`.
 

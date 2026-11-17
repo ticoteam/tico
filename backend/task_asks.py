@@ -315,14 +315,21 @@ def own_click(who: object) -> bool:
 
 
 # ----------------------------------------------------------------------------- reads
+GRANT_SQL = "SELECT * FROM ok_grants WHERE requirement_id=?"
+
+
 def grant(conn: "sqlite3.Connection", requirement_id: str) -> Row | None:
-    """The grant of one OK requirement, with its content loaded, or None."""
-    found = conn.execute("SELECT * FROM ok_grants WHERE requirement_id=?", (requirement_id,))
-    names = [d[0] for d in found.description]
-    row = found.fetchone()
+    """The grant of one OK requirement, with its content loaded, or None. Read through the snapshot's cache: a list of
+    waits primes it for every OK it holds (waiting_on.prime)."""
+    from . import read_cache
+
+    row = read_cache.one(conn, GRANT_SQL, (requirement_id,))
     if not row:
         return None
-    out: Row = dict(zip(names, row, strict=True))
+    if not hasattr(row, "keys"):  # a connection without named rows
+        found = conn.execute(GRANT_SQL, (requirement_id,))
+        row = dict(zip([d[0] for d in found.description], found.fetchone() or (), strict=True))
+    out: Row = dict(row)
     try:
         out["content"] = json.loads(out.get("content") or "null")
     except ValueError:
@@ -467,8 +474,7 @@ def refuses_plain_ok(conn: "sqlite3.Connection", requirement_id: str, value: obj
     it is not give_ok answering it, else None. A send back and an undo stay plain answers."""
     if value != "ok" or _GIVING.get() == requirement_id:
         return None
-    found = conn.execute("SELECT 1 FROM ok_grants WHERE requirement_id=?", (requirement_id,)).fetchone()
-    return FROM_PREVIEW if found else None
+    return FROM_PREVIEW if bound(conn, requirement_id) else None
 
 
 # The bots that act for a person (backend/assistant.py, backend/botops_act.py): they never give an OK of any kind.
@@ -481,7 +487,7 @@ def refuses_ok_by(conn: "sqlite3.Connection", who: object, requirement_id: str, 
     """For every answer path before the engine (the answer route, a batch decision): the refusal's words when `ok` to
     an OK requirement, bound or plain, on anyone's ask, does not come from the person's own session: the Assistant or
     BotOps (acting for a person, confirmed or not, or as itself), a personal token, or anything else acting for them.
-    Else None. A send back, a look again and a question's answer stay theirs to give."""
+    Else None. A send back stays theirs to give."""
     if str(value or "").strip().casefold() != "ok":
         return None
     via = str(getattr(who, "via", "") or "")
@@ -652,9 +658,15 @@ def event_hidden(conn: "sqlite3.Connection", principals: object, target: object)
     return any(not party(conn, viewer, row) for viewer in viewers)
 
 
+BOUND_SQL = "SELECT 1 FROM ok_grants WHERE requirement_id=?"
+
+
 def bound(conn: "sqlite3.Connection", requirement_id: str) -> bool:
-    """Whether a requirement is a bound OK (has a grant)."""
-    return conn.execute("SELECT 1 FROM ok_grants WHERE requirement_id=?", (requirement_id,)).fetchone() is not None
+    """Whether a requirement is a bound OK (has a grant). Read through the snapshot's cache: a list of waits primes it
+    for every OK it holds (waiting_on.prime)."""
+    from . import read_cache
+
+    return read_cache.one(conn, BOUND_SQL, (requirement_id,)) is not None
 
 
 def private_history(conn: "sqlite3.Connection", viewer: object, events: list[Row]) -> list[Row]:

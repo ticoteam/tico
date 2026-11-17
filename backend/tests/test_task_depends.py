@@ -88,7 +88,7 @@ def test_a_task_that_depends_on_another_is_blocked_by_it_and_nobodys_turn(c):
     assert TR.relate(c, X.ANA, blocked, blocker, "depends_on")
     waits = W.waiting_on(c, blocked)
     assert [(w.state, w.who, w.line) for w in waits] == [
-        (W.TASKS, blocker, f"Blocked by {ref(c, blocker)} Growth synced sources part 1, in Build")
+        (W.TASKS, blocker, "Blocked by Growth synced sources part 1, in Build")
     ]
     assert D.is_wait(waits[0].requirement_id)
     assert W.turn(c, E.task(c, blocked)) is None and W.turns(c, E.task(c, blocked)) == set()
@@ -114,7 +114,7 @@ def test_the_owner_is_woken_once_when_the_last_open_dependency_is_done(c):
     entered = X.wakes(c, blocked, B)
     ended(c, first)
     # Still blocked by the fix: nobody is woken.
-    assert [w.line for w in W.waiting_on(c, blocked)] == [f"Blocked by {ref(c, second)} Fix main, in Build"]
+    assert [w.line for w in W.waiting_on(c, blocked)] == ["Blocked by Fix main, in Build"]
     assert bodies(c, blocked) == [] and X.wakes(c, blocked, B) == entered
     ended(c, second)
     (body,) = bodies(c, blocked)
@@ -416,7 +416,7 @@ def test_until_released_stays_blocked_after_done_and_wakes_once_when_production_
     (wait,) = W.waiting_on(c, check)
     assert (wait.state, wait.line) == (
         W.TASKS,
-        f"Blocked by {ref(c, work)} Growth synced sources, done, until production runs its release",
+        "Blocked by Growth synced sources, done, until production runs its release",
     )
     assert W.turn(c, E.task(c, check)) is None
     # rc.9 is cut with the merge, but production still runs rc.8: nothing.

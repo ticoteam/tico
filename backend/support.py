@@ -494,9 +494,7 @@ class Support:
                 | {p.name for p in (ui / "app").glob("*.js")}
                 | {p.name for p in (ui / "app").glob("*.ts")}
                 | {"sw.js"}  # ui/sw.ts is served at the root as sw.js, the name a worker's error gives
-                | {"app.bundle.js"}
-                | {f"app.bundle.{n}.js" for n in range(2, 100)}
-                | page_parts(ui)  # the page parts (ui/parts.json), fetched as a page is first opened
+                | bundle_files(ui)  # the bundle's scripts, the page parts' included (scripts/build-ui.cjs)
             )
             bundle["browser"] = [
                 {**event.model_dump(), "file": event.file if event.file in files else ""} for event in browser
@@ -1165,12 +1163,9 @@ def install(app, store, settings, census):
         return support.remove(who, ticket_id)
 
 
-def page_parts(ui):
-    """The file names of the page parts (backend/ui_bundle.py), as a browser event names them."""
-    import json
+def bundle_files(ui):
+    """The file names of the bundle's scripts this server serves (backend/ui_build.py), as a browser event names them."""
+    from . import ui_build
 
-    try:
-        parts = json.loads((ui / "parts.json").read_text())
-    except (OSError, ValueError):
-        return set()
-    return {f"app.bundle.{name}.js" for name in parts if not name.startswith("//")}
+    folder = ui_build.bundle_dir(ui)
+    return {p.name for p in folder.glob("app.bundle.*.js")} if folder.is_dir() else set()

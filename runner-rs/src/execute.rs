@@ -8393,7 +8393,7 @@ for line in sys.stdin:
             std::fs::write(&script, r#"import json, pathlib, signal, sys
 root = pathlib.Path(__file__).parent
 if '--version' in sys.argv:
-    print('2.1.999'); sys.exit(0)
+    print('2.1.999 (Claude Code)'); sys.exit(0)
 if '--help' in sys.argv:
     sys.exit(0)
 signal.alarm(10)
@@ -8439,7 +8439,7 @@ print(json.dumps({'type':'result','subtype':'success','result':'Acme completed o
         std::fs::write(&script, r#"import json, os, pathlib, signal, sys
 root = pathlib.Path(__file__).parent
 if '--version' in sys.argv:
-    print('2.1.999'); sys.exit(0)
+    print('2.1.999 (Claude Code)'); sys.exit(0)
 if '--help' in sys.argv:
     sys.exit(0)
 signal.alarm(20)  # A failed guard cannot leave this synthetic process behind.
@@ -8532,7 +8532,7 @@ else:
         std::fs::write(&script, r#"import json, os, pathlib, signal, sys
 root = pathlib.Path(__file__).parent
 if '--version' in sys.argv:
-    print('2.1.999'); sys.exit(0)
+    print('2.1.999 (Claude Code)'); sys.exit(0)
 if '--help' in sys.argv:
     sys.exit(0)
 signal.alarm(20)
@@ -8663,7 +8663,7 @@ else:
         std::fs::write(&script, r#"import json, pathlib, sys
 root = pathlib.Path(__file__).parent
 if '--version' in sys.argv:
-    print('2.1.999'); sys.exit(0)
+    print('2.1.999 (Claude Code)'); sys.exit(0)
 if '--help' in sys.argv:
     sys.exit(0)
 with (root / 'argv.jsonl').open('a') as f:

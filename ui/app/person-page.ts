@@ -424,7 +424,7 @@ function personTaskModal(p: RosterPerson) {
     <form class="task" id="person-task">
       <div class="tmodal-body">
         <input type="text" name="title" required aria-label="Title" placeholder="Start with a verb: Email, Ask, Send…">
-        <textarea name="body" required aria-label="Details" placeholder="The ask in the first line, then any details."></textarea>
+        <textarea name="message" aria-label="Message" placeholder="Message"></textarea>
       </div>
       <div class="tmodal-foot"><span class="muted" id="person-task-msg" role="status"></span>
         <button class="ghost" type="button" data-modal-close>Cancel</button><button class="primary" type="submit">Create task</button></div>
@@ -434,11 +434,11 @@ function personTaskModal(p: RosterPerson) {
   form.onsubmit = async (ev: Event) => {
     ev.preventDefault();
     const btn = form.querySelector('[type=submit]'), msg = $('#person-task-msg', d);
-    const title = form.title.value.trim(), body = form.body.value.trim();
+    const title = form.title.value.trim(), message = form.message.value.trim();
     if (!title) return;
     btn.disabled = true; msg.textContent = 'Creating…';
     try {
-      await cloudCompose('/v2/tasks', {title, body, owner: 'human:' + p.id}, []);
+      await cloudCompose('/v2/tasks', {title, ...(message ? {message} : {}), owner: 'human:' + p.id}, []);
       toast(`Task for ${p.name || p.id} created`);
       d.close();
       await v2Refresh();

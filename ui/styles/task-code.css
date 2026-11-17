@@ -21,9 +21,9 @@
 #task-modal .tw-head .tmodal-age{padding:0 var(--s2);font-size:var(--t-sm);white-space:nowrap}
 #task-modal .tw-head .tmodal-sep{width:1px;height:18px;margin:0 var(--s1);background:var(--line)}
 #task-modal .tw-head>.tthread-back{flex:none;margin-top:0}
-/* The documents' tabs sit on the title row; the title gives way first (one line, then an ellipsis), then the row
-   scrolls. Details is an icon, pressed while it shows; its number is what still blocks the stage. */
-#task-modal .tw-head:has(>.tw-tabs) .tmodal-title{-webkit-line-clamp:1;line-clamp:1;min-width:4em}
+/* The documents' tabs sit on the title row. The title keeps 40% of it and its two lines, as on a phone; the tabs take
+   the rest and scroll. Details is an icon, pressed while it shows; its number is what still blocks the stage. */
+#task-modal .tw-head:has(>.tw-tabs) .tmodal-title{flex:1 0 40%;min-width:40%}
 #task-modal .tw-head>.tw-tabs{max-width:min(60%,420px)}
 #task-modal .tw-head .tw-details{position:relative}
 #task-modal .tw-head .tw-details[aria-pressed="true"]{color:var(--ink);background:var(--surface2)}
@@ -47,7 +47,6 @@
 #task-modal .task-desc{font-size:var(--t-md);line-height:1.55}
 #task-modal .task-desc:not(:has(*)){display:none}
 #task-modal .task-desc>*{max-width:680px}
-#task-modal .task-desc-h{display:flex;align-items:center;justify-content:space-between;gap:var(--s3);margin-bottom:var(--s1);font-size:var(--t-sm);line-height:var(--lh)}
 #task-modal .task-desc .tdesc{margin:0;padding:0;background:none;font-size:inherit;line-height:inherit;max-height:none;white-space:normal}
 #task-modal .task-desc .tdesc>:first-child{margin-top:0}
 #task-modal .task-desc textarea[data-task-field="body"]{min-height:220px;font-size:var(--t-md)}
@@ -92,7 +91,6 @@
 #task-modal .task-requirements .task-req[data-state="met"] .task-req-dot{color:var(--run)}
 #task-modal .task-requirements .task-req[data-state="back"] .task-req-dot{color:var(--fail)}
 #task-modal .task-requirements .task-req-name{flex:1;min-width:0}
-#task-modal .task-requirements .task-req-val{margin-left:auto;color:var(--muted);font-weight:400;font-size:var(--t-sm)}
 #task-modal .task-requirements .task-req-end{flex:none}
 #task-modal .task-requirements .task-req-count{margin-left:var(--s1)}
 /* The facts: a muted label, then the value; Code's lines and Subtasks under them. */
@@ -261,6 +259,9 @@ button.ghost.code-retry{padding:1px 8px;font-size:var(--t-sm);line-height:18px}
 #task-modal .task-chat .th-status-ask .th-status-word{color:var(--wait-ink);font-weight:600}
 #task-modal .task-chat .th-status-detail{white-space:normal}
 #task-modal .task-chat .th-status-detail .task-state-line{min-width:0;overflow-wrap:anywhere}
+/* A line about another task (one it depends on or filed) opens it: quiet as the line, underlined on hover. */
+#task-modal .task-chat .th-status-detail a.task-state-line{color:inherit;text-decoration:none}
+#task-modal .task-chat .th-status-detail a.task-state-line:hover{color:var(--ink);text-decoration:underline}
 #task-modal .task-chat .th-status .run-steps{min-width:0}
 #task-modal .task-chat .th-status .run-steps>summary{display:flex;align-items:center;gap:6px;padding-left:0;color:var(--muted)}
 #task-modal .task-chat .th-status .run-steps>summary::before{display:none}
@@ -293,5 +294,5 @@ button.ghost.code-retry{padding:1px 8px;font-size:var(--t-sm);line-height:18px}
    action: the way back for a finished task, Pages' upload line, every + (Sessions, Links, Files, Followers, Related…),
    every × that takes something off (a link, a session, a relation, an ask, a page), Edit on the description and the
    roadmap's "I want this". A section left with only its heading goes too: Pages with no page, an empty To leave. */
-html.view-only #task-modal :is([data-task-reopen],[data-tp-drop],.prop-add,.prop-x,[data-drop-link],[data-drop-rel],[data-req-withdraw],[data-tp-unlink],[data-depends-add],[data-task-body-edit],[data-requester-self]){display:none!important}
+html.view-only #task-modal :is([data-task-reopen],[data-tp-drop],.prop-add,.prop-x,[data-drop-link],[data-drop-rel],[data-req-withdraw],[data-tp-unlink],[data-depends-add],[data-requester-self]){display:none!important}
 html.view-only #task-modal .task-side :is(.tsec-empty,.task-pages:not(:has(.tp-page))){display:none!important}

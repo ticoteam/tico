@@ -5,9 +5,11 @@ setup-token (`claude setup-token`), a ChatGPT login (Codex's `auth.json` from a 
 OpenAI API key. It belongs to the company; `added_by` only says who saved it. A plan (Claude or ChatGPT) has an owner
 (`owner_id`), the person whose plan it is: the one who adds it, unless an owner or admin names another active person of
 the company, then or later. A plan is meant for its owner's own bots, not shared ones (the Add pop-up says so). An API
-key bills per use and has no owner; a company may save many. The value is sealed with the credential
-vault's data key (CredentialCipher.seal, context `model_subscription:<id>`), never shown again, never in a list, an
-event or an idempotency receipt (saves go through Vault.change, which keeps only a keyed fingerprint).
+key bills per use and has no owner; a company may save many. The value is a service row of the credential vault
+(`credential_id`, CREDENTIAL + the subscription's id; backend/credentials.py `keep_service`), never shown again, never
+in a list, an event or an idempotency receipt (saves go through Vault.change, which keeps only a keyed fingerprint).
+Before D11-11 it was sealed in the subscription's own row (`sealed`, context `model_subscription:<id>`): a row the move
+left (backend/migrations/20261117103033_one_encrypted_store.py) opens as before, and its next save moves it.
 
 A computer (runner) is given at most one subscription per runtime (`computer_subscriptions`); one subscription may be
 given to many computers. A bot does not pick one: it runs on its computer, and a turn signs in, for its runtime, its
@@ -75,6 +77,7 @@ from pydantic import Field, SecretStr
 
 from . import bot_settings as BS
 from . import hubdb as H
+from .credentials import SERVICE, keep_service
 from .models import Contract, ID
 from .store import Problem, readiness_document
 from .api_contract import api_v2
@@ -146,14 +149,6 @@ KINDS = {
 }
 RUNTIMES = tuple(dict.fromkeys(k["runtime"] for k in KINDS.values()))
 RUNTIME_LABELS = {"claude": "Claude Code", "codex": "Codex", "cursor": "Cursor", "musecode": "Muse Code"}
-# The kind a model key stored under each variable is (a computer's key, backend/computer_keys.py).
-KEY_KINDS = {
-    "CLAUDE_CODE_OAUTH_TOKEN": "claude_token",
-    "ANTHROPIC_API_KEY": "anthropic_key",
-    "OPENAI_API_KEY": "openai_key",
-    "CURSOR_API_KEY": "cursor_key",
-    "META_API_KEY": "meta_key",
-}
 API_KINDS = tuple(kind for kind, spec in KINDS.items() if spec.get("billing") == "api")
 
 
@@ -212,6 +207,34 @@ class SubscriptionRefresh(Contract):
 # ------------------------------------------------------------------------------------------------ values
 def _context(sid):
     return "model_subscription:" + sid
+
+
+# A subscription's own value is the service row CREDENTIAL + its id. A `credential_id` naming any other row is a key kept
+# in the vault as a credential (added in Settings > Computers before D11-4, "keys on computers" below): it still follows
+# its computer's login (`_given`), reaches runners of v0.6.0-rc.1 as their key (`keys_for`) and gives way to a bot's own
+# key grant (`for_claim`). KEPT_KEY is that test in SQL, on the alias it is formatted with.
+CREDENTIAL = "model-subscription-"
+KEPT_KEY = "{0}credential_id IS NOT NULL AND {0}credential_id<>'" + CREDENTIAL + "'||{0}id"
+
+
+def _kept_key(sub):
+    return bool(sub["credential_id"]) and sub["credential_id"] != CREDENTIAL + sub["id"]
+
+
+def _keep_value(c, vault, sub, value, preview, actor, now):
+    """Put `value` where `sub` keeps it: its own service row (made on its first save), or the vault credential of a kept
+    key, where a computer's key fetch reads it too. Returns the subscription's `credential_id`."""
+    if _kept_key(sub):
+        ciphertext, nonce = vault.cipher.encrypt(c, sub["credential_id"], value)
+        c.execute(
+            "UPDATE credentials SET ciphertext=?,nonce=?,preview=?,revision=revision+1,updated_at=?,updated_by=? "
+            "WHERE id=?",
+            (ciphertext, nonce, preview, now, actor, sub["credential_id"]),
+        )
+        return sub["credential_id"]
+    cid = CREDENTIAL + sub["id"]
+    keep_service(c, vault.cipher, cid, "Model subscription", value, actor, "model_subscriptions", now, False)
+    return cid
 
 
 def _jwt_email(token):
@@ -278,13 +301,20 @@ def delivered(kind, value):
 
 
 def value_of(c, cipher, sub):
-    """A subscription's value: sealed in its own row, or, for a key kept in the vault (`credential_id`: a key from
-    Settings > Computers, backend/computer_keys.py), its credential's. None when that credential is gone."""
+    """A subscription's value, from the vault row `credential_id` names: its own service row, or a kept key's
+    credential. None when that row is gone. A row from before D11-11 the move left opens from `sealed`."""
     if sub["credential_id"]:
+        # The credential the subscription names at the revision `sub` was read at, in one statement: on a connection
+        # outside a transaction (a runner's poll, `Store.read`) a save between two reads would otherwise pair this
+        # row (its kind, its revision) with the value saved for the next one. A save since then: None, as if gone.
         found = c.execute(
-            "SELECT * FROM credentials WHERE id=? AND ciphertext IS NOT NULL", (sub["credential_id"],)
+            "SELECT * FROM credentials WHERE id=(SELECT credential_id FROM model_subscriptions WHERE id=? AND revision=?)"
+            " AND ciphertext IS NOT NULL",
+            (sub["id"], sub["revision"]),
         ).fetchone()
-        return cipher.decrypt(c, found) if found else None
+        if not found:
+            return None
+        return cipher.open_service(c, found) if found["kind"] == SERVICE else cipher.decrypt(c, found)
     return cipher.unseal(c, _context(sub["id"]), sub["sealed"])
 
 
@@ -315,11 +345,10 @@ def _given(c):
             "SELECT g.runner_id AS runner_id,g.runtime AS runtime,g.person AS person,s.id,s.name,s.kind,s.revision,"
             "s.status FROM computer_subscriptions g LEFT JOIN model_subscriptions s "
             "ON s.id=g.subscription_id WHERE (s.id IS NOT NULL OR g.person<>'') "
-            # A computer's key follows its login: not while a person cleared it, signed it out or switched it to a
-            # subscription there (backend/model_login.py marks), as GET runner-model-credentials does.
-            "AND NOT (s.credential_id IS NOT NULL AND (EXISTS (SELECT 1 FROM model_login_cleared m "
-            "WHERE m.runner_id=g.runner_id AND m.runtime=g.runtime AND m.profile='') OR EXISTS (SELECT 1 FROM "
-            "model_login_key_off m WHERE m.runner_id=g.runner_id AND m.runtime=g.runtime AND m.profile='')))"
+            # A computer's key follows its login: not while a person cleared it or signed it out there
+            # (backend/model_login.py model_login_cleared), as GET runner-model-credentials does (`keys_for`).
+            f"AND NOT ({KEPT_KEY.format('s.')} AND EXISTS (SELECT 1 FROM model_login_cleared m "
+            "WHERE m.runner_id=g.runner_id AND m.runtime=g.runtime AND m.profile=''))"
         ):
             sub = {k: r[k] for k in ("id", "name", "kind", "revision", "status")}
             if r["person"]:
@@ -1248,25 +1277,10 @@ def save(c, vault, settings, who, body, sid=None, signed_on=""):
         if body.secret is not None:
             # The credential's own time: readings taken before it are the old account's (`_plan_usage`). Only a replaced or
             # reconnected value moves it; a rename, an owner change or a same-account refresh (`refreshed`) does not.
-            if sub["credential_id"]:
-                # A key kept in the vault takes its new value there, where a computer's key fetch reads it too.
-                ciphertext, nonce = vault.cipher.encrypt(c, sub["credential_id"], value)
-                c.execute(
-                    "UPDATE credentials SET ciphertext=?,nonce=?,preview=?,revision=revision+1,updated_at=?,"
-                    "updated_by=? WHERE id=?",
-                    (ciphertext, nonce, preview, now, who.actor, sub["credential_id"]),
-                )
             c.execute(
-                "UPDATE model_subscriptions SET sealed=?,preview=?,revision=revision+1,status='new',"
+                "UPDATE model_subscriptions SET credential_id=?,sealed='',preview=?,revision=revision+1,status='new',"
                 "status_detail='',status_at=?,updated_at=?,credential_at=? WHERE id=?",
-                (
-                    "" if sub["credential_id"] else vault.cipher.seal(c, _context(sid), value),
-                    preview,
-                    now,
-                    now,
-                    now,
-                    sid,
-                ),
+                (_keep_value(c, vault, sub, value, preview, who.actor, now), preview, now, now, now, sid),
             )
             # A new value may be another account: its own usage-limit hold ends as Try now does, one probe turn tests it
             # (login_holds.try_now), before the bots are re-judged. As for a change, every computer given it stops its
@@ -1290,32 +1304,17 @@ def save(c, vault, settings, who, body, sid=None, signed_on=""):
     name = (body.name or "").strip() or default_name(c, body.kind, preview)
     owner = _default_owner(c, who, body, body.kind)
     sid = H.new_id()
+    cid = _keep_value(c, vault, {"id": sid, "credential_id": None}, value, preview, who.actor, now)
     c.execute(
         "INSERT INTO model_subscriptions(id,name,kind,sealed,preview,added_by,owner_id,created_at,updated_at,"
-        "credential_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
-        (sid, name, body.kind, vault.cipher.seal(c, _context(sid), value), preview, who.actor, owner, now, now, now),
+        "credential_at,credential_id) VALUES(?,?,?,'',?,?,?,?,?,?,?)",
+        (sid, name, body.kind, preview, who.actor, owner, now, now, now, cid),
     )
     H.event(c, who.actor, "subscription.created", sid, {"kind": body.kind})
     _tick_provider(c, settings, who.actor, body.kind)
     spread(c, settings, sid, who.actor, signed_on)
     _follow(c, settings, who.actor)
     return view(c, row(c, sid))
-
-
-def rekeyed(c, credential_id, preview, runtime):
-    """The vault key `credential_id` keeps took a new value outside `save` (Replace key for every computer a shared key
-    serves): its subscription moves to a new revision and counts again, as a new secret does there, so a refusal of
-    the old value said late leaves the new one alone (`turn_rejected`), and its usage-limit hold ends as Try now does."""
-    from . import login_holds
-
-    now = H.now()
-    for r in c.execute("SELECT id FROM model_subscriptions WHERE credential_id=?", (credential_id,)).fetchall():
-        c.execute(
-            "UPDATE model_subscriptions SET preview=?,revision=revision+1,status='new',status_detail='',status_at=?,"
-            "updated_at=?,credential_at=? WHERE id=?",
-            (preview, now, now, now, r["id"]),
-        )
-        login_holds.try_now(c, "", login_holds.subscription_login(r["id"]), runtime)
 
 
 def remove(c, settings, who, sid, confirm=False):
@@ -1338,7 +1337,7 @@ def remove(c, settings, who, sid, confirm=False):
         c.execute(
             "SELECT runner_id,runtime FROM computer_subscriptions WHERE subscription_id=? AND person=''", (sid,)
         ).fetchall()
-        if sub["credential_id"]
+        if _kept_key(sub)
         else []
     )
     # A computer given the owner's plans keeps them: its set moves on at the next turn (`settle`).
@@ -1350,12 +1349,11 @@ def remove(c, settings, who, sid, confirm=False):
         stopped, reset = stopped + done["stopped"], reset + done["sessions_reset"]
     c.execute("DELETE FROM model_subscriptions WHERE id=?", (sid,))
     if sub["credential_id"]:
-        from .computer_keys import drop_credential
         from .model_login import mark_key_cleared
 
         for g in keyed:
             mark_key_cleared(c, who, g["runner_id"], g["runtime"])
-        drop_credential(c, sub["credential_id"])
+        drop_credential(c, sub["credential_id"])  # its own service row always; a kept key once nobody else holds it
     H.event(
         c, who.actor, "subscription.deleted", sid, {"kind": sub["kind"], "computers": computers, "stopped": stopped}
     )
@@ -1674,6 +1672,118 @@ def spread(c, settings, sid, actor, signed_on=""):
     ]
 
 
+# ------------------------------------------------------------------------------------------------ keys on computers
+# A key kept in the vault (`credential_id`) is a subscription like any other here. Before D11-4 a key was added from a
+# computer in Settings > Computers (its credential's source is `computer:<runner id>`: that computer's own key); any
+# other key given to computers is shared. Two things still read it that way: runners of v0.6.0-rc.1 on, which fetch
+# their key from `GET runner-model-credentials` and write it to their key files (`keys_for`), and the Computers page,
+# which says which key each computer uses (`key_listing`).
+OWN = "computer:"
+# The key a computer is given for a runtime: its subscription and its vault credential (`id` is the credential's).
+KEY_SQL = (
+    "SELECT cr.*, s.id AS subscription_id, s.revision AS subscription_revision, g.updated_at AS given_at "
+    "FROM computer_subscriptions g JOIN model_subscriptions s ON s.id=g.subscription_id "
+    "JOIN credentials cr ON cr.id=s.credential_id WHERE g.person='' AND cr.ciphertext IS NOT NULL "
+    "AND cr.kind<>'service'"
+)
+
+
+def drop_credential(c, credential_id):
+    """Delete a key's vault value once no subscription points at it and nobody else holds a grant to it."""
+    if c.execute("SELECT 1 FROM model_subscriptions WHERE credential_id=?", (credential_id,)).fetchone():
+        return
+    if c.execute(
+        "SELECT 1 FROM credential_grants WHERE credential_id=? AND revoked_at IS NULL "
+        "AND subject<>'computers' AND subject NOT LIKE 'computer:%'",
+        (credential_id,),
+    ).fetchone():
+        return
+    c.execute("DELETE FROM credential_grants WHERE credential_id=?", (credential_id,))
+    c.execute("DELETE FROM credentials WHERE id=?", (credential_id,))
+
+
+def before_delete(c, who, credential_id):
+    """Credentials > Delete on a key given to computers: its subscription goes with it, and each computer given it is
+    cleared (`model_login.mark_key_cleared`): told at its next key fetch to delete its copies and log out the login the
+    key made, which a v0.6.0-rc.1 runner keeps for Codex until told so."""
+    if not _present(c):
+        return
+    sub = c.execute("SELECT id FROM model_subscriptions WHERE credential_id=?", (credential_id,)).fetchone()
+    if not sub:
+        return
+    given = c.execute(
+        "SELECT runner_id, runtime FROM computer_subscriptions WHERE subscription_id=? AND person=''", (sub["id"],)
+    ).fetchall()
+    c.execute("DELETE FROM computer_subscriptions WHERE subscription_id=? AND person=''", (sub["id"],))
+    c.execute("DELETE FROM model_subscriptions WHERE id=?", (sub["id"],))
+    from .model_login import mark_key_cleared
+
+    for g in given:
+        mark_key_cleared(c, who, g["runner_id"], g["runtime"])
+        H.event(
+            c,
+            who.actor,
+            "computer_key.deleted",
+            g["runner_id"],
+            {"runtime": g["runtime"], "credential": credential_id, "cleared": True},
+        )
+
+
+def keys_for(c, vault, runner_id, runtime, login_id=""):
+    """What `GET runner-model-credentials` hands this computer for `runtime`: nothing while a person cleared its key
+    or signed its login out (`clear_key` tells one that missed it while offline to clear its copy now), else the key it
+    is given, as `computer` (its own) or `shared`. A fetch for a key job (`login_id`) gets nothing: no job stages a key
+    any more. The reply keeps the shape runners of v0.6.0-rc.1 read. Returns (reply, credential ids sent)."""
+    from . import providers
+
+    if login_id:
+        return {"credentials": []}, []
+    mark = c.execute(
+        "SELECT clear_key FROM model_login_cleared WHERE runner_id=? AND runtime=? AND profile=''", (runner_id, runtime)
+    ).fetchone()
+    if mark:
+        return {"credentials": [], "signed_out": True, **({"clear_key": True} if mark["clear_key"] else {})}, []
+    found = c.execute(KEY_SQL + " AND g.runner_id=? AND g.runtime=?", (runner_id, runtime)).fetchone()
+    if not found or found["env"] not in providers.MODEL_KEYS.get(runtime, ()):
+        return {"credentials": []}, []
+    source = "computer" if found["source"] == OWN + runner_id else "shared"
+    return {"credentials": [{"env": found["env"], "value": vault.cipher.decrypt(c, found), "source": source}]}, [
+        found["id"]
+    ]
+
+
+def key_listing(c):
+    """{runner id: {keys, shared_keys, shared_with}} of every computer given a key, read in one pass for the Computers
+    page (Operations listing); never a value. `keys`: {runtime: {env, preview, since}} of its own keys. `shared_keys`:
+    {runtime: {env, preview}} of the shared key given to it. `shared_with`: {runtime: {id, name, computers}} of the
+    shared key it runs on (not while a person cleared its key or signed it out there) and every live computer that
+    runs on the same one."""
+    if not _present(c):
+        return {}
+    out, served, used = {}, {}, []
+    for row in c.execute(
+        "SELECT g.runner_id, g.runtime, g.updated_at AS given_at, cr.id, cr.name, cr.env, cr.preview, cr.source, "
+        "r.label, r.revoked_at, EXISTS (SELECT 1 FROM model_login_cleared m WHERE m.runner_id=g.runner_id "
+        "AND m.runtime=g.runtime AND m.profile='') AS cleared "
+        "FROM computer_subscriptions g JOIN model_subscriptions s ON s.id=g.subscription_id "
+        "JOIN credentials cr ON cr.id=s.credential_id JOIN runners r ON r.id=g.runner_id "
+        "WHERE g.person='' AND cr.ciphertext IS NOT NULL AND cr.kind<>'service' "
+        "ORDER BY lower(r.label), r.id, g.runtime"
+    ):
+        rid, runtime = row["runner_id"], row["runtime"]
+        found = out.setdefault(rid, {"keys": {}, "shared_keys": {}, "shared_with": {}})
+        if row["source"] == OWN + rid:
+            found["keys"][runtime] = {"env": row["env"], "preview": row["preview"], "since": row["given_at"]}
+            continue
+        found["shared_keys"][runtime] = {"env": row["env"], "preview": row["preview"]}
+        if row["revoked_at"] is None and not row["cleared"]:
+            served.setdefault(row["id"], []).append({"id": rid, "label": row["label"]})
+            used.append((rid, runtime, row))
+    for rid, runtime, row in used:
+        out[rid]["shared_with"][runtime] = {"id": row["id"], "name": row["name"], "computers": served[row["id"]]}
+    return out
+
+
 # ------------------------------------------------------------------------------------------------ claim and run
 def _bot_key_names(c, bot):
     """The model key variables `bot`'s own key grants set in its turns (backend/credentials.py `granted`)."""
@@ -1721,7 +1831,7 @@ def for_claim(c, runner, config, loads=None, bot=""):
             sub
             and bot
             and c.execute(
-                "SELECT 1 FROM model_subscriptions WHERE id=? AND credential_id IS NOT NULL", (sub["id"],)
+                f"SELECT 1 FROM model_subscriptions WHERE id=? AND {KEPT_KEY.format('')}", (sub["id"],)
             ).fetchone()
             and set(providers.MODEL_KEYS.get(runtime, ())) & _bot_key_names(c, bot)
         ):
@@ -1866,15 +1976,16 @@ def refreshed(c, vault, who, body):
     if sub["revision"] != body.revision or given["revision"] != body.revision:
         return {"stored": False}
     value, preview = checked("codex_login", body.value.get_secret_value())
-    old = json.loads(vault.cipher.unseal(c, _context(sub["id"]), sub["sealed"]) or "{}")
+    old = json.loads(value_of(c, vault.cipher, sub) or "{}")
     account = lambda v: (v.get("tokens") or {}).get("account_id") or ""
     if account(old) and account(json.loads(value)) != account(old):
         return {"stored": False}
     if value == json.dumps(old, separators=(",", ":")):
         return {"stored": False}
+    now = H.now()
     c.execute(
-        "UPDATE model_subscriptions SET sealed=?,preview=?,revision=revision+1,updated_at=? WHERE id=?",
-        (vault.cipher.seal(c, _context(sub["id"]), value), preview, H.now(), sub["id"]),
+        "UPDATE model_subscriptions SET credential_id=?,sealed='',preview=?,revision=revision+1,updated_at=? WHERE id=?",
+        (_keep_value(c, vault, sub, value, preview, who.actor, now), preview, now, sub["id"]),
     )
     c.execute(
         "UPDATE attempt_subscriptions SET revision=? WHERE attempt_id=? AND runtime=?",

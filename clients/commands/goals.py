@@ -251,38 +251,6 @@ def goal_strategy_bot(api, args):
 
 
 @tool(
-    "tico_goal_strategy_bot_merge",
-    "The Strategy Owner only, at level 2 or 3: "
-    "when several bots ask a person the same thing, "
-    "make them one item in that person's Needs you. The originals leave their Needs you while it is open; their one "
-    "answer goes to every bot that asked. Counts toward the 5 a day.",
-    {
-        "person": _s("The person they all wait on: a person id"),
-        "title": _s("The merged item's title"),
-        "question": _s("The one question that answers them all"),
-        "tasks": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "2 to 10 task ids waiting on that person",
-        },
-    },
-    required=("person", "title", "question", "tasks"),
-    writes=True,
-)
-def goal_strategy_bot_merge(api, args):
-    return api.post(
-        "strategy-bot/merge",
-        {
-            "person": _target(api, args["person"]),
-            "title": args["title"],
-            "question": args["question"],
-            "tasks": list(args["tasks"]),
-        },
-        key=_key(args),
-    )
-
-
-@tool(
     "tico_goal_strategy_bot_level3_offer",
     "The Strategy Owner only: record that its Monday note offered level 3, once "
     "`level3_offer.due` in tico_goal_strategy_bot is true (10 recoveries approved in a row "
@@ -314,7 +282,7 @@ def goal_strategy_bot_level3_offer(api, args):
                     "task_id": _s("The bot task to reorder, reassign or close"),
                     "owner": _s("The bot for a new or reassigned task"),
                     "title": _s("A new task's title"),
-                    "body": _s("A new task's body"),
+                    "body": _s("A new task's first message"),
                     "note": _s("Why a task closes"),
                 },
                 "required": ["do"],
@@ -804,12 +772,6 @@ GOAL = (
         "goal strategy-bot",
         "the Strategy Owner: its level, regular checks and today's Needs you count per person",
         example="tico goal strategy-bot",
-    ),
-    Command(
-        "goal strategy-bot-merge",
-        "the Strategy Owner at level 2+: one item for several bots' same ask of a person",
-        args=(Arg("tasks", action="store", nargs="+"),),
-        example="tico goal strategy-bot-merge human:ana 'Pricing' 'Which plan first?' t_1 t_2",
     ),
     Command(
         "goal strategy-bot-level3-offer",

@@ -37,7 +37,7 @@ def check(api):
 
 
 def checks(api):
+    """The Bookkeeper's check tasks, each with its words: the instructions Tico gave it (H.task_words)."""
     with api.app.state.store.read() as c:
-        return [
-            dict(r) for r in c.execute("SELECT id,title,body,status,private FROM tasks WHERE owner_id=?", (BK.ACTOR,))
-        ]
+        rows = c.execute("SELECT id,title,status,private FROM tasks WHERE owner_id=?", (BK.ACTOR,))
+        return [{**dict(r), "words": H.task_words(c, r["id"])} for r in rows.fetchall()]

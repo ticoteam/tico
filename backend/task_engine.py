@@ -16,6 +16,7 @@ Names and signatures are in docs/dev/pipelines-v3-build.md.
 import hashlib
 import json
 import logging
+import re
 from collections.abc import Callable, Iterable, Sequence
 from typing import TYPE_CHECKING, Any, NoReturn, cast
 
@@ -115,7 +116,7 @@ def _then(row: Row, *which: str) -> list[str]:
     said = {
         "push": f'tico task move {ident} next -m "why" --version {version}',
         "back": f'tico task move {ident} <earlier stage> -m "why" --version {version}',
-        "ask": f'tico task ask {ident} --to <person> "one sentence" --version {version}',
+        "ask": f'tico task ask {ident} --to <person> "<question>"',
         "file": f'tico task file --parent {ident} "title"',
         "snooze": f'tico task snooze {ident} -m "why" --version {version}',
         "close": f'tico task close {ident} -m "why" --version {version}',
@@ -429,7 +430,7 @@ def shut_out(
     if private and new_owner and not names(target, new_owner) and not H.task_private_readable(conn, new_owner, full):
         blocked.append((new_owner, "owns"))
     for requirement in R.on_stage(conn, target["id"]):
-        who = R.person_of(conn, requirement, "") if requirement["kind"] in ("ok", "answer") else None
+        who = R.person_of(conn, requirement, "") if requirement["kind"] == "ok" else None
         if who and who != owner and not H.task_private_readable(conn, who, after):
             blocked.append((who, "is asked in"))
     if not blocked:
@@ -614,21 +615,26 @@ def _wake_turn(
     own lead says nothing; `refs`, `trigger` and `source` are a new task's own (`enter`)."""
     from . import waiting_on as W
 
+    refs, instructions = task_wakes.split_instructions(refs)
     if row["stage"]["kind"] != "work":
+        task_wakes.keep_instructions(conn, row, instructions)
         return None
     target, turn_lead = _turn_of(conn, row)
     if not target:
+        task_wakes.keep_instructions(conn, row, instructions)
         return None
     out = task_wakes.add(
         conn,
         row,
         target,
         row["visit"],
-        task_wakes.body(conn, row, turn_lead or lead, to=target),
-        refs=refs,
+        task_wakes.with_instructions(task_wakes.body(conn, row, turn_lead or lead, to=target), instructions),
+        refs={**refs, task_wakes.INSTRUCTIONS: True} if instructions else refs,
         trigger=trigger,
         source=source,
     )
+    if instructions and not out:
+        task_wakes.keep_instructions(conn, row, instructions)
     for wait in W.of(conn, row):
         if wait.state in (W.BOT, W.PAUSED) and wait.ask and wait.requirement_id and wait.who != target:
             task_wakes.ask(conn, row, R.get(conn, wait.requirement_id), wait.who)
@@ -1078,6 +1084,12 @@ def move(
     target, kind = _target(conn, by, row, to)
     if not target or kind is None:
         return row
+    if kind in ("forward", "done", "closed") and not cascade:
+        from . import question_marks
+
+        question_marks.refuse_ending(
+            conn, by, task_id, closing=kind == "closed"
+        )  # a bot's own open ❓ waits for its reply
     held = shut_out(conn, row, target)
     if held:
         _refuse(
@@ -1889,7 +1901,7 @@ def progress_mark(conn: "sqlite3.Connection", visit_id: str, standings: Sequence
     `person_spoke`). Nor is a snooze or its end: setting a task aside earns no more runs. Nor is the task's version: it
     says the row changed since someone looked, and a field edit (a new title, a label) raises it. A move and a reassign
     start the ladder again themselves. `standings` saves reading them again when the caller has them."""
-    from . import read_cache
+    from . import question_marks, read_cache
 
     found = cast("Any", read_cache).one(conn, PROGRESS_SQL, (visit_id,))  # a pass reads them for many (never_stuck)
     if not found:
@@ -1898,7 +1910,11 @@ def progress_mark(conn: "sqlite3.Connection", visit_id: str, standings: Sequence
         row = task(conn, found[0])
         standings = R.standings(conn, row) if row and _part(row, "visit").get("id") == visit_id else ()
     stand = ",".join(f"{s.requirement['id']}={s.state}:{s.on or ''}" for s in standings)
-    return ".".join(str(part or 0) for part in found[1:]) + "." + hashlib.sha256(stand.encode()).hexdigest()[:12]
+    mark = ".".join(str(part or 0) for part in found[1:]) + "." + hashlib.sha256(stand.encode()).hexdigest()[:12]
+    # A person's reply to a ❓ on it is progress too (backend/question_marks.py). Only a task that has one says so,
+    # so every other task keeps the mark it had.
+    replies = question_marks.replies(conn, found[0])
+    return f"{mark}.q{replies}" if replies else mark
 
 
 def _reset_ladder(conn: "sqlite3.Connection", visit: Row, ts: str, by: str) -> None:
@@ -2015,6 +2031,9 @@ def on_delete(conn: "sqlite3.Connection", task_ids: Sequence[str], by: str) -> i
     conn.execute(f"DELETE FROM related_inputs WHERE task_id IN ({marks})", ids)  # likewise Jev's related bots
     conn.execute(f"DELETE FROM ask_opinions WHERE task_id IN ({marks})", ids)  # and Flow's opinion on each ask
     conn.execute(f"DELETE FROM ask_snoozes WHERE task_id IN ({marks})", ids)  # and each person's snooze of an ask
+    from . import question_marks
+
+    question_marks.end_tasks(conn, ids, "deleted", by)  # and each ❓ on its chat
     return conn.execute(f"DELETE FROM visits WHERE task_id IN ({marks})", ids).rowcount
 
 
@@ -2279,41 +2298,40 @@ def add_requirement(
     person: str | None,
     line: str,
     *,
-    choices: list[str] | None = None,
     shows: object = None,
     seen_version: int | str | None = None,
     for_action: bool = False,
-    brief: Row | None = None,
-    title: str | None = None,
     ends_with_task: bool = False,
 ) -> Row:
-    """Add an OK or an answer from a named person to this task, for this visit (C30). `brief`: a question's why, its
-    choices' lines and the one recommended (backend/ask_shape.py), and `title`, the ask's short heading, kept in the
-    requirement's settings. `ends_with_task`: a question a feature asks about the task's own work
-    (backend/person_asks.py), taken back once nothing else holds the task (`advance`), so it never holds it alone. The task does not leave the stage
-    until it is answered, withdrawn or pushed past. A bot has one open per task: asking again replaces it (C15,
-    `_replace_open`). A bot does not ask a question of a person the stage's OK or page already waits on
-    (`_stage_asks`), nor one in Product's Validate that is not an OK of its passed proof page (validate_gate;
-    `for_action`: an OK bound to an action, task_asks.ask_ok, is that action's own)."""
-    H = _h()
+    """Add an OK from a named person to this task, for this visit (C30). A question is refused: it is a message marked
+    ❓ (backend/question_marks.py); a bot's OK not bound to an action shows what it approves (a page, a file or a web
+    address). `ends_with_task`: an OK a feature asks
+    about the task's own work (backend/person_asks.py), taken back once nothing else holds the task (`advance`), so it
+    never holds it alone. The task does not leave the stage until it is answered, withdrawn or pushed past. A bot has
+    one open per task: asking again replaces it (C15, `_replace_open`). A bot does not ask an OK in Product's Validate
+    that is not an OK of its passed proof page (validate_gate; `for_action`: an OK bound to an action, task_asks.ask_ok,
+    is that action's own)."""
     row = task(conn, task_id)
     if not row:
         _refuse(conn, by, "not-found", "No such task")
     check_version(conn, by, row, seen_version)
     if row["status"] != "open":
         _refuse(conn, by, "task_ended", f"The task is {row['stage']['name']}. Reopen it first.", task_id)
-    if kind not in ("ok", "answer"):
-        _refuse(conn, by, "task_requirement", "Only an OK or an answer can be added to one task", task_id)
+    if kind == "answer":
+        # A question is a message marked ❓ now (backend/question_marks.py), not an ask the task waits on.
+        _refuse(conn, by, "task_requirement", QUESTION_INSTEAD, task_id)
+    if kind != "ok":
+        _refuse(conn, by, "task_requirement", "Only an OK can be added to one task", task_id)
     if not (is_human(person) or is_bot(person)):
         _refuse(conn, by, "task_requirement", "Name who it is for", task_id)
     if person == by and not is_human(by):
         # A bot never satisfies its own request. A person may ask themself: their own click is what answers it (an OK
         # of their own ask is refused unless it is that click, answers._may_answer).
         _refuse(conn, by, "task_requirement", "Nobody answers their own ask: ask someone else", task_id)
-    if kind == "ok" and not is_human(person):
+    if not is_human(person):
         _refuse(conn, by, "task_requirement", "An OK is asked of a person", task_id)
     if is_bot(by) and not for_action:
-        page = _people_page(conn, row, kind, shows, choices)
+        page = people_page(conn, row, shows)
         if page and page in R.APPROVED:
             # A stage's approval is asked by Tico when the bot writes the document, never by the bot.
             hint = R.DOCUMENT_OK_HINT.format(document=page)
@@ -2321,14 +2339,11 @@ def add_requirement(
         if page:
             _refuse(conn, by, "task_requirement", f"{page} is a person's OK already. {R.PAGE_OK_HINT}", task_id)
     if not for_action:
-        shows = validate_gate.check_ask(conn, row, by, person, kind, shows, choices)
-    if is_bot(by) and kind == "answer" and is_human(person):
-        signoff = _stage_asks(conn, row, str(person))
-        if signoff:
-            name = H.actor_name(conn, person)
-            _refuse(
-                conn, by, "task_requirement", f"The stage already asks {name} to OK {signoff}. {ASKED_HINT}", task_id
-            )
+        shows = validate_gate.check_ask(conn, row, by, person, shows)
+        if is_bot(by) and not shows_a_file(conn, by, shows):
+            # A bot's OK that is not bound to an action approves something it shows: a page or a file it may read. A
+            # bare "OK?", or one that shows only a link, is a question.
+            _refuse(conn, by, "task_requirement", OK_SHOWS, task_id)
     _may_name(conn, by, person, task_id)
     unshared = not_shared(conn, row, str(person))
     if unshared:
@@ -2336,14 +2351,32 @@ def add_requirement(
         _refuse(conn, by, "private", told(conn, by, row, unshared), task_id, said=said)
     if not (line or "").strip():
         _refuse(conn, by, "task_requirement", "Say what you are asking, in one sentence", task_id)
+    return _write_ask(conn, row, by, kind, person, line, shows=shows, ends=ends_with_task)
+
+
+def _write_ask(
+    conn: "sqlite3.Connection",
+    row: Row,
+    by: str,
+    kind: str,
+    person: str | None,
+    line: str,
+    *,
+    shows: object = None,
+    ends: bool = False,
+) -> Row:
+    """The ask `add_requirement` checked, written on the task's visit: it replaces the bot's open one, starts the
+    ladder again and wakes whom it names. Returns the task with `requirement_id`."""
+    H = _h()
+    task_id = str(row["id"])
     ts = H.now()
     visit = row["visit"]
     if is_bot(by):
         _replace_open(conn, task_id, visit["id"], by, ts)
     requirement_id = H.new_id()
     conn.execute(
-        "INSERT INTO requirements (id, visit_id, kind, who_oks, person_id, added_by_id, by_bot, line, shows, choices, "
-        "settings, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO requirements (id, visit_id, kind, who_oks, person_id, added_by_id, by_bot, line, shows, settings, "
+        "created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         (
             requirement_id,
             visit["id"],
@@ -2354,14 +2387,7 @@ def add_requirement(
             1 if is_bot(by) else 0,
             line.strip(),
             None if shows is None else json.dumps(shows),
-            None if choices is None else json.dumps(choices),
-            json.dumps(
-                {
-                    **({"brief": brief} if brief else {}),
-                    **({"title": title} if title else {}),
-                    **({"ends_with_task": True} if ends_with_task else {}),
-                }
-            ),
+            json.dumps({"ends_with_task": True} if ends else {}),
             ts,
         ),
     )
@@ -2376,17 +2402,12 @@ def add_requirement(
     return out
 
 
-def _people_page(
-    conn: "sqlite3.Connection", row: Row, kind: str, shows: object, choices: list[str] | None
-) -> str | None:
+def people_page(conn: "sqlite3.Connection", row: Row, shows: object, *, question: bool = False) -> str | None:
     """The name of the stage's people-only page requirement a bot's ask would duplicate, or None: an OK that shows that
-    page or shows nothing, or a yes/no question that shows that page, while the stage has one; any OK at all while the
-    stage names a document for a person to approve (its name, task_requirements.APPROVED). A person OKs that page
-    already, every version, so the bot's ask adds a second one and nothing passes on it. A yes/no that shows nothing is
+    page or shows nothing, or a ❓ (`question`) whose message names that page, while the stage has one; any OK at all
+    while the stage names a document for a person to approve (its name, task_requirements.APPROVED). A person OKs that
+    page already, every version, so the bot's ask adds a second one and nothing passes on it. A ❓ that names no page is
     a plain question (a Spec stage's clarifying question) and is allowed."""
-    yes_no = kind == "answer" and sorted(str(c).strip().lower() for c in (choices or [])) == ["no", "yes"]
-    if kind != "ok" and not yes_no:
-        return None
     from . import task_pages as P
 
     refs = [str(ref) for ref in cast("list[object]", shows)] if isinstance(shows, list) else []
@@ -2395,42 +2416,55 @@ def _people_page(
         if requirement["kind"] != "page" or not requirement.get("stage_id") or not signoff:
             continue
         document = R.document_of(requirement)
-        if document and kind == "ok":
+        if document and not question:
             return document
         if not R.people_only(requirement):
             continue
         attached = P.current(conn, row["visit"]["id"], requirement["id"])
         named = bool(attached) and any(str(attached["file_id"]) in ref for ref in refs)
-        if named or (kind == "ok" and not refs):
+        if named or (not question and not refs):
             return R.name_of(requirement)
     return None
 
 
-# What a bot is told when the stage already asks the person it names (`_stage_asks`).
-ASKED_HINT = "Do not ask them again: put any question on the page or in a comment."
+# What a question is now (backend/question_marks.py), and what a bot's unbound OK needs (`add_requirement`).
+QUESTION_INSTEAD = (
+    'A question is a message: tico task ask <id> --to <person> "<question>" posts it on the task marked ❓, and '
+    "their reply clears it. No choices or --why: say them in the message."
+)
+OK_SHOWS = (
+    "An OK approves what it shows: add --show page:<id> or file:<id>@<version>. "
+    'For anything else, mark a ❓ instead: tico task ask <id> --to <person> "<question>".'
+)
 
 
-def _stage_asks(conn: "sqlite3.Connection", row: Row, person: str) -> str | None:
-    """The name of the stage's OK or page that waits on `person` now, or None. A bot's question to that same person
-    would be a second item in their Needs you, and the stage would wait on both (Tico Team, Nov 12: the Product Owner
-    asked "Please OK the attached spec" beside the Spec page's own OK, and Spec stayed after the page was OK'd). A page
-    a person OKs anyway counts while Jev is still checking it: it goes to them next."""
-    from . import waiting_on
+# What a bot's OK may approve (`shows_a_file`): a page, at a version or its current one, or a file at a version.
+SHOWN = re.compile(r"page:(?P<page>[^@\s]+)(?:@(?P<at>[0-9]+))?|file:(?P<file>[^@\s]+)@(?P<version>[0-9]+)")
 
-    for standing in R.standings(conn, row):
-        requirement = standing.requirement
-        if standing.state != R.WAITING or not requirement.get("stage_id") or requirement["kind"] not in R.STEERED:
+
+def shows_a_file(conn: "sqlite3.Connection", by: str, shows: object) -> bool:
+    """Whether what an OK shows names at least one page (`page:<id>`, `page:<id>@<version>`) or file version
+    (`file:<id>@<version>`) that is there and that `by` may read: its page audience, and the task it lives on. A link or
+    any other text approves nothing Tico holds."""
+    from . import task_privacy as _privacy
+
+    H, privacy = _h(), cast(Any, _privacy)
+    for ref in cast("list[object]", shows) if isinstance(shows, list) else [shows] if shows else []:
+        found = SHOWN.fullmatch(str(ref).strip())
+        if not found:
             continue
-        on = standing.on
-        if on == R.JEV:
-            if not (requirement.get("person_id") or R.people_only(requirement)):
-                continue  # Jev passing it is enough: no person is asked
-            on = R.person_of(conn, requirement, row["visit"]["id"])
-        elif on and not is_human(on):
-            continue  # a bot named to approve, or a source
-        if (on or waiting_on.person_for(conn, row)) == person:
-            return R.name_of(requirement)
-    return None
+        fid = found["page"] or found["file"]
+        row = conn.execute("SELECT task_id, current_version, archived FROM bot_files WHERE id=?", (fid,)).fetchone()
+        if not row or row["archived"]:
+            continue
+        number = int(found["at"] or found["version"] or row["current_version"] or 0)
+        if not conn.execute("SELECT 1 FROM bot_file_versions WHERE file_id=? AND version=?", (fid, number)).fetchone():
+            continue
+        if row["task_id"] and not H.task_private_readable(conn, by, H.task(conn, row["task_id"])):
+            continue
+        if privacy.page_content_readable(conn, by, [f"page:{fid}"]):
+            return True
+    return False
 
 
 def _replace_open(conn: "sqlite3.Connection", task_id: str, visit_id: str, by: str, ts: str) -> None:

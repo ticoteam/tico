@@ -1341,7 +1341,7 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False, que
 # The queued job of a task. INDEXED BY jobs_queued: the expression on the message cannot use an index, and with the
 # stale sqlite_stat1 row for messages the planner scanned all of them (40-44 ms a call on TIDY v0.5.1, 545 an hour).
 TASK_WAIT_SQL = (
-    f"SELECT j.bot_id,j.message_id,j.held,j.hold_reason,j.hold_until,{H.in_person_name_sql()} AS person_sent "
+    f"SELECT j.id,j.bot_id,j.message_id,j.state,{H.in_person_name_sql()} AS person_sent "
     "FROM jobs j INDEXED BY jobs_queued "
     "JOIN messages m ON m.id=j.message_id "
     "JOIN conversations cv ON cv.id=m.conversation_id "
@@ -1878,26 +1878,25 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
     `waiting_on.needs(person)` (every OK and question asked of them, a private task they must let someone see, every
     Paused cause they can fix; never a task that only is theirs) and every @ of them by a person, on a task or in a
     channel, until they reply (C28). Only what the
-    person may read is listed. Each item has `kind` (task, ask, paused, mention), `id`, `line`, `since` and the brief
+    person may read is listed. Each item has `kind` (task, ask, paused, mention, question: a bot's ❓), `id`, `line`, `since` and the brief
     `task`; an ask also has the fields of its requirement in `to_leave` (`ask`). `count_only` leaves out the brief
     task and the ask's fields: a count needs neither. `task_view` is the callers' and not read here. An ask the person
     snoozed for themselves (backend/ask_snoozes.py) is out until its time; `snoozed` "only" lists just those, each with
     its `snoozed_until`."""
-    from . import strategy_merge, teammate_access, waiting_on
+    from . import question_marks, teammate_access, waiting_on
 
     if not H.is_human(who.actor):
         return []
     visible = auth.task_sql(c, who)
-    # The asks the Strategy Owner merged into one item stay out while that item is open; the item names them (`merged`).
-    merged = strategy_merge.hidden_by_item(c, who.actor)
-    hidden = {rid for ids in merged.values() for rid in ids}
-    raw = [i for i in waiting_on.needs(c, who.actor, snoozed) if i.get("requirement_id") not in hidden]
+    raw = list(waiting_on.needs(c, who.actor, snoozed))
     mentions = _mentions(c, who) if snoozed != "only" else []  # an @ is not snoozed: only asks are
     wanted = {i["task_id"] for i in raw if i.get("task_id")} | {t for i in raw for t in i.get("tasks") or ()}
     wanted |= {m["task_id"] for m in mentions if m.get("task_id")}
     readable = _readable_task_ids(c, visible, wanted)
     briefs = {} if count_only else _briefs(c, readable, visible)
     items = []
+    questions = [it for it in raw if it["kind"] == "question"]
+    raw = [it for it in raw if it["kind"] != "question"]
     for it in raw:
         if it["kind"] == "paused":
             tasks = [t for t in it["tasks"] if t in readable]
@@ -1928,14 +1927,55 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
                 "missing": it["missing"],
                 "since": it["since"],
                 "task": briefs.get(it["task_id"]),
-                **({"merged": merged[it["task_id"]]} if it["task_id"] in merged else {}),
                 **({"snoozed_until": it["snoozed_until"]} if it.get("snoozed_until") else {}),
             }
         )
     # A person the reader may not see is named only to someone in the same conversation (teammate_access.Known).
     known = teammate_access.Known(c, who, auth)  # reads nothing until it is asked
+    # A bot's ❓ for the reader (backend/question_marks.py): its bot and its line, on a task's chat or in a direct chat.
+    # It stands for its message, so the same message is not listed again as an @.
+    marked = set()
+    # Their messages and chats in one read each, not one per ❓.
+    stored = H.prime_messages(c, {it["message_id"] for it in questions})
+    chats = question_marks.chat_rows(c, {m["conversation_id"] for m in stored.values()})
+    from . import threads
+
+    reader = threads.actor_viewer(c, who.actor) if questions else None
+    for it in questions:
+        if it.get("task_id") and it["task_id"] not in readable:
+            continue
+        found = stored.get(it["message_id"]) if stored else None
+        message = H.message_view(c, found) if found else H.message(c, it["message_id"])
+        if not message or message.get("deleted_at") or reader is None:
+            continue
+        if not question_marks.readable(c, who.actor, message, chats.get(str(message["conversation_id"])), reader):
+            continue
+        marked.add(it["message_id"])
+        refs = H._json(message.get("refs"), {}) or {}
+        shows = (
+            [str(r) for r in refs.get("shows") or [] if str(r).startswith("browser:")] if isinstance(refs, dict) else []
+        )
+        items.append(
+            {
+                "kind": "question",
+                "id": it["id"],
+                "mark_id": it["mark_id"],
+                "message_id": it["message_id"],
+                "conversation_id": it["conversation_id"],
+                "root_id": it["room_id"],
+                "task_id": it.get("task_id"),
+                "from_id": it["bot_id"],
+                "line": it["line"],
+                "since": it["since"],
+                "task": briefs.get(it.get("task_id")),
+                **({"shows": shows} if shows else {}),
+                **({"snoozed_until": it["snoozed_until"]} if it.get("snoozed_until") else {}),
+            }
+        )
     for m in mentions:
         if m.get("task_id") and m["task_id"] not in readable:
+            continue
+        if m["id"] in marked:
             continue
         first = (m["body"] or "").strip().splitlines()
         items.append(
@@ -2034,7 +2074,7 @@ def needs_bots(items, me):
 
 # The items a stage's review walks (the ▶ on a stage): asks, tasks and @s on a task in that stage. A Paused cause is the
 # person's to fix in settings, whatever stage its first task is in.
-NEEDS_STAGE_KINDS = ("ask", "task", "mention")
+NEEDS_STAGE_KINDS = ("ask", "task", "mention", "question")
 
 
 def needs_stage(it):
@@ -2074,6 +2114,8 @@ def needs_actor(it, me):
     task = it.get("task") or {}
     if it.get("kind") == "paused":
         return next(iter(it.get("bots") or ()), None)
+    if it.get("kind") == "question":
+        return it.get("from_id") if H.is_bot(it.get("from_id")) else None
     if it.get("kind") == "ask":
         asked = (it.get("ask") or {}).get("asked_by")
         options = [asked, task.get("owner_id"), task.get("requester_id")]
@@ -2741,7 +2783,7 @@ def install_views(app, store, auth, mutate, task_view):
             default = {providers.default_runtime(providers.load(c, store.settings))} - {""}
             run_on = providers.runtimes_run_on(c, store.settings)
             from . import subscriptions, inbox_isolation
-            from .computer_keys import serving, shared_listing
+            from .model_subscriptions import key_listing
 
             subscription_context = subscriptions.context(c, store.settings)
             # One pass for every computer's bot_connections (not assignment+config+identity per bot per runner).
@@ -2749,7 +2791,8 @@ def install_views(app, store, auth, mutate, task_view):
             # One pass for every computer's subscription profiles (not per-runner SELECTs + metadata).
             profiles_map = subscriptions.profiles_by_runner(c)
             kept_for_inbox = inbox_isolation.inbox_only(c, roster(c))
-            shared_keys = serving(c)
+            # One pass for every computer's keys (backend/model_subscriptions.py key_listing), not one per computer.
+            keys_by_runner = key_listing(c)
             # A company key's name and preview are a credential administrator's to read, as in Credentials; a
             # computer's operator reads its own key's.
             from .credentials import administrator
@@ -2773,10 +2816,6 @@ def install_views(app, store, auth, mutate, task_view):
 
             # One pass for every computer's repository status (not one registry_metadata lookup per runner).
             repo_status = computer_repositories(c)
-            from .computer_keys import listing_by_runner
-
-            # One pass for every computer's own keys (not one SELECT per runner).
-            keys_by_runner = listing_by_runner(c)
             from . import cloud_machines
 
             # {runner: {bot, shared, size, state}} for computers that are a cloud machine: a bot's own (`bot`), or the
@@ -2870,19 +2909,14 @@ def install_views(app, store, auth, mutate, task_view):
                     for p in (profiles_map.get(row["id"]) or [])
                 ]
                 # Copy per computer so stripping previews for non-operators does not mutate the shared batch map.
-                keys = {runtime: dict(info) for runtime, info in (keys_by_runner.get(row["id"]) or {}).items()}
-                # `shared_keys`: {runtime: {env, preview}} of the shared key it runs on; `shared_with`: that key's
-                # name, whether it is the "Every computer" one, and every computer it serves.
-                served = shared_keys.get(row["id"]) or {}
-                shared = shared_listing(c, row)
+                given = keys_by_runner.get(row["id"]) or {}
+                keys = {runtime: dict(info) for runtime, info in (given.get("keys") or {}).items()}
+                # `shared_keys`: {runtime: {env, preview}} of the shared key given to it; `shared_with`: the one it
+                # runs on, its name and every computer it serves.
+                shared = {runtime: dict(info) for runtime, info in (given.get("shared_keys") or {}).items()}
                 shared_with = {
-                    runtime: {
-                        "id": key["id"],
-                        "name": key["name"],
-                        "every": key["every"],
-                        "computers": [dict(m) for m in key["computers"]],
-                    }
-                    for runtime, key in served.items()
+                    runtime: {**key, "computers": [dict(m) for m in key["computers"]]}
+                    for runtime, key in (given.get("shared_with") or {}).items()
                 }
                 if not manage:
                     for profile in profiles:
@@ -2920,8 +2954,8 @@ def install_views(app, store, auth, mutate, task_view):
                             exit_used.get(row["id"], 0),
                         ),
                         # {runtime: {env, preview}}: its own keys stored from here, and the company's shared
-                        # ones, for the rows a key signs in (backend/computer_keys.py). Never a value, and a
-                        # preview only for whoever may change the computer.
+                        # ones, for the rows a key signs in (backend/model_subscriptions.py key_listing). Never a
+                        # value, and a preview only for whoever may change the computer.
                         "keys": keys,
                         "shared_keys": shared,
                         "shared_with": shared_with,

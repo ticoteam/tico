@@ -217,6 +217,15 @@ function pageTasks(openId = '') {
   });
   if (openId) taskModalOpen(openId);
 }
+/** A task opened by its address (#/task/<id>) has its own pipeline behind it, its archive's Done or Closed when it is
+ * finished, not the view last left. The address stays the task's; closing the window writes the view's
+ * (task-modal.ts). */
+function tasksBehindTask(t: {pipeline_id?: string | null; status?: string | null}) {
+  const state = TASKS_ST, pipeline = t.pipeline_id || '', known = state?.pipelines.length ? state.pipelines : TASK_PIPELINES;
+  if (!state || !pipeline || (known?.length && !known.some(p => p.id === pipeline))) return;
+  const archive: TasksArchive = t.status === 'done' ? 'done' : t.status === 'closed' ? 'closed' : '';
+  if (state.pipeline !== pipeline || state.archive !== archive) tasksShow(state, {pipeline, archive}, false);
+}
 // The page goes: its listeners, its pipeline view and its timers with it.
 function tasksLeave() {
   const state = TASKS_ST;
@@ -227,12 +236,13 @@ function tasksLeave() {
   tasksAskOff();
   TASKS_ST = null;
 }
-/** A change of view: You or a pipeline, list or columns, the archive. Search and filters stay. */
-function tasksShow(state: TasksPageState, change: Partial<Pick<TasksPageState, 'pipeline' | 'layout' | 'archive'>>) {
+/** A change of view: You or a pipeline, list or columns, the archive. Search and filters stay. `write` false leaves the
+ * address as it is (a task's own, while its window is open). */
+function tasksShow(state: TasksPageState, change: Partial<Pick<TasksPageState, 'pipeline' | 'layout' | 'archive'>>, write = true) {
   Object.assign(state, change);
   if ('pipeline' in change) state.filters = {};
   tasksMenuClose();
-  tasksURLWrite(state);
+  if (write) tasksURLWrite(state);
   state.tasks = []; state.base = [];
   state.more = false; state.edge = null; state.after = ''; state.stalled = false;
   state.loading = true;
@@ -334,7 +344,9 @@ async function tasksLoad(state: TasksPageState, pipelinesToo = true): Promise<vo
     held = taskFeedLanded(state.feed, ticket, rows ? rows.cursor : '');
     if (!held) return;
     state.pipelines = pipelines;
-    if (state.pipeline && !pipelines.some(p => p.id === state.pipeline)) { state.pipeline = ''; tasksURLWrite(state); }
+    // A pipeline gone (or one a task's window named before the pipelines landed) falls back to You. The address is the
+    // list's to rewrite, not an open task's (#/task/<id>): closing that window writes the list's.
+    if (state.pipeline && !pipelines.some(p => p.id === state.pipeline)) { state.pipeline = ''; if (!location.hash.startsWith('#/task/')) tasksURLWrite(state); }
     state.stalled = false;
     if (needs) state.needs = needs;
     if (!rows) { state.tasks = []; state.base = []; state.cursor = ''; state.more = false; state.edge = null; state.after = ''; }
@@ -566,10 +578,11 @@ function tasksRailOff() {
 const tasksGroupHTML = (name: string, rows: string[]) => !rows.length ? ''
   : `<section class="tk-section"><h2 class="tk-group">${esc(name)} <span class="n">${rows.length}</span></h2>${rows.join('')}</section>`;
 const tasksNone = (state: TasksPageState) => `<p class="empty muted">${state.q || taskFiltersOn(state.filters) ? 'No matches' : 'Nothing here'}</p>`;
-/** Which group of You an item is in: Answer (questions, mentions, stuck tasks), Review (OKs of a page or a draft) or Do. */
+/** Which group of You an item is in: Answer (a bot's ❓, mentions, stuck tasks, an ask of a kind not known here),
+    Review (OKs of a page or a draft) or Do. */
 function needsGroup(it: NeedsEntry): 'answer' | 'review' | 'do' {
   if (it.kind === 'ask') return it.ask?.kind === 'ok' || it.ask?.kind === 'page' ? 'review' : 'answer';
-  if (it.kind === 'mention') return 'answer';
+  if (it.kind === 'mention' || it.kind === 'question') return 'answer';
   if (it.kind === 'task' && it.task?.turn?.state === 'paused') return 'answer';
   return 'do';
 }
@@ -580,21 +593,21 @@ function needsMatch(state: TasksPageState, it: NeedsEntry): boolean {
 }
 /** A Needs you row's first line: its task's title; a Paused cause or a mention outside a task by its own line. */
 function needsTitle(it: NeedsEntry): string {
+  // A bot's ❓: its task's title like any ask; in a direct chat with the bot, the bot's name. Its question goes under it.
+  if (it.kind === 'question') return it.task?.title || actorLabel(it.from_id || '') || it.line || 'Untitled';
   return (it.kind !== 'paused' && it.task?.title) || it.line || 'Untitled';
 }
-/** Its second line: the question, under an Answer row's title (its buttons answer it); other asks keep it as the tooltip. */
+/** Its second line: the question, under an Answer row's title; other asks keep it as the tooltip. */
 function needsAsk(it: NeedsEntry): string {
   return needsGroup(it) === 'answer' && needsTitle(it) !== it.line ? it.line : '';
 }
-/** One row of You: its task's title (needsTitle), an Answer row's question under it; a question with two choices answers in place (S1.8). */
+/** One row of You: its task's title (needsTitle), an Answer row's question under it. */
 function needsRowHTML(it: NeedsEntry): string {
-  const ask = it.ask, two = it.kind === 'ask' && ask?.kind === 'answer' && ask.choices?.length === 2 && ask.may.includes('answer');
-  const after = two ? ask!.choices!.map((c, i) => `<button type="button" class="${i ? 'ghost' : 'primary'} sm" data-need-answer="${esc(c)}">${esc(c)}</button>`).join('') : '';
-  const who = it.kind === 'mention' ? it.from_id || '' : ask?.asked_by || it.task?.owner_id || (it.bots?.[0] ? 'bot:' + it.bots[0] : '');
+  const ask = it.ask;
+  const who = it.kind === 'mention' || it.kind === 'question' ? it.from_id || '' : ask?.asked_by || it.task?.owner_id || (it.bots?.[0] ? 'bot:' + it.bots[0] : '');
   const tip = it.kind !== 'task' && needsTitle(it) !== it.line && !needsAsk(it) ? ` title="${esc(it.line)}"` : '';
   return `<div class="tk-row" data-need="${esc(it.id)}" role="button" tabindex="0"${tip}>`
     + `<span class="tk-two"><span class="tk-title">${esc(needsTitle(it))}</span>${needsAsk(it) ? `<span class="tk-ask">${esc(needsAsk(it))}</span>` : ''}</span>${it.task ? lateTagHTML(it.task) : ''}`
-    + (after ? `<span class="tk-after">${after}</span>` : '')
     + `<span class="tk-who">${who ? actorFace(who, 16) : ''}</span><span class="tk-age">${esc(ageShort(it.since))}</span></div>`;
 }
 /** Needs you by stage: a chip per stage with items for the person, in the pipelines' order, then Other; each opens that
@@ -659,20 +672,8 @@ async function tasksBodyClick(state: TasksPageState, ev: MouseEvent) {
   if (el?.closest('[data-reload]')) { state.failed = ''; state.loading = true; tasksRender(state); void tasksLoad(state); return; }
   const chip = el?.closest<HTMLElement>('[data-need-stage]');
   if (chip) { void decideStageOpen(chip.dataset.needStage || ''); return; }
-  const answer = el?.closest<HTMLButtonElement>('[data-need-answer]');
   const row = el?.closest<HTMLElement>('[data-need]');
   const it = row ? state.needs.find(n => n.id === row.dataset.need) : null;
-  if (answer && it?.task_id && it.requirement_id) {
-    ev.stopPropagation();
-    answer.disabled = true;
-    try {
-      await taskAnswer(it.task_id, it.requirement_id, answer.dataset.needAnswer || '', it.task?.version ?? null);
-      state.needs = state.needs.filter(n => n !== it);
-      tasksRender(state);
-      void v2Refresh();
-    } catch (e) { answer.disabled = false; toast(errorMessage(e, 'Not answered.')); }
-    return;
-  }
   if (it) { decideOpen(it.id); return; }
   const task = el?.closest<HTMLElement>('[data-task]')?.dataset.task;
   // On a pipeline's board on a phone a card opens at its conversation, its box asking the task's owner.
@@ -762,7 +763,7 @@ function tasksFilterMenu(state: TasksPageState, k: keyof TaskFilters, anchor: HT
   state.menuField = k;
 }
 
-// ---- New task (S6): a title, the details, and one row: who it is for, the pipeline, Create. No due date here; it is
+// ---- New task (S6): a title, its first message, and one row: who it is for, the pipeline, Create. No due date here; it is
 // added on the task. A new task starts in its pipeline's first stage. `parent` files it from that task.
 function taskCreateModal() {
   let d = $('#task-create');
@@ -781,7 +782,7 @@ interface TaskCreateOptions {
 }
 // What was typed into New task and not yet created: closing the modal (the ✕, a tap outside, the phone's Back) keeps
 // it for the next open; a created task clears it.
-let TASK_CREATE_DRAFT = {title: '', body: ''};
+let TASK_CREATE_DRAFT = {title: '', message: ''};
 function openTaskCreate(owner = '', opts: TaskCreateOptions = {}) {
   const d = taskCreateModal();
   const parent = opts.parent || null;
@@ -791,7 +792,7 @@ function openTaskCreate(owner = '', opts: TaskCreateOptions = {}) {
     <div class="tmodal-body">
       <form class="task tc-form" id="task-create-form">
         <input type="text" name="title" required aria-label="Title" placeholder="Title" maxlength="300">
-        <textarea name="body" required aria-label="Details" placeholder="Details" rows="6"></textarea>
+        <textarea name="message" aria-label="Message" placeholder="Message" rows="6"></textarea>
         <div class="tc-row">
           <div class="tc-pick"><span aria-hidden="true">For:</span>${giveToFieldHTML({name: 'owner', label: 'For', placeholder: 'Who is this for?', selected: forWho, task: parent})}</div>
           <label class="tc-pick"><select name="pipeline" aria-label="Pipeline"><option value="">General</option></select></label>
@@ -805,8 +806,8 @@ function openTaskCreate(owner = '', opts: TaskCreateOptions = {}) {
   const form: HTMLFormElement = $('#task-create-form', d);
   const field = <T extends Element>(name: string) => form.elements.namedItem(name) as T;
   field<HTMLInputElement>('title').value = TASK_CREATE_DRAFT.title;
-  field<HTMLTextAreaElement>('body').value = TASK_CREATE_DRAFT.body;
-  form.oninput = () => { TASK_CREATE_DRAFT = {title: field<HTMLInputElement>('title').value, body: field<HTMLTextAreaElement>('body').value}; };
+  field<HTMLTextAreaElement>('message').value = TASK_CREATE_DRAFT.message;
+  form.oninput = () => { TASK_CREATE_DRAFT = {title: field<HTMLInputElement>('title').value, message: field<HTMLTextAreaElement>('message').value}; };
   const pick = field<HTMLSelectElement>('pipeline');
   const fill = (list: PipelineRec[]) => {
     const want = opts.pipeline || '';
@@ -818,17 +819,17 @@ function openTaskCreate(owner = '', opts: TaskCreateOptions = {}) {
   form.onsubmit = async (ev: SubmitEvent) => {
     ev.preventDefault();
     const btn = form.querySelector<HTMLButtonElement>('[type=submit]'), msg = $('#task-create-msg', d);
-    const title = field<HTMLInputElement>('title').value.trim(), body = field<HTMLTextAreaElement>('body').value.trim();
+    const title = field<HTMLInputElement>('title').value.trim(), message = field<HTMLTextAreaElement>('message').value.trim();
     const who = field<HTMLInputElement>('owner').value;
-    if (title && body && !who) { giveToFieldOpen(form.querySelector<HTMLButtonElement>('button[data-give-to]')!); return; }   // the hidden field is never "required"
-    if (!title || !who || !body || !btn) return;
+    if (title && !who) { giveToFieldOpen(form.querySelector<HTMLButtonElement>('button[data-give-to]')!); return; }   // the hidden field is never "required"
+    if (!title || !who || !btn) return;
     btn.disabled = true; msg.hidden = true;
     const labels = (opts.labels || []).map(String).filter(Boolean);
     try {
-      const made = await taskCreate({title, body, owner: who.includes(':') ? who : 'bot:' + who,
+      const made = await taskCreate({title, ...(message ? {message} : {}), owner: who.includes(':') ? who : 'bot:' + who,
         ...(pick.value ? {pipeline: pick.value} : {}), ...(parent ? {parent: parent.id} : {}),
         ...(labels.length ? {labels} : {}), ...(parent?.private ? {private: true} : {})});
-      TASK_CREATE_DRAFT = {title: '', body: ''};
+      TASK_CREATE_DRAFT = {title: '', message: ''};
       d.close();
       if (TASKS_ST) void tasksCatchUp(TASKS_ST);
       await v2Refresh();

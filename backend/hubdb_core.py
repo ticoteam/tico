@@ -1,5 +1,7 @@
 """Who is acting: the actor helpers the hub modules share. Imports nothing from the hub."""
 
+from typing import Any
+
 KEEPER = "keeper"
 
 
@@ -35,7 +37,7 @@ def is_bot(actor):
     return actor_kind(actor) == "bot"
 
 
-def is_human(actor):
+def is_human(actor: Any) -> bool:
     return actor_kind(actor) == "human"
 
 

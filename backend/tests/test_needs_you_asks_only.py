@@ -1,4 +1,4 @@
-"""Needs you holds only what someone asks of the person: an open question to them, or an OK they must give. A task they
+"""Needs you holds only what someone asks of the person: an open question to them (a bot's ❓), or an OK they must give. A task they
 own with nothing asked of them lives in Tasks, and a task the never-stuck ladder could take no further stays with its
 bot, where the quiet-task rule tells the pipeline's manager (docs/pipelines-v3.md, "Needs you").
 
@@ -9,6 +9,7 @@ import pytest
 
 from backend import hubdb as H
 from backend import never_stuck as NS
+from backend import question_marks as Q
 from backend import stage_rule_timers as T
 from backend import task_engine as E
 from backend import waiting_on as W
@@ -44,18 +45,27 @@ def test_an_open_question_and_an_ok_asked_of_a_person_are_in_their_needs_you(c):
     X.pipeline(c, manager="bot:manager")
     mine = X.new_task(c, ANA, "Renew the lease", assignee=ANA)
     asked = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
-    E.add_requirement(c, asked["id"], "bot:builder", "answer", ANA, "Which date?", seen_version=asked["version"])
-    # One open ask per bot on a task: the OK is another task's.
+    Q.ask(c, "bot:builder", asked["id"], ANA, "Which date?")
+    # The OK is another task's.
     ok = X.new_task(c, ANA, "Write the press note", assignee="bot:builder")
-    E.add_requirement(c, ok["id"], "bot:builder", "ok", ANA, "OK the headline", seen_version=ok["version"])
+    E.add_requirement(
+        c,
+        ok["id"],
+        "bot:builder",
+        "ok",
+        ANA,
+        "OK the headline",
+        seen_version=ok["version"],
+        shows=X.shown(c),
+    )
     # A question on her own task is hers to answer, though the task's own work is not listed.
-    E.add_requirement(c, mine["id"], "bot:builder", "answer", ANA, "Which landlord?", seen_version=mine["version"])
+    Q.ask(c, "bot:builder", mine["id"], ANA, "Which landlord?")
     listed = W.needs(c, ANA)
     assert sorted((n["kind"], n["task_id"], n["line"]) for n in listed) == sorted(
         [
-            ("ask", asked["id"], "Which date?"),
+            ("question", asked["id"], "Which date?"),
             ("ask", ok["id"], "OK the headline"),
-            ("ask", mine["id"], "Which landlord?"),
+            ("question", mine["id"], "Which landlord?"),
         ]
     )
 
@@ -91,11 +101,9 @@ def test_the_count_is_the_lists_length_and_holds_no_owned_task(api):
     with api.app.state.store.transaction() as c:
         H.task_create(c, "bot:finance", "Give finance the payroll connector", "x", "human:ana")
         asked = H.task_create(c, "human:ana", "Run the ads", "x", "bot:finance", lint=False)
-        E.add_requirement(
-            c, asked["id"], "bot:finance", "answer", "human:ana", "Which budget?", seen_version=asked["version"]
-        )
+        Q.ask(c, "bot:finance", asked["id"], "human:ana", "Which budget?")
     post(api, "tasks", {"title": "Renew the domain", "body": "x", "owner": "human:ana"})
     listed = get(api, "needs-you")
-    assert [(i["kind"], i["task_id"]) for i in listed["items"]] == [("ask", asked["id"])]
+    assert [(i["kind"], i["task_id"]) for i in listed["items"]] == [("question", asked["id"])]
     assert get(api, "needs-you?count=1")["count"] == listed["count"] == len(listed["items"]) == 1
-    assert get(api, "needs-you/summary")["by_kind"] == {"ask": 1}
+    assert get(api, "needs-you/summary")["by_kind"] == {"question": 1}

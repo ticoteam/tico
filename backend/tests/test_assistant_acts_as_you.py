@@ -10,12 +10,13 @@ from types import SimpleNamespace
 import pytest
 
 from backend import assistant
-from clients import hubtools
 from backend import hubdb as H
+from backend.store import Problem
+from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import as_member, get, headers, post, setup_attempt  # noqa: F401
 from backend.tests.helpers.assistant import assistant_turn, say
 from backend.tests.helpers.automation_access import flow
-from backend.store import Problem
+from clients import hubtools
 
 
 def set_rule(api, **rules):
@@ -139,7 +140,14 @@ def test_a_batch_commit_never_oks_on_an_assistant_walk(api):
     with api.app.state.store.transaction() as c:
         made = H.task_create(c, "human:ana", "Run the LinkedIn ads", "Q4.", "bot:finance", lint=False)
         asked = H.task_ask(
-            c, "bot:finance", made["id"], "human:ana", "Spend $1,200?", kind="ok", seen_version=made["version"]
+            c,
+            "bot:finance",
+            made["id"],
+            "human:ana",
+            "Spend $1,200?",
+            kind="ok",
+            shows=X.shown(c),
+            seen_version=made["version"],
         )
     tid, rid = made["id"], asked["requirement_id"]
 
@@ -230,7 +238,14 @@ def test_a_background_card_never_approves_and_is_capped_per_person_per_day(api):
     with api.app.state.store.transaction() as c:
         ads = H.task_create(c, "human:ana", "Run the ads", "Q4.", "bot:ops")
         ok = H.task_ask(
-            c, "bot:ops", ads["id"], "human:ana", "Spend $500 on ads?", kind="ok", seen_version=ads["version"]
+            c,
+            "bot:ops",
+            ads["id"],
+            "human:ana",
+            "Spend $500 on ads?",
+            kind="ok",
+            shows=X.shown(c),
+            seen_version=ads["version"],
         )
     give = f"/api/v2/tasks/{ads['id']}/asks/{ok['requirement_id']}/ok"
     for path, body in (("/api/v2/assistant/batch", {"actions": [{"path": give, "body": {}}]}), (give, {})):
@@ -477,6 +492,7 @@ def _template_tools():
     """Every command the Assistant template tells it to run, as the tool it runs: the hubcli command tree walked for each
     `hub ...` span (clients/remotecli.tool_name names the tool), not a pattern."""
     import argparse
+
     from clients import hubcli, remotecli
 
     def fn_of(words):

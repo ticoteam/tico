@@ -1,4 +1,4 @@
-// Page parts on a real hub (support/real-hub.cts), the bundle served as in production (backend/ui_bundle.py, ui/parts.json):
+// Page parts on a real hub (support/real-hub.cts), the bundle served as in production (scripts/build-ui.cjs, ui/parts.json):
 // - a cold open of Home or Tasks downloads the shell only, and so does an owner's first visit and Home's refresh;
 // - a part that cannot load leaves Retry in the main area while the sidebar still works, and Retry opens the page once
 //   the network is back;
@@ -19,7 +19,7 @@ const {PART, cold, drawn, table} = require('./support/parts.cts') as PartsSuppor
 declare const S: {v2: {status: Record<string, unknown>}};
 declare function refresh(quiet: boolean): void;
 declare function liveEmit(topic: string, data: unknown): void;
-declare function decideTabPages(): {page: string}[];
+declare function decideOpen(id: string): boolean;
 declare function uiPartLoad(name: string): Promise<void>;
 
 // Pages a cold open draws from the shell alone.
@@ -74,10 +74,8 @@ const SHELL = ['#/home', '#/tasks'];
       await open.page.waitForLoadState('networkidle', {timeout: t(15000)}).catch(() => {});
       assert.deepEqual(open.errors, [], 'Home after a refresh: errors on the page');
       assert.deepEqual(open.parts, [], "Home's refresh, a bot's status change and notifications download no page part");
-      // A "Page → Tab" phrase in Needs you (the ask screen, its own part since P05b) links Rules' and Settings' tabs
-      // with neither page's code: opening the ask screen's code downloads that part alone.
-      assert.deepEqual(await open.page.evaluate(async () => { await uiPartLoad('decide'); return decideTabPages().map(p => p.page).filter(p => p !== 'Finance'); }),
-        ['Rules', 'Settings'], "the ask screen knows Rules' and Settings' tabs");
+      // The ask screen (Needs you's own part since P05b): loading its code downloads that part, not the pages it links to.
+      assert.equal(await open.page.evaluate(async () => { await uiPartLoad('decide'); return typeof decideOpen; }), 'function', "the ask screen's code loads");
       assert.deepEqual([...new Set(open.parts)].sort(), ['browser-view', 'decide', 'task-docs'], "the ask screen's code downloads its own part, the browser view and a task's documents only");
       await must(hub, 'dana', 'POST', 'humans/dana', {notify_browser: false});
       await open.close();

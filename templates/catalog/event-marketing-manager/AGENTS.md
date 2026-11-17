@@ -58,7 +58,7 @@ Always:
 - `skills/score-an-event-after-it-ends/SKILL.md`: read for the results line of an event that has ended.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/calendar.md`, `knowledge/rules.md` and
    the playbook. A resumed turn already has them.
 3. Set `tico bot status set` to one line naming the event or review in progress.
@@ -79,7 +79,7 @@ stop, and their end wakes you.
 
 ## Talking to {{app_name}}
 Read `tico calendar list`, `tico task list`, `tico team show` and, where connected, the CRM (read only).
-A question is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task. Act within the spend the task asks for and a granted Tool allows; outbound text stays a draft until a person turns mail sending on in Tico. Staffing asks go to people as `tico task create --owner <person>` only when the task asks for them.
+A question is `tico task ask <id> --to <person> "<question>"`, one open question per task. Act within the spend the task asks for and a granted Tool allows; outbound text stays a draft until a person turns mail sending on in Tico. Staffing asks go to people as `tico task create --owner <person>` only when the task asks for them.
 
 ## Method
 - **Goal in one number.** No event is booked, sponsored or put on the calendar without one. The decision is set out in

@@ -407,14 +407,29 @@ def bot_id(secret, slug):
     return "gb_" + hmac.new(secret.encode(), str(slug).encode(), hashlib.sha256).hexdigest()[:16]
 
 
-def _post(url, body, headers, timeout, opener):
-    """(status, payload, code) for a POST to the Gateway: payload is the 2xx answer, code the error's. An unreachable
-    Gateway is status 0."""
+REASON_CHARS = 300
+
+
+def _refusal(body):
+    """{"detail": the Gateway's reason, trimmed to REASON_CHARS} for an error answer that gave one (HQ's `detail` on a
+    refused request), else {}."""
+    try:
+        payload = json.loads(body or b"{}")
+    except ValueError:
+        return {}
+    detail = payload.get("detail") if isinstance(payload, dict) else None
+    detail = detail.strip()[:REASON_CHARS] if isinstance(detail, str) else ""
+    return {"detail": detail} if detail else {}
+
+
+def _post(url, body, headers, timeout, opener, *, reason=False):
+    """(status, payload, code) for a POST to the Gateway: payload is the 2xx answer, code the error's. With `reason`, an
+    error's payload is its `_refusal`. An unreachable Gateway is status 0."""
     status, answer, code = _exchange(
         "POST", url, json.dumps(body).encode(), "application/json", headers=headers, timeout=timeout, opener=opener
     )
     if code:
-        return status, {}, code
+        return status, (_refusal(answer) if reason else {}), code
     try:
         payload = json.loads(answer)
     except ValueError:
@@ -543,13 +558,18 @@ def job_path(job_id):
 
 def video_submit(url, key, body, headers=None, timeout=TIMEOUT, opener=None):
     """Tico HQ's video maker (`POST <base>/videos`, the gateway key): (202, {id, status}, "") for a queued job, or
-    (status, {}, error code). `body` is the request as the door takes it (model, prompt, seconds, resolution, aspect,
-    audio and the frames that are given)."""
+    (status, {}, error code). A refused request says why: (status, {"detail": reason}, code). `body` is the request as
+    the door takes it (model, prompt, seconds, resolution, aspect, audio and the frames that are given)."""
     status, payload, code = _post(
-        safe_base(url) + "/videos", body, {"Authorization": "Bearer " + key, **(headers or {})}, timeout, opener
+        safe_base(url) + "/videos",
+        body,
+        {"Authorization": "Bearer " + key, **(headers or {})},
+        timeout,
+        opener,
+        reason=True,
     )
     if status != 202:
-        return status, {}, code
+        return status, (payload if code else {}), code
     if not _JOB.fullmatch(str(payload.get("id") or "")):
         return 502, {}, "unreadable"
     return 202, {"id": str(payload["id"]), "status": str(payload.get("status") or "queued")[:20]}, ""

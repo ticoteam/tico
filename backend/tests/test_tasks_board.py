@@ -113,7 +113,7 @@ def _a_mention_on_a_task_with_no_bot_on_it_is_one_comment(api):
     said = post(api, f"tasks/{task['id']}/comments", {"text": "@ben can you book it by Friday?"})
     # A mention is a comment that reaches whom it names, not a question (question tasks are their own thing).
     assert said["comment"]["kind"] == "say" and mention_reason(api, said["comment"]["id"], "human:ben") == "mention"
-    assert [m["body"] for m in get(api, "tasks/" + task["id"])["comments"]] == ["@ben can you book it by Friday?"]
+    assert [m["body"] for m in get(api, "tasks/" + task["id"])["comments"]] == ["x", "@ben can you book it by Friday?"]
 
 
 def _mentioning_a_person_on_a_task_a_bot_owns_still_wakes_the_bot(api):
@@ -139,7 +139,10 @@ def _the_author_edits_a_comment_and_nobody_wakes(api):
     edited = post(api, f"tasks/{task['id']}/comments/{said['comment']['id']}", {"text": "Use the August numbers."})
     assert edited["woke"] is False and edited["comment"]["edited_at"]
     after = get(api, "tasks/" + task["id"])
-    assert [(m["body"], bool(m["edited_at"])) for m in after["comments"]] == [("Use the August numbers.", True)]
+    assert [(m["body"], bool(m["edited_at"])) for m in after["comments"]] == [
+        ("x", False),
+        ("Use the August numbers.", True),
+    ]
     assert len(after["messages"]) == len(before["messages"]) and jobs_for(api, "ops") == queued, (
         "nothing sent, nobody woken"
     )
@@ -159,7 +162,7 @@ def _only_its_author_edits_or_deletes_a_comment_signed_in_as_themselves(api):
     for token in ("ana-test", "priya-test", "ben-via-botops"):  # Tico's owner, a teammate, BotOps acting for Ben
         post(api, path, {"text": "Use the October numbers."}, token=token, expected=403)
         post(api, path + "/delete", {}, token=token, expected=403)
-    assert [m["body"] for m in get(api, "tasks/" + task["id"])["comments"]] == ["Use the September numbers."]
+    assert [m["body"] for m in get(api, "tasks/" + task["id"])["comments"]] == ["x", "Use the September numbers."]
     assert post(api, path, {"text": "Use the October numbers."}, token="ben-test")["comment"]["edited_at"]
 
 

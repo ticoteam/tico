@@ -136,7 +136,8 @@ function botCantRunFixHTML(slug: string, cant: BotCantRun): string {
   const more = `#/bot/${encodeURIComponent(slug)}/info`, cls = 'primary bot-alert-resume';
   const task = cant.task?.id ? `#/task/${encodeURIComponent(cant.task.id)}` : '';
   switch (cant.fix) {
-    // A bot being made on a task waits on an ask there that is the viewer's: the button opens it on its task (#411).
+    // A bot being made on a task waits on the viewer's OK or ❓ there (backend/org_routes.py making): the button opens it
+    // on its task (#411).
     case 'open_ask': return task ? `<a class="${cls}" href="${task}" data-bot-ask${cant.ask?.line ? ` title="${esc(cant.ask.line)}"` : ''}>${cant.ask?.kind === 'ok' ? 'Review OK' : 'Answer'}</a>` : '';
     case 'resume': return `<button class="${cls}" type="button" data-bot-unpause>Unpause</button>`;
     case 'release_quarantine': return `<button class="${cls}" type="button" data-quarantine-resume>Resume bot</button>`;

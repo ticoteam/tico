@@ -6,11 +6,12 @@ import json
 
 import pytest
 
+from backend import bot_settings as BS
 from backend import usage_limits
 from backend.store import H
+from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import assign, claim, get, post, runner  # noqa: F401  (api is a fixture)
 from backend.tests.helpers.check_models import company, finish, heartbeat
-from backend import bot_settings as BS
 from backend.tests.helpers.task_models import ops_on_sonnet, revision, set_task_model, task_turn
 
 
@@ -634,7 +635,17 @@ def test_a_cheaper_task_model_on_a_bot_that_sends_warns_in_plain_words_and_still
     set_task_model(api, None)
     with api.app.state.store.transaction() as c:
         asked = H.task_create(c, "bot:ops", "Send the launch note", "To the list.", "bot:ops", lint=False)
-        H.task_ask(c, "bot:ops", asked["id"], "human:ana", "OK to send it?", kind="ok", seen_version=asked["version"])
+        shows = X.shown(c)
+        H.task_ask(
+            c,
+            "bot:ops",
+            asked["id"],
+            "human:ana",
+            "OK to send it?",
+            kind="ok",
+            shows=shows,
+            seen_version=asked["version"],
+        )
     saved = set_task_model(api, HAIKU)
     assert saved["task_model"]["model"] == "claude-haiku-5-5", "it still saves"
     assert saved["warning"] == (

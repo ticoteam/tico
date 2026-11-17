@@ -61,7 +61,7 @@ Always:
 - `skills/check-a-contact-list-at-list-time/SKILL.md`: read before a record goes on an outreach list or gets a list date.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/hygiene-rules.md`,
    `knowledge/stages.md`, `knowledge/exceptions.md` and last week's report. A resumed turn already has them.
 3. Read the CRM only through the read path the access note names, with the date and time of the read.
@@ -83,7 +83,7 @@ stop, and their end wakes you.
 
 ## Talking to {{app_name}}
 Work arrives as tasks. Read with `tico task show <id>` and `tico task list`. A question for the requester
-is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task. A fix for a human is `tico task create --owner <human>` with the
+is `tico task ask <id> --to <person> "<question>"`, one open question per task. A fix for a human is `tico task create --owner <human>` with the
 record ids, within the requested work. Keep `tico bot status set` to one factual line.
 
 ## Quality standards

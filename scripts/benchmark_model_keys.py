@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""Time `GET runner-model-credentials` (backend/computer_keys.py keys_for) and the claim's subscriptions
-(model_subscriptions.for_claim) on a seeded hub, and print each query's plan, so a checkout before D11-4 and one after
-can be compared on the same data.
+"""Time `GET runner-model-credentials` (keys_for: backend/model_subscriptions.py since D11-5, backend/computer_keys.py
+before), the claim's subscriptions (model_subscriptions.for_claim) and the Computers page's keys (key_listing since
+D11-5; serving, listing_by_runner and shared_listing per computer before) on a seeded hub, and print each query's plan,
+so a checkout before D11-4, D11-5 and one after can be compared on the same data.
 
     python3 scripts/benchmark_model_keys.py [--repo CHECKOUT] [--computers 50] [--subscriptions 200] [--bots 200]
 
 `--repo` is the checkout whose `backend` is measured (this one by default). The data are fictional and the same for
 both: each computer's own Claude key as Settings > Computers kept it (`computer_keys`), one key shared with every
 computer, Settings > Models subscriptions given for Codex, and a key granted to each bot. A checkout with the
-D11-4 migration (20261117061243) then moves those keys into subscriptions, as an upgrade does.
+D11-4 migration (20261117061243) then moves those keys into subscriptions, as an upgrade does, and one with the D11-5
+migration (20261117085930) drops the old key tables. `computer_keys` and `model_login_key_off` are made again for the seed where a checkout has
+dropped them already.
 """
 
 import argparse
@@ -22,6 +25,16 @@ import time
 import uuid
 
 NOW = "2026-11-17T00:00:00.000000Z"
+MOVE = "20261117061243_computer_keys_to_subscriptions"
+DROP = "20261117085930_drop_computer_keys"
+LEGACY = (
+    "CREATE TABLE IF NOT EXISTS computer_keys(credential_id TEXT PRIMARY KEY REFERENCES credentials(id), "
+    "runner_id TEXT NOT NULL REFERENCES runners(id), runtime TEXT NOT NULL, state TEXT NOT NULL, login_id TEXT, "
+    "created_at TEXT NOT NULL, created_by TEXT NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS model_login_key_off(runner_id TEXT NOT NULL REFERENCES runners(id), "
+    "runtime TEXT NOT NULL, profile TEXT NOT NULL DEFAULT '', set_at TEXT NOT NULL, set_by TEXT NOT NULL, "
+    "PRIMARY KEY(runner_id,runtime,profile))",
+)
 
 
 def insert(c, table, values):
@@ -34,6 +47,8 @@ def insert(c, table, values):
 
 
 def seed(c, vault, computers, subscriptions, bots):
+    for statement in LEGACY:
+        c.execute(statement)
     insert(c, "humans", {"id": "ana", "name": "Ana", "email": "ana@example.test"})
     columns = {r[1] for r in c.execute("PRAGMA table_info(model_subscriptions)")}
 
@@ -200,7 +215,7 @@ def main():
     parser.add_argument("--rounds", type=int, default=1000)
     args = parser.parse_args()
     sys.path.insert(0, str(args.repo.resolve()))
-    from backend import computer_keys, model_subscriptions
+    from backend import model_subscriptions
     from backend.config import Settings
     from backend.credentials import Vault
     from backend.store import Store
@@ -212,11 +227,12 @@ def main():
         vault = Vault(store)
         with store.transaction() as c:
             runners, bots = seed(c, vault, args.computers, args.subscriptions, args.bots)
-        migrated = (args.repo / "backend/migrations/20261117061243_computer_keys_to_subscriptions.py").exists()
-        if migrated:
-            module = importlib.import_module("backend.migrations.20261117061243_computer_keys_to_subscriptions")
-            with store.transaction() as c:
-                module.up(c, NOW)
+        migrated = (args.repo / f"backend/migrations/{MOVE}.py").exists()
+        dropped = (args.repo / f"backend/migrations/{DROP}.py").exists()
+        for name, present in ((MOVE, migrated), (DROP, dropped)):
+            if present:
+                with store.transaction() as c:
+                    importlib.import_module("backend.migrations." + name).up(c, NOW)
         with store.transaction() as c:
             c.execute("ANALYZE")
             counts = {
@@ -225,17 +241,34 @@ def main():
                     "runners",
                     "model_subscriptions",
                     "computer_subscriptions",
-                    "computer_keys",
                     "credentials",
                     "credential_grants",
                     "bots",
                 )
             }
         claim_bot = "bot" in model_subscriptions.for_claim.__code__.co_varnames
+        if hasattr(model_subscriptions, "key_listing"):
+            keys_for = model_subscriptions.keys_for
+
+            def key_listing(c):
+                return model_subscriptions.key_listing(c)
+
+        else:
+            computer_keys = importlib.import_module("backend.computer_keys")
+            keys_for = computer_keys.keys_for
+
+            def key_listing(c):
+                # What the Operations listing read for keys before D11-5: two passes, then one read per computer.
+                served, own = computer_keys.serving(c), computer_keys.listing_by_runner(c)
+                rows = c.execute("SELECT * FROM runners_with_state ORDER BY lower(label), id").fetchall()
+                return served, own, [computer_keys.shared_listing(c, row) for row in rows]
 
         def keys(c, i):
-            reply, _ = computer_keys.keys_for(c, vault, runners[i % len(runners)], "claude")
+            reply, _ = keys_for(c, vault, runners[i % len(runners)], "claude")
             assert reply["credentials"], reply
+
+        def listing(c, _):
+            assert key_listing(c)
 
         def claim(c, i):
             runner = {"id": runners[i % len(runners)]}
@@ -245,12 +278,15 @@ def main():
         report = {
             "repo": str(args.repo),
             "d11_4": migrated,
+            "d11_5": dropped,
             "rows": counts,
             "keys_for": timed(store, args.rounds, keys),
             "for_claim": timed(store, args.rounds, claim),
+            "key_listing": timed(store, args.rounds, listing),
             "plans": {
-                "keys_for": plans(path, lambda c: computer_keys.keys_for(c, vault, runners[0], "claude")),
+                "keys_for": plans(path, lambda c: keys_for(c, vault, runners[0], "claude")),
                 "for_claim": plans(path, lambda c: (claim(c, 0), claim(c, 1))),
+                "key_listing": plans(path, key_listing),
             },
         }
     print(json.dumps(report, indent=1, ensure_ascii=False))

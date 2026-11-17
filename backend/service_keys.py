@@ -169,15 +169,13 @@ def upsert(c, auth, who, body):
             c,
             H.KEEPER,
             body.title,
-            body.body,
+            body.body + footer,  # the other system's words, and the line that names it: Tico's
             owner,
             body.due,
             deduplicate=False,
             conversation_id=rooms.task_conversation_id(c, auth, owner, H.KEEPER),
             labels=body.labels or [],
         )
-        # Rule 7 above read the other system's own words; the line naming it is Tico's.
-        c.execute("UPDATE tasks SET body=? WHERE id=?", (body.body + footer, row["id"]))
         c.execute(
             "INSERT INTO service_key_tasks(key_id,external_key,task_id,created_at) VALUES(?,?,?,?)",
             (key_id, body.key, row["id"], H.now()),
@@ -213,15 +211,21 @@ def _apply(c, body, row, footer, label):
     row = H.task(c, task_id)
     if not row:
         raise Problem("not_found", "No such task", 404)
-    current = {"body": row["body"], "labels": H.task_labels(row), "due": row["due_at"]}
+    current = {"labels": H.task_labels(row), "due": row["due_at"]}
     wanted = {
-        "body": body.body + footer if body.body is not None else None,
         "labels": H._labels(body.labels) if body.labels is not None else None,
         "due": body.due,
     }
     fields = {name: value for name, value in wanted.items() if value is not None and value != current[name]}
     if fields:
         H.task_update(c, H.KEEPER, task_id, **fields)
+    # New words from the other system: said on the task (a task has no description to rewrite), once each.
+    said = body.body + footer if body.body is not None else None
+    if said is not None and said.strip() not in H.task_words(c, task_id):
+        from . import task_engine, task_wakes
+
+        task_wakes.tell(c, task_engine.task(c, task_id) or row, said)
+        fields["body"] = said
     have = {link["url"] for link in H.task_links(c, task_id)}
     links = [url for url in dict.fromkeys(body.links) if url not in have]
     for url in links:

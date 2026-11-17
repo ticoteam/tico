@@ -839,8 +839,8 @@ def with_botops(cloud):
 def machine_cards(cloud):
     with cloud.store.read() as c:
         return [
-            dict(r)
-            for r in c.execute("SELECT title,body,owner_id,status FROM tasks WHERE title LIKE 'Check %cloud machine'")
+            {**dict(r), "body": H.task_words(c, r["id"])}  # what Tico gave BotOps: its instructions
+            for r in c.execute("SELECT id,title,owner_id,status FROM tasks WHERE title LIKE 'Check %cloud machine'")
         ]
 
 

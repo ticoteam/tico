@@ -25,7 +25,7 @@ const MESSAGES = [
 ];
 const BOT = {bot: 'support-owner', name: 'Support Owner', description: 'Owns the support queue and drafts every reply.', state: 'active', can_manage: true,
   sources: [{id: 'slack:CSUP', kind: 'slack', name: '#support', post: false}, {id: 'email:support@acme.example', kind: 'email', name: 'support@acme.example', synced_at: ago(2)}],
-  last_run: ago(4), next_run: null, slack_interval_minutes: 60};
+  last_run: ago(4), next_run: null};
 
 async function open(browser: Browser, viewport: {width: number; height: number}, w: World, theme: string): Promise<{page: Page; errors: string[]; context: import('playwright').BrowserContext}> {
   const context = await browser.newContext({viewport, serviceWorkers: 'block', hasTouch: viewport.width < 760, isMobile: viewport.width < 760});
@@ -57,7 +57,7 @@ async function open(browser: Browser, viewport: {width: number; height: number},
     if (p === '/api/v2/mail/agent') return json({updated_at: ago(3), instructions: 'Answer every support message within the hour.\nAsk before refunds.'});
     if (p === '/api/v2/messaging/bots') return json({bots: [{bot: BOT.bot, state: BOT.state, revision: 4}]});
     if (p === `/api/v2/messaging/bots/${BOT.bot}`) return json({bot: BOT, slack: [{ts: String(Date.now() / 1000 - 3600), thread_ts: '1', channel: 'CSUP', author: 'Kim', text: 'The calibration steps again?'}],
-      slack_posts: [], slack_digests: [], mail: [], instructions: {published: false, content: 'Owns the support queue and drafts every reply.'}});
+      slack_posts: [], mail: [], instructions: {published: false, content: 'Owns the support queue and drafts every reply.'}});
     if (p === `/api/v2/bots/${BOT.bot}/definition` && method === 'POST') { w.posts.push({path: p, body: JSON.parse(route.request().postData() || '{}')}); return json({}); }
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json(unrouted(p));

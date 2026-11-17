@@ -1,9 +1,9 @@
 """Strategy: the vision, three bets and a market briefing.
 
-Version 1 is the home business: two bets and the sections for homeowners. Version 2 is published a few days later and
+Version 1 is the home business: two bets and the sections for homeowners. Version 2 is saved a few days later and
 adds the business bet, a new summary and the business sections, so the history has a change to show. The Strategy
-Bot's one proposal, a bet the team had not written down yet from this week's briefing, Ana has accepted into the
-draft (proposed, unpublished), and this week's
+Bot's one proposal, a bet the team had not written down yet from this week's briefing, Ana has accepted, so it is live
+as version 3 (proposed), and this week's
 briefing is the Librarian's. Every row goes through the API as Ana, or through the domain function a real install runs.
 """
 
@@ -424,10 +424,8 @@ CONTENT = {
     },
     # Days ago, most first: when each step happened.
     "days": {
-        "setup": 5.7,
         "version_1": 5.5,
         "brand": 4.2,
-        "business": 2.4,
         "version_2": 2.2,
         "market": 2.0,
         "news_rival": 1.9,
@@ -443,24 +441,14 @@ CONTENT = {
 def seed(b):
     goals = _goals(b)
     days = CONTENT["days"]
-    b.at(days=days["setup"])
-    _draft(b, summary=CONTENT["summary_v1"], vision=CONTENT["vision"], sections=CONTENT["sections"])
-    for spec in CONTENT["bets"]:
-        if spec["version"] == 1:
-            _link(b, goals, spec, _bet(b, spec))
     b.at(days=days["version_1"])
-    _publish(b, CONTENT["notes"]["v1"])
+    _save(b, goals, 1, summary=CONTENT["summary_v1"], vision=CONTENT["vision"], sections=CONTENT["sections"])
 
     b.at(days=days["brand"])
     _brand(b)
 
-    b.at(days=days["business"])
-    for spec in CONTENT["bets"]:
-        if spec["version"] == 2:
-            _link(b, goals, spec, _bet(b, spec))
     b.at(days=days["version_2"])
-    _draft(b, summary=CONTENT["summary_v2"], sections=CONTENT["sections_v2"])
-    _publish(b, CONTENT["notes"]["v2"])
+    _save(b, goals, 2, summary=CONTENT["summary_v2"], sections=CONTENT["sections_v2"])
 
     b.at(days=days["market"])
     _market(b)
@@ -486,40 +474,40 @@ def _goals(b):
     }
 
 
-def _revision(b):
-    return b.call("GET", "strategy")["draft"]["revision"]
+def _save(b, goals, version, **fields):
+    """The draft fields and this version's bets as Ana, live as one version with its note, the way a confirmed
+    proposal goes live (strategy.go_live), so the history reads two versions, not one per field."""
+    specs = [spec for spec in CONTENT["bets"] if spec["version"] == version]
 
+    def work(c):
+        S.update_draft(c, "human:ana", live=False, **fields)
+        ids = []
+        for spec in specs:
+            wrong = {"kind": "text", "text": spec["wrong_if"], "check_by": _day(b, spec["check_days"])}
+            bet, _ = S.add_bet(
+                c,
+                "human:ana",
+                spec["statement"],
+                spec["why"],
+                spec["rules_out"],
+                wrong,
+                status="active",
+                rank=spec["rank"],
+                live=False,
+            )
+            if bet:
+                ids.append(bet["id"])
+        S.go_live(c, "human:ana", note=CONTENT["notes"][f"v{version}"])
+        return ids
 
-def _draft(b, **fields):
-    b.call("PUT", "strategy/draft", {"revision": _revision(b), **fields})
-
-
-def _bet(b, spec):
-    wrong = {"kind": "text", "text": spec["wrong_if"], "check_by": _day(b, spec["check_days"])}
-    reply = b.call(
-        "POST",
-        "strategy/bets",
-        {
-            "statement": spec["statement"],
-            "why": spec["why"],
-            "rules_out": spec["rules_out"],
-            "wrong_if": wrong,
-            "status": "active",
-            "rank": spec["rank"],
-            "revision": _revision(b),
-        },
-    )
-    return reply["bet"]["id"]
+    for spec, bet_id in zip(specs, b.write(work), strict=True):
+        _link(b, goals, spec, bet_id)
 
 
 def _link(b, goals, spec, bet_id):
     """The goal the bet serves, when the core seed has one for that owner."""
     if goals.get(spec["goal"]):
         b.call("POST", "goals/" + goals[spec["goal"]], {"bet_id": bet_id})
-
-
-def _publish(b, note):
-    b.call("POST", "strategy/publish", {"note": note, "revision": _revision(b)})
 
 
 def _day(b, days):
@@ -540,8 +528,8 @@ def _briefing(b):
 
 def _proposal(b):
     """The Strategy Owner's proposal: a new bet, from this week's briefing, in the proposed status. Ana has already said
-    yes, through the same decide call her card makes, so the bet sits in the strategy draft as proposed and nothing
-    waits on Goals; nothing is published."""
+    yes, through the same decide call her card makes, so the bet is live in the strategy as proposed and nothing
+    waits on Goals."""
     spec = CONTENT["proposal"]
     bet = {
         "statement": spec["statement"],

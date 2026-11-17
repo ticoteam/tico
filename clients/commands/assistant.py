@@ -562,7 +562,7 @@ def batch_next(api, args):
 
 # The decisions the server takes (backend/batch.py DECISIONS; the request model is backend/models.py BatchRespond).
 # backend/tests/test_batch.py asserts that this tuple, the server's list and the model stay equal.
-NEEDS_YOU_DECISIONS = ("ok", "send_back", "done", "close", "answer")
+NEEDS_YOU_DECISIONS = ("ok", "send_back", "done", "close")
 
 
 @tool(
@@ -576,8 +576,7 @@ NEEDS_YOU_DECISIONS = ("ok", "send_back", "done", "close", "answer")
         ),
         "text": _s("The person's own words"),
         "decision": _s(
-            "With decide: ok or send_back on an OK, answer on a question, done or close on a task. "
-            "send_back and answer need text.",
+            "With decide: ok or send_back on an OK, done or close on a task. send_back needs text.",
             enum=list(NEEDS_YOU_DECISIONS),
         ),
         "item": {"type": "integer", "description": "Another item's number"},
@@ -623,7 +622,11 @@ def batch_abandon(api, args):
     "until they fix it; mention: an @ of them by a person), and the items, oldest first, each "
     "with its task. Use it to see the pile before closing or stopping anything.",
     {
-        "kind": {"type": "string", "enum": ["task", "ask", "paused", "mention"], "description": "Only this kind"},
+        "kind": {
+            "type": "string",
+            "enum": ["task", "ask", "paused", "mention", "question"],
+            "description": "Only this kind",
+        },
         "limit": {
             "type": "integer",
             "minimum": 0,

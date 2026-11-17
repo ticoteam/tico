@@ -1,9 +1,8 @@
 import type {Route} from 'playwright';
 // Offline browser check of Skip on the ask screen (task #181), against a fake of the new routes, on a 390 px phone and
 // on a desktop:
-// - a task to let someone see (the stuck card) has Skip at the end of its row, 44 px tall on a phone; an ask, a typed
-//   choice with no answer row of its own included, shows Snooze and no Skip (#3769, ask-screen-snooze.cts); the phone
-//   has ‹ › too (task #454);
+// - a task to let someone see (the stuck card) has Skip at the end of its row, 44 px tall on a phone; an ask shows
+//   Snooze and no Skip (#3769, ask-screen-snooze.cts); the phone has ‹ › too (task #454);
 // - Skip goes to the next item and sends nothing: the skipped item is not answered or changed;
 // - at the last item, Skip wraps to the first, which is still waiting;
 // - on a desktop ‹ › and the arrow keys still step through.
@@ -19,12 +18,11 @@ const brief = (id: string, title: string) => ({id, title, number: 1, pipeline_id
   owner_id: 'bot:pm', requester_id: 'human:ana', assignee_id: null, due_at: null, late: null, snoozed: false,
   turn: {state: 'person', who: 'human:ana', line: 'Waiting on Ana', since: '2026-11-09T10:00:00Z', until: null, ask: true, requirement_id: null},
   version: 3});
-// `typed`: a stage's typed choice, which is only its buttons and has no answer row of its own; Snooze makes one.
-const question = (n: number, line: string, choices: string[], typed = false) => ({kind: 'ask', id: `r${n}`, task_id: `t${n}`, requirement_id: `r${n}`, line,
+// A stage's OK: no grant (GET /api/v2/oks/{id} 404), so Approve answers ok.
+const ok = (n: number, line: string) => ({kind: 'ask', id: `r${n}`, task_id: `t${n}`, requirement_id: `r${n}`, line,
   since: `2026-11-09T1${n}:00:00Z`, task: brief(`t${n}`, `Task ${n}`),
-  ask: {requirement_id: `r${n}`, kind: 'answer', line, who: 'human:ana', asked_by: 'bot:pm', choices, may: ['answer', 'thumbs'],
-    met: false, shows: [], standing: 'waiting', answer: null,
-    typed: typed ? {name: 'region', type: 'choice', min: null, max: null, question: line} : undefined}});
+  ask: {requirement_id: `r${n}`, kind: 'ok', line, who: 'human:ana', asked_by: 'bot:pm', may: ['ok', 'no'],
+    met: false, shows: [], standing: 'waiting', answer: null}});
 // A private task of Ana's that waits on Ben being let in: the one task item Needs you has (backend/waiting_on.py needs).
 const mine = (n: number, title: string) => ({kind: 'task', id: `t${n}`, task_id: `t${n}`, line: title, since: `2026-11-09T1${n}:00:00Z`,
   task: {...brief(`t${n}`, title), owner_id: 'human:ana', turn: {...brief(`t${n}`, title).turn, ask: false, share: ['human:ben']}}});
@@ -33,14 +31,14 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
   stages: [{id: 'spec', name: 'Spec', purpose: '', owner: null, by_hand: false, task_limit: null, expected_minutes: null,
     expected_bots_only: false, on_enter: {}, requirements: []}],
   done: {id: 'done', name: 'Done'}, closed: {id: 'closed', name: 'Closed'}, may_change: true};
-const Q = ['Write the plan note', 'Which region first?', 'Book the venue'];
+const Q = ['Write the plan note', 'OK the region plan', 'Book the venue'];
 
 (async () => {
   const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL ?? 'chrome') as string});
   try {
     for (const [label, viewport] of [['phone', {width: 390, height: 844}], ['desktop', {width: 1200, height: 900}]] as const) {
       const errors: string[] = [], writes: string[] = [];
-      let needs: Record<string, unknown>[] = [mine(1, Q[0]!), question(2, Q[1]!, ['EU', 'US'], true), mine(3, Q[2]!)];
+      let needs: Record<string, unknown>[] = [mine(1, Q[0]!), ok(2, Q[1]!), mine(3, Q[2]!)];
       const page = await browser.newPage({viewport, serviceWorkers: 'block'});
       page.on('pageerror', (error: Error) => errors.push(error.message));
       await page.route('**/*', (route: Route) => {
@@ -56,6 +54,7 @@ const Q = ['Write the plan note', 'Which region first?', 'Book the venue'];
         if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
         if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
         if (p === '/api/v2/needs-you') return json({actor: 'human:ana', count: needs.length, items: needs, version: String(needs.length), next: null});
+        if (p.startsWith('/api/v2/oks/')) return json({error: 'not_found'}, 404);
         if (p === '/api/v2/flow/opinions') return json({opinions: []});   // Tico has none: Flow as without it
         const read = r.method() === 'GET' ? p.match(/^\/api\/v2\/tasks\/(t\d)$/) : null;
         if (read) return json({task: {...(mine(Number(read[1]!.slice(1)), Q[Number(read[1]!.slice(1)) - 1]!).task), created_at: '2026-11-09T09:00:00Z', attachments: [], links: [], body: ''}});
@@ -73,7 +72,7 @@ const Q = ['Write the plan note', 'Which region first?', 'Book the venue'];
       const dialog = page.locator('#need-card');
       // Question `q` is on screen, as item `n` of `of`.
       const at = async (q: number, of: number, n = q) => {
-        await dialog.locator('.dc-q', {hasText: Q[q - 1]!}).waitFor();
+        await dialog.locator('.dc-q', {hasText: Q[q - 1]!}).waitFor({state: 'attached'});   // a phone opens an OK on its Task tab
         assert.equal(await dialog.locator('[data-dc="prev"]').isDisabled(), n === 1, `${label}: ‹ at ${n} of ${of}`);
         assert.equal(await dialog.locator('[data-dc="next"]').isDisabled(), n === of, `${label}: › at ${n} of ${of}`);
       };
@@ -86,10 +85,10 @@ const Q = ['Write the plan note', 'Which region first?', 'Book the venue'];
         assert.ok(label !== 'phone' || box.height >= 44, `${label}: Skip's tap area is ${box.width}x${box.height}`);
         assert.ok(box.y >= 0 && box.y + box.height <= viewport.height, `${label}: Skip is in view`);
       };
-      // Answers come first in the walk: the typed choice, then the two tasks to let Ben see.
+      // Review comes before Do in the walk: the OK, then the two tasks to let Ben see.
       await at(2, 3, 1);
       assert.ok(await dialog.locator('[data-dc="next"]').isVisible(), `${label}: › shows`);
-      await dialog.locator('[data-dc-choice="EU"]').waitFor();          // the typed choice: its buttons, then Snooze
+      await dialog.locator('[data-dc="approve"]:not([disabled])').waitFor();
       assert.equal(await skip.count(), 0, `${label}: an ask has no Skip`);
       assert.equal(await snooze.count(), 1, `${label}: an ask has Snooze`);
       const sb = (await snooze.boundingBox())!;
@@ -110,7 +109,7 @@ const Q = ['Write the plan note', 'Which region first?', 'Book the venue'];
       assert.deepEqual(writes, [], `${label}: a skip sends nothing`);
 
       // Answering still works after a skip, and the rest stay.
-      await dialog.locator('[data-dc-choice="EU"]').click();
+      await dialog.locator('[data-dc="approve"]:not([disabled])').click();
       await dialog.locator('.dc-bar:not([hidden])').waitFor();
       await page.waitForFunction('decideLive(DEC).length === 2');
       assert.deepEqual(writes, ['POST /api/v2/tasks/t2/asks/r2/answer']);

@@ -18,7 +18,7 @@ has the candidate's line.
     tico task show <id>
 
 Read the role's `knowledge/loops/<role>.md`. If the task changes the loop for this candidate, use the task and note why.
-If a panel name is missing, ask one question with `tico task ask <id> --to <person> "<question>" --version N`.
+If a panel name is missing, ask one question with `tico task ask <id> --to <person> "<question>"`.
 
 ## 2. Find three options
 

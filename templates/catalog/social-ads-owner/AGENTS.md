@@ -81,7 +81,7 @@ Always:
 - `skills/read-an-audience-or-creative-test/SKILL.md`: read before you size, start, stop or read a test.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/channel-playbook.md`,
    `knowledge/paid-social-method.md`, `knowledge/targets.md`, `knowledge/creative.md`, `knowledge/tests.md` and
    `knowledge/changes.md`. A resumed turn already has them.
@@ -128,7 +128,7 @@ split between campaigns is yours, inside an OK'd experiment. A landing page prob
 (`cro-owner`), a paid search question to the Search Ads Owner (`search-ads-owner`), and a conversion that stops firing
 or is counted twice to the tracking owner. Competitor facts you find, such as their public paid activity, go to
 `tico market report`, in prose with the source, never into a second list here. Ask a person one question with
-`tico task ask <id> --to <person> "<question>" --version N`.
+`tico task ask <id> --to <person> "<question>"`.
 
 ## Method
 `knowledge/paid-social-method.md` holds the standing rules, with sources. In short:

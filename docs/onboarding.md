@@ -60,8 +60,8 @@ older chart, still imports.
 from the file, or the group that already has it. Without one, a role goes in its template's group.
 
 **Unreleased:** A file from the setup page's Strategy step (format 0.3, with a `strategy` block) also brings the strategy
-it drafted, for the owner to confirm; nothing is published. The preview lists it under `strategy`. The import writes the
-[strategy draft](strategy.md#setup): the summary and vision, and the file's four sections (Who we serve, What we sell, What we know that others don't, What we won't do) marked
+it drafted, live at once as one version. The preview lists it under `strategy`. The import writes the
+[strategy](strategy.md#setup): the summary and vision, and the file's four sections (Who we serve, What we sell, What we know that others don't, What we won't do) marked
 `_Unconfirmed: drafted from the company file._` (only where empty), with the file's listening requests as a
 **Watching** section; each bet `proposed`, its wrong-if a text test due on the file's check date (90 days out when it
 has none); and each goal on the bet it came from. With a market not defined yet it adds the
@@ -341,6 +341,32 @@ with **Ask** opening the Assistant panel over the page. It shows only to humans 
 `can_build`), and has nothing to close. Asking the Assistant (it hands the request to BotOps) is how a bot is added (`playbooks/build-me-a-bot.md`); connecting
 an external agent you already have is the **Connect an external agent** button in the sidebar footer.
 
+### Setup in Flow
+
+What setup leaves empty is filled in by asking, one question at a time, in Flow. `GET /api/v2/setup/gaps`
+(`backend/setup_gaps.py`) answers, area by area, whether it still waits on a person (the owner or an admin) and the bot
+that asks for it:
+
+| Area | Waits while | Asked by |
+|---|---|---|
+| Market | no active market entity, no page past the seed, no open "Set up the market map" task | the Librarian |
+| Strategy | no strategy summary, or no brand (draft or published) | the Strategy page's owner (Strategy Owner) |
+| Goals | no goal | the Goals page's owner (Strategy Owner) |
+| Org | no bot besides the built-ins | BotOps |
+| Tools | no tool | the Tools page's owner (Tools Owner) |
+| Budget | no company spending limit | BotOps |
+
+Each open area carries Flow's mark: on its Strategy tab (Market, Strategy, Org, Goals, Budget), beside the Tools title, and
+beside the Market setup question and the **Set up brand** button. A tap on a mark opens Flow on that bot alone and pings it
+(`POST /api/v2/flow/ping` `{"scope": "setup", "id": "<area>"}`). The bot follows `skills/setup-in-flow/SKILL.md`: one short
+free-form ❓ for the most important gap, it fills the area in from the reply, then asks the next, and it stops when the area
+is filled or the person says not now. A write that may open or close a gap rings the `setup` topic of
+`GET /api/v2/events`, so the mark goes as soon as the area is filled, by whoever fills it.
+
+It runs only when asked: once when the onboarding modal finishes (`{"scope": "setup"}` pings every open area's bot with its
+areas), on a mark tap, and on Flow's **Ping your bots** (which adds the setup bots to the person's reports). There is no
+schedule; a bot pinged in the last ten minutes is not pinged again.
+
 ### An empty Market page
 
 Market is the Market tab of [Strategy](strategy.md) (`#/strategy/market`; `#/market` redirects there). While the market has
@@ -405,7 +431,7 @@ exception, so the computer keeps reporting the others.
 ## What BotOps does
 
 BotOps works one setup task at a time, following `playbooks/set-up-a-bot.md` in its own repository:
-read the task, `tico bot create --template <template> --name "<Display>"` (Tico picks the slug from the name), put the reviewed
+read the task's chat, `tico bot create --template <template> --name "<Display>"` (Tico picks the slug from the name), put the reviewed
 instructions into `AGENTS.md` (or tailor the template's to the answers), run `tico bot check <slug>`
 and fix every failure, then commit the result.
 

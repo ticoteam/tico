@@ -112,8 +112,10 @@ function check(where: string, rows: Awaited<ReturnType<typeof drawn>>, wake: str
     // s1 wakes Nov 14, 08:00 UTC: "Today", "Tomorrow" or "Nov 14" by the day the check runs, never a hand-made date.
     const wake = await desk.evaluate(() => dayWords('2026-11-14T08:00:00Z'));
     check('columns', await drawn(desk, '[data-pv-col="build"] .tk-card'), wake);
-    // Build has a limit of 3: the two snoozed tasks hold no slot.
-    assert.equal((await desk.locator('[data-pv-col="build"] .pv-stage-n').innerText()).trim(), '2/3', 'snoozed tasks hold no slot');
+    // Build has a limit of 3: the two snoozed tasks hold no slot. Its number is the tasks it lists.
+    const built = desk.locator('[data-pv-col="build"] .pv-stage-n');
+    assert.equal((await built.innerText()).trim(), String(await desk.locator('[data-pv-col="build"] .tk-card').count()), 'the tasks it lists');
+    assert.equal(await built.getAttribute('title'), '2 of 3 slots used.', 'snoozed tasks hold no slot');
 
     await desk.goto('http://tico-ui.test/#/tasks?pipeline=eng&layout=list');
     await desk.locator('.pv-group').first().waitFor();

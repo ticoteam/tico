@@ -301,7 +301,9 @@ def test_display_names_add_names_beside_ids_and_keep_every_body_as_written(named
         assert shown["body_raw"] == "New task from bot:ops: Brightwater handover", url
 
     read = api.get("/api/v2/tasks/" + task["id"], headers=headers()).json()
-    assert read["task"]["body"] == texts[0][1]
+    assert (
+        read["task"]["request"]["text"] == texts[0][1].strip()
+    )  # the first message, as written (trimmed, as a comment is)
     assert read["task"]["owner_name"] == "Operations" and read["task"]["requester_name"] == "Ana Example"
     shown = api.get("/api/v2/docs/" + doc["id"], headers=headers()).json()["doc"]
     assert shown["body"] == _text(CORPUS / "kept" / "customer-export.json")  # byte for byte, ends included

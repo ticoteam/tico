@@ -117,46 +117,64 @@ function cfStackHTML(p: FloorPipe, s: FloorStage, sub = ''): string {
   return `<div class="cf-slot">${sub}${s.needs_you > 0 ? cfFlowHTML(p, s, 12) : ''}`
     + `<button type="button" class="cf-stack" data-cf-pipeline="${esc(p.id)}" data-cf-stage="${esc(s.id)}" data-cf-actor=""`
     + ` data-cf-who="${esc(s.owners.map(o => o.actor).join(' '))}" aria-haspopup="dialog" aria-label="${esc(s.name)}, ${s.count}"`
-    + ` style="--n:${n || 1}">${boxes}</button></div>`;
+    + ` style="--n:${n || 1}"><span class="cf-stname">${esc(s.name)}</span>${boxes}</button></div>`;
 }
-/** The chevron after a stage: two where the stage hands off (files a linked task into another pipeline, `into`). */
-function cfChevHTML(s: FloorStage | undefined, end: boolean, names: Map<string, string>): string {
-  const to = s?.into ? names.get(s.into) ?? null : null;
-  const cls = `cf-chev${end ? ' cf-end' : ''}${to ? ' cf-into' : ''}`;
-  return to ? `<i class="${cls}" role="img" aria-label="${esc(`Into ${to}`)}" title="${esc(`Into ${to}`)}"></i>` : `<i class="${cls}" aria-hidden="true"></i>`;
+/** What the Floor knows of the flows between pipelines: every name the reader sees, by id, and for each pipeline the
+ *  ones that send it work (a stage's handoff, `into`, or tasks moved over lately, `moved_into`). */
+interface CfFlows { names: Map<string, string>; from: Map<string, string[]> }
+/** Where a pipeline's work goes on to from its end: its last stage's handoff, then where its tasks were moved lately. */
+const cfOnTo = (p: FloorPipe): string[] =>
+  [...new Set([p.stages[p.stages.length - 1]?.into ?? '', ...p.moved_into].filter(Boolean))];
+function cfFlows(factories: FloorFactory[]): CfFlows {
+  const pipes = factories.flatMap(f => f.pipelines);
+  const from = new Map<string, string[]>();
+  for (const p of pipes) {
+    for (const to of new Set([...p.stages.map(s => s.into ?? ''), ...p.moved_into].filter(Boolean))) {
+      if (to !== p.id) from.set(to, [...from.get(to) ?? [], p.id]);
+    }
+  }
+  return {names: new Map(pipes.map(p => [p.id, p.name] as [string, string])), from};
 }
-/** One line: a pipeline, and on the Floor the pipelines it hands off to from its last stage in the same hall (a run),
- *  each named under its first stage. A line of one pipeline keeps its name under the rail's start. */
-function cfLineHTML(run: FloorPipe[], deep: boolean, names: Map<string, string>): string {
+/** A chevron on the rail: two where work goes to (or comes from) another pipeline, named for a reader and on hover. */
+function cfChevHTML(ids: string[], end: boolean, flows: CfFlows, way: 'Into' | 'From' = 'Into'): string {
+  const to = ids.map(id => flows.names.get(id)).filter((n): n is string => !!n);
+  const cls = `cf-chev${end ? ' cf-end' : ''}${to.length ? ' cf-into' : ''}${way === 'From' ? ' cf-from' : ''}`;
+  const label = `${way} ${to.join(', ')}`;
+  return to.length ? `<i class="${cls}" role="img" aria-label="${esc(label)}" title="${esc(label)}"></i>` : `<i class="${cls}" aria-hidden="true"></i>`;
+}
+/** One line: a pipeline, and on the Floor the pipelines its work goes on to in the same hall (a run), each named under
+ *  its first stage. A line of one pipeline keeps its name under the rail's start. Two chevrons mark where work goes
+ *  to another pipeline, and, before the first stage, where it comes from one not on this line. */
+function cfLineHTML(run: FloorPipe[], deep: boolean, flows: CfFlows): string {
   const head = run[0]!, tail = run[run.length - 1]!;
   const subs = run.length > 1;
-  const parts: string[] = [];
+  const fed = (flows.from.get(head.id) ?? []).filter(id => !run.some(p => p.id === id));
+  const parts: string[] = fed.length && !deep ? [cfChevHTML(fed, false, flows, 'From')] : [];
   for (const [i, p] of run.entries()) {
     for (const [j, s] of p.stages.entries()) {
       const sub = subs && j === 0 ? `<span class="cf-sub">${esc(p.name)}</span>` : '';
       parts.push(deep ? cfStageHTML(p, s) : cfStackHTML(p, s, sub));
-      if (j < p.stages.length - 1 || i < run.length - 1) parts.push(cfChevHTML(s, false, names));
+      if (j < p.stages.length - 1) parts.push(cfChevHTML(s.into ? [s.into] : [], false, flows));
+      else if (i < run.length - 1) parts.push(cfChevHTML(cfOnTo(p), false, flows));
     }
   }
-  const end = cfChevHTML(tail.stages[tail.stages.length - 1], true, names);
-  return `<div class="cf-line${deep ? ' cf-deep' : ''}${subs ? ' cf-subs' : ''}" data-cf-line="${esc(head.id)}" data-cf-sig="${esc(cfSig(run, names))}">`
+  const end = cfChevHTML(cfOnTo(tail), true, flows);
+  return `<div class="cf-line${deep ? ' cf-deep' : ''}${subs ? ' cf-subs' : ''}" data-cf-line="${esc(head.id)}" data-cf-sig="${esc(cfSig(run, fed, flows))}">`
     + `${subs ? '' : `<span class="cf-pname">${esc(head.name)}</span>`}${cfRateHTML(head.in, 'in')}`
     + `<div class="cf-track"><div class="cf-rail">${parts.join('') || '<span class="cf-slot cf-gap"></span>'}${end}</div></div>`
     + `${cfRateHTML(tail.out, 'out')}</div>`;
 }
-const cfSig = (run: FloorPipe[], names: Map<string, string>): string =>
-  JSON.stringify([run, run.flatMap(p => p.stages.map(s => s.into ? names.get(s.into) ?? null : null))]);
-/** Every pipeline's name the reader sees, by id: what a handoff is labelled with. */
-const cfNames = (factories: FloorFactory[]): Map<string, string> =>
-  new Map(factories.flatMap(f => f.pipelines.map(p => [p.id, p.name] as [string, string])));
-/** A hall's lines. A pipeline whose last stage hands off to another pipeline in the hall carries on into it on one line
- *  (that one is fed by nothing else drawn first), as often as that repeats; every other pipeline is a line of its own. */
+const cfSig = (run: FloorPipe[], fed: string[], flows: CfFlows): string =>
+  JSON.stringify([run, fed, run.flatMap(p => [...p.stages.map(s => s.into ?? ''), ...p.moved_into].map(id => flows.names.get(id) ?? null))]);
+/** A hall's lines. A pipeline whose work goes on to another pipeline in the hall (`cfOnTo`, the first there) carries on
+ *  into it on one line, if no pipeline drawn first already does, as often as that repeats; every other pipeline is a
+ *  line of its own. */
 function cfRuns(pipes: FloorPipe[]): FloorPipe[][] {
   const here = new Map(pipes.map(p => [p.id, p]));
   const next = new Map<string, FloorPipe>(), fed = new Set<string>();
   for (const p of pipes) {
-    const q = here.get(p.stages[p.stages.length - 1]?.into ?? '');
-    if (q && q !== p && !fed.has(q.id)) { next.set(p.id, q); fed.add(q.id); }
+    const q = cfOnTo(p).map(id => here.get(id)).find(x => x && x !== p && !fed.has(x.id));
+    if (q) { next.set(p.id, q); fed.add(q.id); }
   }
   const drawn = new Set<string>(), runs: FloorPipe[][] = [];
   const from = (p: FloorPipe) => {
@@ -165,7 +183,7 @@ function cfRuns(pipes: FloorPipe[]): FloorPipe[][] {
     if (run.length) runs.push(run);
   };
   for (const p of pipes) if (!fed.has(p.id)) from(p);
-  for (const p of pipes) from(p); // a ring of handoffs has no start: it starts at its first pipeline
+  for (const p of pipes) from(p); // a ring has no start: it starts at its first pipeline
   return runs;
 }
 
@@ -178,13 +196,13 @@ function cfOrgHTML(manager: string | null, mates: string[]): string {
     + '</div>';
 }
 /** A hall: a factory, or Other (`id` null: the pipelines in no factory), which has no page and no org chart. */
-function cfHallHTML(f: FloorFactory, names: Map<string, string>): string {
+function cfHallHTML(f: FloorFactory, flows: CfFlows): string {
   const manager = cfManager(f);
   const name = f.id === null ? `<span class="cf-hall-name">${esc(f.name)}</span>`
     : `<a class="cf-hall-name" href="${esc(cfHref(f.id))}">${esc(f.name)}</a>${cfOrgHTML(manager, cfMates(f, manager))}`;
   return `<section class="cf-hall" data-cf-factory="${esc(f.id ?? '')}" aria-label="${esc(f.name)}">`
     + `<div class="cf-hall-head">${name}</div>`
-    + `<div class="cf-lines">${cfRuns(f.pipelines).map(run => cfLineHTML(run, false, names)).join('')}</div></section>`;
+    + `<div class="cf-lines">${cfRuns(f.pipelines).map(run => cfLineHTML(run, false, flows)).join('')}</div></section>`;
 }
 
 // ---- one factory: a deck per teammate in each stage, the stage named under the line
@@ -202,7 +220,7 @@ function cfStageHTML(p: FloorPipe, s: FloorStage): string {
   return `<div class="cf-stage" data-cf-stage-id="${esc(s.id)}"><div class="cf-decks">${decks || '<i class="cf-box cf-none"></i>'}</div>`
     + `<div class="cf-sname"><span>${esc(s.name)}</span>${s.needs_you > 0 ? cfFlowHTML(p, s, 14) : ''}</div></div>`;
 }
-function cfFactoryHTML(f: FloorFactory, names: Map<string, string>): string {
+function cfFactoryHTML(f: FloorFactory, flows: CfFlows): string {
   const manager = cfManager(f), mates = cfMates(f, manager);
   const person = (a: string) => `<li class="cf-mate" data-cf-mate="${esc(a)}">${cfFace(a, 20)}<span>${esc(actorName(a))}</span></li>`;
   const org = manager || mates.length
@@ -210,7 +228,7 @@ function cfFactoryHTML(f: FloorFactory, names: Map<string, string>): string {
       + (mates.length ? `<ul class="cf-roster-list">${mates.map(person).join('')}</ul>` : '') + '</div>'
     : '';
   return `<section class="cf-hall cf-one" data-cf-factory="${esc(f.id)}" aria-label="${esc(f.name)}"><div class="cf-hall-head"><span class="cf-hall-name">${esc(f.name)}</span>${org}</div>`
-    + `<div class="cf-lines">${f.pipelines.map(p => cfLineHTML([p], true, names)).join('')}</div></section>`;
+    + `<div class="cf-lines">${f.pipelines.map(p => cfLineHTML([p], true, flows)).join('')}</div></section>`;
 }
 
 // ---- where it is drawn
@@ -281,12 +299,12 @@ function cfDraw(st: FloorState, data: FloorData): void {
     const title = document.querySelector<HTMLElement>('.cf-page > header.ph .ph-t');
     if (title) title.textContent = f.name;
     pageTitle(f.name);
-    cfPatch(body, `<div class="cf-halls">${cfFactoryHTML(f, cfNames(data.factories))}</div>`, [f]);
+    cfPatch(body, `<div class="cf-halls">${cfFactoryHTML(f, cfFlows(data.factories))}</div>`, [f]);
   } else if (!data.factories.length) {
     body.innerHTML = '<div class="cf-empty"><p class="muted">No factories yet</p></div>';
   } else {
-    const names = cfNames(data.factories);
-    cfPatch(body, `<div class="cf-halls">${data.factories.map(f => cfHallHTML(f, names)).join('')}</div>`, data.factories);
+    const flows = cfFlows(data.factories);
+    cfPatch(body, `<div class="cf-halls">${data.factories.map(f => cfHallHTML(f, flows)).join('')}</div>`, data.factories);
   }
   cfCardFollow(st);
 }

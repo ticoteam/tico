@@ -1,6 +1,7 @@
-"""The Strategy Owner writes the strategy draft and publishes only on what the owner told it (backend/strategy.py
-owners_words): it names a task of its own the owner wrote on, the history says whose words, and nothing else lets a
-bot write it. Acme is the fictional company; Ana is its owner."""
+"""The Strategy Owner writes the strategy only on what the owner told it (backend/strategy.py owners_words): it names a
+task of its own the owner wrote on, the history and the version's note say whose words, and nothing else lets a bot
+write it. What it saves is live at once, like the owner's own saves. Acme is the fictional company; Ana is its
+owner."""
 
 import json
 
@@ -71,47 +72,50 @@ def test_another_bot_naming_a_task_still_only_proposes(api):
     assert r.status_code == 403, r.text
 
 
-def test_the_strategy_owner_publishes_on_the_owners_words_and_the_note_says_whose(api):
+def test_what_the_strategy_owner_saves_on_the_owners_words_is_live_and_the_note_says_whose(api):
     goal_manager(api, level=2)
     as_bot(api, "strategy-owner")
-    post(api, "strategy/bets", {"statement": "Small landlords pay for bots", "status": "active"})
     task = asked(api)
     draft(api, {"sections": {"serve": "Small landlords.", "not": "Enterprise."}, "task": task})
+    assert get(api, "strategy", token="cara-test")["current"]["sections"]["serve"] == "Small landlords."
+    [latest] = get(api, "strategy/versions")
+    assert latest["published_by"] == G.AUTO_ACTOR
+    assert latest["note"].startswith("From ") and "\u201cWho we serve\u201d" in latest["note"]
+    # Publish, kept for older callers, needs the owner's words too, and only answers the live version.
     r = api.post("/api/v2/strategy/publish", json={"note": "", "revision": revision(api)}, headers=headers(BOT))
-    assert r.status_code == 403, r.text  # publishing needs the owner's words too
+    assert r.status_code == 403, r.text
     r = api.post(
         "/api/v2/strategy/publish",
         json={"note": "Who we serve", "revision": revision(api), "task": task},
         headers=headers(BOT),
     )
     assert r.status_code == 200, r.text
-    versions = get(api, "strategy/versions")
-    latest = (versions if isinstance(versions, list) else versions["versions"])[0]
-    assert latest["note"].startswith("Who we serve (From ") and "\u201cWho we serve\u201d" in latest["note"]
-    assert history(api, "published")[-1]["from"] == {"task": task, "person": "human:ana"}
+    assert r.json()["n"] == latest["n"] and len(get(api, "strategy/versions")) == 1
 
 
-def test_a_task_body_never_counts_as_the_owners_words(api):
-    """A body is text the owning bot can write or rewrite (filed "for" the owner, or edited after), so it proves
-    nothing: only the owner's own comments and answers on the task do."""
+def test_a_first_message_counts_only_as_the_words_of_whoever_wrote_it(api):
+    """A task has no description a bot could write or rewrite for the owner: what it asks is its first message, from
+    whoever wrote it. The bot's own words, even quoting the owner, prove nothing; only the owner's own messages and
+    answers on the task do, and nobody can put words in the task some other way."""
     goal_manager(api, level=2)
     as_bot(api, "strategy-owner")
     with api.app.state.store.transaction() as c:
-        filed = H.task_create(c, "human:ana", "Update who we serve", SAID, G.AUTO_ACTOR, lint=False)
-        empty = H.task_create(c, "human:ana", "Question", "", G.AUTO_ACTOR, lint=False)
+        filed = H.task_create(c, G.AUTO_ACTOR, "Update who we serve", SAID, G.AUTO_ACTOR, lint=False)
+        empty = H.task_create(c, G.AUTO_ACTOR, "Question", "", G.AUTO_ACTOR, lint=False)
+        assert H.task_request(c, filed["id"])["from"] == G.AUTO_ACTOR
     assert (
         draft(api, {"sections": {"serve": "Small landlords."}, "task": filed["id"]}, 422)["error"]["code"] == "invalid"
     )
     r = api.post(f"/api/v2/tasks/{empty['id']}", json={"body": SAID, "version": empty["version"]}, headers=headers(BOT))
-    assert r.status_code == 200, r.text
+    assert r.status_code == 422, r.text
     assert (
         draft(api, {"sections": {"serve": "Small landlords."}, "task": empty["id"]}, 422)["error"]["code"] == "invalid"
     )
 
 
-def test_an_answer_about_who_we_serve_ends_up_in_that_section_of_the_published_strategy(api):
-    """The add-to-flow round trip: the Strategy Owner asks Ana on a task of its own, she answers in free text, and it
-    writes her answer into "Who we serve" (and the bet it changes), then publishes citing the task. Only that section
+def test_an_answer_about_who_we_serve_ends_up_in_that_section_of_the_live_strategy(api):
+    """The add-to-flow round trip: the Strategy Owner asks Ana a ❓ on a task of its own, she replies in free text, and it
+    writes her answer into "Who we serve" (and the bet it changes) citing the task, live at once. Only that section
     moves: the summary stays as it was."""
     goal_manager(api, level=2)
     as_bot(api, "strategy-owner")
@@ -123,18 +127,12 @@ def test_an_answer_about_who_we_serve_ends_up_in_that_section_of_the_published_s
     with api.app.state.store.transaction() as c:
         task = H.task_create(c, G.AUTO_ACTOR, "Who do we serve?", "An add-to-flow question.", G.AUTO_ACTOR, lint=False)
     r = api.post(
-        f"/api/v2/tasks/{task['id']}/asks",
-        json={
-            "to": "ana",
-            "version": task["version"],
-            "line": "Who do we serve first?",
-            "why": "Every bet and page starts from it.",
-        },
+        f"/api/v2/tasks/{task['id']}/questions",
+        json={"to": "ana", "text": "Who do we serve first?\n\nEvery bet and page starts from it."},
         headers=headers(BOT),
     )
     assert r.status_code == 200, r.text
-    rid = r.json()["requirement_id"]
-    post(api, f"tasks/{task['id']}/asks/{rid}/answer", {"value": SAID})
+    post(api, f"tasks/{task['id']}/comments", {"text": SAID})  # her reply clears the ❓
     draft(api, {"sections": {"serve": SAID}, "task": task["id"]})
     r = api.post(
         "/api/v2/strategy/bets",
@@ -147,21 +145,15 @@ def test_an_answer_about_who_we_serve_ends_up_in_that_section_of_the_published_s
         headers=headers(BOT),
     )
     assert r.status_code == 200, r.text
-    r = api.post(
-        "/api/v2/strategy/publish",
-        json={"note": "Who we serve", "revision": revision(api), "task": task["id"]},
-        headers=headers(BOT),
-    )
-    assert r.status_code == 200, r.text
-    published = get(api, "strategy")["current"]
+    published = get(api, "strategy", token="cara-test")["current"]
     assert published["sections"]["serve"] == SAID
     assert published["summary"] == "Acme runs rentals with bots."
     assert [b["statement"] for b in published["bets"]] == ["Small landlords pay for bots"]
     assert history(api, "bet.add")[-1]["from"] == {"task": task["id"], "person": "human:ana"}
 
 
-def test_a_one_word_answer_of_the_owners_is_enough_to_write_and_publish(api):
-    """Any answer or comment the owner wrote on the task counts, a tapped choice or "Yes" included; none still refuses."""
+def test_a_one_word_answer_of_the_owners_is_enough_to_write(api):
+    """Any answer or comment the owner wrote on the task counts, a one-word "Yes" reply included; none still refuses."""
     goal_manager(api, level=2)
     as_bot(api, "strategy-owner")
     with api.app.state.store.transaction() as c:
@@ -171,17 +163,12 @@ def test_a_one_word_answer_of_the_owners_is_enough_to_write_and_publish(api):
     sections = {"serve": "Small landlords.", "not": "Enterprise."}
     assert draft(api, {"sections": sections, "task": task["id"]}, 422)["error"]["code"] == "invalid"  # nothing of hers
     r = api.post(
-        f"/api/v2/tasks/{task['id']}/asks",
-        json={
-            "to": "ana",
-            "version": task["version"],
-            "line": "Do we serve small landlords first?",
-            "why": "It sets who we sell to.",
-        },
+        f"/api/v2/tasks/{task['id']}/questions",
+        json={"to": "ana", "text": "Do we serve small landlords first?\n\nIt sets who we sell to."},
         headers=headers(BOT),
     )
     assert r.status_code == 200, r.text
-    post(api, f"tasks/{task['id']}/asks/{r.json()['requirement_id']}/answer", {"value": "Yes"})
+    post(api, f"tasks/{task['id']}/comments", {"text": "Yes"})  # her one-word reply to the ❓
     draft(api, {"sections": sections, "task": task["id"]})
     r = api.post(
         "/api/v2/strategy/bets",
@@ -194,6 +181,4 @@ def test_a_one_word_answer_of_the_owners_is_enough_to_write_and_publish(api):
         headers=headers(BOT),
     )
     assert r.status_code == 200, r.text
-    r = api.post("/api/v2/strategy/publish", json={"revision": revision(api), "task": task["id"]}, headers=headers(BOT))
-    assert r.status_code == 200, r.text
-    assert get(api, "strategy")["current"]["sections"]["serve"] == "Small landlords."
+    assert get(api, "strategy", token="cara-test")["current"]["sections"]["serve"] == "Small landlords."

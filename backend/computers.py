@@ -65,7 +65,6 @@ def sweep(store, at):
                 "AND NOT EXISTS (SELECT 1 FROM cloud_machines m WHERE m.runner_id=r.id) "
                 "AND NOT EXISTS (SELECT 1 FROM browser_exits e WHERE e.runner_id=r.id AND e.sharing=1) "
                 "AND NOT EXISTS (SELECT 1 FROM computer_subscriptions s WHERE s.runner_id=r.id) "
-                "AND NOT EXISTS (SELECT 1 FROM computer_keys k WHERE k.runner_id=r.id) "
                 "AND NOT EXISTS (SELECT 1 FROM computer_profiles p WHERE p.runner_id=r.id) "
                 "AND NOT EXISTS (SELECT 1 FROM model_logins l WHERE l.runner_id=r.id) "
                 "AND NOT EXISTS (SELECT 1 FROM json_tree(r.readiness) j "

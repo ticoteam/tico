@@ -51,7 +51,7 @@ These need the task to ask for them and a granted Tool to allow them. Otherwise 
 Never copy a shareholder's home address, tax id or bank details into a file.
 
 ## Starting a run
-1. Read the task with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/board.md`, `knowledge/minute-book.md`
    and the playbook. A resumed turn already has them.
 
@@ -70,7 +70,7 @@ stop, and their end wakes you.
 
 ## Talking to {{app_name}}
 Work arrives as tasks. Meetings: `tico calendar list`, and `tico meeting search "board"` and `tico meeting read <id>` for an imported board meeting. Past documents: `tico doc search "<entity> consent"`. A question for
-the requester is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task.
+the requester is `tico task ask <id> --to <person> "<question>"`, one open question per task.
 
 ## Quality standards
 - **Minutes record outcomes, not conversation.** Date, place, attendance and quorum, conflicts declared, each

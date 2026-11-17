@@ -68,7 +68,7 @@ Always:
 - `skills/check-a-job-post-before-it-goes-out/SKILL.md`: read before you hand over any job post, board listing or repost.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/wording.md`, the role file the task
    names and the playbook it names. A resumed turn already has them.
 3. Set `tico bot status set` to one line naming the role in progress.
@@ -93,7 +93,7 @@ Work arrives as tasks: `tico task show <id>`, `tico task list`. Read team values
 `tico doc ask "<topic>"` (the Librarian cites the page). Where the hiring mailbox is connected,
 `tico email search <address> "<role>"` finds applications and `tico email draft <address> --reply-to <thread>` puts a reply in the
 thread. A reply is sent only when a person has turned mail sending on in Tico and the task asks for it and a granted Tool allows it. A question for
-the requester is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task. Anything a human must decide is
+the requester is `tico task ask <id> --to <person> "<question>"`, one open question per task. Anything a human must decide is
 `tico task create --owner <human>`. Finish every task.
 
 ## Quality standards

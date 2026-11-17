@@ -339,7 +339,7 @@ const GR_OLD_ROUTE = '#/strategy/growth', GTM_OLD_ROUTE = '#/strategy/gtm';
 // app/org-rules.ts
 const RULES_ROUTE = '#/rules';
 // Every kind of rule, in the page's order (Stage rules spec, The Rules page): each tab's count comes from /rule-groups.
-// The shell keeps it (and SETTINGS_TABS), since a "Page → Tab" phrase in Needs you reads it before either page is opened.
+// The shell keeps it, beside SETTINGS_TABS.
 const RU_TABS: [RuleTab, string][] = [['internal', 'Company'], ['external', 'Outside'], ['stages', 'Pipelines and stages'], ['due', 'Due'],
   ['wakes', 'Wakes'], ['automations', 'Automations on tasks'], ['builtin', 'Built in'], ['suggested', 'Suggested']];
 // A refusal in one line: a 403 is about permission, the rest say what the server said (the Rules page and a stage's

@@ -220,7 +220,7 @@ def _shown(c, room):
 def test_the_migration_takes_notices_and_bare_answers_out_of_peoples_timelines(company):
     """Given a task room written the old way (every notice with a seq, the bot's answers to them posted), when the
     migration runs, then the notices and the answer that named nobody leave Ana's timeline and the unread mark, and
-    every answer that was for her stays: the one to the task's request, one naming her, one the bot sent itself, one
+    her own request stays, and every answer that was for her: the one to the task's request, one naming her, one the bot sent itself, one
     to her own act, the one that finished the task. A notice written after it has no seq. Running it again changes nothing."""
     with company.transaction() as c:
         X.bot(c, "cpo")
@@ -251,6 +251,7 @@ def test_the_migration_takes_notices_and_bare_answers_out_of_peoples_timelines(c
 
         kept = [m for m in _shown(c, room) if m]
         assert kept == [
+            "What to do and how to tell it is done.",  # Ana's own request, the task's first message
             "Which page?",
             "@ana the old reports page or the new one?",
             "I sent this one myself.",
@@ -264,7 +265,8 @@ def test_the_migration_takes_notices_and_bare_answers_out_of_peoples_timelines(c
         assert c.execute("SELECT final_text FROM attempts WHERE final_text=?", ("Noted, back on it.",)).fetchone()
         for notice in (poke, asked, last, quiet):  # still stored: each is what its run started from
             assert c.execute("SELECT seq FROM messages WHERE id=?", (notice,)).fetchone()[0] is None
-        assert {real, named, sent, hers, done} == {
+        asked_first = H.task_request(c, task["id"])["id"]  # Ana's request, the room's first message
+        assert {asked_first, real, named, sent, hers, done} == {
             r[0] for r in c.execute("SELECT id FROM messages WHERE conversation_id=? AND seq IS NOT NULL", (room,))
         }
         fresh = task_wakes.add(c, task, "bot:cpo", task["visit"], "One more.", try_n=5)

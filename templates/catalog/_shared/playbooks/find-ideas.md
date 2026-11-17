@@ -41,7 +41,7 @@ when something has changed, and the line says what.
 
 ## 4. File at most 3
 
-    tico task create --owner me --pipeline growth-experiments --label <your channel tag> --title "<what to try>" --body "<why, in one line, with the source and its date>"
+    tico task create --owner me --pipeline growth-experiments --label <your channel tag> --title "<what to try>" --message "<why, in one line, with the source and its date>"
 
 A new task lands in Ideas. Three is the most per run, not a goal: one good idea beats three weak ones, and none is fine.
 An idea whose number belongs to another channel goes to that channel's Owner as theirs (`--owner <their slug>`, their

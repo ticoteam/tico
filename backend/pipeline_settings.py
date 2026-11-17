@@ -74,11 +74,10 @@ REQUIREMENT_FIELDS = (
     "who_oks",
     "person_id",
     "line",
-    "choices",
 )
 WHO_OKS = ("none", "people_only", "people_with_exceptions")
 OK_KINDS = ("ok", "page")  # the kinds whose "Who OKs" switch means something on a stage (kinds 2 and 3)
-NAMES_PERSON = ("ok", "page", "answer")  # only a requirement met with a button names someone (C29): a person or a bot
+NAMES_PERSON = ("ok", "page")  # only a requirement met with a button names someone (C29): a person or a bot
 # Routing on answers ("Only when", "Met when") is not built yet: a requirement that carries either is refused at save.
 NOT_YET = ("only_when", "met_when")
 REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -654,7 +653,6 @@ def _requirement_out(row: Row) -> Row:
         "who_oks": row.get("who_oks") or "none",
         "person_id": row.get("person_id"),
         "line": row.get("line") or "",
-        "choices": _loads(row.get("choices")),
     }
 
 
@@ -780,19 +778,8 @@ def _requirement_in(raw: object, stage_name: str, problems: list[str]) -> Row:
         "who_oks": who,
         "person_id": _ref(item.get("person_id"), f"The person on a requirement on {stage_name}", problems),
         "line": _text(item.get("line"), f"A requirement's line on {stage_name}", problems),
-        "choices": _choices(item.get("choices"), stage_name, problems),
         **{key: True for key in NOT_YET if item.get(key) is not None},
     }
-
-
-def _choices(value: object, stage_name: str, problems: list[str]) -> list[str] | None:
-    """A choice answer's choices: a list of text, or None."""
-    if value is None:
-        return None
-    if not isinstance(value, list) or not all(isinstance(c, str) for c in cast("list[object]", value)):
-        problems.append(f"The choices on {stage_name} are a list of words.")
-        return None
-    return [str(c).strip() for c in cast("list[object]", value)]
 
 
 def _stage_in(raw: object, position: int, problems: list[str]) -> Row:
@@ -900,50 +887,6 @@ def _check_settings(req: Row, label: str, problems: list[str]) -> None:
             )
 
 
-def _check_answer(req: Row, label: str, problems: list[str]) -> None:
-    """A stage's answer: a name, a type, a number's bounds, a choice's choices (task_requirements.typed)."""
-    settings: Row = req["settings"]
-    title = req["line"] or "An answer"
-    name, kind = settings.get("name"), settings.get("type", "text")
-    if not isinstance(name, str) or not R.ANSWER_NAME.match(name):
-        problems.append(
-            f"{title} on {label} needs a name: lower case letters, digits and _, starting with a letter, up to 40."
-        )
-    if kind not in R.ANSWER_TYPES:
-        problems.append(f"{title} on {label} is text, a number or a choice.")
-    bounds = [settings.get(key) for key in ("min", "max") if key in settings]
-    if kind != "number" and bounds:
-        problems.append(f"Only a number has a min and a max ({title} on {label}).")
-    elif any(not isinstance(b, int) or isinstance(b, bool) for b in bounds):
-        problems.append(f"The min and max of {title} on {label} are whole numbers.")
-    elif len(bounds) == 2 and int(bounds[0] or 0) > int(bounds[1] or 0):
-        problems.append(f"The min of {title} on {label} is more than its max.")
-    choices = req["choices"]
-    if kind == "choice":
-        if not choices or any(not c for c in choices):
-            problems.append(f"{title} on {label} needs its choices.")
-        elif len({c.casefold() for c in choices}) < len(choices):
-            problems.append(f"{title} on {label} has the same choice twice.")
-    elif choices is not None:
-        problems.append(f"Only a choice has choices ({title} on {label}).")
-    if not isinstance(settings.get("question", ""), str):
-        problems.append(f"The question of {title} on {label} must be text.")
-
-
-def _answer_names(record: Row) -> list[str]:
-    """Each answer's name is used once in a pipeline: it is how the answer is read back (task_requirements.values)."""
-    seen: set[str] = set()
-    out: list[str] = []
-    for stage in record["stages"]:
-        for req in stage["requirements"]:
-            name = req["settings"].get("name") if req["kind"] == "answer" else None
-            if isinstance(name, str) and name:
-                if name in seen:
-                    out.append(f"Two answers are named {name}. Each answer's name is used once in a pipeline.")
-                seen.add(name)
-    return out
-
-
 def _check_requirement(conn: "sqlite3.Connection", stage: Row, req: Row, problems: list[str]) -> None:
     kind, label = req["kind"], stage["name"] or "a stage"
     if kind not in R.KINDS:
@@ -956,10 +899,6 @@ def _check_requirement(conn: "sqlite3.Connection", stage: Row, req: Row, problem
     if kind != "item" and (req["source"] or req["condition"]):
         problems.append(f"Only an item requirement names a source and a condition (on {label}).")
     name = _kind_name(req)
-    if kind == "answer":
-        _check_answer(req, label, problems)
-    elif req["choices"] is not None:
-        problems.append(f"Only an answer has choices, not {name} (on {label}).")
     _check_settings(req, label, problems)
     if R.never_pushed_past(req) and req["can_push_past"]:
         problems.append(f"{name} can't be pushed past (C3), on {label}.")
@@ -1169,7 +1108,6 @@ def _problems(conn: "sqlite3.Connection", record: Row) -> list[str]:
                 held = _open_tasks(conn, gone["id"])
                 if held:
                     problems.append(f"{gone['name']} holds open tasks. Move its {_tasks(held)} first.")
-    problems += _answer_names(record)
     loop = _loop(conn, record)
     if loop:
         problems.append(loop)
@@ -1327,14 +1265,13 @@ def _write_requirements(conn: "sqlite3.Connection", by: str, stage_id: str, reqs
             req["who_oks"],
             req["person_id"],
             req["line"],
-            None if req.get("choices") is None else H._dump(req["choices"]),
             position,
         )
         found = req["id"] and conn.execute("SELECT 1 FROM requirements WHERE id=?", (req["id"],)).fetchone()
         if found:
             conn.execute(
                 "UPDATE requirements SET kind=?, source=?, condition=?, settings=?, can_push_past=?, who_oks=?, "
-                "person_id=?, line=?, choices=?, "
+                "person_id=?, line=?, "
                 "position=?, withdrawn_at=NULL WHERE id=?",
                 (*values, req["id"]),
             )
@@ -1343,7 +1280,7 @@ def _write_requirements(conn: "sqlite3.Connection", by: str, stage_id: str, reqs
         rid = req["id"] or H.new_id()
         conn.execute(
             "INSERT INTO requirements (kind, source, condition, settings, can_push_past, who_oks, person_id, line, "
-            "choices, position, id, stage_id, added_by_id, by_bot, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "position, id, stage_id, added_by_id, by_bot, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (*values, rid, stage_id, str(by), 1 if is_bot(by) else 0, ts),
         )
         kept.append(rid)
@@ -1786,18 +1723,15 @@ def _fill(conn: "sqlite3.Connection", key: str, pipeline_id: str) -> None:
                 )
 
 
-TEXT_SETTINGS = ("rubric", "question")  # a requirement's settings that are wording; the rest are choices a person makes
+TEXT_SETTINGS = ("rubric",)  # a requirement's settings that are wording; the rest are choices a person makes
 
 
 def requirement_key(req: Row) -> str:
-    """Which requirement of its stage this is, the same in every company: its kind, an item's source and condition, an
-    answer's name."""
+    """Which requirement of its stage this is, the same in every company: its kind, and an item's source and
+    condition."""
     kind = str(req.get("kind") or "")
     if kind == "item":
         return f"item:{req.get('source')}.{req.get('condition')}"
-    if kind == "answer":
-        settings: Row = req.get("settings") or {}
-        return f"answer:{settings.get('name')}"
     return kind
 
 

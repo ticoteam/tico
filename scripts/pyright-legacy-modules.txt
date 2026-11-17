@@ -88,7 +88,6 @@ backend/census.py
 backend/changelog.py
 backend/chat_goals.py
 backend/check_models.py
-backend/claim_holds.py
 backend/claim_loads.py
 backend/client_ip.py
 backend/cloud_access.py
@@ -120,7 +119,6 @@ backend/company_page/settings.py
 backend/company_page/stats.py
 backend/company_server.py
 backend/company_storage.py
-backend/computer_keys.py
 backend/computers.py
 backend/computers_routes.py
 backend/config.py
@@ -400,7 +398,6 @@ backend/strategy.py
 backend/strategy_acts.py
 backend/strategy_bot.py
 backend/strategy_market.py
-backend/strategy_merge.py
 backend/strategy_prompt.py
 backend/strategy_setup.py
 backend/strategy_suggest.py
@@ -468,7 +465,6 @@ backend/triggers.py
 backend/turn_budgets.py
 backend/turn_fixer.py
 backend/turns.py
-backend/ui_bundle.py
 backend/ui_bundle_routes.py
 backend/ui_compression.py
 backend/update_feeds.py

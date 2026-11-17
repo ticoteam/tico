@@ -6,6 +6,7 @@ import re
 
 from pydantic import (
     AfterValidator,
+    AliasChoices,
     BeforeValidator,
     BaseModel,
     ConfigDict,
@@ -132,7 +133,7 @@ class BatchRespond(Contract):
     kind: Literal["decide", "needs_info", "instruct", "rule", "skip", "later"]
     text: str = Field(default="", max_length=4000)
     item: int | None = Field(default=None, ge=1)  # 1-based position; the current item when omitted
-    decision: Literal["ok", "send_back", "done", "close", "answer"] | None = None
+    decision: Literal["ok", "send_back", "done", "close"] | None = None
     heard: str = Field(default="", max_length=2000)  # what the person actually said, when spoken
     until: str | None = Field(default=None, max_length=40)
 
@@ -184,7 +185,9 @@ class TaskCreate(Contract):
     public_summary: str | None = Field(default=None, max_length=8000)
     private: StrictBool | None = None
     title: str = Field(min_length=1, max_length=300)
-    body: Text
+    # A task has no description: `message` is its first chat message, the request, posted as the caller's own
+    # (hubdb.first_message). `body` is its older name. Left out, the task is its title alone.
+    body: Text | None = Field(default=None, validation_alias=AliasChoices("message", "body"))
     # Who does it. Left out, the pipeline's first stage must pick from several (backend/stage_pick.py): it picks one.
     owner: ID | None = None
     # The person accountable for it, whoever owns it (hubdb.task_human): asks that name nobody go to them first.
@@ -279,7 +282,6 @@ class TaskUpdate(Contract):
     title: str | None = Field(default=None, min_length=1, max_length=300)
     note: str | None = Field(default=None, max_length=200_000)
     due: str | None = None
-    body: Text | None = None
     goal_id: str | None = Field(default=None, max_length=200)  # "" takes the goal off
     lane: Lane | None = None
     labels: list[str] | None = Field(default=None, max_length=20)
@@ -292,6 +294,16 @@ class TaskUpdate(Contract):
     # BotOps applying a person's own request to a task they own or requested (backend/app.py
     # delegated_identity): checked as that person, never as BotOps.
     on_behalf_of: ID | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def no_description(cls, data: Any) -> Any:
+        # A held update written before descriptions went carries "body": None; any text is refused.
+        if isinstance(data, dict) and "body" in data:
+            if data["body"] is not None:
+                raise ValueError("A task has no description: say it in a message on the task instead")
+            data = {k: v for k, v in data.items() if k != "body"}
+        return data
 
 
 class TaskDone(Contract):
@@ -405,24 +417,22 @@ class TaskWhy(Contract):
 
 
 class TaskAsk(Contract):
-    """Ask a person on the task (H.task_ask): a question (`answer`, with `choices` where there are some) or an OK."""
+    """Ask a person on the task for an OK of what it `show`s (H.task_ask). `answer`, a question, is a message marked ❓
+    now (backend/question_marks.py): a bot's is asked as one, its line first and the older fields below as words in it,
+    so a `tico` from before ❓ marks (one a computer runs until it updates) still asks; anyone else's is refused."""
 
     to: ID
     line: Annotated[str, Field(min_length=1, max_length=300)]
     kind: Literal["answer", "ok"] = "answer"
-    choices: list[Annotated[str, Field(min_length=1, max_length=60)]] | None = Field(
-        default=None, min_length=2, max_length=6
-    )
     show: list[Annotated[str, Field(min_length=1, max_length=400)]] = Field(default_factory=list, max_length=10)
-    # A bot's question to a person (backend/ask_shape.py): why it matters, a line per choice on what happens on it (in
-    # the choices' order) and the choice it recommends. Required there; anyone else may send them too.
+    version: Version | None = None
+    # A question's parts as clients before ❓ marks sent them, as words in its ❓. An OK refuses choices and leaves out
+    # `why` and `title`, which those clients sent with every ask.
+    choices: list[Annotated[str, Field(min_length=1, max_length=60)]] | None = Field(default=None, max_length=6)
     why: Annotated[str, Field(max_length=200)] | None = None
     details: list[Annotated[str, Field(max_length=160)]] | None = Field(default=None, max_length=6)
     recommend: Annotated[str, Field(max_length=60)] | None = None
-    # A short title the decision view shows as the ask's heading, with `line` once under it. Optional: an ask without
-    # one is headed by its line.
     title: Annotated[str, Field(max_length=60)] | None = None
-    version: Version | None = None
 
 
 class TaskOkGive(Contract):
@@ -451,7 +461,7 @@ class OkUse(Contract):
 
 
 class TaskAskAnswer(Contract):
-    """ok, no (send it back, with a note), again (look again), or the answer to a question (H.task_answer).
+    """ok, or no (send it back, with a note) (H.task_answer).
     `page_version`: on a page, the `<file id>@<version>` the person was shown; refused when another is attached now.
     `visit_id`: on a document approval, the visit it was asked on: with `page_version`, the approval's key. A stale key
     is refused (`task_changed`) with the version submitted now in `approval`."""
@@ -485,13 +495,6 @@ class TaskAskGive(Contract):
     to: ID
     version: Version | None = None
     on_behalf_of: ID | None = None
-
-
-class TaskAskThumbs(Contract):
-    """Was this worth asking (H.task_thumbs). A thumbs down says what was wrong."""
-
-    up: StrictBool
-    note: str | None = Field(default=None, max_length=2000)
 
 
 class TaskFilter(Contract):
@@ -618,6 +621,26 @@ class TaskComment(Contract):
     # A reply to a bot's question on this task (the ask's requirement id): written to the bot that asked, whom it
     # wakes, and the question stays open (the decision view's "Write to <bot>").
     ask: ID | None = None
+
+
+class Question(Contract):
+    """A bot's ❓ (backend/question_marks.py): its message to one named person, marked "needs your reply". No task is
+    filed and nothing is sent for it; Needs you lists it until they reply in the chat."""
+
+    to: ID
+    text: Text
+
+
+class ChatQuestion(Question):
+    """A ❓ in a direct chat: the bot's chat with the person unless `conversation_id` names another it is in."""
+
+    conversation_id: ID | None = None
+
+
+class QuestionGive(Contract):
+    """Give to: the person an open ❓ is for."""
+
+    to: ID
 
 
 class TaskReaders(Contract):
@@ -890,9 +913,8 @@ class MarketAsk(Contract):
     question: str = Field(min_length=1, max_length=2000)
 
 
-# The team's strategy (backend/strategy.py): the draft is edited a field at a time against the revision the writer
-# read, the bets one by one, and publishing takes a one-line note. Lengths and shapes are checked there, where the
-# refusal is recorded.
+# The team's strategy (backend/strategy.py): it is edited a field at a time against the revision the writer read, the
+# bets one by one, and every save is live. Lengths and shapes are checked there, where the refusal is recorded.
 class StrategyDraft(Contract):
     revision: int
     guide: str | None = Field(default=None, max_length=40)
@@ -911,8 +933,10 @@ class StrategyVision(Contract):
 
 
 class StrategyPublish(Contract):
+    """Kept for older callers (backend/strategy.py publish): every save is live already."""
+
     note: str = Field(default="", max_length=2000)
-    revision: int
+    revision: int | None = None
     task: str | None = Field(default=None, max_length=128)  # the Strategy Owner's: the task holding the owner's words
 
 
@@ -2413,14 +2437,6 @@ class StrategyBotLevel(Contract):
     level: Literal[1, 2, 3]
 
 
-# Several bots' asks waiting on one person, made one Strategy Owner item (backend/strategy_merge.py).
-class StrategyBotMerge(Contract):
-    person: str = Field(min_length=1, max_length=200)
-    title: str = Field(min_length=1, max_length=300)
-    question: str = Field(min_length=1, max_length=4000)
-    tasks: list[str] = Field(min_length=2, max_length=10)
-
-
 # One change in a decision the Strategy Owner makes alone at level 3 (backend/strategy_acts.py).
 class StrategyBotChange(Contract):
     do: Literal["create", "reorder", "reassign", "close"]
@@ -3199,7 +3215,7 @@ class LoginStart(Contract):
     profile: Annotated[str, Field(pattern=r"^(?:[a-z0-9]+(?:-[a-z0-9]+)*)?$", max_length=80)] = ""
     # Sign in to another account in place: the old login keeps working until the new one has finished.
     switch: bool = False
-    # Switch type: "subscription" moves the computer's own login off its API key, once the sign-in has worked.
+    # Switch to subscription, from a page drawn before D11-5: refused with where keys are changed now.
     to: Literal["", "subscription"] = ""
 
 
@@ -3214,32 +3230,11 @@ class RemovalStart(Contract):
 
 
 class SharedKeyUse(Contract):
-    """Use the shared key again on a signed-out login; with `credential`, Add connection > API key > "Use a shared
-    key": that shared key, attached to this computer (a credential administrator's change)."""
+    """Use the shared key again on a signed-out login. `credential` (attaching a shared key from Add connection) is
+    refused: keys are given to computers in Settings > Models now (backend/model_login.py MOVED)."""
 
     runtime: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]*$", max_length=40)]
     credential: str = Field(default="", max_length=100)
-
-
-class KeyClear(Contract):
-    """Clear key on a computer; "all" clears the company's shared key on every computer it serves."""
-
-    runtime: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]*$", max_length=40)]
-    scope: Literal["this", "all"] = "this"
-
-
-class KeyReplace(Contract):
-    """Replace key (or Add key) on a computer. The key is sealed in the vault; nothing sends it back (backend/computer_keys.py)."""
-
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=False)
-    runtime: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]*$", max_length=40)]
-    secret: SecretStr = Field(max_length=4000)
-    env: str = Field(default="", max_length=100, pattern=r"^$|^[A-Z_][A-Z0-9_]*$")
-    scope: Literal["this", "all"] = "this"
-    # Add connection > API key > "Shared with: [computers]": the other computers it serves (this one always does).
-    share: list[Annotated[str, Field(max_length=100)]] = Field(default_factory=list, max_length=200)
-    # Switch to API key: the computer's own login moves off its subscription onto this key once the key works there.
-    switch: bool = False
 
 
 class LoginCode(Contract):

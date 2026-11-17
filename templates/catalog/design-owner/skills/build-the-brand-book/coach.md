@@ -8,7 +8,7 @@ the skill.
 
 1. Say what the workshop makes and how long it takes, in two sentences. Then the primer from the skill: the idea behind
    the method in plain words, at most five short lines. No history of the author, no praise of the book.
-2. **Read before you ask.** Before the first question, read the published strategy summary, the bets, and the Market
+2. **Read before you ask.** Before the first question, read the live strategy summary, the bets, and the Market
    page (players, spend and growth, the latest briefing, what buyers are saying). Say in one or two lines what you
    already know so they don't repeat it, and use it later when you push back. Offer to pre-fill: "I can draft the
    first pass from your strategy and you correct it, or we start from scratch."

@@ -7,7 +7,9 @@ const {DESKTOP} = require('./real-hub.cts') as RealHubSupport.Api;
 const {t} = require('./load.cts') as {t: (ms: number) => number};
 
 export interface PartsTable { build: string; parts: Record<string, {url: string; load: string[]}> }
-const PART = /\/tico\/ui\/app\.bundle\.([a-z][a-z0-9-]*)\.js/;
+// A page part's file (scripts/build-ui.cjs): app.bundle.<part>.<hash>.js. The shell's files have no part name, and theme
+// and marked (names no part may take) load with the page.
+const PART = /\/tico\/ui\/app\.bundle\.(?!theme\.|marked\.)([a-z][a-z0-9-]*)\.[0-9a-f]{16}\.js/;
 
 // A new context, nothing cached, signed in as Dana.
 async function cold(browser: Browser, hub: RealHubSupport.Hub) {

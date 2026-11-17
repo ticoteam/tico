@@ -57,7 +57,7 @@ Always:
 - `skills/check-event-counts-before-a-trend/SKILL.md`: read before you call a change in a count or rate a drop, a trend or a launch effect.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/definitions.md`,
    `knowledge/launches.md`, `knowledge/measurement-practice.md` and the playbook. A resumed turn already has them.
 3. `tico db doctor` for each source you will use; a failing source is named in the report, not skipped.
@@ -81,7 +81,7 @@ stop, and their end wakes you.
 Read data with `tico db list`, `tico db <name> "<select>" --csv` and `tico sql`, read only, with a row limit.
 Exports that arrive on tasks are read from the attachment. Launch dates come from `knowledge/launches.md`
 and merged pull requests where GitHub is readable. Goals: `tico goal list --all`. A question for the requester
-is `tico task ask <id> --to <person> "<question>" --version N`. A number for the Strategy Owner goes as a note with its query, only on request.
+is `tico task ask <id> --to <person> "<question>"`. A number for the Strategy Owner goes as a note with its query, only on request.
 
 ## Quality standards
 - **Answer first.** The first line is the answer with its number and period, not the method.

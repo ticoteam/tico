@@ -95,7 +95,7 @@ const tasks = (() => {
     assert.ok(await form.locator('input[name=owner]').inputValue(), `${where}: an owner is picked`);
     await form.locator(`select[name=pipeline] option[value="${pipeline}"]`).waitFor({state: 'attached', timeout: t(20000)});
     assert.equal(await form.locator('select[name=pipeline]').inputValue(), pipeline, `${where}: the form files it in the pipeline shown`);
-    await form.locator('textarea[name=body]').fill('Write the note and send it to the list.');
+    await form.locator('textarea[name=message]').fill('Write the note and send it to the list.');
     await form.locator('button[type=submit]').click();
     let d = await sheet(page, TITLE);
     const id = d.id;
@@ -166,9 +166,8 @@ const tasks = (() => {
 
 // ---- e2e-needs-you
 const needsYou = (() => {
-  // A bot asks Dana on two of its own tasks: a question with two choices, and an OK. A task is one row of You (its newest
-  // ask), and the row opens its card.
-  const QUESTION = 'Should we ship the beta on Nov 3?';
+  // A bot asks Dana for an OK on a task of its own. A task is one row of You (its newest ask), and the row opens its
+  // card. (A bot's question is a ❓ on a chat message, question-marks.cts.)
   const OK = 'OK a $40 daily limit for builder-claude';
   return async ({hub, browser, phone}: PassContext) => {
     const where = phone ? 'phone' : 'desktop';
@@ -176,39 +175,28 @@ const needsYou = (() => {
     const ask = async (title: string, body: Record<string, unknown>, what: string) => {
       const id = (await must<{task: {id: string}}>(hub, 'engineering-manager', 'POST', 'tasks', {title, body: 'For the beta.', owner: 'engineering-manager'},
         'the bot files its task')).task.id;
+      // An OK approves what it shows: the bot files the page it asks about on the task, and the ask shows it.
+      const shown = (await must<{page: {file_id: string}}>(hub, 'engineering-manager', 'POST', 'pages', {name: 'beta-budget.html',
+        title: 'Beta budget', task: id, text: '<h1>Beta budget</h1><p>$40 a day for builder-claude.</p>'}, 'the bot files its page')).page.file_id;
       const rid = (await must<{requirement_id: string}>(hub, 'engineering-manager', 'POST', `tasks/${id}/asks`,
-        {to: 'dana', version: (await read(id)).version, ...body}, what)).requirement_id;
+        {to: 'dana', version: (await read(id)).version, show: [`page:${shown}`], ...body}, what)).requirement_id;
       assert.ok(rid, `${where}: ${what} is recorded`);
       return async () => (await read(id)).to_leave?.find(r => r.requirement_id === rid);
     };
-    // A bot's question to a person says why it matters, what each choice does and which it recommends (backend/ask_shape.py).
-    const question = await ask('Plan the beta', {line: QUESTION, why: 'The beta invitations go out on Friday.', choices: ['Yes', 'No'],
-      details: ['The beta opens to the waiting list on Friday.', 'The beta waits a week for the fixes.'], recommend: 'Yes'}, 'the bot asks a question');
     const ok = await ask('Set the beta budget', {line: OK, kind: 'ok'}, 'the bot asks for an OK');
 
     const page = await open(browser, hub, 'dana', {phone, hash: '#/tasks'});
-    // This OK binds no content (no grant), so its card's preview read is a 404 and the card shows the ask's own line.
+    // This OK has no grant, so its card's preview read is a 404 and the card shows the page the ask shows.
     expectFailure(page, 404, '^/api/v2/oks/[^/]+$', 'GET');
-    const row = (text: string) => page.locator('#task-body [data-need]', {hasText: text}).first();
-    await row(QUESTION).waitFor({timeout: t(20000)});
-    // An OK row leads with its task's title, the ask is its tooltip (a question keeps its line under the title).
+    // An OK row leads with its task's title, the ask is its tooltip.
     const okRow = page.locator('#task-body [data-need]', {hasText: 'Set the beta budget'}).first();
     await okRow.waitFor({timeout: t(20000)});
     assertClean(page, `${where}: needs you drawn`);
 
-    // The question: answer it on its card.
-    await row(QUESTION).click();
+    // The OK: its row opens its card, and she approves it there. A phone opens an OK on its task (the Task tab, where
+    // Approve is), and the OK's ask sits in the Chat tab, so that tab is opened to read it first.
     const card = page.locator('#need-card');
-    await card.locator('.dc-q', {hasText: QUESTION}).first().waitFor({timeout: t(20000)});
-    await card.locator('[data-dc-choice="Yes"]').first().click();
-    // The card sends the answer when its undo runs out, so the hub is read until the answer is there.
-    const reply = await until(async () => (await question())?.answer?.value, `${where}: the answer on the hub`);
-    assert.equal(reply, 'Yes', `${where}: the hub has the answer to the question`);
-    assertClean(page, `${where}: answered`);
-
-    // The OK: the card goes on to it (or its row opens it), and she approves it there. A phone opens an OK on its task
-    // (the Task tab, where Approve is), and the OK's ask sits in the Chat tab, so that tab is opened to read it first.
-    if (!await card.evaluate(c => (c as HTMLDialogElement).open)) await okRow.click();
+    await okRow.click();
     if (phone) await card.locator('[data-dc="tab"][data-dc-tab="chat"]').click({timeout: t(20000)});
     await card.locator('.dc-q', {hasText: OK}).first().waitFor({timeout: t(20000)});
     await card.locator('[data-dc="approve"]:not([disabled])').first().click();
@@ -268,7 +256,7 @@ const newBot = (() => {
     await page.keyboard.press('Enter');
     await page.locator('.gv-pop').waitFor({state: 'detached'});
     assert.equal(await form.locator('input[name=owner]').inputValue(), bot, `${where}: the owner choice is the bot's id`);
-    await form.locator('textarea[name=body]').fill('The sheet is in Files; send it with a short note.');
+    await form.locator('textarea[name=message]').fill('The sheet is in Files; send it with a short note.');
     await form.locator('button[type=submit]').click();
     // The new task opens once made.
     await page.waitForFunction(text => (document.querySelector('#task-modal') as HTMLDialogElement | null)?.open

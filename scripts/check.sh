@@ -8,7 +8,7 @@
 # core.hooksPath .githooks` runs this, and the branch conflict check, on every push. CONTRIBUTING.md lists where this
 # differs from CI.
 # Checks: lint.sh (ruff baseline and ruff format), test collection (pytest --collect-only), shell_lint.sh (shellcheck),
-# actionlint (workflows), migration order,
+# actionlint (workflows), migration order, gates.sh (shared gate scripts and ast-grep rules with fixtures),
 # check_ui_types.sh (generated API types, tsc), check_ui_strict.py (every UI script TypeScript, strict ratchet),
 # check_node_types.py (the .cts/.mts scripts under scripts/ and recorder/, and the Recorder window's .ts, type-check
 # strictly), the
@@ -287,6 +287,13 @@ fi
 # on every change rather than tracking its inputs.
 job "runner wire contract" python3 scripts/check_wire_contract.py
 
+# Gates may inspect any path. New gates and rules need no input list here; uncommitted and new files count too.
+if touched '.'; then
+  job "verification gates" bash scripts/gates.sh ${RATCHET_ARGS[@]+"${RATCHET_ARGS[@]}"}
+else
+  skip "verification gates" "no file changed"
+fi
+
 # 10. Python types: basedpyright on pyrightconfig.json's include list, against its baseline and the strict-module
 # ratchet. Pyright follows imports, so a change to any Python file, or to the packages the venv installs, can change it.
 if touched '\.pyi?$|^pyrightconfig\.json$|^scripts/(check_types\.sh|check_pyright_ratchet\.py|pyright_baseline\.py|baseline_files\.py|pyright-legacy-modules\.txt)$|^baselines/pyright/|^backend/requirements[^/]*\.(txt|in)$'; then
@@ -313,6 +320,10 @@ for entry in ${ENTRIES[@]+"${ENTRIES[@]}"}; do
   if [ "$status" -eq 0 ]; then passed=$((passed + 1)); else word=FAIL; failed=$((failed + 1)); fi
   printf '  %-4s  %-38s %7s\n' "$word" "${NAMES[$n]}" "$(elapsed "$start" "$end")"
   if [ "$status" -ne 0 ] && [ -s "$JOB_DIR/$n.out" ]; then sed 's/^/        /' "$JOB_DIR/$n.out"; fi
+  # A missing local rules tool passes with a warning; keep it visible through this wrapper.
+  if [ "$status" -eq 0 ] && [ "${NAMES[$n]}" = "verification gates" ]; then
+    grep '^gates: WARNING:' "$JOB_DIR/$n.out" || true
+  fi
 done
 
 echo "check: $passed passed, $failed failed, $skipped skipped in $(elapsed "$T0" "$(now)")"

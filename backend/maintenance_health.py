@@ -31,7 +31,7 @@ from .api_contract import api_v2
 
 log = logging.getLogger("tico.maintenance_health")
 
-BOTOPS = "botops"  # the bot that takes every setup finding (a task per signature), and asks a person for it
+BOTOPS = "botops"  # the bot that takes every setup finding (a task per signature), and marks a ❓ for a person on it
 RULE = "health_monitor_reports"
 SETUP, BUG = "setup", "tico-bug"
 # A finding's severity, lowest first. `bad` where the Health page says bad for the same thing; a rise wakes the bot.
@@ -719,7 +719,7 @@ def _profile_checks(c):
 def _stop_checks(c):
     """A bot Tico stopped for failed runs or for running away (backend/bot_stops.py): one finding per bot until it is
     released. The signature carries the error class or the window, never the bot."""
-    from . import claim_holds, run_failures, turn_budgets
+    from . import bot_stops, run_failures, turn_budgets
 
     out = []
     words = run_failures.CLASS_WORDS
@@ -766,7 +766,8 @@ def _stop_checks(c):
                 severity=BAD,
             )
         )
-    for hold in claim_holds.held(c):
+    claims, checks = bot_stops.claim_holds(c)
+    for hold in claims:
         bot = hold["bot_id"]
         row = H.bot(c, bot) or {}
         name = row.get("display_name") or row.get("slug") or bot
@@ -777,7 +778,7 @@ def _stop_checks(c):
                 SETUP,
                 f"Tico could not start {hold['jobs']} queued run{'s' if hold['jobs'] != 1 else ''} for {name}",
                 f"{name} has {hold['jobs']} queued run{'s' if hold['jobs'] != 1 else ''} held, "
-                f"queued since {str(hold['since'])[:16]} UTC: an error happened while Tico prepared each "
+                f"held since {str(hold['since'])[:16]} UTC: an error happened while Tico prepared each "
                 "one to start. "
                 "Each waits, then Tico tries it again on its own; the wait doubles with each failed try, "
                 "up to an hour. The server log has the traceback.",
@@ -787,7 +788,7 @@ def _stop_checks(c):
                 severity=BAD,
             )
         )
-    for failure in claim_holds.check_failures(c):
+    for failure in checks:
         bot, error = failure["bot"], failure["error"]
         row = H.bot(c, bot) or {}
         name = row.get("display_name") or row.get("slug") or bot

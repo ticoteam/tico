@@ -5,7 +5,7 @@ const {chromium, webkit}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
 const path: typeof import('node:path') = require('node:path');
-const {html, uiFile, bundled} = require('./support/page.cts') as PageSupport.Api;
+const {html, uiFile, shell} = require('./support/page.cts') as PageSupport.Api;
 const {unrouted} = require('./support/routes.cts') as Routes.Api;
 
 async function check(engine: import('playwright').BrowserType) {
@@ -20,7 +20,7 @@ async function check(engine: import('playwright').BrowserType) {
         if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
         if (p.startsWith('/tico/ui/')) {
           if (failing && (blocked === 'all' || blocked === 'css' && p.endsWith('.css')
-              || blocked === 'part' && (bundled ? /app\.bundle\.2\.js$/.test(p) : p.endsWith('/app/core.ts')))) return route.abort();
+              || blocked === 'part' && p === `/tico/ui/${shell[1]}`)) return route.abort();
           const name = p.slice('/tico/ui/'.length), file = uiFile(name);
           if (fs.existsSync(file)) return route.fulfill({path: file, contentType: name.endsWith('.css') ? 'text/css'
             : /\.(?:js|ts)$/.test(name) ? 'application/javascript' : 'application/octet-stream'});

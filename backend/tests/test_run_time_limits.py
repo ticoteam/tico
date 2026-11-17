@@ -171,8 +171,11 @@ def test_timeout_holds_named_irreversible_action_or_used_ok(api, command, label,
     assert label in review['reason'] and review['stopped'] == 'changed'
     assert 'private-marker' not in review['reason']
     with api.app.state.store.read() as c:
-        tasks = c.execute("SELECT body FROM tasks WHERE owner_id='bot:botops' AND status='open'").fetchall()
-        assert len(tasks) == 1 and label in tasks[0]['body'] and 'private-marker' not in tasks[0]['body']
+        tasks = [
+            H.task_words(c, r[0])
+            for r in c.execute("SELECT id FROM tasks WHERE owner_id='bot:botops' AND status='open'")
+        ]
+        assert len(tasks) == 1 and label in tasks[0] and 'private-marker' not in tasks[0]
     assert sweep(api) == [] and job_state(api, first['job_id']) == 'uncertain'
 
 
@@ -187,7 +190,9 @@ def test_second_consecutive_cut_stays_held_with_open_review_and_no_saved_decisio
     review = get(api, 'bots/ops/execution-review')['jobs'][0]
     assert why in review['reason'] and review['stopped'] == 'twice'
     with api.app.state.store.read() as c:
-        body = c.execute("SELECT body FROM tasks WHERE owner_id='bot:botops' AND status='open'").fetchone()[0]
+        body = H.task_words(
+            c, c.execute("SELECT id FROM tasks WHERE owner_id='bot:botops' AND status='open'").fetchone()[0]
+        )
         assert why in body and 'recorded exec_command' not in body
         assert not c.execute(
             'SELECT 1 FROM job_recovery WHERE job_id=? AND attempt_id=?', (first['job_id'], second['id'])
@@ -278,7 +283,9 @@ def test_saved_pause_cannot_hide_outside_actions_or_reset_consecutive_timeout_cu
             c.execute('SELECT end_reason FROM attempt_diagnostics WHERE attempt_id=?', (second['id'],)).fetchone()[0]
             == pause
         )
-        body = c.execute("SELECT body FROM tasks WHERE owner_id='bot:botops' AND status='open'").fetchone()[0]
+        body = H.task_words(
+            c, c.execute("SELECT id FROM tasks WHERE owner_id='bot:botops' AND status='open'").fetchone()[0]
+        )
         assert 'cut by the run time limit twice in a row' in body
     assert sweep(api) == [] and job_state(api, first['job_id']) == 'uncertain'
 
@@ -324,7 +331,9 @@ def test_second_cut_names_outside_effects_from_tool_or_classified_event(api, pay
     review = get(api, 'bots/ops/execution-review')['jobs'][0]
     assert review['stopped'] == 'changed' and label in review['reason']
     with api.app.state.store.read() as c:
-        body = c.execute("SELECT body FROM tasks WHERE owner_id='bot:botops' AND status='open'").fetchone()[0]
+        body = H.task_words(
+            c, c.execute("SELECT id FROM tasks WHERE owner_id='bot:botops' AND status='open'").fetchone()[0]
+        )
         assert 'cut by the run time limit twice in a row' in body and f'recorded {label}' in body
         assert 'private-marker' not in body + review['reason']
         assert not c.execute(

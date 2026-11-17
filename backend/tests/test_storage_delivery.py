@@ -58,6 +58,7 @@ def test_safe_disposition(mime, inline):
     'name,original',
     [
         ('report.json', b'{\n  "owner": "human:ana",\n  "text": "\\u00e9"\n}\n'),
+        ('page.html', b'<p>Write to ana@example.com</p>\n'),
     ],
 )
 def test_attachment_bytes_and_digests_across_versions_and_legacy_ids(api, name, original):
@@ -86,13 +87,16 @@ def test_attachment_bytes_and_digests_across_versions_and_legacy_ids(api, name, 
         assert hashlib.sha256(full.content).hexdigest() == full.headers['x-content-sha256'] == digest
         assert full.headers['etag'] == '"' + digest + '"'
         assert full.headers['content-length'] == str(len(data))
+        # Cloudflare rewrites an HTML body (email obfuscation) unless the response says no-transform.
+        assert full.headers['cache-control'] == 'private, no-store, no-transform'
         partial = api.get(url, headers={**h, 'Range': 'bytes=2-9'})
         assert partial.status_code == 206 and partial.content == data[2:10], url
         assert partial.headers['x-content-sha256'] == digest  # digest identifies the whole stored file
         assert partial.headers['content-range'] == f'bytes 2-9/{len(data)}'
+        assert partial.headers['cache-control'] == full.headers['cache-control']
         head = api.head(url, headers=h)
         assert head.status_code == 200 and head.content == b'', url
-        for key in ('content-length', 'content-type', 'x-content-sha256', 'etag'):
+        for key in ('content-length', 'content-type', 'x-content-sha256', 'etag', 'cache-control'):
             assert head.headers[key] == full.headers[key], (url, key)
 
 
@@ -147,7 +151,7 @@ def test_multipart_range_cache_etag_limits_and_legacy(api):
     url = '/api/v2/files/' + bid
     h = headers('ana-test')
     full = api.get(url, headers=h)
-    assert full.content == b'0123456789' and full.headers['cache-control'] == 'private, no-store'
+    assert full.content == b'0123456789' and full.headers['cache-control'] == 'private, no-store, no-transform'
     assert full.headers['content-type'].startswith('text/plain')
     assert full.headers['content-disposition'].startswith('inline')
     assert full.headers['x-content-type-options'] == 'nosniff'

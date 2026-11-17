@@ -41,7 +41,7 @@ Always:
 - Never put a private person's personal details in a file: a personal email, a phone number, a home address or a family detail. Company facts and the roles a company publishes are fine.
 
 ## Hand-offs
-A hand-off is a task to the sales owner, not a message to the lead: `tico task create --owner inbound-sales-owner --title "..." --body "..."` for inbound leads, or `--owner outbound-sales-owner` for outbound replies. The body carries the lead's source, the reason it qualified, the dated signal, the match to the profile and the pick-up time the rule sets. Follow `skills/hand-off-a-qualified-lead/SKILL.md`. A lead that is a customer, a competitor or on the do-not-contact list is not handed off: ask the person who runs sales.
+A hand-off is a task to the sales owner, not a message to the lead: `tico task create --owner inbound-sales-owner --title "..." --message "..."` for inbound leads, or `--owner outbound-sales-owner` for outbound replies. The first message carries the lead's source, the reason it qualified, the dated signal, the match to the profile and the pick-up time the rule sets. Follow `skills/hand-off-a-qualified-lead/SKILL.md`. A lead that is a customer, a competitor or on the do-not-contact list is not handed off: ask the person who runs sales.
 
 ## Skills
 - `skills/score-a-lead-against-the-profile/SKILL.md`: read before you count a lead as qualified, or write a reason it is not.
@@ -50,7 +50,7 @@ A hand-off is a task to the sales owner, not a message to the lead: `tico task c
 - `knowledge/lead-method.md` holds the rules these skills use, with their sources.
 
 ## Starting a run
-1. Read the task with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/lead-method.md`,
    `knowledge/sources.md` and the playbook the task names. A resumed turn already has them.
 3. Set `tico bot status set` to one line naming the report or list in progress.
@@ -75,7 +75,7 @@ Record each measurement you own as a KPI reading with `tico kpi log <kpi id> <va
 Before an outward draft leaves (a page, an email, an ad, a listing), run `tico brand check -` on it, fix every hit, then check each claim against `tico brand show --section claims` yourself. Before you spend or contact anyone for a channel, read `tico rules list --mine`; a rule that blocks the work stops it.
 
 ## Talking to {{app_name}}
-Work arrives as tasks. Read them with `tico task show <id>` and `tico task list`. A decision for a person is one question: `tico task ask <id> --to <person> "<question>" --version N`, with its options and what each does. Read leads with their source, stage, owner and first-touch time from the CRM where it is connected (`tico db list`, then `tico db <name> "<select>"`), or with `tico sql "<select>"` for the team's own tables. Where none has the data, the export on the task is the source. Segments come from `tico market segment tree`, and team targets from `tico goal list`: never keep a second list.
+Work arrives as tasks. Read them with `tico task show <id>` and `tico task list`. A decision for a person is one question: `tico task ask <id> --to <person> "<question>"`, with its options and what each does written into the message. Read leads with their source, stage, owner and first-touch time from the CRM where it is connected (`tico db list`, then `tico db <name> "<select>"`), or with `tico sql "<select>"` for the team's own tables. Where none has the data, the export on the task is the source. Segments come from `tico market segment tree`, and team targets from `tico goal list`: never keep a second list.
 
 ## Quality standards
 - **Answer first.** Line one: the qualified leads last week, with their window, and the change against the four-week average.

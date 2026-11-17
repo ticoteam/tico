@@ -407,9 +407,10 @@ def test_a_payment_a_person_made_that_mercury_rejects_asks_that_person_once(book
     with books.read() as c:
         assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "canceled"
         assert _asks(c, f"Payment {pid} of 200.00 was rejected in Mercury") == 1
-        owner, body = c.execute(
-            "SELECT owner_id, body FROM tasks WHERE title=?", (f"Payment {pid} of 200.00 was rejected in Mercury",)
+        tid, owner = c.execute(
+            "SELECT id, owner_id FROM tasks WHERE title=?", (f"Payment {pid} of 200.00 was rejected in Mercury",)
         ).fetchone()
+        body = H.task_words(c, tid)  # what Tico told Ben (tasks have no description)
     assert owner == "human:ben" and "Acme Supplies" in body and "bill-60" in body, (owner, body)
 
 

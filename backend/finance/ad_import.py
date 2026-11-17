@@ -5,7 +5,8 @@ It reads; it never books. Nothing here posts to the ledger or changes a posting:
 bank feed brings it, and the budget reads take care that the two are never counted together.
 
 Each import belongs to one Google Ads or Meta Ads tool (backend/tool_services.py) and names which stored credentials
-hold each value the platform needs (`SLOTS`; credential ids, never values). Values are read from the vault at use time
+hold each value the platform needs (`SLOTS`; credential ids, never values), each one a key whoever bound them may use
+(`created_by`, backend/finance/key_use.py), checked when bound and before every run. Values are read from the vault at use time
 and never logged or kept; Google's refresh token is exchanged for an access token on every run and the access token is
 dropped with the run. A refused login (Google's token exchange answering 400 invalid_grant, 401 or 403, an API 401,
 Meta's error 190) sets the import to "reconnect"; any other failure (unreachable, rate limited, a 5xx) to "failed" with
@@ -35,7 +36,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, cast
 
-from . import ad_warnings
+from . import ad_warnings, key_use
 from .core import ledger as L
 from .core.org import SYSTEM
 from .context import load
@@ -211,6 +212,12 @@ def default_mapping(c: Any, platform: str, tool_id: str = "") -> dict[str, str]:
 
 def missing(platform: str, mapping: Mapping[str, str]) -> list[str]:
     return [s for s in REQUIRED[platform] if not mapping.get(s)]
+
+
+def _refused(c: Any, imp: SA.AdImport, credential_id: str) -> str:
+    return (
+        key_use.refused(c, imp.created_by, credential_id, ident=imp.id, provider=imp.platform) if credential_id else ""
+    )
 
 
 def _secrets(c: Any, vault: object, imp: SA.AdImport) -> dict[str, str]:
@@ -713,12 +720,12 @@ def run(store: Any, vault: object, import_id: str, *, now: str | None = None, ht
         imp = next((i for i in SA.imports(c) if i.id == import_id), None)
         if imp is None:
             return Outcome("failed", error="no such import")
+        # Never read or send a key whoever bound it may no longer use (key_use: a grant revoked, a person gone).
+        early = next((r for r in (_refused(c, imp, cid) for cid in dict.fromkeys(imp.credentials.values())) if r), "")
         try:
-            secrets = _secrets(c, vault, imp)
+            secrets = {} if early else _secrets(c, vault, imp)
         except Failed as exc:
             secrets, early = {}, str(exc)
-        else:
-            early = ""
     if early:
         with store.transaction() as c:
             SA.finish(c, imp.id, "failed", early, at, imported=False)

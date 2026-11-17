@@ -885,14 +885,33 @@ def _ask_without_task(conn, decision, actor, body, target, conv):
         who,
         question=f"A rule stopped a message to {H.actor_name(conn, target)}. Should it go on?",
         why="A rule asks a person before this message goes on.",
+        asker=_rules_asker(),
         deduplicate=False,
         private=True,  # the message was for the bot: only the person it falls to reads it
     )
     H.event(conn, H.KEEPER, ASKED, made["id"], {"rule": decision.rule, "about": about})
 
 
+# Only bots write questions (backend/question_marks.py): a rule's ❓ is the Rules Owner's, or BotOps' when it is not
+# here (person_asks.author).
+def _rules_asker():
+    return f"bot:{H.RULES_OWNER}"
+
+
+def _rule_ask(conn, tid, person, text):
+    """The Rules Owner's ❓ to `person` on the task `tid`: `text`, its first line plain. Raises when no bot can ask or
+    the person may not read the task's chat (a private task is not opened to them for a rule). Returns the ❓'s wait id."""
+    from . import person_asks, question_marks
+
+    asker = person_asks.author(conn, _rules_asker())
+    if not asker:
+        raise ValueError("no bot to ask")
+    marked = question_marks.ask(conn, asker, str(tid), person, text, checked=False, let_in=False)
+    return question_marks.wait_id(marked)
+
+
 def _ask(conn, decision, row, actor, body, target=None, conv=None):
-    """An ask on the message's task (H.task_ask), for its requester when that is a person, else the owner bot's
+    """A ❓ on the message's task (`_rule_ask`), for its requester when that is a person, else the owner bot's
     operator; while one this rule added still waits, nothing more. With no task, a task for a person
     (`_ask_without_task`). Raises when nobody can be asked or the ask is refused (the person may not read a private
     task), so the message wakes the bot instead of waiting for no one."""
@@ -912,15 +931,11 @@ def _ask(conn, decision, row, actor, body, target=None, conv=None):
     who = (row["requester_id"] if H.is_human(row["requester_id"]) else None) or _operator(conn, row["owner_id"])
     if not who:
         raise ValueError("no person to ask")
-    sender = "Tico" if actor == H.KEEPER else H.actor_id(actor)
+    sender = "Tico" if actor == H.KEEPER else H.actor_name(conn, actor)
     text = " ".join(str(body or "").split())[:400]
-    line = (
-        f"The rule {decision.rule} asks you about this. {sender} said: {text}"
-        if text
-        else (f"The rule {decision.rule} asks you about this.")
-    )
-    added = H.task_ask(conn, H.KEEPER, row["id"], who, line)
-    H.event(conn, H.KEEPER, ASKED, row["id"], {"rule": decision.rule, "requirement": added.get("requirement_id")})
+    said = f"A rule holds a message from {sender} until you reply. Should it go on?\n\nRule {decision.rule}"
+    wait = _rule_ask(conn, row["id"], who, f"{said}:\n> {text}" if text else said)
+    H.event(conn, H.KEEPER, ASKED, row["id"], {"rule": decision.rule, "requirement": wait})
 
 
 def _act(conn, decision, row, message=None):
@@ -1012,11 +1027,12 @@ def _move(conn, tid, params, said):
 
 
 def _ask_person(conn, tid, params, said):
-    """`params.person` is asked `params.line` on the task (with `params.choices` when there are some)."""
+    """`params.person` is asked `params.line` on the task, a ❓ (`_rule_ask`); `params.choices`, when there are some,
+    are named in it."""
     person, line = str(params["person"]), str(params.get("line") or said)
     choices = params.get("choices") if isinstance(params.get("choices"), list) else None
-    added = H.task_ask(conn, H.KEEPER, tid, person, line, choices=[str(c) for c in choices] if choices else None)
-    return {"person": person, "requirement": added.get("requirement_id")}
+    text = f"{line}\n\nReply {' or '.join(str(c) for c in choices)}." if choices else line
+    return {"person": person, "requirement": _rule_ask(conn, tid, person, text)}
 
 
 def _relate(conn, tid, params, said):
@@ -1419,6 +1435,7 @@ def _event_ask(conn, row, name, params, values, ctx):
         who,
         question=f"A rule needs you: {heading}",
         why="A rule asks a person to look at it when this happens.",
+        asker=_rules_asker(),
         deduplicate=False,
     )
     H.event(conn, H.KEEPER, ASKED, made["id"], {"rule": row["id"], "event": name})

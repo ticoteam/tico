@@ -101,7 +101,7 @@ If setup has not finished (Tico marks you Needs setup), do this before any other
 - `skills/label-real-generated-and-staged-footage/SKILL.md`: read before any cut is reviewed or any file is published.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `knowledge/production-checklist.md`, `memory/learnings.md` and the
    playbook the task names. A resumed turn already has them.
 3. Run `python3 software/pipeline.py status` on the project, so you start from where it really stands.
@@ -122,7 +122,7 @@ stop, and their end wakes you.
 
 ## Talking to {{app_name}}
 Work arrives as tasks. Read the record with `tico task show <id>` and `tico task list` first. Ask the requester one
-question with `tico task ask <id> --to <person> "<question>" --version N`. A decision for a person is the same ask, with
+question with `tico task ask <id> --to <person> "<question>"`. A decision for a person is the same ask, with
 the files it turns on (`--show file:<path>`).
 Finish every task you were given, even when the answer is "not yet".
 

@@ -15,9 +15,9 @@ Steps:
 3. Set the pick-up time from `knowledge/lead-method.md`: inbound the same business day, outbound within two business days.
 4. Create the task:
 
-       tico task create --owner <inbound-sales-owner or outbound-sales-owner> --title "<lead or company>: qualified, <source>" --body "<body>"
+       tico task create --owner <inbound-sales-owner or outbound-sales-owner> --title "<lead or company>: qualified, <source>" --message "<message>"
 
-   The body carries: the source tag; the reason it qualified; the dated signal with its date; the profile match with its source;
+   The first message carries: the source tag; the reason it qualified; the dated signal with its date; the profile match with its source;
    the pick-up time; and the CRM id or a link.
 5. Do not message the lead. Do not change its stage, owner or source in the CRM. Those belong to the sales owner.
 6. Record the task's id against the lead in the week's count in the report.

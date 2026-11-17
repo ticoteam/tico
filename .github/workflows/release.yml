@@ -415,12 +415,10 @@ jobs:
       ${{ !cancelled() && needs.desktop-changes.result == 'success'
       && needs.desktop-changes.outputs.build == 'true' }}
     uses: ./.github/workflows/app.yml
-    # inherit + id-token as main's app.yml expects (it declares no secrets and asks for id-token). Narrowing these
-    # needs app.yml and company-app.yml to declare them first: the follow-up hardening batch, not this one.
+    # app.yml declares no secrets, so it inherits them. It uses no OIDC, so it gets no id-token.
     secrets: inherit
     permissions:
       contents: read
-      id-token: write
 
   # Adds the desktop files and latest.json to the already published release: new builds, or the previous release's
   # files carried forward. latest.json goes last, so a desktop updater never sees a manifest whose files are missing.

@@ -177,11 +177,13 @@ def recent(c, auth, who, at=None, *, bot=None, attempt_id=""):
             [who.actor, *[U.author_actor(a) for a in authors]],
         )
     }
-    # A bot's task for a person is its own task with its question to them (backend/person_asks.py): it waits on the
-    # reader while that question is in their Needs you.
+    # A bot's task for a person is its own task with its ❓ or OK to them (backend/person_asks.py): it waits on the
+    # reader while that is in their Needs you.
     from . import waiting_on as W
 
-    asked = [n["requirement_id"] for n in W.needs(c, who.actor) if n.get("kind") == "ask" and n.get("requirement_id")]
+    need = W.needs(c, who.actor)
+    waiting |= {n["bot_id"] for n in need if n.get("kind") == "question" and n.get("bot_id")}
+    asked = [n["requirement_id"] for n in need if n.get("kind") == "ask" and n.get("requirement_id")]
     if asked:
         waiting |= {
             r[0]

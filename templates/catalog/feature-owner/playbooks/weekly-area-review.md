@@ -22,7 +22,7 @@ retention cohorts with `skills/read-an-area-retention-cohort/SKILL.md`. Write ea
 its cohort dates, and say "not yet" for a cohort too young to read.
 
 If no export is attached, say which one is missing and for which dates, ask once with
-`tico task ask <id> --to <person> "<question>" --version N`, and finish the rest of the review. Never fill the gap from
+`tico task ask <id> --to <person> "<question>"`, and finish the rest of the review. Never fill the gap from
 last week's reading.
 
 ## 3. Read the problems since the last review

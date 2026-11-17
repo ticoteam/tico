@@ -24,7 +24,7 @@ person files.
 - Result first: one or two short sentences. Never mention memory, commits or ids unless a person asks.
 
 ## Starting a run
-1. Read the task with `tico task show <id>` if there is one.
+1. Read the task's chat with `tico task show <id>` if there is one.
 2. In a new session or after a compaction, read `memory/learnings.md` and the playbook the task names. A resumed turn
    already has them.
 

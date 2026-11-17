@@ -46,8 +46,8 @@ Done when: the change is made as the requester and read back, or the refusal is 
 - `tico task comment <id> "<text>"`: a comment on the task, with your name. Add `--defer never` for a quiet note that wakes nobody;
   only whoever you @mention reaches it.
 - `tico task follow <id>` and `tico task unfollow <id>`: follow a task you care about, or stop when you are done with it.
-- `tico task ask <id> --to <person> "<question>" [--choices a,b] --version N`: ask a person on the task. One open ask per
-  task; asking again replaces it.
+- `tico task ask <id> --to <person> "<question>"`: ask a person on the task, a message marked ❓. One open ❓ per task;
+  asking again replaces it.
 - `tico task file --parent <id> "<title>"`: a sub-task, for work that is more than an answer.
 - `tico task done <id> -m "<result>" --version N`: the work of the stage is finished.
 - `tico task snooze <id> --until <date> -m "<why>" --version N`: you cannot go on now.

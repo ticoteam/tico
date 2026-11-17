@@ -133,9 +133,9 @@ a red dot when it can't run. *Needs you*, or *Needs <Name>* for someone else: a 
 [Whose turn it is](tasks.md#whose-turn-it-is).
 
 **How do I answer a bot's question?**
-Open **Tasks › You**. Each ask is one sentence with its buttons: the choices for a question, **Approve** or **Send
-back**
-for an OK. Flow (its mark, two play shapes; on a phone, the Flow tab) steps through them. See [Asks and OKs](tasks.md#asks-and-oks).
+A bot's question is a ❓ on its message, in the task's chat or in a direct chat. Reply there, and your reply is the answer.
+An OK waits in **Tasks › You** with its buttons, **Approve** or **Send back**. Flow (its mark, two play shapes; on a phone,
+the Flow tab) steps through them. See [Asks and OKs](tasks.md#asks-and-oks).
 
 **Marked a task Done by mistake?**
 Choose **Undo** in the toast, or open the finished task under **Done** (the archive button) and choose **Reopen**.

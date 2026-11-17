@@ -266,7 +266,7 @@ threads.post(c, principal, thread_id, body, *, kind="say", refs=None, parent_mes
 - `thread_id`: the thread written to. With `parent_message_id`, the post goes to that message's sub-thread, created
   if it has none (§3.2), and `thread_id` must be the message's thread.
 - `kind`: `say|notice|steer`; `ask` and `answer` are refused (422 `kind`, with the replacement named), and their old rows are
-  history only (`H.OLD_MESSAGE_KINDS`). A question to a person is an ask on a task, not a message. `to_actor`: the
+  history only (`H.OLD_MESSAGE_KINDS`). A question to a person is a `say` the bot marks ❓ (`tico task ask` or `tico chat ask`), not an ask on a task. `to_actor`: the
   explicit addressee (optional); otherwise the first in-audience mention, otherwise NULL.
 - `via`: who really acts (`assistant`, `botops`, `slack`), recorded in `refs.via`. `origin`:
   `{"origin_id", "revision", "actor"}` for replicated inbound (Slack); a repeat

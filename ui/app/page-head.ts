@@ -7,7 +7,7 @@
 'use strict';
 
 type PageTab = {label: string; href?: string | undefined; count?: number | string | undefined; cur?: boolean | undefined; attrs?: string | undefined;
-  mark?: boolean | undefined};   // a section of it waits on the person: the Flow mark beside its name (needsMarkHTML)
+  mark?: string | undefined};   // a setup area of it waits on the person: the Flow mark beside its name (needsMarkHTML)
 type PageHeadPart = 'title' | 'tabs' | 'tools' | 'more' | 'primary';
 type PageHeadOptions = {
   title: string;                           // plain text, escaped here
@@ -40,7 +40,7 @@ function pageHeadTab(t: PageTab): string {
   const n = t.count === undefined || t.count === '' ? '' : `<span class="ph-n">${esc(String(t.count))}</span>`;
   const extra = t.attrs ? ' ' + t.attrs : '';
   const cls = 'ph-tab' + (t.cur ? ' cur' : '');
-  const mark = t.mark ? needsMarkHTML(12) : '';
+  const mark = t.mark ? needsMarkHTML(12, t.mark) : '';
   return t.href !== undefined
     ? `<a class="${cls}" href="${esc(t.href)}"${t.cur ? ' aria-current="page"' : ''}${extra}>${esc(t.label)}${mark}${n}</a>`
     : `<button type="button" class="${cls}" role="tab" aria-selected="${t.cur ? 'true' : 'false'}"${extra}>${esc(t.label)}${mark}${n}</button>`;

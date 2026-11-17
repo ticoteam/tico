@@ -1,9 +1,10 @@
 """A person's comment on a bot's task wakes the bot at once, whatever the task waits on (docs/tasks.md, Comments): a
-person's message is on the always-wake floor (backend/wake_rules.py), so neither a sub-task, an ask of a person nor a
+person's message is on the always-wake floor (backend/wake_rules.py), so neither a sub-task, a ❓ to a person nor a
 snooze holds it back (execution.job_refusal)."""
 
 import pytest
 
+from backend import question_marks
 from backend.store import H
 from backend.tests.helpers.api import claim, post  # noqa: F401
 from backend.tests.helpers.task_lanes import task_bot
@@ -24,7 +25,7 @@ def park(c, tid, wait):
     if wait == "child":
         H.task_create(c, "bot:ops", "Review receipts", "Review #1994.", "bot:cpo", parent_id=tid, lint=False)
     elif wait == "person":
-        H.task_ask(c, "bot:ops", tid, "human:ben", "Can you sign off on the release checklist?", seen_version=version)
+        question_marks.ask(c, "bot:ops", tid, "human:ben", "Can you sign off on the release checklist?")
     elif wait == "snooze":
         H.task_snooze(c, "bot:ops", tid, "Waiting for the freeze to end", H.shift(H.now(), hours=4), version)
 

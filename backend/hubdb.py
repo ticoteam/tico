@@ -208,10 +208,10 @@ BOT_STATES = SV.BOT_STATES
 STATUS_STATES = SV.BOT_STATUS_STATES
 MESSAGE_KINDS = ("say", "notice", "steer")
 # Kinds old rows may still have, read as history only: nothing writes an ask or an answer in a message (a question
-# to a person is an ask on a task, `tico task ask`; to a bot, a DM flagged needs-action).
+# to a person is a message marked ❓, `tico task ask` or `tico chat ask`; to a bot, a DM flagged needs-action).
 OLD_MESSAGE_KINDS = ("ask", "answer")
 ASK_GONE = (
-    "asks are gone: ask a person on a task with tico task ask <task> --to <person> \"<question>\" --version N; "
+    "asks are gone: ask a person on a task with tico task ask <task> --to <person> \"<question>\"; "
     "ask a bot with tico message send <bot> \"<question>\" --needs-action"
 )
 CONVERSATION_KINDS = ("chat", "ask", "task", "notice")
@@ -2239,6 +2239,13 @@ def _write_message(
         ":restricted, :legacy_audience)",
         row,
     )
+    if is_human(actor):
+        from . import question_marks
+
+        room = conv or {}
+        # Their reply clears each ❓ for them in this chat, and resumes each task one of those was on.
+        for cleared_task in question_marks.replied(conn, row, room, row["refs"]):
+            question_marks.after_reply(conn, cleared_task, actor)
     if is_human(actor) and is_bot(target) and row["body"].lstrip().startswith("/"):
         from . import skill_runtime
 
@@ -2585,6 +2592,9 @@ def set_task_readers(conn, actor, task_id, add=(), remove=(), *, replace=None, m
     for reader in wanted:
         if reader not in before:
             _task_event(conn, task_id, actor, "reader", None, reader, "")
+    from . import question_marks
+
+    question_marks.clear_gone(conn, task_id)  # a ❓ for someone who can no longer read the task's chat goes nowhere
     return wanted
 
 
@@ -2874,7 +2884,9 @@ def _next_number(conn, actor, task_id, pipeline_id, note=""):
         ).rowcount
     ):
         number = _one(conn, "SELECT number FROM tasks WHERE id=?", (task_id,))["number"]
-        _task_event(conn, task_id, actor, "number", None, number, note)
+        # Tico gives the number, not whoever filed the task: its history line is the system's (a number a mover gives,
+        # `_number_free`, stays theirs).
+        _task_event(conn, task_id, KEEPER, "number", None, number, note)
     elif numbered and _one(conn, "SELECT 1 FROM tasks WHERE id=? AND number IS NULL", (task_id,)):
         refuse(conn, actor, "number", "The team's task numbers have reached 999999999")
 
@@ -3909,6 +3921,7 @@ def task_comment(
     reach=None,
     people_notified=False,
     to=None,
+    checked=True,
 ):
     """A comment on a task: one message in the task's thread, tagged with the task, from whoever wrote it. It goes as
     any post there does (threads.post): to whom it addresses (its @mentions, the author it replies to) and to the
@@ -3919,13 +3932,16 @@ def task_comment(
     their level says). `delegate`: whether a person's comment delegates the task to the bots it wakes (default: `wake`;
     only one who may direct the task does). `reach`: the bot's Identity when this is its own write through the API, so
     whoever the comment reaches is checked against the bot's reach as a thread post is (reach.check_thread). `to`: the
-    bot it is written to besides (a relayed answer, strategy_merge). A question to a person is an ask on the task
-    (task_ask), never a comment."""
-    _writer(conn, actor, task_id=task_id)
+    bot it is written to besides (a relayed answer). A bot's question to a person is a ❓ on its comment
+    (question_marks.ask). `checked` False: words Tico's own feature wrote for a bot (question_marks.ask), so the bot's
+    standing to write here (a quarantine, reading a private task) is not asked."""
+    if checked:
+        _writer(conn, actor, task_id=task_id)
     row = task(conn, task_id)
     if not row:
         refuse(conn, actor, "not-found", f"no task {task_id}")
-    _task_private_writer(conn, actor, row)
+    if checked:
+        _task_private_writer(conn, actor, row)
     text = str(text or "").strip()
     if not text:
         refuse(conn, actor, "lint", "write the comment")
@@ -3996,6 +4012,60 @@ def task_comment(
     return msg
 
 
+# The mark on a task's first message: the request it was made with (task_create, the description migration).
+REQUEST_REF = "request"
+
+
+def first_message(conn, actor, task_id, conversation_id, text, title=""):
+    """A new task's request: its first chat message, from `actor`, who wrote it. A quiet post (Defer never): the task
+    is assigned through its stage, which wakes and tells whoever has it, so the message reaches the owner bot in that
+    run and notifies nobody besides. None when there is nothing to say (empty, or only the title again)."""
+    text = str(text or "").strip()
+    if not text or text == str(title or "").strip():
+        return None
+    from . import threads
+
+    refs = {"task": task_id, "comment": True, REQUEST_REF: True, **comment_way_refs("defer", "never")}
+    return threads.post(conn, actor, conversation_id, text, refs=refs)
+
+
+def task_request(conn, task_id):
+    """A task's request, its first message (`first_message`): {id, from, text, at}, or None when it was made with
+    none. Its chat may say more since; this is what was asked."""
+    found = conn.execute(
+        "SELECT id, sender_id, body, created_at FROM messages WHERE json_extract(refs, '$.task')=? "
+        f"AND json_extract(refs, '$.{REQUEST_REF}')=1 AND deleted_at IS NULL ORDER BY created_at, rowid LIMIT 1",
+        (task_id,),
+    ).fetchone()
+    if not found:
+        return None
+    return {"id": found[0], "from": found[1], "text": str(found[2] or ""), "at": found[3]}
+
+
+def task_request_text(conn, task_id):
+    """The words of a task's request, "" when it has none (`task_request`)."""
+    found = task_request(conn, task_id)
+    return found["text"] if found else ""
+
+
+def task_words(conn, task_id):
+    """Everything a task was asked with: its request and the instructions Tico gave its bot (task_wakes.instructions),
+    "" when neither. What reading its description used to give."""
+    from . import task_wakes
+
+    return "\n\n".join(filter(None, (task_request_text(conn, task_id), task_wakes.instructions(conn, task_id))))
+
+
+# A task whose request or Tico's instructions say `?` (instr): what reading its body for a mark used to do. The
+# messages are found by their task (messages_refs_task). `+tasks.id` drops the column's TEXT affinity, without which
+# SQLite cannot search that expression index from a correlated subquery and scans every message instead.
+TASK_SAYS_SQL = (
+    "EXISTS (SELECT 1 FROM messages m WHERE json_extract(m.refs, '$.task')=+tasks.id AND m.deleted_at IS NULL "
+    f"AND (json_extract(m.refs, '$.{REQUEST_REF}')=1 OR (m.sender_id='keeper' "
+    "AND json_extract(m.refs, '$.instructions') IN (1, 'all'))) AND instr(m.body, ?)>0)"
+)
+
+
 def comment_way_refs(way, defer_for=None):
     """The marks a comment's way leaves on it (threads.WAY_KEYS, as the thread routes write them): Steer leaves
     none."""
@@ -4009,13 +4079,16 @@ def comment_way_refs(way, defer_for=None):
 def delegate_woken(conn, task_id, person, msg):
     """task_delegations: each bot a person's message on the task woke (its own run, or a steer or queue delivery
     pending for it) acts on the task with party rights for 24 hours."""
-    until = shift(now(), hours=24)
     for recipient, mid in _woken_bots(conn, msg):
-        conn.execute(
-            "INSERT OR IGNORE INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) "
-            "VALUES(?,?,?,?,?)",
-            (task_id, recipient, person, mid, until),
-        )
+        delegate(conn, task_id, recipient, person, mid)
+
+
+def delegate(conn, task_id, bot, person, message_id):
+    """`bot` acts on the task with party rights for 24 hours, lent by `person`'s message that woke it."""
+    conn.execute(
+        "INSERT OR IGNORE INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) VALUES(?,?,?,?,?)",
+        (task_id, bot, person, message_id, shift(now(), hours=24)),
+    )
 
 
 def _woken_bots(conn, msg):
@@ -4355,7 +4428,7 @@ def review_finding_route(conn, actor, task_id, target):
     task's own pull request goes back to whoever builds that task (its feature owner, or a Builder on Engineering of the
     pair Product replaced) through its review (docs/dev/pipelines-v3.md, "Product"),
     and what only a person decides there (the spec, the OK) is asked on that task. The pull request is one the task
-    links, or one its title or body names by URL. Refused as `review_route`, naming the task it belongs on."""
+    links, or one its title or request (its first message) names by URL. Refused as `review_route`, naming the task it belongs on."""
     if not is_bot(actor) or not is_human(target):
         return
     row = task(conn, task_id)
@@ -4369,7 +4442,7 @@ def review_finding_route(conn, actor, task_id, target):
             (task_id,),
         )
     }
-    words = f"{row.get('title') or ''}\n{row.get('body') or ''}"
+    words = f"{row.get('title') or ''}\n{task_request_text(conn, task_id)}"
     prs |= {(f"{owner}/{name}".lower(), int(number)) for owner, name, number in PR_IN_TEXT.findall(words)}
     for repo, number in sorted(prs):
         own = conn.execute(
@@ -4457,6 +4530,7 @@ def task_create(
     unassigned=False,
     human_id=None,
     asks=None,
+    instructions=None,
 ):
     """Rule 5. Anyone may open a task for any active owner; a human owner's General task is linted (rule 7), and so is
     a bot's own task that asks a person (`asks`: the person its question is for, backend/person_asks.py).
@@ -4487,6 +4561,12 @@ def task_create(
     `readers` are who else sees a private task (`set_task_readers`, `readers_check(task_id, added)` its check), set
     before it enters its first stage: the engine lets a private task in only where whoever has it there reads it.
     `human_id` is the task's Human (`task_human`): the person accountable for it, whoever owns it.
+
+    A task is a title and a chat: it has no description. `body` is its first message, the request, posted in its chat
+    as its author's (`first_message`), and none when it is empty or only repeats the title. `instructions` are a
+    routine's or a setup's working instructions for the bot that owns it: they reach that bot through its run (the
+    wake it starts from, task_engine.enter), never the chat. What Tico itself (the keeper) files for a bot is the same:
+    Tico tells a bot things in its run, so its words are the bot's instructions, not a chat message.
     """
     _writer(conn, actor)
     human_id = task_human(conn, actor, human_id) if human_id else None
@@ -4513,9 +4593,8 @@ def task_create(
         if again:
             return _reuse_occurrence(conn, actor, target, again["id"], title, wake_refs, trigger, trigger_source)
     parent = _task_parent(conn, actor, None, parent_id) if parent_id else None
-    from . import private_pipelines, task_engine, visual_specs
+    from . import private_pipelines, task_engine
 
-    body = visual_specs.child_body(conn, parent_id, body)  # tickets under a spec'd roadmap card get its spec
     # Whoever files a subtask asked for it: it shows them as asking and their notices reach them.
     requester = actor
     if private is False and (not is_human(actor) or VIA.get()):
@@ -4579,7 +4658,11 @@ def task_create(
         requester = requester_actor
     title = str(title or "").strip()
     body = str(body or "")
-    severity = classify(f"{title}\n{body}", to_actor=target, actor=actor, conn=conn)
+    instructions = str(instructions or "").strip()
+    if actor == KEEPER and is_bot(target) and body.strip():
+        instructions = "\n\n".join(filter(None, (body.strip(), instructions)))
+        body = ""
+    severity = classify(f"{title}\n{body}\n{instructions}", to_actor=target, actor=actor, conn=conn)
     path_mentioned(conn, actor, "new task", f"{title}\n{body}".strip())
     lane = _lane_for(conn, lane, target, actor)
     if (
@@ -4699,7 +4782,7 @@ def task_create(
         row = {
             "id": new_id(),
             "title": title,
-            "body": body,
+            "body": "",
             "requester_id": requester,
             "owner_id": target,
             "status": "open",
@@ -4824,7 +4907,10 @@ def task_create(
             **({"filed_in": filed_in} if filed_in else {}),
             "news": "assignment",
             **(wake_refs or {}),
+            **({"instructions": instructions} if instructions else {}),
         }
+        # The request comes before anything the move into its first stage writes.
+        first_message(conn, actor, row["id"], conv["id"], body, title)
         # Into the first stage of its pipeline: the engine sets the stage and the owner, opens the visit and wakes a bot
         # that owns it, with `wake` on that wake.
         entered = task_engine.enter(
@@ -4973,7 +5059,6 @@ def task_update(
     note=None,
     owner=None,
     due=None,
-    body=None,
     lane=None,
     labels=None,
     rank=None,
@@ -4995,7 +5080,7 @@ def task_update(
     seen_version=None,
     human_id=None,
 ):
-    """Edit a task's fields: title, body, due date, note, labels, lane, rank, goal, number, privacy, roles, size, its
+    """Edit a task's fields: title, due date, note, labels, lane, rank, goal, number, privacy, roles, size, its
     Human and its public text. One edit raises the task's version once. `seen_version` is the version the caller looked
     at: an edit against an older one is refused.
 
@@ -5008,7 +5093,8 @@ def task_update(
     is). `rank` is the position in the owner's queue. `goal_id` names the goal the task serves; "" takes it off.
     `number` gives a task that has none its number; it never changes. `title` renames it, checked as a new task's
     title would be (`_retitle`). `roles` replaces the people in the roles it names ({role: [actors]}; task_roles).
-    `human_id` names the task's Human (`task_human`); "" takes them off.
+    `human_id` names the task's Human (`task_human`); "" takes them off. A task has no description to edit: what it
+    asks is said on its chat.
     """
     if status is not None and status not in ("open", "done", "closed"):
         raise ValueError(f"a task is open, done or closed, not {status!r}: move it with task_move")
@@ -5048,7 +5134,6 @@ def task_update(
                 ("rank", rank),
                 ("number", number),
                 ("title", title),
-                ("body", body),
                 ("due", due),
                 ("goal", goal_id),
                 ("private", private),
@@ -5082,7 +5167,6 @@ def task_update(
                 note,
                 owner,
                 due,
-                body,
                 lane,
                 rank,
                 goal_id,
@@ -5180,10 +5264,10 @@ def task_update(
             sets.append("readers=NULL")
             for reader in task_readers(row):
                 _task_event(conn, task_id, actor, "reader", reader, None, "")
-    for field, value in (("title", title), ("note", note), ("due", due), ("body", body), ("lane", lane)):
+    for field, value in (("title", title), ("note", note), ("due", due), ("lane", lane)):
         if value is None:
             continue
-        if field in ("title", "body"):
+        if field == "title":
             path_mentioned(conn, actor, f"task {field}", str(value), task_id)
         column = "due_at" if field == "due" else field  # the event's field keeps its name
         if value == row.get(column):
@@ -5217,7 +5301,7 @@ def task_update(
     after = row
     if edited:
         # A bot's result rewritten: that run's outcome.
-        if title is not None or body is not None and body != row.get("body"):
+        if title is not None:
             RT.turn_result(conn, actor, row, "edited", event)
         args["id"] = task_id
         args["updated_at"] = ts
@@ -5789,22 +5873,24 @@ HELD_OPERATOR_REVIEW_TITLE = "Review {display_name}'s unresolved interrupted run
 # The operator review's title carries the bot's display name, which is neither unique nor fixed, so its body names the
 # bot's slug too and the stall guard reads that first.
 HELD_OPERATOR_REVIEW_BOT = "Bot: {slug}."
-# A keeper-filed task about one bot says which in its body by the id, the one name a rename leaves as it is: its title is
+# A keeper-filed task about one bot says which in its words (task_words) by the id, the one name a rename leaves as it is: its title is
 # for people and carries a slug or a display name (bot_review_tasks).
 BOT_REVIEW_ID = "Bot id: {id}."
 _BOT_REVIEW_ID = re.compile(r"^Bot id: (\S+)\.$", re.M)
 
 
 def bot_review_tasks(conn, bot_id, owner, title):
-    """The tasks `owner` holds about this bot, the ones still open first and then newest first: those whose body names
-    its id, and one filed before bodies did under the title the bot has now, unless its body names another bot."""
+    """The tasks `owner` holds about this bot, the ones still open first and then newest first: those whose words
+    (`task_words`, given as `body`) name its id, and one filed before they did under the title the bot has now, unless
+    its words name another bot."""
     rows = conn.execute(
-        "SELECT id,body,status FROM tasks WHERE owner_id=? AND "
-        "(title=? OR (requester_id=? AND instr(body,?)>0)) "
+        "SELECT id,status FROM tasks WHERE owner_id=? AND "
+        f"(title=? OR (requester_id=? AND {TASK_SAYS_SQL})) "
         "ORDER BY (status='open') DESC,created_at DESC",
         (owner, title, KEEPER, BOT_REVIEW_ID.format(id=bot_id)),
     ).fetchall()
-    named = ((row, _BOT_REVIEW_ID.search(str(row["body"] or ""))) for row in rows)
+    found = [{**dict(row), "body": task_words(conn, row["id"])} for row in rows]
+    named = ((row, _BOT_REVIEW_ID.search(row["body"])) for row in found)
     return [row for row, mark in named if not mark or mark.group(1) == bot_id]
 
 
@@ -6041,7 +6127,8 @@ def status_set(conn, actor, bot_slug, state=None, focus=None, task_id=None, reas
     """One active row per bot; the old one moves to `bot_status_history` with `until`.
 
     `state="active"` is how a human clears a quarantine (deviation 4): it sets `bots.state`
-    and leaves the live status `idle`.
+    and leaves the live status `idle`. On a quarantined bot it lifts the quarantine alone: a pause the bot
+    had before stays, and the bot is `paused` until someone resumes it. On any other bot it is a resume.
     """
     _writer(conn, actor, task_id=task_id)
     slug = actor_id(bot_slug) if actor_kind(bot_slug) else str(bot_slug).strip()
@@ -6089,10 +6176,24 @@ def status_set(conn, actor, bot_slug, state=None, focus=None, task_id=None, reas
             (new_id(), slug, old["state"], old["focus"], old["task_id"], old["changed_at"], ts, reason, actor),
         )
     live = state
-    if state == "active":
-        conn.execute("UPDATE bots SET state='active' WHERE id=?", (slug,))
-        live = "idle"
-    elif state in ("paused", "quarantined"):
+    if state in ("active", "paused"):
+        from . import company_pause  # a bot's own pause is a hold (backend/holds.py), kept with bots.state
+
+        if state == "paused":
+            company_pause.pause_bot(conn, actor, slug, reason or "")
+        elif quarantined:  # the quarantine lifts (its hold was released above), not the bot's own pause
+            from . import holds
+
+            paused = bool(holds.get(conn, holds.PAUSED, "bot", slug))
+            conn.execute(
+                "UPDATE bots SET state=? WHERE id=? AND state='quarantined'", ("paused" if paused else "active", slug)
+            )
+            live = "paused" if paused else "idle"
+        else:
+            company_pause.resume_bot(conn, actor, slug)
+            conn.execute("UPDATE bots SET state='active' WHERE id=?", (slug,))
+            live = "idle"
+    elif state == "quarantined":
         conn.execute("UPDATE bots SET state=? WHERE id=?", (state, slug))
     row = {
         "bot": slug,
@@ -6154,7 +6255,13 @@ def status_counts(conn, actor):
         "AND a.answer NOT IN ('give', 'again'))",
         (actor,),
     ).fetchone()[0]
-    return open_tasks, waits + asks
+    # And each open ❓ of the bot's (backend/question_marks.py): on an open task's chat, or in a direct chat.
+    marked = conn.execute(
+        "SELECT COUNT(*) FROM question_marks q LEFT JOIN tasks t ON t.id = q.task_id "
+        "WHERE q.bot_id=? AND q.cleared_at IS NULL AND (q.task_id = '' OR t.status = 'open')",
+        (actor,),
+    ).fetchone()[0]
+    return open_tasks, waits + asks + marked
 
 
 def _recount(conn, actor):
@@ -7186,6 +7293,7 @@ def task_origin(conn, row):
     # unique sensitive refusal immediately preceding creation. The actor comes from
     # the trusted refusal record, not a bot name supplied in the title/body.
     origins, candidates = set(), set()
+    said = row.get("body") or task_request_text(conn, row["id"])  # moved to its first message
     for refusal in _rows(
         conn.execute(
             "SELECT actor,detail FROM refusals WHERE severity IN ('sensitive','escape') "
@@ -7203,7 +7311,7 @@ def task_origin(conn, row):
             f"turned down: {_clip(detail)}. Tell me whether that is a mistake to fix or a "
             f"limit to keep."
         )
-        if row.get("body") == body:
+        if said == body:
             origins.add(actor)
     return next(iter(origins)) if len(origins) == 1 and len(candidates) == 1 else None
 
@@ -7228,7 +7336,6 @@ from .task_calls import (
     task_release as task_release,
     task_requeue as task_requeue,
     task_snooze as task_snooze,
-    task_thumbs as task_thumbs,
     task_try_again as task_try_again,
     task_unsnooze as task_unsnooze,
     task_view as task_view,

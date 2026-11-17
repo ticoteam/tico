@@ -164,8 +164,8 @@ company already owns, so their commits need no sign-off, and their pull requests
   wording or docs prose, trivial getters or exhaustive parametrizations of one path. Mark a test
   `@pytest.mark.slow` if it needs real git, Docker or a server.
 - Added or changed an icon in `ui/`? Run `python3 scripts/build-icon-font.py` to rebuild the icon font subset (a test fails until you do).
-- New UI files are TypeScript (`ui/app/name.ts`, strict types, no `any`). After `npm ci`, `npm run build:ui` compiles
-  them to `build/ui/` (`npm run watch:ui` while editing); the server will not serve a stale build.
+- New UI files are TypeScript (`ui/app/name.ts`, strict types, no `any`). After `npm ci`, `npm run build:ui` builds
+  the UI into `build/ui/`, which is what the server serves (`npm run watch:ui` while editing, then reload).
   `bash scripts/check_ui_types.sh` type-checks them.
 - Keep the tests green, and do not add a dependency, a network call in the UI or a build step
   without saying why.

@@ -138,7 +138,7 @@ def test_the_job_reads_the_site_and_writes_unconfirmed_sections_and_proposed_bet
     assert set(job["written"]["bets"]) == set(bets) and {b["status"] for b in bets.values()} == {"proposed"}
     first = next(b for b in bets.values() if b["rules_out"])
     assert first["wrong_if"]["kind"] == "text" and first["wrong_if"]["check_by"] > H.now()[:10]
-    assert get(api, "strategy/versions") == []  # nothing is published
+    assert [v["n"] for v in get(api, "strategy/versions")] == [1]  # live at once, as one version
 
     # The same research again: the owner's sections stay theirs and no bet is proposed twice.
     write = put(api, "strategy/draft", {"revision": view["draft"]["revision"], "sections": {"serve": "Mine."}})
@@ -187,7 +187,7 @@ def test_the_shared_prompt_drafts_summary_seven_sections_and_three_bets_and_no_v
     for key in S.FIXED_KEYS:
         assert draft["sections"][key] == SS.unconfirmed(answer[key], "your description")
     assert {b["status"] for b in get(api, "strategy")["bets"]} == {"proposed"}
-    assert get(api, "strategy/versions") == []
+    assert [v["n"] for v in get(api, "strategy/versions")] == [1]
 
 
 def test_the_job_gives_up_and_reports_when_the_owner_wrote_the_draft_meanwhile(api, research):
@@ -375,9 +375,10 @@ def test_finishing_setup_with_a_website_files_the_librarians_market_task_once(en
     for _ in range(2):
         assert api.post("/api/v2/setup/complete", json={}, headers=signed_in()).status_code == 200
     with api.app.state.store.read() as c:
-        tasks = [dict(r) for r in c.execute("SELECT title, body FROM tasks WHERE owner_id='bot:librarian'")]
+        tasks = [dict(r) for r in c.execute("SELECT id, title FROM tasks WHERE owner_id='bot:librarian'")]
+        said = H.task_words(c, tasks[0]["id"]) if tasks else ""
     assert [t["title"] for t in tasks] == ["Set up the market map"]
-    assert "https://acme.example" in tasks[0]["body"] and "Bots that run small rentals." in tasks[0]["body"]
+    assert "https://acme.example" in said and "Bots that run small rentals." in said
     market = api.get("/api/v2/librarian/setup", headers=signed_in()).json()["market"]
     assert market["task"]["id"] and market["answers"]["sell"].startswith("https://acme.example")
 
@@ -390,18 +391,15 @@ def test_finishing_setup_without_a_website_files_no_market_task(environment):
         assert not c.execute("SELECT 1 FROM tasks WHERE owner_id='bot:librarian'").fetchone()
 
 
-def test_a_bot_administrator_recruits_from_the_published_bets_never_the_draft(api):
+def test_a_bot_administrator_recruits_from_the_live_bets_which_each_save_changes(api):
     from backend import recruit
     from backend.auth import Identity
-    from backend.tests.helpers.strategy import publish, ready
+    from backend.tests.helpers.strategy import ready
 
-    ready(api, statement="Small landlords pay for bots")
-    publish(api)
-    post(api, "strategy/bets", {"statement": "Unannounced: a franchise model"})
+    first = ready(api, statement="Small landlords pay for bots")
+    post(api, "strategy/bets", {"statement": "A franchise model"})
+    post(api, f"strategy/bets/{first['id']}", {"status": "retired"})
     owner, admin = Identity("human:ana", "owner"), Identity("human:riley", "human")
     with api.app.state.store.read() as c:
-        assert [b["statement"] for b in recruit.strategy_bets(c, owner)] == [
-            "Small landlords pay for bots",
-            "Unannounced: a franchise model",
-        ]
-        assert [b["statement"] for b in recruit.strategy_bets(c, admin)] == ["Small landlords pay for bots"]
+        for who in (owner, admin):
+            assert [b["statement"] for b in recruit.strategy_bets(c, who)] == ["A franchise model"]

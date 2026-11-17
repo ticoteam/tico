@@ -17,6 +17,10 @@ type NeedsEntry = import('../types/api').NeedsYouItem & {
   from_id?: string;
   conversation_id?: string;
   message_id?: string;
+  /** A bot's ❓ (kind `question`, backend/question_marks.py): the mark; its id is `qmark:<mark_id>`. */
+  mark_id?: string;
+  /** A ❓'s website browser to take over (`browser:<tool>/<account>`). */
+  shows?: string[];
 };
 /** Either a full task or a list row: what a row, a mark or a filter reads. */
 type TaskAny = TaskV3 | TaskBriefV3;
@@ -35,8 +39,6 @@ interface PipelineReqRec {
   who_oks: 'none' | 'people_only' | 'people_with_exceptions';
   person_id: string | null;
   line: string;
-  /** An answer's choices, when it is a choice; null on every other requirement. */
-  choices?: string[] | null;
 }
 interface PipelineStageRec {
   id?: string;
@@ -110,7 +112,6 @@ const withVersion = (version: number | null | undefined, body: Record<string, un
   version == null ? body : {...body, version};
 
 // ---- reads
-const taskGet = (id: string): Promise<TaskV3> => get<TaskV3>(taskPath(id), {fresh: true});
 interface TaskBriefQuery {
   owner?: string; status?: string; ids?: string[]; snoozed?: string; q?: string; pipeline?: string;
   sort?: 'queue' | 'finished'; limit?: number; offset?: number;
@@ -134,9 +135,6 @@ async function taskBriefsPage(query: TaskBriefQuery = {}): Promise<{tasks: TaskB
   const res = await get<{tasks?: TaskBriefV3[]; cursor?: string; next_offset?: number | null; next_after?: string | null} | TaskBriefV3[]>(`/v2/tasks?${taskBriefParams(query)}`);
   return Array.isArray(res) ? {tasks: res, cursor: '', more: false, next: ''}
     : {tasks: res.tasks || [], cursor: res.cursor || '', more: res.next_offset != null || !!res.next_after, next: res.next_after || ''};
-}
-async function taskBriefs(query: TaskBriefQuery = {}): Promise<TaskBriefV3[]> {
-  return (await taskBriefsPage(query)).tasks;
 }
 /** What changed since `cursor` under the same filters (GET /v2/tasks?changed_after): the changed rows that still match,
  * the ids that left the filters or became unreadable (`gone`), the next cursor; `reset` when only a full read will do. */
@@ -293,7 +291,8 @@ async function needsYou(): Promise<NeedsEntry[]> {
 }
 
 // ---- writes on a task
-interface TaskNew { title: string; body: string; owner: string; pipeline?: string; parent?: string; labels?: string[]; private?: boolean; }
+/** `message`: the task's first chat message, from whoever creates it (a task has no description). */
+interface TaskNew { title: string; message?: string; owner: string; pipeline?: string; parent?: string; labels?: string[]; private?: boolean; }
 const taskCreate = (b: TaskNew): Promise<TaskV3> => post('/v2/tasks', b, newRequestId()).then((r: {task: TaskV3}) => r.task);
 const taskEdit = (id: string, version: number | null, fields: Record<string, unknown>): Promise<TaskV3> =>
   post(taskPath(id), withVersion(version, fields)).then((r: {task?: TaskV3} & TaskV3) => r.task || r);
@@ -322,15 +321,15 @@ const askUnsnooze = (id: string): Promise<{id: string}> => post('/v2/needs-you/u
 const taskTryAgain = (id: string, why?: string): Promise<TaskMoved> => post(`${taskPath(id)}/try-again`, why ? {why} : {}, newRequestId());
 
 // ---- asks
-interface TaskAskNew { to: string; line: string; kind?: 'answer' | 'ok'; choices?: string[]; show?: string[]; }
+interface TaskAskNew { to: string; line: string; kind: 'ok'; show?: string[]; }
 const taskAsk = (id: string, b: TaskAskNew, version: number | null): Promise<TaskMoved> =>
   post(`${taskPath(id)}/asks`, withVersion(version, {...b}), newRequestId());
 const taskWithdrawAsk = (id: string, rid: string, why?: string): Promise<TaskMoved> =>
   writeRequest('DELETE', `/v2/tasks/${encodeURIComponent(id)}/asks/${encodeURIComponent(rid)}`, why ? {why} : {});
-/** ok, no (send back, with a note), again (look again), or the answer to a question. On a page, `pageVersion` is the
-    page the person was shown (`<file id>@<version>`): refused when another is attached now. With `visitId` it is a
-    document approval's whole key: a stale one is refused with the version submitted now (decide.ts). */
-const taskAnswer = (id: string, rid: string, value: string, version: number | null, note?: string, pageVersion?: string, visitId?: string): Promise<TaskMoved> =>
+/** ok, no (send back, with a note) or done. On a page, `pageVersion` is the page the person was shown
+    (`<file id>@<version>`): refused when another is attached now. With `visitId` it is a document approval's whole
+    key: a stale one is refused with the version submitted now (decide.ts). */
+const taskAnswer = (id: string, rid: string, value: 'ok' | 'no' | 'done', version: number | null, note?: string, pageVersion?: string, visitId?: string): Promise<TaskMoved> =>
   post(`${askPath(id, rid)}/answer`, withVersion(version, {value, ...(note ? {note} : {}), ...(pageVersion ? {page_version: pageVersion} : {}), ...(visitId ? {visit_id: visitId} : {})}), newRequestId());
 const answerUndo = (answerId: string): Promise<TaskMoved> => post(`/v2/answers/${encodeURIComponent(answerId)}/undo`, {}, newRequestId());
 
@@ -353,5 +352,3 @@ const pipelineRec = async (id: string): Promise<PipelineRec> =>
 /** `move_tasks_to`: where the tasks of a stage the save removes go (a 409 stage_has_tasks asks for it). */
 const pipelineSave = async (id: string, rec: (Omit<PipelineRec, 'id'> | PipelineRec) & {move_tasks_to?: {pipeline: string; stage: string}}): Promise<PipelineRec> =>
   ((await post(`/v2/pipelines/${encodeURIComponent(id)}`, rec, newRequestId())) as {pipeline: PipelineRec}).pipeline;
-const pipelineRetire = (id: string, settingsVersion: number): Promise<unknown> =>
-  post(`/v2/pipelines/${encodeURIComponent(id)}/retire`, {settings_version: settingsVersion}, newRequestId());

@@ -10,13 +10,9 @@ In a release); the source's condition says where it stands.
 What met a requirement is its newest answer on the visit that is not undone (`answers`):
 
 - `done`: the owner said the stage's work is finished (owner_done).
-- `ok`: the named person approved. `no`: they sent it back, with notes. `again`: the owner asks them to look again.
+- `ok`: the named person approved. `no`: they sent it back, with notes. `again`: the owner said done again after a
+  send back, so it waits on the person again (answers.reopen_sent_back; older rows are a Look again).
 - `give`: a stage's OK was given to another person, named in `notes`. It waits on them now.
-- anything on an `answer` requirement: the choice the person picked, or what they typed. `no`, `again` and `give` are
-  ordinary answers there: they steer only an OK (and a page). A stage's answer is typed (`settings`: `name`, `type`
-  text, number or choice, `min`/`max` for a number, `question`; choices in `choices`): the value is kept in one exact
-  form (`typed`), with the name and type copied onto the answer, and `values` reads a task's newest answer by name.
-  One that names nobody is the task owner's to give (`owners_answer`).
 - `pushed_past`: someone moved the task on without it, with the reason in `notes`. Any kind.
 
 A requirement never waits on a person who left, was removed or cannot sign in (`active_person`): it waits on nobody named instead, and
@@ -24,7 +20,6 @@ A requirement never waits on a person who left, was removed or cannot sign in (`
 """
 
 import json
-import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
@@ -46,19 +41,19 @@ KIND_NAMES = {
     "page": "A page",
     "item": "An item",
     "linked_done": "Linked work done",
-    "answer": "Answer from someone",
     "related_input": "Related input",
 }
 # Kinds whose "Who OKs" switch means something. Elsewhere it reads as `none`.
-OK_KINDS = ("ok", "page", "answer")
-# Answers that steer an OK instead of meeting it: a send back, a look again, a give. They mean that only on the kinds
-# in STEERED; on a question they are the answer.
+OK_KINDS = ("ok", "page")
+# Answers that steer an OK instead of meeting it: a send back, an ask again, a give. They mean that only on the kinds in
+# STEERED. `again` is written only by the owner saying done after a send back (answers.reopen_sent_back); stored rows
+# from the retired Look again read the same, so undoing one never reads as the answer that moved the task.
 STEERS = ("no", "again", "give")
 STEERED = ("ok", "page")
 
 
 def steers(kind: str, value: object) -> bool:
-    """Whether an answer of this value steers a requirement of this kind (send back, look again, give) instead of
+    """Whether an answer of this value steers a requirement of this kind (send back, ask again, give) instead of
     meeting it."""
     return kind in STEERED and value in STEERS
 
@@ -170,7 +165,7 @@ def _rows(cursor: "sqlite3.Cursor") -> list[Row]:
 
 
 def _loaded(row: Row) -> Row:
-    for key in ("settings", "shows", "choices"):
+    for key in ("settings", "shows"):
         value = row.get(key)
         if isinstance(value, str):
             try:
@@ -312,24 +307,6 @@ def _ok(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | N
     return Standing(requirement, WAITING, person, what)
 
 
-def _answer(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
-    if answer:  # nothing steers a question: any value is the answer, "no", "again" and "give" too
-        return Standing(requirement, MET, line=str(answer["answer"]))
-    if owners_answer(requirement):  # the owner's to give, as their own "done" is: not met, and on them
-        settings: Row = requirement.get("settings") or {}
-        asked = str(settings.get("question") or "").strip()
-        return Standing(requirement, NOT_MET, task.get("owner_id"), asked or name_of(requirement))
-    person = person_of(conn, requirement, task["visit"]["id"])
-    return Standing(requirement, WAITING, person, requirement.get("line") or "Answer")
-
-
-def owners_answer(requirement: Row) -> bool:
-    """A stage's answer that names nobody: the task's owner gives it, as they say done."""
-    return (
-        requirement.get("kind") == "answer" and bool(requirement.get("stage_id")) and not requirement.get("person_id")
-    )
-
-
 def _linked_done(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
     filed = _filed(conn, task["visit"]["id"])
     if not filed:
@@ -386,7 +363,7 @@ def asked_to_decide(standing: Standing, by: object) -> bool:
     return standing.state == WAITING and bool(by) and standing.on == by and standing.line.startswith(DECIDE)
 
 
-# What a bot does to get a page a person OKs looked at again, instead of an ask of its own (task_engine._people_page).
+# What a bot does to get a page a person OKs looked at again, instead of an ask of its own (task_engine.people_page).
 PAGE_OK_HINT = "Attach the new version; Tico asks the person."
 DOCUMENT_OK_HINT = "Write the new version of the {document}; it is submitted for approval."
 
@@ -1003,7 +980,6 @@ def _related_input(conn: "sqlite3.Connection", task: Row, requirement: Row, answ
 KINDS: dict[str, Callable[["sqlite3.Connection", Row, Row, "Row | None"], Standing]] = {
     "owner_done": _owner_done,
     "ok": _ok,
-    "answer": _answer,
     "linked_done": _linked_done,
     "page": _page,
     "item": _item,
@@ -1014,8 +990,6 @@ KINDS: dict[str, Callable[["sqlite3.Connection", Row, Row, "Row | None"], Standi
 #   commit of every linked PR: a new commit puts it back to the owner), `with_release` (Jev is also shown the release
 #   of the task's PRs and of the tasks it filed, so "production is older than the release" is judged against what
 #   GitHub says).
-# - answer (a stage's): `name` (how the answer is read back, `values`), `type` (ANSWER_TYPES), `min` and `max` (a
-#   number's bounds), `question` (what is asked, in full). A choice's choices are the requirement's `choices`.
 # - item: its condition's (item_sources.Condition.settings, `settings_of`).
 # - related_input: `bar` (Jev's score a bot needs to be asked, 0 to 1), `most` (bots asked at most), `wait_hours` (how
 #   long the stage waits for their comments before it is met anyway). Defaults in backend/related_input.py.
@@ -1024,103 +998,11 @@ APPROVED = ("Spec", "QA report", "Release report", "Invoice")
 SETTINGS: dict[str, tuple[str, ...]] = {
     "owner_done": (),
     "ok": (),
-    "answer": ("name", "type", "min", "max", "question"),
     "linked_done": (),
     "page": ("document", "rubric", "at_head", "with_release"),
     "item": (),
     "related_input": ("bar", "most", "wait_hours"),
 }
-
-
-# The types a stage's answer takes, and what its name looks like (a slug, unique within the pipeline).
-ANSWER_TYPES = ("text", "number", "choice")
-ANSWER_NAME = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
-WHOLE = re.compile(r"^[+-]?[0-9]+$")
-
-
-def answer_type(requirement: Row) -> str:
-    """The type of an answer requirement: its setting, else text (a question added to one task)."""
-    settings: Row = requirement.get("settings") or {}
-    return str(settings.get("type") or "text")
-
-
-def _bound(value: object) -> int | None:
-    return value if isinstance(value, int) and not isinstance(value, bool) else None
-
-
-def number_rule(requirement: Row) -> str:
-    """What a number answer must be, said in one line: "Confidence is a whole number from 0 to 100"."""
-    settings: Row = requirement.get("settings") or {}
-    low, high = _bound(settings.get("min")), _bound(settings.get("max"))
-    what = f"{name_of(requirement)} is a whole number"
-    if low is not None and high is not None:
-        return f"{what} from {low} to {high}"
-    if low is not None:
-        return f"{what} of {low} or more"
-    if high is not None:
-        return f"{what} of {high} or less"
-    return what
-
-
-def typed(requirement: Row, value: str) -> tuple[str | None, str]:
-    """An answer's value in its one stored form, or None and the line that says why it does not fit. A number is a
-    whole number within its bounds ("080" is "80"); a choice is one of the choices, spelled as the choice is; text is
-    anything not empty. A question added to one task is text, and its choices are a suggestion."""
-    kind = answer_type(requirement)
-    value = value.strip()
-    if not value:
-        return None, "Give an answer"
-    if kind == "number":
-        settings: Row = requirement.get("settings") or {}
-        low, high = _bound(settings.get("min")), _bound(settings.get("max"))
-        if not WHOLE.match(value) or len(value) > 18:
-            return None, number_rule(requirement)
-        number = int(value)
-        if (low is not None and number < low) or (high is not None and number > high):
-            return None, number_rule(requirement)
-        return str(number), ""
-    if kind == "choice":
-        choices = [str(c) for c in cast("list[object]", requirement.get("choices") or [])]
-        for choice in choices:
-            if choice == value or choice.casefold() == value.casefold():
-                return choice, ""
-        return None, f"{name_of(requirement)} is one of: {', '.join(choices)}"
-    return value, ""
-
-
-NAMED_SQL = (
-    "SELECT v.task_id, a.name, a.answer, a.value_type, a.by_id, a.created_at, v.stage_id FROM answers a "
-    "JOIN visits v ON v.id = a.visit_id WHERE v.task_id IN (%s) AND a.name IS NOT NULL AND a.undone_at IS NULL "
-    "ORDER BY a.created_at, a.id"
-)
-
-
-def prime_values(conn: "sqlite3.Connection", task_ids: Iterable[str]) -> None:
-    """Read the named answers of many tasks together, for the `values` of each that follow in this snapshot (Needs
-    you shows a task for each ask on it)."""
-    found = read_cache.cache(conn)
-    if found is None:
-        return
-    unread = sorted({str(t) for t in task_ids if ("named_answers", str(t)) not in found})
-    for key, rows in _by(conn, NAMED_SQL, "task_id", unread).items():
-        found.setdefault(("named_answers", key), rows)
-
-
-def values(conn: "sqlite3.Connection", task_id: str) -> dict[str, Row]:
-    """{name: {value, type, by, at, stage_id}}: the newest answer by each name a task was given, on any of its visits,
-    that was not taken back. A number reads as a whole number."""
-    out: dict[str, Row] = {}
-    for row in _cached(conn, "named_answers", NAMED_SQL, "task_id", task_id):
-        kind, value = row["value_type"], row["answer"]
-        shown: object = int(value) if kind == "number" and WHOLE.match(str(value)) else value
-        out[str(row["name"])] = {
-            "value": shown,
-            "type": kind or "text",
-            "by": row["by_id"],
-            "at": row["created_at"],
-            "stage_id": row["stage_id"],
-        }
-    return out
 
 
 def settings_of(requirement: Row) -> tuple[str, ...]:

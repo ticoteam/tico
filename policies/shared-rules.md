@@ -28,13 +28,13 @@ These sit alongside `handoffs.md` and `approvals.md`.
   complete on its own. Attach it with `--visual <file>` and `--title <caption>` on your reply or comment.
 - **Design and video come from their bots**. For brand assets, designed graphics (ad and social
   images, landing-page visuals, icons) or edited video (scripts, edits, cuts, captions), file a task
-  for `designer` (Design) or `video-owner` (Video Owner): `tico task create --owner bot:designer --title ... --body ...`.
+  for `designer` (Design) or `video-owner` (Video Owner): `tico task create --owner bot:designer --title ... --message ...`.
   Say what it is for, the size or format, and the deadline; attach or link the source. The result
   comes back under `<slug>/deliverables/<task>/`. Do not buy them.
 - **Keep live copy accurate.** Edit, test and publish requested copy with your Tools. Public copy stays a draft until your sending policy in Tico lets you send (Outbound sends, below). See `documentation.md`.
 - **Name the model that actually did the work.** A turn can run on a fallback model when the configured one hits a limit; your prompt says so when yours does. Reviews prefer a model family different from the work's; when you choose a reviewer by family, read each implementing run's `ran_on` in `tico task show <task>` (`runs`), never a bot's configured model or harness label. A `family` of null (mixed, Cursor auto, nothing counted) is unknown and does not count as different. A different family is a preference, never a requirement: when no reviewer from another family is free or healthy, a same-family review goes ahead rather than the work waiting or anyone being asked to rule on it.
 - **Speak as the owner only in the owner's own accounts.** Keep messages to outsiders as drafts until your sending policy in Tico lets you send; then follow the requested work and standing instructions.
-- **Ask the owner when:** missing information changes the result or needed Tools are unavailable. Act on work already requested and say what was done. Stay quiet when the run finished and nothing is new.
+- **Ask the owner when** missing information changes the result. Never ask people about your own setup (a Tool, a secret, access, a setting): file it for BotOps (`tico task file --parent <id> --owner botops "<title>"`), which asks the person who can fix it. Act on work already requested and say what was done. Stay quiet when the run finished and nothing is new.
 - **Scheduling on the owner's behalf** follows the team's scheduling rules: meeting length,
   minimum notice, allowed hours and time zone, and buffers are set in the calendar policy of the
   inbox bot, not improvised. When someone needs to book the owner directly, use the owner's
@@ -78,33 +78,28 @@ customer-facing stays a draft until your sending policy in Tico lets you send.
 ## Asking people
 Deliver files with `tico task attach <id> <file> --note "..."`. The same task and name adds a version.
 For a comment, use `tico task comment <id> "..." --attach <file>`.
-When your task needs a person (a decision, access, a fix only they can make), ask them once, on your task:
-`tico task ask <id> --to <person> "<one sentence>" --why "<why it matters to them>" --choice "<Label>|<what happens>"
---choice "<Label>|<what happens>" --recommend <Label> [--show page:<ID>] --version N` (MCP: `tico_task_ask`). A question
-to a person says why it matters and gives 2 to 4 choices, each with what happens, and the one you recommend (or no
-choices, for a typed answer); what it shows is a page, file or task by its id, or a link, never a path in your
-repository. Otherwise it is refused before anyone sees it. `--kind ok` asks them to OK the thing you show, or send it back with notes. The task stays in
-its stage until they answer, the ask is one line in their Needs you with buttons, and their answer wakes you once on
-the task. Act on that answer, and don't ask again. Ask once per version: never re-ask about an answered version;
-attach a new version when the work changes, and ask about that. Answers record who replied; you decide the next step.
-An ask never expires and never goes ahead on its own. It ends when they answer, when you withdraw it
-(`tico task ask <id> --withdraw -m "<why>"`), or when the task moves back or closes.
-Write the sentence so it makes sense on its own: one or two plain sentences saying what you need and what happens
-after, at most 40 words, with no ids, hashes, file paths, `s3://` links or tool names (`PR #1555` is fine; a bare
-`#1555` is not); Tico refuses it otherwise. A refusal for length or for more than two sentences gives you a rewrite:
-retry once with it and put the rest in a comment. Give choices when the decision is a pick or a yes/no; they may
-always type their own answer. Put ids, file paths and error text on the task, never in the sentence or the choices.
+When your task needs a person (a decision, or something only they can do), ask them once, on your task, with a
+message marked ❓: `tico task ask <id> --to <person> "<question>"` (MCP: `tico_task_ask` with `to` and `line`). It is
+posted on the task's chat and stays in their Needs you until they reply; their reply wakes you on the task. You are not
+chased while it is open. Act on the reply, and don't ask again. One open ❓ per chat: asking again replaces it.
+Write it plainly: a short first line that makes sense on its own (what you need and what happens after), then any
+detail. Put the options, your pick and why in the message; never ids, hashes, file paths or `s3://` links in the first
+line (`PR #1555` is fine; a bare `#1555` is not). Tico refuses a first line that does not stand on its own.
+To have them approve a page or file you made, ask for an OK of it: `tico task ask <id> --to <person> "<one sentence>"
+--kind ok --show page:<ID> --version N`. An OK shows what it approves; a bare "OK?" is a ❓.
+Your own task is where you talk during your turn: your reply at the end of the turn is posted on it, so don't
+`tico task comment` on it then.
 If a company rule covers your ask, Tico refuses it with the rule's words: act on the rule instead of asking.
 If you have a default that is reversible and internal (a rename, an archive, a draft, a setting you can set back),
-do not ask: do it, and record what you did in one line on your task (`tico task comment`); the person can undo it.
+do not ask: do it, and say what you did in one line in your reply; the person can undo it.
 Ask only for a real choice, a send, spending or a delete.
 One need, one ask. You have one open ask per task: asking again replaces it. Don't file a separate task just to ask,
 and don't hand another bot a sub-task that asks the same person the same thing.
 - Good: `tico task ask <id> --to ana "Run the vendor trial once with the key you sent? If yes, I'll add the results to
-  the report." --choices Yes,No --version N`. Ana gets one line with Yes and No; your task waits for her answer.
+  the report."`. Ana gets one ❓ in her Needs you; your task waits for her reply.
 - Bad: a comment that @s Ana, then a second "Run or stop?" task, then another bot's sub-task that also asks Ana.
   Ana gets three things for one question and answers twice. An @ only marks the task unread for her.
-Never message a person about a task outside the task: no chats, emails or pushes. The ask is how they hear.
+Never message a person about a task outside the task: no chats, emails or pushes. The ❓ is how they hear.
 A private task is read only by its requester, owner and readers. Never share or quote it, or its files, to anyone who
 cannot read it. Asking a person on it lets them read that task and nothing else. Work for others that comes out of
 private work is a new task in your own words (`tico task create --from-private`).

@@ -5,6 +5,7 @@ Synthetic rows only (backend/tests/helpers/engine.py).
 
 import pytest
 
+from backend import question_marks as Q
 from backend import task_engine as E
 from backend import waiting_on as W
 from backend.tests.helpers import engine as X
@@ -148,19 +149,10 @@ def test_a_task_waits_on_the_tasks_it_filed_and_on_a_question_a_bot_asked(c, gen
     assert _states(c, parent["id"]) == [("bot", "bot:manager")]  # nothing filed yet: the owner's to do
     child = X.new_task(c, ANA, "Build the cart", assignee="bot:builder", parent=parent["id"])
     assert _states(c, parent["id"]) == [("tasks", child["id"])]
-    asked = E.add_requirement(
-        c,
-        child["id"],
-        "bot:builder",
-        "answer",
-        ANA,
-        "Card or invoice?",
-        choices=["Card", "Invoice"],
-        seen_version=child["version"],
-    )
+    mark = Q.ask(c, "bot:builder", child["id"], ANA, "Card or invoice?")  # a ❓ on the task's chat
     waits = W.waiting_on(c, child["id"])
-    assert [(w.state, w.who) for w in waits] == [("person", ANA)]  # the bot waits for the answer: it has no turn
-    assert waits[0].requirement_id == asked["requirement_id"] and waits[0].line == "Card or invoice?"
+    assert [(w.state, w.who, w.ask) for w in waits] == [("person", ANA, True)]  # the bot waits for the reply
+    assert waits[0].requirement_id == Q.wait_id(mark) and waits[0].line == "Card or invoice?"
 
 
 def test_an_ended_task_waits_on_nothing_and_an_open_one_never_does(c, build):
@@ -178,18 +170,19 @@ def test_an_ended_task_waits_on_nothing_and_an_open_one_never_does(c, build):
 def test_needs_you_lists_what_is_asked_of_a_person_oldest_first_and_leaves_out_snoozed(c, build):
     mine = X.new_task(c, ANA, "Call the bank", assignee=ANA)
     bots = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
-    asked = E.add_requirement(c, bots["id"], "bot:builder", "ok", ANA, "OK the headline", seen_version=bots["version"])
+    asked = E.add_requirement(
+        c, bots["id"], "bot:builder", "ok", ANA, "OK the headline", shows=X.shown(c), seen_version=bots["version"]
+    )
     set_aside = X.new_task(c, ANA, "Renew the lease", assignee=ANA)
     E.snooze(c, set_aside["id"], ANA)
-    asked_mine = E.add_requirement(
-        c, mine["id"], "bot:builder", "answer", ANA, "Which bank?", seen_version=mine["version"]
-    )
+    mark = Q.ask(c, "bot:builder", mine["id"], ANA, "Which bank?")  # a ❓ on her own task's chat
     listed = W.needs(c, ANA)  # her own tasks' work is not listed: only what she is asked
     assert [(n["kind"], n["task_id"], n["line"]) for n in listed] == [
         ("ask", bots["id"], "OK the headline"),
-        ("ask", mine["id"], "Which bank?"),
+        ("question", mine["id"], "Which bank?"),
     ]
-    assert [n["requirement_id"] for n in listed] == [asked["requirement_id"], asked_mine["requirement_id"]]
+    assert [n["requirement_id"] for n in listed] == [asked["requirement_id"], None]
+    assert listed[1]["id"] == Q.wait_id(mark)
     assert W.needs(c, "human:nobody") == []
 
 
@@ -206,7 +199,9 @@ def test_a_person_who_left_or_was_removed_is_never_chosen(c, general):
     c.execute("UPDATE bot_config SET owner_id='ben' WHERE bot='reviewer'")
     his = X.new_task(c, ANA, "Call the bank", assignee=ben)["id"]
     asked = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
-    E.add_requirement(c, asked["id"], "bot:builder", "ok", ben, "OK the headline", seen_version=asked["version"])
+    E.add_requirement(
+        c, asked["id"], "bot:builder", "ok", ben, "OK the headline", shows=X.shown(c), seen_version=asked["version"]
+    )
     stuck = X.new_task(c, ANA, "Fix the footer", assignee="bot:builder")["id"]
     c.execute("UPDATE visits SET level='person', person_id='human:nobody' WHERE task_id=?", (stuck,))  # removed
     paused = X.new_task(c, ANA, "Check the facts", assignee="bot:reviewer")["id"]
@@ -231,8 +226,10 @@ def test_every_persons_needs_you_comes_from_one_pass_over_the_tasks(c, general, 
     his = X.new_task(c, ANA, "Call the bank", assignee=ben)["id"]
     hers = X.new_task(c, ANA, "Renew the lease", assignee=ANA)["id"]
     asked = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
-    E.add_requirement(c, asked["id"], "bot:builder", "ok", ben, "OK the headline", seen_version=asked["version"])
-    E.add_requirement(c, his, ANA, "answer", ANA, "Which bank?")
+    E.add_requirement(
+        c, asked["id"], "bot:builder", "ok", ben, "OK the headline", shows=X.shown(c), seen_version=asked["version"]
+    )
+    E.add_requirement(c, his, ANA, "ok", ANA, "OK the bank")  # a person's OK of her own: no shows
     paused = X.new_task(c, ANA, "Check the facts", assignee="bot:reviewer")["id"]
     c.execute("UPDATE bots SET state='paused' WHERE id='reviewer'")
     reads: list[str] = []
@@ -333,5 +330,7 @@ def test_priming_bots_reads_their_run_back_off_once_for_all_of_them(c, general):
     finally:
         c.set_trace_callback(None)
     assert causes == [task_wakes.RUNS_FAILING if b == "bot:worker-3" else None for b in bots]
-    # one for failed runs, one for run budgets, one for any open login usage limit (holds PR 6): eight before, one a bot
-    assert len(reads) == 3, reads
+    # One for failed runs, one for run budgets (eight before, one a bot), one for any open login usage limit (holds
+    # PR 6) and one for the company's pause.
+    assert len(reads) == 4, reads
+    assert sum("kind='paused' AND holdable_type='company'" in sql for sql in reads) == 1, reads

@@ -23,7 +23,7 @@ const RID = 'spec-ok-ana';
       const t = task('t-1', 'Chat first in the task window', 'spec', {owner_id: 'bot:writer', labels: ['ui', 'chat']});
       const runs = {'t-1': [{run: 'a1', bot: 'bot:writer', started_at: at(15), finished_at: at(29), outcome: 'ok', ran_on: null}]};
       const {page, errors} = await open(browser, {viewport: {width: 1280, height: 800}, hash: '#/task/t-1', tasks: [t], needs: [],
-        comments: {'t-1': [say(1, 'First line'), say(5, 'Last line')]}, runs});
+        comments: {'t-1': [{...say(0, 'Draft the chat-first window.'), refs: {task: 't-1', request: true}}, say(1, 'First line'), say(5, 'Last line')]}, runs});
       const win = page.locator('#task-modal[open]');
       await win.locator('.task-comments').getByText('Last line').waitFor();
       // The run is one line, between the messages it fell between.
@@ -31,16 +31,18 @@ const RID = 'spec-ok-ana';
       assert.equal(await marks.count(), 1);
       assert.match((await marks.innerText()).replace(/\s+/g, ' '), /^Writer worked 14 min/);
       const order = await win.locator('.task-comments [data-message], .task-comments [data-run-line]').evaluateAll(els => els.map(e => e.getAttribute('data-message') || 'run'));
-      // The request is the chat's first message (its asker, when it was asked, its words); then the story in order.
-      assert.deepEqual(order, ['request:t-1', 'm1', 'run', 'm5']);
-      const request = win.locator('.task-comments .th-request');
-      assert.ok((await request.locator('.th-body').innerText()).trim().length > 0, 'the request\'s words');
+      // A task is a title and a chat: what it asks is the chat's first message, a message like any other; then the
+      // story in order.
+      assert.deepEqual(order, ['m0', 'm1', 'run', 'm5']);
+      const request = win.locator('.task-comments [data-message="m0"]');
+      assert.match(await request.locator('.th-body').innerText(), /Draft the chat-first window/);
       assert.equal(await request.locator('.th-head time').count(), 1, 'when it was asked');
       // The facts are under the Details icon, one line each; no fold.
       assert.equal(await win.locator('details.task-details').count(), 0, 'no Details fold');
       assert.equal(await win.locator('[data-prop-row="owner"]').isVisible(), false, 'a tab away');
       await win.getByRole('button', {name: /^Details/}).click();
       await win.locator('[data-prop-row="owner"]').waitFor({state: 'visible'});
+      assert.equal(await win.locator('#task-pane-details').getByText(/Draft the chat-first window|No details/).count(), 0, 'no description in Details');
       const rows = await win.locator('[data-task-props] [data-prop-row]:not([hidden])').evaluateAll(els => els.map(e => e.getAttribute('data-prop-row')));
       assert.deepEqual(rows, ['stage', 'owner', 'asker', 'visible', 'followers', 'tags'].filter(r => rows.includes(r)), `in order: ${rows}`);
       for (const r of ['stage', 'owner', 'asker', 'visible', 'tags']) assert.ok(rows.includes(r), `${r} row`);
@@ -59,12 +61,12 @@ const RID = 'spec-ok-ana';
     // ---- the banner
     {
       // The ask is one of the stage's requirements, and says who asked (PM): the row names them.
-      const req = {requirement_id: RID, kind: 'answer', line: 'Which plan do signups get?', who: 'human:ana', asked_by: 'bot:pm', choices: ['Pro trial', 'Free'],
-        may: ['answer'], met: false, shows: [], standing: 'waiting', answer: null};
-      const t: Task = task('t-2', 'Signup plans', 'spec', {to_leave: [req], turn: {state: 'person', who: 'human:ana', line: 'Which plan do signups get?', since: null, until: null, ask: true, requirement_id: RID}});
-      const need: Need = {kind: 'ask', id: `ask-b:${RID}`, task_id: 't-2', requirement_id: RID, line: 'Which plan do signups get?', since: at(1), task: brief(t),
-        ask: {requirement_id: RID, kind: 'answer', line: 'Which plan do signups get?', who: 'human:ana', asked_by: 'bot:pm', choices: ['Pro trial', 'Free'],
-          may: ['answer', 'thumbs'], met: false, shows: [], standing: 'waiting', answer: null}};
+      const req = {requirement_id: RID, kind: 'ok', line: 'OK the signup plans?', who: 'human:ana', asked_by: 'bot:pm',
+        may: ['ok', 'no'], met: false, shows: [], standing: 'waiting', answer: null};
+      const t: Task = task('t-2', 'Signup plans', 'spec', {to_leave: [req], turn: {state: 'person', who: 'human:ana', line: 'OK the signup plans?', since: null, until: null, ask: true, requirement_id: RID}});
+      const need: Need = {kind: 'ask', id: `ask-b:${RID}`, task_id: 't-2', requirement_id: RID, line: 'OK the signup plans?', since: at(1), task: brief(t),
+        ask: {requirement_id: RID, kind: 'ok', line: 'OK the signup plans?', who: 'human:ana', asked_by: 'bot:pm',
+          may: ['ok', 'no'], met: false, shows: [], standing: 'waiting', answer: null}};
       const {page, errors} = await open(browser, {viewport: {width: 1280, height: 800}, hash: '#/task/t-2', tasks: [t], needs: [need]});
       const card = page.locator('#need-card[open]');
       await card.waitFor();
@@ -72,7 +74,7 @@ const RID = 'spec-ok-ana';
       const win = page.locator('#task-modal[open]');
       const banner = win.locator('.task-need');
       await banner.waitFor();
-      assert.match(await banner.innerText(), /Which plan do signups get\?/);
+      assert.match(await banner.innerText(), /OK the signup plans\?/);
       const head = (await banner.locator('.th-head').innerText()).replace(/\s+/g, ' ').trim();
       assert.match(head, /^PM waiting on you$/, `the asker, then "waiting on you": ${head}`);
       assert.equal(await banner.locator('.th-av').count(), 1, 'the asker\'s face');
@@ -84,7 +86,7 @@ const RID = 'spec-ok-ana';
       assert.ok(last, 'the ask is the last row of the chat');
       await banner.getByRole('button', {name: 'Answer'}).click();
       await card.waitFor();
-      await card.getByRole('button', {name: 'Pro trial'}).click();
+      await card.locator('[data-dc="approve"]:not([disabled])').click();
       await win.locator('.task-need').waitFor({state: 'detached'});
       assert.equal(await win.locator('.task-need').count(), 0, 'answered: the banner goes');
       assert.deepEqual(errors, []);

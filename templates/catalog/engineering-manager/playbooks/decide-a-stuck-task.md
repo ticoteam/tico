@@ -5,7 +5,7 @@ ice, it was pushed past, or it changed after an OK or merged outside the queue. 
 outcome is one decision on the task with one line of reason.
 
 ## Steps
-1. Read the task: `tico task show <id>`. Note its version, stage, owner, whose turn it is, what is missing to leave the
+1. Read the task's chat: `tico task show <id>`. Note its version, stage, owner, whose turn it is, what is missing to leave the
    stage, who tried and when it last changed. Read the owner's last notes in its conversation.
 2. Read what is missing with `.claude/skills/read-what-is-missing/SKILL.md`. Unread is not met.
 3. Pick the one decision that fits:

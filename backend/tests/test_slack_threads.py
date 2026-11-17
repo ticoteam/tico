@@ -5,6 +5,8 @@ is the real one with the test judge from test_org_rule_check.
 """
 
 import json
+import logging
+import sqlite3
 import time
 from types import SimpleNamespace
 
@@ -300,7 +302,7 @@ def set_audience(world, audience):
 
 
 # ----------------------------------------------------------------------------- inbound
-def test_a_channel_message_goes_through_the_gateway_as_the_mapped_person_and_never_the_readers_pass(world):
+def test_a_channel_message_goes_through_the_gateway_as_the_mapped_person_and_is_not_stored(world):
     activate_marketing(world)
     envelope = {
         "type": "event_callback",
@@ -622,7 +624,7 @@ def test_an_app_mention_in_a_linked_channel_is_carried_once_and_its_message_form
     }
     assert world.gw.receive(mention) == "posted"
     assert all_rows(world, "SELECT event_id FROM slack_events") == [], (
-        "a linked channel's mention never reaches the readers' pass"
+        "a two-way linked channel's mention is not stored for the gateway"
     )
     # The mention also wakes Tico: core's notice ('human:ana in this thread: ...') is written beside the message.
     [carried] = all_rows(world, "SELECT body FROM messages WHERE kind='say'")
@@ -906,17 +908,303 @@ def test_a_restricted_message_waits_for_a_fresh_member_check_and_is_not_sent_on_
     assert len(world.slack.posts) == 1
 
 
-# ----------------------------------------------------------------------------- audit 40: listed readers of a private channel
-def test_a_private_channels_listed_reader_joins_its_members_thread_and_gets_the_digest(world):
+# ----------------------------------------------------------------------------- read-only links: the channels bots read
+def read_marketing(world, readers=("legal",)):
+    """#marketing on the list with readers, as an owner adds it: a read-only link the gateway then activates."""
     with world.hub.transaction() as c:
-        SC.add(c, world.hub.settings, OWNER, "#secret", readers=["legal"])
-    link_id = request(world, "#secret", thread=MEMBERS)
+        entry = SC.add(c, world.hub.settings, OWNER, "#marketing", readers=list(readers))
+    link_id = entry["link"]["id"]
     assert gate(world, link_id) == "active"
-    assert one(world, "SELECT actor FROM thread_members WHERE thread_id=? AND actor='bot:legal'", MEMBERS)
-    assert (
-        one(world, "SELECT notify FROM thread_followers WHERE thread_id=? AND actor='bot:legal'", MEMBERS)["notify"]
-        == "digest"
+    return link_id
+
+
+def test_a_read_only_link_carries_the_channel_in_and_never_writes_back_to_slack(world):
+    """The channel's members are not checked: one who is not on the roster suspends nothing and their message is
+    skipped. A held message tells nobody in Slack, and what is said in the thread does not go out."""
+    world.slack.members[MARKETING].append("U3")  # not admitted: a two-way link would be refused
+    link_id = read_marketing(world)
+    row = link_row(world, link_id)
+    assert row["read_only"] == 1 and row["audience"] == "members" and ST.view(row)["read_only"] is True
+    thread = row["thread_id"]
+    assert outside_members(world, thread) == [] and all_rows(world, "SELECT * FROM slack_link_members") == []
+    members = {r["actor"] for r in all_rows(world, "SELECT actor FROM thread_members WHERE thread_id=?", thread)}
+    assert members == {"human:ben", "bot:legal"}, "the readers and the admin who listed it"
+    follows = {
+        r["actor"]: (r["following"], r["notify"])
+        for r in all_rows(world, "SELECT actor,following,notify FROM thread_followers WHERE thread_id=?", thread)
+    }
+    assert follows == {"human:ben": (0, "live"), "bot:legal": (1, "digest")}
+
+    assert world.bridge.receive(chan_event(ts(1), "Kickoff is at 10")) == "posted"
+    assert one(world, "SELECT sender_id, conversation_id FROM messages WHERE body='Kickoff is at 10'") == {
+        "sender_id": "human:ana",
+        "conversation_id": thread,
+    }
+    assert world.bridge.receive(chan_event(ts(2), "From outside", user="U3")) == "skipped"
+    assert all_rows(world, "SELECT id FROM messages WHERE body='From outside'") == []
+    assert world.bridge.receive(chan_event(ts(3), "BLOCKME: the plan")) == "held"
+    assert world.slack.ephemeral == [], "a read-only link says nothing in Slack"
+
+    with world.hub.transaction() as c:
+        TH.post(c, OWNER, thread, "Noted in Tico", kind="say", refs={}, via="assistant")
+    assert world.bridge.outbound() == [] and world.slack.posts == []
+    world.clock.advance(ST.CHECK_SECONDS + 1)
+    world.bridge.check_links()
+    assert link_row(world, link_id)["state"] == "active", "an unmapped member suspends nothing"
+
+
+def test_a_read_only_links_readers_wake_once_on_the_hourly_bot_digest(world):
+    from backend import thread_bot_digest
+
+    read_marketing(world)
+    for n in range(3):
+        world.bridge.receive(chan_event(ts(n + 1), f"Update {n}"))
+    assert thread_bot_digest.sweep(world.hub) == 1
+    notice = one(world, "SELECT recipient_id, body FROM messages WHERE kind='notice' AND sender_id='keeper'")
+    assert notice["recipient_id"] == "bot:legal" and ": 3" in notice["body"]
+
+
+def test_a_two_way_link_for_a_channel_bots_read_is_refused_while_the_read_only_link_is_on(world):
+    read_marketing(world)
+    link_id = request(world, "#marketing")
+    assert gate(world, link_id) == "refused"
+    assert "already linked" in link_row(world, link_id)["reason"]
+
+
+def test_send_anyway_carries_a_held_message_of_a_read_only_link_in_as_its_person(world):
+    from backend import org_rule_check as OR
+
+    link_id = read_marketing(world)
+    rule_world(world)
+    assert world.bridge.receive(chan_event(ts(1), "The favorite color is teal")) == "held"
+    hold = one(world, "SELECT id, nonce FROM org_rule_holds")
+    with world.hub.transaction() as c:
+        OR.send(c, OWNER, hold["id"], hold["nonce"], auth=Auth(world.hub))
+    carried = one(world, "SELECT sender_id, conversation_id FROM messages WHERE body='The favorite color is teal'")
+    assert carried == {"sender_id": "human:ana", "conversation_id": link_row(world, link_id)["thread_id"]}
+    assert world.slack.ephemeral == []
+
+
+def test_the_list_adds_and_takes_off_readers_and_the_last_one_ends_the_read_only_link(world):
+    link_id = read_marketing(world, readers=("legal", "assistant"))
+    thread = link_row(world, link_id)["thread_id"]
+    with world.hub.transaction() as c:
+        left = SC.remove(c, world.hub.settings, OWNER, "#marketing", reader="assistant")
+    assert left["readers"] == ["legal"] and link_row(world, link_id)["state"] == "active"
+    assert all_rows(world, "SELECT 1 FROM thread_members WHERE thread_id=? AND actor='bot:assistant'", thread) == []
+    with world.hub.transaction() as c:
+        last = SC.remove(c, world.hub.settings, OWNER, "#marketing", reader="legal")
+    assert last["readers"] == [] and last["link"] is None
+    assert link_row(world, link_id)["state"] == "unlinked"
+    # Listed again with a reader, the channel gets a new read-only link; a refused one is asked again.
+    with world.hub.transaction() as c:
+        again = SC.add(c, world.hub.settings, OWNER, "#marketing", readers=["legal"])
+    assert again["link"]["id"] != link_id and again["link"]["state"] == "requested"
+    world.slack.channels[MARKETING]["is_ext_shared"] = True
+    assert gate(world, again["link"]["id"]) == "refused"
+    with world.hub.transaction() as c:
+        asked = SC.add(c, world.hub.settings, OWNER, "#marketing", readers=["assistant"])
+    assert asked["link"]["id"] == again["link"]["id"] and asked["link"]["state"] == "requested"
+    assert asked["readers"] == ["legal", "assistant"]
+    # Taken off the list, the read-only link ends with it.
+    with world.hub.transaction() as c:
+        SC.remove(c, world.hub.settings, OWNER, "#marketing")
+    assert link_row(world, again["link"]["id"])["state"] == "unlinked"
+
+
+def test_a_reader_of_a_two_way_linked_channel_follows_its_thread_and_the_channel_keeps_its_link(world):
+    link_id = activate_marketing(world)
+    with world.hub.transaction() as c:
+        entry = SC.add(c, world.hub.settings, OWNER, "#marketing", readers=["legal"], name="marketing")
+    assert entry["link"]["id"] == link_id and entry["readers"] == ["legal"]
+    follow = one(
+        world, "SELECT following, notify FROM thread_followers WHERE thread_id=? AND actor='bot:legal'", COMPANY
     )
+    assert (follow["following"], follow["notify"]) == (1, "digest")
+    with world.hub.transaction() as c:
+        assert SC.remove(c, world.hub.settings, OWNER, "#marketing", reader="legal")["readers"] == []
+        SC.remove(c, world.hub.settings, OWNER, "#marketing")
+    assert link_row(world, link_id)["state"] == "active", "a two-way link is the thread's, not the list's"
+
+
+def later(world, n):
+    """A Slack ts n seconds after the test clock's now: a read-only link catches up from its activation."""
+    return f"{ST._epoch(world.clock()) + n:.6f}"
+
+
+def pending_digests(world, bot):
+    return [
+        r["thread_id"]
+        for r in all_rows(
+            world,
+            "SELECT thread_id FROM message_deliveries WHERE recipient=? AND mode='digest' AND state='pending' "
+            "ORDER BY created_at",
+            bot,
+        )
+    ]
+
+
+FROM_SLACK = "json_extract(refs,'$.slack.ts') IS NOT NULL"
+
+
+def test_a_reply_in_a_read_channel_reaches_each_readers_digest(world):
+    """A Slack thread reply becomes a sub-thread of the message it answers; the readers follow it at digest before
+    the reply is written, so the reply is in each reader's next digest."""
+    from backend import thread_bot_digest
+
+    link_id = read_marketing(world, readers=("legal", "assistant"))
+    thread = link_row(world, link_id)["thread_id"]
+    assert world.bridge.receive(chan_event(ts(1), "Launch plan")) == "posted"
+    assert world.bridge.receive(chan_event(ts(2), "Looks good", user="U2", thread_ts=ts(1))) == "posted"
+    assert world.bridge.receive(chan_event(ts(3), "Agreed", thread_ts=ts(1))) == "posted"
+    sub = one(world, "SELECT conversation_id FROM messages WHERE body='Looks good'")["conversation_id"]
+    assert sub != thread and one(world, "SELECT parent_id FROM conversations WHERE id=?", sub)["parent_id"] == thread
+    for bot in ("bot:legal", "bot:assistant"):
+        assert pending_digests(world, bot) == [thread, sub, sub]
+    assert thread_bot_digest.sweep(world.hub) == 2
+    notice = one(world, "SELECT body FROM messages WHERE kind='notice' AND recipient_id='bot:legal'")["body"]
+    assert f"- {thread}: 1" in notice and f"- {sub}: 2" in notice
+
+
+def test_a_read_only_link_carries_other_apps_posts_but_never_ticos_own(world):
+    """An alert or deploy feed is carried in by Tico under the app's name; Tico's own app is never echoed back. A
+    two-way link carries no app's post."""
+    link_id = read_marketing(world)
+    alert = {**chan_event(ts(1), "CPU high on web-1", user="B0ALERTS"), "author": "bot", "author_name": "alerts"}
+    assert world.bridge.receive(alert) == "posted"
+    carried = one(world, "SELECT sender_id, refs FROM messages WHERE body='*alerts*: CPU high on web-1'")
+    assert carried["sender_id"] == H.KEEPER and json.loads(carried["refs"])["slack"]["name"] == "alerts"
+    assert pending_digests(world, "bot:legal") == [link_row(world, link_id)["thread_id"]]
+    own = {**chan_event(ts(2), "Tico said this", user=BOT_USER), "author": "bot"}
+    assert world.bridge.receive(own) == "bot"
+    with world.hub.transaction() as c:
+        c.execute("UPDATE slack_thread_links SET read_only=0 WHERE id=?", (link_id,))
+    assert world.bridge.receive({**alert, "ts": ts(3), "event_id": "Ev3"}) == "bot"
+
+
+def test_a_sender_slack_cannot_look_up_yet_waits_and_is_tried_again(world, monkeypatch, caplog):
+    """A rate limit or no answer from users.info is not a person who does not map: the message stays queued (and the
+    ones after it wait) until Slack answers, for a few tries; a user Slack says is gone is skipped at once."""
+    import logging
+
+    link_id = read_marketing(world)
+    answers = {"U2": [G.SlackError("users.info", "ratelimited", retry_after=30), G.SlackUnreachable("no answer")]}
+    real = world.slack.users_info
+
+    def users_info(user_id):
+        if answers.get(user_id):
+            raise answers[user_id].pop(0)
+        return real(user_id)
+
+    monkeypatch.setattr(world.slack, "users_info", users_info)
+    caplog.set_level(logging.WARNING, logger="tico.slack.threads")
+    assert world.bridge.receive(chan_event(ts(1), "From Ben", user="U2")) == "retry"
+    assert world.bridge.receive(chan_event(ts(2), "From Ana")) == "retry", "the queue keeps its order"
+    assert all_rows(world, "SELECT id FROM messages WHERE body IN ('From Ben','From Ana')") == []
+    assert len(all_rows(world, "SELECT seq FROM slack_inbound_events WHERE link_id=?", link_id)) == 2
+    assert "slack.inbound.sender" in caplog.text and "ratelimited" in caplog.text
+    world.clock.advance(ST.PERSON_RETRY + 1)
+    assert world.bridge.drain(link_id) == "retry", "no answer the second time either"
+    world.clock.advance(2 * ST.PERSON_RETRY + 1)
+    assert world.bridge.drain(link_id) == "posted"
+    bodies = [r["body"] for r in all_rows(world, "SELECT body FROM messages WHERE body LIKE 'From %' ORDER BY rowid")]
+    assert bodies == ["From Ben", "From Ana"]
+
+    answers["U2"] = [G.SlackUnreachable("no answer") for _ in range(ST.PERSON_TRIES)]
+    world.bridge._users.clear()
+    assert world.bridge.receive(chan_event(ts(3), "Never looked up", user="U2")) == "retry"
+    for _ in range(ST.PERSON_TRIES - 1):
+        world.clock.advance(ST.PERSON_RETRY * ST.PERSON_TRIES)
+        world.bridge.drain(link_id)
+    assert all_rows(world, "SELECT seq FROM slack_inbound_events WHERE link_id=?", link_id) == [], "tries are bounded"
+    assert world.bridge.receive(chan_event(ts(4), "Gone", user="U9")) == "skipped", "user_not_found is definite"
+
+
+def test_a_read_only_link_catches_up_on_what_the_socket_missed(world, monkeypatch):
+    """From its activation, then from where it last read: once an hour and right after a reconnect. A message the
+    thread already has is not carried twice; Tico's own posts and joins are left out; an app's post is carried."""
+    link_id = read_marketing(world)
+    thread = link_row(world, link_id)["thread_id"]
+    assert world.bridge.receive(chan_event(later(world, 1), "Live one")) == "posted"
+    world.slack.pages[MARKETING] = [
+        {"ts": later(world, 1), "user": "U1", "text": "Live one"},
+        {"ts": later(world, 2), "user": "U2", "text": "Missed one"},
+        {"ts": later(world, 3), "bot_id": "B0ALERTS", "username": "alerts", "text": "Disk full"},
+        {"ts": later(world, 4), "user": BOT_USER, "bot_id": "B0BUNG973DY", "text": "Tico's own"},
+        {"ts": later(world, 5), "user": "U2", "subtype": "channel_join", "text": "joined"},
+        {"ts": later(world, 6), "user": "U1", "text": "Root", "reply_count": 1},
+    ]
+    reply = {"ts": later(world, 7), "user": "U2", "text": "A reply", "thread_ts": later(world, 6)}
+    monkeypatch.setattr(world.slack, "replies", lambda channel, thread_ts, oldest="", limit=200: [reply])
+    caught = world.bridge.tick()["caught_up"]
+    assert caught == [{"link": link_id, "state": "done", "events": 5, "carried": "posted"}]
+    bodies = {
+        r["body"]: r["sender_id"] for r in all_rows(world, "SELECT body, sender_id FROM messages WHERE " + FROM_SLACK)
+    }
+    assert bodies == {
+        "Live one": "human:ana",
+        "Missed one": "human:ben",
+        "*alerts*: Disk full": H.KEEPER,
+        "Root": "human:ana",
+        "A reply": "human:ben",
+    }
+    assert link_row(world, link_id)["read_ts"] == later(world, 7)
+    assert one(world, "SELECT conversation_id FROM messages WHERE body='A reply'")["conversation_id"] != thread
+
+    world.slack.pages[MARKETING].append({"ts": later(world, 8), "user": "U1", "text": "After the pass"})
+    world.clock.advance(ST.CATCH_UP_CHECK + 1)
+    assert world.bridge.tick()["caught_up"] == [], "once an hour"
+    world.gw.bridge.catch_up_soon()  # the socket came back
+    assert world.bridge.tick()["caught_up"][0]["events"] == 1
+    assert len(all_rows(world, "SELECT id FROM messages WHERE body='After the pass'")) == 1
+    read_to = link_row(world, link_id)["read_ts"]
+
+    def down(*args):
+        raise G.SlackUnreachable("conversations.history: no answer")
+
+    monkeypatch.setattr(world.slack, "history_page", down)
+    world.clock.advance(ST.CATCH_UP_SECONDS + 1)
+    assert world.bridge.tick()["caught_up"] == [{"link": link_id, "state": "failed"}]
+    assert link_row(world, link_id)["read_ts"] == read_to, "a failed pass reads from the same place next time"
+
+
+def test_unread_slack_messages_before_the_migration_reach_the_readers_digest_after_it(world):
+    """The readers' pass had read #marketing up to a cursor; the new read-only link starts there, so what came after
+    is carried into the thread and counted in the reader's digest, and what was read before is not."""
+    import importlib
+
+    from backend import thread_bot_digest
+
+    base = ST._epoch(world.clock())
+    with world.hub.transaction() as c:
+        c.execute("DROP INDEX IF EXISTS slack_thread_links_ref")
+        c.execute("DROP INDEX IF EXISTS slack_thread_links_read_only")
+        c.execute("ALTER TABLE slack_thread_links DROP COLUMN read_only")
+        c.execute("ALTER TABLE slack_thread_links DROP COLUMN read_ts")
+        c.execute("ALTER TABLE slack_channels ADD COLUMN readers TEXT NOT NULL DEFAULT '[]'")
+        c.execute("ALTER TABLE slack_channels ADD COLUMN digest_hours REAL NOT NULL DEFAULT 0")
+        c.execute("CREATE TABLE slack_reads (channel TEXT, reader TEXT, last_ts TEXT, PRIMARY KEY (channel, reader))")
+        now = H.now()
+        c.execute(
+            "INSERT INTO slack_channels(key,channel_id,name,readers,post,note,digest_hours,created_at,updated_at,"
+            "updated_by) VALUES(?,?,'marketing','[\"legal\"]',1,'',0,?,?,'human:ben')",
+            (MARKETING, MARKETING, now, now),
+        )
+        c.execute("INSERT INTO slack_reads VALUES(?,?,?)", (MARKETING, "legal", f"{base - 50:.6f}"))
+        importlib.import_module("backend.migrations.20261117104315_slack_readers_to_links").up(c)
+    link = one(world, "SELECT id, read_ts FROM slack_thread_links")
+    assert link["read_ts"] == f"{base - 50:.6f}"
+    world.slack.pages[MARKETING] = [
+        {"ts": f"{base - 60:.6f}", "user": "U1", "text": "Read before"},
+        {"ts": f"{base - 40:.6f}", "user": "U1", "text": "Unread while it moved"},
+        {"ts": f"{base - 30:.6f}", "user": "U2", "text": "Also unread"},
+    ]
+    assert gate(world, link["id"]) == "active"
+    world.bridge.tick()
+    carried = [r["body"] for r in all_rows(world, "SELECT body FROM messages WHERE " + FROM_SLACK + " ORDER BY rowid")]
+    assert carried == ["Unread while it moved", "Also unread"]
+    assert thread_bot_digest.sweep(world.hub) == 1
+    assert ": 2" in one(world, "SELECT body FROM messages WHERE kind='notice' AND recipient_id='bot:legal'")["body"]
 
 
 # ----------------------------------------------------------------------------- audit 23 (Slack): a terminal refusal surfaces once
@@ -1116,3 +1404,61 @@ def test_a_history_story_is_off_opt_in_and_capped(world, monkeypatch, subtests):
                 check(world, monkeypatch)
             else:
                 check(world)
+
+
+# ----------------------------------------------------------------------------- loop failures: the class and a scrubbed message
+def locked(*_args, **_kwargs):
+    raise sqlite3.OperationalError("database is locked (key sk-testkey-000000000000)")
+
+
+LOCKED = "OperationalError: database is locked (key [redacted])"
+
+
+def test_a_message_whose_carry_in_fails_stays_queued_and_the_failure_is_logged_scrubbed(world, monkeypatch, caplog):
+    activate_marketing(world)
+    monkeypatch.setattr(world.bridge, "_process", locked)
+    with caplog.at_level(logging.ERROR, logger="tico.slack.threads"):
+        assert world.bridge.receive(chan_event(ts(1), "Kickoff")) == "queued"
+    assert f"Slack inbound carry failed: {LOCKED}" in caplog.text
+    assert len(all_rows(world, "SELECT seq FROM slack_inbound_events")) == 1
+
+
+def test_a_queue_pass_that_fails_for_a_link_is_logged_scrubbed_and_reports_an_error(world, monkeypatch, caplog):
+    activate_marketing(world)
+    monkeypatch.setattr(world.bridge, "_process", locked)
+    world.bridge.receive(chan_event(ts(1), "Kickoff"))  # queued: its carry-in fails too, logged on arrival
+    with caplog.at_level(logging.ERROR, logger="tico.slack.threads"):
+        assert world.bridge.drain_all() == ["error"]
+    assert f"Slack queue for a link failed: {LOCKED}" in caplog.text
+    assert len(all_rows(world, "SELECT seq FROM slack_inbound_events")) == 1
+
+
+def test_a_delivery_that_fails_is_logged_scrubbed_and_the_next_one_still_goes_out(world, monkeypatch, caplog):
+    activate_marketing(world)
+    send_as_ana(world, "first")
+    send_as_ana(world, "second")
+    real_send_one, tried = world.bridge.send_one, []
+
+    def fail_the_first(link, delivery):
+        tried.append(delivery["id"])
+        if len(tried) == 1:
+            locked()
+        return real_send_one(link, delivery)
+
+    monkeypatch.setattr(world.bridge, "send_one", fail_the_first)
+    with caplog.at_level(logging.ERROR, logger="tico.slack.threads"):
+        out = world.bridge.outbound()
+    assert f"Slack delivery {tried[0]} failed: {LOCKED}" in caplog.text
+    assert {"delivery_id": tried[0], "state": "error"} in out
+    assert [p["text"] for p in world.slack.posts] == ["*Ana Rivera* · via Tico\nsecond"]
+
+
+def test_a_history_import_that_fails_is_logged_scrubbed_and_left_to_be_tried_again(world, monkeypatch, caplog):
+    link_id = request(world, "#marketing", history=True)
+    assert gate(world, link_id) == "active"
+    monkeypatch.setattr(world.bridge, "import_history", locked)
+    world.clock.advance(61)
+    with caplog.at_level(logging.ERROR, logger="tico.slack.threads"):
+        world.bridge.tick()
+    assert f"Slack history import failed: {LOCKED}" in caplog.text
+    assert link_row(world, link_id)["history_state"] == "pending"

@@ -6,17 +6,17 @@ kind at a time, written by `put` and ended by `release`:
 
 | kind              | scope   | stored in                                              | ends                               |
 |-------------------|---------|--------------------------------------------------------|------------------------------------|
-| `paused`          | bot     | `bots.state='paused'`                                  | a person resumes it                |
+| `paused`          | bot     | `bots.state='paused'`, and its `paused` hold           | a person resumes it                |
 | `quarantined`     | bot     | `bots.state='quarantined'`, and its `quarantine` hold  | the cooldown, or a person          |
-| `company_paused`  | company | company_pause.KEY                                      | the owner or an admin resumes      |
+| `company_paused`  | company | `holds`, kind `paused` on the company (company_pause)  | the owner or an admin resumes      |
 | `cloud_locked`    | company | Tico Cloud access (cloud_access)                       | Tico HQ unlocks the company        |
 | `run_hold`        | bot     | `holds`, kind `failing`, held: no until_at             | a try completes, or a release      |
 | `budget`          | bot     | `holds`, kind `runaway` (runaway runs)                 | a release, or a raised budget      |
 | `cooling_off`     | login   | `holds`, kind `usage_limit` (login_holds)              | the reset, then one probe; Try now |
-| `cant_start`      | task    | `task.cant_start` events with BotOps's open task       | BotOps closes its task             |
+| `cant_start`      | task    | `holds`, kind `cant_start` on the task, BotOps's task  | BotOps closes its task             |
 | `task_quarantine` | task    | `holds`, kind `quarantine`, on the task                | the cooldown, or a person          |
-| `claim_held`      | job     | `jobs.hold_reason` (claim_holds)                       | its wait, a start, or a release    |
-| `handed_back`     | job     | the run's expired attempts (execution)                 | its wait                           |
+| `claim_held`      | job     | `holds`, kind `claim_error` on the job, while it waits | its wait, a start, or a release    |
+| `handed_back`     | job     | `holds`, kind `cant_start` on the job, while it waits  | its wait                           |
 | `backoff`         | bot     | `holds`, kind `failing`: its until_at                  | its wait (seconds)                 |
 
 `why` walks them in this order and answers the first that holds the work it is asked about, by the kind's name: the
@@ -36,6 +36,7 @@ from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, field
 from typing import Any, cast
 
+from .prompt_cache import CACHE_WARM_S
 from .store import H as _H
 
 H: Any = _H
@@ -87,12 +88,20 @@ STATE_SQL = "SELECT state FROM bots WHERE id=?"
 # ---------------------------------------------------------------------------------------------- the holds table
 # A kind the `holds` table stores (its CHECK allows every kind; each moves into it in its own change).
 RUNAWAY = "runaway"  # a bot over its run budget (turn_budgets): BUDGET to the pages and the claim
+# RUNAWAY on an automation is the run guard's hold (automations._guard): it holds the automation's runs, never a bot.
 QUARANTINE = "quarantine"  # rule 8 (hubdb.quarantine, task_quarantine): QUARANTINED and TASK_QUARANTINE to the pages
 FAILING = "failing"  # a bot whose runs fail at once (run_failures): BACKOFF while it waits, RUN_HOLD once held
 LOGIN_LIMIT = "usage_limit"  # a login over its provider's usage limit (login_holds): USAGE_LIMIT to the pages
+# A queued run whose claim raised while preparing it, and a bot whose claim check raised (bot_stops.hold_job,
+# check_failed): CLAIM_HELD to the pages while the run waits; the check's hold only passes the bot over.
+CLAIM_ERROR = "claim_error"
+# CANT_START is a kind too: on a job its computer handed back, or took and went silent on, before starting it
+# (execution.wait_unstarted): HANDED_BACK while it waits; on a task once SAME in a row could not start (BotOps's task).
+# PAUSED is a kind too: a bot's own pause (on the bot) and the company's (holdable_id '') (company_pause).
 # A bot-wide hold of these kinds is also bots.state, the switch every reader of a bot checks: its open hold sets it (not
-# on an archived or planned bot), and its release sets the bot active again only while no other such hold is open.
-STATE_KINDS = {QUARANTINE: "quarantined"}
+# on an archived or planned bot, and a pause never over a quarantine). Its release sets the state of the first kind here
+# still open on the bot, so a quarantine wins over a pause, and active only when none is.
+STATE_KINDS = {QUARANTINE: "quarantined", PAUSED: "paused"}
 
 
 def _switch(c: Any, kind: str, holdable_type: str, holdable_id: str, held: bool) -> None:
@@ -102,11 +111,15 @@ def _switch(c: Any, kind: str, holdable_type: str, holdable_id: str, held: bool)
     if held:
         c.execute("UPDATE bots SET state=? WHERE id=? AND state IN ('active','paused')", (state, holdable_id))
         return
-    kinds = ",".join("?" * len(STATE_KINDS))
+    # Only a bot still in the released kind's state: a pause released under a quarantine leaves it quarantined.
+    still = " ".join(
+        "WHEN EXISTS(SELECT 1 FROM holds INDEXED BY holds_open WHERE kind=? AND holdable_type='bot' AND holdable_id=? "
+        "AND released_at IS NULL) THEN ?"
+        for _ in STATE_KINDS
+    )
     c.execute(
-        "UPDATE bots SET state='active' WHERE id=? AND state=? AND NOT EXISTS(SELECT 1 FROM holds "
-        f"WHERE kind IN ({kinds}) AND holdable_type='bot' AND holdable_id=? AND released_at IS NULL)",
-        (holdable_id, state, *STATE_KINDS, holdable_id),
+        f"UPDATE bots SET state=CASE {still} ELSE 'active' END WHERE id=? AND state=?",
+        (*(v for k, st in STATE_KINDS.items() for v in (k, holdable_id, st)), holdable_id, state),
     )
 
 
@@ -121,24 +134,31 @@ OPEN_SQL = (
 @dataclass(frozen=True)
 class Backoff:
     """How a kind waits after failures in a row: `first` seconds after the first, doubling for each more up to `cap`.
-    After `held_after` in a row it is held, and one try (its probe) is let through `probe_first` later, the gap
-    doubling for each try that fails, up to `cap`."""
+    After `held_after` in a row (never, when 0) it is held, and one try (its probe) is let through `probe_first` later,
+    the gap doubling for each try that fails, up to `cap`."""
 
     first: int
     cap: int
-    held_after: int
-    probe_first: int
+    held_after: int = 0
+    probe_first: int = 0
 
 
-KINDS: dict[str, Backoff] = {FAILING: Backoff(first=15, cap=8 * 3600, held_after=5, probe_first=30 * 60)}
+KINDS: dict[str, Backoff] = {
+    FAILING: Backoff(first=15, cap=8 * 3600, held_after=5, probe_first=30 * 60),
+    # Never longer than CACHE_WARM_S, so a retry finds the bot's session still cached.
+    CLAIM_ERROR: Backoff(first=60, cap=CACHE_WARM_S),
+    # A computer's claim polls four times a second: ten hand-backs take about half an hour, not seconds.
+    CANT_START: Backoff(first=15, cap=300),
+}
+CLAIM_CHECK = Backoff(first=60, cap=300)  # a bot's claim check that raised (claim_error on the bot)
 LIVE_RUN_SQL = "SELECT 1 FROM attempts WHERE bot_id=? AND state IN ('leased','running') LIMIT 1"
 
 
-def wait(kind: str, streak: int) -> int:
+def wait(kind: str | Backoff, streak: int) -> int:
     """The one backoff: seconds a hold of `kind` waits after `streak` failures in a row. Before it is held, the wait
     before the next run; once held, the gap before its next try."""
-    k = KINDS[kind]
-    if streak < k.held_after:
+    k = KINDS[kind] if isinstance(kind, str) else kind
+    if not k.held_after or streak < k.held_after:
         return min(k.first * 2 ** max(streak - 1, 0), k.cap)
     return min(k.probe_first * 2 ** (streak - k.held_after), k.cap)
 
@@ -267,20 +287,36 @@ def _task_sql() -> str:
 
 
 def claim_held_sql(many: bool = False) -> str:
-    """The bots (comma-joined) with a run on one task its claim could not start, held for its wait now
-    (claim_holds.hold; held=1 ends at the wait, release_due), and no other queued run there that is not held: the
-    claim takes that one (bot_claimable reads only held=0 jobs), so the bot is not held on the task. With `many`,
-    (task, bots) for every such task. Few rows: jobs_held_queued holds only held queued jobs."""
+    """The bots with a queued run on one task whose claim raised (an open `claim_error` hold on the job), and no other
+    queued run there free of one: the claim takes that one, so the bot is not held on the task. Comma-joined, each
+    "bot until_at": the bot is held while that wait is ahead (`_held_bots`), so the read takes no time and a snapshot
+    can seed it. With `many`, (task, bots) for every such task. Few rows: only the open claim_error holds are read."""
     task = _task_sql()
     other = task.replace("m.", "m2.").replace("cv.", "cv2.")
     return (
-        f"SELECT {task + ', ' if many else ''}group_concat(DISTINCT j.bot_id) FROM jobs j "
-        "JOIN messages m ON m.id = j.message_id JOIN conversations cv ON cv.id = m.conversation_id "
-        "WHERE j.held = 1 AND j.state = 'queued' AND j.hold_reason = ? "
+        f"SELECT {task + ', ' if many else ''}group_concat(DISTINCT j.bot_id || ' ' || coalesce(h.until_at, '')) "
+        "FROM holds h INDEXED BY holds_open "
+        "JOIN jobs j ON j.id = h.holdable_id JOIN messages m ON m.id = j.message_id "
+        "JOIN conversations cv ON cv.id = m.conversation_id "
+        "WHERE h.kind = 'claim_error' AND h.holdable_type = 'job' AND h.released_at IS NULL AND j.state = 'queued' "
         "AND NOT EXISTS (SELECT 1 FROM jobs j2 JOIN messages m2 ON m2.id = j2.message_id "
         "JOIN conversations cv2 ON cv2.id = m2.conversation_id "
-        f"WHERE j2.bot_id = j.bot_id AND j2.state = 'queued' AND j2.held = 0 AND {other} = {task}) "
+        f"WHERE j2.bot_id = j.bot_id AND j2.state = 'queued' AND j2.held = 0 AND {other} = {task} "
+        "AND NOT EXISTS (SELECT 1 FROM holds h2 INDEXED BY holds_open WHERE h2.kind = 'claim_error' "
+        "AND h2.holdable_type = 'job' AND h2.holdable_id = j2.id AND h2.released_at IS NULL)) "
         f"{'GROUP BY 1' if many else f'AND {task} = ?'}"
+    )
+
+
+def cant_start_sql(many: bool = False) -> str:
+    """The bots (comma-joined) whose runs on one task cannot start while BotOps's task about it is open (a `cant_start`
+    hold on the task, bot_stops.cant_start). With `many`, (task, bots) for every such task. Few rows: only the
+    open cant_start holds are read."""
+    return (
+        f"SELECT {'h.holdable_id, ' if many else ''}group_concat(DISTINCT h.bot_id) FROM holds h INDEXED BY holds_open "
+        "JOIN tasks r ON r.id = h.upkeep_task_id AND r.status = 'open' "
+        "WHERE h.kind = 'cant_start' AND h.holdable_type = 'task' AND h.released_at IS NULL "
+        f"{'GROUP BY h.holdable_id' if many else 'AND h.holdable_id = ?'}"
     )
 
 
@@ -293,35 +329,27 @@ def task_quarantine_sql(many: bool = False) -> str:
     )
 
 
-def _claim_reason() -> str:
-    from . import claim_holds
-
-    return str(cast(Any, claim_holds).REASON)
-
-
-def _start_holds() -> Any:
-    from . import start_holds
-
-    return start_holds
+def _task_reads() -> list[tuple[str, str]]:
+    """Each task-scoped kind with its one-task read."""
+    return [(CANT_START, cant_start_sql()), (TASK_QUARANTINE, task_quarantine_sql()), (CLAIM_HELD, claim_held_sql())]
 
 
-def _task_reads() -> list[tuple[str, str, tuple[Any, ...]]]:
-    """Each task-scoped kind with its one-task read and the arguments before the task's id."""
-    SH = _start_holds()
-    return [
-        (CANT_START, str(SH.held_sql()), (H.KEEPER, SH.EVENT)),
-        (TASK_QUARANTINE, task_quarantine_sql(), ()),
-        (CLAIM_HELD, claim_held_sql(), (_claim_reason(),)),
-    ]
-
-
-def _many_sql(kind: str) -> tuple[str, tuple[Any, ...]]:
-    SH = _start_holds()
+def _many_sql(kind: str) -> str:
     if kind == CANT_START:
-        return str(SH.held_sql(many=True)), (H.KEEPER, SH.EVENT)
+        return cant_start_sql(many=True)
     if kind == TASK_QUARANTINE:
-        return task_quarantine_sql(many=True), ()
-    return claim_held_sql(many=True), (_claim_reason(),)
+        return task_quarantine_sql(many=True)
+    return claim_held_sql(many=True)
+
+
+def _held_bots(kind: str, bots: str, now: str) -> set[str]:
+    """The bots a task read (`_task_reads`) names: for CLAIM_HELD only those whose wait is still ahead of `now`."""
+    found: set[str] = set()
+    for each in bots.split(","):
+        bot, _, until = each.partition(" ")
+        if bot and (kind != CLAIM_HELD or until > now):
+            found.add(bot)
+    return found
 
 
 def _read(c: Any, sql: str, args: tuple[Any, ...]) -> Any:
@@ -339,13 +367,14 @@ def on_tasks(c: Any, task_ids: Collection[str] | None = None) -> dict[str, set[s
     RC: Any = read_cache
     found: dict[str, set[str]] = {}
     seed = task_ids is not None and RC.cache(c) is not None
-    for kind, one_sql, before in _task_reads():
-        sql, args = _many_sql(kind)
-        held = {str(task): str(bots or "") for task, bots in c.execute(sql, args).fetchall() if task}
+    now = str(H.now())
+    for kind, one_sql in _task_reads():
+        held = {str(task): str(bots or "") for task, bots in c.execute(_many_sql(kind)).fetchall() if task}
         for task, bots in held.items():
-            found.setdefault(task, set()).update(b for b in bots.split(",") if b)
+            if names := _held_bots(kind, bots, now):
+                found.setdefault(task, set()).update(names)
         if seed:
-            RC.prime(c, one_sql, {(*before, t): (held.get(t),) for t in task_ids or ()})
+            RC.prime(c, one_sql, {(t,): (held.get(t),) for t in task_ids or ()})
     return found if task_ids is None else {t: bots for t, bots in found.items() if t in task_ids}
 
 
@@ -399,10 +428,10 @@ class _Ask:
     def on_task(self, kind: str) -> bool:
         if not self.task_id:
             return False
-        for each, sql, before in _task_reads():
+        for each, sql in _task_reads():
             if each == kind:
-                row = _read(self.c, sql, (*before, self.task_id))
-                return bool(row and row[0] and self.bot in str(row[0]).split(","))
+                row = _read(self.c, sql, (self.task_id,))
+                return bool(row and row[0] and self.bot in _held_bots(kind, str(row[0]), str(H.now())))
         return False
 
 
@@ -463,21 +492,44 @@ def _usage_limit(a: _Ask) -> bool:
     return bool(RC.value(a.c, ("holds.cooling_off", a.bot), lambda: bool(EX.cooling_off(a.c, None, a.bot)), True))
 
 
+# Every open hold on a queued job (claim_error, cant_start): few at any time, read once per snapshot.
+JOB_HOLDS_SQL = (
+    "SELECT * FROM holds INDEXED BY holds_open WHERE kind IN ('claim_error','cant_start') AND holdable_type='job' "
+    "AND released_at IS NULL"
+)
+
+
+def job_hold(c: Any, kind: str, job: Row, loads: Any = None) -> dict[str, Any] | None:
+    """The open hold of `kind` on the queued `job` (a jobs row), or None: from the claim's loads when it has them, else
+    from every job's open holds, read once per snapshot."""
+    key = (kind, "job", str(_col(job, "id")), str(_col(job, "bot_id") or ""))
+    if loads is not None:
+        return loads.holds.get(key)
+    from . import read_cache
+
+    def build() -> dict[tuple[str, str, str, str], dict[str, Any]]:
+        return {
+            (str(r["kind"]), "job", str(r["holdable_id"]), str(r["bot_id"] or "")): dict(r)
+            for r in c.execute(JOB_HOLDS_SQL)
+        }
+
+    found: dict[tuple[str, str, str, str], dict[str, Any]] = cast(Any, read_cache).value(c, "holds.jobs", build, True)
+    return found.get(key)
+
+
+def waiting(hold: Mapping[str, Any] | None, now: str | None = None) -> bool:
+    """Whether `hold` waits now: its until_at is still ahead."""
+    return bool(hold) and str((hold or {}).get("until_at") or "") > (now or str(H.now()))
+
+
 def _claim_held(a: _Ask) -> bool:
     if a.job is not None:
-        job = a.job
-        state = _col(job, "state") or "queued"
-        return bool(_col(job, "held")) and state == "queued" and _col(job, "hold_reason") == _claim_reason()
+        return (_col(a.job, "state") or "queued") == "queued" and waiting(job_hold(a.c, CLAIM_ERROR, a.job, a.loads))
     return a.on_task(CLAIM_HELD)
 
 
 def _handed_back(a: _Ask) -> bool:
-    if a.job is None:
-        return False
-    from . import execution
-
-    until = cast(Any, execution).handed_back_until(a.c, a.job)
-    return bool(until) and until > H.now()
+    return a.job is not None and waiting(job_hold(a.c, CANT_START, a.job, a.loads))
 
 
 def _backoff(a: _Ask) -> bool:
@@ -526,7 +578,7 @@ def why(
 ) -> str | None:
     """The first of `kinds`, in ORDER, that keeps `bot`'s work from starting now, or None.
 
-    The work is a queued `job` (its row: held, hold_reason, attempt_id, message_id) and its `message`, when given (the
+    The work is a queued `job` (its row: id, bot_id, state, attempt_id, message_id) and its `message`, when given (the
     job's own is read when a budget or back-off needs it); else new work, sent now, `human` saying it is a person's.
     `claim`: the claim asks, about the whole queue when no message or job is given: a held bot whose try is due is let
     through for it, and a back-off holds nothing while a person's message waits.
@@ -552,7 +604,7 @@ def words(c: Any, bot: str, kind: str, job: Row | None = None) -> str:
     if kind == QUARANTINED:
         return str(H.quarantine_words(c, bot))
     if kind == CLAIM_HELD:
-        until = str((_col(job, "hold_until") if job is not None else None) or "")
+        until = str(((job_hold(c, CLAIM_ERROR, job) or {}) if job is not None else {}).get("until_at") or "")
         at = f" at {until[11:16]} UTC" if len(until) >= 16 else ""
         return f"Tico couldn't start this run: an error happened while preparing it. It tries again{at}."
     if kind == COMPANY_PAUSED:

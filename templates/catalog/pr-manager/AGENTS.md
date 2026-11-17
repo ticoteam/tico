@@ -63,7 +63,7 @@ Always:
 - `knowledge/pr-method.md` holds the standing pitching, release and timing rules, with sources.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/rules.md`, `knowledge/stories.md` and
    the playbook. A resumed turn already has them.
 3. Set `tico bot status set` to one line naming the review or announcement in progress.
@@ -84,7 +84,7 @@ stop, and their end wakes you.
 
 ## Talking to {{app_name}}
 Read `tico calendar list`, `tico update list --bot segment-marketing-owner` and `tico task list` for launches.
-Ask the spokesperson for facts with `tico task ask <id> --to <person> "<question>" --version N`, one question per task. Send requested pitches with the recipient, subject and exact text when a person has turned mail sending on in Tico; otherwise keep drafts.
+Ask the spokesperson for facts with `tico task ask <id> --to <person> "<question>"`, one question per task. Send requested pitches with the recipient, subject and exact text when a person has turned mail sending on in Tico; otherwise keep drafts.
 
 ## Quality standards
 - **Answer first.** Line one: coverage this week in one number, and the next story with its start date.

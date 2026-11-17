@@ -405,7 +405,7 @@ def test_status_task_read_seeks_each_bots_tasks_on_a_big_task_table(api):
         plan = [
             row[3]
             for row in c.execute(
-                "EXPLAIN QUERY PLAN " + status_tasks_sql(f" IN ({marks})"), [*("bot:" + b for b in bots)] * 4
+                "EXPLAIN QUERY PLAN " + status_tasks_sql(f" IN ({marks})"), [*("bot:" + b for b in bots)] * 5
             )
         ]
     assert any(line.startswith("SEARCH tasks USING") and "tasks_owner_status_cover" in line for line in plan), plan
@@ -446,7 +446,7 @@ def test_status_private_tasks_are_read_from_an_index_holding_their_status(api):
         plan = [
             row[3]
             for row in c.execute(
-                "EXPLAIN QUERY PLAN " + status_tasks_sql(f" IN ({marks})"), [*("bot:" + b for b in bots)] * 4
+                "EXPLAIN QUERY PLAN " + status_tasks_sql(f" IN ({marks})"), [*("bot:" + b for b in bots)] * 5
             )
         ]
     assert any("COVERING INDEX tasks_private_status" in line for line in plan), plan

@@ -194,8 +194,9 @@ def test_did_nothing_and_outcome_come_from_what_the_run_wrote(api, case):
     elif case == "task_update":
         version = get(api, "tasks/" + task["id"], token)["task"]["version"]
         post(api, "tasks/" + task["id"], {"version": version, "title": "Check the bank feed today"}, token)
-    elif case == "comment":
-        post(api, f"tasks/{task['id']}/comments", {"text": "Feed checked: two new lines."}, token)
+    elif case == "comment":  # on another task of its own: not the one its turn is on, whose reply is the end text
+        other = post(api, "tasks", {"owner": "ops", "title": "Reconcile the feed", "body": "Weekly."})
+        post(api, f"tasks/{other['id']}/comments", {"text": "Feed checked: two new lines."}, token)
     elif case == "message":
         post(
             api,
@@ -639,7 +640,7 @@ def test_a_bots_result_accepted_edited_or_overridden_gives_its_run_one_outcome(a
                 H.task_done(c, "bot:ops", task["id"], "Rechecked.", H.task(c, task["id"])["version"])
         # Accepted: Done by someone else's act (the engine's effects say so for a move into Done that is not the bot's).
         H.task_done(c, ana, runs["accepted"][0], "Checked it myself.")
-        H.task_update(c, ana, runs["edited"][0], body="Before the deadline, with the March file.")
+        H.task_update(c, ana, runs["edited"][0], title="Recheck the cash warning with the March file")
         H.task_move(c, ana, runs["overridden"][0], H.TASK_REOPEN, "Not yet: the March file is missing.")
         H.task_reassign(c, ana, runs["given"][0], ana, "I will do this one.")
         got = {

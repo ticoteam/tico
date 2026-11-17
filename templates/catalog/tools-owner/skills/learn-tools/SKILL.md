@@ -38,11 +38,10 @@ Ask when a vendor has no guide and you must connect or fix it, when a guide prov
 which of two ways the company uses. One question, to the person who added that tool's key (`added_by` in
 `tico tool activity <id>`), else the person whose request you are working on:
 
-    tico task ask <your task> "How does Acme sign in to Peec: an API key, or Google sign-in?" --to <their id> \
-        -m "So I connect it the way it works and stop guessing." --version N
+    tico task ask <your task> "How does Acme sign in to Peec: an API key, or Google sign-in? I connect it the way it works and stop guessing." --to <their id>
 
 Work from a task (your own if none: `tico task create --owner me --title "<vendor>: how its login works"`). One open
-question per vendor: check your open tasks first. When the answer wakes you, record it as above, then do the work.
+question per vendor: check your open tasks first. When their reply wakes you, record it as above, then do the work.
 
 ## Never
 - Never write a value: a key, token, password, 2FA key or code, a full URL with a token in it, a cookie. Write what it

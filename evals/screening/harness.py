@@ -22,6 +22,7 @@ os.environ.pop("TICO_INBOUND_KEY", None)
 os.environ["TICO_INBOUND_URL"] = "https://hq.example.test"
 
 from backend import inbound as _inbound
+from backend.store import H
 
 
 async def _no_sync(self, stop):
@@ -300,8 +301,13 @@ def wakes(org, bot):
 
 
 def task_row(org, task_id):
-    rows = org.sql("SELECT id,title,body,owner_id,status,version FROM tasks WHERE id=?", (task_id,))
-    return rows[0] if rows else None
+    """The task, with `body` the words it was filed with: its request and Tico's instructions to its bot (a task has
+    no description)."""
+    rows = org.sql("SELECT id,title,owner_id,status,version FROM tasks WHERE id=?", (task_id,))
+    if not rows:
+        return None
+    with org.store.read() as c:
+        return {**rows[0], "body": H.task_words(c, task_id)}
 
 
 def find_task(org, *titles):

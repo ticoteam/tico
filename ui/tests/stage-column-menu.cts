@@ -5,6 +5,7 @@ import type {Browser, Page, Route} from 'playwright';
 // stages first, by name alone, then Done, then the other pipelines'; one line confirms with the count, and one request
 // moves them. Close all asks "Close 2 tasks?" in the menu (no browser confirm), closes in one request, and its toast's
 // Undo reopens them in one more. What stayed is said above the stages, with why. A phone has the ⋯ beside the stage tabs.
+// Its tabs keep one width from stage to stage for any viewer, the ⋯ kept or not (stripSteady).
 // Run: npm run build:ui && node ui/tests/stage-column-menu.cts   (TICO_SHOTS=<dir> also writes screenshots)
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
@@ -22,6 +23,10 @@ const pipeline = (id: string, name: string, prefix: string, stages: ReturnType<t
   done: {id: `${id}-done`, name: 'Done'}, closed: {id: `${id}-closed`, name: 'Closed'}, may_change: true});
 const PIPELINES = [pipeline('dev', 'Dev', 'D', [stage('ideas', 'Ideas', true), stage('build', 'Build'), stage('ship', 'Ship')]),
   pipeline('backlog', 'Backlog', 'B', [stage('on-ice', 'On ice', true)])];
+type Pipeline = ReturnType<typeof pipeline>;
+/** Dev with an empty Review stage between Build and Ship: the fixtures' tasks sit in the other three. */
+const fourStages = (mayChange: boolean): Pipeline[] => [{...pipeline('dev', 'Dev', 'D', [stage('ideas', 'Ideas', true), stage('build', 'Build'),
+  stage('review', 'Review'), stage('ship', 'Ship')]), may_change: mayChange}];
 const brief = (id: string, number: number, title: string, stageId: string) => ({id, title, number, pipeline_id: 'dev', stage_id: stageId,
   status: 'open', owner_id: 'human:ana', requester_id: 'human:ana', assignee_id: null, due_at: null, late: null, snoozed: false,
   turn: null, version: 1, created_at: '2026-11-09T10:00:00Z', updated_at: '2026-11-09T10:00:00Z'});
@@ -30,7 +35,9 @@ const fixtures = () => [brief('t1', 101, 'Old Trello idea', 'ideas'), brief('t2'
 
 interface Served { page: Page; errors: string[]; writes: {path: string; body: Record<string, unknown>}[]; close: () => Promise<void> }
 
-async function open(browser: Browser, {viewport = {width: 1280, height: 800}, theme = 'light', hash = '#/tasks?pipeline=dev&layout=columns'} = {}): Promise<Served> {
+async function open(browser: Browser, {viewport = {width: 1280, height: 800}, theme = 'light', hash = '#/tasks?pipeline=dev&layout=columns',
+  who = me, pipelines = PIPELINES}: {viewport?: {width: number; height: number}; theme?: string; hash?: string; who?: Record<string, unknown>;
+  pipelines?: Pipeline[]} = {}): Promise<Served> {
   const phone = viewport.width < 600;
   const context = await browser.newContext({viewport, serviceWorkers: 'block', hasTouch: phone, isMobile: phone, colorScheme: theme === 'dark' ? 'dark' : 'light'});
   await context.addInitScript((t: string) => { try { localStorage.setItem('tico.theme', t); } catch {} }, theme);
@@ -45,12 +52,12 @@ async function open(browser: Browser, {viewport = {width: 1280, height: 800}, th
     // The UI's files, and its vendored icon font (the screenshots show the icons, not their names).
     const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(__dirname, '..', p) : '';
     if (file && fs.existsSync(file)) return route.fulfill({contentType: /\.(?:js|ts)$/.test(file) ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
-    if (p === '/api/me') return json({...me, config});
+    if (p === '/api/me') return json({...who, config});
     if (p === '/api/v2/config') return json(config);
     if (p === '/api/employees') return json([]);
     if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
-    if (p === '/api/v2/pipelines') return json({pipelines: PIPELINES});
-    if (p.startsWith('/api/v2/pipelines/')) return json({pipeline: PIPELINES.find(x => p.endsWith(`/${x.id}`))});
+    if (p === '/api/v2/pipelines') return json({pipelines});
+    if (p.startsWith('/api/v2/pipelines/')) return json({pipeline: pipelines.find(x => p.endsWith(`/${x.id}`))});
     if (p === '/api/v2/factories') return json({factories: [], pipelines: []});
     if (p === '/api/v2/tasks' && r.method() === 'GET') return json({tasks: tasks.filter(t => t.status === 'open')});
     if (p === '/api/v2/tasks/move' && r.method() === 'POST') {
@@ -82,6 +89,30 @@ const shot = async (page: Page, name: string) => {
   await page.evaluate(async () => { await document.fonts.ready; await Promise.all(document.getAnimations().filter(a => a.effect?.getComputedTiming().iterations !== Infinity).map(a => a.finished.catch(() => {}))); });
   await page.screenshot({path: `${shots}/${name}.png`});
 };
+
+/** A phone's stage tabs keep one width from stage to stage, whoever the viewer is. Where a viewer gets no ⋯ (a read-only
+ * view; a viewer who may not change the pipeline, on a stage with no tasks) its slot is kept, so the strip does not move. */
+async function stripSteady(browser: Browser) {
+  const cases: {name: string; who: Record<string, unknown>; pipelines: Pipeline[]; more: number[]}[] = [
+    {name: 'a read-only view', who: {...me, read_only_view: true}, pipelines: fourStages(true), more: [0, 0, 0, 0]},
+    {name: 'a viewer who may not change the pipeline', who: me, pipelines: fourStages(false), more: [1, 1, 0, 1]},
+  ];
+  for (const c of cases) {
+    const {page, errors, close} = await open(browser, {viewport: {width: 390, height: 844}, hash: '#/tasks?pipeline=dev', who: c.who, pipelines: c.pipelines});
+    await page.locator('.pv-phone .tk-card').first().waitFor();
+    const widths: number[] = [], more: number[] = [];
+    for (const id of ['ideas', 'build', 'review', 'ship']) {
+      await page.locator(`.pv-tab[data-pv-tab="${id}"]`).click();
+      await page.waitForFunction(stage => document.querySelector('.pv-tab.on')?.getAttribute('data-pv-tab') === stage, id);
+      widths.push(Math.round(await page.locator('.pv-tabs').evaluate(el => el.getBoundingClientRect().width)));
+      more.push(await page.locator('.pv-phone-head .pv-col-more').count());
+    }
+    assert.ok(widths.every(w => w === widths[0]), `${c.name}: the strip's width on ideas, build, review, ship: ${widths}`);
+    assert.deepEqual(more, c.more, `${c.name}: where the ⋯ is (ideas, build, review, ship)`);
+    assert.deepEqual(errors, []);
+    await close();
+  }
+}
 
 (async () => {
   const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL ?? 'chrome') as string});
@@ -141,7 +172,8 @@ const shot = async (page: Page, name: string) => {
       // 5. A phone: the ⋯ sits beside the stage tabs, 44 px, for the stage shown; its menu is the same.
       const phone = await open(browser, {viewport: {width: 390, height: 844}, theme});
       await phone.page.locator('.pv-phone .tk-card').first().waitFor();
-      const pm = phone.page.locator('.pv-phone-head .pv-col-more');
+      const pm = phone.page.locator('.pv-phone-head [data-pv-col-menu]');
+      await pm.waitFor();
       const box = (await pm.boundingBox())!;
       assert.ok(box.width >= 44 && box.height >= 44, `44 px: ${box.width}x${box.height}`);
       assert.ok(box.x + box.width <= 390, 'on screen');
@@ -159,6 +191,7 @@ const shot = async (page: Page, name: string) => {
       assert.deepEqual(phone.errors, []);
       await phone.close();
     }
+    await stripSteady(browser);
     console.log('stage-column-menu: ok');
   } finally {
     await browser.close();

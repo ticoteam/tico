@@ -140,44 +140,6 @@
  {
   "argv": [
    "strategy",
-   "publish",
-   "--note",
-   "note-1",
-   "--revision",
-   "5"
-  ],
-  "tools": [
-   [
-    "tico_strategy_publish",
-    {
-     "note": "note-1",
-     "operation_id": null,
-     "revision": 5
-    }
-   ]
-  ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
-   [
-    "POST",
-    "strategy/publish",
-    {
-     "note": "note-1",
-     "revision": 5
-    }
-   ]
-  ],
-  "stdout": "{\n  \"ok\": true\n}\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "strategy",
    "versions"
   ],
   "tools": [

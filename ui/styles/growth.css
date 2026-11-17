@@ -294,8 +294,7 @@ button.gsrc-row:hover{background:var(--surface2)}
 .br-hit .pill{margin:0}
 
 /* Strategy page: Brand strip */
-#strat-brand:empty,#strat-setup:empty{display:none}
-.strat-setup{display:flex;flex-wrap:wrap;gap:8px}
+#strat-brand:empty{display:none}
 .br-strip{display:flex;align-items:stretch;min-height:92px;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;background:var(--surface);color:var(--ink);text-decoration:none}
 .br-strip:hover{border-color:var(--muted);text-decoration:none}
 .br-strip-hero{display:flex;flex-direction:column;justify-content:center;gap:4px;flex:0 1 44%;padding:14px 18px;background:var(--surface2);min-width:0}

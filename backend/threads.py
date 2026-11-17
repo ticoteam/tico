@@ -1408,9 +1408,13 @@ def never_wakes(refs, bot):
 def system_line(message, posting=None):
     """Whether a message is a system line (D10): the keeper's (task news, notices), a roundup (refs.no_mentions), a
     follow-up nudge or card (quiet_notice), or a legacy writer's notice. It reaches whom it addresses, never the
-    followers."""
+    followers. Not a system line: another Slack app's post the keeper carries in (refs.slack.app), which reads as a
+    plain line from that app."""
     refs = _refs_of(message)
-    if _cause(message.get("sender_id")) == "keeper" or refs.get("no_mentions") or quiet_notice({"refs": refs}):
+    carried = isinstance(refs.get("slack"), dict) and bool(refs["slack"].get("app"))
+    if (_cause(message.get("sender_id")) == "keeper" and not carried) or refs.get("no_mentions"):
+        return True
+    if quiet_notice({"refs": refs}):
         return True
     return posting is None and message.get("kind") == "notice"
 
@@ -3524,17 +3528,26 @@ def _newly_reading(c, root, target):
 def _joined(c, root_id, actor):
     """A join reads up to now across the whole tree: the root (followed, unless it is a task's thread: joining a task
     follows nobody) and each sub-thread (a read mark, not a follow), so nothing written before it counts as unread. One
-    statement, however many sub-threads there are."""
+    statement, however many sub-threads there are. The root's row takes `_new_id()`, so a seeded demo builds the same."""
     now = _now()
     c.execute(
         "INSERT INTO thread_followers(id,thread_id,actor,following,notify,reason,last_read_seq,created_at,"
-        "updated_at) SELECT lower(hex(randomblob(16))), id, ?, "
+        "updated_at) SELECT CASE WHEN id=? THEN ? ELSE lower(hex(randomblob(16))) END, id, ?, "
         "CASE WHEN id=? AND task_id IS NULL AND COALESCE(audience,'')<>'task' THEN 1 ELSE 0 END, ?, 'joined', "
         "last_seq, ?, ? FROM conversations WHERE root_id=? ON CONFLICT(thread_id,actor) DO UPDATE SET "
         "last_read_seq=MAX(last_read_seq,excluded.last_read_seq), following=MAX(following,excluded.following), "
         "updated_at=excluded.updated_at",
         # A bot follows a chat at `mentions` (D14): it is reached by what addresses it.
-        (actor, root_id, "mentions" if str(actor).startswith("bot:") else "live", now, now, root_id),
+        (
+            root_id,
+            _new_id(),
+            actor,
+            root_id,
+            "mentions" if str(actor).startswith("bot:") else "live",
+            now,
+            now,
+            root_id,
+        ),
     )
 
 

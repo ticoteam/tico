@@ -17,7 +17,6 @@ from fastapi import Request
 from . import botkpis
 from . import strategy_acts as CA
 from . import strategy_bot
-from . import strategy_merge as CM
 from . import strategy_suggest as CS
 from . import company as C
 from . import goal_asks as GA
@@ -49,7 +48,7 @@ def company_editor(who, tap=False):
 
 
 def strategy_visible(who, proposal, auth=None):
-    """A strategy proposal carries unpublished draft text (strategy_draft) or every affected goal's title
+    """A strategy proposal carries text the owner has not confirmed (strategy_draft) or every affected goal's title
     (strategy_realign): the owner reads it, and the bot that proposed it; no one else. A brand draft proposal
     (backend/brand.py) is the same for the owner and the admins, who write that draft."""
     if proposal["kind"] in DRAFT_PAGE_KINDS:
@@ -394,7 +393,7 @@ def install(app, store, auth, mutate, settings):
             )
 
     def company_view(c, who):
-        # The vision has one source, the strategy: the owner reads the draft's, everyone else the published one.
+        # The vision has one source, the strategy: the owner reads the draft's, everyone else the live one (the same).
         record = {**C.profile(c), "vision": S.vision(c, editor=company_editor(who))}
         by = record.get("updated_by")
         known = N.lookup(c, {by}) if by else {}
@@ -521,38 +520,6 @@ def install(app, store, auth, mutate, settings):
     def strategy_itself(c, who, what):
         if who.actor != "bot:" + strategy_bot.SLUG or who.via:
             raise Problem("forbidden", f"Only the {strategy_bot.name(c)} {what}", 403)
-
-    @app.post(
-        "/api/v2/strategy-bot/merge",
-        **api_v2(
-            "Goals",
-            "mergeStrategyBotAsks",
-            "The Strategy Owner only, at level 2 or 3: one item in a person's Needs you for 2 to 10 tasks where bots ask them the same thing. The originals leave their Needs you while it is open; their one answer goes to each bot that asked, and an item that ends unanswered puts the originals back. Counts toward its 5 a day",
-            "StrategyBotMergeResult",
-        ),
-    )
-    def strategy_bot_merge(request: Request, body: M.StrategyBotMerge):
-        """At level 2 or 3, the Strategy Owner makes several bots' asks waiting on one person a single item of its own;
-        the person's answer to it goes to each bot that asked (backend/strategy_merge.py)."""
-        who = request.state.identity
-        # The merged item is the Strategy Owner's ask of the person: checked like any bot's ask (backend/task_rule_gate.py),
-        # refused with the rule's words when a rule covers it.
-        rules = request.app.state.task_rules
-        said = [("Title", body.title), ("Question", body.question)]
-
-        def reach(c):
-            return [rules.rule_target(c, who, body.person)]
-
-        verdict = rules.check_words(who, "strategy_merge", said, reach)
-
-        def work(c):
-            auth.domain(who)
-            strategy_itself(c, who, "merges the asks waiting on a person")
-            rules.apply_words(c, who, verdict, said, reach, ask=True)
-            person = H.resolve_actor(c, body.person) or body.person
-            return CM.merge(c, who.actor, person, body.title, body.question, body.tasks)
-
-        return mutate(request, body, work)
 
     @app.post(
         "/api/v2/strategy-bot/level3-offer",

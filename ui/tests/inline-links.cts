@@ -53,17 +53,14 @@ const BODY = ['Two drafts for review.', '',
       if(p.endsWith('/watch'))return route.fulfill({contentType:'text/event-stream',body:': fixture\n\n'});
       const answer=threads(p,url,route.request().method());
       if(answer!==undefined)return json(answer);
-      if(p===`/api/v2/tasks/${TASK}`)return json({task:{id:TASK,title:'Review the launch drafts',body:BODY,owner_id:'human:ana',requester_id:'bot:finance',status:'open',lane:'company',labels:[],links:[],parts:{total:0,done:0},version:1,updated_at:new Date().toISOString()},children:[]});
+      if(p===`/api/v2/tasks/${TASK}`)return json({task:{id:TASK,title:'Review the launch drafts',owner_id:'human:ana',requester_id:'bot:finance',status:'open',lane:'company',labels:[],links:[],parts:{total:0,done:0},version:1,updated_at:new Date().toISOString()},children:[],comments:[{id:'req',kind:'say',sender_id:'bot:finance',body:BODY,refs:{task:TASK,request:true},created_at:new Date().toISOString()}]});
       if(p==='/api/v2/tasks')return json({tasks:[]});
       return json(unrouted(p));
     });
     await page.goto('https://tico-ui.test/#/bot/finance/dm');
     await page.getByRole('link',{name:'the drafts'}).click();
-    const desc=page.locator('#task-modal[open] .tdesc.md').first();
-    // The task's request heads its Details.
-    const info=page.locator('#task-modal[open] [data-task-tab="details"]');
-    await info.waitFor();
-    await info.click();
+    // What the task asks is its chat's first message.
+    const desc=page.locator('#task-modal[open] [data-message="req"] .th-body.md');
     await desc.waitFor();
     // The mapped bucket: the bare URI is a link to the view URL, and a .md draft shows as a card naming the file.
     const draft=desc.locator(`a[href="${VIEW}/email/deliverables/1234/2026-09-09-launch.md"]`);
@@ -81,7 +78,7 @@ const BODY = ['Two drafts for review.', '',
     // Image links: a thumbnail beside each, loaded without a referrer, that opens the one viewer; Escape closes it.
     const hero=desc.getByRole('link',{name:'hero image'});
     assert.equal(await hero.getAttribute('href'),VIEW+'/img/hero.png');
-    await page.waitForFunction(()=>document.querySelectorAll('#task-modal .tdesc .inline-thumb.ready').length===2);
+    await page.waitForFunction(()=>document.querySelectorAll('#task-modal [data-message="req"] .inline-thumb.ready').length===2);
     assert.equal(await desc.locator('.inline-thumb img').first().getAttribute('referrerpolicy'),'no-referrer');
     assert.deepEqual(referers.filter(Boolean),[]);
     await desc.getByRole('button',{name:'View cover'}).click();

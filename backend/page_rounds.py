@@ -220,5 +220,5 @@ def notices(conn: "sqlite3.Connection", task_id: str, requirement_id: str) -> li
     out = list(mine.notices)
     held = next((s for s in standings if pr_conflicts.held(s)), None)
     if held is not None:
-        out.append(pr_conflicts.ask_line(conn, held, str(mine.requirement.get("kind") or "")))
+        out.append(pr_conflicts.ask_line(conn, held))
     return out

@@ -194,15 +194,14 @@ function redesignAfterRoute() {
   finProbeOnce();   // the Finance link shows once the viewer sees something in Finance
 }
 
-// The Strategy tabs with a section waiting on the person (Flow's mark beside the name). A page sets its tab from the
-// condition it already reads for its own section, so a tab not read yet this session shows none; the setting is kept
-// for the session, so the other tabs keep showing it, and no request is made for it.
+// The Strategy tabs whose setup area waits on the person (Flow's mark beside the name), as GET /v2/setup/gaps says
+// (ui/app/setup-gaps.ts sets them, and again on each `setup` event).
 const STRAT_TAB_NEEDS = new Set<string>();
 function strategyTabNeeds(tab: string, needs: boolean): void {
   if (needs) STRAT_TAB_NEEDS.add(tab); else STRAT_TAB_NEEDS.delete(tab);
   document.querySelectorAll<HTMLElement>(`[data-strat-tab="${tab}"]`).forEach(el => {
     el.querySelector(':scope > .needs-mark')?.remove();
-    if (needs) el.insertAdjacentHTML('beforeend', needsMarkHTML(12));
+    if (needs) el.insertAdjacentHTML('beforeend', needsMarkHTML(12, tab));
   });
 }
 // The Strategy section's heading with the redesign's tabs. Lenses are the Strategy tab's second view; Brand opens
@@ -212,6 +211,7 @@ function strategyTabNeeds(tab: string, needs: boolean): void {
 // its own keeps the header's Copy link.
 function redesignStrategyHead(tab: string): string {
   const on = ['lenses', 'brand'].includes(tab) ? 'strategy' : tab;
+  void setupGapsWatch();
   const tabs = [['market', MARKET_ROUTE, 'Market'], ['strategy', '#/strategy', 'Strategy'], ['org', RD_ORG, 'Org'],
     ['goals', RD_GOALS, 'Goals'], ['budget', RD_BUDGET, 'Budget']];
   const more = tab === 'strategy' ? `<a href="${LENSES_ROUTE}" data-strat-lenses>Lenses</a>`
@@ -222,7 +222,7 @@ function redesignStrategyHead(tab: string): string {
   // The one page header (page-head.ts); #strat-actions is its button holder, which each tab fills.
   return pageHead({title: sub || 'Strategy', back: sub ? {href: '#/strategy', label: 'Strategy'} : undefined,
     hook: 'strat-head rd-strat-head', tabsHook: 'strat-tabs', tabsAttrs: 'aria-label="Strategy"',
-    tabs: tabs.map(([id = '', href = '', label = '']): PageTab => ({label, href, cur: on === id, attrs: `data-strat-tab="${id}"`, mark: STRAT_TAB_NEEDS.has(id)})),
+    tabs: tabs.map(([id = '', href = '', label = '']): PageTab => ({label, href, cur: on === id, attrs: `data-strat-tab="${id}"`, mark: STRAT_TAB_NEEDS.has(id) ? id : ''})),
     more, actId: 'strat-actions'});
 }
 

@@ -66,7 +66,7 @@ def _row(row, body=True):
 
 
 def _active(c):
-    """The published strategy's active bets, in their Strategy page order."""
+    """The live strategy's active bets, in their Strategy page order."""
     published = S.current(c)
     return [b for b in (published or {}).get("bets") or [] if b.get("status") == "active"]
 
@@ -136,7 +136,7 @@ def latest(c):
 
 # ----------------------------------------------------------------------------- writing
 def bets_touched(c, items):
-    """The ids of the active bets of the published strategy that cite one of the items' entities, or whose thesis
+    """The ids of the active bets of the live strategy that cite one of the items' entities, or whose thesis
     wrong-if watches one."""
     ids = {e for item in items for e in item["entity_ids"]}
     return [b["id"] for b in _active(c) if ids & _watching(b)]

@@ -32,7 +32,7 @@ returning its secret again; the retry cache stores only metadata. There is no Se
 |---|---|
 | `key` | Your own id for this piece of work, 1 to 200 characters. Required. The pair (this service key, `key`) is one task. |
 | `owner` | `human:<id>`, `bot:<slug>`, or the email of a person on the roster. |
-| `title`, `body` | The task's title and description. |
+| `title`, `body` | The task's title and first message. |
 | `labels` | The task's labels; they replace the ones it has. |
 | `links` | Links to attach, such as the report's page. Added, never removed. |
 | `due` | ISO 8601 with a timezone. |
@@ -96,7 +96,7 @@ owner's click ([Updates](updates.md#the-servers-own-updater)). `tico service-key
 
 ## What a person sees
 
-The task arrives like any other, added by Tico, which files it as it files a routine's tasks. Its description ends
+The task arrives like any other, added by Tico, which files it as it files a routine's tasks. Its first message ends
 with a line naming the key: *Filed by Billing backend (service key).* The task's history shows each change the key made
 as made by Tico.
 

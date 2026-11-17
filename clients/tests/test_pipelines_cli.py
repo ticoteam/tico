@@ -174,8 +174,8 @@ LINES = [
     (["stage", "show", "product-spec"], {"stage": "product-spec"}),
     (["company", "show"], {}),
     (
-        ["task", "request", "product", "Add negate", "--body", "Why"],
-        {"pipeline": "product", "title": "Add negate", "body": "Why"},
+        ["task", "request", "product", "Add negate", "--message", "Why"],
+        {"pipeline": "product", "title": "Add negate", "message": "Why"},
     ),
     (["task", "approve", "T1", "-m", "Looks right"], {"id": "T1", "note": "Looks right"}),
     (["task", "send-back", "T1", "-m", "Cover -0"], {"id": "T1", "note": "Cover -0"}),
@@ -280,7 +280,6 @@ def test_a_request_goes_to_the_first_stages_holder_and_a_stage_for_whoever_needs
             {
                 "owner": PRODUCT_OWNER,
                 "title": "Add negate",
-                "body": "Add negate",
                 "due": None,
                 "goal_id": None,
                 "pipeline": "product",

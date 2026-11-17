@@ -40,13 +40,13 @@ def test_each_stage_counts_its_open_tasks_by_holder_and_what_waits_on_the_reader
     carts = [task(api, f"Saved carts {n}", "ben", "product") for n in range(3)]
     mine = task(api, "Order export", "ana", "product")
     moved = task(api, "Gift receipts", "ops", "product")
-    # Needs you holds what is asked of a person: a question on each of Ben's, and one on Ana's.
+    # Needs you holds what is asked of a person: an OK on each of Ben's, and one on Ana's.
     from backend import task_engine as E
 
     with api.app.state.store.transaction() as c:
         for row, person in [*((t, "human:ben") for t in carts), (mine, "human:ana")]:
             version = H.task(c, row["id"])["version"]
-            E.add_requirement(c, row["id"], "human:cara", "answer", person, "Ready to ship?", seen_version=version)
+            E.add_requirement(c, row["id"], "human:cara", "ok", person, "Ready to ship?", seen_version=version)
     post(api, f"tasks/{moved['id']}/move", {"to": "product-build", "why": "The spec is in the PR"})
     seen = floor(api)
     [factory] = [f for f in seen if f["id"] == made["id"]]
@@ -155,6 +155,18 @@ def test_a_stage_that_hands_off_names_the_pipeline_it_files_into_when_the_reader
     assert [s["into"] for s in find(floor(api), "deals")["stages"]] == [None, None]
     # Cara reads none of the private pipeline's tasks: it is not on her Floor, so nothing hands off to it there.
     assert [s["into"] for s in find(floor(api, "cara-test"), "leads")["stages"]] == [None, None]
+
+
+def test_a_pipeline_names_the_ones_its_tasks_were_moved_into_lately(api):
+    made = post(api, "factories", {"name": "Product"})["factory"]
+    pipeline(api, "ideas", None)
+    pipeline(api, "builds", made["id"])
+    first = task(api, "Saved carts", "cara", "ideas")
+    task(api, "Dark mode", "cara", "ideas")
+    assert find(floor(api), "ideas")["moved_into"] == []
+    post(api, f"tasks/{first['id']}/move", {"to": "builds-spec", "to_pipeline": "builds", "version": first["version"]})
+    assert find(floor(api), "ideas")["moved_into"] == ["builds"]
+    assert find(floor(api), "builds")["moved_into"] == []
 
 
 def test_a_person_the_reader_may_not_see_holds_tasks_counted_but_not_named(acme):

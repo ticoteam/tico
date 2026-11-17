@@ -39,10 +39,10 @@ const PAGES: Record<string, string> = {
   [`${QA}@1`]: '<h1>QA report</h1><ul><li>Cart survives closing the tab ✓</li><li>Expires after 30 days ✓</li></ul>',
 };
 const LONG = Array.from({length: 40}, (_, i) => `Step ${i + 1}: open a cart, close the tab, come back.`).join('\n\n');
-const req = (id: string, line: string, met: boolean) => ({requirement_id: id, line, met, who: 'bot:writer', may: [], typed: false, answer: null, standing: '', asked_by: null, choices: null});
+const req = (id: string, line: string, met: boolean) => ({requirement_id: id, line, met, who: 'bot:writer', may: [], answer: null, standing: '', asked_by: null});
 const tasks = () => [
-  task('t-1', 'Fix the login redirect', 'spec', {owner_id: 'bot:writer', body: LONG}),
-  task('t-2', 'Saved carts that survive closing the tab', 'spec', {owner_id: 'bot:writer', documents: docs(), body: LONG,
+  task('t-1', 'Fix the login redirect', 'spec', {owner_id: 'bot:writer', note: LONG}),
+  task('t-2', 'Saved carts that survive closing the tab', 'spec', {owner_id: 'bot:writer', documents: docs(), note: LONG,
     to_leave: [req('r-1', 'Spec written', true), req('r-2', 'OK from anyone', false)]} as Parameters<typeof task>[3]),
 ];
 // Each task's pages (GET /api/v2/places/task:<id>): one, and the reader may link more.

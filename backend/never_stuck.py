@@ -36,10 +36,18 @@ Names and signatures are in docs/dev/pipelines-v3-build.md.
 """
 
 from collections.abc import Callable, Iterable
-from datetime import timedelta, timezone
 from typing import TYPE_CHECKING, Any, cast
 
-from . import batch_work, hubdb_core, merge_order, stage_rule_timers, task_depends, task_wakes
+from . import (
+    batch_work,
+    hubdb_core,
+    late_rule,
+    merge_order,
+    question_marks,
+    stage_rule_timers,
+    task_depends,
+    task_wakes,
+)
 from . import task_engine as E
 from . import task_requirements as R
 from . import waiting_on as W
@@ -136,6 +144,8 @@ def check(
     seen: dict[str, str | None] = {}
     live = task_wakes.live_bots(conn, at)  # a pass starts no run: read once
     _ready_snoozes(conn, done, failures)
+    # A ❓ whose person can no longer answer it (a change the roster and readers hooks did not see) goes nowhere.
+    question_marks.clear_gone(conn)
     # A snooze of a task that was deleted, or is not on the engine, is no task's: it is left alone.
     due = conn.execute(
         "SELECT z.task_id FROM snoozes z JOIN tasks t ON t.id = z.task_id AND t.pipeline_id IS NOT NULL "
@@ -647,7 +657,7 @@ def _to_person(conn: "sqlite3.Connection", row: Row, level: str, done: dict[str,
 
 
 # The question a stopped task's bot asks a person when no manager hears of it, in its own voice (only bots write
-# questions): a first line that says what is asked, a why, no paths (backend/ask_shape.py). `{who}` is "I" from the
+# questions): a first line that says what is asked, then why, no paths (backend/ask_shape.py). `{who}` is "I" from the
 # stalled bot, or the bot's name when BotOps asks for it.
 STUCK_ASK = "{who} stuck on {stage}: {line}. Can you help or tell me what to do?"
 STUCK_LINES = {
@@ -678,12 +688,13 @@ def manager_hears(conn: "sqlite3.Connection", row: Row) -> bool:
 
 def ask_person(conn: "sqlite3.Connection", row: Row) -> str | None:
     """The stopped task's bot asks a person who reads it what to do: its owner when a person owns it, else the person it
-    falls to (`_person`). The bot that stalled asks, in its own words; when it cannot run, BotOps asks for it. Once per
-    stop: an open question of this kind on the visit is not asked again. The ask keeps the ladder stopped; an answer is a
-    change, which starts it again. Returns the requirement's id, or None when nobody can ask or be asked."""
+    falls to (`_person`). The bot that stalled asks, in its own words, with a ❓ on the task's chat
+    (backend/question_marks.py); when it cannot run, BotOps asks for it. Once per stop: a task with an open ❓ is not
+    asked again. The ❓ keeps the ladder stopped; the person's reply is a change, which starts it again. Returns the
+    ❓'s wait id (`qmark:<id>`), or None when nobody can ask or be asked."""
     visit = row["visit"]
     kept = visit.get("person_id")
-    if any(not s.met and E.stuck_ask(s.requirement) for s in R.standings(conn, row)):
+    if question_marks.on_task(conn, row["id"]):
         return None
     owner = row.get("owner_id")
     person = owner if is_human(owner) and R.active_person(conn, owner) else _person(conn, row)
@@ -706,26 +717,15 @@ def ask_person(conn: "sqlite3.Connection", row: Row) -> str | None:
     said = STUCK_LINES[kind].format(me=me)
     who = "I'm" if author == bot else f"{_name(conn, bot)} is" if bot else "This task is"
     line = STUCK_ASK.format(who=who, stage=row["stage"]["name"], line=said)
-    brief = {"why": STUCK_WHY, "details": None, "recommend": None}
     H = _h()
     try:
-        asked = E.add_requirement(
-            conn,
-            row["id"],
-            author,
-            "answer",
-            person,
-            line,
-            seen_version=row.get("version"),
-            brief=brief,
-            title=E.STUCK_TITLE,
-        )
+        asked = question_marks.ask(conn, author, str(row["id"]), person, f"{line}\n\n{STUCK_WHY}", checked=False)
     except H.Refused:
-        return None  # the stage asks them already, or they left: what they see there is the way in
-    # The ask is a change, which starts the ladder again: it stays stopped until the person answers.
+        return None  # they left, or the chat is not theirs to read: what they see there is the way in
+    # The ❓ is a change, which starts the ladder again: it stays stopped until the person replies.
     conn.execute("UPDATE visits SET level='person', person_id=?, next_try_at=NULL WHERE id=?", (kept, visit["id"]))
     task_wakes.drop(conn, row["id"])
-    return str(asked["requirement_id"])
+    return question_marks.wait_id(asked)
 
 
 def _botops(conn: "sqlite3.Connection") -> str | None:
@@ -918,9 +918,7 @@ def _late_by_due(conn: "sqlite3.Connection", row: Row, at: str, done: dict[str, 
     visit = row["visit"]
     if visit.get("late_told_at") or not row.get("due_at"):
         return
-    due, now = H.parse_ts(row["due_at"]), H.parse_ts(at)
-    if due and len(str(row["due_at"])) == 10:
-        due = due.replace(tzinfo=timezone.utc) + timedelta(days=1)  # a due date with no time: Late once the day is over
+    due, now = late_rule.due_instant(row["due_at"]), H.parse_ts(at)
     if not due or not now or now < due:
         return
     conn.execute("UPDATE visits SET late_told_at=? WHERE id=?", (at, visit["id"]))
@@ -1069,8 +1067,15 @@ def rules_hold(conn: "sqlite3.Connection") -> list[str]:
                 for who, items in W.needs_by_person(conn).items():
                     for item in items:
                         needs.setdefault(who, {}).setdefault(str(item.get("task_id")), []).append(item)
-            listed = needs.get(person, {}).get(task_id, [])
-            mine = [wait for wait in waits if wait.state == W.PERSON and wait.who == person]
+            # A ❓ is listed from its mark (backend/question_marks.py), not as one of the task's asks.
+            listed = [item for item in needs.get(person, {}).get(task_id, []) if item["kind"] != "question"]
+            mine = [
+                wait
+                for wait in waits
+                if wait.state == W.PERSON
+                and wait.who == person
+                and not str(wait.requirement_id or "").startswith("qmark:")
+            ]
             if snoozes is None:
                 snoozes = W.ask_snoozes(conn)
             # An ask the person snoozed for themselves is out of their list until its time (backend/ask_snoozes.py).

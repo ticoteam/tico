@@ -93,19 +93,10 @@ const DAYS: string[] = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 // A schedule runs on a cron or `on:` a hub event; one phrase for either.
 const EVENT_WORDS: Record<string, string> = {'meeting.ready': 'when a meeting is imported', 'recording.ready': 'when a meeting is imported',
   'market.insight.urgent': 'when an urgent market insight comes in', release_published: 'when a release is published',
-  'strategy.published': 'when a strategy version is published', 'market.briefing': 'when a market briefing is posted'};
+  'strategy.published': 'when the strategy changes', 'market.briefing': 'when a market briefing is posted'};
 // An event with no words of its own still reads as words: "market.price.changed" is "when market price changed".
 const eventWords = (on: string): string => EVENT_WORDS[on] || (String(on).startsWith('webhook.') ? `on the ${(webhookTriggers() || []).find(t => t.event === on)?.name || on.slice(8).replace(/-/g, ' ')} webhook`
   : `when ${String(on).replace(/[._-]+/g, ' ').trim()}`);
-const cadenceWords = (r: {on?: string | null; cron?: string | null}): string | null | undefined => r.on ? eventWords(r.on) : cronWords(r.cron);
-// A schedule's time zone, short ("PDT"), and nothing when it is the viewer's own.
-const zoneWord = (tz: string | null | undefined): string => {
-  if (!tz) return '';
-  try {
-    if (tz === Intl.DateTimeFormat().resolvedOptions().timeZone) return '';
-    return new Intl.DateTimeFormat('en-US', {timeZone: tz, timeZoneName: 'short'}).formatToParts(new Date()).find(p => p.type === 'timeZoneName')?.value || tz;
-  } catch { return tz; }
-};
 function durationWords(value: number | string | null | undefined): string {
   if (value == null || value === '') return '';
   const s = Math.max(0, Math.round(+value));

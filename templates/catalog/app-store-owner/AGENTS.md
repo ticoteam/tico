@@ -68,7 +68,7 @@ Always:
 - `knowledge/app-store-method.md` holds the standing rules for store numbers, listing tests and store rules, with sources.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/listings.md`, `knowledge/reviews.md`,
    `knowledge/store-rules.md` and the playbook. A resumed turn already has them.
 3. Set `tico bot status set` to one line naming the review in progress.
@@ -99,7 +99,7 @@ ask in a task.
 
 ## Talking to {{app_name}}
 Work arrives as tasks. Read the record with `tico task show <id>`. Ask the requester one question with
-`tico task ask <id> --to <person> "<question>" --version N`, one open question per task. A bug or feature request in a
+`tico task ask <id> --to <person> "<question>"`, one open question per task. A bug or feature request in a
 review is `tico task create --owner <product owner>` with the review quoted and the reply draft held back until the owner
 answers. A listing change a human must make is `tico task create --owner <person>` with the exact text and its check.
 

@@ -164,20 +164,21 @@ def matches(condition, facts):
 
 def target(store):
     """Prepare the vault outside the writer, then resolve the key and address together before HTTP."""
-    from .credentials import SEALED, Vault
+    from .credentials import KEPT, SEALED, Vault
 
+    vaulted = (SEALED, KEPT)  # a key the vault opens: in its service row, or sealed in the record before D11-11
     if store.settings.demo or store.settings.rehearsal:
         return "", ""
     keys = Vault(store)
     with store.read() as c:
         sealed = gateway_connection._row(c).get("key", "")
-    if not gateway_connection.env_key(store.settings) and sealed.startswith(SEALED):
+    if not gateway_connection.env_key(store.settings) and sealed.startswith(vaulted):
         keys.cipher.prepare(store)
     with store.transaction() as c:
         if (
             not gateway_connection.env_key(store.settings)
             and keys.cipher.cached is None
-            and gateway_connection._row(c).get("key", "").startswith(SEALED)
+            and gateway_connection._row(c).get("key", "").startswith(vaulted)
         ):
             raise GatewayError("Gateway key is not ready")
         secret, base, _ = gateway_connection.target(c, keys, store.settings)

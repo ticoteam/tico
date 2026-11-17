@@ -32,11 +32,11 @@ tools:
   - service: github
     identity: "the product repositories the owner lists for this bot"
     can: [read]
-    note: "reads pull requests, the merge queue, workflow runs and releases; pushes fix commits to a pull request's branch in Merge once the owner grants write; never merges, reruns, cancels, triggers or edits a workflow, never deploys or rolls back"
+    note: "reads pull requests, the merge queue, workflow runs and releases; pushes fix commits to a pull request's branch in Merge once the owner grants write; queues rather than merges where the merge queue merges; never merges red checks"
 # Pushing a fix to a pull request's branch in Merge, and tagging an approved release (playbooks/rollout.md, step 1), need write access on each repository, granted by the owner with
-# `tico bot repos release-owner --chosen <owner>/<repo>:write`. This file never grants it. The token can trigger workflows, so the only
-# things between this bot and a rerun or a deploy are this entry, the write grant and .claude/settings.json, which denies every
-# run, workflow, cache, credential, api, merge, release and tag command the agent could type.
+# `tico bot repos release-owner --chosen <owner>/<repo>:write`. This file never grants it. With write, it may merge, tag and
+# release where the company releases without Tico's merge queue (its own skill or playbook). .claude/settings.json denies only
+# what cannot be undone: force pushes, deleting a repository, release, run, cache or issue, and secrets and variables.
 #
 # For the rollout, one entry per install in knowledge/rollout.json, uncommented when its key is granted:
 #  - service: tico-updates

@@ -17,16 +17,11 @@ interface UpdateStatus {
 }
 
 // A tab left open through an update keeps running the old UI. The config poll already runs, so what this page
-// loaded with is compared to the server's on every answer: its release, and the build of its script and
-// stylesheet (the `?v=` of their tags, which the config carries as `ui_build`; empty when the files are served
-// unbundled). The bar offers the reload and never reloads by itself, since the person may be typing.
+// loaded with is compared to the server's on every answer: its release, and its build (the parts list's `build`,
+// ui/app/parts.ts, which the config carries as `ui_build`). The bar offers the reload and never reloads by itself,
+// since the person may be typing.
 let LOADED_VERSION = '';
-const PAGE_BUILD = (() => {
-  if (UI_PARTS.build) return UI_PARTS.build;   // the shell and its page parts (ui/app/parts.ts)
-  const v = (sel: string) => (document.querySelector(sel)?.getAttribute(sel.startsWith('script') ? 'src' : 'href') || '').split('?v=')[1] || '';
-  const js = v('script[src*="app.bundle.js"]'), css = v('link[href*="app.bundle.css"]');
-  return js && css ? js + '.' + css : '';
-})();
+const PAGE_BUILD = UI_PARTS.build;
 function noticeUpdatedServer() {
   const v = String(S.config.version || '');
   if (!v) return;

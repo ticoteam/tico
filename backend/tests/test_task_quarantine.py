@@ -3,6 +3,7 @@
 import pytest
 
 from backend import hubdb as H
+from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import claim, get, headers, post, ready, settled  # noqa: F401 (fixture)
 from backend.tests.helpers.execution_review import job_state
 from backend.tests.helpers.held_runs import botops
@@ -40,7 +41,13 @@ def test_external_asks_fence_their_task(api, external_work):
 
     def ask(row, expected=200):
         version = get(api, "tasks/" + row["id"])["task"]["version"]
-        body = {"to": "ana", "line": "OK to merge the export fix?", "kind": "ok", "version": version}
+        body = {
+            "to": "ana",
+            "line": "OK to merge the export fix?",
+            "kind": "ok",
+            "show": X.shown_on(api),
+            "version": version,
+        }
         return post(api, f"tasks/{row['id']}/asks", body, token, expected=expected)
 
     with api.app.state.store.read() as c:
@@ -981,7 +988,7 @@ def _task_mutation(api, token, mutation, n):
             body = {} if mutation == "delete_comment" else {"text": "Checked the report."}
         elif mutation == "update":
             suffix = ""
-            body = {"version": get(api, "tasks/" + tid)["task"]["version"], "body": "Check the export again."}
+            body = {"version": get(api, "tasks/" + tid)["task"]["version"], "title": task["title"] + " again"}
         requests.append((f"tasks/{tid}" + ("/" + suffix if suffix else ""), body))
     with api.app.state.store.transaction() as c:
         Q.hold(c, H.actor_id(tasks[0]["owner_id"]), "task:" + tasks[0]["id"], "Repeated refusals", {"rule": "identity"})
@@ -999,7 +1006,8 @@ def _task_mutation(api, token, mutation, n):
 
 
 def _held_notes(api, machine, source, n):
-    from backend import bot_to_bot as B, task_quarantine as Q
+    from backend import bot_to_bot as B
+    from backend import task_quarantine as Q
 
     with api.app.state.store.transaction() as c:
         if source.startswith("chat"):
@@ -1034,7 +1042,7 @@ def _held_notes(api, machine, source, n):
     if not source.startswith("chat"):
         row = get(api, "tasks/" + task["id"])["task"]
         result = post(
-            api, "tasks/" + task["id"], {"version": row["version"], "body": "Check it."}, attempt["token"], expected=403
+            api, "tasks/" + task["id"], {"version": row["version"], "title": "Check it"}, attempt["token"], expected=403
         )
         assert result["error"]["code"] == "quarantined"
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": attempt["lane"]}, machine["token"])

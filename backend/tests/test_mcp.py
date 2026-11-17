@@ -9,12 +9,24 @@ from urllib.parse import urlencode
 
 import pytest
 
-from backend.mcp import ApiProblem, InProcessApi
-from backend.tests.helpers.api import assign, claim, get, headers, post, ready, restrict, runner, setup_attempt  # noqa: F401
-from clients import bot_files as BF, hubcli, hubtools
-from clients.tico import MultipartBody
 from backend import bot_settings as BS
+from backend.mcp import ApiProblem, InProcessApi
+from backend.tests.helpers import engine as X
+from backend.tests.helpers.api import (  # noqa: F401
+    assign,
+    claim,
+    get,
+    headers,
+    post,
+    ready,
+    restrict,
+    runner,
+    setup_attempt,
+)
 from backend.tests.helpers.mcp import call, rpc
+from clients import bot_files as BF
+from clients import hubcli, hubtools
+from clients.tico import MultipartBody
 
 
 def test_initialize_lists_every_tool_and_ignores_notifications(api):
@@ -198,15 +210,15 @@ def test_tools_write_through_the_same_rules_as_http(api):
 
     # A person's task opens with a plain ask, or it is refused with the rule and an example the bot can act on.
     wordy = " ".join(["word"] * 150)
-    err, out = call(api, "tico_task_create", {"owner": "ana", "title": "The thing", "body": wordy}, token=token)
+    err, out = call(api, "tico_task_create", {"owner": "ana", "title": "The thing", "message": wordy}, token=token)
     assert err and "Your ask to ana is 150 words" in json.dumps(out) and "Example:" in json.dumps(out)
     # Other writing problems on it are warnings: the task is made and the bot told how to improve.
     wordy = "Approve the thing? If yes, I'll ship it.\n\n" + wordy
     err, out = call(
-        api, "tico_task_create", {"owner": "ana", "title": "The thing", "body": wordy, "dry_run": True}, token=token
+        api, "tico_task_create", {"owner": "ana", "title": "The thing", "message": wordy, "dry_run": True}, token=token
     )
     assert not err and out["ok"] is True and any("verb" in w for w in out["warnings"])
-    err, out = call(api, "tico_task_create", {"owner": "ana", "title": "The thing", "body": wordy}, token=token)
+    err, out = call(api, "tico_task_create", {"owner": "ana", "title": "The thing", "message": wordy}, token=token)
     # The bot's own task, with its question to Ana (backend/person_asks.py).
     assert not err and out["task"]["owner_id"] == "bot:ops" and any("words outside" in w for w in out["warnings"])
     wordy_task = out["task"]["id"]
@@ -219,14 +231,14 @@ def test_tools_write_through_the_same_rules_as_http(api):
     err, task = call(
         api,
         "tico_task_create",
-        {"owner": "cpo", "title": "Review the runtime", "body": "Please.", "operation_id": "op-1"},
+        {"owner": "cpo", "title": "Review the runtime", "message": "Please.", "operation_id": "op-1"},
         token=token,
     )
     assert not err and task["task"]["owner_id"] == "bot:cpo"
     err, again = call(
         api,
         "tico_task_create",
-        {"owner": "cpo", "title": "Review the runtime", "body": "Please.", "operation_id": "op-1"},
+        {"owner": "cpo", "title": "Review the runtime", "message": "Please.", "operation_id": "op-1"},
         token=token,
     )
     assert not err and again["task"]["id"] == task["task"]["id"]
@@ -316,7 +328,7 @@ def test_malformed_mcp_params_are_json_rpc_errors(api, method, params):
 
 
 def test_a_bot_asks_a_person_on_its_own_task_and_the_ask_is_in_their_needs_you(api):
-    """One ask, on the task: no second task just to ask. It carries the version the bot was shown; a stale one is
+    """One OK, on the task: no second task just to ask. It carries the version the bot was shown; a stale one is
     refused with the version the task has now; the ask is one line in the person's Needs you, and the bot takes it
     back with --withdraw."""
     r = runner(api, "ana")
@@ -330,11 +342,9 @@ def test_a_bot_asks_a_person_on_its_own_task_and_the_ask_is_in_their_needs_you(a
     ask = {
         "id": work["id"],
         "to": "ana",
-        "line": "Run the vendor trial once?",
-        "choice": ["Yes|The trial runs once.", "No|Nothing runs."],
-        "recommend": "Yes",
-        "why": "It decides what ships next.",
-        "title": "Vendor trial: run it once?",
+        "line": "OK the vendor trial plan?",
+        "kind": "ok",
+        "show": X.shown_on(api),
     }
     err, refused = call(api, "tico_task_ask", {**ask, "version": version - 1}, token=attempt["token"])
     assert err and refused["error"] == "task_changed" and refused["version"] == version, refused
@@ -343,8 +353,7 @@ def test_a_bot_asks_a_person_on_its_own_task_and_the_ask_is_in_their_needs_you(a
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM tasks").fetchone()[0] == 1, "an ask is not a task"
     item = next(i for i in get(api, "needs-you")["items"] if i["kind"] == "ask")
-    assert item["line"] == "Run the vendor trial once?"
-    assert item["ask"]["title"] == "Vendor trial: run it once?", "the short title reaches Needs you"
+    assert item["line"] == "OK the vendor trial plan?"
     err, out = call(api, "tico_task_ask", {"id": work["id"], "withdraw": True}, token=attempt["token"])
     assert not err, out
     assert not [i for i in get(api, "needs-you")["items"] if i["kind"] == "ask"]

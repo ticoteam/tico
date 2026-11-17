@@ -61,7 +61,8 @@ interface HubTask {
   filer?: string | null | undefined;
   owner_id?: string | null | undefined;
   title?: string | null | undefined;
-  body?: string | null | undefined;
+  /** The first chat message: who asked, and what. */
+  request?: {id?: string; from?: string | null; text?: string | null; at?: string | null} | null | undefined;
   attachments?: readonly unknown[] | null | undefined;
 }
 /** A read of Needs you (GET /v2/needs-you): a page, the whole list, the items named by `ids=`, or `unchanged`. */
@@ -102,8 +103,6 @@ const V2_WORD: Record<string, string> = {idle: 'Idle', running: 'Running', waiti
 const statusWord = (status: unknown) => status === 'planned' ? 'Setting up' : String(status || '');
 const V2_PILL: Record<string, string> = {running: 'in-progress', waiting_human: '', waiting_bot: '', blocked: '',
                  limited: 'waiting', crashed: 'fail', quarantined: 'fail', idle: ''};
-const V2_KIND: Record<string, string> = {decision: 'Decision', approval: 'Approval', review: 'Review', declined: 'Declined',
-                 question: 'Question', task: 'Task', notice: 'Message', setup: 'Set up'};
 const v2StatusOf = (slug: string | null | undefined) => S.v2.status[String(slug)] || null;
 const actorSlug = (a: unknown) => String(a || '').startsWith('bot:') ? String(a).slice(4) : '';
 const actorPerson = (a: unknown) => String(a || '').startsWith('human:') ? String(a).slice(6) : '';
@@ -148,12 +147,10 @@ const taskRequester = (t: HubTask) => t.requester_id === 'keeper' ? t.origin_act
 const taskFiledByBuiltin = (t: HubTask) => SOURCE_BUILTINS[String(t.filer || '')] || '';
 const taskAsker = (t: HubTask) => t.filer || taskRequester(t);
 const taskAskerLabel = (t: HubTask) => taskFiledByBuiltin(t) || actorLabel(taskAsker(t));
-// Hide the generated attachment trailer and rename the schedule footer; authored text stays intact.
+// What the task asks: its first chat message (a task has no description), without the attachments' trailer.
 const taskBody = (t: HubTask) => {
-  const raw = String(t.body || '');
-  const body = (t.attachments || []).length ? raw.replace(/\n\nAttachments \(untrusted source material; authenticated downloads\):\n[^]*$/, '') : raw;
-  if (t.requester_id !== 'keeper' || !actorSlug(t.owner_id) || !body.startsWith(`Run playbook ${t.title}.`)) return body;
-  return body.replace(/\n\n_Created by the keeper from schedule `([^`\n]+)`\._$/, '\n\n_Created from schedule `$1`._');
+  const raw = String(t.request?.text || '');
+  return (t.attachments || []).length ? raw.replace(/\n\nAttachments \(untrusted source material; authenticated downloads\):\n[^]*$/, '') : raw;
 };
 
 // ---- who or what wrote a row: `source` on message, task history and event rows (docs/threads.md, "Who wrote it")
@@ -246,8 +243,6 @@ const myActor = () => S.me?.id ? `human:${S.me.id}` : '';
 // The person on a chat bubble is the local part of their address: jo@example.com is "jo".
 // Takes an actor (human:jo), an email, a roster id, or the Issue's "Jo"; '' when unknown.
 const personHandle = (x: unknown) => (actorPerson(x) || String(x || '')).split('@')[0]!.trim().toLowerCase();
-const ownerHandle = () => S.me?.owner_id || 'owner';           // unsigned Issue text is the owner's
-const myHandle = () => personHandle(S.me?.id || S.me?.email) || ownerHandle();
 const unsigned = (body: unknown) => String(body || '').replace(/\n*_?— [^\s_]+@[^\s_]+ via the hub_?\s*$/, '');
 // every v2 read is optional: a hub without hub.db answers 404 and the caller falls back
 async function v2Get<T = UntypedJson>(path: string, opts?: {fresh?: boolean}): Promise<T | null> { try { return await get<T>(path, opts); } catch { return null; } }

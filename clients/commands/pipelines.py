@@ -281,11 +281,11 @@ def company_show(api, args):
     "stage (a stage held by whoever the task is for needs `owner`; a stage that picks from several picks one, unless "
     "`owner` names one). Product requests go to product. Prints the task "
     "with its id and version; watch it with `tico task wait <id>`. A person or a bot may file one. "
-    'Example: tico task request product "Add a negate(x) function" --body "Why and what done looks like"',
+    'Example: tico task request product "Add a negate(x) function" --message "Why and what done looks like"',
     {
         "pipeline": PIPELINE,
         "title": _s("What is asked, in plain words"),
-        "body": _s("The details: why, and what done looks like; default the title"),
+        "message": _s("The first message on its chat: why, and what done looks like"),
         "owner": _s("Who works it first instead of the stage's holder: a bot slug, a person id, or `me`"),
         "private": {"type": "boolean", "description": "Only its requester, owner and readers see it"},
     },
@@ -300,7 +300,9 @@ def task_request(api, args):
     if not owner and holder != PICK:
         raise ValueError(f"{row.get('name')}'s first stage is held by {WHOEVER}: add --owner <bot or person>")
     # A first stage that picks from several picks the owner as the task arrives; naming one always wins.
-    fields = {"title": args["title"], "body": args.get("body") or args["title"], "pipeline": row["id"]}
+    fields = {"title": args["title"], "pipeline": row["id"]}
+    if said := args.get("message") or args.get("body"):
+        fields["message"] = said
     if owner:
         fields["owner"] = owner
     for name in ("private", "operation_id"):

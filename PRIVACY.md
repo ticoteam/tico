@@ -506,7 +506,7 @@ Every field:
 | Field | What | Redacted sample |
 |---|---|---|
 | `capture` | Server capture start, event/repeat/eviction counts, omitted entries, memory-only retention, and whether the sender edited the attachment | `{"server_repeats": 12, "truncated": 0, "edited": true}` |
-| `browser` | Up to 20 in-memory browser failure groups: kind, UTC time, known app script filename, line/column, count. No error/rejection text, stack text, raw URL, console output or user input. Uploaded to your server only when building the attachment, and to HQ only on Send. | `{"kind": "error", "file": "app.bundle.js", "line": 42, "count": 2}` |
+| `browser` | Up to 20 in-memory browser failure groups: kind, UTC time, known app script filename, line/column, count. No error/rejection text, stack text, raw URL, console output or user input. Uploaded to your server only when building the attachment, and to HQ only on Send. | `{"kind": "error", "file": "app.bundle.0123456789abcdef.js", "line": 42, "count": 2}` |
 | `format`, `created_at` | The bundle's version and when it was made | `1`, `2026-10-01T09:30:00Z` |
 | `versions` | Tico, server, each computer's release, the updater's | `{"tico": "0.2.18", "runners": ["0.2.17"], "updater": "v0.2.18"}` |
 | `system` | The server's OS and architecture, Docker and compose versions if the updater is there, whether it runs in Docker | `{"os": "Linux", "arch": "x86_64", "docker": "27.1.2", "compose": "2.29.1", "in_docker": true}` |

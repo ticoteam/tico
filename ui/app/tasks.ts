@@ -118,12 +118,13 @@ let DECIDE_WANT = '';                       // a deep link's item (#/decide?item
 let DECIDE_STAGE = '';                      // a deep link's stage review (#/decide?stage=<id>), opened once Tasks has read
 const DEC_OTHER = '-';                      // the walk of what is in no stage (Tasks › You's Other chip)
 // The server sorts Home's Needs you rows by the same rule (backend/cards.py needs_act): a new kind here changes both.
-// Only an OK or a page's OK is approved: an ask of any other kind, one Flow does not know included, is answered, so
-// it never offers Approve or Send back.
+// Only an OK or a page's OK is approved: an ask of any other kind is one Flow does not know, which shows its line and
+// opens its task, never Approve or Send back.
 function decideKind(it: NeedsEntry): AskKind {
-  if (it.kind === 'ask') return it.ask?.kind === 'ok' || it.ask?.kind === 'page' ? 'ok' : 'question';
+  if (it.kind === 'ask') return it.ask?.kind === 'ok' || it.ask?.kind === 'page' ? 'ok' : 'other';
   if (it.kind === 'paused') return 'fix';
-  if (it.kind === 'mention') return 'mention';
+  // A bot's ❓ is answered in its chat, as a mention is: never an OK (backend/question_marks.py).
+  if (it.kind === 'mention' || it.kind === 'question') return 'mention';
   // A task item is one thing a person must fix before it can move: a private task that waits on someone being let in
   // (turn.share). Needs you never lists a task only because it is the person's (backend/waiting_on.py needs). Its
   // buttons are the stuck card's, never Done, Snooze or Give to (task #392).

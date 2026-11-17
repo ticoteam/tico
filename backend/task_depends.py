@@ -52,14 +52,14 @@ LOG = logging.getLogger(__name__)
 
 RELATION = "depends_on"
 KIND = "depends_on"  # the prefix of the wait's requirement id; never a stored requirement
-LINE = "Blocked by {ref} {title}, in {stage}"
+LINE = "Blocked by {task}, in {stage}"
 UNNAMED = "Blocked by a task you can't open"
 DONE = "{ref} is done"
 CLOSED = "{ref} was closed without doing it"
 DELETED = "{ref} was deleted"
 WAKE = "unblocked"
 UNTIL = "released"  # task_relations.until: held past the other task's end, until production runs its release
-RELEASED_LINE = "Blocked by {ref} {title}, done, until production runs its release"
+RELEASED_LINE = "Blocked by {task}, done, until production runs its release"
 IN_PRODUCTION = "{ref} is in production: it runs {version}"
 # A held dependency whose task merged nothing into the repository production runs (the server first ran with no release
 # manifest, or a Release stage's release repo changed): there is no release to wait for, and it is not "in production".
@@ -92,11 +92,12 @@ def _engine() -> Any:
 
 
 def ref(row: Row | None) -> str:
-    """How a line names a task: `#304`, or its id's first eight characters when it has no number."""
+    """How a line names a task: its label when the row carries the letters it was made with (`O561`), else `#304`, or
+    its id's first eight characters when it has no number."""
     if not row:
         return "a task"
     number = row.get("number")
-    return f"#{number}" if number is not None else str(row["id"])[:8]
+    return f"{row.get('prefix') or '#'}{number}" if number is not None else str(row["id"])[:8]
 
 
 def _open_of(conn: "sqlite3.Connection", task_ids: list[str]) -> dict[str, list[tuple[str, str]]]:
@@ -144,20 +145,26 @@ def is_wait(requirement_id: object) -> bool:
     return str(requirement_id or "").startswith(KIND + ":")
 
 
+# The letters are the task's own (`tasks.prefix`, kept when it moves); one made before they were kept reads its pipeline's.
 _NAMED = (
-    "SELECT t.id, t.number, t.title, s.name, t.status FROM tasks t LEFT JOIN stages s ON s.id = t.stage_id WHERE t.id=?"
+    "SELECT t.id, t.number, t.title, s.name, t.status, COALESCE(t.prefix, p.prefix) FROM tasks t "
+    "LEFT JOIN stages s ON s.id = t.stage_id LEFT JOIN pipelines p ON p.id = t.pipeline_id WHERE t.id=?"
 )
 
 
 def line(conn: "sqlite3.Connection", blocker_id: str) -> str:
-    """ "Blocked by #304 Growth synced sources part 1, in Build", or once it is Done and the dependency holds until its
-    release, "Blocked by #304 Growth synced sources part 1, done, until production runs its release"."""
+    """ "Blocked by E304 Growth synced sources part 1, in Build", or once it is Done and the dependency holds until its
+    release, "Blocked by E304 Growth synced sources part 1, done, until production runs its release". A task with no
+    number is named by its title alone: a person reads the line, and an id says nothing to them."""
     found = read_cache.one(conn, _NAMED, (blocker_id,))
     if not found:
         return UNNAMED
+    title = str(found[2] or "").strip()
+    named = ref({"id": found[0], "number": found[1], "prefix": found[5]}) if found[1] is not None else ""
+    task = f"{named} {title}".strip() or ref({"id": found[0]})
     if found[4] != "open":
-        return RELEASED_LINE.format(ref=ref({"id": found[0], "number": found[1]}), title=str(found[2] or "").strip())
-    said = LINE.format(ref=ref({"id": found[0], "number": found[1]}), title=str(found[2] or "").strip(), stage="")
+        return RELEASED_LINE.format(task=task)
+    said = LINE.format(task=task, stage="")
     return said + str(found[3]) if found[3] else said.removesuffix(", in ")
 
 

@@ -76,7 +76,7 @@ Always:
 - `skills/check-a-page-as-a-crawler/SKILL.md`: read before you call a page fine, broken or missing from search.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/channel-playbook.md`,
    `knowledge/visibility-method.md`, `knowledge/prompts.md` and `knowledge/pages.md`. A resumed turn already has them.
 3. Find the playbook for the task: a routine names its own; a Growth task's stage names one in "Your pipelines";
@@ -113,7 +113,7 @@ A channel you do not own is changed by its owner: ask in a task.
 ## Talking to {{app_name}}
 Work arrives as tasks: your routines, your Growth tasks, and requests from the Growth Manager or a person. Read the
 record with `tico task show <id>`. Competitor facts you find go to `tico market report`, in prose with the source, never
-into a second list here. Ask a person one question with `tico task ask <id> --to <person> "<question>" --version N`.
+into a second list here. Ask a person one question with `tico task ask <id> --to <person> "<question>"`.
 
 ## Method
 - **Ranked, cited and named are three results.** A page that loads is not a page that ranks. A ranking is

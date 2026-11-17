@@ -144,6 +144,24 @@ def chat_goal(api, args):
 
 
 @tool(
+    "tico_chat_ask",
+    "Ask a person in a chat, marked ❓: in their Needs you until they reply there. Files no task.",
+    {
+        "to": _s("The person's id"),
+        "message": _s("A short first line, then any detail"),
+        "conversation_id": _s("A chat you share; default: your chat with them"),
+    },
+    required=("to", "message"),
+    writes=True,
+)
+def chat_ask(api, args):
+    body = {"to": args["to"], "text": args["message"]}
+    if args.get("conversation_id"):
+        body["conversation_id"] = args["conversation_id"]
+    return api.post("questions", body, key=_key(args))
+
+
+@tool(
     "tico_thread_catchup",
     "Catch up on a thread: what is new in it (and its sub-threads, with scope subtree) that you "
     "may read, summarized and posted to your Assistant DM. The newest 40 messages at most. Nothing new posts nothing.",

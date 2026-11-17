@@ -146,32 +146,31 @@ def test_needs_you_rows_lead_with_the_task_and_carry_the_ask(api):
     """A Needs you row is titled by the task it is on, so asks with the same wording on different tasks read apart; the
     ask itself goes along as its line, with the word for what it needs."""
     from backend.store import H
+    from backend.tests.helpers.engine import ok_ask
 
     with api.app.state.store.transaction() as c:
         work = H.task_create(c, "human:ben", "Launch plan", "Plan it.", "human:ben", lint=False)
-        H.task_ask(c, "human:ben", work["id"], "human:ana", "Which region?")
+        ok_ask(c, work["id"], "human:ben", "human:ana", "OK the region?")
     needs = next(p["card"] for p in place(api, "dashboard")["pins"] if p["card"]["template"] == "needs_you")
     asks = [row for row in needs["data"]["items"] if row["kind"] == "ask"]
     assert [(row["title"], row["line"], row["act"], row["task_id"]) for row in asks] == [
-        ("Launch plan", "Which region?", "answer", work["id"])
+        ("Launch plan", "OK the region?", "ok", work["id"])
     ]
 
 
-def test_only_an_ok_or_a_pages_ok_reads_as_an_ok_and_an_ask_of_a_kind_it_does_not_know_is_answered():
-    """A Needs you row says ok only for what can be OK'd (ui/app/tasks.ts decideKind sorts the same): an ask of a
-    kind it does not know is answered, never approved."""
+def test_an_ask_reads_as_an_ok_a_question_or_mention_as_a_reply_and_anything_else_as_a_fix():
+    """A Needs you row's word (ui/app/decide.ts decideKind sorts the same): an ask is an OK or a page's OK, so ok; a
+    bot's ❓ or an @ is answered in the chat; a task row is the reader's to fix."""
     from backend.cards import needs_act
 
-    def ask(kind):
-        return {"kind": "ask", "ask": {"kind": kind} if kind else {"removed": True}}
-
-    assert [needs_act(ask(k)) for k in ("ok", "page", "answer", "mark", None)] == [
-        "ok",
-        "ok",
-        "answer",
-        "answer",
-        "answer",
+    rows = [
+        {"kind": "ask", "ask": {"kind": "ok"}},
+        {"kind": "ask", "ask": {"kind": "page"}},
+        {"kind": "question"},
+        {"kind": "mention"},
+        {"kind": "task"},
     ]
+    assert [needs_act(row) for row in rows] == ["ok", "ok", "reply", "reply", "fix"]
 
 
 def test_a_page_pinned_by_a_person_widens_to_the_places_audience_and_is_in_its_activity(api):

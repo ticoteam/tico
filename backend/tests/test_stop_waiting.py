@@ -7,6 +7,7 @@ from backend import wake_presets as W
 from backend.store import H
 from backend.tests.helpers.api import claim, expire, post
 from backend.tests.helpers.stop_waiting import task_attempt
+from backend.tests.helpers.held_runs import no_start_wait
 
 
 def end(c, task_id, status):
@@ -76,8 +77,7 @@ def test_expiry_cancels_stopped_or_finished_work_and_preserves_normal_retry(api,
     # Cancellation must win even over the pre-start failure threshold.
     if cause != "open":
         monkeypatch.setattr(execution, "PRE_START_TRIES", 1)
-    # A lapse now waits before the job goes out again (execution.handed_back_until); not what this test is about.
-    monkeypatch.setattr(execution, "HAND_BACK_WAIT", 0)
+    no_start_wait(monkeypatch)  # a lapse's wait before the next try is not what this test is about
     machine, task, attempt = task_attempt(api)
     if started:
         post(api, f"attempts/{attempt['id']}/started", {"thread_id": "thread"}, machine["token"])

@@ -440,8 +440,9 @@ def test_a_sensitive_vendor_whose_grouping_gives_someone_a_value_asks_and_a_vend
     assert summary["skipped"] == ["calendly: CALENDLY_API_KEY is on two tools"]
     assert {"aws", "aws-2", "calendly", "calendly-2"} <= set(names(api))
     with api.app.state.store.read() as c:
-        task = c.execute("SELECT title, body, owner_id AS owner FROM tasks WHERE title='Group AWS?'").fetchone()
-    assert task["owner"] == "bot:doc-updater" and "bot:finance" in task["body"]
+        task = c.execute("SELECT id, title, owner_id AS owner FROM tasks WHERE title='Group AWS?'").fetchone()
+        said = H.task_words(c, task["id"])  # what Tico asked the tools' owner (tasks have no description)
+    assert task["owner"] == "bot:doc-updater" and "bot:finance" in said
     regroup(api)  # asked once
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM tasks WHERE title='Group AWS?'").fetchone()[0] == 1
@@ -461,10 +462,11 @@ def test_a_login_pair_stored_as_two_keys_is_offered_to_the_tools_owner_once_and_
     assert regroup(api)["logins"] == 0
     with api.app.state.store.read() as c:
         task = c.execute(
-            "SELECT owner_id AS owner, body FROM tasks WHERE title='Make CLICK2MAIL a website account?'"
+            "SELECT id, owner_id AS owner FROM tasks WHERE title='Make CLICK2MAIL a website account?'"
         ).fetchone()
-    assert task["owner"] == "bot:doc-updater" and "CLICK2MAIL_PASSWORD" in task["body"]
-    assert "acme-synthetic-portal-pass-02" not in task["body"]
+        said = H.task_words(c, task["id"])
+    assert task["owner"] == "bot:doc-updater" and "CLICK2MAIL_PASSWORD" in said
+    assert "acme-synthetic-portal-pass-02" not in said
     env = env_of(api, run(api)["ops"])
     assert env["CLICK2MAIL_PASSWORD"] == "acme-synthetic-portal-pass-02"
 

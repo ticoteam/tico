@@ -107,10 +107,8 @@ def notes(api, action="screening.held"):
 def owned(api, owner):
     with api.app.state.store.read() as c:
         return [
-            dict(t)
-            for t in c.execute(
-                "SELECT id,title,body,owner_id FROM tasks WHERE owner_id=? ORDER BY created_at", (owner,)
-            )
+            {**dict(t), "body": H.task_words(c, t["id"])}  # what it was filed with: no description any more
+            for t in c.execute("SELECT id,title,owner_id FROM tasks WHERE owner_id=? ORDER BY created_at", (owner,))
         ]
 
 

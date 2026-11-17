@@ -10,7 +10,7 @@ Done when: the brief is on the task with the counts, every mailbox read that fai
 
 ---
 
-## 1. Read the task and the preferences
+## 1. Read the task's chat and the preferences
 
     tico task show <id>
 

@@ -35,6 +35,15 @@ def mapped(monkeypatch, repo_map):
     monkeypatch.setattr(checks, "DependencyMap", lambda root: repo_map if root == ROOT else build(root))
 
 
+def test_diff_facts_change_selects_its_tests(repo_map):
+    changed = ["scripts/diff_facts.py"]
+    test = "scripts/tests/test_diff_facts.py"
+    assert test in repo_map.run_by[changed[0]]
+    picked = checks.selection(changed, graph=repo_map)
+    assert test in picked["python"]
+    assert test in checks.narrow(picked, changed, "pull_request", graph=repo_map)["python"]
+
+
 def test_uncertain_changes_run_the_smoke_set_never_everything_and_ui_keeps_its_map(tmp_path, mapped):
     smoke_tests, smoke_scripts = checks.smoke(ROOT)
     for changed in (
@@ -317,7 +326,7 @@ def test_install_retry_is_bounded_and_warm_browser_or_python_never_downloads_apt
     cache = tmp_path / "playwright-system"
     cache.mkdir()
     (cache / "complete").touch()
-    for suite in ("python", "browser"):
+    for suite in ("python", "browser", "types"):
         log.write_text("")
         result = subprocess.run(
             ["bash", str(ROOT / "scripts/ci_install.sh"), "--once", suite], env=env, capture_output=True
@@ -325,13 +334,20 @@ def test_install_retry_is_bounded_and_warm_browser_or_python_never_downloads_apt
         assert result.returncode == 0, result.stderr.decode()
         calls = log.read_text()
         assert "update" not in calls and "--download-only" not in calls and "--with-deps" not in calls
-        if suite == "python":
+        if suite == "types":
+            assert calls == ""  # the venv alone: no npm, no UI build, no system packages
+        elif suite == "python":
             assert calls.splitlines() == [
                 "npm ci --fetch-retries=1 --no-audit --no-fund --prefer-offline",
                 "npm run --silent build:ui",
             ]
         else:
             assert "--no-download install" in calls and "playwright install chromium webkit" in calls
+            # dpkg runs beside pip and npm, and finishes before the browsers install.
+            lines = calls.splitlines()
+            assert "--force-unsafe-io" in calls
+            dpkg = next(i for i, line in enumerate(lines) if "--no-download install" in line)
+            assert dpkg < next(i for i, line in enumerate(lines) if "playwright install" in line)
 
 
 def test_cached_system_packages_match_the_locked_browser_version():
@@ -396,7 +412,13 @@ def test_free_disk_removes_the_unused_sdks_only_under_the_space_a_job_needs(tmp_
 def test_a_route_change_selects_the_contract_tests(repo_map):
     # The spec is generated from the code, so no committed spec file in a route's diff reaches the contract test any more.
     # The route's module reaches it through the app's imports, and the generator reaches it directly.
-    for changed in ("backend/computers_routes.py", "backend/openapi_v2.py"):
+    for changed in (
+        "backend/computers_routes.py",
+        "backend/openapi_v2.py",
+        "backend/api_contract.py",
+        "backend/api_schemas/bots.py",
+        "backend/calendar_api.py",  # declares its routes with **api_v2(...) but is not a *_routes.py
+    ):
         picked = checks.selection([changed], graph=repo_map)
         assert "backend/tests/test_openapi_v2.py" in picked["python"], changed
         # A light pull request narrows the plan (depth 1, the hub app.py is not followed): the contract test must stay.
@@ -1115,7 +1137,7 @@ def test_the_main_cache_warm_up_saves_the_keys_pr_checks_restore():
             assert len(setup) == 1 and steps[setup[0]].get("id") == "python" and setup[0] < at[0], name
             install = [i for i, step in enumerate(steps) if "scripts/ci_install.sh" in str(step.get("run", ""))]
             assert install and at[0] < install[0], name
-    assert sum(venv in str(job) for job in pr["jobs"].values()) == 4  # plan, tests, static, caddy-linux
+    assert sum(venv in str(job) for job in pr["jobs"].values()) == 5  # plan, tests, static, types, caddy-linux
     for ident, uses, args, runner, lookup in warmed:
         assert runner in ("ubuntu-24.04", "macos-latest"), ident
         assert any((uses, args) == (r[1], r[2]) and runner == r[3] for r in restored), ident
@@ -1281,6 +1303,7 @@ def test_every_job_runs_on_a_github_hosted_runner_and_only_a_ready_pull_request_
     assert set(jobs) == {
         "plan",
         "static",
+        "types",
         "tests",
         "checks",
         "rust-lint",
@@ -1305,9 +1328,10 @@ def test_a_draft_starts_no_job_and_marking_it_ready_or_pushing_to_a_ready_pull_r
     # On a ready pull request nothing but the draft flag holds back the plan, the static checks and the gate. The static
     # checks run on pull requests only: the merge queue runs them in the plan's merge commit checks.
     assert doc["jobs"]["plan"]["if"] == "${{ !github.event.pull_request.draft }}"
-    assert (
-        doc["jobs"]["static"]["if"] == "${{ github.event_name == 'pull_request' && !github.event.pull_request.draft }}"
-    )
+    for name in ("static", "types"):
+        assert (
+            doc["jobs"][name]["if"] == "${{ github.event_name == 'pull_request' && !github.event.pull_request.draft }}"
+        ), name
     assert doc["jobs"]["checks"]["if"] == "${{ always() && !github.event.pull_request.draft }}"
     # Every other workflow that runs on a pull request holds its jobs back on a draft too (a push to main still runs).
     for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
@@ -1510,7 +1534,7 @@ def test_a_ui_file_outside_the_map_runs_its_readers_its_linked_scripts_and_the_s
 
 
 def test_index_html_script_urls_map_to_the_files_the_server_serves():
-    # The page names scripts by URL (backend/ui_bundle.py): /tico/ui/x is ui/x, /vendor/x is ui/vendor/x.
+    # The page names scripts by URL (scripts/build-ui.cjs): /tico/ui/x is ui/x, /vendor/x is ui/vendor/x.
     diff = (
         '+<script src="/tico/ui/app/b.ts"></script>\n'
         '+<script src="/vendor/marked.min.js"></script>\n'
@@ -1881,11 +1905,16 @@ def test_a_queue_group_runs_every_whole_tree_static_check_on_its_merge_commit_be
     script = (ROOT / "scripts/ci/merge_commit_checks.sh").read_text()
     # Every static check runs on the merge commit too, the per-file ones included: they share configuration (a lint rule
     # one pull request turns on can fail the other's new code).
-    static = [str(step.get("run", "")) for step in jobs["static"]["steps"] if step.get("run")]
+    static = [str(step.get("run", "")) for job in ("static", "types") for step in jobs[job]["steps"] if step.get("run")]
     found = {re.search(r"scripts/[\w/]+\.(?:py|sh)", run).group(0) for run in static if "scripts/" in run}
     found -= {"scripts/ci_install.sh"}  # the static job's install, which the plan job has already done
     found |= {"-m backend.openapi_v2 --check", "npm ci --ignore-scripts", "pinned_tool.sh actionlint"}
-    assert found >= {"scripts/check_migration_order.py", "scripts/lint.sh", "scripts/check_ui_lint.sh"}
+    assert found >= {
+        "scripts/check_migration_order.py",
+        "scripts/lint.sh",
+        "scripts/check_ui_lint.sh",
+        "scripts/check_types.sh",
+    }
     for name in found:
         assert name in script, name
     assert 'LINT_BASE_REF="$base"' in script and 'PYRIGHT_BASE_REF="$base"' in script
@@ -2462,8 +2491,7 @@ def test_a_cli_command_change_runs_the_cli_spec_test_even_in_a_light_plan(event,
         "ui/parts.json",
         "ui/index.html",
         "ui/vendor/marked.min.js",
-        "backend/ui_bundle.py",
-        "backend/ui_compression.py",
+        "backend/ui_build.py",
         "scripts/build-ui.cjs",
         "package-lock.json",
     ],

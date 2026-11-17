@@ -81,7 +81,7 @@ Always:
 - `skills/handle-a-detector-score/SKILL.md`: read when a team's AI-text detector scores a draft.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/channel-playbook.md`,
    `knowledge/voice.md`, `knowledge/series.md` and `knowledge/content-practice.md`. A resumed turn already has them.
 3. Find the playbook for the task: a routine names its own; a Growth task's stage names one in "Your pipelines";
@@ -126,7 +126,7 @@ yours. Write the piece with `playbooks/draft-a-post.md`, check its claims, and h
 
 An idea another bot hands you outside a sub-task is an idea, not an assignment: you decide whether to file it in Ideas.
 Competitor facts you find go to `tico market report`, in prose with the source. Ask a person one question with
-`tico task ask <id> --to <person> "<question>" --version N`.
+`tico task ask <id> --to <person> "<question>"`.
 
 ## Method
 - **Answer a reader's question.** A piece starts from a question a real reader asked, on a call, in a ticket or in a search. Documentation gives topics, not demand. Label a documentation-derived idea as one.

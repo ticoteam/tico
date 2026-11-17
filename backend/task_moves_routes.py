@@ -22,7 +22,6 @@ from . import models as M
 from . import org_rule_check as _org_rule_check
 from . import reach as _reach
 from . import setup_live as _setup_live
-from . import strategy_merge as _strategy_merge
 from . import task_asks as _task_asks
 from . import task_caps as _task_caps
 from . import task_rule_gate as _task_rule_gate
@@ -40,7 +39,6 @@ ask_ingest: Any = _ask_ingest
 org_rule_check: Any = _org_rule_check
 reach: Any = _reach
 setup_live: Any = _setup_live
-strategy_merge: Any = _strategy_merge
 task_asks: Any = _task_asks
 task_caps: Any = _task_caps
 task_rule_gate: Any = _task_rule_gate
@@ -75,6 +73,33 @@ def parse_until(value: object) -> str | None:
     if stamp <= H.now():
         raise Problem("date", "until is a date to come", 422)
     return stamp
+
+
+# An OK approves what it shows: the choices an older client's question carried are not an OK's.
+OK_NO_CHOICES = (
+    'An OK approves what it shows and has no choices. To ask a question, ask it: tico task ask <id> --to <person> "<line>", '
+    "with the options in its words."
+)
+
+
+def question_words(body: M.TaskAsk) -> str:
+    """An older client's question (`answer`) as a ❓'s words: its line first, then why it matters, each choice with
+    what happens on it, and the one it recommends. Its title is the line's heading only, so it is left out."""
+    parts = [body.line.strip()]
+    if body.why and body.why.strip():
+        parts.append(body.why.strip())
+    details = list(body.details or [])
+    picks = [
+        f"- {choice.strip()}: {details[n].strip()}"
+        if n < len(details) and details[n].strip()
+        else f"- {choice.strip()}"
+        for n, choice in enumerate(body.choices or [])
+    ]
+    if body.recommend and body.recommend.strip():
+        picks.append(f"I'd pick {body.recommend.strip()}.")
+    if picks:
+        parts.append("\n".join(picks))
+    return "\n\n".join(parts)
 
 
 def register(
@@ -732,88 +757,27 @@ def register(
 
     # ------------------------------------------------------------------ asks
     def ask_said(body: Any) -> list[tuple[str, Any]]:
-        """What the rule check reads of an ask: its line, why it matters, each choice with its line (the one
-        recommended marked) and what it shows. One call reads all of it."""
-        details: list[str] = list(body.details or [])
-        best = ask_shape.recommended(body.choices, body.recommend)
-        choices = [
-            f"{label}{' (recommended)' if label.strip() == best else ''}"
-            + (f": {details[i]}" if i < len(details) and details[i] else "")
-            for i, label in enumerate(body.choices or [])
-        ]
-        return [
-            ("Title", body.title),
-            ("Ask", body.line),
-            ("Why", body.why),
-            ("Choices", "\n".join(choices)),
-            ("Shows", "\n".join(body.show or [])),
-        ]
-
-    def ask_brief(body: Any) -> dict[str, Any] | None:
-        """What a question keeps besides its line and choices (task_calls._brief_of reads it back)."""
-        if not (body.why or "").strip():
-            return None
-        return {
-            "why": body.why.strip(),
-            "details": [d.strip() for d in body.details] if body.details else None,
-            "recommend": ask_shape.recommended(body.choices, body.recommend),
-        }
+        """What the rule check reads of an ask: its line and what it shows. One call reads all of it."""
+        return [("Ask", body.line), ("Shows", "\n".join(body.show or []))]
 
     def ask_shape_refused(request: Request, tid: str, body: M.TaskAsk | M.TaskOkAsk) -> None:
-        """A bot's ask to a person that is not shaped as one (backend/ask_shape.py: its line and why, and a question's
-        why and choices) is refused before the rule check's call, and nothing is written but the refusal (rule
-        `task_ask_shape`: fixed by rewriting, never counted toward quarantine)."""
+        """A bot's ask to a person whose line is not shaped as one (backend/ask_shape.py) is refused before the rule
+        check's call, and nothing is written but the refusal (rule `task_ask_shape`: fixed by rewriting, never counted
+        toward quarantine). What an OK shows is the engine's to check (task_engine.shows_a_file)."""
         caller: Any = request.state.identity
         if caller.role != "bot":
             return
-        why = body.why if isinstance(body, M.TaskAsk) else None
         with store.read() as c:
             target = H.resolve_actor(c, body.to) or ""
             if not H.is_human(target):
                 return
-            said = [ask_shape.line_refusal(body.line, why)]
-            if isinstance(body, M.TaskAsk) and body.kind == "answer":
-                said.append(question_refused(c, target, body))
-            detail = " ".join(filter(None, said))
-        if detail:
+        if detail := ask_shape.line_refusal(body.line):
             work(
                 request,
                 tid,
                 body,
                 lambda c, who, task_id: H.refuse(c, who.actor, "task_ask_shape", detail, task=task_id),
             )
-
-    def question_refused(c: Any, target: str, body: M.TaskAsk) -> str | None:
-        """What a bot's question to a person lacks: its why, its choices' shape, what it shows (ask_shape.refusal)."""
-        name = H.actor_name(c, target) or "They"
-
-        def exists(kind: str, ident: str, version: int | None) -> bool:
-            """A task by its id or number (the number through its unique index). A page or file by its id (pages
-            are files), not archived, not a deleted page, and at the version it pins when it pins one."""
-            if kind == "task":
-                number = int(ident) if ident.isdigit() and int(ident) < 2**63 else None
-                return c.execute("SELECT 1 FROM tasks WHERE id=? OR number=?", (ident, number)).fetchone() is not None
-            found = c.execute(
-                "SELECT f.current_version FROM bot_files f LEFT JOIN pages p ON p.file_id=f.id WHERE f.id=? "
-                "AND f.archived=0 AND (p.file_id IS NULL OR (p.deleted_at IS NULL AND p.archived=0))",
-                (ident,),
-            ).fetchone()
-            if found is None:
-                return False
-            if version is None:
-                return True
-            sql = "SELECT 1 FROM bot_file_versions WHERE file_id=? AND version=?"
-            return c.execute(sql, (ident, version)).fetchone() is not None
-
-        return ask_shape.refusal(
-            name,
-            why=body.why,
-            choices=body.choices,
-            details=body.details,
-            recommend=body.recommend,
-            shows=body.show,
-            exists=exists,
-        )
 
     def ask_call(c: Any, who: Any, task_id: str, body: Any, gate: Any, params: Any, ingest: Any) -> Any:
         from . import lifecycle as _lifecycle
@@ -830,12 +794,9 @@ def register(
             body.to,
             body.line,
             kind=body.kind,
-            choices=body.choices,
             shows=body.show or None,
             seen_version=version,
             mover=mover(c, who) or None,
-            brief=ask_brief(body),
-            title=(body.title or "").strip() or None,
         )
         if gate and gate.get("late"):
             saved: dict[str, Any] = H.task(c, task_id) or {}
@@ -849,16 +810,22 @@ def register(
         **api_v2(
             "Tasks",
             "askOnTask",
-            "Ask a person on the task, in one sentence: a question (kind answer, with choices where there are some) or an OK. The task stays in its stage until they answer; the answer carries requirement_id",
+            "Ask a person on the task for an OK of what it shows, in one sentence. The task stays in its stage until they answer; carries requirement_id. A question is a message marked ❓ (POST /api/v2/tasks/{tid}/questions)",
             "TaskResult",
         ),
     )
     def task_ask(request: Request, tid: str, body: M.TaskAsk):
-        """Ask a person on the task, in one sentence: a question (with choices, or a typed answer) or an OK (C19). A
-        bot's ask a company rule covers is refused with the rule's words (docs/dev/pipelines-v3.md, "How a rule stops the
-        next one"). A bot's ask to a person has a short first line that stands on its own, and a question says why it
-        matters, with choices (2 to 4) that each say what happens and the one it recommends (backend/ask_shape.py):
-        refused before any check otherwise."""
+        """Ask a person on the task for an OK of what it shows, in one sentence (C19). A bot's ask a company rule covers
+        is refused with the rule's words (docs/dev/pipelines-v3.md, "How a rule stops the next one"). A bot's ask to a
+        person has a short first line that stands on its own and shows only what the person can open
+        (backend/ask_shape.py): refused before any check otherwise. A question (`answer`) is a message marked ❓: it is
+        asked as one (POST /api/v2/tasks/{tid}/questions, backend/question_marks.py), with the parts an older client
+        sends as words in it (`question_words`), so a computer's `tico` from before ❓ marks still asks."""
+        if body.kind == "answer":
+            text = question_words(body)
+            return request.app.state.task_question(request, tid, M.Question(to=body.to, text=text))
+        if body.choices or body.details or body.recommend:
+            raise Problem("validation", OK_NO_CHOICES, 422)
         ask_shape_refused(request, tid, body)
         return checked(request, tid, body, "task_ask")
 
@@ -880,8 +847,7 @@ def register(
         return checked(request, tid, body, "task_withdraw_ask", {"requirement_id": requirement_id})
 
     def answer_said(body: Any) -> list[tuple[str, Any]]:
-        typed = body.value if body.value.strip().lower() not in task_rule_gate.BUTTONS else None
-        return [("Answer", typed), ("Note", body.note)]
+        return [("Note", body.note)]
 
     def answer_call(c: Any, who: Any, task_id: str, body: Any, gate: Any, params: Any, ingest: Any) -> Any:
         asked = requirement_on(c, task_id, params["requirement_id"])
@@ -904,8 +870,6 @@ def register(
             visit_id=body.visit_id,
             keyed=True,
         )
-        # An answer on the Strategy Owner's merged item goes to each original it stands for.
-        strategy_merge.on_answer(c, who.actor, task_id, body.value)
         return {"answer_id": done.get("answer_id")}
 
     def asker(c: Any, params: dict[str, Any]) -> list[str]:
@@ -922,13 +886,12 @@ def register(
         **api_v2(
             "Tasks",
             "answerAsk",
-            "Answer a requirement: ok, no (send it back, with a note), again (look again), or the answer to a question; a stage's answer may be named by its name instead of its id, and takes a whole number in its range, one of its choices, or text; carries answer_id",
+            "Answer an OK: ok, or no (send it back, with a note); carries answer_id",
             "TaskResult",
         ),
     )
     def task_answer(request: Request, tid: str, requirement_id: str, body: M.TaskAskAnswer):
-        """OK, send back (`no` with a note), look again (`again`), or the answer to a question. A requirement of the
-        stage is answered here too."""
+        """OK, or send back (`no` with a note). A requirement of the stage is answered here too."""
         return checked(request, tid, body, "task_ask_answer", {"requirement_id": requirement_id})
 
     @app.post(
@@ -1002,24 +965,6 @@ def register(
 
         def call(c: Any, who: Any, task_id: str) -> Any:
             H.task_give(c, who.actor, task_id, requirement_on(c, task_id, requirement_id), body.to, body.version)
-
-        return work(request, tid, body, call)
-
-    @app.post(
-        "/api/v2/tasks/{tid}/asks/{requirement_id}/thumbs",
-        **api_v2(
-            "Tasks",
-            "rateAsk",
-            "Was this worth asking: up, or down with what was wrong (which sends an open ask back)",
-            "TaskResult",
-        ),
-    )
-    def task_thumbs(request: Request, tid: str, requirement_id: str, body: M.TaskAskThumbs):
-        """Was this worth asking. A thumbs down says what was wrong, and sends an open ask back."""
-
-        def call(c: Any, who: Any, task_id: str) -> Any:
-            done = H.task_thumbs(c, who.actor, task_id, requirement_on(c, task_id, requirement_id), body.up, body.note)
-            return {"feedback_id": done.get("feedback_id")} if done.get("feedback_id") else None
 
         return work(request, tid, body, call)
 

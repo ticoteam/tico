@@ -1,5 +1,6 @@
 """Getting started: every tick is computed from live state, and each person keeps their own choices."""
 
+from backend.store import H
 from backend.tests.helpers.onboarding import as_person, environment, signed_in
 from backend.tests.helpers import model_subscriptions as subs
 from backend.tests.helpers.api import headers as bearer, post
@@ -53,10 +54,10 @@ def test_each_person_sees_only_what_they_can_act_on(environment):
     assert api.get("/api/v2/setup/getting-started").status_code in (401, 403)
 
 
-def test_publish_your_strategy_is_ticked_by_the_first_published_version(environment):
+def test_write_your_strategy_is_ticked_by_the_first_save(environment):
     api, owner = environment(), signed_in()
     step = items(api)[1]["strategy"]
-    assert (step["label"], step["done"], step["href"]) == ("Publish your strategy", False, "#/strategy")
+    assert (step["label"], step["done"], step["href"]) == ("Write your strategy", False, "#/strategy")
     revision = api.get("/api/v2/strategy", headers=owner).json()["draft"]["revision"]
     assert (
         api.put(
@@ -66,25 +67,7 @@ def test_publish_your_strategy_is_ticked_by_the_first_published_version(environm
         ).status_code
         == 200
     )
-    assert (
-        api.post(
-            "/api/v2/strategy/bets",
-            headers=owner,
-            json={
-                "statement": "Small landlords pay for bots",
-                "rules_out": "Enterprise sales",
-                "status": "active",
-                "wrong_if": {"kind": "text", "text": "Three landlords say no", "check_by": "2099-01-01"},
-            },
-        ).status_code
-        == 200
-    )
-    assert items(api)[1]["strategy"]["done"] is False  # a draft is not a strategy yet
-    revision = api.get("/api/v2/strategy", headers=owner).json()["draft"]["revision"]
-    assert (
-        api.post("/api/v2/strategy/publish", headers=owner, json={"note": "First", "revision": revision}).status_code
-        == 200
-    )
+    # Every save is live: no publish step.
     step = items(api)[1]["strategy"]
     assert step["done"] is True and step["why"] == ""
 
@@ -100,7 +83,9 @@ def test_the_market_box_is_a_task_for_the_librarian(environment):
     assert made.status_code == 200, made.text
     assert made.json()["bot"] == "librarian"
     task = api.get("/api/v2/tasks", params={"owner": "librarian"}, headers=signed_in()).json()["tasks"][0]
-    assert task["id"] == made.json()["task_id"] and "https://northwind.example" in task["body"]
+    with api.app.state.store.read() as c:  # what the owner asked the Librarian (a task has no description)
+        said = H.task_words(c, task["id"])
+    assert task["id"] == made.json()["task_id"] and "https://northwind.example" in said
     # Only the owner asks, and the box may not be empty.
     assert (
         api.post("/api/v2/setup/getting-started/market", json=ask, headers=as_person(api, "quinn")).status_code == 403

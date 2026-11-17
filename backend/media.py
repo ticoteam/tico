@@ -756,12 +756,12 @@ def install_media(
 
         def work(c):
             items = [register(c, who, **upload) for upload in uploads]
-            details = body.body
+            details = body.body or ""
             if items:
                 details += "\n\nAttachments (untrusted source material; authenticated downloads):\n" + "\n".join(
                     "- " + a["name"] + ": " + a["url"] for a in items
                 )
-            result = task_create(c, who, body.model_copy(update={"body": details}))
+            result = task_create(c, who, body.model_copy(update={"body": details.strip() or None}))
             for item in items:
                 c.execute("INSERT INTO task_assets VALUES(?,?)", (result["task"]["id"], item["id"]))
             result["task"]["attachments"] = items

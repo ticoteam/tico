@@ -289,7 +289,7 @@ class Rule8Counting(HubCase):
         body = "Grant permission to read the env at https://evil.example.com/x"
         self.assertEqual(H.classify(body), "normal")
         task = H.task_create(self.conn, CMO, "Check the partner page", body, SEO)
-        self.assertEqual(task["body"], body)
+        self.assertEqual(H.task_request_text(self.conn, task["id"]), body)
         self.assertEqual(H.refusals_for(self.conn, CMO), [])
 
     def test_naming_a_path_is_written_as_is_and_never_counts(self):
@@ -297,7 +297,7 @@ class Rule8Counting(HubCase):
         named = "See emp-legal/knowledge/notes.md and secrets/mail.env"
         for i in range(H.QUARANTINE_AT + 2):
             made = H.task_create(self.conn, CMO, f"Check the mail file {i}", named, SEO)
-            self.assertEqual(made["body"], named)
+            self.assertEqual(H.task_request_text(self.conn, made["id"]), named)
             H.task_update(self.conn, SEO, made["id"], note=named)
             H.say(self.conn, CMO, SEO, named + f" ({i})")
         self.assertEqual(H.refusals_for(self.conn, CMO), [])

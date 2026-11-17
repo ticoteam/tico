@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from backend import claim_holds, execution, holds, login_holds, start_holds, task_wakes, views
+from backend import bot_stops, execution, holds, login_holds, task_wakes, views
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, post, ready, runner
 from backend.tests.helpers.run_failures import failing
@@ -53,7 +53,16 @@ def _usage_limit(api, c, rig):
 
 def _cant_start(api, c, rig):
     review = H.task_create(c, H.KEEPER, "Find why ops's runs can't start", "Why.", "human:ana", lint=False)
-    H.event(c, H.KEEPER, start_holds.EVENT, rig["task_id"], {"bot": "ops", "review": review["id"], "reason": "x"})
+    holds.put(
+        c,
+        holds.CANT_START,
+        "task",
+        rig["task_id"],
+        actor=H.KEEPER,
+        bot_id="ops",
+        reason="x",
+        upkeep_task_id=review["id"],
+    )
 
 
 def _task_quarantine(api, c, rig):
@@ -61,7 +70,7 @@ def _task_quarantine(api, c, rig):
 
 
 def _claim_held(api, c, rig):
-    claim_holds.hold(c, api.app.state.store.settings, rig["job_id"], "RuntimeError")
+    bot_stops.hold_job(c, api.app.state.store.settings, rig["job_id"], "RuntimeError")
 
 
 def _handed_back(api, c, rig):
@@ -92,7 +101,7 @@ CASES = [
     Case(holds.QUARANTINED, _bot_state("quarantined"), card="is quarantined", label="bot quarantined"),
     Case(
         holds.COMPANY_PAUSED,
-        lambda api, c, rig: _metadata(c, "company_pause", {"paused_by": "human:ana", "paused_at": NOW}),
+        lambda api, c, rig: holds.put(c, holds.PAUSED, "company", "", actor="human:ana"),
         health="company_paused",
         card=task_wakes.COMPANY_PAUSED,
         label="all bots are paused",
@@ -246,9 +255,7 @@ def _second_run(c, job_id):
     message = dict(c.execute("SELECT * FROM messages WHERE id=?", (job["message_id"],)).fetchone())
     task = json.loads(message["refs"])["task"]
     message.update(id=message["id"] + "-again", wake_key=None, sender_id="human:ana", refs=json.dumps({"task": task}))
-    job.update(
-        id=job_id + "-again", message_id=message["id"], held=0, hold_until=None, hold_reason=None, hold_task_id=None
-    )
+    job.update(id=job_id + "-again", message_id=message["id"], held=0, hold_until=None)
     for table, row in (("messages", message), ("jobs", job)):
         c.execute(f"INSERT INTO {table}({','.join(row)}) VALUES({','.join('?' * len(row))})", tuple(row.values()))
     return job["id"]

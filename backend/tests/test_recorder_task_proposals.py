@@ -195,7 +195,7 @@ def test_post_save_create_applies_current_edits_under_the_saved_version_and_repl
     assert result['item']['result_ref'] == replay['item']['result_ref']
     created = get(api, 'tasks/' + result['item']['result_ref'])['task']
     assert created['owner_id'] == 'human:cara' and created['title'] == edited['text']
-    assert 'The current details' in created['body'] and created['due_at']
+    assert 'The current details' in created['request']['text'] and created['due_at']
     with api.app.state.store.read() as c:
         assert c.execute('SELECT count(*) FROM tasks WHERE id=?', (created['id'],)).fetchone()[0] == 1
     saved = add(api, rid, {'section': 'task', 'text': 'Send the plan'})['item']

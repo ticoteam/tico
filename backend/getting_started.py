@@ -307,9 +307,9 @@ def checklist(c, who, settings, github):
         ),
         _item(
             "strategy",
-            "Publish your strategy",
+            "Write your strategy",
             _published(c),
-            "Setup saved a draft. Publish it when the bets and what you won't do are right.",
+            "Your bets and what you won't do. Every save is live.",
             "#/strategy",
         ),
     ]
@@ -317,7 +317,8 @@ def checklist(c, who, settings, github):
 
 
 def _published(c):
-    """The team has published a strategy version (backend/strategy.py); a server without the table has not."""
+    """The team has a strategy version, which every save makes (backend/strategy.py); a server without the table has
+    not."""
     try:
         return c.execute("SELECT 1 FROM strategy_versions WHERE status='published' LIMIT 1").fetchone()
     except sqlite3.OperationalError:
@@ -355,19 +356,22 @@ def view(c, who, settings, auth, github=None):
 
 
 # ------------------------------------------------------------------ actions
-def _task(c, auth, who, owner, title, body):
+def _task(c, auth, who, owner, title, instructions):
+    """A set-up task Tico files for the person who asked: its title says what is wanted, and `instructions`, the steps,
+    reach the bot through its run, never the task's chat (a task is a title and a chat)."""
     from . import rooms
 
     if owner == BOTOPS:
         from .botops_act import request_task
 
-        return request_task(c, auth, who, title, body)
+        return request_task(c, auth, who, title, instructions=instructions)
     return H.task_create(
         c,
         who.actor,
         title,
-        body,
+        "",
         "bot:" + owner,
+        instructions=instructions,
         allow_planned=True,
         conversation_id=rooms.task_conversation_id(c, auth, "bot:" + owner, who.actor),
     )

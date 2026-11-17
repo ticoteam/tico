@@ -1,4 +1,4 @@
-"""The company-wide pause: one Hub record, who may pause and resume, and a refusal that changes nothing.
+"""The company-wide pause: one open hold, who may pause and resume, and a refusal that changes nothing.
 
 Synthetic fixture team only (backend/tests/helpers/api_app.py): ana is the owner, ben an admin, cara a member.
 """
@@ -14,7 +14,9 @@ from backend.tests.helpers.api import get, post  # noqa: F401
 
 def _record_rows(api):
     with api.app.state.store.read() as c:
-        return c.execute("SELECT COUNT(*) FROM registry_metadata WHERE key='company_pause'").fetchone()[0]
+        return c.execute(
+            "SELECT COUNT(*) FROM holds WHERE kind='paused' AND holdable_type='company' AND released_at IS NULL"
+        ).fetchone()[0]
 
 
 def _bot_state(api, bot):

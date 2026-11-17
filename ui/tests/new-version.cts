@@ -5,7 +5,7 @@ const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs = require('node:fs') as typeof import('node:fs');
 const path = require('node:path') as typeof import('node:path');
-const {html, uiFile, bundled} = require('./support/page.cts');
+const {html, uiFile} = require('./support/page.cts');
 const {unrouted} = require('./support/routes.cts');
 const {t} = (() => { try { return require('./support/load.cts') as import('./support/load.cts').Api; } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
 const shots = process.env.TICO_SCREENSHOT_DIR;
@@ -129,14 +129,14 @@ const UPDATE: NewVersionUpdate = {current: '0.1.0', latest: '0.2.0', available: 
     await v.ctx.close();
 
     // The same release with another build of the page's script and stylesheet (an image rebuilt without a new
-    // version) shows the bar too, in the bundled page; the page's own build matches the config's and shows nothing.
+    // version) shows the bar too; the page's own build matches the config's and shows nothing.
     v = await visit({update: {...UPDATE, available: false}});
     const own = await v.page.evaluate(() => PAGE_BUILD);
-    assert.equal(!!own, bundled, 'the page knows its build when it is bundled');
+    assert.ok(own, 'the page knows its build');
     await v.page.evaluate(b => get('/v2/config').then(c => applyConfig({...c, ui_build: b})), own || 'aaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbb');
     assert.equal(await v.page.locator('#stale-banner').isVisible(), false, 'the same build shows nothing');
     await v.page.evaluate(() => get('/v2/config').then(c => applyConfig({...c, ui_build: '0123456789abcdef.fedcba9876543210'})));
-    assert.equal(await v.page.locator('#stale-banner').isVisible(), bundled, 'another build shows the bar when the page is bundled');
+    assert.equal(await v.page.locator('#stale-banner').isVisible(), true, 'another build shows the bar');
     await v.ctx.close();
 
     // A tab shown again asks at once, not at the next poll.

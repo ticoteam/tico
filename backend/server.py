@@ -16,7 +16,7 @@ def run(*, host="127.0.0.1", port=8765, settings=None, log_level="info"):
     from .screen_binary import prepare
     from . import ui_build
 
-    # A server never starts on a UI whose TypeScript is not compiled or is out of date (backend/ui_build.py).
+    # A server never starts on a UI build that is missing or out of date (backend/ui_build.py).
     try:
         ui_build.prepare(settings.ui_dir if settings else ui_build.ROOT / "ui")
     except ui_build.StaleBuild as exc:

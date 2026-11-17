@@ -60,27 +60,25 @@ def test_needs_you_and_the_sidebar_list_the_same_open_mentions(api):
 
 
 def test_a_reply_to_the_person_needs_them_on_both_readers_until_they_post(api):
-    """A reply to a message of the person's needs them (the Nov 6 reply_needs_you intent), from a person or a bot,
-    and it clears when they post in that thread."""
-    setup_attempt(api, "finance")
+    """A person's reply to a message of the person's needs them (the Nov 6 reply_needs_you intent), and it clears when
+    they post in that thread."""
     tid = members_thread(api, members=("human:ana", "human:ben"))
     asked = say(api, tid, "Lease: sign it?", actor="human:ana")
     human = say(api, tid, "Yes, sign it.", actor="human:ben", in_reply_to=asked["id"])
-    bot = say(api, tid, "Signed copy filed.", actor="bot:finance", in_reply_to=asked["id"])
-    expected = sorted([human["id"], bot["id"]])
-    assert needs_you_mentions(api) == attention_mentions(api) == expected
+    assert needs_you_mentions(api) == attention_mentions(api) == [human["id"]]
     say(api, tid, "Thanks.", actor="human:ana")
     assert needs_you_mentions(api) == attention_mentions(api) == []
 
 
-def test_a_bots_reply_that_ats_the_person_still_needs_them(api):
-    """A reply keeps its winning reason in the delivery: the bot's @ in its reply to the person is a `mention` from a bot.
-    Both readers still list it, because the reply target decides, not the reason."""
+def test_a_bots_reply_to_the_person_never_needs_them_even_with_an_at(api):
+    """A bot's message needs a person only by its ❓ (backend/question_marks.py): its reply, with an @ or without, marks
+    the thread unread and stays out of Needs you, on a task that has moved on as anywhere else."""
     setup_attempt(api, "finance")
     tid = members_thread(api)
     asked = say(api, tid, "Lease: sign it?", actor="human:ana")
-    bot = say(api, tid, "@ana please confirm the lease date.", actor="bot:finance", in_reply_to=asked["id"])
-    assert needs_you_mentions(api) == attention_mentions(api) == [bot["id"]]
+    say(api, tid, "Signed copy filed.", actor="bot:finance", in_reply_to=asked["id"])
+    say(api, tid, "@ana please confirm the lease date.", actor="bot:finance", in_reply_to=asked["id"])
+    assert needs_you_mentions(api) == attention_mentions(api) == []
 
 
 def test_a_sidebar_mention_is_always_one_that_needs_you_lists(api):

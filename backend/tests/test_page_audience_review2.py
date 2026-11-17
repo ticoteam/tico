@@ -32,17 +32,17 @@ def test_counsel_edit_then_narrow_scrubs_history_comments_results_and_sse(api):
     edit(api, fid, {"people": ["cara"], "bots": [H.RULES_OWNER]})
     tid = post(api, "rules/read", {"file_id": fid, "source_id": source(api)}, token="cara-test")["task_id"]
     task = get(api, "tasks/" + tid, token="cara-test")["task"]
-    original = task["body"]
+    original = task["request"]["text"]  # what Cara asked: the task's first message, the document fenced in it
     assert "42 deals" in original
     changed = {
-        "body": original + "\nReview this document.",
         "note": "The document says 42 deals.",
         "version": task["version"],
     }
     post(api, "tasks/" + tid, changed, token="cara-test", key="edit-page-copy")
     machine, attempt = counsel_run(api)
     aid = attempt["id"]
-    post(api, "tasks/" + tid + "/comments", {"text": "The document reports 42 deals."}, token=attempt["token"])
+    with api.app.state.store.transaction() as c:  # what its run said on the task (a comment from before the turn's end)
+        H.task_comment(c, "bot:" + attempt["bot"], tid, "The document reports 42 deals.", wake=False)
     output = [
         {"seq": 1, "kind": "message", "payload": {"text": original}},
         {"seq": 2, "kind": "delta", "payload": {"text": original}},
@@ -67,7 +67,7 @@ def test_counsel_edit_then_narrow_scrubs_history_comments_results_and_sse(api):
         before = events.latest(c)
     edit(api, fid, {"people": ["cara"]})
     result = get(api, "tasks/" + tid, token="cara-test")
-    assert result["task"]["body"] == counsel.REMOVED_PAGE
+    assert result["task"]["request"]["text"] == counsel.REMOVED_PAGE
     assert result["events"] and "42 deals" not in json.dumps(result)
     replay = post(api, "tasks/" + tid, changed, token="cara-test", key="edit-page-copy")
     assert "42 deals" not in json.dumps(replay)
@@ -147,8 +147,11 @@ def test_runner_claim_scrubs_message_history_and_stored_refs(api, retry):
     fid = page(api, attempt, task=tid, title="Audience secret").json()["page"]["file_id"]
     with api.app.state.store.transaction() as c:
         cid = H.task(c, tid)["conversation_id"]
+        # The wake the claim hands the bot: the first message after the task's request.
         row = c.execute(
-            "SELECT id,refs FROM messages WHERE conversation_id=? ORDER BY rowid LIMIT 1", (cid,)
+            "SELECT id,refs FROM messages WHERE conversation_id=? AND json_extract(refs,'$.request') IS NULL "
+            "ORDER BY rowid LIMIT 1",
+            (cid,),
         ).fetchone()
         refs = H._json(row["refs"], {})
         refs["attachments"] = [

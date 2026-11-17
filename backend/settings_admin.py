@@ -17,6 +17,7 @@ from . import runner_online
 from . import placement
 from . import providers
 from . import rooms
+from . import company_pause
 from . import shared_bots
 from . import profiles, start_places, task_models, task_run_models, update_feeds, wake_presets
 from .execution import _reported, stranded
@@ -657,6 +658,8 @@ class SettingsAdmin:
             "INSERT INTO bots(id,slug,display_name,effort,state,created_at) VALUES(?,?,?,?,?,?)",
             (bot_id, body.slug, body.display_name, effort, body.status, now),
         )
+        if body.status == "paused":
+            company_pause.pause_bot(c, who.actor, bot_id)
         c.execute(
             "INSERT INTO bot_config(bot,team,owner_id,owner_ids,description,reports_to,"
             "repo,thread_mode,definition_updated_at,definition_updated_by,bot_owners,created_by) "
@@ -677,6 +680,12 @@ class SettingsAdmin:
             ),
         )
         BS.write(c, bot_id, config, now)
+        if body.repo:
+            from .repositories import note_named
+
+            # A repository someone named is chosen, as a definition save records it: Tico clones it even when GitHub
+            # had it before the bot. The name a form fills in by itself is not (repositories.Homes).
+            note_named(c, body.repo, (folder, "bot-" + body.slug), self.settings.github_owner)
         if config.get("repo_access_mode") == "all":
             # The template's repository access (card.yaml), given by default: audited as any change, and not a choice,
             # so a seat's default may still follow it (repositories.untouched).
@@ -1169,6 +1178,10 @@ class SettingsAdmin:
 
             arrive(c, "bot:" + bot, values.get("reports_to"))  # a new manager's report goes last there
         c.execute("UPDATE bots SET display_name=?,state=? WHERE id=?", (values["display_name"], values["status"], bot))
+        if values["status"] == "paused":
+            company_pause.pause_bot(c, who.actor, bot)  # its own pause is a hold (backend/holds.py)
+        elif before.get("status") == "paused":
+            company_pause.resume_bot(c, who.actor, bot)
         if before.get("status") == "paused" and values["status"] == "active":
             # Settings must lift the control API's pause too. An edit to an already-active
             # bot leaves deployment drains intact.

@@ -122,7 +122,7 @@ def open_url(settings, task_id):
 
 
 def preview(c, settings, url, row, button=True):
-    """One `chat.unfurl` entry: a title linked to the pasted URL, the description's start, one
+    """One `chat.unfurl` entry: a title linked to the pasted URL, its request's start, one
     line of facts, and the open button (or, with `button` off, the same link as text)."""
     from .names import lookup
 
@@ -132,7 +132,9 @@ def preview(c, settings, url, row, button=True):
     if len(title) > TITLE_CHARS:
         title = title[: TITLE_CHARS - 1].rstrip() + "…"
     text = f"*<{escape(url)}|{escape(title)}>*"
-    about = excerpt(row.get("body"))
+    from . import hubdb as H
+
+    about = excerpt(H.task_request_text(c, row["id"]) if row.get("id") else "")  # what it asks: its first message
     if about:
         text += "\n" + escape(about)
     facts = [state(c, row)]

@@ -9,7 +9,7 @@ import hashlib
 import sys
 from pathlib import Path
 
-# build/ui: the JavaScript the image serves for ui/'s TypeScript (backend/ui_build.py), its maps and manifest.
+# build/ui: the UI build the image serves (scripts/build-ui.cjs, backend/ui_build.py): the page, the bundle, the maps.
 DIRS = ("backend", "build/ui", "clients", "runner", "runner_support", "runner-rs/harnesses", "ui")
 SKIP = {"__pycache__", "node_modules", "tests"}
 

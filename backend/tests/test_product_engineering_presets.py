@@ -331,7 +331,7 @@ def test_in_development_files_one_engineering_task_with_the_product_text_and_the
         "bot:builder",
     )
     assert eng["title"] == "Saved carts"
-    assert eng["body"] == "Let a shopper keep a cart.\n\nSpec: page:f-spec@3"
+    assert H.task_request_text(c, eng["id"]) == "Let a shopper keep a cart.\n\nSpec: page:f-spec@3"
     assert eng["requester_id"] == "bot:pm"
     assert "handoff_filed" in X.events(c, row["id"])
     standing = R.standings(c, E.task(c, row["id"]))[0]
@@ -799,7 +799,7 @@ def test_the_engineering_task_carries_what_the_person_said_with_their_spec_ok(c)
     ((filed, kind),) = _filed(c, row["id"])
     assert kind == "handoff"
     name = H.actor_name(c, ANA)
-    assert E.task(c, filed)["body"] == (
+    assert H.task_request_text(c, filed) == (
         f"Let a shopper keep a cart.\n\nSpec: page:f-page@1\n\n{name}'s notes on the spec, given with their OK:\n"
         + SPEC_NOTES
     )
@@ -812,7 +812,7 @@ def test_an_ok_with_no_notes_adds_nothing_to_the_engineering_task(c):
     row, rid = _sign_off(c, "product-spec")
     A.answer(c, row["id"], rid, ANA, "ok")
     ((filed, _),) = _filed(c, row["id"])
-    assert E.task(c, filed)["body"] == "Let a shopper keep a cart.\n\nSpec: page:f-page@1"
+    assert H.task_request_text(c, filed) == "Let a shopper keep a cart.\n\nSpec: page:f-page@1"
     assert "notes" not in TW.body(c, E.task(c, row["id"]), to="bot:pm")
 
 

@@ -9,8 +9,8 @@
 
 /** The controls a view hides outright (styles/components.css, html.view-only; the task window's own in task-code.css). */
 const VIEW_HIDDEN = [
-  '#task-mi-new', '#task-mi-edit', '#task-play', '.add-ctl', '[data-need-answer]', '[data-task-follow]', '.p-follow', '.tm-page-add', 'header.ph .ph-add',
-  '[data-page-add]', '[data-page-link]', '[data-answer]', '[data-dash-mode]', '[data-dash-add]',
+  '#task-mi-new', '#task-mi-edit', '#task-play', '.add-ctl', '[data-task-follow]', '.p-follow', '.tm-page-add', 'header.ph .ph-add',
+  '[data-page-add]', '[data-page-link]', '[data-dash-mode]', '[data-dash-add]',
   // 👍 👎 on a bot's or a person's work (feedback.ts): the task window's head and their messages.
   '[data-fb-rate]',
   // The task window: its page +, Ask someone, Follow, Answer, Done or Close, and Stop on a run.
@@ -20,7 +20,7 @@ const VIEW_HIDDEN = [
   // description and the roadmap's "I want this"; a section left with only its heading goes with them.
   '#task-modal [data-task-reopen]', '#task-modal [data-tp-drop]', '#task-modal .prop-add', '#task-modal .prop-x',
   '#task-modal [data-drop-link]', '#task-modal [data-drop-rel]', '#task-modal [data-req-withdraw]', '#task-modal [data-tp-unlink]',
-  '#task-modal [data-depends-add]', '#task-modal [data-task-body-edit]', '#task-modal [data-requester-self]',
+  '#task-modal [data-depends-add]', '#task-modal [data-requester-self]',
   // A bot's ⋯: the private chat's Archive (and its line) is a write.
   '#bot-dm-arch-host',
 ];

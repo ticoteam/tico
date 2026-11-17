@@ -166,3 +166,72 @@ def test_an_ordinary_upload_named_like_a_document_starts_its_own_file(api):
     again = post(api, f"tasks/{tid}/files", {"name": "spec.html", "text": "<p>Ordinary, again</p>"})
     assert (again["file_id"], again["version"]) == (plain["file_id"], 2)
     assert documents(api, tid)[0]["version"] == 1
+
+
+REPORT = "# How UI works today\n\nThe web app is one page.\n"
+
+
+def test_a_report_published_and_attached_by_name_is_one_file_and_a_markdown_tab(api):
+    # A bot writes reports/2026-11-17-how-ui-works-today.md (the runner publishes it after the turn) and attaches the same
+    # bytes by name: the task holds one file, the one attached by name, and it is a document read as Markdown.
+    from backend.tests.helpers.files import publish
+
+    tid = task(api, "bot:ops", "UI: how it works today")
+    _, attempt = turn(api)
+    dated = publish(
+        api,
+        attempt,
+        "2026-11-17-how-ui-works-today.md",
+        REPORT,
+        task=tid,
+        path="reports/2026-11-17-how-ui-works-today.md",
+    )
+    assert dated.status_code == 200, dated.text
+    named = post(api, f"tasks/{tid}/files", {"name": "How UI works today.md", "text": REPORT}, attempt["token"])
+    post(api, f"tasks/{tid}/files", {"name": "rows.csv", "text": "a,b\n1,2\n"}, attempt["token"])
+
+    files = get(api, f"tasks/{tid}/files")["files"]
+    assert sorted(f["name"] for f in files) == ["How UI works today.md", "rows.csv"]
+    [doc] = documents(api, tid)
+    assert {k: doc[k] for k in ("name", "file_id", "kind", "version")} == {
+        "name": "How UI works today",
+        "file_id": named["file_id"],
+        "kind": "markdown",
+        "version": 1,
+    }
+
+    # Changed, they are two contents again; the dated one's tab drops the date, and an HTML document of the same name wins.
+    publish(
+        api,
+        attempt,
+        "2026-11-17-how-ui-works-today.md",
+        REPORT + "\nMore.\n",
+        task=tid,
+        path="reports/2026-11-17-how-ui-works-today.md",
+    )
+    assert sorted(f["name"] for f in get(api, f"tasks/{tid}/files")["files"]) == [
+        "2026-11-17-how-ui-works-today.md",
+        "How UI works today.md",
+        "rows.csv",
+    ]
+    assert [(d["name"], d["kind"]) for d in documents(api, tid)] == [("How UI works today", "markdown")]
+    write(api, tid, "Plan", "<p>Plan</p>")
+    assert [(d["name"], d["kind"]) for d in documents(api, tid)] == [
+        ("Plan", "html"),
+        ("How UI works today", "markdown"),
+    ]
+
+
+def test_a_markdown_document_keeps_the_task_s_read_rules(api):
+    tid = task(api, "human:ben", "Private notes", private=True)
+    post(api, f"tasks/{tid}/files", {"name": "notes.md", "text": "# Notes"}, "ben-test")
+    assert [(d["name"], d["kind"]) for d in documents(api, tid, "ben-test")] == [("Notes", "markdown")]
+    get(api, "tasks/" + tid, "cara-test", expected=404)
+
+
+def test_markdown_tab_names():
+    from backend.task_documents import markdown_name
+
+    assert markdown_name("2026-11-17-how-admin-tico-works-today.md") == "How admin tico works today"
+    assert markdown_name("How admin-tico works today.md") == "How admin-tico works today"
+    assert markdown_name("notes.MARKDOWN") == "Notes"

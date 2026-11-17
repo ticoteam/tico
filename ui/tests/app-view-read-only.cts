@@ -195,15 +195,13 @@ const ready = (page: Page) => page.waitForFunction(() => {
     await page.locator('.tmodal[open] .task-sessions .tlink:not(.primary)').waitFor({timeout: t(15000)});
     assert.equal(await page.locator('.tmodal[open] .task-sessions .tlink.primary').count(), 1, 'the primary session is listed too');
     const inert = '.tmodal[open] :is([data-tp-add], [data-req-ask], [data-prop-follow], [data-fb-rate], [data-session-add], [data-link-add], '
-      + '[data-drop-link], [data-related-add], [data-tf-add], [data-tp-unlink], [data-req-withdraw], [data-task-body-edit], .prop-add, .prop-x)';
+      + '[data-drop-link], [data-related-add], [data-tf-add], [data-tp-unlink], [data-req-withdraw], .prop-add, .prop-x)';
     assert.deepEqual(await page.locator(inert).evaluateAll(els => els.filter(e => (e as HTMLElement).offsetWidth > 0).map(e => e.outerHTML.slice(0, 80))), [], 'no greyed-out write in the task window');
     // No heading stands alone: Pages with no page and an empty To leave go with their +; Activity and links has its Sessions.
     assert.deepEqual(await page.locator('.tmodal[open] .task-side .rail-h').evaluateAll(hs => hs.filter(h => (h as HTMLElement).offsetWidth > 0)
       .filter(h => { const sec = h.closest('section'); return !!sec && ![...sec.children].some(c => c !== h && (c as HTMLElement).offsetWidth > 0); }).map(h => (h as HTMLElement).innerText)),
     [], 'no heading with nothing under it');
     assert.equal(await page.locator('.tmodal[open] [data-task-activity] > .rail-h').isVisible(), true, 'Activity and links heads its Sessions');
-    // What the task is heads Details.
-    assert.equal(await page.locator('.tmodal[open] [data-task-body-edit]').isVisible(), false, 'no Edit on the description');
 
     // The reads work in a view, not only show. ⋯ holds only Copy link, and it copies.
     const win = page.locator('.tmodal[open]');

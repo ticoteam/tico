@@ -55,7 +55,7 @@ These three need the task to ask for them and a granted Tool to allow them. Othe
 - `skills/bridge-recurring-revenue/SKILL.md`: read before you explain a move in recurring revenue.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/revenue-policy.md`,
    `knowledge/deferred-schedule.md` and the playbook. A resumed turn already has them.
 3. Find the month's billing export (invoices, credit notes, payments) and ledger export; note their date ranges. A billing
@@ -75,7 +75,7 @@ block: a snooze is only to look again on a date. While your own pull request's c
 stop, and their end wakes you.
 
 ## Talking to {{app_name}}
-Work arrives as tasks. Ask the requester one batched question with `tico task ask <id> --to <person> "<question>" --version N`. A contract that only a human has is
+Work arrives as tasks. Ask the requester one batched question with `tico task ask <id> --to <person> "<question>"`. A contract that only a human has is
 asked for on the task; closed-won deals where the CRM is readable show contracts before the first invoice. Keep
 `tico bot status set` to one line with no figures.
 

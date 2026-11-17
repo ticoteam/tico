@@ -206,7 +206,7 @@ ahead of time so it doesn't try.
     until a reviewer releases it (`message.held` tells the owners and admins);
   - `tico message send` (`POST /api/v2/messages`, and `POST /api/v2/chat/{bot}` through the same check and write),
     task comments, task create and owner change: the routes `ask_ingest` already gates;
-  - task questions (`POST /api/v2/task-questions`): title, body, question and why as one output to the person asked;
+  - task questions (`POST /api/v2/task-questions`): title, body and question as one output to the person asked;
     on Block no task, fold, comment or note;
   - updates (`POST /api/v2/updates`), slide text included, for the whole company;
   - task updates (`POST /api/v2/tasks/{tid}`: title, body, note, `public_title`, `public_summary`; on Block they stay

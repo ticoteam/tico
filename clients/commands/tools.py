@@ -217,7 +217,7 @@ def slack_channel_list(api, args):
     "tico_slack_channel_add",
     "Let a bot read a Slack channel: add the channel to the team's list with the bots that read it, "
     "or add readers to (or change) one already there, as the person who asked you (an owner or an admin; anyone else is "
-    "refused, with who to ask). A reader gets what is new in the channel about once an hour. Posting in the channel "
+    "refused, with who to ask). A reader follows the channel's thread and gets what is new there about once an hour. Posting in the channel "
     "is on unless you set post false. A channel shared outside the workspace is refused by Tico whatever this says. "
     "Safe to repeat. Say what you did in one line.",
     {
@@ -232,19 +232,13 @@ def slack_channel_list(api, args):
             "description": "May bots post there? On for a new channel; leave out to keep it as is",
         },
         "note": _s("What the channel is for"),
-        "digest_hours": {
-            "type": "number",
-            "description": "Readers get it at most once in this many hours (a noisy channel)",
-        },
         "name": _s("Its name, when you give the id"),
     },
     required=("channel",),
     writes=True,
 )
 def slack_channel_add(api, args):
-    body = {
-        k: args[k] for k in ("channel", "readers", "post", "note", "digest_hours", "name") if args.get(k) is not None
-    }
+    body = {k: args[k] for k in ("channel", "readers", "post", "note", "name") if args.get(k) is not None}
     return _as_person(api).post("slack/channels", body, key=_key(args))
 
 

@@ -26,7 +26,7 @@ const brief = (id: string, title: string, number: number) => ({id, title, number
 const need = (task: string, title: string, number: number, hour: number, earlier: Record<string, unknown> | null) => ({
   kind: 'ask', id: `v-${task}:${RID}`, task_id: task, requirement_id: RID, line: 'OK the release', since: `2026-11-15T${hour}:00:00Z`,
   task: brief(task, title, number),
-  ask: {requirement_id: RID, kind: 'ok', line: 'OK the release', who: 'human:chris', asked_by: null, choices: null, may: ['ok', 'no'],
+  ask: {requirement_id: RID, kind: 'ok', line: 'OK the release', who: 'human:chris', asked_by: null, may: ['ok', 'no'],
     met: false, shows: [], standing: 'waiting', answer: null, ...(earlier ? {earlier} : {}),
     brief: {why: 'QA passed on the release candidate.', details: ['Not a check row'], recommend: null}}});
 const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager_id: null, owner_id: 'human:chris', private: false,
@@ -67,7 +67,7 @@ const QA = '<h1>QA: saved carts</h1><p>Before and after: the cart is kept when t
         if (p === `/api/v2/oks/${RID}`) return json({error: 'not_found'}, 404);     // a stage's OK: no grant
         if (p === '/api/v2/files/pq' && url.searchParams.get('v') === '2')
           return route.fulfill({contentType: 'text/html', headers: {'content-disposition': 'inline; filename="page.html"'}, body: QA});
-        if (p === '/api/v2/tasks/t-73') return json({task: {...brief('t-73', 'Dark mode toggle', 73), body: 'A toggle in Settings for dark mode.'}});
+        if (p === '/api/v2/tasks/t-73') return json({task: {...brief('t-73', 'Dark mode toggle', 73), request: {text: 'A toggle in Settings for dark mode.'}}});
         if (r.method() === 'POST' && p.startsWith('/api/v2/')) {
           writes.push({p, body: JSON.parse(r.postData() || '{}') as Record<string, unknown>});
           const m = /^\/api\/v2\/tasks\/(t-7[23])\/asks\/([^/]+)\/answer$/.exec(p);

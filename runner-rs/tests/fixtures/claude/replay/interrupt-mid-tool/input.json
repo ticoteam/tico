@@ -5,7 +5,8 @@
   "source": {
     "real": true,
     "recorded": "2026-10-16",
-    "how": "record_replays: the installed CLI through replay_proxy.py"
+    "how": "record_replays: the installed CLI through replay_proxy.py",
+    "edited": "The interrupt control_request frame was added when the runner began stopping turns as the Agent SDK does. Claude's output is as recorded before it, so it never answers the request: the replay covers the fallback that closes and kills the process once the interrupt grace ends."
   },
   "turns": [
     {

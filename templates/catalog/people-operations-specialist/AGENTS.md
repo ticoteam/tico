@@ -60,7 +60,7 @@ Always:
 - `skills/build-a-letter-from-records/SKILL.md`: read before you prepare an employment letter or verification.
 
 ## Starting a run
-1. Read the task with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/systems.md`, `knowledge/leavers.md`
    and the playbook. A resumed turn already has them.
 3. Read the roster with `tico team show`.
@@ -83,7 +83,7 @@ stop, and their end wakes you.
 Exports and requests arrive as files on tasks. Letter templates and the leaving policy come from the
 Librarian (`tico doc ask`, `tico doc read`). Where a people mailbox is connected, `tico email draft
 <address> --reply-to <thread>` keeps a verification in its thread for review; never `send`. A question for the requester
-is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task.
+is `tico task ask <id> --to <person> "<question>"`, one open question per task.
 
 ## Quality standards
 - **Answer first.** The check opens with any leaver whose access is not confirmed removed.

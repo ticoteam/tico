@@ -1,4 +1,4 @@
-// Code moved out of the shell to keep a cold open of Home under 300 KB (P05b, backend/ui_bundle.py SHELL_JS_CEILING),
+// Code moved out of the shell to keep a cold open of Home under 300 KB (P05b, backend/ui_build.py SHELL_JS_CEILING),
 // on a real hub with the bundle served as in production, in Chromium and in WebKit (Safari):
 // - a cold open of Home downloads none of the moved parts;
 // - each moved feature works on its first use: Tags, What's new, the style guide, a thread's settings and Members, the
@@ -15,7 +15,8 @@ const {startHub, DESKTOP} = require('./support/real-hub.cts') as RealHubSupport.
 const {t} = require('./support/load.cts') as {t: (ms: number) => number};
 const {must} = require('./support/e2e.cts') as {must: (hub: RealHubSupport.Hub, who: string, method: string, path: string, body?: unknown) => Promise<{id?: string}>};
 
-const PART = /\/tico\/ui\/app\.bundle\.([a-z][a-z0-9-]*)\.js/;
+// A page part's file (scripts/build-ui.cjs): app.bundle.<part>.<hash>.js; theme and marked are not parts.
+const PART = /\/tico\/ui\/app\.bundle\.(?!theme\.|marked\.)([a-z][a-z0-9-]*)\.[0-9a-f]{16}\.js/;
 // The parts P05b made: none of them is downloaded by a cold open of Home.
 const MOVED = ['assistant', 'changelog', 'task-files', 'decide', 'tags', 'key-drop', 'browser-view', 'thread-settings',
   'stage-rules', 'file-review', 'style-guide', 'give-to', 'thread-call-live'];
@@ -170,7 +171,7 @@ async function run(engine: BrowserType, name: string, hub: RealHubSupport.Hub, t
     {
       const open = await cold(browser, hub);
       const {page} = open;
-      const KEY_DROP = /\/tico\/ui\/app\.bundle\.key-drop\.js/;
+      const KEY_DROP = /\/tico\/ui\/app\.bundle\.key-drop\.[0-9a-f]{16}\.js/;
       await page.route(KEY_DROP, down);
       await page.goto(hub.url + '/#/tools');
       await openChat(page);
@@ -182,7 +183,7 @@ async function run(engine: BrowserType, name: string, hub: RealHubSupport.Hub, t
       const leaks: string[] = [];
       page.on('request', r => { if (r.method() !== 'GET' && !r.url().includes('/v2/credentials') && (r.postData() || '').includes(key)) leaks.push(r.method() + ' ' + r.url()); });
       await box.fill('Here is the key ' + key);
-      const tried = page.waitForEvent('requestfailed', {predicate: r => /\.key-drop\.js/.test(r.url()), timeout: t(15000)});
+      const tried = page.waitForEvent('requestfailed', {predicate: r => KEY_DROP.test(r.url()), timeout: t(15000)});
       await page.locator('aside.pgc .p-send').click();
       await tried;
       assert.ok((await box.inputValue()).includes(key), name + ': nothing is sent while the key drop cannot load');

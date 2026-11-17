@@ -654,13 +654,11 @@ BotOps to start it, then finish the sign-in in your browser.
 To change the account a computer uses, open it in Settings > Computers and choose **Switch account** on its connection: the new account is
 signed in on the side, and the old one keeps working until that finishes (or if you cancel). **Sign out** names the bots
 that stop first; they wait until someone signs in again. A computer you signed out is not signed back in by the model key
-given to every computer until you sign in or choose **Use the shared key**. See [Computers](computers.md#signing-out-and-switching-accounts).
+it is given until you sign in or choose **Use the shared key**. See [Computers](computers.md#signing-out-and-switching-accounts).
 
-A computer can also run on a model API key of its own, with no terminal: **Add key** (or **Replace key**) on its connection in
-Settings > Computers keeps the key in Tico's credential vault for that computer alone, and the computer checks it before
-the old one goes. **Clear key** names the bots that stop, then takes the key off the computer. For the key given to every
-computer, both ask whether to change **this computer only** or **all of them**; an offline computer clears its copy when
-it is next online. See [Computers](computers.md#api-keys-on-a-computer).
+A computer can also run on a model API key, with no terminal: add the key in **Settings > Models** and give it to the
+computer there. Taking it off the computer there makes the computer delete its copy at its next key fetch (an offline
+computer when it is next online). See [Computers](computers.md#api-keys-on-a-computer).
 
 ### Linux or cloud server (Docker)
 
@@ -893,10 +891,10 @@ Native release checkouts download the matching checksummed binary. Development c
 it with Rust 1.92 or newer. `TICO_SCREEN_RELAY_BIN` can supply a matching executable; its source
 fingerprint is checked before startup. Use `CARGO_HOME`, `CARGO_TARGET_DIR`, `RUSTUP_HOME` and
 `TMPDIR` on your work disk to keep build files there. Docker ships the binary and needs no compiler.
-A checkout also compiles the web UI's TypeScript files: install Node 22 and run `npm ci` once, and
-`python -m backend.server` runs `npm run build:ui` itself when the build is missing or stale, with the Node on
-PATH or, for a launchd or systemd job whose PATH lacks it, one in /opt/homebrew/bin, /usr/local/bin, Volta or nvm's
-default. Without them it refuses to start and says what is missing (ui/README.md, "TypeScript"). The Docker image ships the compiled UI.
+A checkout also builds the web UI: install Node 22 and run `npm ci` once, and `python -m backend.server` runs
+`npm run build:ui` itself when the build is missing or stale, with the Node on its PATH or, for a launchd or systemd
+job whose PATH lacks it, one in /opt/homebrew/bin, /usr/local/bin, Volta or nvm. Without Node it refuses to start and
+says what is missing (ui/README.md). The Docker image ships the built UI.
 
 Existing native launchd/systemd server jobs need a one-time `scripts/tico-computer -e <env> server install`
 after updating, so they run `backend.server` rather than a direct Uvicorn listener. New jobs already

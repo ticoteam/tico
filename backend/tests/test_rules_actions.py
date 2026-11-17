@@ -1,12 +1,14 @@
 """What a wake rule's `ask` and `action` outcomes do to the message's task (backend/rules.py `carry_out`): each is one
-task call as Tico, with the rule's words as its why. A refused call is undone and the message wakes the bot instead
-(`fail_open`). The decision is handed in as the engine would make it; the message path itself is test_rules."""
+task call as Tico, with the rule's words as its why; an ask is the Rules Owner's ❓ on the task's chat (`_rule_ask`).
+A refused call is undone and the message wakes the bot instead (`fail_open`). The decision is handed in as the engine
+would make it; the message path itself is test_rules."""
 
 import json
 
 import pytest
 
-from backend import hubdb as H, rules as R
+from backend import hubdb as H, question_marks as Q, rules as R
+from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import unrelated_task_managers
 
 ANA, BEN = "human:ana", "human:ben"
@@ -15,6 +17,7 @@ ANA, BEN = "human:ana", "human:ben"
 @pytest.fixture
 def c(company):
     with company.transaction() as conn:
+        X.bot(conn, H.RULES_OWNER)  # only a bot writes a question: a rule's ❓ is the Rules Owner's
         yield conn
 
 
@@ -36,10 +39,13 @@ def test_an_ask_puts_one_ask_on_the_task_for_its_person_until_it_is_answered(c):
     assert carry(c, row, R.ASK, body="Is the date still right?").outcome == R.NOTE
     [wait] = asks(c, row["id"])
     assert (wait.state, wait.who) == ("person", ANA)
-    assert "rule_x" in wait.line and "Is the date still right?" in wait.line
+    [mark] = Q.on_task(c, row["id"])
+    assert (mark["bot_id"], mark["person_id"], wait.requirement_id) == (f"bot:{H.RULES_OWNER}", ANA, Q.wait_id(mark))
+    said = H.message(c, mark["message_id"])["body"]
+    assert "rule_x" in said and "Is the date still right?" in said
     carry(c, row, R.ASK)  # still waiting: no second ask
     assert len(asks(c, row["id"])) == 1
-    H.task_answer(c, ANA, row["id"], wait.requirement_id, "Yes, the 12th")
+    H.task_comment(c, ANA, row["id"], "Yes, the 12th")  # her reply on the task's chat clears the ❓
     assert not asks(c, row["id"])
     carry(c, row, R.ASK)  # answered: the rule may ask again
     assert len(asks(c, row["id"])) == 1
@@ -79,10 +85,14 @@ def no_task(c, decision_by=ANA, room="room-1", body="Can someone check the Acme 
 
 
 def rule_tasks(c):
-    return c.execute(
-        "SELECT t.id, t.owner_id, t.status, t.title, t.body FROM events e JOIN tasks t ON t.id=e.target "
-        "WHERE e.action='rule.ask' ORDER BY e.rowid"
-    ).fetchall()
+    """The tasks the rule's asks filed; `body` is what each was filed with (a task has no description)."""
+    return [
+        {**dict(t), "body": H.task_words(c, t["id"])}
+        for t in c.execute(
+            "SELECT t.id, t.owner_id, t.status, t.title FROM events e JOIN tasks t ON t.id=e.target "
+            "WHERE e.action='rule.ask' ORDER BY e.rowid"
+        )
+    ]
 
 
 def test_an_ask_with_no_task_files_one_open_task_for_the_bots_operator_per_thread(c):

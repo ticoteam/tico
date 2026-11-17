@@ -206,7 +206,7 @@ runner's own wire (`/api/v2/runners/...`, `/api/v2/attempts/...`, `contracts/run
 Trigger. NOT NULL, no default. One run of an automation.
 
 - `queued`: waiting to run.
-- `held`: queued but held by an active guard hold on the automation (`automation_guard_holds`).
+- `held`: queued but held by the run guard's open `runaway` hold on the automation (`holds`).
 - `running`: claimed by a worker.
 - `waiting`: parked until `wake_at` (a wait step in the flow).
 - `ok`: finished successfully.
@@ -520,7 +520,7 @@ Without a CHECK (values are whatever the code writes):
 
 - `tasks.checkpoint_state` (a fingerprint, not a status), `tasks.verdict`, `tasks.verdict_head`.
 - `bot_tool_requests.state`, `credential_requests.status`, `credential_imports.state`, `bot_transitions.state`,
-  `bot_transition_checkpoints.state`, `model_logins.state`, `oauth_grants.state`, `cloud_machines.state`, `computer_keys.state`,
+  `bot_transition_checkpoints.state`, `model_logins.state`, `oauth_grants.state`, `cloud_machines.state`,
   `seats.request_state`, `seat_requests.state`, `service_jobs.state`, `slack_events.state`, `slack_posts.state`,
   `worktree_waits.state`, `check_waits.state`, `calendar_actions.status`, `listening_items.status`, `support_tickets.status`,
   `runner_versions.update_state`, `runner_harness_actions.state`, `update_queue.state`,

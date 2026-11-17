@@ -1205,8 +1205,9 @@ def _sentence(text):
 def sizing(conn, auth, who):
     """The open Size the market task as the Market page shows it, or None when none is open or the reader may not open
     it: its id and `version`, whose turn it is (`turn`: `person` while it waits on a person, else `working`), and `ask`,
-    the question it waits on the reader for (requirement id, kind, line, choices), answered by POST
-    /api/v2/tasks/{id}/asks/{requirement_id}/answer."""
+    what it waits on the reader for (requirement id, kind, line): a ❓ (kind `question`, its `mark_id`) is answered by a
+    comment on the task; any other ask (an OK) on the task itself."""
+    from . import question_marks
     from . import waiting_on as W
 
     task_id = _open_task(conn)
@@ -1224,16 +1225,22 @@ def sizing(conn, auth, who):
         "ask": None,
     }
     mine = next((w for w in waits if w.state == W.PERSON and w.ask and w.who == who.actor and w.requirement_id), None)
-    if mine:
-        found = conn.execute(
-            "SELECT kind, line, choices FROM requirements WHERE id=?", (mine.requirement_id,)
-        ).fetchone()
+    if mine and question_marks.mark_id(mine.requirement_id):
+        # A ❓ on the task's chat: the reader's reply there is the answer (POST /api/v2/tasks/{id}/comments).
+        out["ask"] = {
+            "requirement_id": None,
+            "mark_id": question_marks.mark_id(mine.requirement_id),
+            "kind": "question",
+            "line": mine.line or "",
+        }
+    elif mine:
+        # Any other ask (an OK): its line, and the task to answer it on.
+        found = conn.execute("SELECT kind, line FROM requirements WHERE id=?", (mine.requirement_id,)).fetchone()
         out["turn"] = "person"
         out["ask"] = {
             "requirement_id": mine.requirement_id,
-            "kind": found["kind"] if found else "answer",
+            "kind": found["kind"] if found else "ok",
             "line": mine.line or (found["line"] if found else ""),
-            "choices": [str(c) for c in _loads(found["choices"], [])] if found else [],
         }
     return out
 
@@ -1284,8 +1291,9 @@ def research(conn, auth, who, description):
         conn,
         who.actor,
         _free_title(conn, who.actor),
-        text,
+        description,  # the owner's own words are the request; the steps reach the Librarian through its run
         "bot:librarian",
+        instructions=text,
         allow_planned=True,
         conversation_id=rooms.task_conversation_id(conn, auth, "bot:librarian", who.actor),
     )

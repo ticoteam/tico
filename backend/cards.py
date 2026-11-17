@@ -405,14 +405,14 @@ def needs_list(ctx):
 
 
 def needs_act(it):
-    """What a Needs you row asks of the reader, as ui/app/decide.ts decideKind sorts it: ok, answer, reply, fix. Only an
-    OK or a page's OK is ok; an ask of any other kind is answered. A task row is one a person must fix before it can
+    """What a Needs you row asks of the reader, as ui/app/decide.ts decideKind sorts it: ok, reply, fix. An ask is an
+    OK or a page's OK (a question is a ❓, answered in the chat). A task row is one a person must fix before it can
     move (a private task to let someone see): Needs you lists no task only because it is the reader's
     (waiting_on.needs)."""
     kind = it.get("kind")
     if kind == "ask":
-        return "ok" if (it.get("ask") or {}).get("kind") in ("ok", "page") else "answer"
-    if kind == "mention":
+        return "ok"
+    if kind in ("mention", "question"):  # an @, or a bot's ❓: answered in the chat
         return "reply"
     return "fix"
 

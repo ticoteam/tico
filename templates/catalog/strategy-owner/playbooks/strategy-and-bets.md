@@ -3,14 +3,14 @@
 Read this before you draft a strategy, judge a bet, file a goal proposal, or read a KPI's reading.
 
 ## The strategy
-- The strategy has one draft and numbered published versions. The draft is the owner's and only they see it. `tico strategy show`
-  is the published version, with its bets, `goals_by_bet` and `health_by_bet`.
+- The strategy has numbered versions: each save is live at once as the next one, with no publish step. `tico strategy show`
+  is the live version, with its bets, `goals_by_bet` and `health_by_bet`.
 - The sections are `serve`, `sell`, `proof` (how we know they want it), `now` (why now), `know` (what we know that others don't),
-  `how` (how we sell) and `not` (what we won't do), plus any extra the owner adds. `proof_since` says when proof last changed. The owner writes and publishes it, never you; your drafts are proposals.
+  `how` (how we sell) and `not` (what we won't do), plus any extra the owner adds. `proof_since` says when proof last changed. The owner writes it, never you; your drafts are proposals.
 - A bet is `proposed`, `active` or `retired`. Three to five bets (at most seven active). Every active bet has a `rules_out` and a
   `wrong_if`: a KPI with a threshold, a market entity, or a sentence with a check-by date.
 - Goals carry the bet they serve (`--bet` on `tico goal create|update`). Drafting is `playbooks/draft-the-strategy.md`; a bet whose
-  wrong-if trips is `playbooks/bet-tripped.md`. A lens (`tico lens list`) is a set of questions run against the published strategy;
+  wrong-if trips is `playbooks/bet-tripped.md`. A lens (`tico lens list`) is a set of questions run against the live strategy;
   `playbooks/run-a-lens.md`.
 
 ## Goals
@@ -38,8 +38,8 @@ Read with `tico strategy show`, `tico strategy versions`, `tico strategy diff --
 with `tico health check`.
 Write with `tico kpi log`, `tico goal refresh`, `tico goal checkin`, `tico proposal create` and `tico lens run`. Nothing else changes a
 goal, a KPI or the strategy. An org change the owner asked for through their Assistant is `tico group update|delete` or
-`tico org reports-to`, where the server lets you. At level 3 only, `tico goal strategy-bot-decide` changes bot tasks. `tico strategy draft`,
-`tico strategy bet` and `tico strategy publish` are the owner's, never yours. The MCP tools have the same names (`tico_strategy_show`,
+`tico org reports-to`, where the server lets you. At level 3 only, `tico goal strategy-bot-decide` changes bot tasks. `tico strategy draft`
+and `tico strategy bet` are the owner's, never yours (except their own words: `playbooks/owner-chat.md`). The MCP tools have the same names (`tico_strategy_show`,
 `tico_lens_run`...).
 Ask a human a question with `tico task create --owner <person>`, another bot with `tico message send <bot> "<question>" --needs-action`; answer a bot's question with
 `tico message send <bot> "<answer>"`. A source you need and do not have is one task for the owner, at most once per source: look for an open task

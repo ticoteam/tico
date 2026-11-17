@@ -1,17 +1,18 @@
 // No browser: the pipeline screens' drawing and decisions (docs/dev/pipelines-v3.md S7, S8, S11, S12, S17.3). The classic
 // scripts are compiled with esbuild's transform and run in one vm context, with the few shared globals they read stubbed:
 // - the pipeline view's hook draws columns, the list and the phone's tabs from the tasks the page gives it, with each
-//   stage's count out of its limit, and a stage header that opens settings only for whoever may change the pipeline;
-// - against a limit the count is the tasks that hold a slot; one count per stage: those waiting only on a person
-//   (`on_person`) are said in the count's tooltip and name ("5 of 20 slots used. 15 more wait on a person and hold no
-//   slot."), and on a phone in one muted line above the open stage's cards; no person pill;
+//   stage's number the tasks it lists (what a person sees below it), and a stage header that opens settings only for
+//   whoever may change the pipeline;
+// - a limited stage shows its limit only when every slot is used (`full`, on the number and the phone tab); the slots
+//   and the tasks waiting only on a person (`on_person`) are said in the number's tooltip ("5 of 20 slots used. 15 more
+//   wait on a person and hold no slot."), and on a phone in one muted line above the open stage's cards; no person pill;
 // - a refused move reads as the engine said it: a push past asks why, anything else is the engine's line;
 // - Strategy › Org's Factories section orders a factory's pipelines by where they file, and puts pipelines in no factory
 //   in one group after them;
 // - the editor names what someone else changed when its save is refused as out of date;
 // - the editor offers every kind, a page's and In a release's settings, and a stage's On entering list (its Limit and
-//   actions, the owner change among them, as rows; + Rule and + Action), and saves them as the record stores them; an answer's name follows its title until edited, and its type keeps only its own fields;
-// - a task's row for a stage's answer is its title, and once met its value.
+//   actions, the owner change among them, as rows; + Rule and + Action), and saves them as the record stores them;
+// - a task's row for a stage's OK is its title alone, met or not; what it waits on is its tooltip.
 // Run: node ui/tests/pipeline-view-unit.cts
 'use strict';
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
@@ -80,7 +81,7 @@ if (!view) throw new Error('the view sets its hook on the page');
 {
   const html = view.html(rec(), TASKS, opts());
   assert.equal((html.match(/class="pv-col"/g) || []).length, 3, 'a column per work stage; Done and Closed are not columns');
-  assert.match(html, /data-pv-settings="spec"[^>]*><span class="pv-stage-name">Spec<\/span><span class="pv-stage-n tnum" title="2 of 2 slots used." aria-label="2 of 2 slots used.">2\/2<\/span>/, 'a stage with a limit counts out of it');
+  assert.match(html, /data-pv-settings="spec"[^>]*><span class="pv-stage-name">Spec<\/span><span class="pv-stage-n tnum full" title="2 of 2 slots used." aria-label="2 of 2 slots used.">2<\/span>/, 'a full stage with a limit shows its limit on its number');
   assert.match(html, /<span class="pv-stage-name">Ideas<\/span><span class="pv-stage-n tnum">1<\/span>/);
   assert.equal((html.match(/class="tk-card"/g) || []).length, 3, 'only this pipeline\'s open tasks');
   assert.doesNotMatch(html, /Other pipeline|Shipped/);
@@ -154,22 +155,29 @@ if (!view) throw new Error('the view sets its hook on the page');
   const twenty = rec({id: 'spec20', stages: [stage('ideas', 'Ideas', {by_hand: true}), stage('spec', 'Spec', {task_limit: 20}), stage('dev', 'In development')]});
   const html = view.html(twenty, [...waiting, ...working], opts());
   const words = '5 of 20 slots used. 15 more wait on a person and hold no slot.';
-  assert.match(html, new RegExp(`<span class="pv-stage-name">Spec</span><span class="pv-stage-n tnum" title="${words}" aria-label="${words}">5/20</span></button>`),
-    'Spec 5/20, the rest said in its tooltip and name, and nothing after it');
+  assert.match(html, new RegExp(`<span class="pv-stage-name">Spec</span><span class="pv-stage-n tnum" title="${words}" aria-label="${words}">20</span></button>`),
+    'Spec 20, the tasks it lists; the slots said in its tooltip and name, and no limit on the number while a slot is free');
   assert.doesNotMatch(html, /pv-stage-person/, 'no person pill');
   assert.equal((html.match(/class="tk-card"/g) || []).length, 20, 'every task is still drawn');
   const list = view.html(twenty, [...waiting, ...working], opts({layout: 'list'}));
   assert.match(list, new RegExp(`title="${words}"`));
   assert.doesNotMatch(list, /pv-stage-person/);
   const phone = view.html(twenty, [...waiting, ...working], opts({phone: true}));
-  assert.match(phone, /data-pv-tab="spec"[^>]*>Spec <span class="tnum">5\/20<\/span>/, 'the phone tab counts bot work too');
+  assert.match(phone, /data-pv-tab="spec"[^>]*>Spec <span class="tnum">20<\/span>/, 'the phone tab counts every task it lists, bot work too');
   assert.doesNotMatch(phone, /pv-stage-person/);
   assert.match(phone, new RegExp(`</div><p class="pv-slots">${words}</p><div class="pv-phone">`), 'a phone says it in one line above the cards');
   const one = view.html(twenty, [waiting[0], ...working], opts());
   assert.match(one, /title="5 of 20 slots used\. 1 more waits on a person and holds no slot\."/);
   const none = view.html(twenty, working, opts({phone: true}));
   assert.doesNotMatch(none, /pv-slots/, 'none waits on a person: no line on the phone');
-  assert.match(view.html(twenty, working, opts()), /title="5 of 20 slots used\." aria-label="5 of 20 slots used\.">5\/20</);
+  assert.match(view.html(twenty, working, opts()), /title="5 of 20 slots used\." aria-label="5 of 20 slots used\.">5<\/span>/);
+  const packed = Array.from({length: 20}, (_, i) => task(`f${i}`, `Ship ${i}`, 'spec', {pipeline_id: 'spec20'}));
+  assert.match(view.html(twenty, packed, opts()), /<span class="pv-stage-n tnum full" title="20 of 20 slots used\." aria-label="20 of 20 slots used\.">20<\/span>/,
+    'every slot used: the limit on the number, and the one time it shows');
+  assert.match(view.html(twenty, packed, opts({phone: true})), /data-pv-tab="spec"[^>]*>Spec <span class="tnum full">20<\/span>/, 'and on the phone tab');
+  const snoozed = {...working[0], id: 'z1', snoozed: true};
+  assert.match(view.html(twenty, [...working, snoozed], opts()), /title="5 of 20 slots used\." aria-label="5 of 20 slots used\.">6<\/span>/,
+    'a snoozed task is listed, so it is counted, and holds no slot');
   const open = view.html(rec({id: 'spec20', stages: [stage('ideas', 'Ideas', {by_hand: true}), stage('spec', 'Spec')]}), [...waiting, ...working], opts());
   assert.match(open, /<span class="pv-stage-n tnum">20<\/span><\/button>/, 'without a limit every task counts, with no tooltip');
 }
@@ -250,14 +258,14 @@ const factories = (async () => {
   assert.match(release, /data-pe-rs="prereleases"[^>]* checked> Pre-releases count/, 'omission renders the enabled default');
   // An approval names its document and its approver (any person, or one), and has no page switches.
   const approval = {kind: 'page', source: null, condition: null, settings: {document: 'QA report'}, can_push_past: true, who_oks: 'people_only',
-    person_id: null, line: 'QA report', choices: null};
+    person_id: null, line: 'QA report'};
   const approves = ctx.peReqEdHTML(state, approval, 0, 1, 'ed-a') as string;
   assert.match(approves, /<span>Document<\/span><select data-pe-rf="document"[^>]*>.*<option value="QA report" selected>QA report<\/option>/);
   assert.match(approves, /<span>Approver<\/span><select data-pe-rf="approver"[^>]*><option value="">Any person<\/option>/);
   assert.doesNotMatch(approves, /data-pe-rs="at_head"|data-pe-rf="line"/, 'no page switches, no title: the document is its name');
   assert.equal(ctx.peReqText(approval), 'Approve QA report');
   assert.deepEqual(plain(ctx.peReqNew(state, 'approval')), {kind: 'page', source: null, condition: null, settings: {document: 'Spec'},
-    can_push_past: true, who_oks: 'people_only', person_id: null, line: 'Spec', choices: null});
+    can_push_past: true, who_oks: 'people_only', person_id: null, line: 'Spec'});
   assert.match(release, /data-pe-rf="can_push_past"[^>]*disabled/, 'In a release is never pushed past');
 
   const field = (kind: 'HTMLInputElement' | 'HTMLSelectElement', data: Record<string, string>, value = '', checked = false) =>
@@ -377,38 +385,6 @@ const factories = (async () => {
   assert.equal(state.draft.stages[0]!['by_hand'], false);
   assert.equal(state.draft.stages[0]!['requests_move_on'], false, 'only a by-hand stage keeps it');
 }
-// ---- the editor: a stage's answer
-{
-  const state = {id: 'product', pipelines: [], draft: rec({stages: [stage('spec', 'Spec', {requirements: [req('owner_done')]})]})};
-  const field = (kind: 'HTMLInputElement' | 'HTMLSelectElement', data: Record<string, string>, value = '') =>
-    Object.assign(Object.create(ctx[kind].prototype), {dataset: {peSi: '0', peRi: '0', ...data}, value, type: 'text', closest: () => null});
-  const r = () => plain(state.draft.stages[0]!.requirements[0]!) as Record<string, unknown>;
-  const html = () => ctx.peReqEdHTML(state, state.draft.stages[0]!.requirements[0]!, 0, 0, 'ed') as string;
-  assert.equal(ctx.peReqText(state.draft.stages[0]!.requirements[0]!), 'Owner says done');
-  // An answer, added from + Requirement: its title names it; the name follows the title.
-  state.draft.stages[0]!.requirements[0] = ctx.peReqNew(state, 'answer');
-  ctx.peInput(state, field('HTMLInputElement', {peRf: 'line'}, 'Confidence'));
-  assert.deepEqual([r()['kind'], r()['settings'], r()['who_oks'], r()['choices']], ['answer', {type: 'text', name: 'confidence'}, 'none', null]);
-  assert.match(html(), /<span>Title<\/span><input data-pe-rf="line"/);
-  assert.match(html(), /<span>From<\/span><select data-pe-rf="person_id"[^>]*><option value="">Task owner<\/option>/);
-  assert.match(html(), /data-pe-rf="answer_name"[^>]*value="confidence"/);
-  ctx.peInput(state, field('HTMLInputElement', {peRf: 'line'}, 'Confidence (0-100)'));
-  assert.equal((r()['settings'] as Record<string, unknown>)['name'], 'confidence_0_100', 'the name follows the title');
-  ctx.peInput(state, field('HTMLInputElement', {peRf: 'answer_name'}, 'conf'));
-  ctx.peInput(state, field('HTMLInputElement', {peRf: 'line'}, 'Confidence'));
-  assert.equal((r()['settings'] as Record<string, unknown>)['name'], 'conf', 'a name edited by hand stays');
-  ctx.peInput(state, field('HTMLSelectElement', {peRf: 'answer_type'}, 'number'));
-  ctx.peInput(state, field('HTMLInputElement', {peRf: 'min'}, '0'));
-  ctx.peInput(state, field('HTMLInputElement', {peRf: 'max'}, '100'));
-  ctx.peInput(state, field('HTMLInputElement', {peRf: 'question'}, 'How sure are you?'));
-  assert.deepEqual(r()['settings'], {type: 'number', name: 'conf', min: 0, max: 100, question: 'How sure are you?'});
-  assert.match(html(), /<span>Min<\/span><input type="number"[^>]*value="0">/);
-  ctx.peInput(state, field('HTMLSelectElement', {peRf: 'answer_type'}, 'choice'));
-  assert.deepEqual([r()['settings'], r()['choices']], [{type: 'choice', name: 'conf', question: 'How sure are you?'}, []], 'a choice has no bounds');
-  assert.match(html(), /data-pe-yes-no/);
-  ctx.peInput(state, field('HTMLSelectElement', {peRf: 'answer_type'}, 'text'));
-  assert.equal(r()['choices'], null, 'text has no choices');
-}
 // ---- the editor: the stage window in task order, and an Owner that is "One of several"
 {
   const bots = [{id: 'b1', name: 'Builder'}, {id: 'b2', name: 'Builder 2'}, {id: 'r1', name: 'Reviewer 1'}];
@@ -523,18 +499,17 @@ const factories = (async () => {
   assert.match(card, /Waiting for a free Reviewer"/, 'pointing at the card shows the line');
   assert.equal(ctx.taskLine(waiting), 'Waiting for a free Reviewer');
 }
-// ---- a task's row for a stage's answer
+// ---- a task's row for a stage's OK
 {
-  const typed = {name: 'confidence', type: 'number', min: 0, max: 100, question: 'How sure are you?'};
-  const row = (extra: Record<string, unknown>) => ctx.taskReqRowHTML({requirement_id: 'r1', kind: 'answer', line: 'Confidence', met: false,
-    standing: 'How sure are you?', who: 'bot:builder', asked_by: null, choices: null, typed, shows: [], answer: null, may: [], ...extra}) as string;
+  const row = (extra: Record<string, unknown>) => ctx.taskReqRowHTML({requirement_id: 'r1', kind: 'ok', line: 'Confidence', met: false,
+    standing: 'How sure are you?', who: 'bot:builder', asked_by: null, shows: [], answer: null, may: [], ...extra}) as string;
   const open = row({});
   assert.match(open, /<span class="task-req-name">Confidence<\/span>/, 'the title only');
   // What it is waiting on is in the row's tooltip; the row itself draws the title alone.
   assert.match(open, / title="Not yet · Checks: builder · How sure are you\?"/);
-  assert.doesNotMatch(open.replace(/ title="[^"]*"/, ''), /How sure|task-req-val/);
-  const met = row({met: true, who: null, standing: '80', answer: {id: 'a1', at: '', by: 'bot:builder', note: null, value: '80'}});
+  assert.doesNotMatch(open.replace(/ title="[^"]*"/, ''), /How sure/);
+  const met = row({met: true, who: null, standing: 'OK', answer: {id: 'a1', at: '', by: 'bot:builder', note: null, value: 'ok'}});
   assert.match(met, /<span class="task-req-name">Confidence<\/span>/);
-  assert.match(met, /<span class="task-req-val">80<\/span>/, 'once met, its value');
+  assert.doesNotMatch(met.replace(/ title="[^"]*"/, ''), /task-req-val/, 'once met, still the title alone');
 }
 factories.then(() => console.log('pipeline-view-unit: ok'), error => { console.error(error); process.exitCode = 1; });

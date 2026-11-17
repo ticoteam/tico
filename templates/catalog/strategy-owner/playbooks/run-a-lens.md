@@ -1,13 +1,13 @@
 # Run a lens
 
 A task or a message from the owner that asks for a lens ("run Scenarios on our strategy"), or a moment where one would
-help: a bet tripped, a weekly review with no lens in 90 days. A lens is a short set of questions about the published
+help: a bet tripped, a weekly review with no lens in 90 days. A lens is a short set of questions about the live
 strategy, answered once, and the server writes the result (`tico lens list` shows them; `docs/lenses.md` explains them).
 Budget 15 minutes.
 
-Inputs: the owner's ask or the trigger, `tico lens list`, and the published strategy (`tico strategy show`).
+Inputs: the owner's ask or the trigger, `tico lens list`, and the live strategy (`tico strategy show`).
 
-**Never publish and never write the draft.** A lens run you start files one `strategy_draft` proposal at most, and the
+**Never write the strategy.** A lens run you start files one `strategy_draft` proposal at most, and the
 server files it, not you. The owner confirms or rejects it. **Never start a run unasked**: a weekly review only
 suggests one.
 
@@ -22,7 +22,7 @@ market lens (Where to Play, Five Forces) is the Librarian's, not yours.
 
 ## 2. Answer from the record
 
-`tico strategy show` is the published strategy and the only thing the lens reads. Fill each step from it, from the
+`tico strategy show` is the live strategy and the only thing the lens reads. Fill each step from it, from the
 market pages (`tico doc search --market`) and from what the owner said in the task. Write the answers to a file as
 `{"step key": answer}`: a list step is a list of short strings, a text step a few sentences. Skip a step you cannot
 answer from the record; do not invent. The result says what it assumed for a skipped step, so a skip is honest.

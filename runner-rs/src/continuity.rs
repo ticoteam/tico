@@ -118,9 +118,9 @@ impl Session {
             return None;
         }
         let read = if stateless {
-            "Read the task"
+            "Read the task's chat"
         } else {
-            "Read the task and memory/"
+            "Read the task's chat and memory/"
         };
         let because = match self.why {
             Some(NOT_FOUND) => "was not on this computer",
@@ -281,7 +281,7 @@ mod tests {
             "{n}"
         );
         assert!(
-            n.contains("Read the task and memory/ before acting") && !n.contains("state.md"),
+            n.contains("Read the task's chat and memory/ before acting") && !n.contains("state.md"),
             "{n}"
         );
         assert!(Session::new(COMPACT_FAILED, None)
@@ -304,7 +304,7 @@ mod tests {
             .prompt_note(true, true)
             .unwrap();
         assert!(
-            n.contains("Read the task before acting")
+            n.contains("Read the task's chat before acting")
                 && !n.contains("memory")
                 && !n.contains("state.md"),
             "{n}"

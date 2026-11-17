@@ -76,7 +76,7 @@ async function visit(context: import('playwright').BrowserContext, {phone = fals
     if (file && fs.existsSync(file)) {
       // The page's scripts wait (theme.ts in the head runs, as it does before the first paint), so the rail is
       // recorded as its markup and styles draw it.
-      if (gates.holdScripts && /\.(?:js|ts)$/.test(p) && !p.endsWith('/theme.ts')) await new Promise(go => gates.scripts.push(go));
+      if (gates.holdScripts && /\.(?:js|ts)$/.test(p) && !/\/app\.bundle\.theme\.[0-9a-f]{16}\.js$/.test(p)) await new Promise(go => gates.scripts.push(go));
       return r.fulfill({contentType: /\.(?:js|ts)$/.test(file) ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
     }
     if (p === '/api/v2/events') return r.abort();

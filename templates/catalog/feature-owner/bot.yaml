@@ -19,11 +19,11 @@ tools:
   - service: github
     identity: "the product repositories the owner lists for this bot"
     can: [read]
-    note: "reads the listed repositories, pull requests and checks; opening branches and pull requests needs write access the owner grants; it never merges"
+    note: "reads the listed repositories, pull requests and checks; opening branches and pull requests needs write access the owner grants; the merge queue merges where the repository has one"
 # A starter is read only, and the owner grants write once the bot should build. The team's GitHub App token can write,
-# so the only things between this bot and a merge, a release, a force push or a review are the granted access and
-# .claude/settings.json, which denies merges, reviews, closes, releases, tags, API
-# calls, skipped pre-push hooks and forced pushes (a --force-with-lease after a rebase is allowed). The Merge stage
+# so what stands between this bot and a merge, a release or a review is the granted access and its instructions.
+# .claude/settings.json denies only what cannot be undone: forced pushes (a --force-with-lease after a rebase is
+# allowed), deleting a repository, release, run, cache or issue, and secrets and variables. The Merge stage
 # queues each pull request.
 # Optional, uncomment when connected. Read only.
 #   - service: crm

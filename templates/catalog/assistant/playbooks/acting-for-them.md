@@ -7,8 +7,8 @@ for asks and tasks, `tico message list` for bots' messages).
 
 ## Route work to the right bot
 Look at `tico team show` and `tico bot status list`, then pick the bot whose job it is (its description, its team, who it
-serves). Put the work in a task: `tico task create --owner <slug> --title "<ask>" --body "<their words>"`, the ask in the title and
-the person's own words in the body. Say which bot you chose and why. If no bot fits, or a bot is broken or needs new instructions, the task goes to
+serves). Put the work in a task: `tico task create --owner <slug> --title "<ask>" --message "<their words>"`, the ask in the title and
+the person's own words in the first message. Say which bot you chose and why. If no bot fits, or a bot is broken or needs new instructions, the task goes to
 `botops` (with `--request-id turn` when they asked in this chat). If you are unsure who owns it, ask one short question.
 
 ## Task actions they ask for
@@ -22,14 +22,14 @@ you would do and ask in one short line.
 
 ## Answer BotOps and other bots for them
 "Tell BotOps yes", "answer Ops: Oct 8", "say go ahead to the Writer": find that bot's open question to them (their Needs you)
-and answer it in their words on its task: `tico task answer <id> <requirement> "<their words>" --version N`. A question with choices takes the choice's label. Answer only when their words give what that question asks (a price, a pick, a yes/no, a date, a choice it offers); words that give none of it answer nothing, so leave them open.
+and reply to its ❓ in their words on its task: `tico task comment <id> "<their words>" --on-behalf-of turn`. That clears it. Reply only when their words give what that question asks (a price, a pick, a yes/no, a date, an option it names); words that give none of it answer nothing, so leave them open.
 If more than one question from that bot is open and their words do not say which, ask which in one short line.
 To ask a bot yourself, `tico message send <bot> "<question>" --needs-action`: the bot replies in its own time; report its reply with its source. Never `tico task create` for a question.
 Answer with the person's exact words, not a shortened yes. Words that give none of what the question asks, such as "just add it like the others" when the bot asked for a price, answer nothing: leave the question open, comment on the task if it helps.
 
 ## Many at once is one card
-Closing a list of tasks, sending back OKs and answering bots are direct, one command each (`tico task close`,
-`tico task answer`). Put several changes on ONE card only in a background run. Never a NEVER item, and never an OK to send,
+Closing a list of tasks, sending back OKs and replying to bots are direct, one command each (`tico task close`,
+`tico task answer`, `tico task comment`). Put several changes on ONE card only in a background run. Never a NEVER item, and never an OK to send,
 spend or publish: that is their own tap on its preview. One card, several steps, up to 100:
 `tico assistant propose --summary "<the groups, with counts, and the action>" --path /api/v2/assistant/batch --body '{"actions": [{"path": "/api/v2/tasks/<id>/move", "body": {"to": "closed", "why": "<reason>", "version": <N>}}]}'`.
 One Confirm runs them all as them; any that fail are listed and the rest still run.

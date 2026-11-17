@@ -84,7 +84,6 @@ def test_the_request_operation_id_is_sent(monkeypatch):
         (["task", "snooze", "T1", "-m", "later"], "tico_task_snooze"),
         (["task", "file", "Write it", "--parent", "T1"], "tico_task_file"),
         (["task", "ask", "T1", "what next?"], "tico_task_ask"),
-        (["task", "thumbs", "T1", "R1", "up"], "tico_task_thumbs"),
     ],
 )
 def test_each_command_calls_its_tool(monkeypatch, argv, tool):

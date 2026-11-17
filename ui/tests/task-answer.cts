@@ -16,8 +16,8 @@ const RID = 'spec-ok-ana';
 const asking = (id: string, title: string): Task => task(id, title, 'spec', {
   turn: {state: 'person', who: 'human:ana', line: 'Waiting on Ana', since: null, until: null, ask: true, requirement_id: RID}});
 const need = (t: Task, ask: string, line: string): Need => ({kind: 'ask', id: `${ask}:${RID}`, task_id: t.id, requirement_id: RID, line,
-  since: '2026-11-12T07:00:00Z', task: brief(t), ask: {requirement_id: RID, kind: 'answer', line, who: 'human:ana', asked_by: 'bot:pm',
-    choices: ['Yes', 'No'], may: ['answer', 'thumbs'], met: false, shows: [], standing: 'waiting', answer: null}});
+  since: '2026-11-12T07:00:00Z', task: brief(t), ask: {requirement_id: RID, kind: 'ok', line, who: 'human:ana', asked_by: 'bot:pm',
+    may: ['ok', 'no'], met: false, shows: [], standing: 'waiting', answer: null}});
 
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});

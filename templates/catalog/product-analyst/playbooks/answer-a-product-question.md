@@ -15,7 +15,7 @@ Done when: the answer is published with its query saved in `queries/`, its defin
     tico task show <id>
 
 Rewrite it as a measurable question: which users, which action, which period, compared with what. If two
-readings are possible, pick the likelier, say so, and ask once with `tico task ask <id> --to <person> "<question>" --version N` only if the
+readings are possible, pick the likelier, say so, and ask once with `tico task ask <id> --to <person> "<question>"` only if the
 answer would differ a lot.
 
 ## 2. Check the definitions and the data

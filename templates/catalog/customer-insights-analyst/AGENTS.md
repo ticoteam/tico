@@ -68,7 +68,7 @@ Always:
 - `skills/hand-off-feedback-evidence/SKILL.md`: read before you send a theme, a bug or a request to another team.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`. If a notice says the task is yours,
+1. Read the task's chat with `tico task show <id>`. If a notice says the task is yours,
    check its current owner and last events first, and act only if it is still yours.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/themes.md`, `knowledge/trends.md`,
    `knowledge/feedback-method.md` and the playbook the task names. A resumed turn already has them.
@@ -93,7 +93,7 @@ stop, and their end wakes you.
 Work arrives as tasks: `tico task show <id>`, `tico task list`. Feedback comes from tasks and files humans attach, from
 Support Agent's digests and known-issues, and from imported customer calls (`tico meeting search "<theme>"`, then
 `tico meeting read <id>`). Where a mailbox is connected, `tico email search <address> "<query> newer_than:7d"`.
-Ask the recipient one question with `tico task ask <id> --to <person> "<question>" --version N`. Something a human must decide is
+Ask the recipient one question with `tico task ask <id> --to <person> "<question>"`. Something a human must decide is
 `tico task create --owner <person>`. Finish every task, quiet week or not.
 
 ## Quality standards

@@ -19,6 +19,10 @@ A Slack channel is linked to one Tico thread, and the two talk both ways.
 - Every inbound write goes through the org rule check as the person (`org_rule_check.inbound`, held as that person,
   with its provenance: the Slack channel and ts). A Block holds it; Send anyway can release it (`replay_held`).
 - History is opt-in: the last 30 days, at most 5,000 messages, written with `refs.import`, so nothing wakes.
+- A read-only link (`read_only`) is how bots read a channel (Settings > Tools > Slack, `readers`): the channel's
+  messages come into a members thread of its readers and the admin who listed it, and nothing goes back to Slack, so
+  the channel's members are not mapped and one who is not on the roster suspends nothing (their messages are skipped).
+  Each reader follows the thread at `digest`, and the hourly bot digest (`thread_bot_digest`) wakes it.
 
 Core is `backend/threads.py` (the contract's entry points: `viewer`, `readable`, `post`, `apply_revision`,
 `add_outside_delivery`, `outside_due`, `settle_delivery`, `follow`). Tests use the real core and fake only Slack.
@@ -36,7 +40,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from . import hubdb as H
 from . import org_rule_check as OR
 from . import screening
-from . import slack_channels as SC
+from . import slack_errors as SE
 from . import slack_gateway as G
 from .auth import Identity
 from .store import Problem
@@ -78,6 +82,13 @@ CHANNEL_ERRORS = frozenset(
 MISSING_CHANNEL = ("channel_not_found", "not_in_channel")
 MAX_DRAIN = 500  # queued inbound events carried in one pass of one link
 STALLED = frozenset({"denied", "retry"})  # outcomes that keep the queue where it is
+CATCH_UP_SECONDS = 3600  # a read-only link asks Slack for what its socket may have missed this often
+CATCH_UP_CHECK = 60  # how often the gateway looks for a read-only link whose catch-up is due
+PERSON_TRIES = 5  # users.info failures (a rate limit, no answer) one event waits through before it counts as unmapped
+PERSON_RETRY = 60  # seconds before the next try, times the tries so far
+# The read-only links a catch-up pass looks at, by the partial index on read_only (slack_thread_links_read_only).
+CATCH_UP_SQL = "SELECT * FROM slack_thread_links WHERE read_only=1 AND state='active' LIMIT 200"
+GONE_USERS = frozenset({"user_not_found", "user_not_visible", "account_inactive"})  # users.info's definite answers
 
 
 def outside_recipient(channel_id):
@@ -259,6 +270,14 @@ def audience(c, core, viewer_for, link_id, thread_id, author, text):
     """The recipients a Slack message is checked against (an org rule's With is matched on them): the channel's mapped
     members who read the thread, and the people and bots the text @mentions who read it too. Sorted, never the author."""
     found = {H.human_actor(pid) for pid in _members(c, link_id)}
+    found.update(  # a read-only link maps no channel member: its thread's members are who reads what it carries
+        r[0]
+        for r in c.execute(
+            "SELECT m.actor FROM slack_thread_links l JOIN thread_members m ON m.thread_id=l.thread_id "
+            "WHERE l.id=? AND l.read_only=1",
+            (link_id,),
+        )
+    )
     found.update(actor for actor, _kind in core.mentions(c, thread_id, text, author=author))
     out = []
     for actor in sorted(found):
@@ -295,6 +314,7 @@ def view(row):
         "reason": row["reason"],
         "history": {"state": row["history_state"], "count": row["history_count"]},
         "linked_by": row["linked_by"],
+        "read_only": bool(row.get("read_only")),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -345,15 +365,19 @@ def unlink_link(store, who, link_id, core=None, auth=None):
         row = _link(c, link_id)
         if not row or row["state"] == "unlinked" or not _can_see(c, core, auth or _auth(store), who, row["thread_id"]):
             raise Problem("not_found", "That Slack link was not found", 404)
-        c.execute("UPDATE slack_thread_links SET state='unlinked', updated_at=? WHERE id=?", (H.now(), link_id))
-        c.execute("DELETE FROM slack_inbound_events WHERE link_id=?", (link_id,))
-        if row["channel_id"]:
-            _sweep(core, c, row["channel_id"])
-            for node in _subtree(c, row["thread_id"]):
-                core.remove_outside_member(c, H.KEEPER, node, outside_recipient(row["channel_id"]))
-        H.event(c, who.actor, "slack.unlink", link_id, {"channel": row["channel_id"]})
-        _audit(c, who, link_id, {"state": row["state"]}, {"state": "unlinked"})
+        _unlink(c, core, who, row)
         return view(_link(c, link_id))
+
+
+def _unlink(c, core, who, row):
+    c.execute("UPDATE slack_thread_links SET state='unlinked', updated_at=? WHERE id=?", (H.now(), row["id"]))
+    c.execute("DELETE FROM slack_inbound_events WHERE link_id=?", (row["id"],))
+    if row["channel_id"]:
+        _sweep(core, c, row["channel_id"])
+        for node in _subtree(c, row["thread_id"]):
+            core.remove_outside_member(c, H.KEEPER, node, outside_recipient(row["channel_id"]))
+    H.event(c, who.actor, "slack.unlink", row["id"], {"channel": row["channel_id"]})
+    _audit(c, who, row["id"], {"state": row["state"]}, {"state": "unlinked"})
 
 
 def resume_link(store, who, link_id, auth=None):
@@ -416,6 +440,78 @@ def list_links(store, who, thread_id="", limit=50, cursor="", auth=None):
     }
 
 
+# ----------------------------------------------------------------------------- read-only links (the channels bots read)
+def channel_link(c, key, channel_id=""):
+    """A listed channel's link that is not over: by the reference it was asked with (`slack_channels.key`), else by
+    its channel id once the gateway found it. A refused read-only link counts, so adding readers asks it again."""
+    row = _one(
+        c,
+        "SELECT * FROM slack_thread_links WHERE channel_ref=? AND state IN ('requested','active','suspended','refused') "
+        "ORDER BY CASE state WHEN 'refused' THEN 1 ELSE 0 END, created_at DESC LIMIT 1",
+        (key,),
+    )
+    if row and row["state"] == "refused" and not row["read_only"]:
+        row = None
+    return row or (_linked(c, channel_id) if channel_id else None)
+
+
+def add_readers(c, who, key, name, channel_id, bots):
+    """The bots follow the listed channel's thread at `digest`, so the hourly bot digest wakes them with what the
+    channel said. A channel with no link gets a read-only one: a members thread named for it, owned by `who`, that only
+    takes in what Slack says. A refused read-only link is asked again."""
+    core = _core()
+    link = channel_link(c, key, channel_id)
+    if link is None:
+        thread_id = core.create(c, who.actor, title="#" + (name or channel_id), audience="members")["id"]
+        core.unfollow(c, core.actor_viewer(c, who.actor), thread_id)  # they read it; every message is not news to them
+        now, link_id = H.now(), H.new_id()
+        c.execute(
+            "INSERT INTO slack_thread_links (id,thread_id,channel_ref,channel_name,audience,state,history_state,"
+            "linked_by,read_only,created_at,updated_at) VALUES (?,?,?,?,'members','requested','off',?,1,?,?)",
+            (link_id, thread_id, key, name, who.actor, now, now),
+        )
+        H.event(c, who.actor, "slack.link.request", link_id, {"thread": thread_id, "read_only": True})
+        _audit(c, who, link_id, None, {"thread": thread_id, "channel": key, "read_only": True})
+        link = _link(c, link_id)
+    elif link["state"] == "refused":
+        c.execute(
+            "UPDATE slack_thread_links SET state='requested', reason='', updated_at=? WHERE id=?", (H.now(), link["id"])
+        )
+    assert link is not None  # found above, or just made
+    for bot in bots:
+        actor = "bot:" + bot
+        viewer = core.actor_viewer(c, actor)
+        if viewer is None:
+            continue
+        if not core.readable(c, viewer, link["thread_id"]):
+            core.add_member(c, H.KEEPER, link["thread_id"], actor)
+        core.follow(c, viewer, link["thread_id"], notify="digest")
+    return link
+
+
+def remove_reader(c, who, link, bot):
+    """The bot stops following the channel's thread. On a read-only link it leaves the thread too, and the link ends
+    with its last reader."""
+    core, actor = _core(), "bot:" + bot
+    if link["read_only"]:
+        core.remove_member(c, H.KEEPER, link["thread_id"], actor)
+        if not c.execute(
+            "SELECT 1 FROM thread_followers WHERE thread_id=? AND following=1 AND notify='digest' AND actor LIKE 'bot:%'",
+            (link["thread_id"],),
+        ).fetchone():
+            _unlink(c, core, who, link)
+        return
+    viewer = core.actor_viewer(c, actor)
+    if viewer is not None and core.readable(c, viewer, link["thread_id"]):
+        core.unfollow(c, viewer, link["thread_id"])
+
+
+def drop_channel(c, who, link):
+    """A channel taken off the list: its read-only link ends. A two-way link is the thread's, and stays."""
+    if link and link["read_only"] and link["state"] != "unlinked":
+        _unlink(c, _core(), who, link)
+
+
 def _event_key(event):
     """The queue's key for an event. A message and its @mention are the same message (channel, ts), so both forms share
     a key and the second is dropped in the queue; an edit is keyed by Slack's edit ts, a delete by its message."""
@@ -475,6 +571,9 @@ class Bridge:
         self._recovered = False
         self._users = {}  # Slack user id -> (expires, users.info answer)
         self._verified = {}  # link id -> epoch seconds until its Slack side is trusted (SEND_CHECK_SECONDS)
+        self._caught_up = {}  # read-only link id -> ISO time its next catch-up is due (absent = now)
+        self._catch_up_check = ""  # ISO time the gateway next looks for a due catch-up ("" = now)
+        self._waiting = {}  # queued event key -> (users.info failures, ISO time of the next try)
 
     # --- seams
     def core(self):
@@ -502,12 +601,20 @@ class Bridge:
     def person_for(self, c, slack_user_id):
         """(person, reason): the roster person a Slack user is, or None and why. The gateway's `check_user` decides, so
         linking and every message apply the same rules."""
+        person, reason, _later = self.lookup(c, slack_user_id)
+        return person, reason
+
+    def lookup(self, c, slack_user_id):
+        """(person, reason, later): `person_for`, and whether Slack could not say yet (a rate limit, no answer), so the
+        sender is not known to be unmapped and a message from them is tried again."""
         try:
             user = self.slack_user(slack_user_id)
-        except (G.SlackError, G.SlackUnreachable) as exc:
-            return None, f"users.info: {getattr(exc, 'code', type(exc).__name__)}"
+        except G.SlackError as exc:
+            return None, f"users.info: {exc.code}", exc.code not in GONE_USERS
+        except G.SlackUnreachable:
+            return None, "users.info: unreachable", True
         person, _user, reason = self.gw.check_user(c, user)
-        return person, reason
+        return person, reason, False
 
     def slack_user(self, slack_user_id):
         """A Slack user's users.info answer, reused for USER_CACHE_SECONDS: membership is checked on every link check
@@ -575,6 +682,8 @@ class Bridge:
                 thread = _thread(c, link["thread_id"])
             if not thread:
                 return self._refuse(link, "The thread no longer exists")
+            if link.get("read_only"):  # nothing goes back to Slack, so who is in the channel is not checked
+                return self._activate(link, info, {}, thread.get("audience") or "members")
             if thread.get("audience") != need:
                 want = "a company thread" if need == "company" else "a members thread"
                 return self._refuse(
@@ -639,20 +748,9 @@ class Bridge:
                         "INSERT INTO slack_link_members (link_id,slack_user_id,person_id,created_at) VALUES (?,?,?,?)",
                         (link["id"], uid, pid, now),
                     )
-                core = self.core()
-                for node in _subtree(c, link["thread_id"]):  # the sub-threads made before the link too
-                    core.add_outside_delivery(c, node, outside_recipient(info["id"]))
-                listed, _by_name = SC.lookup(c, self.settings, info["id"], str(info.get("name") or ""))
-                for slug in (listed or {}).get("readers") or []:
-                    try:
-                        viewer = self.bot_viewer(slug)
-                        if private and not core.readable(c, viewer, link["thread_id"]):
-                            # A members thread opens to its members only: a listed reader joins it, as the bridge's
-                            # access, before its digest follow (the follow needs the thread to be readable).
-                            core.add_member(c, H.KEEPER, link["thread_id"], f"bot:{slug}")
-                        core.follow(c, viewer, link["thread_id"], notify="digest")
-                    except Problem:
-                        continue  # a reader that cannot be made a member is not followed
+                if not link.get("read_only"):
+                    for node in _subtree(c, link["thread_id"]):  # the sub-threads made before the link too
+                        self.core().add_outside_delivery(c, node, outside_recipient(info["id"]))
                 H.event(c, H.KEEPER, "slack.link.active", link["id"], {"channel": info["id"], "members": len(persons)})
             return "active"
         except Problem as exc:
@@ -709,6 +807,8 @@ class Bridge:
             return "Tico is no longer in the channel", {}
         if G.is_external(info):
             return "the channel became Slack Connect (shared with another workspace)", {}
+        if link.get("read_only"):
+            return None, {}
         if bool(info.get("is_private")) != bool(link["channel_private"]):
             return "the channel's privacy changed", {}
         persons, problems = self.resolve_members(link["channel_id"])
@@ -758,8 +858,9 @@ class Bridge:
 
     # --- inbound
     def linked(self, channel_id):
+        """The channel's active or suspended link, or None."""
         with self.store.read() as c:
-            return _linked(c, channel_id) is not None
+            return _linked(c, channel_id)
 
     def receive(self, event):
         """A channel message, edit or delete from a linked channel. It joins the link's queue, so the order holds, and
@@ -769,8 +870,8 @@ class Bridge:
             link = _linked(c, event["channel"])
         if not link:
             return "unlinked"
-        if event["op"] == "store" and event.get("author") != "human":
-            return "bot"  # Tico's own posts and other bots' are never carried in
+        if event["op"] == "store" and event.get("author") != "human" and (not link["read_only"] or self._own(event)):
+            return "bot"  # Tico's own posts are never carried in; other apps' only into a read-only link
         with self.store.transaction() as c:
             c.execute(
                 "INSERT OR IGNORE INTO slack_inbound_events (link_id,event_key,event,created_at) VALUES (?,?,?,?)",
@@ -779,7 +880,7 @@ class Bridge:
         try:
             return self.drain(link["id"])
         except Exception as exc:  # noqa: BLE001 the queue is kept; the next pass carries it in
-            LOG.error("Slack inbound carry failed: %s", type(exc).__name__)
+            LOG.error("Slack inbound carry failed: %s", SE.describe(exc))
             return "queued"
 
     def drain(self, link_id):
@@ -817,7 +918,7 @@ class Bridge:
             try:
                 out.append(self.drain(link_id))
             except Exception as exc:  # noqa: BLE001 one link's queue never stops the others
-                LOG.error("Slack queue for a link failed: %s", type(exc).__name__)
+                LOG.error("Slack queue for a link failed: %s", SE.describe(exc))
                 out.append("error")
         return out
 
@@ -833,9 +934,10 @@ class Bridge:
         gateway's persist makes it, so the wake rule sees it."""
         return G.humanize(text, {self.gw.bot_user_id: self.settings.assistant_name})[: G.TEXT_CHARS]
 
-    def _note(self, channel, user, text):
-        """A private note to the author, sent after the commit that decided it. Nothing here stops ingestion."""
-        if not user:
+    def _note(self, link, channel, user, text):
+        """A private note to the author, sent after the commit that decided it. Nothing here stops ingestion. A
+        read-only link says nothing in Slack."""
+        if not user or link.get("read_only"):
             return
         try:
             self.slack.post_ephemeral(channel, user, text)
@@ -858,7 +960,9 @@ class Bridge:
         with self.store.transaction() as c:
             if not _seen(c, event["channel"], event["ts"]):
                 _record(c, link, event, "in", "held", actor=actor, error=reason)
-        self._note(event["channel"], event.get("user_id"), "Tico held this message, so it did not reach the thread.")
+        self._note(
+            link, event["channel"], event.get("user_id"), "Tico held this message, so it did not reach the thread."
+        )
         return "held"
 
     def audience_of(self, c, link, thread_id, author, text):
@@ -900,21 +1004,39 @@ class Bridge:
         return bool(OR.R.matching(c, actor, now, OR.place_for(c, actor, now, thread_id)))
 
     def post_in(self, event, link):
-        """One channel message, carried into the thread as its person. A Slack thread reply becomes a sub-thread."""
-        channel, ts = event["channel"], event["ts"]
+        """One channel message, carried into the thread as its person. A Slack thread reply becomes a sub-thread. On a
+        read-only link another app's post (an alert, a deploy) is carried in by Tico itself, under the app's name."""
+        channel, ts, key = event["channel"], event["ts"], _event_key(event)
+        app = bool(link.get("read_only")) and event.get("author") == "bot"
+        waiting = self._waiting.get(key)
+        if waiting and self.clock() < waiting[1]:
+            return "retry"
         with self.store.read() as c:
             if _seen(c, channel, ts):
                 return "duplicate"
-            person, reason = self.person_for(c, event["user_id"])
-            parent = self.parent_for(c, event) if person else None
-        if not person:
+            person, reason, later = (None, "", False) if app else self.lookup(c, event["user_id"])
+            parent = self.parent_for(c, event) if person or app else None
+        if later:
+            tries = (waiting[0] if waiting else 0) + 1
+            LOG.warning(
+                "slack.inbound.sender link=%s event=%s try=%d/%d: %s", link["id"], key, tries, PERSON_TRIES, reason
+            )
+            if tries < PERSON_TRIES:
+                self._waiting[key] = (tries, H.shift(self.clock(), seconds=PERSON_RETRY * tries))
+                return "retry"  # the event stays queued: Slack could not say who sent it yet
+        self._waiting.pop(key, None)
+        if not person and not app and link.get("read_only"):
+            return "skipped"  # a read-only thread carries roster people only; nothing else depends on who is there
+        if not person and not app:
             with self.store.transaction() as c:
                 self.suspend(
                     c, link["id"], f"a message came from someone who doesn't map to a roster person ({reason})"
                 )
             return "denied"  # the event stays queued until the link is checked again
-        actor = H.human_actor(person["id"])
+        actor = H.KEEPER if app or person is None else H.human_actor(person["id"])
         text = self.body_for(event["text"])
+        if app:
+            text = f"*{event.get('author_name') or event['user_id']}*: {text}"  # who posted it, as the thread shows it
         if screening.screen(self.store, "slack", text, actor=actor, role="human", key=ts).get("action") == "hold":
             return self._held(event, link, actor, "screening hold")
         thread_id = parent["conversation_id"] if parent else link["thread_id"]
@@ -928,6 +1050,10 @@ class Bridge:
         origin_id = f"{H.new_id()}@slack:{self.gw.team_id}"
         origin = {"origin_id": origin_id, "revision": 0, "install": f"slack:{self.gw.team_id}", "actor": actor}
         refs = {"slack": {"channel": channel, "ts": ts, "team": self.gw.team_id}}
+        if event.get("author") == "bot" and event.get("author_name"):
+            refs["slack"]["name"] = event["author_name"]  # an app's post: the name it posts under
+        if actor == H.KEEPER:
+            refs["slack"]["app"] = event.get("user_id") or True  # another app's post: a plain line, not a system one
         if carry_import:
             refs["import"] = True
         held = False
@@ -957,9 +1083,11 @@ class Bridge:
                     _record(c, link, event, "in", "held", origin_id=origin_id, actor=actor, error="org rule hold")
                     held = True
                 else:
+                    if link.get("read_only") and parent:
+                        self._readers_follow(c, link, parent["message_id"], actor)
                     posted = self.core().post(
                         c,
-                        self.viewer(c, actor),
+                        actor if link.get("read_only") else self.viewer(c, actor),
                         thread_id,
                         OR.warned_text(verdict, text),
                         kind="say",
@@ -975,8 +1103,32 @@ class Bridge:
                 _record(c, link, event, "in", "failed", origin_id=origin_id, actor=actor, error=exc.code)
             return "refused"
         if held and not carry_import:
-            self._note(channel, event.get("user_id"), "Tico held this message, so it did not reach the thread.")
+            self._note(link, channel, event.get("user_id"), "Tico held this message, so it did not reach the thread.")
         return "held"
+
+    def _readers_follow(self, c, link, parent_message_id, actor):
+        """A reply in a read channel goes into its message's sub-thread, and who is told is planned from that
+        sub-thread's own followers: the link's readers follow it at digest too, before the reply is written."""
+        sub = self.core().sub_thread(c, actor, parent_message_id)
+        assert sub is not None  # sub_thread makes it when missing
+        now = H.now()
+        for row in c.execute(
+            "SELECT actor FROM thread_followers WHERE thread_id=? AND following=1 AND notify='digest' "
+            "AND actor LIKE 'bot:%'",
+            (link["thread_id"],),
+        ).fetchall():
+            c.execute(
+                "INSERT INTO thread_followers(id,thread_id,actor,following,notify,reason,last_read_seq,created_at,"
+                "updated_at) VALUES(?,?,?,1,'digest','manual',?,?,?) ON CONFLICT(thread_id,actor) DO NOTHING",
+                (H.new_id(), sub["id"], row["actor"], int(sub.get("last_seq") or 0), now, now),
+            )
+
+    def _own(self, message):
+        """A post by Tico's own Slack app (an event or a history message)."""
+        user = str(message.get("user_id") or message.get("user") or "")
+        if user and user == self.gw.bot_user_id:
+            return True
+        return bool(self.gw.app_id) and message.get("app_id") == self.gw.app_id
 
     def parent_for(self, c, event):
         """The Tico message a Slack thread reply answers: the message its thread root was carried as, or None."""
@@ -1009,6 +1161,7 @@ class Bridge:
         if row["state"] == "held":
             if not deleted:
                 self._note(
+                    link,
                     event["channel"],
                     self._author_user(link["id"], row),
                     "Tico held this message, so the edit did not reach the thread.",
@@ -1030,6 +1183,7 @@ class Bridge:
             )
             if verdict.get("action") == "hold":
                 self._note(
+                    link,
                     event["channel"],
                     self._author_user(link["id"], row),
                     "Tico held this edit, so the message in the thread was not changed.",
@@ -1045,7 +1199,7 @@ class Bridge:
         except Problem as exc:
             return f"refused: {exc.code}"
         if note:
-            self._note(event["channel"], self._author_user(link["id"], row), note)
+            self._note(link, event["channel"], self._author_user(link["id"], row), note)
         return outcome
 
     def _apply_revision(self, event, link, row, msg, body, deleted, edited, gate):
@@ -1082,7 +1236,10 @@ class Bridge:
         out = []
         with self.store.read() as c:
             links = [
-                dict(r) for r in c.execute("SELECT * FROM slack_thread_links WHERE state='active' AND channel_id<>''")
+                dict(r)
+                for r in c.execute(
+                    "SELECT * FROM slack_thread_links WHERE state='active' AND channel_id<>'' AND read_only=0"
+                )
             ]
         for link in links:
             if self.backoff.get(link["channel_id"], "") > self.clock():
@@ -1111,7 +1268,7 @@ class Bridge:
                 try:
                     out.append(self.send_one(link, d))
                 except Exception as exc:  # noqa: BLE001 one delivery never stops the others
-                    LOG.error("Slack delivery %s failed: %s", d.get("id"), type(exc).__name__)
+                    LOG.error("Slack delivery %s failed: %s", d.get("id"), SE.describe(exc))
                     out.append({"delivery_id": d.get("id"), "state": "error"})
         return out
 
@@ -1533,17 +1690,8 @@ class Bridge:
         mapped person with `refs.import`, so it wakes no bot. A message from someone who is not a linked member, a bot's,
         or one the Block holds is skipped. Idempotent: a message already carried is not carried twice."""
         oldest = f"{_epoch(self.clock()) - HISTORY_DAYS * 86400:.6f}"
-        found, cursor = [], ""
         try:
-            for _ in range(HISTORY_PAGES):
-                page, cursor = self.slack.history_page(link["channel_id"], oldest, cursor, HISTORY_PAGE)
-                found.extend(page)
-                if not cursor or len(found) >= HISTORY_CAP:
-                    break
-            for top in [m for m in found if int(m.get("reply_count") or 0) > 0]:
-                if len(found) >= HISTORY_CAP:
-                    break
-                found.extend(self.slack.replies(link["channel_id"], top["ts"], oldest, HISTORY_PAGE))
+            found = self._history(link["channel_id"], oldest)
         except (G.SlackError, G.SlackUnreachable):
             self._history_state(link["id"], "pending")
             return {"state": "pending"}
@@ -1581,6 +1729,75 @@ class Bridge:
                 continue
         self._history_state(link["id"], "done", count)
         return {"state": "done", "count": count}
+
+    def _history(self, channel_id, oldest):
+        """The channel's messages newer than `oldest`, top-level and the replies in their threads, at most `HISTORY_CAP`.
+        Raises what Slack raised."""
+        found, cursor = [], ""
+        for _ in range(HISTORY_PAGES):
+            page, cursor = self.slack.history_page(channel_id, oldest, cursor, HISTORY_PAGE)
+            found.extend(page)
+            if not cursor or len(found) >= HISTORY_CAP:
+                break
+        for top in [m for m in found if int(m.get("reply_count") or 0) > 0]:
+            if len(found) >= HISTORY_CAP:
+                break
+            found.extend(self.slack.replies(channel_id, top["ts"], oldest, HISTORY_PAGE))
+        return found
+
+    # --- read-only links: what the socket missed
+    def catch_up_soon(self):
+        """Every read-only link catches up on the next pass: the socket has just come back."""
+        self._caught_up.clear()
+        self._catch_up_check = ""
+
+    def catch_up_due(self):
+        """Each active read-only link catches up once an hour, and on the first pass after a (re)connect."""
+        now = self.clock()
+        if now < self._catch_up_check:
+            return []
+        self._catch_up_check = H.shift(now, seconds=CATCH_UP_CHECK)
+        with self.store.read() as c:
+            links = [dict(r) for r in c.execute(CATCH_UP_SQL)]
+        out = []
+        for link in links:
+            if now < self._caught_up.get(link["id"], ""):
+                continue
+            self._caught_up[link["id"]] = H.shift(now, seconds=CATCH_UP_SECONDS)
+            try:
+                out.append(self.catch_up(link))
+            except Exception as exc:  # noqa: BLE001 one link's catch-up never stops the others; the next hour tries again
+                LOG.error("slack.catch_up link=%s failed: %s", link["id"], type(exc).__name__)
+        return out
+
+    def catch_up(self, link):
+        """What a read-only link's channel said since it last read (`read_ts`; its activation at first), from Slack's
+        history, queued as the socket would have queued it and carried in: messages the thread already has are skipped,
+        and its readers' digests count the rest."""
+        channel = link["channel_id"]
+        oldest = link.get("read_ts") or f"{_epoch(link.get('activated_at') or link['created_at']):.6f}"
+        try:
+            found = self._history(channel, oldest)
+        except (G.SlackError, G.SlackUnreachable) as exc:
+            LOG.warning("slack.catch_up link=%s: %s", link["id"], getattr(exc, "code", type(exc).__name__))
+            return {"link": link["id"], "state": "failed"}
+        kind, newest, events = ("group" if channel.startswith("G") else "channel"), oldest, []
+        for m in sorted(found, key=lambda m: float(m.get("ts") or 0)):
+            ts = str(m.get("ts") or "")
+            if not ts or float(ts) <= float(oldest):
+                continue
+            newest = ts
+            row, _why = (None, "own") if self._own(m) else G.channel_message(channel, kind, m, self.gw.bot_user_id)
+            if row:
+                events.append({"event_id": f"catch-up:{channel}:{ts}", "team_id": self.gw.team_id, **row})
+        with self.store.transaction() as c:
+            for event in events:
+                c.execute(
+                    "INSERT OR IGNORE INTO slack_inbound_events (link_id,event_key,event,created_at) VALUES (?,?,?,?)",
+                    (link["id"], _event_key(event), json.dumps(event, sort_keys=True), H.now()),
+                )
+            c.execute("UPDATE slack_thread_links SET read_ts=? WHERE id=?", (newest, link["id"]))
+        return {"link": link["id"], "state": "done", "events": len(events), "carried": self.drain(link["id"])}
 
     def _import_one(self, link, m, person_id, text):
         channel, ts = link["channel_id"], str(m.get("ts"))
@@ -1623,9 +1840,11 @@ class Bridge:
             try:
                 out["gated"].append(self.gate(link))
             except Exception as exc:  # noqa: BLE001 a check that breaks is tried again, never lost
+                # A Slack error from the channel lookup can echo a message, so the class alone is logged.
                 LOG.error("Slack link %s check failed: %s", link["id"], type(exc).__name__)
                 out["gated"].append("error")
         self.check_links()
+        out["caught_up"] = self.catch_up_due()
         out["carried"] = self.drain_all()
         out["sent"] = self.outbound()
         self.reconcile()
@@ -1643,7 +1862,7 @@ class Bridge:
             try:
                 out["history"].append(self.import_history(link))
             except Exception as exc:  # noqa: BLE001 the import is tried again, not lost
-                LOG.error("Slack history import failed: %s", type(exc).__name__)
+                LOG.error("Slack history import failed: %s", SE.describe(exc))
                 self._history_state(link["id"], "pending")
         return out
 
@@ -1697,7 +1916,7 @@ def replay_held(c, bot, hold, replay, ingest, gate=None):
         refs["import"] = True
     posted = core.post(
         c,
-        core.viewer(None, bot),
+        row["actor"] if link.get("read_only") else core.viewer(None, bot),
         replay["thread_id"],
         text,
         kind="say",

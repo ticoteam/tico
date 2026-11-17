@@ -225,7 +225,7 @@ def _build():
     )
     add(
         "strategy.published",
-        "A new version of the strategy was published.",
+        "The strategy changed: every save is a new version, live at once.",
         "Strategy published",
         {"version": 3, "note": "Focus on Acme's renewals.", "published_by": "human:ana"},
     )

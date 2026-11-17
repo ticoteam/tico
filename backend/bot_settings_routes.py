@@ -7,6 +7,7 @@ from . import (
     company_billing,
     company_pause,
     gateway_connection,
+    holds,
     login_holds,
     model_login,
     models as M,
@@ -368,16 +369,12 @@ def register(
             row = H.bot(c, bot)
             config = c.execute("SELECT owner_id,revision FROM bot_config WHERE bot=?", (bot,)).fetchone()
             operator = (H.human(c, config["owner_id"]) or {}) if config else {}
-            record = c.execute(
-                "SELECT actor,created_at,action FROM events WHERE target=? "
-                "AND action IN ('bot.pause','bot.resume') ORDER BY created_at DESC,rowid DESC LIMIT 1",
-                (bot,),
-            ).fetchone()
+            hold = holds.get(c, holds.PAUSED, "bot", bot)  # its own pause, by whom and since when
             paused_by = None
-            if row["state"] == "paused" and record and record["action"] == "bot.pause":
-                person = H.human(c, H.actor_id(record["actor"])) if record["actor"].startswith("human:") else None
+            if row["state"] == "paused" and hold and hold["created_by_id"].startswith("human:"):
+                person = H.human(c, H.actor_id(hold["created_by_id"]))
                 if person:
-                    paused_by = {"name": person["name"], "at": record["created_at"]}
+                    paused_by = {"name": person["name"], "at": hold["created_at"]}
             tasks = H._rows(
                 c.execute(
                     "SELECT * FROM tasks WHERE owner_id=? AND status='open'",
@@ -478,9 +475,12 @@ def register(
                 (bot, int(body.action in ("drain", "pause"))),
             )
             if body.action != "drain":
-                c.execute(
-                    "UPDATE bots SET state=? WHERE id=?", ("active" if body.action == "resume" else "paused", bot)
-                )
+                # The bot's own pause is a hold, with bots.state kept in step (company_pause.pause_bot).
+                if body.action == "pause":
+                    company_pause.pause_bot(c, who.actor, bot)
+                else:
+                    company_pause.resume_bot(c, who.actor, bot)
+                    c.execute("UPDATE bots SET state='active' WHERE id=?", (bot,))
                 if body.action == "pause":
                     c.execute(
                         "UPDATE attempts SET lease_until=? WHERE bot_id=? AND state IN ('leased','running')",

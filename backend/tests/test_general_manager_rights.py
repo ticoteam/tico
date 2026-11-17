@@ -5,10 +5,10 @@ import json
 
 import pytest
 
+from backend import bot_settings as BS
 from backend import hubdb as H
 from backend.tests.helpers import engine as X
 from backend.tests.helpers.tasks_board import api, bot_token, get, headers, post  # noqa: F401
-from backend import bot_settings as BS
 
 
 def _manager(api, kind):
@@ -76,7 +76,6 @@ def _manager_updates_every_field_and_is_named_in_history(api, manager):
     for fields, field in [
         ({'due': '2027-01-01T00:00:00Z'}, 'due_at'),
         ({'title': 'Check the revised packet'}, 'title'),
-        ({'body': 'Review the revised packet.'}, 'body'),
         ({'rank': 12}, 'rank'),
     ]:
         task = make(api)
@@ -343,7 +342,16 @@ def test_a_person_manager_says_its_reports_task_is_done(company):
 def test_managing_a_task_never_answers_an_ok_that_names_someone_else(chart):
     c, manager = chart
     task = _task(c, ANA, "bot:ops", "Check the permission packet")
-    asked = H.task_ask(c, "bot:ops", task, ANA, "OK to send the packet?", kind="ok", seen_version=_version(c, task))
+    asked = H.task_ask(
+        c,
+        "bot:ops",
+        task,
+        ANA,
+        "OK to send the packet?",
+        kind="ok",
+        shows=X.shown(c),
+        seen_version=_version(c, task),
+    )
     with pytest.raises(H.Refused) as refused:
         H.task_answer(c, manager, task, asked["requirement_id"], "ok", None, _version(c, task))
     assert refused.value.rule == "task_requirement"

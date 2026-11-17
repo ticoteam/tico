@@ -1,5 +1,5 @@
 {
-  "_source": "Slack Web API answers for conversations.history (the fields connectors/slack.py reads: messages with ts, user, text; response_metadata.next_cursor) and the missing_scope error (error, needed, provided). Shaped from Slack's public API reference, not a live capture.",
+  "_source": "Slack Web API answers for conversations.history (the fields the Slack gateway reads for bots, backend/slack_gateway.py and backend/slack_requests.py: messages with ts, user, text; response_metadata.next_cursor) and the missing_scope error (error, needed, provided). Shaped from Slack's public API reference, not a live capture.",
   "history": {
     "ok": true,
     "messages": [

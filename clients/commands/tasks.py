@@ -37,8 +37,8 @@ def task_context(api, args):
 @tool(
     "tico_task_create",
     "File a task for a bot or a person. A task for a person is a decision or a review: the title says what you "
-    "ask, the body is under 120 words, and its first paragraph is the ask: one or two plain sentences on what you "
-    "need and what happens after, at most 40 words, with no ids, hashes, file paths, s3:// links or tool names "
+    "ask, the message is under 120 words, and its first paragraph is the ask: one or two plain sentences on what "
+    "you need and what happens after, at most 40 words, with no ids, hashes, file paths, s3:// links or tool names "
     "(\"PR #1555\" is fine; refused otherwise), e.g. \"Approve the video tool trial for Thursday? If yes, I'll send "
     "the invite.\" Details go below. It starts in the first stage of its pipeline (General when none is named). "
     "`dry_run` reports the checks a create would fail and writes nothing. A person’s asking criteria can refuse "
@@ -50,7 +50,7 @@ def task_context(api, args):
             "picks one"
         ),
         "title": _s("Task title: plain words, no reference numbers or all-caps"),
-        "body": _s("The details", default=""),
+        "message": _s("The first message on its chat: what you ask, if the title doesn't say it all", default=""),
         "pipeline": _s("The pipeline's id; default general"),
         "visibility": _s(
             "People only: roadmap visibility at creation; public needs public_title. A bot is refused; "
@@ -58,7 +58,7 @@ def task_context(api, args):
             enum=["public", "private"],
         ),
         "public_title": _s("People only (a bot is refused): public title; the internal title is never published"),
-        "public_summary": _s("People only (a bot is refused): public summary; the internal body is never published"),
+        "public_summary": _s("People only (a bot is refused): public summary; the task's chat is never published"),
         "due": _s("ISO-8601 date-time with timezone"),
         "private": {
             "type": "boolean",
@@ -141,7 +141,7 @@ def task_create(api, args):
     body = {
         **({"owner": _target(api, args["owner"])} if args.get("owner") else {}),
         "title": args["title"],
-        "body": args.get("body") or "",
+        **({"message": said} if (said := args.get("message") or args.get("body")) else {}),
         "due": args.get("due"),
         "goal_id": args.get("goal_id") or None,
         **({"human": _target(api, args["human"])} if args.get("human") else {}),
@@ -180,7 +180,7 @@ def task_create(api, args):
         body["roles"] = roles
     if args.get("dry_run"):
         return api.post("tasks/dry-run", body)
-    links = s3links.apply(api, body, ("body",))
+    links = s3links.apply(api, body, ("message",))
     return s3links.annotate(api.post("tasks", body, key=_key(args)), links)
 
 
@@ -188,13 +188,13 @@ def task_create(api, args):
     "tico_task_child_create",
     "Create a subtask under a parent; you are its requester. With `check_model`, the subtask is "
     "your own and runs on that model in a session of its own, reading only the subtask: name in "
-    "its body the PR or files to look at. Mark it done with the verdict as the note; it comes "
+    "its message the PR or files to look at. Mark it done with the verdict as the note; it comes "
     "back to the parent.",
     {
         "parent": TASK_ID,
         "owner": _s("Bot slug or human id; `me` for a check_model subtask (the default)"),
         "title": _s("What to do"),
-        "body": _s("Details", default=""),
+        "message": _s("The first message on its chat", default=""),
         "check_model": _s(
             "A company-enabled runtime, optionally with a model: `grok`, `codex:gpt-6.1-sol`; `auto` for "
             "the company's check model, from a provider other than the parent's author when one can run it"
@@ -212,7 +212,7 @@ def task_child_create(api, args):
     owner = args.get("owner") or ("me" if args.get("check_model") else None)
     if not owner:
         raise ValueError("owner is required (or check_model, which files the subtask for you)")
-    return task_create(api, {**args, "owner": owner, "body": args.get("body") or args["title"]})
+    return task_create(api, {**args, "owner": owner})
 
 
 @tool("tico_task_tree", "The nested subtasks with status, owner and worst PR state.", {"id": TASK_ID}, required=("id",))
@@ -266,6 +266,13 @@ def task_text(task, actors=None, events=()):
     owner = task.get("owner_name") or _who(task.get("owner_id") or task.get("owner"), actors)
     place = [(task.get("pipeline") or {}).get("name"), stage.get("name"), f"owner {owner}" if owner else None]
     lines.append(" · ".join(p for p in place if p))
+    asked = task.get("request") if isinstance(task.get("request"), dict) else None
+    if asked and asked.get("text"):
+        # What it asks: its first chat message (a task has no description); the rest of its chat says more.
+        said = " ".join(str(asked["text"]).split())
+        lines.append(
+            f"Asked by {_who(asked.get('from'), actors) or 'someone'}: {said[:600]}" + ("…" if len(said) > 600 else "")
+        )
     if task.get("status") not in (None, "open"):
         lines.append(f"Status: {task['status']}")
     if task.get("turn"):
@@ -288,8 +295,6 @@ def task_text(task, actors=None, events=()):
         answer = item.get("answer")
         if answer:
             words.append(f"answer: {answer.get('value')}" + (f", {answer['note']}" if answer.get("note") else ""))
-        if item.get("choices"):
-            words.append("choices: " + ", ".join(str(c) for c in item["choices"]))
         words.append(f"id {item.get('requirement_id')}")
         if item.get("may"):
             words.append("you may: " + ", ".join(item["may"]))
@@ -551,49 +556,43 @@ def _own_ask(api, task_id, requirement=None):
     )
 
 
+# What makes tico_task_ask a stage ask rather than a ❓: any of these.
+# A question is a message marked ❓ (backend/question_marks.py); its options and why are words in it.
+QUESTION_INSTEAD = (
+    'A question is a message: tico task ask <id> --to <person> "<question>", with no --kind or --show. Say the '
+    "options, your pick and why in the message."
+)
+_STAGE_ASK = ("kind", "show", "subject", "why")
+
+
 @tool(
     "tico_task_ask",
-    "Ask a person on this task one sentence: a question or an OK. The task waits in its stage for the answer, which "
-    "wakes you once; asking again replaces your ask. `withdraw` takes it back.",
+    "Ask a person on this task. `to` and `line`: a ❓ message on its chat, in their Needs you until they reply. A new ❓ "
+    "replaces yours, so put every question in one, numbered when there are several; options and why go in it. While it "
+    "is open you can't mark the task done or close it. An OK: `kind` ok with `show`. `withdraw` takes an OK back.",
     {
         "id": TASK_ID,
         "to": _s("The person's id"),
-        "line": _s("The one sentence asked, readable alone", maxLength=300),
+        "line": _s("The message: a short first line that reads on its own, then any detail", maxLength=4000),
         "kind": {
             "type": "string",
-            "enum": ["answer", "ok"],
-            "description": "answer (default): a question; ok: approve or send back",
+            "enum": ["ok"],
+            "description": "ok: approve or send back what `show` names",
         },
-        "choices": {
-            "type": "array",
-            "items": {"type": "string", "maxLength": 60},
-            "minItems": 2,
-            "maxItems": 6,
-            "description": "Answers to pick; they may type their own",
-        },
-        "choice": {
-            "type": "array",
-            "items": _s("Label|what happens", maxLength=221),
-            "minItems": 2,
-            "maxItems": 4,
-            "description": "Instead of choices",
-        },
-        "recommend": _s("The choice you recommend", maxLength=60),
-        "title": _s("Short heading", maxLength=60),
         "show": {
             "type": "array",
             "items": _s("page:<id>, file:<id>@<version> or a link"),
             "maxItems": 10,
-            "description": "What they look at, shown with the ask",
+            "description": "What an OK approves, shown with it",
         },
         "subject": _s(
             "An OK bound to what you will do, <kind>:<id>, covering exactly `content`; "
             "use it once with tico_ok_use just before acting"
         ),
         "content": {"description": "With subject: exactly what the OK covers (any JSON)"},
-        "withdraw": {"type": "boolean", "description": "Take back your open ask instead"},
-        "requirement": _s("With withdraw: the ask's requirement id, if several"),
-        "why": _s("Why it matters (with withdraw: why)"),
+        "withdraw": {"type": "boolean", "description": "Take back your open OK instead"},
+        "requirement": _s("With withdraw: the OK's requirement id, if several"),
+        "why": _s("With withdraw: why"),
         "version": VERSION,
     },
     required=("id",),
@@ -607,25 +606,22 @@ def task_ask(api, args):
     missing = [name for name in ("to", "line") if not args.get(name)]
     if missing:
         raise ValueError(f"An ask names who it is for and the one line they are asked: give {' and '.join(missing)}")
+    if not any(args.get(field) for field in _STAGE_ASK):
+        # A ❓: the message on the task's chat, needing their reply (backend/question_marks.py).
+        return api.post(f"tasks/{args['id']}/questions", {"to": args["to"], "text": args["line"]}, key=_key(args))
+    if args.get("kind") != "ok" and not args.get("subject"):
+        raise ValueError(QUESTION_INSTEAD)
     body = {"to": args["to"], "line": args["line"], "version": _seen(args)}
     if args.get("subject"):
-        if args.get("choices") or args.get("kind") == "answer" or "content" not in args:
-            raise ValueError("An OK bound to a subject is an ok with its content, never a question with choices")
-        if args.get("title"):
-            raise ValueError("An OK bound to a subject shows its content, not a title: leave out title")
+        if "content" not in args:
+            raise ValueError("An OK bound to a subject is an ok with its content")
         body.update({"subject": args["subject"], "content": args["content"]})
         if args.get("show"):
             body["show"] = args["show"]
         return api.post(f"tasks/{args['id']}/oks", body, key=_key(args))
-    for field in ("kind", "choices", "show", "why", "recommend", "title"):
+    for field in ("kind", "show"):
         if args.get(field):
             body[field] = args[field]
-    if args.get("choice"):
-        if args.get("choices"):
-            raise ValueError("Give the answers once: choice (Label|what happens) or choices, not both")
-        pairs = [str(one).partition("|") for one in args["choice"]]
-        body["choices"] = [label.strip() for label, _, _ in pairs]
-        body["details"] = [detail.strip() for _, _, detail in pairs]
     return api.post(f"tasks/{args['id']}/asks", body, key=_key(args))
 
 
@@ -653,13 +649,11 @@ def ok_use(api, args):
 @tool(
     "tico_task_answer",
     "Answer what you are asked on a task (a bot named on an OK or a question): ok, no (send it "
-    "back, with a note), again (look again), or your answer. The requirement id is in "
-    "tico_task_show's To leave. A stage's answer is named there (confidence): give the name, then "
-    "a whole number in its range, one of its choices, or text.",
+    "back, with a note). The requirement id is in tico_task_show's To leave.",
     {
         "id": TASK_ID,
-        "requirement": _s("The requirement's id, or a stage's answer by its name"),
-        "value": _s("ok, no, again, or your answer: one of its choices or your own words"),
+        "requirement": _s("The requirement's id"),
+        "value": _s("ok or no", enum=["ok", "no"]),
         "note": _s("What they read with it, word for word; required with no"),
         "version": VERSION,
         "on_behalf_of": ASKED,
@@ -703,7 +697,7 @@ def task_give(api, args):
     {
         "parent": TASK_ID,
         "title": _s("What the new task is for, in plain words"),
-        "body": _s("The details; default the title"),
+        "message": _s("The first message on its chat: anything the title doesn't say"),
         "owner": _s(
             "Who does it: a bot slug, a person id, or `me` (the default; in a pipeline whose first stage picks, the "
             "stage picks)"
@@ -723,11 +717,9 @@ def task_give(api, args):
     writes=True,
 )
 def task_file(api, args):
-    fields = ("parent", "title", "pipeline", "due", "labels", "private", "after", "operation_id")
-    # A task has a body: with none given, its title is its body, as for a sub-task made with tico_task_child_create.
-    body = args.get("body") or args["title"]
+    fields = ("parent", "title", "message", "body", "pipeline", "due", "labels", "private", "after", "operation_id")
     owner = args.get("owner") or (None if _first_stage_picks(api, args.get("pipeline")) else "me")
-    return task_create(api, {**{k: args[k] for k in fields if k in args}, "body": body, "owner": owner})
+    return task_create(api, {**{k: args[k] for k in fields if k in args}, "owner": owner})
 
 
 def _first_stage_picks(api, pipeline):
@@ -767,7 +759,7 @@ def _first_stage_picks(api, pipeline):
         "updated_since": _s("Only tasks changed after this ISO-8601 time with a timezone"),
         "member": _s("Only tasks this person or bot is on in some role (`me`, a human id or a bot slug)"),
         "role": _s("With member: only tasks they are on in this role"),
-        "brief": {"type": "boolean", "description": "Leave out each task's body"},
+        "brief": {"type": "boolean", "description": "Leave out each task's longer fields"},
         "all": {
             "type": "boolean",
             "default": False,
@@ -829,12 +821,11 @@ def task_list(api, args):
 
 @tool(
     "tico_task_update",
-    "Edit a task's fields: title, body, due, labels, privacy, goal, with a note. Where it is and who has it change "
+    "Edit a task's fields: title, due, labels, privacy, goal, with a note. Where it is and who has it change "
     "by tico_task_done, tico_task_move, tico_task_close and tico_task_reassign, never here.",
     {
         "id": TASK_ID,
         "title": _s("A new title; it is checked as a new task's title would be"),
-        "body": _s("A new body"),
         "due": _s("ISO-8601 date-time with timezone"),
         "labels": {"type": "array", "items": {"type": "string"}, "description": "Replace the labels"},
         "private": {
@@ -852,7 +843,7 @@ def task_list(api, args):
 )
 def task_update(api, args):
     body = {"version": _seen(args)}
-    for field in ("title", "body", "due", "labels", "private", "goal_id", "note"):
+    for field in ("title", "due", "labels", "private", "goal_id", "note"):
         if args.get(field) is not None:
             body[field] = args[field]
     if args.get("human") is not None:
@@ -1361,7 +1352,7 @@ TASK = (
         tool="tico_task_child_create",
         args=(
             Arg("title", "--title"),
-            Arg("body", default=""),
+            Arg("message", default=""),
             Arg("check_model", "--check-model", nargs="?", const="auto", metavar="RUNTIME[:MODEL]"),
             Arg("check_role", "--role"),
         ),
@@ -1470,7 +1461,7 @@ TASK = (
     ),
     Command(
         "task update",
-        "edit a task's fields: title, body, due, labels, privacy, goal; with --version",
+        "edit a task's fields: title, due, labels, privacy, goal; with --version",
         args=(
             Arg("note", "-m"),
             Arg("note", "--note"),

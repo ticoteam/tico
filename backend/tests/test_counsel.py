@@ -196,9 +196,9 @@ def test_the_document_is_fenced_as_data_in_counsels_task(api):
     file_id, _ = store_file(api, CONTRACT + "\n" + hostile)
     read = post(api, "rules/read", {"file_id": file_id, "source_id": source(api)})
     with api.app.state.store.read() as c:
-        body = c.execute("SELECT body, owner_id FROM tasks WHERE id=?", (read["task_id"],)).fetchone()
-    assert body["owner_id"] == "bot:rules-owner"
-    text = body["body"]
+        owner = c.execute("SELECT owner_id FROM tasks WHERE id=?", (read["task_id"],)).fetchone()["owner_id"]
+        text = H.task_words(c, read["task_id"])  # what the person asked: the task's first message
+    assert owner == "bot:rules-owner"
     start = text.index("<<UNTRUSTED DOCUMENT ")
     end = text.index("<<END UNTRUSTED DOCUMENT ")
     assert text.index(hostile) > start and text.index(hostile) < end
@@ -300,7 +300,7 @@ def test_a_long_document_is_named_not_pasted_and_counsel_reads_the_whole_version
     file_id, version = store_file(api, big)
     read = read_document(api, file_id)
     with api.app.state.store.read() as c:
-        body = c.execute("SELECT body FROM tasks WHERE id=?", (read["task_id"],)).fetchone()["body"]
+        body = H.task_words(c, read["task_id"])
     assert len(body) < 2_000
     assert "Filler clause" not in body and "Keep a record of each consent" not in body
     assert f"tico file read {file_id} --version {version}" in body
@@ -317,7 +317,7 @@ def test_a_short_document_is_fenced_inside_the_task(api):
     file_id, _ = store_file(api, CONTRACT)
     read = read_document(api, file_id)
     with api.app.state.store.read() as c:
-        body = c.execute("SELECT body FROM tasks WHERE id=?", (read["task_id"],)).fetchone()["body"]
+        body = H.task_words(c, read["task_id"])
     assert "Keep a record of each consent for five years." in body
     assert "tico file read" not in body
 
@@ -386,7 +386,7 @@ def test_the_run_asked_reads_a_long_file_on_a_private_task(api):
     same_file, newer = upload("Newer private contract, not delegated.")
     assert same_file == file_id and newer == version + 1
     with api.app.state.store.read() as c:
-        body = c.execute("SELECT body FROM tasks WHERE id=?", (read["task_id"],)).fetchone()["body"]
+        body = H.task_words(c, read["task_id"])
     assert f"tico file read {file_id} --version {version}" in body
     assert "Filler clause" not in body
     run = read_run(api)
@@ -562,11 +562,9 @@ def test_a_document_read_and_an_ask_make_only_calls_counsel_is_allowed(api, monk
             },
         ),
     )["id"]
-    tools(
-        token,
-        ("tico_rules_get", {"id": rule_id}),
-        ("tico_task_comment", {"id": read["task_id"], "text": "Wrote 1 suggestion."}),
-    )
+    # What it says goes in its reply at the end of the turn (`finish`), posted on its task: a bot does not comment on
+    # its own task during its turn there (task_comments_routes OWN_TURN).
+    tools(token, ("tico_rules_get", {"id": rule_id}))
     # The same tools over the hub's own MCP: the version it was asked to read comes back whole, a newer one is refused.
     assert not mcp(api, "tico_rules_list", {}, token=token)[0]
     failed, got = mcp(api, "tico_file_read", {"id": file_id, "version": version}, token=token)
@@ -577,8 +575,8 @@ def test_a_document_read_and_an_ask_make_only_calls_counsel_is_allowed(api, monk
     assert ("GET", f"/api/v2/files/{file_id}/versions/{newer}", counsel.READ_SCOPE) in seen
     seen[:] = [s for s in seen if s[2] is None]
     finish(api, r, attempt)
-    # A question's run: the rules in force, one rule and a note on its task. Closing it is not Counsel's: moving a task
-    # is outside its routes, so only the person who asked closes it.
+    # A question's run: the rules in force and one rule; its answer is its reply at the end of the turn. Closing it is
+    # not Counsel's: moving a task is outside its routes, so only the person who asked closes it.
     ask = post(api, "rules/ask", {"question": "Can I keep consent records?"}, token="cara-test")
     token = next_counsel_run(api, r)["token"]
     tools(
@@ -586,7 +584,6 @@ def test_a_document_read_and_an_ask_make_only_calls_counsel_is_allowed(api, monk
         ("tico_rules_list", {}),
         ("tico_rules_list", {"bot": "ops"}),
         ("tico_rules_get", {"id": rule_id}),
-        ("tico_task_comment", {"id": ask["task_id"], "text": "No rule covers it."}),
     )
     shown = api.get(f"/api/v2/tasks/{ask['task_id']}", headers=headers(token)).json()["task"]["version"]
     with pytest.raises(Exception, match="The Rules Owner reads only"):
@@ -602,7 +599,6 @@ def test_a_document_read_and_an_ask_make_only_calls_counsel_is_allowed(api, monk
         "/api/v2/rules",
         "/api/v2/rules/{id}",
         "/api/v2/tasks/{id}",
-        "/api/v2/tasks/{id}/comments",
         "/api/v2/files/{id}/versions/1",
     } <= paths, paths
 
@@ -804,7 +800,7 @@ def test_screening_runs_on_every_document_read_and_warns(api, monkeypatch):
     read = read_document(api, file_id)
     assert seen == [("document", "rules-owner")]
     with api.app.state.store.read() as c:
-        body = c.execute("SELECT body FROM tasks WHERE id=?", (read["task_id"],)).fetchone()["body"]
+        body = H.task_words(c, read["task_id"])
     assert body.startswith("Tico screening:")
     assert "Keep a record of each consent" in body
     assert events(api, "screening.warned")
@@ -824,7 +820,7 @@ def test_a_document_screening_holds_is_not_given_to_counsel(api, monkeypatch):
     read = read_document(api, file_id)
     assert read["screening"] == "hold"
     with api.app.state.store.read() as c:
-        body = c.execute("SELECT body FROM tasks WHERE id=?", (read["task_id"],)).fetchone()["body"]
+        body = H.task_words(c, read["task_id"])
     assert "Screening held this document" in body
     assert "UNTRUSTED DOCUMENT" not in body and "Keep a record of each consent" not in body
     assert events(api, "screening.held")
@@ -968,7 +964,7 @@ def test_a_document_over_the_bound_is_marked_truncated_in_every_place(api, monke
     assert read["truncated"] is True
     with api.app.state.store.read() as c:
         row = c.execute("SELECT * FROM rule_reads WHERE file_id=?", (read["file"]["id"],)).fetchone()
-        body = c.execute("SELECT body FROM tasks WHERE id=?", (read["task_id"],)).fetchone()["body"]
+        body = H.task_words(c, read["task_id"])
     assert row["truncated"] == 1 and row["version"] == 1
     assert "longer than 400000 characters" in body
     # An upload past the bound is cut at it, and says so.
@@ -1076,7 +1072,8 @@ def outside_fence(text):
 
 def task_row(api, task_id):
     with api.app.state.store.read() as c:
-        return dict(c.execute("SELECT title, body FROM tasks WHERE id=?", (task_id,)).fetchone())
+        row = dict(c.execute("SELECT title FROM tasks WHERE id=?", (task_id,)).fetchone())
+        return {**row, "body": H.task_words(c, task_id)}  # its words: the first message
 
 
 def store_bytes(api, data, mime, title, name):
@@ -1307,9 +1304,10 @@ def test_read_identity_includes_source_and_receipts_match_persisted_reads(api, m
         for receipt in (read, again):
             with api.app.state.store.read() as c:
                 persisted = c.execute("SELECT * FROM rule_reads WHERE task_id=?", (receipt["task_id"],)).fetchone()
-                task = c.execute(
-                    "SELECT title, body, closed_at, status FROM tasks WHERE id=?", (receipt["task_id"],)
-                ).fetchone()
+                task = dict(
+                    c.execute("SELECT title, closed_at, status FROM tasks WHERE id=?", (receipt["task_id"],)).fetchone()
+                )
+                task["body"] = H.task_words(c, receipt["task_id"])
                 source_row = next(r for r in ES.rule_sources(c) if r["id"] == sid)
             assert receipt["source"]["id"] == persisted["source_id"] == sid
             assert f"source {sid})" in task["title"]
@@ -1338,7 +1336,7 @@ def test_the_server_refuses_counsel_outward_routes_and_comments_only_on_its_own_
         assert r.status_code == 403, (path, r.text)
         assert "not its to make" in r.text
     # A comment on a task that is not Counsel's own is refused; on its own read task, from its run, it is not.
-    other = post(api, "tasks", {"owner": "ops", "title": "Ops work", "body": "Ordinary work."})
+    other = post(api, "tasks", {"owner": "ops", "title": "Ops work", "message": "Ordinary work."})
     assert api.post(f"/api/v2/tasks/{other['id']}/comments", headers=token, json={"body": "hi"}).status_code == 403
     read = post(api, "rules/read", {"url": "https://vendor.example/terms", "source_id": source(api)})
     token = read_run(api)
@@ -1421,11 +1419,10 @@ def test_counsel_suggests_from_its_private_read_run_and_publishes_nothing_else(a
     )
     edit = api.post(f"/api/v2/rules/{made.json()['id']}", headers=run(), json={"version": 1, "text": "Changed."})
     assert edit.status_code == 403, edit.text
-    # Its note goes on its own task, which stays private.
-    note = api.post(
-        f"/api/v2/tasks/{read['task_id']}/comments", headers=run(), json={"text": "read, nothing else for us"}
-    )
-    assert note.status_code < 300, note.text
+    # Its note is its reply at the end of the turn, on its own task, which stays private.
+    finish(api, r, attempt, "Read, nothing else for us.")
+    assert any("nothing else for us" in n for n in done_notes(api, read["task_id"]))
+    assert task_state(api, read["task_id"])["private"]
 
 
 def done_notes(api, task_id):

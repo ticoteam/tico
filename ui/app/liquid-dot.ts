@@ -50,9 +50,10 @@ function flowMarkHTML(size = 16, live = false): string {
     + `<g class="f2"><path d="${FLOW_PLAY}" transform="translate(10.5 7.2) scale(.7)"/></g></svg></span>`;
 }
 // The mark beside a heading or a tab that waits on the person (a question to answer, a form to fill in): still, and named
-// for screen readers, with no words or tooltip.
-function needsMarkHTML(size: number): string {
-  return `<span class="needs-mark" role="img" aria-label="Needs you">${flowMarkHTML(size)}</span>`;
+// for screen readers, with no words or tooltip. With a setup `area` (backend/setup_gaps.py), a tap opens Flow on the
+// bot that asks for it (ui/app/setup-gaps.ts).
+function needsMarkHTML(size: number, area = ''): string {
+  return `<span class="needs-mark" ${area ? `role="button" tabindex="0" data-setup-area="${area}"` : 'role="img"'} aria-label="Needs you">${flowMarkHTML(size)}</span>`;
 }
 // The dot hardly ever just vanishes: when it moves (a row into a panel and back, an older turn to the newest), a copy
 // flies from where it was (`from`, a rect) to `el` along an arc and squashes as it lands, while `el` waits unseen. Both
@@ -116,20 +117,6 @@ function ldotFly(el: Element | null | undefined, from: LdotRect | null | undefin
   el._ldotFly = run;
   ghostRuns.set(ghost, run);
   return run;
-}
-// One hop (a peek arrived, support left) or a squash (support popped out of it): a Web Animation on the body, on top
-// of whatever the dot was doing, transform only; none with reduced motion or on a still dot.
-const LDOT_MOVES: {hop: Keyframe[]; split: Keyframe[]} = {
-  hop: [{transform: 'none'}, {transform: 'translateY(5%) scale(1.12,.88)', offset: .15}, {transform: 'translateY(-34%) scale(.94,1.07)', offset: .45},
-        {transform: 'translateY(0) scale(1.1,.9)', offset: .75}, {transform: 'none'}],
-  split: [{transform: 'none'}, {transform: 'scale(1.3,.75)', offset: .3}, {transform: 'scale(.85,1.15)', offset: .55},
-          {transform: 'scale(1.06,.95)', offset: .8}, {transform: 'none'}],
-};
-function ldotMove(el: Element | null | undefined, move = 'hop'): Animation | null {
-  if (!(el instanceof HTMLElement)) return null;
-  const body = el.querySelector<HTMLElement>('.body');
-  if (!body || typeof body.animate !== 'function' || ldotCalm() || el.dataset.state === 'still') return null;
-  return body.animate(move === 'split' ? LDOT_MOVES.split : LDOT_MOVES.hop, {duration: move === 'split' ? 330 : 750, easing: 'cubic-bezier(.3,0,.2,1)'});
 }
 
 // Idle alternates, cheaply: a setTimeout (never a frame loop) gives the live idle dot a short variant every 6-14 s; in

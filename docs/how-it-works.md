@@ -50,7 +50,7 @@ Words are defined in the [Glossary](glossary.md).
   Record states: `active`, `paused`, `planned`, `quarantined`. Live status while it works:
   `idle`, `running`, `waiting_human`, `waiting_bot`, `blocked`, `limited`, `crashed`, `paused`,
   `quarantined`.
-- **Task** — a unit of work with a requester, an owner (bot or human), a title, a body and a
+- **Task** — a unit of work with a requester, an owner (bot or human), a title, a first message and a
   note; a pipeline and a stage in it, a `rank` in its owner's queue, labels, links (a pull request first), the tasks
   it filed, and relations to other tasks (related, duplicates, follow-ups). Status: `open`, `done` or `closed`; what
   an open task waits on is read, never stored ([Whose turn it is](tasks.md#whose-turn-it-is)). The owner says
@@ -63,7 +63,7 @@ Words are defined in the [Glossary](glossary.md).
   nobody until the bot's next turn there or a deadline. Chat says which, and Stop and redirect ends the turn so the next
   one starts with that message. A requesting bot steers its delegated task's running turn with
   `tico message send --steer --ref task:<id>`.
-  A bot's question to a person is an ask on its task, and it lands in their **Needs you**
+  A bot's question to a person is a ❓ on its chat message, and it lands in their **Needs you**
   ([Asks and OKs](tasks.md#asks-and-oks)). An OK on one exact action (send this email, spend, publish) is an ask bound
   to
   exactly what the person was shown: only they give it, by their own click, and it is used once. Authorized work needs
@@ -128,7 +128,7 @@ tasks. It never runs a bot. It runs from the Docker image ([install.md](install.
 on the same host, the Slack gateway (`backend/slack_gateway.py`, its own unit) turns a DM to
 Tico or an `@Tico` in a channel into a message for the bot the decision model routes it to, posts the
 reply back under that bot's name, and stores everything else said in the channels Tico is
-in so that each channel's readers see it within the hour (`docs/slack-gateway.md`).
+in; a channel bots read comes into a read-only thread they catch up on within the hour (`docs/slack-gateway.md`).
 Pages: **Tasks** (where the app opens), **Meetings** (imported transcripts, source sync status, Import, and each meeting's
 action items), **Docs**,
 **Tools**, **Changelog**, the **Team** tree, and under your email **Settings**
@@ -590,8 +590,8 @@ thread and that command, because a compacted session, or one on a new model, no 
 all of it. The runner fast-forwards the checkout from origin before the run, and
 pulls or clones any `reads:` sibling repos beside it.
 
-**A bot needs you.** It adds an ask to its task (`tico task ask <id> --to <you> "<question>"`, or `--kind ok` for
-an OK) or files a sub-task for you to do. The ask, or the first paragraph of a task it gives you, must say in one
+**A bot needs you.** It asks on its task (`tico task ask <id> --to <you> "<question>"` marks a ❓ in the task's chat, or
+`--kind ok` for an OK) or files a sub-task for you to do. The question, or the first paragraph of a task it gives you, must say in one
 or two plain sentences what it needs and what happens after, with no ids, file paths or tool names; Tico refuses
 it otherwise. The task stays in its stage until you answer ([Asks and OKs](tasks.md#asks-and-oks)).
 **Needs you** at the top of **Tasks** lists every ask with your name and every task that is your turn, across
@@ -720,8 +720,8 @@ final answer. To get an answer back, send it flagged `--needs-action`
 (`tico message send <bot> "<question>" --needs-action`). A bot receiving an ordinary message that asks for a reply
 sends that reply explicitly with `tico message send`. Humans' replies are delivered automatically.
 
-A bot never answers an ask for a person. A person answers it in **Needs you**, and the bot hears the answer
-once.
+A bot never answers a question or an OK for a person. A person answers it in **Needs you** (a reply in the chat, for a ❓),
+and the bot hears the answer once.
 
 Computer readiness covers only bots assigned to that Computer. Eligible bots are placement
 options, and their missing repositories do not count as readiness or Health failures there.
