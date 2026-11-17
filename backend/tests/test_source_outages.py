@@ -159,8 +159,8 @@ def test_an_absolute_reset_is_not_extended_by_a_later_status_refresh(api, monkey
         c.execute("UPDATE bot_status SET changed_at='2026-10-27T06:59:00.000000Z' WHERE bot='ops'")
     at(monkeypatch, '2026-10-27T07:01:00.000000Z', api)
     with api.app.state.store.transaction() as c:
-        assert not cooling_off(c, 'ops')
-        release_limits(c)
+        assert not cooling_off(c, api.app.state.store.settings, 'ops')
+        release_limits(c, api.app.state.store.settings)
         assert H.status(c, 'ops')['state'] == 'idle'
         assert 'resumes' in H.status(c, 'ops')['focus']
     ready(api, machine, ['ops'])

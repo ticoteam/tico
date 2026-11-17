@@ -132,6 +132,31 @@ def mint(c, vault, tool_id, subject, *, attempt='', runner='', agent=False, now=
     return TOKEN_PREFIX + body + '.' + _b64(hmac.new(_signing_key(c, vault), body.encode(), hashlib.sha256).digest())
 
 
+def home_of(row, tool):
+    """The tool id a key's proxy address names: the tool it was on before it was grouped onto its vendor account's tool
+    (`credentials.former_tool_id`, backend/tool_templates.py), so a run's `TICO_TOOL_<ID>_URL` never changes, else its
+    own tool's."""
+    try:
+        former = row['former_tool_id']
+    except (IndexError, KeyError):
+        former = None
+    return former or tool['id']
+
+
+def tool_for(c, tool_id):
+    """The tools row a proxy address names: the tool, or the tool a grouped tool's key was moved onto from it."""
+    tool = c.execute('SELECT * FROM tools WHERE id=?', (tool_id,)).fetchone()
+    if tool is not None:
+        return tool
+    try:
+        moved = c.execute(
+            'SELECT tool_id FROM credentials WHERE former_tool_id=? AND tool_id IS NOT NULL LIMIT 1', (tool_id,)
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None  # a file from before grouping
+    return c.execute('SELECT * FROM tools WHERE id=?', (moved[0],)).fetchone() if moved else None
+
+
 def proxied_tools(c):
     """{tool id: tool row} for every tool whose calls go through the proxy."""
     return {r['id']: r for r in c.execute("SELECT * FROM tools WHERE delivery='proxy'")}
@@ -141,6 +166,7 @@ def runtime_item(c, vault, settings, row, tool, subject, *, attempt='', runner='
     """What a run is handed for a held credential of a proxied tool: a proxy token where the key would be, and the
     proxy's address in `url_env`. Never the key."""
     token = mint(c, vault, tool['id'], subject, attempt=attempt, runner=runner, agent=agent)
+    home = home_of(row, tool)
     return {
         'id': row['id'],
         'name': row['name'],
@@ -148,8 +174,8 @@ def runtime_item(c, vault, settings, row, tool, subject, *, attempt='', runner='
         'kind': row['kind'],
         'value': token,
         'tool': tool['name'] or tool['id'],
-        'proxy_url': proxy_url(settings, tool['id']),
-        'url_env': url_env(tool['id']),
+        'proxy_url': proxy_url(settings, home),
+        'url_env': url_env(home),
         # The vendor address the proxy forwards to: the runner sends a declared MCP server under it through the proxy.
         'base_url': tool['base_url'] or '',
     }
@@ -200,9 +226,10 @@ def holder_live(c, claims, now=None):
     return True
 
 
-def found_token(request, scheme):
+def found_token(request, scheme, names=(), params=()):
     """The proxy token wherever the caller put it: Bearer, either half of Basic, the scheme's header or its query
-    parameter. Returns (token, where), where is 'header' when it sat in the scheme's own header."""
+    parameter, or any header or parameter a template's ways send (`names`, `params`). Returns (token, where), where is
+    'header' when it sat in the scheme's own header."""
     auth = request.headers.get('authorization', '')
     places = []
     kind, _, value = auth.partition(' ')
@@ -217,6 +244,8 @@ def found_token(request, scheme):
         places.append((request.headers.get(scheme[7:], ''), 'header'))
     if scheme.startswith('query:'):
         places.append((request.query_params.get(scheme[6:], ''), 'query'))
+    places += [(request.headers.get(n, ''), 'template') for n in names if n != 'authorization']
+    places += [(request.query_params.get(p, ''), 'query') for p in params]
     for text, where in places:
         match = TOKEN_RE.search(text or '')
         if match:
@@ -316,9 +345,9 @@ def pinned(url, name):
     return httpx.URL(url).copy_with(host=address), host, parts.hostname
 
 
-def secrets_of(key, username):
+def secrets_of(key, username, more=()):
     """Every spelling of the key an answer could echo: itself and each Basic encoding it was sent in."""
-    out = {key}
+    out = {key, *more}
     for pair in (f'{key}:', f'{username}:{key}'):
         out.add(base64.b64encode(pair.encode()).decode())
     return sorted((s for s in out if s), key=len, reverse=True)
@@ -354,18 +383,24 @@ class Scrubber:
         return data
 
 
-def outgoing_headers(request, tool, credential, key, where):
-    """The caller's headers minus its sign-in and what proxies added, with the vendor's auth set from the key."""
+def outgoing_headers(request, tool, credential, key, where, auth=None):
+    """The caller's headers minus its sign-in and what proxies added, with the vendor's auth set from the key, or, for
+    a tool with a template, the headers its template built from every field (`auth`)."""
     scheme = tool['auth_scheme'] or 'bearer'
-    named = scheme[7:].lower() if scheme.startswith('header:') else ''
+    named = scheme[7:].lower() if scheme.startswith('header:') and auth is None else ''
+    dropped = {k.lower() for k in auth} if auth is not None else set()
     out = []
     for name, value in request.headers.items():
         low = name.lower()
         if low in HOP or low in REQUEST_DROP or low.startswith(REQUEST_DROP_PREFIXES) or (named and low == named):
             continue
+        if low in dropped:
+            continue
         out.append((name, value))
     out.append(('Accept-Encoding', 'gzip, deflate'))
-    if scheme == 'bearer':
+    if auth is not None:
+        out += list(auth.items())
+    elif scheme == 'bearer':
         out.append(('Authorization', 'Bearer ' + key))
     elif scheme == 'basic_user':
         out.append(('Authorization', 'Basic ' + base64.b64encode(f'{key}:'.encode()).decode()))
@@ -379,18 +414,19 @@ def outgoing_headers(request, tool, credential, key, where):
     return out
 
 
-def outgoing_query(query, tool, key):
-    """The caller's query string, with the scheme's parameter (when the scheme is a query parameter) set to the key."""
-    scheme = tool['auth_scheme'] or ''
-    if not scheme.startswith('query:'):
+def outgoing_query(query, tool, key, params=None):
+    """The caller's query string, with the scheme's parameter (when the scheme is a query parameter) set to the key, or,
+    for a tool with a template, each parameter its template built (`params`) set."""
+    if params is None:
+        scheme = tool['auth_scheme'] or ''
+        if not scheme.startswith('query:'):
+            return query
+        params = {scheme[6:]: key}
+    if not params:
         return query
-    param = scheme[6:]
-    kept = [
-        part
-        for part in query.split('&')
-        if part and part.split('=', 1)[0] != quote(param, safe='') and part.split('=', 1)[0] != param
-    ]
-    return '&'.join(kept + [quote(param, safe='') + '=' + quote(key, safe='')])
+    names = set(params) | {quote(p, safe='') for p in params}
+    kept = [part for part in query.split('&') if part and part.split('=', 1)[0] not in names]
+    return '&'.join(kept + [quote(p, safe='') + '=' + quote(v, safe='') for p, v in params.items()])
 
 
 def read_only_detail(who, name, mcp=''):
@@ -443,12 +479,16 @@ def install(app, store):
     def plan(request, tool_id, rest, method):
         """Everything the call needs, read once: (refusal, None) or (None, plan)."""
         with store.read() as c:
-            tool = c.execute('SELECT * FROM tools WHERE id=?', (tool_id,)).fetchone()
+            tool = tool_for(c, tool_id)
             if not tool:
                 return (401, 'identity', 'Invalid tool token', None), None
-            token, where = found_token(request, tool['auth_scheme'] or 'bearer')
+            from . import tool_templates
+
+            spec = tool_templates.spec_of(tool)
+            names, params = tool_templates.auth_names(spec) if spec else ((), ())
+            token, where = found_token(request, tool['auth_scheme'] or 'bearer', names, params)
             claims = claims_of(c, vault, token)
-            if not claims or claims['t'] != tool_id:
+            if not claims or claims['t'] != tool['id']:
                 return (401, 'identity', 'Invalid tool token', None), None
             subject = str(claims['s'])
             if not holder_live(c, claims):
@@ -461,23 +501,30 @@ def install(app, store):
             from . import api_tools
 
             name = tool['name'] or tool_id
+            tool_id = tool['id']
+            auth = None
             try:
                 # No level, or no stored key for it: refused with the setting that would allow it (api_tools).
-                credential, level = api_tools.key_for(c, tool_id, subject)
+                if spec and spec.get('ways'):
+                    auth = tool_templates.proxy_auth(c, vault, tool, spec, subject)
+                    credential, level = auth['credential'], auth['level']
+                else:
+                    credential, level = api_tools.key_for(c, tool_id, subject)
             except Problem as exc:
-                return (exc.status, exc.code, exc.detail, (subject, '')), None
-            log = (subject, level)
+                return (exc.status, exc.code, exc.detail, (subject, '', tool_id)), None
+            log = (subject, level, tool_id)
             problem = address_problem(tool['base_url'] or '', name)
             if problem:
                 return (403, 'tool_address', problem, log), None
             # A sign-in (backend/mcp_connect.py) is a Read and write key too: a Read caller is held to MCP reads.
-            reads_only = level == 'read' and credential['access_level'] != 'read'
+            reads_only = auth['reads_only'] if auth else level == 'read' and credential['access_level'] != 'read'
             who = api_tools._label(c, subject) if reads_only else ''
             if reads_only and method not in SAFE and method != 'POST':
                 return (403, 'forbidden', read_only_detail(who, name), log), None
             # An MCP tool's sign-in has no stored key: its access token is fetched below.
             key = None if credential['kind'] == 'oauth' else vault.cipher.decrypt(c, credential)
             return None, {
+                'auth': auth,
                 'tool': dict(tool),
                 'credential': dict(credential),
                 'key': key,
@@ -504,11 +551,12 @@ def install(app, store):
             status, code, detail, log = refusal
             if log:
                 await loop().run_in_executor(
-                    None, record, tool_id, None, log[0], log[1], method, shown, status, 'refused', detail, began
+                    None, record, log[2], None, log[0], log[1], method, shown, status, 'refused', detail, began
                 )
             return refused(status, code, detail)
         assert ready is not None  # plan answers a refusal or a plan
         tool, credential, key = ready['tool'], ready['credential'], ready['key']
+        tool_id, auth = tool['id'], ready['auth']
         got = ready or {}  # the plan, typed as never None past the refusal above
         if key is None:
             from . import mcp_connect
@@ -538,7 +586,7 @@ def install(app, store):
                     began,
                 )
                 return refused(401 if again else 502, 'tool_sign_in', detail)
-        secrets = secrets_of(key, credential.get('username') or '')
+        secrets = secrets_of(key, credential.get('username') or '', auth['secrets'] if auth else ())
         log = lambda status, result, detail: loop().run_in_executor(
             None,
             record,
@@ -574,7 +622,7 @@ def install(app, store):
                 return refused(403, 'forbidden', detail)
         listing = bool(calls) and any(m == 'tools/list' for m, _ in calls)
         url = tool['base_url'].rstrip('/') + '/' + rest.lstrip('/')
-        query = outgoing_query(query, tool, key)
+        query = outgoing_query(query, tool, key, auth['query'] if auth else None)
         url += ('?' + query) if query else ''
         if urlsplit(url).hostname != urlsplit(tool['base_url']).hostname:
             await log(None, 'refused', 'Address left the tool host')
@@ -595,7 +643,10 @@ def install(app, store):
             client.build_request(
                 method,
                 target,
-                headers=[('Host', host), *outgoing_headers(request, tool, credential, key, got['where'])],
+                headers=[
+                    ('Host', host),
+                    *outgoing_headers(request, tool, credential, key, got['where'], auth['headers'] if auth else None),
+                ],
                 content=b''.join(chunks),
                 extensions={'sni_hostname': sni},
             ),

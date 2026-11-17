@@ -210,7 +210,9 @@ def test_a_limit_on_the_check_model_holds_the_check_alone_and_the_bot_keeps_work
     )
     with api.app.state.store.read() as c:
         status = H.status(c, "ops")
-        assert status["state"] != "limited" and not cooling_off(c, "ops"), "Grok's limit is not the bot's"
+        assert status["state"] != "limited" and not cooling_off(c, api.app.state.store.settings, "ops"), (
+            "Grok's limit is not the bot's"
+        )
         assert "grok usage limit on a check" in status["focus"] and "claude" not in status["focus"]
         assert limit_streak(c, "ops") == 0 and last_limit(c, "ops") is None, "a check's limits are not the bot's"
     person = post(
@@ -282,7 +284,7 @@ def test_a_check_handed_to_another_bot_mid_turn_still_completes_as_the_check(api
         machine["token"],
     )
     with api.app.state.store.read() as c:
-        assert H.status(c, "ops")["state"] != "limited" and not cooling_off(c, "ops")
+        assert H.status(c, "ops")["state"] != "limited" and not cooling_off(c, api.app.state.store.settings, "ops")
         assert "grok usage limit on a check" in H.status(c, "ops")["focus"]
         assert not c.execute("SELECT 1 FROM registry_metadata WHERE key LIKE 'check-attempt:%'").fetchone()
 

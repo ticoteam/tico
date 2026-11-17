@@ -103,3 +103,11 @@ def run(store, onboarding, telemetry, vault=None):
             tool_settings.repair_ids_once(store, vault)
         except Exception as exc:  # noqa: BLE001 - one failed job must not prevent the remaining jobs
             telemetry.capture("tool_settings_ids", exc)
+        # Once, after the two above: each vendor account's tools become one tool with its template, every bot's run
+        # environment kept as it was; login pairs go to the Tools Owner (backend/tool_templates.py group_once).
+        try:
+            from . import tool_templates
+
+            tool_templates.group_once(store, vault)
+        except Exception as exc:  # noqa: BLE001 - one failed job must not prevent the remaining jobs
+            telemetry.capture("tool_templates_group", exc)

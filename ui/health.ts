@@ -203,12 +203,21 @@ interface HlSetupReply {
 
 let HL: HlHealth | null = null;
 let HL_LOAD = 0;
+let HL_NEWEST: Promise<HlHealth | null> = Promise.resolve(null);   // the read started last: the one that draws the page
 let HL_METRICS: HlMetrics | null = null;   // owners and admins: the last hour from the flight recorder (GET /api/v2/system/metrics)
 let HL_FINDINGS: HlFindings | null = null;  // Check health's open findings and the team rule (GET /api/v2/health/findings)
 
+// A read overtaken by a newer one (a poll, a boot read, a caller's own) draws nothing, so it resolves with the newest
+// read's result: an awaited refresh never reports the state from before it. The dots (ui/app/heartbeat.ts) are drawn
+// from HL when the newest read lands, so a caller that reads them after its await sees that state.
 async function hlRefresh(): Promise<HlHealth | null> {
   if (!S.me) return null;
-  const seq = ++HL_LOAD;
+  const run = hlRead(++HL_LOAD);
+  HL_NEWEST = run;
+  return run;
+}
+
+async function hlRead(seq: number): Promise<HlHealth | null> {
   // The last hour and the monitor are drawn only on the Health page: the minute poll elsewhere (the dot, the stuck
   // bots, a new version) reads the checks alone. On the page, once the checks have said who this is (their audience),
   // all three are read together; the first time, the other two follow the checks.
@@ -218,7 +227,7 @@ async function hlRefresh(): Promise<HlHealth | null> {
   const checks = (data: HlHealth | null): HlHealth | null => data && Array.isArray(data.checks) ? data : null;
   const [data, [metrics, findings]] = HL ? await Promise.all([v2Get('/v2/health'), extras(HL)])
     : await v2Get('/v2/health').then(async data => [data, await extras(checks(data))]);
-  if (seq !== HL_LOAD) return HL;
+  if (seq !== HL_LOAD) return HL_NEWEST;   // overtaken: the newest read draws the page and this call waits for it
   HL = checks(data);
   if (page) {
     HL_METRICS = HL && HL.audience !== 'human' && metrics?.requests ? metrics : null;

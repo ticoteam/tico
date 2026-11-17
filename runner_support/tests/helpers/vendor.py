@@ -7,6 +7,7 @@ proxy scrubs it), else 401:
 - `/header`: `X-Api-Key: <key>`
 - `/query`: `?api_key=<key>`
 - `/basic`: `Authorization: Basic base64(<username>:<key>)`
+- `/pair`: a header pair, `X-Api-Key: <key>` and `X-Api-Secret: <pair>` (a vendor whose account is two secrets)
 - `/file`: a POST whose body is the expected file's bytes (a client certificate, say)
 - `/mcp`: a minimal streamable-HTTP MCP server (initialize, notifications, tools/list, tools/call) behind
   `Authorization: Bearer <key>`, or an access token its OAuth server issued
@@ -53,8 +54,8 @@ class Vendor:
     """The stub service. `seen` holds one dict per request: route, method, status, user agent, the Host header, and
     `shown` (what was presented as the credential, kept in this process only so a test can say what was wrong)."""
 
-    def __init__(self, key, username="", file_body=b"", login=None, oauth=False):
-        self.key, self.username, self.file_body = key, username, file_body
+    def __init__(self, key, username="", file_body=b"", login=None, oauth=False, pair=""):
+        self.key, self.username, self.file_body, self.pair = key, username, file_body, pair
         self.login = login or {}  # {"username", "password", "totp"}
         self.oauth, self.codes, self.access, self.refreshes = oauth, {}, set(), set()
         self.seen = []
@@ -97,7 +98,7 @@ class Vendor:
         body = request.rfile.read(size) if size else b""
         status, shown, answer, extra, more = 404, "", {"error": "not found"}, {}, {}
         try:
-            if route in ("/bearer", "/header", "/query", "/basic"):
+            if route in ("/bearer", "/header", "/query", "/basic", "/pair"):
                 shown = self._presented(route, request.headers, parse_qs(parts.query))
                 status = 200 if shown == self._expected(route) else 401
                 answer = {"ok": True, "echo": shown} if status == 200 else {"error": "bad credential"}
@@ -136,6 +137,8 @@ class Vendor:
         request.wfile.write(data)
 
     def _expected(self, route):
+        if route == "/pair":
+            return f"{self.key}|{self.pair}"
         return f"{self.username}:{self.key}" if route == "/basic" else self.key
 
     @staticmethod
@@ -147,6 +150,8 @@ class Vendor:
             return headers.get("x-api-key", "")
         if route == "/query":
             return (query.get("api_key") or [""])[0]
+        if route == "/pair":
+            return headers.get("x-api-key", "") + "|" + headers.get("x-api-secret", "")
         if auth.startswith("Basic "):
             return base64.b64decode(auth[6:]).decode("utf-8", "replace")
         return ""
