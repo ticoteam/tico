@@ -711,7 +711,8 @@ def near(meta: Row) -> bool:
     if not meta.get("near"):
         return False
     now = datetime.now(timezone.utc)
-    windows = [meta.get("reading"), meta.get("five_hour"), *(meta.get("models") or [])]
+    models: list[object] = meta.get("models") or []
+    windows: list[object] = [meta.get("reading"), meta.get("five_hour"), *models]
     for w in windows:
         if not isinstance(w, dict):
             continue
