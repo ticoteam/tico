@@ -249,7 +249,7 @@ class Pages:
         }
 
     def read(self, who, fid):
-        with self.store.read() as c:
+        with self.store.read_transaction() as c:
             r = self.rows(c, [fid]).get(fid)
             if not r or not self.files.visible(c, who, r, {}):
                 raise Problem("not_found", "Page not found", 404)
@@ -264,7 +264,7 @@ class Pages:
     def many(self, who, ids):
         """Up to 50 pages at once, in the order asked, leaving out the ones `who` may not read."""
         wanted = list(dict.fromkeys(i for i in ids if i))[:IDS_MAX]
-        with self.store.read() as c:
+        with self.store.read_transaction() as c:
             found = self.rows(c, wanted)
             from .files import prime_visible
 
@@ -313,7 +313,7 @@ class Pages:
         sql, args = page_links.filters(linked, role, writer)
         where.extend(sql)
         params.extend(args)
-        with self.store.read() as c:
+        with self.store.read_transaction() as c:
             if task:
                 self.auth.task(c, who, task)
             cache = {}

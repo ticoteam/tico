@@ -110,7 +110,7 @@ function taskDialogWire(d: ModalDialog) {
     if (!anchor || anchor.hasAttribute('download') || ev.defaultPrevented) return;
     const url = new URL(anchor.href, location.href);
     const match = url.origin === location.origin && url.pathname.match(/^\/api\/v2\/files\/([^/]+)$/);
-    if (match && tfOpen(d, decodeURIComponent(match[1]!), url.searchParams.get('v'), {scroll: true})) ev.preventDefault();
+    if (match && tfOpen(d, decodeURIComponent(match[1]!), url.searchParams.get('v'))) ev.preventDefault();
   });
   d.addEventListener('issue-acted', () => d.close());
   d.addEventListener('close', () => {
@@ -1461,9 +1461,9 @@ function taskCauseLinkHTML(href: string | null | undefined): string {
 // The window shows one thing at a time with the full width: the task's chat; its Files (the pages and files linked to it,
 // task-pages.ts); or one of its documents (QA report…, ui/app/task-docs.ts), from the tabs on the title row (Chat, Files N,
 // then the documents; a Spec is a card under the title, taskSpecsHTML); or Details (what it is, what it needs to leave
-// its stage, a short list of facts, its files), from its icon in the head, which closes back to what showed before. The
+// its stage and a short list of facts), from its icon in the head, which closes back to what showed before. The
 // style guide's Task window; kept on the dialog across redraws.
-type TaskTab = string;   // 'chat', 'files', 'details' or docKey(name)
+type TaskTab = string;   // 'chat', 'files', 'details' or a document's key
 /** The documents the window draws: the task's own read's, else the last read's for the same task. */
 const taskTabRow = (d: ModalDialog) => d.querySelector<HTMLElement>('.tw-tabs');
 const taskDetailsButton = (d: ModalDialog) => d.querySelector<HTMLElement>('[data-task-tab="details"]');
@@ -1507,21 +1507,15 @@ function taskTabsBind(d: ModalDialog) {
   const details = taskDetailsButton(d);
   if (details) details.onclick = () => taskTabShow(d, d.taskTab === 'details' ? d.taskTabBack || 'chat' : 'details');
 }
-// The documents with a tab: every one but the Spec (its card sits under the title, taskSpecsHTML), the newest of each
-// name (a name can be a page several times over, each one the same document). The tab row is Chat, then Files N (the
-// task's pages and files, task-pages.ts), then these.
-function taskTabDocs(docs: TaskDoc[] | null | undefined): TaskDoc[] {
-  const seen = new Set<string>(), out: TaskDoc[] = [];
-  for (const x of docs || []) if (x.name !== 'Spec' && !seen.has(x.name)) { seen.add(x.name); out.push(x); }
-  return out;
-}
+// Spec pages have cards under the title. Every other document gets a tab after Files.
+const taskTabDocs = (docs: TaskDoc[] | null | undefined): TaskDoc[] => (docs || []).filter(d => d.name !== 'Spec' || d.kind === 'markdown');
 const taskDocOf = (d: ModalDialog, key: string | null | undefined): TaskDoc | null => docOf(taskTabDocs(d.taskDocs), key);
 /** The tabs on the title row, and the change of a document as the task is read again: a new tab, a new version, one gone. */
 function taskDocTabsHTML(t: ModalTask, docs: TaskDoc[] | null | undefined, tab: TaskTab | undefined) {
   const on = tab === 'details' || !tab ? 'chat' : tab, shown = taskTabDocs(docs);
   const tabs: DocTab[] = [{key: 'chat', label: 'Chat', dot: taskYours(t)}, {key: TASK_FILES_TAB, label: taskFilesLabel(TFT_COUNT.get(String(t.id)))},
-    ...shown.map(x => ({key: docKey(x.name), label: x.name}))];
-  const valid = on === 'chat' || on === TASK_FILES_TAB || shown.some(x => docKey(x.name) === on);
+    ...shown.map(x => docTab(x, shown))];
+  const valid = tabs.some(x => x.key === on);
   return docTabsHTML(tabs, valid ? on : 'chat', key => `data-task-tab="${esc(key)}"`, 'Task').replace('class="doc-tabs"', 'class="doc-tabs tw-tabs"');
 }
 function taskDocsSync(d: ModalDialog, t: ModalTask | null | undefined) {
@@ -1614,6 +1608,7 @@ function hubModalHTML(t: ModalTask, opts: {thread?: boolean; docs?: TaskDoc[]; t
     <div class="task-edit-meta muted" role="status"><span data-task-presence></span><span data-task-edit-error hidden>Not saved · <button type="button" class="linkish" data-task-edit-retry>Retry</button></span></div>
     <div class="muted task-edit-current" data-task-edit-current hidden></div>
     <section class="rule-holds" data-rule-holds aria-label="Held by a rule" hidden></section>
+    <div data-task-files></div>
     <div class="tmodal-body task-layout" data-task-tab-shown="chat">
       <section class="task-chat" id="task-pane-chat" role="tabpanel" aria-label="Chat"><p class="muted" role="status">Loading the conversation…</p></section>
       <section class="task-doc" role="tabpanel" aria-label="Document"></section>
@@ -1627,7 +1622,6 @@ function hubModalHTML(t: ModalTask, opts: {thread?: boolean; docs?: TaskDoc[]; t
         ${taskRequirementsHTML(t)}
         <section class="task-props" data-task-props aria-label="Facts">${taskPropsHTML(t, {runsOn: taskRunModelRowHTML(t), goal: t.goal_id || ''})}</section>
         <div class="task-rail" data-task-rail hidden></div>
-        <section class="tsec task-files" data-task-files aria-label="Files" hidden></section>
         <section class="task-activity" data-task-activity aria-label="Activity and links"><h3 class="tw-h rail-h">Activity and links</h3>
           <section class="tsec task-links${links.length ? '' : ' tsec-empty'}"><h3 class="rail-h">Links<button type="button" class="prop-add" data-link-add aria-label="Add a link" title="Add a link">${TL_ICON.plus}</button></h3>
             ${links.length ? `<div class="tlinks">${links.map(l => `<span class="tlink ${esc(l.kind)} ${esc(l.state || '')}"><a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.title || l.url)}</a>${l.state && l.state !== 'open' ? ` · ${esc(l.state)}` : ''}${mover ? `<button type="button" class="x tap-mark" data-drop-link="${esc(l.id)}" aria-label="Remove link">×</button>` : ''}</span>`).join('')}</div>` : ''}

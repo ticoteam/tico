@@ -89,6 +89,7 @@ def prime(c: Any, rows: Iterable[Any]) -> None:
     read_cache.prime_rows(c, WRITERS_SQL, {(fid,): value for fid, value in writers.items()})
     targets = {str(r["target"]) for found in links.values() for r in found}
     _prime_targets(c, targets)
+    _prime_approvals(c, (r for found in links.values() for r in found))
     actors = targets | {str(v["actor"]) for found in writers.values() for v in found}
     known: dict[str, str] = cast(Callable[..., dict[str, str]], names.lookup)(c, actors)
     read_cache.prime(c, "SELECT page_link_name FROM names WHERE actor=?", {(a,): known.get(a) for a in actors})
@@ -139,12 +140,25 @@ def writers_of(c: Any, page_id: str) -> list[dict[str, Any]]:
     ]
 
 
+def rows_for(c: Any, page_id: str) -> tuple[Any, ...]:
+    return cast(Callable[..., tuple[Any, ...]], read_cache.rows)(c, LINKS_SQL, (page_id,))
+
+
+def _prime_approvals(c: Any, rows: Iterable[Any]) -> None:
+    task_documents.prime_approvals(
+        c,
+        {r["target"][5:] for r in rows if r["role"] not in ("writer", "related") and r["target"].startswith("task:")},
+    )
+
+
 def links_of(c: Any, auth: Any, who: Any, page_id: str) -> list[dict[str, Any]]:
-    rows: Any = cast(Callable[..., Any], read_cache.rows)(c, LINKS_SQL, (page_id,))
+    rows = rows_for(c, page_id)
     targets = {str(r["target"]) for r in rows}
     _prime_targets(c, targets)
+    _prime_approvals(c, rows)
     known = _names(c, {t for t in targets if t.startswith(("bot:", "human:"))})
     out: list[dict[str, Any]] = []
+    approvals: dict[str, dict[str, int]] = {}
     from . import files
 
     for r in rows:
@@ -187,7 +201,16 @@ def links_of(c: Any, auth: Any, who: Any, page_id: str) -> list[dict[str, Any]]:
             if exc.status not in (403, 404):
                 raise
             continue
-        out.append({"target": target, "role": r["role"], "name": name, "by": r["created_by"], "at": r["created_at"]})
+        role = str(r["role"])
+        link: dict[str, Any] = {
+            "target": target, "role": role, "name": name, "by": r["created_by"], "at": r["created_at"]
+        }
+        if kind == "task" and role not in ("writer", "related"):
+            if role not in approvals:
+                approvals[role] = task_documents.approved_tasks(c, page_id, role)
+            if ident in approvals[role]:
+                link["approval"] = {"version": approvals[role][ident]}
+        out.append(link)
     return out
 
 

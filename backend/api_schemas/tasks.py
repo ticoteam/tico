@@ -505,10 +505,12 @@ SCHEMAS.update(
             {
                 "id": "s",
                 "name": "s",
+                "title": "s",
                 "mime": "s",
                 "current_version": "i",
                 "archived": "b",
                 "links": items(ref("PageLinkView")),
+                "writers": items(ref("PageWriter")),
                 "versions": items(ref("TaskFileVersion")),
             }
         ),
@@ -557,8 +559,10 @@ SCHEMAS["TaskDocument"] = obj(
             "description": ", ".join(DOCUMENT_NAMES) + " (the names Tico knows), or a bot's own",
         },
         "file_id": "s",
+        "title": "s",
+        "kind": {"type": "string", "enum": ["html", "markdown"]},
         "page_id": "s",
-        "links": items(obj({"target": "s", "role": "s", "name": "s", "by": "s", "at": "s"})),
+        "links": items(ref("PageLinkView")),
         "changed_since_ok": "b",
         "approved_version": "i",
         "version": "i",
@@ -566,7 +570,7 @@ SCHEMAS["TaskDocument"] = obj(
         "at": "s",
         "versions": items(obj({"n": "i", "by": "s", "at": "s", "note": "n"})),
     },
-    required=["name", "file_id", "page_id", "links", "changed_since_ok", "version", "by", "at", "versions"],
+    required=["name", "file_id", "version", "by", "at", "versions"],
 )
 
 SCHEMAS["Task"]["properties"]["documents"] = items(ref("TaskDocument"))

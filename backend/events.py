@@ -518,6 +518,20 @@ TRIGGERS = [
     ("changes_task_assets_insert", "INSERT", "task_assets", None, _row("tasks", "files", "NEW.task_id")),
     ("changes_task_assets_delete", "DELETE", "task_assets", None, _row("tasks", "files", "OLD.task_id")),
     (
+        "changes_page_links_insert",
+        "INSERT",
+        "page_links",
+        "NEW.target LIKE 'task:%'",
+        _row("tasks", "files", "substr(NEW.target,6)"),
+    ),
+    (
+        "changes_page_links_delete",
+        "DELETE",
+        "page_links",
+        "OLD.target LIKE 'task:%'",
+        _row("tasks", "files", "substr(OLD.target,6)"),
+    ),
+    (
         "changes_pins_insert",
         "INSERT",
         "pins",

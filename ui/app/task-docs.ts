@@ -16,13 +16,20 @@ interface TaskDoc {
 // One tab: Chat, a document, or (Flow) what an approval shows when it is no document of the task.
 interface DocTab { key: string; label: string; dot?: boolean; }
 
-const docKey = (name: string) => 'doc:' + name;
+const docKey = (doc: TaskDoc, docs: TaskDoc[]) =>
+  docs.filter(other => other.name === doc.name).length > 1
+    ? 'doc:' + JSON.stringify([doc.name, doc.file_id])
+    : 'doc:' + doc.name;
 const docOf = (docs: TaskDoc[] | null | undefined, key: string | null | undefined): TaskDoc | null =>
-  key?.startsWith('doc:') ? (docs || []).find(d => docKey(d.name) === key) || null : null;
+  key?.startsWith('doc:') && docs ? docs.find(d => docKey(d, docs) === key) || null : null;
+const docTab = (doc: TaskDoc, docs: TaskDoc[]): DocTab => ({
+  key: docKey(doc, docs),
+  label: docs.filter(other => other.name === doc.name).length > 1 ? doc.title || doc.name : doc.name,
+});
 /** The tabs: Chat first, then each document, most recently changed first (as the server lists them), then `extra`.
     None at all, not even Chat, when there is nothing beside the chat. */
 function docTabs(docs: TaskDoc[] | null | undefined, extra: DocTab[] = [], chatDot = false): DocTab[] {
-  const rest = [...(docs || []).map(d => ({key: docKey(d.name), label: d.name})), ...extra];
+  const rest = [...(docs || []).map((d, _, shown) => docTab(d, shown)), ...extra];
   return rest.length ? [{key: 'chat', label: 'Chat', dot: chatDot}, ...rest] : [];
 }
 /** The Spec cards under a task's title: one card per page the task has as its Spec, each opening the page. A card shows
@@ -30,7 +37,7 @@ function docTabs(docs: TaskDoc[] | null | undefined, extra: DocTab[] = [], chatD
     the Spec of D-…" when another task has it as its Spec too, and a small dot when the task was OK'd on an older
     version. No Spec, no section. */
 function taskSpecsHTML(docs: TaskDoc[] | null | undefined, taskId: string, titles: Map<string, string> = new Map()): string {
-  const specs = (docs || []).filter(d => d.name === 'Spec');
+  const specs = (docs || []).filter(d => d.name === 'Spec' && d.kind !== 'markdown');
   if (!specs.length) return '';
   const cards = specs.map(d => {
     const id = d.page_id || d.file_id, links = d.links || [];

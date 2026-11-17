@@ -9,9 +9,7 @@ const PAGE_SIZES: Record<string, number> = {small: 180, medium: 320, large: 520}
 const PAGE_FULL_MIN = 240;
 // The link and writer fields of a page read (the contract's Page read). The generated Page type gains them from the
 // server's schema; until then they are read through these types.
-// A task's approval of pages: the version each page was OK'd at (approval.pages), or the `file@version` ref(s) (page_version).
-interface PageLinkApproval {pages?: {file_id: string; version: number}[] | null; page_version?: string | string[] | null;}
-interface PageLink {target: string; role: string; name?: string | null; by?: string | null; at?: string | null; approval?: PageLinkApproval | null;}
+interface PageLink {target: string; role: string; name?: string | null; by?: string | null; at?: string | null; approval?: {version: number} | null;}
 interface PageWriter {actor: string; name?: string | null; versions?: number; last_at?: string | null;}
 type PageRead = import('../types/api').Page & {links?: PageLink[] | null; writers?: PageWriter[] | null; may_write?: boolean | null;};
 
@@ -245,7 +243,7 @@ function pagesAccessRefresh() {
   if (LF) void lfLoad();
   if (TASK_CHAT) {
     const dialog: TaskPagesHost = TASK_CHAT.dialog;
-    if (dialog.tpEl) { dialog.tpEl.tpCards = new Map(); void taskPagesLoad(dialog); }
+    if (dialog.tpEl) void taskPagesLoad(dialog);
     taskChatLive(TASK_CHAT);
   }
   if (!PG && !LF && !TASK_CHAT) void route();
@@ -369,23 +367,12 @@ function pageLinkHref(target: string): string {
   return kind === 'task' ? '#/task/' + id : kind === 'bot' ? '#/bot/' + id : kind === 'human' ? '#/person/' + id
     : kind === 'goal' ? goalsBase() + '/' + id : kind === 'page' ? PAGE_ROUTE + id : '';
 }
-// The version a task approved this page at: the page's entry in the link's approval (approval.pages), else the page's
-// own `file@version` ref in approval.page_version. Null when the task has not OK'd this page.
-function pageLinkOkVersion(l: PageLink, fileId: string): number | null {
-  const a = l.approval;
-  if (!a || !l.target.startsWith('task:')) return null;
-  const hit = (a.pages || []).find(x => x.file_id === fileId);
-  if (hit) return Number(hit.version);
-  const refs = Array.isArray(a.page_version) ? a.page_version : String(a.page_version || '').split(/[\s,]+/);
-  const ref = refs.map(r => String(r).split('@')).find(([file]) => file === fileId);
-  return ref && ref[1] ? Number(ref[1]) : null;
-}
 function pageChipsHTML(state: PageFullState): string {
   const p = state.page;
   if (!p) return '';
   const chips = (p.links || []).filter(l => l.role !== 'writer' && pageLinkHref(l.target)).map(l => {
     const name = l.name || l.target.slice(l.target.indexOf(':') + 1), related = l.role === 'related';
-    const ok = pageLinkOkVersion(l, p.file_id);
+    const ok = l.approval?.version;
     const mark = related ? '<span class="nav-icon" aria-hidden="true">link</span>' : '';
     const words = related ? esc(name) : `${esc(l.role)} of ${esc(name)}`;
     return `<span class="pg-chip"><a class="pg-chip-link" href="${esc(pageLinkHref(l.target))}">${mark}<span>${words}</span></a>`
@@ -711,8 +698,6 @@ async function pageFullAct(state: PageFullState, act: string | undefined, el?: H
 }
 
 // ----------------------------------------------------------------- a task's pages
-// A pinned page row of the task's section, kept across redraws while its key holds.
-interface TaskPagesRow { key: string; el: HTMLElement; }
 // POST and GET make-page's status (backend/tasks.py): a page being made in a chat, or the last try.
 interface MakePageStatus { state: 'making' | 'made' | 'failed' | 'update_required'; conversation_id?: string; }
 // The section's element, with the state this file keeps on it.
@@ -722,7 +707,6 @@ interface TaskPagesSlot extends HTMLDivElement {
   tpMaking?: MakePageStatus | null;
   tpMakeSeq?: number;
   tpSeq?: number;
-  tpCards?: Map<string | null, TaskPagesRow>;
   tpFollow?: (() => void) | null;
   tpFollowCid?: string | null | undefined;
   tpMakeOpen?: boolean;
@@ -733,9 +717,7 @@ interface TaskPagesHost extends HTMLDialogElement { tpEl?: TaskPagesSlot | null;
 const taskMakeDraftKey = (id: string) => 'tico.task.make-page.' + encodeURIComponent(String(S.me?.id || '')) + '.' + id;
 // A live event the task's pages react to: a files change on the task, or a run of the page being made.
 interface TaskPagesLiveEvent { kind?: string; kinds?: string[]; id?: unknown; conversation_id?: string; }
-// A pin on a task's place: its page is the page as GET /api/v2/places/{place} lists it, with the replaced and archived flags.
-interface TaskPlacePin { id: string | null; size?: string; can_unpin?: boolean; page?: import('../types/api').Page | null; }
-interface TaskPlaceRead { can_link?: boolean; pins?: TaskPlacePin[]; }
+interface TaskPlaceRead { can_link?: boolean; }
 function taskPageMakeDraw(d: TaskPagesHost, status: MakePageStatus | null) {
   const slot = d.tpEl;
   if (!slot) return;
@@ -778,28 +760,10 @@ async function taskPagesLoad(d: TaskPagesHost) {
   try {
     const r = await get<TaskPlaceRead>('/v2/places/' + encodeURIComponent('task:' + slot.dataset.task), {fresh: true});
     if (d.tpEl !== slot || seq !== slot.tpSeq) return;
-    const pins = (r.pins || []).filter((x): x is TaskPlacePin & {page: import('../types/api').Page} => !!x.page && !x.page.replaced_by_id && !x.page.archived);
-    // Pages shows even with none, for its + (Details' one part that stays when empty); a reader who may not link any
-    // and has none to open gets no section.
-    slot.hidden = !r.can_link && !pins.length;
+    slot.hidden = !r.can_link && !!$('[data-tft-new]', slot).hidden;
     $('[data-tp-add]', slot).hidden = !r.can_link;
     slot.tpCanLink = !!r.can_link;
     taskPageMakeShow(slot);
-    const kept = slot.tpCards || new Map<string | null, TaskPagesRow>(), cards = new Map<string | null, TaskPagesRow>();
-    for (const pin of pins) {
-      const key = JSON.stringify([pin.page, pin.size, pin.can_unpin]);
-      let row = kept.get(pin.id);
-      if (!row || row.key !== key) {
-        // One row: the page's icon and name, and the row opens the page. Its version is on the chat's chip, not here.
-        const el = document.createElement('div'); el.className = 'tp-page';
-        el.innerHTML = `<a class="tp-row" href="${esc(pageHref(pin.page.file_id))}" data-page="${esc(pin.page.file_id)}" title="${esc(pin.page.title)}"><span class="nav-icon" aria-hidden="true">description</span><span class="tp-name">${esc(pin.page.title)}</span></a>${pin.can_unpin
-          ? `<button type="button" class="ghost tp-unlink" data-tp-unlink="${esc(pin.id)}" aria-label="${esc('Unlink ' + pin.page.title)}" title="Unlink">${TL_ICON.x}</button>` : ''}`;
-        row = {key, el};
-      }
-      cards.set(pin.id, row);
-    }
-    slot.tpCards = cards;
-    $('.tp-pages', slot).replaceChildren(...[...cards.values()].map(x => x.el));
     if (r.can_link) await taskPageMakeLoad(d);
   } catch (e) { if (d.tpEl === slot) toast(errorMessage(e, ''), true); }
 }

@@ -354,7 +354,7 @@ function lfRowHTML(f: LfRow) {
   const kindName = (LF_KINDS.find(([v]) => v === kind)?.[1] || 'Other').replace(/s$/, '');
   const bot = pageBotName(f), when = ago(f.last_activity_at), team = lfTeamName(botRow(f.bot)?.team) || '';
   const who = page && f.writers?.length ? f.writers.map(w => w.name || w.actor.replace(/^[a-z]+:/, '')).join(', ') : bot;
-  const first = page ? lfPageLinks(f) || esc(kindName) : esc(kindName);
+  const links = page ? lfPageLinks(f) : '';
   // Pinned and archived are marks, not pills (style guide: a pill only when something is wrong); the mark says where
   // it is pinned on hover and to a screen reader.
   const pinned = f.pins || [];
@@ -366,7 +366,7 @@ function lfRowHTML(f: LfRow) {
   return `<tr class="lf-row"><td class="lf-name"><div class="lf-cell"><a class="lf-open" href="${esc(url)}"${attrs}>
       <span class="nav-icon lf-ico" aria-hidden="true">${link ? 'link' : LF_ICON[kind] || 'inventory_2'}</span>
       <span class="lf-text"><span class="lf-line"><span class="lf-title" title="${esc(f.title)}">${esc(name)}</span>${pins}${archived}</span></span></a>
-      <span class="lf-meta">${first} · ${esc(who)} · ${esc(when)}</span>${excerpt}</div></td>
+      <span class="lf-meta${links ? ' lf-has-links' : ''}">${links || esc(kindName)}<span class="lf-meta-by"> · ${esc(who)} · ${esc(when)}</span></span>${excerpt}</div></td>
     <td class="lf-kind">${esc(kindName)}</td>
     <td class="lf-by"><span class="lf-by-in">${page && f.writers?.length ? '' : f.bot ? avatar(f.bot, 16) : ''}<span class="lf-by-n">${esc(who)}</span></span></td>
     <td class="lf-team">${esc(team)}</td>

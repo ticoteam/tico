@@ -7,7 +7,16 @@ from ._base import SCHEMAS, items, obj
 SCHEMAS.update(
     {
         # Pages and Library › Files (backend/pages.py, backend/file_library.py).
-        "PageLinkView": obj({"target": "s", "role": "s", "name": "s", "by": "s", "at": "s"}),
+        "PageLinkView": obj(
+            {
+                "target": "s",
+                "role": "s",
+                "name": "s",
+                "by": "s",
+                "at": "s",
+                "approval": obj({"version": "i"}, required=["version"]),
+            }
+        ),
         "PageWriter": obj({"actor": "s", "name": "s", "versions": "i", "last_at": "s"}),
         "Page": obj(
             {

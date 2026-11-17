@@ -466,7 +466,7 @@ class Library:
         if until:
             where.append("f.last_activity_at<?")
             params.append(until)
-        with self.store.read() as c:
+        with self.store.read_transaction() as c:
             if team:
                 sql, args = self._team_where(c, who, team)
                 where.append(sql)
@@ -520,7 +520,7 @@ class Library:
         tokens = manual.query_words(q)
         if not tokens:
             raise Problem("query", "Search needs at least one word", 422)
-        with self.store.read() as c:
+        with self.store.read_transaction() as c:
             candidates = self._candidates(c, tokens, kind_sql, kind_args)
             from .files import prime_visible
 

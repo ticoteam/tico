@@ -1,13 +1,13 @@
-"""Pages stand alone (docs/pages-standalone-contract.md): publish with `--page` or `--task --as`, link and unlink, the
+"""Pages stand alone (docs/pages.md): publish with `--page` or `--task --as`, link and unlink, the
 list filters, `task attach --doc` (a document is a page), and the ambiguous refusal. HTTP is faked the way the other
 CLI tests fake it: the request each command makes is the assertion."""
 
+import json
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
 from clients import bot_files as BF, hubcli, hubtools, remotecli
-from clients.commands import content
 from clients.tico import APIError
 
 
@@ -177,7 +177,7 @@ def test_task_attach_doc_is_refused_with_a_note_and_otherwise_a_page(monkeypatch
     assert query["task"] == ["T1"] and query["as"] == ["Spec"]
 
 
-def test_page_show_prints_the_title_links_and_writers():
+def test_page_show_keeps_its_json_output_with_links_and_writers(monkeypatch, capsys):
     result = {
         "page": {
             "title": "Plan",
@@ -185,9 +185,10 @@ def test_page_show_prints_the_title_links_and_writers():
             "writers": [{"actor": "human:steven", "name": "Steven", "versions": 2}],
         }
     }
-    assert content._page_show_render(None, result) == (
-        "Plan\n  Spec: D-18463 Edit Property\n  writer: Steven, 2 version(s)"
-    )
+    monkeypatch.setattr(remotecli, "run", lambda *_: result)
+    for argv in (["page", "show", "file-1"], ["page", "show", "file-1", "--json"]):
+        assert remotecli.main(hubcli.parser().parse_args(argv)) == 0
+        assert json.loads(capsys.readouterr().out) == result
 
 
 def test_the_mcp_tools_take_the_link_arguments():

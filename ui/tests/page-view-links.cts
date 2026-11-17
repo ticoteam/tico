@@ -43,7 +43,7 @@ const pageHtml = (n: number) => `<!doctype html><html><head><meta charset="utf-8
 const weekly = (): PageFixture => ({file_id: 'file-weekly', title: 'Engineering weekly', bot_id: 'engineering-manager', bot_name: 'Engineering Lead',
   version: 5, updated_by: 'human:steven', updated_by_name: 'Steven', updated_at: at(2), may_write: true,
   links: [
-    {target: 'task:t-18463', role: 'Spec', name: TASK_NAMES['t-18463']!, by: 'human:steven', at: at(72), approval: {pages: [{file_id: 'file-weekly', version: 4}]}},
+    {target: 'task:t-18463', role: 'Spec', name: TASK_NAMES['t-18463']!, by: 'human:steven', at: at(72), approval: {version: 4}},
     {target: 'task:t-19385', role: 'related', name: TASK_NAMES['t-19385']!, by: 'bot:engineering-manager', at: at(30)},
     {target: 'bot:cmo', role: 'related', name: 'AI CMO', by: 'human:ana', at: at(20)},
     {target: 'human:steven', role: 'writer', name: 'Steven', by: 'human:ana', at: at(90)},

@@ -621,16 +621,6 @@ def pages_list(api, args):
     )
 
 
-def _page_show_render(args, result):
-    """A page's title, links and writers as lines a person reads (`--json` is the whole read)."""
-    page = result.get("page") or {}
-    lines = [str(page.get("title") or page.get("file_id") or "")]
-    lines += [f"  {link['role']}: {link.get('name') or link['target']}" for link in page.get("links") or []]
-    for writer in page.get("writers") or []:
-        lines.append(f"  writer: {writer.get('name') or writer['actor']}, {writer.get('versions', 1)} version(s)")
-    return "\n".join(lines)
-
-
 @tool(
     "tico_page_show",
     "Page status, pins, links and writers. Read HTML with tico_file_read.",
@@ -1073,12 +1063,7 @@ PAGE = (
         "pages you may read, newest first; --linked, --role and --writer narrow them",
         example="tico page list --linked task:T1 --role Spec",
     ),
-    Command(
-        "page show",
-        "one page's title, links and writers (--json: the whole read)",
-        example="tico page show p1",
-        render=_page_show_render,
-    ),
+    Command("page show", "one page's status, pins, links and writers", example="tico page show p1"),
     Command("page access", "show or change who can see a page", example="tico page access p1 --audience everyone"),
     Command(
         "page archive",

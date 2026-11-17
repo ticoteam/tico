@@ -773,7 +773,7 @@ def install_media(
         "/api/v2/tasks/{tid}/files", **api_v2("Tasks", "listTaskFiles", "Files and versions on a task", "TaskFileList")
     )
     def task_files(request: Request, tid: str, all_pages: bool = Query(default=False, alias="all")):
-        with store.read() as c:
+        with store.read_transaction() as c:
             task_id = auth.resolve_task(c, request.state.identity, tid)
             return files.task_listing(c, request.state.identity, task_id, all_pages=all_pages)
 

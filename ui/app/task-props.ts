@@ -583,11 +583,9 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
     if (r.edit && waiting('due')) items.push({text: 'Set a due date…', icon: 'today', run: () => setTimeout(() => taskPropShow(d, 'due'))});
     if (r.links && waiting('tags')) items.push({text: 'Add a tag…', icon: 'label', run: () => setTimeout(() => taskPropShow(d, 'tags'))});
     if (r.links && !$('[data-sub-add]', d)) items.push({text: 'Add subtask', icon: 'add', run: () => { taskTabShow(taskModalOf(d), 'details'); taskRailAdd(d, task); }});
-    // Add a file: the Files section's picker (task-files.ts), for whoever may add files; it shows the section, which
-    // hides while the task has none.
-    const files = $('[data-task-files]', d) as HTMLElement | null, fileInput = files && $('[data-tf-input]', files) as HTMLInputElement | null;
-    if (fileInput && !$('[data-tf-add][hidden]', files)) items.push({text: 'Add a file…', icon: 'draft', run: () => {
-      taskTabShow(taskModalOf(d), 'details'); files.classList.add('tf-shown'); fileInput.click();
+    const modal = taskModalOf(d), fileInput = d.querySelector<HTMLInputElement>('[data-tf-input]');
+    if (fileInput && modal.canComment !== false) items.push({text: 'Add a file…', icon: 'draft', run: () => {
+      taskTabShow(modal, TASK_FILES_TAB); fileInput.click();
     }});
     // Make page: the Pages section's Describe box (pages.ts), when the reader may add pages here.
     if (taskModalOf(d).tpEl?.tpCanLink) items.push({text: 'Make a page…', icon: 'description', run: () => { taskTabShow(taskModalOf(d), 'details'); taskPageMakeOpen(d); }});

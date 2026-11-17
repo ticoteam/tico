@@ -7,12 +7,14 @@ all readable document links with the version that task last approved, plus its M
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Callable
 from typing import Any, cast
 
 from clients import bot_files as BF
 
+from . import read_cache
 from .store import H, Problem
 
 # The names a stage approves; spelled as here whatever case or dashes a writer uses.
@@ -116,23 +118,56 @@ def record(c: Any, task_id: str, name: str, file_id: str, by: str | None = None)
         L.link(c, file_id, version["actor"], "writer", by)
 
 
-def approved_documents(c: Any, task_id: str) -> dict[tuple[str, str], int]:
-    """The task's last OK for each (page, document role), including earlier visits."""
-    from . import task_pages as P
+DocumentApprovals = dict[tuple[str, str], int]
 
-    out: dict[tuple[str, str], int] = {}
-    answers = c.execute(
-        "SELECT a.*,json_extract(r.settings,'$.document') AS document FROM visits v "
-        "JOIN answers a ON a.visit_id=v.id JOIN requirements r ON r.id=a.requirement_id "
-        "WHERE v.task_id=? AND a.answer='ok' AND a.undone_at IS NULL ORDER BY a.created_at DESC,a.rowid DESC",
-        (task_id,),
-    ).fetchall()
-    for answer in answers:
-        if not answer["document"]:
-            continue
-        for file_id, version in P.answer_pages(c, task_id, dict(answer)).items():
-            out.setdefault((file_id, str(answer["document"])), version)
+# Latest OK first. The event pins all submitted versions. Older answers only stored the version number on the answer.
+APPROVALS_SQL = """
+WITH history AS MATERIALIZED (
+    SELECT subject_id, json_extract(data,'$.answer_id') AS answer_id, json_extract(data,'$.pages') AS pages
+    FROM history_events WHERE subject_type='task' AND subject_id IN ({marks}) AND kind='answer'
+)
+SELECT v.task_id,json_extract(r.settings,'$.document') AS document,h.pages,
+    CASE WHEN h.pages IS NULL THEN (
+        SELECT json_object('file_id',p.file_id,'version',p.version) FROM requirement_pages p
+        WHERE p.visit_id=a.visit_id AND p.requirement_id=a.requirement_id
+          AND p.version=a.page_version AND p.created_at<=a.created_at
+        ORDER BY p.created_at DESC,p.rowid DESC LIMIT 1
+    ) END AS legacy_page
+FROM visits v JOIN answers a ON a.visit_id=v.id JOIN requirements r ON r.id=a.requirement_id
+LEFT JOIN history h ON h.subject_id=v.task_id AND h.answer_id=a.id
+WHERE v.task_id IN ({marks}) AND a.answer='ok' AND a.undone_at IS NULL
+  AND json_extract(r.settings,'$.document') IS NOT NULL
+ORDER BY a.created_at DESC,a.rowid DESC
+"""
+
+
+def _read_approvals(c: Any, task_ids: list[str]) -> dict[str, DocumentApprovals]:
+    marks = ",".join("?" * len(task_ids))
+    out: dict[str, DocumentApprovals] = {task_id: {} for task_id in task_ids}
+    for answer in c.execute(APPROVALS_SQL.format(marks=marks), (*task_ids, *task_ids)):
+        pages = json.loads(answer["pages"]) if answer["pages"] is not None else []
+        if answer["legacy_page"]:
+            pages = [json.loads(answer["legacy_page"])]
+        for page in pages:
+            out[answer["task_id"]].setdefault((page["file_id"], answer["document"]), page["version"])
     return out
+
+
+def prime_approvals(c: Any, task_ids: set[str]) -> None:
+    """Read neutral approval history for all tasks in a page list's snapshot."""
+    snapshot = read_cache.cache(c)
+    if snapshot is None:
+        return
+    for chunk in H.chunks(sorted(t for t in task_ids if ("document_approvals", t) not in snapshot)):
+        for task_id, approvals in _read_approvals(c, list(chunk)).items():
+            snapshot["document_approvals", task_id] = approvals
+
+
+def approved_documents(c: Any, task_id: str) -> DocumentApprovals:
+    """The task's last OK for each (page, document role), including earlier visits."""
+    return read_cache.value(
+        c, ("document_approvals", task_id), lambda: _read_approvals(c, [task_id])[task_id], shared=True
+    )
 
 
 def approved_versions(c: Any, task_id: str, role: str | None = None) -> dict[str, int]:
@@ -149,18 +184,15 @@ def approved_tasks(c: Any, page_id: str, role: str | None = None) -> dict[str, i
 
     The map is neutral data; callers still filter task links through their reader's permissions.
     """
-    rows = c.execute(
-        "SELECT substr(target,6) AS task_id,role FROM page_links WHERE page_id=? "
-        "AND target LIKE 'task:%' AND role NOT IN ('writer','related')",
-        (page_id,),
-    ).fetchall()
+    from . import page_links as L
+
     out: dict[str, int] = {}
-    for row in rows:
-        document = str(row["role"])
-        if role is not None and document != role:
+    for row in L.rows_for(c, page_id):
+        target, document = str(row["target"]), str(row["role"])
+        if not target.startswith("task:") or document in ("writer", "related") or (role and document != role):
             continue
-        task_id = str(row["task_id"])
-        version = approved_versions(c, task_id, document).get(page_id)
+        task_id = target[5:]
+        version = approved_documents(c, task_id).get((page_id, document))
         if version is not None:
             out[task_id] = max(out.get(task_id, 0), version)
     return out

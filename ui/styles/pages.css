@@ -164,10 +164,12 @@ html.view-only [data-tft-new]{display:none!important}
 .lf-line{display:flex;align-items:center;gap:8px;min-width:0;flex:0 1 auto}
 /* the name's link, then the meta line and the excerpt beside it (a link in the meta is a link of its own, not in the name's) */
 .lf-cell{display:flex;align-items:center;gap:14px;min-width:0}
-.lf-cell:has(.lf-excerpt) .lf-open{flex:0 1 auto;max-width:55%}
+.lf-cell:has(:is(.lf-excerpt,.lf-has-links)) .lf-open{flex:0 1 auto;max-width:55%}
 .lf-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
 .lf-excerpt{flex:1 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:var(--t-sm)}
-.lf-meta{display:none}
+.lf-meta{display:none;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:var(--t-sm)}
+.lf-meta.lf-has-links{display:block;flex:0 1 auto}
+.lf-meta-by{display:none}
 .lf-meta a{color:inherit;text-decoration:none}
 .lf-meta a:hover{color:var(--ink);text-decoration:underline}
 /* pinned and archived: a small muted mark after the name, never a pill */
@@ -199,8 +201,9 @@ html.view-only [data-tft-new]{display:none!important}
   .lf-ico{margin-top:1px}
   .lf-text{flex-direction:column;align-items:stretch;gap:2px}
   .lf-cell{flex-direction:column;align-items:stretch;gap:2px}
-  .lf-cell:has(.lf-excerpt) .lf-open{max-width:none}
-  .lf-meta{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:var(--t-sm);padding-left:28px}   /* past the icon and its gap */
+  .lf-cell:has(:is(.lf-excerpt,.lf-has-links)) .lf-open{max-width:none}
+  .lf-meta{display:block;padding-left:28px}   /* past the icon and its gap */
+  .lf-meta-by{display:inline}
   .lf-excerpt{flex:none;padding-left:28px;white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
   .lf-pad{padding:14px 6px}
 }

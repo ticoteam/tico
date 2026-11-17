@@ -1,6 +1,6 @@
 // Journey: bot files and pages, and Make page, as Dana and Priya. The Engineering Lead's pages and files (the pages seed) show in
 // Library > Files with their titles; a page opens and draws its title, its version and its status line; a reader links a page to a
-// task (filesPages). Then Make page's task box and progress card, which were make-page.cjs (makePage; the request and pin use a real hub,
+// task (filesPages). Then Make page's task box and progress card (the request and publish use a real hub,
 // the authenticated publish and durable status contracts are in backend/tests/test_make_page.py). Runs on a phone: the
 // desktop row (kind, bot) is redesign-e2e-pages.cts's, and Make page's fit is checked where it is tightest.
 import type * as E2E from './support/e2e.cts';
@@ -20,11 +20,9 @@ interface MakeStatus {
 }
 
 
-// A task's pages are the first part of its Details tab: "+" opens the page search, ⋯ › Make a page… the Describe box.
+// The Files tab holds the task's pages, page search and Describe box.
 async function pagesTab(p: Pick<import('playwright').Page, 'locator'>) {
-    await p.locator('#task-modal[open] [data-task-pages]').waitFor({state: 'attached'});
-    const details = p.locator('#task-modal[open] [data-task-tab="details"][aria-pressed="false"]');
-    if (await details.count()) await details.click();   // pressed again, Details would close
+    await p.locator('#task-modal[open] [data-task-tab="files"]').click();
 }
 async function makePageOpen(p: Pick<import('playwright').Page, 'locator'>) {
     await p.locator('#task-modal[open] [data-task-more]').click();
@@ -124,13 +122,17 @@ async function filesPages({hub, browser, phone}: PassContext) {
     const reader = await open(browser, hub, 'priya', {phone, hash: '#/task/' + id});
     const permissions = await must<{can_edit: boolean; can_link: boolean}>(hub, 'priya', 'GET', 'places/task:' + id);
     assert.equal(permissions.can_edit, false, `${where}: the reader cannot arrange the task's cards`);
-    assert.equal(permissions.can_link, true, `${where}: the reader can link a page`);
+    assert.equal(permissions.can_link, true, `${where}: the task allows linking a page`);
+    await must(hub, 'dana', 'POST', 'pages/' + audienceId + '/links', {target: 'human:priya', role: 'writer'});
     go(page, '#/task/' + id);
     const section = reader.locator('[data-task-pages]');
     await pagesTab(reader); await pagesTab(page);
-    await section.getByRole('button', {name: 'Add a page', exact: true}).click();
+    await section.getByRole('button', {name: 'Link a page or file', exact: true}).click();
     // A later task update in the same batch must not hide the earlier files invalidation.
-    const refreshed = reader.waitForResponse(r => decodeURIComponent(new URL(r.url()).pathname) === '/api/v2/places/task:' + id);
+    const refreshed = reader.waitForResponse(r => {
+      const url = new URL(r.url());
+      return url.pathname === `/api/v2/tasks/${id}/files` && url.searchParams.get('all') === '1';
+    });
     await reader.evaluate(id => liveEmit('tasks', {id, kind: 'update', kinds: ['files', 'update']}), id);
     assert.equal((await refreshed).status(), 200, `${where}: a coalesced files change refreshes the pages`);
     const search = reader.waitForResponse(r => new URL(r.url()).pathname === '/api/v2/files/search');
@@ -139,9 +141,9 @@ async function filesPages({hub, browser, phone}: PassContext) {
     const choice = section.getByRole('button', {name: 'Engineering weekly', exact: true});
     const linkedPage = await choice.getAttribute('data-tp-page');
     await choice.click();
-    const card = `.tp-row[data-page="${linkedPage}"]`;
-    await section.locator(card).waitFor({timeout: t(15000)});
-    await page.locator('[data-task-pages] ' + card).waitFor({timeout: t(15000)});
+    const card = `[data-tft-page="${linkedPage}"]`;
+    await reader.locator(card).waitFor({timeout: t(15000)});
+    await page.locator(card).waitFor({timeout: t(15000)});
     assert.equal(await section.locator('.tp-picker').isVisible(), false, `${where}: linking closes the picker`);
     assertClean(reader, `${where}: a task reader links a page`);
     const readerOverflow = await reader.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
@@ -149,9 +151,9 @@ async function filesPages({hub, browser, phone}: PassContext) {
     await shot(reader, `e2e-task-pages-${where}`);
 
     // The owner unlinks it in another tab; its files event refreshes the already loaded section in both tabs.
-    await page.locator('[data-task-pages]').getByRole('button', {name: 'Unlink Engineering weekly', exact: true}).click();
-    await section.locator('.tp-row').waitFor({state: 'detached', timeout: t(15000)});
-    await page.locator('[data-task-pages] .tp-row').waitFor({state: 'detached', timeout: t(15000)});
+    await must(hub, 'dana', 'DELETE', `pages/${linkedPage}/links?target=task:${id}&role=related`);
+    await reader.locator(card).waitFor({state: 'detached', timeout: t(15000)});
+    await page.locator(card).waitFor({state: 'detached', timeout: t(15000)});
     assertClean(page, `${where}: unlink reaches both task readers`);
     assertClean(reader, `${where}: linked pages refresh without reopening the task`);
     await reader.context().close();
@@ -218,11 +220,11 @@ async function makePage({hub, browser, phone}: PassContext) {
     status!.state = 'made';
     const published = await must<{page: {file_id: string}}>(hub, 'engineering-manager', 'POST', 'pages', {name: 'alert-flow.html', title: 'Alert flow', task: id,
       text: '<h1>Alert flow</h1><p>Three scenarios.</p>'});
-    await section.locator('.tp-row[data-page="' + published.page.file_id + '"]').waitFor({timeout: t(15000)}).catch(async e => {
+    await page.locator('[data-tft-page="' + published.page.file_id + '"]').waitFor({timeout: t(15000)}).catch(async e => {
       const state = await page.evaluate(() => ({route: location.hash, stream: LIVE.es?.url,
         open: (document.querySelector('#task-modal') as HTMLDialogElement | null)?.open, section: document.querySelector<HTMLElement>('[data-task-pages]')?.innerText}));
       assert.fail(e.message + '\n' + JSON.stringify({state, errors: page.watch.errors,
-        pins: await must(hub, 'priya', 'GET', 'places/task:' + id)}));
+        files: await must(hub, 'priya', 'GET', `tasks/${id}/files?all=1`)}));
     });
     await card.waitFor({state: 'hidden', timeout: t(10000)});
 

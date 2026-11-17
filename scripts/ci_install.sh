@@ -15,6 +15,13 @@ suite=${1:?suite required}
 # satisfied (a few seconds, no downloads), and a missing or wrong package is installed, so a broken lock still fails.
 "$RUNNER_TEMP/venv/bin/python" -c '' 2>/dev/null || python3 -m venv --clear "$RUNNER_TEMP/venv"
 "$RUNNER_TEMP/venv/bin/python" -m pip install --disable-pip-version-check --retries 1 --timeout 30 -r backend/requirements-dev.txt
+# Remote commands can run the same pinned Ruff and basedpyright checks as the PR job.
+if [ "${GITHUB_WORKFLOW:-}" = "Remote run" ]; then
+  "$RUNNER_TEMP/venv/bin/python" -m pip install --disable-pip-version-check --retries 1 --timeout 30 uv==0.13.0
+  case ${SETUP:-} in
+    rust | all) rustup toolchain install 1.92 --profile minimal --component rustfmt ;;
+  esac
+fi
 # Every suite serves the UI as scripts/build-ui.cjs builds it to build/ui with the lock's esbuild (backend/ui_build.py
 # refuses a missing or stale build).
 npm ci --fetch-retries=1 --no-audit --no-fund --prefer-offline
