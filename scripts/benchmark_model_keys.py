@@ -94,15 +94,10 @@ def seed(c, vault, computers, subscriptions, bots):
             "runners",
             {"id": rid, "label": f"Box {i:03d}", "owner_id": "ana", "token_hash": uuid.uuid4().hex, "created_at": NOW},
         )
-        insert(
-            c,
-            "runner_states",
-            {
-                "runner_id": rid,
-                "last_seen_at": NOW,
-                "readiness": json.dumps(readiness),
-                "capabilities": json.dumps(["model_sign_out_v1", "model_keys_v1"]),
-            },
+        c.execute("INSERT OR IGNORE INTO runner_states(runner_id) VALUES(?)", (rid,))  # a trigger may have made it
+        c.execute(
+            "UPDATE runner_states SET last_seen_at=?, readiness=?, capabilities=? WHERE runner_id=?",
+            (NOW, json.dumps(readiness), json.dumps(["model_sign_out_v1", "model_keys_v1"]), rid),
         )
         if own:
             cid = credential("ANTHROPIC_API_KEY", f"ANTHROPIC_API_KEY for {rid}", "computer:" + rid)
