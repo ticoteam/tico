@@ -58,8 +58,9 @@ def verify_dkim(raw: bytes) -> bool:
     """Whether a DKIM signature of the From address's own domain (that domain or a subdomain of it) verifies over this
     raw message (dkimpy, with the signer's published key) and signs From and both unsubscribe headers. A signature with
     a body length limit (`l=`) is not used: text could be added after the signed part."""
-    import dkim
-    import dkim.dnsplug
+    # dkimpy ships no stubs: the import is the one narrow suppression, and its surface is typed as Any below.
+    import dkim  # pyright: ignore[reportMissingTypeStubs]
+    import dkim.dnsplug  # pyright: ignore[reportMissingTypeStubs]
 
     msg = BytesParser(policy=policy.compat32).parsebytes(raw)
     found = re.findall(r"[\w.+%'-]+@([\w-]+(?:\.[\w-]+)+)", str(msg.get("From") or ""))
