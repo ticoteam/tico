@@ -151,7 +151,9 @@ function taskPageMakeOpen(d: TaskPagesHost) {
 // its title, the roles it has on this task (chips), v<version> · writers · time, and opens the page; a file row shows
 // today's meta (v<version> · time) and opens in the task's viewer (task-files.ts). Its count is the tab's "Files N".
 async function taskFilesTabLoad(d: TftHost, id: string | number): Promise<void> {
-  const key = String(id), seq = d.tftSeq = (d.tftSeq || 0) + 1;
+  const key = String(id);
+  d.tftSeq = (d.tftSeq || 0) + 1;
+  const seq = d.tftSeq;
   const data = await v2Get<{files?: TftItem[] | null}>(`/v2/tasks/${encodeURIComponent(key)}/files?all=1`, {fresh: true});
   if (!d.open || String(d.dataset.task) !== key || d.tftSeq !== seq) return;
   if (!data) return;                       // a failed read keeps what the last one found
