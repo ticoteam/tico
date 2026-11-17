@@ -88,7 +88,7 @@ Every push to a ready pull request runs CI, so batch the fixes that follow.
 
 ## 7. Let the stage finish
 
-There is nothing to say done in Build. {{app_name}} reads the checks from GitHub and moves the task to review once
+There is nothing to say done in Build. {{app_name}} reads the checks from GitHub and moves the task to Review once
 they pass at the head; a failing check wakes you with its names (`skills/get-the-checks-green-at-the-head/SKILL.md`).
 When the same check fails on main too, follow that skill's "When main is red": comment `Blocks #<your task>` on the
 one open `Main red:` task (file it only when none is open), make your task depend on it rather than snooze, and once

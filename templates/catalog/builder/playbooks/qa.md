@@ -1,6 +1,6 @@
 # QA
 
-Triggered when a task you own enters QA, after Fixes 2. The stage leaves when the checks pass at the head commit and
+Triggered when a task you own enters QA. The stage leaves when the checks pass at the head commit and
 the QA page is attached: Jev checks it, then a person approves it, and approving it ships the change to production.
 
 ---
@@ -14,14 +14,15 @@ and the proof, without running anything.
    row each, with its number. Add any check the change needs that the spec did not name (another screen that uses the
    same code, a permission, a data change on a copy), and say why.
 2. Run each one at the head commit, where it really runs: the repository's demo or a preview for a screen (Tico:
-   `python3 scripts/release_shots.py --base <merge base> --head <head> --version <next> --out shots/`; Reviewer 2's
-   shots when they are at the head), the tests for logic (name the ones that fail on the old code), the real call or
+   `python3 scripts/release_shots.py --base <merge base> --head <head> --version <next> --out shots/`; reuse shots
+   from the Review page when they are at the head), the tests for logic (name the ones that fail on the old code), the real call or
    job for a change with no screen.
 3. Each check gets a result: pass, fail, or not checked with why. A pass has its proof on the page: a screenshot with
    red numbered arrows at 390 and 1280 px, or the command as run and its real output (test names and counts, the call
    and its response, the query and its rows). "Looks good" is not proof, and a check with none is not checked.
 4. A check that fails is yours to fix before the page goes out: fix, push, and run the checks it touches again
-   (Reviewer 2 reads the new commit before the person is asked). Keep what you found and fixed under the findings. Anything that does not block the change becomes its own task, linked.
+   (the bot that wrote the latest Review page reads the new commit before the person is asked). Keep what you found
+   and fixed under the findings. Anything that does not block the change becomes its own task, linked.
 
 ## 2. Build the page
 
@@ -36,7 +37,7 @@ commit:
 - Findings: what failed and was fixed in this round, and the follow-ups filed, each with what was done, what happened,
   what was expected and `file:line`. Or "None."
 - In the details: where it ran (the demo or preview, the pull request link and the full head commit, the checks at that
-  head with the link), what Reviewer 1 and Reviewer 2 each found on the commit they read and what you did about each,
+  head with the link), what each review found at its commit, who or which model reviewed it, and what you did about each finding,
   and what was not checked, with why and what would check it.
 
 A check only a person can do (a physical device, a reply someone owes) goes under not checked with why. The page never
@@ -57,12 +58,12 @@ draw, or has a broken picture, is fixed and published again, never attached. The
 - **Jev sent it back:** the reasons are in `tico task show`. Fix the page (or the change), publish again and attach the
   new version.
 - **The person sent it back:** their notes are on the task. Fix what they asked, push, publish the page again and attach
-  it. Reviewer 2 reads a commit pushed after its review before the person is asked again: say so on the page, with the
+  it. The last reviewer reads new commits before the person is asked again. Say so on the page, with the
   new head.
 - **Jev is unsure, or you want the person's OK:** attach the new version; Tico asks the person. Never ask your own OK
   of this page, or a yes/no that shows it ("OK to merge?"): Tico refuses it, and an answer to it passes nothing.
 - **New commits after the OK:** the page is for one head. A rebase that changes the same lines keeps the OK; other new
-  commits are read by Reviewer 2, and the person is asked again only after it sends them back. Publish a new version
+  commits go to the last reviewer, and the person is asked again only if the reviewer sends them back. Publish a new version
   for the new head and attach it.
 - **Sent back from Merge:** the reason names what failed in the merge queue. Fix it on the same branch, push, and attach
   a new page for the new head.

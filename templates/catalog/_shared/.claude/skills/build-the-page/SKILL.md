@@ -38,7 +38,7 @@ The page brings the proof. It never asks its reader to test, look at the app, or
 | A spec for a bug | `templates/bug-spec.html` | `bug-spec` | Feature Owner, Spec |
 | A spec for a new feature or change on a screen | `templates/screen-spec.html` | `screen-spec` | Feature Owner, Spec |
 | A spec for a change with no screen (API, command, job) | `templates/change-spec.html` | `change-spec` | Feature Owner, Spec |
-| A Review page | `templates/review.html` | `review` | Reviewers, Review 1 and 2 |
+| A Review page | `templates/review.html` | `review` | Reviewer, Review |
 | The QA page | `templates/qa.html` | `qa` | Feature Owner, QA |
 | The release report, one for a batch | `templates/release.html` | `release` | Release Owner |
 | Checked in production | `templates/validation.html` | `validation` | Feature Owner, Validate |
@@ -54,7 +54,7 @@ What goes at the top, before `#details`:
   risks (three at most).
 
 Below the line, only what the builder, QA or release needs. Each template has the sections its stage's checker reads
-(a spec: goal, scope, acceptance criteria; a review: the head commit, what was read and run, the findings; QA: the
+(a spec: goal, scope, acceptance criteria; a review: the head commits, each model's checks and findings; QA: the
 proof, the checks at the head, what each reviewer found; Checked in production: the version and what was run there).
 Keep every section; write "Nothing." in one that has nothing, and delete the pictures only where no screen changed
 (show the call and its output in two `<pre>` blocks instead, and say so in the opening).

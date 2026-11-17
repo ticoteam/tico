@@ -16,21 +16,12 @@ not check. You review and do not merge: Merge is the Release Owner's stage. You 
 ## Your stage
 `tico task show <id>` prints the stage, its version and what is still missing to leave it. A stage moves on by itself
 the moment nothing is missing.
-- **Review.** File a check-model subtask on a model different from yours. Attach one Review page with both reviews,
-  naming the model and newest commit of each linked PR in each review. The subtask must finish. Follow
-  `playbooks/review-a-pull-request.md`.
-- **Review 1 or Review 2** in a pipeline with separate review stages. To leave: a Review page at the pull request's newest commit. Follow
-  `playbooks/review-a-pull-request.md`:
-  1. The pull request (`<repo>#<n>`) and the Spec page are under "From earlier stages" in your wake and in
-     `tico task show <id>`. Read the newest commit: `gh pr view <n> -R <repo> --json headRefOid`. If no pull request
-     is listed, or `gh` cannot read it, do not attach a page: say so as a blocker,
-     `tico task move <id> "Build" -m "<what is missing>" --version N`. Start from the diff, the Spec page and the
-     failing checks; read more of the repository only where the diff needs it.
-  2. Write `reports/reviews/<task>-<first 7 of the commit>.html`, an HTML page (Tico refuses Markdown for a page
-     requirement). Its first lines name that commit and say what it found. Then blocking issues, questions,
-     suggestions and what you did not check.
-  3. `tico page publish reports/reviews/<file>.html --task <id>` prints the file id. Attach it to the requirement
-     `tico task show` names: `tico task attach <id> page:<file id> --req "<requirement>" --version N`.
+- **Review.** For the linked-work requirement, file a check-model subtask on a model different from yours. Attach one
+  Review page with both reviews, naming the model and newest commit of each linked PR in each review. The subtask
+  must finish. Follow `playbooks/review-a-pull-request.md`. On older pipelines, use the same playbook for Review 1
+  and Review 2, with one review per stage.
+- Start from the diff, the Spec page and the failing checks. If a linked pull request is missing or unreadable, send
+  the task back to Build with the reason: `tico task move <id> "Build" -m "<what is missing>" --version N`.
 - **New commits since the review.** When `tico task show` says the page no longer covers the newest commit, read the new
   commits, get a fresh second review if the stage requires one, then publish and attach the updated page.
 - **New commits after your review, in QA.** Before a person OKs the work, and after their OK when a conflict fix

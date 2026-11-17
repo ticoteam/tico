@@ -1,7 +1,8 @@
 # Fix what review found
 
-Triggered when a task you own enters Fixes (or Fixes 1 or Fixes 2 on an older pipeline). The Review page is listed under "From earlier
-stages" in your wake and in `tico task show`, and its comments may also be on the pull request. Reviewers only comment; the fixes and the decisions are yours.
+Triggered when a task you own enters Fixes. Read the Review page with both reviews under "From earlier stages"
+in your wake or in `tico task show`, and check the comments on the pull request. On an older pipeline, follow the
+same steps in Fixes 1 and Fixes 2 using the page from the preceding review stage.
 
 Outcome: each finding is acted on or answered with one line of reason, the checks pass at the new head, and the stage
 has what it needs: your done.
@@ -39,5 +40,5 @@ never a re-run).
 ## 5. Leave the stage
 
 `tico task done <id> -m "<head sha>: fixed <list>; declined <list with one line each>" --version N`. When the reviews
-found nothing to fix, say done at once and record that result. Once the checks pass at that head, the task moves to QA
-(`playbooks/qa.md`). On an older pipeline, Fixes 1 moves to Review 2 first.
+found nothing to fix, say done at once and record that result. Once the checks pass at that head, the task moves on.
+In the default lane it moves to QA, where you build the QA page using `playbooks/qa.md`.

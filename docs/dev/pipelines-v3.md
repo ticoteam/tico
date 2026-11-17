@@ -51,7 +51,7 @@ architecture) and C (the screens).
 - No migration and no rollback.
 - A stage with no requirements moves tasks on by itself when the next stage has room.
 - Engineering ends at release. Product's Validate checks production.
-- Two review rounds by default. Reviewers are separate bots.
+- The default Review stage uses two models. The reviewer files the second review as a check-model subtask.
 - No chats, emails or pushes to people about a task.
 - An ask is a requirement with a person on it. @ in the conversation only marks unread. Work for a person is a sub-task.
 
@@ -145,9 +145,9 @@ Close calls that change behavior, C1 to C31. They are part of sign-off A. Text i
   one task. Work a person has to go and do is a sub-task. *Draft 6 kept a bot's question in its own table.*
 - **C20.** Sub-tasks nest at most 5 deep.
 - **C22.** Your OK is for the commits you were shown. A rebase or conflict fix after it that changes the same lines
-  keeps it. One that changes other lines is read by Reviewer 2 first: its OK keeps yours, and the PR merges without
-  asking you again. Its send back goes to the Builder, and you are asked again after the next read. The task shows
-  "Changed after OK" and the manager bot is told. *Until Nov 12 a commit after your OK merged once green; on Nov 12
+  keeps it. The bot that wrote the latest Review page reads changes to other lines. Its OK keeps yours, and the PR
+  merges without asking you again. Its send back goes to the Builder, and you are asked again after the next read.
+  The task shows "Changed after OK" and the manager bot is told. *Until Nov 12 a commit after your OK merged once green; on Nov 12
   any commit after it asked you again, which at ~100 PRs a day meant an ask for every rebase.*
 - **C23.** A row is the title and a mark, on one line. In your own list it is the ask, as a sentence. Who has it and what
   is missing is on the task. *Draft 5 put those words on the row.*
@@ -808,15 +808,23 @@ old Product holds gets a number (`product-spec-2`, `product-validate-2`). Then r
 open task (`POST /api/v2/pipelines/{id}/retire`, refused while one is open), and rename Features to Product. No code
 moves a task between them.
 
-Existing pipelines retain their Review and Fixes stages on startup. In a pipeline that still has Review 2 or Fixes 2,
-tasks finish in those stages and single-review page requirements keep their rubric.
+The Product and Engineering presets both use Build → Review → Fixes → QA. Review needs one page covering the newest
+commit of every linked PR, with both reviews and their models, and a finished second-review subtask on a different
+model. The reviewer files it with
+`tico task child <id> --check-model <runtime>:<model> --role review --title "Review: second opinion"`
+and includes the PRs and full head commits in `--message`. In Fixes, the owner addresses both reviews and says done.
+The task moves on when the checks pass.
+
+Existing pipelines keep their Review and Fixes stages on startup, including Review 2 and Fixes 2 where present.
+Single-review pages keep their rubric.
 
 One stage is added on an upgrade, once (`pipeline_settings._add_qa`): an Engineering pipeline made before QA had a stage
 of its own gets QA after Fixes 2, owned by Fixes 2's owner, with Checks pass and the page a person OKs moved there from
-Fixes 2 as it was set (its person, its switches, its line and check). Fixes 2 gets Owner says done. A task waiting in
-Fixes 2 on that page then waits on the Builder's done; the never-stuck check wakes it, and in QA it attaches the QA
-page, which the person is asked to OK again. A pipeline whose QA stage was removed, that has no Fixes 2 or no page a
-person OKs on it, or that already has a live stage named QA is left as it is.
+Fixes 2 as it was set (its person, its switches, its line and check). Fixes 2 gets Owner says done. When the pipeline
+still has its second review stage and Fixes 2 is left with only Checks pass and Owner says done, its old shipped
+purpose is updated to match. A task waiting on that page in Fixes 2 then waits on the Builder's done. The never-stuck
+check wakes the Builder, which attaches the QA page in QA, where the person is asked to OK it again. A pipeline whose QA
+stage was removed, that has no Fixes 2 or no page a person OKs on it, or that already has a live stage named QA is left as it is.
 
 ### Private pipelines
 
@@ -964,7 +972,7 @@ Preset stages: On deck → Build → Review → Fixes → QA → Merge → Relea
   time: 2 hours. If GitHub takes a PR out of the queue, the owner queues it again as it is, pushes its own fix to the
   PR's branch (a rebase, a conflict, a flaky or broken test, a small code fix) and queues it again, or sends it back
   when the fault needs the Builder. A bot queues a new commit only when it changes the same lines as the one the task
-  came into Merge with; otherwise it sends the task back to QA, where Reviewer 2 reads it and the person's OK
+  came into Merge with; otherwise it sends the task back to QA, where the last reviewer reads it and the person's OK
   comes back with the task (C22). A person may queue any commit. Besides what ends a bot's snooze in any stage (see
   Snooze), a bot's snooze in Merge ends when GitHub takes the PR out of the queue or merges it, or its base branch
   moves (once per base commit; not while the PR is queued or its checks run, nor when the reason names a PR to wait
@@ -1247,7 +1255,7 @@ late. Nothing depends on the exact 10 seconds.
   line ("The PR has a merge conflict: Builder fixes it after your OK."), and the Builder is not woken, so the ask does
   not change under the person. When the person answers, the Builder is woken once to rebase: after an OK it is told to
   leave the OK'd page as it is, and a send back reaches it with the conflict, so one turn can fix both. A rebase that
-  changes the same lines keeps the person's OK; one that changes others is read by Reviewer 2 (QA, C22).
+  changes the same lines keeps the person's OK. The last reviewer reads changes to other lines (QA, C22).
 - **Merge.** Tico queues each PR at the commit that was checked (GitHub's merge queue, or auto-merge where the repo has
   none). No bot runs a merge command. A call GitHub fails is tried 3 times, 1, 5 and 15 minutes apart, then it is the
   owner's turn with GitHub's reason. When GitHub takes a PR out of the queue without merging it (a check failed, a new
@@ -1279,9 +1287,9 @@ late. Nothing depends on the exact 10 seconds.
   rebase onto. When #40 is closed without merging, the order ends and it is the owner's turn once: Tico does not
   queue it by itself. Both tasks show the order, read-only: "After #40 · Merge" and "Before #42 · Build" (to a
   reader who cannot open #40: "After a task you can't open").
-- **A commit after the person's OK** does not merge on that OK unless it changes the same lines. Otherwise Reviewer 2
+- **A commit after the person's OK** does not merge on that OK unless it changes the same lines. Otherwise the last reviewer
   reads it in QA (from Merge, the Release Owner sends the task back; the person's OK comes back with it, on the
-  page they OK'd). Reviewer 2's OK keeps the person's; its send back goes to the Builder, who attaches the page again,
+  page they OK'd). The reviewer's OK keeps the person's. A send back goes to the Builder, who attaches the page again,
   and the person is asked after the next read. The task shows "Changed after OK" and the manager bot is told once
   (C22). Sent back while a PR is still at the commit it was last queued at, the OK that came back does not count:
   the page waits on the Builder ("Merge queue ran 463f2e7 and it failed (…): push a fix."), with the mover's note,
@@ -1298,7 +1306,7 @@ late. Nothing depends on the exact 10 seconds.
   token does. A repo ruleset that requires the check, pinned to the company App, stops a bot merging
   or queuing a PR around the Merge stage ([GitHub App](../github-app.md#require-ticos-merge-check)). It means "Tico's Merge
   stage queued this PR after the person's OK": a commit pushed after the OK is queued by a bot only when it changes the
-  same lines, or after Reviewer 2 read it (C22), and by a person as they choose. A post that fails queues nothing and
+  same lines, or after the last reviewer OKs it (C22), and by a person as they choose. A post that fails queues nothing and
   is tried again like any failed call.
 - **Leaving Merge backwards, or closing,** takes the PRs out of the queue. That call doesn't exist today and gets built.
   If GitHub merges one first, the task shows "PR merged anyway" and the manager bot is told once.
@@ -1557,7 +1565,7 @@ Today: the task window, in two columns.
 - **Reassign:** buttons "Builder", "Eng Manager", "Someone else…".
 - **Move back:** one button per earlier stage, such as "On deck", "Build".
 - **Close:** no dialog. A bar "Closed" with an "Undo" button at the right.
-- **Move on, something missing:** the line "Move to Review 1 without Checks pass?", then a "Why" box and a "Move" button
+- **Move on, something missing:** the line "Move to Review without Checks pass?", then a "Why" box and a "Move" button
   (main) on one row.
 - **Can't move on:** "PR #812 hasn't merged" with a "Move back" button at the right.
 
@@ -1604,7 +1612,7 @@ Today: the Engineering and Product pipelines.
   - "On deck", 2: no mark "Saved carts" · avatar · "20m"; no mark "Order export" · avatar · "1h".
   - "Build", 3/3: spinner "Phone view shows one stage" · avatar · "58m"; no mark "Calibration export retries" · Late tag
     · avatar · "30h"; no mark "Assistant can approve a spec" · avatar · "2h".
-  - "Review 1", 1: spinner "Guest checkout" · avatar · "14m".
+  - "Review", 1: spinner "Guest checkout" · avatar · "14m".
   - "QA", 1: amber "!" "Address lookup fix" · the person's avatar · "5h".
   - "Merge", 1: no mark "Refund flow" · avatar · "40m".
 
@@ -1626,7 +1634,7 @@ Rules:
 
 ### S8. A stage's header
 
-Examples, as drawn: "Ideas 12", "Spec 2/2", "Build 2/3", "Review 1 0".
+Examples, as drawn: "Ideas 12", "Spec 2/2", "Build 2/3", "Review 0".
 
 - A name and a number. Where the stage has a limit, the number is "how many hold a slot / the limit", then a person
   mark and how many wait only on a person's OK, when any do (C27). Its label and tooltip say "15 wait on a
@@ -1756,7 +1764,7 @@ Turn: Builder (stopped early, try 2 of 3)
 To leave Build:
   met      PR open      #812
   not met  Checks pass  lint, unit at 4c1e9a
-Next: Review 1 (Reviewer 1), room 0 of 1
+Next: Review (Reviewer 1)
 Filed by: P-12 Checkout flow
 ```
 
@@ -1801,7 +1809,7 @@ Four phone screens:
    "Checkout flow: spec", "Guests can pay without making an account. The order summary stays visible." with the second
    sentence highlighted. A "Notes" box. Buttons "Approve" (main) and "Send back".
 3. **A pipeline.** Header: "Tasks"; "Engineering ▾"; at the right, search and +. A row of stage tabs: "On deck 2",
-   "Build 3/3" (selected), "Review 1 1". The selected stage's tasks: "Phone view shows one stage" with a spinner;
+   "Build 3/3" (selected), and "Review" with one task. The selected stage's tasks: "Phone view shows one stage" with a spinner;
    "Calibration export retries" with the Late tag; "Assistant can approve a spec".
 4. **A task.** Top bar: "Engineering › Build"; at the right ⋯ and ✕. Title "Calibration export retries" with the Late
    tag. The one line: spinner · "Builder working". The description: "Retry the calibration export when the device is
@@ -1953,7 +1961,7 @@ How each one works on the engine.
   manager and the company's owner. The bot a pipeline names for a stage (its fixed owner bot, or a bot on its "One of
   several" list; never a person, a group, an "assignee" stage's assignee or the General Manager) reads a private task
   while it holds that stage, as its owner, and its managers with it. That read is not on Who can see, ends when the
-  task moves on, and is a line on the task's history ("Reviewer 1 can read this while it holds Review 1"). A bot that
+  task moves on, and is a line on the task's history ("Reviewer 1 can read this while it holds Review"). A bot that
   reads only that way shares nothing: it adds no reader, gives the task to nobody, and what it files from the task is
   private with the task's readers, for itself or for someone who already reads the task. The filer keeps reading what
   it filed after it leaves the stage, as any requester does, and shares that no more than the task it came from. On a pipeline holding an open private task only a person changes who holds a stage.
@@ -2131,7 +2139,7 @@ Numbered in order so they can be cited (scenario 1 to 49).
 13. A held action with no task: a General task is filed for the person.
 14. A person sends a page back: the task stays in its stage, the bot gets the notes word for word, version 2 comes back
     marked with what changed.
-15. A bot pushes a task past Review 1 with a reason: it moves, shows Pushed past, and the manager is told once.
+15. A bot pushes a task past Review with a reason: it moves, shows Pushed past, and the manager is told once.
 16. A bot tries to push past a people-only OK: refused.
 17. Anyone tries to push past PR merged: refused, offered Move back and Close.
 18. A task is dragged two stages ahead: every skipped requirement is recorded as pushed past, with one reason.
@@ -2170,7 +2178,7 @@ Numbered in order so they can be cited (scenario 1 to 49).
 46. A bot marks a second ❓ in the same chat: the first is replaced. Never two from one bot in one chat.
 47. A closed task's PR merges anyway: the task shows it and the manager bot is told once.
 48. A commit lands after the person's OK: a rebase with the same lines keeps the OK; other changes are read by
-    Reviewer 2, whose OK keeps it and whose send back asks the person again after the next read. The task shows
+    the last reviewer, whose OK keeps it and whose send back asks the person again after the next read. The task shows
     "Changed after OK".
 49. A linked task is deleted: the waiting task treats it as Closed.
 

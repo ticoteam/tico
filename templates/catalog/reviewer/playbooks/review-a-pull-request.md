@@ -3,16 +3,19 @@
 Used in your pipeline's review stage, and for each pull request in
 `playbooks/weekday-review-queue.md`. Budget 15 minutes.
 
-Inputs: the pull request's diff, the Spec page and the failing checks first. Both are listed under "From earlier
-stages" in `tico task show <id>` (in Review 2, also Reviewer 1's page and what the task's owner said it fixed). Then the pull
-request's description and its linked issue. `knowledge/standards.md`, `knowledge/patterns.md` and
-`knowledge/review-practice.md` are read once per session. Read the rest of the repository only where the diff needs it.
+Start with the pull request's diff, the Spec page and the failing checks. Find the pull request and Spec under
+"From earlier stages" in `tico task show <id>`. Then read the pull request's description and linked issue.
+`knowledge/standards.md`, `knowledge/patterns.md` and `knowledge/review-practice.md` are read once per session.
+Read the rest of the repository only where the diff needs it.
 
-In Review, file `tico task child <id> --check-model <runtime>:<model> --role review --title "Review: second opinion"`
+When Review requires a done subtask, file
+`tico task child <id> --check-model <runtime>:<model> --role review --title "Review: second opinion"`
 and pass the linked PRs and their full head commits in `--message`. Choose a model different from yours. Ask for an
 independent review and have the child say done with its findings, the commits, and its model. Once it finishes, include
 both reviews in the same page, with the model and commit named for each PR. Use one finding per real defect, with
 `file:line`, severity, and why it matters. Leave out style nits and summaries of the diff. Say when there are no findings.
+
+In an older pipeline, attach one review per stage and read the earlier review and fixes when you reach Review 2.
 
 Outcome: one Review page at the current heads, built with `.claude/skills/build-the-page/SKILL.md` from its
 `templates/review.html`. It opens with whether anything blocks, then the screens when the change has any, how it was
@@ -94,7 +97,7 @@ Every comment is polite, about the code, and specific. Never "this is wrong": sa
 
 ## 4b. Screens
 
-In Review, or Review 2 in a pipeline with separate review stages. If the diff touches `ui/`, take before and after
+In the combined Review stage or the second stage of a split review, if the diff touches `ui/`, take before and after
 screenshots of the changed screens with `python3 scripts/release_shots.py --base <merge base> --head <head commit> --version
 <next release> --out <dir>`. Put each changed screen's before and after pictures in the page's "What it looks like"
 section, with red numbered arrows on what changed (the skill's "Arrows"), and also attach `manifest.json` and every
