@@ -4,7 +4,6 @@ quarantined bot's as an open hold on the bot, and each quarantine_holds row (one
 import json
 
 from backend.migrations import DIRECTORY, statements
-from backend.store import H
 from backend.tests.helpers.api import get  # noqa: F401  (the api fixture)
 
 MIGRATION = DIRECTORY / "20261117072054_holds_quarantine.sql"
@@ -39,10 +38,6 @@ def _event(c, id, bot, detail, at=HELD):
     )
 
 
-def _shown(c, bot):
-    return c.execute(f"SELECT {H.BOT_STATE_SQL} FROM bots b WHERE b.id=?", (bot,)).fetchone()[0]
-
-
 def test_every_quarantine_moves_into_holds_and_running_it_again_changes_nothing(api):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET state='quarantined' WHERE id IN ('ops','cpo','finance')")
@@ -63,13 +58,13 @@ def test_every_quarantine_moves_into_holds_and_running_it_again_changes_nothing(
         _migrate(c)
         assert not c.execute("SELECT 1 FROM sqlite_master WHERE name='quarantine_holds'").fetchone()
         moved = _rows(c)
-        _migrate(c)  # again: the older table comes back empty and goes, and no bot is quarantined
+        _migrate(c)  # again: the older table comes back empty and goes, and each bot's open hold is kept
         assert _rows(c) == moved
         assert not c.execute("SELECT 1 FROM sqlite_master WHERE name='quarantine_holds'").fetchone()
 
+        # bots.state stays the switch every reader checks; the hold carries the reason and the cooldown.
         states = dict(c.execute("SELECT id,state FROM bots WHERE id IN ('ops','cpo','finance')").fetchall())
-        assert states == {"ops": "active", "cpo": "active", "finance": "active"}
-        assert [_shown(c, bot) for bot in ("ops", "cpo", "finance")] == ["quarantined"] * 3  # rc.1's status payload
+        assert states == {"ops": "quarantined", "cpo": "quarantined", "finance": "quarantined"}
 
         bot = {"kind": "quarantine", "holdable_type": "bot", "created_by_id": "keeper", "released_at": None}
         bot |= {"released_by_id": None, "released_how": None}

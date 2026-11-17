@@ -1,8 +1,8 @@
 -- Quarantines move into the holds table (backend/holds.py; reports D1, PR 5 of "one holds system"): a bot-wide one is
 -- an open `quarantine` hold on the bot, and one on a task or chat (backend/task_quarantine.py) a hold on that task or
 -- conversation naming the held bot. A refusal count's hold waits until its until_at (the hour's cooldown); an escape's
--- has none and waits for a person. bots.state keeps only the bot's lifecycle: the pages still say `quarantined`
--- (hubdb.BOT_STATE_SQL), and the bots CHECK still allows it, so the table is not rebuilt.
+-- has none and waits for a person. bots.state stays `quarantined` while a bot-wide hold is open (holds.put and
+-- holds.release keep it so), so every reader of it is unchanged and the bots table is not touched here.
 -- Ids name the row's kind before its subject, so no two rows share one. Running this again changes nothing.
 -- The holds table as 20261117061834_holds_runaway makes it, for a company that applies the two in either order.
 CREATE TABLE IF NOT EXISTS holds (
@@ -43,7 +43,6 @@ SELECT 'bots:quarantined:' || b.id, 'quarantine', 'bot', b.id, b.id, coalesce(js
 FROM bots b LEFT JOIN events e ON e.rowid = (SELECT rowid FROM events WHERE action = 'quarantine'
   AND target = 'bot:' || b.id ORDER BY created_at DESC, rowid DESC LIMIT 1)
 WHERE b.state = 'quarantined';
-UPDATE bots SET state = 'active' WHERE state = 'quarantined';
 -- Every hold on one task or chat, open and released. Who released one was not kept: a release after its cooldown is
 -- the cooldown's (expired), any earlier one a person's.
 CREATE TABLE IF NOT EXISTS quarantine_holds(id INTEGER PRIMARY KEY, bot_id TEXT NOT NULL, task_id TEXT,

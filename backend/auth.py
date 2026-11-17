@@ -552,7 +552,7 @@ class Auth:
         attempt = c.execute(
             "SELECT a.* FROM attempts a JOIN assignments x ON x.bot=a.bot_id "
             "JOIN bots b ON b.id=a.bot_id WHERE a.id=? AND a.runner_id=? "
-            f"AND x.runner_id=? AND x.generation=a.generation AND b.state='active' AND NOT {H.QUARANTINE_HELD_SQL}",
+            "AND x.runner_id=? AND x.generation=a.generation AND b.state='active'",
             (aid, who.runner_id, who.runner_id),
         ).fetchone()
         if not attempt:

@@ -929,8 +929,7 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None):
         return list(groups.values())
 
     for bot in c.execute(
-        f"SELECT b.id,b.slug,b.display_name,{H.BOT_STATE_SQL} AS state FROM bots b "
-        "WHERE b.state IN ('active','paused','quarantined') ORDER BY b.slug"
+        "SELECT id,slug,display_name,state FROM bots WHERE state IN ('active','paused','quarantined') ORDER BY slug"
     ):
         slug = bot["id"]
         count, oldest = queued.get(slug, (0, None))

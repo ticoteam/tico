@@ -1904,16 +1904,13 @@ def prime_bot_rows(c, slugs):
         return
     for part in H.chunks(sorted({H.actor_id(s) for s in slugs if s})):
         marks = ",".join("?" * len(part))
-        for table, column, statement, columns in (
-            ("bot_status", "bot", "SELECT * FROM bot_status WHERE bot=?", "*"),
-            ("bots b", "id", H.BOT_SQL, H.BOT_COLUMNS),
-            ("run_backoff", "bot", run_backoff.GET_SQL, "*"),
-            ("bot_browser_exits", "bot", browser_exit.BOT_EXIT_SQL, "*"),
+        for table, column, statement in (
+            ("bot_status", "bot", "SELECT * FROM bot_status WHERE bot=?"),
+            ("bots", "id", "SELECT * FROM bots WHERE id=?"),
+            ("run_backoff", "bot", run_backoff.GET_SQL),
+            ("bot_browser_exits", "bot", browser_exit.BOT_EXIT_SQL),
         ):
-            found = {
-                row[column]: row
-                for row in c.execute(f"SELECT {columns} FROM {table} WHERE {column} IN ({marks})", part)
-            }
+            found = {row[column]: row for row in c.execute(f"SELECT * FROM {table} WHERE {column} IN ({marks})", part)}
             prime(c, statement, {(s,): found.get(s) for s in part})
         holds.prime(c, holds.RUNAWAY, "bot", part)
         holds.prime(c, holds.QUARANTINE, "bot", part)

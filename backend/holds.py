@@ -7,7 +7,7 @@ kind at a time, written by `put` and ended by `release`:
 | kind              | scope   | stored in                                              | ends                               |
 |-------------------|---------|--------------------------------------------------------|------------------------------------|
 | `paused`          | bot     | `bots.state='paused'`                                  | a person resumes it                |
-| `quarantined`     | bot     | `holds`, kind `quarantine`, on the bot                 | the cooldown, or a person          |
+| `quarantined`     | bot     | `bots.state='quarantined'`, and its `quarantine` hold  | the cooldown, or a person          |
 | `company_paused`  | company | company_pause.KEY                                      | the owner or an admin resumes      |
 | `cloud_locked`    | company | Tico Cloud access (cloud_access)                       | Tico HQ unlocks the company        |
 | `run_hold`        | bot     | `run_backoff.held_at` (failed runs)                    | a try completes, or a release      |
@@ -88,6 +88,26 @@ STATE_SQL = "SELECT state FROM bots WHERE id=?"
 # A kind the `holds` table stores (its CHECK allows every kind; each moves into it in its own change).
 RUNAWAY = "runaway"  # a bot over its run budget (turn_budgets): BUDGET to the pages and the claim
 QUARANTINE = "quarantine"  # rule 8 (hubdb.quarantine, task_quarantine): QUARANTINED and TASK_QUARANTINE to the pages
+# A bot-wide hold of these kinds is also bots.state, the switch every reader of a bot checks: its open hold sets it (not
+# on an archived or planned bot), and its release sets the bot active again only while no other such hold is open.
+STATE_KINDS = {QUARANTINE: "quarantined"}
+
+
+def _switch(c: Any, kind: str, holdable_type: str, holdable_id: str, held: bool) -> None:
+    state = STATE_KINDS.get(kind)
+    if state is None or holdable_type != "bot":
+        return
+    if held:
+        c.execute("UPDATE bots SET state=? WHERE id=? AND state IN ('active','paused')", (state, holdable_id))
+        return
+    kinds = ",".join("?" * len(STATE_KINDS))
+    c.execute(
+        "UPDATE bots SET state='active' WHERE id=? AND state=? AND NOT EXISTS(SELECT 1 FROM holds "
+        f"WHERE kind IN ({kinds}) AND holdable_type='bot' AND holdable_id=? AND released_at IS NULL)",
+        (holdable_id, state, *STATE_KINDS, holdable_id),
+    )
+
+
 OPEN_SQL = (
     "SELECT * FROM holds WHERE kind=? AND holdable_type=? AND holdable_id=? AND coalesce(bot_id,'')=? "
     "AND released_at IS NULL"
@@ -168,6 +188,7 @@ def put(
             now,
         ),
     ).fetchall()
+    _switch(c, kind, holdable_type, holdable_id, True)
     return dict(found[0])
 
 
@@ -182,6 +203,8 @@ def release(
         "AND holdable_id=? AND coalesce(bot_id,'')=? AND released_at IS NULL RETURNING *",
         (now, actor, how, now, kind, holdable_type, holdable_id, _held_bot(holdable_type, holdable_id, bot_id) or ""),
     ).fetchall()
+    if found:
+        _switch(c, kind, holdable_type, holdable_id, False)
     return dict(found[0]) if found else None
 
 
@@ -422,7 +445,7 @@ def _backoff(a: _Ask) -> bool:
 
 CHECKS: dict[str, Callable[[_Ask], bool]] = {
     PAUSED: lambda a: a.state() == "paused",
-    QUARANTINED: lambda a: a.state() == "quarantined" or get(a.c, QUARANTINE, "bot", a.bot) is not None,
+    QUARANTINED: lambda a: a.state() == "quarantined",
     COMPANY_PAUSED: _company_paused,
     CLOUD_LOCKED: _cloud_locked,
     RUN_HOLD: lambda a: a.backoff() == RUN_HOLD,

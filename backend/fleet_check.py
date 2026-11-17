@@ -85,7 +85,7 @@ def check(c, who, auth, settings):
     from . import events, views
 
     bots = c.execute(
-        f"SELECT b.id,b.slug,b.display_name,{H.BOT_STATE_SQL} AS state,b.created_at,bc.onboarding_state FROM bots b "
+        "SELECT b.id,b.slug,b.display_name,b.state,b.created_at,bc.onboarding_state FROM bots b "
         "JOIN bot_config bc ON bc.bot=b.id WHERE b.state<>'archived' ORDER BY b.slug"
     ).fetchall()
     # The rows each bot's check reads, read once for every bot (a snapshot keeps them; the loop finds them there).

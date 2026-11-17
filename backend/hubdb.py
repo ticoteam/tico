@@ -45,8 +45,8 @@ withdrawn text in the audit trail.
    that name a `secrets/` path or another bot's folder are written as they are and recorded
    (`path_mentioned`); they are never refused or counted. Refusals remain in the audit; repeated
    failures open an internal review. Generic refusal diagnostics do not create human decision tasks.
-7. **`sync_registry` never lifts a quarantine.** A bot the registry calls `active` that a quarantine
-   holds stays quarantined: the sync leaves its hold alone. Tokens, thread ids and
+7. **`sync_registry` never lowers a state.** A bot the registry calls `active` that hubdb has
+   `quarantined` stays quarantined; only a human clears it. Tokens, thread ids and
    `last_turn_at` are never overwritten by a sync.
 8. **Extra read helpers.** `bot(conn, slug)`, `human(conn, id)`, `task(conn, id)`, `task_history(conn, id)`,
    `message(conn, id)`, `conversation(conn, id)`, `refusals_for(...)`,
@@ -1174,20 +1174,8 @@ QUARANTINE_COOLDOWN_S = 3600
 COUNT_QUARANTINE = re.compile(r"\d+ (?:refused writes|repeated refusals|refusals) today")  # the first: before #287
 
 # A quarantine is a hold (backend/holds.py, kind `quarantine`): on the bot, or on one of its tasks or chats
-# (backend/task_quarantine.py). bots.state keeps only the bot's lifecycle: every reader of a bot's state reads its open
-# bot-wide hold as `quarantined` (BOT_STATE_SQL, over the bots row `b`), as the pages did before the hold moved there.
-QUARANTINE_HELD_SQL = (
-    "EXISTS(SELECT 1 FROM holds h WHERE h.kind='quarantine' AND h.holdable_type='bot' AND h.holdable_id=b.id "
-    "AND h.released_at IS NULL)"
-)
-BOT_STATE_SQL = (
-    f"CASE WHEN b.state IN ('active','paused') AND {QUARANTINE_HELD_SQL} THEN 'quarantined' ELSE b.state END"
-)
-BOT_COLUMNS = f"b.*, {BOT_STATE_SQL} AS shown_state"
-BOT_SQL = f"SELECT {BOT_COLUMNS} FROM bots b WHERE b.id=?"
-QUARANTINED_BOTS_SQL = (
-    "SELECT holdable_id FROM holds WHERE kind='quarantine' AND holdable_type='bot' AND released_at IS NULL"
-)
+# (backend/task_quarantine.py). The hold keeps its reason, its cooldown (until_at) and its history; bots.state stays
+# the switch every reader checks, `quarantined` while a bot-wide hold is open (holds.put and holds.release set it).
 
 
 def quarantine_hold(conn, slug):
@@ -1287,10 +1275,21 @@ def lift_cooled_quarantines(conn):
     Returns the bots whose work was let out; an escape has no cooldown and still needs a person."""
     from . import task_quarantine
 
+    from . import holds
+
     lifted = task_quarantine.release(conn, KEEPER, due=True)
-    for row in _rows(conn.execute(QUARANTINED_BOTS_SQL + " AND until_at<=?", (now(),))):
+    for row in _rows(
+        conn.execute(
+            "SELECT h.holdable_id,b.state FROM holds h JOIN bots b ON b.id=h.holdable_id WHERE h.kind='quarantine' "
+            "AND h.holdable_type='bot' AND h.released_at IS NULL AND h.until_at<=?",
+            (now(),),
+        )
+    ):
         slug = row["holdable_id"]
         with isolated(conn, "lift_cooled_quarantines", slug):
+            if row["state"] != "quarantined":  # archived meanwhile: its hold ends, and it stays as it is
+                holds.release(conn, holds.QUARANTINE, "bot", slug, actor=KEEPER, how="expired")
+                continue
             status_set(conn, KEEPER, slug, state="active", reason="Cooldown over: the refusal count starts again.")
             if slug not in lifted:
                 lifted.append(slug)
@@ -1710,8 +1709,9 @@ def sync_registry(conn, employees, people):
                 row,
             )
         else:
-            # A quarantine is a hold (quarantine_hold), which a sync leaves as it is.
+            # never lower a state a human set
             row["id"] = have["id"]
+            row["state"] = "quarantined" if have.get("state") == "quarantined" else state
             conn.execute("UPDATE bots SET display_name=:display_name, effort=:effort, state=:state WHERE id=:id", row)
     doc = people if isinstance(people, dict) else {"people": people or []}
     for p in doc.get("people") or []:
@@ -6066,6 +6066,11 @@ def status_set(conn, actor, bot_slug, state=None, focus=None, task_id=None, reas
         from . import task_quarantine
 
         task_quarantine.release(conn, actor, bot=slug)
+    if state == "quarantined" and not quarantine_hold(conn, slug):
+        from . import holds
+
+        # Set by hand (the status API): a hold like any other quarantine, which waits for a person.
+        holds.put(conn, holds.QUARANTINE, "bot", slug, actor=actor, reason=reason or focus or "")
     if quarantined and state not in ("active", "quarantined"):
         # Lease expiry and completion are routine keeper updates. Neither can clear or mask
         # the human review required by quarantine.
@@ -6084,8 +6089,8 @@ def status_set(conn, actor, bot_slug, state=None, focus=None, task_id=None, reas
     if state == "active":
         conn.execute("UPDATE bots SET state='active' WHERE id=?", (slug,))
         live = "idle"
-    elif state == "paused":
-        conn.execute("UPDATE bots SET state='paused' WHERE id=?", (slug,))
+    elif state in ("paused", "quarantined"):
+        conn.execute("UPDATE bots SET state=? WHERE id=?", (state, slug))
     row = {
         "bot": slug,
         "state": live if live is not None else (old or {}).get("state") or "idle",
@@ -6427,17 +6432,10 @@ def prune_deltas(conn, before=None):
 
 
 # ----------------------------------------------------------------------------- reads
-def _shown(row):
-    """A bots row read with BOT_STATE_SQL as `shown_state`: its state as every reader sees it."""
-    if row is not None:
-        row["state"] = row.pop("shown_state")
-    return row
-
-
 def bot(conn, bot_id):
     """The bot with this id: an actor's id, or a foreign key's value. Never a slug: a person's or a client's input
-    goes through resolve_bot, which accepts either. Its state says `quarantined` while a quarantine holds it."""
-    return _shown(_one(conn, BOT_SQL, (actor_id(bot_id),)))
+    goes through resolve_bot, which accepts either."""
+    return _one(conn, "SELECT * FROM bots WHERE id=?", (actor_id(bot_id),))
 
 
 def resolve_bot(conn, ref):
@@ -6448,7 +6446,7 @@ def resolve_bot(conn, ref):
         value = value[4:]
     if not value:
         return None
-    return _shown(_one(conn, BOT_SQL.replace("b.id=?", "b.id=? OR b.slug=?"), (value, value)))
+    return _one(conn, "SELECT * FROM bots WHERE id=? OR slug=?", (value, value))
 
 
 def rename_bot(conn, bot_id, new_slug):
@@ -6465,18 +6463,16 @@ def rename_bot(conn, bot_id, new_slug):
 
 
 def bots(conn, state=None):
-    """Every bot (each in `state`, when given), as `bot` reads one: the whole table is shared between requests
-    (roster_clock), and its quarantines are one read."""
+    sql, args = "SELECT * FROM bots", []
+    where = []
+    if state:
+        where.append("state=?")
+        args.append(state)
+    if where:
+        sql += " WHERE " + " AND ".join(where)
     from .read_cache import rows
 
-    held = {row[0] for row in rows(conn, QUARANTINED_BOTS_SQL)}
-    out = []
-    for row in map(dict, rows(conn, "SELECT * FROM bots ORDER BY slug")):
-        if row["id"] in held and row["state"] in ("active", "paused"):
-            row["state"] = "quarantined"
-        if not state or row["state"] == state:
-            out.append(row)
-    return out
+    return [dict(row) for row in rows(conn, sql + " ORDER BY slug", args)]
 
 
 # The Tico account a person signed in with (backend/oidc.py `person`): matched by the sign-in only, never sent out.
