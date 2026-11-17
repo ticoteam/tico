@@ -267,7 +267,11 @@ const total = (rows: {runs: number; est_cost_usd: number | null; subscription_eq
     await page.keyboard.press('Escape');
     await panel.waitFor({state: 'hidden'});
     // On a phone the header's tools fold into ⋯: the icon is there, and its menu is a sheet that stays in the window.
+    // The focus leaves Filter first: a header keeps a tool that has the focus in its row, and would fold it only when the
+    // press on ⋯ takes the focus, moving ⋯ away before the release (the click then misses and ⋯ never opens).
+    await filter.evaluate(el => (el as HTMLElement).blur());
     await page.setViewportSize({width: 400, height: 844});
+    await page.locator('header.use-head.ph-fold > .ph-menu button.use-filter').waitFor({state: 'attached'});
     await more.click();
     await filter.click();
     await panel.locator('.use-filter-menu').waitFor();
