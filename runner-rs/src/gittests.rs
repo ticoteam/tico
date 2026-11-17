@@ -582,7 +582,7 @@ async fn isolated_existing_task_locks_go_to_the_bot_without_replacing_inodes_or_
 
 // HotMic 0.3.46 leftovers: a managed base clone (repos/<name>/.git, its config and tico-managed) owned by
 // ticorun, directories 755, files 644. Refreshing it hands it to the bot, whose worktree add and
-// mark_managed (runner_support/repositories.py) then work.
+// mark_managed (repositories.rs) then work.
 #[cfg(target_os = "linux")]
 #[tokio::test]
 #[ignore = "requires a disposable Linux two-user environment"]
