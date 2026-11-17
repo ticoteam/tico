@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Replay historical red-main diffs through the current light PR selector, without collecting or running tests."""
+"""Replay historical red-main diffs through the light PR and queue selectors, without running tests."""
 
 import argparse
 import ast
@@ -50,10 +50,10 @@ class Replay:
         matches = self.graph.by_base.get(Path(path).name, set())
         return next(iter(matches)) if len(matches) == 1 else None
 
-    def plan(self, changed, added=None):
+    def plan(self, changed, event="pull_request", added=None):
         # Cases have no A/M status, so retain selection's conservative default; merge costs supply git's additions.
-        picked = checks.selection(changed, root=self.root, graph=self.graph, core=self.core, added=added)
-        picked = checks.narrow(picked, changed, "pull_request", root=self.root, graph=self.graph, added=added)
+        picked = checks.selection(changed, event=event, root=self.root, graph=self.graph, core=self.core, added=added)
+        picked = checks.narrow(picked, changed, event, root=self.root, graph=self.graph, added=added)
         record = picked.get("narrow")
         if record:
             counts = {p: self.counts[p] for p in picked["python"] if self.counts[p]}
@@ -85,9 +85,34 @@ class Replay:
         paths = self.definitions.get(name, ())
         return ("file", next(iter(paths))) if len(paths) == 1 else ("missing", name)
 
+    def changed_files(self, case):
+        changed = set(case["changed_files"])
+        if case["cause"] != "batched":
+            return sorted(changed), None
+        breakers = case.get("breaking_prs", [])
+        refs = [re.match(r"(?:pr \d+ \(merge |commit )([0-9a-f]{7,40})\b", b) for b in breakers]
+        if len(refs) < 2 or not all(refs):
+            return sorted(changed), "single-PR diff: case data does not identify both breaking commits"
+        combined = set()
+        for match in refs:
+            sha = match[1]
+            try:
+                combined.update(
+                    subprocess.check_output(
+                        ["git", "diff", "--name-only", sha + "^1", sha],
+                        cwd=self.root,
+                        text=True,
+                        stderr=subprocess.PIPE,
+                    ).splitlines()
+                )
+            except subprocess.CalledProcessError:
+                return sorted(changed), f"single-PR diff: breaking commit {sha} unavailable locally"
+        return sorted(combined), "combined diff of all named breaking commits"
+
     def case(self, case, number):
         changed, moved, gone = [], {}, []
-        for path in case["changed_files"]:
+        inputs, batch = self.changed_files(case)
+        for path in inputs:
             current = self.resolve(path)
             if current and current != path:
                 moved[path] = current
@@ -97,70 +122,76 @@ class Replay:
             changed.append(current or path)
         targets = [self.target(t) for t in case["failing_tests"]]
         stale = not changed or any(kind == "missing" for kind, _ in targets)
-        picked = self.plan(sorted(set(changed))) if changed else None
+        plans = {event: self.plan(sorted(set(changed)), event) for event in checks.NARROW} if changed else {}
         results = []
         for description, (kind, target) in zip(case["failing_tests"], targets, strict=True):
-            caught = False
-            reason = "no changed files" if not changed else "target no longer resolves to a runnable check"
-            if picked:
-                if kind == "unsupported":
-                    reason = "outside the PR test jobs"
-                elif kind == "missing":
-                    pass
-                elif kind == "static":
-                    caught, reason = True, "static job: " + target
-                elif target.startswith("ui/tests/"):
-                    caught = Path(target).stem in picked["browser"]
-                    reason = "browser selected" if caught else "browser not linked"
-                else:
-                    caught = target in picked["python"] or (
-                        picked["contracts"] and target in checks.contract_files(picked["sweeps"])
-                    )
-                    reason = (
-                        "Python/contracts selected"
-                        if caught
-                        else (
-                            "time budget"
-                            if target in picked.get("narrow", {}).get("left_over_budget", ())
-                            else "depth cut"
-                            if target in picked.get("narrow", {}).get("left_transitive", ())
-                            else "not linked"
-                        )
-                    )
-            results.append(dict(test=description, target=target, caught=caught, reason=reason))
+            stages = {event: self.selected(kind, target, picked) for event, picked in plans.items()}
+            results.append(
+                dict(test=description, target=target, caught=any(s["caught"] for s in stages.values()), stages=stages)
+            )
+        caught_pr = any(r["stages"].get("pull_request", {}).get("caught", False) for r in results)
+        caught_queue = any(r["stages"].get("merge_group", {}).get("caught", False) for r in results)
         return dict(
             case=number,
             fix_pr=case["fix_pr"],
             cause=case["cause"],
             stale=stale,
-            caught=not stale and all(r["caught"] for r in results),
+            caught=caught_pr or caught_queue,
+            caught_pr=caught_pr,
+            caught_queue=caught_queue,
             results=results,
+            batch=batch,
             moved=moved,
             gone=gone,
-            python=len(picked["python"]) if picked else 0,
-            browser=len(picked["browser"]) if picked else 0,
+            selected={event: dict(python=len(p["python"]), browser=len(p["browser"])) for event, p in plans.items()},
         )
+
+    def selected(self, kind, target, picked):
+        caught = False
+        reason = "target no longer resolves to a runnable check"
+        if picked:
+            if kind == "unsupported":
+                reason = "outside the PR/queue test jobs"
+            elif kind == "missing":
+                pass
+            elif kind == "static":
+                caught, reason = True, "static job: " + target
+            elif target.startswith("ui/tests/"):
+                caught = Path(target).stem in picked["browser"]
+                reason = "browser selected" if caught else "browser not linked"
+            else:
+                caught = target in picked["python"] or (
+                    picked["contracts"] and target in checks.contract_files(picked["sweeps"])
+                )
+                reason = (
+                    "Python/contracts selected"
+                    if caught
+                    else (
+                        "time budget"
+                        if target in picked.get("narrow", {}).get("left_over_budget", ())
+                        else "depth cut"
+                        if target in picked.get("narrow", {}).get("left_transitive", ())
+                        else "not linked"
+                    )
+                )
+        return dict(caught=caught, reason=reason)
 
     def run(self, cases, only=None):
         return [self.case(c, n) for n, c in enumerate(cases, 1) if only is None or n == only]
 
 
 def report(rows):
-    print(f"{'cause':<16} {'caught':>6} {'missed':>6} {'stale':>6}")
+    print(f"{'cause':<16} {'PR':>6} {'queue only':>10} {'missed both':>11}")
     for cause in sorted({r["cause"] for r in rows}) + ["TOTAL"]:
         group = [r for r in rows if cause == "TOTAL" or r["cause"] == cause]
-        stale = sum(r["stale"] for r in group)
-        caught = sum(r["caught"] for r in group)
-        print(f"{cause:<16} {caught:>6} {len(group) - stale - caught:>6} {stale:>6}")
+        pr = sum(r["caught_pr"] for r in group)
+        queue = sum(r["caught_queue"] and not r["caught_pr"] for r in group)
+        print(f"{cause:<16} {pr:>6} {queue:>10} {len(group) - pr - queue:>11}")
+    print("Caught case IDs:", sorted(r["case"] for r in rows if r["caught"]))
+    print("Missed at both:", sorted(r["case"] for r in rows if not r["caught"]))
     for row in rows:
-        print(
-            f"case {row['case']:2} fix #{row['fix_pr']}: "
-            + ("STALE" if row["stale"] else "caught" if row["caught"] else "MISSED")
-        )
-        for result in row["results"]:
-            print(f"  {'yes' if result['caught'] else ' no'} {result['test']}: {result['reason']} ({result['target']})")
-        if row["moved"] or row["gone"]:
-            print(f"  mapped {row['moved']}; unresolved inputs retained as deletions: {len(row['gone'])}")
+        if row["batch"]:
+            print(f"case {row['case']}: {row['batch']}")
 
 
 def main():
