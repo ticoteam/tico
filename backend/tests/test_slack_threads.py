@@ -1027,6 +1027,186 @@ def test_a_reader_of_a_two_way_linked_channel_follows_its_thread_and_the_channel
     assert link_row(world, link_id)["state"] == "active", "a two-way link is the thread's, not the list's"
 
 
+def later(world, n):
+    """A Slack ts n seconds after the test clock's now: a read-only link catches up from its activation."""
+    return f"{ST._epoch(world.clock()) + n:.6f}"
+
+
+def pending_digests(world, bot):
+    return [
+        r["thread_id"]
+        for r in all_rows(
+            world,
+            "SELECT thread_id FROM message_deliveries WHERE recipient=? AND mode='digest' AND state='pending' "
+            "ORDER BY created_at",
+            bot,
+        )
+    ]
+
+
+FROM_SLACK = "json_extract(refs,'$.slack.ts') IS NOT NULL"
+
+
+def test_a_reply_in_a_read_channel_reaches_each_readers_digest(world):
+    """A Slack thread reply becomes a sub-thread of the message it answers; the readers follow it at digest before
+    the reply is written, so the reply is in each reader's next digest."""
+    from backend import thread_bot_digest
+
+    link_id = read_marketing(world, readers=("legal", "assistant"))
+    thread = link_row(world, link_id)["thread_id"]
+    assert world.bridge.receive(chan_event(ts(1), "Launch plan")) == "posted"
+    assert world.bridge.receive(chan_event(ts(2), "Looks good", user="U2", thread_ts=ts(1))) == "posted"
+    assert world.bridge.receive(chan_event(ts(3), "Agreed", thread_ts=ts(1))) == "posted"
+    sub = one(world, "SELECT conversation_id FROM messages WHERE body='Looks good'")["conversation_id"]
+    assert sub != thread and one(world, "SELECT parent_id FROM conversations WHERE id=?", sub)["parent_id"] == thread
+    for bot in ("bot:legal", "bot:assistant"):
+        assert pending_digests(world, bot) == [thread, sub, sub]
+    assert thread_bot_digest.sweep(world.hub) == 2
+    notice = one(world, "SELECT body FROM messages WHERE kind='notice' AND recipient_id='bot:legal'")["body"]
+    assert f"- {thread}: 1" in notice and f"- {sub}: 2" in notice
+
+
+def test_a_read_only_link_carries_other_apps_posts_but_never_ticos_own(world):
+    """An alert or deploy feed is carried in by Tico under the app's name; Tico's own app is never echoed back. A
+    two-way link carries no app's post."""
+    link_id = read_marketing(world)
+    alert = {**chan_event(ts(1), "CPU high on web-1", user="B0ALERTS"), "author": "bot", "author_name": "alerts"}
+    assert world.bridge.receive(alert) == "posted"
+    carried = one(world, "SELECT sender_id, refs FROM messages WHERE body='*alerts*: CPU high on web-1'")
+    assert carried["sender_id"] == H.KEEPER and json.loads(carried["refs"])["slack"]["name"] == "alerts"
+    assert pending_digests(world, "bot:legal") == [link_row(world, link_id)["thread_id"]]
+    own = {**chan_event(ts(2), "Tico said this", user=BOT_USER), "author": "bot"}
+    assert world.bridge.receive(own) == "bot"
+    with world.hub.transaction() as c:
+        c.execute("UPDATE slack_thread_links SET read_only=0 WHERE id=?", (link_id,))
+    assert world.bridge.receive({**alert, "ts": ts(3), "event_id": "Ev3"}) == "bot"
+
+
+def test_a_sender_slack_cannot_look_up_yet_waits_and_is_tried_again(world, monkeypatch, caplog):
+    """A rate limit or no answer from users.info is not a person who does not map: the message stays queued (and the
+    ones after it wait) until Slack answers, for a few tries; a user Slack says is gone is skipped at once."""
+    import logging
+
+    link_id = read_marketing(world)
+    answers = {"U2": [G.SlackError("users.info", "ratelimited", retry_after=30), G.SlackUnreachable("no answer")]}
+    real = world.slack.users_info
+
+    def users_info(user_id):
+        if answers.get(user_id):
+            raise answers[user_id].pop(0)
+        return real(user_id)
+
+    monkeypatch.setattr(world.slack, "users_info", users_info)
+    caplog.set_level(logging.WARNING, logger="tico.slack.threads")
+    assert world.bridge.receive(chan_event(ts(1), "From Ben", user="U2")) == "retry"
+    assert world.bridge.receive(chan_event(ts(2), "From Ana")) == "retry", "the queue keeps its order"
+    assert all_rows(world, "SELECT id FROM messages WHERE body IN ('From Ben','From Ana')") == []
+    assert len(all_rows(world, "SELECT seq FROM slack_inbound_events WHERE link_id=?", link_id)) == 2
+    assert "slack.inbound.sender" in caplog.text and "ratelimited" in caplog.text
+    world.clock.advance(ST.PERSON_RETRY + 1)
+    assert world.bridge.drain(link_id) == "retry", "no answer the second time either"
+    world.clock.advance(2 * ST.PERSON_RETRY + 1)
+    assert world.bridge.drain(link_id) == "posted"
+    bodies = [r["body"] for r in all_rows(world, "SELECT body FROM messages WHERE body LIKE 'From %' ORDER BY rowid")]
+    assert bodies == ["From Ben", "From Ana"]
+
+    answers["U2"] = [G.SlackUnreachable("no answer") for _ in range(ST.PERSON_TRIES)]
+    world.bridge._users.clear()
+    assert world.bridge.receive(chan_event(ts(3), "Never looked up", user="U2")) == "retry"
+    for _ in range(ST.PERSON_TRIES - 1):
+        world.clock.advance(ST.PERSON_RETRY * ST.PERSON_TRIES)
+        world.bridge.drain(link_id)
+    assert all_rows(world, "SELECT seq FROM slack_inbound_events WHERE link_id=?", link_id) == [], "tries are bounded"
+    assert world.bridge.receive(chan_event(ts(4), "Gone", user="U9")) == "skipped", "user_not_found is definite"
+
+
+def test_a_read_only_link_catches_up_on_what_the_socket_missed(world, monkeypatch):
+    """From its activation, then from where it last read: once an hour and right after a reconnect. A message the
+    thread already has is not carried twice; Tico's own posts and joins are left out; an app's post is carried."""
+    link_id = read_marketing(world)
+    thread = link_row(world, link_id)["thread_id"]
+    assert world.bridge.receive(chan_event(later(world, 1), "Live one")) == "posted"
+    world.slack.pages[MARKETING] = [
+        {"ts": later(world, 1), "user": "U1", "text": "Live one"},
+        {"ts": later(world, 2), "user": "U2", "text": "Missed one"},
+        {"ts": later(world, 3), "bot_id": "B0ALERTS", "username": "alerts", "text": "Disk full"},
+        {"ts": later(world, 4), "user": BOT_USER, "bot_id": "B0BUNG973DY", "text": "Tico's own"},
+        {"ts": later(world, 5), "user": "U2", "subtype": "channel_join", "text": "joined"},
+        {"ts": later(world, 6), "user": "U1", "text": "Root", "reply_count": 1},
+    ]
+    reply = {"ts": later(world, 7), "user": "U2", "text": "A reply", "thread_ts": later(world, 6)}
+    monkeypatch.setattr(world.slack, "replies", lambda channel, thread_ts, oldest="", limit=200: [reply])
+    caught = world.bridge.tick()["caught_up"]
+    assert caught == [{"link": link_id, "state": "done", "events": 5, "carried": "posted"}]
+    bodies = {
+        r["body"]: r["sender_id"] for r in all_rows(world, "SELECT body, sender_id FROM messages WHERE " + FROM_SLACK)
+    }
+    assert bodies == {
+        "Live one": "human:ana",
+        "Missed one": "human:ben",
+        "*alerts*: Disk full": H.KEEPER,
+        "Root": "human:ana",
+        "A reply": "human:ben",
+    }
+    assert link_row(world, link_id)["read_ts"] == later(world, 7)
+    assert one(world, "SELECT conversation_id FROM messages WHERE body='A reply'")["conversation_id"] != thread
+
+    world.slack.pages[MARKETING].append({"ts": later(world, 8), "user": "U1", "text": "After the pass"})
+    world.clock.advance(ST.CATCH_UP_CHECK + 1)
+    assert world.bridge.tick()["caught_up"] == [], "once an hour"
+    world.gw.bridge.catch_up_soon()  # the socket came back
+    assert world.bridge.tick()["caught_up"][0]["events"] == 1
+    assert len(all_rows(world, "SELECT id FROM messages WHERE body='After the pass'")) == 1
+    read_to = link_row(world, link_id)["read_ts"]
+
+    def down(*args):
+        raise G.SlackUnreachable("conversations.history: no answer")
+
+    monkeypatch.setattr(world.slack, "history_page", down)
+    world.clock.advance(ST.CATCH_UP_SECONDS + 1)
+    assert world.bridge.tick()["caught_up"] == [{"link": link_id, "state": "failed"}]
+    assert link_row(world, link_id)["read_ts"] == read_to, "a failed pass reads from the same place next time"
+
+
+def test_unread_slack_messages_before_the_migration_reach_the_readers_digest_after_it(world):
+    """The readers' pass had read #marketing up to a cursor; the new read-only link starts there, so what came after
+    is carried into the thread and counted in the reader's digest, and what was read before is not."""
+    import importlib
+
+    from backend import thread_bot_digest
+
+    base = ST._epoch(world.clock())
+    with world.hub.transaction() as c:
+        c.execute("DROP INDEX IF EXISTS slack_thread_links_ref")
+        c.execute("DROP INDEX IF EXISTS slack_thread_links_read_only")
+        c.execute("ALTER TABLE slack_thread_links DROP COLUMN read_only")
+        c.execute("ALTER TABLE slack_thread_links DROP COLUMN read_ts")
+        c.execute("ALTER TABLE slack_channels ADD COLUMN readers TEXT NOT NULL DEFAULT '[]'")
+        c.execute("ALTER TABLE slack_channels ADD COLUMN digest_hours REAL NOT NULL DEFAULT 0")
+        c.execute("CREATE TABLE slack_reads (channel TEXT, reader TEXT, last_ts TEXT, PRIMARY KEY (channel, reader))")
+        now = H.now()
+        c.execute(
+            "INSERT INTO slack_channels(key,channel_id,name,readers,post,note,digest_hours,created_at,updated_at,"
+            "updated_by) VALUES(?,?,'marketing','[\"legal\"]',1,'',0,?,?,'human:ben')",
+            (MARKETING, MARKETING, now, now),
+        )
+        c.execute("INSERT INTO slack_reads VALUES(?,?,?)", (MARKETING, "legal", f"{base - 50:.6f}"))
+        importlib.import_module("backend.migrations.20261117104315_slack_readers_to_links").up(c)
+    link = one(world, "SELECT id, read_ts FROM slack_thread_links")
+    assert link["read_ts"] == f"{base - 50:.6f}"
+    world.slack.pages[MARKETING] = [
+        {"ts": f"{base - 60:.6f}", "user": "U1", "text": "Read before"},
+        {"ts": f"{base - 40:.6f}", "user": "U1", "text": "Unread while it moved"},
+        {"ts": f"{base - 30:.6f}", "user": "U2", "text": "Also unread"},
+    ]
+    assert gate(world, link["id"]) == "active"
+    world.bridge.tick()
+    carried = [r["body"] for r in all_rows(world, "SELECT body FROM messages WHERE " + FROM_SLACK + " ORDER BY rowid")]
+    assert carried == ["Unread while it moved", "Also unread"]
+    assert thread_bot_digest.sweep(world.hub) == 1
+    assert ": 2" in one(world, "SELECT body FROM messages WHERE kind='notice' AND recipient_id='bot:legal'")["body"]
+
+
 # ----------------------------------------------------------------------------- audit 23 (Slack): a terminal refusal surfaces once
 def test_a_terminal_slack_refusal_files_one_needs_you_item_until_it_is_resolved(world, monkeypatch):
     link_id = activate_marketing(world)

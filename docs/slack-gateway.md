@@ -138,7 +138,18 @@ realtime: `@Tico` for a faster response, otherwise within the hour, if there are
   its roster author through screening and the org rule check, like a two-way link's, and nothing
   goes back to Slack: no copies of the thread, and no private note when a message is held. The
   channel's members are not mapped, so someone who is not on the roster suspends nothing; their
-  messages are skipped. Slack Connect is still refused.
+  messages are skipped. Only a definite answer from `users.info` (`user_not_found`, `user_not_visible`,
+  `account_inactive`) counts as not on the roster: a rate limit or no answer keeps the message queued and tries
+  again, up to five times with a growing wait, each logged as `slack.inbound.sender` with the link and event.
+  Another app's post (an alert, a deploy) is carried in by Tico under the app's name, a plain line that reaches
+  the readers; Tico's own posts never are. A two-way link still carries no app's post. Slack Connect is still
+  refused.
+- **Catch-up.** A read-only link remembers the newest Slack message it has read (`read_ts`). Once an hour, and
+  right after the gateway reconnects, it reads the channel's history (replies included) from there and carries
+  what the socket missed through the same queue; a message the thread already has is not carried twice. A
+  failed read is logged (`slack.catch_up`) and starts from the same place next time.
+- **Replies.** A Slack thread reply goes into a sub-thread of the message it answers; the readers follow the
+  sub-thread at `digest` before the reply is written, so it is in their digest too.
 - **Readers.** Each reader follows the thread at `digest`. The hourly bot digest
   (`thread_bot_digest`) wakes an active reader once with every thread it follows that has news,
   so an engineering bot's twenty alert channels are one run an hour, not twenty. A paused bot
@@ -153,8 +164,9 @@ listed by name alone: the gateway asks Slack for its id. Reading grants no posti
 something in the channel is bound by `post:` and the solicited-reply rule exactly as before.
 
 The gateway used to read these channels itself, once an hour, into a digest message per reader. The upgrade
-moves each channel's readers to a read-only link and follows (`20261117104315_slack_readers_to_links`); the old
-digests stay readable on the bot's Messaging page link (`GET /api/v2/messaging/bots/{bot}/slack-digests/{id}`).
+moves each channel's readers to a read-only link and follows (`20261117104315_slack_readers_to_links`). The link
+starts reading at the oldest reader's last read, so what no reader had read yet is carried in and counted in their
+digests; a channel no reader had read starts at its activation. The old digests stay readable on the bot's Messaging page link (`GET /api/v2/messaging/bots/{bot}/slack-digests/{id}`).
 
 ## Replies back to Slack
 
@@ -330,7 +342,8 @@ a read channel's message stored and carried into its thread, its active readers 
 the hourly bot digest (a paused one waits), nothing posted back, a reply in a bot's thread routed
 at once, the channel copy of a mention routed once, and message automations hearing a read
 channel but not a two-way linked one. `backend/tests/test_slack_threads.py` covers the read-only
-link itself and `backend/tests/test_slack_channels.py` the list, its readers and the upgrade.
+link itself (a reply in each reader's digest, apps' posts, a sender Slack cannot look up yet, catch-up, and
+the unread backlog across the upgrade) and `backend/tests/test_slack_channels.py` the list, its readers and the upgrade.
 Nothing live is called.
 `backend/tests/test_slack_bots.py` covers the bots' routes: every gate, the 503s, history and files through the
 request thread, a post in the outbox and its Slack Connect cancel, a DM, and Send anyway on a held post.

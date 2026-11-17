@@ -9,6 +9,7 @@ import json
 
 from backend import hubdb as H
 from backend import slack_channels as SC
+from backend import slack_threads as ST
 from backend.auth import Identity
 from backend.tests.helpers.api import get, post, setup_attempt  # noqa: F401  (fixture)
 from backend.tests.helpers.botops_parity import act
@@ -44,6 +45,9 @@ def test_an_owner_or_admin_lists_a_channel_and_a_member_may_read_the_list_but_no
     assert again["note"] == "Customer success", "a note that was not sent is kept"
     by_id = post(api, "slack/channels", {"channel": "C0000000010", "name": "#ideas"}, "ana-test")
     assert (by_id["id"], by_id["name"], by_id["channel"]) == ("C0000000010", "ideas", "#ideas")
+    # An rc.1 client still sends `digest_hours` (`tico slack channel add --digest-hours`); it is taken and ignored.
+    rc1 = {"channel": "C0000000010", "name": "#ideas", "readers": ["ops"], "post": True, "note": "", "digest_hours": 6}
+    assert post(api, "slack/channels", rc1, "ana-test")["readers"] == ["ops"]
 
     seen = get(api, "slack/channels", "cara-test")
     assert (
@@ -141,7 +145,9 @@ MIGRATION = "backend.migrations.20261117104315_slack_readers_to_links"
 def _old_shape(c):
     """The tables as the readers' pass left them: readers and digest_hours on each entry, a cursor table."""
     c.execute("DROP INDEX IF EXISTS slack_thread_links_ref")
+    c.execute("DROP INDEX IF EXISTS slack_thread_links_read_only")
     c.execute("ALTER TABLE slack_thread_links DROP COLUMN read_only")
+    c.execute("ALTER TABLE slack_thread_links DROP COLUMN read_ts")
     c.execute("ALTER TABLE slack_channels ADD COLUMN readers TEXT NOT NULL DEFAULT '[]'")
     c.execute("ALTER TABLE slack_channels ADD COLUMN digest_hours REAL NOT NULL DEFAULT 0")
     c.execute(
@@ -182,7 +188,8 @@ def test_the_migration_moves_each_channels_readers_to_a_read_only_link_and_runs_
         _listed(c, RELEASE, RELEASE, "release_notes", ["cto"], "human:ana")
         _listed(c, "#ideas", "", "ideas", ["legal"], "bot:cmo")
         _listed(c, QUIET, QUIET, "quiet", [], "human:ana")
-        c.execute("INSERT INTO slack_reads(channel,reader,last_ts) VALUES(?,?,?)", (MARKETING, "cmo", "1.0"))
+        for reader, last_ts in (("cmo", "1700000009.000100"), ("seo", "1700000003.000100"), ("cto", "1700000001.0")):
+            c.execute("INSERT INTO slack_reads(channel,reader,last_ts) VALUES(?,?,?)", (MARKETING, reader, last_ts))
         c.execute(
             "INSERT OR REPLACE INTO registry_metadata VALUES('owner',?)", (json.dumps({"email": "cara@acme.example"}),)
         )
@@ -192,7 +199,9 @@ def test_the_migration_moves_each_channels_readers_to_a_read_only_link_and_runs_
         with hub.read() as c:
             return (
                 rows(
-                    hub, "SELECT id,thread_id,channel_ref,state,read_only,linked_by FROM slack_thread_links ORDER BY id"
+                    hub,
+                    "SELECT id,thread_id,channel_ref,state,read_only,read_ts,linked_by FROM slack_thread_links "
+                    "ORDER BY id",
                 ),
                 rows(hub, "SELECT thread_id,actor,following,notify FROM thread_followers ORDER BY thread_id,actor"),
                 rows(hub, "SELECT thread_id,actor,role FROM thread_members ORDER BY thread_id,actor"),
@@ -205,6 +214,8 @@ def test_the_migration_moves_each_channels_readers_to_a_read_only_link_and_runs_
     marketing, ideas = by_ref[MARKETING], by_ref["#ideas"]
     assert (marketing["state"], marketing["read_only"], marketing["linked_by"]) == ("requested", 1, "human:ben")
     assert (ideas["read_only"], ideas["linked_by"]) == (1, "human:cara"), "a bot's change: the company owner"
+    assert marketing["read_ts"] == "1700000003.000100", "it reads from its readers' oldest cursor (not the CTO's)"
+    assert ideas["read_ts"] == "", "a channel with no id had no cursor: it reads from its activation"
     assert by_ref["#release_notes"]["read_only"] == 0
     readers = {(f["thread_id"], f["actor"]) for f in follows if f["following"] and f["notify"] == "digest"}
     assert readers == {
@@ -242,3 +253,11 @@ def test_the_list_reads_its_links_and_readers_by_index(hub):
     assert "SCAN l" not in plans[0], plans[0]
     assert "SEARCH thread_followers USING INDEX sqlite_autoindex_thread_followers_2 (thread_id=?)" in plans[1], plans[1]
     assert "SCAN thread_followers" not in plans[1], plans[1]
+
+
+def test_the_catch_up_pass_finds_its_read_only_links_by_index(hub):
+    """Pins the plan of the gateway's catch-up read (slack_threads.CATCH_UP_SQL, once a minute): the partial index on
+    read-only links, never a scan of every link."""
+    with hub.read() as c:
+        plan = " | ".join(r[3] for r in c.execute("EXPLAIN QUERY PLAN " + ST.CATCH_UP_SQL))
+    assert plan == "SEARCH slack_thread_links USING INDEX slack_thread_links_read_only (state=?)", plan

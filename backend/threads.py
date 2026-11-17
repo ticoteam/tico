@@ -1408,9 +1408,13 @@ def never_wakes(refs, bot):
 def system_line(message, posting=None):
     """Whether a message is a system line (D10): the keeper's (task news, notices), a roundup (refs.no_mentions), a
     follow-up nudge or card (quiet_notice), or a legacy writer's notice. It reaches whom it addresses, never the
-    followers."""
+    followers. Not a system line: another Slack app's post the keeper carries in (refs.slack.app), which reads as a
+    plain line from that app."""
     refs = _refs_of(message)
-    if _cause(message.get("sender_id")) == "keeper" or refs.get("no_mentions") or quiet_notice({"refs": refs}):
+    carried = isinstance(refs.get("slack"), dict) and bool(refs["slack"].get("app"))
+    if (_cause(message.get("sender_id")) == "keeper" and not carried) or refs.get("no_mentions"):
+        return True
+    if quiet_notice({"refs": refs}):
         return True
     return posting is None and message.get("kind") == "notice"
 

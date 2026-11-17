@@ -306,6 +306,8 @@ class ChannelAdd(BaseModel):
     readers: list[str] = Field(default_factory=list, max_length=200)
     post: bool | None = None
     note: str | None = Field(default=None, max_length=500)
+    # rc.1 clients send it (`tico slack channel add --digest-hours`); the hourly bot digest replaced it, so it is ignored.
+    digest_hours: float | None = Field(default=None, deprecated=True)
     operation_id: str | None = None
 
 

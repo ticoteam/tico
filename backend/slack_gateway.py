@@ -2307,12 +2307,13 @@ def main(argv=None, make_slack=None):
         )
         state = {"connected": None, "stamp": slack_app.stamp(store) if stored else None}
 
-        def heartbeat():
+        def heartbeat(gateway=gateway, state=state, store=store, verified=verified):  # this connection's own
             up = gateway.slack.connected() if hasattr(gateway.slack, "connected") else True
             if up != state["connected"]:
                 state["connected"] = up
                 if up:
                     slack_app.report(store, "connected", team=verified["team_id"])
+                    gateway.bridge.catch_up_soon()  # what the socket missed while it was down
                 else:
                     slack_app.report(store, "disconnected", "The Slack websocket dropped; reconnecting")
             if state["stamp"] is not None and slack_app.stamp(store) != state["stamp"]:

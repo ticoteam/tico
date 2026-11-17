@@ -8,8 +8,10 @@ hourly bot digest (`thread_bot_digest.sweep`) wakes it.
 For each listed channel with readers: the channel's open link is used when it has one (its thread gets the readers as
 followers); otherwise a members thread named for the channel is made, owned by the person who last changed the entry
 (else the company owner), with the readers as members and digest followers, and a `requested` read-only link the
-gateway then checks. Then `slack_channels.readers` and `digest_hours` and the `slack_reads` table go. `slack_digests`
-stays, read-only. Each step checks first, so a second run changes nothing.
+gateway then checks. The new link reads from the oldest place its readers had read to (`read_ts`, from their
+`slack_reads` cursors), so the link's catch-up carries in what they had not read yet and no reader loses a message.
+Then `slack_channels.readers` and `digest_hours` and the `slack_reads` table go. `slack_digests` stays, read-only. Each
+step checks first, so a second run changes nothing.
 """
 
 import json
@@ -58,6 +60,24 @@ def _owner(conn, updated_by):
     person = conn.execute("SELECT id FROM humans WHERE lower(email)=?", (email,)).fetchone() if email else None
     person = person or conn.execute("SELECT id FROM humans ORDER BY rowid LIMIT 1").fetchone()
     return "human:" + person[0] if person else ""
+
+
+def _read_to(conn, channel_id, bots):
+    """The oldest place the channel's readers had read to: where the link's catch-up starts. '' when none had read."""
+    if (
+        not channel_id
+        or not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='slack_reads'").fetchone()
+    ):
+        return ""
+    marks = ",".join("?" * len(bots))
+    cursors = [
+        str(r[0])
+        for r in conn.execute(
+            f"SELECT last_ts FROM slack_reads WHERE channel=? AND reader IN ({marks}) AND last_ts<>''",
+            (channel_id, *bots),
+        )
+    ]
+    return min(cursors, key=float) if cursors else ""
 
 
 def _open_link(conn, key, channel_id):
@@ -127,9 +147,16 @@ def _add_reader(conn, thread_id, bot, by, now):
 
 
 def up(conn):
-    if "read_only" not in _columns(conn, "slack_thread_links"):
+    links = _columns(conn, "slack_thread_links")
+    if "read_only" not in links:
         conn.execute("ALTER TABLE slack_thread_links ADD COLUMN read_only INTEGER NOT NULL DEFAULT 0")
+    if "read_ts" not in links:
+        # The Slack ts a read-only link has read to: its catch-up asks Slack for what came after ('' = its activation).
+        conn.execute("ALTER TABLE slack_thread_links ADD COLUMN read_ts TEXT NOT NULL DEFAULT ''")
     conn.execute("CREATE INDEX IF NOT EXISTS slack_thread_links_ref ON slack_thread_links(channel_ref, state)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS slack_thread_links_read_only ON slack_thread_links(state) WHERE read_only=1"
+    )
     columns = _columns(conn, "slack_channels")
     if "readers" in columns:
         now = _now()
@@ -146,8 +173,9 @@ def up(conn):
                 thread_id = _new_thread(conn, owner, "#" + (name or channel_id), now)
                 conn.execute(
                     "INSERT INTO slack_thread_links (id,thread_id,channel_ref,channel_name,audience,state,history_state,"
-                    "linked_by,read_only,created_at,updated_at) VALUES (?,?,?,?,'members','requested','off',?,1,?,?)",
-                    (_id(), thread_id, key, name, owner, now, now),
+                    "linked_by,read_only,read_ts,created_at,updated_at) "
+                    "VALUES (?,?,?,?,'members','requested','off',?,1,?,?,?)",
+                    (_id(), thread_id, key, name, owner, _read_to(conn, channel_id, bots), now, now),
                 )
             for bot in bots:
                 _add_reader(conn, thread_id, bot, owner, now)
