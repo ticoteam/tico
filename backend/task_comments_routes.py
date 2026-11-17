@@ -11,6 +11,7 @@ from . import org_rule_check
 from . import task_privacy as privacy
 from . import teammate_access
 from . import visuals
+from .api_contract import api_v2
 
 
 def register(
@@ -188,7 +189,22 @@ def register(
             c, bot, replay["task"], M.TaskComment.model_validate(replay["body"]), ingest, org_rule_check.decided(gate)
         )
 
-    @app.post("/api/v2/tasks/{tid}/comments")
+    # Before POST: the API document lists a path's methods in the order they are registered.
+    @app.get(
+        "/api/v2/tasks/{tid}/comments",
+        **api_v2("Tasks", "listTaskComments", "Comments and questions with their answers", "TaskComments"),
+    )
+    def task_comments(request: Request, tid: str):
+        with store.read() as c:
+            task_id = auth.resolve_task(c, request.state.identity, tid)
+            auth.task(c, request.state.identity, task_id)
+            return {
+                "comments": visual_view(
+                    c, request.state.identity, H.task_comments(c, task_id, actor=privacy.actor(request.state.identity))
+                )
+            }
+
+    @app.post("/api/v2/tasks/{tid}/comments", **api_v2("Tasks", "commentOnTask", "Comment on a task", "CommentResult"))
     def task_comment(request: Request, tid: str, body: M.TaskComment):
         """A comment on a task. `delivery` says how it reaches the task's bot (backend/delivery.py): steer into its
         running turn, queue right after it, defer to its next turn on the task (at the latest `defer_for`, 24h), or
@@ -216,17 +232,6 @@ def register(
         if body.attachments:
             app.state.file_metadata.wake.set()  # a chat file shared here is a new task copy: preview it now
         return result
-
-    @app.get("/api/v2/tasks/{tid}/comments")
-    def task_comments(request: Request, tid: str):
-        with store.read() as c:
-            task_id = auth.resolve_task(c, request.state.identity, tid)
-            auth.task(c, request.state.identity, task_id)
-            return {
-                "comments": visual_view(
-                    c, request.state.identity, H.task_comments(c, task_id, actor=privacy.actor(request.state.identity))
-                )
-            }
 
     @app.get("/api/v2/tasks/{tid}/tree")
     def task_tree(request: Request, tid: str):

@@ -46,6 +46,7 @@ from . import models as M
 from . import people as P
 from . import read_cache
 from .store import H, Problem, encode
+from .api_contract import api_v2
 
 SIZES = ("small", "medium", "large")
 PLACE_MAX = 60  # pins at one place: a page of cards, not an archive
@@ -1981,7 +1982,15 @@ def install(app, store, auth, mutate, settings, task_view):
         auth.domain(who)
         return Ctx(c, auth, who, settings, task_view, getattr(app.state, "pages", None), month)
 
-    @app.get("/api/v2/places/{place}")
+    @app.get(
+        "/api/v2/places/{place}",
+        **api_v2(
+            "Cards and pins",
+            "getPlace",
+            "A place's pins in order (dashboard, growth, team:<group>, bot:<id>, task:<id>, person:me for Company), each card with what it shows the caller; unreadable pages are left out. growth takes `month` (YYYY-MM) and answers `month` and `months`, the picker's choices",
+            "Place",
+        ),
+    )
     def place_show(request: Request, place: str, month: str | None = None):
         """A place's pins in order, each card with what it shows the caller; pages the caller may not read are left
         out. A Dashboard, team page or Company page nobody saved shows its default cards, pins without ids (`saved`
@@ -1996,7 +2005,15 @@ def install(app, store, auth, mutate, settings, task_view):
             return attach(store, auth, request.state.identity, out, seen=True)
         return out
 
-    @app.put("/api/v2/places/{place}")
+    @app.put(
+        "/api/v2/places/{place}",
+        **api_v2(
+            "Cards and pins",
+            "savePlace",
+            "Save a Dashboard, team page or Company page (its default cards become pins); a team page's audience sets its group's Read",
+            "Place",
+        ),
+    )
     def place_save(request: Request, place: str, body: PlaceSave):
         """Save a Dashboard, team page or Company page (its default cards become real pins) and, for a team page, who
         sees it."""
@@ -2007,7 +2024,10 @@ def install(app, store, auth, mutate, settings, task_view):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/places/{place}/order")
+    @app.post(
+        "/api/v2/places/{place}/order",
+        **api_v2("Cards and pins", "orderPlace", "Put every pin at a place in this order", "Place"),
+    )
     def place_order(request: Request, place: str, body: PlaceOrder):
         """Put every pin at the place in this order."""
 
@@ -2020,7 +2040,15 @@ def install(app, store, auth, mutate, settings, task_view):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/pins")
+    @app.post(
+        "/api/v2/pins",
+        **api_v2(
+            "Cards and pins",
+            "addPin",
+            "Pin page:<file id> or card:<id> at a place: a bot its own, to its sidebar or task; any person who may read a task there, without widening page access; a person who arranges the Dashboard or a team page there",
+            "Place",
+        ),
+    )
     def pin_add(request: Request, body: PinAdd):
         """Pin a page or a card at a place (the pinning rule: module docstring)."""
 
@@ -2031,7 +2059,7 @@ def install(app, store, auth, mutate, settings, task_view):
 
         return mutate(request, body, work)
 
-    @app.patch("/api/v2/pins/{pid}")
+    @app.patch("/api/v2/pins/{pid}", **api_v2("Cards and pins", "updatePin", "Resize or move a pin", "Place"))
     def pin_edit(request: Request, pid: str, body: PinEdit):
         def work(c):
             ctx = context(c, request)
@@ -2040,7 +2068,14 @@ def install(app, store, auth, mutate, settings, task_view):
 
         return mutate(request, body, work)
 
-    @app.delete("/api/v2/pins/{pid}")
+    @app.delete(
+        "/api/v2/pins/{pid}",
+        **api_v2(
+            "Cards and pins",
+            "removePin",
+            "Unpin; on a task, whoever pinned it, its owner or requester, or the org owner; a card pinned nowhere else goes with it",
+        ),
+    )
     def pin_remove(request: Request, pid: str):
         """Unpin. A card pinned nowhere else goes with its pin."""
 
@@ -2049,7 +2084,15 @@ def install(app, store, auth, mutate, settings, task_view):
 
         return mutate(request, M.Empty(), work)
 
-    @app.get("/api/v2/cards")
+    @app.get(
+        "/api/v2/cards",
+        **api_v2(
+            "Cards and pins",
+            "listCards",
+            "Cards the caller made or sees pinned, with their data; `ids` reads up to 50",
+            "CardList",
+        ),
+    )
     def cards_list(request: Request, ids: str = "", limit: int = 50, cursor: str = ""):
         """Cards the caller made or sees pinned, newest first, each with what it shows them. `ids` reads up to 50."""
         with store.read_transaction() as c:
@@ -2074,14 +2117,23 @@ def install(app, store, auth, mutate, settings, task_view):
                     last = row
             return {"cards": out, "next": None}
 
-    @app.get("/api/v2/cards/choices")
+    @app.get(
+        "/api/v2/cards/choices",
+        **api_v2(
+            "Cards and pins",
+            "getCardChoices",
+            "Card templates and their settings, the teams, the KPIs and pages the caller may pick, the Growth page's metrics and channels; `place=growth` adds its templates",
+        ),
+    )
     def cards_choices(request: Request, team: str = "", place: str = ""):
         """The card templates and their settings, the teams, and the KPIs and pages the caller may pick. `place`
         (growth, or person:me) adds that place's own templates."""
         with store.read_transaction() as c:
             return choices(context(c, request), team, place)
 
-    @app.post("/api/v2/cards")
+    @app.post(
+        "/api/v2/cards", **api_v2("Cards and pins", "addCard", "A built-in card, pinned at `place` in the same write")
+    )
     def card_add(request: Request, body: CardAdd):
         """A new card; with `place` it is pinned there in the same write (who may arrange the place)."""
 
@@ -2102,14 +2154,14 @@ def install(app, store, auth, mutate, settings, task_view):
 
         return mutate(request, body, work)
 
-    @app.patch("/api/v2/cards/{cid}")
+    @app.patch("/api/v2/cards/{cid}", **api_v2("Cards and pins", "updateCard", "Change a card's heading or settings"))
     def card_edit(request: Request, cid: str, body: CardEdit):
         def work(c):
             return {"card": edit_card(context(c, request), cid, body.title, body.settings)}
 
         return mutate(request, body, work)
 
-    @app.delete("/api/v2/cards/{cid}")
+    @app.delete("/api/v2/cards/{cid}", **api_v2("Cards and pins", "removeCard", "Remove a card and every pin of it"))
     def card_remove(request: Request, cid: str):
         """Remove a card and every pin of it."""
 

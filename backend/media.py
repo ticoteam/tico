@@ -26,6 +26,7 @@ from . import rooms
 from . import visuals
 from .store import H, P, Problem, encode, digest as request_digest
 from .views import default_bot, human_only, roster
+from .api_contract import api_v2
 
 
 class Note(M.Contract):
@@ -767,13 +768,24 @@ def install_media(
 
         return await asyncio.to_thread(write, request, body, uploads, work)
 
-    @app.get("/api/v2/tasks/{tid}/files")
+    @app.get(
+        "/api/v2/tasks/{tid}/files", **api_v2("Tasks", "listTaskFiles", "Files and versions on a task", "TaskFileList")
+    )
     def task_files(request: Request, tid: str):
         with store.read() as c:
             task_id = auth.resolve_task(c, request.state.identity, tid)
             return files.task_listing(c, request.state.identity, task_id)
 
-    @app.post("/api/v2/tasks/{tid}/files", openapi_extra=task_file_contract())
+    @app.post(
+        "/api/v2/tasks/{tid}/files",
+        **api_v2(
+            "Tasks",
+            "attachTaskFile",
+            "Attach a file; the same name adds a version",
+            "TaskFileResult",
+            openapi_extra=task_file_contract(),
+        ),
+    )
     async def task_attach(request: Request, tid: str):
         who = request.state.identity
         from .files import edit_file_version, file_added

@@ -671,7 +671,15 @@ def install(app, store, auth, mutate, rule_check):
         with store.transaction() as c:
             return threads.dm(c, v, [peer])
 
-    @app.get("/api/v2/threads/{thread_id}")
+    @app.get(
+        "/api/v2/threads/{thread_id}",
+        **api_v2(
+            "Threads",
+            "getThread",
+            "A thread as the viewer sees it: its unread count, read mark, what they may do and its first page of members",
+            "ThreadView",
+        ),
+    )
     def get_thread(request: Request, thread_id: str):
         """The thread view, with its first page of members under `members` (the members route's shape, capped)."""
         v = threads.viewer(auth, request.state.identity)
@@ -852,7 +860,31 @@ def install(app, store, auth, mutate, rule_check):
 
         return mutate(request, body, work)
 
-    @app.patch("/api/v2/threads/{thread_id}")
+    # Before PATCH: the API document lists a path's methods in the order they are registered.
+    @app.delete(
+        "/api/v2/threads/{thread_id}",
+        **api_v2(
+            "Threads",
+            "deleteThread",
+            "Delete a thread the viewer manages, when every message in it is deleted and no one else is in it; it leaves every list and reads as not found. Otherwise 409 `not_deletable` with the reason, and nothing is removed",
+            "ThreadDeleted",
+        ),
+    )
+    def delete_thread(request: Request, thread_id: str):
+        """Delete a thread whose messages are all deleted and that no one else is in. Refused with a plain reason (409)
+        otherwise. It leaves every list and reads as not found."""
+        who = request.state.identity
+        return mutate(request, Nothing(), lambda c: threads.delete(c, threads.viewer(auth, who), thread_id))
+
+    @app.patch(
+        "/api/v2/threads/{thread_id}",
+        **api_v2(
+            "Threads",
+            "updateThread",
+            "Rename, archive or unarchive a thread, change who it is for, set how many days a root keeps its messages (`retention_days`, null for good), or pin a root for everyone (`pinned_for_everyone`; never a 1:1 DM, a Home, a task's or a meeting's thread); its managers only",
+            "ThreadView",
+        ),
+    )
     def patch_thread(request: Request, thread_id: str, body: ThreadPatch):
         who = request.state.identity
 
@@ -1088,13 +1120,6 @@ def install(app, store, auth, mutate, rule_check):
         """Unpin a root thread for me, over a pin for everyone too. The answer is the thread view."""
         who = request.state.identity
         return mutate(request, Nothing(), lambda c: thread_rail.unpin(c, threads.viewer(auth, who), thread_id))
-
-    @app.delete("/api/v2/threads/{thread_id}")
-    def delete_thread(request: Request, thread_id: str):
-        """Delete a thread whose messages are all deleted and that no one else is in. Refused with a plain reason (409)
-        otherwise. It leaves every list and reads as not found."""
-        who = request.state.identity
-        return mutate(request, Nothing(), lambda c: threads.delete(c, threads.viewer(auth, who), thread_id))
 
     @app.delete(
         "/api/v2/threads/{thread_id}/follow",

@@ -27,6 +27,7 @@ from . import models as M
 from .models import Contract
 from .store import H, Problem
 from . import bot_settings as BS
+from .api_contract import api_v2
 
 log = logging.getLogger("tico.maintenance_health")
 
@@ -1252,7 +1253,14 @@ def findings_view(c):
 
 
 def install(app, store, auth, mutate, settings):
-    @app.get("/api/v2/health/findings")
+    @app.get(
+        "/api/v2/health/findings",
+        **api_v2(
+            "Health",
+            "getHealthFindings",
+            "What Check health found on this install: each open problem with its count, last seen time and Tico-bug report, plus botops (whether BotOps is there to take findings) and reports_without_asking (the team rule)",
+        ),
+    )
     def health_findings(request: Request):
         who = request.state.identity
         if who.role not in ("owner", "human") and who.actor != "bot:" + BOTOPS:
@@ -1262,7 +1270,14 @@ def install(app, store, auth, mutate, settings):
                 raise Problem("forbidden", "Owners and admins read the health findings", 403)
             return findings_view(c)
 
-    @app.post("/api/v2/health/findings/{key}/report")
+    @app.post(
+        "/api/v2/health/findings/{key}/report",
+        **api_v2(
+            "Health",
+            "reportHealthFinding",
+            "People and BotOps: report a finding (key or signature) as a Tico bug: one ticket per problem with the redacted diagnostics, a message on it when it comes back, or a support approval when the team rule is off",
+        ),
+    )
     def report_finding(request: Request, key: str, body: M.Empty):
         who = request.state.identity
         if who.actor != "bot:" + BOTOPS and who.role != "owner":

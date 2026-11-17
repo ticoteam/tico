@@ -127,6 +127,7 @@ from . import (
     fleet_runner_routes,
     ui_bundle_routes,
 )
+from .api_contract import api_v2
 
 
 # Gateway image calls in flight per process (each holds a thread up to 130 s); more answer 429 with Retry-After.
@@ -2021,7 +2022,7 @@ def create_app(settings=None):
         with store.read() as c:
             c.execute("SELECT 1 FROM schema_migrations").fetchone()
 
-    @app.get("/healthz")
+    @app.get("/healthz", **api_v2("Health", "getLiveness", "Is the server up (no sign-in)"))
     async def health():
         await anyio.to_thread.run_sync(health_check, limiter=health_threads)
         return {
@@ -2032,7 +2033,7 @@ def create_app(settings=None):
             "environment_id": settings.environment_id,
         }
 
-    @app.get("/api/v2/config")
+    @app.get("/api/v2/config", **api_v2("Team", "getConfig", "Team and app names, version, setup state", "Config"))
     def environment(request: Request):
         """Everything a client needs to name this environment and reach its runner."""
         from .onboarding import config_view
@@ -2295,7 +2296,7 @@ def create_app(settings=None):
 
         return teammate_access.can(c, who, "manage", "human:" + pid, auth=auth)
 
-    @app.post("/api/v2/humans/{pid}")
+    @app.post("/api/v2/humans/{pid}", **api_v2("Team chart", "updatePerson", "Edit a person's profile or reports_to"))
     def person_update(request: Request, pid: str, body: M.PersonUpdate):
         caller = request.state.identity
 
@@ -2761,7 +2762,9 @@ def create_app(settings=None):
         )
         return rc, (None if org_rule_check.holds(rc) or retry else message_ingest(who, body))
 
-    @app.post("/api/v2/messages")
+    @app.post(
+        "/api/v2/messages", **api_v2("Conversations", "sendMessage", "Send a message to a person or bot", "Message")
+    )
     def say(request: Request, body: M.MessageCreate):
         who = request.state.identity
         rc, ingest = message_checks(who, body, retry=saved_retry(request, who))
@@ -2854,7 +2857,7 @@ def create_app(settings=None):
 
         return mutate(request, body, work)
 
-    @app.get("/api/v2/messages/{mid}")
+    @app.get("/api/v2/messages/{mid}", **api_v2("Conversations", "getMessage", "One message", "Message"))
     def message(request: Request, mid: str):
         with store.read() as c:
             row = H.message(c, mid)
@@ -2873,7 +2876,10 @@ def create_app(settings=None):
             row["sender_can_approve_send"] = message_sender_can_approve_send(c, auth, row)
             return visual_view(c, who, [row])[0]
 
-    @app.post("/api/v2/chat/{bot}")
+    @app.post(
+        "/api/v2/chat/{bot}",
+        **api_v2("Conversations", "chatWithBot", "Send a message to a bot (opens the chat if needed)", "ChatResult"),
+    )
     def chat(request: Request, bot: str, body: M.ChatCreate):
         who = request.state.identity
         with store.read() as c:
@@ -3031,7 +3037,15 @@ def create_app(settings=None):
         app, auth, mutate, rule_check, rule_target, store, task_filters, task_idents, visible_tasks
     )
 
-    @app.get("/api/v2/tasks/{tid}")
+    @app.get(
+        "/api/v2/tasks/{tid}",
+        **api_v2(
+            "Tasks",
+            "getTask",
+            "A task with its history, comments and messages: where it is (pipeline, stage), whose turn it is, what it takes to leave its stage (to_leave, each requirement with what the reader may do), the next stage and the tasks it filed",
+            "TaskDetail",
+        ),
+    )
     def task(request: Request, tid: str):
         with store.read() as c:
             tid = auth.resolve_task(c, request.state.identity, tid)
@@ -3773,7 +3787,7 @@ def create_app(settings=None):
         with store.read() as c:
             return store.saved(c, who, request.url.path, request.headers.get("idempotency-key"))
 
-    @app.post("/api/v2/tasks")
+    @app.post("/api/v2/tasks", **api_v2("Tasks", "createTask", "Create a task", "TaskResult"))
     def create_task(request: Request, body: M.TaskCreate):
         who = request.state.identity
         if who.via == "botops" and who.role == "bot" and H.is_bot(who.task_actor) and who.task_actor != who.actor:
@@ -3817,7 +3831,7 @@ def create_app(settings=None):
             c, bot, M.TaskCreate.model_validate(replay["body"]), ingest=ingest, rule=org_rule_check.decided(gate)
         )
 
-    @app.post("/api/v2/tasks/dry-run")
+    @app.post("/api/v2/tasks/dry-run", **api_v2("Tasks", "checkTask", "The checks a create would fail; writes nothing"))
     def task_dry_run(request: Request, body: M.TaskCreate):
         """The checks a create would fail, nothing written and no refusal counted."""
         from .mcp import task_dry_run as check
@@ -3895,7 +3909,15 @@ def create_app(settings=None):
             **org_rule_check.answer(rule_gate),
         }
 
-    @app.post("/api/v2/tasks/{tid}")
+    @app.post(
+        "/api/v2/tasks/{tid}",
+        **api_v2(
+            "Tasks",
+            "updateTask",
+            "Edit a task's fields (title, body, due, labels, privacy, goal, note). A bot sends the version it was shown (409 task_changed otherwise); a person may leave it out. Where it is and who has it change by done, move and owner",
+            "TaskResult",
+        ),
+    )
     def update_task(request: Request, tid: str, body: M.TaskUpdate):
         caller = request.state.identity
         rc = rule_update_check(caller, tid, body)
@@ -3971,7 +3993,14 @@ def create_app(settings=None):
         app, auth, mover, mutate, rule_check, rule_task_audience, store, task_followers_seen, task_place, visual_view
     )
 
-    @app.post("/api/v2/tasks/{tid}/delete")
+    @app.post(
+        "/api/v2/tasks/{tid}/delete",
+        **api_v2(
+            "Tasks",
+            "deleteTask",
+            "Delete a task made by mistake, with its conversation, to the trash: its human requester or a mover, signed in as themselves, whatever bots did on it: that work stays in place, hidden until a restore",
+        ),
+    )
     def task_delete(request: Request, tid: str, body: M.Empty):
         """A person deletes a task: its human requester, or anyone who may move any task. Bots and
         delegated sessions close instead. Closing reads as finished work, so a person can always delete,
