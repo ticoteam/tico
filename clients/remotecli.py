@@ -52,11 +52,6 @@ def _contacts_args(args):
     return args
 
 
-# `tico bot` commands that are one tool each, run through via_tool: anything else under `tico bot` falls to bots(),
-# whose last branch is `bot create` and reads args.template.
-BOT_TOOLS = ("bot turns-at-once", "bot browser-exit", "bot app-view", "bot app-shot")
-
-
 def unwrap(result):
     """A write's task as the CLI prints it: the task alone when the answer is only `{"task": ...}`."""
     return result["task"] if isinstance(result, dict) and set(result) == {"task"} else result
@@ -73,10 +68,6 @@ def via_tool(client, args, **more):
     }
     if getattr(args, "visual", None):
         fields["visuals"] = visuals_from_args(args)
-    if args.fn == "bot turns-at-once" and hasattr(args, "limit"):
-        fields["limit"] = args.limit  # explicit null restores the default; omission only reads
-    if args.fn == "bot browser-exit" and hasattr(args, "computer"):
-        fields["computer"] = args.computer  # explicit null is the bot's own internet; omission only reads
     fields["operation_id"] = fields.get("operation_id") or os.environ.get("HUB_OPERATION_ID")
     fields.update(more)
     return hubtools.BY_NAME[tool_name(args.fn)]["fn"](client, fields)
@@ -403,9 +394,7 @@ def run(args, who=None):
         return calendar_command(client, args)
     if (spec := cli_spec.of(args)) is not None:  # a command declared as a spec (clients/cli_spec.py)
         return spec.call(client, args)
-    from clients.commands.org import COMMANDS as ORG_COMMANDS
-
-    if fn in ORG_COMMANDS or fn in hubcli_pipelines.COMMANDS:  # `tico bot list` and the like; `tico task request` ...
+    if fn in hubcli_pipelines.COMMANDS:  # `tico task request` and the other pipeline leaves
         return via_tool(client, args)
 
     from clients.commands import connections as hubtools_connections
@@ -473,14 +462,13 @@ def run(args, who=None):
         return integrations(client, args)
     if fn in ("bot copy", "bot update-from-original", "bot suggest-to-original", "skill copy", "skill submit"):
         return via_tool(client, args)  # they work in this computer's workspace (clients/botcopy.py)
-    if fn in BOT_TOOLS:
-        return via_tool(client, args)
+    if fn == "bot app-shot":
+        return via_tool(client, args)  # it writes the PNG on this computer
     if fn == "tool report":
         return via_tool(client, args, tools=json.loads(args.tools))
-    if args.cmd == "template" or (args.cmd == "bot" and args.sub not in ("status", "recent", "repo-create")):
+    if args.cmd in ("template", "bot"):  # `bot create`, `check` and `model`; the other bot leaves are specs
         return bots(client, args)
     if fn in (
-        "bot repo-create",
         "group list",
         "group update",
         "group delete",
@@ -509,7 +497,6 @@ def run(args, who=None):
         "run list",
         "message list",
         "message mark-read",
-        "bot recent",
         "agent pair show",
         "agent pair approve",
         "agent pair decline",
@@ -791,13 +778,6 @@ def run(args, who=None):
         )
     if cmd == "automation":
         return automation(client, args)
-    if fn.startswith("bot status"):
-        if fn == "bot status set":
-            bot = args.bot or me()["actor"].split(":", 1)[-1]
-            return post(f"bots/{bot}/status", {"state": args.state, "focus": args.focus, "task_id": args.task})
-        if fn == "bot status history":
-            return client.get(f"bots/{args.bot}/history", since=args.since)
-        return [b for b in client.get("bots") if not args.team or b["team"] == args.team]
     if cmd == "calendar":
         from clients import hubtools
 
@@ -873,8 +853,8 @@ def botops_tools(client, args):
 
 # ----------------------------------------------------------------------------- bots
 def bots(client, args):
-    """`tico template list`, `tico bot create|check` and the bot commands that act as the requester: how BotOps sets the
-    chosen bots up.
+    """`tico template list`, `tico bot create|check` and `tico bot model`: how BotOps sets the chosen bots up. The other
+    `tico bot` commands are specs (BOT in clients/commands/bots.py).
 
     The materialization is `clients/catalog.py`, which needs no network. What comes from the
     server is this company's names, the onboarding answers everybody's `knowledge/company.md` is
@@ -890,88 +870,16 @@ def bots(client, args):
             return client.get("templates")["cards"]
         except (APIError, KeyError, TypeError):
             return catalog.cards()
-    if args.fn == "bot branch":
-        from clients import hubtools
-
-        fields = {"bot": args.bot}
-        if args.computer:
-            listing = hubtools._as_person(client).get("computers")
-            rows = listing.get("computers", []) if isinstance(listing, dict) else listing
-            me = hubtools._as_person(client).get("me")
-            person = str(me.get("actor") or me.get("id") or "").removeprefix("human:")
-            matches = [
-                row
-                for row in rows
-                if not row.get("revoked_at")
-                and row.get("owner_id") == person
-                and args.computer in (row.get("id"), row.get("label"))
-            ]
-            if len(matches) != 1:
-                raise APIError("computer", "Choose one of your computers by its id or unique label")
-            fields["runner_id"] = matches[0]["id"]
-        return hubtools.bot_branch(client, fields)
-    if args.fn == "bot update":
-        # The server checks the change as the person who sent the cited message (backend/app.py).
-        from clients import hubtools
-
-        fields = {
-            k: v
-            for k, v in (
-                ("slug", args.slug),
-                ("reports_to", args.reports_to),
-                ("display_name", args.display_name),
-                ("description", args.description),
-                ("status", args.status),
-                ("repo", args.repo),
-                ("on_behalf_of", args.on_behalf_of),
-                ("shared", args.shared),
-                ("session", args.session),
-                ("subtask_session", getattr(args, "subtask_session", None)),
-                ("task_goal", getattr(args, "task_goal", None)),
-                ("review_model", getattr(args, "review_model", None)),
-                ("capture_stream", getattr(args, "capture_stream", None)),
-                ("new_slug", getattr(args, "new_slug", None)),
-            )
-            if v is not None
-        }
-        if getattr(args, "subscribe_updates", None) is not None:
-            picked = [p.strip() for p in args.subscribe_updates.split(",") if p.strip() and p.strip() != "none"]
-            fields["update_subscriptions"] = picked
-        try:
-            return hubtools.BY_NAME["tico_bot_update"]["fn"](client, fields)
-        except ValueError as exc:
-            raise APIError("not_found", str(exc)) from None
-    if args.fn in (
-        "bot show",
-        "bot access",
-        "bot mail",
-        "bot owners",
-        "bot setup-done",
-        "bot ready",
-        "bot place",
-        "bot go-live",
-        "bot model",
-        "bot pause",
-        "bot resume",
-        "bot scope",
-        "bot restore",
-        "bot archive",
-        "bot budget",
-        "bot release",
-        "bot profile",
-        "bot task-model",
-    ) or (args.fn == "bot create" and args.record_only):
+    if args.fn == "bot model" or (args.fn == "bot create" and args.record_only):
         from clients import hubtools
 
         fields = {
             k: v
             for k, v in vars(args).items()
-            if k not in ("cmd", "sub", "subsub", "fn", "no_setup", "record_only") and v not in (None, [])
+            if k not in ("cmd", "sub", "subsub", "fn", "record_only") and v not in (None, [])
         }
         if args.fn == "bot create" and args.record_only:
             fields["build"] = False
-        if getattr(args, "no_setup", False):
-            fields["setup"] = False
         fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
         return hubtools.BY_NAME[tool_name(args.fn)]["fn"](client, fields)
     if args.fn == "bot check":
