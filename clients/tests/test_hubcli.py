@@ -975,7 +975,6 @@ def test_create_sends_its_pipeline_and_parent_the_same_from_the_cli_and_mcp(monk
 
 
 def test_turns_at_once_cli_preserves_explicit_unlimited(monkeypatch):
-    from clients import remotecli
     from clients.hubtools import BY_NAME
 
     sent = []
@@ -985,7 +984,8 @@ def test_turns_at_once_cli_preserves_explicit_unlimited(monkeypatch):
         ['bot', 'turns-at-once', 'ops', 'unlimited'],
         ['bot', 'turns-at-once', 'ops', '3'],
     ):
-        remotecli.via_tool(None, hubcli.parser().parse_args(argv))
+        args = hubcli.parser().parse_args(argv)
+        cli_spec.of(args).call(None, args)
     assert 'limit' not in sent[0]
     assert [row['limit'] for row in sent[1:]] == [None, 3]
 
