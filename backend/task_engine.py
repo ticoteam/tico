@@ -2455,9 +2455,9 @@ def shows_a_file(conn: "sqlite3.Connection", by: str, shows: object) -> bool:
     """Whether what an OK shows names at least one page (`page:<id>`, `page:<id>@<version>`) or file version
     (`file:<id>@<version>`) that is there and that `by` may read: its page audience, and the task it lives on. A link or
     any other text approves nothing Tico holds."""
-    from . import task_privacy
+    from . import task_privacy as _privacy
 
-    H = _h()
+    H, privacy = _h(), cast(Any, _privacy)
     for ref in cast("list[object]", shows) if isinstance(shows, list) else [shows] if shows else []:
         found = SHOWN.fullmatch(str(ref).strip())
         if not found:
@@ -2471,7 +2471,7 @@ def shows_a_file(conn: "sqlite3.Connection", by: str, shows: object) -> bool:
             continue
         if row["task_id"] and not H.task_private_readable(conn, by, H.task(conn, row["task_id"])):
             continue
-        if task_privacy.page_content_readable(conn, by, [f"page:{fid}"]):
+        if privacy.page_content_readable(conn, by, [f"page:{fid}"]):
             return True
     return False
 
