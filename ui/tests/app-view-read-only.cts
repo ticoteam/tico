@@ -1,10 +1,10 @@
 // A bot's read-only view of the app (backend/app_view.py) on a real hub (ui/tests/support/real-hub.cts). The bot's run
 // opens a view and the page is signed in with the view's token, as `tico bot app-shot` does. On Tasks, a task window,
-// Company › Mine, Company › Dashboard and a thread, every visible, enabled button and field is a read on this test's
+// Company and a thread, every visible, enabled button and field is a read on this test's
 // allowlist: New task, Follow, the page +, answer buttons and the message box do not show, and the box is a grey
 // "Read-only view" line. The task window shows no greyed write either (👍 👎, the + and × on Sessions, Edit), and no
 // heading with nothing under it. Tasks reads the bot's name and its open tasks by stage, with a line that Needs you is a
-// person's list, and the phone bar has no Flow (Threads keeps its slot); Company › Mine is one card of the bot's tasks. A Company place that fails to load says "This page
+// person's list, and the phone bar has no Flow (Threads keeps its slot); Company is one card of the bot's tasks. A Company place that fails to load says "This page
 // couldn't load." with Try again, never the server's text. A person sees New task and the message box as before.
 // The bot's list keeps up through the refresh (an edit, a new task, one closed or given away) and pages with More, and C
 // opens no New task dialog in a view.
@@ -240,19 +240,13 @@ const ready = (page: Page) => page.waitForFunction(() => {
     await page.locator('.tmodal[open] [data-modal-close]').click();
     await page.locator('.tmodal[open]').waitFor({state: 'detached', timeout: t(15000)});
 
-    // Company › Mine: one card, the bot's tasks, and no error.
+    // Company: one card, the bot's tasks, and no error.
     await go(page, '#/home');
     await page.locator('#dash-grid', {hasText: OWN}).waitFor({timeout: t(15000)});
     const grid = await page.locator('#dash-grid').innerText();
     assert.ok(grid.includes(`${name}'s tasks`) && !/No such place/.test(grid), grid);
-    assert.deepEqual(await writesShown(page), [], 'Company › Mine offers nothing that writes');
-    await headerMenu(page, 'Company › Mine');
-
-    // Company › Dashboard.
-    await go(page, '#/overview');
-    await page.locator('#dash-grid .dash-pin, #dash-grid .dash-failed, #dash-grid .empty').first().waitFor({timeout: t(15000)});
-    assert.deepEqual(await writesShown(page), [], 'the Dashboard offers nothing that writes');
-    await headerMenu(page, 'the Dashboard');
+    assert.deepEqual(await writesShown(page), [], 'Company offers nothing that writes');
+    await headerMenu(page, 'Company');
 
     // A thread: the bot's own DM page.
     await go(page, `#/bot/${BOT}`);
@@ -303,13 +297,13 @@ const ready = (page: Page) => page.waitForFunction(() => {
     // New task sits on the header's row on a computer (a first-run tour covers the page, so it is read, not clicked).
     await person.locator('#task-new').waitFor({state: 'attached', timeout: t(15000)});
     assert.equal(await person.locator('#task-new').evaluate(b => getComputedStyle(b).display !== 'none' && !(b as HTMLButtonElement).disabled), true, 'a person keeps New task');
-    await person.route('**/api/v2/places/dashboard*', r => r.fulfill({status: 404, contentType: 'application/json',
+    await person.route('**/api/v2/places/person*', r => r.fulfill({status: 404, contentType: 'application/json',
       body: JSON.stringify({error: {code: 'not_found', message: 'No such place: places are dashboard, team:<group>'}})}));
-    await go(person, '#/overview');
+    await go(person, '#/home');
     const failed = person.locator('#dash-grid .dash-failed');
     await failed.waitFor({timeout: t(15000)});
     assert.match(await failed.innerText(), /^This page couldn't load\.\s*Try again$/);
-    await person.unroute('**/api/v2/places/dashboard*');
+    await person.unroute('**/api/v2/places/person*');
     await failed.getByRole('button', {name: 'Try again'}).evaluate(b => (b as HTMLButtonElement).click());
     await failed.waitFor({state: 'detached', timeout: t(15000)});
     await person.context().close();

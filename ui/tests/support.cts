@@ -528,10 +528,10 @@ declare function talkToUs(report: unknown): void;
     assert.deepEqual(v.errors, []);
     await v.ctx.close();
 
-    // ---- An old #/help link: Overview with the chat open over it.
+    // ---- An old #/help link: Company with the chat open over it.
     v = await visit({hash: '#/help'});
     await v.page.locator('#support-pop[open] [name=message]').waitFor();
-    assert.equal(await v.page.evaluate(() => location.hash), '#/overview');
+    assert.equal(await v.page.evaluate(() => location.hash), '#/home');
     await v.page.waitForFunction(() => document.activeElement?.id === 'support-message');
     assert.deepEqual(v.errors, []);
     await v.ctx.close();

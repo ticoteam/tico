@@ -99,7 +99,7 @@ function liveTasksApply(events: LiveTaskEvent[]): void {
   if (BOT) botTasksLive(BOT.slug, events);
   // And a person's page (person-page.ts).
   if (typeof PERSON_TASKS !== 'undefined' && PERSON_TASKS) personTasksLive(events);
-  // And My dashboard's My tasks (dashboard.ts).
+  // And Company's My tasks (dashboard.ts).
   dashTasksLive(events);
   const open = TASK_CHAT;   // read again: a stop above may have cleared it
   if (open && events.some(d => d.bulk || String(d.id) === String(open.id))) taskChatLive(open);
@@ -131,7 +131,7 @@ function liveWire(): void {
       if (BOT) botNeedsChanged(BOT.slug);
     }, 200);
   }).catch(() => {}));
-  // My dashboard puts each change in its cards (ui/app/dashboard.ts); it reads nothing for them.
+  // Company puts each change in its cards (ui/app/dashboard.ts); it reads nothing for them.
   liveOn('needs-list', dashNeedsLive);
   liveOn('threads', dashThreadsLive);
   // Away longer than the server keeps: read everything once.

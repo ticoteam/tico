@@ -35,7 +35,7 @@ let BOOT_DEFAULT_ROUTE = false;
 const ENTRY_JUMP = entryJump();
 const ENTRY_ROUTE = entryRoute();
 if (ENTRY_ROUTE) history.replaceState(null, '', location.pathname + ENTRY_ROUTE);
-else if (!location.hash || location.hash === '#/') { BOOT_DEFAULT_ROUTE = true; history.replaceState(null, '', HOME); }   // My dashboard is home
+else if (!location.hash || location.hash === '#/') { BOOT_DEFAULT_ROUTE = true; history.replaceState(null, '', HOME); }   // Company is home
 // Every team-facing name comes from the server (GET /api/me -> config, also GET /api/v2/config),
 // so a second environment shows its own application, team and assistant names. The defaults show until /api/me
 // answers, and strings built before then read the names lazily.

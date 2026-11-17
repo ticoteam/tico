@@ -1,8 +1,10 @@
-"""My dashboard, the `person:<id>` place (backend/cards.py): its person alone reads and arranges it, an admin has no
-way in, BotOps arranges it only for its person, and its cards widen nothing: each shows its reader only what they may
-already read.
+"""Company, the `person:<id>` place (backend/cards.py): its person alone reads and arranges it, an admin has no way in,
+BotOps arranges it only for its person, and its cards widen nothing: each shows its reader only what they may already
+read. The Floor is its first card, once, on this place only, and a page saved before the Floor was a card gets it once.
 
 Ana owns the company, Ben is an admin, Cara is a member (the base fixture)."""
+
+import importlib
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend.store import H
@@ -19,12 +21,52 @@ def templates(view):
 def test_my_dashboard_starts_with_its_defaults_and_is_the_callers_own(api):
     mine = place(api, "person:me", "cara-test")
     assert mine["place"] == "person:cara" and mine["kind"] == "person" and mine["can_edit"] is True
-    assert templates(mine) == ["needs_attention", "unread_threads", "my_tasks", "updates", "latest_pages"]
+    assert templates(mine) == ["floor", "needs_attention", "unread_threads", "my_tasks", "updates", "latest_pages"]
+    assert mine["pins"][0]["size"] == "large" and mine["pins"][0]["card"]["hidden"] is False
     assert all(not p["card"]["settings"].get("team") for p in mine["pins"])
     assert place(api, "person:cara", "cara-test")["place"] == "person:cara"
     saved = put(api, "places/person:me", {}, "cara-test")
     assert saved["saved"] is True and all(p["id"] for p in saved["pins"])
     put(api, "places/person:me", {"audience": {"everyone": False, "groups": []}}, "cara-test", expected=422)
+
+
+def test_the_floor_goes_on_this_page_once_and_comes_back_like_any_card(api):
+    saved = put(api, "places/person:me", {}, "cara-test")
+    floor = saved["pins"][0]
+    assert floor["card"]["template"] == "floor"
+    # Once only, and on no other place.
+    post(api, "cards", {"template": "floor", "place": "person:me"}, "cara-test", expected=409)
+    refused = post(api, "cards", {"template": "floor", "place": "dashboard"}, expected=422)
+    assert "Floor goes on Company" in str(refused)
+    choices = get(api, "cards/choices?place=person:me", "cara-test")["templates"]
+    assert "floor" in [t["id"] for t in choices]
+    assert "floor" not in [t["id"] for t in get(api, "cards/choices?place=dashboard")["templates"]]
+    # Moved under another card, removed, then added back: like any other card.
+    others = [p["id"] for p in saved["pins"][1:]]
+    moved = post(api, "places/person:me/order", {"ids": [others[0], floor["id"], *others[1:]]}, "cara-test")
+    assert templates(moved)[:2] == ["needs_attention", "floor"]
+    delete(api, "pins/" + floor["id"], "cara-test")
+    assert "floor" not in templates(place(api, "person:me", "cara-test"))
+    post(api, "cards", {"template": "floor", "place": "person:me", "size": "large"}, "cara-test")
+    back = place(api, "person:me", "cara-test")
+    assert templates(back)[-1] == "floor" and back["pins"][-1]["size"] == "large"
+
+
+def test_a_page_saved_before_the_floor_gets_it_first_once(api):
+    migration = importlib.import_module("backend.migrations.20261117023225_company_floor_widget")
+    saved = put(api, "places/person:me", {}, "cara-test")
+    delete(api, "pins/" + saved["pins"][0]["id"], "cara-test")  # as a page saved before the Floor was a card
+    before = templates(place(api, "person:me", "cara-test"))
+    put(api, "places/person:me", {})  # Ana's page, saved with its Floor
+    with api.app.state.store.transaction() as c:
+        migration.up(c)
+        migration.up(c)
+    after = place(api, "person:me", "cara-test")
+    assert templates(after) == ["floor", *before] and after["pins"][0]["size"] == "large"
+    assert templates(place(api, "person:me")).count("floor") == 1, "a page that holds its Floor is left as it is"
+    # The card is Cara's own, so she may edit and remove it as hers.
+    patch(api, "cards/" + after["pins"][0]["card"]["id"], {"title": "Work"}, "cara-test")
+    delete(api, "pins/" + after["pins"][0]["id"], "cara-test")
 
 
 def test_nobody_else_reads_or_arranges_it_not_even_an_admin(api):

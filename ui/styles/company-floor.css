@@ -1,8 +1,12 @@
-/* ui/styles/company-floor.css — Company › Floor (ui/app/company-floor.ts): a hall per factory, a line per pipeline, a
-   stack of light boxes per stage; one factory draws a deck per teammate. No state colours: only the Flow mark has a
+/* ui/styles/company-floor.css — the Floor, Company's first card, and one factory's page (ui/app/company-floor.ts): a
+   hall per factory, a line per pipeline, a stack of light boxes per stage; one factory draws a deck per teammate. No state colours: only the Flow mark has a
    colour of its own. Only transform and opacity animate. */
 .cf-page{display:flex;flex-direction:column;min-height:0;position:relative}
 .cf-body{flex:1;min-width:0;overflow:auto;padding:var(--s5) 28px var(--s6)}
+/* Company's Floor card (ui/app/dashboard.ts): the card is the frame, so the floor takes its body as it is. Its card and
+   sheet are fixed to the screen, which a grid that contains its layout would hold them to instead. */
+.cf-host .cf-body{padding:0;overflow:visible}
+.dash-grid:has(.cf-host){contain:none}
 .cf-halls{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,460px),1fr));gap:var(--s5);align-items:start}
 .cf-body-one .cf-halls{grid-template-columns:minmax(0,1fr)}
 .cf-empty{display:flex;flex-direction:column;align-items:flex-start;gap:var(--s2);margin:var(--s4) 0}
@@ -120,6 +124,7 @@ a.cf-hall-name:focus-visible{outline:var(--focus-ring);outline-offset:var(--focu
 
 @media (max-width:760px){
   .cf-body{padding:var(--s3) 12px var(--s5)}
+  .cf-host .cf-body{padding:0}
   .cf-halls{grid-template-columns:minmax(0,1fr);gap:var(--s3)}
   .cf-hall{padding:var(--s3) var(--s3) var(--s4)}
   .cf-hall-head{flex-direction:column;gap:6px}

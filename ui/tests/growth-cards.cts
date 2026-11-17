@@ -165,8 +165,8 @@ function server(me: Person, pipelines: unknown[] = PIPELINES, setup: Setup = set
   };
   return {reads, writes, setup, handle(method: string, p: string, body: PostedCard, query: URLSearchParams): [number, unknown] | null {
     if (method !== 'GET' && /^\/api\/v2\/(places|pins|cards|growth)\b/.test(p)) writes.push([method, p, body]);
-    if (p === '/api/v2/places/dashboard' && method === 'GET') return [200, {
-      place: 'dashboard', kind: 'dashboard', saved: true, can_edit: me.company_role !== 'member',
+    if (p === '/api/v2/places/person%3Ame' && method === 'GET') return [200, {
+      place: 'person:' + me.id, kind: 'person', saved: true, can_edit: true,
       pins: [{id: 'overview-pin', item: 'card:overview-card', position: 0, size: 'small', made_by: 'human:ana',
         card: {id: 'overview-card', template: 'kpi', title: 'Company activation', heading: 'Company activation', name: 'KPI',
           settings: {kpi: 'k2'}, team_name: '', hidden: false, data: {name: 'Activated', unit: '', value: 210, spark: []}}}],
@@ -374,7 +374,7 @@ async function shot(page: Page, name: string) {
       assert.equal(await page.evaluate(() => location.hash), '#/growth?m=2026-08');
       assert.equal(await page.locator('#dash-grid .grc-ret-t tbody tr').count(), 2);
       // Opened at that address, the page reads that month.
-      await page.evaluate(() => { location.hash = '#/overview'; });
+      await page.evaluate(() => { location.hash = '#/home'; });
       // Both pages use #dash-grid: wait for Company before accepting any pins from it.
       await page.getByRole('heading', {name: 'Company', exact: true}).waitFor();
       await page.locator('#dash-grid .dash-pin').first().waitFor();
@@ -845,7 +845,7 @@ async function shot(page: Page, name: string) {
       await panel(page).locator('[data-grs-see]').click();
       await page.waitForFunction(() => document.querySelector('#dash-grid tr[data-channel="search"]')?.classList.contains('grs-flash'));
       assert.equal(await panel(page).isVisible(), false);
-      await page.evaluate(() => { location.hash = '#/overview'; });
+      await page.evaluate(() => { location.hash = '#/home'; });
       await page.getByRole('heading', {name: 'Company', exact: true}).waitFor();
       await page.evaluate(() => { location.hash = '#/growth'; });
       await page.locator('#dash-grid .grc-funnel').waitFor();

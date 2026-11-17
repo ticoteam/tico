@@ -38,16 +38,16 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 | Find a bot, human or page | ⌘K, or Search in the sidebar: its icon at the end of the **Tico Assistant** row, or its own row on the Assistant page, during setup and where no person has loaded (phone: in More) |
 | Find a file or page any bot made | Library → Files (`#/library/files`); search finds text inside ([Files](files.md#library--files)) |
 | See every tool and connection, who uses it and its status | Tools (`#/tools`) ([Connect tools](connect-tools.md#tools-list)) |
-| Arrange your own landing page | Company → Mine (`#/home`) ([Company](overview.md#my-dashboard)) |
-| See how full each stage is and who holds it, by factory | Company → Floor (`#/overview/floor`; one factory at `#/overview/floor/<id>`) ([Company](overview.md#floor)) |
+| Arrange your own landing page | Company (`#/home`): **Edit** in ⋯ ([Company](overview.md#your-company-page)) |
+| See how full each stage is and who holds it, by factory | Company's Floor card; a hall's name opens one factory (`#/overview/floor/<id>`) ([Company](overview.md#floor)) |
 | See the team chart and its factories, or make a factory | Company → Strategy → Org (`#/strategy/org`); **+** beside Factories makes one (owners and admins) |
 | Open a page full size | Tap its card, or `#/page/<id>` ([Pages](pages.md)) |
 | Read or write the team's strategy, publish a version | Company → Strategy (`#/strategy`); the owner writes and publishes, the Strategy Owner proposes ([Strategy](strategy.md)); Lenses on that page run a framework against it ([Lenses](lenses.md)) |
 | See the market, its map, or ask the Librarian about it | Company → Strategy → Market (`#/strategy/market`; `#/market` redirects there); **Open map** for the graph |
 | See growth numbers and their sources, or marketing tasks | Company → Growth (`#/growth`; Sources is a link on the page, or in Settings for the owner and admins) ([Growth](growth.md)). Marketing tasks are on the Tasks page, type Marketing |
 | Review goals and KPIs | Goals; a goal's **Bet** picker links it to a strategy bet |
-| See the Company page, or share it | Company → Share (`#/overview/company-page`); the share icon has transparency, the address and readers. Owners and admins only ([Company page](company-page.md)) |
-| Change the Company page: editions, disclosure, stats, audiences, accent, logo | Company → Share → Manage (`#/company-page`) |
+| See the Company page, or share it | Company → ⋯ → Share (`#/overview/company-page`); the share icon has transparency, the address and readers. Owners and admins only ([Company page](company-page.md)) |
+| Change the Company page: editions, disclosure, stats, audiences, accent, logo | Company → ⋯ → Share → Manage (`#/company-page`) |
 | Message the Tico team | **?** beside Search (phone: More drawer, beside Search), or any `#/support` link |
 
 All four system bots appear as **Built-in** in Settings > Bots. Neither Assistant nor BotOps has a rail entry: **Tico Assistant**

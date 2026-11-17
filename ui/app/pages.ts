@@ -234,7 +234,7 @@ function pagesAccessRefresh() {
 // A pin's place (backend/cards.py) as the app's address.
 function pagePlaceHref(place: string) {
   const [kind, ...rest] = String(place).split(':'), id = encodeURIComponent(rest.join(':'));
-  return kind === 'dashboard' ? OVERVIEW : kind === 'growth' ? '#/growth' : kind === 'person' ? HOME : kind === 'team' ? '#/team/' + id : kind === 'bot' ? '#/bot/' + id : '#/task/' + id;
+  return kind === 'dashboard' || kind === 'person' ? HOME : kind === 'growth' ? '#/growth' : kind === 'team' ? '#/team/' + id : kind === 'bot' ? '#/bot/' + id : '#/task/' + id;
 }
 // Who published a version, as the rest of the app names them.
 const pageVersionBy = (v: PageVersion) => v.actor ? actorLabel(v.actor) : '';

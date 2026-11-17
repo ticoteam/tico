@@ -1724,7 +1724,7 @@ Rules:
 - The company's owner and Admins have a quiet **+** beside the title: **New factory** asks a name and a goal
   (`POST /api/v2/factories`). For them the section shows before the first factory; for anyone else it shows only once
   there is one.
-- How full each stage is, and the rates in and out, are on Company › Floor (docs/overview.md).
+- How full each stage is, and the rates in and out, are on Company's Floor card (docs/overview.md).
 
 ### S13. Home
 
