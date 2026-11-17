@@ -998,9 +998,9 @@ class Builder:
                 "note": D.SLACK["note"],
             },
         )
-        # The app is connected as far as this machine can show: tokens sealed with a local key, the gateway's line set to
+        # The app is connected as far as this machine can show: tokens sealed in the vault, the gateway's line set to
         # connected. No gateway runs in the demo, so nothing dials Slack; the tokens are placeholders.
-        slack_app.save(self.store, self.settings, "human:ana", "xoxb-demo-placeholder", "xapp-demo-placeholder")
+        slack_app.save(self.store, "human:ana", "xoxb-demo-placeholder", "xapp-demo-placeholder")
         slack_app.pin(self.store, D.SLACK["team"], D.SLACK["app"])
         slack_app.report(self.store, "connected", "Connected to the Acme Lights workspace.", team=D.SLACK["team"])
 

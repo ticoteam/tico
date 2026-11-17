@@ -520,7 +520,6 @@ def _connectors(b):
     b.at(days=6.0)
     slack_app.save(
         b.store,
-        b.settings,
         CONTENT["owner"]["id"],
         "xoxb-" + _derived("slack-bot"),
         "xapp-" + _derived("slack-app"),

@@ -32,9 +32,12 @@ LOGIN = 'login'
 # An MCP tool's OAuth sign-in (backend/mcp_connect.py): its tokens are sealed here, never revealed or edited, and reach a
 # run only as a proxy token.
 OAUTH = 'oauth'
+# A secret the server itself uses (the Slack app's tokens, backend/slack_app.py): sealed here, never listed, granted,
+# revealed or handed to a run (`Vault.row` answers 404 for one).
+SERVICE = 'service'
 # The credentials a run or a watcher may be handed: never a website account, and a sign-in only through the proxy.
 RUN_ROWS = (
-    "SELECT * FROM credentials WHERE kind!='login' AND (kind!='oauth' OR tool_id IN "
+    "SELECT * FROM credentials WHERE kind NOT IN ('login','service') AND (kind!='oauth' OR tool_id IN "
     "(SELECT id FROM tools WHERE delivery='proxy')) ORDER BY id"
 )
 # A shared website account available to current and future bots, without releasing its value to their turns.
@@ -293,8 +296,9 @@ _key_file_lock = threading.Lock()
 
 
 def legacy_key(path):
-    """A key file an install sealed secrets with before TICO_CREDENTIAL_KMS_KEY was set (github-app.key, slack.key):
-    its 32 bytes, or None when it is absent or not a key. Read only: a read never makes a key file."""
+    """A key file an install sealed secrets with before TICO_CREDENTIAL_KMS_KEY was set (github-app.key, and slack.key
+    for the one move in backend/migrations/20261117075941_slack_tokens_into_vault.py): its 32 bytes, or None when it is
+    absent or not a key. Read only: a read never makes a key file."""
     try:
         data = Path(path).read_bytes()
     except OSError:
@@ -564,7 +568,7 @@ class Vault:
 
     @staticmethod
     def row(c, cid):
-        row = c.execute('SELECT * FROM credentials WHERE id=?', (cid,)).fetchone()
+        row = c.execute('SELECT * FROM credentials WHERE id=? AND kind!=?', (cid, SERVICE)).fetchone()
         if not row:
             raise Problem('not_found', 'Credential not found', 404)
         return row
@@ -1119,7 +1123,9 @@ def install_credentials(app, store, delegate=None, propose=None):
                 ids = granted(c, who.actor)
                 mine = [
                     {k: v for k, v in vault.brief(row).items() if k != 'preview'} | {'can_reveal': False, 'grants': []}
-                    for row in c.execute("SELECT * FROM credentials WHERE kind!='login' ORDER BY lower(name),id")
+                    for row in c.execute(
+                        "SELECT * FROM credentials WHERE kind NOT IN ('login','service') ORDER BY lower(name),id"
+                    )
                     if row['id'] in ids
                 ]
                 return {
@@ -1141,7 +1147,9 @@ def install_credentials(app, store, delegate=None, propose=None):
 
             hidden = api_tools.hidden_keys(c, who, vault.admins)  # keys of tools this person may not see
             # A website account is listed on its website tool (backend/website_tools.py), never here.
-            for row in c.execute("SELECT * FROM credentials WHERE kind!='login' ORDER BY lower(name),id"):
+            for row in c.execute(
+                "SELECT * FROM credentials WHERE kind NOT IN ('login','service') ORDER BY lower(name),id"
+            ):
                 if row['id'] in hidden:
                     continue
                 # A credential this person added is listed for sharing (its grants too), never revealed unless granted.

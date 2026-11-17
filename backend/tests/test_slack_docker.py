@@ -111,12 +111,17 @@ def test_tokens_are_sealed_never_returned_and_never_logged(api, caplog, tmp_path
     assert state.json()["configured"] is True and BOT not in state.text and APP_TOKEN not in state.text
     raw = b"".join(p.read_bytes() for p in tmp_path.iterdir() if p.name.startswith("hub.db"))
     assert BOT.encode() not in raw and APP_TOKEN.encode() not in raw
-    assert (tmp_path / "slack.key").stat().st_mode & 0o077 == 0
+    assert not (tmp_path / "slack.key").exists()  # sealed with the vault's key, which its backup covers
     assert BOT not in caplog.text and APP_TOKEN not in caplog.text
     store = api.app_state.store
-    assert slack_app.load(store, store.settings)["bot_token"] == BOT
+    assert slack_app.load(store)["bot_token"] == BOT
+    # Vault rows the server uses: never listed, granted or revealed.
+    listed = api.get("/api/v2/credentials", headers=h())
+    assert listed.status_code == 200 and slack_app.BOT_ID not in listed.text
+    revealed = api.post(f"/api/v2/credentials/{slack_app.BOT_ID}/reveal", headers=h())
+    assert revealed.status_code in (403, 404) and BOT not in revealed.text
     assert api.post("/api/v2/slack/disconnect", headers=h()).status_code == 200
-    assert slack_app.load(store, store.settings) is None
+    assert slack_app.load(store) is None and api.get("/api/v2/slack/app", headers=h()).json()["configured"] is False
 
 
 class FakeClient:
@@ -163,39 +168,120 @@ def test_the_gateway_opens_tokens_the_api_sealed_under_a_kms_key(tmp_path, monke
     settings = Settings.from_env()
     store = Store(settings)
     store.initialize()
-    slack_app.save(store, settings, "human:ana", BOT, APP_TOKEN, Vault(store, CredentialCipher("test-key", kms)))
+    slack_app.save(store, "human:ana", BOT, APP_TOKEN, Vault(store, CredentialCipher("test-key", kms)))
     assert not (tmp_path / "slack.key").exists()
     assert G.main(["--check"], make_slack=FakeClient) == 0
     assert FakeClient.instances[-1].bot == BOT and '"team_id": "T0FAKE1"' in capsys.readouterr().out
 
 
-def test_slack_tokens_saved_before_kms_was_set_open_with_slack_key_and_are_resealed(tmp_path, caplog):
+MOVE = "20261117075941_slack_tokens_into_vault"
+
+
+def _older_server(tmp_path, key=None):
+    """A database as an older server left it, this move not run yet (as in any order: every newer migration has): the
+    tokens sealed in its own `slack_credentials` table with `key` (a slack.key file beside it when None)."""
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-    from backend.credentials import CredentialCipher, Vault
     from backend.store import Store
+
+    store = Store(Settings(db_path=tmp_path / "hub.db", company_name="Acme"))
+    store.initialize()
+    if key is None:
+        key = os.urandom(32)
+        (tmp_path / "slack.key").write_bytes(key)
+    elif callable(key):
+        key = key(store)
+    nonce = os.urandom(12)
+    sealed = AESGCM(key).encrypt(
+        nonce, json.dumps({"bot_token": BOT, "app_token": APP_TOKEN}).encode(), slack_app.OLD_AAD
+    )
+    with store.transaction() as c:
+        c.execute(
+            "CREATE TABLE slack_credentials(id TEXT PRIMARY KEY, ciphertext BLOB NOT NULL, nonce BLOB NOT NULL, "
+            "team_id TEXT NOT NULL DEFAULT '', app_id TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, "
+            "created_by TEXT NOT NULL)"
+        )
+        c.execute(
+            "INSERT INTO slack_credentials VALUES('app',?,?,'T0OLD','A0OLD','2026-11-01T00:00:00Z','human:ana')",
+            (sealed, nonce),
+        )
+        c.execute("DELETE FROM schema_migrations WHERE version=?", (MOVE,))
+    return store
+
+
+def _start(store):
+    import sqlite3
+    from contextlib import closing
+
+    from backend import migrations
+
+    with closing(sqlite3.connect(store.settings.db_path, isolation_level=None)) as conn:
+        migrations.apply(conn)
+        return conn.execute("SELECT 1 FROM sqlite_master WHERE name='slack_credentials'").fetchone() is not None
+
+
+def test_an_older_servers_slack_key_tokens_move_into_the_vault_once(tmp_path, caplog):
+    store = _older_server(tmp_path)
+    caplog.set_level("INFO")
+    assert _start(store) is False  # moved, and the table dropped
+    (tmp_path / "slack.key").unlink()  # never read again
+    stored = slack_app.load(store)
+    assert (stored["bot_token"], stored["app_token"]) == (BOT, APP_TOKEN)
+    assert (stored["team_id"], stored["app_id"], stored["created_at"]) == ("T0OLD", "A0OLD", "2026-11-01T00:00:00Z")
+    raw = b"".join(p.read_bytes() for p in tmp_path.iterdir() if p.name.startswith("hub.db"))
+    assert BOT.encode() not in raw and APP_TOKEN.encode() not in raw
+    assert BOT not in caplog.text and not (tmp_path / "slack.key").exists()
+    assert _start(store) is False and slack_app.load(store)["bot_token"] == BOT  # recorded: it does not run again
+
+
+def test_without_slack_key_the_row_is_left_logged_and_the_start_goes_on(tmp_path, caplog):
+    store = _older_server(tmp_path)
+    (tmp_path / "slack.key").unlink()
+    caplog.set_level("INFO")
+    assert _start(store) is True
+    assert "category=cannot_open id=slack_credentials:app detail=FileNotFoundError" in caplog.text
+    assert slack_app.load(store) is None
+    with store.read() as c:
+        assert slack_app.status(c)["configured"] is True  # still there: Disconnect forgets it
+    slack_app.forget(store)
+    with store.read() as c:
+        assert slack_app.status(c)["configured"] is False
+
+
+def test_kms_sealed_tokens_move_and_wait_for_kms_when_it_is_unreachable(tmp_path, monkeypatch, caplog):
+    from backend.credentials import CredentialCipher, Vault
     from backend.tests.helpers.credentials import FakeKMS
 
-    settings = Settings(db_path=tmp_path / "hub.db", company_name="Acme")
-    store = Store(settings)
-    store.initialize()
-    slack_app.save(store, settings, "human:ana", BOT, APP_TOKEN)  # before KMS: sealed with slack.key
-    legacy = (tmp_path / "slack.key").read_bytes()
-    settings.credential_kms_key = "test-key"
-    vault = Vault(store, CredentialCipher("test-key", FakeKMS()))
+    class Down:
+        def decrypt(self, **kwargs):
+            raise RuntimeError("KMS unreachable")
+
+    kms, reach = FakeKMS(), {"kms": None}
+    monkeypatch.setenv("TICO_CREDENTIAL_KMS_KEY", "test-key")
+    monkeypatch.setattr("boto3.client", lambda name, *a, **k: reach["kms"] if name == "kms" else pytest.fail(name))
+
+    def vault_key(store):
+        with store.transaction() as c:
+            return Vault(store, CredentialCipher("test-key", kms)).cipher.key(c)
+
+    store = _older_server(tmp_path, vault_key)
+    reach["kms"] = Down()
     caplog.set_level("INFO")
-    assert slack_app.load(store, settings, vault)["bot_token"] == BOT
+    assert _start(store) is True  # the start does not fail
+    assert "category=vault_unavailable id=slack_credentials:app detail=Problem" in caplog.text
+    assert slack_app.load(store, Vault(store, CredentialCipher("test-key", Down()))) is None
+    # KMS is back: the gateway's next read opens the row with the vault's key and moves it.
+    stored = slack_app.load(store, Vault(store, CredentialCipher("test-key", kms)))
+    assert (stored["bot_token"], stored["team_id"]) == (BOT, "T0OLD")
+    assert "Moved the Slack tokens from slack_credentials into the vault" in caplog.text and BOT not in caplog.text
     with store.read() as c:
-        row = c.execute("SELECT * FROM slack_credentials").fetchone()
-        AESGCM(vault.cipher.key(c)).decrypt(row["nonce"], row["ciphertext"], slack_app.AAD)  # now the vault's
-    assert any("Re-sealed slack_credentials app" in r.getMessage() for r in caplog.records)
-    assert not any(BOT in r.getMessage() for r in caplog.records)
-    assert slack_app.load(store, settings, vault)["app_token"] == APP_TOKEN
-    assert (tmp_path / "slack.key").read_bytes() == legacy
-    # Without slack.key nothing opens them, and the read makes no key file.
-    slack_app.save(store, settings, "human:ana", BOT, APP_TOKEN)
-    (tmp_path / "slack.key").unlink()
-    assert slack_app.load(store, settings, vault) is None and not (tmp_path / "slack.key").exists()
+        assert c.execute("SELECT count(*) FROM slack_credentials").fetchone()[0] == 0
+    # And a start with KMS reachable moves one at once.
+    (tmp_path / "next").mkdir()
+    other = _older_server(tmp_path / "next", vault_key)
+    reach["kms"] = kms
+    assert _start(other) is False
+    assert slack_app.load(other, Vault(other, CredentialCipher("test-key", kms)))["app_token"] == APP_TOKEN
 
 
 def test_the_gateway_reads_tokens_from_the_secret_arn_and_nowhere_else(monkeypatch):

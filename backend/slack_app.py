@@ -1,16 +1,15 @@
-"""The company's Slack app tokens, encrypted at rest, and the gateway's health line.
+"""The company's Slack app tokens, encrypted at rest in the vault, and the gateway's health line.
 
 The owner pastes the bot token (xoxb-) and app-level token (xapp-) from a Slack app created with
-`connectors/slack-app-manifest.json`. The API only seals them and reports status; the gateway
-process (`backend/slack_gateway.py`) is the one that opens them. Tokens are never returned by an
-endpoint and never written to a log. See docs/slack.md.
+`connectors/slack-app-manifest.json`. They are two `credentials` rows of kind `service` (SERVICE), sealed with the vault's
+data key and backed up with it: never listed, granted or revealed (backend/credentials.py `Vault.row`). The API only seals
+them and reports status; the gateway process (`backend/slack_gateway.py`) is the one that opens them. Tokens are never
+returned by an endpoint and never written to a log. See docs/slack.md.
 """
 
 import json
 import logging
-import os
 import re
-import threading
 from pathlib import Path
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -18,118 +17,126 @@ from fastapi import Request
 from pydantic import BaseModel, ConfigDict
 
 from . import hubdb as H
-from .credentials import open_or_reseal
+from .credentials import SERVICE, Vault
 from .store import Problem
 
 HEALTH = "slack:gateway"
 MANIFEST = Path(__file__).resolve().parent.parent / "connectors" / "slack-app-manifest.json"
 BOT_TOKEN = re.compile(r"^xoxb-[A-Za-z0-9-]{10,}$")
 APP_TOKEN = re.compile(r"^xapp-[A-Za-z0-9-]{10,}$")
-AAD = b"tico-slack-app:v1"
-KEY_FILE = "slack.key"
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS slack_credentials(
- id TEXT PRIMARY KEY, ciphertext BLOB NOT NULL, nonce BLOB NOT NULL, team_id TEXT NOT NULL DEFAULT '',
- app_id TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, created_by TEXT NOT NULL);
-"""
-_lock = threading.Lock()
+# The two rows: `username` keeps the id pinned from each on first connect (the workspace's, the app's).
+BOT_ID, APP_ID = "slack-bot-token", "slack-app-token"
+ROWS = f"SELECT * FROM credentials WHERE id IN ('{BOT_ID}','{APP_ID}') AND kind='{SERVICE}'"
+# An older server's own table, moved by backend/migrations/20261117075941_slack_tokens_into_vault.py. One it could not
+# open then (KMS unreachable) is still here: under KMS it is sealed with the vault's key, and `load` moves it.
+OLD_TABLE, OLD_AAD = "slack_credentials", b"tico-slack-app:v1"
 log = logging.getLogger("tico.slack_app")
 
 
-def key_file(settings):
-    """The local key file: backed up beside credential.key (backend/replication.py)."""
-    return Path(settings.db_path).parent / KEY_FILE
-
-
-def _key(settings, vault=None, c=None, create=True):
-    """The vault's KMS-wrapped key when the deployment has one; otherwise a key file beside the
-    database, so a copy of the database alone does not carry the tokens. Only a save makes the file:
-    a read with it missing returns None rather than a new key that opens nothing. A save may make one: it replaces
-    the only row sealed with slack.key, and the backup keeps the old key's copy aside (backend/replication.py)."""
-    if settings.credential_kms_key and vault is not None and c is not None:
-        return vault.cipher.key(c)
-    path = key_file(settings)
-    with _lock:
-        if not path.exists():
-            if not create:
-                return None
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(fd, "wb") as out:
-                out.write(os.urandom(32))
-    return path.read_bytes()
-
-
-def save(store, settings, actor, bot_token, app_token, vault=None):
-    """Seal both tokens. The workspace and app ids are pinned from the tokens on first connect."""
-    nonce = os.urandom(12)
-    with store.transaction() as c:
-        c.executescript(SCHEMA)
-        sealed = AESGCM(_key(settings, vault, c)).encrypt(
-            nonce, json.dumps({"bot_token": bot_token, "app_token": app_token}).encode(), AAD
+def _put(c, cipher, actor, bot_token, app_token, team_id="", app_id="", at=None):
+    at = at or H.now()
+    for cid, name, value, pinned in (
+        (BOT_ID, "Slack bot token", bot_token, team_id),
+        (APP_ID, "Slack app-level token", app_token, app_id),
+    ):
+        ciphertext, nonce = cipher.encrypt(c, cid, value)
+        c.execute(
+            "INSERT INTO credentials(id,name,username,kind,ciphertext,nonce,source,created_at,updated_at,updated_by,"
+            "created_by) VALUES(?,?,?,?,?,?,'slack',?,?,?,?) ON CONFLICT(id) DO UPDATE SET username=excluded.username,"
+            "ciphertext=excluded.ciphertext,nonce=excluded.nonce,revision=credentials.revision+1,"
+            "updated_at=excluded.updated_at,updated_by=excluded.updated_by",
+            (cid, name, pinned, SERVICE, ciphertext, nonce, at, at, actor, actor),
         )
-        c.execute("DELETE FROM slack_credentials")
-        c.execute("INSERT INTO slack_credentials VALUES('app',?,?,'','',?,?)", (sealed, nonce, H.now(), actor))
+
+
+def _old(c):
+    """The older server's row the move left, or None."""
+    if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (OLD_TABLE,)).fetchone():
+        return None
+    return c.execute(f"SELECT * FROM {OLD_TABLE} WHERE id='app'").fetchone()
+
+
+def save(store, actor, bot_token, app_token, vault=None):
+    """Seal both tokens. The workspace and app ids are pinned from the tokens on first connect."""
+    vault = vault or Vault(store)
+    with store.transaction() as c:
+        _put(c, vault.cipher, actor, bot_token, app_token)
         c.execute("DELETE FROM service_health WHERE service=?", (HEALTH,))
 
 
-def load(store, settings, vault=None):
-    """`{"bot_token","app_token","team_id","app_id","created"}` or None. Gateway process only."""
-    with store.read() as c:
-        if not c.execute("SELECT 1 FROM sqlite_master WHERE name='slack_credentials'").fetchone():
-            return None
-        row = c.execute("SELECT * FROM slack_credentials WHERE id='app'").fetchone()
-        if not row:
-            return None
-        try:
-            key = _key(settings, vault, c, create=False)
-            if key is None:
+def _move_old(store, vault):
+    """The older server's row, opened with the vault's key and moved into the vault; None when it does not open."""
+    try:
+        with store.transaction() as c:
+            row = _old(c)
+            if not row:
                 return None
-            # Under KMS, tokens saved before TICO_CREDENTIAL_KMS_KEY was set open with slack.key and are re-sealed once.
-            kms = settings.credential_kms_key and vault is not None
-            data = json.loads(
-                open_or_reseal(
-                    c,
-                    key,
-                    key_file(settings) if kms else None,
-                    row["nonce"],
-                    row["ciphertext"],
-                    AAD,
-                    "slack_credentials",
-                    "id",
-                    "app",
-                    log,
-                )
+            data = json.loads(AESGCM(vault.cipher.key(c)).decrypt(row["nonce"], row["ciphertext"], OLD_AAD))
+            _put(
+                c,
+                vault.cipher,
+                row["created_by"],
+                data["bot_token"],
+                data["app_token"],
+                row["team_id"],
+                row["app_id"],
+                row["created_at"],
             )
-        except Exception:
-            return None
+            c.execute(f"DELETE FROM {OLD_TABLE}")
+    except Exception as exc:
+        log.warning(
+            "slack tokens not moved into the vault: category=%s id=%s:app detail=%s",
+            "vault_unavailable" if isinstance(exc, Problem) else "cannot_open",
+            OLD_TABLE,
+            type(exc).__name__,
+        )
+        return None
+    log.info("Moved the Slack tokens from %s into the vault", OLD_TABLE)
+    return True
+
+
+def load(store, vault=None):
+    """`{"bot_token","app_token","team_id","app_id","created_at"}` or None. Gateway process only."""
+    vault = vault or Vault(store)
+    with store.read() as c:
+        rows = {r["id"]: r for r in c.execute(ROWS)}
+        old = len(rows) < 2 and _old(c)
+    if old and _move_old(store, vault):
+        return load(store, vault)
+    if len(rows) < 2:
+        return None
+    try:
+        with store.read() as c:
+            bot, app = (vault.cipher.decrypt(c, rows[cid]) for cid in (BOT_ID, APP_ID))
+    except Problem:
+        return None
     return {
-        "bot_token": data["bot_token"],
-        "app_token": data["app_token"],
-        "team_id": row["team_id"],
-        "app_id": row["app_id"],
-        "created_at": row["created_at"],
+        "bot_token": bot,
+        "app_token": app,
+        "team_id": rows[BOT_ID]["username"],
+        "app_id": rows[APP_ID]["username"],
+        "created_at": rows[BOT_ID]["updated_at"],
     }
 
 
 def stamp(store):
     """What changed last, without opening the tokens: the gateway restarts its connection on a change."""
     with store.read() as c:
-        if not c.execute("SELECT 1 FROM sqlite_master WHERE name='slack_credentials'").fetchone():
-            return ""
-        row = c.execute("SELECT created_at FROM slack_credentials WHERE id='app'").fetchone()
-    return row["created_at"] if row else ""
+        row = c.execute("SELECT updated_at FROM credentials WHERE id=? AND kind=?", (BOT_ID, SERVICE)).fetchone()
+    return row["updated_at"] if row else ""
 
 
 def pin(store, team_id, app_id):
     with store.transaction() as c:
-        c.execute("UPDATE slack_credentials SET team_id=?,app_id=? WHERE id='app'", (team_id, app_id))
+        for cid, pinned in ((BOT_ID, team_id), (APP_ID, app_id)):
+            c.execute("UPDATE credentials SET username=? WHERE id=? AND kind=?", (pinned, cid, SERVICE))
 
 
 def forget(store):
     with store.transaction() as c:
-        c.executescript(SCHEMA)
-        c.execute("DELETE FROM slack_credentials")
+        c.execute(f"DELETE FROM credentials WHERE id IN ('{BOT_ID}','{APP_ID}') AND kind='{SERVICE}'")
+        if _old(c):
+            c.execute(f"DELETE FROM {OLD_TABLE}")
         c.execute("DELETE FROM service_health WHERE service=?", (HEALTH,))
 
 
@@ -156,12 +163,9 @@ def report(store, state, message="", team=""):
 
 def status(c):
     """The state the Settings card and the Health page read; never a token."""
-    exists = c.execute("SELECT 1 FROM sqlite_master WHERE name='slack_credentials'").fetchone()
-    row = (
-        c.execute("SELECT team_id,app_id,created_at FROM slack_credentials WHERE id='app'").fetchone()
-        if exists
-        else None
-    )
+    rows = {r["id"]: r for r in c.execute(ROWS)}
+    old = _old(c) if len(rows) < 2 else None
+    row = {"team_id": rows[BOT_ID]["username"], "app_id": rows[APP_ID]["username"]} if len(rows) == 2 else old
     health = c.execute(
         "SELECT last_succeeded_at,last_error,detail FROM service_health WHERE service=?", (HEALTH,)
     ).fetchone()
@@ -234,7 +238,7 @@ def install_slack_app(app, settings, store):
             raise Problem(
                 "slack_app_token", "The app-level token starts with xapp-. Create it under Basic Information.", 422
             )
-        save(store, settings, who.actor, bot, app_token, getattr(app.state, "vault", None))
+        save(store, who.actor, bot, app_token, getattr(app.state, "vault", None))
         with store.transaction() as c:
             H.event(c, who.actor, "slack.tokens_saved", "", {})
         return {"ok": True}

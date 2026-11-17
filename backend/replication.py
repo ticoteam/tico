@@ -9,10 +9,12 @@ key is set, and a restored database without it cannot. It is copied to the same 
 never logged, never in the status file, never in a message. The status keeps when it was copied and the file's size and
 modification time, not the key or anything derived from it.
 
-Two more key files beside it seal secrets the vault does not hold, and get the same handling: /data/github-app.key (the
-GitHub App's private key, client secret and webhook secret, and the directory sync credentials; backend/github_app.py)
-and /data/slack.key (the Slack tokens; backend/slack_app.py). They are copied whenever they exist, KMS or not: either may
-still seal secrets saved before KMS was set, which open with it until their first read re-seals them with the vault's key.
+One more key file beside it seals secrets the vault does not hold, and gets the same handling: /data/github-app.key (the
+GitHub App's private key, client secret and webhook secret, and the directory sync credentials; backend/github_app.py).
+It is copied whenever it exists, KMS or not: it may still seal secrets saved before KMS was set, which open with it until
+their first read re-seals them with the vault's key. /data/slack.key is no longer copied (the Slack tokens are in the
+vault now), but an older backup's copy is still restored: the database restored with it moves its Slack tokens into the
+vault on the first start (backend/migrations/20261117075941_slack_tokens_into_vault.py), which needs it.
 /data/tico-session-secret (backend/oidc.py) is not copied: it signs only the few minutes of a sign-in round trip (the
 sessions themselves are in the database), so a new one costs nobody their session and one less secret leaves the server.
 """
@@ -77,7 +79,8 @@ CREDENTIAL_KEY = "credential.key"
 CREDENTIAL_KEY_COPY = "credential-key/" + CREDENTIAL_KEY
 CREDENTIAL_KEY_BYTES = 32
 # The other key files, copied to the same place: credential-key/<name>.
-KEY_FILES = ("github-app.key", "slack.key")
+KEY_FILES = ("github-app.key",)
+OLD_KEY_FILES = ("slack.key",)  # restored from an older backup, never copied now
 # Backup generations. The replica may keep the database's Litestream levels in a folder named for when a new generation was
 # started, gen-<UTC yyyymmddThhmmssZ>/, and environment.json at the root names it. No field there means the root, as every
 # replica had before. files/ and credential-key/ stay at the root for every generation.
@@ -531,14 +534,14 @@ def restore_credential_key(mirror, path, replace=False, copy=CREDENTIAL_KEY_COPY
 
 
 def restore_key_files(env, replace=False, mirror=None):
-    """credential.key, github-app.key and slack.key back beside the restored database. A backup made before the last two
-    were copied has neither: that is said, not an error (Health then names what cannot be opened). Each file is tried
-    even when another fails; the exit status says whether any did."""
+    """credential.key, github-app.key and an older backup's slack.key back beside the restored database. A backup made
+    before the last two were copied has neither: that is said, not an error (Health then names what cannot be opened).
+    Each file is tried even when another fails; the exit status says whether any did."""
     mirror = mirror or mirror_from_env(env)
     failed = 0
     said = {CREDENTIAL_KEY: ("the credential key", "none was ever made, or AWS KMS holds the data key")}
     for name, path, copy in [(CREDENTIAL_KEY, credential_key_path(env), CREDENTIAL_KEY_COPY)] + [
-        (name, key_file_path(env, name), key_copy(name)) for name in KEY_FILES
+        (name, key_file_path(env, name), key_copy(name)) for name in KEY_FILES + OLD_KEY_FILES
     ]:
         what, why = said.get(name, (name, "nothing used it, or the backup predates copying it"))
         try:

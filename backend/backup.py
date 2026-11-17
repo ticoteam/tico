@@ -129,9 +129,12 @@ def record_verified_blobs(source, bucket, items):
         )
 
 
-# The local key files beside the database (backend/credentials.py, github_app.py, slack_app.py): a database restored
-# without them cannot open the credentials, the GitHub App and directory sync secrets, or the Slack tokens.
-KEY_FILES = ("credential.key", "github-app.key", "slack.key")
+# The local key files beside the database (backend/credentials.py, github_app.py): a database restored
+# without them cannot open the credentials, or the GitHub App and directory sync secrets.
+KEY_FILES = ("credential.key", "github-app.key")
+# Carried by an older bundle and put back, never carried now: the Slack tokens an older database sealed with it move into
+# the vault on its first start (backend/migrations/20261117075941_slack_tokens_into_vault.py).
+OLD_KEY_FILES = ("slack.key",)
 KEY_BYTES = 32
 
 
@@ -300,7 +303,7 @@ def fetch_key_files(manifest, bucket, key, s3, directory):
     restored. A different key already in `directory` is refused by name: it may open another database, and it is never
     overwritten."""
     listed = manifest.get("key_files") or {}
-    if not isinstance(listed, dict) or not set(listed) <= set(KEY_FILES):
+    if not isinstance(listed, dict) or not set(listed) <= set(KEY_FILES + OLD_KEY_FILES):
         raise ValueError("The backup manifest lists unexpected key files")
     found = {}
     for name, entry in sorted(listed.items()):

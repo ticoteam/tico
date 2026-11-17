@@ -306,7 +306,7 @@ def main(argv=None):
 
         s3 = boto3.client("s3")
         settings = Settings(db_path=args.database, blob_dir=args.blob_dir, blob_bucket=args.blob_bucket or "")
-        # A hand-run bundle carries the key files beside the database (credential.key, github-app.key, slack.key):
+        # A hand-run bundle carries the key files beside the database (credential.key, github-app.key):
         # restore_bundle (python -m backend.backup) puts them back beside the restored database.
         from .company_storage import for_backup
 
