@@ -1,6 +1,7 @@
 """Helpers that other tests share, moved out of test_migrations.py so they import no test file."""
 
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from backend.config import Settings
 from backend.store import Store
@@ -20,7 +21,8 @@ def fresh(tmp_path):
 
 
 def snapshot(path):
-    with sqlite3.connect(path) as c:
+    # Close before the next boot inspects WAL and SHM. The connection context alone only ends a transaction.
+    with closing(sqlite3.connect(path)) as c:
         return (
             c.execute("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name").fetchall(),
             c.execute("SELECT version,checksum,applied_at FROM schema_migrations ORDER BY version").fetchall(),
