@@ -4,6 +4,7 @@ Moved from clients/hubtools.py; clients/commands/__init__.py says how the table 
 
 import hashlib
 import json
+import re
 from urllib.parse import quote
 from clients.tico import APIError
 
@@ -666,6 +667,71 @@ def tool_index(api, args):
 )
 def tool_check(api, args):
     return _as_person(api).post('api-tools/' + quote(str(args['id']).removeprefix('api:'), safe='') + '/check', {})
+
+
+# A path segment that names one record (an id, a number, a hash), folded to `:id` so one endpoint's calls count together.
+# A version (`v2`, `v26.0`) or a dated API version (`2010-04-01`) is part of the endpoint and stays.
+_RECORD = re.compile(r'^\d+$|^(?!v\d+(\.\d+)*$)(?!\d{4}-\d{2}-\d{2}$)(?=.*\d)[A-Za-z0-9_.:@=-]{6,}$')
+
+
+def _endpoint(path):
+    """`/v1/customers/cus_8f2k91/charges?limit=` as `/v1/customers/:id/charges?limit=`: the call's shape, never a value
+    (the proxy keeps a query's keys, not its values)."""
+    base, mark, query = str(path or '').partition('?')
+    return '/'.join(':id' if _RECORD.match(part) else part for part in base.split('/')) + mark + query
+
+
+def activity_summary(rows):
+    """The page's calls by caller, method, endpoint, status and result, most frequent first: what a tool is used for and
+    which error keeps coming back."""
+    groups = {}
+    for row in rows:
+        caller = row.get('bot') or row.get('actor') or ''
+        shape = (caller, row.get('method') or '', _endpoint(row.get('path')), row.get('status_code'), row['result'])
+        seen = groups.setdefault(shape, {'count': 0, 'last_at': row['at']})
+        seen['count'] += 1
+        seen['last_at'] = max(seen['last_at'], row['at'])
+    fields = ('caller', 'method', 'endpoint', 'status_code', 'result')
+    newest = sorted(groups.items(), key=lambda kv: kv[1]['last_at'], reverse=True)
+    return [
+        {**dict(zip(fields, shape, strict=True)), **seen}
+        for shape, seen in sorted(newest, key=lambda kv: -kv[1]['count'])
+    ]
+
+
+@tool(
+    'tico_tool_activity',
+    'An API tool\'s recent activity, newest first: each call through the proxy (who, method, path, status, result) and, '
+    'for keys on computers, each caller\'s last key use; a summary of repeated calls and errors; who added its keys. '
+    'Never a value. The Tools page\'s owner reads every caller; others their own and their bots\'. Page with cursor.',
+    {
+        'id': _s('Its tico_tool_index row id, without api:'),
+        'since': _s('Only rows from this window on: 24h, 7d or an ISO time'),
+        'result': {
+            'type': 'string',
+            'enum': ['sent', 'refused', 'failed', 'use'],
+            'description': 'sent: reached the vendor (any status); refused: stopped by Tico; failed: vendor unreachable',
+        },
+        'limit': {'type': 'integer', 'minimum': 1, 'maximum': 200},
+        'cursor': _s('The previous page\'s next'),
+    },
+    required=('id',),
+)
+def tool_activity(api, args):
+    reader = _as_person(api)
+    tool_id = quote(str(args['id']).removeprefix('api:'), safe='')
+    query = {k: args[k] for k in ('since', 'result', 'limit', 'cursor') if args.get(k) not in (None, '')}
+    page = reader.get(f'api-tools/{tool_id}/activity', **query)
+    detail = reader.get(f'api-tools/{tool_id}')
+    shown = ('id', 'name', 'vendor', 'service', 'base_url', 'auth_scheme', 'check_path', 'delivery')
+    return {
+        'tool': {k: (detail.get('tool') or {}).get(k) for k in shown},
+        'status': detail.get('status'),
+        'added_by': sorted({k['created_by'] for k in detail.get('keys') or [] if k.get('created_by')}),
+        'summary': activity_summary(page.get('rows') or []),
+        'rows': page.get('rows') or [],
+        'next': page.get('next'),
+    }
 
 
 @tool(

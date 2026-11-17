@@ -71,6 +71,7 @@ person's rights; a refusal names who can. The MCP tools have the same names (`ti
   the run's environment, as every key stored before Tools did).
 
 ## 1. Find what exists first
+Vendor guides, this company's notes and how to learn more: `skills/learn-tools/SKILL.md`.
 Read `tico tool index` and the tool's page before asking anyone for anything. If the service already has a tool with a
 stored key, the bot needs a **level**, not a new key: a second key with the same value is a duplicate (section 6).
 
