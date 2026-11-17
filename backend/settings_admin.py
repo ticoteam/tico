@@ -680,6 +680,12 @@ class SettingsAdmin:
             ),
         )
         BS.write(c, bot_id, config, now)
+        if body.repo:
+            from .repositories import note_named
+
+            # A repository someone named is chosen, as a definition save records it: Tico clones it even when GitHub
+            # had it before the bot. The name a form fills in by itself is not (repositories.Homes).
+            note_named(c, body.repo, (folder, "bot-" + body.slug), self.settings.github_owner)
         if config.get("repo_access_mode") == "all":
             # The template's repository access (card.yaml), given by default: audited as any change, and not a choice,
             # so a seat's default may still follow it (repositories.untouched).
