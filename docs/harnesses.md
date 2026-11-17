@@ -375,6 +375,15 @@ to 2.1.316 (no turn on this computer has used it for 64 minutes)` or `(no turn r
 hours)`. A first install and the owner's **Update** or pin do not wait, and pinning a harness drops a daily update
 still waiting for it.
 
+Each manifest's `[version]` table can name the oldest release Tico supports (`minimum`) and releases known to be
+broken (`broken`: a version, `"2.1.301"`, or a range, `">=2.1.300 <2.1.305"`), checked in with the runner and never
+fetched (`runner-rs/src/cli_compat.rs`). The daily update skips a broken release and stays on the installed one; the
+runner logs why once and the harness's status says it (`Claude Code 2.1.301 is a known-broken release (...); staying on
+2.1.299`), with no update offered. An install or **Update** whose newest release is broken takes the newest earlier
+one that is not. An installed release below the minimum or on the list, the runner's or a person's own, is named in
+the status the same way. A flag only newer releases have is passed only to one that has it, read from the CLI's own
+version line (`2.1.326 (Claude Code)`), so a wrapper's number never decides: `--effort` needs Claude Code 2.1.38.
+
 A harness can be **pinned** to a version: the runner keeps that version and only reports that a newer one exists.
 The manifest can ship a pin (`[update] policy = "pinned"`, `pin = "1.2.3"`), and the owner can pin or unpin per
 computer.
@@ -444,6 +453,8 @@ A harness is a manifest plus a host adapter.
    [version]
    args = ["--version"]
    pattern = '(\d+\.\d+\.\d+)'  # one capture group
+   minimum = "1.2.0"            # optional: the oldest release Tico supports
+   broken = []                  # optional: releases updates skip, "1.2.3" or ">=1.2.3 <1.2.5"
 
    [update]
    policy = "latest"            # latest | pinned (a pinned manifest also needs pin = "1.2.3")

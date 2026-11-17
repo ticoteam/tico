@@ -13,6 +13,11 @@ package = "@openai/codex"
 [version]
 args = ["--version"]
 pattern = '(\d+\.\d+\.\d+)'
+# The oldest release whose app-server has every method the runner calls (`skills/extraRoots/set` is new in 0.136).
+minimum = "0.136.0"
+# Releases the daily update skips, staying on the installed one: a version ("0.170.0") or a range (">=0.170.0 <0.171.0").
+# Say why beside each entry.
+broken = []
 
 [update]
 policy = "latest"
