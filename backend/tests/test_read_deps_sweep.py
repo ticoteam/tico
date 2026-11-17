@@ -126,6 +126,33 @@ def test_a_run_is_walked_once_per_write_and_every_message_naming_it_still_depend
     assert {f"m:reply-{i}" for i in range(12)} <= deps
 
 
+def test_a_walk_built_under_the_write_lock_checks_no_private_tasks_readers(api, monkeypatch):
+    """A Walk is built inside every sweep write and treats every task as private, so working out which private tasks
+    the owner may read was thrown away: on TIDY it held the lock about 0.3 s per write, seconds on a busy host, before
+    the first row, and Slack's gateway timed out behind it ("database is locked"). The Walk skips it; a request's index
+    still does it."""
+    from backend import privacy_index, task_privacy
+    from backend.auth import Identity
+
+    checked = []
+    fake = ({"id": "secret-task", "requester_id": "human:ana", "owner_id": "bot:ops", "readers": "[]", "private": 1},)
+    monkeypatch.setattr(privacy_index.row_clock, "parties", lambda _c: fake)
+    monkeypatch.setattr(task_privacy, "task_readable", lambda _c, _who, row: checked.append(row["id"]) or True)
+    store = api.app.state.store
+    backlog(store, 3)
+    with store.read() as c:
+        walk = read_deps.Walk(c)
+        assert checked == []
+        assert "anything" in walk.index.private and walk.index.denied == set()
+        privacy_index.ReadIndex(c, Identity("human:ana", "human"))
+        assert checked == ["secret-task"]
+    checked.clear()
+    with store.read() as c:  # a fresh connection: the reads above hold a snapshot open
+        assert read_deps.sweep(c) >= 3
+        assert c.execute("SELECT 1 FROM read_index WHERE key='m:old-2'").fetchone()
+    assert checked == []
+
+
 class _Stop:
     """`loop`'s stop with no clock: each wait is recorded and returns at once; the test's pass sets it."""
 
