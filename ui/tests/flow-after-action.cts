@@ -2,10 +2,11 @@ import type {Page, Route} from 'playwright';
 // Offline browser check of Flow right after each action (ui/app/decide.ts decideDo, decideApprove, decideBar), at
 // 1200 px and on a 390 px phone: Approve, Approve with comments (an OK with nothing bound, and one bound to what it
 // shows), a comment a rule holds, Send back, a reply to a bot's question, a tapped choice, Snooze, Skip, Undo after
-// each, and the last item (All done). After each the pane shows the next item (its card and buttons) or All done, the
-// top bar is whole (where you are, ✕), the undo notice stays in the top bar's slot and covers nothing under it, and
-// nothing throws.
-// FLOW_SHOTS=<folder> saves the screen after Approve with comments, desktop and phone, light and dark.
+// each (and an Undo that fails), and the last item (All done). After each the pane shows the next item (its card and
+// buttons) or All done, the top bar is whole (where you are, ✕), and nothing throws. The undo notice is quiet text in
+// the top bar: no box of its own, over no control, the pane or its buttons, and nothing moves for it.
+// FLOW_SHOTS=<folder> saves the screen after Approve with comments, after a held comment and after a failed Undo,
+// desktop and phone, light and dark.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -38,6 +39,7 @@ const BOUND = new Set([3, 4, 13, 14]);
     let needs: Item[] = [];
     const away = new Map<string, Item>();        // what an answer or a snooze took, for its undo
     const holdOnce = new Set<string>();          // tasks whose next comment a rule holds
+    const failUndo = new Set<string>();          // answers whose next undo fails
     const take = (pred: (n: Item) => boolean) => { for (const n of needs.filter(pred)) away.set(n.id, n); needs = needs.filter(n => !pred(n)); };
     const back = (id: string) => { const n = away.get(id); if (n && !needs.some(x => x.id === id)) needs = [n, ...needs]; away.delete(id); };
     const page: Page = await browser.newPage({viewport: {width: 1200, height: 860}, serviceWorkers: 'block'});
@@ -74,6 +76,7 @@ const BOUND = new Set([3, 4, 13, 14]);
         const a = p.match(/^\/api\/v2\/tasks\/(t\d+)\/asks\/(r\d+)\/(answer|ok)$/);
         if (a) { take(n => n['requirement_id'] === a[2]); return json({task: {id: a[1]}, answer_id: 'a-' + a[2], requirement_id: a[2]}); }
         const u = p.match(/^\/api\/v2\/answers\/a-r(\d+)\/undo$/);
+        if (u && failUndo.delete('a-r' + u[1])) return json({error: 'internal', detail: 'Not undone: try again'}, 500);
         if (u) { back(`v${u[1]}:r${u[1]}`); return json({task: {id: 't' + u[1]}}); }
         if (p === '/api/v2/needs-you/snooze') { take(n => n.id === body['id']); return json({id: body['id'], snoozed_until: body['until']}); }
         if (p === '/api/v2/needs-you/unsnooze') { back(String(body['id'])); return json({id: body['id']}); }
@@ -89,6 +92,7 @@ const BOUND = new Set([3, 4, 13, 14]);
     await page.goto('https://tico-ui.test/#/tasks');
     await page.locator('#tasks-root, main').first().waitFor();
 
+    let paneTop = 0;   // where the pane starts under the top bar, which nothing moves
     /** Flow on exactly `items`, on the first of them. */
     const open = async (items: Item[]) => {
       if (await dialog.isVisible()) await dialog.locator('[data-dc="close"]').click();
@@ -98,9 +102,10 @@ const BOUND = new Set([3, 4, 13, 14]);
       await side.locator(`[data-key="${items[0]!.id}"]`).waitFor();
       await dialog.locator('.dc-start').waitFor({state: 'detached'});
       await page.waitForTimeout(450);   // a phone's new item takes no taps for 400 ms (decideCalm)
+      paneTop = await dialog.locator('.dc-main').evaluate(e => e.getBoundingClientRect().top);
     };
-    /** The pane after an action: `next` on screen with its buttons, or All done; the top bar whole; the undo notice in
-        its slot, over nothing under the bar. */
+    /** The pane after an action: `next` on screen with its buttons, or All done; the top bar whole; the undo notice
+        plain text in the top bar, over nothing, and nothing moved for it. */
     const whole = async (what: string, next: string | null) => {
       if (next) await side.locator(`[data-key="${next}"]`).waitFor();
       else await side.locator('.dc-done h2', {hasText: 'All done'}).waitFor();
@@ -108,18 +113,35 @@ const BOUND = new Set([3, 4, 13, 14]);
         const q = (s: string) => document.querySelector<HTMLElement>(`#need-card ${s}`);
         const box = (e: HTMLElement | null) => e ? e.getBoundingClientRect() : null;
         const shown = (e: HTMLElement | null) => !!e && e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden';
-        const head = box(q('.dc-head')), bar = q('.dc-bar'), barBox = bar && !bar.hidden ? box(bar) : null;
+        const head = box(q('.dc-head')), bar = q('.dc-bar'), on = bar && !bar.hidden ? bar : null, barBox = box(on);
+        // What the notice never lies over: the top bar's own controls, the pane, and every button in it.
+        const meet = (o: DOMRect) => !!barBox && o.width > 0 && o.left < barBox.right && o.right > barBox.left && o.top < barBox.bottom && o.bottom > barBox.top;
+        const over = [...document.querySelectorAll<HTMLElement>('#need-card .dc-head > :not(.dc-bar):not(.dc-sayw):not(.dc-up), #need-card .dc-nav > button, #need-card .dc-main, #need-card .dc-main button')]
+          .filter(shown).filter(e => meet(e.getBoundingClientRect())).map(e => e.className || e.tagName);
+        // Nothing moves for it: the pane and its first heading sit where they sit without it.
+        const where = () => { const h = [...document.querySelectorAll<HTMLElement>('#need-card .dc-main h2, #need-card .dc-main h3')].find(shown);
+          return JSON.stringify([box(q('.dc-main')), box(h || null)]); };
+        let shift = '';
+        if (on) { const withIt = where(); on.hidden = true; const without = where(); on.hidden = false; if (withIt !== without) shift = `${withIt} vs ${without}`; }
         // The middle of the pane as it shows (a phone's is one scroll: the side may be under the fold).
         const m = box(q('.dc-main'))!, bottom = Math.min(m.bottom, innerHeight), hit = document.elementFromPoint(m.left + m.width / 2, (m.top + bottom) / 2);
         const buttons = [...document.querySelectorAll<HTMLElement>('#need-card .dc-side [data-key] button, #need-card .dc-side .dc-done button, #need-card .dc-chat button')].filter(shown);
         return {crumb: shown(q('.dc-crumb')), close: shown(q('[data-dc="close"]')), head, bar: barBox, buttons: buttons.length,
-          covered: !!hit?.closest('.dc-bar'), onMain: !!hit?.closest('.dc-main')};
+          covered: !!hit?.closest('.dc-bar'), onMain: !!hit?.closest('.dc-main'), over, shift, paneTop: box(q('.dc-main'))!.top,
+          fill: on ? getComputedStyle(on).backgroundColor : '', undo: box(on?.querySelector<HTMLElement>('[data-dc="undo"]') || null)};
       });
       assert.ok(look.crumb && look.close, `${what}: the top bar shows where you are and ✕ (${JSON.stringify(look)})`);
       assert.ok(look.buttons > 0, `${what}: the pane has its buttons (${JSON.stringify(look)})`);
       assert.ok(!look.covered && look.onMain, `${what}: nothing lies over the pane (${JSON.stringify(look)})`);
-      if (look.bar) assert.ok(look.head && look.bar.top >= look.head.top - 1 && look.bar.bottom <= look.head.bottom + 1 && look.bar.height <= 80,
-        `${what}: the undo notice stays in the top bar (${JSON.stringify(look)})`);
+      assert.equal(look.paneTop, paneTop, `${what}: the pane starts where it did`);
+      if (look.bar) {
+        assert.ok(look.head && look.bar.top >= look.head.top - 1 && look.bar.bottom <= look.head.bottom + 1,
+          `${what}: the undo notice is in the top bar (${JSON.stringify(look)})`);
+        assert.deepEqual(look.over, [], `${what}: the undo notice lies over nothing`);
+        assert.equal(look.shift, '', `${what}: nothing moves for the undo notice`);
+        assert.equal(look.fill, 'rgba(0, 0, 0, 0)', `${what}: the undo notice has no box of its own`);
+        if (look.undo) assert.ok(look.undo.width >= 44 && look.undo.height >= 44 && look.undo.right <= look.bar.right + 1, `${what}: Undo shows whole, a 44 px target (${JSON.stringify(look)})`);
+      }
       assert.deepEqual(errors, [], `${what}: nothing threw`);
     };
     /** Undo from the top bar: the item is back in the walk, and the pane still whole. */
@@ -131,6 +153,14 @@ const BOUND = new Set([3, 4, 13, 14]);
     };
     const toChat = async () => { if (phone()) await dialog.locator('[data-dc="tab"][data-dc-tab="chat"]').click(); };
     const shots = process.env.FLOW_SHOTS || '';
+    const shoot = async (name: string) => {
+      if (!shots) return;
+      for (const scheme of ['light', 'dark']) {
+        await page.evaluate((s: string) => document.documentElement.setAttribute('data-theme', s), scheme);
+        await page.screenshot({path: path.join(shots, `${name}-${scheme}.png`)});
+      }
+      await page.evaluate(() => document.documentElement.removeAttribute('data-theme'));
+    };
 
     for (const width of [1200, 390]) {
       await page.setViewportSize(width === 390 ? {width: 390, height: 844} : {width: 1200, height: 860});
@@ -150,15 +180,23 @@ const BOUND = new Set([3, 4, 13, 14]);
       await approve.click();
       await whole(`${at} Approve with comments (unbound)`, 'v90:r90');
       assert.match(await dialog.locator('.dc-bar').innerText(), /Approved with comments/);
-      if (shots) {
-        for (const scheme of ['light', 'dark'] as const) {
-          await page.emulateMedia({colorScheme: scheme});
-          await page.evaluate((s: string) => document.documentElement.setAttribute('data-theme', s), scheme);
-          await page.screenshot({path: path.join(shots, `approve-with-comments-${at}-${scheme}.png`)});
-        }
-        await page.evaluate(() => document.documentElement.removeAttribute('data-theme'));
-      }
+      await shoot(`approve-with-comments-${at}`);
       await undo(`${at} Approve with comments (unbound)`, 'v2:r2', 'v90:r90');
+
+      // An Undo that fails says so in the same place, in the failure colour.
+      await open([ok(15), ok(90)]);
+      await approve.click();
+      await whole(`${at} Approve before a failed Undo`, 'v90:r90');
+      failUndo.add('a-r15');
+      await dialog.locator('.dc-bar [data-dc="undo"]').click();
+      await dialog.locator('.dc-bar.dc-bar-err', {hasText: 'Not undone: try again'}).waitFor();
+      await whole(`${at} a failed Undo`, 'v90:r90');
+      const tint = await dialog.locator('.dc-bar').evaluate(e => {
+        const probe = document.createElement('span'); probe.style.color = 'var(--fail)'; e.after(probe);
+        const fail = getComputedStyle(probe).color; probe.remove(); return [getComputedStyle(e).color, fail];
+      });
+      assert.equal(tint[0], tint[1], 'it is in the failure colour');
+      await shoot(`undo-failed-${at}`);
 
       // Approve with comments, an OK bound to what it shows: the OK, then the words as a comment.
       await open([ok(3), ok(90)]);
@@ -179,6 +217,7 @@ const BOUND = new Set([3, 4, 13, 14]);
       await approve.click();
       await side.locator('.err', {hasText: 'Your comment did not go'}).waitFor();
       await whole(`${at} a held comment`, 'v4:r4');
+      await shoot(`comment-held-${at}`);
       assert.equal(await approve.count(), 0, 'approved: no Approve left');
       // Undo takes the OK back: Approve is there again, and nothing says it was approved.
       await undo(`${at} a held comment`, 'v4:r4', 'v4:r4');
