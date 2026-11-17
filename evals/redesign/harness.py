@@ -393,53 +393,6 @@ def run_now(org, facts, key, sample=None, who=DANA):
     return org.api("post", f"/api/v2/automations/{auto_id(facts, key)}/run", payload, who=who, wave=W3)
 
 
-def mail_message(msg_id, sender, subject, body="", thread=""):
-    """One received mail in the shape the mail sync publishes (MailMessage in backend/connectors.py)."""
-    from backend.store import H
-
-    return {
-        "msg_id": msg_id,
-        "thread_id": thread or msg_id,
-        "from_addr": sender,
-        "from_header": sender,
-        "subject": subject,
-        "snippet": body[:200],
-        "body": body,
-        "date": H.now(),
-        "labels": ["INBOX"],
-    }
-
-
-def publish_mail(org, mailbox, messages, deleted=()):
-    """A mail sync batch through POST /api/v2/connectors/mail/messages, the route the runner's sync posts to. The
-    runner's token only: it is the one caller allowed to publish (CONTRACT §2 Feeding input)."""
-    from backend.store import H
-
-    payload = {"mailbox": mailbox, "messages": list(messages), "deleted": list(deleted), "synced_at": H.now()}
-    return org.api("post", "/api/v2/connectors/mail/messages", payload, who=org.runner["token"], wave=W3)
-
-
-def mail_computer(org, mailbox):
-    """The mail computer's pass (CONTRACT §1 Mail actions): it claims every queued action for `mailbox` and reports
-    each done, as runner_support/connectors.py `mail_action_tick` does after Gmail took it. Returns the actions it claimed."""
-    claimed = org.api(
-        "post", "/api/v2/automations/mail-actions/claim", {"mailbox": mailbox}, who=org.runner["token"], wave=W3
-    )
-    actions = ((claimed.body or {}).get("actions") or []) if claimed.status == 200 else []
-    for action in actions:
-        kind = action.get("action")
-        done = {
-            "ok": True,
-            "detail": {"draft": "drafted", "send": "sent", "forward": "forwarded"}.get(kind, kind),
-            **({"draft": "d-" + action["id"][:8]} if kind == "draft" else {}),
-            **({"message": "s-" + action["id"][:8]} if kind in ("send", "forward") else {}),
-        }
-        org.api(
-            "post", f"/api/v2/automations/mail-actions/{action['id']}/result", done, who=org.runner["token"], wave=W3
-        )
-    return actions
-
-
 def inbox_send(org, inbox, send, who=DANA):
     """The inbox's send switch (CONTRACT §2 Send switch): true sends replies, false saves drafts."""
     return org.api("patch", f"/api/v2/inboxes/{inbox}", {"send": send}, who=who, wave=W3)

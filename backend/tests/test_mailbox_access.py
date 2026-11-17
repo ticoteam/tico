@@ -365,22 +365,11 @@ def a_stopped_mailbox_is_used_by_nobody_and_stopped_only_by_its_person_or_an_adm
     assert MA.stop(c, "person:ben", s["id"])["status"] == "stopped"
 
 
-def the_connector_reads_its_targets_and_never_writes_here(c):
-    personal(c, CARA)
-    p = MA.connector([{"address": "Cara@Acme.example"}, "ana@acme.example", {"address": ""}])
-    assert p.targets == frozenset({CARA, ANA})
-    assert MA.level(c, p, CARA) == "read"
-    assert MA.level(c, p, BEN) == "none"
-    assert MA.may(c, p, CARA)["organize"] is False
-    assert {box["address"]: box["level"] for box in MA.mailboxes_for(c, p)} == {CARA: "read", ANA: "read"}
-
-
-def test_outside_the_domain_stopping_and_the_connector(api):
+def test_outside_the_domain_and_stopping(api):
     run_steps(
         api,
         outside_the_company_domains_read_and_write_is_read,
         a_stopped_mailbox_is_used_by_nobody_and_stopped_only_by_its_person_or_an_admin,
-        the_connector_reads_its_targets_and_never_writes_here,
     )
 
 
@@ -436,9 +425,6 @@ def test_what_tico_may_do_caps_every_level(api):
 
 
 # ----------------------------------------------------------------------------------------------------- stopping
-
-
-# ---------------------------------------------------------------------------------------------------- the connector
 
 
 # ---------------------------------------------------------------------------------------------- automation actions

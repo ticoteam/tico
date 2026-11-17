@@ -449,8 +449,6 @@ def test_the_recorders_call_reads_todays_meetings_live_with_no_snapshot(api, goo
     lists = len([c for c in google.calls if c[1].endswith("/events")])
     assert get(api, "calendar/upcoming")["events"] == read["events"]  # the native view, same 60 s read
     assert len([c for c in google.calls if c[1].endswith("/events")]) == lists
-    with api.app.state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM connector_snapshots").fetchone()
 
 
 def test_a_google_failure_answers_stale_not_an_error(api, google):
@@ -542,8 +540,6 @@ def test_a_personal_connect_google_calendar_is_read_watched_and_booked_on_the_se
     assert google.minted == []  # never the Workspace key: the person's own grant wins
     asked = {call["scope"] for call in google.refreshes.calls}
     assert asked == {GC.G + "calendar.events", " ".join(sorted(GC.SERVICE_SCOPES["calendar"]))}
-    with api.app.state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM connector_snapshots").fetchone()
 
 
 def test_a_read_only_personal_grant_refuses_a_booking_before_google(api, google):

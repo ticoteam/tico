@@ -45,7 +45,22 @@ GROUPS = {
 BOTS = {"coder": ("web", "human:cara"), "seller": ("sales", "human:dan"), "finance-owner": ("eng", "human:ben")}
 
 
+# The provider keys tests connect with: stored credentials the owner, a credential administrator, may use. They hold no
+# value: the fake providers need none, and a sync reads a value only when one is stored.
+KEYS = ("cred-mercury", "cred-mercury-2", "cred-2", "cred-stripe", "cred-stripe-2", "cred-brex")
+
+
+def store_keys(c: sqlite3.Connection, *ids: str) -> None:
+    for cid in ids or KEYS:
+        c.execute(
+            "INSERT OR IGNORE INTO credentials(id,name,kind,created_at,updated_at,updated_by,created_by) "
+            "VALUES(?,?,'token',?,?,?,?)",
+            (cid, cid, AT, AT, OWNER, OWNER),
+        )
+
+
 def _seed(c: sqlite3.Connection) -> None:
+    store_keys(c)
     H.sync_registry(
         c, {slug: {"name": slug, "runtime": "fake", "status": "active"} for slug in BOTS}, {"people": PEOPLE}
     )
@@ -463,6 +478,7 @@ def connect(
     found, why = sync.probe(fake)  # type: ignore[arg-type]
     assert not why, why
     with store.transaction() as c:
+        store_keys(c, "cred-mercury")  # a store not made from the template (the api fixture's) has none yet
         done = act(
             c,
             OWNER,

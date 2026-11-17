@@ -20,15 +20,13 @@ logged in one place.
   credential; the server reads, files, drafts and queues sends, and enforces the rules.
 - **Bots never call the Gmail or Calendar API directly.** AGENTS.md for every bot with mail
   access says so; the audit log is how we notice if one does.
-- **Auth: one Google service account with domain-wide delegation.** Key at
-  `~/tico-work/secrets/google-sa.json`, mode 600. It is never loaded into a bot's environment;
-  the CLI reads it by path. Google-side scopes are granted once for the whole domain
-  (`gmail.modify`, `calendar`); Google has no scope that allows drafts but forbids sending, so the
-  send gate is Tico's send queue, not Google's.
+- **Auth: one Google service account with domain-wide delegation, or each person's own Connect Google grant.** Both
+  are sealed on the Tico server (Tools > Settings > Email); no computer and no bot's environment ever holds them.
+  Google-side scopes are granted once for the whole domain in Google Admin; Google has no scope that allows drafts but
+  forbids sending, so the send gate is Tico's send queue, not Google's.
 - **Who may act as which mailbox is Tico's answer.** Each command runs as its caller (a bot's turn token, a person's
-  own Tico login) at their own mailbox level, and names the mailbox; a bot's `tools:` block only narrows that
-  (mailbox identity, verbs `read`, `draft`, `send`). Whether a send goes is Tico's sending policy, which a person sets
-  in Tico.
+  own Tico login) at their own mailbox level (Read, or Read and write), and names the mailbox. Whether a send goes is
+  Tico's sending policy, which a person sets in Tico.
 
 ## Commands (the interface every bot learns)
 
@@ -66,9 +64,8 @@ Ana uses the same commands with her own Tico login, at her own level.
 ### Read-only mailbox access
 
 Legal is authorized by Ana (September 4, 2026, #130) to read messages and attachments from
-`ana@acme.example`. Its Gmail access entry has `can: [read]` and `read_only: true`. The shared
-service refuses mailbox filing, labels, mark-read, starring, drafts, and sends for that
-entry. Attachments on outbound mail use the same draft and send permissions as the message without files.
+`ana@acme.example`: it holds Read on her mailbox. The server refuses mailbox filing, labels, mark-read, starring,
+drafts, and sends at Read. Attachments on outbound mail use the same draft and send permissions as the message without files.
 
 Legal names `legal@acme.example` in each command for its own mail and `ana@acme.example` for Ana's; filing is not
 allowed on Ana's.
@@ -108,12 +105,10 @@ including ones already OK'd. Company safeguards cannot be weakened by a bot over
 correspondent, attachments, outside Cc, many outside recipients, legal or money matters), blocked recipients, the
 people the owner handles personally, daily caps per bot/inbox/company, pacing and the undo window. The queue rechecks
 access and policy immediately before dispatch. See [Turning sending on](mail.md#turning-sending-on) for the controls
-and API. The connector keeps one check of its own, access: a bot whose `bot.yaml` grants no `send` verb on the mailbox
-gets a draft.
+and API. A send also needs Read and write on the mailbox.
 
-Attachments must still come from the bot's own folder, outside secret-looking paths. A held send is an OK on a task,
-"Send this email?", bound to the content, recipients and attachment hashes; the server sends the frozen version, so
-edits need a new OK. A numbered GitHub issue does not count: it does not identify a Tico person allowed to OK this send.
+A held send is an OK on a task, "Send this email?", bound to the content, recipients and attachment hashes; the server
+sends the frozen version, so edits need a new OK. A numbered GitHub issue does not count: it does not identify a Tico person allowed to OK this send.
 
 **Per-message OK.** The configured Who can OK rule is bot managers by default, or inbox admins or named people. The
 person sees the frozen preview and OKs it with their own click; nothing a bot passes releases a send. The server checks the OK and the current rule again at dispatch. An OK does not override Never, mailbox
@@ -137,13 +132,13 @@ checks.
 
 **3. Reviewer (a second model, on the server).**
 Tico reviews a bot's own writing before it queues the send: the draft against the incoming thread and the team
-writing rules. Any commitment (money, dates, discounts, legal, guarantees) or unsupported claim fails it. The
-connector runs no reviewer of its own.
+writing rules. Any commitment (money, dates, discounts, legal, guarantees) or unsupported claim fails it.
 
 **4. Execution.**
 The durable queue records content-and-recipient duplicate protection and the operation identity before dispatch. Retries of one operation stay the same; a new intent may follow a definite non-send. Gmail receives frozen raw MIME in the send request, never a mutable draft ID. A provider attempt is never
-automatically repeated if delivery is uncertain. `tico calendar schedule` deletes its newly created event if queueing the
-confirmation fails; a queued confirmation leaves a silent event in place while awaiting an OK or after cancellation.
+automatically repeated if delivery is uncertain. If Tico refuses the invitation after `tico calendar schedule` made its
+event, the booking fails and says so; a queued invitation leaves a silent event in place while awaiting an OK or after
+cancellation.
 Frozen body and attachment
 previews load through the viewer's authorization before the OK.
 The send audit row comes from the provider response.
@@ -198,23 +193,20 @@ where it got to. Nothing of a message is stored; an automation run sees the body
 live through the read API (`GET /api/v2/mail/...`, `tico email`, [Message bots](mail.md)), and every body read is audited
 as `mail.read`.
 
-No computer syncs mail or carries out mail any more: `mailboxes` is empty in `GET /api/v2/connectors/mail/targets`, and
-the server itself sends every queued email and carries out every automation mail action (a computer that still asks for
-them gets none). Older computers may still post a copy to `POST /api/v2/connectors/mail/messages`; the server keeps such
-a copy for `TICO_MAIL_RETENTION_DAYS` (default 180). SQL access to `mail_*` is owner-only.
+No computer touches mail or calendar. The server sends every queued email (`email_sending.drain`), carries out every
+automation mail action (`backend/mail_actions.py`), and books calendars (`POST /api/v2/calendar/appointments`). Tico
+keeps no copy of mail, so there is nothing to sync, retain or sweep.
 
 ## Shared sending policy and queue
 
 The server's `backend/email_sending.py` owns the effective company/inbox/bot sending policy, who can OK,
-bot/inbox/company caps and the durable undo queue. `connectors/mail/actions.py` enqueues automation sends through the
-same API as bot sends; it sends provider mail only with a one-use server dispatch permit. Scheduling offer emails
-use that queue too. Pending work survives restarts, and an uncertain delivery never retries automatically. See
+bot/inbox/company caps and the durable undo queue. Automation sends go through the same queue as bot sends, and
+calendar invitations too. Pending work survives restarts, and an uncertain delivery never retries automatically. See
 [Turning sending on](mail.md#turning-sending-on) for settings, migration behavior, cancellation and the API.
 
 ## Tests and rollout
 
-- Unit tests for policy and lint with fixture emails, `python3 -m unittest`, and preflight runs
-  them for any bot that declares gmail access.
+- Unit tests for policy and lint with fixture emails, in the server's test suite.
 - Week one: all three bots read and draft only (sending Never). Ana reviews drafts in Gmail and on the tasks. Week
   two, if the drafts are good: Influencer at Ask first, so Ana OKs each send in Tico. A message bot sends on its
   own only once a person who manages it sets On their own (Settings > Bots > <bot> > Email sending, or
@@ -229,13 +221,9 @@ use that queue too. Pending work survives restarts, and an uncertain delivery ne
 
 ## What Ana does (about 20 minutes)
 
-1. Google Cloud: a project (suggest `acme-tico-hub`; don't reuse a personal OAuth client from another
-   project). Enable the Gmail
-   API and the Google Calendar API. Create a service account `company-hub-mail`, create a JSON
-   key, save it as `~/tico-work/secrets/google-sa.json`, `chmod 600`. Note its client ID.
-2. Google Workspace admin: Security > Access and data control > API controls > Domain-wide
-   delegation > Add new: the client ID with scopes
-   `https://www.googleapis.com/auth/gmail.modify` and `https://www.googleapis.com/auth/calendar`.
+1. Tools > Settings > Email > Whole Workspace: run the setup command in Cloud Shell, which makes the service account
+   and sends its key to Tico ([Set up Google in Settings](mail.md#set-up-google-in-settings)).
+2. Google Workspace admin: authorize the client ID and the scopes Tico shows, then click **Check** in Tico.
 3. Make sure `legal@acme.example` is a real user mailbox, not a group or alias (delegation can only
    act as a user).
 4. Answer the open questions below.
@@ -245,7 +233,7 @@ use that queue too. Pending work survives restarts, and an uncertain delivery ne
 1. legal@acme.example is a real user mailbox; the legal message bot acts as it directly.
 2. The message bot archives noise from day one, by rules first (unsubscribe link means marketing,
    archive at once), then by the model for what the rules miss.
-3. The second reviewer runs in Tico on every send of a bot's own writing; the connector runs none of its own.
-4. CLI, not a daemon.
+3. The second reviewer runs in Tico on every send of a bot's own writing.
+4. Thin commands over the server, not a daemon on a computer.
 5. The purpose of both message bots is inbox zero with very little input from Ana; add linting
    and automatic rules over time rather than more model calls.

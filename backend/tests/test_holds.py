@@ -44,9 +44,8 @@ def _budget(api, c, rig):
 
 
 def _usage_limit(api, c, rig):
-    _metadata(
+    login_holds._save(
         c,
-        login_holds.key(rig["runner_id"], "", "fake"),
         {"runner_id": rig["runner_id"], "profile": "", "runtime": "fake", "since": NOW, "until": LATER, "reset": LATER},
     )
     H.status_set(c, H.KEEPER, "ops", state="limited", focus="Usage limit")

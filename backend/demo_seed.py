@@ -962,31 +962,6 @@ class Builder:
 
     def messaging(self):
         self.at(hours=2)
-        address = D.INBOX
-        messages = []
-        for index, (subject, body, labels, sender, to) in enumerate(D.MAIL):
-            at = self.ago(hours=2 - index / 4)
-            messages.append(
-                {
-                    "msg_id": f"demo-mail-{index}",
-                    "thread_id": "demo-calibration" if index < 2 else "demo-second-kit",
-                    "epoch": int(at.timestamp()),
-                    "date": at.isoformat(),
-                    "from_addr": sender,
-                    "from_header": sender,
-                    "to": [to],
-                    "subject": subject,
-                    "snippet": body[:120],
-                    "body": body,
-                    "labels": labels,
-                }
-            )
-        self.call(
-            "POST",
-            "connectors/mail/messages",
-            {"mailbox": address, "messages": messages, "synced_at": H.now()},
-            token=self.linux["token"],
-        )
         self.call(
             "POST",
             "slack/channels",

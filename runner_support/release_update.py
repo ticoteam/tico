@@ -40,10 +40,12 @@ DEFERRAL_LIMIT_S = 2 * 3600
 DEFERRAL_FIELDS = ("deferrals", "deferred_since", "deferral_cause", "cause_count")
 KINDS = ("mac", "linux", "docker")
 HELPERS = (
-    "connectors",
     "close-calls",
     "importers",
 )  # scripts/tico-computer installs these as launchd jobs (systemd user units on Linux) beside the bot job
+# Helper jobs a computer set up earlier may still have, and an update removes: mail and calendar run on the server now.
+# A one-time step that 0.7 removes.
+RETIRED = ("connectors",)
 
 
 def key(value):
@@ -475,21 +477,31 @@ def restart_runner(pid, wait=60, env=os.environ, run=subprocess.run):
         pass
 
 
-def helper_labels(env=os.environ):
+def helper_labels(env=os.environ, helpers=HELPERS):
     """The launchd label of each helper job. scripts/tico-computer names them from the bot job's label (`team.tico.tico-bot`,
     or `team.tico.tico.<env>.bot` for a company environment), and launchd gives this process that label."""
     service = env.get("XPC_SERVICE_NAME", "")
     prefix = service[:-3] if service.startswith("team.tico") and service.endswith("bot") else "team.tico.tico-"
-    return {helper: prefix + helper for helper in HELPERS}
+    return {helper: prefix + helper for helper in helpers}
 
 
 def restart_helpers(env=os.environ, run=subprocess.run, agents=None, uid=None, say=None):
     """Restart the helper jobs that are installed on this Mac (scripts/tico-computer restart semantics: `launchctl kickstart -k`,
     or a bootstrap when the job is installed but not loaded), so none keeps the old release in memory. A job with no
-    plist is not installed and is left alone. Returns the restarted job names."""
+    plist is not installed and is left alone. A RETIRED job is removed first. Returns the restarted job names."""
     say = say or (lambda line: print(time.strftime("%Y-%m-%d %H:%M:%S") + " " + line, flush=True))
     agents = Path(agents) if agents else Path.home() / "Library" / "LaunchAgents"
     domain = f"gui/{os.getuid() if uid is None else uid}"
+    for label in helper_labels(env, RETIRED).values():
+        plist = agents / f"{label}.plist"
+        if plist.is_file():
+            try:
+                run(["launchctl", "bootout", f"{domain}/{label}"], capture_output=True, text=True, timeout=60)
+                plist.unlink()
+            except (OSError, subprocess.SubprocessError) as exc:
+                say(f"Tico update: could not remove {label}: {type(exc).__name__}")
+                continue
+            say(f"Tico update: removed {label}, retired")
     restarted = []
     for helper, label in helper_labels(env).items():
         plist = agents / f"{label}.plist"
@@ -515,9 +527,19 @@ def restart_helpers(env=os.environ, run=subprocess.run, agents=None, uid=None, s
 def restart_helpers_systemd(env=os.environ, run=subprocess.run, unit_dir=None, say=None):
     """The systemd counterpart of restart_helpers: restart the helper units installed beside this runner's unit (their
     files are in the user unit directory), so none keeps the old release in memory. Returns the restarted job names."""
-    from .systemd_units import helper_units, is_installed
+    from .systemd_units import helper_units, is_installed, user_unit_dir
 
     say = say or (lambda line: print(time.strftime("%Y-%m-%d %H:%M:%S") + " " + line, flush=True))
+    for unit in helper_units(systemd_unit(env), RETIRED).values():
+        if is_installed(unit, unit_dir):
+            try:
+                run(["systemctl", "--user", "disable", "--now", unit], capture_output=True, text=True, timeout=60)
+                (Path(unit_dir) if unit_dir else user_unit_dir()).joinpath(unit).unlink()
+                run(["systemctl", "--user", "daemon-reload"], capture_output=True, text=True, timeout=60)
+            except (OSError, subprocess.SubprocessError) as exc:
+                say(f"Tico update: could not remove {unit}: {type(exc).__name__}")
+                continue
+            say(f"Tico update: removed {unit}, retired")
     restarted = []
     for helper, unit in helper_units(systemd_unit(env)).items():
         if not is_installed(unit, unit_dir):

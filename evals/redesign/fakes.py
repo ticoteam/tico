@@ -18,8 +18,6 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from connectors.mail.tests.fake import FakeGmailService  # noqa: F401 (the mail tests' own fake, unchanged)
-
 RECORDINGS = Path(__file__).parent / "recordings"
 LIVE_RATE, LIVE_MAX = 0.05, 10
 # The level every decision runs at: Low, Jev (backend/judge.py asks with no level). Every recording was taken at low.

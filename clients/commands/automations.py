@@ -409,3 +409,12 @@ AUTOMATION = (
         example="tico automation template founder --owner person:ana --inbox support@example.com",
     ),
 )
+
+# `tico event-types`: a top-level leaf.
+EVENT_TYPES = (
+    Command(
+        "event-types",
+        "every event Tico names, with a one-line description and an example payload",
+        example="tico event-types --group task",
+    ),
+)

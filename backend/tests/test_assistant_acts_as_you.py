@@ -448,7 +448,6 @@ REVIEWED = {
     "POST /api/v2/bots/{bot}/limit/retry": "retries a bot's limit; writes no sign-in",
     "POST /api/v2/lenses/{lens_id}/runs": "runs a lens on the model provider the company already set",
     "POST /api/v2/files/links": "a file link; 'provider' names the file's host",
-    "POST /api/v2/connectors/calendar/actions/claim": "claims a calendar card the person taps; 'invite' is a calendar invite",
     "POST /api/v2/calendar/appointments": "books a calendar event; its invites go out through the calendar (see the report)",
     "POST /api/v2/imports/transcripts": "imports a transcript; 'provider' is its source field",
     "POST /api/v2/credential-requests": "asks the person for a credential; they enter it in Settings, which is NEVER",

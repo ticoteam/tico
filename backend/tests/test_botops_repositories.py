@@ -82,7 +82,7 @@ def test_a_person_in_settings_still_narrows_and_is_told_what_stops(api, botops, 
 
 
 def test_the_cli_grant_suffix_sets_each_workflow_option_or_leaves_it():
-    from clients.remotecli import chosen_grant
+    from clients.commands.bots import chosen_grant
     from clients.tico import APIError
 
     assert chosen_grant("Acme/product:write") == {"full_name": "Acme/product", "access": "write"}

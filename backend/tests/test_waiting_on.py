@@ -333,6 +333,7 @@ def test_priming_bots_reads_their_run_back_off_once_for_all_of_them(c, general):
     finally:
         c.set_trace_callback(None)
     assert causes == [task_wakes.RUNS_FAILING if b == "bot:worker-3" else None for b in bots]
-    # One for failed runs, one for run budgets (eight before, one a bot), and one for the company's pause.
-    assert len(reads) == 3, reads
+    # One for failed runs, one for run budgets (eight before, one a bot), one for any open login usage limit (holds
+    # PR 6) and one for the company's pause.
+    assert len(reads) == 4, reads
     assert sum("kind='paused' AND holdable_type='company'" in sql for sql in reads) == 1, reads

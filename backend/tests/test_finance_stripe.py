@@ -32,6 +32,7 @@ from backend.tests.helpers.finance_fixtures import (
     finance_template,
     reopen_rows,
     store,
+    store_keys,
 )
 
 DAY = int(datetime(2026, 10, 10, 12, tzinfo=timezone.utc).timestamp())
@@ -641,6 +642,7 @@ def test_the_connections_route_takes_a_stripe_key_through_the_stripe_probe(api, 
     store = api.app.state.store
     with store.transaction() as c:
         assert FA.ensure_setup(c, store.settings.owner_email)
+        store_keys(c, "cred-stripe")
     probed: list[str] = []
 
     def stripe_probe(_store: Any, _vault: Any, credential_id: str) -> tuple[dict[str, object], str]:

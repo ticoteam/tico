@@ -9,6 +9,7 @@ after it, and that turn's success lets the rest of the queue move and the bot st
 import pytest
 
 from backend import bot_settings as BS
+from backend.migrations import DIRECTORY, statements
 from backend.credentials import CredentialCipher
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, post, runner
@@ -349,6 +350,9 @@ def test_an_older_servers_gateway_waits_become_the_gateways_hold(api, monkeypatc
         )
         importlib.import_module("backend.migrations.20261117015737_gateway_waits_to_login_hold").up(c, H.parse_ts(HIT))
         assert not c.execute("SELECT 1 FROM registry_metadata WHERE key LIKE 'gateway-unavailable:%'").fetchone()
+        # The upgrade's later migration then moves the login holds into `holds`.
+        for statement in statements((DIRECTORY / "20261117071838_holds_usage_limit.sql").read_text()):
+            c.execute(statement)
     hold = gateway_hold(api)
     # The cap's month, not the outage's minute: the later wait wins, and the month is weeks away.
     assert hold["until"] == "2026-11-01T00:00:01.000000Z" and hold["bot"] == "ops"

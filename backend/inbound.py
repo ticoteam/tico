@@ -28,7 +28,7 @@ from .auth import validate_identity
 from . import outbound_tls
 from .models import Contract
 from .store import H, Problem, encode
-from .api_contract import ERROR, KEYLESS, api_v2
+from .api_contract import KEYLESS, api_v2, error
 
 TRANSPORT = None  # tests' fake HQ, never a live company database
 RETENTION = 90 * 86400  # bodies and codes; metadata stays
@@ -853,7 +853,7 @@ def install(app, store, settings, auth):
             description=COMPANY_CONNECTION_DESCRIPTION,
             request_body=COMPANY_CONNECTION_BODY,
             responses={
-                code: {**ERROR, 'description': detail}
+                code: error(detail)
                 for code, detail in [
                     ('403', 'Direct human management or portal authorization required'),
                     ('409', 'Missing saved identity, expired code or conflicting connection'),

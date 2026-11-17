@@ -228,7 +228,8 @@ def _declared_tool(entry, used, label):
         status, problem = (
             "problem",
             problem
-            or f"{label} has no Google access: no service-account key (google-sa.json) and no connected Google account (google-oauth.json) in its state directory",
+            or "Tico has no Google access for this bot's mailbox: mail and calendar run on the server, so connect Google in "
+            "Tools > Settings > Email and give the bot its mailbox",
         )
     elif credential == "missing":
         status, problem = "problem", problem or f"Credential missing on {label}"
@@ -522,12 +523,12 @@ def listing(c, settings, bot, reads=None):
     # those reach the run whoever its message bot is.
     google = lambda entry: entry.get("held") and entry.get("env") == "GOOGLE_SA_KEY"
     covered = routines.token_mailboxes(c, bot)
-    if covered and all(google_workspace.authority(c, box) == "workspace" for box in covered):
-        # The server holds the Google Workspace key and mints each run's token (plan v5): this bot needs no key on its
-        # computer, and its mailbox's workspace is the one the server covers.
+    if covered and all(google_workspace.authority(c, box) in ("workspace", "personal") for box in covered):
+        # The server holds the Google Workspace key or the person's own grant and acts on the mail itself (mail spec
+        # v1.1): this bot needs no key on its computer.
         for tool, entry in zip(declared, state["raw"]):
             if entry.get("env") == "GOOGLE_SA_KEY":
-                tool.update(status="ready", problem="", detail="ready (Google Workspace on the server)")
+                tool.update(status="ready", problem="", detail="ready (Google on the server)")
     elif any(google(entry) for entry in state["raw"]) and not covered:
         for tool, entry in zip(declared, state["raw"]):
             if google(entry):

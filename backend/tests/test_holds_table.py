@@ -1,9 +1,13 @@
 """The holds table (backend/holds.py): one writer that keeps one open hold of a kind on a thing, a release that keeps it
 as history, the one backoff and probe, and the migrations that move each kind into it: 20261117061834_holds_runaway
-(bot_budget, run budgets), 20261117072000_holds_failing (run_backoff, failed runs) and 20261117073216_holds_paused
-(the company's pause and each paused bot)."""
+(bot_budget, run budgets), 20261117072000_holds_failing (run_backoff, failed runs), 20261117071838_holds_usage_limit
+(registry_metadata login-hold keys, usage limits) and 20261117073216_holds_paused (the company's pause and each paused
+bot)."""
 
-from backend import company_pause, general_manager, holds, invariants, maintenance_health, run_failures, turn_budgets
+import json
+
+from backend import claim_loads, company_pause, general_manager, holds, invariants, login_holds, maintenance_health
+from backend import run_failures, turn_budgets
 from backend.migrations import DIRECTORY, statements
 from backend.store import H
 from backend.tests.helpers.api import get, post, setup_attempt  # noqa: F401  (the api fixture)
@@ -292,6 +296,95 @@ def test_a_quarantine_wins_over_a_pause_and_the_bot_is_active_only_once_neither_
             lift(c, bot)
             company_pause.resume_bot(c, "human:ana", bot)
             assert state(c, bot) == kept
+
+
+LOGINS = DIRECTORY / "20261117071838_holds_usage_limit.sql"
+LIMIT = "You've hit your session limit · resets 2:40am (UTC)"
+
+
+def test_every_login_hold_key_moves_to_an_open_usage_limit_hold_and_running_it_again_changes_nothing(api):
+    own = {
+        "runner_id": "r1",
+        "profile": "",
+        "runtime": "claude",
+        "since": HELD,
+        "until": "2026-10-24T14:40:00.000000Z",
+        "streak": 2,
+        "reset": True,
+        "capacity": False,
+        "attempt_id": "att-1",
+        "bot": "ops",
+        "error": LIMIT,
+        "probe_job": "job-1",
+        "probe_at": HELD,
+        "cut": "2026-10-24T15:00:00.000000Z",
+        "stuck": ["ops"],
+    }
+    plan = {"runner_id": "", "profile": "sub:s1", "runtime": "claude", "since": EARLIER, "until": HELD, "error": ""}
+    with api.app.state.store.transaction() as c:
+        c.executemany(
+            "INSERT INTO registry_metadata(key,value) VALUES(?,?)",
+            [
+                (login_holds.key("r1", "", "claude"), json.dumps(own)),
+                (login_holds.key("", "sub:s1", "claude"), json.dumps(plan)),
+                ("login-hold:r9||codex", "not json"),  # read as no hold before, and dropped
+                ("login-holding", json.dumps({"other": 1})),  # another key, left as it is
+            ],
+        )
+        for statement in statements(LOGINS.read_text()):
+            c.execute(statement)
+        moved = [dict(r) for r in c.execute("SELECT * FROM holds ORDER BY id")]
+        for statement in statements(LOGINS.read_text()):
+            c.execute(statement)
+        assert [dict(r) for r in c.execute("SELECT * FROM holds ORDER BY id")] == moved
+        left = [r[0] for r in c.execute("SELECT key FROM registry_metadata WHERE key LIKE 'login-hold%'")]
+        assert left == ["login-holding"]
+
+        by_id = {row["id"]: row for row in moved}
+        assert set(by_id) == {"login-hold:r1||claude", "login-hold:sub:s1|claude"}
+        row = by_id["login-hold:r1||claude"]
+        assert (row["kind"], row["holdable_type"], row["holdable_id"], row["bot_id"]) == (
+            "usage_limit",
+            "login",
+            "r1||claude",
+            None,
+        )
+        assert (row["until_at"], row["streak"], row["probe_job_id"], row["probe_at"]) == (
+            own["until"],
+            2,
+            "job-1",
+            HELD,
+        )
+        assert (row["created_by_id"], row["created_at"], row["released_at"]) == ("keeper", HELD, None)
+        assert "until" not in json.loads(row["details"]) and json.loads(row["details"])["cut"] == own["cut"]
+        assert (
+            by_id["login-hold:sub:s1|claude"]["streak"] == 0
+            and by_id["login-hold:sub:s1|claude"]["probe_job_id"] is None
+        )
+
+        # The login holds read the moved rows as they read the keys.
+        assert login_holds.get(c, "r1", "", "claude") == own
+        assert login_holds.get(c, "", "sub:s1", "claude") == {**plan, "streak": 0, "probe_job": None, "probe_at": None}
+        assert login_holds.for_attempt(c, "att-1") == own
+        assert [h["runtime"] for h in login_holds.every(c)] == ["claude", "claude"]
+        assert [h["runner_id"] for h in login_holds.on_runner(c, "r1")] == ["r1"]
+
+
+def test_a_cleared_login_hold_is_kept_as_history_and_the_next_limit_opens_another(api):
+    with api.app.state.store.transaction() as c:
+        first = login_holds.record(c, "r1", "", "claude", HELD, attempt_id="att-1", bot="ops", error=LIMIT)
+        assert login_holds.get(c, "r1", "", "claude") == first
+        login_holds.take_probe(c, "r1", "", "claude", "job-1", now=first["until"])
+        assert login_holds.get(c, "r1", "", "claude")["probe_job"] == "job-1"
+        login_holds.clear(c, "r1", "", "claude")
+        assert login_holds.get(c, "r1", "", "claude") == {} and login_holds.for_attempt(c, "att-1") == {}
+        how = c.execute("SELECT released_how FROM holds WHERE holdable_id='r1||claude'").fetchall()
+        assert [r[0] for r in how] == ["probe_passed"]
+        again = login_holds.record(c, "r1", "", "claude", first["until"], bot="ops", error=LIMIT)
+        assert again["streak"] == 1  # a new run of limits: the cleared one is history
+        loads = claim_loads.Loads(None, None, None, {}, {}, {}, {}, {}, claim_loads.open_holds(c))
+        assert login_holds.get(c, "r1", "", "claude", loads) == again
+        assert login_holds.get(c, "r2", "", "claude", loads) == {}
 
 
 FAILING = DIRECTORY / "20261117072000_holds_failing.sql"

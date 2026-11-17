@@ -129,9 +129,7 @@ def test_at_the_monthly_cap_a_call_is_refused_before_any_model_is_asked(api, mon
     assert result.status_code == 429 and result.json()["error"]["code"] == "spend_cap"
     assert len(engine.calls) == 1, "Jev is not asked at the cap"
 
-    # The callers that ask through the hub (mail triage, "already covered?") carry on as if Decide were off.
-    from connectors.mail import judge as MJ
-
+    # A caller that asks through the hub ("already covered?") is told why, so it carries on as if Decide were off.
     from clients.tico import APIError
 
     class Client:
@@ -143,10 +141,9 @@ def test_at_the_monthly_cap_a_call_is_refused_before_any_model_is_asked(api, mon
             return response.json()
 
     chosen = J.load_set("mail-triage")
-    judged = MJ.judge_message(
-        {"id": "m1", "subject": "Invoice", "from": "a@b.example"}, chosen, J.through_hub(Client())
-    )
-    assert judged["error"] == "spend_cap"
+    with pytest.raises(J.JudgeError) as refused:
+        J.through_hub(Client())({"id": "m1", "subject": "Invoice", "from": "a@b.example"}, chosen["questions"])
+    assert refused.value.code == "spend_cap"
 
     # A cap of 0 is no cap.
     api.app.state.store.settings.decisions_monthly_usd = 0

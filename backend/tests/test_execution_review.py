@@ -229,7 +229,7 @@ def test_an_api_key_quota_refusal_holds_the_bot_and_says_billing_not_subscriptio
 
 def age_limit(api, seconds):
     """Move the bot's limit and every login hold `seconds` into the past, as if that much time went by."""
-    import json as _json
+    from backend import login_holds
     from backend.store import H
 
     with api.app.state.store.transaction() as c:
@@ -240,10 +240,9 @@ def age_limit(api, seconds):
         for table, column in (("attempts", "finished_at"), ("messages", "created_at")):
             for rowid, at in c.execute(f"SELECT rowid,{column} FROM {table} WHERE {column} IS NOT NULL").fetchall():
                 c.execute(f"UPDATE {table} SET {column}=? WHERE rowid=?", (H.shift(at, seconds=-seconds), rowid))
-        for key, value in c.execute("SELECT key,value FROM registry_metadata WHERE key LIKE 'login-hold:%'").fetchall():
-            hold = _json.loads(value)
+        for hold in login_holds.every(c):
             hold.update(since=H.shift(hold['since'], seconds=-seconds), until=H.shift(hold['until'], seconds=-seconds))
-            c.execute("UPDATE registry_metadata SET value=? WHERE key=?", (_json.dumps(hold), key))
+            login_holds._save(c, hold)
 
 
 def test_usage_limited_turn_requeues_and_cools_off_longer_after_a_third_strike(api):

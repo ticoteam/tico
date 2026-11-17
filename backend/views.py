@@ -270,9 +270,6 @@ def assignments_by_runner(c):
     return ordered, active
 
 
-SERVICE_NAMES = {"connector:calendar": "Calendar Tool", "connector:mail": "Mail Tool"}
-
-
 def team_services(c, who, auth):
     if who.role != "owner" and not auth.bot_admin(who):
         return []
@@ -280,9 +277,9 @@ def team_services(c, who, auth):
         {
             **dict(r),
             "scope": "team",
-            "name": SERVICE_NAMES.get(r["service"], r["service"]),
-            "text": f"{SERVICE_NAMES.get(r['service'], r['service'])}: {r['last_error'] or 'No reported error'}",
-            "fix": "Open Health for " + SERVICE_NAMES.get(r["service"], r["service"]),
+            "name": r["service"],
+            "text": f"{r['service']}: {r['last_error'] or 'No reported error'}",
+            "fix": "Open Health for " + r["service"],
         }
         for r in c.execute("SELECT service,last_succeeded_at,last_error FROM service_health ORDER BY service")
     ]
@@ -1177,8 +1174,7 @@ def operation_issues(c, who, auth):
                 needs_person=bool(detail.get("needs_person")),
                 action=detail.get("action"),
             )
-        # Google connections: the Workspace key that stopped working, and a covered mailbox no computer syncs
-        # (backend/google_workspace.py).
+        # Google connections: the Workspace key that stopped working (backend/google_workspace.py).
         from . import google_workspace
 
         key = google_workspace.active(c)
@@ -1190,41 +1186,6 @@ def operation_issues(c, who, auth):
                 needs_person=True,
                 action="Check the key in Tools > Settings > Email.",
             )
-        sync_owners = google_workspace.sync_owners(c)
-        for box in google_workspace.workspace_mailboxes(c) + google_workspace.personal_mailboxes(c):
-            if box["address"] not in sync_owners:
-                add(
-                    "google_workspace",
-                    box["address"] + " has no sync computer",
-                    "Mail and calendar for "
-                    + box["address"]
-                    + " are not syncing because no eligible computer is online.",
-                    needs_person=False,
-                    severity="warning",
-                    action="Bring an isolated company server online."
-                    if box["kind"] == "shared"
-                    else "Bring the person's computer, their Assistant's host or an isolated company server online.",
-                )
-        # A connector that stopped refreshing (the Mac lost the network, or the sync hung) writes no
-        # error, so its age is checked while a Mac is online: calendar refreshes every 45 s, mail
-        # reports every 10 minutes.
-        if c.execute(
-            "SELECT 1 FROM runners_with_state WHERE revoked_at IS NULL AND last_seen_at>?",
-            (runner_online.cutoff(),),
-        ).fetchone():
-            for service, label, limit in (("connector:calendar", "Calendar", 15), ("connector:mail", "Mail", 90)):
-                row = c.execute(
-                    "SELECT last_succeeded_at,last_error FROM service_health WHERE service=?", (service,)
-                ).fetchone()
-                last = H.parse_ts(row["last_succeeded_at"]) if row and row["last_succeeded_at"] else None
-                if last and not row["last_error"] and last < H.parse_ts(H.shift(H.now(), minutes=-limit)):
-                    minutes = int((H.parse_ts(H.now()) - last).total_seconds() // 60)
-                    add(
-                        "service",
-                        SERVICE_NAMES[service] + " needs attention",
-                        f"{label} last refreshed {minutes} minutes ago although a Mac is online; check its Tool log.",
-                        needs_person=False,
-                    )
         # A backup that stops running never writes an error, so age is checked here with
         # the same limits as the CloudWatch alarms; the hub is the notification channel.
         # Both run daily after 03:00 UTC and the restore check retries hourly, so 36 hours
@@ -2972,7 +2933,7 @@ def install_views(app, store, auth, mutate, task_view):
                     }
                 )
             health = [
-                {**dict(r), "name": SERVICE_NAMES.get(r["service"], r["service"])}
+                {**dict(r), "name": r["service"]}
                 for r in c.execute("SELECT service,last_succeeded_at,last_error FROM service_health")
             ]
             from .agents import listing as agent_listing
