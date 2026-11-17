@@ -115,7 +115,8 @@ def test_tokens_are_sealed_never_returned_and_never_logged(api, caplog, tmp_path
     assert BOT not in caplog.text and APP_TOKEN not in caplog.text
     store = api.app_state.store
     assert slack_app.load(store)["bot_token"] == BOT
-    # Vault rows the server uses: never listed, granted or revealed.
+    # Vault rows the server uses: never listed, granted or revealed, a credential administrator included.
+    store.settings.credential_admins = ("ana@acme.example",)
     listed = api.get("/api/v2/credentials", headers=h())
     assert listed.status_code == 200 and slack_app.BOT_ID not in listed.text
     revealed = api.post(f"/api/v2/credentials/{slack_app.BOT_ID}/reveal", headers=h())
