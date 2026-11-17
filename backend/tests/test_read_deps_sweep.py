@@ -146,7 +146,8 @@ def test_a_walk_built_under_the_write_lock_checks_no_private_tasks_readers(api, 
         assert "anything" in walk.index.private and walk.index.denied == set()
         privacy_index.ReadIndex(c, Identity("human:ana", "human"))
         assert checked == ["secret-task"]
-        checked.clear()
+    checked.clear()
+    with store.read() as c:  # a fresh connection: the reads above hold a snapshot open
         assert read_deps.sweep(c) >= 3
         assert c.execute("SELECT 1 FROM read_index WHERE key='m:old-2'").fetchone()
     assert checked == []
