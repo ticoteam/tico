@@ -126,11 +126,11 @@ def test_a_route_says_what_fastapi_cannot_see():
     responses, sign-in, the key) lands on the operation, and the route's own declaration is never changed."""
     from fastapi import FastAPI
 
-    from backend.api_contract import ERROR, api_v2
+    from backend.api_contract import api_v2, error
 
     app = FastAPI()
     body = {"required": True, "content": {"text/plain": {"schema": {"type": "string"}}}}
-    gone = {**ERROR, "description": "not_found"}
+    gone = error("not_found")
 
     @app.post(
         "/api/v2/things",
@@ -157,7 +157,8 @@ def test_a_route_says_what_fastapi_cannot_see():
     op = document["paths"]["/api/v2/things"]["post"]
     assert op["description"] == "Reads its body by hand." and op["requestBody"] == body
     assert op["responses"]["200"]["description"] == "Bytes" and op["responses"]["404"] == gone
-    assert {"401", "422"} <= set(op["responses"])
+    assert op["responses"]["401"]["description"] == "Not signed in"  # each error keeps its own description
+    assert op["responses"]["422"]["description"].startswith("Invalid request or rule")
     q, key = op["parameters"]
     assert q["description"] == "What to look for"
     assert (key["name"], key["required"], key["description"]) == ("Idempotency-Key", False, "Not needed.")

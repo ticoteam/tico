@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 
 from . import needs_shape
-from .api_contract import ERROR, MARK, ref
+from .api_contract import MARK, error, ref
 from .legacy_spellings import legacy_of
 from .sources import KINDS as SOURCE_KINDS
 from .task_documents import NAMES as DOCUMENT_NAMES
@@ -5960,11 +5960,8 @@ def spec(app):
             if param["name"] in contract.get("parameters", {}):
                 param["description"] = contract["parameters"][param["name"]]
         if contract.get("security") != []:
-            responses["401"] = {"description": "Not signed in", **ERROR}
-            responses["422"] = {
-                "description": "Invalid request or rule: error.code and field-specific error.detail",
-                **ERROR,
-            }
+            responses["401"] = error("Not signed in")
+            responses["422"] = error("Invalid request or rule: error.code and field-specific error.detail")
         for code, response in contract.get("responses", {}).items():
             if response is None:
                 responses.pop(code, None)

@@ -22,19 +22,17 @@ def ref(name: str) -> dict[str, str]:
     return {"$ref": "#/components/schemas/" + name}
 
 
-# A response that is an error: {"error": {...}}. Give it its own description: {**ERROR, "description": "..."}.
-ERROR: dict[str, Any] = {
-    "description": 'A problem: {"error": {"code", "detail", "retryable", ...}}',
-    "content": {"application/json": {"schema": ref("Problem")}},
-}
+def error(description: str) -> dict[str, Any]:
+    """A response that is an error, {"error": {"code", "detail", "retryable", ...}}, under its own description."""
+    return {"description": description, "content": {"application/json": {"schema": ref("Problem")}}}
+
 
 # The 422 of a write a bot may ask through: its ask can fail the person's asking criteria.
-ASK_REFUSED: dict[str, Any] = {
-    **ERROR,
-    "description": "ask_refused: a bot ask fails the person's asking criteria; "
+ASK_REFUSED = error(
+    "ask_refused: a bot ask fails the person's asking criteria; "
     "detail gives the reason and fix. Nothing is created or changed; no quarantine "
-    "or org-rule hold. Progress notes should be posted as updates.",
-}
+    "or org-rule hold. Progress notes should be posted as updates."
+)
 
 # The Idempotency-Key note of a PUT whose handler never passes through Store.mutate.
 KEYLESS = "Optional: this write does not check the header."

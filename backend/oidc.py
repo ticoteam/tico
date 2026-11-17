@@ -32,7 +32,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from . import brand_icons
 from .config import PRODUCT_NAME
 from .store import H, Problem, digest
-from .api_contract import ERROR, api_v2
+from .api_contract import api_v2, error
 
 log = logging.getLogger("tico.oidc")
 
@@ -1033,7 +1033,7 @@ def register(app, auth):
             "Token",
             request_body=TOKEN_REQUEST,
             security=[],
-            responses={"400": {"description": "invalid_grant, or the request is malformed", **ERROR}},
+            responses={"400": error("invalid_grant, or the request is malformed")},
         ),
     )
     async def token(request: Request):
