@@ -11,7 +11,7 @@ from . import org_rule_check
 from . import task_privacy as privacy
 from . import teammate_access
 from . import visuals
-from .api_contract import api_v2
+from .api_contract import ASK_REFUSED, api_v2
 
 
 def register(
@@ -204,7 +204,10 @@ def register(
                 )
             }
 
-    @app.post("/api/v2/tasks/{tid}/comments", **api_v2("Tasks", "commentOnTask", "Comment on a task", "CommentResult"))
+    @app.post(
+        "/api/v2/tasks/{tid}/comments",
+        **api_v2("Tasks", "commentOnTask", "Comment on a task", "CommentResult", responses={"422": ASK_REFUSED}),
+    )
     def task_comment(request: Request, tid: str, body: M.TaskComment):
         """A comment on a task. `delivery` says how it reaches the task's bot (backend/delivery.py): steer into its
         running turn, queue right after it, defer to its next turn on the task (at the latest `defer_for`, 24h), or

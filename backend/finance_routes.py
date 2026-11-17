@@ -169,6 +169,12 @@ def books_problem(e: books_link.BrokerFailed) -> Problem:
     return Problem("books_unavailable", "HQ could not finish that books step: try again in a moment", 502)
 
 
+TAX_CSV = {
+    "description": "The workpaper as CSV (text/csv, sent as an attachment)",
+    "content": {"text/csv": {"schema": {"type": "string"}}},
+}
+
+
 def install(app, store, auth, mutate):
     # The private-line audit a request has armed (spec §7.5): its reader, the private accounts that reader sees in full,
     # and the ids the request names. `viewer` clears it at the start of every request, so it never outlives one.
@@ -972,6 +978,7 @@ def install(app, store, auth, mutate):
             "Finance",
             "getFinanceSalesTaxCsv",
             "The sales tax workpaper as CSV, the same lines as on screen. Full view only",
+            answer=TAX_CSV,
         ),
     )
     def finance_sales_tax_csv(
@@ -1011,7 +1018,10 @@ def install(app, store, auth, mutate):
     @app.get(
         "/api/v2/finance/tax/1099.csv",
         **api_v2(
-            "Finance", "getFinance1099Csv", "The 1099 workpaper as CSV, the same lines as on screen. Full view only"
+            "Finance",
+            "getFinance1099Csv",
+            "The 1099 workpaper as CSV, the same lines as on screen. Full view only",
+            answer=TAX_CSV,
         ),
     )
     def finance_form_1099_csv(

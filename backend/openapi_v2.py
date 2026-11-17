@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 
 from . import needs_shape
-from .api_contract import MARK
+from .api_contract import ERROR, MARK, ref
 from .legacy_spellings import legacy_of
 from .sources import KINDS as SOURCE_KINDS
 from .task_documents import NAMES as DOCUMENT_NAMES
@@ -59,47 +59,6 @@ TAGS = {
     "Live events": "One server-sent event stream for a person's pages (docs/custom-frontend.md, Live events): tasks, "
     "messages, runs, bots and Needs you as they change, resumable from a change number.",
 }
-
-EVENTS_DESCRIPTION = (
-    "text/event-stream. Each change is `id: <change number>`, `event: <topic>` and JSON `data` with `seq`, `actor` "
-    "(who made it, when the viewer may know) and `at`:\n"
-    "- `tasks`: `id`, `kind` (the last change), `kinds` (all distinct change kinds for this task in the batch) and "
-    "`task` (as `GET /api/v2/tasks` shows it to the viewer), or `gone: true` for a deleted task (TaskEvent schema). "
-    "When the batch moved its owner or status, `was` (`owner`, `status`) is what they were, only to a viewer who could "
-    "read the task before and can now; a viewer who never could gets no event. "
-    "Refetch files and linked pages when `kinds` includes `files`, even if `kind` is `update`. "
-    "A `bulk: true` event without `id` means read task lists in full.\n"
-    "- `meeting_items`: `meeting_id`, `kind`; refetch items. `presence`: `place`; refetch presence. "
-    "Explicit meeting/task subscriptions receive one `gone: true` on access loss, rechecked within 60 seconds.\n"
-    "- `messages`: `id`, `conversation_id` and `message` (as a conversation page shows it), or `deleted: true`; "
-    "a chat goal set, paused, met or stopped is `goal_id` and `goal`.\n"
-    "- `runs`: `run_id`, `conversation_id`, `bot`, and either `output` (one step of the run: `kind`, `payload`) or "
-    "`state` (`job_id`, and the job's state or the run's `state`: docs/status-and-state.md, Runs).\n"
-    "- `bots`: `bot` and `status` (as `GET /api/v2/status` lists it).\n"
-    "- `threads`: `thread_id`, `root_id` and `kind` (docs/dev/threads-contract.md §9); an `activity` one also carries "
-    "`counters`, `message_id` (the newest message it stands for that the viewer reads), `unread` and `unread_count` "
-    "(how many of the messages it stands for are unread for the viewer: add that many) and `thread` (`id`, `title`, "
-    "`name`, `audience`, `root_id`, `parent_id`, `kind`, `last_message_at`, and `dm_with`/`dm_with_count` for a DM), "
-    "so a list bumps its row, or adds one it does not hold, without reading it again; `pinned` carries `actor`, `pinned` and `pinned_for_everyone`; `bot_status` (to the "
-    "root's readers, at most one a run step every 5 s) carries `bots`, the root's whole list as "
-    "`GET /api/v2/threads/{thread_id}/bot-status` gives it; `routed` carries `message_id` and `routed`.\n"
-    "- `needs`: the viewer's own Needs-you `count`, `plate_count` and `items` (as `GET /api/v2/needs-you`; a mention "
-    "item carries `message_id`, `conversation_id` and its thread's `root_id`), whenever anything on it may have moved. "
-    "With `needs=changes`: `count`, `plate_count`, `version`, each bot's count (`bots`), each stage's count (`stages`), counts by kind (`by_kind`), "
-    "task ids represented by other cards (`folded_task_ids`), and the ids `changed` and `removed` "
-    "since `base` (null when more than 100 moved: read the list whole). `folded_task_ids` is omitted when unchanged "
-    "(keep the held set), or null when the replacement or its difference exceeds 100 ids (read the list whole); read the changed items with "
-    "`GET /api/v2/needs-you?ids=`, and the whole list (or its first pages) when the version held is not "
-    "`base`. `ready` then carries `needs_version`.\n"
-    "- `calendar`: `calendar` (the calendar row id, `human:<id>` for time away, `google:<id>` for a Google write), "
-    "`id` and `kind` (event, away, google); refetch the calendar window on screen.\n"
-    "- `letters`: `id` and `letter` (as `GET /api/v2/letters/{id}` shows it), only to readers of that record. Patch this row without rereading the list.\n"
-    "Also `event: ready` (`seq`: where the log stands), `event: cursor` (the change number to resume from, past changes "
-    "the viewer may not see), `event: reset` (the client was further behind than the log keeps, 24 hours or more than 5,000 changes: read in full), "
-    "`event: expired` (sign-in no longer valid; sign in and reconnect), and a `: keepalive` comment every 15 seconds. "
-    "Only what the viewer may read is sent. A stream ends after about fifteen minutes; reconnect with `after` (or the "
-    "browser's own `Last-Event-ID`). People only: a bot is refused with 403."
-)
 
 
 def _t(kind):
@@ -160,7 +119,6 @@ def items(schema):
     return {"type": "array", "items": _t(schema) if isinstance(schema, str) else schema}
 
 
-ref = lambda name: {"$ref": "#/components/schemas/" + name}
 ACTORS = {
     "type": "object",
     "additionalProperties": {"type": "string"},
@@ -5051,33 +5009,6 @@ SCHEMAS.update(
 
 ANSWERS = SCHEMAS
 
-# Documentation for the two sign-in routes whose bodies the handlers read by hand.
-TOKEN_REQUEST = {
-    "required": True,
-    "content": {
-        "application/json": {
-            "schema": {
-                "type": "object",
-                "required": ["code", "code_verifier"],
-                "additionalProperties": False,
-                "properties": {
-                    "code": {"type": "string", "description": "From the URL fragment: #tico_code=..."},
-                    "code_verifier": {
-                        "type": "string",
-                        "minLength": 43,
-                        "maxLength": 128,
-                        "description": "The PKCE verifier whose S256 hash was the code_challenge.",
-                    },
-                },
-            }
-        }
-    },
-}
-
-ERROR = {
-    "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-    "content": {"application/json": {"schema": ref("Problem")}},
-}
 PROBLEM = {
     "type": "object",
     "required": ["error"],
@@ -5378,22 +5309,9 @@ SCHEMAS['BotDreamView'] = obj(
     }
 )
 
-# The methods that write. Each /api/v2 write declares the Idempotency-Key header, required unless an exception says not.
+# The methods that write. Each /api/v2 write declares the Idempotency-Key header, required unless its route says not
+# (api_v2's idempotency).
 WRITE_METHODS = ("post", "put", "patch", "delete")
-# PUTs whose handlers never pass through Store.mutate, so they accept a write without the key.
-PUT_WITHOUT_KEY = frozenset(
-    {
-        "/api/v2/bots/{bot}/github-repos",
-        "/api/v2/bots/{bot}/repositories",
-        "/api/v2/finance/bills-address",
-        "/api/v2/hooks/wake-url",
-        "/api/v2/inbound/inboxes/{ident}/audience",
-        "/api/v2/postal/addresses/{address_id}/grants/{grantee_type}/{grantee_id}",
-        "/api/v2/postal/settings",
-        "/api/v2/repositories/settings",
-        "/api/v2/repositories/{owner}/{repo}",
-    }
-)
 
 DESCRIPTION = (
     "The stable API for building your own frontend on Tico. Everything here keeps its shape within v2: fields are added, "
@@ -5979,23 +5897,9 @@ SCHEMAS.update(
 )
 
 
-MENTIONS_DESCRIPTION = (
-    "Turns the file paths and names a bot wrote (in a message, a page, a report) into its files, for links. "
-    "A value with a folder (`reports/pack.docx`, `/home/bot/checkout/reports/pack.docx`) matches the file published "
-    "from that path in the bot's checkout, else the one file whose path it ends with or that ends with it. A bare name "
-    "(`pack.docx`) matches only when exactly one of the bot's files has that name. Only the files the caller may see "
-    "count, by each file's current version; archived files and links never match. A value that is not exactly one "
-    "file is absent from `files`: none, two or more (never a guess), or one the caller may not read all look the same. "
-    "Tico's web app also tries a bare name inside a folder named earlier in the same paragraph; this route does not, "
-    "so send the joined path yourself. A caller who may see the bot but none of its files gets 200 with `files` "
-    "empty, as does a request with no m. Errors: 401 not signed in, 404 no such bot or one the caller may not see, "
-    "422 more than 60 m values."
-)
-
-
 def operations(app):
-    """Each stable operation as (path, method, tag, operationId, summary, answer name in SCHEMAS): the routes whose
-    decorator carries api_v2(...), in the order the app serves them."""
+    """Each stable operation as (path, method, tag, operationId, summary, contract): the routes whose decorator
+    carries api_v2(...), in the order the app serves them, with what api_v2 says about each (backend/api_contract.py)."""
     found, seen = [], set()
     for route in app.routes:
         extra = getattr(route, "openapi_extra", None) or {}
@@ -6034,179 +5938,56 @@ def spec(app):
     """The v2 document for this app: the stable operations of `app.openapi()`, described."""
     full = copy.deepcopy(app.openapi())
     paths = {}
-    for path, method, tag, op_id, summary, answer in operations(app):
+    for path, method, tag, op_id, summary, contract in operations(app):
         op = (full["paths"].get(path) or {}).get(method)
         if op is None:
             raise RuntimeError("the stable API lists %s %s, which the server does not serve" % (method.upper(), path))
+        contract = copy.deepcopy(contract)  # the document is the caller's to change; the routes' declarations are not
         op.pop(MARK, None)
         op.pop("tags", None)  # FastAPI puts a route's own tags first; the document has them after its answers
         op["tags"], op["operationId"], op["summary"] = [tag], op_id, summary
         op.pop("description", None)
         responses = {code: r for code, r in op.get("responses", {}).items() if code != "422"}
+        answer = contract.get("answer")
+        if isinstance(answer, str):
+            answer = {"description": "OK", "content": {"application/json": {"schema": ref(answer)}}}
         if answer:
-            responses["200"] = {"description": "OK", "content": {"application/json": {"schema": ref(answer)}}}
-        if path == "/api/v2/events":
-            responses["200"] = {
-                "description": EVENTS_DESCRIPTION,
-                "x-task-event-schema": ref("TaskEvent"),
-                "content": {"text/event-stream": {"schema": {"type": "string"}}},
-            }
-        if path == "/api/v2/cloud-machines/support":
-            op["description"] = (
-                "HQ is the source of the switch and helper states; no local copy is kept. "
-                "GET returns available false, on null and an empty machines list off Tico Cloud "
-                "or when HQ answers 404 not_cloud. Demo and rehearsal never contact HQ. "
-                "PUT accepts a boolean on, needs the owner and refuses support sessions. "
-                "Core assigns an increasing revision and keeps it for retries of the same "
-                "Idempotency-Key. A 409 stale_revision is final and carries HQ's current boolean "
-                "on in the error. After an uncertain PUT, read HQ again before showing a saved state."
-            )
-            responses["403"] = {"description": "People only; changing the switch needs the owner", **ERROR}
-            responses["502"] = {"description": "Didn't reach Tico HQ, or HQ's answer could not be used", **ERROR}
-            if method == "put":
-                responses["404"] = {"description": "not_cloud: cloud-machine support is not available", **ERROR}
-        if path == "/api/v2/bots/{bot}/files/mentions":
-            op["description"] = MENTIONS_DESCRIPTION
-            for param in op.get("parameters", []):
-                if param.get("name") == "m":
-                    param["description"] = (
-                        "A path or file name as the bot wrote it; repeat for each (m=a&m=b), at most 60. Values are "
-                        "trimmed, a repeat counts once, and one over 300 characters is ignored. Before matching, "
-                        "\\ becomes / and a leading ./ is dropped; the answer keeps the value as sent (trimmed)"
-                    )
-            responses["404"] = {**ERROR, "description": "not_found: no such bot, or one the caller may not see"}
-        if method == "get" and path.startswith("/api/v2/files/") and path.endswith("/versions/{number}"):
-            responses["200"] = {
-                "description": "The file's bytes (application/octet-stream, sent as an attachment)",
-                "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}},
-            }
-        if method == "get" and path.startswith("/api/v2/finance/tax/") and path.endswith(".csv"):
-            responses["200"] = {
-                "description": "The workpaper as CSV (text/csv, sent as an attachment)",
-                "content": {"text/csv": {"schema": {"type": "string"}}},
-            }
-        # The logo travels as its raw bytes, not JSON, and the preview is a page of HTML (company_page/api.py).
-        if path == "/api/v2/company-page/logo" and method == "post":
-            op["requestBody"] = {
-                "required": True,
-                "description": "The image itself, up to 2 MB. SVG is refused.",
-                "content": {mime: {"schema": {"type": "string", "format": "binary"}} for mime in COMPANY_LOGO_TYPES},
-            }
-        if path == "/api/v2/company-page/logo" and method == "get":
-            responses["200"] = {
-                "description": "The logo's bytes, sent as their image type",
-                "content": {mime: {"schema": {"type": "string", "format": "binary"}} for mime in COMPANY_LOGO_TYPES},
-            }
-        if path == "/api/v2/company-page/preview" and method == "get":
-            responses["200"] = {
-                "description": "The page as HTML for one audience, never kept",
-                "content": {"text/html": {"schema": {"type": "string"}}},
-            }
-        if path == "/auth/login":
-            responses = {
-                "302": {"description": "Redirect to the identity provider"},
-                "400": {"description": "next is not an allowed origin, or code_challenge is missing"},
-            }
-        if path not in ("/healthz", "/auth/login", "/auth/token"):
+            responses["200"] = answer
+        if "request_body" in contract:
+            op["requestBody"] = contract["request_body"]
+        if "description" in contract:
+            op["description"] = contract["description"]
+        for param in op.get("parameters", []):
+            if param["name"] in contract.get("parameters", {}):
+                param["description"] = contract["parameters"][param["name"]]
+        if contract.get("security") != []:
             responses["401"] = {"description": "Not signed in", **ERROR}
             responses["422"] = {
                 "description": "Invalid request or rule: error.code and field-specific error.detail",
                 **ERROR,
             }
-        if method == "post" and path in (
-            "/api/v2/tasks",
-            "/api/v2/tasks/{tid}",
-            "/api/v2/tasks/{tid}/comments",
-            "/api/v2/messages",
-            "/api/v2/conversations/{cid}/messages",
-        ):
-            responses["422"] = {
-                **ERROR,
-                "description": "ask_refused: a bot ask fails the person's asking criteria; "
-                "detail gives the reason and fix. Nothing is created or changed; no quarantine "
-                "or org-rule hold. Progress notes should be posted as updates.",
-            }
-        if path == "/auth/token":
-            op["requestBody"] = TOKEN_REQUEST
-            op["security"] = []
-            responses["400"] = {"description": "invalid_grant, or the request is malformed", **ERROR}
-        if path == "/api/v2/mail/messages/organize":
-            op["requestBody"] = {"required": True, "content": {"application/json": {"schema": ref("MailOrganizeBody")}}}
-            responses["403"] = {"description": "Organize access or the company organize switch is off", **ERROR}
-        connection = path == '/api/v2/inbound/company-connection'
-        if connection:
-            op['requestBody'] = {
-                'required': True,
-                'content': {
-                    'application/json': {
-                        'schema': {
-                            'type': 'object',
-                            'additionalProperties': False,
-                            'required': ['action', 'code'],
-                            'properties': {
-                                'action': {'type': 'string', 'enum': ['preview', 'connect']},
-                                'code': {
-                                    'type': 'string',
-                                    'minLength': 43,
-                                    'maxLength': 43,
-                                    'pattern': '^[A-Za-z0-9_-]{43}$',
-                                    'writeOnly': True,
-                                },
-                            },
-                        }
-                    }
-                },
-            }
-            op['description'] = (
-                'Direct signed-in human owner/admin only; no personal tokens, support or delegated agents. '
-                'Preview shows the target company before explicit consent to share Inbox in both directions. '
-                'The server supplies its private key and existing reported installation identity; neither belongs in this body. '
-                'Requests are limited to 2 KiB; code validation errors never echo supplied values. '
-                'Disconnect in the portal stops future access, preserving merged history and existing local copies.'
-            )
-            for code, detail in [
-                ('403', 'Direct human management or portal authorization required'),
-                ('409', 'Missing saved identity, expired code or conflicting connection'),
-                ('503', 'Inbox connection unavailable; reconcile the same code in its original lifetime'),
-            ]:
-                responses[code] = {**ERROR, 'description': detail}
-        if path in ("/healthz", "/auth/login"):
-            op["security"] = []
+        for code, response in contract.get("responses", {}).items():
+            if response is None:
+                responses.pop(code, None)
+            else:
+                responses[code] = response
+        if "security" in contract:
+            op["security"] = contract["security"]
         op["responses"] = dict(sorted(responses.items()))
-        inbound = path == "/api/v2/inbound/tasks"
-        granola = path.startswith("/api/v2/meetings/granola")
-        if inbound:
-            op["security"] = [{"serviceKey": []}]
         if method in WRITE_METHODS and path.startswith("/api/v2/"):
-            keyless = method == "put" and path in PUT_WITHOUT_KEY
+            optional = contract.get("idempotency")
             parameters = op.setdefault("parameters", [])
             parameters[:] = [p for p in parameters if (p.get("name"), p.get("in")) != ("Idempotency-Key", "header")]
             parameters.append(
                 {
                     "name": "Idempotency-Key",
                     "in": "header",
-                    "required": not (inbound or granola or connection or keyless),
+                    "required": optional is None,
                     "schema": {"type": "string"},
-                    "description": (
-                        "Not needed: the pair (service key, `key`) makes a repeated call harmless, and the header "
-                        "is ignored."
-                        if inbound
-                        else 'Optional. Retry the same action and code; HQ rechecks the current grant, role, session and original expiry without readoption.'
-                        if connection
-                        else "Optional. Sync uses a two-minute debounce; connecting starts a new device sign-in."
-                        if granola
-                        else "Optional: this write does not check the header."
-                        if keyless
-                        else "1-200 characters. Reusing a key with the same body replays the first answer."
-                    ),
+                    "description": optional
+                    or "1-200 characters. Reusing a key with the same body replays the first answer.",
                 }
             )
-        if method == "post" and path.startswith("/api/v2/calls/") and path.endswith("/token"):
-            # A refresh writes nothing, so the key is optional and ignored.
-            for param in op["parameters"]:
-                if param.get("name") == "Idempotency-Key":
-                    param["required"] = False
-                    param["description"] = "Not needed: a refresh writes nothing; the header is ignored."
         paths.setdefault(path, {})[method] = op
     used = set()
     _refs(paths, used)
@@ -6360,7 +6141,6 @@ SCHEMAS.update(
 
 # The Company page (backend/company_page): what an owner or an admin writes, and the page's own settings. Readers never
 # reach these routes; the reader origin serves the page and its data without a key.
-COMPANY_LOGO_TYPES = ("image/png", "image/jpeg", "image/webp")  # company_page/release.py LOGO_TYPES
 TAGS["Company page"] = (
     "The public page for the company's updates: its audiences, the editions each one reads, the stats "
     "the page shows, the readers who sign in to it, and the logo (docs/company-page.md)."

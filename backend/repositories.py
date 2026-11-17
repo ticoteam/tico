@@ -17,7 +17,7 @@ from . import read_cache
 from .auth import validate_identity
 from .store import Problem
 from . import bot_settings as BS
-from .api_contract import api_v2
+from .api_contract import KEYLESS, api_v2
 
 SETTINGS = 'repos_new_bot_default'
 # {bot: [owner/name, ...]}: write grants an Owner or admin let start and manage workflow runs (Actions: write).
@@ -1297,7 +1297,8 @@ def install(app, store, service):
         return listing()
 
     @app.put(
-        '/api/v2/repositories/settings', **api_v2("Repositories", "setRepositoryDefaults", "New bot repository default")
+        '/api/v2/repositories/settings',
+        **api_v2("Repositories", "setRepositoryDefaults", "New bot repository default", idempotency=KEYLESS),
     )
     def settings(request: Request, body: RepoSettings):
         who = human(request, True)
@@ -1308,7 +1309,8 @@ def install(app, store, service):
         return body.model_dump()
 
     @app.put(
-        '/api/v2/repositories/{owner}/{repo}', **api_v2("Repositories", "updateRepository", "Tick or edit a repository")
+        '/api/v2/repositories/{owner}/{repo}',
+        **api_v2("Repositories", "updateRepository", "Tick or edit a repository", idempotency=KEYLESS),
     )
     def update(request: Request, owner: str, repo: str, body: RepoUpdate):
         who = human(request, True)
@@ -1365,7 +1367,9 @@ def install(app, store, service):
 
     @app.put(
         '/api/v2/bots/{bot}/repositories',
-        **api_v2("Repositories", "setBotRepositories", "Set bot repository access", "BotRepositories"),
+        **api_v2(
+            "Repositories", "setBotRepositories", "Set bot repository access", "BotRepositories", idempotency=KEYLESS
+        ),
     )
     def bot_set(request: Request, bot: str, body: RepoAccessUpdate):
         with store.read() as c:

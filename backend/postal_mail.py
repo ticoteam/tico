@@ -53,7 +53,7 @@ from .models import Contract
 from .store import Problem
 from . import bot_settings as BS
 from . import read_cache
-from .api_contract import api_v2
+from .api_contract import KEYLESS, api_v2
 
 LOG = logging.getLogger("tico.postal_mail")
 TRANSPORT = None  # tests' fake HQ, never the live one
@@ -1155,6 +1155,7 @@ def install(app, settings, store, auth):
             "grantPostalMailRead",
             "Give one person or bot Read, including private letters and scans; owner or admin",
             "PostalMailGrantResult",
+            idempotency=KEYLESS,
         ),
     )
     def mail_grant(
@@ -1250,6 +1251,7 @@ def install(app, settings, store, auth):
             "setPostalMailSettings",
             "Route future legal mail to an active bot or the owner (null), keeping the owner informed; owner or admin",
             "PostalMailSettings",
+            idempotency=KEYLESS,
         ),
     )
     def mail_settings_set(request: Request, body: PostalLegalRouting):
