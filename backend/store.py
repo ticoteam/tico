@@ -1014,17 +1014,9 @@ class Store:
                 retire_health_rows(c)
                 if seed_market and not self.settings.test_identities:
                     from . import market as Market
-                    from .blobs import Blobs
 
                     Market.ensure_curator(c)
-                    document = Market.load_snapshot(self.settings.registry_dir)
-                    sources = Market.locate_sources(self.settings.registry_dir.parent)
-                    Market.seed(c, sources, Blobs(self.settings), document=document)
-                # Market pages the seed wrote before pages carried `seeded`: hide the untouched ones while the graph
-                # is empty (backend/market.py). Idempotent, no migration number.
-                from . import market as Market
-
-                Market.mark_seeded_pages(c)
+                    Market.seed(c, document=Market.load_snapshot(self.settings.registry_dir))
                 # The Directory's boot step: flags Market's company/self as self, and the kind of each organization Market
                 # wrote without one (backend/entities/store.py boot). Idempotent.
                 from .entities import store as Directory

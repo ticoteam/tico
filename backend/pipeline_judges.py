@@ -70,12 +70,13 @@ LINES_AT_MOST = 3  # a verdict names at most this many missing parts, one line e
 
 class Part:
     """One named part of a check: its question id, what Jev is asked (`ask`, completing "The attachment ..."), the line a
-    verdict says when it is missing (`missing`) and when Jev can't tell (`unclear`)."""
+    verdict says when it is missing (`missing`) and when Jev can't tell (`unclear`), and the short line an OK that shows
+    a passed page lists as one of its check rows (`found`; ui/app/decide.ts decideAskBubbleHTML), where it has one."""
 
-    __slots__ = ("key", "ask", "missing", "unclear")
+    __slots__ = ("key", "ask", "missing", "unclear", "found")
 
-    def __init__(self, key: str, ask: str, missing: str, unclear: str) -> None:
-        self.key, self.ask, self.missing, self.unclear = key, ask, missing, unclear
+    def __init__(self, key: str, ask: str, missing: str, unclear: str, found: str = "") -> None:
+        self.key, self.ask, self.missing, self.unclear, self.found = key, ask, missing, unclear, found
 
 
 # The checks Tico ships, each as its parts (the Spec page's "What changes" table, task #351). A rubric is one of these
@@ -137,6 +138,7 @@ CHECKS: dict[str, tuple[Part, ...]] = {
             "says what changed; the work's title and spec say what was asked, so naming the work or its PR is enough",
             "Doesn't say what was built.",
             "Can't tell what was built.",
+            "Says what was built.",
         ),
         Part(
             "output",
@@ -144,6 +146,7 @@ CHECKS: dict[str, tuple[Part, ...]] = {
             "command output, a log line, numbers before and after); a line that only says it passed is not proof",
             "No check output found.",
             "Can't tell if check output is shown.",
+            "Shows the check output.",
         ),
         Part(
             "checks",
@@ -152,6 +155,7 @@ CHECKS: dict[str, tuple[Part, ...]] = {
             "have this part",
             "The checks at the newest commit are not shown, or one failed.",
             "Can't tell if the checks at the newest commit passed.",
+            "Checks pass at the newest commit.",
         ),
         Part(
             "reviewer_1",
@@ -159,6 +163,7 @@ CHECKS: dict[str, tuple[Part, ...]] = {
             "review are fine)",
             "Reviewer 1's findings are missing.",
             "Can't tell what Reviewer 1 found.",
+            "Has Reviewer 1's findings.",
         ),
         Part(
             "reviewer_2",
@@ -166,6 +171,7 @@ CHECKS: dict[str, tuple[Part, ...]] = {
             "review are fine)",
             "Reviewer 2's findings are missing.",
             "Can't tell what Reviewer 2 found.",
+            "Has Reviewer 2's findings.",
         ),
     ),
     "validate": (
@@ -174,6 +180,7 @@ CHECKS: dict[str, tuple[Part, ...]] = {
             "names the version production runs",
             "The version production runs is not named.",
             "Can't tell if the version production runs is named.",
+            "Names the version production runs.",
         ),
         Part(
             "holds",
@@ -181,6 +188,7 @@ CHECKS: dict[str, tuple[Part, ...]] = {
             "work (`work.context.release`, when given)",
             "The version production runs doesn't hold this work yet.",
             "Can't tell if the version production runs holds this work.",
+            "Production runs a version that holds this work.",
         ),
         Part(
             "shown",
@@ -188,6 +196,7 @@ CHECKS: dict[str, tuple[Part, ...]] = {
             "have this part",
             "Doesn't say what was run or looked at in production and what it gave.",
             "Can't tell what was run or looked at in production.",
+            "Says what was run in production and what it gave.",
         ),
     ),
 }

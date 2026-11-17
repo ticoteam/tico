@@ -1,12 +1,13 @@
-/* ui/app/company-floor.ts — Company › Floor (#/overview/floor): every factory the reader sees as a hall, each pipeline a
-   line, each work stage a small stack of boxes standing on it, as high as the stage is full (relative and capped, never
+/* ui/app/company-floor.ts — the Floor, a card on Company (#/home, ui/app/dashboard.ts): every factory the reader sees
+   as a hall, each pipeline a line, each work stage a small stack of boxes standing on it, as high as the stage is full (relative and capped, never
    one box a task). A hall's dim org chart is its manager over its reports and the teammates holding its work; pointing
    at one lights their stacks. Flow's mark stands over a stack holding something that waits on the reader, and opens Flow there. The
    two numbers at a line's ends are tasks in and out, as a rate; either flips every rate between a day and a week, kept
    in this browser. Nothing else is written on the floor: pointing at a stack shows its card (who holds it, the stage, how
    many, how many wait on you, the oldest tasks), a click or Enter pins the card, a phone opens it as a sheet.
-   One factory (#/overview/floor/<id>) draws each stage as one deck per teammate holding tasks there, the stage's name
-   under the line with one mark beside it, and the factory's manager and teammates by name.
+   One factory (#/overview/floor/<id>, its own page, back to Company) draws each stage as one deck per teammate holding
+   tasks there, the stage's name under the line with one mark beside it, and the factory's manager and teammates by name.
+   One floor is on screen at a time: floorMount puts the company's in its card, pageFloorFactory one factory's page.
    Reads: GET /api/v2/company/floor (backend/company_floor.py) and, for a card's rows, GET /api/v2/tasks (task-api.ts).
    The live task and Needs-you signals read the floor again and patch each changed line in place.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
@@ -22,6 +23,7 @@ type FloorUnit = 'day' | 'week';
 interface FloorPick { pipeline: string; stage: string; actor: string }
 interface FloorState {
   factory: string;            // '' for the whole company
+  host: HTMLElement;          // what the floor is drawn in: Company's Floor card, or one factory's page
   data: FloorData | null;
   run: number;
   pinned: FloorPick | null;
@@ -40,7 +42,7 @@ const CF_REST = '+';
 let CF: FloorState | null = null;
 let CF_REFOCUS = false;        // focus going back to a stack as its card closes: it does not open the card again
 
-const cfHref = (factory: string): string => OVERVIEW_FLOOR + (factory ? '/' + encodeURIComponent(factory) : '');
+const cfHref = (factory: string): string => OVERVIEW_FLOOR + '/' + encodeURIComponent(factory);
 const cfKey = (p: FloorPick): string => `${p.pipeline}|${p.stage}|${p.actor}`;
 const cfPhone = (): boolean => matchMedia('(max-width:760px), (hover:none)').matches;
 
@@ -161,32 +163,40 @@ function cfFactoryHTML(f: FloorFactory): string {
     + `<div class="cf-lines">${f.pipelines.map(p => cfLineHTML(p, true)).join('')}</div></section>`;
 }
 
-// ---- the page
-function pageOverviewFloor(factory = ''): void {
-  const main = $('#main'); main.classList.add('overview-layout');
-  CF = {factory, data: null, run: 0, pinned: null, shown: null, anchor: null, hoverTimer: 0, rows: new Map()};
-  const head = factory
-    ? pageHead({title: '', back: {href: OVERVIEW_FLOOR, label: 'Company'}, pad: true, tabs: dashTabs('floor'), tabsHook: 'dash-tabs',
-        tabsAttrs: 'aria-label="Company"', more: PAGE_HEAD_COPY})
-    : dashCompanyHead('floor');
-  main.innerHTML = `<section class="overview-page cf-page" aria-label="Floor">${head}`
-    + `<div class="cf-body${factory ? ' cf-body-one' : ''}" id="cf-body">${cfSkeleton(factory)}</div>`
-    + '<div class="cf-scrim" hidden></div><div class="cf-card" id="cf-card" role="dialog" tabindex="-1" hidden></div></section>';
-  const page = document.querySelector<HTMLElement>('#main > .cf-page');
-  if (!page) return;
-  page.addEventListener('click', cfClick);
-  page.addEventListener('pointerover', cfOver);
-  page.addEventListener('pointerout', cfOut);
-  page.addEventListener('focusin', cfFocus);
+// ---- where it is drawn
+/** The floor in `host`, read again now. The company's floor read last is drawn at once, so Company drawing its cards
+ *  again (a write, a changed read) does not flash the skeleton. */
+function cfStart(host: HTMLElement, factory: string): void {
+  const kept = CF && CF.factory === factory ? CF.data : null;
+  CF = {factory, host, data: kept, run: 0, pinned: null, shown: null, anchor: null, hoverTimer: 0, rows: new Map()};
+  host.insertAdjacentHTML('beforeend', `<div class="cf-body${factory ? ' cf-body-one' : ''}" id="cf-body">${cfSkeleton(factory)}</div>`
+    + '<div class="cf-scrim" hidden></div><div class="cf-card" id="cf-card" role="dialog" tabindex="-1" hidden></div>');
+  host.addEventListener('click', cfClick);
+  host.addEventListener('pointerover', cfOver);
+  host.addEventListener('pointerout', cfOut);
+  host.addEventListener('focusin', cfFocus);
+  if (kept) cfDraw(CF, kept);
   void cfLoad();
+}
+/** Company's Floor card (ui/app/dashboard.ts DASH_BODY.floor): the whole company's floor in the card's body. */
+function floorMount(host: HTMLElement): void {
+  if (host.isConnected) cfStart(host, '');
+}
+/** One factory's page, under a header that leads back to Company. */
+function pageFloorFactory(factory: string): void {
+  if (!factory) { location.replace(HOME); return; }
+  const main = $('#main'); main.classList.add('overview-layout');
+  main.innerHTML = `<section class="overview-page cf-page" aria-label="Floor">`
+    + `${pageHead({title: '', back: {href: HOME, label: 'Company'}, pad: true, more: PAGE_HEAD_COPY})}</section>`;
+  const page = document.querySelector<HTMLElement>('#main > .cf-page');
+  if (page) cfStart(page, factory);
 }
 function cfSkeleton(factory: string): string {
   const hall = '<div class="cf-hall cf-skel" aria-hidden="true"><span class="cf-skel-name"></span><span class="cf-skel-line"></span><span class="cf-skel-line"></span></div>';
   return `<div class="cf-halls" aria-busy="true" aria-label="Loading">${factory ? hall : hall.repeat(4)}</div>`;
 }
-/** Whether the floor is still the page on screen. */
-const cfHere = (): boolean => !!CF && document.getElementById('cf-body') !== null
-  && (S.route === OVERVIEW_FLOOR || S.route.startsWith(OVERVIEW_FLOOR + '/'));
+/** Whether the floor is still on screen: its host is in the page and still holds it. */
+const cfHere = (): boolean => !!CF && CF.host.isConnected && CF.host.querySelector('#cf-body') !== null;
 
 async function cfLoad(): Promise<void> {
   const st = CF;
@@ -197,7 +207,7 @@ async function cfLoad(): Promise<void> {
     data = await get<FloorData>('/v2/company/floor', {fresh: true});
   } catch {
     if (run !== st.run || CF !== st || !cfHere()) return;
-    const body = document.getElementById('cf-body');
+    const body = st.host.querySelector<HTMLElement>('#cf-body');
     if (body && !st.data) body.innerHTML = '<div class="cf-empty"><p class="muted">Could not load</p><button type="button" class="ghost" data-cf-retry>Retry</button></div>';
     return;
   }
@@ -207,12 +217,12 @@ async function cfLoad(): Promise<void> {
 }
 
 function cfDraw(st: FloorState, data: FloorData): void {
-  const body = document.getElementById('cf-body');
+  const body = st.host.querySelector<HTMLElement>('#cf-body');
   if (!body) return;
   if (st.factory) {
     const f = data.factories.find(x => x.id === st.factory);
     // A factory this reader may not see is not drawn: the address goes back to the company.
-    if (!f) { location.replace(OVERVIEW_FLOOR); return; }
+    if (!f) { location.replace(HOME); return; }
     const title = document.querySelector<HTMLElement>('.cf-page > header.ph .ph-t');
     if (title) title.textContent = f.name;
     pageTitle(f.name);

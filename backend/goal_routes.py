@@ -443,9 +443,6 @@ def install(app, store, auth, mutate, settings):
         return mutate(request, body, work)
 
     # ------------------------------------------------------------------ how much the Strategy Owner does
-    # The /api/v2/ceo-bot paths are the Strategy Owner's old ones: clients built before the rename still call them, so
-    # each stays a hidden alias of the route under it.
-    @app.post("/api/v2/ceo-bot/level", include_in_schema=False)
     @app.post("/api/v2/strategy-bot/level")
     def strategy_bot_level(request: Request, body: M.StrategyBotLevel):
         """Settings > Strategy Owner, "How much your Strategy Owner does": the owner picks Passive (1), Suggests actions (2)
@@ -467,7 +464,6 @@ def install(app, store, auth, mutate, settings):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/ceo-bot/checks", include_in_schema=False)
     @app.post("/api/v2/strategy-bot/checks")
     def strategy_bot_checks(request: Request, body: M.StrategyBotChecks):
         """Settings > Strategy Owner, "Regular checks": the owner turns the KPI pass and the automatic goal colours on or
@@ -493,7 +489,6 @@ def install(app, store, auth, mutate, settings):
         if who.actor != "bot:" + strategy_bot.SLUG or who.via:
             raise Problem("forbidden", f"Only the {strategy_bot.name(c)} {what}", 403)
 
-    @app.post("/api/v2/ceo-bot/merge", include_in_schema=False)
     @app.post("/api/v2/strategy-bot/merge")
     def strategy_bot_merge(request: Request, body: M.StrategyBotMerge):
         """At level 2 or 3, the Strategy Owner makes several bots' asks waiting on one person a single item of its own;
@@ -518,7 +513,6 @@ def install(app, store, auth, mutate, settings):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/ceo-bot/level3-offer", include_in_schema=False)
     @app.post("/api/v2/strategy-bot/level3-offer")
     def strategy_bot_level3_offer(request: Request, body: M.Empty):
         """The Strategy Owner records that its Monday note offered level 3: refused unless 10 approvals in a row at level
@@ -533,7 +527,6 @@ def install(app, store, auth, mutate, settings):
         return mutate(request, body, work)
 
     # ------------------------------------------------------------------ what the Strategy Owner does alone (level 3)
-    @app.post("/api/v2/ceo-bot/decisions", include_in_schema=False)
     @app.post("/api/v2/strategy-bot/decisions")
     def strategy_bot_decide(request: Request, body: M.StrategyBotDecision):
         """The Strategy Owner only, at level 3: one decision made alone, with its reason: bot tasks created, moved to the
@@ -600,7 +593,6 @@ def install(app, store, auth, mutate, settings):
 
         return mutate(request, body, work)
 
-    @app.get("/api/v2/ceo-bot/log", include_in_schema=False)
     @app.get("/api/v2/strategy-bot/log")
     def strategy_bot_log(request: Request, before: str | None = None, limit: int = CA.LOG_PAGE):
         """The Strategy Owner log, newest first: each decision it made alone with its reason and what it changed, and each
@@ -616,7 +608,6 @@ def install(app, store, auth, mutate, settings):
             out["can_undo"] = company_editor(who)
             return out
 
-    @app.post("/api/v2/ceo-bot/log/{action_id}/undo", include_in_schema=False)
     @app.post("/api/v2/strategy-bot/log/{action_id}/undo")
     def strategy_bot_undo(request: Request, action_id: str, body: M.Empty):
         """The owner, on their own click, undoes one decision the Strategy Owner made alone: the tasks it changed go back

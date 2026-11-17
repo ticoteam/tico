@@ -18,8 +18,10 @@ def page(path, key=None, **query):
 
 # Nav page -> (list endpoint, key of the list in the body or None when the body is the list, query).
 PAGES = {
+    # Company (#/home), the reader's own cards (person:me), the Floor first.
     "overview": page("places/person%3Ame", "pins"),
-    # Company › Floor (ui/app/company-floor.ts): stacks in the Growth, Success and Product halls (demo_sections/floor.py).
+    # Company's Floor card (ui/app/company-floor.ts): stacks in the Growth, Success and Product halls
+    # (demo_sections/floor.py).
     "floor": page("company/floor", "factories"),
     "updates": page("updates", "updates"),
     "tasks": page("tasks", "tasks"),

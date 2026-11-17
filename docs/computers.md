@@ -502,7 +502,7 @@ refused too. Each view, and each time the setting changes, is a line in the audi
 The page a view shows offers nothing that writes, so a screenshot never suggests the bot could act: New task, Follow,
 the page + and answer buttons are not shown, the message box is a grey "Read-only view" line, and other controls that
 change something show greyed out. Tasks lists the bot's own open tasks by stage (Needs you is a person's list), and
-Company › Mine is one card of them.
+Company is one card of them.
 
 API: `GET/POST /api/v2/bots/{bot}/app-view`, `POST /api/v2/app-view` ([OpenAPI](api.md#the-contract)).
 

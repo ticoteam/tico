@@ -1,6 +1,6 @@
 # pyright: strict
-"""Company › Floor: work standing in the Growth, Success and Product factories' stages, so each hall has stacks of
-different heights, a few teammates holding them, a rate in and out, and one that waits on Ana.
+"""The Floor (Company's first card): work standing in the Growth, Success and Product factories' stages, so each hall
+has stacks of different heights, a few teammates holding them, a rate in and out, and one that waits on Ana.
 
 Leads come in all week and most stop at Targets; a few reach Outreach and Replies, one is Qualified, and three closed
 out as Done. Bids talks to three venues and has two proposals out. Most customers sit in Active. Product has builds

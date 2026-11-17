@@ -290,7 +290,7 @@ async function shots(browser: Browser, hub: RealHubSupport.Hub, read: ReadCtx, r
         await ready(page);
         await page.evaluate(v => (window as unknown as PageWin).ticoTheme.set(v), theme);
         for (const [name, hash, wait, act, before] of screens) {
-          await go(page, '#/overview');
+          await go(page, '#/home');
           await go(page, hash);
           if (act) { await page.locator(before!).waitFor({timeout: t(10000)}); await act(page); }
           await page.locator(wait).first().waitFor({timeout: t(15000)});

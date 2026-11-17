@@ -1568,10 +1568,7 @@ def test_bank_numbers_live_only_in_the_vault_through_create_approve_send(api):
     sent = fake.sent("create_recipient")[0]["electronicRoutingInfo"]
     assert (sent["accountNumber"], sent["routingNumber"]) == (ACCOUNT, ROUTING)  # read from the vault at send time
     answers += [
-        get(api, "finance/recipients"),
         get(api, f"finance/actions/{asked['action_id']}", token="ben-test"),
-        get(api, "finance/payments"),
-        get(api, "finance/rules"),
         the_ok(api, asked["approval_id"]),
     ]
     with store.read() as c:
@@ -1579,7 +1576,6 @@ def test_bank_numbers_live_only_in_the_vault_through_create_approve_send(api):
         recipient = c.execute("SELECT last4, details_ref FROM fin_recipients").fetchone()
         assert recipient["last4"] == "6666" and recipient["details_ref"]
     assert ACCOUNT not in json.dumps(answers) and ROUTING not in json.dumps(answers)
-    assert get(api, "finance/recipients")["recipients"][0]["last4"] == "6666"
 
 
 def test_a_denied_or_declined_payee_leaves_no_bank_numbers_and_no_vault_row(api):

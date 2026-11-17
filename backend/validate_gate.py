@@ -18,8 +18,6 @@ on your phone"). So a bot's ask of a person on a task in Validate (`check_ask`, 
 
 A person who sends the OK back with a note (Not validated, `sends_back`) moves the task back to In development with
 that note, which files new Engineering work with the note in it (stage_effects._handoff_body).
-
-`sweep` runs once, at the start of the release that carries this (start_jobs), over tasks already in Validate.
 """
 
 import re
@@ -50,13 +48,6 @@ OWN_TASK = "Ask it as its own task, or as an OK for that action."
 ASK_OK = "Ask their OK of the Checked in production page instead: the card shows the page, with OK and Not validated."
 HELD = "Waits for the Decision model to pass the Checked in production page"
 NOT_VALIDATED = "Not validated"
-SWEPT = "validate-proof-sweep"
-
-
-def _h() -> Any:
-    from . import hubdb
-
-    return hubdb
 
 
 def applies(row: Row | None, by: object, person: object) -> bool:
@@ -95,11 +86,6 @@ def page_of(conn: "sqlite3.Connection", row: Row) -> "tuple[Row | None, Standing
 
 def ref(page: Row) -> str:
     return f"page:{page['file_id']}@{page['version']}"
-
-
-def _names(shows: object, page: Row) -> bool:
-    refs = cast("list[object]", shows) if isinstance(shows, list) else []
-    return any(str(page["file_id"]) in str(one) for one in refs)
 
 
 def _refuse(conn: "sqlite3.Connection", by: str, detail: str, task_id: str) -> None:
@@ -197,69 +183,3 @@ def not_validated(conn: "sqlite3.Connection", task_id: str, by: str, notes: str 
 
     said = " ".join(str(notes or "").split())
     return E.move(conn, task_id, back_to(conn, task_id), by, f"{NOT_VALIDATED}: {said}" if said else NOT_VALIDATED)
-
-
-# ----------------------------------------------------------------------------- the one-time sweep at the release
-def _withdrawn_line(conn: "sqlite3.Connection", requirement: Row, why: str) -> str:
-    name = _h().actor_name(conn, requirement.get("person_id"))
-    what = "OK" if requirement["kind"] == "ok" else "question"
-    return f"Withdrew the {what} to {name}, “{requirement.get('line') or ''}”: {why}"
-
-
-def sweep(conn: "sqlite3.Connection") -> list[str]:
-    """Once (no schema change; a registry mark): every open task in Validate. A bot's unanswered ask of a person that
-    shows no passed page is withdrawn with a comment saying what and why (FIRST, or OWN_TASK for a decision); the task
-    then moves to Done when the passed page was all else it waited for, or its owner has the turn and is woken once.
-    A person's own ask, an OK bound to an action, an answered ask, and an OK that shows a passed page are untouched.
-    Returns the tasks it changed."""
-    from . import task_engine as E
-    from . import task_requirements as R
-    from . import task_wakes
-
-    H = _h()
-    if conn.execute("SELECT 1 FROM registry_metadata WHERE key=?", (SWEPT,)).fetchone():
-        return []
-    conn.execute("INSERT INTO registry_metadata VALUES(?,?)", (SWEPT, H.now()))
-    changed: list[str] = []
-    rows = conn.execute(
-        "SELECT id FROM tasks WHERE status='open' AND stage_id=? ORDER BY created_at, id", (STAGE,)
-    ).fetchall()
-    for (task_id,) in rows:
-        row = E.task(conn, str(task_id))
-        if not row or not row.get("visit"):
-            continue
-        page, standing = page_of(conn, row)
-        passed = bool(page and standing and standing.met)
-        answered = R.newest_answers(conn, row["visit"]["id"])
-        lines: list[str] = []
-        for requirement in R.for_visit(conn, row["visit"]):
-            if requirement["kind"] not in ("ok", "answer") or requirement.get("stage_id"):
-                continue
-            if not requirement.get("by_bot") or not is_human(requirement.get("person_id")):
-                continue
-            if requirement["id"] in answered or _bound(conn, str(requirement["id"])):
-                continue
-            if requirement["kind"] == "ok" and passed and page and _names(requirement.get("shows"), page):
-                continue
-            why = OWN_TASK if requirement["kind"] == "answer" and decision(requirement.get("choices")) else FIRST
-            E.withdraw_requirement(conn, str(requirement["id"]), E.SYSTEM, why)
-            lines.append(_withdrawn_line(conn, requirement, why))
-        if not lines:
-            continue
-        changed.append(str(task_id))
-        H.task_comment(conn, E.SYSTEM, str(task_id), "\n".join(lines), wake=False)
-        out = E.task(conn, str(task_id))
-        if not out or out["status"] != "open":
-            continue
-        target, _ = E._turn_of(conn, out)  # pyright: ignore[reportPrivateUsage]
-        if target:
-            lead = " ".join(lines)
-            task_wakes.add(
-                conn,
-                out,
-                target,
-                out["visit"],
-                task_wakes.body(conn, out, lead, to=target),
-                wake_key=f"{task_id}:{out['visit']['id']}:{SWEPT}",
-            )
-    return changed

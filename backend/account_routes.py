@@ -20,9 +20,6 @@ def register(app, auth, mutate, onboarding, owner_only, recruiter, settings, sto
         with store.read() as c:
             return {"cards": onboarding.catalog(c)}
 
-    # The /api/v2/ceo-bot path is the Strategy Owner's old one: clients built before the rename still call it, so it
-    # stays a hidden alias of the route under it.
-    @app.get("/api/v2/ceo-bot", include_in_schema=False)
     @app.get("/api/v2/strategy-bot")
     def strategy_bot_settings(request: Request):
         """The Strategy Owner's name, level and regular checks (backend/strategy_bot.py). How many items it put in each
@@ -37,16 +34,6 @@ def register(app, auth, mutate, onboarding, owner_only, recruiter, settings, sto
         if who.actor != "bot:" + strategy_bot.SLUG and auth.company_role(who) not in ("owner", "admin"):
             value["asked_today"] = {k: n for k, n in value["asked_today"].items() if k == who.actor}
         return value
-
-    @app.post("/api/v2/strategy-owner/turn-on")
-    def turn_on_goal_manager(request: Request, body: M.Empty):
-        who = request.state.identity
-        if who.role != "owner":
-            from . import strategy_bot
-
-            with store.read() as c:
-                raise Problem("forbidden", "Only the owner turns the " + strategy_bot.name(c) + " on", 403)
-        return mutate(request, body, lambda c: onboarding.turn_on_goal_manager(c, who))
 
     @app.get("/api/v2/setup")
     @app.get("/api/v2/onboarding", deprecated=True)  # rc.1 runners (catalog_job reads the record)

@@ -6,7 +6,6 @@ from pathlib import Path
 import yaml
 
 from backend import market as M
-from backend.blobs import Blobs
 from backend.tests.helpers.api import get, post  # noqa: F401
 from backend.tests.helpers.market import FIXTURE_REGISTRY
 from clients.routines import validate_schedules
@@ -17,7 +16,7 @@ CATALOG = Path(__file__).resolve().parents[2] / "templates" / "catalog" / "libra
 def test_the_market_bootstrap_creates_the_customer_themes_page_and_leaves_an_edited_one_alone(api):
     store = api.app.state.store
     with store.transaction() as c:
-        M.seed(c, {}, Blobs(store.settings), document=M.load_snapshot(FIXTURE_REGISTRY))
+        M.seed(c, document=M.load_snapshot(FIXTURE_REGISTRY))
         page = M.read_page(c, "market/customer-themes")
         assert page and page["title"] == "Customer themes"
         M.write_page(
@@ -44,7 +43,7 @@ def test_the_librarian_template_runs_customer_themes_on_meeting_ready_from_its_p
 def test_the_page_is_written_by_the_owner_and_not_by_another_member(api):
     store = api.app.state.store
     with store.transaction() as c:
-        M.seed(c, {}, Blobs(store.settings), document=M.load_snapshot(FIXTURE_REGISTRY))
+        M.seed(c, document=M.load_snapshot(FIXTURE_REGISTRY))
     post(api, "market/pages/customer-themes", {"body": "# Customer themes\n\n## Slow exports\nSeen 3 times"})
     assert "Slow exports" in get(api, "market/pages/customer-themes")["body"]
     post(api, "market/pages/customer-themes", {"body": "# x"}, token="cara-test", expected=403)

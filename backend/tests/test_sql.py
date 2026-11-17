@@ -313,7 +313,6 @@ def test_owner_sees_everything_but_other_peoples_rooms(api, world):
         "tool_settings.moved",
         "tool_templates.grouped",
         "usage-count",
-        "validate-proof-sweep",
     ]
 
 

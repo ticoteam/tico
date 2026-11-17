@@ -61,6 +61,26 @@ def get(conn: "sqlite3.Connection", file_id: str, version: int, key: str) -> Row
     )
 
 
+def checks_of(conn: "sqlite3.Connection", file_id: str, version: int | None = None) -> list[str]:
+    """The check rows of a page version (its newest, with no version) that Jev passed: one short line per part of the
+    check it was judged by (pipeline_judges.CHECKS, `Part.found`). An OK that shows the page lists them under its
+    question; [] when no verdict on it passed, or its check is a company's own."""
+    from . import pipeline_judges as PJ
+    from . import task_requirements as R
+
+    found = conn.execute(
+        "SELECT p.requirement_id FROM requirement_pages p JOIN page_verdicts v ON v.file_id = p.file_id "
+        "AND v.version = p.version AND v.rubric_hash = COALESCE(p.rubric_hash, '') WHERE p.file_id=? "
+        "AND (? IS NULL OR p.version=?) "
+        "AND v.verdict='met' ORDER BY p.version DESC, v.updated_at DESC LIMIT 1",
+        (file_id, version, version),
+    ).fetchone()
+    requirement: Row = (R.get(conn, str(found[0])) if found else None) or {}
+    settings: Row = requirement.get("settings") or {}
+    check = PJ.check_of(settings.get("rubric"))
+    return [part.found for part in PJ.CHECKS[check] if part.found] if check else []
+
+
 def owe(conn: "sqlite3.Connection", file_id: str, version: int, key: str) -> Row:
     """The verdict row for a page version and rubric hash, made owed (due now) when there is none. Attaching a page calls
     it, so the Jev step finds the page without reading every requirement."""

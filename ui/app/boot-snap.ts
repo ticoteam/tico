@@ -53,10 +53,10 @@ function snapSignedOut() {
   return SNAP.banned;
 }
 const snapOn = () => { try { return typeof indexedDB !== 'undefined' && (!navigator.webdriver || window.ticoBootSnap === true); } catch { return false; } };
-// The pages kept: Home, Overview, Tasks (its list, any view), Threads (the list) and a team's page.
+// The pages kept: Company (#/home), Tasks (its list, any view), Threads (the list) and a team's page.
 function snapRouteOk(hash?: string): boolean {
   const [page = ''] = String(hash || '').split('?');
-  if ([HOME, OVERVIEW, TASKS, THREADS_ROUTE].includes(page)) return true;
+  if ([HOME, TASKS, THREADS_ROUTE].includes(page)) return true;
   const team = page.startsWith(TEAM_PAGE) ? page.slice(TEAM_PAGE.length) : '';
   return !!team && !team.includes('/');
 }

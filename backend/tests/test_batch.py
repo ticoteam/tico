@@ -175,3 +175,29 @@ def test_a_comment_that_fails_halfway_leaves_nothing_of_itself_and_the_batch_goe
     applied, errors = B._comment_instead(c, ANA, FINANCE, [(f"task:{task['id']}", "Run the ads\nGo.")], "test")
     assert applied == [] and "failed after writing" in errors[0]
     assert c.execute("SELECT COUNT(*) FROM events").fetchone()[0] == before
+
+
+def test_the_cli_and_the_mcp_tool_offer_the_decisions_the_server_takes():
+    """`tico needs-you respond --decision` and tico_needs_you_respond send what models.BatchRespond accepts: an MCP
+    agent that said approve or decline was refused on every item."""
+    import argparse
+    from typing import get_args
+
+    from backend import models as M
+    from clients import hubcli, hubtools
+
+    (literal,) = [arg for arg in get_args(M.BatchRespond.model_fields["decision"].annotation) if get_args(arg)]
+    taken = set(get_args(literal))
+    assert taken == set(B.DECISIONS)
+    schema = hubtools.BY_NAME["tico_needs_you_respond"]["inputSchema"]["properties"]["decision"]
+    assert set(schema["enum"]) == taken
+
+    def sub(parser, *names):
+        for name in names:
+            action = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction))
+            parser = action.choices[name]
+        return parser
+
+    respond = sub(hubcli.parser(), "needs-you", "respond")
+    (decision,) = [a for a in respond._actions if a.dest == "decision"]
+    assert set(decision.choices) == taken

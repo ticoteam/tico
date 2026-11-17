@@ -1666,7 +1666,8 @@ function decideAskBubbleHTML(st: DecState, it: NeedsEntry): string {
   // Proof tab on a phone. A long review is the asker's message above it.
   if (decideCheckedOk(it) || earlier) {
     const long = it.line.length > DEC_ASK_SHORT || /\n/.test(it.line), q = long ? decidePageQuestion(it) : it.line;
-    const checks = (it.ask?.brief?.details || []).map(d => String(d).trim()).filter(d => d && d.length <= DEC_ASK_SHORT).slice(0, 3);
+    // The rows are what Jev passed on the page the OK shows (backend/page_verdicts.py checks_of), never the ask's words.
+    const checks = ((earlier ? it.ask?.earlier?.checks : it.ask?.checks) || []).map(d => String(d).trim()).filter(d => d && d.length <= DEC_ASK_SHORT).slice(0, 3);
     const verdict = checks.length ? `<ul class="dc-checks">${checks.map(c => `<li>${esc(c)}</li>`).join('')}</ul>` : one(it.ask?.brief?.why || '');
     const proof = '<button type="button" class="linkish dc-proof-link" data-dc="tab" data-dc-tab="task">Proof</button>';
     return (long ? decideSaidMsgHTML(who, it.since || '', it.line) : '')

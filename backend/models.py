@@ -960,25 +960,6 @@ class MarketEdgeCreate(Contract):
     insight_id: str | None = Field(default=None, max_length=80)
 
 
-class MarketEdgeUpdate(Contract):
-    rel: str | None = Field(default=None, max_length=40)
-    since: str | None = None
-    until: str | None = None
-    set_since: bool = False
-    set_until: bool = False
-    confidence: Literal["high", "medium", "low"] | None = None
-    properties: dict | None = None
-    evidence_ids: list[str] | None = None
-    insight_id: str | None = Field(default=None, max_length=80)
-
-
-class MarketCitation(Contract):
-    claim_kind: Literal["entity", "edge", "evidence", "document"]
-    claim_id: str = Field(min_length=1, max_length=200)
-    evidence_id: str = Field(min_length=1, max_length=80)
-    insight_id: str | None = Field(default=None, max_length=80)
-
-
 class MarketResolve(Contract):
     status: Literal["applied", "merged", "rejected", "needs-human"]
     resolution: str = Field(default="", max_length=2000)

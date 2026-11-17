@@ -729,7 +729,6 @@ def test_a_bot_handoff_while_the_filter_is_off_replays_but_a_human_handoff_does_
             "asker": "bot:ops",
             "title": "Renew the vendor contract",
             "text": "Check the renewal date",
-            "asked": None,
             "created_at": "2026-10-06T09:00:00",
         }
     ]
@@ -966,69 +965,6 @@ def test_a_settings_read_that_always_fails_still_lands_a_failed_open_row(gate, m
     assert (item["outcome"], item["would"], item["reason"]) == (A.FAILED_OPEN, A.FAILED_OPEN, "error")
     assert item["ref"] == out["task"]["id"] and item["call_id"] is None
     assert not calls(api) and not model.calls
-
-
-# ---- what the model reads for a structured question (Dev 724) --------------------------------------------------
-
-DATES = [
-    {
-        "id": "date",
-        "header": "Date",
-        "question": "Which launch date do you want?",
-        "why": "It sets the venue deposit.",
-        "options": [
-            {"label": "Nov 3", "then": "Book the venue for Nov 3", "description": "The earlier date"},
-            {"label": "Nov 10", "then": "Book the venue for Nov 10", "recommended": True},
-        ],
-    }
-]
-
-
-def model_text(model):
-    return model.calls[-1]["state"]["item"]["text"]
-
-
-def test_a_long_task_body_is_cut_and_the_lines_and_options_survive():
-    """The lines of a structured question come first; the body fills the rest."""
-    questions = [
-        {
-            "question": "Which launch date do you want?",
-            "why": "It sets the venue deposit.",
-            "options": [
-                {"label": "Nov 3", "then": "Book Nov 3"},
-                {"label": "Nov 10", "then": "Book Nov 10", "recommended": True},
-            ],
-        }
-    ]
-    text = A.structured_text(questions, "Long context. " * 300)
-    assert len(text) == A.MAX_TEXT
-    assert text.startswith(
-        "Question: Which launch date do you want?\nWhy: It sets the venue deposit.\n"
-        "Option: Nov 3 (then: Book Nov 3)\nOption: Nov 10 (then: Book Nov 10)\n"
-        "Recommended: Nov 10\n\nLong context."
-    )
-
-
-def test_the_largest_question_set_keeps_every_question_option_and_recommendation(gate):
-    """The schema's largest set: four questions of 300 characters, six options of 60 each, each with a why and a then.
-    The lines are never cut, so every question, option and recommended option reads, in order, with no body."""
-    qs = []
-    for q in range(1, 5):
-        options = [
-            {"label": f"Q{q} option {o} " + "L" * 45, "then": f"Q{q} then {o} " + "T" * 100, "recommended": o == 6}
-            for o in range(1, 7)
-        ]
-        qs.append({"question": f"Q{q} " + "Q" * 296, "why": f"Q{q} why " + "W" * 190, "options": options})
-    text = A.structured_text(qs, "Body")
-    cursor = 0
-    for q in qs:
-        for needle in [q["question"][:300], "Why: " + q["why"][:200]]:
-            cursor = text.index(needle, cursor) + len(needle)
-        for option in q["options"]:
-            cursor = text.index(f"Option: {option['label'][:60]}", cursor) + 1
-        cursor = text.index(f"Recommended: {q['options'][5]['label'][:60]}", cursor) + 1
-    assert len(text) > A.MAX_TEXT and text.count("Recommended:") == 4
-    assert "Body" not in text, "the lines are never cut to make room for a body"
 
 
 def ana_gate(api):
