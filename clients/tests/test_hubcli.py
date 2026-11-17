@@ -643,9 +643,7 @@ class AgainstAStub(unittest.TestCase):
         code, out = run_hub("task", "list", "--status", "closed", env=self.env)
         self.assertEqual(code, 0, out)
         self.assertEqual(out, [{"id": "T1", "status": "closed"}])
-        self.assertEqual(
-            [(m, p) for m, p, _, _ in Stub.seen], [("GET", "/api/v2/me"), ("GET", "/api/v2/tasks?status=closed")]
-        )
+        self.assertEqual([(m, p) for m, p, _, _ in Stub.seen], [("GET", "/api/v2/tasks?status=closed")])
 
     def test_task_child_on_a_check_model_is_the_bots_own_subtask(self):
         code, out = run_hub(
