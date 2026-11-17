@@ -62,6 +62,15 @@ def errors(added, head, base, base_name, *, now=None, edited=()):
     return found + frozen
 
 
+def _as_released(git, head, path):
+    """True when `path` at `head` is byte for byte the file the newest release tag before `head` holds."""
+    try:
+        tag = git("describe", "--tags", "--abbrev=0", "--match", "v[0-9]*", head).strip()
+        return git("rev-parse", f"{tag}:{path}").strip() == git("rev-parse", f"{head}:{path}").strip()
+    except subprocess.CalledProcessError:
+        return False  # no release tag here, or the release does not have the file
+
+
 def check(base, head="HEAD", base_name="main", root=ROOT):
     def git(*args):
         return subprocess.check_output(["git", *args], cwd=root, text=True)
@@ -74,6 +83,8 @@ def check(base, head="HEAD", base_name="main", root=ROOT):
     edited = git("diff", "--name-only", "--diff-filter=M", "--no-renames", "-z", ancestor, head, "--", DIRECTORY).split(
         "\0"
     )
+    # Putting a file back exactly as the newest release shipped it is the fix, not an edit.
+    edited = [path for path in edited if path and not _as_released(git, head, path)]
     head_files = git("ls-tree", "-r", "--name-only", "-z", head, "--", DIRECTORY).split("\0")
     base_files = git("ls-tree", "-r", "--name-only", "-z", base, "--", DIRECTORY).split("\0")
     return errors(added, head_files, base_files, base_name, edited=edited)
