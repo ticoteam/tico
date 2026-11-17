@@ -130,7 +130,7 @@ RENAMED = {
     "product-team-manager": "product-manager",
     "success-team-manager": "success-manager",
     "pipeline-manager": "general-manager",
-    # Nov 14: one Product pipeline, and each feature owned from pitch to production by one bot: the Product Owner is the
+    # Nov 14: one Product pipeline, and each feature owned from spec to production by one bot: the Product Owner is the
     # Feature Owner (templates/catalog/feature-owner, the Product Owner and Builder templates in one).
     "segment-product-owner": "feature-owner",
 }

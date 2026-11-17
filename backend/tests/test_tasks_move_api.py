@@ -304,3 +304,85 @@ def test_an_assistant_move_to_another_pipeline_is_undone_back_to_its_stage(api):
     assert r.status_code == 200, r.text
     task = get(api, "tasks/" + made["id"])["task"]
     assert (task["pipeline"]["id"], task["stage"]["id"]) == ("dev", "ideas")
+
+
+# ---------------------------------------------------------------- a stage's column, all at once (the board's ⋯)
+def changes_since(api, seq):
+    with api.app.state.store.read() as c:
+        return [r[0] for r in c.execute("SELECT kind FROM changes WHERE topic='tasks' AND seq>?", (seq,)).fetchall()]
+
+
+def last_seq(api):
+    with api.app.state.store.read() as c:
+        return c.execute("SELECT COALESCE(MAX(seq), 0) FROM changes").fetchone()[0]
+
+
+def test_close_all_in_a_column_closes_each_in_its_own_pipeline_and_undo_reopens_them(api):
+    boards(api)
+    mine = [idea(api, f"Ben's {n}", token="ben-test") for n in range(3)]
+    anas = idea(api, "Ana's")
+    seq = last_seq(api)
+    ids = [t["id"] for t in (*mine, anas)]
+    out = post(api, "tasks/move", {"ids": ids, "to": "closed"}, token="ben-test")
+    assert sorted(out["moved"]) == sorted(t["id"] for t in mine)
+    # Ben reads Ana's task but does not work it: it stays, and the answer says why.
+    assert [(s["id"], s["code"]) for s in out["skipped"]] == [(anas["id"], "identity")]
+    assert changes_since(api, seq) == ["bulk"], "one live change for the lot"
+    for t in mine:
+        task = get(api, "tasks/" + t["id"])["task"]
+        assert (task["status"], task["pipeline"]["id"]) == ("closed", "dev")
+    assert get(api, "tasks/" + anas["id"])["task"]["status"] == "open"
+    back = post(api, "tasks/move", {"ids": out["moved"], "to": "reopen", "why": "Undone"}, token="ben-test")
+    assert sorted(back["moved"]) == sorted(out["moved"])
+    assert {get(api, "tasks/" + t["id"])["task"]["status"] for t in mine} == {"open"}
+
+
+def test_move_all_inside_the_pipeline_keeps_back_what_its_stage_still_needs(api):
+    boards(api)
+    made = [idea(api, f"Idea {n}") for n in range(2)]
+    out = post(api, "tasks/move", {"ids": [t["id"] for t in made], "to": "build"})
+    assert sorted(out["moved"]) == sorted(t["id"] for t in made)
+    # Build asks its owner to say done: Done is refused for each, and the result says why.
+    out = post(api, "tasks/move", {"from": {"pipeline": "Dev", "stage": "Build"}, "to": "done"})
+    assert out["moved"] == [] and {s["code"] for s in out["skipped"]} == {"task_not_met"}
+    assert {get(api, "tasks/" + t["id"])["task"]["stage"]["id"] for t in made} == {"build"}
+    r = api.post("/api/v2/tasks/move", json={"ids": [made[0]["id"]]}, headers=headers())
+    assert r.status_code == 422, "somewhere to go: to, or to_pipeline"
+
+
+def test_assign_all_gives_each_to_the_new_owner_and_skips_what_the_caller_cannot_work(api):
+    boards(api)
+    mine = [idea(api, f"Ben's {n}", token="ben-test") for n in range(2)]
+    hidden = idea(api, "Ana's own idea", owner="ana", private=True)
+    seq = last_seq(api)
+    ids = [t["id"] for t in (*mine, hidden)]
+    out = post(api, "tasks/owner", {"ids": ids, "owner": "human:cara"}, token="ben-test")
+    assert sorted(out["changed"]) == sorted(t["id"] for t in mine) and out["unchanged"] == 0
+    assert [(s.get("id"), s["code"]) for s in out["skipped"]] == [(None, "not_found")], "counted, never named"
+    assert changes_since(api, seq) == ["bulk"]
+    assert {get(api, "tasks/" + t["id"])["task"]["owner_id"] for t in mine} == {"human:cara"}
+    again = post(api, "tasks/owner", {"ids": [mine[0]["id"]], "owner": "human:cara"}, token="ben-test")
+    assert again["changed"] == [] and again["unchanged"] == 1
+
+
+def test_snooze_all_sets_each_aside_and_a_bad_date_changes_none(api):
+    boards(api)
+    made = [idea(api, f"Idea {n}") for n in range(2)]
+    ids = [t["id"] for t in made]
+    r = api.post("/api/v2/tasks/snooze", json={"ids": ids, "until": "2001-01-01"}, headers=headers())
+    assert r.status_code == 422, r.text
+    out = post(api, "tasks/snooze", {"ids": ids, "until": "2999-01-01"})
+    assert sorted(out["changed"]) == sorted(ids)
+    assert {(get(api, "tasks/" + i)["task"].get("snooze") or {}).get("until", "")[:4] for i in ids} == {"2999"}
+
+
+@pytest.mark.parametrize("route, body", [("tasks/owner", {"owner": "human:cara"}), ("tasks/snooze", {})])
+def test_a_bot_alone_reassigns_or_snoozes_one_task_at_a_time(api, route, body):
+    boards(api)
+    bot = as_bot(api)
+    made = idea(api, "The bot's", owner="ops", token=bot)
+    before = get(api, "tasks/" + made["id"])["task"]["owner_id"]
+    r = api.post(f"/api/v2/{route}", json={"ids": [made["id"]], "why": "All of them", **body}, headers=headers(bot))
+    assert r.status_code == 403, r.text
+    task = get(api, "tasks/" + made["id"])["task"]
+    assert (task["owner_id"], task.get("snooze")) == (before, None)

@@ -1,8 +1,8 @@
 # QA
 
 Triggered when a task you own enters QA, after Fixes 2. The stage leaves when the checks pass at the head commit and
-the QA page is attached: Jev checks it, then it is approved (`tico task show` says by whom). In OK release a person
-then OKs the release from the same page, and that ships the change to production.
+the QA report is written: the decision model checks it, then it is approved (`tico task show` says by whom). In OK
+release a person approves the Release report, and that ships the change to production.
 
 ---
 
@@ -47,23 +47,22 @@ asks its reader to test.
     python3 .claude/skills/build-the-page/page.py check reports/<task id>-qa.html --kind qa
     tico page publish reports/<task id>-qa.html --task <id> --title "QA: <the change>"
     python3 .claude/skills/build-the-page/page.py render <file id> --kind qa
-    tico task attach <id> page:<file id> --req "<requirement>" --version N
+    tico task attach <id> reports/<task id>-qa.html --doc "QA report" --note "<what changed>"
 
-`tico page publish` prints the file id. Look at both pictures `render` names before you attach: a page that does not
-draw, or has a broken picture, is fixed and published again, never attached. The requirement's name is the one
-`tico task show` lists for QA. Then end the turn: Jev checks it, then the stage asks a person to approve it.
+`tico page publish` prints the file id. Look at both pictures `render` names before you write it: a page that does not
+draw, or has a broken picture, is fixed and published again, never written. Writing it in QA submits it. Then end the
+turn: the decision model checks it, then the stage asks a person to approve it.
 
 ## 3. When it comes back
 
-- **Jev sent it back:** the reasons are in `tico task show`. Fix the page (or the change), publish again and attach the
-  new version.
-- **The person sent it back:** their notes are on the task. Fix what they asked, push, publish the page again and attach
-  it. Reviewer 2 reads a commit pushed after its review before the person is asked again: say so on the page, with the
+- **The decision model sent it back:** the reasons are in `tico task show`. Fix the page (or the change) and write the
+  next version.
+- **The person sent it back:** their notes are in the chat. Fix what they asked, push, and write the next version. Reviewer 2 reads a commit pushed after its review before the person is asked again: say so on the page, with the
   new head.
-- **Jev is unsure, or you want the person's OK:** attach the new version; Tico asks the person. Never ask your own OK
-  of this page, or a yes/no that shows it ("OK to merge?"): Tico refuses it, and an answer to it passes nothing.
+- **The decision model is unsure:** Tico asks the person. Never ask your own OK of this report, or a yes/no that shows
+  it ("OK to merge?"): Tico refuses it, and an answer to it passes nothing.
 - **New commits after the OK:** the page is for one head. A rebase that changes the same lines keeps the OK; other new
-  commits are read by Reviewer 2, and the person is asked again only after it sends them back. Publish a new version
-  for the new head and attach it.
-- **Sent back from Merge:** the reason names what failed in the merge queue. Fix it on the same branch, push, and attach
-  a new page for the new head.
+  commits are read by Reviewer 2, and the person is asked again only after it sends them back. Write the next version
+  for the new head.
+- **Sent back from Merge:** the reason names what failed in the merge queue. Fix it on the same branch, push, and write
+  the next version for the new head.

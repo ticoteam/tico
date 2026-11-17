@@ -748,16 +748,22 @@ function decidePaintBody(st: DecState) {
   let html = '';
   if (kind === 'ok') {
     const v = st.ok.get(decideOkKey(it));
-    // An OK with nothing attached (a pitch is the task itself): the task's title and text, so there is something to OK.
+    // An OK with nothing attached (on a company's own stage): the task's title and text, so there is something to OK.
     const bare = !!v && decideOkBare(v) && !!decideTaskId(it);
     if (bare) decideAboutLoad(decideTaskId(it));
     const title = decideAboutOf(it)?.task?.title || it.task?.title || '';
     const changed = v?.changed ? '<p class="dc-changed" role="alert">It changed. Look again.</p>' : '';
+    // A document approval shows the task's document as a phone's tab does (decideOkDocMount): its one version line,
+    // and the document in the app's colours. The served page stands in only when the task has no such document.
+    if (it.ask?.approval) decideAboutLoad(decideTaskId(it));
+    const about = it.ask?.approval ? decideAboutOf(it) : undefined;
     html = bare ? changed + decideAboutHTML(it, kind, title ? `<h3 class="dc-title">${esc(title)}</h3>` : '')
+      : about?.state === 'loading' ? skelRows(4)
+      : decideApprovalDoc(it) ? changed + '<div class="dc-docview"></div>'
       : !v || v.state === 'loading' ? skelRows(4)
       : v.state === 'failed' ? `<p class="err" role="alert">${esc(v.error)}</p>`
       // Changes since vK on (the version menu): the same page with its changed blocks marked.
-      : changed + `<div class="dc-doc${!v.html && !v.pages.length ? ' dc-bare' : ''}">${v.since?.on && v.since.marked ? v.since.html : v.html}`
+      : changed + decideApprovalLineHTML(it) + `<div class="dc-doc${!v.html && !v.pages.length ? ' dc-bare' : ''}">${v.since?.on && v.since.marked ? v.since.html : v.html}`
         + `${v.pages.map((_, i) => `<div data-dc-page="${i}"></div>`).join('')}</div>`;
   } else if (kind === 'question' && decideTaskId(it)) {
     // A question's background: its task, one line that opens (open as it was left on this item, through a redraw).
@@ -773,14 +779,36 @@ function decidePaintBody(st: DecState) {
   if (kind !== 'ok') html += (it.ask?.shows || []).filter(r => r.startsWith('browser:')).map(r => decideBrowserSlot(r.slice(8))).join('');
   // A question: on a phone the question and its answer come first, the background under them (decide.css).
   host.parentElement?.classList.toggle('dc-qmain', kind === 'question');
-  if (host.dataset.html === html && host.dataset.key === it.id) return;
+  if (host.dataset.html === html && host.dataset.key === it.id) { decideOkDocMount(host, it); return; }
   host.dataset.html = html; host.dataset.key = it.id;
   browserView.stopIn(host);
   host.innerHTML = html;
+  decideOkDocMount(host, it);
   host.querySelectorAll<HTMLElement>('[data-dc-browser]').forEach(slot => { decideBrowserMount(st, it, slot); });
   const v = kind === 'ok' ? st.ok.get(decideOkKey(it)) : null;
   if (v && typeof window.pageCard === 'function')
     v.pages.forEach((p, i) => host.querySelector(`[data-dc-page="${i}"]`)?.replaceWith(window.pageCard(p, {size: 'full'})));
+}
+/** The task document a document approval asks about, once the task is read; null for any other item. */
+function decideApprovalDoc(it: NeedsEntry): TaskDoc | null {
+  const fid = it.ask?.approval?.file_id;
+  return fid ? decideAboutOf(it)?.task?.documents?.find(d => d.file_id === fid) || null : null;
+}
+/** The approval's document on the left (wide screen), mounted as the phone's tab mounts it (task-docs.ts docViewMount),
+    so it follows the app's theme unless its own HTML sets its colours; drawn again it moves to a newer version. */
+function decideOkDocMount(host: HTMLElement, it: NeedsEntry) {
+  const slot = host.querySelector<HTMLElement>(':scope > .dc-docview'), doc = decideApprovalDoc(it);
+  if (slot && doc) docViewMount(slot, doc, decideApprovalOn(it, doc));
+}
+/** A document approval's one muted version line over the document on the left ("v2 · submitted for approval ·
+    changed: …"), as a phone shows it on the document's tab (task-docs.ts docVersionLine). '' for any other OK. */
+function decideApprovalLineHTML(it: NeedsEntry): string {
+  const a = it.ask?.approval;
+  if (!a || a.version == null) return '';
+  const asked: DocApproval = {version: a.version, unchecked: a.unchecked};
+  const found = decideAboutOf(it)?.task?.documents?.find(d => d.file_id === a.file_id)?.versions.find(x => x.n === a.version);
+  const text = found ? docVersionLine(found, asked) : [`v${a.version}`, 'submitted for approval', a.unchecked ? 'not checked' : ''].filter(Boolean).join(' · ');
+  return `<p class="dc-docver">${esc(text)}</p>`;
 }
 /** An OK whose view, as read, shows nothing: no grant's content, no page, no diff. Its task's text stands in. */
 const decideOkBare = (v: AskOkView): boolean => (v.state === 'ready' || v.state === 'none') && !v.html && !v.pages.length && !v.missing;
@@ -817,11 +845,9 @@ function decidePaintSide(st: DecState) {
   if (!it || !host) return;
   const kind = decideKind(it), asker = decideAsker(it), chat = decideChatOf(it);
   const typed = kind === 'question' ? it.ask?.typed : undefined;
-  // A page's OK is about the task's page: its title heads it, with the version under it. Needs you's line opens with
-  // what it is and the decision ("Spec for <title>, ready for your OK", views.page_ask_line), so only what the stage
-  // said after that (Jev's reason, a send back) is kept.
+  // A page's OK is about the task's page: its title heads it, with the version under it. Its row says only what it is
+  // (the document's name): which version and what changed is the version line, never pasted into the row.
   const page = it.ask?.page, title = page ? it.task?.title || '' : '';
-  const said = title ? it.line.replace(/^.*?, ready for your OK\.?\s*/, '').replace(/\s*OK [^()]* \(version \d+\)$/, '').trim() : '';
   // Who asks, alone, beside the question.
   const who = asker ? `<span class="dc-owner">${esc(actorLabel(asker))}</span>` : '';
   const q = (cls: string, text: string) => `<div class="dc-qrow"><h3 class="${cls}">${esc(text)}</h3>${who}</div>`;
@@ -848,8 +874,7 @@ function decidePaintSide(st: DecState) {
   const head = chat ? '' : parts ? `<h3 class="dc-q dc-q-page">${esc(title)}</h3>${parts.sub}${parts.body}`
     : question ? decideQuestionHeadHTML(it, tag) + (goBtn ? `<div class="dc-links">${goBtn}</div>` : '')
     : earlier ? `<h3 class="dc-q">${esc(it.line)}</h3>${earlierMeta}`
-    : q('dc-q', title || typed?.question || it.line) + open
-      + (said && said !== title ? `<p class="dc-said">${esc(said)}</p>` : '');
+    : q('dc-q', title || typed?.question || it.line) + open;
   const err = st.error ? `<p class="err" role="alert">${esc(st.error)}</p>` : '';
   const busy = st.busy ? ' disabled' : '';
   let body = '';
@@ -957,7 +982,7 @@ function decideBarSet(): HTMLElement | null {
 }
 const DEC_BAR_WATCH = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => { decideBarSet(); });
 // ---- a page that comes back: the right side in parts
-const DEC_JEV: Record<string, [string, string]> = {met: ['✓', 'Meets'], unsure: ['?', 'Unsure'], failed: ['?', 'Unsure'], not_met: ['✗', "Doesn't"]};
+const DEC_JEV: Record<string, [string, string]> = {met: ['✓', 'Meets'], unsure: ['?', 'Unsure'], failed: ['–', 'Not checked'], not_met: ['✗', "Doesn't"]};
 /** A person's own words, cut to 2 lines, with "more" (shown in full once opened). */
 function decideClampHTML(st: DecState, it: NeedsEntry, part: string, text: string): string {
   const open = st.open.has(`${it.id}:more:${part}`);
@@ -985,8 +1010,8 @@ function decideRoundsHTML(st: DecState, it: NeedsEntry, rounds: DecRound[], vers
   const stage = decideStageName(it.task?.stage_id), date = shortDate(now.at), who = by ? actorLabel(by) : '';
   const said = now.jev.verdict ? DEC_JEV[now.jev.verdict] : undefined;
   const dot = '<span class="dc-dot" aria-hidden="true">·</span>', wide = (h: string) => `<span class="dc-m-wide">${h}</span>`;
-  const jev = said ? `<span class="dc-jev" data-v="${esc(now.jev.verdict || '')}">${said[0]}${wide(` ${esc(said[1])}`)}</span>`
-    : `<span class="dc-jev dc-jev-wait"><span class="dc-m-narrow">…</span>${wide('Decision model checking')}</span>`;
+  // A version reaches a person once the decision model has looked (or could not): there is no "checking" state to show.
+  const jev = said ? `<span class="dc-jev" data-v="${esc(now.jev.verdict || '')}">${said[0]}${wide(` ${esc(said[1])}`)}</span>` : '';
   // The line: who asked first, cut first when the line is too long (decide.css); the date and Jev's word only when wide.
   const line = [who ? `<span class="dc-meta-who">${esc(who)}</span>` : '', stage ? `<span>${esc(stage)}</span>` : '', `<span>v${now.version}</span>`,
     date ? wide(esc(date)) : '', jev].filter(Boolean).map((h, i) => (i ? h.startsWith('<span class="dc-m-wide"') ? wide(dot) : dot : '') + h).join('');
@@ -999,7 +1024,7 @@ function decideRoundsHTML(st: DecState, it: NeedsEntry, rounds: DecRound[], vers
   const change = since ? `<button type="button" role="menuitemcheckbox" class="dc-mi dc-vrow" aria-checked="${since.on}" data-dc-since${since.same ? ' disabled' : ''}>`
     + `Changes since v${since.version}${since.same ? '<span class="dc-since-none"> · No text changes</span>' : ''}</button>` : '';
   const info = [[who, stage, `v${now.version}`, date].filter(Boolean).join(' · '),
-    said ? `Decision model: ${said[1]}${now.jev.reason ? ` · ${now.jev.reason}` : ''}` : 'Decision model checking'];
+    said ? `Decision model: ${said[1]}${now.jev.reason ? ` · ${now.jev.reason}` : ''}` : ''].filter(Boolean);
   const sheet = info.map(t => `<p class="dc-vinfo" role="presentation">${esc(t)}</p>`).join('')
     + (rounds.length > 1 ? rounds.map(row).join('') : '') + change;
   const sub = `<div class="dc-meta"><span class="dc-vwrap"><button type="button" class="dc-vbtn${since?.on ? ' on' : ''}" data-dc-vmenu aria-haspopup="menu" aria-expanded="${menu}">`
@@ -1543,6 +1568,24 @@ async function decideShownPage(st: DecState, it: NeedsEntry): Promise<string | u
   await decideOkLoad(st, it, true);
   return null;
 }
+/** Whether a refused approval was a stale key (answers._page_version): the body names the version submitted now. */
+function decideStaleKey(err: unknown): boolean {
+  const body = (err as Partial<ApiFailure> | null)?.body;
+  const found = body?.['approval'] as {document?: unknown} | undefined;
+  return body?.['error'] === 'task_changed' && typeof found?.document === 'string';
+}
+/** A stale approval key (a newer version was submitted since it was shown): nothing was approved. The list is read
+    again, so the item carries the version submitted now, and that version is shown with "It changed. Look again.". */
+async function decideStaleApproval(st: DecState, it: NeedsEntry) {
+  await v2Refresh();
+  if (DEC !== st || st.at !== it.id) return;
+  decideSync(st, decideSource());
+  st.error = '';
+  // The task's documents are read again too: they hold the newer version and its note.
+  const tid = decideTaskId(it);
+  decideAboutLoad(tid, true);
+  await decideOkLoad(st, st.items.get(it.id) ?? it, true);
+}
 const decideUndoAnswer = (r: unknown) => { const id = (r as TaskMoved | null)?.answer_id; return id ? () => answerUndo(id) : null; };
 // A reopen needs a why from everyone (task_engine.move): an undo says so, or the server refuses it.
 const decideUndoReopen = (taskId: string) => () => () => taskMove(taskId, 'reopen', null, 'Undone');
@@ -1592,7 +1635,7 @@ function decideChatMount(st: DecState, it: NeedsEntry, host: HTMLElement, card: 
     decideChatStop();
     // A phone's title row and tabs (decide.css, decideTabsPaint): the task's chat, its documents, what an OK shows.
     const title = decideAboutOf(it)?.task?.title || it.task?.title || '';
-    host.innerHTML = `<div class="dc-tabs"><h3 class="dc-tabs-t">${esc(title)}</h3></div><div class="dc-chat"></div><div class="dc-docpane"></div>`;
+    host.innerHTML = `<div class="dc-tabs"><h3 class="dc-tabs-t">${esc(title)}</h3></div><div class="dc-chat"></div><p class="dc-docnote" role="alert" hidden></p><div class="dc-docpane"></div>`;
     const el = host.querySelector<HTMLElement>('.dc-chat')!;
     DEC_CHAT = {item: it.id, cid, view: null, typed};
     if (cid) {
@@ -1655,7 +1698,19 @@ function decideTabShow(it: NeedsEntry, key: string) {
   root?.classList.toggle('dc-on-doc', !!doc);
   const bar = $('.decide .dc-side > .dc-tabs');
   if (bar) docTabsPaint(bar, key, b => b.dataset.dcTab);
-  if (doc && pane) docViewMount(pane, doc);
+  const asked = doc ? decideApprovalOn(it, doc) : null;
+  if (doc && pane) docViewMount(pane, doc, asked);
+  // A stale key shows the newer version with the same note the wide screen has above it (decidePaintBody).
+  const note = $('.decide .dc-side > .dc-docnote');
+  // Its words are there only while it shows, so the wide screen's note is the one "It changed" on the page.
+  const changed = !!asked && !!DEC?.ok.get(decideOkKey(it))?.changed;
+  if (note) { note.hidden = !changed; note.textContent = changed ? 'It changed. Look again.' : ''; }
+}
+/** The approval an item asks of this document, as its version line says it ("v2 · submitted for approval · changed:
+    …"): only when the item's page is this document. */
+function decideApprovalOn(it: NeedsEntry, doc: TaskDoc): DocApproval | null {
+  const a = it.ask?.approval;
+  return a && a.version != null && a.file_id === doc.file_id ? {version: a.version, unchecked: a.unchecked} : null;
 }
 /** The second tab, named for what it holds: the Spec a page's OK is about, the Proof a Validate or QA OK shows, an
     action's Invoice or Email, else the Task. */
@@ -1705,7 +1760,8 @@ function decideAskBubbleHTML(st: DecState, it: NeedsEntry): string {
   }
   // A page's OK before its rounds are read: the question, and what the stage said after "ready for your OK" (Jev's
   // reason, a send back) as its one line.
-  const title = page ? it.task?.title || '' : '';
+  // A document approval's row is its name alone: nothing more to say under the question.
+  const title = page && !it.ask?.approval ? it.task?.title || '' : '';
   const said = title ? it.line.replace(/^.*?, ready for your OK\.?\s*/, '').replace(/\s*OK [^()]* \(version \d+\)$/, '').trim() : '';
   const q = decideKind(it) === 'question' ? decideQuestionOf(it) : page ? decidePageQuestion(it) : it.line;
   // An action's OK says what will happen in the ask itself, so Approve is never blind; a page stays in Task.
@@ -1717,6 +1773,9 @@ function decideAskBubbleHTML(st: DecState, it: NeedsEntry): string {
 const DEC_ASK_SHORT = 120;
 /** A page's OK as a question: "OK the spec?", from the line ("Spec for X, ready for your OK") or the stage's name. */
 function decidePageQuestion(it: NeedsEntry): string {
+  // A document approval asks for its document ("Approve the Spec?"); any other page names its stage.
+  const document = it.ask?.approval?.document;
+  if (document) return `Approve the ${document}?`;
   const what = /^(.+?) for .+, ready for your OK/.exec(it.line)?.[1] || decideEarlier(it)?.stage || decideStageName(it.task?.stage_id) || 'page';
   return `OK the ${/^[A-Z]{2,}\b/.test(what) ? what : what.toLowerCase()}?`;
 }
@@ -1846,8 +1905,13 @@ async function decideApprove(st: DecState, it: NeedsEntry) {
     const ups = await decideChatUpload(st, it.id, taskId, take?.files || []);
     if (!ups) { hold(false); return; }
     const said = decideWithFiles(take?.text || decideNote('#dc-notes'), [...files, ...ups]);
-    await decideDo(st, it, take?.text ? 'Approved with comments' : 'Approved', () => taskAnswer(taskId, rid, 'ok', it.task?.version ?? null, said || undefined, page), decideUndoAnswer);
+    // A document approval sends its whole key: the visit it was asked on and the version on screen.
+    let stale = false;
+    const approve = () => taskAnswer(taskId, rid, 'ok', it.task?.version ?? null, said || undefined, page, it.ask?.approval?.visit_id)
+      .catch((e: unknown) => { stale = decideStaleKey(e); throw e; });
+    await decideDo(st, it, take?.text ? 'Approved with comments' : 'Approved', approve, decideUndoAnswer);
     hold(false);
+    if (stale) { await decideStaleApproval(st, it); return; }
     if (take && said && !st.error) decideChatGone(take);
     return;
   }

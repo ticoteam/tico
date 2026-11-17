@@ -47,7 +47,7 @@ TASK_ROWS = (
     "meeting_task_links",
     "maintenance_listings",
     "maintenance_handoffs",
-    "quarantine_holds",
+    "holds",
 )
 # Where a task stands in its pipeline is not kept: its visits, answers, asks and snooze go with it
 # (task_engine.on_delete), and a restore starts it on a new visit (task_engine.restore). The tasks it filed, and the
@@ -56,6 +56,7 @@ TASK_ROWS = (
 # history is the shared history table's task rows (backend/migrations/baseline.sql).
 TASK_KEYS = {
     "history_events": ("subject_id", "subject_type='task'"),
+    "holds": ("holdable_id", "holdable_type='task'"),  # what holds a bot on the task (backend/holds.py)
 }
 # Rows that are work done on the task: any one of them refuses the run.
 TASK_WORK = (

@@ -73,6 +73,14 @@ body.board-holding .pv-cols{align-items:stretch}
 .pv-play-none{visibility:hidden}
 /* ▶ (or its kept slot) goes right; the rules mark, where a stage has rules of its own, ends the header (stage-rules.css) */
 .pv-stage-n[title]{cursor:help}
+/* ⋯ ends the header: what can be done to every task the stage shows (stage-menu.ts); as quiet as the rules mark */
+.pv-col-more{flex:none;display:inline-grid;place-items:center;width:24px;height:24px;min-height:0;margin:0 0 0 -4px;padding:0;border:0;border-radius:var(--r-ctl);background:none;color:var(--muted);cursor:pointer}
+.pv-col-more .nav-icon{font-size:17px}
+.pv-col-more:hover,.pv-col-more[aria-expanded="true"]{background:var(--hover);color:var(--ink)}
+.pv-col-more:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
+.pv-phone-head .pv-col-more{width:44px;height:44px;margin:0 0 4px}
+/* the ⋯ ends a phone's tab row itself: no empty slot kept after it for a rules mark (stage-rules.css) */
+.pv-phone-head:has(> .pv-col-more):has(> .sr-mark)::after{display:none}
 
 /* A phone: a row of stage tabs (the only thing that scrolls sideways), ▶ for the stage shown, then its tasks. Every
    control is at least 44 px tall (S17). */

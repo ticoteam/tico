@@ -181,6 +181,13 @@ def next_due(c, audiences):
     return [{**a, "next_due": due(a)} for a in audiences]
 
 
+# The logo travels as its raw bytes, not JSON, and the preview is a page of HTML.
+LOGO_CONTENT = {
+    mime: {"schema": {"type": "string", "format": "binary"}}
+    for mime in ("image/png", "image/jpeg", "image/webp")  # release.LOGO_TYPES, imported only when used
+}
+
+
 def register(app, store, auth, mutate, settings):
     seeded = {"done": False}
 
@@ -260,7 +267,15 @@ def register(app, store, auth, mutate, settings):
         return write(request, body, work)
 
     # The logo is the one picture the page sends out, so it is uploaded here and kept apart from the library's files.
-    @app.get("/api/v2/company-page/logo", **api_v2("Company page", "getCompanyLogo", "The logo's bytes, with its type"))
+    @app.get(
+        "/api/v2/company-page/logo",
+        **api_v2(
+            "Company page",
+            "getCompanyLogo",
+            "The logo's bytes, with its type",
+            answer={"description": "The logo's bytes, sent as their image type", "content": LOGO_CONTENT},
+        ),
+    )
     def company_page_logo_show(request: Request):
         gate(request)
         with store.read() as c:
@@ -283,6 +298,11 @@ def register(app, store, auth, mutate, settings):
             "Company page",
             "setCompanyLogo",
             "Upload the logo as the raw image body: PNG, JPEG, GIF or WebP, up to 2 MB",
+            request_body={
+                "required": True,
+                "description": "The image itself, up to 2 MB. SVG is refused.",
+                "content": LOGO_CONTENT,
+            },
         ),
     )
     async def company_page_logo_set(request: Request):
@@ -320,6 +340,10 @@ def register(app, store, auth, mutate, settings):
             "Company page",
             "getCompanyPreview",
             "The page as it would read for one audience, as HTML that is never kept",
+            answer={
+                "description": "The page as HTML for one audience, never kept",
+                "content": {"text/html": {"schema": {"type": "string"}}},
+            },
         ),
     )
     def company_page_preview(request: Request, audience: str = "", theme: str = ""):

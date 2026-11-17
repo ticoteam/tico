@@ -32,7 +32,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from . import brand_icons
 from .config import PRODUCT_NAME
 from .store import H, Problem, digest
-from .api_contract import api_v2
+from .api_contract import ERROR, api_v2
 
 log = logging.getLogger("tico.oidc")
 
@@ -811,6 +811,30 @@ def _page(settings, status, title, message, action=None):
     return HTMLResponse(body, status_code=status)
 
 
+# The body of POST /auth/token, which the handler reads by hand.
+TOKEN_REQUEST = {
+    "required": True,
+    "content": {
+        "application/json": {
+            "schema": {
+                "type": "object",
+                "required": ["code", "code_verifier"],
+                "additionalProperties": False,
+                "properties": {
+                    "code": {"type": "string", "description": "From the URL fragment: #tico_code=..."},
+                    "code_verifier": {
+                        "type": "string",
+                        "minLength": 43,
+                        "maxLength": 128,
+                        "description": "The PKCE verifier whose S256 hash was the code_challenge.",
+                    },
+                },
+            }
+        }
+    },
+}
+
+
 def register(app, auth):
     """`/auth/login`, `/auth/callback` and `/auth/signed-out`. They answer 404 unless the
     server was started with TICO_AUTH_PROXY=oidc."""
@@ -861,7 +885,15 @@ def register(app, auth):
     @app.get(
         LOGIN_PATH,
         **api_v2(
-            "Session", "startSignIn", "Start browser sign-in (redirects); a frontend passes next and code_challenge"
+            "Session",
+            "startSignIn",
+            "Start browser sign-in (redirects); a frontend passes next and code_challenge",
+            security=[],
+            responses={
+                "200": None,
+                "302": {"description": "Redirect to the identity provider"},
+                "400": {"description": "next is not an allowed origin, or code_challenge is missing"},
+            },
         ),
     )
     def login(request: Request, next: str = "/", fresh: str = "", code_challenge: str = "", prompt: str = ""):
@@ -994,7 +1026,15 @@ def register(app, auth):
 
     @app.post(
         TOKEN_PATH,
-        **api_v2("Session", "exchangeCode", "Exchange the one-time sign-in code for a bearer session", "Token"),
+        **api_v2(
+            "Session",
+            "exchangeCode",
+            "Exchange the one-time sign-in code for a bearer session",
+            "Token",
+            request_body=TOKEN_REQUEST,
+            security=[],
+            responses={"400": {"description": "invalid_grant, or the request is malformed", **ERROR}},
+        ),
     )
     async def token(request: Request):
         """Exchange the one-time code a frontend got in its URL for a bearer session."""

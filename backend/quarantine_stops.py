@@ -23,8 +23,7 @@ def line(c, bot, at=None, hold=None):
     words: the end reason is read more widely than the review."""
     at = at or H.now()
     if hold is not None:
-        until = H.shift(hold["created_at"], seconds=H.QUARANTINE_COOLDOWN_S)
-        resumes = {"auto": True, "resumes_at": until}
+        resumes = {"auto": True, "resumes_at": hold["until_at"]}
     else:
         resumes = H.quarantine_resumes(c, bot)
     if resumes["auto"]:

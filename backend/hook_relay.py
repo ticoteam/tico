@@ -53,7 +53,7 @@ from . import tico_notices
 from .auth import validate_identity
 from .models import Contract, Empty
 from .store import Problem
-from .api_contract import api_v2
+from .api_contract import KEYLESS, api_v2
 
 TRANSPORT = None  # tests' fake HQ, never the live one
 EVERY = 15  # seconds between pulls when this server has a relay address of its own
@@ -960,6 +960,7 @@ def install(app, settings, store, auth):
             "setWebhookWakeUrl",
             "Set the wake address (https) or turn it off (url null); the answer carries the signing secret once, for the receiver (the owner; needs the Gateway key)",
             "WebhookWakeUrlSet",
+            idempotency=KEYLESS,
         ),
     )
     def wake_url_set(request: Request, body: WakeUrl):

@@ -53,7 +53,7 @@ def write_state(api):
                 "history_events",
                 "idempotency",
                 "refusals",
-                "quarantine_holds",
+                "holds",
                 "org_rule_holds",
             )
         }

@@ -1507,6 +1507,10 @@ class GranolaMCP:
         await asyncio.gather(*list(self.jobs.values()), *list(self.revocations), return_exceptions=True)
 
 
+# What the Idempotency-Key header does on a Granola write: nothing.
+GRANOLA_KEY = "Optional. Sync uses a two-minute debounce; connecting starts a new device sign-in."
+
+
 def install_granola(app):
     service = app.state.granola = GranolaMCP(app)
 
@@ -1530,7 +1534,13 @@ def install_granola(app):
 
     @app.post(
         "/api/v2/meetings/granola/connect",
-        **api_v2("Meetings", "connectGranola", "Start personal Granola browser sign-in", "GranolaDevice"),
+        **api_v2(
+            "Meetings",
+            "connectGranola",
+            "Start personal Granola browser sign-in",
+            "GranolaDevice",
+            idempotency=GRANOLA_KEY,
+        ),
     )
     async def connect(request: Request):
         return await safe(service.connect(person(request)))
@@ -1544,14 +1554,26 @@ def install_granola(app):
 
     @app.delete(
         "/api/v2/meetings/granola/connect",
-        **api_v2("Meetings", "disconnectGranola", "Delete your encrypted Granola tokens", "GranolaDisconnect"),
+        **api_v2(
+            "Meetings",
+            "disconnectGranola",
+            "Delete your encrypted Granola tokens",
+            "GranolaDisconnect",
+            idempotency=GRANOLA_KEY,
+        ),
     )
     async def disconnect(request: Request):
         return await safe(service.disconnect(person(request)))
 
     @app.post(
         "/api/v2/meetings/granola/sync",
-        **api_v2("Meetings", "syncGranola", "Start a background sync; reuse the last two minutes", "GranolaSync"),
+        **api_v2(
+            "Meetings",
+            "syncGranola",
+            "Start a background sync; reuse the last two minutes",
+            "GranolaSync",
+            idempotency=GRANOLA_KEY,
+        ),
     )
     async def sync(request: Request, now: bool = False):
         """`now`: the person pressed Sync now, so a backoff yields after five minutes since the last attempt."""
