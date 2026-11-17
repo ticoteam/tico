@@ -58,7 +58,8 @@ stayed stay picked.
 
 Removing a stage that holds open tasks asks where they go, in any pipeline: the save answers 409 `stage_has_tasks`
 (the stages, and a suggested `move_to`) until it carries `move_tasks_to: {pipeline, stage}`. The tasks move first, then
-the stage goes.
+the stage goes. Retiring a pipeline that holds open tasks takes the same `move_tasks_to` (a stage of another
+pipeline) on `POST /api/v2/pipelines/{id}/retire`.
 
 ## Whose turn it is
 

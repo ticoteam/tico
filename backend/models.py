@@ -523,6 +523,8 @@ class PipelineRecord(Contract):
 
 class PipelineRetire(Contract):
     settings_version: int | None = None
+    # Where its open tasks go first (another pipeline's stage); without it a pipeline that holds one is refused.
+    move_tasks_to: TaskMovePlace | None = None
 
 
 class PipelineFromPreset(Contract):

@@ -1603,13 +1603,27 @@ def save(
     return after
 
 
-def retire(conn: "sqlite3.Connection", by: str, pipeline_id: str, seen_version: int | str | None = None) -> Row:
-    """Take a pipeline out of use. Its tasks that ended stay where they are. Refused while it holds an open task, or
-    while another pipeline files tasks into it."""
+def retire(
+    conn: "sqlite3.Connection",
+    by: str,
+    pipeline_id: str,
+    seen_version: int | str | None = None,
+    move_tasks_to: Row | None = None,
+) -> Row:
+    """Take a pipeline out of use. Its tasks that ended stay where they are. Refused while it holds an open task, unless
+    `move_tasks_to` ({"pipeline", "stage"}: another pipeline) says where they go, or while another pipeline files tasks
+    into it."""
     row = task_engine.pipeline(conn, pipeline_id)
     if not row:
         _refuse(conn, by, "not-found", "No such pipeline")
     _may_change(conn, by, row, seen_version)
+    if move_tasks_to and not row.get("retired_at"):
+        if task_engine.pipeline_named(conn, by, str(move_tasks_to.get("pipeline") or ""))["id"] == pipeline_id:
+            _refuse(conn, by, "task_settings", "Move the tasks to another pipeline.")
+        gone = [
+            {"id": s["id"], "name": s["name"]} for s in task_engine.stages(conn, pipeline_id) if s["kind"] == "work"
+        ]
+        _move_out(conn, by, pipeline_id, gone, move_tasks_to)
     if not row.get("retired_at") and is_bot(by):
         for stage in task_engine.stages(conn, pipeline_id):
             if any(R.people_only(r) for r in R.on_stage(conn, stage["id"])):

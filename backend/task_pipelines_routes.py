@@ -107,7 +107,9 @@ def register(app: "FastAPI", auth: Any, mutate: "Callable[..., Any]", store: Any
         auth.domain(who)
 
         def write(c: Any) -> dict[str, Any]:
-            pipeline_settings.retire(c, who.actor, pipeline_id, body.settings_version)
+            place = body.move_tasks_to
+            to = {"pipeline": place.pipeline, "stage": place.stage} if place else None
+            pipeline_settings.retire(c, who.actor, pipeline_id, body.settings_version, to)
             return {"pipeline": record(c, who, pipeline_id)}
 
         return mutate(request, body, write)

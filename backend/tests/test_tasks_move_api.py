@@ -159,3 +159,28 @@ def test_a_stage_that_holds_tasks_is_removed_once_they_have_somewhere_to_go(api)
     for t in made:
         task = get(api, "tasks/" + t["id"])["task"]
         assert (task["pipeline"]["id"], task["stage"]["id"]) == ("backlog", "on-ice")
+
+
+def test_a_pipeline_that_holds_tasks_retires_once_they_move_to_another(api):
+    boards(api)
+    made = [
+        idea(api, "Idea"),
+        post(api, "tasks", {"title": "Build it", "body": "x", "owner": "ben", "pipeline": "dev"}),
+    ]
+    version = get(api, "pipelines/dev")["pipeline"]["settings_version"]
+    r = api.post("/api/v2/pipelines/dev/retire", json={"settings_version": version}, headers=headers())
+    assert r.status_code == 409, "it holds open tasks"
+    r = api.post(
+        "/api/v2/pipelines/dev/retire",
+        json={"settings_version": version, "move_tasks_to": {"pipeline": "dev", "stage": "build"}},
+        headers=headers(),
+    )
+    assert r.status_code == 409, "not into itself"
+    out = post(
+        api,
+        "pipelines/dev/retire",
+        {"settings_version": version, "move_tasks_to": {"pipeline": "Backlog", "stage": "On ice"}},
+    )
+    assert out["pipeline"]["retired_at"]
+    for t in made:
+        assert get(api, "tasks/" + t["id"])["task"]["stage"]["id"] == "on-ice"

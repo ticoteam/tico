@@ -962,7 +962,8 @@ STABLE = [
         "post",
         "Pipelines",
         "retirePipeline",
-        "Take a pipeline out of use once it holds no open task",
+        "Take a pipeline out of use once it holds no open task; move_tasks_to {pipeline, stage} (another pipeline) moves "
+        "its open tasks there first",
         None,
     ),
     (
