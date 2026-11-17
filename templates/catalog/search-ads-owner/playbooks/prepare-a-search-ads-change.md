@@ -15,7 +15,7 @@ evidence. Nothing goes into the account here. A bet goes live only after a perso
     tico task show <id>
 
 Find the segment, the goal, the platform, the campaign or ad group, the budget and the date. If one of them is
-missing, ask once with `tico task ask <id> --to <person> "<question>" --version N` and stop.
+missing, ask once with `tico task ask <id> --to <person> "<question>"` and stop.
 
 ## 2. Check it against the targets and the structure
 

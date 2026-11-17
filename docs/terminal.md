@@ -24,7 +24,7 @@ was wrong), 2 when the server refused. Writes send an Idempotency-Key, so a retr
 
 **What a token cannot do.** A personal token is you, except that it cannot give an OK on an *OK* requirement (one a
 stage keeps for a person's own word: "An OK is the person's own, in Tico"); give that one in Tico. It can approve or
-send back a page sign-off, answer a question, and send back an OK.
+send back a page sign-off, answer a bot's ❓ with a reply in its chat, and send back an OK.
 
 ## Read the company
 
@@ -74,7 +74,7 @@ tico needs-you show               # everything that waits on you, in one list
    tico task send-back <id> -m "Say what negate(-0) returns"
    ```
 
-   A question on a task is answered with `tico task answer <id> <requirement> "<answer>" --version <version>`.
+   An OK is answered with `tico task answer <id> <requirement> ok|no --version <version>`. A bot's question (❓) is answered by a reply in its chat.
 
 5. **Wait for the merge.** Product files the work into Engineering; `--tree` follows the tasks a task files. A task
    that reached a stage or went past it meets `--stage`, so this ends once the Engineering task leaves Merge:

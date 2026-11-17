@@ -34,7 +34,6 @@ const lastSeg = (path: unknown): string => decoded((String(path).split(/[?#]/)[0
 // Documents a link may point at, by extension: a card with this mark (the viewer's own marks where it shows the kind).
 const MD_FILE_MARK: Record<string, string> = {pdf: 'PDF', md: 'DOC', markdown: 'DOC', txt: 'TEXT', csv: 'CSV', doc: 'DOC', docx: 'DOC',
   xls: 'XLS', xlsx: 'XLS', ppt: 'PPT', pptx: 'PPT', zip: 'ZIP'};
-const MD_IMAGE_RE = /\.(png|jpe?g|gif|webp|avif)$/i;
 const extOf = (s: unknown): string => ((/\.([a-z0-9]{1,8})$/i.exec(String(s || '').split(/[?#]/)[0] ?? '') || [])[1] || '').toLowerCase();
 const ticoFileUrl = (url: URL): boolean => url.host === location.host && /^\/api\/v2\/files\/[A-Za-z0-9-]{8,80}$/.test(url.pathname);
 // An object nothing here can open: its name, the full URI in the tooltip and a Copy button, never a long raw line.

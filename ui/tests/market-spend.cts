@@ -28,7 +28,7 @@ interface Seg {id: string; name: string; parent: string | null; depth: number; s
 interface Data {definition: unknown; year: number; dimension: string; basis: string; total: unknown; segments: Seg[]}
 interface LiveData {offering?: Data; chain?: typeof chain; [key: string]: unknown}
 // The open Size the market task as GET /api/v2/market/spend carries it (market_spend.py sizing).
-interface Sizing {id: string; version: number; turn: string; ask: {requirement_id: string; kind: string; line: string; choices: string[]} | null}
+interface Sizing {id: string; version: number; turn: string; ask: {requirement_id: string | null; mark_id?: string; kind: string; line: string} | null}
 interface OpenOpts {role?: string; route?: string; viewport?: Viewport; empty?: boolean; data?: LiveData; sizing?: Sizing | null}
 type Sent = [string, string, unknown];
 
@@ -127,7 +127,7 @@ async function open(browser: Browser, {role = 'owner', route = '#/strategy/marke
       live.sizing = {id: 'task-size', version: (live.sizing?.version || 0) + 1, turn: 'working', ask: null};
       return json({task_id: 'task-size', sizing: live.sizing});
     }
-    const answered = p.match(/^\/api\/v2\/tasks\/([^/]+)\/asks\/([^/]+)\/answer$/);
+    const answered = p.match(/^\/api\/v2\/tasks\/([^/]+)\/comments$/);
     if (answered && method === 'POST') {
       sent.push(['POST', p, req.postDataJSON()]);
       live.sizing = {id: answered[1]!, version: (live.sizing?.version || 0) + 1, turn: 'working', ask: null};
@@ -259,10 +259,10 @@ const noSideScroll = (page: Page) => page.evaluate(() => ({page: document.docume
       assert.deepEqual(errors, [], role);
       await page.close();
     }
-    // The task waits on the owner: its question is on the card, answered there with the task's version, and the card
-    // goes back to working. Needs you marks Where is the money going? until then.
+    // The task waits on the owner: the Librarian's ❓ is on the card, answered there by a comment on the task, and the
+    // card goes back to working. Needs you marks Where is the money going? until then.
     {
-      const sizing = {id: 'task-size', version: 4, turn: 'person', ask: {requirement_id: 'req-1', kind: 'answer', line: 'Offices only, or homes too?', choices: ['Offices only']}};
+      const sizing = {id: 'task-size', version: 4, turn: 'person', ask: {requirement_id: null, mark_id: 'm1', kind: 'question', line: 'Offices only, or homes too?'}};
       const {page, errors, sent} = await open(browser, {route: '#/strategy/market/spend', empty: true, sizing});
       const asked = page.locator('#mkt-q-money [data-mkt-asked]');
       await asked.waitFor();
@@ -274,7 +274,7 @@ const noSideScroll = (page: Page) => page.evaluate(() => ({page: document.docume
       await asked.locator('[data-mkt-reply] input').fill('Offices only, under 50 staff');
       await asked.locator('[data-mkt-reply] [type="submit"]').click();
       await page.locator('#mkt-q-money [data-mkt-researching] .market-spin').waitFor();
-      assert.deepEqual(sent, [['POST', '/api/v2/tasks/task-size/asks/req-1/answer', {value: 'Offices only, under 50 staff', version: 4}]]);
+      assert.deepEqual(sent, [['POST', '/api/v2/tasks/task-size/comments', {text: 'Offices only, under 50 staff'}]]);
       assert.equal(await page.locator('#mkt-qh-money .needs-mark').count(), 0, 'answered');
       assert.deepEqual(errors, []);
       await page.close();

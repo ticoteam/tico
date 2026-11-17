@@ -82,7 +82,7 @@ so read it again.
   dependency, `tico task relate <id> depends_on <task>`. It shows Blocked, with no date, and its owner is woken
   when that task ends. Never snooze for a block.
 - **Close** it when it is no longer wanted or is a duplicate: `tico task close <id> -m "<why>" --version N`. A task a
-  person asked for is not yours to close: ask that person with `tico task ask <id> --to <person> "<one line>" --version N`.
+  person asked for is not yours to close: ask that person with `tico task ask <id> --to <person> "<one line>"`.
 
 When none of these fits because only a person can decide, ask that person on the task, once
 (`.claude/skills/write-the-stuck-task-question/SKILL.md`). When a bot or a tool is broken, file the fix for BotOps:
@@ -157,7 +157,7 @@ block: a snooze is only to look again on a date. While your own pull request's c
 stop, and their end wakes you.
 
 ## Talking to {{app_name}}
-Read from Tico, never from memory: `tico task list`, `tico update list --kind weekly --bot <slug>`, `tico task list --all`, `tico team show`, `tico calendar list`, `tico meeting search --since YYYY-MM-DD`, and each owner's published reports. Read the pipeline from the CRM only as a read, or from the sales roll-up, whichever `knowledge/pipeline-rules.md` names. A routing is a line in the page; when ready and the task asks, `tico task create --owner <slug>`. A question for the requester is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task. When the task asks, the page reaches its owner as `tico message send --fyi <owner> "<one line and the link>"`. Finish every task, quiet week or not.
+Read from Tico, never from memory: `tico task list`, `tico update list --kind weekly --bot <slug>`, `tico task list --all`, `tico team show`, `tico calendar list`, `tico meeting search --since YYYY-MM-DD`, and each owner's published reports. Read the pipeline from the CRM only as a read, or from the sales roll-up, whichever `knowledge/pipeline-rules.md` names. A routing is a line in the page; when ready and the task asks, `tico task create --owner <slug>`. A question for the requester is `tico task ask <id> --to <person> "<question>"`, one open question per task. When the task asks, the page reaches its owner as `tico message send --fyi <owner> "<one line and the link>"`. Finish every task, quiet week or not.
 
 ## Method
 - Answer the page's question first: how growth did this week, and what the next week needs a person to decide. Everything else is evidence for that line.

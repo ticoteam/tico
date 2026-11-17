@@ -4,10 +4,11 @@ from backend.store import H
 from backend.tests.helpers.api import claim, post, ready
 from backend.tests.helpers.run_failures import setup
 from backend import bot_settings as BS
+from backend import question_marks
 
 
 def busy(api, machine, first, count, live=1):
-    """`count` more active bots on the test computer, each with open tasks, two questions to a person, a task for a
+    """`count` more active bots on the test computer, each with open tasks, two ❓ to a person, a task for a
     person, private tasks and a stopped run on record; the first `live` of them running, every third one crashed."""
     from backend.store import encode
     from backend.tests.helpers.api import assign
@@ -36,8 +37,7 @@ def busy(api, machine, first, count, live=1):
                 task = H.task_create(c, "human:ana", f"Work {slug} {k}", "Do it.", "bot:" + slug, private=k == 3)
                 first_task = first_task or task["id"]
                 if k in (1, 2):
-                    seen = H.task(c, task["id"])["version"]
-                    H.task_ask(c, "bot:" + slug, task["id"], "human:ana", "Which one?", seen_version=seen)
+                    question_marks.ask(c, "bot:" + slug, task["id"], "human:ana", "Which one?")
             H.task_create(c, "bot:" + slug, f"Need {slug}", "Please look.", "human:ben", private=bool(n % 2))
             H.status_set(
                 c, "bot:" + slug, slug, state="crashed" if n % 3 == 2 else "idle", focus="Working", task_id=first_task

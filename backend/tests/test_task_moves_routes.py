@@ -2,6 +2,7 @@
 the task as JSON; a refusal is flat, with what is missing, the commands allowed next and the version."""
 
 from backend.auth import Identity
+from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import get, headers, post
 
 
@@ -124,21 +125,21 @@ def test_an_ask_is_answered_given_and_withdrawn_on_the_task(api):
     made = task(api, owner="ana")
     asked = api.post(
         f"/api/v2/tasks/{made['id']}/asks",
-        json={"to": "ben", "line": "Which month suits the team?", "choices": ["May", "June"]},
+        json={"to": "ben", "line": "OK June for the offsite?", "kind": "ok"},
         headers=headers(),
     )
     assert asked.status_code == 200, asked.text
     rid = asked.json()["requirement_id"]
     ask = next(r for r in asked.json()["task"]["to_leave"] if r["requirement_id"] == rid)
-    assert ask["kind"] == "answer" and ask["who"] == "human:ben" and ask["choices"] == ["May", "June"]
+    assert ask["kind"] == "ok" and ask["who"] == "human:ben"
     items = get(api, "needs-you", token="ben-test")["items"]
     item = next(i for i in items if i["kind"] == "ask")
-    assert item["line"] == "Which month suits the team?" and item["task"]["id"] == made["id"]
-    assert item["requirement_id"] == rid and item["ask"]["choices"] == ["May", "June"]
+    assert item["line"] == "OK June for the offsite?" and item["task"]["id"] == made["id"]
+    assert item["requirement_id"] == rid
     given = post(api, f"tasks/{made['id']}/asks/{rid}/give", {"to": "cara"}, token="ben-test")
     assert next(r for r in given["to_leave"] if r["requirement_id"] == rid)["who"] == "human:cara"
     answered = api.post(
-        f"/api/v2/tasks/{made['id']}/asks/{rid}/answer", json={"value": "June"}, headers=headers("cara-test")
+        f"/api/v2/tasks/{made['id']}/asks/{rid}/answer", json={"value": "ok"}, headers=headers("cara-test")
     )
     assert answered.status_code == 200, answered.text
     aid = answered.json()["answer_id"]
@@ -159,9 +160,7 @@ def test_needs_you_leaves_out_a_persons_own_task_lists_its_ask_and_counts_the_li
     needs = get(api, "needs-you", token="ben-test")
     assert not [i for i in needs["items"] if i.get("task_id") == made["id"]]  # his, with nothing asked: in Tasks
     with api.app.state.store.transaction() as c:
-        E.add_requirement(
-            c, made["id"], "human:ana", "answer", "human:ben", "Which barn?", seen_version=made["version"]
-        )
+        E.add_requirement(c, made["id"], "human:ana", "ok", "human:ben", "OK the barn", seen_version=made["version"])
     needs = get(api, "needs-you", token="ben-test")
     mine = [i for i in needs["items"] if i["kind"] == "ask" and i["task"]["id"] == made["id"]]
     assert len(mine) == 1 and mine[0]["task"]["stage_id"] == "general-todo"
@@ -324,13 +323,14 @@ def test_an_unrelated_reader_cannot_finish_or_hand_over_through_the_owners_done(
     assert shown["status"] == "open" and shown["owner_id"] == "human:ben"
 
 
-def ask(api, tid, to="ben", line="OK to book the barn?", kind="ok", token="ana-test"):
+def ask(api, tid, to="ben", line="OK to book the barn?", kind="ok", token="ana-test", shows=None):
+    """An ask on the task. A bot's OK shows what it approves (`shows`)."""
     body = {
         "to": to,
         "line": line,
         "kind": kind,
         "version": show(api, tid)["version"],
-        "why": "It sets what goes out on launch day.",
+        **({"show": shows} if shows else {}),
     }
     r = api.post(f"/api/v2/tasks/{tid}/asks", json=body, headers=headers(token))
     assert r.status_code == 200, r.text
@@ -359,12 +359,12 @@ def test_a_reader_who_cannot_work_the_task_cannot_give_someone_elses_ask_away(ap
 
 
 def test_a_reader_who_was_not_asked_cannot_send_a_bots_ask_back(api):
-    """Codex review 2, 2: the bot said its own work is done and waits only on Ben's answer. Cara's thumbs down would
-    withdraw that ask and so finish the task: refused. Ben, who was asked, may decline it."""
+    """Codex review 2, 2: the bot said its own work is done and waits only on Ben's OK. Cara, who was not asked, may not
+    send it back: refused, and the task is as it was. Ben, who was asked, may."""
     bot = as_bot(api)
     made = task(api, owner="ops")
     tid = made["id"]
-    rid = ask(api, tid, line="Which month suits the team?", kind="answer", token=bot)
+    rid = ask(api, tid, line="OK the offsite plan?", token=bot, shows=X.shown_on(api))
     own = next(r for r in show(api, tid)["to_leave"] if r["kind"] == "owner_done")["requirement_id"]
     version = show(api, tid)["version"]
     done = api.post(
@@ -373,12 +373,14 @@ def test_a_reader_who_was_not_asked_cannot_send_a_bots_ask_back(api):
     assert done.status_code == 200, done.text
     before = show(api, tid)
     assert before["status"] == "open"
-    thumbs = f"tasks/{tid}/asks/{rid}/thumbs"
-    body = refused(api, thumbs, {"up": False, "note": "Nobody needs this"}, token="cara-test", status=403)
-    assert body["error"]["code"] == "identity"
+    answer = f"tasks/{tid}/asks/{rid}/answer"
+    body = refused(api, answer, {"value": "no", "note": "Nobody needs this"}, token="cara-test")
+    assert body["error"] == "task_requirement" and body["detail"] == "This is asked of Ben"
     assert show(api, tid) == before
-    post(api, thumbs, {"up": False, "note": "We already picked June"}, token="ben-test")
-    assert show(api, tid)["status"] == "done"
+    said = post(api, answer, {"value": "no", "note": "We already picked June"}, token="ben-test")
+    with api.app.state.store.read() as c:
+        found = c.execute("SELECT by_id, answer, notes FROM answers WHERE id=?", (said["answer_id"],)).fetchone()
+    assert tuple(found) == ("human:ben", "no", "We already picked June")
 
 
 def test_only_who_gave_an_answer_takes_it_back(api):

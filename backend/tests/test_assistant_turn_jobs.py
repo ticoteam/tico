@@ -13,6 +13,7 @@ from backend import task_asks
 from backend.tests.helpers.api import assign, get, headers, post, runner, setup_attempt  # noqa: F401
 from backend.tests.helpers.assistant import assistant_turn, say
 from backend.tests.helpers.automation_access import flow
+from backend import question_marks as Q
 
 
 def turn(api, text="Please do it"):
@@ -128,17 +129,14 @@ def test_one_assistant_turn_makes_every_write_the_person_could_make_with_no_card
     with api.app.state.store.read() as c:
         assert H.task(c, task)["owner_id"] == "bot:ops", "owner"
 
-    # A turn answers a question the bot asked.
+    # A turn answers a question the bot asked her (a ❓ on its message in the task's chat): her reply there clears it.
     with api.app.state.store.transaction() as c:
         tool = H.task_create(c, "human:ana", "Pick the outbound tool", "x", "bot:finance", lint=False)
-        asked = H.task_ask(c, "bot:finance", tool["id"], "human:ana", "Close or Apollo?", seen_version=tool["version"])
-    call(
-        api,
-        turn(api, "Apollo"),
-        "POST",
-        f"tasks/{tool['id']}/asks/{asked['requirement_id']}/answer",
-        {"value": "Apollo"},
-    )
+        Q.ask(c, "bot:finance", tool["id"], "human:ana", "Close or Apollo?", checked=False)
+        assert [m["person_id"] for m in Q.on_task(c, tool["id"])] == ["human:ana"]
+    call(api, turn(api, "Apollo"), "POST", f"tasks/{tool['id']}/comments", {"text": "Apollo"})
+    with api.app.state.store.read() as c:
+        assert Q.on_task(c, tool["id"]) == [], "her reply clears the ❓"
 
     # A turn sets a direct setting and a confirm setting.
     token = turn(api, "Turn off topic upkeep and the Apollo rule")

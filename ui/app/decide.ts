@@ -2,8 +2,7 @@
    modal on a wide screen, the whole screen on a phone. The top bar is where you are (All mine / a pipeline / a stage, a
    menu), Flow's mark, the mic, the undo notice (what was just done), the next ask Tico is still thinking about, then ‹ › ✕ (‹ › on a wide screen
    only; Skip, in the answer row, steps on at every width). The thing asked about is on the left, shown in full (the page, the email, what an OK is for); the
-   sentence asked, who asks, Notes and the buttons are on the right. A stage's typed answer asks its question: a choice is its buttons, a number a whole-number box
-   with its range, text a box; a value the server refuses stays typed, under the server's line.
+   sentence asked, who asks, Notes and the buttons are on the right.
    An OK bound to what was shown: the content on screen is the preview GET /v2/oks/{id} (or the email's own preview)
    returned, held here and never read again behind the person's back. A letter shows its proof and a file its pinned
    version, read here before Approve is on; what does not load leaves Approve off. Approve sends the hash of exactly that preview. If
@@ -15,7 +14,7 @@
 'use strict';
 
 /** What an item is on this screen. */
-type AskKind = 'ok' | 'question' | 'stuck' | 'fix' | 'mention';
+type AskKind = 'ok' | 'other' | 'stuck' | 'fix' | 'mention';
 /** What an OK shows, as it was read: `hash` is the hash of exactly this content, the one Approve sends. `none` is an OK
     with no bound grant (a stage's OK of a page): Approve is a plain answer. `missing`: a part of what it shows did not
     load, so Approve stays off. `urls`: the object URLs of bytes read for it (a proof, a file), let go with it. `page`: on
@@ -123,8 +122,6 @@ const DEC_BAR_FADE_MS = 400;     // the undo fades out over this long (decide.cs
 const DEC_CALM_MS = 400;
 let DEC_CALM_TIMER = 0;
 let DEC_ASK_NOTE = '';                      // the item whose empty Send back asked for a note: Notes keeps saying so
-// The two answers Tico adds to every bot's question to a person (backend/answers.py DONT_KNOW, GIVE_BACK).
-const DEC_DONT_KNOW = "I don't know, explain", DEC_GIVE_BACK = 'Give it back';
 const DEC_FILES_MAX = 10;                   // files on one note
 let DEC_FILE_KEY = 0;
 let DEC_VOICE = false;                      // the mic is on: voice is not built, so the bar says it is coming
@@ -214,6 +211,7 @@ function decideDialog(): HTMLDialogElement {
       <button type="button" class="dc-mic" data-dc="voice" aria-label="Voice" aria-pressed="false" title="Voice">${DEC_MIC}</button>
       <div class="dc-sayw"><span class="dc-say"></span><span class="dc-vh" aria-live="polite"></span></div>
       <span class="dc-up"></span><span class="dc-bar" role="status" hidden></span>
+      <span class="dc-head-acts"></span>
       <span class="dc-nav">
         <button type="button" class="dc-icon dc-wide" data-dc="prev" aria-label="Previous" title="Previous (←)">‹</button>
         <button type="button" class="dc-icon dc-wide" data-dc="next" aria-label="Next" title="Next (→)">›</button>
@@ -241,16 +239,12 @@ function decideDialog(): HTMLDialogElement {
     decideNeedsText(root);
   });
   d.addEventListener('keydown', (ev: KeyboardEvent) => {
-    // Enter in an answer's one-line box sends it.
-    if (DEC && ev.key === 'Enter' && eventElement(ev)?.matches('input#dc-other')) {
-      ev.preventDefault(); (d.querySelector<HTMLButtonElement>('[data-dc="other"]'))?.click(); return;
-    }
     // Snooze's menu: Enter in Other's time box snoozes until it; ↑ ↓ move between its choices.
     const snz = DEC?.more === 'snooze' ? eventElement(ev)?.closest('.dc-snzw') : null;
     if (snz && ev.key === 'Enter' && eventElement(ev)?.matches('input#dc-snz-at')) {
       ev.preventDefault(); snz.querySelector<HTMLButtonElement>('[data-dc="snooze-at"]')?.click(); return;
     }
-    // Snooze's and a question's ⋯ menu: ↑ ↓ move between their choices (from the button: the first, or the last).
+    // Snooze's and ⋯'s menu: ↑ ↓ move between their choices (from the button: the first, or the last).
     const menu = snz || (DEC?.more === 'ask' ? eventElement(ev)?.closest('.dc-askw') : null);
     if (menu && (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') && eventElement(ev)?.matches('[role="menuitem"], [aria-haspopup="menu"]')) {
       ev.preventDefault();
@@ -314,7 +308,7 @@ function decideStart(d: HTMLDialogElement) {
   const cover = root?.lastElementChild;
   window.setTimeout(() => cover?.remove(), DEC_START_MS);
 }
-/** ▶: the walk from its first item, or, after Go to, from the item it left (decide-about.ts). */
+/** ▶: the walk from its first item, or, after a link in an item's text, from the item it left (decide-about.ts). */
 // Async so code outside this page part (Tasks' ▶ Review) may use its answer: the shell's stand-in loads the part first.
 async function decideGoThrough(): Promise<boolean> { const at = DEC_RESUME; DEC_RESUME = ''; return (!!at && decideOpen(at)) || decideOpen(''); }
 /** The phone's Flow tab and Flow's mark beside Tasks: ▶ over all of Needs you, as the Tasks header's Flow on You; with
@@ -396,7 +390,7 @@ function decideStop() {
   DEC = null; DEC_VOICE = false;
   decideOpinionsEnd();
   decideChatStop(); DEC_APPROVED.clear(); DEC_BROWSED.clear();
-  DEC_ABOUT.clear(); DEC_SENT = ''; DEC_HELD.clear(); DEC_SENDING.clear();
+  DEC_ABOUT.clear();
   clearTimeout(st.barTimer);
   for (const v of st.ok.values()) decideOkLet(v);
   st.off.forEach(fn => fn());
@@ -427,7 +421,7 @@ function decideRefresh(st: DecState, items: NeedsItem[] | NeedsEntry[] | undefin
 
 // ---- moving through
 function decideGo(st: DecState, id: string | null) {
-  st.at = id; st.more = ''; st.snzOther = false; st.error = ''; st.busy = false; st.files = []; DEC_SENT = ''; DEC_ASK_NOTE = '';
+  st.at = id; st.more = ''; st.snzOther = false; st.error = ''; st.busy = false; st.files = []; DEC_ASK_NOTE = '';
   if (id) st.seen.add(id);
   decideRender(st);
 }
@@ -566,7 +560,7 @@ const decideStageName = (id: string | null | undefined): string => {
 };
 /** Who asks: the asker of an ask, the bot that can't run, who @'d you, else the task's owner. */
 function decideAsker(it: NeedsEntry): string {
-  if (it.kind === 'mention') return it.from_id || '';
+  if (it.kind === 'mention' || it.kind === 'question') return it.from_id || '';
   if (it.kind === 'paused') return it.bots?.[0] ? 'bot:' + it.bots[0].replace(/^bot:/, '') : '';
   return it.ask?.asked_by || it.task?.owner_id || '';
 }
@@ -627,10 +621,10 @@ function decideOpinionsEnd() {
   DEC_OP.timer = 0; DEC_OP.busy = false; DEC_OP.abort = null; DEC_OP.since = 0; DEC_OP.off = false;
   DEC_OP.state.clear(); DEC_OP.print.clear(); DEC_OP.score.clear();
 }
-/** What an opinion is about: the ask's sentence, choices, what it shows and its page's version. A bot that edits the
-    ask or puts up a new page under the same id changes it. */
+/** What an opinion is about: the ask's sentence, what it shows and its page's version. A bot that edits the ask or
+    puts up a new page under the same id changes it. */
 const decideOpPrint = (it: NeedsEntry): string =>
-  JSON.stringify([it.line, it.ask?.line ?? '', it.ask?.choices ?? null, decideShowRefs(it), decidePage(it)]);
+  JSON.stringify([it.line, it.ask?.line ?? '', decideShowRefs(it), decidePage(it)]);
 /** An ask still waiting on its opinion: asked (or about to be) with none back yet, so the mark moves. Not while the
     route is off. */
 const decideOpWaits = (it: NeedsEntry | null | undefined): boolean => !!it && it.kind === 'ask' && !DEC_OP.off
@@ -731,6 +725,8 @@ function decideRender(st: DecState) {
   const it = decideCurrent(st);
   root.classList.toggle('dc-empty', !it);
   if (!it) {
+    root.classList.remove('dc-solo');
+    $('.dc-head-acts', root)?.replaceChildren();
     $('.dc-thing', root)!.innerHTML = '';
     $('.dc-side', root)!.innerHTML = decideDoneHTML(st);
     decideBarRoom();
@@ -771,20 +767,16 @@ function decidePaintBody(st: DecState) {
       // Changes since vK on (the version menu): the same page with its changed blocks marked.
       : changed + decideApprovalLineHTML(it) + `<div class="dc-doc${!v.html && !v.pages.length ? ' dc-bare' : ''}">${v.since?.on && v.since.marked ? v.since.html : v.html}`
         + `${v.pages.map((_, i) => `<div data-dc-page="${i}"></div>`).join('')}</div>`;
-  } else if (kind === 'question' && decideTaskId(it)) {
-    // A question's background: its task, one line that opens (open as it was left on this item, through a redraw).
-    html = decideBgHTML(it);
   } else if (decideTaskId(it)) {
     // Who asked and when, then the task's own text, its links, files and pages; the heading is on the right only.
     html = decideAboutHTML(it, kind);
-  } else if (kind === 'mention') {
+  } else if (kind === 'mention' && it.kind !== 'question') {
+    // (A ❓ in a direct chat has no task: its chat is the whole item, dc-solo.)
     html = `<blockquote class="dc-quote">${esc(it.line)}</blockquote>`;
   }
   // A website's browser the ask shows (`browser:<tool>/<account>`): the live view; an OK's comes in its shows.
   // (On a phone it is in the Task tab; the bottom row's Open browser opens it: decidePaintSide.)
-  if (kind !== 'ok') html += (it.ask?.shows || []).filter(r => r.startsWith('browser:')).map(r => decideBrowserSlot(r.slice(8))).join('');
-  // A question: on a phone the question and its answer come first, the background under them (decide.css).
-  host.parentElement?.classList.toggle('dc-qmain', kind === 'question');
+  if (kind !== 'ok') html += (it.ask?.shows || it.shows || []).filter(r => r.startsWith('browser:')).map(r => decideBrowserSlot(r.slice(8))).join('');
   if (host.dataset.html === html && host.dataset.key === it.id) { decideOkDocMount(host, it); return; }
   host.dataset.html = html; host.dataset.key = it.id;
   browserView.stopIn(host);
@@ -819,12 +811,11 @@ function decideApprovalLineHTML(it: NeedsEntry): string {
 /** An OK whose view, as read, shows nothing: no grant's content, no page, no diff. Its task's text stands in. */
 const decideOkBare = (v: AskOkView): boolean => (v.state === 'ready' || v.state === 'none') && !v.html && !v.pages.length && !v.missing;
 const decideBrowserSlot = (ref: string) => ref.includes('/') ? `<div class="dc-browser" data-dc-browser="${esc(ref)}"></div>` : '';
-/** The live view of the browser an ask shows. Its Done answers the ask "Done" when that is one of its choices (a bot's
-    "sign in for me"), else it only closes the view, which leaves an Open browser button. */
+/** The live view of the browser an ask shows. Its Done replies "Done" to a bot's ❓ that shows it (a bot's "sign in for
+    me", backend/browser_commands.py); else it only closes the view, which leaves an Open browser button. */
 function decideBrowserMount(st: DecState, it: NeedsEntry, slot: HTMLElement) {
   const [toolId = '', accountId = ''] = (slot.dataset.dcBrowser || '').split('/');
-  const answers = decideKind(it) === 'question' && (it.ask?.choices || []).includes('Done');
-  const taskId = it.task_id || it.task?.id || '', rid = decideRid(it), ver = it.task?.version ?? null;
+  const marked = it.kind === 'question';
   const closed = () => {
     if (!slot.isConnected || DEC !== st) return;
     // Back from it: the bottom row's forward action is Done now (decidePaintSide).
@@ -835,9 +826,9 @@ function decideBrowserMount(st: DecState, it: NeedsEntry, slot: HTMLElement) {
   };
   browserView.mount(slot, {toolId, accountId, title: it.line, onClose: closed,
     onDone: async () => {
-      if (!answers) return true;
-      await decideDo(st, it, 'Answered', () => taskAnswer(taskId, rid, 'Done', ver), decideUndoAnswer);
-      // Still on this item: the answer was refused and says why on the right; the view stays open.
+      if (!marked) return true;
+      await decideChatSend(st, 'Done', []);
+      // Still on this item: the reply was refused and says why on the right; the view stays open.
       return !(DEC === st && st.at === it.id);
     }});
 }
@@ -850,7 +841,6 @@ function decidePaintSide(st: DecState) {
   const it = decideCurrent(st), host: HTMLElement | null = $('.decide .dc-side');
   if (!it || !host) return;
   const kind = decideKind(it), asker = decideAsker(it), chat = decideChatOf(it);
-  const typed = kind === 'question' ? it.ask?.typed : undefined;
   // A page's OK is about the task's page: its title heads it, with the version under it. Its row says only what it is
   // (the document's name): which version and what changed is the version line, never pasted into the row.
   const page = it.ask?.page, title = page ? it.task?.title || '' : '';
@@ -872,15 +862,10 @@ function decidePaintSide(st: DecState) {
   const earlier = kind === 'ok' && !parts ? decideEarlier(it) : null, dot = '<span class="dc-dot" aria-hidden="true">·</span>';
   const earlierMeta = earlier ? `<div class="dc-meta">${[by ? `<span class="dc-meta-who">${esc(actorLabel(by))}</span>` : '',
     earlier.stage ? `<span>${esc(earlier.stage)}</span>` : '', `<span>v${earlier.version}</span>`, tag].filter(Boolean).join(dot)}</div>` : '';
-  // A question: itself, once, in full (#3786).
-  const question = kind === 'question';
-  const go = question ? decideGoOf(decideAboutText(decideAboutOf(it)?.task)) : null;
-  const goBtn = go ? `<button type="button" class="ghost dc-go" data-dc="go" data-dc-href="${esc(go[1])}">${esc(go[0])}</button>` : '';
   // The task's title heads a page's OK on a wide screen; a phone drops it, the page has its own heading (decide.css).
   const head = chat ? '' : parts ? `<h3 class="dc-q dc-q-page">${esc(title)}</h3>${parts.sub}${parts.body}`
-    : question ? decideQuestionHeadHTML(it, tag) + (goBtn ? `<div class="dc-links">${goBtn}</div>` : '')
     : earlier ? `<h3 class="dc-q">${esc(it.line)}</h3>${earlierMeta}`
-    : q('dc-q', title || typed?.question || it.line) + open;
+    : q('dc-q', title || it.line) + open;
   const err = st.error ? `<p class="err" role="alert">${esc(st.error)}</p>` : '';
   const busy = st.busy ? ' disabled' : '';
   let body = '';
@@ -890,11 +875,10 @@ function decidePaintSide(st: DecState) {
     // The forward button says what it does: Pay $1,240.00, Send email, OK (a Validate page), else Approve.
     const label = decideCheckedOk(it) ? 'OK' : decideAction(v)?.verb || 'Approve', words = DEC_CHAT?.item === it.id && DEC_CHAT.typed.trim();
     // An OK approved whose comment did not go has no Approve left: the arrow sends the comment.
-    // A browser ask on a phone: Open browser is the forward action, Done once the person is back from it (when "Done"
-    // can answer it: a question with that choice, or with none).
-    const choices = it.ask?.choices || [], done = kind === 'question' && (!choices.length || choices.includes('Done'));
-    const browse = decidePhone() && (it.ask?.shows || []).some(r => r.startsWith('browser:'))
-      ? DEC_BROWSED.has(it.id) && done ? decideBtn('browse-done', 'Done', true, busy) : decideBtn('browse', 'Open browser', true, busy) : '';
+    // A browser ask on a phone: Open browser is the forward action, Done once the person is back from it (on a bot's ❓,
+    // where "Done" is the reply).
+    const browse = decidePhone() && (it.ask?.shows || it.shows || []).some(r => r.startsWith('browser:'))
+      ? DEC_BROWSED.has(it.id) && it.kind === 'question' ? decideBtn('browse-done', 'Done', true, busy) : decideBtn('browse', 'Open browser', true, busy) : '';
     body = `<div class="dc-acts dc-acts-row">${kind === 'ok' && !DEC_APPROVED.has(it.id) ? decideBtn('approve', words ? `${label} with comments` : label, true,
       ` data-dc-label="${label}"` + (!ready || !(it.ask?.may || []).includes('ok') || st.busy ? ' disabled' : '')) : browse}</div>${decideMoreHTML(st, it)}`;
   } else if (kind === 'ok') {
@@ -910,8 +894,6 @@ function decidePaintSide(st: DecState) {
       ${decideFilesHTML(st, true)}<div class="dc-acts">${decideBtn('sendback', checked ? 'Not validated' : 'Send back', false,
         // On a phone Send back is always on; with no note it asks for one (decideClick). A wide screen keeps it off until then.
         decidePhone() ? busy : ` data-dc-needs="#dc-notes" disabled`)}${decideBtn('approve', checked ? 'OK' : 'Approve', true, !ready || !may.includes('ok') || st.busy ? ' disabled' : '')}</div>`;
-  } else if (question) {
-    body = decideQuestionHTML(st, it, typed);
   } else if (kind === 'stuck') {
     // Stuck because someone can't see the private task: one button lets exactly them see it and moves it on, and says
     // what they get before the press (task #392). Else Try again.
@@ -922,12 +904,11 @@ function decidePaintSide(st: DecState) {
     body = `<div class="dc-acts">${fix}${decideBtn('give', 'Reassign', false, busy)}${decideBtn('back', 'Move back', false, busy)}${decideBtn('close-task', 'Close', false, busy)}</div>${gives}${decideMoreHTML(st, it)}`;
   } else {
     // A cause a person fixes in the app (Connect GitHub) goes straight there; Open shows the first task it holds up.
-    body = `<div class="dc-acts">${it.href ? decideBtn('fix', it.line, true) : ''}${decideBtn('open', 'Open', !it.href)}</div>`;
+    // (A bot's ❓ is its chat, above; one with no chat to show keeps Open and its ⋯.)
+    body = `<div class="dc-acts">${it.href ? decideBtn('fix', it.line, true) : ''}${decideBtn('open', 'Open', !it.href)}</div>${it.kind === 'question' ? decideMoreHTML(st, it) : ''}`;
   }
   // What was typed stays through a redraw of the same item (busy, uploads, then a refusal in the server's words).
   const same = host.querySelector<HTMLElement>(':scope > [data-key]')?.dataset.key === it.id;
-  const held = same ? host.querySelector<HTMLInputElement>('#dc-other')?.value : undefined;
-  const heldSaid = same ? host.querySelector<HTMLTextAreaElement>('#dc-other-note')?.value : undefined;
   const heldNote = same ? host.querySelector<HTMLTextAreaElement>('#dc-notes')?.value : undefined;
   // So does the caret: a redraw while someone types (a refusal, the end of a send) leaves them typing in the same box.
   const typing = document.activeElement;
@@ -936,22 +917,24 @@ function decidePaintSide(st: DecState) {
   const card = `<div data-key="${esc(it.id)}">${head}${err}${body}</div>`;
   if (chat) decideChatMount(st, it, host, card); else { decideChatStop(); host.innerHTML = card; }
   $('.decide')?.classList.toggle('dc-chatmode', chat);
-  // An ask has Snooze (for you alone) at the end of the answer row, on every width; anything else has Skip there. An
-  // item with no row of its own (a typed choice) gets one.
-  const ask = it.kind === 'ask';
+  $('.decide')?.classList.toggle('dc-solo', chat && !decideTaskId(it));
+  // An ask has Snooze (for you alone) at the end of the answer row, on every width; anything else has Skip there.
+  const ask = it.kind === 'ask' || it.kind === 'question';
   if (ask || decideLive(st).length > 1) {
     const card = host.querySelector<HTMLElement>(':scope > [data-key]')!, row = card.querySelector<HTMLElement>(':scope > .dc-acts');
     const end = ask ? decideSnoozeHTML(st) : `<button type="button" class="linkish dc-skip" data-dc="skip"${busy}>Skip</button>`;
     if (row) row.insertAdjacentHTML('beforeend', end); else card.insertAdjacentHTML('beforeend', `<div class="dc-acts">${end}</div>`);
   }
-  // ⋯ is last on every item's row, after Snooze: a question's other answers (I don't know, Give it back, Ask back),
-  // and Close task.
+  // ⋯ is last on every item's row, after Snooze: Close task and Give to….
   const more = decideAskMoreHTML(st, it);
   if (more) host.querySelector<HTMLElement>('[data-key] > .dc-acts')?.insertAdjacentHTML('beforeend', more);
-  const box = host.querySelector<HTMLInputElement>('#dc-other');
-  if (box && held) box.value = held;
-  const saidBox = host.querySelector<HTMLTextAreaElement>('#dc-other-note');
-  if (saidBox && heldSaid) saidBox.value = heldSaid;
+  // A ❓ on a wide screen: Snooze and ⋯ go on the header row by ‹ ›, as a phone has them on its title row, so the
+  // composer ends the column.
+  const headActs = $('.decide .dc-head-acts') as HTMLElement | null;
+  if (headActs) {
+    const row = chat && it.kind === 'question' && !decidePhone() ? host.querySelector<HTMLElement>(':scope > [data-key] > .dc-acts') : null;
+    if (row && !row.querySelector(':scope > button')) headActs.replaceChildren(row); else headActs.replaceChildren();
+  }
   const note = host.querySelector<HTMLTextAreaElement>('#dc-notes');
   if (note && heldNote) note.value = heldNote;
   host.querySelectorAll<HTMLTextAreaElement>('textarea[data-dc-grow]').forEach(decideGrow);
@@ -962,7 +945,6 @@ function decidePaintSide(st: DecState) {
   });
   const back = caret ? host.querySelector<HTMLTextAreaElement>(`#${caret.id}`) : null;
   if (caret && back && !back.disabled) { back.focus({preventScroll: true}); back.setSelectionRange(caret.from, caret.to, caret.dir); }
-  decideHeldWire(st, host);
   decideMenuPlace(host);
   decideNeedsText($('.decide')!);
   decideBarRoom();
@@ -1055,77 +1037,22 @@ function decideRoundsHTML(st: DecState, it: NeedsEntry, rounds: DecRound[], vers
   const one = now.changed.length ? now.changed.join('; ') : (now.note || '').split('\n')[0]!.trim() || now.jev.reason || '';
   return {sub, body: parts.join(''), line: one, points, note};
 }
-/** A question's head (#3786): the question once, in full, then one dense meta line: who asked, when, the task (#N ↗).
-    In a box of its own, so a phone never pins this line as it pins a page's (decide.css). */
-function decideQuestionHeadHTML(it: NeedsEntry, tag: string): string {
-  const by = it.ask?.asked_by || '', who = by ? actorLabel(by) : 'Tico', date = it.since ? shortDate(it.since) : '';
-  const dot = '<span class="dc-dot" aria-hidden="true">·</span>';
-  const meta = [`<span class="dc-meta-who">${esc(who)}</span>`, date ? `<span>${esc(date)}</span>` : '', tag].filter(Boolean).join(dot);
-  return `<div class="dc-ask"><h3 class="dc-q dc-q-ask">${esc(decideQuestionOf(it))}</h3><p class="dc-meta dc-ask-meta">${meta}</p></div>`;
-}
-/** A question's choices: a bot's (or any with lines) as cards, each with its line and the "Recommended" tag on the one
-    the bot recommends, every card alike; a person's or a stage's as buttons. Tapping one answers. */
-function decideChoicesHTML(st: DecState, it: NeedsEntry): string {
-  const busy = st.busy ? ' disabled' : '', brief = it.ask?.brief || null, bot = decideAsker(it).startsWith('bot:');
-  const choices = it.ask?.choices || [], details = brief?.details || [];
-  const card = (c: string, i: number) => {
-    const rec = brief?.recommend === c, line = details[i] || '';
-    // Every card looks the same: the Recommended tag alone marks the bot's pick, so none looks chosen already.
-    return `<button type="button" class="dc-choice" data-dc-choice="${esc(c)}"${busy}>`
-      + `<span class="dc-choice-head"><span class="dc-choice-name">${esc(c)}</span>${rec ? '<span class="dc-rec-tag">Recommended</span>' : ''}</span>`
-      + (line ? `<span class="dc-choice-line">${esc(line)}</span>` : '') + '</button>';
-  };
-  return !choices.length ? '' : bot || details.length ? `<div class="dc-choice-list">${choices.map(card).join('')}</div>`
-    : `<div class="dc-choices">${choices.map(c => `<button type="button" class="ghost" data-dc-choice="${esc(c)}"${busy}>${esc(c)}</button>`).join('')}</div>`;
-}
-/** A question's answer (#3786): a bot's why line and its choices (a card each, with its line and Recommended on the
-    one it recommends), a person's or a stage's as buttons; then the answer box and Send, which answers it. A stage's
-    typed choice is its buttons alone; its number a whole-number box with its range (Enter sends). */
-function decideQuestionHTML(st: DecState, it: NeedsEntry, typed: TaskReq['typed'] | undefined): string {
-  const brief = it.ask?.brief || null;
-  const why = brief?.why ? `<p class="dc-why">Why it matters: ${esc(brief.why)}</p>` : '';
-  const list = decideChoicesHTML(st, it);
-  if (typed?.type === 'choice') return why + list;
-  const label = esc(typed?.question || typed?.name || 'Answer');
-  let box: string;
-  if (typed?.type === 'number') {
-    const {min, max} = typed;
-    const range = min != null && max != null ? `${min}–${max}` : min != null ? `≥ ${min}` : max != null ? `≤ ${max}` : '';
-    const bounds = (min != null ? ` min="${min}"` : '') + (max != null ? ` max="${max}"` : '');
-    const input = `<input id="dc-other" type="number" step="1" inputmode="numeric"${bounds} aria-label="${label}" placeholder="Answer" autocomplete="off">`;
-    // Words always have a box: a note with the number, or, alone, a question back to whoever asked.
-    box = (range ? `<label class="dc-notes"><span>${esc(range)}</span>${input}</label>` : input)
-      + `<div class="dc-note-row"><textarea id="dc-other-note" data-dc-grow rows="${decideNoteRows()}" maxlength="4000" aria-label="Notes" placeholder="Notes"></textarea></div>`;
-  } else {
-    box = `<div class="dc-note-row"><textarea id="dc-other" data-dc-grow rows="${decideNoteRows()}" maxlength="4000" aria-label="${label}" placeholder="Answer"></textarea>${typed ? '' : decideAttachHTML(st)}</div>`
-      + (typed ? '' : decideFilesHTML(st, true));
-  }
-  const sent = DEC_SENT === it.id ? '<p class="dc-sent" role="status">Sent</p>' : '';
-  return `${why}${list}${box}${sent}${decideHeldHTML(it, '#dc-other')}<div class="dc-acts dc-ask-acts">${decideBtn('other', 'Send', true, ' data-dc-needs="#dc-other, #dc-other-note" disabled')}</div>`;
-}
-/** ⋯ last on an item's row. A question's: a bot's "I don't know, explain" and "Give it back" (answers.DONT_KNOW and
-    GIVE_BACK, which Tico adds to every bot's question), and Ask back, which sends the box's words to whoever asked as a
-    comment and leaves the question open. On every item whose task the person may close (decideMayClose): Close task.
+/** ⋯ last on an item's row: Close task on every item whose task the person may close (decideMayClose), and Give to…
+    where a reply in the task's chat answers (the same right) or on a bot's ❓ (another person's reply is needed instead).
     '' when it would hold nothing. */
 function decideAskMoreHTML(st: DecState, it: NeedsEntry): string {
-  const busy = st.busy ? ' disabled' : '', open = st.more === 'ask', bot = decideAsker(it).startsWith('bot:');
-  const kind = decideKind(it), question = kind === 'question';
-  // In the task's chat, a reply in the chat does what the other answers did: only Give to… and Close task.
-  const chat = decideChatOf(it);
-  const items: [string, string][] = chat ? []
-    : [...(question && bot ? [['dont-know', DEC_DONT_KNOW], ['give-back', DEC_GIVE_BACK]] as [string, string][] : []),
-      ...(question && decideReplyTo(it) ? [['askback', 'Ask back']] as [string, string][] : [])];
+  const busy = st.busy ? ' disabled' : '', open = st.more === 'ask';
+  const items: [string, string][] = [];
   // Close task, on every item with a task the person may close (a stuck one has its own Close).
-  if (kind !== 'stuck' && decideMayClose(it)) items.push(['close-task', 'Close task']);
-  // In the task's chat a reply does what the other answers did: only Close task and Give to… (the same right).
-  if (chat && decideMayClose(it)) items.push(['give', 'Give to…']);
+  if (decideKind(it) !== 'stuck' && decideMayClose(it)) items.push(['close-task', 'Close task']);
+  if (it.kind === 'question' || (decideChatOf(it) && decideMayClose(it))) items.push(['give', 'Give to…']);
   if (!items.length) return '';
   const btn = `<button type="button" class="dc-icon dc-snz-b dc-more-b" data-dc="ask-more" aria-label="More" title="More" aria-haspopup="menu" aria-expanded="${open}"${busy}>⋯</button>`;
   const menu = open ? `<span class="dc-snz" role="menu" aria-label="More">${items.map(([k, l]) =>
     `<button type="button" role="menuitem" class="dc-mi" data-dc="${k}"${busy}>${esc(l)}</button>`).join('')}</span>` : '';
   return `<span class="dc-snzw dc-askw">${btn}${menu}</span>`;
 }
-/** Closes a question's ⋯ menu, focus back on ⋯; true when it was open. */
+/** Closes ⋯'s menu, focus back on ⋯; true when it was open. */
 function decideAskMoreClose(st: DecState): boolean {
   if (st.more !== 'ask') return false;
   st.more = '';
@@ -1153,7 +1080,7 @@ function decideGrow(box: HTMLTextAreaElement) {
   box.style.height = `${Math.min(Math.max(start, need), most)}px`;
 }
 /** A paste counts for the note only while a note box has the focus. */
-const eventInNote = (root: HTMLElement) => !!root.querySelector('[data-dc-attach]') && !!document.activeElement?.matches('#dc-notes, #dc-other');
+const eventInNote = (root: HTMLElement) => !!root.querySelector('[data-dc-attach]') && !!document.activeElement?.matches('#dc-notes');
 /** The files row under the note: each file with its state and ✕ (Retry when it failed), then 📎 Attach. */
 function decideFilesHTML(st: DecState, list = false): string {
   const rows = st.files.map(f => `<li class="dc-file" data-dc-file="${f.key}" data-state="${f.state}"><span class="dc-file-name">${esc(f.file.name)}</span>`
@@ -1288,7 +1215,7 @@ function decideSnoozeUntil(what: string): string | null {
     list, and its bot is not told). Undo brings it back. Only an ask has Snooze. */
 async function decideSnooze(st: DecState, it: NeedsEntry, until: string) {
   st.more = ''; st.snzOther = false;
-  if (it.kind !== 'ask') return;
+  if (it.kind !== 'ask' && it.kind !== 'question') return;
   // Counted on the end screen from the snoozed asks as the server has them (decideSnoozedRead), read again after this.
   await decideDo(st, it, 'Snoozed', async () => { const r = await askSnooze(it.id, until); st.snoozedAsks = null; DEC_SNZ_GEN++; needsWakeAt(until); return r; },
     () => async () => { await askUnsnooze(it.id); st.snoozedAsks = null; DEC_SNZ_GEN++; });
@@ -1614,13 +1541,21 @@ function decideMayClose(it: NeedsEntry): boolean {
 }
 // ---- the task's chat: an ask on a task is answered in the task's own thread, drawn by the chat every thread uses
 // (thread-view.ts threadMount): its messages, the ask as the asker's last message (`tail`), and the composer, whose
-// arrow sends a reply (decideChatSend). Under it only Approve on an OK, Snooze and ⋯. A stage's typed answer keeps its
-// own boxes. Underneath an ask stays an ask: an OK's reply is its send back, a bot's question waits on the bot's reply.
+// arrow sends a reply (decideChatSend). Under it only Approve on an OK, Snooze and ⋯. Underneath an ask stays an ask:
+// an OK's reply is its send back.
 let DEC_CHAT: {item: string; cid: string; view: ThvView | null; typed: string} | null = null;
-const DEC_CHAT_SNOOZE_DAYS = 7;   // a replied question leaves Flow until the bot writes back (waiting_on), or this long
+/** A bot's ❓: the chat it sits in (its task's, or a direct chat with the bot). */
+const decideMarkRoom = (it: NeedsEntry): string => it.kind === 'question' ? it.root_id || it.conversation_id || '' : '';
 function decideChatOf(it: NeedsEntry): boolean {
-  const kind = decideKind(it);
-  return (kind === 'ok' || kind === 'question') && !it.ask?.typed && !!decideTaskId(it);
+  // A bot's ❓ is its chat: the marked message in view and the composer, whose reply clears it.
+  if (it.kind === 'question') return !!decideMarkRoom(it);
+  return decideKind(it) === 'ok' && !!decideTaskId(it);
+}
+/** The chat's box as the task's window words it (task-modal.ts taskComposerToPaint): "Message <the task's owner>"
+    when that is someone else; in a direct chat, the bot. */
+function decideChatPlaceholder(it: NeedsEntry): string {
+  const owner = decideTaskId(it) ? String(it.task?.owner_id || '') : it.from_id || '';
+  return owner && owner !== myActor() ? `Message ${actorLabel(owner)}` : 'Message';
 }
 function decideChatStop() { if (DEC_CHAT?.view) threadUnmount(DEC_CHAT.view); DEC_CHAT = null; }
 /** A bot's OK of Product's Validate page, its page first (backend/validate_gate.py): OK, or a reply that sends the work
@@ -1630,9 +1565,9 @@ const decideCheckedOk = (it: NeedsEntry): boolean => !it.ask?.page && /^product-
 /** The right side of an ask: the task's chat, kept through every redraw of the item (its thread is mounted once the
     task's read names it), then `card`, the row under it. On a phone the task folds to its title above the chat. */
 function decideChatMount(st: DecState, it: NeedsEntry, host: HTMLElement, card: string) {
-  const taskId = decideTaskId(it);
-  decideAboutLoad(taskId);
-  const cid = decideAboutOf(it)?.task?.conversation_id || '';
+  const taskId = decideTaskId(it), mark = decideMarkRoom(it);
+  if (taskId) decideAboutLoad(taskId);
+  const cid = mark || decideAboutOf(it)?.task?.conversation_id || '';
   if (!DEC_CHAT || DEC_CHAT.item !== it.id || (cid && !DEC_CHAT.view) || !host.querySelector(':scope > .dc-chat')) {
     const typed = DEC_CHAT?.item === it.id ? DEC_CHAT.typed : '';
     // Each item opens on what it needs from the person: an OK on what is to be approved (its Spec, Proof, Invoice...),
@@ -1640,14 +1575,17 @@ function decideChatMount(st: DecState, it: NeedsEntry, host: HTMLElement, card: 
     if (DEC_CHAT?.item !== it.id) DEC_TAB = decideKind(it) === 'ok' ? 'task' : 'chat';
     decideChatStop();
     // A phone's title row and tabs (decide.css, decideTabsPaint): the task's chat, its documents, what an OK shows.
-    const title = decideAboutOf(it)?.task?.title || it.task?.title || '';
+    // A ❓ in a direct chat has no task: the bot's name heads its chat.
+    const title = decideAboutOf(it)?.task?.title || it.task?.title || (mark ? actorLabel(it.from_id || '') : '');
     host.innerHTML = `<div class="dc-tabs"><h3 class="dc-tabs-t">${esc(title)}</h3></div><div class="dc-chat"></div><p class="dc-docnote" role="alert" hidden></p><div class="dc-docpane"></div>`;
     const el = host.querySelector<HTMLElement>('.dc-chat')!;
     DEC_CHAT = {item: it.id, cid, view: null, typed};
     if (cid) {
-      DEC_CHAT.view = threadMount(el, {id: cid, card: true, header: false,
-        tail: () => { const now = DEC && decideCurrent(DEC); return now && now.id === it.id ? decideAskBubbleHTML(DEC!, now) : ''; },
-        send: (text, files) => decideChatSend(st, text, files), typed: decideChatTyped, reach: false});   // no "To <name>" line
+      // A ❓'s question is a message of the chat already: no ask under it; the chat opens at that message.
+      DEC_CHAT.view = threadMount(el, {id: cid, card: true, header: false, ...(mark ? {focus: it.message_id || ''} : {}),
+        tail: () => { const now = DEC && decideCurrent(DEC); return now && now.id === it.id && !mark ? decideAskBubbleHTML(DEC!, now) : ''; },
+        send: (text, files) => decideChatSend(st, text, files), typed: decideChatTyped, reach: false,   // no "To <name>" line
+        placeholder: () => decideChatPlaceholder(it)});
     } else el.innerHTML = `<div class="thv-list">${decideAskBubbleHTML(st, it)}</div>`;   // until the task's read lands
   } else if (DEC_CHAT.view) thvDraw(DEC_CHAT.view, {parts: ['list']});
   else host.querySelector('.dc-chat .thv-list')!.innerHTML = decideAskBubbleHTML(st, it);
@@ -1658,8 +1596,8 @@ function decideChatMount(st: DecState, it: NeedsEntry, host: HTMLElement, card: 
 }
 // ---- a phone's tabs on an ask in the task's chat (ui/app/task-docs.ts, as the task window draws them): Chat, then the
 // task's documents, newest change first. An OK whose page is one of those documents (the same file) opens on that
-// document's tab; any other OK has its own tab after Chat, named for what it shows, and opens there. A question on a
-// task with no document has no tabs.
+// document's tab; any other OK has its own tab after Chat, named for what it shows, and opens there. A ❓ on a task
+// with no document has no tabs.
 let DEC_TAB = 'chat';   // the tab shown for the item on screen: 'chat', 'task' (what the OK shows) or a document's key
 /** The task document an OK's page is, by its file: only then is what the OK shows that document. */
 function decideOkDoc(it: NeedsEntry, docs: TaskDoc[]): TaskDoc | null {
@@ -1727,8 +1665,8 @@ function decideTabName(st: DecState, it: NeedsEntry): string {
   const v = st.ok.get(decideOkKey(it));
   return decideAction(v) ? v?.kind === 'finance' ? 'Invoice' : v?.kind === 'email_send' ? 'Email' : 'Task' : v?.kind === 'spec' ? 'Spec' : 'Task';
 }
-/** The ask as the asker's last message: who and when, "needs you", the task; the question (or what the OK is for), its
-    one why line, its choices as replies to tap; a page's rounds and version under it. */
+/** The ask as the asker's last message: who and when, "needs you", the task; what the OK is for; a page's rounds and
+    version under it. */
 function decideAskBubbleHTML(st: DecState, it: NeedsEntry): string {
   const asker = decideAsker(it), date = it.since ? shortDate(it.since) : '', num = it.task?.number;
   const tag = `<button type="button" class="linkish dc-task-link" data-dc="task">${num ? `#${num}` : 'Task'} ↗</button>`;
@@ -1743,22 +1681,21 @@ function decideAskBubbleHTML(st: DecState, it: NeedsEntry): string {
   const by = [`<span class="dc-meta-who">${esc(who ? actorLabel(who) : 'Tico')}</span>${paused}`, date ? `<span>${esc(date)}</span>` : '',
     earlier?.stage ? `<span>${esc(earlier.stage)}</span>` : '', earlier ? `<span>v${earlier.version}</span>` : ''].filter(Boolean).join(dot) + tag;
   const parts = page && okView?.rounds ? decideRoundsHTML(st, it, okView.rounds, page.version, okView.notices, tag, okView.since, who) : null;
-  const why = it.ask?.brief?.why ? `<p class="dc-why">${esc(it.ask.brief.why)}</p>` : '';
   const one = (t: string) => t ? `<p class="dc-said dc-one" title="${esc(t)}">${esc(t)}</p>` : '';
   // A page's OK with its rounds read: its own meta line (who, stage, version, Jev, the task) as the byline, the
   // question, one line of what changed (else Jev's take) and your points; your note on the version before is your
   // message above it, not in it.
   if (parts) {
     return decideNoteMsgHTML(parts.note) + `<div class="dc-msg dc-msg-ask">${parts.sub}<div class="dc-msg-b"><h3 class="dc-q dc-q-ask">${esc(decidePageQuestion(it))}</h3>`
-      + `${one(parts.line)}${parts.points}${why}</div></div>`;
+      + `${one(parts.line)}${parts.points}</div></div>`;
   }
-  // A Validate or QA OK: the question, then the verdict (up to 3 check rows, else one line) and Proof, which opens the
+  // A Validate or QA OK: the question, then the verdict (up to 3 check rows) and Proof, which opens the
   // Proof tab on a phone. A long review is the asker's message above it.
   if (decideCheckedOk(it) || earlier) {
     const long = it.line.length > DEC_ASK_SHORT || /\n/.test(it.line), q = long ? decidePageQuestion(it) : it.line;
     // The rows are what Jev passed on the page the OK shows (backend/page_verdicts.py checks_of), never the ask's words.
     const checks = ((earlier ? it.ask?.earlier?.checks : it.ask?.checks) || []).map(d => String(d).trim()).filter(d => d && d.length <= DEC_ASK_SHORT).slice(0, 3);
-    const verdict = checks.length ? `<ul class="dc-checks">${checks.map(c => `<li>${esc(c)}</li>`).join('')}</ul>` : one(it.ask?.brief?.why || '');
+    const verdict = checks.length ? `<ul class="dc-checks">${checks.map(c => `<li>${esc(c)}</li>`).join('')}</ul>` : '';
     const proof = '<button type="button" class="linkish dc-proof-link" data-dc="tab" data-dc-tab="task">Proof</button>';
     return (long ? decideSaidMsgHTML(who, it.since || '', it.line) : '')
       + `<div class="dc-msg dc-msg-ask"><div class="dc-meta dc-ask-meta dc-msg-by">${by}</div><div class="dc-msg-b"><h3 class="dc-q dc-q-ask">${esc(q)}</h3>`
@@ -1769,11 +1706,11 @@ function decideAskBubbleHTML(st: DecState, it: NeedsEntry): string {
   // A document approval's row is its name alone: nothing more to say under the question.
   const title = page && !it.ask?.approval ? it.task?.title || '' : '';
   const said = title ? it.line.replace(/^.*?, ready for your OK\.?\s*/, '').replace(/\s*OK [^()]* \(version \d+\)$/, '').trim() : '';
-  const q = decideKind(it) === 'question' ? decideQuestionOf(it) : page ? decidePageQuestion(it) : it.line;
+  const q = page ? decidePageQuestion(it) : it.line;
   // An action's OK says what will happen in the ask itself, so Approve is never blind; a page stays in Task.
   const act = decideKind(it) === 'ok' ? decideReceiptHTML(st.ok.get(decideOkKey(it))) : '';
   return `<div class="dc-msg dc-msg-ask"><div class="dc-meta dc-ask-meta dc-msg-by">${by}</div><div class="dc-msg-b"><h3 class="dc-q dc-q-ask">${esc(q)}</h3>`
-    + `${said && said !== title ? one(said) : ''}${act}${why}${decideChoicesHTML(st, it)}</div></div>`;
+    + `${said && said !== title ? one(said) : ''}${act}</div></div>`;
 }
 /** An ask's line longer than this is a review, not a question: it goes above the ask as the asker's message. */
 const DEC_ASK_SHORT = 120;
@@ -1856,18 +1793,30 @@ async function decideChatUpload(st: DecState, itemId: string, taskId: string, fi
     sends them as a comment. */
 const DEC_APPROVED = new Set<string>();
 const decideHeldSaid = (held: RuleHold) => held.outcome === 'escalated' ? 'A rule holds this message until someone reviews it.' : 'A rule stopped this message.';
-/** The composer's arrow on an ask: on an OK, its send back with the words as the note; on a bot's question, a reply on
-    the task's thread named for the ask (it wakes the bot), and the ask leaves this person's Flow until the bot writes
-    back; on a person's or a stage's question, the answer. Files go up to the task's Files first and are named in it.
+/** The composer's arrow on an ask: on a bot's ❓, a message of its chat; on an OK, its send back with the words as the
+    note (after an Approve whose comment did not go, that comment). Files go up to the task's Files first and are named in it.
     True once it went: the composer clears and the next item shows; a refusal stays on the item in the server's words. */
 async function decideChatSend(st: DecState, text: string, files: File[]): Promise<boolean> {
   const it = DEC === st ? decideCurrent(st) : null;
   if (!it || st.busy) return false;
+  if (it.kind === 'question') {
+    // A bot's ❓: the reply is a message of its chat like any other (a task's chat or a direct one), which clears the ❓
+    // (backend/question_marks.py); Flow moves on. Files go up with it, into that chat.
+    const room = decideMarkRoom(it);
+    await decideDo(st, it, 'Sent', async () => {
+      const body = {text};
+      const r = (files.length ? await thvUpload(thvPath(room).replace('/v2/', '/v2/uploads/') + '/messages', body, files)
+        : await post(thvPath(room) + '/messages', body)) as {held?: RuleHold | null} | undefined;
+      if (r?.held) throw new Error(decideHeldSaid(r.held));
+      return r;
+    });
+    return !st.error;
+  }
   const taskId = decideTaskId(it), rid = decideRid(it), ver = it.task?.version ?? null;
   const ups = await decideChatUpload(st, it.id, taskId, files);
   if (!ups) return false;
   const said = decideWithFiles(text, ups);
-  const comment = async (body: {text: string; ask?: string}) => {
+  const comment = async (body: {text: string}) => {
     const r = await post(`/v2/tasks/${encodeURIComponent(taskId)}/comments`, body) as {held?: RuleHold | null};
     if (r?.held) throw new Error(decideHeldSaid(r.held));
     return r;
@@ -1876,21 +1825,10 @@ async function decideChatSend(st: DecState, text: string, files: File[]): Promis
     // Approved already; its comment did not go: the arrow sends the words as that comment.
     await decideDo(st, it, 'Sent', () => comment({text: said}));
     if (!st.error) DEC_APPROVED.delete(it.id);
-  } else if (decideKind(it) === 'ok') {
+  } else {
     const page = await decideShownPage(st, it);
     if (page === null) return false;
     await decideDo(st, it, 'Sent back', () => taskAnswer(taskId, rid, 'no', ver, said, page), decideUndoAnswer);
-  } else if (decideAsker(it).startsWith('bot:')) {
-    const until = new Date(Date.now() + DEC_CHAT_SNOOZE_DAYS * 86_400_000).toISOString();
-    // The snooze first, then the reply: a bot that answers at once always writes after the snooze (waiting_on ends it),
-    // and a retry only snoozes again. A reply that does not go takes the snooze back.
-    await decideDo(st, it, 'Sent', async () => {
-      const out = await askSnooze(it.id, until);
-      try { await comment({text: said, ask: rid}); } catch (e) { await askUnsnooze(it.id).catch(() => {}); throw e; }
-      needsWakeAt(until); return out;
-    }, () => async () => { await askUnsnooze(it.id); });
-  } else {
-    await decideDo(st, it, 'Answered', () => taskAnswer(taskId, rid, said, ver), decideUndoAnswer);
   }
   return !st.error;
 }
@@ -1967,8 +1905,8 @@ async function decideApprove(st: DecState, it: NeedsEntry) {
   } finally { hold(false); }
 }
 async function decideClick(st: DecState, ev: MouseEvent) {
-  const el = eventElement(ev), b = el?.closest<HTMLElement>('[data-dc], [data-dc-choice], [data-dc-stage], [data-dc-walk], [data-dc-more], [data-dc-ver], [data-dc-since], [data-dc-vmenu]');
-  // A link in the task's text to a place in the app: there, as Go to goes (the item stays in Needs you).
+  const el = eventElement(ev), b = el?.closest<HTMLElement>('[data-dc], [data-dc-stage], [data-dc-walk], [data-dc-more], [data-dc-ver], [data-dc-since], [data-dc-vmenu]');
+  // A link in the task's text to a place in the app: there (the item stays in Needs you).
   const link = el?.closest<HTMLAnchorElement>('.dc-thing a[href]'), there = link ? decideAppHref(link.getAttribute('href') || '') : '';
   if (there && !ev.defaultPrevented && ev.button === 0 && !ev.metaKey && !ev.ctrlKey && !ev.shiftKey) { ev.preventDefault(); decideGoThere(st, there); return; }
   if (!el?.closest('.dc-where')) decideMenu(false);
@@ -2022,7 +1960,6 @@ async function decideClick(st: DecState, ev: MouseEvent) {
   }
   if (what === 'prev' || what === 'next') { decideStep(st, what === 'prev' ? -1 : 1); return; }
   if (what === 'skip') { decideSkip(st); return; }
-  if (what === 'go' && b.dataset.dcHref) { decideGoThere(st, b.dataset.dcHref); return; }
   if (what === 'undo') return;            // the bar's own handler
   if (what === 'snoozed') { st.snoozedOpen = !st.snoozedOpen; decideRender(st); ($('.decide [data-dc="snoozed"]') as HTMLElement | null)?.focus(); return; }
   if (what === 'unsnooze' && b.dataset.dcAsk) { await decideUnsnooze(st, b, b.dataset.dcAsk); return; }
@@ -2040,7 +1977,6 @@ async function decideClick(st: DecState, ev: MouseEvent) {
   const shown = b.closest<HTMLElement>('[data-key]')?.dataset.key;
   if (shown && shown !== it.id) return;
   const taskId = it.task_id || it.task?.id || '', rid = decideRid(it), ver = it.task?.version ?? null;
-  if (b.dataset.dcChoice != null) { await decideDo(st, it, 'Answered', () => taskAnswer(taskId, rid, b.dataset.dcChoice!, ver), decideUndoAnswer); return; }
   if (b.dataset.dcStage) { await decideDo(st, it, 'Moved back', () => taskMove(taskId, b.dataset.dcStage!, ver)); return; }
   switch (what) {
     case 'approve': await decideApprove(st, it); return;
@@ -2061,46 +1997,16 @@ async function decideClick(st: DecState, ev: MouseEvent) {
       if (page !== null) await decideDo(st, it, 'Sent back', () => taskAnswer(taskId, rid, 'no', ver, decideWithFiles(note, files), page), decideUndoAnswer);
       return;
     }
-    case 'other': {
-      // A number question's words: with a number, its note; alone, a question back to whoever asked (Ask back).
-      const said = decideNote('#dc-other-note');
-      if (said && !decideNote('#dc-other') && decideReplyTo(it)) {
-        await decideReplySend(st, it, '#dc-other-note', decideAsker(it).startsWith('bot:') ? rid : '');
-        return;
-      }
-      const text = decideNote('#dc-other') || said;
-      if (!text) return;
-      const files = await decideFilesReady(st, it.id);
-      if (!files) { if (DEC === st) decidePaintSide(st); return; }
-      const note = said && text !== said ? said : undefined;
-      await decideDo(st, it, 'Answered', () => taskAnswer(taskId, rid, decideWithFiles(text, files), ver, note), decideUndoAnswer);
-      return;
-    }
     case 'ask-more':
       if (decideAskMoreClose(st)) return;
       st.more = 'ask'; decidePaintSide(st);
       ($('.decide .dc-askw [role="menuitem"]') as HTMLElement | null)?.focus({preventScroll: true});
       return;
-    case 'askback': {
-      // Ask back sends what is in the box; with nothing there it asks for the words first, and sends nothing.
-      st.more = '';
-      if (!decideNote('#dc-other')) {
-        decidePaintSide(st);
-        const box = $('#dc-other') as HTMLTextAreaElement | null;
-        if (box) { box.placeholder = 'Ask what they mean'; box.focus({preventScroll: true}); box.scrollIntoView({block: 'nearest'}); }
-        return;
-      }
-      // A bot's question: the comment names it, and the server writes it to the bot (answers stay its own).
-      await decideReplySend(st, it, '#dc-other', decideAsker(it).startsWith('bot:') ? decideRid(it) : '');
-      return;
-    }
-    case 'dont-know': await decideDo(st, it, 'Answered', () => taskAnswer(taskId, rid, DEC_DONT_KNOW, ver), decideUndoAnswer); return;
-    case 'give-back': await decideDo(st, it, 'Given back', () => taskAnswer(taskId, rid, DEC_GIVE_BACK, ver), decideUndoAnswer); return;
     case 'task': decideStop(); void taskModalOpen(taskId, undefined, {direct: true}); return;
     case 'again': await decideDo(st, it, 'Tried again', () => taskTryAgain(taskId)); return;
     case 'let-see': { const whom = it.task?.turn?.share || []; if (whom.length) await decideLetSee(st, it, whom); return; }
     case 'browse': ($('.decide .dc-thing [data-bv-launch], .decide .dc-thing [data-dc-browser-open]') as HTMLElement | null)?.click(); return;
-    case 'browse-done': await decideDo(st, it, 'Done', () => taskAnswer(taskId, rid, 'Done', ver), decideUndoAnswer); return;
+    case 'browse-done': if (it.kind === 'question') await decideChatSend(st, 'Done', []); return;
     case 'close-task': {
       // Close (a stuck item's) and Close task (⋯): what is typed in the item's box is the reason, kept on the close (its
       // history, and the news a bot that asked for the task gets: task_effects._tell_requester). No confirm: ↶ reopens it.
@@ -2132,14 +2038,30 @@ async function decideClick(st: DecState, ev: MouseEvent) {
       await decideSnooze(st, it, until);
       return;
     }
-    case 'give-to': { const to = decideTo(); if (to) await decideDo(st, it, `Given to ${actorLabel(to)}`, () => taskReassign(taskId, to, ver)); return; }
+    case 'give-to': {
+      const to = decideTo();
+      if (to) await decideDo(st, it, `Given to ${actorLabel(to)}`, () => it.kind === 'question' && it.mark_id ? questionGive(it.mark_id, to) : taskReassign(taskId, to, ver));
+      return;
+    }
     case 'open': decideOpenWhere(it); return;
     case 'fix': if (it.href) { decideStop(); location.hash = it.href; } return;
   }
 }
-/** Open: a mention's thread (or its task), a cause's first task. */
+/** A bot's ❓ opens its chat at the marked message, where the reply clears it: a task's chat, else the direct chat. */
+function questionOpen(it: NeedsEntry) {
+  const task = it.task_id || it.task?.id;
+  if (task) void taskChatJump(String(task), it.message_id || '');
+  else if (it.conversation_id) {
+    location.hash = threadHref(it.conversation_id) + (it.message_id ? `?m=${encodeURIComponent(it.message_id)}` : '');
+  }
+}
+/** Give to… on a bot's ❓: its reply is needed from another person now. */
+const questionGive = (markId: string, to: string): Promise<unknown> =>
+  post(`/v2/questions/${encodeURIComponent(markId)}/give`, {to}, newRequestId());
+/** Open: a mention's thread (or its task), a ❓'s chat at its message, a cause's first task. */
 function decideOpenWhere(it: NeedsEntry) {
   decideStop();
+  if (it.kind === 'question') { questionOpen(it); return; }
   if (it.kind === 'mention' && !it.task_id && it.conversation_id && typeof threadHref === 'function') { location.hash = threadHref(it.conversation_id); return; }
   const id = it.task_id || it.task_ids?.[0] || it.task?.id;
   if (id) void taskModalOpen(id, undefined, {direct: true});

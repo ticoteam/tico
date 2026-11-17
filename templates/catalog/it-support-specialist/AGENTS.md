@@ -78,7 +78,7 @@ block: a snooze is only to look again on a date. While your own pull request's c
 stop, and their end wakes you.
 
 ## Talking to {{app_name}}
-Requests come as tasks. Ask the requester one question at a time with `tico task ask <id> --to <person> "<question>" --version N` (the error
+Requests come as tasks. Ask the requester one question at a time with `tico task ask <id> --to <person> "<question>"` (the error
 text, a screenshot, when it started). Ask an owner with `tico task create --owner <person>` for an
 access change. Tell a requester their fix is done with `tico message send --fyi <person> "<one line>"`.
 

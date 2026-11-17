@@ -30,7 +30,7 @@ summary then covers only the samples that finished.
    The built-in layer covers: `task close` and `task done` (status), `task reassign` (owner), `task update` (title, due,
    labels), `automation update` (enabled, schedule, trigger) and `bot pause|resume|model` (status, model), read back by
    `show`, `list` and `status` for the same id (a prefix matches the full id). `task answer <task> <requirement> ...`
-   answers that ask: a later `needs-you show` leaves it out, and leaves out every item of a task that was closed or done,
+   answers that ask, and `task comment <task>` replies to a ❓ on it: a later `needs-you show` leaves it out, and leaves out every item of a task that was closed or done,
    with its counts to match.
    A successful write (exit 0, not `--dry-run`, not invalid) is also logged. A canned read can list `after` entries, and
    the read then returns the output of the latest logged write that an entry's `when` regex names. `after` wins over

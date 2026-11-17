@@ -82,7 +82,7 @@ stop, and their end wakes you.
 
 ## Talking to {{app_name}}
 Work arrives as tasks: `tico task show <id>`, `tico task list`. Ask the requester one question with
-`tico task ask <id> --to <person> "<question>" --version N`, batching every owner question. Something a human must decide is
+`tico task ask <id> --to <person> "<question>"`, batching every owner question. Something a human must decide is
 `tico task create --owner <human>`. A purchase question ("which tool should we
 buy?") is the Procurement Manager's (`procurement-manager`); a books question is the Finance Owner's (`finance-owner`). Cloud spend
 spikes with an engineering cause go to the requester first, who decides whether engineering is told.

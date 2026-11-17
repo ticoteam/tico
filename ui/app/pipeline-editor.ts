@@ -4,8 +4,8 @@
    its Name and Goal (stored as `purpose`); On entering, one list of what happens as a task enters (its Limit, its
    actions: the owner it changes to and what it opens or queues, its rules: a row each, then + Rule and + Action); While
    here (Late after: the expected time); To leave
-   (how tasks leave, and the requirements, always open: Responses, such as done, an OK or an answer with its name,
-   question and type, and Links, such as a task, a page or a PR; each added from + Requirement's list, with a few
+   (how tasks leave, and the requirements, always open: Responses, such as done or an OK, and Links, such as a task, a
+   page or a PR; each added from + Requirement's list, with a few
    presets, its kind fixed from then on). A rule sits in the phase where it acts, under its fields, with that phase's
    + Rule (stage-rules.ts stageRulesPhaseHTML); the built-in rules are one line at the end. A rule acts at once, in a
    form over the editor, and Save saves the stage's fields alone (its Limit and actions among them). The owner a task
@@ -54,11 +54,10 @@ interface PeState {
 let PE: PeState | null = null;
 
 /** What a stage's requirement can need: a kind, or one of GitHub's conditions (kind `item`, source `github`). A response
-    is given by someone (done, an OK, a typed answer); a link is met by other work (a task, a page, a PR). */
+    is given by someone (done, an OK); a link is met by other work (a task, a page, a PR). */
 const PE_KINDS: [string, string][] = [
   ['owner_done', 'Owner says done'],
   ['ok', 'OK from someone'],
-  ['answer', 'Answer'],
   ['linked_done', 'Linked work done'],
   ['page', 'A page'],
   ['related_input', 'Related input'],
@@ -77,10 +76,10 @@ const PE_SWITCHES: Record<string, [string, string][]> = {
  * the stage's `by_hand`, shown as one more requirement. */
 const PE_REQ_PICKS: [string, string][] = [
   ['by_hand', 'OK from anyone'], ['approval', 'Approval…'], ['ok_bot', 'OK from a bot…'], ['owner_done', 'Owner says done'], ['page', 'A page, checked by Decision model…'],
-  ['answer', 'An answer…'], ['pr_open', 'PR open'], ['checks_pass', 'Checks pass'], ['pr_merged', 'PR merged'], ['in_release', 'In a release'],
+  ['pr_open', 'PR open'], ['checks_pass', 'Checks pass'], ['pr_merged', 'PR merged'], ['in_release', 'In a release'],
   ['linked_done', 'Linked work done'], ['related_input', 'Related input']];
 /** The picks whose new requirement opens its editor (something to choose or name); the rest are added as a row. */
-const PE_REQ_CHOOSE = ['approval', 'ok_bot', 'page', 'answer', 'in_release'];
+const PE_REQ_CHOOSE = ['approval', 'ok_bot', 'page', 'in_release'];
 /** The documents a stage approves (task_requirements.APPROVED): a person approves the version the bot submits by
  * writing it in the stage. */
 const PE_APPROVALS = ['Spec', 'QA report', 'Release report', 'Invoice'];
@@ -94,12 +93,6 @@ const PE_BY_HAND = 'OK from anyone';
 /** The by-hand row's key in rowOpen and on its row (`<stage index>:hand`); a requirement's is `req:<index>`. */
 const PE_HAND = 'hand';
 const PE_LEAVE_NONE = 'Nothing required. Tasks move on when the next stage has room.';
-/** A stage's answer (kind `answer`): its types, and what its name looks like (task_requirements.ANSWER_NAME). */
-const PE_ANSWER_TYPES: [string, string][] = [['text', 'Text'], ['number', 'Number'], ['choice', 'Choice']];
-const PE_YES_NO = ['Yes', 'No'];
-/** An answer's name from its title: "Confidence (0-100)" is confidence_0_100. */
-const peSlug = (title: string): string =>
-  title.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^[^a-z]+/, '').slice(0, 40).replace(/_+$/, '');
 /** Kinds met with a button: they name who meets them, and have a Who OKs. */
 const PE_OK_KINDS = ['ok', 'page'];
 /** Kinds that can never be pushed past (C3). */
@@ -143,28 +136,10 @@ const peF = (label: string, control: string, size = ''): string =>
 /** Fields side by side on one line; they wrap on a narrow screen. */
 const peRow = (fields: string): string => `<div class="pe-row">${fields}</div>`;
 
-/** A stage's answer: who gives it (nobody named is the task's owner), its name, the question, and its type with a
-    number's bounds or a choice's choices. */
-function peAnswerHTML(req: PipelineReqRec, at: string): string {
-  const s = req.settings, type = String(s['type'] ?? 'text');
-  const text = (key: string): string => esc(typeof s[key] === 'string' || typeof s[key] === 'number' ? String(s[key]) : '');
-  const bound = (key: string, label: string): string => peF(label, `<input type="number" step="1" inputmode="numeric" data-pe-rf="${key}" ${at} value="${text(key)}">`, 'short');
-  const choices = (req.choices ?? []).map((c, ci) => `<span class="pe-choice"><input data-pe-rf="choice" data-pe-ci="${ci}" ${at} maxlength="80" value="${esc(c)}" aria-label="Choice ${ci + 1}" autocomplete="off">`
-    + `<button type="button" class="ghost" data-pe-choice-x data-pe-ci="${ci}" ${at} aria-label="Remove ${esc(c)}">×</button></span>`).join('');
-  return peRow(peF('From', `<select data-pe-rf="person_id" ${at}>${peChoice([...pePeople(), ...peBots()], req.person_id, 'Task owner')}</select>`)
-      // the answer's key, as the task stores it: not a second name
-      + peF('Saved as', `<input data-pe-rf="answer_name" ${at} maxlength="40" pattern="[a-z][a-z0-9_]{0,39}" value="${text('name')}" autocomplete="off" spellcheck="false">`))
-    + peF('Question', `<input data-pe-rf="question" ${at} maxlength="500" value="${text('question')}" autocomplete="off">`)
-    + peRow(peF('Type', `<select data-pe-rf="answer_type" ${at}>${PE_ANSWER_TYPES.map(([v, l]) => `<option value="${v}"${v === type ? ' selected' : ''}>${l}</option>`).join('')}</select>`)
-      + (type === 'number' ? bound('min', 'Min') + bound('max', 'Max') : ''))
-    + (type === 'choice' ? `<div class="pe-choices">${choices}<button type="button" class="ghost" data-pe-choice-add ${at}>+ Choice</button>`
-      + `<button type="button" class="ghost" data-pe-yes-no ${at}>Yes / No</button></div>` : '');
-}
-
 /** To leave is one plain list of requirements (Chris, Nov 14 mockup to-leave-requirements): one line each in words
  * ("PR open", "OK from Chris" with a face, "Page: Spec page"), the requirement mark first, a lock at the right only on
  * one that can't be pushed past. A tap opens its small editor in place, as On entering's rows: only what its kind has
- * (who OKs it, a page's or an answer's settings, a release's repo), Can be pushed past, and Remove. Its kind is picked
+ * (who OKs it, a page's settings, a release's repo), Can be pushed past, and Remove. Its kind is picked
  * when it is added (+ Requirement), never changed. "Someone moves it by hand" (the stage's by_hand) is its last row. */
 
 /** Who OKs an OK: the people or bots it names. One today (a requirement's person_id); several is the proposed backend
@@ -190,17 +165,15 @@ function peReqText(req: PipelineReqRec): string {
     return who.length ? peOkWords(who) : line || (req.who_oks === 'people_only' ? 'OK from a person' : 'OK from someone');
   }
   if (needs === 'page') return line ? `Page: ${line}` : 'A page, checked by Decision model';
-  if (needs === 'answer') return line ? `Answer: ${line}` : 'An answer';
   return line ? `${peKindName(needs)}: ${line}` : peKindName(needs);
 }
 
 /** A requirement's small editor, under its row: who OKs it (an OK: one person or one bot; a page: who OKs after the
- * decision model; an approval: its document and approver), its name where its kind has one (an OK's ask, a page's name,
- * an answer's title), its kind's settings, its switches (Can be pushed past last, off and fixed on a kind that never
- * is), and Remove. */
+ * decision model; an approval: its document and approver), its name where its kind has one (an OK's ask, a page's name),
+ * its kind's settings, its switches (Can be pushed past last, off and fixed on a kind that never is), and Remove. */
 function peReqEdHTML(state: PeState, req: PipelineReqRec, si: number, ri: number, id: string): string {
   const at = `data-pe-si="${si}" data-pe-ri="${ri}"`;
-  const needs = peNeeds(req), never = PE_NEVER_PUSHED.includes(needs), page = needs === 'page', answer = needs === 'answer';
+  const needs = peNeeds(req), never = PE_NEVER_PUSHED.includes(needs), page = needs === 'page';
   const line = (label: string, placeholder: string): string =>
     peF(label, `<input data-pe-rf="line" ${at} maxlength="200" value="${esc(req.line)}" placeholder="${esc(placeholder)}" autocomplete="off">`);
   const whoOks = peF('Who OKs', `<select data-pe-rf="who_oks" ${at}>${PE_WHO_OKS.map(([v, l]) => `<option value="${v}"${v === req.who_oks ? ' selected' : ''}>${l}</option>`).join('')}</select>`);
@@ -222,8 +195,7 @@ function peReqEdHTML(state: PeState, req: PipelineReqRec, si: number, ri: number
     // a page's person is optional: Jev checks, then that person OKs the version Jev passed
     fields = line('Page', 'Review page')
       + peF('Then OK from', `<select data-pe-rf="person_id" ${at}>${peChoice([...pePeople(), ...peBots()], req.person_id, 'Nobody')}</select>`) + whoOks;
-  } else if (answer) fields = line('Title', 'Confidence (0-100)') + peAnswerHTML(req, at);
-  else if (needs === 'in_release') {
+  } else if (needs === 'in_release') {
     fields = peF('Release repo', `<input data-pe-rf="release_repo" ${at} maxlength="200" value="${esc(String(req.settings['release_repo'] ?? ''))}" placeholder="owner/repo" autocomplete="off">`)
       + peF('Release with', `<input data-pe-rf="release_with" ${at} maxlength="120" value="${esc(String(req.settings['release_with'] ?? ''))}" placeholder="workflow:release.yml or tag" autocomplete="off">`);
   }
@@ -289,14 +261,13 @@ function peReqNew(state: PeState, pick: string): PipelineReqRec {
   if (pick === 'approval') {
     const document = PE_APPROVALS[0] ?? 'Spec';
     return {kind: 'page', source: null, condition: null, settings: {document}, can_push_past: true, who_oks: 'people_only',
-      person_id: null, line: document, choices: null};
+      person_id: null, line: document};
   }
   const kind = pick === 'ok_bot' ? 'ok' : pick;
   const github = PE_GITHUB.includes(kind), ok = PE_OK_KINDS.includes(kind);
   const person = pick === 'ok_bot' ? (state.draft.manager_id ? prActor(state.draft.manager_id) : peBots()[0]?.id ?? null) : null;
   return {kind: github ? 'item' : kind, source: github ? 'github' : null, condition: github ? kind : null,
-    settings: kind === 'answer' ? {type: 'text'} : {},
-    can_push_past: !PE_NEVER_PUSHED.includes(kind), who_oks: ok ? 'people_with_exceptions' : 'none', person_id: person, line: '', choices: null};
+    settings: {}, can_push_past: !PE_NEVER_PUSHED.includes(kind), who_oks: ok ? 'people_with_exceptions' : 'none', person_id: person, line: ''};
 }
 /** What + Requirement offers this stage now: every kind, less one of the plain kinds it has already and by hand when it
  * is set. A bot's OK only where there is a bot. */
@@ -666,8 +637,7 @@ const peIndex = (el: HTMLElement, key: string): number => Number(el.dataset[key]
 const peRowEl = (si: number, key: string): HTMLElement | null => document.querySelector<HTMLElement>(
   `#pe-body [data-pe-${key === PE_HAND || key.startsWith('req:') ? 'leave' : 'enter'}-row="${key}"][data-pe-si="${si}"]`);
 
-/** A field changed: the draft follows it. A change that alters what the panel shows (an owner of several, an answer's
- * type) draws again; a stage's name is written in place (its row, or one stage's dialog title). */
+/** A field changed: the draft follows it. A change that alters what the panel shows (an owner of several) draws again; a stage's name is written in place (its row, or one stage's dialog title). */
 function peInput(state: PeState, el: HTMLInputElement | HTMLSelectElement): void {
   const value = el.value, checked = el instanceof HTMLInputElement && el.type === 'checkbox' ? el.checked : false;
   if (el.dataset['peMoveTo'] !== undefined) { if (state.moveOut) state.moveOut.to = value; return; }
@@ -754,32 +724,7 @@ function peInput(state: PeState, el: HTMLInputElement | HTMLSelectElement): void
   }
   const rf = el.dataset['peRf'];
   if (!req || !rf) return;
-  if (rf === 'line') {
-    // An answer's name follows its title until it is edited by hand.
-    const name = req.kind === 'answer' ? String(req.settings['name'] ?? '') : null;
-    if (name !== null && (!name || name === peSlug(req.line))) {
-      req.settings = peSetting(req.settings, 'name', peSlug(value) || null);
-      const box = el.closest('.pe-req-ed')?.querySelector<HTMLInputElement>('[data-pe-rf="answer_name"]');
-      if (box) box.value = peSlug(value);
-    }
-    req.line = value;
-  } else if (rf === 'answer_name') req.settings = peSetting(req.settings, 'name', value.trim() || null);
-  else if (rf === 'question') req.settings = peSetting(req.settings, 'question', value.trim() ? value : null);
-  else if (rf === 'min' || rf === 'max') {
-    // What is not a whole number is sent as typed, for the server to refuse in its words.
-    const n = value.trim() === '' ? NaN : Number(value);
-    req.settings = peSetting(req.settings, rf, Number.isFinite(n) ? n : null);
-  } else if (rf === 'choice') {
-    const choices = [...(req.choices ?? [])];
-    choices[peIndex(el, 'peCi')] = value;
-    req.choices = choices;
-  } else if (rf === 'answer_type') {
-    let settings = peSetting(req.settings, 'type', value);
-    if (value !== 'number') settings = peSetting(peSetting(settings, 'min', null), 'max', null);
-    req.settings = settings;
-    req.choices = value === 'choice' ? req.choices ?? [] : null;
-    peDraw(state);
-  }
+  if (rf === 'line') req.line = value;
   else if (rf === 'release_repo' || rf === 'release_with') req.settings = peSetting(req.settings, rf, value.trim() || null);
   else if (rf === 'person_id') req.person_id = value || null;
   else if (rf === 'document') {
@@ -792,7 +737,7 @@ function peInput(state: PeState, el: HTMLInputElement | HTMLSelectElement): void
   }
   else if (rf === 'who_oks') req.who_oks = value as PipelineReqRec['who_oks'];
   else if (rf === 'can_push_past') req.can_push_past = checked;
-  // what the row says follows: an OK's name and face, a page's or an answer's title, the lock
+  // what the row says follows: an OK's name and face, a page's title, the lock
   if (['line', 'person_id', 'who_oks', 'can_push_past', 'document', 'approver'].includes(rf)) peLeaveSay(state, peIndex(el, 'peSi'), peIndex(el, 'peRi'));
 }
 
@@ -820,7 +765,7 @@ function peNextSaid(state: PeState, stage: PipelineStageRec): void {
 function peClick(state: PeState, target: Element): void {
   const el = target.closest<HTMLElement>('button');
   if (!el) return;
-  const d = state.draft, si = peIndex(el, 'peSi'), ri = peIndex(el, 'peRi'), stage = d.stages[si], req = stage?.requirements[ri];
+  const d = state.draft, si = peIndex(el, 'peSi'), stage = d.stages[si];
   if (el.hasAttribute('data-pe-save')) { void peSave(state); return; }
   if (el.hasAttribute('data-pe-theirs') && state.clash) {
     peTakeTheirs(state, state.clash.theirs);
@@ -933,13 +878,6 @@ function peClick(state: PeState, target: Element): void {
     const row = peRowEl(si, key);
     (state.rowOpen ? row?.querySelector<HTMLElement>('.pe-row-ed :is(input:not([type=checkbox]), select)') : row?.querySelector<HTMLElement>('.sr-open'))?.focus();
   }
-  else if (req && el.hasAttribute('data-pe-yes-no')) { req.choices = [...PE_YES_NO]; peDraw(state); }
-  else if (req && el.hasAttribute('data-pe-choice-x')) { req.choices = (req.choices ?? []).filter((_, i) => i !== peIndex(el, 'peCi')); peDraw(state); }
-  else if (req && el.hasAttribute('data-pe-choice-add')) {
-    req.choices = [...(req.choices ?? []), ''];
-    peDraw(state);
-    document.querySelector<HTMLInputElement>(`#pe-body [data-pe-si="${si}"][data-pe-ri="${ri}"][data-pe-rf="choice"][data-pe-ci="${req.choices.length - 1}"]`)?.focus();
-  }
 }
 
 // ---------------------------------------------------------------- saving
@@ -976,13 +914,11 @@ function peStageOwn(stage: PipelineStageRec): PipelineStageRec {
   return pick ? {...own, pick: pePickOwn(pick)} : own;
 }
 
-/** The draft as it is sent: an answer's empty choices left out, no bot families, and a stage as a person set it (peStageOwn). */
+/** The draft as it is sent: no bot families, and a stage as a person set it (peStageOwn). */
 function peOut(draft: PipelineRec): PipelineRec {
   const out = peCopy(draft);
   delete out.bot_families;
   out.stages = out.stages.map(peStageOwn);
-  for (const stage of out.stages) for (const req of stage.requirements)
-    if (req.choices) req.choices = req.choices.map(c => c.trim()).filter(Boolean);
   return out;
 }
 

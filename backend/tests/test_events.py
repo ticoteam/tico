@@ -295,14 +295,14 @@ def test_the_engines_tables_log_their_task_and_the_needs_of_its_people(api):
     found = logged(
         lambda: asked.append(
             api.post(
-                f"/api/v2/tasks/{task['id']}/asks", json={"to": "ben", "line": "Which day?"}, headers=headers()
+                f"/api/v2/tasks/{task['id']}/asks",
+                json={"to": "ben", "line": "OK Monday", "kind": "ok"},
+                headers=headers(),
             ).json()["requirement_id"]
         )
     )
     assert ("tasks", "ask", task["id"]) in found and ("needs", "ask", "human:ben") in found
-    found = logged(
-        lambda: post(api, f"tasks/{task['id']}/asks/{asked[0]}/answer", {"value": "Monday"}, token="ben-test")
-    )
+    found = logged(lambda: post(api, f"tasks/{task['id']}/asks/{asked[0]}/answer", {"value": "ok"}, token="ben-test"))
     assert ("tasks", "answer", task["id"]) in found and ("needs", "ask", "human:ben") in found
     found = logged(lambda: post(api, f"tasks/{task['id']}/snooze", {"until": "2099-01-05", "why": "Later"}))
     assert ("tasks", "snooze", task["id"]) in found and ("needs", "task", "human:ana") in found

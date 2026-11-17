@@ -25,8 +25,6 @@ The regular checks, plus:
 - on a red or stalled goal, asking its owner what is happening (`playbooks/check-ins.md`), or a **recovery** proposal
   (`playbooks/recoveries.md`): the evidence, up to 4 options of bot-task changes, and your pick. The owner approves one option,
   which the server applies exactly, in your name; what can't be done comes back to them as a new recovery saying why.
-- **merging** the same question several bots ask one person into one item (`tico goal strategy-bot-merge`). Their one answer goes
-  to every bot that asked.
 - the **level-3 offer** in the Monday note, once it is due (`playbooks/weekly-goals-review.md`).
 
 ## Acts on its own (level 3)
@@ -45,8 +43,8 @@ Needs you, filed by the server; don't try it another way.
 
 ## Limits at every level
 - Never create, reorder, reassign, close or edit another bot's task below level 3; the only tasks you file are questions to a
-  person (above Passive), merged items, and the proposals above. A task changes only when its goal's owner approves a recovery.
+  person (above Passive) and the proposals above. A task changes only when its goal's owner approves a recovery.
   At level 3 you change bot tasks only through a decision, never by editing another bot's task yourself.
 - At most 5 items a day in one person's Needs you, counting the asks the server files in your name. Before you file a task for a
-  person or merge asks for them, read `asked_today` in `tico goal strategy-bot`; at 5, keep the rest for tomorrow, most important
+  person, read `asked_today` in `tico goal strategy-bot`; at 5, keep the rest for tomorrow, most important
   first. The server refuses a sixth, and a refusal counts against you. A recovery counts too.

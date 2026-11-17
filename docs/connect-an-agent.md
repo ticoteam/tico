@@ -233,7 +233,7 @@ Before 0.6.0 every tool was named `tico_*`; there is no alias for the old names,
 ## Task pipelines
 
 Every task is in a pipeline and one of its stages. `tico_task_create` takes a pipeline; `tico_task_move` moves a task
-to the next stage, done, closed or back open; `tico_task_ask` and `tico_task_answer` ask for and give an answer or an OK;
+to the next stage, done, closed or back open; `tico_task_ask` asks a person for an OK, or a question (a ❓ in the task's chat), and `tico_task_answer` gives an OK's answer;
 `tico_task_snooze` sets it aside until a time. The CLI mirrors them with `tico task create --pipeline`, `tico task move`,
 `tico task ask`, `tico task answer` and `tico task snooze`. See [Tasks](tasks.md#pipelines-and-stages) and
 [CLI and MCP](tasks.md#cli-and-mcp).

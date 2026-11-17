@@ -327,9 +327,9 @@ Every run is the same shape, and `AGENTS.md` should say so plainly:
 3. **Do the work**, updating `knowledge/` as it learns rather than at the end.
 4. **Report in the task thread.** The result goes in the task's completion note, first line
    first. A chart or a mockup can go with the comment as a titled [visual](visuals.md); every bot's instructions already say when to add one ([When a bot adds a visual](visuals.md#when-a-bot-adds-a-visual)), so `AGENTS.md` needn't. Put the ask first and stay under 120 words. The lint checks that the first line is not empty; it does not judge its meaning.
-5. **When it needs a person, ask on the task** (`tico task ask`), having read the record first, since most
+5. **When it needs a person, ask them** (`tico task ask`: a ❓ in the task's chat, or an OK with `--kind ok`), having read the record first, since most
    questions a bot wants to ask are already answered there. One sentence, readable on its own: it is the only thing
-   the person has to read. A bot has one open ask per task; asking again replaces it. Internal routing, task closure,
+   the person has to read. A bot has one open question per chat and one open OK per task; asking again replaces it. Internal routing, task closure,
    branches and draft pull requests are the bot's work, not questions for a person. An OK (`--kind ok`) can clarify
    an uncertain action; granted Tools and the outbound send switch govern access.
 6. **Commit, then mark the stage's work done with a result note** (`tico task done <id> -m "..."`). A bot never

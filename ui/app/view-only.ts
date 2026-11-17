@@ -9,8 +9,8 @@
 
 /** The controls a view hides outright (styles/components.css, html.view-only; the task window's own in task-code.css). */
 const VIEW_HIDDEN = [
-  '#task-mi-new', '#task-mi-edit', '#task-play', '.add-ctl', '[data-need-answer]', '[data-task-follow]', '.p-follow', '.tm-page-add', 'header.ph .ph-add',
-  '[data-page-add]', '[data-page-link]', '[data-answer]', '[data-dash-mode]', '[data-dash-add]',
+  '#task-mi-new', '#task-mi-edit', '#task-play', '.add-ctl', '[data-task-follow]', '.p-follow', '.tm-page-add', 'header.ph .ph-add',
+  '[data-page-add]', '[data-page-link]', '[data-dash-mode]', '[data-dash-add]',
   // 👍 👎 on a bot's or a person's work (feedback.ts): the task window's head and their messages.
   '[data-fb-rate]',
   // The task window: its page +, Ask someone, Follow, Answer, Done or Close, and Stop on a run.

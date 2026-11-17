@@ -208,10 +208,10 @@ BOT_STATES = SV.BOT_STATES
 STATUS_STATES = SV.BOT_STATUS_STATES
 MESSAGE_KINDS = ("say", "notice", "steer")
 # Kinds old rows may still have, read as history only: nothing writes an ask or an answer in a message (a question
-# to a person is an ask on a task, `tico task ask`; to a bot, a DM flagged needs-action).
+# to a person is a message marked ❓, `tico task ask` or `tico chat ask`; to a bot, a DM flagged needs-action).
 OLD_MESSAGE_KINDS = ("ask", "answer")
 ASK_GONE = (
-    "asks are gone: ask a person on a task with tico task ask <task> --to <person> \"<question>\" --version N; "
+    "asks are gone: ask a person on a task with tico task ask <task> --to <person> \"<question>\"; "
     "ask a bot with tico message send <bot> \"<question>\" --needs-action"
 )
 CONVERSATION_KINDS = ("chat", "ask", "task", "notice")
@@ -2239,6 +2239,13 @@ def _write_message(
         ":restricted, :legacy_audience)",
         row,
     )
+    if is_human(actor):
+        from . import question_marks
+
+        room = conv or {}
+        # Their reply clears each ❓ for them in this chat, and resumes each task one of those was on.
+        for cleared_task in question_marks.replied(conn, row, room, row["refs"]):
+            question_marks.after_reply(conn, cleared_task, actor)
     if is_human(actor) and is_bot(target) and row["body"].lstrip().startswith("/"):
         from . import skill_runtime
 
@@ -2585,6 +2592,9 @@ def set_task_readers(conn, actor, task_id, add=(), remove=(), *, replace=None, m
     for reader in wanted:
         if reader not in before:
             _task_event(conn, task_id, actor, "reader", None, reader, "")
+    from . import question_marks
+
+    question_marks.clear_gone(conn, task_id)  # a ❓ for someone who can no longer read the task's chat goes nowhere
     return wanted
 
 
@@ -3909,6 +3919,7 @@ def task_comment(
     reach=None,
     people_notified=False,
     to=None,
+    checked=True,
 ):
     """A comment on a task: one message in the task's thread, tagged with the task, from whoever wrote it. It goes as
     any post there does (threads.post): to whom it addresses (its @mentions, the author it replies to) and to the
@@ -3919,13 +3930,16 @@ def task_comment(
     their level says). `delegate`: whether a person's comment delegates the task to the bots it wakes (default: `wake`;
     only one who may direct the task does). `reach`: the bot's Identity when this is its own write through the API, so
     whoever the comment reaches is checked against the bot's reach as a thread post is (reach.check_thread). `to`: the
-    bot it is written to besides (a relayed answer, strategy_merge). A question to a person is an ask on the task
-    (task_ask), never a comment."""
-    _writer(conn, actor, task_id=task_id)
+    bot it is written to besides (a relayed answer). A bot's question to a person is a ❓ on its comment
+    (question_marks.ask). `checked` False: words Tico's own feature wrote for a bot (question_marks.ask), so the bot's
+    standing to write here (a quarantine, reading a private task) is not asked."""
+    if checked:
+        _writer(conn, actor, task_id=task_id)
     row = task(conn, task_id)
     if not row:
         refuse(conn, actor, "not-found", f"no task {task_id}")
-    _task_private_writer(conn, actor, row)
+    if checked:
+        _task_private_writer(conn, actor, row)
     text = str(text or "").strip()
     if not text:
         refuse(conn, actor, "lint", "write the comment")
@@ -4063,13 +4077,16 @@ def comment_way_refs(way, defer_for=None):
 def delegate_woken(conn, task_id, person, msg):
     """task_delegations: each bot a person's message on the task woke (its own run, or a steer or queue delivery
     pending for it) acts on the task with party rights for 24 hours."""
-    until = shift(now(), hours=24)
     for recipient, mid in _woken_bots(conn, msg):
-        conn.execute(
-            "INSERT OR IGNORE INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) "
-            "VALUES(?,?,?,?,?)",
-            (task_id, recipient, person, mid, until),
-        )
+        delegate(conn, task_id, recipient, person, mid)
+
+
+def delegate(conn, task_id, bot, person, message_id):
+    """`bot` acts on the task with party rights for 24 hours, lent by `person`'s message that woke it."""
+    conn.execute(
+        "INSERT OR IGNORE INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) VALUES(?,?,?,?,?)",
+        (task_id, bot, person, message_id, shift(now(), hours=24)),
+    )
 
 
 def _woken_bots(conn, msg):
@@ -6236,7 +6253,13 @@ def status_counts(conn, actor):
         "AND a.answer NOT IN ('give', 'again'))",
         (actor,),
     ).fetchone()[0]
-    return open_tasks, waits + asks
+    # And each open ❓ of the bot's (backend/question_marks.py): on an open task's chat, or in a direct chat.
+    marked = conn.execute(
+        "SELECT COUNT(*) FROM question_marks q LEFT JOIN tasks t ON t.id = q.task_id "
+        "WHERE q.bot_id=? AND q.cleared_at IS NULL AND (q.task_id = '' OR t.status = 'open')",
+        (actor,),
+    ).fetchone()[0]
+    return open_tasks, waits + asks + marked
 
 
 def _recount(conn, actor):
@@ -7311,7 +7334,6 @@ from .task_calls import (
     task_release as task_release,
     task_requeue as task_requeue,
     task_snooze as task_snooze,
-    task_thumbs as task_thumbs,
     task_try_again as task_try_again,
     task_unsnooze as task_unsnooze,
     task_view as task_view,

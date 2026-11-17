@@ -9,10 +9,10 @@ Who may act:
 - A call that works the task (done, move, close, reassign, ask, snooze, try again): the actor can work it, the same
   rule a field edit uses, plus the pipeline's manager and owner. `mover` is the caller saying a person may move any
   task (the company's owner; a route knows).
-- An answer and a thumbs up: whoever the engine says the requirement is asked of, so a bot or a person named on an OK
-  answers it without being on the task.
-- Giving an ask away or sending it back with a thumbs down: who it waits on, whoever asked it, or someone who can work
-  the task. Taking an answer back: only who gave it (`may_handle_ask`).
+- An answer: whoever the engine says the requirement is asked of, so a bot or a person named on an OK answers it
+  without being on the task.
+- Giving an ask away or sending it back with a note: who it waits on, whoever asked it, or someone who can work the
+  task. Taking an answer back: only who gave it (`may_handle_ask`).
 
 The engine's modules are loaded when a call runs, not when this module loads: hubdb imports this module, and the
 engine's modules reach back to hubdb and the store.
@@ -22,7 +22,7 @@ import functools
 import json
 import re
 from collections.abc import Callable, Iterable
-from typing import TYPE_CHECKING, Any, Concatenate, NoReturn, ParamSpec, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Concatenate, NoReturn, ParamSpec, TypeVar
 
 from . import ask_shape, hubdb_core, task_effects
 
@@ -156,30 +156,12 @@ def _may_work(conn: "sqlite3.Connection", actor: str, row: Row, mover: bool | No
 
 def _owners_done_is_work(conn: "sqlite3.Connection", actor: str, row: Row, requirement_id: str) -> None:
     """Answering the owner's own "done" finishes the stage, and giving it away hands the task over: /done and /owner
-    by another road, so the same reader may do them, refused as those are. The owner's answer to a stage's question is
-    their work too."""
+    by another road, so the same reader may do them, refused as those are."""
     from . import task_requirements as R
 
     requirement = R.get(conn, requirement_id) or {}
-    if requirement.get("kind") == "owner_done" or R.owners_answer(requirement):
+    if requirement.get("kind") == "owner_done":
         _may_work(conn, actor, row)
-
-
-def _requirement_named(conn: "sqlite3.Connection", row: Row, requirement: str) -> str:
-    """The requirement a caller names: its id, or the name of a stage's answer the task's open visit asks
-    (`tico task answer E-12 confidence 80`). Anything else is passed on as it is, for the engine to refuse."""
-    from . import task_engine as E
-    from . import task_requirements as R
-
-    visit: Row | None = (E.task(conn, row["id"]) or {}).get("visit")
-    if not visit or R.get(conn, requirement):
-        return requirement
-    wanted = requirement.strip().lower()
-    for found in R.for_visit(conn, visit):
-        settings: Row = found.get("settings") or {}
-        if found["kind"] == "answer" and str(settings.get("name") or "") == wanted:
-            return str(found["id"])
-    return requirement
 
 
 def may_handle_ask(
@@ -239,6 +221,14 @@ def task_done(
             return A.answer(
                 conn, task_id, own.requirement["id"], actor, "done", note or None, seen_version=seen_version
             )
+    if row["status"] == "open" and says:
+        # Done again after a send back: each stage OK sent back asks its approver again (answers.reopen_sent_back),
+        # and the task waits on them.
+        E.check_version(conn, actor, row, seen_version)
+        if A.reopen_sent_back(conn, row, actor, note or None):
+            with task_effects.because(actor):
+                E.changed(conn, task_id, actor)
+            return E.task(conn, task_id) or row
     with task_effects.because(actor):
         return E.move(conn, task_id, NEXT, actor, None, seen_version)
 
@@ -439,19 +429,15 @@ def task_ask(
     person: str,
     line: str,
     *,
-    kind: str = "answer",
-    choices: list[str] | None = None,
+    kind: str = "ok",
     shows: object = None,
     seen_version: int | str | None = None,
     mover: bool | None = None,
     for_action: bool = False,
-    brief: Row | None = None,
-    title: str | None = None,
 ) -> Row:
-    """Ask someone on the task: an answer (`kind` "answer", with `choices` where there are some) or an OK (`kind`
-    "ok"). `brief` is a question's why, its choices' lines and the one recommended (backend/ask_shape.py); `title` a
-    short heading for it (at most 60 characters). The task stays in its stage until they answer, the ask is withdrawn, or someone pushes past it. The result
-    carries `requirement_id`."""
+    """Ask someone on the task for an OK of what it shows (a question is a message marked ❓, backend/question_marks.py,
+    and task_engine.add_requirement refuses any other kind). The task stays in its stage until they answer, the ask is
+    withdrawn, or someone pushes past it. The result carries `requirement_id`."""
     from . import task_engine as E
 
     H = _h()
@@ -469,10 +455,10 @@ def task_ask(
     bring_in(conn, actor, row, target)
     if is_bot(actor) and is_human(target):
         # What a bot puts in front of a person is plain: a first line of one or two short sentences, no ids or paths
-        # (rule 7), that stands on its own; a list of questions may follow it, and its why is one line. Every path that
-        # asks a person comes through here, whatever the bot was told (backend/ask_shape.py).
+        # (rule 7), that stands on its own. Every path that asks a person comes through here, whatever the bot was told
+        # (backend/ask_shape.py).
         H.require_person_ask(conn, actor, target, str(line or "").strip().split("\n", 1)[0], "ask")
-        shape = ask_shape.line_refusal(line, (brief or {}).get("why"))
+        shape = ask_shape.line_refusal(line)
         if shape:
             H.refuse(conn, actor, "lint", shape)
     return E.add_requirement(
@@ -482,12 +468,9 @@ def task_ask(
         kind,
         target,
         line,
-        choices=choices,
         shows=shows,
         seen_version=seen_version,
         for_action=for_action,
-        brief=brief,
-        title=title,
     )
 
 
@@ -527,16 +510,14 @@ def task_answer(
     visit_id: str | None = None,
     keyed: bool = False,
 ) -> Row:
-    """Answer what is asked: `ok`, `no` with a note (send back) or `again` (look again) on an OK; `ok` or `no` on a
-    page, for the page shown (`page_version`, `<file id>@<version>`; a document approval's key adds `visit_id`, and
-    a person's answer from a client, `keyed`, must carry it); the choice or the text on a question; `done` on the
-    owner's own work. If that was the last thing missing the task moves on. The result carries `answer_id`. `own_click` says the
+    """Answer what is asked: `ok` or `no` with a note (send back) on an OK; `ok` or `no` on a page, for the page shown
+    (`page_version`, `<file id>@<version>`; a document approval's key adds `visit_id`, and a person's answer from a
+    client, `keyed`, must carry it); `done` on the owner's own work. If that was the last thing missing the task moves on. The result carries `answer_id`. `own_click` says the
     request is the person's own click in their own session (task_asks.own_click): only that OKs an OK the person
     asked themself."""
     from . import answers as A
 
     row = _open(conn, actor, task_id, work=False)
-    requirement_id = _requirement_named(conn, row, requirement_id)
     _owners_done_is_work(conn, actor, row, requirement_id)
     with task_effects.because(actor):
         return A.answer(
@@ -639,21 +620,6 @@ def task_answer_undo(conn: "sqlite3.Connection", actor: str, answer_id: str) -> 
         return A.undo(conn, answer_id, actor)
 
 
-@_task_write()
-def task_thumbs(
-    conn: "sqlite3.Connection", actor: str, task_id: str, requirement_id: str, up: bool, note: str | None = None
-) -> Row:
-    """Was this worth asking. A thumbs down says what was wrong, and sends an open ask back. A move it causes is the
-    actor's."""
-    from . import answers as A
-
-    _open(conn, actor, task_id, work=False)
-    with task_effects.because(actor):
-        if up:
-            return A.thumbs_up(conn, task_id, requirement_id, actor)
-        return A.thumbs_down(conn, task_id, requirement_id, actor, note or "")
-
-
 # ----------------------------------------------------------------------------- snooze
 @_task_write()
 def task_snooze(
@@ -723,7 +689,6 @@ def _may(
     standing: Any,
     answer: Row | None,
     viewer: str,
-    holder: str | None,
     works: bool,
 ) -> list[str]:
     """What `viewer` may do with one requirement, as names a screen turns into buttons. A hint: the engine decides
@@ -733,42 +698,31 @@ def _may(
     requirement: Row = standing.requirement
     kind = requirement["kind"]
     human = is_human(viewer)
-    owner = row.get("owner_id")
     out: list[str] = []
     asked = False
-    if kind in ("ok", "answer"):
+    if kind == "ok":
         person = R.person_of(conn, requirement, row["visit"]["id"])
         asked = viewer == person or (person is None and human)
     if kind == "owner_done" and not standing.met and works:
         out += ["done", "give"]
-    if kind == "ok" and not standing.met:
-        if answer and answer["answer"] == "no":
-            if viewer in (owner, holder):
-                out.append("again")
-        elif asked and standing.state == R.WAITING and not R.outside(standing.on):
+    # Sent back: the owner revises and says done again, which asks again (answers.reopen_sent_back).
+    sent_back = bool(answer) and (answer or {}).get("answer") == "no"
+    if kind == "ok" and not standing.met and not sent_back and asked:
+        if standing.state == R.WAITING and not R.outside(standing.on):
             out += ["ok", "no"]  # not while it is held on Jev or back with the owner (validate_gate.held)
-    owners = R.owners_answer(requirement)
-    if kind == "answer" and not standing.met and (works if owners else asked):
-        out.append("answer")
     # A page is answered once Jev has looked: by whom it waits on, or any person when it names nobody (answers).
     if kind == "page" and standing.state == R.WAITING and not R.outside(standing.on):
         if viewer == standing.on or (standing.on is None and human):
             out += ["ok", "no"]
     # Give: whoever it waits on, whoever asked it, or someone who works the task (may_handle_ask); the owner's own work
     # is given by someone who works the task, which reassigns it.
-    on_stage_answer = kind == "answer" and bool(requirement.get("stage_id"))
-    if kind in ("ok", "answer") and standing.state == R.WAITING and not on_stage_answer:
+    if kind == "ok" and standing.state == R.WAITING:
         if works or viewer in (standing.on, requirement.get("added_by_id")):
             out.append("give")
     if answer and answer["by_id"] == viewer and (kind != "owner_done" or works):
         out.append("undo")
     if requirement.get("visit_id") and (works or viewer == requirement.get("added_by_id")):
         out.append("withdraw")
-    # A thumb rates a bot's ask, as answers._ask reads it: one added to the task is its author's, a stage's is the
-    # owner's.
-    asker = requirement.get("added_by_id") if requirement.get("visit_id") else owner
-    if kind in ("ok", "answer") and human and is_bot(asker) and not on_stage_answer:
-        out.append("thumbs")
     return out
 
 
@@ -925,7 +879,16 @@ def prime_views(conn: "sqlite3.Connection", task_ids: Iterable[str], viewer: str
         for key, found in _keyed(conn, sql, unread).items():
             values.setdefault((sql, key), found)
     E.prime_stages(conn, [str(row["pipeline_id"]) for row in rows.values() if row.get("pipeline_id")])
-    R.prime_values(conn, ids)
+    # The check rows of the page each OK shows (`_page_checks`), from the requirements W.prime read.
+    from . import page_verdicts
+
+    firsts: list[object] = []
+    for row in rows.values():
+        for requirement in R.for_visit(conn, row["visit"]) if row.get("visit") else []:
+            shows: list[object] = requirement.get("shows") or []
+            if requirement["kind"] == "ok" and shows:
+                firsts.append(shows[0])
+    page_verdicts.prime_checks(conn, firsts)
     TR.prime_ancestry(conn, ids)
     if viewer:
         _h().prime_task_delegated(conn, ids, viewer)
@@ -984,25 +947,8 @@ def _answer_view(conn: "sqlite3.Connection", task_id: str, answer: Row, private:
     }
 
 
-def _typed_view(requirement: Row) -> Row | None:
-    """A stage's answer as the task shows it: {name, type, min, max, question}. None for any other requirement."""
-    settings: Row = requirement.get("settings") or {}
-    if requirement.get("kind") != "answer" or not requirement.get("stage_id"):
-        return None
-    from . import task_requirements as R
-
-    return {
-        "name": settings.get("name"),
-        "type": R.answer_type(requirement),
-        "min": settings.get("min"),
-        "max": settings.get("max"),
-        "question": settings.get("question") or "",
-    }
-
-
 def _decided(conn: "sqlite3.Connection", task_id: str, visit_id: str, viewer: str | None) -> list[Row]:
-    """A bot's asks on this visit that were answered (an OK given, a question answered) before its next ask replaced
-    them (C15, task_engine._replace_open): what was decided, so it stays on the task, met, with its answer. Nothing
+    """A bot's OKs on this visit that were given before its next ask replaced them (C15, task_engine._replace_open): what was decided, so it stays on the task, met, with its answer. Nothing
     can be done about one any more (`may` is empty)."""
     from . import task_asks
     from . import task_requirements as R
@@ -1024,9 +970,6 @@ def _decided(conn: "sqlite3.Connection", task_id: str, visit_id: str, viewer: st
                 "standing": "OK'd" if requirement["kind"] == "ok" else str(answer["answer"]),
                 "who": None,
                 "asked_by": None if private else requirement.get("added_by_id"),
-                "choices": None if private else requirement.get("choices"),
-                **({"brief": _brief_of(requirement)} if _brief_of(requirement) and not private else {}),
-                **({"title": _title_of(requirement)} if _title_of(requirement) and not private else {}),
                 "shows": [] if private else requirement.get("shows") or [],
                 **({"source": requirement["shows"]} if requirement.get("shows") and not private else {}),
                 "answer": _answer_view(conn, task_id, answer, private),
@@ -1036,40 +979,16 @@ def _decided(conn: "sqlite3.Connection", task_id: str, visit_id: str, viewer: st
     return out
 
 
-def _brief_of(requirement: Row) -> Row | None:
-    """A question's why, its choices' lines and the one recommended, as the bot asked it (backend/ask_shape.py), or
-    None for an ask that carried none."""
-    settings: Row = requirement.get("settings") or {}
-    brief: Any = settings.get("brief")
-    if not isinstance(brief, dict) or not cast("Row", brief).get("why"):
-        return None
-    found = cast("Row", brief)
-    return {"why": found.get("why"), "details": found.get("details"), "recommend": found.get("recommend")}
-
-
-def _title_of(requirement: Row) -> str | None:
-    """An ask's short title, as it was asked with one (models.TaskAsk.title), or None."""
-    settings: Row = requirement.get("settings") or {}
-    title: Any = settings.get("title")
-    return title if isinstance(title, str) and title else None
-
-
 def ask_shown(conn: "sqlite3.Connection", row: Row, requirement: Row) -> Row:
-    """What a requirement of the task's open visit asks, as a party to it reads it: its sentence, choices, typed
-    question, brief, title and what it shows (a page requirement: the page attached now, at its pinned version). The
+    """What a requirement of the task's open visit asks, as a party to it reads it: its sentence and what it shows (a page requirement: the page attached now, at its pinned version). The
     same for every party; `_leave_entry` hides a bound OK's from anyone else, and a snooze of the ask holds while this
     is what was asked (waiting_on.ask_version)."""
     from . import task_requirements as R
 
     page = _page_of(conn, row["visit"]["id"], requirement) if requirement["kind"] == "page" else None
-    typed, brief, title = _typed_view(requirement), _brief_of(requirement), _title_of(requirement)
     return {
         "kind": requirement["kind"],
         "line": R.approval_line(requirement),
-        "choices": requirement.get("choices"),
-        **({"typed": typed} if typed else {}),
-        **({"brief": brief} if brief else {}),
-        **({"title": title} if title else {}),
         "shows": [page["ref"]] if page else list(requirement.get("shows") or []),
         **({"page": page} if page else {}),
     }
@@ -1082,11 +1001,10 @@ def _leave_entry(
     answers: dict[str, Row],
     viewer: str | None,
     hidden: Any,
-    holder: Any,
     works: bool,
 ) -> Row:
     """One entry of a task's `to_leave` (task_view): a requirement of its open visit, where it stands, and what `viewer`
-    may do about it. `hidden` is what `hidden_filed` keeps from them; `holder` and `works` are the task's."""
+    may do about it. `hidden` is what `hidden_filed` keeps from them; `works` is the task's."""
     from . import task_asks
 
     task_id = row["id"]
@@ -1111,20 +1029,16 @@ def _leave_entry(
         "standing": task_asks.PRIVATE_LINE if private and not standing.met else standing_line(standing, hidden),
         "who": None if standing.met or standing.on in hidden else standing.on,
         "asked_by": None if private else requirement.get("added_by_id") if requirement.get("visit_id") else None,
-        "choices": None if private else asked["choices"],
-        **({"typed": asked["typed"]} if asked.get("typed") else {}),
-        **({"brief": asked["brief"]} if asked.get("brief") and not private else {}),
-        **({"title": asked["title"]} if asked.get("title") and not private else {}),
         "shows": shows,
         # What it shows is where its words come from: a reader who may not open one of those pages reads
-        # none of the ask, its choices or its answer (files.readable_page_refs drops the whole entry).
+        # none of the ask or its answer (files.readable_page_refs drops the whole entry).
         **({"source": shows} if shows else {}),
         **({"page": page} if page else {}),
         **({"earlier": earlier} if earlier else {}),
         **({"checks": checks} if checks else {}),
         **({"approval": approval} if approval else {}),
         "answer": _answer_view(conn, task_id, answer, private) if answer else None,
-        "may": _may(conn, row, standing, answer, str(viewer), holder, works) if viewer else [],
+        "may": _may(conn, row, standing, answer, str(viewer), works) if viewer else [],
     }
 
 
@@ -1149,11 +1063,10 @@ def _approval_of(row: Row, standing: Any, page: Row | None) -> Row | None:
 
 def ask_entry(conn: "sqlite3.Connection", task_id: str, requirement_id: str, viewer: str) -> Row | None:
     """The `to_leave` entry of one requirement of a task, as `task_view(conn, task_id, viewer)` gives it, without the
-    rest of the view (its waits, next stage, filed tasks and values): Needs you shows each ask with this alone. None
+    rest of the view (its waits, next stage and filed tasks): Needs you shows each ask with this alone. None
     when the view has no such entry."""
     from . import task_engine as E
     from . import task_requirements as R
-    from . import waiting_on as W
 
     row = E.task(conn, task_id)
     if not row:
@@ -1170,7 +1083,7 @@ def ask_entry(conn: "sqlite3.Connection", task_id: str, requirement_id: str, vie
         )
     hidden = hidden_filed(conn, row, viewer, None)
     answers = R.newest_answers(conn, visit["id"])
-    return _leave_entry(conn, row, found, answers, viewer, hidden, W.holder(conn, row), can_work(conn, viewer, row))
+    return _leave_entry(conn, row, found, answers, viewer, hidden, can_work(conn, viewer, row))
 
 
 def task_view(
@@ -1204,9 +1117,8 @@ def task_view(
     shown: Callable[[str], bool] = lambda task_id: task_id not in hidden
     waits = [W.view(wait, shown) for wait in W.of(conn, row, standings=standings)] if live else []
     answers = R.newest_answers(conn, visit["id"]) if live else {}
-    holder = W.holder(conn, row) if live else None
     works = bool(viewer) and can_work(conn, str(viewer), row)
-    to_leave = [_leave_entry(conn, row, standing, answers, viewer, hidden, holder, works) for standing in standings]
+    to_leave = [_leave_entry(conn, row, standing, answers, viewer, hidden, works) for standing in standings]
     if live:
         to_leave.extend(_decided(conn, task_id, visit["id"], viewer))
     following = E.next_stage(conn, row) if live else None
@@ -1268,5 +1180,4 @@ def task_view(
         else None,
         "filed_by": filed_by,
         "filed": filed,
-        "values": R.values(conn, task_id),
     }

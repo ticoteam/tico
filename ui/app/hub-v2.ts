@@ -103,8 +103,6 @@ const V2_WORD: Record<string, string> = {idle: 'Idle', running: 'Running', waiti
 const statusWord = (status: unknown) => status === 'planned' ? 'Setting up' : String(status || '');
 const V2_PILL: Record<string, string> = {running: 'in-progress', waiting_human: '', waiting_bot: '', blocked: '',
                  limited: 'waiting', crashed: 'fail', quarantined: 'fail', idle: ''};
-const V2_KIND: Record<string, string> = {decision: 'Decision', approval: 'Approval', review: 'Review', declined: 'Declined',
-                 question: 'Question', task: 'Task', notice: 'Message', setup: 'Set up'};
 const v2StatusOf = (slug: string | null | undefined) => S.v2.status[String(slug)] || null;
 const actorSlug = (a: unknown) => String(a || '').startsWith('bot:') ? String(a).slice(4) : '';
 const actorPerson = (a: unknown) => String(a || '').startsWith('human:') ? String(a).slice(6) : '';
@@ -245,8 +243,6 @@ const myActor = () => S.me?.id ? `human:${S.me.id}` : '';
 // The person on a chat bubble is the local part of their address: jo@example.com is "jo".
 // Takes an actor (human:jo), an email, a roster id, or the Issue's "Jo"; '' when unknown.
 const personHandle = (x: unknown) => (actorPerson(x) || String(x || '')).split('@')[0]!.trim().toLowerCase();
-const ownerHandle = () => S.me?.owner_id || 'owner';           // unsigned Issue text is the owner's
-const myHandle = () => personHandle(S.me?.id || S.me?.email) || ownerHandle();
 const unsigned = (body: unknown) => String(body || '').replace(/\n*_?— [^\s_]+@[^\s_]+ via the hub_?\s*$/, '');
 // every v2 read is optional: a hub without hub.db answers 404 and the caller falls back
 async function v2Get<T = UntypedJson>(path: string, opts?: {fresh?: boolean}): Promise<T | null> { try { return await get<T>(path, opts); } catch { return null; } }

@@ -77,7 +77,7 @@ stop, and their end wakes you.
 
 ## Talking to {{app_name}}
 Work arrives as tasks. Read with `tico task show`, `tico task list`, `tico meeting search "<customer>"`,
-`tico meeting read <id>`, `tico calendar list`. A question is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task.
+`tico meeting read <id>`, `tico calendar list`. A question is `tico task ask <id> --to <person> "<question>"`, one open question per task.
 A human's job (a training call, a data import on the customer's side) is `tico task create --owner
 <person>` after the owner agrees. A handover at go-live is `tico task create --owner success-owner`.
 

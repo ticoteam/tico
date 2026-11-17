@@ -26,7 +26,7 @@ const brief = (id: string, title: string, number: number) => ({id, title, number
 const need = (task: string, title: string, number: number, hour: number, earlier: Record<string, unknown> | null) => ({
   kind: 'ask', id: `v-${task}:${RID}`, task_id: task, requirement_id: RID, line: 'OK the release', since: `2026-11-15T${hour}:00:00Z`,
   task: brief(task, title, number),
-  ask: {requirement_id: RID, kind: 'ok', line: 'OK the release', who: 'human:chris', asked_by: null, choices: null, may: ['ok', 'no'],
+  ask: {requirement_id: RID, kind: 'ok', line: 'OK the release', who: 'human:chris', asked_by: null, may: ['ok', 'no'],
     met: false, shows: [], standing: 'waiting', answer: null, ...(earlier ? {earlier} : {}),
     brief: {why: 'QA passed on the release candidate.', details: ['Not a check row'], recommend: null}}});
 const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager_id: null, owner_id: 'human:chris', private: false,

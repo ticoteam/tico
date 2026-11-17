@@ -151,8 +151,8 @@ const dashThreadHref = (id: string) => typeof window.threadHref === 'function' ?
 // Needs you cards (needs_attention, needs_you): each row its title and a mark for what it needs (style guide "A row is a
 // title and marks"), named for screen readers and on hover; the count is dashHeadN's. Icons from the font's subset: the
 // map's name ends in _ICONS so scripts/build-icon-font.py keeps them in it.
-const DASH_ACT_ICONS: Record<string, string> = {done: 'task_alt', ok: 'thumb_up', answer: 'help', reply: 'reply', fix: 'build'};
-const DASH_ACT_WORDS: Record<string, string> = {done: 'Done', ok: 'OK', answer: 'Answer', reply: 'Reply', fix: 'Fix'};
+const DASH_ACT_ICONS: Record<string, string> = {done: 'task_alt', ok: 'thumb_up', reply: 'reply', fix: 'build'};
+const DASH_ACT_WORDS: Record<string, string> = {done: 'Done', ok: 'OK', reply: 'Reply', fix: 'Fix'};
 const dashActMark = (act: string | null | undefined) => {
   const icon = act ? DASH_ACT_ICONS[act] : undefined, word = act ? DASH_ACT_WORDS[act] : undefined;
   return icon && word ? `<span class="nav-icon dash-act" role="img" aria-label="${word}" title="${word}">${icon}</span>` : '';
@@ -394,7 +394,8 @@ function dashTasksPut(events: LiveTaskEvent[]): void {
 // and its count, each item by the server's rule (backend/cards.py needs_brief): its task's title, a Paused cause or an
 // item without a task by its line, with the line as its tooltip and the word for what it needs. A team's card counts the items its bots are behind, which
 // the held items do not say: the safety read.
-const dashAct = (it: NeedsEntry) => ({ok: 'ok', question: 'answer', yours: 'done', stuck: 'fix', fix: 'fix', mention: 'reply'} as Record<string, string>)[decideKind(it)] || '';
+// Every ask is an OK on the card, one of a kind Flow does not know included (backend/cards.py needs_act).
+const dashAct = (it: NeedsEntry) => ({ok: 'ok', other: 'ok', yours: 'done', stuck: 'fix', fix: 'fix', mention: 'reply'} as Record<string, string>)[decideKind(it)] || '';
 function dashNeedsLive(): void {
   const items = S.v2?.needs || [], count = S.v2?.needsCount ?? items.length;
   const brief = (n: number): DashNeedsItem[] => items.slice(0, n).map(it => ({title: (it.kind !== 'paused' && it.task?.title) || it.line || '', line: it.line || '', act: dashAct(it),

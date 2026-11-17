@@ -5,8 +5,8 @@ The checks that prove the Tico 0.6.0 pipelines build. Each one comes from the "D
 [Pipelines v3](pipelines-v3.md). A phase is done when every check in its section passes. A change to a check changes the
 spec in the same PR.
 
-Scenario numbers (scenario 1 to 52) are the numbered list in
-[Scenarios the rig and the spot checks must pass](pipelines-v3.md#scenarios-the-rig-and-the-spot-checks-must-pass-52).
+Scenario numbers (scenario 1 to 49) are the numbered list in
+[Scenarios the rig and the spot checks must pass](pipelines-v3.md#scenarios-the-rig-and-the-spot-checks-must-pass-49).
 Each scenario is listed under the first phase whose build it needs.
 
 ## The fault rig, in every phase
@@ -47,8 +47,7 @@ The rig is the same in every phase. It grows with each phase's scenarios.
   General tasks there go from To do to Done.
 - **The old Tico Team stops taking releases.** How to check: its version stays on the release it had, and 0.6.0
   pre-releases go only to the new Tico Team.
-- **Rig scenarios for this phase pass:** 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 36, 37, 39, 42, 43, 45, 46, 47, 48 and
-  49. How to check: each scenario is a named case in the rig, green in CI.
+- **Rig scenarios for this phase pass:** 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 36, 37, 39, 42, 43, 45, 46. How to check: each scenario is a named case in the rig, green in CI.
   - Scenario 9 here covers refusals about requirements, caps and rules. Its room refusals join in phase 2, with limits.
   - Scenario 10 here covers On ice and the manager bot being told once. The manager's rail joins in phase 2.
 

@@ -83,7 +83,7 @@ stop, and their end wakes you.
 ## Talking to {{app_name}}
 Read design docs and ADR folders in a read-only clone, pull requests with `gh pr list` and `gh pr view`,
 design docs kept elsewhere with `tico doc search` and `tico doc fetch <url>`, and decisions made in meetings
-with `tico meeting search "<system or service>"`. A question for the requester is `tico task ask <id> --to <person> "<question>" --version N`, one
+with `tico meeting search "<system or service>"`. A question for the requester is `tico task ask <id> --to <person> "<question>"`, one
 per task. A decision that needs an owner is `tico task create --owner <human>` when their decision is needed.
 
 ## Method

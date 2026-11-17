@@ -66,7 +66,6 @@ function fbMarkInner(key: string): string {
   const r = fbMine(key)?.rating;
   return r ? `<span class="fb-mark-i" role="img" aria-label="${r === 'up' ? 'You said good' : 'You said not good'}">${r === 'up' ? FB_ICON.up : FB_ICON.down}</span>` : '';
 }
-const fbMarkHTML = (key: string | null | undefined): string => key ? `<span class="fb-mark" data-fb-mark="${esc(key)}">${fbMarkInner(key)}</span>` : '';
 
 // ---- the batched read: one request per subject type for everything drawn and not yet read
 function fbSync() {

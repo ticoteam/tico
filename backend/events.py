@@ -628,6 +628,23 @@ TRIGGERS = [
         _needs("snooze", "OLD.person_id", "NEW.person_id"),
     ),
     ("changes_ask_snoozes_delete", "DELETE", "ask_snoozes", None, _needs("snooze", "OLD.person_id")),
+    # A bot's ❓ (backend/question_marks.py) moves the Needs you of the person it is for, and of whoever it was given
+    # from, and the task whose chat it is on. Its glyph moves with the message's refs (changes_messages_update).
+    (
+        "changes_question_marks_insert",
+        "INSERT",
+        "question_marks",
+        None,
+        _row("tasks", "question", "NEW.task_id", where="NEW.task_id <> ''") + _needs("question", "NEW.person_id"),
+    ),
+    (
+        "changes_question_marks_update",
+        "UPDATE",
+        "question_marks",
+        _ANY_COLUMN,
+        _row("tasks", "question", "NEW.task_id", where="NEW.task_id <> ''")
+        + _needs("question", "OLD.person_id", "NEW.person_id"),
+    ),
     (
         "changes_links_insert",
         "INSERT",

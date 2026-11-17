@@ -7,21 +7,23 @@ import json
 import pytest
 
 from backend.store import H
+from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import get, headers, post
 from backend.tests.helpers.company import with_strategy_bot
-from backend.tests.helpers.org_rules import rule
-from backend.tests.helpers.strategy_bot_level import level
+from backend.tests.helpers.engine import ok_ask
 from backend.tests.helpers.org_rule_check import (  # noqa: F401 - fixtures
     COLOR,
     LAUNCH,
-    hand_over,
     color_rule,
+    hand_over,
     hold_row,
     not_a_friday,
     ruled,
     sql,
     task_for_ops,
 )
+from backend.tests.helpers.org_rules import rule
+from backend.tests.helpers.strategy_bot_level import level
 
 
 def row(api, task_id):
@@ -105,9 +107,10 @@ def test_withdrawing_an_ask_with_a_forbidden_why_is_held(ruled):
         f"tasks/{task['id']}/asks",
         {
             "to": "ana",
-            "line": "Which launch day suits you?",
+            "line": "OK the launch note?",
+            "kind": "ok",
+            "show": X.shown_on(api),
             "version": 1,
-            "why": "It sets what goes out on launch day.",
         },
     )
     color_rule(api)
@@ -220,9 +223,16 @@ def all_slots_busy(monkeypatch):
 
 
 def bots_ask(api, task, line="May I say our favorite color is red?", expected=200):
+    """bot:ops asks Ana to OK what it shows (a question is a ❓ message now, checked on its own route)."""
     r = api.post(
         f"/api/v2/tasks/{task['id']}/asks",
-        json={"to": "ana", "line": line, "version": task["version"], "why": "It sets what goes out on launch day."},
+        json={
+            "to": "ana",
+            "line": line,
+            "kind": "ok",
+            "show": X.shown_on(api),
+            "version": task["version"],
+        },
         headers=headers("ops-test"),
     )
     assert r.status_code == expected, r.text
@@ -233,27 +243,6 @@ def asks_on(api, task):
     return sql(
         api, "SELECT id FROM requirements WHERE visit_id IN (SELECT id FROM visits WHERE task_id=?)", (task["id"],)
     )
-
-
-def test_a_bots_ask_whose_short_title_alone_breaks_a_rule_is_refused(ruled):
-    """The person reads the title first, so the check reads it with the line (task #390)."""
-    api, judge = ruled
-    color_rule(api)
-    task = task_for_ops(api)
-    r = api.post(
-        f"/api/v2/tasks/{task['id']}/asks",
-        json={
-            "to": "ana",
-            "line": "Which line should the launch post lead with?",
-            "title": "Our favorite color is red: say it?",
-            "version": task["version"],
-            "why": "It sets what goes out on launch day.",
-        },
-        headers=headers("ops-test"),
-    )
-    assert r.status_code == 409 and r.json()["error"] == "task_rule", r.text
-    assert judge.calls, "the check was asked"
-    assert asks_on(api, task) == []
 
 
 @pytest.mark.parametrize("cause", ["day_cap", "busy", "too_large"])
@@ -270,7 +259,7 @@ def test_a_bots_ask_the_check_cannot_judge_here_is_refused_to_try_again(ruled, m
         from clients import judge as J
 
         monkeypatch.setattr(J, "MAX_STATE_CHARS", 200)
-    got = bots_ask(api, task, "Which launch day suits you, Monday or Tuesday or later this month?", 503)
+    got = bots_ask(api, task, "OK the launch day plan for Monday or Tuesday or later this month?", 503)
     assert problem(got) == ("task_rule_unchecked", True), got
     assert asks_on(api, task) == before and row(api, task["id"])["version"] == task["version"]
     assert sql(api, "SELECT state FROM bots WHERE slug='ops'")[0]["state"] == "active"
@@ -284,7 +273,7 @@ def test_a_bot_spending_the_days_calls_cannot_then_ask_unchecked(ruled, monkeypa
 
     monkeypatch.setattr(K.B, "daily_cap", lambda settings, who: 1)
     task = task_for_ops(api)
-    bots_ask(api, task, "Which launch day suits you?")  # the day's one call
+    bots_ask(api, task, "OK the launch day plan?")  # the day's one call
     assert len(judge.calls) == 1
     task = task_for_ops(api, "Write the second note")
     bots_ask(api, task, "May I say our favorite color is red?", 503)
@@ -483,39 +472,31 @@ def test_a_rule_scoped_to_the_tasks_thread_holds_a_write_on_the_task(ruled):
     assert row(api, task["id"])["status"] != "done"
 
 
-def test_an_answer_reaches_whoever_asked_and_a_rule_with_them_holds_it(ruled):
+def test_a_send_back_reaches_whoever_asked_and_a_rule_with_them_holds_it(ruled):
     api, _ = ruled
     task = task_for_ops(api)
-    asked = ops(
-        api,
-        f"tasks/{task['id']}/asks",
-        {"to": "ben", "line": "Which color do we use?", "version": 1, "why": "It sets what goes out on launch day."},
-    )
-    with api.app.state.store.transaction() as c:  # asked by another bot on the task than its owner
-        c.execute("UPDATE requirements SET added_by_id='bot:finance' WHERE id=?", (asked["requirement_id"],))
+    with api.app.state.store.transaction() as c:  # an OK asked by another bot on the task than its owner
+        asked = ok_ask(c, task["id"], "bot:finance", "ben", "OK the brand colors")
     rule(api, {"kind": "internal", "text": COLOR, "who": {"everyone": True}, "with": {"bots": ["finance"]}})
     r = api.post(
         f"/api/v2/tasks/{task['id']}/asks/{asked['requirement_id']}/answer",
-        json={"value": "Our favorite color is red."},
+        json={"value": "no", "note": "Our favorite color is red."},
         headers=headers("ben-test"),
     )
     assert r.status_code == 200 and r.json()["held"], r.text
     assert sql(api, "SELECT 1 FROM answers WHERE requirement_id=?", (asked["requirement_id"],)) == []
 
 
-def test_a_warned_answer_with_no_note_carries_the_line_without_editing_the_task(ruled):
+def test_a_warned_send_back_carries_the_line_on_its_note_without_editing_the_task(ruled):
     api, _ = ruled
     task = task_for_ops(api)
-    asked = ops(
-        api,
-        f"tasks/{task['id']}/asks",
-        {"to": "cara", "line": "Which color do we use?", "version": 1, "why": "It sets what goes out on launch day."},
-    )
+    with api.app.state.store.transaction() as c:  # the owner's own OK ask: its send back's note is the warned text
+        asked = ok_ask(c, task["id"], "bot:ops", "cara", "OK the brand colors")
     rule(api, {"kind": "internal", "text": COLOR, "who": {"everyone": True}, "if_broken": "warn"})
     before = row(api, task["id"])
     r = api.post(
         f"/api/v2/tasks/{task['id']}/asks/{asked['requirement_id']}/answer",
-        json={"value": "Our favorite color is red."},
+        json={"value": "no", "note": "Our favorite color is red."},
         headers=headers("cara-test"),
     )
     assert r.status_code == 200 and r.json()["rule_warning"], r.text
@@ -526,32 +507,6 @@ def test_a_warned_answer_with_no_note_carries_the_line_without_editing_the_task(
 
 def strategy_rule(api, if_broken="block"):
     return rule(api, {"kind": "internal", "text": COLOR, "who": {"bots": ["strategy-owner"]}, "if_broken": if_broken})
-
-
-def test_the_strategy_bots_merged_ask_a_rule_covers_is_refused_and_files_nothing(ruled):
-    api, _ = ruled
-    token = with_strategy_bot(api)
-    level(api, 2)
-    strategy_rule(api)
-    tasks = []
-    for title in ("Ship the pricing page", "Plan the launch"):
-        task = task_for_ops(api, title)
-        bots_ask(api, task, "Which pricing page goes live first?")
-        tasks.append(task["id"])
-    before = sql(api, "SELECT count(*) AS n FROM tasks")[0]["n"]
-    r = api.post(
-        "/api/v2/strategy-bot/merge",
-        json={
-            "person": "human:ana",
-            "title": "Colors",
-            "question": "May I say our favorite color is red?",
-            "tasks": tasks,
-        },
-        headers=headers(token),
-    )
-    assert r.status_code == 409 and r.json()["error"] == "task_rule", r.text
-    assert sql(api, "SELECT count(*) AS n FROM tasks")[0]["n"] == before
-    assert not sql(api, "SELECT 1 FROM strategy_merges")
 
 
 def test_a_strategy_bot_decision_that_breaks_a_rule_is_held_and_changes_nothing(ruled):
@@ -584,18 +539,18 @@ def test_a_warned_strategy_bot_decision_carries_the_line_on_what_it_writes(ruled
 
 
 def batch_with_an_ask(api):
-    """Ana's batch holding one question bot:finance asked her on its task."""
+    """Ana's batch holding one OK bot:finance asked her on its task: she sends it back with a note."""
     with api.app.state.store.transaction() as c:
         made = H.task_create(c, "human:ana", "Run the LinkedIn ads", "Q4.", "bot:finance", lint=False)
-        asked = H.task_ask(c, "bot:finance", made["id"], "human:ana", "Which color?", seen_version=made["version"])
+        asked = ok_ask(c, made["id"], "bot:finance", "ana", "OK the ad colors", shows=["https://example.com/ads"])
     return made["id"], asked["requirement_id"], post(api, "batch", {})["id"]
 
 
-def test_an_answer_in_a_batch_that_breaks_a_rule_is_held_and_not_applied(ruled):
+def test_a_send_back_in_a_batch_that_breaks_a_rule_is_held_and_not_applied(ruled):
     api, _ = ruled
     rule(api, {"kind": "internal", "text": COLOR, "who": {"everyone": True}})
     tid, rid, bid = batch_with_an_ask(api)
-    post(api, f"batch/{bid}/respond", {"kind": "decide", "decision": "answer", "text": "Our favorite color is red."})
+    post(api, f"batch/{bid}/respond", {"kind": "decide", "decision": "send_back", "text": "Our favorite color is red."})
     done = post(api, f"batch/{bid}/commit", {})
     assert any("was held" in e for e in done["errors"]), done
     with api.app.state.store.read() as c:
@@ -604,17 +559,17 @@ def test_an_answer_in_a_batch_that_breaks_a_rule_is_held_and_not_applied(ruled):
     assert "favorite color" not in str(sql(api, "SELECT body FROM messages WHERE body LIKE '%favorite%'"))
 
 
-def test_a_warned_answer_in_a_batch_carries_the_line(ruled):
+def test_a_warned_send_back_in_a_batch_carries_the_line(ruled):
     api, _ = ruled
     rule(api, {"kind": "internal", "text": COLOR, "who": {"everyone": True}, "if_broken": "warn"})
     tid, rid, bid = batch_with_an_ask(api)
-    post(api, f"batch/{bid}/respond", {"kind": "decide", "decision": "answer", "text": "Our favorite color is red."})
+    post(api, f"batch/{bid}/respond", {"kind": "decide", "decision": "send_back", "text": "Our favorite color is red."})
     done = post(api, f"batch/{bid}/commit", {})
     assert not done["errors"], done
     with api.app.state.store.read() as c:
         view = H.task_view(c, tid, "human:ana")
     answer = next(r for r in view["to_leave"] if r["requirement_id"] == rid)["answer"]
-    assert str(answer["value"]).startswith("Warning:"), answer
+    assert answer["value"] == "no" and str(answer["note"]).startswith("Warning:"), answer
 
 
 def test_a_bulk_close_whose_why_breaks_a_rule_is_held_and_closes_nothing(ruled):

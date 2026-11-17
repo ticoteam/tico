@@ -4,6 +4,7 @@ you, Open and Waiting over the bot's own tasks. On a store with no app."""
 import pytest
 
 from backend import bot_task_tabs as T
+from backend import question_marks as Q
 from backend.store import H
 from backend.tests.helpers import engine as X
 from backend.tests.helpers.tasks_board import api, get, post  # noqa: F401 - api is a fixture
@@ -27,7 +28,7 @@ def _shown(c, builtin, viewer=ANA):
 def test_needs_you_and_waiting_read_the_engine_and_open_holds_the_bots_work(c):
     working = H.task_create(c, ANA, "Draft the plan", "Draft it.", "bot:ops", lint=False)
     asking = H.task_create(c, ANA, "Pick a venue", "Pick one.", "bot:ops", lint=False)
-    H.task_ask(c, "bot:ops", asking["id"], ANA, "Lisbon or Porto?", seen_version=asking["version"])
+    Q.ask(c, "bot:ops", asking["id"], ANA, "Lisbon or Porto?")  # the bot's ❓ to Ana
     for_ana = H.task_create(c, "bot:ops", "Sign the venue contract", "Sign it.", ANA, lint=False)
     assert _shown(c, "needs") == {asking["id"], for_ana["id"]}
     assert _shown(c, "needs", viewer="human:ben") == set()

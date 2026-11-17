@@ -67,13 +67,12 @@ const T = {
 };
 // Needs you as the hub sends it: an ask (with who asked) or a task of hers, each with its task.
 type Need = {kind: 'ask' | 'task'; id: string; task_id: string; requirement_id: string | null; line: string; since: string; task: Task;
-  ask?: {requirement_id: string; kind: 'answer' | 'ok'; line: string; met: boolean; who: string; asked_by: string; choices: string[] | null; shows: []; answer: null; may: string[]}};
-const askNeed = (t: Task, kind: 'answer' | 'ok' = 'answer', choices: string[] | null = ['Yes', 'No']): Need => ({kind: 'ask', id: t.turn!.requirement_id!,
-  task_id: t.id, requirement_id: t.turn!.requirement_id!, line: t.turn!.line, since: ago(30), task: t, ask: {requirement_id: t.turn!.requirement_id!, kind,
-  line: t.turn!.line, met: false, who: 'human:ana', asked_by: 'bot:lead', choices: kind === 'ok' ? null : choices, shows: [], answer: null,
-  may: kind === 'ok' ? ['ok', 'no'] : ['answer']}});
+  ask?: {requirement_id: string; kind: 'ok'; line: string; met: boolean; who: string; asked_by: string; shows: []; answer: null; may: string[]}};
+const askNeed = (t: Task): Need => ({kind: 'ask', id: t.turn!.requirement_id!,
+  task_id: t.id, requirement_id: t.turn!.requirement_id!, line: t.turn!.line, since: ago(30), task: t, ask: {requirement_id: t.turn!.requirement_id!, kind: 'ok',
+  line: t.turn!.line, met: false, who: 'human:ana', asked_by: 'bot:lead', shows: [], answer: null, may: ['ok', 'no']}});
 const taskNeed = (t: Task): Need => ({kind: 'task', id: t.id, task_id: t.id, requirement_id: null, line: t.turn!.line, since: ago(30), task: t});
-const NEEDS: Need[] = [askNeed(T.asked), taskNeed(T.forAna), askNeed(T.waits), askNeed(T.friday), askNeed(T.announce, 'ok'),
+const NEEDS: Need[] = [askNeed(T.asked), taskNeed(T.forAna), askNeed(T.waits), askNeed(T.friday), askNeed(T.announce),
   taskNeed(task('t-qa-ana', 'Approve the test plan', {owner_id: 'human:ana', requester_id: 'bot:qa', turn: {state: 'person', who: 'human:ana', line: 'Ana to do it'}}))];
 const needsOf = (bot: string) => NEEDS.filter(n => n.task.requester_id === bot || n.ask?.asked_by === bot);
 
@@ -195,7 +194,7 @@ const LAYOUT: Layout[] = [{builtin: 'needs', name: 'Needs you'}, {builtin: 'acti
     assert.ok(!(await titles('#t-open')).includes('Pick the release day'));
     assert.ok(!(await titles('#t-blocked')).includes('Pick the release day'));
     assert.ok(!(await titles('#t-c4')).includes('Pick the release day'));
-    // An OK or a question opens its Needs you card over the rail; nothing unfolds in the rail.
+    // An ask opens its Needs you card over the rail; nothing unfolds in the rail.
     assert.equal(await rail.locator('#t-needs details').count(), 0);
     await rail.locator('#t-needs .tk-row', {hasText: 'Send the announcement'}).click();
     await page.locator('#need-card .dc-q', {hasText: 'OK the announcement'}).waitFor();   // the ask, the last message in its task's chat
@@ -277,7 +276,7 @@ const LAYOUT: Layout[] = [{builtin: 'needs', name: 'Needs you'}, {builtin: 'acti
     assert.equal(await rail.locator('#bot-needs').isHidden(), true);
     await page.evaluate(() => { const r = document.querySelector<HTMLElement>('#pane-tasks')!; r.style.height = r.style.overflowY = ''; r.scrollTop = 0; });
 
-    // A half-typed reply in a question's chat survives a redraw of the rail, and the picked tab stays.
+    // A half-typed reply in an ask's chat survives a redraw of the rail, and the picked tab stays.
     await tab('needs').click();
     await rail.locator('#t-needs .tk-row', {hasText: 'Plan the weekly summary'}).click();
     await page.locator('#need-card .dc-chat .p-text').fill('Friday works');

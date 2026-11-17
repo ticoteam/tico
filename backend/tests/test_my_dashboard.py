@@ -270,19 +270,17 @@ def test_the_library_does_not_say_a_page_is_on_someone_elses_dashboard(api):
 
 def test_needs_attention_rows_lead_with_the_task_title(api):
     # Two tasks of Cara's ask the same thing of her: each row reads its own task's title, with the ask as its line.
-    from backend import task_engine as E
+    from backend.tests.helpers.engine import ok_ask
 
     for title in ("Fix the invoice export", "Ship the pricing page"):
         tid = task(api, "human:cara", title)
         with api.app.state.store.transaction() as c:
-            E.add_requirement(
-                c, tid, "human:ana", "answer", "human:cara", "Is it done?", seen_version=H.task(c, tid)["version"]
-            )
+            ok_ask(c, tid, "human:ana", "human:cara", "OK it?")
     task(api, "human:cara", "Book the venue")  # hers, with nothing asked: in Tasks, not here
     cards = {p["card"]["template"]: p["card"]["data"] for p in place(api, "person:me", "cara-test")["pins"]}
     rows = [it for it in cards["needs_attention"]["items"] if it["kind"] == "ask"]
     assert sorted(it["title"] for it in rows) == ["Fix the invoice export", "Ship the pricing page"]
-    assert all(it["line"] and it["line"] != it["title"] and it["act"] == "answer" for it in rows), rows
+    assert all(it["line"] and it["line"] != it["title"] and it["act"] == "ok" for it in rows), rows
     assert not [it for it in cards["needs_attention"]["items"] if it.get("title") == "Book the venue"]
     assert len({it["line"] for it in rows}) == 1  # the same ask, two different rows
 
@@ -295,7 +293,7 @@ def test_needs_brief_titles_by_task_and_words_what_is_needed():
 
     items = [
         item("ask", "Send this email?") | {"ask": {"kind": "ok"}},
-        item("ask", "Which date works?", "Pick a launch date") | {"ask": {"kind": "answer"}},
+        item("question", "Which date works?", "Pick a launch date"),
         item("mention", "@ana can you look?"),
         item("task", "Stuck in Build: Ben can't see this task", "Shared one", turn={"share": ["human:ben"]}),
         item("paused", "Connect Google", "Sync the calendar"),
@@ -304,7 +302,7 @@ def test_needs_brief_titles_by_task_and_words_what_is_needed():
     rows = needs_brief(items, len(items))
     assert [(r["title"], r["act"]) for r in rows] == [
         ("Send an email", "ok"),
-        ("Pick a launch date", "answer"),
+        ("Pick a launch date", "reply"),  # a bot's ❓: answered in the chat
         ("Send an email", "reply"),
         ("Shared one", "fix"),  # a task item is one to let someone see: never "done"
         ("Connect Google", "fix"),  # a Paused cause is not about one task: its own line

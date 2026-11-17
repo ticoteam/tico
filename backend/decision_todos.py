@@ -35,14 +35,10 @@ MARK = "release.decision_todos"  # registry_metadata: {"since", "done", "wait_un
 JUDGED = "decision_todos.judged"  # one event per judged to-do
 PER_PASS = 20  # calls one pass makes at most
 RETRY = timedelta(hours=1)  # after a failed call, the next pass that asks
-NOTE = (
-    "Closed by Tico: this is a decision for {person}, so {bot} asks it as a question on its own task, with why it "
-    "matters, its choices and its recommendation."
-)
+NOTE = "Closed by Tico: this is a decision for {person}, so {bot} asks it with a ❓ message on its own task."
 TOLD = (
-    "Your to-do “{title}” for {person} was a decision, so Tico closed it. Ask it as a question on your own "
-    "task: tico task ask <task> --to {handle}, with why it matters, 2 to 4 choices each saying what happens, and your "
-    "recommendation."
+    "Your to-do “{title}” for {person} was a decision, so Tico closed it. Ask it on your own task: "
+    'tico task ask <task> --to {handle} "<question>". Say why, the options and your pick in the message.'
 )
 
 

@@ -2,7 +2,7 @@ import type {Route} from 'playwright';
 // Offline browser check of "Want more? Ping your bots" under Flow's All done (ui/app/decide.ts decidePing), against a
 // fake of POST /api/v2/flow/ping (backend/flow_ping.py):
 // - All done offers the ping; pressing it asks the reader's reports and says "Asking your bots";
-// - a pinged bot's question coming into Needs you comes on screen by itself;
+// - a pinged bot's OK coming into Needs you comes on screen by itself;
 // - Flow narrowed to one bot (its page's Flow mark, decideBotsFlow) shows that bot's items alone, names it in the
 //   crumb, and its ping asks that bot;
 // - a ping that found no bots says so and offers the button again;
@@ -19,13 +19,14 @@ const {unrouted} = require('./support/routes.cts') as import('./support/routes.c
 type Item = Record<string, unknown> & {id: string};
 const me = {id: 'ana', name: 'Ana', email: 'ana@acme.example', role: 'owner', mover: true, cloud: true};
 const config = {version: '0.1.0', app_name: 'Tico', local: true};
-const question = (n: number, bot: string, line: string): Item => {
+// A bot's plain OK: nothing of its own to show (GET /v2/oks/{rid} 404), approved with Approve.
+const ask = (n: number, bot: string, line: string): Item => {
   const task = {id: 't' + n, title: line, number: n, pipeline_id: null, stage_id: null, status: 'open', owner_id: bot,
     requester_id: bot, assignee_id: null, due_at: null, late: null, snoozed: false,
     turn: {state: 'person', who: 'human:ana', line: 'Waiting on Ana', since: '2026-11-15T10:00:00Z', until: null, ask: true, requirement_id: null},
     version: 1};
   return {kind: 'ask', id: 'r' + n, task_id: task.id, requirement_id: 'r' + n, line, since: '2026-11-15T10:00:00Z', task,
-    ask: {requirement_id: 'r' + n, kind: 'answer', line, who: 'human:ana', asked_by: bot, choices: ['Yes', 'No'], may: ['answer'],
+    ask: {requirement_id: 'r' + n, kind: 'ok', line, who: 'human:ana', asked_by: bot, may: ['ok', 'no'],
       met: false, shows: [], standing: 'waiting', answer: null}};
 };
 
@@ -60,6 +61,7 @@ const question = (n: number, bot: string, line: string): Item => {
       return json(unrouted(p));
     });
     const dialog = page.locator('#need-card');
+    const approve = dialog.locator('.dc-side [data-key] [data-dc="approve"]');
     const ping = dialog.getByRole('button', {name: 'Want more? Ping your bots'});
     const shot = async (name: string) => {
       if (!process.env.FLOW_SHOTS) return;
@@ -68,11 +70,11 @@ const question = (n: number, bot: string, line: string): Item => {
     };
 
     // ---- 1. All done offers the ping; it asks the reader's reports and says so.
-    needs = [question(1, 'bot:pm', 'Launch in March?')];
+    needs = [ask(1, 'bot:pm', 'Launch in March?')];
     await page.goto('http://tico-ui.test/#/tasks');
     await page.locator('[data-need="r1"]').waitFor();
     await page.evaluate('decideFlow(document.body)');
-    await dialog.locator('[data-dc-choice="Yes"]').click();
+    await approve.click();
     await dialog.getByText('All done').waitFor();
     await ping.waitFor();
     await shot('all-done');
@@ -82,20 +84,20 @@ const question = (n: number, bot: string, line: string): Item => {
     assert.equal(await ping.count(), 0);
     await shot('asking');
 
-    // ---- 2. The pinged bot's question comes in and comes on screen by itself.
-    needs = [question(2, 'bot:pm', 'Price per seat or per company?')];
+    // ---- 2. The pinged bot's OK comes in and comes on screen by itself.
+    needs = [ask(2, 'bot:pm', 'Price per seat or per company?')];
     await page.evaluate('v2Refresh()');
-    await dialog.locator('.dc-q', {hasText: 'Price per seat or per company?'}).waitFor();
-    await dialog.locator('[data-dc-choice="Yes"]').click();
+    await dialog.locator('.dc-q', {hasText: 'Price per seat or per company?'}).waitFor({state: 'attached'});   // on its Task tab
+    await approve.click();
     await dialog.getByText('All done').waitFor();
     await dialog.locator('[data-dc="close"]').first().click();
 
     // ---- 3. Narrowed to one bot: its items alone, its name in the crumb, its ping asks it.
-    needs = [question(3, 'bot:ops', 'Move the backup to Sunday?'), question(4, 'bot:pm', 'Drop the free plan?')];
+    needs = [ask(3, 'bot:ops', 'Move the backup to Sunday?'), ask(4, 'bot:pm', 'Drop the free plan?')];
     await page.evaluate('v2Refresh()');
     await page.locator('[data-need="r4"]').waitFor();
     await page.evaluate("decideBotsFlow(document.body, ['bot:pm'], 'PM', {scope: 'bot', id: 'pm'})");
-    await dialog.locator('.dc-q', {hasText: 'Drop the free plan?'}).waitFor();
+    await dialog.locator('.dc-q', {hasText: 'Drop the free plan?'}).waitFor({state: 'attached'});
     assert.equal(await dialog.getByText('Move the backup to Sunday?').count(), 0, 'another bot’s item stays out');
     assert.ok((await dialog.locator('.dc-head').innerText()).includes('PM'), 'the crumb names the bot');
     await shot('narrowed');
@@ -109,7 +111,7 @@ const question = (n: number, bot: string, line: string): Item => {
     await page.keyboard.press('Escape');   // on a phone ⋯ is a sheet over its own button
     await closeIt.waitFor({state: 'detached'});
     await page.evaluate('S.me.mover = true');
-    await dialog.locator('[data-dc-choice="Yes"]').click();
+    await approve.click();
     await dialog.getByText('All done').waitFor();
     pinged = [];
     await ping.click();
@@ -120,7 +122,7 @@ const question = (n: number, bot: string, line: string): Item => {
     await dialog.locator('[data-dc="close"]').first().click();
 
     // ---- 5. A team with no bots: its Flow walks nothing (All done), not everyone's items.
-    needs = [question(5, 'bot:ops', 'Rotate the keys tonight?')];
+    needs = [ask(5, 'bot:ops', 'Rotate the keys tonight?')];
     await page.evaluate('v2Refresh()');
     await page.locator('[data-need="r5"]').waitFor();
     await page.evaluate("decideBotsFlow(document.body, [], 'Empty', {scope: 'group', id: 'empty'})");
@@ -131,6 +133,6 @@ const question = (n: number, bot: string, line: string): Item => {
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), 'no sideways scroll');
     assert.deepEqual(errors, []);
     await page.close();
-    console.log('PASS: All done pings your bots, says Asking your bots, new questions come on screen; one bot\'s Flow shows and pings it alone.');
+    console.log('PASS: All done pings your bots, says Asking your bots, new OKs come on screen; one bot\'s Flow shows and pings it alone.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

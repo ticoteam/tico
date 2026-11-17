@@ -127,7 +127,7 @@ A channel you do not own is changed by its owner: ask in a task.
 Work arrives as tasks: your routines, your Growth tasks, and requests from the Growth Manager, another bot (a
 launch another Owner wants announced) or a person. Read the record with `tico task show <id>`. Competitor facts you
 find go to `tico market report`, in prose with the source, never into a second list here. Ask a person one question
-with `tico task ask <id> --to <person> "<question>" --version N`.
+with `tico task ask <id> --to <person> "<question>"`.
 
 ## Method
 - **One audience, one job, one call to action.** If an idea has two jobs, it is two emails.

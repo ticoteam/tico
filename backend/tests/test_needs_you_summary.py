@@ -5,14 +5,13 @@ from backend.tests.helpers.api import get, post  # noqa: F401
 
 
 def test_summary_total_is_the_lists_count_and_splits_by_bot(api):
+    from backend import question_marks
     from backend import task_engine as E
 
     with api.app.state.store.transaction() as c:
         for title in ("Give finance the payroll connector", "Pick a payroll vendor"):
             made = H.task_create(c, "bot:finance", title, "x", "bot:finance", lint=False)
-            E.add_requirement(
-                c, made["id"], "bot:finance", "answer", "human:ana", "Which?", seen_version=made["version"]
-            )
+            question_marks.ask(c, "bot:finance", made["id"], "human:ana", "Which?")
         mine = H.task_create(c, "human:ana", "Renew the domain", "x", "human:ana", lint=False)
         E.add_requirement(c, mine["id"], "human:ana", "ok", "human:ana", "OK the price", seen_version=mine["version"])
     post(api, "tasks", {"title": "Book the barn", "body": "x", "owner": "human:ana"})  # hers, nothing asked: not listed
@@ -20,7 +19,7 @@ def test_summary_total_is_the_lists_count_and_splits_by_bot(api):
     summary = get(api, "needs-you/summary")
     assert summary["actor"] == "human:ana"
     assert summary["total"] == get(api, "needs-you?count=1")["count"] == 3
-    assert summary["by_kind"] == {"ask": 3}
+    assert summary["by_kind"] == {"question": 2, "ask": 1}
     by_bot = {b["bot"]: b for b in summary["by_bot"]}
     assert by_bot["bot:finance"]["count"] == 2 and by_bot["other"]["count"] == 1
     capped = get(api, "needs-you/summary?limit=1")

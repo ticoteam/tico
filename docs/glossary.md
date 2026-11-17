@@ -54,7 +54,7 @@ The words Tico uses, and what each replaces.
 - **Pipeline**: a line of stages a task moves through, with a manager bot. Every task is in one; General is the default
   ([Tasks](tasks.md#pipelines-and-stages)).
 - **Stage**: one place in a pipeline, with what a task needs to leave it.
-- **Ask**: a requirement on a task that names a person: an OK or an answer. It is in their Needs you
+- **Ask**: a requirement on a task that names a person: an OK. It is in their Needs you
   ([Tasks](tasks.md#asks-and-oks)).
 - **OK**: a person's yes on an ask. An OK for something that leaves the team or spends is bound to exactly what they
   were

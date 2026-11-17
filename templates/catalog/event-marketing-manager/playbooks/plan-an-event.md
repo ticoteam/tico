@@ -14,7 +14,7 @@ Done when: the brief is at `reports/<event>/brief.md` with goal, budget and foll
     tico task show <id>
 
 Find the event, the date and who asked. If the goal or the budget is unknown, propose defaults from
-`knowledge/rules.md` and past results, and ask once with `tico task ask <id> --to <person> "<question>" --version N`.
+`knowledge/rules.md` and past results, and ask once with `tico task ask <id> --to <person> "<question>"`.
 
 ## 2. Decide whether it is worth it
 

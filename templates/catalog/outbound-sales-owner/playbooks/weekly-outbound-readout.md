@@ -47,5 +47,5 @@ there are, and `tico kpi log <kpi id> <value> --period-start <date> --period-end
 ## When the log is missing
 
 If `knowledge/sequences.md` has no lines for part of the window, say which days are missing. Ask once with
-`tico task ask <id> --to <person> "<question>" --version N`, and finish with what you have. Never fill a gap from last week's
+`tico task ask <id> --to <person> "<question>"`, and finish with what you have. Never fill a gap from last week's
 numbers.

@@ -38,15 +38,12 @@ def test_wakes_on_a_task_with_a_live_turn_join_it_and_only_the_other_side_starts
     machine = task_bot(api, lanes=True, others=("finance",))
     with api.app.state.store.transaction() as c:
         task = H.task_create(c, "bot:finance", "Install", "Install the admin page.", "bot:ops", lint=False)
+        # The owner's status note before its turn names its requester, which follows the task from then on.
+        H.task_comment(c, "bot:ops", task["id"], "@finance Install started; receipt follows.", wake=False)
     active = busy_on(api, machine, task["id"])
-    # The owner's own status comment @mentioning its requester never wakes the owner. The requester bot has no turn on
-    # the task (docs/dev/pipelines-v3.md: only a bot whose turn it is starts a run on a task), so no run of its starts.
-    post(
-        api,
-        f"tasks/{task['id']}/comments",
-        {"text": "@finance Install started; receipt follows.", "needs_action": True},
-        token=active["token"],
-    )
+    # The owner does not comment on its own task during its turn there (its reply at the end is posted on it).
+    said = {"text": "Install started; receipt follows.", "needs_action": True}
+    post(api, f"tasks/{task['id']}/comments", said, token=active["token"], expected=409)
     assert queued(api) == [] and claim(api, machine) is None
     # A person's comment and Tico's own notice wake the owner; while its turn runs, each waits for that turn.
     person = post(api, f"tasks/{task['id']}/comments", {"text": "One installer only."})["comment"]

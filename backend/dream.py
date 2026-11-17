@@ -3,8 +3,8 @@
 A dream is an ordinary task: the bot owns it, the person who started it is its requester, it carries the label
 `dream`, and INSTRUCTIONS reach the bot through its run as the task's instructions (task_wakes), never as a chat
 message: they are Tico's words, not the person's. It runs as a task turn on the bot's computer with the bot's own model, and its
-session resumes across the one ask it may put to its requester on the task (`tico_task_ask`), so the answer lands in
-the same context. The commits it makes are memory updates like any other: the Learnings history names their run's
+session resumes across the one ❓ it may put to its requester on the task's chat (`tico_task_ask` with only `to` and
+`line`, backend/question_marks.py): their reply wakes it in the same context. The commits it makes are memory updates like any other: the Learnings history names their run's
 task, and the panel filters them by this task. Nothing is stored here beyond the task.
 
 What makes a task a dream is the `dream.start` event this route writes on it, with the person as its actor: labels
@@ -67,8 +67,9 @@ with `tico_task_show` first, and pass the version the last call on it printed wi
 4. Ask. Ask only about the business: what you should do, for whom, by which rule or priority, where two
    instructions about the work disagree, or one broad question that would align you better. Never ask for
    permission, about which files to edit, how to organize your memory, or anything else about the dream itself:
-   decide those yourself. {ask} At most 3 questions. Each one makes sense on its own and ends with your suggested
-   answer ("Suggested: ..."). Ask big alignment questions before small either/or ones. Zero questions is fine. {wait}
+   decide those yourself. {ask} At most 3 questions, numbered, in one message. Each one makes sense on its own and
+   ends with your suggested answer ("Suggested: ..."). Ask big alignment questions before small either/or ones. Zero
+   questions is fine. {wait}
 
 5. Apply. Fold the answers in. A broad answer may rewrite whole sections. Fix each fact where it lives, delete what
    has been replaced, turn relative dates into absolute ones, and merge duplicates.
@@ -89,10 +90,9 @@ MODES = {
         "waiting": "{requester} started this and is waiting for it.",
         "settle": "Do not edit memory/ or knowledge/ yet: anything there is committed when your turn ends, before the "
         "answers come. Keep the draft in this conversation.",
-        "ask": "If something only {requester} can settle, ask it with `tico_task_ask` to {requester} on this task: "
-        "one question per ask (an ask that asks two things is refused), and one ask at a time (asking again replaces "
-        "the open one), so wait for each answer before the next.",
-        "wait": "Then stop and wait for the answer.",
+        "ask": "If something only {requester} can settle, ask {requester} on this task with `tico_task_ask`, only "
+        "`to` and `line`: one message marked ❓, a short first line, then the questions. Their reply wakes you here.",
+        "wait": "Then stop and wait for the reply.",
     },
     True: {
         "waiting": "Nobody is waiting: this dream started on its own, on a copy of your latest session, so what you "
@@ -101,8 +101,8 @@ MODES = {
         # Nobody watches an auto dream: its questions go to the person's Flow the usual way, each its own task with a
         # plain title, never on this task, whose instructions these are.
         "ask": "If something only {requester} can settle, follow Tico's skills/add-to-flow/SKILL.md (under HUB_DIR) "
-        "and ask {requester}: each question its own new task with one ask, never on this task (if Tico will not let "
-        "you reach them, ask your supervisor, as the skill says). The answer reaches you on that task.",
+        "and ask {requester}: each question its own new task with a ❓ on it, never on this task (if Tico will not let "
+        "you reach them, ask your supervisor, as the skill says). The reply reaches you on that task.",
         "wait": "Do not wait for answers: finish this dream after your commit. {requester} did not start this dream.",
     },
 }
@@ -238,9 +238,18 @@ def _started(c, row):
 
 
 def _ask(c, row):
-    """The dream's open ask to its requester: a wait on a requirement that names them, or None."""
+    """The dream's open ❓ to its requester: a wait that names them (`qmark:<id>`), or None."""
     waits = H.task_waits(c, [row["id"]]).get(row["id"]) or []
     return next((w for w in waits if w.state == "person" and w.ask and w.who == row["requester_id"]), None)
+
+
+def _asked(c, ask):
+    """What the ❓ asks: its whole message, the numbered questions (INSTRUCTIONS), not only its first line."""
+    from . import question_marks
+
+    mark = question_marks.get(c, ask.requirement_id.removeprefix(question_marks.PREFIX))
+    said = mark and c.execute("SELECT body FROM messages WHERE id=?", (mark["message_id"],)).fetchone()
+    return (said["body"] if said else "") or ask.line
 
 
 def view(c, who, row):
@@ -271,12 +280,12 @@ def view(c, who, row):
     else:
         ask = _ask(c, row)
         if ask:
-            # Its ask to the requester (`tico_task_ask` on the dream), answered on the Learnings panel.
+            # Its ❓ to the requester (`tico_task_ask` on the dream), answered with a reply on the Learnings panel.
             state = "asking"
             questions = {
                 "task_id": row["id"],
                 "requirement_id": ask.requirement_id,
-                "text": ask.line[:MAX_TEXT],
+                "text": _asked(c, ask)[:MAX_TEXT],
                 "mine": ask.who == who.actor,
             }
         elif row["status"] == "open" and not _started(c, row):

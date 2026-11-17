@@ -41,7 +41,7 @@ const DATA: Record<string, (s?: Settings) => unknown> = {
   tasks_by_status: () => ({counts: {open: 4, done: 7}}),
   done_per_week: s => ({weeks: weeks(s!.weeks || 8)}),
   needs_you: () => ({count: 2, items: [{id: 't1', kind: 'task', title: 'Approve the Acme launch plan', line: 'Say when the work is done', act: 'done', task_id: 't1'},
-    {id: 'q1', kind: 'ask', title: 'Pick a pricing page layout', line: 'Which layout?', act: 'answer', task_id: 'q1'}]}),
+    {id: 'q1', kind: 'question', title: 'Pick a pricing page layout', line: 'Which layout?', act: 'reply', task_id: 'q1'}]}),
   latest_pages: () => ({pages: [{file_id: 'f1', title: 'Weekly numbers', bot: 'eng-lead', updated_at: ago(90), archived: false}]}),
   needs_attention: () => DATA.needs_you!(),
   unread_threads: () => ({count: 0, threads: []}),
@@ -490,7 +490,7 @@ async function shot(page: Page, name: string) {
         {id: 'n1', kind: 'task', title: 'Fix the invoice export', line: done, act: 'done', task_id: 'n1'},
         {id: 'n2', kind: 'task', title: 'Ship the pricing page', line: done, act: 'done', task_id: 'n2'},
         {id: 'n3', kind: 'ask', title: 'Send an email', line: 'Send this email?', act: 'ok', task_id: 'n3'},
-        {id: 'n4', kind: 'ask', title: 'Pick a launch date for the holiday storefront once the supplier confirms the December shipment', line: 'Which date works?', act: 'answer', task_id: 'n4'},
+        {id: 'n4', kind: 'question', title: 'Pick a launch date for the holiday storefront once the supplier confirms the December shipment', line: 'Which date works?', act: 'reply', task_id: 'n4'},
         {id: 'n5', kind: 'mention', title: 'Ship the pricing page', line: '@ana can you look?', act: 'reply', task_id: 'n2'},
       ];
       DATA.needs_attention = () => ({count: 13, items: rows});
@@ -501,8 +501,8 @@ async function shot(page: Page, name: string) {
         const where = 'at ' + viewport.width;
         assert.deepEqual(await pin.locator('.dash-needs-t').allInnerTexts(), rows.map(r => r.title), 'titles, not the ask, ' + where);
         const marks = pin.locator('.dash-needs li > a > .dash-act');
-        assert.deepEqual(await marks.evaluateAll(els => els.map(el => el.getAttribute('aria-label'))), ['Done', 'Done', 'OK', 'Answer', 'Reply'], 'the marks, named, ' + where);
-        assert.deepEqual(await marks.evaluateAll(els => els.map(el => [el.getAttribute('role'), el.getAttribute('title')])), ['Done', 'Done', 'OK', 'Answer', 'Reply'].map(w => ['img', w]), 'a mark says its word on hover');
+        assert.deepEqual(await marks.evaluateAll(els => els.map(el => el.getAttribute('aria-label'))), ['Done', 'Done', 'OK', 'Reply', 'Reply'], 'the marks, named, ' + where);
+        assert.deepEqual(await marks.evaluateAll(els => els.map(el => [el.getAttribute('role'), el.getAttribute('title')])), ['Done', 'Done', 'OK', 'Reply', 'Reply'].map(w => ['img', w]), 'a mark says its word on hover');
         assert.deepEqual(await marks.evaluateAll(els => els.map(el => getComputedStyle(el).fontFamily.includes('Material Symbols'))), [true, true, true, true, true], 'an icon, not a word');
         assert.deepEqual(await pin.locator('.dash-needs li > a').evaluateAll(els => els.map(a => a.getAttribute('title'))), rows.map(r => r.line), 'the ask is the tooltip');
         assert.equal(await pin.locator('.dash-needs li > a').first().getAttribute('href'), '#/task/n1', 'the mark is inside the link to the task');

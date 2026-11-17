@@ -272,7 +272,7 @@ async function taskModalShow(task: ModalTask, d: ModalDialog = taskModal(), opts
     // Opening lands on the window itself (Back in the thread view): not the title, whose focus would open it for editing
     // and show all of a long one, nor a control, which would wear a focus ring before the keyboard moves. Tab goes on.
     if (d.open && d.matches(':modal')) {
-      if (d.classList.contains('thread')) $('[data-thread-back]', d)?.focus({preventScroll: true, focusVisible: false} as FocusOptions);
+      if (d.classList.contains('thread')) $('[data-thread-back]', d)?.focus(TASK_QUIET_FOCUS);
       else { d.tabIndex = -1; d.focus({preventScroll: true}); }
     }
   }
@@ -298,13 +298,15 @@ async function taskModalShow(task: ModalTask, d: ModalDialog = taskModal(), opts
   const keep = !a ? '' : a.matches('[data-modal-close]') ? '[data-modal-close]' : a.matches('[data-task-more]') ? '[data-task-more]' : a.matches('.tmodal-title') ? '.tmodal-title'
     : a.matches('[data-thread-back]') ? '[data-thread-back]' : a instanceof HTMLElement && a.dataset.taskTab ? `[data-task-tab="${CSS.escape(a.dataset.taskTab)}"]`
     : a instanceof HTMLElement && a.dataset.prop ? `[data-prop="${CSS.escape(a.dataset.prop)}"]` : '';
+  const quiet = !!a && (a as HTMLElement).dataset?.quietFocus !== undefined;
   taskModalRunsKeep(d, kept);
   taskLiveFocusKeep(d);
   const fullForm = taskFormCapture(d);
   d.innerHTML = hubModalHTML(full, {thread: d.classList.contains('thread'), docs: taskDocsOf(d, full), tab: d.taskTab});
   adopt(); taskFormAdopt(d, fullForm);
   taskModalBind(d, full, true);
-  if (keep) $(keep, d)?.focus({preventScroll: true});
+  if (keep && quiet) taskQuietFocus($(keep, d) as HTMLElement | null);
+  else if (keep) $(keep, d)?.focus({preventScroll: true});
   taskPropFocus(d); d.focusProp = ''; taskLiveFocusRestore(d); taskFormRestore(d, fullForm);
   taskTabFirst(d, detail); taskLiveStart(d, after); d.scrollTop = scroll;
   void taskRailLoad(d, full, detail);
@@ -878,9 +880,9 @@ function commentLineHTML(x: ModalLine, i: number, all: ModalLine[] | null | unde
   const fb = m.id && fbRates(m.sender_id) ? fbKey('message', m.id) : '';
   return `<div class="th-msg tcomment tmsg${me ? ' th-mine from-me' : ''}${bot ? ' bot' : ''}" data-message="${esc(m.id || '')}"><div class="th-av">${taskMsgFace(m)}</div>
     <div class="th-main"><div class="th-head">${taskMsgWho(m)}${kind}${roadmapCommentMark(m, taskId)}<time datetime="${esc(m.created_at)}" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time>${
-      m.refs?.quiet ? '<span class="th-state muted" title="Saved for the bot\'s next run on this task">saved</span>' : ''}</div>
+      m.refs?.quiet ? '<span class="th-state muted" title="Saved for the bot\'s next run on this task">saved</span>' : ''}${qmarkHTML(m.refs)}</div>
     ${taskStepsHTML(m)}<div class="th-body-wrap"${fb ? ` data-fb-press="${esc(fb)}"` : ''}>${body ? messageMd('th-body md', body, m.sender_id) : ''}
-    ${tfCommentFilesHTML(m, files)}${ask ? askHTML(ask, m.answers, m.sender_id, files) : ''}${fbRowHTML(fb, m.body || '')}</div></div></div>`;
+    ${tfCommentFilesHTML(m, files)}${ask ? askHTML(ask, m.answers, m.sender_id) : ''}${fbRowHTML(fb, m.body || '')}</div></div></div>`;
 }
 // A message's face and name, as the chat shows them: the Assistant passing on a person's words is that person's
 // Assistant; yours reads "You"; a bot's or a person's name opens their page.
@@ -1005,13 +1007,17 @@ function taskWaitHolder(data: ModalDetail, t: ModalTask | null, id: string): str
   const owner = String(rows.find(k => String(k.id) === id)?.owner_id || '');
   return owner.includes(':') ? owner : '';
 }
+// A ❓ waits under its mark's id, `qmark:<mark id>` (backend/question_marks.py wait_id).
+const taskTurnIsQmark = (id: unknown) => String(id || '').startsWith('qmark:');
 // The rows at the end of the chat that say what is happening now: a run at work (taskLiveHTML), else what the bot's next
-// run waits for, else whose turn it is; a deferred hand-over; and, whatever else shows, the reader's own ask with Answer.
+// run waits for, else whose turn it is; a deferred hand-over; and, whatever else shows, the reader's own OK with Answer.
+// The reader's own ❓ has no row: it is the bot's message with its ? mark, and their reply in the composer clears it.
 function taskStateHTML(state: TaskChatState, data: ModalDetail, sent = '') {
   const t = data.task || state.dialog.liveTask || null;
   const live = taskLiveHTML(data.execution, state.stopping, sent);
   const turn = t && !taskFinished(t) ? t.turn : null, me = myActor();
-  const yours = !!turn?.ask && !!turn.requirement_id && !!me && turn.who === me && !!turn.line;
+  const myQmark = !!turn && !!me && turn.who === me && taskTurnIsQmark(turn.requirement_id);
+  const yours = !!turn?.ask && !!turn.requirement_id && !!me && turn.who === me && !!turn.line && !myQmark;
   const owner = String(t?.owner_id || '');
   // A row names whoever it is about, face first; with nobody to name it has no face, and a word alone leads it
   // ("Waiting on you").
@@ -1028,7 +1034,7 @@ function taskStateHTML(state: TaskChatState, data: ModalDetail, sent = '') {
   // or a bot's turn always leads with who it is; a raw id never shows. Someone else's ask says what is owed ("Ben to
   // answer"), so the question does not read as theirs. A task it waits on (one it filed, one it depends on) is named by
   // whoever has that task when the reader can see it, else the row leads with "Waiting on a task".
-  if (!now && turn?.line && !yours) {
+  if (!now && turn?.line && !yours && !myQmark) {
     const other = turn.state === 'tasks' && turn.who ? String(turn.who) : '';
     const who = String(turn.who || '').includes(':') ? String(turn.who) : other ? taskWaitHolder(data, t, other) : '';
     const word = who && turn.ask ? 'to answer' : who && turn.state === 'bot' && turn.running ? 'working' : other && !who ? 'waiting on a task' : '';
@@ -1361,6 +1367,11 @@ async function taskChatLoad(id: string | number, dialog: ModalDialog, data: Moda
     })] : [];
   state.liveOff = () => { offs.forEach(off => off()); state.liveOff = null; };
 }
+/** A bot's ❓ from Flow (decide.ts questionOpen): the task's chat, at the marked message. */
+function taskChatJump(task: string, message: string) {
+  if (message) TASK_JUMP = {task, id: message};
+  return taskModalOpen(task, undefined, {thread: true, direct: true});
+}
 // A link from outside Tico (the Slack visuals line) names a message: bring it into view and mark it for a moment.
 // The task opened only because the reader may read it; a message not on the page loaded says so.
 function taskJumpPending(state: TaskChatState) {
@@ -1509,6 +1520,16 @@ function taskActivityOpen(d: ModalDialog, focus = '.rail-h') {
   const el = $(focus, activity) as HTMLElement | null;
   if (el && !el.matches('input, button, a')) el.setAttribute('tabindex', '-1');
   el?.focus({preventScroll: true});
+}
+/** Where opening puts the focus, with no ring: Chrome draws one on script focus when nothing was clicked first (a link,
+    a reload). data-quiet-focus keeps it off (forms.css) until the focus moves; a redraw keeps it quiet. */
+// Focus without a ring (focusVisible is newer than the DOM types) and without scrolling.
+const TASK_QUIET_FOCUS = {preventScroll: true, focusVisible: false} as FocusOptions;
+function taskQuietFocus(el: HTMLElement | null) {
+  if (!el) return;
+  el.dataset.quietFocus = '';
+  el.addEventListener('blur', () => { delete el.dataset.quietFocus; }, {once: true});
+  el.focus(TASK_QUIET_FOCUS);
 }
 // Whether the task waits on the reader's own answer (its turn is the reader's ask).
 const taskYours = (t: ModalTask) => { const turn = !taskFinished(t) ? t.turn : null, me = myActor(); return !!turn?.ask && !!turn.requirement_id && !!me && turn.who === me && !!turn.line; };

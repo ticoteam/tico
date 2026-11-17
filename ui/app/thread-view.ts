@@ -193,6 +193,8 @@ interface ThvOpts {
   typed?: (text: string) => void;
   // false: no "To <name>" line under the box (who the message reaches); Flow's chat leaves it out.
   reach?: boolean;
+  // The box's words when empty, in place of the thread's name: Flow's chat says it as the task's window does.
+  placeholder?: () => string;
 }
 // The composer of a bot's Home or DM or a thread: what pill.js, slash-commands.js and chat-goal.js read off it.
 interface ThvComposer {
@@ -446,11 +448,6 @@ async function thvLoad(view: ThvView): Promise<void> {
     if (view.state === 'gone' && view.opts.hideGone) { (view.opts.hideGone === true ? view.host : view.opts.hideGone).hidden = true; return; }
     thvDraw(view);
   }
-}
-// A message posted elsewhere (Start onboarding) into a DM on screen: that DM reads itself again, finding the thread
-// if it was not there yet.
-function threadsReloadDM(actor: string) {
-  for (const v of THV_VIEWS) if (v.opts.dm === actor && !v.gone) { if (v.id) void thvRefresh(v); else void thvLoad(v); }
 }
 function threadsReloadHome(actor: string) {
   for (const v of THV_VIEWS) if (v.opts.home === actor && !v.gone) { if (v.id) void thvRefresh(v); else void thvLoad(v); }
@@ -795,7 +792,8 @@ function thvMsgHTML(view: ThvView, m: ThvMessage, cont = false) {
     thvMine(m) && 'th-mine', fresh && 'th-new', quiet && 'th-new-quiet', m.deleted && 'th-deleted'].filter(Boolean).join(' ');
   // The name line (the style guide's chat window): name, time, then what it answers. No "bot" tag, no "edited".
   const quote = m.deleted ? '' : thvQuoteHTML(thvQuoteOf(view, m), true);
-  const head = cont ? '' : `<div class="th-head">${relay ? `<span class="th-who">${esc(rowSource(m).name)}</span>` : thvWhoHTML(m.sender_id)}${chatTimeHTML(m.created_at)}${quote}</div>`;
+  const qmark = m.deleted ? '' : qmarkHTML(m.refs);
+  const head = cont ? qmark : `<div class="th-head">${relay ? `<span class="th-who">${esc(rowSource(m).name)}</span>` : thvWhoHTML(m.sender_id)}${chatTimeHTML(m.created_at)}${quote}${qmark}</div>`;
   let body;
   if (m.deleted) body = '<div class="th-body muted">Deleted</div>';
   else if (thvIsUpdateCard(m)) body = thvUpdateHTML(m);
@@ -1326,6 +1324,8 @@ function thvComposerLabel(view: ThvView) {
 }
 // Who the words go to: the bot in its Home or DM, the thread by its name, the people in a DM.
 function thvPlaceholder(view: ThvView) {
+  const own = view.opts.placeholder?.();
+  if (own) return own;
   const t = view.thread, slug = view.opts.goals;
   // The bot's own name only: botDisplayName adds the slug when two bots share a name, and the page already says which.
   if (slug) return 'Message ' + (slug === assistantBot() ? assistantName() : botRow(slug)?.display_name || botRow(slug)?.slug || slug);

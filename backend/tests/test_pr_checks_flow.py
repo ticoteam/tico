@@ -3,8 +3,10 @@ task_engine.tell_owner): a wake on the owner bot's turn, a quiet note for its ne
 person first."""
 
 from backend import github as G
-from backend.repositories import metadata, save_metadata
 from backend import hubdb as H
+from backend import question_marks
+from backend.repositories import metadata, save_metadata
+from backend.tests.helpers import engine as X
 from backend.tests.helpers.rules import plain_task
 from backend.tests.helpers.wake_rules import jobs, setup
 
@@ -32,9 +34,15 @@ def woke(c, msg):
     return jobs(c, "cpo") == 1, bool(msg["refs"].get("quiet"))
 
 
-def asked(c, task, person="human:ana", kind="answer"):
-    """The owner bot asks `person` on its task, and nothing is queued."""
-    H.task_ask(c, "bot:cpo", task["id"], person, "Which color?", kind=kind, seen_version=task["version"])
+def asked(c, task, person="human:ana", kind="question"):
+    """The owner bot asks `person` on its task (a ❓, or an OK of what it shows), and nothing is queued."""
+    if kind == "question":
+        question_marks.ask(c, "bot:cpo", task["id"], person, "Which color?")
+    else:
+        shows = X.shown(c)
+        H.task_ask(
+            c, "bot:cpo", task["id"], person, "OK the color?", kind=kind, shows=shows, seen_version=task["version"]
+        )
     c.execute("DELETE FROM jobs")
     return H.task(c, task["id"])
 
@@ -57,7 +65,7 @@ def test_finished_checks_on_a_task_that_asks_a_person_are_a_note(api):
     with api.app.state.store.transaction() as c:
         task = asked(c, plain_task(c))
         msg = sent(c, task)
-        # The person's answer is what wakes it: the result waits for the owner's next run, as a note.
+        # The person's reply is what wakes it: the result waits for the owner's next run, as a note.
         assert woke(c, msg) == (False, True)
 
 
@@ -73,8 +81,8 @@ def test_finished_checks_after_the_person_answers_wake_again(api):
     with api.app.state.store.transaction() as c:
         task = asked(c, plain_task(c))
         assert woke(c, sent(c, task)) == (False, True)
-        [ask] = [r for r in H.task_view(c, task["id"])["to_leave"] if r["kind"] == "answer"]
-        H.task_answer(c, "human:ana", task["id"], ask["requirement_id"], "Blue")
+        H.task_comment(c, "human:ana", task["id"], "Blue.")  # her reply clears the ❓
+        assert question_marks.on_task(c, task["id"]) == []
         c.execute("DELETE FROM jobs")
         assert woke(c, sent(c, H.task(c, task["id"]), head="b" * 40)) == (True, False)
 

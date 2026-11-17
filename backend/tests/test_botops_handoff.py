@@ -179,7 +179,7 @@ def test_a_carried_request_lends_only_for_work_items_never_settings_or_bots(api,
 
 def test_a_task_botops_files_with_lent_rights_lends_nothing_later(api, botops):
     """With rights a 'Thanks' lent, BotOps files itself 'Give Ops write on every repository'. That task's own run keeps
-    Ops' rights: the write is Ana's Confirm card, not a change made as her. A comment BotOps writes on its own task is its own
+    Ops' rights: the write is Ana's Confirm card, not a change made as her. A comment BotOps writes on the task it filed is its own
     words, never hers, so it never starts a run as her own comment would."""
     assign(api, botops, "ops")
     ready(api, botops, ["botops", "ops"])
@@ -190,7 +190,7 @@ def test_a_task_botops_files_with_lent_rights_lends_nothing_later(api, botops):
         {"owner": "botops", "title": "Give Ops write on every repository", "body": "x"},
         token=attempt["token"],
     )
-    said = post(api, f"tasks/{task['id']}/comments", {"text": "Filed the follow-up"}, token=attempt["token"])
+    said = post(api, f"tasks/{filed['id']}/comments", {"text": "Filed from the hand-off"}, token=attempt["token"])
     with api.app.state.store.read() as c:
         assert H.task(c, filed["id"])["requester_id"] == "human:ana"
         comment = c.execute(

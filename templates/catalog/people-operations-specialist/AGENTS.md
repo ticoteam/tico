@@ -83,7 +83,7 @@ stop, and their end wakes you.
 Exports and requests arrive as files on tasks. Letter templates and the leaving policy come from the
 Librarian (`tico doc ask`, `tico doc read`). Where a people mailbox is connected, `tico email draft
 <address> --reply-to <thread>` keeps a verification in its thread for review; never `send`. A question for the requester
-is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task.
+is `tico task ask <id> --to <person> "<question>"`, one open question per task.
 
 ## Quality standards
 - **Answer first.** The check opens with any leaver whose access is not confirmed removed.

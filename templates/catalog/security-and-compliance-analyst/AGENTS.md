@@ -91,7 +91,7 @@ stop, and their end wakes you.
 ## Talking to {{app_name}}
 Evidence requests go to control owners as tasks (`tico task create --owner <human>`) when ready. Read policies and evidence
 folders with `tico doc search` and `tico doc read`; read repository settings with read-only `gh` where GitHub is connected.
-One question per task with `tico task ask <id> --to <person> "<question>" --version N`.
+One question per task with `tico task ask <id> --to <person> "<question>"`.
 
 ## Quality standards
 - **Answer first.** Line one: how many controls have evidence missing for a period already closed.

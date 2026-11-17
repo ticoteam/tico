@@ -1,6 +1,5 @@
 """A batch (backend/batch.py): Needs you, frozen, walked one item at a time, applied on commit with the person's own
-identity through the task calls. OK and Send back on a bot's ask, an answer to its question, Done or Close on a task
-it filed for the person. An OK bound to what it lets go is never given on a walk. On a store with no app."""
+identity through the task calls. OK and Send back on a bot's ask, Done or Close on a task it filed for the person. An OK bound to what it lets go is never given on a walk. On a store with no app."""
 
 import pytest
 
@@ -46,26 +45,25 @@ def _start(c):
 def test_a_batch_holds_what_bots_ask_and_commit_applies_it_through_the_task_calls(c):
     ads = _work(c)
     ok = H.task_ask(
-        c, FINANCE, ads["id"], "human:ana", "Spend the Q4 ads budget?", kind="ok", seen_version=ads["version"]
-    )
-    other = _work(c, "Pick the launch day")
-    question = H.task_ask(
         c,
         FINANCE,
-        other["id"],
+        ads["id"],
         "human:ana",
-        "Monday or Friday?",
-        choices=["Monday", "Friday"],
-        seen_version=other["version"],
+        "Spend the Q4 ads budget?",
+        kind="ok",
+        shows=X.shown(c),
+        seen_version=ads["version"],
     )
+    other = _work(c, "Pick the launch day")
+    launch = X.ok_ask(c, other["id"], FINANCE, "ana", "Launch on Monday?", shows=["https://example.com/launch-plan"])
     # A task handed to her with nothing asked is in her Tasks, not Needs you: the batch leaves it out.
     chore = H.task_create(c, FINANCE, "Sign the lease", "Sign it today.", "human:ana", lint=False)
     batch = _start(c)
     keys = [B._items(c.execute("SELECT * FROM batches WHERE id=?", (batch["id"],)).fetchone())]
     assert batch["total"] == 2 and batch["item"]["key"] == "ask:" + _ask_id(c, ads, ok)
-    assert {i["key"] for i in keys[0]} == {"ask:" + _ask_id(c, ads, ok), "ask:" + _ask_id(c, other, question)}
+    assert {i["key"] for i in keys[0]} == {"ask:" + _ask_id(c, ads, ok), "ask:" + _ask_id(c, other, launch)}
     B.respond(c, ANA.actor, batch["id"], "decide", "Go ahead.", n=1, decision="ok")
-    B.respond(c, ANA.actor, batch["id"], "decide", "Friday", n=2, decision="answer")
+    B.respond(c, ANA.actor, batch["id"], "decide", "Friday instead", n=2, decision="send_back")
     held = H.task_view(c, ads["id"], "human:ana")["to_leave"]
     assert not next(r for r in held if r["requirement_id"] == ok["requirement_id"])["met"]  # nothing applied yet
     log = []
@@ -74,7 +72,8 @@ def test_a_batch_holds_what_bots_ask_and_commit_applies_it_through_the_task_call
     view = H.task_view(c, ads["id"], "human:ana")
     assert next(r for r in view["to_leave"] if r["requirement_id"] == ok["requirement_id"])["met"]
     asked = H.task_view(c, other["id"], "human:ana")["to_leave"]
-    assert next(r for r in asked if r["requirement_id"] == question["requirement_id"])["answer"]["value"] == "Friday"
+    sent_back = next(r for r in asked if r["requirement_id"] == launch["requirement_id"])["answer"]
+    assert (sent_back["value"], sent_back["note"]) == ("no", "Friday instead")
     assert H.task(c, chore["id"])["status"] == "open"
     assert [to for to, _, _ in log] == [FINANCE]
 
@@ -82,7 +81,14 @@ def test_a_batch_holds_what_bots_ask_and_commit_applies_it_through_the_task_call
 def test_send_back_needs_notes_and_an_ok_or_a_close_only_fits_its_kind(c):
     ads = _work(c)
     ok = H.task_ask(
-        c, FINANCE, ads["id"], "human:ana", "Spend the Q4 ads budget?", kind="ok", seen_version=ads["version"]
+        c,
+        FINANCE,
+        ads["id"],
+        "human:ana",
+        "Spend the Q4 ads budget?",
+        kind="ok",
+        shows=X.shown(c),
+        seen_version=ads["version"],
     )
     batch = _start(c)
     with pytest.raises(Problem, match="what to change"):
@@ -135,7 +141,14 @@ def test_a_bound_ok_is_never_given_on_a_walk(c):
 def test_an_assistant_walking_the_list_may_send_back_but_never_ok(c):
     ads = _work(c)
     ok = H.task_ask(
-        c, FINANCE, ads["id"], "human:ana", "Spend the Q4 ads budget?", kind="ok", seen_version=ads["version"]
+        c,
+        FINANCE,
+        ads["id"],
+        "human:ana",
+        "Spend the Q4 ads budget?",
+        kind="ok",
+        shows=X.shown(c),
+        seen_version=ads["version"],
     )
     batch = _start(c)
     B.respond(c, ANA.actor, batch["id"], "decide", "", decision="ok")
@@ -149,7 +162,16 @@ def test_an_assistant_walking_the_list_may_send_back_but_never_ok(c):
 
 def test_a_batch_belongs_to_a_person_and_later_keeps_an_item_out_for_a_day(c):
     ads = _work(c)
-    H.task_ask(c, FINANCE, ads["id"], "human:ana", "Spend the Q4 ads budget?", kind="ok", seen_version=ads["version"])
+    H.task_ask(
+        c,
+        FINANCE,
+        ads["id"],
+        "human:ana",
+        "Spend the Q4 ads budget?",
+        kind="ok",
+        shows=X.shown(c),
+        seen_version=ads["version"],
+    )
     batch = _start(c)
     with pytest.raises(Problem, match="not found"):
         B.respond(c, "human:ben", batch["id"], "skip")

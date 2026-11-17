@@ -108,7 +108,8 @@ TAGS = {
 PAGE_LEFT_OUT = {"invariant"}
 FIX_PAGE = (
     "BotOps: open the check on Settings > Health for the detail, fix the cause it names, and the check clears on the "
-    "next run. A fix only a person can make reaches a person as a Needs you card on this task."
+    "next run. A fix only a person can make: one ❓ on this task to the person who can make it, with the link to the "
+    "check or the page where they fix it."
 )
 FIX_RUN = "BotOps: nothing to do by hand; the check clears when the next run no longer finds it."
 

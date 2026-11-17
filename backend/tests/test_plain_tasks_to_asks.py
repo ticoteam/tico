@@ -1,4 +1,5 @@
-"""A feature that needs a person to act asks them a question, so it is in their Needs you (backend/person_asks.py):
+"""A feature that needs a person to act asks them a question (a ❓ on the task's chat), so it is in their Needs you
+(backend/person_asks.py):
 Needs you holds only what is asked of a person, and a plain task handed to them would be in no list they are told of.
 One test per feature here; the Strategy Owner's asks (test_goal_asks.py, test_strategy.py, test_strategy_bot_acts.py),
 legal mail (test_postal_mail.py) and a bot's task for a person through the API (test_ask_ingest.py) are in their own.
@@ -6,7 +7,6 @@ legal mail (test_postal_mail.py) and a bot's task for a person through the API (
 Synthetic rows only (backend/tests/helpers/engine.py).
 """
 
-import json
 from types import SimpleNamespace
 
 import pytest
@@ -32,16 +32,20 @@ def c(company):
 
 
 def asked(c, person, task_id, by="bot:botops"):
-    """The asks on `task_id` in `person`'s Needs you, each written by `by` (a bot, never Tico: only bots write
-    questions) and each passing the checks a bot's question passes (ask_shape.line_refusal)."""
-    found = [n for n in W.needs(c, person) if n["kind"] == "ask" and n["task_id"] == task_id]
+    """The ❓ on `task_id` in `person`'s Needs you, each marked by `by` (a bot, never Tico: only bots write
+    questions) on its own message, whose words, its line and then its why, pass the checks a bot's question passes
+    (ask_shape.line_refusal)."""
+    found = [n for n in W.needs(c, person) if n["kind"] == "question" and n["task_id"] == task_id]
     for item in found:
-        author, settings = c.execute(
-            "SELECT added_by_id, settings FROM requirements WHERE id=?", (item["requirement_id"],)
+        author, message_id = c.execute(
+            "SELECT bot_id, message_id FROM question_marks WHERE id=?", (item["mark_id"],)
         ).fetchone()
         assert author == by, author
-        why = json.loads(settings or "{}").get("brief", {}).get("why")
-        assert why and ask_shape.line_refusal(item["line"], why) is None, (item["line"], why)
+        message = H.message(c, message_id)
+        assert message["sender_id"] == by
+        line, _, why = message["body"].partition("\n\n")
+        assert line == item["line"]
+        assert why and ask_shape.line_refusal(message["body"]) is None, message["body"]
         assert H.task_view(c, task_id, person), "the person reads the task"
     return found
 
@@ -58,7 +62,6 @@ def test_a_person_asked_on_a_bots_task_finds_it_in_needs_you_and_the_bot_holds_i
         bot="bot:builder",
     )
     assert made["owner_id"] == "bot:builder" and len(asked(c, ANA, made["id"], by="bot:builder")) == 1
-    assert ask_shape.refusal("Ana", why="It is stuck.", choices=None, details=None, recommend=None, shows=None) is None
 
 
 def test_with_no_such_bot_the_task_is_the_persons_and_botops_asks(c):
@@ -114,8 +117,8 @@ def test_a_bots_task_for_a_person_through_the_api_is_its_own_with_a_question_to_
     items = get(api, "needs-you", "ben-test")["items"]
     [item] = [i for i in items if i.get("task_id") == task["id"]]
     with api.app.state.store.read() as c:
-        author = c.execute("SELECT added_by_id FROM requirements WHERE id=?", (item["requirement_id"],)).fetchone()[0]
-    assert (item["kind"], author) == ("ask", "bot:ops")  # the bot that filed it asks, in its own words
+        author = c.execute("SELECT bot_id FROM question_marks WHERE id=?", (item["mark_id"],)).fetchone()[0]
+    assert (item["kind"], item["from_id"], author) == ("question", "bot:ops", "bot:ops")  # the bot that filed it asks
 
 
 def test_a_question_on_the_persons_own_task_ends_when_they_finish_it(c):
@@ -144,6 +147,7 @@ def test_a_bot_that_cannot_run_has_botops_ask_for_it_and_with_no_bot_nobody_asks
         ).fetchone()[0]
         == 0
     )
+    assert c.execute("SELECT count(*) FROM question_marks WHERE task_id=?", (alone["id"],)).fetchone()[0] == 0
 
 
 def test_a_question_that_would_fail_the_ask_checks_is_asked_in_plain_words(c):

@@ -77,7 +77,7 @@ block: a snooze is only to look again on a date. While your own pull request's c
 stop, and their end wakes you.
 
 ## Talking to {{app_name}}
-Work arrives as tasks. A missing input is asked of its owner on the task with `tico task ask <id> --to <person> "<question>" --version N` or a
+Work arrives as tasks. A missing input is asked of its owner on the task with `tico task ask <id> --to <person> "<question>"` or a
 `tico task create --owner <slug or person>` when their action is needed, two working days before cut-off.
 Keep `tico bot status set` to one line that never contains a figure.
 

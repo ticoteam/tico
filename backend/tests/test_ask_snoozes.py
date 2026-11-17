@@ -27,10 +27,10 @@ def at(**shift):
 
 
 def ask_ben(api, line="OK the launch note?"):
-    """Ana asks Ben on a task of hers; (task, the ask's Needs-you id in Ben's list)."""
+    """Ana asks Ben for an OK on a task of hers; (task, the ask's Needs-you id in Ben's list)."""
     with api.app.state.store.transaction() as c:
         task = H.task_create(c, ANA, "Write the launch note", "Due Friday.", ANA, lint=False)
-        asked = H.task_ask(c, ANA, task["id"], BEN, line, seen_version=H.task(c, task["id"])["version"])
+        asked = H.task_ask(c, ANA, task["id"], BEN, line, kind="ok", seen_version=H.task(c, task["id"])["version"])
     items = get(api, "needs-you", token="ben-test")["items"]
     return task, next(i["id"] for i in items if i.get("requirement_id") == asked["requirement_id"])
 
@@ -75,7 +75,16 @@ def test_the_task_and_its_bot_are_untouched(api):
     with api.app.state.store.transaction() as c:
         X.bot(c, "builder")
         task = H.task_create(c, ANA, "Write the launch note", "", "bot:builder", lint=False)
-        asked = H.task_ask(c, "bot:builder", task["id"], BEN, "OK the headline?", seen_version=task["version"])
+        asked = H.task_ask(
+            c,
+            "bot:builder",
+            task["id"],
+            BEN,
+            "OK the headline?",
+            kind="ok",
+            shows=X.shown(c),
+            seen_version=task["version"],
+        )
         before = E.task(c, task["id"])
         mark = events.mark(c)
         wakes = c.execute("SELECT count(*) FROM task_wakes").fetchone()[0] if _has(c, "task_wakes") else None
@@ -218,7 +227,16 @@ def test_never_stuck_counts_a_snoozed_ask_as_listed(store):
         X.bot(c, "builder")
         X.pipeline(c, manager=None)
         task = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
-        E.add_requirement(c, task["id"], "bot:builder", "ok", BEN, "OK the headline", seen_version=task["version"])
+        E.add_requirement(
+            c,
+            task["id"],
+            "bot:builder",
+            "ok",
+            BEN,
+            "OK the headline",
+            shows=X.shown(c),
+            seen_version=task["version"],
+        )
         (item,) = [i for i in W.needs(c, BEN) if i["kind"] == "ask"]
         visit_id, requirement_id = W.ask_id(item).split(":")
         snooze_row(c, BEN, item, at(days=1))
@@ -265,9 +283,9 @@ def test_a_new_version_of_a_page_the_ask_shows_unpinned_ends_the_snooze(api):
     assert get(api, "needs-you/snoozed", token="ben-test")["items"] == []
 
 
-def test_a_changed_question_ends_the_snooze(api):
+def test_an_ok_whose_words_change_ends_the_snooze(api):
     """A stage's OK whose words change in the pipeline's settings (same requirement, same visit) asks something
-    else: it is back. So do new choices."""
+    else: it is back."""
     from backend import pipeline_settings as PS
 
     with api.app.state.store.transaction() as c:
@@ -281,8 +299,8 @@ def test_a_changed_question_ends_the_snooze(api):
         config = PS.read(c, "approval")
         config["stages"][0]["requirements"][0]["line"] = "Approve 100000 dollars?"
         PS.save(c, ANA, config, seen_version=config["settings_version"])
-    assert item in ids(api, "ben-test"), "a new question is not hidden"
-    # Snoozed again, the same words keep it out; it is the question that ends it, not the save.
+    assert item in ids(api, "ben-test"), "new words are a new ask, not hidden"
+    # Snoozed again, the same words keep it out; it is the new words that end it, not the save.
     post(api, "needs-you/snooze", {"id": item, "until": at(days=7)}, token="ben-test")
     with api.app.state.store.transaction() as c:
         config = PS.read(c, "approval")
@@ -291,14 +309,13 @@ def test_a_changed_question_ends_the_snooze(api):
 
 
 def test_a_snooze_ends_when_the_bot_that_asked_writes_on_the_task(api):
-    """Flow snoozes a bot's question once the person replies in the task's chat: it is the bot's turn to read the reply.
-    Their own words leave it snoozed; the asking bot's next message on the task brings it back."""
+    """A person who snoozes a bot's OK and writes in the task's chat leaves it with the bot: it is the bot's turn to
+    read what they wrote. Their own words leave it snoozed; the asking bot's next message on the task brings it back.
+    (A ❓ clears on the reply instead, question_marks.replied.)"""
     with api.app.state.store.transaction() as c:
         X.bot(c, "writer")
         task = H.task_create(c, "bot:writer", "Draft the launch note", "Due Friday.", "bot:writer", lint=False)
-        asked = H.task_ask(
-            c, "bot:writer", task["id"], BEN, "Which launch date?", seen_version=H.task(c, task["id"])["version"]
-        )
+        asked = X.ok_ask(c, task["id"], "bot:writer", BEN, "OK Friday as the launch date?")
     item = next(
         i["id"]
         for i in get(api, "needs-you", token="ben-test")["items"]
@@ -308,7 +325,7 @@ def test_a_snooze_ends_when_the_bot_that_asked_writes_on_the_task(api):
     post(
         api,
         f"tasks/{task['id']}/comments",
-        {"text": "Friday, unless the venue moves.", "ask": asked["requirement_id"]},
+        {"text": "Fine, unless the venue moves."},
         token="ben-test",
     )
     assert item not in ids(api, "ben-test"), "the person's reply leaves it with the bot"

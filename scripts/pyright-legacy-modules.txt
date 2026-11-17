@@ -399,7 +399,6 @@ backend/strategy.py
 backend/strategy_acts.py
 backend/strategy_bot.py
 backend/strategy_market.py
-backend/strategy_merge.py
 backend/strategy_prompt.py
 backend/strategy_setup.py
 backend/strategy_suggest.py

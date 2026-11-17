@@ -8,6 +8,7 @@ import json
 import pytest
 
 from backend import hubdb as H, task_trigger_rules as T
+from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import unrelated_task_managers
 
 ANA = "human:ana"
@@ -157,6 +158,7 @@ def test_close_ask_and_relate_actions_go_through_the_task_calls(c):
     )
     linked = rule(c, action="relate", params={"task": related["id"]}, when={"owner": "ops"})
     closed = rule(c, action="close", params={"text": "Filed by mistake"}, when={"owner": "cpo"})
+    X.bot(c, H.RULES_OWNER)  # a rule's question is the Rules Owner's ❓ on the task (rules._rule_ask)
     task = make(c)
     waits = H.task_waits(c, [task["id"]])[task["id"]]
     assert [(w.state, w.who) for w in waits if w.ask] == [("person", "human:ben")]

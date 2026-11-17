@@ -391,8 +391,8 @@ def test_qa_files_a_product_bug_for_its_areas_feature_owner(co):
 
 
 def test_a_question_to_the_person_waits_in_their_list_and_the_answer_wakes_the_asker(co):
-    """The owner needs an answer only the person has: the task waits on "Answer from someone", the person sees one
-    item, and their answer wakes the owner with it."""
+    """The owner needs an answer only the person has: it asks with a ❓ on the task, the person sees one item, and
+    their reply wakes the owner with it."""
     task = to_spec(co)
     before = co.needs_you()
     owner = co.handoff(task, "Spec", co.owner)
@@ -402,21 +402,18 @@ def test_a_question_to_the_person_waits_in_their_list_and_the_answer_wakes_the_a
         task,
         "--to",
         "owner",
-        "Integers only?",
-        "--why",
-        "It decides the input type.",
-        "--version",
-        owner.version(),
+        "Integers only? It decides the input type.",
     )
     owner.end()
     co.beat()
-    assert co.new_in_list(before) == [("ask", task)], "the question did not reach the person's list once"
+    assert co.new_in_list(before) == [("question", task)], "the question did not reach the person's list once"
     assert not [bot for bot, queued in co.queued() if queued == task], "a bot is woken on a task that waits on a person"
-    ask = next(i for i in co.needs_you() if i["task_id"] == task)
-    co.person("POST", f"tasks/{task}/asks/{ask['requirement_id']}/answer", {"value": "Integers only."})
+    co.person("POST", f"tasks/{task}/comments", {"text": "Integers only."})
     co.beat()
     assert co.new_in_list(before) == [], "the answered question is still in the person's list"
-    owner = co.handoff(task, "Spec", co.owner)
+    # The reply is a comment to the asker: it wakes the owner itself (a steer), not a wake Tico writes.
+    assert co.task(task)["turn"]["who"] == co.actor(co.owner), "the reply did not give the task back to the owner"
+    owner = co.turn_on(co.owner, task, "by the person's reply")
     assert "Integers only." in owner.wake + owner.show(), "the owner is not shown the person's answer"
     owner.end()
     co.clean()

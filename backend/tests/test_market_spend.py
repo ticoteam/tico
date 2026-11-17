@@ -5,6 +5,7 @@ import pytest
 
 from backend import market_spend as MS
 from backend.store import H
+from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import get, post, put, setup_attempt  # noqa: F401
 from backend.tests.helpers.company import with_strategy_bot
 from backend.tests.helpers.market import _librarian, _seed
@@ -411,35 +412,46 @@ def test_the_owner_changes_the_sentence_of_a_sized_market(api):
     assert seen["sizing"]["id"] == sent["task_id"] and seen["total"]["spend_usd"] == B
 
 
-def test_the_spend_view_carries_the_open_sizing_task_and_the_question_it_asks_the_reader(api):
+def test_the_spend_view_carries_the_open_sizing_task_and_the_ok_it_asks_the_reader(api):
     assert get(api, "market/spend")["sizing"] is None
     _librarian(api)
     task_id = post(api, "market/spend/research", {"description": "Software for small landlords"})["task_id"]
     shown = get(api, "market/spend")["sizing"]
     assert shown["id"] == task_id and shown["turn"] == "working" and shown["ask"] is None
     with api.app.state.store.transaction() as c:
-        asked = H.task_ask(
-            c,
-            "bot:librarian",
-            task_id,
-            "human:ana",
-            "Which country should we size first?",
-            seen_version=H.task(c, task_id)["version"],
+        # An OK on the task (a question is a ❓, below): the view shows it and the task's answer route answers it.
+        asked = X.ok_ask(
+            c, task_id, "bot:librarian", "human:ana", "OK sizing the US first", shows=["https://example.com/plan"]
         )
     shown = get(api, "market/spend?dimension=buyer")["sizing"]
     assert shown["turn"] == "person"
-    assert shown["ask"]["requirement_id"] == asked["requirement_id"] and shown["ask"]["kind"] == "answer"
-    assert shown["ask"]["line"] == "Which country should we size first?" and shown["ask"]["choices"] == []
+    assert shown["ask"]["requirement_id"] == asked["requirement_id"] and shown["ask"]["kind"] == "ok"
+    assert shown["ask"]["line"] == "OK sizing the US first" and "choices" not in shown["ask"]
     post(
         api,
         f"tasks/{task_id}/asks/{asked['requirement_id']}/answer",
-        {"value": "The US", "version": shown["version"]},
+        {"value": "ok", "version": shown["version"]},
     )
     after = get(api, "market/spend")["sizing"]
     assert after["id"] == task_id and after["ask"] is None and after["turn"] == "working"
     with api.app.state.store.transaction() as c:
         H.task_done(c, "human:ana", task_id, "Sized")
     assert get(api, "market/spend")["sizing"] is None
+
+
+def test_the_librarians_question_mark_shows_on_the_spend_view_and_a_comment_answers_it(api):
+    from backend import question_marks as Q
+
+    _librarian(api)
+    task_id = post(api, "market/spend/research", {"description": "Software for small landlords"})["task_id"]
+    with api.app.state.store.transaction() as c:
+        mark = Q.ask(c, "bot:librarian", task_id, "human:ana", "Which country should we size first?", checked=False)
+    shown = get(api, "market/spend")["sizing"]
+    assert shown["turn"] == "person" and shown["ask"]["kind"] == "question" and shown["ask"]["mark_id"] == mark["id"]
+    assert shown["ask"]["line"] == "Which country should we size first?" and shown["ask"]["requirement_id"] is None
+    post(api, f"tasks/{task_id}/comments", {"text": "The US"})
+    after = get(api, "market/spend")["sizing"]
+    assert after["ask"] is None and after["turn"] == "working"
 
 
 def test_asking_for_the_market_names_the_places_the_company_serves(api):

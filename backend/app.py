@@ -22,7 +22,7 @@ from starlette.requests import ClientDisconnect
 
 from . import built_on
 from . import agents, app_view, mcp_oauth, oidc, runner_online, views
-from . import outcome_stats, person_asks
+from . import ask_shape, outcome_stats, person_asks, question_marks
 from . import pipeline_judges
 from . import recorder_installs
 from . import assistant_changes, why_here
@@ -2443,8 +2443,8 @@ def create_app(settings=None):
         people = T.mentioned_people(c, text, author) if text else []
         return [a for a in dict.fromkeys((row["owner_id"], row["requester_id"], *people, *extra)) if a]
 
-    def rule_comment_audience(c, who, row, text):
-        return rule_task_audience(c, row, who.actor, text)
+    def rule_comment_audience(c, who, row, text, *extra):
+        return rule_task_audience(c, row, who.actor, text, *extra)
 
     def rule_message_to(c, who, body):
         """The actor a message goes to, as `send` writes it: `to: assistant` is the person's Assistant bot."""
@@ -2806,6 +2806,62 @@ def create_app(settings=None):
             lambda: mutate(request, body, lambda c: message_write(c, who, body, rc, ingest), retry_body=legacy_body),
         )
 
+    @app.post(
+        "/api/v2/questions",
+        **api_v2(
+            "Conversations",
+            "askInChat",
+            "A bot's ❓ in a direct chat: send `text` to `to` (in `conversation_id`, or the bot's chat with them) and "
+            "mark it as needing their reply, until they reply there. Bots only",
+        ),
+    )
+    def chat_question(request: Request, body: M.ChatQuestion):
+        """A bot's ❓ in a direct chat (backend/question_marks.py): its message to `to`, marked as needing their reply,
+        in one step. Checked as any message is, and as a question to a person (the org rules' `kind:ask`). No task is
+        filed and nothing is sent for it beyond the message."""
+        who = request.state.identity
+        if who.role != "bot":
+            raise Problem("forbidden", "Only a bot marks a message ❓", 403)
+        if shape := ask_shape.line_refusal(body.text):  # in plain code, before the rule check's call
+            mutate(request, body, lambda c: H.refuse(c, who.actor, "task_ask_shape", shape))
+        sent = M.MessageCreate(to=body.to, text=body.text, conversation_id=body.conversation_id)
+        asking = question_marks.Asking(
+            lambda c, author, recipients: rule_message_place(who, sent)(c, author, recipients)
+        )
+        rc, ingest = message_checks(who, sent, retry=saved_retry(request, who), place=asking, operation="chat_question")
+        return ask_ingest.judged(
+            store, ingest, lambda: mutate(request, body, lambda c: chat_question_write(c, who, sent, rc, ingest))
+        )
+
+    def chat_question_write(c, who, sent, rc, ingest):
+        """A ❓ in a direct chat, as the route writes it and Send anyway replays it: the message, then its mark, in one
+        transaction. Held by a rule, nothing is written and nothing is marked."""
+        message = message_write(c, who, sent, rc, ingest)
+        if not message.get("id"):
+            return message
+        mark = question_marks.mark(c, who.actor, str(message["id"]), sent.to)
+        return {**message, "question": question_marks.public(mark)}
+
+    @app.post(
+        "/api/v2/questions/{mid}/give",
+        **api_v2(
+            "Needs you", "giveQuestion", "Give to: an open ❓ is for `to` now. Its person or the bot that marked it"
+        ),
+    )
+    def question_give(request: Request, mid: str, body: M.QuestionGive):
+        """Give to: an open ❓ is for someone else now. Its person, or the bot that marked it, may move it."""
+        who = request.state.identity
+
+        def write(c):
+            to = auth.target(c, who, body.to)
+            return {
+                "question": question_marks.public(
+                    question_marks.give(c, question_marks.mark_id(mid) or mid, to, who.actor)
+                )
+            }
+
+        return mutate(request, body, write)
+
     def rule_prepare_message(store_, bot, replay):
         return message_ingest(bot, M.MessageCreate.model_validate(replay["body"]))
 
@@ -2815,6 +2871,12 @@ def create_app(settings=None):
         return message_write(
             c, bot, M.MessageCreate.model_validate(replay["body"]), org_rule_check.decided(gate), ingest
         )
+
+    @org_rule_check.replayer("chat_question", prepare=rule_prepare_message)
+    def rule_replay_chat_question(c, bot, hold, replay, ingest, gate=None):
+        """Send anyway of a held ❓ in a direct chat: the message and its mark, as the route writes them."""
+        sent = M.MessageCreate.model_validate(replay["body"])
+        return chat_question_write(c, bot, sent, org_rule_check.decided(gate), ingest)
 
     def chat_upload_checks(request, who, bot, sent):
         """The checks of a person's chat message with files, outside the write: `message_checks` under its own operation,
@@ -3596,15 +3658,7 @@ def create_app(settings=None):
         )
         c.execute("UPDATE tasks SET acceptance=? WHERE id=?", (encode(body.acceptance_criteria), row["id"]))
         if asks_person:
-            person_asks.ask_on(
-                c,
-                who.actor,
-                row,
-                owner,
-                body.title,
-                person_asks.HANDED_WHY,
-                ends_with_task=holder == owner,
-            )
+            person_asks.ask_on(c, who.actor, row, owner, body.title, person_asks.HANDED_WHY)
             row = {**row, **(H.task(c, row["id"]) or {})}
         if body.for_actor:
             H._task_event(

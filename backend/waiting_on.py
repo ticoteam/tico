@@ -28,7 +28,17 @@ from dataclasses import asdict, dataclass, replace
 from itertools import chain
 from typing import TYPE_CHECKING, Any, TypeVar
 
-from . import hubdb_core, idea_checks, merge_order, pipeline_rights, pr_conflicts, read_cache, task_depends, task_wakes
+from . import (
+    hubdb_core,
+    idea_checks,
+    merge_order,
+    pipeline_rights,
+    pr_conflicts,
+    question_marks,
+    read_cache,
+    task_depends,
+)
+from . import task_wakes
 from . import task_engine as E
 from . import task_requirements as R
 
@@ -343,7 +353,7 @@ def unreadable(conn: "sqlite3.Connection", row: Row, standings: Iterable[R.Stand
         if (
             named
             and not R.outside(named)
-            and standing.requirement["kind"] in ("ok", "answer", "page")
+            and standing.requirement["kind"] in ("ok", "page")
             and not H.task_private_readable(conn, named, row)
         ):
             return named
@@ -428,9 +438,15 @@ def of(
     # task it filed. Until that ends, the rest of what is missing is nobody's turn. A person's own task stays theirs.
     has = holder(conn, row) if unmet and not by_hand else None
     theirs = is_bot(has)
-    asked = theirs and any(
-        s.state == R.WAITING and s.requirement.get("visit_id") and s.requirement.get("added_by_id") == has
-        for s in unmet
+    # A ❓ on the task's chat waits on the person it names (backend/question_marks.py), and the bot that put it there
+    # is not chased while it waits: its own ❓ is a question it asked.
+    marks = question_marks.on_task(conn, row["id"])
+    asked = theirs and (
+        any(
+            s.state == R.WAITING and s.requirement.get("visit_id") and s.requirement.get("added_by_id") == has
+            for s in unmet
+        )
+        or any(m["bot_id"] == has for m in marks)
     )
     filed: list[tuple[str, str]] | None = None
     on_tasks: set[str] = set()
@@ -548,6 +564,13 @@ def of(
         line = f"{'Late' if late else 'Stuck'} in {stage['name']}: {_share_line(conn, shut)}"
         since = late or visit.get("last_change_at") or entered
         out.insert(0, Wait(PERSON, person_for(conn, row), line, None, since, share=shut))
+    if marks:
+        # Any bot with an open ❓ here (the holder, or a reviewer asked for its OK) is not chased for anything on the
+        # task while it waits: the wait is the person's. It is chased again once the ❓ clears.
+        asking = {m["bot_id"] for m in marks}
+        out = [wait for wait in out if not (wait.state in (BOT, PAUSED) and not wait.fix and wait.who in asking)]
+    for m in marks:
+        out.append(Wait(PERSON, m["person_id"], m["line"], question_marks.wait_id(m), m["created_at"], ask=True))
     blockers = task_depends.blockers(conn, str(row["id"]))
     if blockers:
         # It depends on a task still open: that is all it waits on, nobody's turn, until the task ends (task_depends).
@@ -756,6 +779,26 @@ def prime(conn: "sqlite3.Connection", task_ids: Iterable[str]) -> dict[str, Row]
         bots += [str(a) for a in (row.get("owner_id"), pipeline.get("manager_id")) if a]
     task_wakes.prime_bots(conn, bots)
     visits = sorted({str(row["visit"]["id"]) for row in rows if row.get("visit")})
+    from . import task_asks
+
+    # Each OK's grant on them (task_asks.bound, which `of` asks of every OK, and task_asks.grant, which a reader's
+    # view of each asks): one statement for them all.
+    oks = [
+        str(row[0])
+        for row in conn.execute(
+            "SELECT id FROM requirements WHERE kind='ok' AND visit_id IN (SELECT value FROM json_each(?))",
+            (json.dumps(visits),),
+        )
+    ]
+    grants = {
+        str(row["requirement_id"]): row
+        for row in conn.execute(
+            task_asks.GRANT_SQL.replace("requirement_id=?", "requirement_id IN (SELECT value FROM json_each(?))"),
+            (json.dumps(oks),),
+        )
+    }
+    read_cache.prime(conn, task_asks.BOUND_SQL, {(rid,): (1,) if rid in grants else None for rid in oks})
+    read_cache.prime(conn, task_asks.GRANT_SQL, {(rid,): grants.get(rid) for rid in oks})
     unread = [visit_id for visit_id in visits if ("filed_open", visit_id) not in values]
     for visit_id, filed in _filed_open_of(conn, unread).items():
         values.setdefault(("filed_open", visit_id), filed)
@@ -819,7 +862,7 @@ _VISIT_ASKS = (
 )
 # GitHub conditions whose standing names the task's owner, GitHub or nobody's turn, never a person by the ladder.
 _NAMED_CONDITIONS = ("pr_open", "checks_pass", "pr_merged")
-_ASK_KINDS = ("ok", "answer", "page")
+_ASK_KINDS = ("ok", "page")
 
 
 def _listed(values: Iterable[str]) -> tuple[str]:
@@ -1203,8 +1246,7 @@ def ask_snoozes(conn: "sqlite3.Connection", *people: str) -> dict[tuple[str, str
 
 def ask_version(conn: "sqlite3.Connection", row: Row, wait: "Wait", requirement: Row | None = None) -> str:
     """What `wait`'s ask asks now, as Flow's opinion names it (flow_opinions.ask_version, the one definition of "the
-    ask changed"): its sentence, the requirement's line, choices, typed question, brief and title, and what it shows,
-    each page at its current version. The same for everyone it asks. `requirement` is the ask's, when the caller has
+    ask changed"): its sentence, the requirement's line and what it shows, each page at its current version. The same for everyone it asks. `requirement` is the ask's, when the caller has
     it; "" when the task's open visit has no such requirement."""
     from . import flow_opinions, task_calls
 
@@ -1233,7 +1275,7 @@ def snoozed_until(
 ) -> str | None:
     """When the person's snooze of this ask ends, or None when it is not snoozed for them: a snooze holds only while
     the ask is the one they snoozed, asked at the same moment and asking the same (`ask_version`: its words, its
-    choices, each page it shows at the same version), so a new question or a new page version is never hidden."""
+    each page it shows at the same version), so a new ask or a new page version is never hidden."""
     visit_id = _visit_id(row)
     if not wait.ask or not visit_id:
         return None
@@ -1268,11 +1310,15 @@ def _lists(
         standings = R.standings(conn, row) if row.get("visit") else []
         waits = listed(of(conn, row, seen, standings), row)
         held = next((s for s in standings if pr_conflicts.held(s)), None)
-        kinds = {str(s.requirement["id"]): str(s.requirement.get("kind")) for s in standings}
         asks: dict[str, Row] = {str(s.requirement["id"]): s.requirement for s in standings}
         people = sorted({str(wait.who) for wait in waits if wait.state == PERSON and wait.who and wait.who in only})
         for person in people:
-            mine = [wait for wait in waits if wait.state == PERSON and wait.who == person]
+            # A ❓ is listed from its mark, task or none (`question_marks.items`, below), not as the task's ask.
+            mine = [
+                wait
+                for wait in waits
+                if wait.state == PERSON and wait.who == person and not question_marks.mark_id(wait.requirement_id)
+            ]
             if any(wait.about for wait in mine):  # said to them: a sub-task they may not open is not named
                 shown = _shown(conn, row, person)
                 mine = [unnamed(wait, shown) for wait in mine]
@@ -1287,7 +1333,7 @@ def _lists(
                     continue
                 line = wait.line
                 if held and wait.ask:
-                    line = R.sentences(line, pr_conflicts.ask_line(conn, held, kinds.get(str(wait.requirement_id), "")))
+                    line = R.sentences(line, pr_conflicts.ask_line(conn, held))
                 out.setdefault(person, []).append(
                     {
                         "kind": "ask" if wait.ask else "task",
@@ -1339,6 +1385,9 @@ def _lists(
             entry["since"] = min(entry["since"], wait.since or "")
     for fixer, entries in paused.items():
         out.setdefault(fixer, []).extend(entries.values())
+    # Each open ❓ for the person, on a task's chat or in a direct chat with a bot.
+    for person, questions in question_marks.items(conn, only, snoozed, only_people).items():
+        out.setdefault(person, []).extend(questions)
     return {
         person: sorted(items, key=lambda item: (item["since"] or "", item.get("task_id") or "", item["line"]))
         for person, items in out.items()

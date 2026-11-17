@@ -95,7 +95,7 @@ dialog.tf-view::backdrop{background:rgba(0,0,0,.6)}
 .tc-kind{font-size:var(--t-2xs);font-weight:600;letter-spacing:var(--track-caps);color:var(--ink)}
 .tc-titled{display:inline-flex;flex-direction:column;gap:2px;max-width:120px;min-width:0}
 .tc-file-title{font-size:var(--t-sm);color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-/* a question: a chip, the question, its options; once answered, the answers. The message box (pill.js) shares the
+/* a question: a chip and the question; once answered, the answers. The message box (pill.js) shares the
    class name, not the card. */
 .ask:not([class*="pill-"]){display:flex;flex-direction:column;gap:8px;margin-top:8px;padding:9px 10px;border:1px solid color-mix(in srgb,var(--wait) 45%,var(--line));border-radius:8px;background:var(--surface);font-size:var(--t-sm);line-height:var(--lh)}
 .ask.answered{border-color:var(--line)}
@@ -104,13 +104,6 @@ dialog.tf-view::backdrop{background:rgba(0,0,0,.6)}
 .ask-chip{flex:none;padding:0 6px;border-radius:4px;background:var(--wait-bg);color:var(--wait-ink);font-size:var(--t-xs);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase}
 .ask.answered .ask-chip{background:var(--surface2);color:var(--muted)}
 .ask-text{font-weight:500;color:var(--ink)}
-.ask-opts{display:flex;flex-wrap:wrap;gap:6px}
-.ask-opt{display:inline-flex;flex-direction:column;align-items:flex-start;gap:1px;max-width:100%;padding:4px 10px;border:1px solid var(--line);border-radius:7px;background:var(--surface2);color:var(--ink);font:inherit;text-align:left;cursor:pointer}
-.ask-opt.ro{cursor:default;background:transparent;color:var(--muted);border-color:var(--line)}
-.ask-l{font-weight:600}
-.ask-d{font-size:var(--t-sm);color:var(--muted)}
-.ask-pic{width:96px;height:54px;margin-bottom:3px;border-radius:4px}
-.ask.answered .ask-opts{display:none}
 .ask-answers{display:flex;flex-direction:column;gap:3px;margin:0;padding:0;list-style:none}
 .ask-answers li{display:flex;align-items:center;flex-wrap:wrap;gap:5px}
 .ask-answers b{font-weight:600}

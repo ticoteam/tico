@@ -268,9 +268,9 @@ the same playbook.
 
 The spend read carries the open sizing task as `sizing` (`{id, version, turn, ask}`, or null when none is open, or when the
 reader may not open it): `turn` is `working` or `person`, and `ask` is the question when it waits on the reader
-(`{requirement_id, kind, line, choices}`). The Market card shows it as the server has it, so a reload shows the same: a
-spinner and the task while it works, or the question with a reply box when it waits on the reader, answered with
-`POST /api/v2/tasks/{id}/asks/{requirement_id}/answer` and the task's `version`. It follows the task live and reads again when
+(`{requirement_id, mark_id, kind, line}`). The Market card shows it as the server has it, so a reload shows the
+same: a spinner and the task while it works, or the question with a reply box when it waits on the reader. A bot's ❓ is answered by a reply in its chat, and an OK by
+`POST /api/v2/tasks/{id}/asks/{requirement_id}/answer` with the task's `version`. It follows the task live and reads again when
 it moves; when the sizes arrive the page is drawn again. The owner can change the sentence whether or not the market is sized:
 unsized, it is the form (its button reads Update once a task is open); sized, it is a line above the map whose pencil opens
 the form, prefilled, and Escape folds it back.

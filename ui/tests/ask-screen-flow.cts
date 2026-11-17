@@ -5,7 +5,7 @@ import type {Route} from 'playwright';
 // - Snooze on an ask opens its menu (1 hour, 1 day, 1 week, 1 month, Other) and sends a moment: each an exact span
 //   from now, late in the evening in Los Angeles too (a clock and zone faked here); Undo unsnoozes; the end counts it;
 // - the mic turns the mark into the wave and back, and nothing is sent;
-// - Tico's opinions show no line: the bar holds nothing while the mic is off, and a question's choices stay as drawn.
+// - Tico's opinions show no line: the bar holds nothing while the mic is off.
 // FLOW_SHOTS=<folder> saves the screen, an ask's snooze choices and the undo after one.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
@@ -20,9 +20,10 @@ const brief = (id: string, stage: string, ask = true) => ({id, title: `Task ${id
   owner_id: ask ? 'bot:pm' : 'human:ana', requester_id: 'human:ana', assignee_id: null, due_at: null, late: null, snoozed: false,
   turn: {state: 'person', who: 'human:ana', line: 'Waiting on Ana', since: '2026-11-09T10:00:00Z', until: null, ask, requirement_id: null},
   version: 3});
-const question = (n: number, stage: string, line: string) => ({kind: 'ask', id: `r${n}`, task_id: `t${n}`, requirement_id: `r${n}`, line,
+// A stage's OK: no grant (GET /api/v2/oks/{id} 404), so Approve answers ok.
+const ok = (n: number, stage: string, line: string) => ({kind: 'ask', id: `r${n}`, task_id: `t${n}`, requirement_id: `r${n}`, line,
   since: `2026-11-09T1${n}:00:00Z`, task: brief(`t${n}`, stage),
-  ask: {requirement_id: `r${n}`, kind: 'answer', line, who: 'human:ana', asked_by: 'bot:pm', choices: ['Yes', 'No'], may: ['answer'],
+  ask: {requirement_id: `r${n}`, kind: 'ok', line, who: 'human:ana', asked_by: 'bot:pm', may: ['ok', 'no'],
     met: false, shows: [], standing: 'waiting', answer: null}});
 const stage = (id: string, name: string) => ({id, name, purpose: '', owner: null, by_hand: false, task_limit: null, expected_minutes: null,
   expected_bots_only: false, on_enter: {}, requirements: []});
@@ -30,14 +31,14 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
   factory_id: null, preset: null, settings_version: 1, retired_at: null,
   stages: [stage('spec', 'Spec'), stage('build', 'Build'), stage('ship', 'Ship')],
   done: {id: 'done', name: 'Done'}, closed: {id: 'closed', name: 'Closed'}, may_change: true};
-const Q = ['Which plan do new signups get?', 'Ship on Monday?', 'Write the release note'];
+const Q = ['OK the signup plans', 'OK shipping on Monday', 'OK the release note'];
 
 (async () => {
   const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL ?? 'chrome') as string});
   try {
     const errors: string[] = [], writes: {p: string; body: Record<string, unknown>}[] = [];
-    const own = question(3, 'build', Q[2]!);
-    let needs: Record<string, unknown>[] = [question(1, 'spec', Q[0]!), question(2, 'build', Q[1]!), own];
+    const own = ok(3, 'build', Q[2]!);
+    let needs: Record<string, unknown>[] = [ok(1, 'spec', Q[0]!), ok(2, 'build', Q[1]!), own];
     let snoozed: Record<string, unknown>[] = [];
     // 23:30 on Nov 13 in Los Angeles: a bare date for tomorrow would be a midnight the team's zone may already be past.
     const page = await browser.newPage({viewport: {width: 1200, height: 900}, serviceWorkers: 'block', timezoneId: 'America/Los_Angeles'});
@@ -58,6 +59,7 @@ const Q = ['Which plan do new signups get?', 'Ship on Monday?', 'Write the relea
       if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
       if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
       if (p === '/api/v2/needs-you') return json({actor: 'human:ana', count: needs.length, items: needs, version: String(needs.length), next: null});
+      if (p.startsWith('/api/v2/oks/')) return json({error: 'not_found'}, 404);
       if (p === '/api/v2/flow/opinions') return json({opinions: []});   // Tico has none: the screen is as without it
       const read = r.method() === 'GET' ? p.match(/^\/api\/v2\/tasks\/(t\d)$/) : null;
       if (p === '/api/v2/needs-you/snoozed') return json({actor: 'human:ana', items: snoozed, next: null});
@@ -115,11 +117,8 @@ const Q = ['Which plan do new signups get?', 'Ship on Monday?', 'Write the relea
     assert.equal(await dialog.locator('.dc-say').textContent(), '');
     assert.deepEqual(writes, [], 'voice sends nothing');
 
-    // The bar holds only the undo notice: no line from Tico, and a question's choices stay as drawn, none looking chosen.
-    const main = (choice: string) => dialog.locator(`[data-dc-choice="${choice}"]`).evaluate(b => b.matches('.primary, .dc-rec') || b === document.activeElement);
+    // The bar holds only the undo notice: no line from Tico.
     assert.equal(await dialog.locator('.dc-say').textContent(), '');
-    assert.equal(await main('No'), false);
-    assert.equal(await main('Yes'), false);
     await shot('flow');
 
     // Snooze on an ask. 1 day and 1 week: a day and seven days from now, each undone.
@@ -153,7 +152,7 @@ const Q = ['Which plan do new signups get?', 'Ship on Monday?', 'Write the relea
     // 1 hour: an hour on; the end counts it.
     await snooze('snooze-hour', '2026-11-14T08:30:00.000Z');
     assert.equal(await left(), 1, 'the snoozed ask is out of the walk');
-    await dialog.locator('[data-dc-choice="Yes"]').click();
+    await dialog.locator('[data-dc="approve"]:not([disabled])').click();
     await dialog.locator('.dc-done').waitFor();
     // The end screen reads the snoozed list after it shows: wait for its count, don't read it once. The count is its own
     // button: hasText matches an element's text with its children's run together ("All done1 snoozedWant more?"), so a
@@ -162,6 +161,6 @@ const Q = ['Which plan do new signups get?', 'Ship on Monday?', 'Write the relea
 
     assert.deepEqual(errors, []);
     await page.close();
-    console.log('PASS: the menu switches the walk; Snooze takes an ask out and the end counts it; the mic toggles; Tico\'s line picks.');
+    console.log('PASS: the menu switches the walk; Snooze takes an ask out and the end counts it; the mic toggles; Tico shows no line.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -78,7 +78,7 @@ def test_a_bots_snooze_on_another_task_or_a_release_is_refused_and_look_again_on
 
 def test_a_bots_snooze_on_a_person_is_told_to_ask_them(c, jev):
     rule, line = SR.judge_snooze(c, _task(c), "bot:ops", "waiting for the customer to decide", None)
-    assert "Ask them on the task." in E.refusal_line(rule, line)
+    assert "Ask them with a ❓ on the task." in E.refusal_line(rule, line)
     assert len(jev.calls) == 1
 
 

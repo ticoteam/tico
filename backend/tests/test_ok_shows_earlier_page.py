@@ -153,9 +153,14 @@ def test_a_bots_ask_and_a_page_ok_never_borrow_an_earlier_page(api):
     task_id, _ = _released(api)
     with api.app.state.store.transaction() as c:
         row = E.task(c, task_id)
-        asked = H.task_ask(c, "bot:writer", task_id, BEN, "OK the spend?", kind="ok", seen_version=row["version"])
-        requirement = c.execute("SELECT * FROM requirements WHERE id=?", (asked["requirement_id"],)).fetchone()
-        assert TC.earlier_page(c, task_id, row["visit"]["id"], dict(requirement)) is None
+        shows = X.shown(c)
+        asked = H.task_ask(
+            c, "bot:writer", task_id, BEN, "OK the spend?", kind="ok", shows=shows, seen_version=row["version"]
+        )
+        requirement = dict(c.execute("SELECT * FROM requirements WHERE id=?", (asked["requirement_id"],)).fetchone())
+        assert TC.earlier_page(c, task_id, row["visit"]["id"], requirement) is None
+        # A bot's OK shows what it approves now; one on the task's visit borrows no page even where it showed nothing.
+        assert TC.earlier_page(c, task_id, row["visit"]["id"], {**requirement, "shows": None}) is None
         page_requirement = {"id": "r", "kind": "page", "visit_id": None, "shows": None}
         assert TC.earlier_page(c, task_id, row["visit"]["id"], page_requirement) is None
         named = {"id": "r", "kind": "ok", "visit_id": None, "shows": ["page:other@1"]}

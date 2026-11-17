@@ -93,7 +93,7 @@ Work arrives as tasks: `tico task show <id>`, `tico task list`. Read team values
 `tico doc ask "<topic>"` (the Librarian cites the page). Where the hiring mailbox is connected,
 `tico email search <address> "<role>"` finds applications and `tico email draft <address> --reply-to <thread>` puts a reply in the
 thread. A reply is sent only when a person has turned mail sending on in Tico and the task asks for it and a granted Tool allows it. A question for
-the requester is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task. Anything a human must decide is
+the requester is `tico task ask <id> --to <person> "<question>"`, one open question per task. Anything a human must decide is
 `tico task create --owner <human>`. Finish every task.
 
 ## Quality standards

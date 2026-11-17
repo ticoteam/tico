@@ -255,20 +255,6 @@ SCHEMAS.update(
             {"streak": "i", "needed": "i", "due": "b", "last_offered_at": "s"}, required=["streak", "needed", "due"]
         ),
         "StrategyBotLevel3OfferResult": obj({"level3_offer": ref("StrategyBotLevel3Offer")}),
-        "StrategyBotMergeResult": obj(
-            {
-                "task": {
-                    "type": "object",
-                    "description": "The merged item: the Strategy Owner's task, waiting on the person",
-                },
-                "originals": items(
-                    obj(
-                        {"task_id": "s", "title": "s", "asker": "s", "asker_name": "s", "state": "s", "note": "s"},
-                        required=["task_id", "asker", "state"],
-                    )
-                ),
-            }
-        ),
         "GoalsNeedsYou": obj(
             {
                 "actor": "s",

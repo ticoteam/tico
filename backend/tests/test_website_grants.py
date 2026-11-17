@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from backend import browser_commands as B
+from backend import question_marks
 from backend import website_tools as W
 from backend.auth import Identity
 from backend.store import H, Problem
@@ -720,11 +721,11 @@ def test_needs_you_view_and_input_follow_an_own_computer_session(computers):
         s.own["token"],
     )
     end(thread, box)
-    rid = post(s.api, "browser/needs-you", {"site": s.tid, "line": "Please finish sign-in."}, s.turn["token"])[
+    wait = post(s.api, "browser/needs-you", {"site": s.tid, "line": "Please finish sign-in."}, s.turn["token"])[
         "requirement_id"
     ]
-    with s.store.read() as c:
-        person = c.execute("SELECT person_id FROM requirements WHERE id=?", (rid,)).fetchone()[0]
+    with s.store.read() as c:  # the bot's ❓ on its task (backend/question_marks.py)
+        person = question_marks.get(c, question_marks.mark_id(wait))["person_id"]
     token = person.removeprefix("human:") + "-test"
     path = f"website-tools/{s.tid}/accounts/{s.aid}/browser"
     thread, box = person_request(s, path, token, {})
@@ -752,7 +753,7 @@ def test_needs_you_view_and_input_follow_an_own_computer_session(computers):
         s.own["token"],
     )
     assert end(thread, box).headers["content-type"] == "image/jpeg"
-    post(s.api, f"tasks/{s.task['id']}/asks/{rid}/answer", {"value": "Done"}, token)
+    post(s.api, f"tasks/{s.task['id']}/comments", {"text": "Done."}, token)  # their reply clears the ❓
     post(s.api, path + "/control", {"take": False}, token)
     thread, box = begin(s, "read")
     [cmd] = poll(s, s.own, wait=3)

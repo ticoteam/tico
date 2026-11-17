@@ -172,7 +172,7 @@ decision with an Undo ([Your Strategy Owner](strategy-bot.md#the-strategy-bot-lo
 
 The levels, who changes them and what stays yours are on [Your Strategy Owner](strategy-bot.md).
 
-#### Recoveries and merged asks
+#### Recoveries
 
 At **Suggests actions**, a red or stalled goal gets a **recovery** in its owner's Needs you, in place of "check why it is off
 track": the evidence, up to 4 options and the Strategy Owner's pick. Each option is a few changes to bots' tasks only: a new
@@ -183,10 +183,6 @@ words, and what wasn't done comes back as a new recovery. Nothing is dropped. Go
 the recoveries waiting. At **Acts on its own**, the Strategy Owner makes the changes itself as a decision, in place of a
 recovery, and posts a comment on the goal saying what it did and why; you undo a decision in the Strategy Owner log. A change
 you undid is never made alone again: tried again, it becomes an item in your Needs you.
-
-When several bots ask you the same thing, the Strategy Owner can make them **one item** (`POST /api/v2/strategy-bot/merge`), a
-task for you in General with one question on it. Their questions leave your Needs you while it is open, and your one answer goes to every bot that asked. If the item ends
-without an answer, they come back as they were. A merged item counts toward the 5 a day.
 
 After 10 recoveries in a row approved with its pick unchanged, the Monday note offers **Acts on its own** once, and at most once
 a month (`level3_offer` in `GET /api/v2/strategy-bot`). The Strategy Owner never raises its own level.
@@ -254,7 +250,7 @@ Only a human can; confirming makes the change as that human.
 | `flag` | `issue`: `vague` or `duplicate`, and a `note` | the goal's owner |
 | `goal_why` | `why`: one line, up to 200 characters ([A goal's Why](#a-goals-why)); never for a goal tied to a bet | whoever may change the goal |
 | `strategy_draft` | partial `summary`, `vision`, `sections`, `bets` ([Strategy](strategy.md#who-may-do-what)); confirming writes it, live at once as one version | the team owner |
-| `recovery` | `evidence`, 1 to 4 `options` (`label`, 1 to 6 `actions`: `create`, `reorder` or `settle` on bots' tasks), `pick`; only the Strategy Owner at **Suggests actions** or **Acts on its own** ([Recoveries](#recoveries-and-merged-asks)) | the goal's owner; `{"decision": "confirm", "option": n}` approves another option than the pick |
+| `recovery` | `evidence`, 1 to 4 `options` (`label`, 1 to 6 `actions`: `create`, `reorder` or `settle` on bots' tasks), `pick`; only the Strategy Owner at **Suggests actions** or **Acts on its own** ([Recoveries](#recoveries)) | the goal's owner; `{"decision": "confirm", "option": n}` approves another option than the pick |
 
 Pending proposals appear under **Needs you** on the Goals page for the human who decides them, except a Why, which
 waits on its goal. To confirm a Why with your own words, send `why` with the decision:

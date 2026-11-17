@@ -194,8 +194,9 @@ def test_did_nothing_and_outcome_come_from_what_the_run_wrote(api, case):
     elif case == "task_update":
         version = get(api, "tasks/" + task["id"], token)["task"]["version"]
         post(api, "tasks/" + task["id"], {"version": version, "title": "Check the bank feed today"}, token)
-    elif case == "comment":
-        post(api, f"tasks/{task['id']}/comments", {"text": "Feed checked: two new lines."}, token)
+    elif case == "comment":  # on another task of its own: not the one its turn is on, whose reply is the end text
+        other = post(api, "tasks", {"owner": "ops", "title": "Reconcile the feed", "body": "Weekly."})
+        post(api, f"tasks/{other['id']}/comments", {"text": "Feed checked: two new lines."}, token)
     elif case == "message":
         post(
             api,

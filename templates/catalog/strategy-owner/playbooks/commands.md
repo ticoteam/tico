@@ -13,8 +13,6 @@ with --all, kpi readings, and any `--help` or `--version` probe of a name not li
 - `tico goal strategy-bot`: your level, whether the regular checks run, and `asked_today` per person.
 - Level 3 only: `tico goal strategy-bot-decide "<reason>" '<changes json>' --goal-id <goal>`: creates or reorders bot tasks
   (`playbooks/acts-on-its-own.md`).
-- Level 2 and up: `tico goal strategy-bot-merge <person> "<title>" "<the one question>" <task-id> <task-id>...`: one item for
-  the same question several bots ask one person (`playbooks/recoveries.md`).
 - `tico goal company`: the vision and description (read only).
 - `tico strategy vision --task <id> "<vision>"`: only on the server's vision question, the vision the owner sent there, in
   their words (`playbooks/vision-question.md`).

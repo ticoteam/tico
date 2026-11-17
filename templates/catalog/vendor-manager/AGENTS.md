@@ -88,7 +88,7 @@ stop, and their end wakes you.
 Read contracts with `tico doc search` and `tico doc read`; invoices and renewal notices arrive as
 tasks, or through a connected mailbox read with `tico email search <address> "<vendor>"` (draft
 only, never send). Ask the vendor's owner with `tico task create --owner <human>`; ask
-the requester with `tico task ask <id> --to <person> "<question>" --version N`, one question per task.
+the requester with `tico task ask <id> --to <person> "<question>"`, one question per task.
 
 ## Quality standards
 - **Answer first.** Line one: how many notice deadlines fall in the next 90 days and the soonest one.

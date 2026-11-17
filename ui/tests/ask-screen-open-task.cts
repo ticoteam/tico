@@ -37,17 +37,17 @@ const taskPage = (page: Page) => page.locator('#task-modal[open] .tmodal-title')
     {
       const {page, errors} = await open(browser);
       try {
-        await page.evaluate(() => { void taskModalOpen('t-2'); });
+        await page.evaluate(() => { void taskModalOpen('t-1'); });
         await card(page).waitFor({timeout: 5000});
-        assert.equal(await card(page).locator('.dc-q').innerText(), 'Which plan do new signups get?');
+        assert.equal(await card(page).locator('.dc-q').innerText(), 'Approve the spec for Checkout flow');
         await card(page).locator('[data-dc="close"]').click();
         // A pipeline board's card on a phone opens at the conversation asking its owner (tasks-page.ts): still the ask.
-        await page.evaluate(() => { void taskModalOpen('t-2', undefined, {thread: true, ask: true}); });
+        await page.evaluate(() => { void taskModalOpen('t-1', undefined, {thread: true, ask: true}); });
         await card(page).waitFor({timeout: 5000});
-        assert.equal(await card(page).locator('.dc-q').innerText(), 'Which plan do new signups get?');
+        assert.equal(await card(page).locator('.dc-q').innerText(), 'Approve the spec for Checkout flow');
         await card(page).locator('[data-dc="close"]').click();
         // The task's conversation asked for by name (a bot's chat, taskThreadShow) opens as it is.
-        await page.evaluate(() => { void taskModalOpen('t-2', undefined, {thread: true}); });
+        await page.evaluate(() => { void taskModalOpen('t-1', undefined, {thread: true}); });
         await page.locator('#task-modal[open]').waitFor({timeout: 5000});
         assert.equal(await card(page).count(), 0, 'the conversation, not the ask');
         await page.keyboard.press('Escape');
@@ -74,13 +74,13 @@ const taskPage = (page: Page) => page.locator('#task-modal[open] .tmodal-title')
 
     // The first wait is someone else's (a list row carries only that one), and the person's own ask is behind it: the ask.
     {
-      const tasks = fixtures(), needs = needsOf(tasks), t2 = tasks.find(t => t.id === 't-2')!;
-      t2.turn = {...t2.turn!, who: 'human:sam', line: 'Waiting on Sam', requirement_id: 'r9'};
+      const tasks = fixtures(), needs = needsOf(tasks), t1 = tasks.find(t => t.id === 't-1')!;
+      t1.turn = {...t1.turn!, who: 'human:sam', line: 'Waiting on Sam', requirement_id: 'r9'};
       const {page, errors} = await open(browser, {tasks, needs});
       try {
-        await page.evaluate(() => { void taskModalOpen('t-2'); });
+        await page.evaluate(() => { void taskModalOpen('t-1'); });
         await card(page).waitFor({timeout: 5000});
-        assert.equal(await card(page).locator('.dc-q').innerText(), 'Which plan do new signups get?');
+        assert.equal(await card(page).locator('.dc-q').innerText(), 'Approve the spec for Checkout flow');
         assert.equal(await page.locator('#task-modal[open]').count(), 0);
         assert.deepEqual(errors, []);
       } finally { await page.close(); }

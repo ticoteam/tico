@@ -295,8 +295,6 @@ def task_text(task, actors=None, events=()):
         answer = item.get("answer")
         if answer:
             words.append(f"answer: {answer.get('value')}" + (f", {answer['note']}" if answer.get("note") else ""))
-        if item.get("choices"):
-            words.append("choices: " + ", ".join(str(c) for c in item["choices"]))
         words.append(f"id {item.get('requirement_id')}")
         if item.get("may"):
             words.append("you may: " + ", ".join(item["may"]))
@@ -558,49 +556,42 @@ def _own_ask(api, task_id, requirement=None):
     )
 
 
+# What makes tico_task_ask a stage ask rather than a ❓: any of these.
+# A question is a message marked ❓ (backend/question_marks.py); its options and why are words in it.
+QUESTION_INSTEAD = (
+    'A question is a message: tico task ask <id> --to <person> "<question>", with no --kind or --show. Say the '
+    "options, your pick and why in the message."
+)
+_STAGE_ASK = ("kind", "show", "subject", "why")
+
+
 @tool(
     "tico_task_ask",
-    "Ask a person on this task one sentence: a question or an OK. The task waits in its stage for the answer, which "
-    "wakes you once; asking again replaces your ask. `withdraw` takes it back.",
+    "Ask a person on this task. `to` and `line`: a ❓ message on its chat, in their Needs you until they reply (a new "
+    "❓ replaces yours); options and why go in it. An OK: `kind` ok with `show`. `withdraw` takes an OK back.",
     {
         "id": TASK_ID,
         "to": _s("The person's id"),
-        "line": _s("The one sentence asked, readable alone", maxLength=300),
+        "line": _s("The message: a short first line that reads on its own, then any detail", maxLength=4000),
         "kind": {
             "type": "string",
-            "enum": ["answer", "ok"],
-            "description": "answer (default): a question; ok: approve or send back",
+            "enum": ["ok"],
+            "description": "ok: approve or send back what `show` names",
         },
-        "choices": {
-            "type": "array",
-            "items": {"type": "string", "maxLength": 60},
-            "minItems": 2,
-            "maxItems": 6,
-            "description": "Answers to pick; they may type their own",
-        },
-        "choice": {
-            "type": "array",
-            "items": _s("Label|what happens", maxLength=221),
-            "minItems": 2,
-            "maxItems": 4,
-            "description": "Instead of choices",
-        },
-        "recommend": _s("The choice you recommend", maxLength=60),
-        "title": _s("Short heading", maxLength=60),
         "show": {
             "type": "array",
             "items": _s("page:<id>, file:<id>@<version> or a link"),
             "maxItems": 10,
-            "description": "What they look at, shown with the ask",
+            "description": "What an OK approves, shown with it",
         },
         "subject": _s(
             "An OK bound to what you will do, <kind>:<id>, covering exactly `content`; "
             "use it once with tico_ok_use just before acting"
         ),
         "content": {"description": "With subject: exactly what the OK covers (any JSON)"},
-        "withdraw": {"type": "boolean", "description": "Take back your open ask instead"},
-        "requirement": _s("With withdraw: the ask's requirement id, if several"),
-        "why": _s("Why it matters (with withdraw: why)"),
+        "withdraw": {"type": "boolean", "description": "Take back your open OK instead"},
+        "requirement": _s("With withdraw: the OK's requirement id, if several"),
+        "why": _s("With withdraw: why"),
         "version": VERSION,
     },
     required=("id",),
@@ -614,25 +605,22 @@ def task_ask(api, args):
     missing = [name for name in ("to", "line") if not args.get(name)]
     if missing:
         raise ValueError(f"An ask names who it is for and the one line they are asked: give {' and '.join(missing)}")
+    if not any(args.get(field) for field in _STAGE_ASK):
+        # A ❓: the message on the task's chat, needing their reply (backend/question_marks.py).
+        return api.post(f"tasks/{args['id']}/questions", {"to": args["to"], "text": args["line"]}, key=_key(args))
+    if args.get("kind") != "ok" and not args.get("subject"):
+        raise ValueError(QUESTION_INSTEAD)
     body = {"to": args["to"], "line": args["line"], "version": _seen(args)}
     if args.get("subject"):
-        if args.get("choices") or args.get("kind") == "answer" or "content" not in args:
-            raise ValueError("An OK bound to a subject is an ok with its content, never a question with choices")
-        if args.get("title"):
-            raise ValueError("An OK bound to a subject shows its content, not a title: leave out title")
+        if "content" not in args:
+            raise ValueError("An OK bound to a subject is an ok with its content")
         body.update({"subject": args["subject"], "content": args["content"]})
         if args.get("show"):
             body["show"] = args["show"]
         return api.post(f"tasks/{args['id']}/oks", body, key=_key(args))
-    for field in ("kind", "choices", "show", "why", "recommend", "title"):
+    for field in ("kind", "show"):
         if args.get(field):
             body[field] = args[field]
-    if args.get("choice"):
-        if args.get("choices"):
-            raise ValueError("Give the answers once: choice (Label|what happens) or choices, not both")
-        pairs = [str(one).partition("|") for one in args["choice"]]
-        body["choices"] = [label.strip() for label, _, _ in pairs]
-        body["details"] = [detail.strip() for _, _, detail in pairs]
     return api.post(f"tasks/{args['id']}/asks", body, key=_key(args))
 
 
@@ -660,13 +648,11 @@ def ok_use(api, args):
 @tool(
     "tico_task_answer",
     "Answer what you are asked on a task (a bot named on an OK or a question): ok, no (send it "
-    "back, with a note), again (look again), or your answer. The requirement id is in "
-    "tico_task_show's To leave. A stage's answer is named there (confidence): give the name, then "
-    "a whole number in its range, one of its choices, or text.",
+    "back, with a note). The requirement id is in tico_task_show's To leave.",
     {
         "id": TASK_ID,
-        "requirement": _s("The requirement's id, or a stage's answer by its name"),
-        "value": _s("ok, no, again, or your answer: one of its choices or your own words"),
+        "requirement": _s("The requirement's id"),
+        "value": _s("ok or no", enum=["ok", "no"]),
         "note": _s("What they read with it, word for word; required with no"),
         "version": VERSION,
         "on_behalf_of": ASKED,

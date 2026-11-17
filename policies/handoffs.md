@@ -15,7 +15,7 @@ to leave. Every command that changes a task carries `--version N`, the version y
 2. There is no status to set. Your run shows that you are working; keep `tico bot status set` to one
    line about what you are doing now.
 3. If the goal or deliverable is unclear, ask one focused question on the task
-   (`tico task ask <task-id> --to <person> "<question>" --version N`). Otherwise state the smallest
+   with a ❓ (`tico task ask <task-id> --to <person> "<question>"`). Otherwise state the smallest
    necessary assumption and continue.
 
 Before starting a newly created task, compare it with the other open tasks between the same
@@ -83,7 +83,7 @@ nothing is missing; you do not say done for a need Tico can see.
 When you stop, the task must be in one of six states. Your wake says so.
 
 1. Done with the stage: `tico task done <task-id> -m "<what was done>" --version N`, or you moved it.
-2. Asking a person on the task: `tico task ask`.
+2. Asking a person: a ❓ message on the task, `tico task ask <task-id> --to <person> "<question>"`.
 3. Waiting on a task you filed: `tico task file`.
 4. Snoozed, with a reason and a date wherever there is one: `tico task snooze`. Only to look again on a date.
 5. Closed, with a reason: `tico task close <task-id> -m "<why>" --version N`.
@@ -168,18 +168,16 @@ conversation, which is twenty runs — far past the point anyone would want it s
 The owner reads asks on a phone between meetings. Ask on the task the work belongs to:
 
 ```text
-tico task ask <task-id> --to <owner> "<one sentence>" --why "<why it matters>" \
-  --choice "<Label>|<what happens>" --choice "<Label>|<what happens>" --recommend <Label> [--show page:<id>] --version N
+tico task ask <task-id> --to <owner> "<question>"
 ```
 
-It is one line in their Needs you, with buttons. The task stays in its stage until they answer, and
-their answer wakes you once. Ask once, when one answer lets the work go on. If there is no task yet,
-file one you own and ask on it. Do not also send the owner the same question with
-`tico message send`, a chat or an email. The ask should be the only thing the reader has to read:
-one decision, two choices if you can name them, no playbook, coverage stats, or commit hashes. It is
-one or two plain sentences saying what you need and what happens after, at most 40 words, with no
-ids, hashes, file paths, `s3://` links or tool names, though `PR #1555` is fine; Tico refuses one
-that breaks this. Put the draft or summary on the task, or show it with `--show`.
+It posts your message on the task's chat, marked ❓: it is in their Needs you until they reply, and
+their reply wakes you on the task. Ask once, when one answer lets the work go on. If there is no
+task yet, file one you own and ask on it. Do not also send the owner the same question with
+`tico message send`, a chat or an email. The message should be the only thing the reader has to
+read: a short first line that stands on its own, then the options, your pick and why. No playbook,
+coverage stats, or commit hashes, and no ids, file paths or `s3://` links in the first line, though
+`PR #1555` is fine. Attach the draft or summary to the task and link it.
 
 Real work a person has to go and do (sign a filing, call a vendor) is a task for them, filed from
 yours: `tico task file --parent <task-id> --owner <person> "<verb-first title>"`. Its title starts
@@ -217,7 +215,7 @@ request is preparation; proceed when the assigned work authorizes it. Ask a pers
 actual business choice or an action requiring Tools the bot lacks.
 
 Rules:
-- **The ask** is the decision in plain words, with the choices spelled out. Never make the reader
+- **The ask** is the decision in plain words, with the options spelled out. Never make the reader
   scroll to find it.
 - **System attribution.** Call the background system **Tico** in text for people; name the actual bot when its identity is known. Keep actor IDs unchanged in commands.
 - **Plain language.** No internal codes, tags, or scores (no "class", "GEO citation", "routine 3").
@@ -226,8 +224,8 @@ Rules:
   conversation. Name the real-world subject before a status or stage.
 - **Under 120 words** in a task body you give a person, outside the quoted draft. One link is
   fine; a wall of links is not.
-- Include the recommendation and any material condition or consequence. Do not repeat obvious
-  instructions for answering; the ask has its own buttons.
+- Include the recommendation and any material condition or consequence. Do not explain how to
+  answer: they reply in the chat.
 - Show the relevant draft or summary with the ask. Longer supporting files go on the task, so they
   open in the app; no required trip to another repo.
 - Before asking, check for an open ask on the same decision. One ask per need: asking again on the
@@ -243,10 +241,9 @@ Every ask must be understandable without opening logs or another document:
 - Evidence: a short relevant excerpt and a readable source link when available, on the task. Keep
   technical diagnostics in the bot's audit record, not in the ask.
 
-Example: “Should our public pages say Acme files taxes for customers, or that customers file them?”
-with the choices `Acme files,Customers file`, and on the task: “Our current pages disagree. I
-recommend keeping the customer responsible until you confirm the service we provide. I will then
-prepare consistent wording.”
+Example ❓: “Should our public pages say Acme files taxes for customers, or that customers file them?
+Our current pages disagree. I recommend keeping the customer responsible until you confirm the
+service we provide. I will then prepare consistent wording.”
 
 Do not invent a recommendation or consequence. If evidence is missing, investigate first. For missing Tools, name the exact action, destination and access needed. Do not turn a tool failure into a request to OK work already assigned.
 

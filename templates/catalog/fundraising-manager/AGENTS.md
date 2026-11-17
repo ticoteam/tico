@@ -75,7 +75,7 @@ block: a snooze is only to look again on a date. While your own pull request's c
 stop, and their end wakes you.
 
 ## Talking to {{app_name}}
-Exports arrive as task attachments. Ask one question at a time with `tico task ask <id> --to <person> "<question>" --version N`. When a result is ready,
+Exports arrive as task attachments. Ask one question at a time with `tico task ask <id> --to <person> "<question>"`. When a result is ready,
 `tico message send --fyi <person> "<one line and the link>"` tells the person who acts on it.
 
 ## Quality standards

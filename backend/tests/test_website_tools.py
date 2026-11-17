@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from backend import question_marks
 from backend import totp as T
 from backend import website_tools as W
 from backend.auth import Identity
@@ -641,17 +642,16 @@ def test_one_who_only_manages_a_granted_bot_reaches_the_browser_only_while_an_as
         view()
     assert hidden.value.status == 404
     task = post(api, "tasks", {"owner": "finance", "title": "Pull the statements", "body": "From the bank."})
-    with store.transaction() as c:
-        made = H.task_ask(
+    with store.transaction() as c:  # the bot's ❓ showing the browser, as browser_commands' Needs-you ask writes it
+        question_marks.ask(
             c,
             finance,
             task["id"],
             "human:cara",
             "Please sign in to the bank for me.",
-            kind="answer",
-            choices=["Done"],
-            shows=[f"browser:{tid}/{aid}"],
-            seen_version=task.get("version"),
+            checked=False,
+            let_in=False,
+            refs={"shows": [f"browser:{tid}/{aid}"]},
         )
     assert view()["account_id"] == aid
     with pytest.raises(Problem):
@@ -659,7 +659,7 @@ def test_one_who_only_manages_a_granted_bot_reaches_the_browser_only_while_an_as
     with pytest.raises(Problem):
         with store.read() as c:
             W.picked_account(c, Identity("human:eve", "human"), tid, aid)  # it waits on Cara, not on Eve
-    post(api, f"tasks/{task['id']}/asks/{made['requirement_id']}/answer", {"value": "Done"}, "cara-test")
+    post(api, f"tasks/{task['id']}/comments", {"text": "Done."}, "cara-test")  # her reply clears the ❓
     with pytest.raises(Problem):
         view()
 

@@ -5,7 +5,7 @@ import re
 
 import pytest
 
-from backend import health, models_preset, releases, replication, runner_online
+from backend import health, models_preset, question_marks, releases, replication, runner_online
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.helpers.getting_started import SIGNED_IN, add_bot, enrolled, heartbeat  # noqa: F401
@@ -1726,11 +1726,11 @@ def test_batched_computer_load_and_overload_reads_answer_what_each_computer_read
 
 
 def _asks(api, owner, askers, start=0):
-    """One open question to `owner` per entry of `askers`, each on its own task of that bot's, titled apart."""
+    """One open ❓ to `owner` per entry of `askers`, each on its own task of that bot's, titled apart."""
     with api.app.state.store.transaction() as c:
         for i, asker in enumerate(askers, start=start):
             made = H.task_create(c, asker, f"Item {i} for {owner}", "x", asker, private=False)
-            H.task_ask(c, asker, made["id"], owner, f"Question {i}?", seen_version=made["version"])
+            question_marks.ask(c, asker, made["id"], owner, f"Question {i}?")
 
 
 def test_a_plate_over_ten_warns_and_names_the_three_bots_asking_most(environment):

@@ -84,7 +84,7 @@ stop, and their end wakes you.
 
 ## Talking to {{app_name}}
 Trip requests come as tasks. Read the traveller's meetings with `tico calendar list --calendar
-<their email>` where connected. Ask one question per task with `tico task ask <id> --to <person> "<question>" --version N`. Ask the owner
+<their email>` where connected. Ask one question per task with `tico task ask <id> --to <person> "<question>"`. Ask the owner
 with `tico task create --owner <owner>` when a travel detail is missing. Send the finished
 itinerary to the traveller with `tico message send --fyi <human> "<one line and the link>"`.
 

@@ -113,6 +113,19 @@ class Rig:
             )
         )
 
+    def reply_jobs(self, task: str, bot: str) -> int:
+        """Jobs queued for a bot's run on a person's comment in the task's chat (a reply to its ❓ is one)."""
+        return int(
+            self.w.read(
+                lambda c: c.execute(
+                    "SELECT COUNT(*) FROM jobs j JOIN messages m ON m.id = j.message_id JOIN tasks t ON t.conversation_id "
+                    "= m.conversation_id WHERE j.state='queued' AND t.id=? AND m.recipient_id=? AND m.sender_id LIKE "
+                    "'human:%'",
+                    (task, bot),
+                ).fetchone()[0]
+            )
+        )
+
     def events(self, task: str) -> list[dict[str, Any]]:
         rows = self.w.read(
             lambda c: c.execute(
@@ -392,8 +405,15 @@ ELSEWHERE: dict[int, str] = {
 }
 
 
+# Scenarios of the spec whose feature was removed (a thumbs down on an ask: structured questions are gone).
+REMOVED: dict[int, str] = {
+    47: "a thumbs down with Send back on an ask",
+    48: "a third thumbs down on one bot's asks in 30 days",
+}
+
+
 def numbers_covered() -> list[int]:
-    return sorted([*SCENARIOS, *LATER, *ELSEWHERE])
+    return sorted([*SCENARIOS, *LATER, *ELSEWHERE, *REMOVED])
 
 
 @contextmanager
@@ -590,28 +610,20 @@ def s07(r: Rig) -> None:
 
 @scenario(8, "A person answers while the bot is paused")
 def s08(r: Rig) -> None:
-    from backend import answers as A
-    from backend import task_engine as E
+    from backend import question_marks as Q
 
     task = r.task(ANA, "Choose a venue", assignee=BUILDER)
     r.ran(task, BUILDER)
-    version = r.row(task)["version"]
-    out = r.ok(
-        BUILDER,
-        lambda c: E.add_requirement(c, task, BUILDER, "answer", BEN, "Which city?", seen_version=version),
-        "the bot asks Ben",
-    )
-    rid = out["requirement_id"]
+    # The question is the bot's message on the task's chat marked ❓; Ben's reply there is what is delivered.
+    r.ok(BUILDER, lambda c: Q.ask(c, BUILDER, task, BEN, "Which city?", checked=False), "the bot asks Ben")
     r.raw(lambda c: c.execute("UPDATE bots SET state='paused' WHERE id='builder'"))
-    r.ok(BEN, lambda c: A.answer(c, task, rid, BEN, "Lisbon"), "Ben answers")
-    expect(r.queued(task, BUILDER) == 1, "the answer was not queued for the bot")
+    r.ok(BEN, lambda c: _h().task_comment(c, BEN, task, "Lisbon"), "Ben answers")
+    expect(r.reply_jobs(task, BUILDER) == 1, "the answer was not queued for the bot")
     r.later(hours=2)
     expect(r.waits(task) == [("paused", BUILDER)], f"while paused the task waits on {r.waits(task)}")
-    expect(r.queued(task, BUILDER) == 1, "the answer's wake was dropped while the bot was paused")
+    expect(r.reply_jobs(task, BUILDER) == 1, "the answer's wake was dropped while the bot was paused")
     r.raw(lambda c: c.execute("UPDATE bots SET state='active' WHERE id='builder'"))
     r.check()
-    wakes = r.wakes(task, BUILDER)
-    expect(any("Lisbon" in w[2] for w in wakes), f"the bot's wakes: {wakes}")
     expect(r.ran(task, BUILDER) == 1, "the answer was not delivered when the bot could run")
 
 
@@ -1029,23 +1041,22 @@ def s38(r: Rig) -> None:
 @scenario(39, "A task is reassigned while the old owner is running")
 def s39(r: Rig) -> None:
     from backend import answers as A
+    from backend import question_marks as Q
     from backend import task_engine as E
 
     task = r.task(ANA, "Fix the invoice", assignee=BUILDER)
     r.ran(task, BUILDER)
-    seen = r.row(task)["version"]
-    out = r.ok(
-        BUILDER,
-        lambda c: E.add_requirement(c, task, BUILDER, "answer", BEN, "Which client?", seen_version=seen),
-        "the bot asks",
-    )
+    # The question is the bot's message on the task's chat marked ❓; Ben's reply there queues the bot's wake.
+    r.ok(BUILDER, lambda c: Q.ask(c, BUILDER, task, BEN, "Which client?", checked=False), "the bot asks")
     runs = r.start(task, BUILDER) or r.raw(lambda c: [])
     r.later(minutes=3)
     runs = r.start(task, BUILDER)
-    r.ok(BEN, lambda c: A.answer(c, task, out["requirement_id"], BEN, "Acme"), "Ben answers while the bot runs")
-    expect(r.queued(task, BUILDER) >= 1, "nothing was queued for the bot")
+    r.ok(BEN, lambda c: _h().task_comment(c, BEN, task, "Acme"), "Ben answers while the bot runs")
+    expect(r.reply_jobs(task, BUILDER) >= 1, "nothing was queued for the bot")
     seen = r.row(task)["version"]
     r.ok(ANA, lambda c: E.reassign(c, task, WRITER, ANA, "Writer knows the client"), "Ana reassigns")
+    # Ben's reply is a comment the old owner may still read as a follower: it is not a wake of the task's own, so
+    # the reassign does not drop it (only the owner's wakes keyed to the visit and owner go).
     expect(r.queued(task, BUILDER) == 0, "the old owner's queued wake was not dropped")
     rid = r.requirement(task, "owner_done")
     r.refused(
@@ -1061,6 +1072,7 @@ def s39(r: Rig) -> None:
 @scenario(41, "A task with an open ask moves back")
 def s41(r: Rig) -> None:
     from backend import task_engine as E
+    from backend.tests.helpers.engine import shown
 
     task = r.task(ANA, "Choose the font", WORK, assignee=WRITER)
     r.to_deck(task)
@@ -1068,7 +1080,16 @@ def s41(r: Rig) -> None:
     version = r.row(task)["version"]
     r.ok(
         WRITER,
-        lambda c: E.add_requirement(c, task, WRITER, "ok", BEN, "OK to use Inter?", seen_version=version),
+        lambda c: E.add_requirement(
+            c,
+            task,
+            WRITER,
+            "ok",
+            BEN,
+            "OK to use Inter?",
+            shows=shown(c, "Font sample", bot="writer"),
+            seen_version=version,
+        ),
         "the ask",
     )
     expect(any(n["kind"] == "ask" and n["task_id"] == task for n in r.needs(BEN)), "the ask is not in Ben's list")
@@ -1107,66 +1128,21 @@ def s45(r: Rig) -> None:
 
 @scenario(46, "A bot adds a second question to a task")
 def s46(r: Rig) -> None:
-    from backend import task_engine as E
+    from backend import question_marks as Q
 
     task = r.task(ANA, "Plan the menu", assignee=BUILDER)
     for line in ("Vegetarian?", "How many guests?"):
-        version = r.row(task)["version"]
-        r.ok(
-            BUILDER,
-            lambda c, line=line, version=version: E.add_requirement(
-                c, task, BUILDER, "answer", BEN, line, seen_version=version
-            ),
-            line,
-        )
+        # The bot's question is its message on the task's chat marked ❓ (the bot's reach is not this case's point).
+        r.ok(BUILDER, lambda c, line=line: Q.ask(c, BUILDER, task, BEN, line, checked=False), line)
     asks = [n for n in r.needs(BEN) if n.get("task_id") == task]
-    expect(len(asks) == 1 and "How many guests?" in str(asks[0]["line"]), f"Ben's list: {asks}")
+    expect(len(asks) == 1 and asks[0]["kind"] == "question", f"Ben's list: {asks}")
+    expect("How many guests?" in str(asks[0]["line"]), f"Ben's list: {asks}")
     open_ = r.w.read(
         lambda c: c.execute(
-            "SELECT COUNT(*) FROM requirements WHERE added_by_id=? AND withdrawn_at IS NULL AND visit_id IS NOT NULL",
-            (BUILDER,),
+            "SELECT COUNT(*) FROM question_marks WHERE bot_id=? AND task_id=? AND cleared_at IS NULL", (BUILDER, task)
         ).fetchone()[0]
     )
-    expect(open_ == 1, f"{open_} open asks from one bot")
-
-
-def _ask(r: Rig, task: str, line: str = "OK to send?") -> str:
-    from backend import task_engine as E
-
-    version = r.row(task)["version"]
-    out = r.ok(WRITER, lambda c: E.add_requirement(c, task, WRITER, "ok", BEN, line, seen_version=version), "the ask")
-    return str(out["requirement_id"])
-
-
-@scenario(47, "A thumbs down with Send back on an ask")
-def s47(r: Rig) -> None:
-    from backend import answers as A
-
-    task = r.task(ANA, "Email the members", assignee=WRITER)
-    rid = _ask(r, task)
-    r.ok(BEN, lambda c: A.thumbs_down(c, task, rid, BEN, "Just send it, no need to ask"), "the thumbs down")
-    expect(not any(n.get("task_id") == task for n in r.needs(BEN)), "the ask stayed in Ben's list")
-    told = [w for w in r.wakes(task, WRITER) if w[0].startswith("thumbs_down")]
-    expect(len(told) == 1 and "Just send it, no need to ask" in told[0][2], f"the bot got: {told}")
-
-
-@scenario(48, "A third thumbs down on one bot's asks in 30 days (the count; the sheet is a screen)")
-def s48(r: Rig) -> None:
-    from backend import answers as A
-
-    counts = []
-    for n in range(4):
-        task = r.task(ANA, f"Mailing {n}", assignee=WRITER)
-        rid = _ask(r, task)
-        r.ok(
-            BEN,
-            lambda c, task=task, rid=rid: A.thumbs_down(c, task, rid, BEN, "Don't ask about mailings"),
-            f"thumbs down {n}",
-        )
-        counts.append(r.w.read(lambda c: A.thumbs_down_count(c, WRITER)))
-        if n == 0:
-            r.w.shift(31 * 86400)  # the first is more than 30 days old when the others come
-    expect(counts == [1, 1, 2, 3], f"counts {counts}")
+    expect(open_ == 1, f"{open_} open questions from one bot")
 
 
 @scenario(52, "A linked task is deleted")
@@ -1182,31 +1158,6 @@ def s52(r: Rig) -> None:
 
 
 # ----------------------------------------------------------------------------- bugs the seeded runs found
-
-
-@extra("runs-outside-ladder", "A snooze ends while another bot is asked: still at most 7 runs without a change")
-def c_runs_outside_ladder(r: Rig) -> None:
-    from backend import task_engine as E
-
-    task = r.task(ANA, "Approve the copy", assignee=WRITER)
-    r.ran(task, WRITER)
-    version = r.row(task)["version"]
-    r.ok(
-        WRITER,
-        lambda c: E.add_requirement(c, task, WRITER, "answer", REVIEWER, "Is the copy right?", seen_version=version),
-        "ask the reviewer",
-    )
-    r.ran(task, REVIEWER)  # the reviewer's ask wake: it stops without answering
-    version = r.row(task)["version"]
-    r.ok(
-        WRITER,
-        lambda c: E.snooze(c, task, WRITER, "Waiting on legal", _h().shift(r.w.now(), seconds=600), version),
-        "snooze",
-    )
-    r.later(minutes=11)  # the snooze ends. Neither it nor its end is a change (R1): the reviewer's run above counts.
-    runs = r.ladder(task)
-    expect(len(runs) <= 6, f"{len(runs)} bot runs after the reviewer's one, without a change: {runs}")
-    expect(all(bot != WRITER for bot, _, _ in runs), f"the writer, who asked and waits, was woken: {runs}")
 
 
 @extra("file-into", "A stage that files into General files one linked task on enter, once per visit")

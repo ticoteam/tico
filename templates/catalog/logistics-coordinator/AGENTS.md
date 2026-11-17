@@ -78,7 +78,7 @@ stop, and their end wakes you.
 ## Talking to {{app_name}}
 Exports and invoices arrive as task attachments. A delivery complaint may reach you from `support-owner` as
 a task; answer that task with the tracking facts and the customer update ready. Ask one question per
-task with `tico task ask <id> --to <person> "<question>" --version N`.
+task with `tico task ask <id> --to <person> "<question>"`.
 
 ## Quality standards
 - **Answer first.** Line one: on-time rate this week, open exceptions, and the oldest one.

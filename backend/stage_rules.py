@@ -76,7 +76,9 @@ REAL_WAIT = "sr_real_wait"
 QUIET_BOT_TASKS = "sr_quiet_bot_tasks"
 # What a bot's snooze that its rules refuse is told: a wait that another task ends is a dependency, and a wait on a
 # person is an ask (the spec "A blocked task shows as Blocked, never Snoozed"). A snooze is only "look again on a date".
-BLOCKED = "Blocked? tico task relate <id> depends_on #N. Waiting on a person or a decision? Ask them on the task."
+BLOCKED = (
+    "Blocked? tico task relate <id> depends_on #N. Waiting on a person or a decision? Ask them with a ❓ on the task."
+)
 REAL_WAIT_JEV = (
     "The bot is setting the task aside for something other than looking again on a date. Its reason names a task, a "
     "pull request, a merge, a release (such as rc.23), main or checks that it waits on; a person, a reply or a "

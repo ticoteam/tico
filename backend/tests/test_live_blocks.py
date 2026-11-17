@@ -12,12 +12,11 @@ ON_VISUALS = {"host": "visuals.localhost:9001"}
 
 
 def wait_on(api, tid, who):
-    """The task's bot waits on `who`: it asks them a question on the task."""
-    from backend.store import H
+    """The task's bot waits on `who`: it asks them a question on the task, marked ❓."""
+    from backend import question_marks
 
     with api.app.state.store.transaction() as c:
-        seen = H.task(c, tid)["version"]
-        H.task_ask(c, "bot:ops", tid, who, "Renew it for a year? I'll pay after.", seen_version=seen)
+        question_marks.ask(c, "bot:ops", tid, who, "Renew it for a year? I'll pay after.")
 
 
 def page(api, attempt, task, name, data):

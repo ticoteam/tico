@@ -3,7 +3,7 @@
 Merge keeps the task dropped on: its merge note carries the other's request under "From #A", its files and pages (linked), labels,
 related links, followers and requesters; the other's open subtasks move under it; the other is Closed with the
 duplicate note and linked as a duplicate. Comments stay on the duplicate, its asks end, and the kept task's note counts
-the comments and lists each question. A bot owner is woken once; a person is not. A refusal anywhere changes nothing.
+the comments and lists each ask. A bot owner is woken once; a person is not. A refusal anywhere changes nothing.
 Make it a subtask puts the task under the other after filing: both keep their owners and stages, the parent waits on
 it, and history on both names who did it. Loops, nesting past 5, private with company, and a task with an open pull
 request are refused with one line; bots, and people who cannot change both tasks, are refused."""
@@ -47,8 +47,8 @@ def test_merge_moves_the_details_and_subtasks_and_closes_the_duplicate(api):
     child = task(api, "Check the Stripe logs", parent=dup["id"])
     for n in range(7):
         post(api, f"tasks/{dup['id']}/comments", {"text": f"Note {n}"})
-    for line in ("Which plan did it fail on?", "Is it every annual customer?"):
-        post(api, f"tasks/{dup['id']}/asks", {"to": "cara", "line": line})
+    for line in ("OK the refund fix for the Pro plan?", "OK refunding every annual customer?"):
+        post(api, f"tasks/{dup['id']}/asks", {"to": "cara", "line": line, "kind": "ok"})
     r = api.put(f"/api/v2/tasks/{dup['id']}/followers", json={"actor": "cara"}, headers=headers())
     assert r.status_code == 200, r.text
     other = task(api, "Refund email copy")
@@ -58,7 +58,7 @@ def test_merge_moves_the_details_and_subtasks_and_closes_the_duplicate(api):
     assert (seen["merge"], seen["subtask"], seen["same_owner"]) == (None, None, True)
     assert seen["moves"]["comments"] == 7 and seen["moves"]["subtasks"] == 1
     assert seen["moves"]["followers"] == 2, "cara, who follows it, and ana, who asked for it"
-    assert seen["moves"]["asks"] == ["Which plan did it fail on?", "Is it every annual customer?"]
+    assert seen["moves"]["asks"] == ["OK the refund fix for the Pro plan?", "OK refunding every annual customer?"]
 
     done = post(api, f"tasks/{dup['id']}/merge", {"into": kept["id"]})
 
@@ -97,7 +97,7 @@ def test_merge_moves_the_details_and_subtasks_and_closes_the_duplicate(api):
         assert sum(1 for m in H.task_comments(c, dup["id"]) if m["kind"] == "say") >= 7, "the comments stay"
         notes = [m["body"] for m in H.task_comments(c, kept["id"]) if m["kind"] == "say"]
         assert any(
-            f"7 comments on [{n}](#/task/{dup['id']})" in body and "Which plan did it fail on?" in body
+            f"7 comments on [{n}](#/task/{dup['id']})" in body and "OK the refund fix for the Pro plan?" in body
             for body in notes
         )
         closed = [m["body"] for m in H.task_comments(c, dup["id"])]

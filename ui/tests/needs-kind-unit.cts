@@ -1,6 +1,7 @@
 // No browser: Flow sorts an ask by its kind (ui/app/tasks.ts decideKind, tasks-page.ts needsGroup, dashboard.ts dashAct),
 // as backend/cards.py needs_act does. Only an OK or a page's OK is approved; an ask of a kind Flow does not know (or one
-// whose kind it may not read) is answered, so it never offers Approve or Send back.
+// whose kind it may not read) is 'other', which never offers Approve or Send back, and an OK on the card as the server
+// words every ask. A bot's ❓ is replied to, as a mention is.
 // Run: node ui/tests/needs-kind-unit.cts
 'use strict';
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
@@ -29,9 +30,13 @@ for (const kind of ['ok', 'page']) {
   assert.equal(needsGroup(ask(kind)), 'review', `${kind}: under Review`);
   assert.equal(dashAct(ask(kind)), 'ok', `${kind}: ok on the card`);
 }
-for (const kind of ['answer', 'mark', null]) {
-  assert.equal(decideKind(ask(kind)), 'question', `${kind}: answered, never Approve or Send back`);
+for (const kind of ['mark', null]) {
+  assert.equal(decideKind(ask(kind)), 'other', `${kind}: never Approve or Send back`);
   assert.equal(needsGroup(ask(kind)), 'answer', `${kind}: under Answer`);
-  assert.equal(dashAct(ask(kind)), 'answer', `${kind}: answer on the card`);
+  assert.equal(dashAct(ask(kind)), 'ok', `${kind}: ok on the card, as the server says`);
 }
+const mark = {kind: 'question', id: 'qmark:q1', line: 'x', since: ''};
+assert.equal(decideKind(mark), 'mention', 'a ❓: replied to in its chat');
+assert.equal(needsGroup(mark), 'answer', 'a ❓: under Answer');
+assert.equal(dashAct(mark), 'reply', 'a ❓: reply on the card');
 console.log('needs-kind-unit: ok');

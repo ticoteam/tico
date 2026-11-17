@@ -29,7 +29,7 @@ def test_payloads_stay_under_their_budgets(api):
     cid = msg["conversation_id"]
     task = post(api, "tasks", {"owner": "human:ana", "title": "Review the plan", "body": BODY})["task"]
     with store.transaction() as c:
-        # 2,000 tasks: 500 on ana, each asking her a question (her Needs you), the rest on bots.
+        # 2,000 tasks: 500 on ana, each asking her OK (her Needs you), the rest on bots.
         from backend import task_engine as TE
 
         mine = [task] + [
@@ -37,7 +37,7 @@ def test_payloads_stay_under_their_budgets(api):
         ]
         for row in mine:
             version = H.task(c, row["id"])["version"]
-            TE.add_requirement(c, row["id"], "human:ana", "answer", "human:ana", "Ready?", seen_version=version)
+            TE.add_requirement(c, row["id"], "human:ana", "ok", "human:ana", "Ready?", seen_version=version)
         for i in range(1500):
             H.task_create(c, "human:ana", f"Bot work {i}", BODY, "bot:ops", lint=False)
         first = dict(

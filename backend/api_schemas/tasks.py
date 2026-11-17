@@ -231,19 +231,6 @@ SCHEMAS.update(
                 "standing": "s",
                 "who": "n",
                 "asked_by": "n",
-                "choices": {"type": ["array", "null"], "items": {"type": "string"}},
-                # A bot's question to a person: why it matters, a line per choice on what happens (in the choices' order)
-                # and the choice it recommends (backend/ask_shape.py). Absent on an ask that carried none.
-                "brief": obj(
-                    {
-                        "why": "s",
-                        "details": {"type": ["array", "null"], "items": {"type": "string"}},
-                        "recommend": "n",
-                    },
-                    required=["why", "details", "recommend"],
-                ),
-                # The ask's short title (at most 60 characters), the decision view's heading. Absent on an ask without one.
-                "title": "s",
                 "shows": items({"type": "string"}),
                 # A page requirement: the page attached now, at the version an OK of it is for.
                 "page": obj({"file_id": "s", "version": "i", "ref": "s"}, required=["file_id", "version", "ref"]),
@@ -282,17 +269,7 @@ SCHEMAS.update(
                 "answer": {
                     "oneOf": [obj({"id": "s", "value": "s", "note": "n", "by": "s", "at": "s"}), {"type": "null"}]
                 },
-                # A stage's answer: how it is named and what it takes. Absent on every other requirement.
-                "typed": obj(
-                    {
-                        "name": "s",
-                        "type": {"enum": ["text", "number", "choice"]},
-                        "min": {"type": ["integer", "null"]},
-                        "max": {"type": ["integer", "null"]},
-                        "question": "s",
-                    }
-                ),
-                "may": items({"enum": ["done", "ok", "no", "again", "answer", "give", "undo", "withdraw", "thumbs"]})
+                "may": items({"enum": ["done", "ok", "no", "give", "undo", "withdraw"]})
                 | {"description": "What this reader may do with it: a hint, the engine decides"},
             },
             required=[
@@ -303,7 +280,6 @@ SCHEMAS.update(
                 "standing",
                 "who",
                 "asked_by",
-                "choices",
                 "shows",
                 "answer",
                 "may",

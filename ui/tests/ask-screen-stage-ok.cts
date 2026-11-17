@@ -24,7 +24,7 @@ const brief = (id: string, title: string) => ({id, title, number: 1, pipeline_id
 const need = (task: string, title: string, file: string, version: number, hour: number, line = `Spec for ${title}, ready for your OK`) => ({
   kind: 'ask', id: `v-${task}:${RID}`, task_id: task, requirement_id: RID, line, since: `2026-11-09T${String(hour).padStart(2, '0')}:00:00Z`,
   task: brief(task, title),
-  ask: {requirement_id: RID, kind: 'page', line, who: 'human:ana', asked_by: 'bot:pm', choices: null, may: ['ok', 'no'], met: false,
+  ask: {requirement_id: RID, kind: 'page', line, who: 'human:ana', asked_by: 'bot:pm', may: ['ok', 'no'], met: false,
     shows: [`page:${file}@${version}`], standing: 'waiting', answer: null, page: {file_id: file, version, ref: `page:${file}@${version}`}}});
 const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager_id: null, owner_id: 'human:ana', private: false,
   factory_id: null, preset: null, settings_version: 1, retired_at: null,

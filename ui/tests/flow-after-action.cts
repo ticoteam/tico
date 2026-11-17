@@ -1,8 +1,8 @@
 import type {Page, Route} from 'playwright';
 // Offline browser check of Flow right after each action (ui/app/decide.ts decideDo, decideApprove, decideBar), at
 // 1200 px and on a 390 px phone: Approve, Approve with comments (an OK with nothing bound, and one bound to what it
-// shows), a comment a rule holds, Send back, a reply to a bot's question, a tapped choice, Snooze, Skip, Undo after
-// each (and an Undo that fails), and the last item (All done). After each the pane shows the next item (its card and
+// shows), a comment a rule holds, Send back, a reply to a bot's ❓, Snooze, Skip, Undo after each that has one (and an
+// Undo that fails), and the last item (All done). After each the pane shows the next item (its card and
 // buttons) or All done, the top bar is whole (where you are, ✕), and nothing throws. The undo notice is quiet text in
 // the top bar: no box of its own, over no control, the pane or its buttons, and nothing moves for it.
 // FLOW_SHOTS=<folder> saves the screen after Approve with comments, after a held comment and after a failed Undo,
@@ -21,12 +21,14 @@ const brief = (n: number, title: string) => ({id: 't' + n, title, number: n, pip
   status: 'open', owner_id: 'bot:tpo', requester_id: 'human:ana', assignee_id: null, due_at: null, late: null, snoozed: false,
   turn: {state: 'person', who: 'human:ana', line: 'Waiting on Ana', since: '2026-11-15T09:00:00Z', until: null, ask: true, requirement_id: null},
   version: 3});
-const ask = (n: number, kind: 'ok' | 'answer', line: string, choices: string[] | null = null): Item => ({kind: 'ask', id: `v${n}:r${n}`,
-  task_id: 't' + n, requirement_id: 'r' + n, since: `2026-11-15T10:${String(n).padStart(2, '0')}:00Z`, line, task: brief(n, `Task ${n}: ${line}`),
-  ask: {requirement_id: 'r' + n, kind, line, who: 'human:ana', asked_by: 'bot:tpo', choices, may: kind === 'ok' ? ['ok', 'no'] : ['answer'],
-    met: false, shows: [], standing: 'waiting', answer: null}});
-const ok = (n: number) => ask(n, 'ok', `OK the spec ${n}?`);
-const question = (n: number, choices: string[] | null = null) => ask(n, 'answer', `Which plan for ${n}?`, choices);
+const ok = (n: number): Item => ({kind: 'ask', id: `v${n}:r${n}`,
+  task_id: 't' + n, requirement_id: 'r' + n, since: `2026-11-15T10:${String(n).padStart(2, '0')}:00Z`, line: `OK the spec ${n}?`,
+  task: brief(n, `Task ${n}: OK the spec ${n}?`), ask: {requirement_id: 'r' + n, kind: 'ok', line: `OK the spec ${n}?`, who: 'human:ana',
+    asked_by: 'bot:tpo', may: ['ok', 'no'], met: false, shows: [], standing: 'waiting', answer: null}});
+// A bot's ❓ on a message of its task's chat (backend/question_marks.py): the reply is a message there.
+const mark = (n: number): Item => ({kind: 'question', id: `qmark:q${n}`, mark_id: 'q' + n, task_id: 't' + n, message_id: 'm' + n,
+  conversation_id: 'c' + n, root_id: 'c' + n, from_id: 'bot:tpo', requirement_id: null, line: `Which plan for ${n}?`,
+  since: `2026-11-15T10:${String(n).padStart(2, '0')}:00Z`, task: brief(n, `Task ${n}`)});
 const mention = (n: number): Item => ({kind: 'mention', id: `mn${n}`, line: `Can you look at the numbers ${n}?`, from_id: 'human:bo',
   conversation_id: 'c' + n, since: `2026-11-15T08:${String(n).padStart(2, '0')}:00Z`});
 // OKs bound to what they show (GET /oks/rN has content and its hash): okGive, then the words as a comment.
@@ -65,6 +67,9 @@ const BOUND = new Set([3, 4, 13, 14]);
       const t = p.match(/^\/api\/v2\/tasks\/t(\d+)$/);
       if (t && r.method() === 'GET') return json({task: {...brief(Number(t[1]), `Task ${t[1]}`), body: 'What the task is about.',
         created_at: '2026-11-15T09:00:00Z', attachments: [], links: [], conversation_id: 'c' + t[1]}});
+      // A reply in a ❓'s chat clears it (backend/question_marks.py).
+      const said = r.method() === 'POST' && p.match(/^\/api\/v2\/threads\/(c\d+)\/messages$/);
+      if (said) { writes.push(p); take(n => n['root_id'] === said[1]); return json({message: {id: 'm99'}}); }
       if (r.method() === 'POST' && p.startsWith('/api/v2/') && !p.startsWith('/api/v2/threads/')) {
         const body = JSON.parse(r.postData() || '{}') as Record<string, unknown>;
         writes.push(p);
@@ -99,7 +104,8 @@ const BOUND = new Set([3, 4, 13, 14]);
       needs = items; away.clear();
       await page.evaluate('v2Refresh()');
       await page.evaluate('decideFlow(document.body)');
-      await side.locator(`[data-key="${items[0]!.id}"]`).waitFor();
+      // A ❓'s actions are its chat's composer, so its own row there is empty (hidden): attached is enough.
+      await side.locator(`[data-key="${items[0]!.id}"]`).waitFor({state: 'attached'});
       await dialog.locator('.dc-start').waitFor({state: 'detached'});
       await page.waitForTimeout(450);   // a phone's new item takes no taps for 400 ms (decideCalm)
       paneTop = await dialog.locator('.dc-main').evaluate(e => e.getBoundingClientRect().top);
@@ -246,18 +252,13 @@ const BOUND = new Set([3, 4, 13, 14]);
       await whole(`${at} Send back`, 'v90:r90');
       await undo(`${at} Send back`, 'v5:r5', 'v90:r90');
 
-      // A reply to a bot's question: snoozed for Ana until it writes back.
-      await open([question(6), ok(90)]);
+      // A reply to a bot's ❓: a message of its chat (no Undo: a sent message stays sent).
+      await open([mark(6), ok(90)]);
+      n = writes.length;
       await composer.fill('The small one');
       await arrow.click();
       await whole(`${at} a reply`, 'v90:r90');
-      await undo(`${at} a reply`, 'v6:r6', 'v90:r90');
-
-      // A tapped choice answers the question.
-      await open([question(7, ['Small', 'Large']), ok(90)]);
-      await dialog.locator('[data-dc-choice="Small"]').first().click();
-      await whole(`${at} a choice`, 'v90:r90');
-      await undo(`${at} a choice`, 'v7:r7', 'v90:r90');
+      assert.deepEqual(writes.slice(n), ['/api/v2/threads/c6/messages']);
 
       // Snooze, 1 hour.
       await open([ok(8), ok(90)]);

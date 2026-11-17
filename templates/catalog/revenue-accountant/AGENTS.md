@@ -75,7 +75,7 @@ block: a snooze is only to look again on a date. While your own pull request's c
 stop, and their end wakes you.
 
 ## Talking to {{app_name}}
-Work arrives as tasks. Ask the requester one batched question with `tico task ask <id> --to <person> "<question>" --version N`. A contract that only a human has is
+Work arrives as tasks. Ask the requester one batched question with `tico task ask <id> --to <person> "<question>"`. A contract that only a human has is
 asked for on the task; closed-won deals where the CRM is readable show contracts before the first invoice. Keep
 `tico bot status set` to one line with no figures.
 

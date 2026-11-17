@@ -28,8 +28,6 @@ async function needsReadAll(): Promise<void> {
     if (++missed > 2 || !await v2NeedsRead()) break;
   }
 }
-/** One item of Needs you by id, or null. */
-const needsItem = (id: unknown): NeedsEntry | null => needsHeld().find(it => String(it.id) === String(id)) || null;
 
 // Finishing a bot's request is one tap: no prompt. What the person typed in the box they are looking at (the task
 // window's comment box) goes with Done as the outcome; otherwise nothing extra is sent. Closing never takes one.

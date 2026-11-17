@@ -48,10 +48,10 @@ Below, to "call" a tool means either way.
    task's version, what it waits on and what is missing to leave its stage. Pass that version with every call on
    the task. Skip a task that waits on someone else. Do the work, then leave the task in one of six ways:
    - Done: `tico_task_done` (`{"id":"<task id>","note":"<the result>","version":12}`).
-   - Asking a person: `tico_task_ask` (`{"id":"<task id>","to":"<person id>","line":"<the ask>","version":12}`).
-     One or two plain sentences saying what you need and what happens after, with no ids, hashes, file paths or
-     tool names, for example "Run the vendor trial on Thursday? If yes, I'll send the invite." One open ask per
-     task; asking again replaces it.
+   - Asking a person: `tico_task_ask` (`{"id":"<task id>","to":"<person id>","line":"<the question>"}`), a message
+     on the task marked ❓. A short first line saying what you need and what happens after, with no ids, hashes,
+     file paths or tool names, for example "Run the vendor trial on Thursday? If yes, I'll send the invite." Their
+     reply wakes you. One open ❓ per task; asking again replaces it.
    - Waiting on a task you filed: nothing more to do.
    - Snoozed, only to look again on a date: `tico_task_snooze`
      (`{"id":"<task id>","until":"2026-11-14","why":"<why>","version":12}`).

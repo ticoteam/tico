@@ -58,24 +58,12 @@ class NoCredential(CliError):
         self.code = code
 
 
-def thumb(value):
-    """up or down, as the thumbs route's `up`."""
-    if value not in ("up", "down"):
-        raise argparse.ArgumentTypeError("up or down")
-    return value == "up"
-
-
 def json_value(value):
     """`--content`: any JSON value, read exactly; a plain word that is not JSON is refused."""
     try:
         return json.loads(value)
     except ValueError:
         raise argparse.ArgumentTypeError("--content is JSON, for example '{\"usd\": \"10.00\"}'") from None
-
-
-def choice_list(value):
-    """`--choices a,b`: the answers a person picks from, in order."""
-    return [choice.strip() for choice in value.split(",") if choice.strip()]
 
 
 def out(obj):
@@ -606,6 +594,13 @@ def parser():
     s.add_argument("action", nargs="?", default="get", choices=["get", "set", "edit", "pause", "resume", "clear"])
     s.add_argument("objective", nargs="?")
     s.set_defaults(fn="chat goal")
+    s = chat.add_parser("ask", help="ask a person in your direct chat, marked ❓: it needs their reply")
+    s.add_argument("message", help="what you ask: a short first line that stands on its own")
+    s.add_argument("--to", required=True, help="the person: their id")
+    s.add_argument(
+        "--conversation", dest="conversation_id", help="a chat you are both in; your chat with them if left out"
+    )
+    s.set_defaults(fn="chat ask")
     cli_spec.add(sub, assistant_commands.ASSISTANT)  # tico assistant: clients/commands/assistant.py
     cli_spec.add(sub, task_work_commands.TAG)  # tico tag: clients/commands/task_work.py
 
@@ -688,45 +683,26 @@ def parser():
     s.set_defaults(fn="task create")
     version_help = "the version you were last shown: tico task show, a list row and every wake print it"
     s = task.add_parser(
-        "ask", help="ask a person on this task, in one line; it waits for their answer, which wakes you once"
+        "ask",
+        help="ask a person on this task: the message is posted on the task's chat marked ❓ (needs their reply); "
+        "with --kind ok and --show, an OK of what it shows",
     )
     s.add_argument("id")
-    s.add_argument(
-        "line", nargs="?", help="what they are asked: a first line of 140 characters at most, readable on its own"
-    )
+    s.add_argument("line", nargs="?", help="the message: a short first line that reads on its own, then any detail")
     s.add_argument("--to", help="the person you ask: their id")
     s.add_argument(
-        "--kind", choices=["answer", "ok"], help="answer (the default): a question; ok: approve or send back"
-    )
-    s.add_argument("--choices", type=choice_list, help="the answers to pick from, a,b")
-    s.add_argument(
-        "--choice",
-        action="append",
-        metavar="LABEL|WHAT HAPPENS",
-        help="one answer to pick from and what happens on it; repeat, 2 to 4 (a bot asking a person)",
-    )
-    s.add_argument(
-        "--recommend", metavar="LABEL", help="the choice you recommend (a bot asking a person, with choices)"
-    )
-    s.add_argument(
-        "--title", help="a short title, at most 60 characters: the heading above the question (not with --for)"
+        "--kind",
+        choices=["ok"],
+        help="ok: approve or send back what --show names (a question is the default)",
     )
     s.add_argument("--show", action="append", metavar="REF", help="what they look at: page:12, file:ID@N; repeat")
     s.add_argument("--for", dest="subject", metavar="KIND:ID", help="an OK bound to what you will do, with --content")
     s.add_argument("--content", type=json_value, help="with --for: exactly what the OK covers, as JSON")
     s.add_argument("--withdraw", action="store_true", default=None, help="take back your open ask instead")
     s.add_argument("--requirement", help="with --withdraw: the ask's requirement id, when several may be withdrawn")
-    s.add_argument(
-        "-m", "--why", help="why it matters to them, in one line (a bot asking a person needs it); with --withdraw: why"
-    )
+    s.add_argument("-m", "--why", help="with --withdraw: why")
     s.add_argument("--version", type=int, help=version_help)
     s.set_defaults(fn="task ask")
-    s = task.add_parser("thumbs", help="was this ask worth asking: up or down; a down sends an open ask back")
-    s.add_argument("id")
-    s.add_argument("requirement", help="the ask's requirement id, from tico task show")
-    s.add_argument("up", metavar="up|down", type=thumb, help="up: worth asking; down: what was wrong goes in --note")
-    s.add_argument("--note", help="what was wrong, in a few words")
-    s.set_defaults(fn="task thumbs")
     s = task.add_parser("give", help="give what you are asked on a task to another person")
     s.add_argument("id")
     s.add_argument("requirement", help="the requirement's id, from tico task show")
@@ -735,7 +711,9 @@ def parser():
     s.add_argument("--version", type=int, help=version_help)
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="task give")
-    s = task.add_parser("comment", help="leave a comment on a task, on the record with your name")
+    s = task.add_parser(
+        "comment", help="leave a comment on a task (not your own task during your turn: your reply is posted there)"
+    )
     s.add_argument("--public", action="store_true", default=None)
     s.add_argument("--ok", metavar="OK_ID", help="the OK a person gave on exactly this public reply")
     s.add_argument("id")
@@ -1462,12 +1440,12 @@ RENAMED.sort(key=lambda rule: -len(rule[0]))
 # Commands taken away (asks in Tico 0.5, the old task engine in 0.6): each prints one line naming what to use instead
 # and exits 1, so a bot told an old command does not loop on it. The longest old spelling that matches wins.
 ASK_INSTEAD = (
-    'ask a person on your task with: tico task ask <id> --to <person> "<one line>" --version N; '
+    'ask a person on your task with: tico task ask <id> --to <person> "<question>" (a message marked ❓); '
     'ask a bot with: tico message send <bot> "<question>" --needs-action'
 )
 ANSWER_INSTEAD = (
-    "a person answers in Needs you; a bot named on an ask answers with: "
-    "tico task answer <id> <requirement> ok|no|<answer> --version N"
+    "a person replies in Needs you; a bot named on an OK answers with: "
+    "tico task answer <id> <requirement> ok|no --version N"
 )
 WAIT_INSTEAD = (
     "a task waits only on a person it asks (tico task ask) or a task it files (tico task file --parent <id>); "

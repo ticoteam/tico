@@ -1,5 +1,8 @@
 """Product's Validate: no bot's OK of a person (the decision model passing the Checked in production page ends it), no
-check asked without that page, the OK and Not validated of an OK a bot asked before that rule, and the one-time sweep of tasks already in Validate (backend/validate_gate.py).
+check asked without that page, the OK and Not validated of an OK a bot asked before that rule, a bot's ❓ to a person
+refused there as an OK ask would be, and the one-time sweep of tasks already in Validate (backend/validate_gate.py). A
+question is a message marked ❓ now (backend/question_marks.py): the engine refuses one as an ask
+(backend/tests/test_question_writers.py).
 
 Synthetic rows only (backend/tests/helpers/engine.py): the fictional company, where Ana owns it, and its role bots.
 """
@@ -11,6 +14,7 @@ import pytest
 from backend import answers as A
 from backend import page_verdicts as V
 from backend import pipeline_settings as PS
+from backend import question_marks as Q
 from backend import task_engine as E
 from backend import task_requirements as R
 from backend import validate_gate as G
@@ -66,12 +70,13 @@ def _asked_before(c, row, monkeypatch, **kw):
     """A bot's OK of Ana asked before Validate refused every bot's OK (NOBODY_ASKED), showing the page as such an OK
     did: it is still answered."""
 
-    def then(conn, row, by, person, kind, shows, choices):
+    def then(conn, row, by, person, shows):
         page, _ = G.page_of(conn, row)
         return [G.ref(page)] if page else shows
 
     with monkeypatch.context() as m:
         m.setattr(G, "check_ask", then)
+        m.setattr(E, "shows_a_file", lambda *_: True)  # the page is rows of the test's own (_attach), no file
         return _ask(c, row, PM, "ok", ANA, CHECKED, **kw)
 
 
@@ -98,11 +103,8 @@ def _on_person(c, task_id, person):
 # ----------------------------------------------------------------------------- the ask
 def test_with_no_passed_page_a_bots_check_of_a_person_is_refused_and_nothing_reaches_them(c):
     row = _in_validate(c)
-    for kind, choices in (("ok", None), ("answer", ["yes", "no"]), ("answer", ["Yes", "No", "Something else"])):
-        with pytest.raises(H.Refused, match=re.escape(G.FIRST)):
-            _ask(c, row, PM, kind, ANA, "Is the row 40 px on your phone?", choices=choices)
-    with pytest.raises(H.Refused, match=re.escape(G.FIRST)):  # a free question is a check too
-        _ask(c, row, PM, "answer", ANA, "How tall is the row on your phone?")
+    with pytest.raises(H.Refused, match=re.escape(G.FIRST)):
+        _ask(c, row, PM, "ok", ANA, "Is the row 40 px on your phone?")
     # With a page, sent back or passed, no bot asks an OK: the decision model passing it ends the stage.
     row = _jev(c, _attach(c, row), "not_met")
     with pytest.raises(H.Refused, match=re.escape(G.NOBODY_ASKED)):
@@ -114,11 +116,39 @@ def test_with_no_passed_page_a_bots_check_of_a_person_is_refused_and_nothing_rea
     assert _on_person(c, row["id"], ANA) == []
 
 
-def test_a_decision_that_is_not_a_check_is_its_own_task_or_an_ok_for_that_action(c):
+def _marks(c, row):
+    return c.execute("SELECT id FROM question_marks WHERE task_id=?", (row["id"],)).fetchall()
+
+
+def test_a_bots_question_to_a_person_in_validate_is_refused_as_its_own_task_or_an_ok_of_the_page(c):
+    row = _in_validate(c)
+    said = c.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+    # No passed page: a check or a decision, never a question to the person.
+    with pytest.raises(H.Refused, match=re.escape(f"{G.FIRST} {G.OWN_TASK}")):
+        Q.ask(c, PM, row["id"], ANA, "Is the row 40 px on your phone?")
+    row = _jev(c, _attach(c, row), "not_met")
+    with pytest.raises(H.Refused, match=re.escape(G.OWN_TASK)):
+        Q.ask(c, PM, row["id"], ANA, "Which host should we pay for?")
+    # Passed: the person OKs the page, on its card.
+    row = _jev(c, row)
+    with pytest.raises(H.Refused, match=re.escape(G.ASK_OK)):
+        Q.ask(c, PM, row["id"], ANA, "Does the row look right to you?")
+    assert _marks(c, row) == [] and c.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == said
+
+
+def test_a_question_validate_does_not_cover_is_let_through(c):
+    row = _in_validate(c)
+    # Only a bot's question to a person on a task in Validate: a person's, one to a bot, or another stage is not its.
+    for by, person, stage in ((ANA, BEN, G.STAGE), (PM, "bot:engineer", G.STAGE), (PM, ANA, "product-spec")):
+        assert not G.applies({**row, "stage_id": stage}, by, person)
+        G.check_question(c, {**row, "stage_id": stage}, by, person)
+    row = E.move(c, row["id"], G.BACK_TO, ANA, "Back for this test")
+    mark = Q.ask(c, row["owner_id"], row["id"], ANA, "Is the row 40 px on your phone?")
+    assert mark["person_id"] == ANA and _marks(c, row)
+
+
+def test_an_ok_for_an_action_is_that_actions_own_and_not_held_behind_the_page(c):
     row = _jev(c, _attach(c, _in_validate(c)), "unsure")
-    for choices in (["Fly", "Render"], ["Fly", "Render", "Neither"]):
-        with pytest.raises(H.Refused, match=re.escape(G.OWN_TASK)):
-            _ask(c, row, PM, "answer", ANA, "Which host do we pay for?", choices=choices)
     # An OK bound to an action (task_asks.ask_ok) is that action's own: asked, and waiting on the person.
     out = _ask(c, row, PM, "ok", ANA, "OK to pay for the host?", for_action=True)
     c.execute(
@@ -131,7 +161,7 @@ def test_a_decision_that_is_not_a_check_is_its_own_task_or_an_ok_for_that_action
 
 def test_a_person_asks_whatever_they_like(c):
     row = _in_validate(c)
-    out = _ask(c, row, ANA, "answer", BEN, "Does it look right to you?", choices=["yes", "no"])
+    out = _ask(c, row, ANA, "ok", BEN, "Does it look right to you?")
     assert _standing(c, row["id"], out["requirement_id"]).on == BEN
 
 
@@ -141,9 +171,6 @@ def test_an_ok_asked_before_the_rule_waits_on_jev_and_reaches_the_person_only_on
     waiting = _standing(c, rid=rid, task_id=row["id"])
     assert (waiting.state, waiting.on) == (R.WAITING, R.JEV)
     assert _on_person(c, row["id"], ANA) == []
-    # A yes/no beside it is a free question: the card is the OK.
-    with pytest.raises(H.Refused, match=re.escape(G.FIRST)):
-        _ask(c, row, PM, "answer", ANA, "Does it pass?", choices=["yes", "no"])
     # Nor from the task page: the person neither OKs it nor sends it back before Jev passed the page.
     assert not {"ok", "no"} & set(_may(c, row, rid))
     for value, notes in (("ok", None), ("no", "Looks clipped")):
@@ -160,12 +187,11 @@ def test_an_ok_asked_before_the_rule_waits_on_jev_and_reaches_the_person_only_on
 
 
 def test_the_oks_check_rows_are_what_the_decision_model_passed_on_the_page_not_the_bots_words(c, monkeypatch):
-    """The Validate OK's verdict rows come from the page's passed check, so they stay when the ask carries no brief."""
+    """The Validate OK's verdict rows come from the page's passed check, never from what the bot wrote on the ask."""
     from backend import pipeline_judges as PJ
 
     row = _attach(c, _in_validate(c))
-    brief = {"why": "Checked on rc.13.", "details": ["Row is 40 px"], "recommend": None}
-    rid = _asked_before(c, row, monkeypatch, brief=brief)["requirement_id"]
+    rid = _asked_before(c, row, monkeypatch)["requirement_id"]
 
     def entry():
         return next(r for r in H.task_view(c, row["id"], ANA)["to_leave"] if r["requirement_id"] == rid)

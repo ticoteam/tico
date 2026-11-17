@@ -101,7 +101,7 @@ stop, and their end wakes you.
 ## Talking to {{app_name}}
 Work arrives as tasks. Read the roster with `tico team show`, the handbook through the Librarian with
 `tico doc ask "<question>"`, dates with `tico calendar list`, and goals with `tico goal list --all`. A
-question for the owner is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task. When ready, the summary reaches its readers
+question for the owner is `tico task ask <id> --to <person> "<question>"`, one open question per task. When ready, the summary reaches its readers
 as `tico message send --fyi <person> "<one line and the link>"`.
 
 ## Quality standards

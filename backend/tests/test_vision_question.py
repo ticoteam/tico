@@ -1,6 +1,6 @@
 """The team's vision is the Strategy Owner's question to the owner, not a to-do (Tasks spec "Bots ask people a question
-with choices", AC-10): a task the Strategy Owner holds with its question on it, no choices. A vision they send is saved
-by the Strategy Owner in their words, said on the task, and the question closes; anything else leaves it open."""
+with choices", AC-10): a task the Strategy Owner holds with its ❓ to the owner on the task's chat. A vision they send is
+saved by the Strategy Owner in their words, said on the task, and the task closes; anything else leaves it open."""
 
 from backend import goal_asks as GA
 from backend import strategy as S
@@ -20,14 +20,11 @@ def vision_row(api):
 
 
 def open_asks(api, task_id):
+    """The open ❓ on the task (backend/question_marks.py)."""
     with api.app.state.store.read() as c:
         return [
             dict(r)
-            for r in c.execute(
-                "SELECT r.* FROM requirements r JOIN visits v ON v.id=r.visit_id WHERE v.task_id=? AND v.left_at IS NULL "
-                "AND r.withdrawn_at IS NULL AND NOT EXISTS (SELECT 1 FROM answers a WHERE a.requirement_id=r.id)",
-                (task_id,),
-            )
+            for r in c.execute("SELECT * FROM question_marks WHERE task_id=? AND cleared_at IS NULL", (task_id,))
         ]
 
 
@@ -43,15 +40,9 @@ def test_the_owner_gets_the_vision_as_the_strategy_owners_question_not_a_to_do(a
     # The Strategy Owner holds it and asks it: the owner's list has the question, and no to-do of theirs.
     assert (task["owner_id"], task["requester_id"], task["title"]) == (MANAGER, MANAGER, GA.VISION_QUESTION)
     [ask] = open_asks(api, task["id"])
-    assert (ask["kind"], ask["person_id"], ask["added_by_id"], ask["line"]) == (
-        "answer",
-        "human:ana",
-        MANAGER,
-        GA.VISION_LINE,
-    )
-    assert ask["choices"] is None
+    assert (ask["person_id"], ask["bot_id"], ask["line"]) == ("human:ana", MANAGER, GA.VISION_LINE)
     mine = [i for i in get(api, "needs-you")["items"] if i.get("task_id") == task["id"]]
-    assert [i["kind"] for i in mine] == ["ask"]
+    assert [i["kind"] for i in mine] == ["question"]
     assert not [i for i in get(api, "needs-you")["items"] if "what this team is for" in str(i.get("title"))]
     # Its why goes with it, as a bot's question carries one.
     detail = get(api, f"tasks/{task['id']}")
@@ -98,15 +89,17 @@ def test_a_vision_the_owner_sends_is_saved_in_their_words_said_and_the_question_
     post(api, "strategy/vision", {"task": task["id"], "vision": VISION}, token=BOT, expected=409)
 
 
-def test_a_question_back_leaves_the_question_open_and_nothing_is_saved(api):
+def test_a_question_back_leaves_the_task_open_and_nothing_is_saved(api):
     goal_manager(api, level=2)
     sync(api)
     task = vision_row(api)
     as_bot(api, "strategy-owner")
+    assert open_asks(api, task["id"])
     say(api, task["id"], "What do you mean by a vision?")
+    # Her reply clears the ❓ (any reply does) and reaches the Strategy Owner; the task stays open for its answer back.
     with api.app.state.store.read() as c:
         assert H.task(c, task["id"])["status"] == "open" and not S.vision(c, editor=True)
-    assert open_asks(api, task["id"])
+    assert not open_asks(api, task["id"])
     # The Strategy Owner may not save words the owner did not write there, nor a scrap of what they did write.
     post(api, "strategy/vision", {"task": task["id"], "vision": VISION}, token=BOT, expected=422)
     post(api, "strategy/vision", {"task": task["id"], "vision": "a vision"}, token=BOT, expected=422)

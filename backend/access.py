@@ -317,6 +317,9 @@ def _save_roster(c, roster):
     from . import people_mirror
 
     people_mirror.changed()  # the Tico account gets the sign-in list again (backend/people_mirror.py)
+    from . import question_marks
+
+    question_marks.clear_gone(c)  # a ❓ for someone who left or lost sign-in goes nowhere: its bot asks someone else
 
     def memberships(value):
         return (

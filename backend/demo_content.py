@@ -2804,27 +2804,21 @@ TASKS = [
     ),
 ]
 
-# What an open task waits on, set by its owner when it last changed (TASKS). An ask names a person on the task:
-# (person, line, kind, choices); "ok" is a yes or a send back, "answer" a question. A snooze sets the task aside:
-# (why, days from the build until it ends).
+# What an open task waits on, set by its owner when it last changed (TASKS). A snooze sets the task aside: (why, days
+# from the build until it ends).
+# A bot's ❓ on its own open task (backend/question_marks.py): (person, message).
 TASK_ASKS = {
     "mobile-beta": (
         "human:eli",
         "Release the calibration screen to every owner? The beta with 200 owners is clean.",
-        "ok",
-        None,
     ),
     "video-cut": (
         "human:cara",
         "Can the 30-second install video go into the holiday ads? Say what to change if not.",
-        "answer",
-        None,
     ),
     "cloud-quote": (
         "human:ana",
         "Should the render cloud add two workers for the January peak, or stay at six?",
-        "answer",
-        ["Add two workers", "Stay at six"],
     ),
 }
 TASK_SNOOZES = {"pr-tests": ("The author is away for three days.", 3)}

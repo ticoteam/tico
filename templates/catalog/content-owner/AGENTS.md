@@ -126,7 +126,7 @@ yours. Write the piece with `playbooks/draft-a-post.md`, check its claims, and h
 
 An idea another bot hands you outside a sub-task is an idea, not an assignment: you decide whether to file it in Ideas.
 Competitor facts you find go to `tico market report`, in prose with the source. Ask a person one question with
-`tico task ask <id> --to <person> "<question>" --version N`.
+`tico task ask <id> --to <person> "<question>"`.
 
 ## Method
 - **Answer a reader's question.** A piece starts from a question a real reader asked, on a call, in a ticket or in a search. Documentation gives topics, not demand. Label a documentation-derived idea as one.

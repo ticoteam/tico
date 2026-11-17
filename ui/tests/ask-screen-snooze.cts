@@ -28,7 +28,7 @@ const brief = (id: string, title: string) => ({id, title, number: 1, pipeline_id
 const Q = ['Approve the invoice run', 'Approve the launch email', 'Approve the price change'];
 const ok = (n: number) => ({kind: 'ask', id: `v${n}:r${n}`, task_id: `t${n}`, requirement_id: `r${n}`, line: Q[n - 1]!,
   since: `2026-11-09T1${n}:00:00Z`, task: brief(`t${n}`, `Task ${n}`),
-  ask: {requirement_id: `r${n}`, kind: 'ok', line: Q[n - 1]!, who: 'human:ana', asked_by: 'human:bo', choices: null, may: ['ok', 'no'],
+  ask: {requirement_id: `r${n}`, kind: 'ok', line: Q[n - 1]!, who: 'human:ana', asked_by: 'human:bo', may: ['ok', 'no'],
     met: false, shows: [], standing: 'waiting', answer: null}});
 const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager_id: null, owner_id: 'human:ana', private: false,
   factory_id: null, preset: null, settings_version: 1, retired_at: null,
