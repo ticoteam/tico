@@ -161,12 +161,21 @@ MARKS = ("growth setup",)
 # out so the runner list does not widen; each one needs its own decision. `call token` mints a token, a POST that its
 # tool does not mark as a write; `file approved` reads a checkout file's bytes; the automation reads (and their
 # `automations` spellings) were never in the hand list; the others are Librarian and link reads. `task run` starts a
-# bot's task, but its tool (tico_task_run) is not marked a write, so it stays out until that tool says so.
+# bot's task, but its tool (tico_task_run) is not marked a write, so it stays out until that tool says so. The Assistant
+# reads (a person's own chat, what it learned, a shared chat, the waiting cards) were never in the hand list either;
+# `meeting granola sync` starts a sync, a POST its tool does not mark as a write, and `meeting pending` was not listed.
 UNDECIDED = (
+    "assistant learned",
+    "assistant proposals",
+    "assistant read",
+    "assistant shared",
+    "assistant shared-read",
     "call token",
     "doc ask-status",
     "doc link-list",
     "file approved",
+    "meeting granola sync",
+    "meeting pending",
     "automation question-sets",
     "automation recent-runs",
     "automation template",

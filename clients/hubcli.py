@@ -475,50 +475,8 @@ def parser():
 
     cli_spec.add(sub, company_page.CLI)  # tico company-page, audiences, editions, readers
 
-    meeting = sub.add_parser(
-        "meeting", help="search meetings, read transcripts, import a transcript from another tool"
-    ).add_subparsers(dest="sub")
-    granola = meeting.add_parser(
-        "granola", help="your Granola account; connect in Meetings in your browser"
-    ).add_subparsers(dest="granola_action")
-    for action in ("status", "sync"):
-        granola.add_parser(action).set_defaults(fn="meeting granola " + action)
-    s = meeting.add_parser("link", help="link existing tasks to a saved meeting")
-    s.add_argument("id")
-    s.add_argument("task_ids", nargs="+")
-    s.set_defaults(fn="meeting link")
-    s = meeting.add_parser("unlink", help="remove a meeting's task link")
-    s.add_argument("id")
-    s.add_argument("task")
-    s.set_defaults(fn="meeting unlink")
-    s = meeting.add_parser("search")
-    s.add_argument("q", nargs="?", default="")
-    s.add_argument("--person", default="")
-    s.add_argument("--since")
-    s.add_argument("--until")
-    s.add_argument("--limit", type=int, default=20)
-    s.add_argument("--offset", type=int, default=0)
-    s.set_defaults(fn="meeting search")
-    s = meeting.add_parser("read", help="read a transcript")
-    s.add_argument("id")
-    s.add_argument("--offset", type=int, default=0)
-    s.add_argument("--limit", type=int, default=20000)
-    s.add_argument("--notes", action="store_true", default=None, help="read only the meeting's notes")
-    s.set_defaults(fn="meeting read")
-    s = meeting.add_parser("delete", help="delete a Meeting you may edit")
-    s.add_argument("id")
-    s.set_defaults(fn="meeting delete")
-    meeting.add_parser("pending", help="your Pending queue").set_defaults(fn="meeting pending")
-    s = meeting.add_parser("approve", help="share your Pending meetings")
-    target = s.add_mutually_exclusive_group(required=True)
-    target.add_argument("id", nargs="?")
-    target.add_argument("--all", action="store_true")
-    s.add_argument("--private", action="store_true", default=None)
-    s.set_defaults(fn="meeting approve")
-    for action in ("dismiss", "restore"):
-        s = meeting.add_parser(action)
-        s.add_argument("id")
-        s.set_defaults(fn="meeting " + action)
+    cli_spec.add(sub, calls.MEETING)  # tico meeting: clients/commands/calls.py (all but `import`)
+    meeting = _group_subparsers(sub, "meeting")  # hand-built: it reads the transcript and notes files on this computer
     s = meeting.add_parser(
         "import", help="file a transcript (text, WebVTT, SRT or JSON segments) as one of your meetings"
     )
@@ -654,69 +612,7 @@ def parser():
     s.add_argument("action", nargs="?", default="get", choices=["get", "set", "edit", "pause", "resume", "clear"])
     s.add_argument("objective", nargs="?")
     s.set_defaults(fn="chat goal")
-    assistant = sub.add_parser("assistant", help="the Assistant's proposals for a person to confirm").add_subparsers(
-        dest="sub"
-    )
-    assistant.add_parser("read", help="read your private Assistant chat").set_defaults(fn="assistant read")
-    s = assistant.add_parser("send", help="ask your private Assistant")
-    s.add_argument("text")
-    s.set_defaults(fn="assistant send")
-    s = assistant.add_parser("propose", help="ask the person to confirm one side-effecting operation")
-    s.add_argument("--summary", required=True)
-    s.add_argument("--path", required=True)
-    s.add_argument("--method", default="POST", choices=["POST", "PUT", "PATCH", "DELETE"])
-    s.add_argument("--body", default="{}", help="the request's JSON body")
-    s.add_argument(
-        "--for",
-        dest="for_person",
-        default=None,
-        help="the Assistant's own background run only: the person (human:<id>) whose chat gets the card",
-    )
-    s.set_defaults(fn="assistant propose")
-    s = assistant.add_parser("morning", help="the Assistant's one morning message to a person (background run only)")
-    s.add_argument("--for", dest="for_person", required=True, help="the person (human:<id>) whose chat gets it")
-    s.add_argument("--body", required=True, help="the message, in Markdown, at most 2000 characters")
-    s.set_defaults(fn="assistant morning")
-    s = assistant.add_parser("learn", help="save one thing the person taught you (What it has learned)")
-    s.add_argument("text", help="one short line, in their words")
-    s.add_argument(
-        "--company",
-        dest="layer",
-        action="store_const",
-        const="company",
-        default="personal",
-        help="the Strategy Owner in the owner's chat: about the company, not how they like things",
-    )
-    s.set_defaults(fn="assistant learn")
-    assistant.add_parser(
-        "learned", help="what your chat bot has learned: your layer, and the company's for the owner"
-    ).set_defaults(fn="assistant learned")
-    assistant.add_parser(
-        "shared", help="the people who chose you to view their Assistant chat, read only (a bot's own run)"
-    ).set_defaults(fn="assistant shared")
-    s = assistant.add_parser("shared-read", help="read one page of a person's Assistant chat they shared with you")
-    s.add_argument("person", help="the person's id, e.g. human:ana (tico assistant shared)")
-    s.add_argument("--before", default=None, help="next_before from the previous page, for older messages")
-    s.set_defaults(fn="assistant shared-read")
-    s = assistant.add_parser("withdraw", help="take back a Confirm card that waits: it never runs (any teammate)")
-    s.add_argument("id", help="the card's proposal id (tico assistant proposals)")
-    s.add_argument("--reason", default="", help="why, in one short sentence: the person reads it in their chat")
-    s.set_defaults(fn="assistant withdraw")
-    change = assistant.add_parser(
-        "change", help="what your Assistant did for you, and undoing one of those changes"
-    ).add_subparsers(dest="subsub")
-    s = change.add_parser("list", help="the Assistant's changes for you, newest first, with the words it acted on")
-    s.add_argument("--days", type=int, help="how far back (default 30, at most 90)")
-    s.add_argument("--limit", type=int, help="changes per page (default 50, at most 100)")
-    s.add_argument("--before", help="the `next` of the page before, to read older changes")
-    s.set_defaults(fn="assistant change list")
-    s = change.add_parser("restore", help="undo one change as you; restoring it again changes nothing")
-    s.add_argument("id", help="the change's id (tico assistant change list)")
-    s.set_defaults(fn="assistant change restore")
-    s = assistant.add_parser("proposals", help="the Confirm cards still waiting for their owner (find one to withdraw)")
-    s.add_argument("--proposer", choices=["botops", "assistant"], default=None, help="only the cards one proposed")
-    s.add_argument("--owner", default=None, help="only one person's cards, e.g. human:ana")
-    s.set_defaults(fn="assistant proposals")
+    cli_spec.add(sub, assistant_commands.ASSISTANT)  # tico assistant: clients/commands/assistant.py
     cli_spec.add(sub, task_work_commands.TAG)  # tico tag: clients/commands/task_work.py
 
     cli_spec.add(sub, tasks_commands.TASK)  # tico task and tasks: clients/commands/tasks.py
