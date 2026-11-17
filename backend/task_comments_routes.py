@@ -40,9 +40,18 @@ def register(
 ):
     def replying_to(c, who, task_id, body):
         """A reply to a bot's question (`ask`): the bot that asked it, and whether the question waits on the writer.
-        (None, False) for a plain comment. 422 when `ask` is not a bot's unanswered question on this task's open visit."""
+        A person's plain comment on a task where a bot's ❓ waits on them is their reply to it (writing it clears the ❓,
+        hubdb). (None, False) for any other plain comment. 422 when `ask` is not a bot's unanswered question on this
+        task's open visit."""
         if not body.ask:
-            return None, False
+            if who.role == "bot" or body.public or body.delivery == "goal":
+                return None, False
+            mine = c.execute(
+                "SELECT bot_id FROM question_marks WHERE task_id=? AND person_id=? AND cleared_at IS NULL "
+                "ORDER BY created_at LIMIT 1",
+                (task_id, who.actor),
+            ).fetchone()
+            return (mine[0], True) if mine else (None, False)
         if body.public or body.delivery == "goal":
             raise Problem("validation", "A reply to an ask is a plain comment: send it without public or goal", 422)
         marked = question_marks.get(c, question_marks.mark_id(body.ask) or body.ask)

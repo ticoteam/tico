@@ -105,8 +105,7 @@ def test_the_readers_answer_comes_back_to_the_task_and_nowhere_wider(api):
             "SELECT m.refs FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id='ops' AND j.state='queued'"
         ).fetchall()
     assert any(json.loads(r[0] or "{}").get("task") == child["id"] for r in queued), queued
-    answer = attempt  # the run that asked him, still going
-    post(api, f"tasks/{row['id']}/comments", {"text": "Ben approved; going ahead."}, answer["token"])
+    answer = attempt  # the run that asked him, still going: its reply at the end is posted on its task
     # ...but not past the task's own readers.
     r = api.post(
         "/api/v2/messages",
