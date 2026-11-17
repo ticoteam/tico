@@ -273,7 +273,8 @@ def test_markdown_tab_names():
     assert markdown_name("notes.MARKDOWN") == "Notes"
 
 
-def test_linked_document_files_and_context_fill_their_limits_with_readable_pages(api):
+def test_linked_document_files_and_context_fill_their_limits_with_readable_pages(api, monkeypatch):
+    from backend import files as file_store
     from backend import task_context, task_documents
     from backend.auth import Identity
 
@@ -321,9 +322,18 @@ def test_linked_document_files_and_context_fill_their_limits_with_readable_pages
         c.set_trace_callback(trace.append)
         docs = task_documents.listing(c, files, reader, tid)
         result = files.task_listing(c, reader, tid, all_pages=True)["files"]
+        batches = []
+        prime_visible = file_store.prime_visible
+
+        def primed(c, rows):
+            batches.append(len(rows))
+            return prime_visible(c, rows)
+
+        monkeypatch.setattr(file_store, "prime_visible", primed)
         context = task_context.listing(c, files.auth, reader, tid)["pages"]
         c.set_trace_callback(None)
     assert len(docs) == 50 and len(result) == 200 and len(context) == 10
+    assert batches == [50, 50]
     for records, key in ((docs, "file_id"), (result, "id"), (context, "id")):
         assert records[0][key] == newest
         assert {record[key] for record in records} <= set(visible)
