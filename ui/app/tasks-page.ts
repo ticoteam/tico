@@ -3,8 +3,9 @@
    The header, left to right: "Tasks", the view button ("You 7 ▾" or a pipeline's name), the pencil on a pipeline,
    then search, filter, list or columns on a pipeline, archive, Flow (decide.ts) and +.
    You is Needs you in three groups, Answer, Review and Do; a row is the sentence asked, and opens the ask screen
-   (decide.ts). A pipeline is drawn by task-pipelines.ts through TASK_PAGE_HOOKS (task-row.ts), else as a list grouped
-   by stage; its manager answers the page's chat (pipeline-rail.ts, page-chat.ts). The archive is Snoozed, Done and Closed, of the pipeline in view or of every pipeline from You.
+   (decide.ts). The person's own open tasks follow at the end of Do: they are in Tasks only, since Needs you, its count
+   and the badge hold only what someone asks of them (backend/waiting_on.py needs). A pipeline is drawn by
+   task-pipelines.ts through TASK_PAGE_HOOKS (task-row.ts), else as a list grouped by stage; its manager answers the page's chat (pipeline-rail.ts, page-chat.ts). The archive is Snoozed, Done and Closed, of the pipeline in view or of every pipeline from You.
    Reads: GET /api/v2/needs-you, GET /api/v2/pipelines, GET /api/v2/tasks (through task-api.ts).
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
@@ -253,19 +254,25 @@ function tasksKept(state: TasksPageState) {
 // refresh, and the stream's `reset`. Otherwise the 2-minute refresh, a tab back from sleep, a bulk change and this
 // tab's own writes catch up with a changed_after delta from the cursor the last read gave.
 /** The view's server filters: the archive's (of the pipeline in view, if any), or the pipeline's open tasks, snoozed
- * ones too (task-pipelines.ts draws them last in their stage); You is Needs you's. */
+ * ones too (task-pipelines.ts draws them last in their stage); on You, the viewer's own open tasks (Needs you is read
+ * beside them). */
 function tasksQuery(state: TasksPageState): TaskBriefQuery | null {
   const of = state.pipeline ? {pipeline: state.pipeline} : {};
   if (state.archive) return {status: state.archive === 'snoozed' ? 'open' : state.archive, snoozed: state.archive === 'snoozed' ? 'only' : 'hide', ...of, ...state.narrow};
   if (state.pipeline) return {status: 'open', snoozed: 'all', ...of, ...state.narrow};
-  // A bot's read-only view has no Needs you (a person's list): its You is the bot's own open tasks.
-  if (tasksViewOnly()) return {status: 'open', snoozed: 'all', owner: 'bot:' + (S.me?.id || ''), ...state.narrow};
-  return null;
+  // A bot's read-only view has no Needs you (a person's list): its You is the bot's own open tasks, snoozed ones too. A
+  // person's own snoozed tasks are in the archive's Snoozed, as Needs you leaves out what they snoozed.
+  const owner = tasksYouOwner();
+  return owner ? {status: 'open', snoozed: tasksViewOnly() ? 'all' : 'hide', owner, ...state.narrow} : null;
 }
 /** A bot's read-only view of the app (backend/app_view.py). */
 const tasksViewOnly = (): boolean => !!S.me?.read_only_view;
-/** A view's You: the bot's own open tasks (tasksQuery), kept live and paged like a pipeline's rows. */
-const tasksOwnView = (state: TasksPageState): boolean => tasksViewOnly() && !state.pipeline && !state.archive;
+/** Whose own open tasks You lists: the bot's in its read-only view, else the person's. */
+const tasksYouOwner = (): string => tasksViewOnly() ? (S.me?.id ? 'bot:' + S.me.id : '') : myActor();
+/** You: the viewer's own open tasks (tasksQuery), kept live and paged like a pipeline's rows; a person's beside their Needs you. */
+const tasksOwnView = (state: TasksPageState): boolean => !state.pipeline && !state.archive;
+/** A person's You: Needs you first (tasksYouHTML), then their own open tasks. */
+const tasksNeedsView = (state: TasksPageState): boolean => tasksOwnView(state) && !tasksViewOnly();
 /** The search and the filters as the server takes them (backend/task_match.py): the same meaning as taskFilterMatch, so
  * the server answers only the matches, a page at a time. */
 function tasksNarrow(state: Pick<TasksPageState, 'q' | 'filters'>): TaskBriefQuery {
@@ -299,11 +306,12 @@ function tasksViewHas(state: TasksPageState, t: TaskBriefV3): boolean {
   if (state.readKey && !taskFilterMatch(t, state.q, state.filters)) return false;
   if (state.archive === 'snoozed') return t.status === 'open' && !!t.snoozed;
   if (state.archive) return t.status === state.archive;
-  if (tasksOwnView(state)) return t.status === 'open' && t.owner_id === 'bot:' + (S.me?.id || '');
+  if (tasksOwnView(state)) return t.status === 'open' && t.owner_id === tasksYouOwner() && (tasksViewOnly() || !t.snoozed);
   return !!state.pipeline && t.status === 'open';
 }
-/** What the view needs: the pipelines (for the view button and the stage names), then You's Needs you, the archive, or
- * the pipeline's open tasks. */
+/** What the view needs: the pipelines (for the view button and the stage names), then You's Needs you and own tasks, the
+ * archive, or the pipeline's open tasks. A read for a search or a filter (`pipelinesToo` false) leaves Needs you as it
+ * is: its rows are matched here, and it follows its own live version. */
 async function tasksLoad(state: TasksPageState, pipelinesToo = true): Promise<void> {
   const ticket = taskFeedRead(state.feed);
   state.behind = false;
@@ -312,20 +320,22 @@ async function tasksLoad(state: TasksPageState, pipelinesToo = true): Promise<vo
   let held: LiveTaskEvent[] | null = [];
   try {
     const query = tasksQuery(state);
-    const [pipelines, rows] = await Promise.all([
+    const [pipelines, rows, needs] = await Promise.all([
       pipelinesToo ? tasksPipelinesRead().catch(() => state.pipelines) : state.pipelines,
-      query ? taskBriefsPage(tasksPageQuery(state, query)) : needsYou(),
+      query ? taskBriefsPage(tasksPageQuery(state, query)) : null,
+      tasksNeedsView(state) && pipelinesToo ? needsYou() : null,
     ]);
     // Kept for the next visit even when the page was left before it landed; a search's matches are not the view.
-    if (!narrowed || !query) S.lastRead.tasks = {view: tasksViewKey(state), needs: Array.isArray(rows) ? rows : [],
-      tasks: Array.isArray(rows) ? [] : rows.tasks.filter(t => !state.pipeline || t.pipeline_id === state.pipeline)};
+    if (!narrowed || !query) S.lastRead.tasks = {view: tasksViewKey(state), needs: needs || [],
+      tasks: rows ? rows.tasks.filter(t => !state.pipeline || t.pipeline_id === state.pipeline) : []};
     if (TASKS_ST !== state) return;
-    held = taskFeedLanded(state.feed, ticket, Array.isArray(rows) ? '' : rows.cursor);
+    held = taskFeedLanded(state.feed, ticket, rows ? rows.cursor : '');
     if (!held) return;
     state.pipelines = pipelines;
     if (state.pipeline && !pipelines.some(p => p.id === state.pipeline)) { state.pipeline = ''; tasksURLWrite(state); }
     state.stalled = false;
-    if (Array.isArray(rows)) { state.needs = rows; state.cursor = ''; state.more = false; state.edge = null; state.after = ''; }
+    if (needs) state.needs = needs;
+    if (!rows) { state.tasks = []; state.base = []; state.cursor = ''; state.more = false; state.edge = null; state.after = ''; }
     else {
       state.tasks = rows.tasks.filter(t => !state.pipeline || t.pipeline_id === state.pipeline); state.cursor = rows.cursor;
       state.more = rows.more; state.edge = rows.tasks.at(-1) ?? null; state.after = rows.next;
@@ -372,7 +382,8 @@ async function tasksCatchUp(state: TasksPageState | null): Promise<void> {
   if (!state || TASKS_ST !== state) return;
   if (state.loading) { state.behind = true; return; }
   const query = tasksQuery(state);
-  if (!query) { tasksNeedsLive(); return; }
+  if (tasksNeedsView(state)) tasksNeedsLive();
+  if (!query) return;
   if (!state.cursor) { await tasksLoad(state); return; }
   try {
     const out = await taskRowsCatchUp(state.tasks, state.cursor, query, t => tasksViewHas(state, t), () => TASKS_ST === state && !state.loading, state.feed, tasksOrder(state));
@@ -389,8 +400,8 @@ function tasksTaskPut(state: TasksPageState, given: TaskAny | null, id: string |
   let moved = false;
   // You: Needs you says what is on it; a task's change only redraws the item that shows it.
   for (const it of state.needs) if (t && it.task && String(it.task.id) === key) { it.task = {...it.task, ...t} as typeof it.task; moved = true; }
-  // A full task carries every list field.
-  if (state.pipeline || state.archive || tasksOwnView(state)) moved = taskRowsPut(state.tasks, t as TaskBriefV3 | null, key, row => tasksViewHas(state, row), tasksOrder(state)) || moved;
+  // A full task carries every list field. On You, a task of the person's own that Needs you lists too is drawn once there.
+  moved = taskRowsPut(state.tasks, t as TaskBriefV3 | null, key, row => tasksViewHas(state, row), tasksOrder(state)) || moved;
   if (moved && draw) tasksRender(state);
   return moved;
 }
@@ -597,12 +608,20 @@ function tasksStageChipsHTML(state: TasksPageState): string {
   return `<div class="tk-stages" role="group" aria-label="Needs you by stage">${chips.map(([id, name, n]) =>
     `<button type="button" class="tk-stage" data-need-stage="${esc(id)}" aria-label="${esc(`Review ${name}: ${n}`)}"><span>${esc(name)}</span><span class="n tnum">${n}</span></button>`).join('')}</div>`;
 }
+/** The person's own open tasks that Needs you does not already list: each is in You once. */
+function tasksYouOwn(state: TasksPageState): TaskBriefV3[] {
+  const listed = new Set(state.needs.map(it => String(it.task?.id ?? it.task_id ?? '')));
+  return state.tasks.filter(t => !listed.has(String(t.id)));
+}
+/** A person's You: Needs you under Answer, Review and Do, then their own open tasks at the end of Do. */
 function tasksYouHTML(state: TasksPageState): string {
   const shown = state.needs.filter(it => needsMatch(state, it));
-  if (!shown.length) return tasksNone(state);
+  const own = tasksYouOwn(state).filter(t => taskFilterMatch(t, state.q, state.filters));
+  if (!shown.length && !own.length) return tasksNone(state);
   const of = (g: string) => shown.filter(it => needsGroup(it) === g).map(needsRowHTML);
   const chips = state.q.trim() || taskFiltersOn(state.filters) ? '' : tasksStageChipsHTML(state);
-  return chips + tasksGroupHTML('Answer', of('answer')) + tasksGroupHTML('Review', of('review')) + tasksGroupHTML('Do', of('do'));
+  return chips + tasksGroupHTML('Answer', of('answer')) + tasksGroupHTML('Review', of('review'))
+    + tasksGroupHTML('Do', [...of('do'), ...own.map(t => taskRowHTML(t, {look: 'you'}))]);
 }
 /** A bot's read-only view in place of You: a line that Needs you is a person's list, then the bot's open tasks by stage,
     in the pipelines' order, then Other. */
@@ -662,7 +681,7 @@ async function tasksBodyClick(state: TasksPageState, ev: MouseEvent) {
 function tasksScopeMenu(state: TasksPageState, anchor: HTMLElement) {
   const item = (attr: string, label: string, on: boolean, count = 0) => `<button type="button" role="menuitemradio" aria-checked="${on}" class="tl-mi" ${attr}><span class="tl-mi-t">${esc(label)}</span>${count ? `<span class="tl-mi-n tnum">${count}</span>` : ''}${on ? '<span class="tl-mi-on" aria-hidden="true">✓</span>' : ''}</button>`;
   tasksMenu(state, anchor, `<div class="tl-menu" role="menu" aria-label="Show">
-    ${item('data-scope=""', tasksViewOnly() ? S.me?.name || 'Bot' : 'You', !state.pipeline, tasksViewOnly() ? state.tasks.length : state.needs.length)}<div class="tl-menu-sep" role="separator"></div>
+    ${item('data-scope=""', tasksViewOnly() ? S.me?.name || 'Bot' : 'You', !state.pipeline, tasksViewOnly() ? state.tasks.length : state.needs.length + tasksYouOwn(state).length)}<div class="tl-menu-sep" role="separator"></div>
     ${state.pipelines.map(p => item(`data-scope="${esc(p.id)}"`, p.name, state.pipeline === p.id)).join('')}</div>`, pop => {
     pop.onclick = ev => {
       const b = eventElement(ev)?.closest<HTMLElement>('[data-scope]');
@@ -678,7 +697,7 @@ function tasksScopeMenu(state: TasksPageState, anchor: HTMLElement) {
 const tasksFilterOn = (f: TaskFilters, k: keyof TaskFilters) => { const v = f[k]; return Array.isArray(v) ? v.length > 0 : !!v; };
 /** The rows a filter's values come from: what the view lists, and what it listed with no search or filter. */
 const tasksFilterRows = (state: TasksPageState): TaskBriefV3[] =>
-  state.archive || state.pipeline || tasksOwnView(state) ? [...state.base, ...state.tasks] : state.needs.map(it => it.task).filter((t): t is TaskBriefV3 => !!t);
+  [...tasksNeedsView(state) ? state.needs.map(it => it.task).filter((t): t is TaskBriefV3 => !!t) : [], ...state.base, ...state.tasks];
 type TaskFilterValue = {value: string; label: string; face?: string};
 function tasksFilterValues(state: TasksPageState, k: keyof TaskFilters): TaskFilterValue[] {
   if (k === 'due') return [{value: 'overdue', label: 'Overdue'}, {value: 'week', label: 'This week'}, {value: 'any', label: 'Has a date'}];

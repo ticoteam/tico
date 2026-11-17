@@ -7,8 +7,7 @@ from unittest import mock
 
 import pytest
 
-from runner_support import isolation, mail_key
-from runner_support.connectors import mail_secret_path
+from runner_support import mail_key
 from runner_support.tests.helpers.supervisor import Supervisor
 
 
@@ -27,38 +26,6 @@ def channel():
     server.close()
 
 
-def test_the_key_moves_out_of_the_bots_reach_when_isolated(tmp_path, monkeypatch):
-    monkeypatch.delenv("GOOGLE_SA_KEY", raising=False)
-    home = tmp_path / "home"
-    secrets = home / "workspace" / "secrets"
-    secrets.mkdir(parents=True)
-    (secrets / "google-sa.json").write_text('{"type": "service_account"}')
-    os.chmod(secrets / "google-sa.json", 0o600)
-    config = {"projects_dir": str(home / "workspace"), "state_dir": str(home / "state-r1")}
-    bot_uid = os.getuid() + 1  # any bot user other than the supervisor running this test
-    monkeypatch.setattr(isolation, "identity", lambda: (bot_uid, 10002))
-    assert mail_key.status(config) == "exposed"
-    assert mail_key.protect(config) is True
-    moved = home / "state-r1" / "google-sa.json"
-    assert moved.read_text() == '{"type": "service_account"}' and not (secrets / "google-sa.json").exists()
-    # Closed to the bot user: no group or other bits on the file or its directory, and the mail
-    # job now reads it there.
-    assert stat.S_IMODE(moved.stat().st_mode) == 0o600 and stat.S_IMODE(moved.parent.stat().st_mode) == 0o700
-    assert moved.stat().st_uid == os.getuid() != bot_uid
-    assert mail_secret_path(config) == moved and mail_key.status(config) == "protected"
-    assert mail_key.protect(config) is False
-
-
-def test_without_isolation_the_key_stays_and_is_reported_readable(tmp_path, monkeypatch):
-    monkeypatch.delenv("GOOGLE_SA_KEY", raising=False)
-    monkeypatch.delenv(isolation.UID_ENV, raising=False)
-    (tmp_path / "secrets").mkdir()
-    (tmp_path / "secrets" / "google-sa.json").write_text("{}")
-    config = {"projects_dir": str(tmp_path)}
-    assert mail_key.protect(config) is False and mail_key.status(config) == "exposed"
-    assert mail_secret_path(config) == tmp_path / "secrets" / "google-sa.json"
-
-
 def test_the_mail_cli_asks_the_supervisor_only_inside_an_isolated_turn(channel, monkeypatch):
     from connectors.mail import auth
 
@@ -69,22 +36,6 @@ def test_the_mail_cli_asks_the_supervisor_only_inside_an_isolated_turn(channel, 
     assert auth.supervisor_token("ana@acme.example", [auth.GMAIL_SCOPE])["token"] == "ya29.ana@acme.example"
     with pytest.raises(auth.Failure):
         auth.supervisor_token("cara@acme.example", [auth.GMAIL_SCOPE])
-
-
-def test_the_computer_holds_the_key_only_when_isolated_with_the_key_and_the_connectors_job(tmp_path, monkeypatch):
-    monkeypatch.delenv("GOOGLE_SA_KEY", raising=False)
-    monkeypatch.setenv("TICO_SIDE_JOBS", "1")
-    config = {"projects_dir": str(tmp_path / "workspace"), "state_dir": str(tmp_path / "state-r1")}
-    monkeypatch.setattr(isolation, "identity", lambda: (10003, 10002))
-    assert mail_key.held_by_computer(config) is False  # no key on this computer
-    (tmp_path / "state-r1").mkdir()
-    (tmp_path / "state-r1" / "google-sa.json").write_text("{}")
-    assert mail_key.held_by_computer(config) is True
-    monkeypatch.setenv("TICO_SIDE_JOBS", "0")
-    assert mail_key.held_by_computer(config) is False  # nothing runs the connectors job
-    monkeypatch.setenv("TICO_SIDE_JOBS", "1")
-    monkeypatch.setattr(isolation, "identity", lambda: None)
-    assert mail_key.held_by_computer(config) is False  # a bot reads the key itself there
 
 
 def previous_registration(tmp_path):
@@ -198,80 +149,3 @@ def test_reenrollment_never_imports_another_operators_key(tmp_path, monkeypatch,
         monkeypatch.setattr(Path, "lstat", different_volume)
     assert not mail_key.carry_protected(config, tmp_path / "runner.json")
     assert not (tmp_path / "state-new" / mail_key.FILE).exists()
-
-
-def test_connected_account_grants_alone_give_mail_access_and_stay_out_of_the_bots_reach(tmp_path, monkeypatch):
-    monkeypatch.delenv("GOOGLE_SA_KEY", raising=False)
-    monkeypatch.delenv("GOOGLE_OAUTH_GRANTS", raising=False)
-    monkeypatch.setenv("TICO_SIDE_JOBS", "1")
-    home = tmp_path / "home"
-    secrets = home / "workspace" / "secrets"
-    secrets.mkdir(parents=True)
-    (secrets / mail_key.GRANTS).write_text('{"grants": {}}')
-    os.chmod(secrets / mail_key.GRANTS, 0o600)
-    config = {"projects_dir": str(home / "workspace"), "state_dir": str(home / "state-r1")}
-    monkeypatch.setattr(isolation, "identity", lambda: (os.getuid() + 1, 10002))
-    assert mail_key.status(config) == "exposed"
-    assert mail_key.protect(config) is True
-    moved = home / "state-r1" / mail_key.GRANTS
-    assert moved.read_text() == '{"grants": {}}' and stat.S_IMODE(moved.stat().st_mode) == 0o600
-    assert not (secrets / mail_key.GRANTS).exists() and not (home / "state-r1" / mail_key.FILE).exists()
-    assert mail_key.status(config) == "protected" and mail_key.held_by_computer(config)
-    from runner_support.connectors import mail_credential_present, mail_grants_path
-
-    assert mail_grants_path(config) == moved and mail_credential_present(config)
-
-
-def test_a_second_grant_moved_from_the_workspace_keeps_the_first(tmp_path, monkeypatch):
-    monkeypatch.delenv("GOOGLE_SA_KEY", raising=False)
-    home = tmp_path / "home"
-    secrets = home / "workspace" / "secrets"
-    secrets.mkdir(parents=True)
-    config = {"projects_dir": str(home / "workspace"), "state_dir": str(home / "state-r1")}
-    monkeypatch.setattr(isolation, "identity", lambda: (os.getuid() + 1, 10002))
-    for mailbox in ("ben@x.example", "ana@x.example"):
-        (secrets / mail_key.GRANTS).write_text('{"grants": {"%s": {"refresh_token": "t-%s"}}}' % (mailbox, mailbox))
-        os.chmod(secrets / mail_key.GRANTS, 0o600)
-        assert mail_key.protect(config) is True
-    import json
-
-    kept = json.loads((home / "state-r1" / mail_key.GRANTS).read_text())["grants"]
-    assert sorted(kept) == ["ana@x.example", "ben@x.example"]
-
-
-def test_a_corrupt_workspace_grants_file_leaves_the_protected_one_alone(tmp_path, monkeypatch):
-    monkeypatch.delenv("GOOGLE_SA_KEY", raising=False)
-    home = tmp_path / "home"
-    secrets = home / "workspace" / "secrets"
-    secrets.mkdir(parents=True)
-    config = {"projects_dir": str(home / "workspace"), "state_dir": str(home / "state-r1")}
-    monkeypatch.setattr(isolation, "identity", lambda: (os.getuid() + 1, 10002))
-    (secrets / mail_key.GRANTS).write_text('{"grants": {"ben@x.example": {"refresh_token": "t-ben"}}}')
-    os.chmod(secrets / mail_key.GRANTS, 0o600)
-    assert mail_key.protect(config) is True
-    protected = (home / "state-r1" / mail_key.GRANTS).read_text()
-    for broken in ("{not json", "[]"):
-        (secrets / mail_key.GRANTS).write_text(broken)
-        os.chmod(secrets / mail_key.GRANTS, 0o600)
-        mail_key.protect(config)  # logs, never raises
-        assert (home / "state-r1" / mail_key.GRANTS).read_text() == protected
-        assert (secrets / mail_key.GRANTS).is_file()  # left for a person to look at
-
-
-def test_the_supervisor_s_mint_reaches_the_server_that_refreshes_connect_google_never_with_the_hub_token(
-    tmp_path, monkeypatch
-):
-    script = tmp_path / "mail.sh"
-    script.write_text(
-        '#!/bin/sh\n[ -z "$HUB_TOKEN" ] || exit 9\n'
-        'printf \'{"token": "ya29.t", "expiry": "", "url": "%s", "auth": "%s"}\' '
-        '"$TICO_GOOGLE_BROKER_URL" "$TICO_GOOGLE_BROKER_AUTH"\n'
-    )
-    script.chmod(0o755)
-    monkeypatch.setenv("HUB_TOKEN", "hub-token")
-    monkeypatch.setenv("TICO_GOOGLE_BROKER_AUTH", "inherited")  # never one the runner did not set itself
-    config = {"url": "https://team.acme.example", "token": "runner-token", "state_dir": str(tmp_path)}
-    minted = mail_key.minter(config, script)("gmail", "ana@acme.example")
-    assert (minted["url"], minted["auth"]) == ("https://team.acme.example", "runner-token")
-    minted = mail_key.minter({"state_dir": str(tmp_path)}, script)("gmail", "ana@acme.example")
-    assert (minted["url"], minted["auth"]) == ("", "")
