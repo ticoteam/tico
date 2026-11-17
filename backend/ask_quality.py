@@ -1,7 +1,7 @@
 # pyright: strict
 """How well each bot asks people (Tasks spec "Bots ask people a question with choices", AC-12), for the Decide readout
-(backend/decide_readout.py): per bot, its asks to people in the window, how many a person sent back as "Badly written"
-(the decision view's chip, a 👎 on the ask), and the share (the target is under 1 in 20, read three weeks after the
+(backend/decide_readout.py): per bot, its asks to people in the window (its ❓ questions and its OKs), how many a
+person sent back as "Badly written" (the decision view's chip, a 👎 on the ask), and the share (the target is under 1 in 20, read three weeks after the
 release: `tico decision readout --days 21`). A 👎 counts on the day it was last set, as answers.thumbs_down_count reads it.
 
 The guard: refusing badly written asks must not stop a bot asking at all. Each refusal of a bot's ask to a person (its
@@ -22,6 +22,14 @@ BADLY_WRITTEN = "Badly written"  # the chip's words, which the 👎 reason start
 TARGET = 1 / 20
 REFUSED_RULES = ("task_ask_shape", "task_rule")
 DAY = timedelta(days=1)
+# A bot's asks to people made in [?, ?): its questions, each a message marked ❓ (question_marks), then its OKs and the
+# questions it added as asks before a question was a ❓, both on a task's visit (requirements). The bounds go in twice,
+# once per table.
+ASKS = (
+    "SELECT bot_id, created_at FROM question_marks WHERE created_at>=? AND created_at<? "
+    "UNION ALL SELECT added_by_id, created_at FROM requirements WHERE by_bot=1 AND visit_id IS NOT NULL "
+    "AND person_id LIKE 'human:%' AND kind IN ('answer','ok') AND created_at>=? AND created_at<?"
+)
 
 
 def _at(stamp: str) -> datetime:
@@ -32,11 +40,7 @@ def per_bot(c: Any, start: str, end: str) -> list[dict[str, Any]]:
     """[{bot, name, asks, badly_written, share, refused, stuck}] for every bot that asked a person or was refused in
     [start, end), most asks first. `share` is None with no asks."""
     asks: dict[str, list[str]] = {}
-    for bot, created in c.execute(
-        "SELECT added_by_id, created_at FROM requirements WHERE by_bot=1 AND visit_id IS NOT NULL "
-        "AND person_id LIKE 'human:%' AND kind IN ('answer','ok') AND created_at>=? AND created_at<?",
-        (start, end),
-    ):
+    for bot, created in c.execute(ASKS, (start, end, start, end)):
         asks.setdefault(str(bot), []).append(str(created))
     badly: dict[str, int] = {}
     for bot, n in c.execute(
@@ -61,11 +65,8 @@ def per_bot(c: Any, start: str, end: str) -> list[dict[str, Any]]:
         refused.setdefault(str(bot), []).append(str(created))
     # An ask that got through within a day after a refusal may fall after the window's end: read up to a day past it.
     later: dict[str, list[datetime]] = {}
-    for bot, created in c.execute(
-        "SELECT added_by_id, created_at FROM requirements WHERE by_bot=1 AND visit_id IS NOT NULL "
-        "AND person_id LIKE 'human:%' AND kind IN ('answer','ok') AND created_at>=? AND created_at<?",
-        (start, (_at(end) + DAY).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"),
-    ):
+    until = (_at(end) + DAY).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+    for bot, created in c.execute(ASKS, (start, until, start, until)):
         later.setdefault(str(bot), []).append(_at(str(created)))
     out: list[dict[str, Any]] = []
     for bot in sorted(set(asks) | set(refused) | set(badly)):
