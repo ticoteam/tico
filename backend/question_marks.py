@@ -24,7 +24,9 @@ draws its glyph from the message alone and a change reaches open pages through t
 """
 
 import sqlite3
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any, cast
 
 from . import ask_shape
@@ -104,6 +106,20 @@ STILL_OPEN = (
 )
 
 
+# Tico's own feature ending a task whose ❓ it worded for its bot, because the answer no longer matters (a measure read
+# since, a vision set elsewhere): the ❓ ends with the task, as it does on any move Tico makes itself.
+_SETTLED: ContextVar[bool] = ContextVar("question_marks_settled", default=False)
+
+
+@contextmanager
+def settled() -> Iterator[None]:
+    token = _SETTLED.set(True)
+    try:
+        yield
+    finally:
+        _SETTLED.reset(token)
+
+
 def open_of(conn: sqlite3.Connection, bot: str, task_id: object) -> Row | None:
     """The bot's own open ❓ on this task's chat that its person can still answer, or None."""
     found = conn.execute(
@@ -115,7 +131,7 @@ def open_of(conn: sqlite3.Connection, bot: str, task_id: object) -> Row | None:
 def refuse_ending(conn: sqlite3.Connection, by: str, task_id: object) -> None:
     """Refuse a bot's done, forward move or close of a task while its own ❓ there is open: the task ending would
     clear the question before the person saw it. A person's moves, and Tico's own, are never held by a ❓."""
-    if not task_id or not H.is_bot(by) or by == H.KEEPER:
+    if not task_id or not H.is_bot(by) or by == H.KEEPER or _SETTLED.get():
         return
     found = open_of(conn, by, task_id)
     if not found:
