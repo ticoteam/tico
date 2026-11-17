@@ -10,6 +10,7 @@ button.pv-stage-h{cursor:pointer}
 button.pv-stage-h:hover .pv-stage-name{text-decoration:underline}
 .pv-stage-name{font-weight:600}
 .pv-stage-n{color:var(--muted);font-size:var(--t-sm)}
+.pv-stage-n.full{color:var(--wait-ink);font-weight:600}
 
 /* Columns: one per work stage, side by side, sharing the width (300px to 480px each), scrolling sideways past that. */
 .pv-cols{display:flex;gap:12px;align-items:flex-start;overflow-x:auto;padding:0 2px 12px;min-height:0}
@@ -59,6 +60,10 @@ body.board-holding .pv-cols{align-items:stretch}
 .tk-card .pv-wake{min-width:0}
 .pv-blocked-by{display:inline-flex;align-items:center;gap:3px;white-space:nowrap}
 .pv-stop{display:inline-flex;color:var(--fail)}
+/* The task it waits for: its label or a few words of its title, quiet as the age it stands in for, and it opens that task. */
+.pv-blocked-ref{min-height:0;max-width:18ch;overflow:hidden;padding:0;border:0;background:none;color:inherit;font:inherit;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}
+.pv-blocked-ref:hover{color:var(--ink);text-decoration:underline}
+.pv-blocked-ref:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
 
 /* The list: a group per stage. */
 .pv-group{margin:0 0 10px}
@@ -73,6 +78,15 @@ body.board-holding .pv-cols{align-items:stretch}
 .pv-play-none{visibility:hidden}
 /* ▶ (or its kept slot) goes right; the rules mark, where a stage has rules of its own, ends the header (stage-rules.css) */
 .pv-stage-n[title]{cursor:help}
+/* ⋯ ends the header: what can be done to every task the stage shows (stage-menu.ts); as quiet as the rules mark */
+.pv-col-more{flex:none;display:inline-grid;place-items:center;width:24px;height:24px;min-height:0;margin:0 0 0 -4px;padding:0;border:0;border-radius:var(--r-ctl);background:none;color:var(--muted);cursor:pointer}
+.pv-col-more .nav-icon{font-size:17px}
+.pv-col-more:hover,.pv-col-more[aria-expanded="true"]{background:var(--hover);color:var(--ink)}
+.pv-col-more:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
+.pv-phone-head .pv-col-more{width:44px;height:44px;margin:0 0 4px}
+/* No ⋯ on a phone's row (a viewer who may not change the pipeline, a stage with no tasks): an empty box of the same size
+   keeps its place, so the tabs keep their width from stage to stage. */
+.pv-phone-head:not(:has(> .pv-col-more))::after{content:'';flex:none;width:44px;height:44px;margin:0 0 4px}
 
 /* A phone: a row of stage tabs (the only thing that scrolls sideways), ▶ for the stage shown, then its tasks. Every
    control is at least 44 px tall (S17). */
@@ -89,6 +103,11 @@ body.board-holding .pv-cols{align-items:stretch}
 /* A refused move: the engine's line, or "Move to X without Y?" with a why. */
 .pv-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;background:var(--wait-bg);color:var(--wait-ink)}
 .pv-bar-text{flex:1 1 240px;min-width:0}
+/* Picking many (⋯ › Select): the bar is quiet, not a warning; a picked card or row carries the accent ring. */
+.pv-bar.pv-sel{background:var(--hover);color:var(--ink)}
+.pv-sel .pv-bar-text{flex:0 1 auto}
+.pv-selecting [data-task]{cursor:pointer}
+.pv [data-task].pv-picked{box-shadow:0 0 0 2px var(--accent);background:var(--hover)}
 .pv-bar input{flex:1 1 180px;min-width:0;height:30px;box-sizing:border-box;padding:0 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);font:inherit}
 
 /* The board's bots on a phone and the chat they open over the board (ui/app/pipeline-ask.ts). The face is the header's
@@ -112,3 +131,10 @@ body.board-holding .pv-cols{align-items:stretch}
 .pa-x{width:44px;height:44px;flex:none}
 .pa-chat{flex:1;min-height:0;display:flex;flex-direction:column;padding:0 10px max(8px, env(safe-area-inset-bottom))}
 .pa-chat>.thv{flex:1;min-height:0}
+
+/* Show N more: a stage past its first 30 cards (task-pipelines.ts PV_CAP), quiet, the width of its column. */
+.pv-more{align-self:stretch;justify-content:center;color:var(--muted);font-size:var(--t-sm)}
+/* A card out of view (most of a big board's) is not laid out or painted until it scrolls in: each change to a 1,000-task
+   board, or to the header above it, lays out the cards in view, not all of them (ui/tests/board-flood.cts). `auto`
+   keeps each card's last drawn height meanwhile. A card's own outline and shadow still show; a phone's stage is short. */
+.pv-col-body > .tk-card{content-visibility:auto;contain-intrinsic-size:auto 64px}

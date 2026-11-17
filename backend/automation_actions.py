@@ -4,15 +4,14 @@ Each runs inside one short write transaction (backend/automations.py opens it) a
 the rules' task and event runners (backend/rules.py), outgoing webhooks, updates, and tasks. An action never raises
 for an ordinary refusal; it answers {"ok": False, "detail": ...} and the run records it.
 
-Mail actions are queued in `automation_mail_actions`; archive, label and leave run on the server for Whole Workspace
-mailboxes. Other mail actions wait for the mailbox's computer to claim and report them
-(POST .../mail-actions/claim, POST .../mail-actions/{id}/result; backend/automations.py). The step waits until the
+Mail actions are queued in `automation_mail_actions`, and the server carries each out for any mailbox it holds a
+credential for (backend/automations.py `drain_workspace_mail`, backend/mail_actions.py). The step waits until the
 result comes back. On a Slack message, send_reply posts in the thread (the `slack_posts` outbox) and draft_reply
 leaves the draft with the owner as a task.
 
 `send_reply` honors the inbox's send switch (`automation_inboxes`, on unless set off): off saves a draft and logs
 `automation.send_off`. The switch is read again when the send leaves: a mail send claimed, or a Slack post delivered,
-after it went off is a draft too (`slack_held`, the claim route).
+after it went off is a draft too (`slack_held`, `automations._claim_workspace_mail`).
 
 An automation acts as its owner (`acts_as`), never as Tico: the owner's task rights decide what it may change, and
 every event its writes leave says `via: automation:<id>` (backend/automations.py sets it). Only a notice to a bot is
@@ -121,8 +120,8 @@ def _queue_mail(c, auto, run_id, action, message, args, result=None, step=None, 
     )
     after, state = (prev["id"] if prev else None), "queued"
     if not refused and mailbox:
-        # The owner's level on the mailbox now (backend/mailbox_access.py); each executor checks it again. A message with
-        # no mailbox (a test run's sample) names nothing a computer can claim, so it waits as it always did.
+        # The owner's level on the mailbox now (backend/mailbox_access.py); the server's drain checks it again. A message
+        # with no mailbox (a test run's sample) skips this check, and the drain fails it with why: no credential covers it.
         from . import mailbox_access
 
         refused = mailbox_access.action_refusal(
@@ -353,12 +352,17 @@ def _create_task(c, auto, run_id, args, values, step=None):
     if owner.startswith("person:"):
         owner = "human:" + owner[7:]
     due, marker, refs = _occurrence(c, auto, args, values)
-    row = H.task_create(
+    from . import person_asks
+
+    # A task for a person carries the automation's question to them (person_asks), so it is in their Needs you.
+    row = person_asks.task_for(
         c,
         actor,
         title,
         _text(args, "body") or title,
         owner,
+        question=title[:200],
+        why="An automation filed it for you.",
         due=due,
         lint=False,
         deduplicate=False,
@@ -696,12 +700,15 @@ def start_turn(
     # A scheduled run waits as the routine's settings say (backend/wake_presets.py); its wake names the routine, which
     # the repeat guard reads.
     release = release_of(c, auto, run_id)
+    # The step's prompt is the bot's working instructions: they stay the routine's and reach the bot through its run,
+    # never the task's chat (a task is a title and a chat, spec change 8).
     task = H.task_create(
         c,
         actor,
         title,
-        prompt,
+        "",
         H.bot_actor(bot),
+        instructions=prompt,
         due=due,
         lint=False,
         deduplicate=False,
@@ -741,17 +748,9 @@ def start_turn(
 
 
 # ---------------------------------------------------------------------------------------------------- find
-# Each source: its query ({after} is the cursor test, {mine} the mailboxes), the time and id columns the cursor reads,
+# Each source but mail (`_find_mail`, Gmail): its query ({after} is the cursor test), the time and id columns the cursor reads,
 # and how many LIKEs the query takes.
 FIND = {
-    "mail": (
-        "SELECT mailbox, msg_id AS id, thread_id AS thread, from_addr AS 'from', subject, snippet, date, "
-        "updated_at AS at FROM mail_messages WHERE deleted_at IS NULL AND {after} AND lower(mailbox) IN ({mine}) "
-        "AND (subject LIKE ? OR from_addr LIKE ? OR snippet LIKE ?)",
-        "updated_at",
-        "msg_id",
-        3,
-    ),
     "tasks": (
         "SELECT id, title, status, owner_id, requester_id, created_at AS at FROM tasks WHERE {after} "
         "AND coalesce(private,0)=0 AND title LIKE ?",
@@ -776,6 +775,56 @@ FIND = {
 }
 
 
+MAIL_FIND_SCAN = 5000  # message ids a mail find lists per mailbox, to start from the oldest past the cursor
+
+
+def _find_mail(c, query, limit, cursor, mailboxes, skip):
+    """Mail from Gmail itself, in the owner's mailboxes: the messages received after the cursor (their time, then their
+    id) whose text matches `query` (a Gmail search), oldest first. Headers and snippets only. Messages are read oldest
+    first a page at a time, the ones at or before the cursor passed over, until `limit` are past it and a later second
+    has begun, so many messages of one second are found in id order and none is passed over."""
+    from datetime import datetime, timezone
+
+    from . import gmail_live
+
+    since, last = cursor
+    since_at = H.parse_ts(since) if since else None
+    after = int(since_at.timestamp()) - 1 if since_at else 0
+    terms = " ".join(t for t in (str(query or "").strip(), f"after:{after}" if after > 0 else "") if t)
+    want, found = int(limit), []
+    for box in dict.fromkeys(m.lower() for m in mailboxes):
+        ids = [mid for mid in reversed(gmail_live.all_ids(c, box, terms, MAIL_FIND_SCAN)) if mid not in skip]
+        mine = []
+        for start in range(0, len(ids), gmail_live.LIMIT_MAX):
+            page = gmail_live.metadata(c, box, ids[start : start + gmail_live.LIMIT_MAX])
+            for item in page:
+                at = datetime.fromtimestamp(item["epoch"], timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+                if (at, item["id"]) <= (since, last):
+                    continue
+                mine.append(
+                    {
+                        "mailbox": box,
+                        "id": item["id"],
+                        "thread": item["thread_id"],
+                        "from": item["from"],
+                        "subject": item["subject"],
+                        "snippet": str(item["snippet"] or "")[:MAX_ITEM],
+                        "date": item["date"],
+                        "at": at,
+                    }
+                )
+            mine.sort(key=lambda row: (row["at"], row["id"]))
+            newest = max((item["epoch"] for item in page), default=0)
+            if (
+                len(mine) >= want
+                and datetime.fromtimestamp(newest, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+                > mine[want - 1]["at"]
+            ):
+                break  # a later second has begun: nothing older than the ones kept is left on later pages
+        found += mine[:want]
+    return sorted(found, key=lambda row: (row["at"], row["id"]))[:want]
+
+
 # The stale-PR find: an open or draft PR whose last activity (else its creation) is at or before the idle line. The
 # cursor reads that activity, so a PR is found again only once new activity makes it idle again.
 PR_IDLE = (
@@ -792,22 +841,20 @@ def find(c, auto, source, query, limit, cursor, *, mailboxes=(), skip=(), idle_h
     """Items from `source` after `cursor` ((time, id): items with the same time are told apart by id, so a page that
     ends among them never skips the rest) whose text has `query` (plain words), oldest first. Mail is read from
     `mailboxes` only, the owner's; `skip` holds ids another run of the automation is still working on."""
+    if source == "mail":
+        return _find_mail(c, query, limit, cursor, mailboxes, skip)
     sql, at, ident, likes = FIND[source]
-    if source == "mail" and not mailboxes:
-        return []
     idle = []
     if idle_hours and source == "prs":
         sql, at, ident, likes = PR_IDLE
         idle = [H.shift(H.now(), hours=-int(idle_hours))]
     like = "%" + str(query or "").strip().replace("%", "").replace("_", "") + "%"
     since, last = cursor
-    mine = ",".join("?" * len(mailboxes))
-    sql = sql.format(after=f"({at}>? OR ({at}=? AND {ident}>?))", mine=mine) + f" ORDER BY {at}, {ident} LIMIT ?"
+    sql = sql.format(after=f"({at}>? OR ({at}=? AND {ident}>?))") + f" ORDER BY {at}, {ident} LIMIT ?"
     args = [
         since,
         since,
         last,
-        *([m.lower() for m in mailboxes] if source == "mail" else []),
         *idle,
         *[like] * likes,
         int(limit) + len(skip),

@@ -1,16 +1,15 @@
 # pyright: strict
-"""Answers to what a task needs (docs/pipelines-v3.md, "Asks" and "What your answer does").
+"""Answers to what a task needs (docs/dev/pipelines-v3.md, "Asks" and "What your answer does").
 
 The one writer of `answers` rows, apart from the `pushed_past` rows `task_engine.move` writes. The owner says done, a
-person OKs or sends back, a person answers a question, an ask is given to someone else, or an answer is taken back. The
-answer is saved and the task moves on in the same step if that was the last thing it waited for. When the answer hands
-the turn back to a bot, the bot is woken once with the person's words.
-
-Thumbs on an ask are `feedbacks` rows, written through `feedback.rate`.
+person OKs or sends back, an ask is given to someone else, or an answer is taken back. The answer is saved and the task
+moves on in the same step if that was the last thing it waited for. When a send back hands the turn back to a bot, the
+bot is woken once with the person's words. A question to a person is a message marked ❓ (backend/question_marks.py),
+answered by a reply in the chat, never here.
 
 Every function takes the caller's open write transaction and never commits. Each returns the task as
 `task_engine.task()` gives it after the write, with `answer_id` where an answers row was written, and refuses through
-`hubdb.refuse` with a rule that starts with `task_`, or `not-found`. No answer, give or thumb changes `tasks.version`.
+`hubdb.refuse` with a rule that starts with `task_`, or `not-found`. No answer or give changes `tasks.version`.
 Giving the owner's own "done" to someone else is a reassign, which does.
 
 Names and signatures are in docs/dev/pipelines-v3-build.md.
@@ -35,30 +34,18 @@ _core: Any = hubdb_core
 is_bot: Callable[[object], bool] = _core.is_bot
 is_human: Callable[[object], bool] = _core.is_human
 
-DONE, OK, NO, AGAIN, GIVE, PUSHED_PAST = "done", "ok", "no", "again", "give", "pushed_past"
-# The two answers Tico adds to every bot's question to a person (Tasks spec "Bots ask people a question with choices",
-# AC-4 and AC-5), beside the bot's own choices and never counted in them. Each closes the ask like any answer.
-DONT_KNOW, GIVE_BACK = "I don't know, explain", "Give it back"
+DONE, OK, NO, GIVE, PUSHED_PAST = "done", "ok", "no", "give", "pushed_past"
+# What the owner saying done again writes on each stage OK that was sent back (reopen_sent_back): it waits on its
+# approver again. Nobody answers it by hand: there is no Look again any more.
+AGAIN = "again"
 # The kinds a person (or a named bot) answers by hand. A page is answered once Jev has looked (task_requirements._page).
-BY_HAND = ("owner_done", "ok", "answer", "page")
-# Kinds that are an ask: they can name a person, and take a thumb (C29).
-ASKS = ("ok", "answer")
-
-# Thumbs on an ask are feedbacks rows with this subject type (migration 20261110020000) and the subject id
-# "<visit id>:<requirement id>".
-ASK_SUBJECT = "ask"
+BY_HAND = ("owner_done", "ok", "page")
 
 
 def _h() -> Any:
     from . import hubdb
 
     return hubdb
-
-
-def _feedback() -> Any:
-    from . import feedback
-
-    return feedback
 
 
 def _tc() -> Any:
@@ -80,39 +67,6 @@ def _part(row: Row | None, key: str) -> Row:
 
 def _name(conn: "sqlite3.Connection", actor: str | None) -> str:
     return str(_h().actor_name(conn, actor)) if actor else "nobody"
-
-
-def ask_subject_id(visit_id: str, requirement_id: str) -> str:
-    """The feedbacks subject id of one ask: a requirement, in one visit of one task."""
-    return f"{visit_id}:{requirement_id}"
-
-
-def ask_of(conn: "sqlite3.Connection", subject_id: str) -> Row | None:
-    """The ask a feedbacks subject id names: {task_id, visit, requirement, bot}, or None when there is no such ask.
-    `bot` is the bot whose ask it is (as in `_ask`), or None when it is no bot's."""
-    H = _h()
-    visit_id, _, requirement_id = subject_id.partition(":")
-    visit: Row | None = H._one(conn, "SELECT * FROM visits WHERE id=?", (visit_id,))
-    requirement = R.get(conn, requirement_id)
-    if not visit or not requirement or requirement["kind"] not in ASKS:
-        return None
-    if requirement["kind"] == "answer" and requirement.get("stage_id"):
-        return None  # a stage's answer takes no thumb (_ask)
-    if requirement.get("visit_id"):
-        if requirement["visit_id"] != visit_id:
-            return None
-        bot = requirement.get("added_by_id")
-    else:
-        if requirement.get("stage_id") != visit["stage_id"]:
-            return None
-        owner = conn.execute("SELECT owner_id FROM tasks WHERE id=?", (visit["task_id"],)).fetchone()
-        bot = owner[0] if owner else None
-    return {
-        "task_id": visit["task_id"],
-        "visit": visit,
-        "requirement": requirement,
-        "bot": bot if is_bot(bot) else None,
-    }
 
 
 # ----------------------------------------------------------------------------- checks
@@ -182,54 +136,33 @@ def _may_answer(
     if kind == "page":
         _may_answer_page(conn, by, row, requirement, value, notes)
         return
-    if R.owners_answer(requirement):
-        # A stage's answer that names nobody is the owner's, given as they say done: by the owner, the manager or a
-        # person.
-        if not value:
-            _refuse(conn, by, "task_requirement", "Give an answer", task_id)
-        if by not in (row.get("owner_id"), _part(row, "pipeline").get("manager_id")) and not is_human(by):
-            _refuse(conn, by, "task_requirement", "Only the owner, the manager or a person answers this", task_id)
-        return
     person = R.person_of(conn, requirement, row["visit"]["id"])
-    if kind == "ok" and value == AGAIN:
-        newest = R.newest_answers(conn, row["visit"]["id"]).get(requirement["id"])
-        if not newest or newest["answer"] != NO:
-            _refuse(conn, by, "task_requirement", "Look again comes after a send back", task_id)
-        if by not in (row.get("owner_id"), W.holder(conn, row)):
-            _refuse(conn, by, "task_requirement", "Only the task's owner asks to look again", task_id)
-        return
-    if kind == "ok" and value not in (OK, NO):
+    if value not in (OK, NO):
         _refuse(conn, by, "task_requirement", "An OK takes ok or no", task_id)
-    over = R.too_long(row, requirement) if kind == "ok" and value == OK else None
-    if over:
-        _refuse(conn, by, "task_requirement", f"{over} (tico task update {task_id} --body).", task_id)
-    if kind == "ok" and validate_gate.held(conn, row, requirement):
+    if validate_gate.held(conn, row, requirement):
         # A bot's OK in Validate is the person's only once Jev passed its page: not from the task page before then.
         _refuse(conn, by, "task_requirement", f"{validate_gate.HELD}.", task_id)
-    if kind == "ok" and requirement.get("visit_id") and not is_human(by):
+    if requirement.get("visit_id") and not is_human(by):
         _refuse(conn, by, "task_requirement", "An OK is a person's to give", task_id)
-    if kind == "ok" and value == OK and requirement.get("visit_id") and by == requirement.get("added_by_id"):
+    if value == OK and requirement.get("visit_id") and by == requirement.get("added_by_id"):
         if not own_click:
             _refuse(conn, by, "task_requirement", "Your own ask is OK'd only by your own click in Tico", task_id)
-    if kind == "ok":
-        from . import task_asks
+    from . import task_asks
 
-        # The Assistant and BotOps never answer OK to an OK, bound or plain, whichever caller brings it here: the value
-        # is already stripped (answer), so " ok " is "ok".
-        if value == OK and task_asks.acting_for_people(by):
-            _refuse(conn, by, "task_requirement", task_asks.NOT_YOURS, task_id)
-        # An OK bound to exact content is given only through its preview, with the hash of what was shown
-        # (task_asks.give_ok). A send back stays a plain answer.
-        refused = task_asks.refuses_plain_ok(conn, requirement["id"], value)
-        if refused:
-            _refuse(conn, by, "task_requirement", refused, task_id)
-    if kind == "answer" and not value:  # a choice or any text: "no" is an answer like any other
-        _refuse(conn, by, "task_requirement", "Give an answer", task_id)
+    # The Assistant and BotOps never answer OK to an OK, bound or plain, whichever caller brings it here: the value is
+    # already stripped (answer), so " ok " is "ok".
+    if value == OK and task_asks.acting_for_people(by):
+        _refuse(conn, by, "task_requirement", task_asks.NOT_YOURS, task_id)
+    # An OK bound to exact content is given only through its preview, with the hash of what was shown
+    # (task_asks.give_ok). A send back stays a plain answer.
+    refused = task_asks.refuses_plain_ok(conn, requirement["id"], value)
+    if refused:
+        _refuse(conn, by, "task_requirement", refused, task_id)
     # A requirement that names nobody (a stage's OK), or a person who left, is any person's. A bot answers only when it
     # is named.
     if by != person and not (person is None and is_human(by)):
         _refuse(conn, by, "task_requirement", f"This is asked of {_name(conn, person)}", task_id)
-    if R.steers(kind, value) and value == NO and not (notes or "").strip():
+    if value == NO and not (notes or "").strip():
         _refuse(conn, by, "task_why", "Say what to change", task_id)
 
 
@@ -262,19 +195,48 @@ def _may_answer_page(
         _refuse(conn, by, "task_why", "Say which commits you read and what you checked", task_id)
 
 
+# A stale approval key: what the approver is told, beside the version that is submitted now (`extra.approval`).
+STALE_APPROVAL = "A newer version is submitted. Look again."
+APPROVE_SHOWN = "Approve the version you were shown"
+
+
 def _page_version(
-    conn: "sqlite3.Connection", by: str, row: Row, requirement: Row, page_version: str | None
+    conn: "sqlite3.Connection",
+    by: str,
+    row: Row,
+    requirement: Row,
+    page_version: str | None,
+    value: str = "",
+    visit_id: str | None = None,
+    keyed: bool = False,
 ) -> int | None:
     """The page version an answer on a page is for: the one that counts now (task_requirements.page_for: the one
     attached, or the one a person's OK brought back from Merge). A caller that names the page it was shown
     (`<file id>@<version>`) is refused when another is attached since (`task_changed`): another file at the same
-    version number is another page."""
+    version number is another page. A document approval's OK carries its whole key, the visit and the version shown:
+    a person's from a client (`keyed`, the answer route) is refused without the version (a bot's OK there is a review
+    of new commits, never the approval), and a stale key is refused with the version submitted now
+    (`extra.approval`), which the approver is shown instead."""
     if requirement["kind"] != "page":
         return None
     page, _ = R.page_for(conn, row, requirement)
     now = int(page["version"]) if page else None
-    if page_version not in (None, "") and (not page or str(page_version) != f"{page['file_id']}@{now}"):
-        _refuse(conn, by, "task_changed", "The page changed. Look again.", row["id"])
+    document = R.document_of(requirement)
+    if keyed and is_human(by) and document and value == OK and page_version in (None, ""):
+        _refuse(conn, by, "task_requirement", f"{APPROVE_SHOWN}: send its page_version", row["id"])
+    stale_visit = bool(visit_id) and visit_id != _part(row, "visit").get("id")
+    if stale_visit or (
+        page_version not in (None, "") and (not page or str(page_version) != f"{page['file_id']}@{now}")
+    ):
+        if not document:
+            _refuse(conn, by, "task_changed", "The page changed. Look again.", row["id"])
+        approval = {
+            "document": document,
+            "visit_id": _part(row, "visit").get("id"),
+            "file_id": page["file_id"] if page else None,
+            "version": now,
+        }
+        _h().refuse(conn, by, "task_changed", STALE_APPROVAL, task=row["id"], extra={"approval": approval})
     return now
 
 
@@ -287,32 +249,15 @@ def _write(
     value: str,
     notes: str | None,
     page_version: int | None = None,
-    typed: Row | None = None,
 ) -> str:
-    """Write one answers row. `typed` is the answer requirement it meets: its name and type go on the row with it. An
-    answer on a page keeps the commits it was given at (`_heads`)."""
+    """Write one answers row. An answer on a page keeps the commits it was given at (`_heads`)."""
     H = _h()
     answer_id = H.new_id()
-    settings: Row = (typed or {}).get("settings") or {}
-    name = str(settings["name"]) if settings.get("name") else None
-    value_type = R.answer_type(typed) if typed else None
     heads = _heads(conn, row) if page_version is not None else None
     conn.execute(
-        "INSERT INTO answers (id, visit_id, requirement_id, by_id, answer, notes, page_version, name, value_type, "
-        "heads, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-        (
-            answer_id,
-            row["visit"]["id"],
-            requirement_id,
-            str(by),
-            value,
-            notes,
-            page_version,
-            name,
-            value_type,
-            heads,
-            H.now(),
-        ),
+        "INSERT INTO answers (id, visit_id, requirement_id, by_id, answer, notes, page_version, heads, created_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?)",
+        (answer_id, row["visit"]["id"], requirement_id, str(by), value, notes, page_version, heads, H.now()),
     )
     data: Row = {"requirement": requirement_id, "answer_id": answer_id}
     if page_version is not None:
@@ -320,6 +265,21 @@ def _write(
     # Through the task's history writer: an answer the Assistant or BotOps gave with the person's rights says so (via).
     H._task_event(conn, row["id"], by, "answer", None, value, notes, data=data)
     return answer_id
+
+
+def reopen_sent_back(conn: "sqlite3.Connection", row: Row, by: str, note: str | None = None) -> list[str]:
+    """The owner says done again after a send back (task_calls.task_done, or `done` here): each of the stage's OKs that
+    was sent back on this visit waits on its approver again, back in their Needs you. An `again` answer by whoever said
+    done, with their note, so the send back stays in the history. The answers written."""
+    visit: Row = row.get("visit") or {}
+    if row.get("status") != "open" or not visit.get("id"):
+        return []
+    newest = R.newest_answers(conn, visit["id"])
+    written: list[str] = []
+    for requirement in R.on_stage(conn, visit["stage_id"]):
+        if requirement["kind"] == "ok" and (newest.get(requirement["id"]) or {}).get("answer") == NO:
+            written.append(_write(conn, row, requirement["id"], by, AGAIN, note))
+    return written
 
 
 def _heads(conn: "sqlite3.Connection", row: Row) -> str | None:
@@ -370,9 +330,8 @@ def _tell_bot(
     conn: "sqlite3.Connection", row: Row, requirement: Row, by: str, value: str, notes: str | None, key: str
 ) -> None:
     """After an answer that left the task where it is: a send back is the bot's turn, with the notes word for word; an
-    answer to something that was added to this task (a question or an OK) goes to the bot that asked, with the ask and
-    the answer. A question's answer is never a send back, whatever it says. A bot that has no turn on the task now is
-    not woken: whoever has the turn gets the words."""
+    OK on something that was added to this task goes to the bot that asked, with the ask and the answer. A bot that
+    has no turn on the task now is not woken: whoever has the turn gets the words."""
     steered = R.steers(requirement["kind"], value)
     if steered and value == NO:
         _wake(
@@ -389,12 +348,6 @@ def _tell_bot(
         lead = f'{_name(conn, by)} answered "{R.name_of(requirement)}": {value}'
         if is_bot(asker) and target != asker:
             lead = f'{_name(conn, by)} answered "{R.name_of(requirement)}", asked by {_name(conn, asker)}: {value}'
-        if is_bot(asker) and value == GIVE_BACK:
-            # Give it back (AC-5): not an answer to act on. The bot decides, or asks the one it reports to.
-            lead = (
-                f"{_name(conn, by)} gave it back: decide it yourself, or ask your manager. "
-                f'The question was "{R.name_of(requirement)}".'
-            )
         _wake(conn, row, target, lead, key, requirement.get("shows"))
 
 
@@ -432,23 +385,20 @@ def answer(
     seen_version: int | str | None = None,
     own_click: bool = False,
     page_version: str | None = None,
+    visit_id: str | None = None,
+    keyed: bool = False,
 ) -> Row:
-    """Answer a requirement of the task's open visit: `done` (owner says done), `ok`, `no` with notes or `again` (an
-    OK), `ok` or `no` on a page (for the version attached now; `page_version`, when given, is the `<file id>@<version>`
-    the person was shown), or the choice or text (a question). If that was the last thing missing, the task moves in the same step. The
-    same answer given twice is one answer. `own_click`: the person's own click in their own session (_may_answer)."""
+    """Answer a requirement of the task's open visit: `done` (owner says done), `ok` or `no` with notes (an OK), or `ok`
+    or `no` on a page (for the version attached now; `page_version`, when given, is the `<file id>@<version>` the
+    person was shown; on a document approval `visit_id` too, the approval's key, which `keyed` requires). If that was
+    the last thing missing, the task moves in the same step. The same answer given twice is one answer. `own_click`:
+    the person's own click in their own session (_may_answer)."""
     row = _open_task(conn, task_id, by)
     E.check_version(conn, by, row, seen_version)
     requirement = _asked(conn, row, requirement_id, by)
     value = str(value or "").strip()
-    pinned = _page_version(conn, by, row, requirement, page_version)
+    pinned = _page_version(conn, by, row, requirement, page_version, value, visit_id, keyed)
     _may_answer(conn, by, row, requirement, value, notes, own_click=own_click)
-    if requirement["kind"] == "answer":
-        # One exact form: "080" is 80, a choice as the choice is spelled. What does not fit is refused in one line.
-        stored, why = R.typed(requirement, value)
-        if stored is None:
-            _refuse(conn, by, "task_requirement", why, task_id)
-        value = stored
     newest = R.newest_answers(conn, row["visit"]["id"]).get(requirement_id)
     same = (str(by), value, notes, pinned, _heads(conn, row) if pinned is not None else None)
     kept = (newest or {}).get("heads")
@@ -456,8 +406,9 @@ def answer(
         out = E.task(conn, task_id) or row
         out["answer_id"] = newest["id"]
         return out
-    typed = requirement if requirement["kind"] == "answer" else None
-    answer_id = _write(conn, row, requirement_id, by, value, notes, pinned, typed)
+    answer_id = _write(conn, row, requirement_id, by, value, notes, pinned)
+    if requirement["kind"] == "owner_done":
+        reopen_sent_back(conn, row, by, notes)
     if requirement["kind"] == "ok" and value != OK:
         from . import task_asks
 
@@ -479,14 +430,6 @@ def answer(
         _tell_bot(conn, out, requirement, by, value, notes, _wake_key(out, answer_id))
         # A merge conflict held for this answer is the Builder's now, before the task moves on (pr_conflicts).
         pr_conflicts.after_answer(conn, task_id)
-    if requirement["kind"] == "answer" and requirement.get("visit_id"):
-        from . import strategy_merge
-
-        merged: Any = strategy_merge
-        # A person's answer on an item the Strategy Owner merged is their answer to every original still asked of them,
-        # and the item is done. Any other task is left alone.
-        if merged.on_answer(conn, by, task_id, value):
-            out = E.task(conn, task_id) or out
     out["answer_id"] = answer_id
     return out
 
@@ -518,11 +461,8 @@ def give_to(
         if by != row.get("owner_id") and not is_human(by):
             _refuse(conn, by, "task_requirement", "Only the owner or a person gives this task to someone", task_id)
         return E.reassign(conn, task_id, person, by, seen_version=row.get("version"))
-    if kind not in ASKS:
+    if kind != "ok":
         _refuse(conn, by, "task_requirement", f"{R.name_of(requirement)} can't name a person", task_id)
-    if kind == "answer" and requirement.get("stage_id"):
-        # A give is kept as an answer, and on a stage's answer any value meets it: the stage names who answers.
-        _refuse(conn, by, "task_requirement", f"{R.name_of(requirement)} is answered by who the stage names", task_id)
     visit = row["visit"]
     standing = R.standing(conn, row, requirement, R.newest_answers(conn, visit["id"]).get(requirement_id))
     if standing.state != R.WAITING:
@@ -563,8 +503,7 @@ def undo(conn: "sqlite3.Connection", answer_id: str, by: str) -> Row:
         return row
     now = _part(row, "visit")
     stays = visit.get("left_at") is None
-    # Only an answer that meets a requirement can move a task: not a send back, a look again or a give on an OK. On a
-    # question every answer meets it, "no" too.
+    # Only an answer that meets a requirement can move a task: not a send back or a give on an OK.
     answered = R.get(conn, found["requirement_id"])
     moved_by_it = (
         not R.steers(answered["kind"] if answered else "ok", found["answer"])
@@ -589,99 +528,3 @@ def undo(conn: "sqlite3.Connection", answer_id: str, by: str) -> Row:
             E.changed(conn, task_id, by)  # whoever has it now is woken by the never-stuck check
         return moved or E.task(conn, task_id) or row
     return E.move(conn, task_id, visit["stage_id"], by, "Answer taken back", seen_version=row.get("version"))
-
-
-# ----------------------------------------------------------------------------- thumbs
-def _ask(conn: "sqlite3.Connection", task_id: str, requirement_id: str, by: str) -> tuple[Row, Row, Row, str]:
-    """The task, the requirement, the visit it was asked in and the bot whose ask it is. A requirement added to one
-    task is the ask of the bot that added it. A stage's OK is asked in the task's latest visit to that stage, about the
-    work of the bot that owns the task."""
-    H = _h()
-    if not is_human(by):
-        _refuse(conn, by, "task_requirement", "Only a person gives a thumb", task_id)
-    row = E.task(conn, task_id)
-    requirement = R.get(conn, requirement_id)
-    if not row or not requirement:
-        _refuse(conn, by, "not-found", "No such ask", task_id)
-    if requirement.get("visit_id"):
-        visit = H._one(conn, "SELECT * FROM visits WHERE id=? AND task_id=?", (requirement["visit_id"], task_id))
-        bot = requirement.get("added_by_id")
-    else:
-        visit = H._one(
-            conn,
-            "SELECT * FROM visits WHERE task_id=? AND stage_id=? ORDER BY entered_at DESC, id DESC LIMIT 1",
-            (task_id, requirement["stage_id"]),
-        )
-        bot = row.get("owner_id")
-    if not visit or requirement["kind"] not in ASKS:
-        _refuse(conn, by, "task_requirement", "That is not an ask on this task", task_id)
-    if requirement["kind"] == "answer" and requirement.get("stage_id"):
-        # A thumb rates a bot's ask, and a send back would answer the stage's question with the reason.
-        _refuse(conn, by, "task_requirement", "A stage's answer takes no thumb", task_id)
-    if not is_bot(bot):
-        _refuse(conn, by, "task_requirement", "Only a bot's ask takes a thumb", task_id)
-    return row, requirement, visit, str(bot)
-
-
-def _rate(
-    conn: "sqlite3.Connection", by: str, row: Row, visit: Row, requirement: Row, bot: str, rating: str, reason: str
-) -> str:
-    subj: Row = {
-        "bot_id": bot,
-        "conversation_id": row.get("conversation_id"),
-        "attempt": (None, None, None),
-        "revision": row.get("version"),
-    }
-    subject_id = ask_subject_id(visit["id"], requirement["id"])
-    saved: Row = _feedback().rate(conn, by, ASK_SUBJECT, subject_id, subj, rating, reason)
-    return str(saved["id"])
-
-
-def thumbs_up(conn: "sqlite3.Connection", task_id: str, requirement_id: str, by: str) -> Row:
-    """👍 on a bot's ask: one tap, on the bot's record. Rating again replaces it."""
-    row, requirement, visit, bot = _ask(conn, task_id, requirement_id, by)
-    out = dict(row)
-    out["feedback_id"] = _rate(conn, by, row, visit, requirement, bot, "up", "")
-    return out
-
-
-def thumbs_down(
-    conn: "sqlite3.Connection", task_id: str, requirement_id: str, by: str, reason: str, *, send_back: bool = True
-) -> Row:
-    """👎 on a bot's ask, with what was wrong. With `send_back` an open ask also leaves the person's list: one a bot
-    added to the task is withdrawn and the bot is woken once with the person's words; a stage's OK is sent back
-    (`answer(..., "no", notes=reason)`)."""
-    row, requirement, visit, bot = _ask(conn, task_id, requirement_id, by)
-    reason = str(reason or "")
-    if send_back and not reason.strip():
-        _refuse(conn, by, "task_why", "Say what was wrong", task_id)
-    still_asked = row["status"] == "open" and _part(row, "visit").get("id") == visit["id"]
-    still_asked = still_asked and any(r["id"] == requirement_id for r in R.for_visit(conn, visit))
-    asked = R.person_of(conn, requirement, visit["id"])
-    if send_back and still_asked and not _tc().may_handle_ask(conn, by, row, requirement, recipient=asked):
-        _refuse(conn, by, "identity", "Only who was asked, whoever asked, or who works the task sends it back", task_id)
-    out: Row = dict(row)
-    if send_back and still_asked and not requirement.get("visit_id"):
-        out = answer(conn, task_id, requirement_id, by, NO, reason)
-    feedback_id = _rate(conn, by, row, visit, requirement, bot, "down", reason)
-    if send_back and still_asked and requirement.get("visit_id"):
-        out = E.withdraw_requirement(conn, requirement_id, by, reason) or E.task(conn, task_id) or row
-        target = _whose(conn, out, bot) if out["status"] == "open" else None
-        lead = f'{_name(conn, by)} sent back your ask "{R.name_of(requirement)}": {reason}'
-        if target != bot:
-            lead = f'{_name(conn, by)} sent back {_name(conn, bot)}\'s ask "{R.name_of(requirement)}": {reason}'
-        _wake(conn, out, target, lead, f"{task_id}:{visit['id']}:thumbs_down:{feedback_id}")
-    out["feedback_id"] = feedback_id
-    return out
-
-
-def thumbs_down_count(conn: "sqlite3.Connection", bot: str, days: int = 30) -> int:
-    """How many 👎 people gave one bot's asks in the last `days` days. On the third in 30 days the 👎 sheet opens with
-    a rule drafted (C21)."""
-    H = _h()
-    since = H.shift(H.now(), days=-days)
-    found = conn.execute(
-        "SELECT COUNT(*) FROM feedbacks WHERE bot_id=? AND rating='down' AND subject_type=? AND updated_at>=?",
-        (bot, ASK_SUBJECT, since),
-    ).fetchone()
-    return int(found[0]) if found else 0

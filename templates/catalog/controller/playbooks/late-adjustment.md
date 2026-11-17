@@ -8,7 +8,7 @@ Triggered by a task about a number that changed after the period was closed. Bud
 
 ---
 
-1. Read the task and the closed period's review. Name the entry or document that changed the number, with its date and who posted it.
+1. Read the task's chat and the closed period's review. Name the entry or document that changed the number, with its date and who posted it.
 2. Show the effect on the period's reports. List each report already sent to the owner, the board or an investor that carries the old number.
 3. Propose the correction as lines for the accountant: account, debit or credit, amount, reason. Apply nothing.
 4. Add the cause to `knowledge/close-history.md`: what changed, when it was found, and what it touched.

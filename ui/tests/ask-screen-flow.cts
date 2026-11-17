@@ -1,12 +1,12 @@
 import type {Route} from 'playwright';
 // Offline browser check of Flow's top bar and end (ui/app/decide.ts), against a fake of the new routes, on a desktop:
 // - the crumb's menu lists only the places where something waits, and a row switches the walk to that place;
-// - an ask has Skip and no Snooze;
-// - Snooze on your own task sends a moment: Tomorrow and Next week are 8:00 by the person's clock, late in the evening
-//   in Los Angeles too (a clock and zone faked here), and 1 hour an hour on; Undo unsnoozes; the end counts it;
+// - an ask has Snooze (an icon, for you alone: ask-screen-snooze.cts) and no Skip;
+// - Snooze on an ask opens its menu (1 hour, 1 day, 1 week, 1 month, Other) and sends a moment: each an exact span
+//   from now, late in the evening in Los Angeles too (a clock and zone faked here); Undo unsnoozes; the end counts it;
 // - the mic turns the mark into the wave and back, and nothing is sent;
-// - decideLineSet puts Tico's line in the bar and makes its pick the main button; null puts it back.
-// FLOW_SHOTS=<folder> saves the screen with a line on it, and your own task's snooze choices.
+// - Tico's opinions show no line: the bar holds nothing while the mic is off.
+// FLOW_SHOTS=<folder> saves the screen, an ask's snooze choices and the undo after one.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -20,26 +20,26 @@ const brief = (id: string, stage: string, ask = true) => ({id, title: `Task ${id
   owner_id: ask ? 'bot:pm' : 'human:ana', requester_id: 'human:ana', assignee_id: null, due_at: null, late: null, snoozed: false,
   turn: {state: 'person', who: 'human:ana', line: 'Waiting on Ana', since: '2026-11-09T10:00:00Z', until: null, ask, requirement_id: null},
   version: 3});
-const question = (n: number, stage: string, line: string) => ({kind: 'ask', id: `r${n}`, task_id: `t${n}`, requirement_id: `r${n}`, line,
+// A stage's OK: no grant (GET /api/v2/oks/{id} 404), so Approve answers ok.
+const ok = (n: number, stage: string, line: string) => ({kind: 'ask', id: `r${n}`, task_id: `t${n}`, requirement_id: `r${n}`, line,
   since: `2026-11-09T1${n}:00:00Z`, task: brief(`t${n}`, stage),
-  ask: {requirement_id: `r${n}`, kind: 'answer', line, who: 'human:ana', asked_by: 'bot:pm', choices: ['Yes', 'No'], may: ['answer'],
+  ask: {requirement_id: `r${n}`, kind: 'ok', line, who: 'human:ana', asked_by: 'bot:pm', may: ['ok', 'no'],
     met: false, shows: [], standing: 'waiting', answer: null}});
-const mine = (n: number, stage: string, line: string) => ({kind: 'task', id: `t${n}`, task_id: `t${n}`, line, since: `2026-11-09T1${n}:00:00Z`,
-  task: brief(`t${n}`, stage, false)});
 const stage = (id: string, name: string) => ({id, name, purpose: '', owner: null, by_hand: false, task_limit: null, expected_minutes: null,
   expected_bots_only: false, on_enter: {}, requirements: []});
 const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager_id: null, owner_id: 'human:ana', private: false,
   factory_id: null, preset: null, settings_version: 1, retired_at: null,
   stages: [stage('spec', 'Spec'), stage('build', 'Build'), stage('ship', 'Ship')],
   done: {id: 'done', name: 'Done'}, closed: {id: 'closed', name: 'Closed'}, may_change: true};
-const Q = ['Which plan do new signups get?', 'Ship on Monday?', 'Write the release note'];
+const Q = ['OK the signup plans', 'OK shipping on Monday', 'OK the release note'];
 
 (async () => {
   const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL ?? 'chrome') as string});
   try {
     const errors: string[] = [], writes: {p: string; body: Record<string, unknown>}[] = [];
-    const own = mine(3, 'build', Q[2]!);
-    let needs: Record<string, unknown>[] = [question(1, 'spec', Q[0]!), question(2, 'build', Q[1]!), own];
+    const own = ok(3, 'build', Q[2]!);
+    let needs: Record<string, unknown>[] = [ok(1, 'spec', Q[0]!), ok(2, 'build', Q[1]!), own];
+    let snoozed: Record<string, unknown>[] = [];
     // 23:30 on Nov 13 in Los Angeles: a bare date for tomorrow would be a midnight the team's zone may already be past.
     const page = await browser.newPage({viewport: {width: 1200, height: 900}, serviceWorkers: 'block', timezoneId: 'America/Los_Angeles'});
     await page.clock.setFixedTime(new Date('2026-11-14T07:30:00Z'));
@@ -49,26 +49,31 @@ const Q = ['Which plan do new signups get?', 'Ship on Monday?', 'Write the relea
       const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       if (url.origin !== 'http://tico-ui.test') return route.abort();
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
+      // The icon font, so the shots show icons, not their names.
+      if (p.startsWith('/vendor/fonts/')) return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(path.join(__dirname, '..', p))});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (ui && fs.existsSync(uiFile(ui[1]!))) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
       if (p === '/api/me') return json({...me, config});
       if (p === '/api/v2/config') return json(config);
       if (p === '/api/employees') return json([]);
-      if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
+      if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
       if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
       if (p === '/api/v2/needs-you') return json({actor: 'human:ana', count: needs.length, items: needs, version: String(needs.length), next: null});
+      if (p.startsWith('/api/v2/oks/')) return json({error: 'not_found'}, 404);
       if (p === '/api/v2/flow/opinions') return json({opinions: []});   // Tico has none: the screen is as without it
       const read = r.method() === 'GET' ? p.match(/^\/api\/v2\/tasks\/(t\d)$/) : null;
-      if (read) return json({task: {...brief(read[1]!, 'build', read[1] !== 't3'), created_at: '2026-11-09T09:00:00Z', attachments: [], links: [],
+      if (p === '/api/v2/needs-you/snoozed') return json({actor: 'human:ana', items: snoozed, next: null});
+      if (read) return json({task: {...brief(read[1]!, 'build'), created_at: '2026-11-09T09:00:00Z', attachments: [], links: [],
         body: 'The release goes out Friday. The note lists what changed for customers.'}});
       if (r.method() !== 'GET' && p.startsWith('/api/')) {
         writes.push({p, body: JSON.parse(r.postData() || '{}') as Record<string, unknown>});
-        const snooze = p.match(/^\/api\/v2\/tasks\/(t\d)\/snooze$/);
-        if (snooze) {
-          needs = needs.filter(n => n['task_id'] !== snooze[1]);
-          return json({task: {...brief(snooze[1]!, 'build', false), snoozed: true}});
+        const body = JSON.parse(r.postData() || '{}') as Record<string, unknown>;
+        if (p === '/api/v2/needs-you/snooze') {
+          needs = needs.filter(n => n['id'] !== body['id']);
+          snoozed = [{...own, snoozed_until: body['until']}];
+          return json({id: body['id'], snoozed_until: body['until']});
         }
-        if (p === '/api/v2/tasks/t3/unsnooze') { needs = [...needs, own]; return json({task: brief('t3', 'build', false)}); }
+        if (p === '/api/v2/needs-you/unsnooze') { needs = [...needs, own]; snoozed = []; return json({id: body['id']}); }
       }
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));
@@ -89,8 +94,8 @@ const Q = ['Which plan do new signups get?', 'Ship on Monday?', 'Write the relea
     };
     await dialog.locator('.dc-q', {hasText: Q[0]!}).waitFor();
     assert.equal(await left(), 3, 'All mine walks everything');
-    assert.equal(await dialog.locator('[data-dc="snooze"]').count(), 0, 'an ask: no Snooze');
-    assert.equal(await dialog.locator('[data-dc="skip"]').count(), 1, 'an ask: Skip');
+    assert.equal(await dialog.locator('[data-dc="snooze"][aria-label="Snooze"]').count(), 1, 'an ask: Snooze');
+    assert.equal(await dialog.locator('[data-dc="skip"]').count(), 0, 'an ask: no Skip');
 
     // The menu: All mine, the pipeline, then only its stages where something waits (no Ship). Build walks Build's two.
     await dialog.locator('.dc-crumb').click();
@@ -105,58 +110,57 @@ const Q = ['Which plan do new signups get?', 'Ship on Monday?', 'Write the relea
     await dialog.locator('.dc-mic').click();
     assert.equal(await dialog.locator('.dc-wave').isVisible(), true);
     assert.equal(await dialog.locator('.dc-flow').isHidden(), true);
-    assert.notEqual(await dialog.locator('.dc-say').textContent(), '', 'the line says something');
+    assert.notEqual(await dialog.locator('.dc-say').textContent(), '', 'the voice notice shows in the bar');
     await dialog.locator('.dc-wave').click();
     assert.equal(await dialog.locator('.dc-wave').isHidden(), true);
     assert.equal(await dialog.locator('.dc-mic').isVisible(), true);
     assert.equal(await dialog.locator('.dc-say').textContent(), '');
     assert.deepEqual(writes, [], 'voice sends nothing');
 
-    // Tico's line: the bar shows it and its pick is the main button; null takes both back.
-    await page.evaluate(`decideLineSet('r2', {line: 'Yes. It matches the plan.', pick: 'No'})`);
-    assert.equal(await dialog.locator('.dc-say').textContent(), 'Yes. It matches the plan.');
-    const main = (choice: string) => dialog.locator(`[data-dc-choice="${choice}"]`).evaluate(b => b.matches('.primary, .dc-rec'));
-    assert.equal(await main('No'), true);
-    assert.equal(await main('Yes'), false);
-    await shot('flow');
-    await page.evaluate(`decideLineSet('r2', null)`);
+    // The bar holds only the undo notice: no line from Tico.
     assert.equal(await dialog.locator('.dc-say').textContent(), '');
-    assert.equal(await main('No'), false);
+    await shot('flow');
 
-    // Snooze on your own task. Tomorrow and Next week: 8:00 on Nov 14 and Nov 20 in Los Angeles (16:00Z), each undone.
+    // Snooze on an ask. 1 day and 1 week: a day and seven days from now, each undone.
     const snooze = async (what: string, until: string) => {
-      await dialog.locator('.dc-q', {hasText: 'Task t3'}).waitFor();   // your own task's heading is its title
+      await dialog.locator('.dc-q', {hasText: Q[2]!}).waitFor();
       await dialog.locator('[data-dc="snooze"]').click();
-      assert.deepEqual(await dialog.locator('.dc-more button').allTextContents(), ['1 hour', 'Tomorrow', 'Next week']);
+      assert.deepEqual(await dialog.locator('.dc-snz [role="menuitem"]').allTextContents(), ['1 hour', '1 day', '1 week', '1 month', 'Other']);
       if (what === 'snooze-day') await shot('flow-snooze');
       await dialog.locator(`[data-dc="${what}"]`).click();
       await dialog.locator('.dc-bar:not([hidden])').waitFor();
-      assert.deepEqual(writes, [{p: '/api/v2/tasks/t3/snooze', body: {until, version: 3}}], what);
+      if (what === 'snooze-day') await shot('undo');
+      assert.deepEqual(writes, [{p: '/api/v2/needs-you/snooze', body: {id: 'r3', until}}], what);
       await dialog.locator('.dc-q', {hasText: Q[1]!}).waitFor();
-      assert.equal(await left(), 1, 'the snoozed task is out of the walk');
+      assert.equal(await left(), 1, 'the snoozed ask is out of the walk');
       writes.length = 0;
     };
     const undo = async () => {
       await dialog.locator('.dc-bar [data-dc="undo"]').click();
       await page.waitForFunction('decideLive(DEC).length === 2');
-      assert.deepEqual(writes.map(w => w.p), ['/api/v2/tasks/t3/unsnooze'], 'Undo unsnoozes');
+      assert.deepEqual(writes.map(w => w.p), ['/api/v2/needs-you/unsnooze'], 'Undo unsnoozes');
       writes.length = 0;
       await dialog.locator('[data-dc="next"]').click();
     };
     await dialog.locator('[data-dc="next"]').click();
-    await snooze('snooze-day', '2026-11-14T16:00:00.000Z');
+    await snooze('snooze-day', '2026-11-15T07:30:00.000Z');
     await undo();
-    await snooze('snooze-week', '2026-11-20T16:00:00.000Z');
+    await snooze('snooze-week', '2026-11-21T07:30:00.000Z');
+    await undo();
+    await snooze('snooze-month', '2026-12-14T07:30:00.000Z');
     await undo();
     // 1 hour: an hour on; the end counts it.
     await snooze('snooze-hour', '2026-11-14T08:30:00.000Z');
-    assert.equal(await left(), 1, 'the snoozed task is out of the walk');
-    await dialog.locator('[data-dc-choice="Yes"]').click();
+    assert.equal(await left(), 1, 'the snoozed ask is out of the walk');
+    await dialog.locator('[data-dc="approve"]:not([disabled])').click();
     await dialog.locator('.dc-done').waitFor();
-    assert.match(await dialog.locator('.dc-done').innerText(), /\b1 snoozed\b/);
+    // The end screen reads the snoozed list after it shows: wait for its count, don't read it once. The count is its own
+    // button: hasText matches an element's text with its children's run together ("All done1 snoozedWant more?"), so a
+    // pattern on the whole .dc-done never sees "1 snoozed" as words.
+    await dialog.locator('.dc-done [data-dc="snoozed"]', {hasText: /^1 snoozed$/}).waitFor();
 
     assert.deepEqual(errors, []);
     await page.close();
-    console.log('PASS: the menu switches the walk; Snooze takes your task out and the end counts it; the mic toggles; Tico\'s line picks.');
+    console.log('PASS: the menu switches the walk; Snooze takes an ask out and the end counts it; the mic toggles; Tico shows no line.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

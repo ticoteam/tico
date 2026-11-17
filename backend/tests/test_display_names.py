@@ -5,8 +5,9 @@ from fastapi.routing import APIRoute
 
 from backend import meetings
 from backend.store import H
-from backend.tests.old_asks import old_ask
+from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import headers, post  # noqa: F401
+from backend.tests.old_asks import old_ask
 
 
 @pytest.fixture
@@ -15,7 +16,7 @@ def named_data(api):
         c.execute("UPDATE humans SET name='Ana' WHERE id='ana'")
         c.execute("UPDATE bots SET display_name='Operations' WHERE slug='ops'")
         task = H.task_create(c, 'human:ana', 'Review the plan', 'Please review the plan.', 'bot:ops')
-        # An old ask in a task's thread, read as history, and the bot's ask on the task to a person.
+        # An old ask in a task's thread, read as history, and the bot's OK asked on the task of a person.
         ask = old_ask(
             c,
             'bot:ops',
@@ -26,7 +27,14 @@ def named_data(api):
         )
         c.execute("UPDATE humans SET name='Ben' WHERE id='ben'")
         question = H.task_ask(
-            c, 'bot:ops', task['id'], 'human:ben', 'Which review date?', seen_version=H.task(c, task['id'])['version']
+            c,
+            'bot:ops',
+            task['id'],
+            'human:ben',
+            'OK the review date',
+            kind='ok',
+            shows=X.shown(c),
+            seen_version=H.task(c, task['id'])['version'],
         )
         notice = H.notice(c, 'bot:ops', 'human:ana', 'New task from bot:ops: Review the plan')
         meetings.snapshot(

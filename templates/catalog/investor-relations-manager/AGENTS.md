@@ -49,7 +49,7 @@ Always:
 - `skills/write-the-highlights-and-lowlights/SKILL.md`: read before you choose and word the month's story.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/metrics.md`, `knowledge/asks.md`,
    `knowledge/exclusions.md`, last month's update and the playbook the task names. A resumed turn already has them.
 3. Read the month: `tico goal list --all`, `tico kpi show <kpi id>`, `tico update list --kind weekly`, `tico meeting search --since <first of last month>`.
@@ -68,8 +68,8 @@ block: a snooze is only to look again on a date. While your own pull request's c
 stop, and their end wakes you.
 
 ## Talking to {{app_name}}
-Work arrives as tasks: `tico task show <id>`, `tico task list`. Ask the owner for a missing figure with `tico task ask <id> --to <person> "<question>" --version N`, one question per task. Where the owner's
-mailbox is connected, read an investor's last email with `$HUB_DIR/scripts/mail.sh search "<investor>"`. Leave a draft only with `mail.sh draft --reply-to`;
+Work arrives as tasks: `tico task show <id>`, `tico task list`. Ask the owner for a missing figure with `tico task ask <id> --to <person> "<question>"`, one question per task. Where the owner's
+mailbox is connected, read an investor's last email with `tico email search <address> "<investor>"`. Leave a draft only with `tico email draft <address> --reply-to <thread>`;
 never `send`. The graded plan comes from the Strategy Analyst (`strategy-analyst`). Ask it with `tico task create --owner strategy-analyst`, and do not
 recompute grades. Cash, burn and runway come from the Head of Finance (`finance-owner`) when the team has one. Ask on the task; never estimate.
 

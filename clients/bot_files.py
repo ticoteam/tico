@@ -17,6 +17,8 @@ MB = 1024 * 1024
 MAX_BYTES = 25 * MB  # every kind but video and audio
 MEDIA_MAX_BYTES = 2048 * MB  # video and audio: the server's upload limit (TICO_UPLOAD_MAX_BYTES) by default
 MEDIA_KINDS = ("video", "audio")
+# A task's documents (backend/task_documents.py): one of each per task, each a versioned HTML file.
+DOCUMENTS = ("Spec", "QA report", "Release report", "Invoice", "Email")
 DEFAULT_FOLDERS = ("reports/", "artifacts/")
 
 TYPES = {

@@ -257,19 +257,6 @@ def test_counsel_cannot_copy_a_restricted_page_into_its_task_context(api, monkey
     assert refused.value.status == 403
 
 
-def test_page_audience_migration_keeps_existing_pages_unrestricted():
-    import importlib
-    import sqlite3
-
-    migration = importlib.import_module('backend.migrations.20261105010233_page_audience')
-    with sqlite3.connect(':memory:') as c:
-        c.execute('CREATE TABLE pages(file_id TEXT PRIMARY KEY, cadence TEXT)')
-        c.execute("INSERT INTO pages VALUES('existing','weekly')")
-        migration.up(c)
-        migration.up(c)
-        assert c.execute('SELECT file_id,cadence,audience FROM pages').fetchall() == [('existing', 'weekly', None)]
-
-
 def test_linking_a_restricted_page_to_a_readable_task_never_widens_it(api):
     fid, _ = promoted(api)
     tid = post(api, 'tasks', {'owner': 'ops', 'title': 'Linked work', 'body': 'Plan', 'private': False})['id']

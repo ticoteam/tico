@@ -549,13 +549,13 @@ def test_the_people_list_carries_the_callers_access_and_a_manager_edits_their_re
     api, tokens = acme
 
     def row(token, pid):
-        return next(p for p in api.get("/api/people", headers=headers(token)).json()["people"] if p["id"] == pid)
+        return next(p for p in api.get("/api/humans", headers=headers(token)).json()["people"] if p["id"] == pid)
 
     def group(token, gid):
-        return next(g for g in api.get("/api/people", headers=headers(token)).json()["org_groups"] if g["id"] == gid)
+        return next(g for g in api.get("/api/humans", headers=headers(token)).json()["org_groups"] if g["id"] == gid)
 
     assert row("dee-test", "cara")["my_access"]["manage"] and not row("eve-test", "cara")["my_access"]["manage"]
     assert group("fay-test", "legal")["my_access"]["write"] and not group("eve-test", "legal")["my_access"]["write"]
     # The list says what the server does: her manager edits Cara's profile and a peer does not.
-    assert api.post("/api/v2/people/cara", json={"title": "Counsel"}, headers=headers("dee-test")).status_code == 200
-    assert api.post("/api/v2/people/cara", json={"title": "Peer"}, headers=headers("eve-test")).status_code == 403
+    assert api.post("/api/v2/humans/cara", json={"title": "Counsel"}, headers=headers("dee-test")).status_code == 200
+    assert api.post("/api/v2/humans/cara", json={"title": "Peer"}, headers=headers("eve-test")).status_code == 403

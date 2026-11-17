@@ -119,12 +119,12 @@ posted in it, is no reason to list it, and neither is a bot's activity there. Re
 page, the Tasks page and search still find it. A task you make is not unread for you: its first notice is your own action.
 
 Only human messages, and anything addressed to you, count as unread. A bot's post in a thread you follow is activity:
-a dot, not a count. **Needs attention** at the top of the list holds the threads with something open on your Needs you list: a mention or
-ask you have not answered, an unread DM, a post of yours held for review or held for you to review, and any thread you
-are in where the loop guard paused the bots' wakes; posting there lets them all go, and without a post they go by
-themselves, as many as the thread's hour has room for. Unread threads come next, then the rest, newest first. A thread's
-row counts its sub-threads too. `tico thread read <thread> --seq N` marks a thread read up to a message; `--all` also marks every
-sub-thread under it.
+a dot, not a count. **Needs attention** at the top of the list holds the threads with something open on your Needs you
+list: an @ of you by a person, or a reply to you, that you have not answered, an unread DM, a post of yours held for review or held for you to
+review, and any thread you are in where the loop guard paused the bots' wakes; posting there lets them all go, and without
+a post they go by themselves, as many as the thread's hour has room for. Unread threads come next, then the rest, newest
+first. A thread's row counts its sub-threads too. `tico thread read <thread> --seq N` marks a thread read up to a message;
+`--all` also marks every sub-thread under it.
 
 ## Update requests
 
@@ -149,7 +149,7 @@ request is deleted, its messages read as ordinary messages again.
 - A bot acknowledges a request with a one-word `✅` in its thread.
 - A bot's open asks to people go in its Home.
 - A bot's messages into a thread, including a reply in a sub-thread and the first message of a new thread, pass the
-  org rules check the same way a message to a person does ([Rules](rules-plan.md)). A held message writes nothing: a
+  org rules check the same way a message to a person does ([Rules](dev/rules-plan.md)). A held message writes nothing: a
   held first message makes no thread, sub-thread or DM. Send anyway posts it then, and makes the thread with it. The
   author can withdraw a held message (a person's comes back as Edit and resend), and so can the person a bot reports
   to.

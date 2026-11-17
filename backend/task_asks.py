@@ -54,8 +54,9 @@ SYSTEM: str = _core.KEEPER
 
 WAITING, OK, SENT_BACK, WITHDRAWN, USED = "waiting", "ok", "sent_back", "withdrawn", "used"
 STANDINGS = (WAITING, OK, SENT_BACK, WITHDRAWN, USED)
-# How a visit ends that takes its asks with it: the task moved back, closed, or was reopened from that stage.
-ENDS_ASKS = ("back", "closed", "reopened")
+# How a visit ends that takes its asks with it: the task moved back, through a side stage, to another pipeline, or was
+# closed or reopened.
+ENDS_ASKS = ("back", "side", "closed", "reopened", "moved")
 FROM_PREVIEW = "OK this from its preview in Tico."
 
 # Each module's step is imported by name inside a small function: lazily, so task_asks imports none of them at load
@@ -314,14 +315,21 @@ def own_click(who: object) -> bool:
 
 
 # ----------------------------------------------------------------------------- reads
+GRANT_SQL = "SELECT * FROM ok_grants WHERE requirement_id=?"
+
+
 def grant(conn: "sqlite3.Connection", requirement_id: str) -> Row | None:
-    """The grant of one OK requirement, with its content loaded, or None."""
-    found = conn.execute("SELECT * FROM ok_grants WHERE requirement_id=?", (requirement_id,))
-    names = [d[0] for d in found.description]
-    row = found.fetchone()
+    """The grant of one OK requirement, with its content loaded, or None. Read through the snapshot's cache: a list of
+    waits primes it for every OK it holds (waiting_on.prime)."""
+    from . import read_cache
+
+    row = read_cache.one(conn, GRANT_SQL, (requirement_id,))
     if not row:
         return None
-    out: Row = dict(zip(names, row, strict=True))
+    if not hasattr(row, "keys"):  # a connection without named rows
+        found = conn.execute(GRANT_SQL, (requirement_id,))
+        row = dict(zip([d[0] for d in found.description], found.fetchone() or (), strict=True))
+    out: Row = dict(row)
     try:
         out["content"] = json.loads(out.get("content") or "null")
     except ValueError:
@@ -367,7 +375,7 @@ def _task_status(conn: "sqlite3.Connection", task_id: object) -> str | None:
 
 
 def _taken_back(conn: "sqlite3.Connection", visit: Row) -> bool:
-    """Whether the task was moved back, closed or reopened since this visit ended: what it moved on with is undone."""
+    """Whether a move since this visit ended took back the asks the task moved on with."""
     found = conn.execute(
         f"SELECT 1 FROM visits WHERE task_id=? AND left_at>=? AND how IN ({','.join('?' for _ in ENDS_ASKS)}) LIMIT 1",
         (visit["task_id"], visit["left_at"], *ENDS_ASKS),
@@ -407,7 +415,8 @@ def _state(conn: "sqlite3.Connection", row: Row) -> tuple[str, Row | None, Row |
 
 def standing(conn: "sqlite3.Connection", requirement_id: str) -> str:
     """How an OK stands: waiting (on its person), ok (given from its preview, not used yet), sent_back, withdrawn (it
-    is not asked any more: withdrawn, replaced, its task moved back, closed, deleted or pushed past it), or used."""
+    is not asked any more: withdrawn, replaced, its task diverted, moved back, closed, deleted or pushed past it),
+    or used."""
     row = grant(conn, requirement_id)
     if not row:
         return WITHDRAWN
@@ -466,8 +475,7 @@ def refuses_plain_ok(conn: "sqlite3.Connection", requirement_id: str, value: obj
     it is not give_ok answering it, else None. A send back and an undo stay plain answers."""
     if value != "ok" or _GIVING.get() == requirement_id:
         return None
-    found = conn.execute("SELECT 1 FROM ok_grants WHERE requirement_id=?", (requirement_id,)).fetchone()
-    return FROM_PREVIEW if found else None
+    return FROM_PREVIEW if bound(conn, requirement_id) else None
 
 
 # The bots that act for a person (backend/assistant.py, backend/botops_act.py): they never give an OK of any kind.
@@ -480,7 +488,7 @@ def refuses_ok_by(conn: "sqlite3.Connection", who: object, requirement_id: str, 
     """For every answer path before the engine (the answer route, a batch decision): the refusal's words when `ok` to
     an OK requirement, bound or plain, on anyone's ask, does not come from the person's own session: the Assistant or
     BotOps (acting for a person, confirmed or not, or as itself), a personal token, or anything else acting for them.
-    Else None. A send back, a look again and a question's answer stay theirs to give."""
+    Else None. A send back stays theirs to give."""
     if str(value or "").strip().casefold() != "ok":
         return None
     via = str(getattr(who, "via", "") or "")
@@ -651,9 +659,15 @@ def event_hidden(conn: "sqlite3.Connection", principals: object, target: object)
     return any(not party(conn, viewer, row) for viewer in viewers)
 
 
+BOUND_SQL = "SELECT 1 FROM ok_grants WHERE requirement_id=?"
+
+
 def bound(conn: "sqlite3.Connection", requirement_id: str) -> bool:
-    """Whether a requirement is a bound OK (has a grant)."""
-    return conn.execute("SELECT 1 FROM ok_grants WHERE requirement_id=?", (requirement_id,)).fetchone() is not None
+    """Whether a requirement is a bound OK (has a grant). Read through the snapshot's cache: a list of waits primes it
+    for every OK it holds (waiting_on.prime)."""
+    from . import read_cache
+
+    return read_cache.one(conn, BOUND_SQL, (requirement_id,)) is not None
 
 
 def private_history(conn: "sqlite3.Connection", viewer: object, events: list[Row]) -> list[Row]:

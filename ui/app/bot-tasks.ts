@@ -171,7 +171,7 @@ function botTabHas(tab: BotTaskTabEntry, t: TaskAny, slug: string): boolean | nu
   }
   if (finished && window && String(row.done_at || row.closed_at || row.updated_at || '') < ago(window)) return false;
   // A routine's finished runs are on no tab.
-  return !(finished && (row.routine_id || /from schedule/.test(String(row.body || ''))));
+  return !(finished && row.routine_id);
 }
 // The filter tabs as the server counted them, mended from the events: a held task's row in place, a task joining or
 // leaving a tab its rows decide, and a gone or unreadable one out of every tab. True when anything moved.
@@ -574,7 +574,7 @@ async function v2PillTask(P: BotPillState, text: string) {
   const btn = pq(P, '.p-send'), label = btn.textContent;
   btn.disabled = true; pillBtnSay(btn, 'Creating…');
   try {
-    await cloudCompose('/v2/tasks', {title: (text.split('\n')[0] ?? '').trim().slice(0, 80), body: text, owner: P.slug}, files);
+    await cloudCompose('/v2/tasks', {title: (text.split('\n')[0] ?? '').trim().slice(0, 80), message: text, owner: P.slug}, files);
     pillAcknowledge(P, text, files, scope);
     toast(`Task for ${empName(P.slug)} created`);
     await v2Refresh();

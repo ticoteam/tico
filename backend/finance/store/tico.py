@@ -39,11 +39,16 @@ def _metadata(c: sqlite3.Connection, key: str) -> Any:
         return None
 
 
+def _owner_email(c: sqlite3.Connection) -> str:
+    """The stored owner record's email, in lower case."""
+    stored = _metadata(c, "owner")
+    return str(cast(dict[str, Any], stored).get("email") or "").strip().lower() if isinstance(stored, dict) else ""
+
+
 def owner_person(c: sqlite3.Connection, fallback: str = "") -> str:
     """The install owner as `human:<id>`: the stored owner record's person, else `fallback` (the person Finance was
     set up for). Admins are not owners."""
-    stored = _metadata(c, "owner")
-    email = str(cast(dict[str, Any], stored).get("email") or "").strip().lower() if isinstance(stored, dict) else ""
+    email = _owner_email(c)
     if email:
         row = c.execute("SELECT id FROM humans WHERE lower(email)=?", (email,)).fetchone()
         if row:
@@ -205,7 +210,7 @@ def queue_email(
     from pathlib import Path
     from ...auth import Auth
     from ... import email_sending
-    from connectors.mail import compose
+    from ...mail_lib import compose
     from ...store import Problem
 
     sending: Any = email_sending
@@ -453,7 +458,21 @@ def needs_you(c: sqlite3.Connection, person: str, title: str, body: str, *, priv
     person cannot be given one. `private` (True for a notice that names an amount) keeps it to the person and its
     requester; left None, Tico's default applies."""
     try:
-        made: Any = _H.task_create(c, _H.KEEPER, title[:200], body, person, deduplicate=True, private=private)
+        from ... import person_asks
+
+        # BotOps' question to the person on their task (person_asks), so the item is in their Needs you.
+        made: Any = person_asks.task_for(
+            c,
+            _H.KEEPER,
+            title[:200],
+            body,
+            person,
+            question=title[:200],
+            why=person_asks.first_sentence(body) or "Finance needs a person to act on this.",
+            deduplicate=True,
+            private=private,
+            lint=True,
+        )
     except _H.Refused:
         return None
     task: Mapping[str, Any] = cast(Mapping[str, Any], made) if isinstance(made, Mapping) else {}
@@ -514,8 +533,9 @@ def _bound(fingerprint: object, base: object) -> str:
 def credential_secret(c: sqlite3.Connection, vault: object, credential_id: str) -> str:
     """A stored credential's secret, read at use time ("" when it is gone or holds none). Never logged or kept."""
     row = c.execute("SELECT * FROM credentials WHERE id=?", (credential_id,)).fetchone()
-    # A website login (backend/website_tools.py) is never a provider key: its value goes to a browser only.
-    if row is None or row["ciphertext"] is None or vault is None or row["kind"] == "login":
+    # A website login (backend/website_tools.py) is never a provider key: its value goes to a browser only. Nor is a
+    # secret the server itself uses (the Slack app's tokens): the vault never opens one by an id it was handed.
+    if row is None or row["ciphertext"] is None or vault is None or row["kind"] in ("login", "service"):
         return ""
     return str(cast(Any, vault).cipher.decrypt(c, row) or "")
 
@@ -575,6 +595,50 @@ def drop_credential(c: sqlite3.Connection, credential_id: str) -> None:
         (credential_id, SEALED_SOURCE),
     )
     c.execute("DELETE FROM credentials WHERE id=? AND source=?", (credential_id, SEALED_SOURCE))
+
+
+def _identity(c: sqlite3.Connection, actor: str) -> Any:
+    """The vault's view of `actor` (backend/auth.py `Identity`), with no more rights than they hold: a bot as itself,
+    a person rebuilt the way deferred work rebuilds them (`Auth.identity_for_actor`). None for anyone else, or a
+    person who has left or whose sign-in is off."""
+    from ... import access, auth
+
+    A: Any = auth
+    if actor.startswith("bot:"):
+        try:  # as bot auth resolves it: an archived or paused bot, or one with no current credential, is no one
+            return A.bot_identity(c, actor)
+        except A.Problem:
+            return None
+    if not actor.startswith("human:"):
+        return None
+    signed: Any = getattr(_VAULT[0], "auth", None)
+    if signed is not None:
+        try:
+            return signed.identity_for_actor(c, actor)
+        except A.Problem:
+            return None
+    # A vault registered without the app's sign-in (a worker or a test): the same rebuild, the owner in force by email
+    # as Auth.identity_for_actor does (backend/access.py load_owner, which follows a transfer).
+    if A.standing(c, actor.partition(":")[2]):
+        return None
+    email = person_email(c, actor)
+    owner = str(cast(Any, access).load_owner(c, _VAULT[0].store.settings)["email"])
+    return A.Identity(actor, "owner" if email and email == owner else "human", email=email)
+
+
+def may_use_credential(c: sqlite3.Connection, actor: str, credential_id: str) -> bool:
+    """Whether `actor` may put this stored credential to use: the vault's rule (backend/credentials.py `usable`), with
+    the actor's own rights. A Finance connection reads only a credential its creator may use, so a finance admin can
+    never send a key they could not use themselves to a provider. False with no vault registered."""
+    from ... import credentials
+
+    if not _VAULT:
+        return False
+    who = _identity(c, actor)
+    if who is None:
+        return False
+    vault: Any = _VAULT[0]
+    return bool(cast(Any, credentials).usable(c, who, credential_id, vault.admins_now(c)))
 
 
 def credential_exists(c: sqlite3.Connection, credential_id: str) -> bool:

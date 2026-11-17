@@ -90,7 +90,7 @@ def test_a_wake_may_start_only_for_a_bot_whose_turn_it_is(c, general):
 
 
 def test_a_bots_word_to_another_bot_about_a_persons_task_starts_no_run(c, general):
-    """docs/pipelines-v3.md "It only wakes whoever has the turn": a task a person owns wakes no bot, so a bot's message
+    """docs/dev/pipelines-v3.md "It only wakes whoever has the turn": a task a person owns wakes no bot, so a bot's message
     to another bot about it starts no run. It stays in the task's chat for that bot's next run, and the check owes the
     other bot nothing (rule 2 holds: it has no turn)."""
     from backend import never_stuck as NS
@@ -225,7 +225,7 @@ def test_a_persons_own_message_on_a_snoozed_task_starts_a_run(c, general, monkey
     enqueue(c, {"id": carrier, "sender_id": H.KEEPER, "recipient_id": BUILDER, "refs": refs, "created_at": H.now()})
     job = dict(c.execute("SELECT * FROM jobs WHERE id=?", (carrier,)).fetchone())
     assert task_wakes.may_start(c, carrier)
-    assert execution.job_refusal(c, job, {}, set(), set(), False, False) is None
+    assert execution.job_refusal(c, job, {}, set(), set()) is None
 
 
 def _start(company, c, message_id):

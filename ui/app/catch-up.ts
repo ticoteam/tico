@@ -69,7 +69,7 @@ function cuDialog() {
   return dlg;
 }
 async function catchUpOpen() {
-  if (THREADS.rail === false || CU.open) return;
+  if (CU.open) return;
   const dlg = cuDialog();
   Object.assign(CU, {open: true, queue: [], later: [], done: 0, total: 0, next: null, paging: null, state: 'loading', error: '', seen: new Set(), undo: null, drafts: new Map()});
   cuDraw();

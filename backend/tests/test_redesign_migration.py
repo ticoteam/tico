@@ -6,7 +6,6 @@ import json
 
 import pytest
 
-from backend.tests.helpers.migrations import forget_from, restore_config  # the column back for a rerun from before 0070
 from backend import automation_flow as F
 from backend import hubdb as H
 from backend import redesign_migration as M
@@ -80,8 +79,12 @@ def marks(api):
 
 
 def told(api, mid):
-    """What the owner got for one migration: tasks and notices that name it."""
-    tasks = rows(api, "SELECT id, title, body FROM tasks WHERE title LIKE '%Automations%'")
+    """What the owner got for one migration: tasks (with the words they were filed with) and notices that name it."""
+    with db(api).read() as c:
+        tasks = [
+            {"id": r[0], "title": r[1], "body": H.task_words(c, r[0])}
+            for r in c.execute("SELECT id, title FROM tasks WHERE title LIKE '%Automations%'").fetchall()
+        ]
     notes = [r for r in rows(api, "SELECT id, refs FROM messages WHERE refs LIKE ?", (f"%{mid}%",))]
     return tasks, notes
 
@@ -295,7 +298,7 @@ def test_rehearsal_cases_team_rules_paused_bots_and_long_inbox_instructions(api)
     routine(api, "sch_ops", bot="ops", cron="0 8 * * 1", zone="UTC", title="Weekly ops check")
     with db(api).transaction() as c:
         c.execute("UPDATE bots SET state='paused' WHERE slug='ops'")
-    post(api, "access/people/cara", {"inbox_bot": "inbox", "mailbox": "cara@acme.example"})
+    post(api, "access/humans/cara", {"inbox_bot": "inbox", "mailbox": "cara@acme.example"})
     with db(api).transaction() as c:
         c.execute(
             "INSERT OR REPLACE INTO mail_agent_instructions(bot, content, runner_id, updated_at) VALUES(?,?,?,?)",
@@ -331,7 +334,7 @@ def test_the_moved_inbox_hands_the_assistant_the_mail_it_runs_on(api, monkeypatc
     from types import SimpleNamespace
     from backend import automations
 
-    post(api, "access/people/ana", {"inbox_bot": "inbox", "mailbox": "ana@acme.example"})
+    post(api, "access/humans/ana", {"inbox_bot": "inbox", "mailbox": "ana@acme.example"})
     first_start(api)
     prompts = []
     monkeypatch.setattr(
@@ -419,47 +422,12 @@ def test_a_routine_longer_than_an_automation_takes_moves_off_with_its_text_cut(a
     assert flow["enabled"] is False and len(flow["steps"][0]["prompt"]) == F.MAX_PROMPT
 
 
-def test_the_upgrade_drops_the_cutover_record_and_accepts_tables_and_holds_still_reads_the_marks(api):
-    """An install from before the drop has the record and accepts tables. Migration 0007 removes them at the next start;
-    `redesign_migrated` stays, and `holds` still sees a routine the cutover converted (so it is never reseeded and fires
-    twice)."""
-    store = db(api)
-    with store.transaction() as conn:
-        conn.execute(
-            "CREATE TABLE redesign_migrations(id TEXT PRIMARY KEY, state TEXT NOT NULL, actor TEXT NOT NULL, "
-            "created_at TEXT NOT NULL, expires_at TEXT NOT NULL, finished_at TEXT, restored_at TEXT, snapshot TEXT, "
-            "result TEXT)"
-        )
-        conn.execute(
-            "INSERT INTO redesign_migrations(id, state, actor, created_at, expires_at) VALUES('mig_1','converted',"
-            "'human:ana',?,?)",
-            (H.now(), H.now()),
-        )
-        conn.execute(
-            "CREATE TABLE redesign_migration_accepts(flag TEXT PRIMARY KEY, accepted_by TEXT NOT NULL, "
-            "accepted_at TEXT NOT NULL)"
-        )
-        conn.execute(
-            "INSERT INTO redesign_migrated(kind, id, migration, automation) VALUES('routine','sch_1','mig_1','a1')"
-        )
-        # As a file from before 0007 has it: that migration and every later one not run yet.
-        restore_config(conn)
-        forget_from(conn, "0007")
-    store.initialize(seed_market=False)
-    with store.read() as conn:
-        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        assert not {"redesign_migrations", "redesign_migration_accepts"} & tables
-        assert "redesign_migrated" in tables
-        assert M.holds(conn, "routine", "sch_1") is True
-        assert M.holds(conn, "routine", "sch_2") is False
-
-
 OLD_INBOX = "Sort Acme mail by sender and urgency. Refunds go to Ben."  # short instructions the cutover copied whole
 
 
 def inbox_of(api, content=OLD_INBOX):
     """Ana's inbox, moved by the cutover on this release's code, with her Inbox Manager's instructions as given."""
-    post(api, "access/people/ana", {"inbox_bot": "inbox", "mailbox": "ana@acme.example"})
+    post(api, "access/humans/ana", {"inbox_bot": "inbox", "mailbox": "ana@acme.example"})
     with db(api).transaction() as c:
         c.execute(
             "INSERT OR REPLACE INTO mail_agent_instructions(bot, content, runner_id, updated_at) VALUES(?,?,?,?)",

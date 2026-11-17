@@ -31,11 +31,11 @@ function tipHTML(slug: string): string {
     rows.push(['State', botStatePill(slug)]);
     rows.push(['Open', esc(`${openCount(slug)} task${openCount(slug) === 1 ? '' : 's'}`)]);
   }
-  if (S.me?.cloud && e && e.agent) {
+  if (S.me && e && e.agent) {
     rows.push(['Run by', esc(`${agentKind(e.agent)}${e.agent.profile ? ` · ${e.agent.profile}` : ''}`)]);
     rows.push(['Status', agentPresenceLabel(e.agent, e.online)]);
     if (e.agent.last_seen_at) rows.push([e.agent.synced ? 'Last sync' : 'Last seen', esc(ago(e.agent.last_seen_at))]);
-  } else if (S.me?.cloud && e) {
+  } else if (S.me && e) {
     rows.push(['Computer', esc(e.machine?.label || 'Not registered')]);
     rows.push(['Status', e.online ? (e.ready ? 'Online · ready' : 'Online · setup needed') : 'Offline']);
     // Its turns run on the Tico AI Gateway until its subscription is signed in (backend/models_preset.py as_served).
@@ -112,19 +112,4 @@ interface V2HistoryRow {
   focus?: string;
   started_at?: string;
   ended_at?: string | null;
-}
-async function v2HistoryLoad(slug: string): Promise<void> {
-  const pills: Record<string, string> = V2_PILL, words: Record<string, string> = V2_WORD;
-  const el: HTMLElement | null = $('#v2-history'); if (!el) return;
-  const d: {history?: V2HistoryRow[]} | null = await v2Get(`/v2/status?bot=${encodeURIComponent(slug)}&since=7d`);
-  // Looked up again: the box may have been redrawn while the history was on its way.
-  const box: HTMLElement | null = $('#v2-history'); if (!box) return;
-  const rows: V2HistoryRow[] = [...(d?.history || [])].sort((a, b) => String(b.started_at || '').localeCompare(String(a.started_at || '')));
-  box.innerHTML = rows.length
-    ? `<ul class="sh-list">${rows.map(h => { const by = h.by && h.by !== 'keeper' && actorSlug(h.by) !== slug ? actorLabel(h.by) : '';   // the bot or the hub itself goes without saying
-        const why = [h.reason || '', by].filter(Boolean).join(' · ');
-        return `<li class="sh-row"><span class="pill ${pills[h.state ?? ''] ?? ''}">${esc(words[h.state ?? ''] || h.state || '')}</span>
-        <span class="sh-focus"${h.focus || why ? ` title="${esc([h.focus, why].filter(Boolean).join(' · '))}"` : ''}>${esc(h.focus || '')}${why ? ` <span class="muted">${esc(why)}</span>` : ''}</span>
-        <span class="sh-when muted tnum" title="${esc(fmt(h.started_at))}${h.ended_at ? ' to ' + esc(fmt(h.ended_at)) : ''}">${esc(ago(h.started_at))}</span></li>`; }).join('')}</ul>`
-    : '<div class="empty">No status changes in the last week.</div>';
 }

@@ -1,10 +1,8 @@
 """The one `idempotency` table (backend/store.py): a stored answer replays and expires after the retry window, an
-operation binding is kept and never swept, and an unknown outcome of a bound operation is refused without asking again.
-The migration that moves an older file's rows across is tested in test_migrations.py."""
+operation binding is kept and never swept, and an unknown outcome of a bound operation is refused without asking again."""
 
 import pytest
 
-from backend.tests.helpers.migrations import forget_from, restore_config  # the column back for a rerun from before 0070
 from backend import invites
 from backend.store import sweep_idempotency
 from backend.tests.helpers.api import headers  # noqa: F401  (the api fixture)
@@ -62,7 +60,7 @@ def test_bound_rows_survive_the_retention_sweep_and_stored_answers_do_not(api): 
 
 def test_an_invite_whose_outcome_is_unknown_is_refused_again_and_its_send_is_never_repeated(signin, monkeypatch):  # noqa: F811
     headers_ = owner(signin)
-    url = "/api/v2/access/people/cara/invite"
+    url = "/api/v2/access/humans/cara/invite"
     attempts = []
 
     def lost(auth, settings, person):
@@ -79,47 +77,3 @@ def test_an_invite_whose_outcome_is_unknown_is_refused_again_and_its_send_is_nev
     with signin.auth.store.read() as c:
         row = c.execute("SELECT binding,state FROM idempotency WHERE key=?", (headers_["idempotency-key"],)).fetchone()
     assert tuple(row) == ("invites", "pending")
-
-
-def test_an_answer_stored_before_the_upgrade_replays_after_it(api):  # noqa: F811
-    """A key whose answer an older release stored (the six-column table) still replays after migration 0050: the retry
-    gets the first answer and makes nothing new, and other content under the key is still refused. The answer is a
-    goal's: a file from before the Pipelines v3 cut-over that has tasks is refused (backend/migrations), so the file
-    rerun from 0050 has none."""
-    import sqlite3
-    from contextlib import closing
-
-    from fastapi.testclient import TestClient
-
-    from backend.app import create_app
-
-    h = headers("ana-test")
-    body = {"owner": "ops", "title": "Before the upgrade"}
-    first = api.post("/api/v2/goals", json=body, headers=h)
-    assert first.status_code == 200, first.text
-    settings = api.app.state.store.settings
-    with closing(sqlite3.connect(settings.db_path)) as c, c:
-        c.execute(
-            "CREATE TABLE idempotency_legacy(actor TEXT NOT NULL, operation TEXT NOT NULL, key TEXT NOT NULL, "
-            "request_hash TEXT NOT NULL, response TEXT NOT NULL, created_at TEXT NOT NULL, "
-            "PRIMARY KEY(actor,operation,key))"
-        )
-        c.execute(
-            "INSERT INTO idempotency_legacy(rowid,actor,operation,key,request_hash,response,created_at) "
-            "SELECT rowid,actor,operation,key,request_hash,response,created_at FROM idempotency"
-        )
-        c.execute("DROP TABLE idempotency")
-        c.execute("ALTER TABLE idempotency_legacy RENAME TO idempotency")
-        c.execute("CREATE INDEX idempotency_by_created ON idempotency(created_at)")
-        c.execute("DELETE FROM tasks")  # what the fixture's start filed: a file with tasks is not rerun from 0050
-        restore_config(c)
-        forget_from(c, "0050")
-        goals = c.execute("SELECT count(*) FROM goals").fetchone()[0]
-    with TestClient(create_app(settings), follow_redirects=False) as upgraded:
-        again = upgraded.post("/api/v2/goals", json=body, headers=h)
-        assert again.status_code == 200 and again.json() == first.json()
-        changed = upgraded.post("/api/v2/goals", json={**body, "title": "Other"}, headers=h)
-        assert changed.status_code == 409 and changed.json()["error"]["code"] == "idempotency_conflict"
-    with closing(sqlite3.connect(settings.db_path)) as c:
-        assert c.execute("SELECT count(*) FROM goals").fetchone()[0] == goals
-        assert "binding" in {r[1] for r in c.execute("PRAGMA table_info(idempotency)")}

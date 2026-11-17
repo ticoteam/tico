@@ -35,7 +35,7 @@ const BOTS: Bot[] = [
   bot('eng-manager', 'Engineering Manager', 'engineering', 'human:chris'),
   bot('firmware', 'Firmware Engineer', 'engineering', 'eng-manager'),
   bot('devops', 'DevOps Engineer', 'engineering', 'eng-manager', {shared_from: 'devops-main', owner_id: 'chris'}),
-  bot('qa', 'Quality Assurance Specialist', 'engineering', 'eng-manager', {onboarding_state: 'needs_onboarding'}),
+  bot('qa', 'Quality Assurance Specialist', 'engineering', 'eng-manager', {onboarding_state: 'needs_setup'}),
   bot('hardware', 'Hardware Test Engineer', 'engineering', 'eng-manager'),
   bot('retail', 'Retail Partners Manager', 'sales', 'human:chris'),
   bot('partnerships', 'Partnerships Development Manager', 'sales', 'retail', {goal_active: true}),

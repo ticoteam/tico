@@ -49,8 +49,9 @@ def _report(c):
 
 
 def _checks(c):
-    rows = c.execute("SELECT id,title,body,status FROM tasks WHERE owner_id=? ORDER BY created_at, id", (TM.ACTOR,))
-    return [dict(r) for r in rows]
+    """The manager's check tasks, each with its words: the report Tico gave it (H.task_words)."""
+    rows = c.execute("SELECT id,title,status FROM tasks WHERE owner_id=? ORDER BY created_at, id", (TM.ACTOR,))
+    return [{**dict(r), "words": H.task_words(c, r["id"])} for r in rows.fetchall()]
 
 
 def _version(c, task_id):
@@ -99,18 +100,18 @@ def test_a_paused_task_opens_one_check_that_a_later_report_absorbs_and_a_private
     first = _report(c)
     assert first["items"] == 1 and first["words"] == "1 department, 1 item"
     (check,) = _checks(c)
-    assert check["title"] == "Task check: Company (1)" and paused in check["body"]
-    assert "Paused: " in check["body"] and "has no computer" in check["body"] and "tico task show" in check["body"]
-    assert private not in check["body"] and SECRET not in check["body"]
+    assert check["title"] == "Task check: Company (1)" and paused in check["words"]
+    assert "Paused: " in check["words"] and "has no computer" in check["words"] and "tico task show" in check["words"]
+    assert private not in check["words"] and SECRET not in check["words"]
     assert _report(c)["items"] == 0 and len(_checks(c)) == 1  # reported once: left out for a day, nothing new
     second = _new(c, "Chase the Acme renewal")
     assert _report(c)["items"] == 1
     (check,) = _checks(c)  # absorbed: the same task, a new body
-    assert check["title"] == "Task check: Company (1)" and second in check["body"] and paused not in check["body"]
+    assert check["title"] == "Task check: Company (1)" and second in check["words"] and paused not in check["words"]
     H.task_done(c, TM.ACTOR, check["id"], "1 fixed, 0 left", _version(c, check["id"]))
     third = _new(c, "Send the Acme statements")
     _report(c)
-    assert [t["status"] for t in _checks(c)] == ["done", "open"] and third in _checks(c)[1]["body"]
+    assert [t["status"] for t in _checks(c)] == ["done", "open"] and third in _checks(c)[1]["words"]
 
 
 def test_a_snoozed_task_and_one_the_bot_can_work_are_not_listed(c):
@@ -138,8 +139,8 @@ def test_two_open_tasks_with_one_title_requester_and_owner_are_a_duplicate_and_o
     first, second = _twin(c, "Reconcile the Acme invoices")
     assert _report(c)["items"] == 1
     (check,) = _checks(c)
-    assert f"same title, requester and owner as {first}" in check["body"]
-    assert f"tico task relate {second} {first} --kind duplicate_of" in check["body"]
+    assert f"same title, requester and owner as {first}" in check["words"]
+    assert f"tico task relate {second} {first} --kind duplicate_of" in check["words"]
     third, _ = _twin(c, "Book the Acme review")
     H.task_snooze(c, H.KEEPER, third, "Not this quarter", None)
     assert _report(c)["items"] == 0
@@ -160,14 +161,14 @@ def test_cut_items_are_not_seen_and_appear_in_the_next_report(c, monkeypatch):
     items = synthetic_report_items(30)
     use_synthetic_items(monkeypatch, items)
     _report(c)
-    first_body = _checks(c)[0]["body"]
+    first_body = _checks(c)[0]["words"]
     included = sum(f"synthetic-{i:02}" in first_body for i in range(len(items)))
     assert 0 < included < len(items)
     seen = {r["key"] for r in c.execute("SELECT key FROM task_manager_seen")}
     assert seen == {item["key"] for item in items[:included]}
 
     second = _report(c)
-    second_body = _checks(c)[0]["body"]
+    second_body = _checks(c)[0]["words"]
     cut_ids = {item["task"] for item in items[included:]}
     assert second["items"] == len(cut_ids)
     assert all(task_id in second_body for task_id in cut_ids)
@@ -177,7 +178,7 @@ def test_render_is_unchanged_under_cap_and_report_keeps_the_thirty_item_cap(c, m
     items = synthetic_report_items(35, why_size=1, fix_size=1)
     use_synthetic_items(monkeypatch, items)
     _report(c)
-    body = _checks(c)[0]["body"]
+    body = _checks(c)[0]["words"]
     assert "Task check for Company: 35 items." in body
     assert "... and 5 more, in the next report." in body
     assert all(f"synthetic-{i:02}" in body for i in range(30))
@@ -283,7 +284,7 @@ def built(environment):
     shutil.copytree(TEMPLATE, Path(api.app.state.store.settings.catalog_dir) / "general-manager")
     machine(api)
     draft(api)
-    api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+    api.post("/api/v2/setup/complete", json={}, headers=signed_in())
     return api
 
 

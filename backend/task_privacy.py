@@ -590,6 +590,10 @@ def page(c, who, cid, *, before=None, since=None, limit=200, task_id=None, max_b
     its messages come to that many bytes as JSON (the newest message is always sent); the rest pages back."""
     snapshot(c)
     clauses, args = ["conversation_id=?"], [cid]
+    if not H.is_bot(getattr(who, "actor", who)):
+        # A person reads the room's timeline: the messages with a seq. Tico's notices to a bot and its carriers are
+        # the bot's run input (H.run_notice), read by the bot alone.
+        clauses.append("seq IS NOT NULL")
     if before:
         anchor = c.execute("SELECT rowid,* FROM messages WHERE id=? AND conversation_id=?", (before, cid)).fetchone()
         if not anchor or not message_readable(c, actor(who), anchor):
@@ -896,6 +900,33 @@ def attempt_readable(c, actor, aid, memo=None):
         )
     except Problem:
         return False
+
+
+def prime_attempt_messages(c, aids):
+    """Read the job message and inputs of many runs in one query per 250, for the attempt_pages_readable checks that
+    follow in this snapshot: the same rows and key prime_attempts keeps, without the rest of the runs' provenance, for
+    a page that checks many bot replies but reads no run's tasks (the Threads rail)."""
+    values = read_cache.cache(c)
+    if values is None:
+        return
+    wanted = sorted(
+        {aid for aid in aids if isinstance(aid, str) and aid} - {k[1] for k in values if k[:1] == ("attempt_messages",)}
+    )
+    for start in range(0, len(wanted), 250):
+        chunk = wanted[start : start + 250]
+        marks = ",".join("?" * len(chunk))
+        found = {aid: [] for aid in chunk}
+        for row in c.execute(
+            "SELECT a.id AS primed_attempt,m.* FROM attempts a JOIN jobs j ON j.id=a.job_id "
+            f"JOIN messages m ON m.id=j.message_id WHERE a.id IN ({marks}) UNION "
+            "SELECT i.attempt_id AS primed_attempt,m.* FROM attempt_inputs i "
+            f"JOIN messages m ON m.id=i.message_id WHERE i.attempt_id IN ({marks})",
+            chunk * 2,
+        ):
+            row = dict(row)
+            found[row.pop("primed_attempt")].append(row)
+        for aid in chunk:
+            values[("attempt_messages", aid)] = found[aid]
 
 
 def attempt_pages_readable(c, actor, aid):
@@ -1635,20 +1666,29 @@ def require_destination(c, who, to, conversation_id, refs, reply=None, reach=Non
 # A long-lived bot's finished company tasks are most of its rows and change nothing.
 STATUS_TASKS_SQL = "(status IN (%s) OR private IS NOT 0)" % ",".join("'%s'" % s for s in H.ACTIVE_STATUSES)
 # The columns `status` reads of them: never the bodies, which were megabytes a status page on a real install.
-STATUS_TASK_COLUMNS = "id,owner_id,requester_id,status,private,readers,askers"
+STATUS_TASK_COLUMNS = "id,owner_id,requester_id,status,private,readers,askers,markers"
 # Who has an ask open on the task's current visit that names a person and is not answered yet (hubdb.status_counts):
 # a bot's ask counts toward its needs_human only where the reader may read the task.
+# The bots waiting on a person on each task: an unanswered ask they put to a person, and an open ❓ of theirs on its
+# chat (backend/question_marks.py), one entry each.
 _ASKERS = (
-    "(SELECT json_group_array(r.added_by_id) FROM visits v JOIN requirements r ON r.visit_id = v.id "
+    "(SELECT json_group_array(asker) FROM (SELECT r.added_by_id AS asker FROM visits v "
+    "JOIN requirements r ON r.visit_id = v.id "
     "WHERE v.task_id = tasks.id AND v.left_at IS NULL AND r.withdrawn_at IS NULL AND r.person_id LIKE 'human:%' "
     "AND NOT EXISTS (SELECT 1 FROM answers a WHERE a.requirement_id = r.id AND a.visit_id = v.id "
-    "AND a.undone_at IS NULL AND a.answer NOT IN ('give', 'again'))) AS askers"
+    "AND a.undone_at IS NULL AND a.answer NOT IN ('give', 'again')) "
+    "UNION ALL SELECT q.bot_id FROM question_marks q WHERE q.task_id = tasks.id AND q.cleared_at IS NULL)) AS askers"
 )
-STATUS_TASK_SELECT = STATUS_TASK_COLUMNS.replace(",askers", "," + _ASKERS)
+# The bots with an open ❓ on the task: its status counts the task for them too, owner or not (`status_inputs`).
+_MARKERS = (
+    "(SELECT json_group_array(q.bot_id) FROM question_marks q WHERE q.task_id = tasks.id AND q.cleared_at IS NULL) "
+    "AS markers"
+)
+STATUS_TASK_SELECT = STATUS_TASK_COLUMNS.replace(",askers", "," + _ASKERS).replace(",markers", "," + _MARKERS)
 
 
 def status_tasks_sql(match):
-    """A bot's tasks `status` reads, `match` being `=?` or `IN (...)` and bound four times. Each part is one
+    """A bot's tasks `status` reads, `match` being `=?` or `IN (...)` and bound five times. Each part is one
     index: OR-ing owner and requester made SQLite read every task the bots ever had, finished ones included,
     to test status and privacy columns stored past the bodies; a busy team's page spent most of a second there."""
     live = "status IN (%s)" % ",".join("'%s'" % s for s in H.ACTIVE_STATUSES)
@@ -1657,7 +1697,10 @@ def status_tasks_sql(match):
         f"UNION SELECT {STATUS_TASK_SELECT} FROM tasks WHERE requester_id{match} AND {live} "
         # `+` keeps the few private tasks on their own index (tasks_private_status), not the owner's every task.
         f"UNION SELECT {STATUS_TASK_SELECT} FROM tasks INDEXED BY tasks_private_status WHERE private IS NOT 0 "
-        f"AND (+owner_id{match} OR +requester_id{match})"
+        f"AND (+owner_id{match} OR +requester_id{match}) "
+        # A task the bot put an open ❓ on, owner or not (backend/question_marks.py).
+        f"UNION SELECT {STATUS_TASK_SELECT} FROM tasks WHERE {live} AND id IN "
+        f"(SELECT task_id FROM question_marks WHERE cleared_at IS NULL AND bot_id{match})"
     )
 
 
@@ -1675,28 +1718,44 @@ def status_tasks(c, match, args):
 
 def status_inputs(c, bots):
     """What `status` reads for each of many bots, one query per kind per 500 bots:
-    {bot id: {"tasks": [...]}}, to pass to `status` as keywords."""
+    {bot id: {"tasks": [...], "direct": [...]}}, to pass to `status` as keywords."""
     snapshot(c)
-    out: dict[str, dict[str, list]] = {bot: {"tasks": []} for bot in bots}
+    out: dict[str, dict[str, list]] = {bot: {"tasks": [], "direct": []} for bot in bots}
     for part in H.chunks(out):
         # An f-string, not "+": basedpyright sometimes infers the unannotated H.chunks as Unknown | None.
         actors = [f"bot:{bot}" for bot in part]
         marks = " IN (" + ",".join("?" * len(actors)) + ")"
-        for t in status_tasks(c, marks, actors * 4):
-            for party in {t["owner_id"], t["requester_id"]}:
+        for t in status_tasks(c, marks, actors * 5):
+            for party in {t["owner_id"], t["requester_id"], *json.loads(t.get("markers") or "[]")}:
                 if party in actors:
                     out[H.actor_id(party)]["tasks"].append(t)
+        for bot, message in direct_marks(c, marks, actors):
+            out[H.actor_id(bot)]["direct"].append(message)
     return out
 
 
-def status(c, who, row, *, tasks=None):
+def direct_marks(c, match, args):
+    """[(bot, marked message)] of each open ❓ in a direct chat (no task) of the bots `match` names, for `status`."""
+    rows = [
+        dict(r)
+        for r in c.execute(
+            "SELECT q.bot_id AS question_bot, m.* FROM question_marks q JOIN messages m ON m.id = q.message_id "
+            f"WHERE q.cleared_at IS NULL AND q.task_id = '' AND q.bot_id{match}",
+            args,
+        )
+    ]
+    prime_messages(c, rows)
+    return [(row.pop("question_bot"), row) for row in rows]
+
+
+def status(c, who, row, *, tasks=None, direct=None):
     """Free-form focus/results can contain task content; hide it when provenance is lost."""
     snapshot(c)
     if not row:
         return row
     row = dict(row)
     tid = row.get("task_id")
-    tasks = tasks if tasks is not None else status_tasks(c, "=?", ("bot:" + row["bot"],) * 4)
+    tasks = tasks if tasks is not None else status_tasks(c, "=?", ("bot:" + row["bot"],) * 5)
     task = next((t for t in tasks if t["id"] == tid), None) if tid else None
     if tid and task is None:
         task = _task(c, tid)
@@ -1711,12 +1770,20 @@ def status(c, who, row, *, tasks=None):
             t["owner_id"] == "bot:" + row["bot"] and t["status"] in H.ACTIVE_STATUSES for t in tasks
         )
     if "needs_human" in row:
-        # One per readable open task the bot filed for a person, and one per unanswered ask it put to a person on a
-        # readable open task (hubdb.status_counts).
+        # One per readable open task the bot filed for a person, one per unanswered ask or open ❓ it put to a person
+        # on a readable open task, and one per open ❓ of its in a direct chat whose message the reader may read
+        # (hubdb.status_counts).
         bot = "bot:" + row["bot"]
-        row["needs_human"] = sum(
-            t["status"] in H.ACTIVE_STATUSES and t["requester_id"] == bot and H.is_human(t["owner_id"]) for t in tasks
-        ) + sum(json.loads(t.get("askers") or "[]").count(bot) for t in tasks if t["status"] == "open")
+        if direct is None:
+            direct = [m for _, m in direct_marks(c, "=?", (bot,))]
+        row["needs_human"] = (
+            sum(
+                t["status"] in H.ACTIVE_STATUSES and t["requester_id"] == bot and H.is_human(t["owner_id"])
+                for t in tasks
+            )
+            + sum(json.loads(t.get("askers") or "[]").count(bot) for t in tasks if t["status"] == "open")
+            + sum(message_readable(c, actor(who), m, current=True) for m in direct)
+        )
     return row
 
 

@@ -28,7 +28,7 @@ def start(api, row, machine=None):
         # The request waits for a warm session (backend/wake_presets.py); let it go as the release check would.
         c.execute(
             "UPDATE jobs SET held=0,released=json_object('warm',1,'waited',0,'at',?) "
-            "WHERE message_id=? AND held=1 AND state='queued' AND hold_reason IS NULL",
+            "WHERE message_id=? AND held=1 AND state='queued'",
             (H.now(), row["message_id"]),
         )
     attempt = claim(api, machine, row["bot"])

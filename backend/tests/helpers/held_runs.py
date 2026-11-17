@@ -54,3 +54,19 @@ def task_held(api, private=False):
         )
         H.task_comment(c, H.KEEPER, other_id, 'The digest numbers are in.', extra_refs={'subtask': 'digest-1'})
     return machine, attempt, task_id, other_id
+
+
+def start_wait_over(c):
+    """The wait before a handed-back or lapsed run's next try has passed (execution.wait_unstarted, its cant_start
+    hold): the claim may hand the job out again."""
+    c.execute(
+        "UPDATE holds SET until_at=? WHERE kind='cant_start' AND holdable_type='job' AND released_at IS NULL",
+        (H.shift(H.now(), seconds=-1),),
+    )
+
+
+def no_start_wait(monkeypatch):
+    """A handed-back or lapsed run goes out again at once: its wait is not what the test is about."""
+    from backend import holds
+
+    monkeypatch.setitem(holds.KINDS, holds.CANT_START, holds.Backoff(first=0, cap=0))

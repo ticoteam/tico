@@ -4,23 +4,9 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-const TR_SVG = {
-  plus: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>',
-  catchUp: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="4" y="9" width="16" height="11" rx="2"/><path d="M6 6h12M8 3h8"/></svg>',
-  browse: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>',
-  lock: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
-  pin: (on: boolean) => `<svg width="15" height="15" viewBox="0 0 24 24" fill="${on ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="${on ? 0 : 1.6}" stroke-linejoin="round" aria-hidden="true"><path d="M15 3l6 6-3 1-4 4 .5 5-1.5 1.5-4-4-5 5-1-1 5-5-4-4L5 10l5 .5 4-4z"/></svg>`,
-};
-// `#` before a thread's name, a lock for a private one.
-const threadHashHTML = (t: ThreadRow | null | undefined) => `<span class="tr-mark" aria-hidden="true">${threadPrivate(t) ? TR_SVG.lock : '#'}</span>`;
 const TR_PHONE = matchMedia('(max-width:760px)'), trPhone = () => TR_PHONE.matches;
 // #/threads first drawn at phone width has an empty pane: grown past the phone's width it opens what the computer does.
 TR_PHONE.addEventListener('change', () => { if (!TR_PHONE.matches && S.route === THREADS_ROUTE) void pageThreads(); });
-
-// The thread last opened here, which #/threads opens again.
-const THREADS_LAST_KEY = 'tico.threads.last';
-function threadsLastGet() { try { return localStorage.getItem(THREADS_LAST_KEY) || ''; } catch { return ''; } }
-function threadsLastSet(id: string) { try { localStorage.setItem(THREADS_LAST_KEY, id); } catch { /* not kept */ } }
 
 // ----------------------------------------------------------------- the page
 // The thread the pane shows, and the element and view that hold it.
@@ -121,7 +107,7 @@ async function pageThreads() {
 // No thread to open but chats wait for you: say how many, and offer Catch up (never the empty picture).
 const trUnreadWords = (n: number): string => `${threadsCountText(n)} chat${n === 1 ? '' : 's'} with new messages`;
 function trUnreadPane(pane: Element): boolean {
-  const n = THREADS.rail === true ? threadsCatchUp() : 0;
+  const n = threadsCatchUp();
   if (!n) return false;
   pane.innerHTML = `<div class="tr-empty" data-tr-unread-pane><div class="empty-state">${EMPTY_ART.unread}<p><b data-tr-unread-n>${esc(trUnreadWords(n))}</b></p>
     <button type="button" class="primary" data-tr-catchup>Catch up</button></div></div>`;
@@ -231,13 +217,13 @@ function railRender() {
   more.hidden = all; more.textContent = all ? '' : `${unread.length - RAIL_UNREAD_CAP} more`;
   rail.querySelector('.tr-none').hidden = !(words && !lists.pinned.length && !lists.threads.length && !unread.length);
   rail.querySelector('[data-tr-more]').hidden = !THREADS.next || !!words;
-  const can = THREADS.rail === true, n = threadsCatchUp();
+  const n = threadsCatchUp();
   const catchUp = rail.querySelector('[data-tr-catch]'), badge = catchUp.querySelector('.tr-badge');
-  catchUp.hidden = !can;
+  catchUp.hidden = false;
   catchUp.classList.toggle('cur', !!CU.open);
   badge.hidden = !n; badge.textContent = threadsCountText(n);
   catchUp.setAttribute('aria-label', n ? `Catch up, ${n}` : 'Catch up');
-  rail.querySelector('[data-tr-browse]').hidden = !can;
+  rail.querySelector('[data-tr-browse]').hidden = false;
   // The pane's "N chats with new messages" follows the count; at 0 (and Catch up closed: nothing moves behind it) the
   // pane is emptied first, so this cannot run again, and pageThreads() picks what shows instead.
   const un = document.querySelector('[data-tr-unread-n]'), unPane = un?.closest('.tr-pane');

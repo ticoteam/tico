@@ -9,8 +9,9 @@ Done when: the matching playbook has been read and its own Done when line is met
 - `build-me-a-bot.md`: build a bot and take it live.
 - `change-model-or-computer.md`: a model change or a move, checked on the computer.
 - `health-check.md`: what is broken, and the fixes you may make right away.
-- `connect-a-tool.md`: connect a tool (the vendor's MCP server first, else a skill in the bot's repo; credentials).
-- `share-a-credential.md`: give another bot a credential one bot has.
+- `connect-a-tool.md`: connect a tool (the vendor's MCP server first, else a skill in the bot's repo; credentials), when
+  the Tools Owner hands you its bot.yaml entry or you build the bot. A request only about a tool or a key is the Tools Owner's.
+- `share-a-credential.md`: give another bot a credential one bot has, when the Tools Owner hands it to you with a person's request.
 - `turn-on-sending.md`: let a message bot's mail go out, to the recipients the human names.
 - `connect-a-hermes-profile.md`: connect a Hermes or OpenClaw profile with a pairing code, ask how often it syncs, and fix one
   that is not reporting in or was archived.

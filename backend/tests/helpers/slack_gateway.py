@@ -7,6 +7,8 @@ from backend.config import Settings
 from backend.store import Store, encode
 from clients import judge as J
 from backend import bot_settings as BS
+from backend import slack_channels as SC
+from backend.auth import Identity
 
 
 TEAM, APP, BOT_USER, BOT_ID = "T02F3S2SD", "A0BU75YSGT1", "U0BUS6WA4SY", "B0BUNG973DY"
@@ -77,7 +79,7 @@ USERS = {
 
 
 CHANNELS = {
-    MARKETING: {"id": MARKETING, "name": "marketing"},
+    MARKETING: {"id": MARKETING, "name": "marketing", "is_member": True},
     "C0EXT": {"id": "C0EXT", "name": "partners", "is_ext_shared": True},
 }
 
@@ -87,8 +89,8 @@ class FakeSlack:
 
     def __init__(self, team=TEAM, app=APP, scopes=SCOPES):
         self.team, self.app, self.scopes = team, app, scopes
-        self.posts, self.failures, self.calls, self.unfurls = [], [], [], []
-        self.pages, self.threads, self.unreadable = {}, {}, set()  # what history and replies return
+        self.posts, self.failures, self.calls, self.unfurls, self.ephemeral = [], [], [], [], []
+        self.threads = {}  # what replies return
 
     def auth_test(self):
         return {
@@ -115,14 +117,9 @@ class FakeSlack:
             raise G.SlackError("conversations.info", "channel_not_found")
         return CHANNELS[channel]
 
-    def history(self, channel, oldest="", limit=200):
-        self.calls.append(("conversations.history", channel, oldest))
-        if channel in self.unreadable:
-            raise G.SlackError("conversations.history", "not_in_channel")
-        return sorted(
-            (m for m in self.pages.get(channel, []) if float(m["ts"]) > float(oldest or 0)),
-            key=lambda m: float(m["ts"]),
-        )[:limit]
+    def conversations_list(self):
+        self.calls.append(("conversations.list",))
+        return list(CHANNELS.values())
 
     def replies(self, channel, thread_ts, oldest="", limit=200):
         self.calls.append(("conversations.replies", channel, thread_ts, oldest))
@@ -157,6 +154,11 @@ class FakeSlack:
             }
         )
         return {"ok": True, "ts": f"{1700000000 + len(self.posts)}.000100"}
+
+    def post_ephemeral(self, channel, user, text):
+        self.calls.append(("chat.postEphemeral", channel))
+        self.ephemeral.append((channel, user, text))
+        return {"ok": True}
 
 
 class FakeJudge:
@@ -289,7 +291,12 @@ def send(gateway, text, judge_answer=None, **kw):
 
 # ----------------------------------------------------------------------------- channels read like an employee reads them
 RELEASE, QUIET = "C0000000002", "C0QUIET"
-CHANNELS.update({RELEASE: {"id": RELEASE, "name": "release_notes"}, QUIET: {"id": QUIET, "name": "quiet"}})
+CHANNELS.update(
+    {
+        RELEASE: {"id": RELEASE, "name": "release_notes", "is_member": True},
+        QUIET: {"id": QUIET, "name": "quiet", "is_member": True},
+    }
+)
 
 
 USERS["U1"]["profile"]["real_name"] = "Ana Rivera"
@@ -300,31 +307,13 @@ USERS["U2"]["profile"]["real_name"] = "Ben"
 
 @pytest.fixture
 def readers(tmp_path):
-    """A registry whose channels name their readers: #marketing is read by the CMO and SEO,
-    #release_notes by the CTO, #quiet by nobody; a paused bot and an unknown slug are listed too."""
+    """A list whose channels name their readers: #marketing is read by the CMO, SEO and a paused Finance bot,
+    #release_notes by the CTO, #quiet by nobody. Each read channel gets a read-only link, which the first tick
+    activates."""
     registry = tmp_path / "registry"
     registry.mkdir()
     (registry / "hub-access.yaml").write_text("owner: ana@acme.example\nallowed_domains:\n  - acme.example\n")
-    (registry / "slack-channels.yaml").write_text(f"""
-channels:
-  - id: {MARKETING}
-    name: marketing
-    purpose: "Marketing work log."
-    post: true
-    readers: [cmo, seo, finance, nobody-here]
-  - id: {RELEASE}
-    name: release_notes
-    purpose: "Product release notes."
-    post: false
-    readers: cto
-  - id: {QUIET}
-    name: quiet
-    purpose: "Nobody reads this one."
-    post: false
-""")
-    settings = Settings(
-        db_path=tmp_path / "hub.db", slack_team_id=TEAM, slack_app_id=APP, registry_dir=registry, slack_digest_cap=5
-    )
+    settings = Settings(db_path=tmp_path / "hub.db", slack_team_id=TEAM, slack_app_id=APP, registry_dir=registry)
     store = Store(settings)
     store.initialize()
     with store.transaction() as c:
@@ -349,12 +338,19 @@ channels:
                 (slug, None, 'ana', entry['description'], entry['reports_to']),
             )
             BS.write(c, slug, {'name': slug, 'runtime': 'fake'})
+        ana = Identity("human:ana", "owner", email="ana@acme.example")
+        for cid, name, post, slack_readers, note in (
+            (MARKETING, "marketing", True, ["cmo", "seo", "finance"], "Marketing work log."),
+            (RELEASE, "release_notes", False, ["cto"], "Product release notes."),
+            ("#quiet", "quiet", False, [], "Nobody reads this one."),  # by name: the gateway finds its id
+        ):
+            SC.add(c, settings, ana, cid, readers=slack_readers, post=post, note=note, name=name)
     slack, engine, clock = FakeSlack(), FakeJudge(), Clock()
     gw = G.Gateway(store, slack, judge_engine=engine, clock=clock)
     gw.verify_app()
     gw.engine = engine
-    gw.tick()  # the first pass: cursors start at now, nothing is delivered
-    assert digests(store) == []
+    gw.tick()  # the first pass checks the read-only links: both go active
+    assert [r["state"] for r in rows(store, "SELECT state FROM slack_thread_links")] == ["active", "active"]
     return gw
 
 
@@ -365,14 +361,6 @@ def channel_message(text, channel=MARKETING, user="U1", thread_ts=None, subtype=
     if subtype:
         payload["event"]["subtype"] = subtype
     return payload
-
-
-def digests(hub):
-    return rows(
-        hub,
-        "SELECT d.reader,d.count,d.skipped,d.channels,m.body,m.refs,m.sender_id,m.recipient_id "
-        "FROM slack_digests d JOIN messages m ON m.id=d.message_id ORDER BY d.created_at, d.reader",
-    )
 
 
 # ----------------------------------------------------------------------------- the call's size and question count

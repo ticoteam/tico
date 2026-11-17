@@ -19,7 +19,7 @@ with its reading and its date.
 
 `tico growth channel list` gives each channel's stage and budget. A test can start only on a channel at `testing` or
 `scaling` with budget left for its spend. A channel at `idea` can take an idea, but the growth meeting cannot start it
-until its stage is `testing`; say so in the idea's body. A `paused` channel takes no new idea. The board list shows what
+until its stage is `testing`; say so in the idea's first message. A `paused` channel takes no new idea. The board list shows what
 is already On deck, In development, Live or Working, so nothing is filed twice.
 
 ## 3. Write each idea
@@ -37,7 +37,7 @@ meeting decides.
 
 ## 4. File each idea
 
-    tico task create --owner growth-manager --label growth:ideas --title "<idea, one line>" --body-file <file> --label channel:<slug> --label segment:<slug>
+    tico task create --owner growth-manager --label growth:ideas --title "<idea, one line>" --message-file <file> --label channel:<slug> --label segment:<slug>
 
 ## 5. Link a follow-up
 

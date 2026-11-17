@@ -1,4 +1,4 @@
-"""A task waits on another bot's work through a sub-task it filed (docs/pipelines-v3.md, "A task waits a day on a
+"""A task waits on another bot's work through a sub-task it filed (docs/dev/pipelines-v3.md, "A task waits a day on a
 sub-task"): while the sub-task is open the parent's bot is not woken and the parent names what it waits on; when the
 sub-task ends, the parent's owner is woken once with how it ended. There is no Blocked and no `waiting_on` field: a
 task waits on a person, a task it filed, or room, and a bot asks a bot in a DM."""

@@ -8,16 +8,9 @@ guidance, responsibilities and operating procedures, including customer support 
 handling.
 
 Research captures, audits, meeting records, proposals, implementation plans and historical
-designs are not current team guidance. Preserve useful material in an organized Bot Notes
-collection: Research, Plans and proposals, Historical records, Technical reference,
-Marketing working files, Bot operating rules, and Library maintenance. Unclassified shared
-files go to Needs review. These collections are excluded from the default documentation search.
-When explicitly discussing a note, qualify it as reference rather than presenting it as policy.
-
-`registry/company-docs.json` defines the reviewed Tico documents included in the current library
-and explicit exceptions for notes. A file being under `docs/` does not by itself make it current
-team guidance. The reader organizes existing source files without breaking bot references;
-file deletion or physical relocation is unnecessary for removing clutter from the main library.
+designs are not current team guidance. Keep useful material where it already lives, and when a
+note is discussed, qualify it as reference rather than presenting it as policy. A file under
+`docs/` does not by itself make it current team guidance.
 
 Promote useful research into a maintained procedure when the requested work and evidence support it. Preserve unresolved questions as questions; do not invent policy to
 fill gaps. PRs remain proposed changes, separate from merged guidance.

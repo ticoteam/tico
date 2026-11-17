@@ -13,7 +13,7 @@ one; the Librarian may start a market one. A run on the draft is the owner's alo
 readable by every signed-in reader, bots included, since it only discusses what is published. Changes go to the draft
 through the owner's click (`apply`, the code path of accepting a `strategy_draft` proposal); when the Strategy Owner ran
 the lens, the changes are filed as one `strategy_draft` proposal (source `lens`) and the owner decides it on the usual
-card. A lens never publishes. Unversioned and idempotent (`ensure`), like the strategy tables."""
+card. Unversioned and idempotent (`ensure`), like the strategy tables."""
 
 import functools
 import json
@@ -81,20 +81,6 @@ SHARPEN_TEXT_MAX = 200
 CELL_MAX = 400
 INTERRUPTED = {"code": "interrupted", "message": "The run was cut off; run it again"}
 SHARPEN_TARGET = "market/open-questions"
-
-SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS lens_runs (id TEXT PRIMARY KEY, lens TEXT NOT NULL, applies_to TEXT NOT NULL, "
-    "on_draft INTEGER NOT NULL DEFAULT 0, strategy_n INTEGER, status TEXT NOT NULL, "
-    "answers TEXT NOT NULL DEFAULT '{}', result TEXT, applied TEXT NOT NULL DEFAULT '[]', "
-    "sharpen_tasks TEXT NOT NULL DEFAULT '{}', proposal_id TEXT, created_by TEXT NOT NULL, created_at TEXT NOT NULL, "
-    "finished_at TEXT, error TEXT, claimed INTEGER NOT NULL DEFAULT 0)",
-    "CREATE INDEX IF NOT EXISTS lens_runs_created ON lens_runs(created_at)",
-)
-
-
-def ensure(c):
-    for statement in SCHEMA:
-        c.execute(statement)
 
 
 # Test seam: how the job is started.
@@ -351,7 +337,7 @@ def start(c, who, settings, store, lens_id, answers, on="published"):
     if not market and not on_draft:
         published = S.current(c)
         if not published:
-            raise Problem("no_published", "Nothing is published yet; run it on the draft, or publish first", 422)
+            raise Problem("no_published", "There is no strategy yet; run it on the draft, or save one first", 422)
         number = published["n"]
     model = writer(c, settings, store) is not None
     now = H.now()

@@ -51,6 +51,19 @@
 .mkt-seg button[aria-pressed=true]{background:var(--raised);color:var(--ink);font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,.12)}
 .mkt-start{display:grid;gap:8px;max-width:560px}
 .mkt-start input{width:100%}
+/* The sizing task: its question to the reader, with a reply; the sentence form under it. */
+[data-mkt-sizing]:not(:empty){margin-bottom:12px}
+.mkt-asked{display:grid;gap:8px;max-width:560px}
+.mkt-asked p{margin:0}
+.mkt-q-line{font-weight:600;color:var(--ink)}
+.mkt-asked .mkt-cite{margin:0}
+.mkt-asked .mkt-cite input{flex:1;min-width:0}
+.mkt-def-line{margin:0 0 12px;max-width:560px;color:var(--muted);font-size:var(--t-sm)}
+.mkt-def-line[hidden],.mkt-start[hidden]{display:none}
+#mkt-sizing .mkt-start{margin-bottom:12px}
+.mkt-pen{position:relative;display:inline-grid;place-items:center;width:20px;height:20px;min-height:0;padding:0;vertical-align:middle;border:0;border-radius:50%;background:transparent;color:var(--muted);cursor:pointer}
+.mkt-pen:hover{background:var(--surface2);color:var(--ink)}
+.mkt-pen svg{width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:2;stroke-linejoin:round}
 .mkt-two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;align-items:start}
 .mkt-two.solo{grid-template-columns:minmax(0,1fr)}
 .mkt-card .mkt-lab+.mkt-growth{margin-top:8px}

@@ -1,5 +1,5 @@
 import type {Route} from 'playwright';
-// Offline browser check that an OK's Approve waits for the exact content it is for (docs/pipelines-v3.md S3):
+// Offline browser check that an OK's Approve waits for the exact content it is for (docs/dev/pipelines-v3.md S3):
 // - a letter's OK reads the letter's own preview (GET /api/v2/letters/{id}) and its proof; Approve is off until the proof is
 //   drawn, then sends the letter's shown_hash;
 // - a letter whose proof does not load leaves Approve off; Send back still works;
@@ -23,7 +23,7 @@ const brief = (id: string, title: string) => ({id, title, number: 1, pipeline_id
   version: 3});
 const need = (rid: string, line: string, hour: number, shows: string[] = []) => ({kind: 'ask', id: rid, task_id: 't-' + rid, requirement_id: rid, line,
   since: `2026-11-09T${String(hour).padStart(2, '0')}:00:00Z`, task: brief('t-' + rid, line),
-  ask: {requirement_id: rid, kind: 'ok', line, who: 'human:ana', asked_by: 'bot:pm', choices: null, may: ['ok', 'no', 'thumbs'], met: false,
+  ask: {requirement_id: rid, kind: 'ok', line, who: 'human:ana', asked_by: 'bot:pm', may: ['ok', 'no'], met: false,
     shows, standing: 'waiting', answer: null}});
 const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager_id: null, owner_id: 'human:ana', private: false,
   factory_id: null, preset: null, settings_version: 1, retired_at: null,
@@ -67,7 +67,7 @@ const gate = () => { let open!: () => void; const p = new Promise<void>(r => { o
       if (p === '/api/me') return json({...me, config});
       if (p === '/api/v2/config') return json(config);
       if (p === '/api/employees') return json([]);
-      if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
+      if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
       if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
       if (p === '/api/v2/needs-you') return json({actor: 'human:ana', count: needs.length, items: needs, version: needsVersion, next: null});
       // Letters: the grant's content is the letter's terms; the proof is read from the letter's own preview.
@@ -92,7 +92,10 @@ const gate = () => { let open!: () => void; const p = new Promise<void>(r => { o
         await specPage.p;
         return route.fulfill({contentType: 'text/html', headers: {'content-disposition': 'inline; filename="spec.html"'}, body: `<h1>Importer spec v${v}</h1>`});
       }
-      if (r.method() === 'POST' && p.startsWith('/api/v2/')) {
+      // The task's read names its thread: the ask is answered in its chat (decide.ts decideChatMount).
+      const read = /^\/api\/v2\/tasks\/(t-r\d)$/.exec(p);
+      if (read && r.method() === 'GET') return json({task: {...brief(read[1]!, 'x'), conversation_id: 'c-' + read[1]}});
+      if (r.method() === 'POST' && p.startsWith('/api/v2/') && !p.startsWith('/api/v2/threads/')) {
         writes.push({p, body: JSON.parse(r.postData() || '{}') as Record<string, unknown>});
         const m = /^\/api\/v2\/tasks\/(t-r\d)\/asks\/(r\d)\/(ok|answer)$/.exec(p);
         if (m) return json({task: brief(m[1]!, 'x'), answer_id: 'a-' + m[2], requirement_id: m[2]});
@@ -105,7 +108,7 @@ const gate = () => { let open!: () => void; const p = new Promise<void>(r => { o
     await page.locator('#task-play').click();
     const dialog = page.locator('#need-card');
     const approve = dialog.locator('[data-dc="approve"]');
-    const next = async (line: string) => {
+    const next = async (line: string | RegExp) => {
       await dialog.locator('[data-dc="next"]').click();
       await dialog.locator('.dc-q', {hasText: line}).waitFor();
     };
@@ -119,13 +122,13 @@ const gate = () => { let open!: () => void; const p = new Promise<void>(r => { o
     await dialog.getByText('Jo Rivera').waitFor();
     assert.equal(await approve.isDisabled(), false);
 
-    // r2: a letter whose proof does not load: Approve stays off, Send back still goes.
+    // r2: a letter whose proof does not load: Approve stays off, a reply in the chat still sends it back.
     await next('Mail the notice');
     await dialog.locator('.dc-doc .err, .dc-doc + .err, .err').first().waitFor();
     assert.equal(await approve.isDisabled(), true, 'no proof, no Approve');
     assert.equal(await dialog.locator('iframe.dc-proof').count(), 0);
-    await dialog.locator('#dc-notes').fill('Fix the proof.');
-    await dialog.locator('[data-dc="sendback"]:not([disabled])').click();
+    await dialog.locator('.dc-chat .p-text').fill('Fix the proof.');
+    await dialog.locator('.dc-chat .p-send').click();
     await dialog.locator('.dc-bar:not([hidden])').waitFor();
     assert.deepEqual(writes.at(-1)?.p, '/api/v2/tasks/t-r2/asks/r2/answer');
     await dialog.locator('.dc-q', {hasText: 'Mail the lease letter'}).or(dialog.locator('.dc-q', {hasText: 'Approve the pricing notes'})).first().waitFor();
@@ -178,7 +181,7 @@ const gate = () => { let open!: () => void; const p = new Promise<void>(r => { o
     assert.equal(await dialog.locator('.dc-doc .dc-details .dc-raw').count(), 1, 'the exact content is under Details');
 
     // r8: a page requirement's OK: off until the page at version 2 is shown; Approve sends that version.
-    await next('Spec page');
+    await next(/^OK the \w+\?$/);   // a page's OK asks its question: "OK the spec?"
     await page.waitForTimeout(300);
     assert.equal(await approve.isDisabled(), true, 'Approve waits for the page at its version');
     specPage.open();

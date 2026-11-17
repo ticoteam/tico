@@ -7,6 +7,7 @@ reads them all in one prompt, each with the time it was sent.
 
 from backend import hubdb as H
 from backend.tests.helpers.api import assign, get, post, ready, runner  # noqa: F401
+from backend.tests.helpers.run_failures import wait_over
 
 
 def claim(api, r, next_run=True):
@@ -110,7 +111,7 @@ def test_a_completed_run_settles_its_notes_and_a_failed_one_does_not(api):
         assert [x["id"] for x in H.notes_waiting(c, "ops")] == [n["id"]]
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='canceled' WHERE state='uncertain'")
-        c.execute("UPDATE run_backoff SET wait_until=NULL")
+        wait_over(c)
     post(api, "chat/ops", {"text": "Second"})
     second = claim(api, r)
     post(api, f"attempts/{second['id']}/started", {"thread_id": "t2"}, token=r["token"])
@@ -148,7 +149,7 @@ def test_an_unsettled_note_with_a_completed_carrier_is_still_read_and_the_catch_
     assert settled(api, n["id"])
 
 
-def test_the_migration_settles_old_notes_of_completed_runs_only(api):
+def test_a_start_settles_unsettled_notes_of_completed_runs_only(api):
     r = setup(api)
     done, failed = note(api, "one"), None
     post(api, "chat/ops", {"text": "First"})
@@ -166,10 +167,8 @@ def test_the_migration_settles_old_notes_of_completed_runs_only(api):
     )
     waiting = note(api, "three")
     store = api.app.state.store
-    with store.transaction() as c:  # a database from before the column
-        c.execute("DROP INDEX notes_waiting")
-        c.execute("DROP INDEX notes_unsettled_carried")
-        c.execute("ALTER TABLE notes DROP COLUMN settled_at")
+    with store.transaction() as c:  # notes no path settled: the start's one pass settles them
+        c.execute("UPDATE notes SET settled_at=NULL")
     store.initialize()
     assert settled(api, done["id"]) and settled(api, failed["id"]) is None and settled(api, waiting["id"]) is None
     with store.read() as c:

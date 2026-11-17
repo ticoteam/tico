@@ -4,7 +4,7 @@
 
 // User Timing marks, each set once per page load, in the order an open passes them (ms since navigation start):
 //   tico:head          theme.js ran in the head: the page's HTML has arrived
-//   tico:bundle-start  the bundle's first statement (backend/ui_bundle.py BUNDLE_MARK); not set with the files unbundled
+//   tico:bundle-start  the bundle's first statement (scripts/build-ui.cjs BUNDLE_MARK)
 //   tico:boot          every script has run and boot.js starts
 //   tico:paint-cached  the last screen this person saw here is shown again (boot-snap.js), when there is one
 //   tico:roster        the roster, /me and the people answered
@@ -76,8 +76,8 @@ function bootTimingReport(settled: boolean): BootTimingReport {
     const nav = performance.getEntriesByType('navigation')[0];
     if (nav && isNavigationEntry(nav)) html = bootMs(nav.responseEnd);
     const resources = performance.getEntriesByType('resource').filter(isResourceEntry);
-    // The script's parts (backend/ui_bundle.py): their bytes added up, and from the first one asked to the last one in.
-    const js = resources.filter(r => /^\/tico\/ui\/app\.bundle(?:\.\d+)?\.js$/.test(new URL(r.name, location.href).pathname));
+    // The shell's scripts (scripts/build-ui.cjs): their bytes added up, and from the first one asked to the last one in.
+    const js = resources.filter(r => /^\/tico\/ui\/app\.bundle\.[0-9a-f]{16}\.js$/.test(new URL(r.name, location.href).pathname));
     const took = js.length ? bootMs(Math.max(...js.map(r => r.responseEnd)) - Math.min(...js.map(r => r.startTime))) : null;
     if (took !== null) bundle = {bytes: Math.max(0, Math.round(js.reduce((n, r) => n + (r.transferSize || 0), 0))), ms: took};
     const until = marks['paint-fresh'] ?? Infinity;

@@ -13,7 +13,7 @@ Steps:
 4. Apply the rule in `knowledge/product-practice.md`: a problem is ranked only with at least 3 distinct accounts from at least 2 sources in the last 30 days. Anything below that is "watching".
 5. Separate failures from requests. A request (asking for something the product does not have) goes under "requests" with its count. It never ranks above a failure.
 6. If the usage export is attached, compute each problem's activation gap: activation among accounts that hit it, minus activation among accounts that did not, with both counts. Rank by gap times accounts hit. If there is no export, rank by accounts hit and mark the ranking "evidence only".
-7. Write the list. For each problem: rank, the problem, accounts and sources, the gap or "evidence only", its status (pitch filed with its task id, watching, or parked with a date and a reason), and its previous rank.
+7. Write the list. For each problem: rank, the problem, accounts and sources, the gap or "evidence only", its status (feature filed with its task id, watching, or parked with a date and a reason), and its previous rank.
 8. Write "Left out": each item read that is not this area's product problem, with its reason and where it went (another area, marketing, support, billing).
 
 Checks before you finish:

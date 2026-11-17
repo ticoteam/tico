@@ -25,14 +25,14 @@ This record does not provide the separate automatic fixer.
 Health's **Stuck bots** check and `tico health check` name the bot, its queue split (jobs
 that can start, jobs behind an interrupted run awaiting review, jobs held after repeated refusals until cooldown,
 jobs held on purpose), the oldest age, why it cannot
-start, and a fix or a command to inspect its runs. Work held on purpose never makes a bot stuck. The web Stuck list,
-Company › Campus and the silent-computer line split the queue the same way. Settings > General > Health > Details
+start, and a fix or a command to inspect its runs. Work held on purpose never makes a bot stuck. The web Stuck list
+and the silent-computer line split the queue the same way. Settings > General > Health > Details
 shows the same summaries.
 
 **Tasks** shows the never-stuck check's hourly reading: whether every rule that holds at all times holds (each open task
 waits on something; each bot's turn has a run, a wake or a next try), and how many tasks are on a retry, with a
-manager, with a person or unable to run. It is bad when a rule is broken. See
-[Rules that hold at all times](pipelines-v3.md#rules-that-hold-at-all-times).
+manager, at the ladder's end or unable to run. It is bad when a rule is broken. See
+[Rules that hold at all times](dev/pipelines-v3.md#rules-that-hold-at-all-times).
 
 A cloud machine asleep while all its jobs wait on purpose shows those waits as queue information. If any job needs
 a fix, such as signing in its check model, Health marks the bot stuck even when an older task waits on purpose.
@@ -64,7 +64,8 @@ work, mail asks, bot history, computers offline, and the rest. Each check is tag
 Setup checks (each problem is one BotOps task): `runner_outdated`, `runner_restarting`, `computer_silent`,
 `limited_no_fallback`, `default_login_limited`, `check_limited`, `run_hold`, `claim_failed`, `claim_check`,
 `new_sessions`, `turn_budget`, `reviewer_holds_tasks`, `responder_has_tasks`, `doer_idle`, `stuck_setup`,
-`worktree_error`, `push_stuck`, `cannot_fetch`.
+`worktree_error`, `push_stuck`, `cannot_fetch`. While a computer is silent with work queued, its `computer_silent` task is the
+one task for that outage. The Health page's `computers` and `waiting` checks file only for the computers no silent-computer finding reports: a silent computer's outage is that one task, and those two checks are held (not cleared) while it lasts.
 
 Tico-bug checks (each problem is also reported to the Tico team): `queue_idle`, `worktree_fallback`, `event_stream`,
 `readiness_403`, `runner_route_latency`, `server_cpu`.

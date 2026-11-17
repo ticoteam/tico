@@ -43,7 +43,7 @@ needs (a back end before the screen that calls it), and a data change that locks
 
 ## 3. Write the page
 
-Follow `skills/build-the-page/SKILL.md` with its `templates/release.html`, top to bottom:
+Follow `.claude/skills/build-the-page/SKILL.md` with its `templates/release.html`, top to bottom:
 
 1. **Changelog.** Written for customers, good enough to publish as the company's changelog as it is. One entry per
    change people will notice: its kind (New, Improved, Fixed), a short plain headline, one or two sentences on what
@@ -65,11 +65,11 @@ suggested version with its reason (`knowledge/versioning.md`); a person records 
 The release task lives in the pipeline where releases wait for their OK (`<release pipeline id>`): its first stage
 needs this report with a person's OK.
 
-    tico task create --pipeline <release pipeline id> --owner <you> --title "Release YYYY-MM-DD.N" --label release:YYYY-MM-DD.N --body "<the tasks, one line each>"
-    python3 skills/build-the-page/page.py build reports/releases/YYYY-MM-DD.N-draft.html --out reports/releases/YYYY-MM-DD.N.html
-    python3 skills/build-the-page/page.py check reports/releases/YYYY-MM-DD.N.html --kind release
+    tico task create --pipeline <release pipeline id> --owner <you> --title "Release YYYY-MM-DD.N" --label release:YYYY-MM-DD.N --message "<the tasks, one line each>"
+    python3 .claude/skills/build-the-page/page.py build reports/releases/YYYY-MM-DD.N-draft.html --out reports/releases/YYYY-MM-DD.N.html
+    python3 .claude/skills/build-the-page/page.py check reports/releases/YYYY-MM-DD.N.html --kind release
     tico page publish reports/releases/YYYY-MM-DD.N.html --task <release task id> --title "Release YYYY-MM-DD.N"
-    python3 skills/build-the-page/page.py render <file id> --kind release
+    python3 .claude/skills/build-the-page/page.py render <file id> --kind release
     tico task attach <release task id> page:<file id> --req "<requirement>" --version N
 
 Look at both pictures `render` names before you attach. The requirement's name is the one `tico task show` lists;

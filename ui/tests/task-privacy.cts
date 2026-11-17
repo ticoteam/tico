@@ -17,7 +17,8 @@ const {html} = require('./support/page.cts');
 const {open, task} = require('./tasks-page.cts') as Tasks.Api;
 // The facts are on the task window's Details tab.
 const openDetails = async (page: import('playwright').Page, id: string) => {
-  await page.locator(`#task-modal[open][data-task="${id}"] [data-task-tab="details"]`).click();
+  const tab = page.locator(`#task-modal[open][data-task="${id}"] [data-task-tab="details"]`);
+  if (await tab.getAttribute('aria-pressed') !== 'true') await tab.click();   // pressed again, Details would close
 };
 declare function openTaskCreate(owner: string, opts?: {parent: {id: string; title: string; private: boolean}}): void;
 declare function loadSettings(): Promise<void>;
@@ -179,7 +180,7 @@ const BOTS = [['pm', 'PM'], ['writer', 'Writer']].map(([name, display_name]) => 
     await page.evaluate(() => openTaskCreate('bot:writer', {parent: {id: 't-11', title: 'Draft the newsletter', private: true}}));
     const create = page.locator('#task-create[open]');
     await create.locator('[name=title]').fill('Pick the font');
-    await create.locator('[name=body]').fill('For the newsletter.');
+    await create.locator('[name=message]').fill('For the newsletter.');
     await create.locator('[type=submit]').click();
     await page.waitForFunction(() => !(document.querySelector('#task-create') as HTMLDialogElement).open);
     const made = posts.find(x => x.p === '/api/v2/tasks')!.body;

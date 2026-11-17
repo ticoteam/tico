@@ -1,15 +1,18 @@
 """Bot-first view of scheduled email and Slack work.
 
-The source of truth stays with the mail connector, Slack gateway, and automations. This read
-model joins their records for people reviewing what a bot covers and what it saw.
+The source of truth stays with Gmail, the Slack gateway, and automations. This read model joins their records for
+people reviewing what a bot covers and what it saw. Mail is read from Gmail when the page asks (Tico keeps no copy):
+a mailbox's review count is Gmail's own count of its review labels, kept REVIEW_SECONDS.
 """
 
 import json
+import threading
+import time
 
 from fastapi import Request
 
-from . import routines, runs
-from .mail import message_public, visible_addresses
+from . import routines
+from .mail import live_message_public, visible_addresses
 from . import slack_channels as SC
 from .slack_gateway import permalink
 from .store import H, P, Problem
@@ -24,7 +27,54 @@ def _json(value, fallback):
         return fallback
 
 
-def _sources(c, who, settings, bot, config, people, allowed, channels, mailboxes, reads):
+REVIEW_SECONDS = 60
+MAIL_SHOWN = 40  # the newest messages a bot's page shows, across its mailboxes
+REVIEW_LABELS = ("hub/needs-", "hub/drafted")  # a prefix, and the drafted label itself
+_REVIEW = {}  # mailbox -> (count, monotonic expiry)
+_REVIEW_LOCK = threading.Lock()
+
+
+def needs_review(c, address):
+    """How many messages in the mailbox carry a review label now (Gmail's count per label, added up). A mailbox Gmail
+    cannot answer for counts 0; its check error says why."""
+    from . import gmail_live
+
+    now = time.monotonic()
+    with _REVIEW_LOCK:
+        hit = _REVIEW.get(address)
+    if hit and hit[1] > now:
+        return hit[0]
+    try:
+        count = sum(
+            gmail_live.label_total(c, address, row["id"])
+            for row in gmail_live.labels(c, address)
+            if row["type"] == "user" and (row["name"].startswith(REVIEW_LABELS[0]) or row["name"] == REVIEW_LABELS[1])
+        )
+    except Problem:
+        count = 0
+    with _REVIEW_LOCK:
+        _REVIEW[address] = (count, now + REVIEW_SECONDS)
+    return count
+
+
+def rule_hits(c, mailbox, ids):
+    """{message id: [automation names]}: the automations each message started a run of."""
+    from .automations import _stored_ref
+
+    refs = {_stored_ref(f"mail:{mailbox}:{mid}"): mid for mid in ids}
+    out = {}
+    if refs:
+        marks = ",".join("?" * len(refs))
+        for row in c.execute(
+            "SELECT r.trigger_ref, a.name FROM automation_runs r JOIN automations a ON a.id=r.automation_id "
+            f"WHERE r.trigger_ref IN ({marks}) ORDER BY r.started_at",
+            tuple(refs),
+        ):
+            out.setdefault(refs[row["trigger_ref"]], []).append(row["name"])
+    return out
+
+
+def _sources(c, who, settings, bot, config, people, allowed, channels, mailboxes):
     sources = []
     for address in routines.inbox_of(c, bot)["mailboxes"]:
         if address not in allowed:
@@ -37,15 +87,14 @@ def _sources(c, who, settings, bot, config, people, allowed, channels, mailboxes
                 "name": address,
                 "synced_at": row.get("synced_at"),
                 "error": row.get("error"),
-                "message_count": row.get("message_count") or 0,
-                "needs_review": row.get("needs_review") or 0,
+                "message_count": 0,
+                "needs_review": needs_review(c, address),
             }
         )
     if who.role == "owner":
         for cid, channel in channels.items():
             if bot not in channel["readers"]:
                 continue
-            read = reads.get((cid, bot)) or {}
             sources.append(
                 {
                     "id": "slack:" + cid,
@@ -53,8 +102,6 @@ def _sources(c, who, settings, bot, config, people, allowed, channels, mailboxes
                     "name": "#" + (channel["name"] or cid),
                     "purpose": channel["purpose"],
                     "post": channel["post"],
-                    "last_read": read.get("last_run_at"),
-                    "read_count": read.get("digests") or 0,
                 }
             )
     return sources
@@ -65,18 +112,10 @@ def _catalog(c, who, auth, settings):
     people = roster(c)
     channels = SC.channel_map(c, settings) if who.role == "owner" else {}
     mailboxes = {
-        row["address"]: dict(row) for row in c.execute("SELECT * FROM mail_mailboxes") if row["address"] in allowed
+        row["address"]: {"synced_at": row["checked_at"], "error": row["check_error"]}
+        for row in c.execute("SELECT address,checked_at,check_error FROM mailboxes")
+        if row["address"] in allowed
     }
-    if mailboxes:
-        marks = ",".join("?" * len(mailboxes))
-        for row in c.execute(
-            "SELECT m.mailbox,count(*) AS n FROM mail_messages m WHERE m.deleted_at IS NULL "
-            f"AND m.mailbox IN ({marks}) AND EXISTS (SELECT 1 FROM json_each(m.labels) "
-            "WHERE value LIKE 'hub/needs-%' OR value='hub/drafted') GROUP BY m.mailbox",
-            tuple(mailboxes),
-        ):
-            mailboxes[row["mailbox"]]["needs_review"] = row["n"]
-    reads = {(row["channel"], row["reader"]): dict(row) for row in c.execute("SELECT * FROM slack_reads")}
     # Each bot's own automations (a mail bot's checks and schedules): when one last ran and when the next is due.
     schedules = {}
     for row in c.execute(
@@ -85,10 +124,6 @@ def _catalog(c, who, auth, settings):
         "WHERE a.deleted_at IS NULL AND a.owner_id LIKE 'bot:%'"
     ):
         schedules.setdefault(row["owner_id"][4:], []).append(dict(row))
-    latest_digest = {
-        row["reader"]: row["last"]
-        for row in c.execute("SELECT reader,max(created_at) AS last FROM slack_digests GROUP BY reader")
-    }
     bots = []
     covered_mail, covered_slack = set(), set()
     readable = auth.bot_accesses(c, who)
@@ -101,7 +136,7 @@ def _catalog(c, who, auth, settings):
             (bot,),
         ).fetchone()
         config = _json(config_row["config"], {}) if config_row else {}
-        sources = _sources(c, who, settings, bot, config, people, allowed, channels, mailboxes, reads)
+        sources = _sources(c, who, settings, bot, config, people, allowed, channels, mailboxes)
         if not sources:
             continue
         covered_mail.update(s["name"] for s in sources if s["kind"] == "email")
@@ -113,9 +148,7 @@ def _catalog(c, who, auth, settings):
             "SELECT max(coalesce(settled_at,created_at)) FROM attempts WHERE bot_id=? AND (job_id IS NULL OR trigger IS NOT NULL)",
             (bot,),
         ).fetchone()[0]
-        last = max(
-            fired + ([latest_digest[bot]] if bot in latest_digest else []) + ([turn] if turn else []), default=None
-        )
+        last = max(fired + ([turn] if turn else []), default=None)
         status = H.status(c, bot) or {}
         bots.append(
             {
@@ -129,9 +162,6 @@ def _catalog(c, who, auth, settings):
                 "automation_count": len(jobs),
                 "last_run": last,
                 "next_run": min(due, default=None),
-                "slack_interval_minutes": settings.slack_digest_minutes
-                if any(s["kind"] == "slack" for s in sources)
-                else None,
                 # Mailbox review labels belong to its primary inbox bot. Other bots
                 # may read the same mailbox without owning that review queue.
                 "needs_review": (
@@ -228,17 +258,21 @@ def install_messaging(app, store, auth):
             ]
             mail = []
             if mailboxes:
-                marks = ",".join("?" * len(mailboxes))
-                for row in c.execute(
-                    f"SELECT * FROM mail_messages WHERE deleted_at IS NULL AND mailbox IN ({marks}) "
-                    "ORDER BY epoch DESC LIMIT 40",
-                    tuple(mailboxes),
-                ):
-                    item = message_public(row)
-                    item["rule_hits"] = _json(row["rule_hits"], [])
-                    mail.append(item)
+                from . import gmail_live, mailbox_access
+
+                domains = mailbox_access.company_domains(c)
+                for address in mailboxes:
+                    try:
+                        page = gmail_live.list(c, address, limit=MAIL_SHOWN)["messages"]
+                    except Problem:
+                        continue  # the source's check error says why
+                    hits = rule_hits(c, address, [item["id"] for item in page])
+                    for item in page:
+                        shown = live_message_public(address, item, domains)
+                        shown["rule_hits"] = hits.get(item["id"], [])
+                        mail.append(shown)
+                mail = sorted(mail, key=lambda item: (item["epoch"], item["msg_id"]), reverse=True)[:MAIL_SHOWN]
             slack = []
-            digests = []
             posts = []
             if slack_ids and who.role == "owner":
                 team_url = _workspace_url(c)
@@ -251,36 +285,6 @@ def install_messaging(app, store, auth):
                         tuple(slack_ids),
                     )
                 ]
-                for row in c.execute(
-                    "SELECT * FROM slack_digests WHERE reader=? ORDER BY created_at DESC LIMIT 15", (bot,)
-                ):
-                    event_ids = _json(row["event_ids"], [])
-                    if source and event_ids:
-                        marks = ",".join("?" * len(event_ids))
-                        matching = c.execute(
-                            f"SELECT count(*) FROM slack_events WHERE event_id IN ({marks}) "
-                            "AND channel IN (" + ",".join("?" * len(slack_ids)) + ")",
-                            (*event_ids, *slack_ids),
-                        ).fetchone()[0]
-                        if not matching:
-                            continue
-                    attempt = c.execute(
-                        "SELECT a.state,a.started_at,a.finished_at,a.final_text FROM jobs j "
-                        "LEFT JOIN attempts a ON a.job_id=j.id WHERE j.message_id=? "
-                        "ORDER BY a.created_at DESC LIMIT 1",
-                        (row["message_id"],),
-                    ).fetchone()
-                    digests.append(
-                        {
-                            "id": row["id"],
-                            "created_at": row["created_at"],
-                            "count": row["count"],
-                            "skipped": row["skipped"],
-                            "channels": _json(row["channels"], []),
-                            "event_ids": event_ids,
-                            "run": {**dict(attempt), "state": runs.state(attempt["state"])} if attempt else None,
-                        }
-                    )
                 posts = [
                     {
                         "channel": row["channel"],
@@ -302,7 +306,6 @@ def install_messaging(app, store, auth):
                 "source": source,
                 "instructions": instructions,
                 "automations": jobs,
-                "slack_digests": digests,
                 "slack_posts": posts,
                 "mail": mail,
                 "slack": slack,
@@ -339,6 +342,7 @@ def install_messaging(app, store, auth):
 
     @app.get("/api/v2/messaging/bots/{bot}/slack-digests/{digest_id}")
     def messaging_slack_digest(request: Request, bot: str, digest_id: str):
+        """A Slack pass the gateway wrote before bots read channels through their threads (D9-5): kept, read-only."""
         who = request.state.identity
         human_only(who)
         if who.role != "owner":

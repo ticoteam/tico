@@ -1,5 +1,5 @@
-"""The reads the cut-over's screens need (docs/pipelines-v3.md S7, S10, S12): a list's pipeline, stage, waiting-on and
-pushed-past filters, a row's `pushed_past` and `turn.running`, Company › Factories, the manager rail's Log, a person's
+"""The reads the cut-over's screens need (docs/dev/pipelines-v3.md S7, S10, S12): a list's pipeline, stage, waiting-on and
+pushed-past filters, a row's `pushed_past` and `turn.running`, the factories, the manager rail's Log, a person's
 preferences and a support report's answer."""
 
 from backend.tests.helpers.api import assign, claim, expire, get, headers, post, ready, runner
@@ -340,8 +340,13 @@ def test_health_counts_tasks_without_naming_them_and_a_member_counts_only_what_t
 
 
 def test_an_admins_needs_you_plates_count_only_what_the_admin_may_read(api):
-    for n in range(12):
-        post(api, "tasks", {"title": f"Private errand {n}", "body": "x", "owner": "cara", "private": True})
+    from backend import question_marks
+    from backend.store import H
+
+    with api.app.state.store.transaction() as c:
+        for n in range(12):
+            made = H.task_create(c, "human:cara", f"Private errand {n}", "x", "bot:finance", private=True, lint=False)
+            question_marks.ask(c, "bot:finance", made["id"], "human:cara", f"Which shop {n}?")
     own = next((c for c in get(api, "health", token="cara-test")["checks"] if c["id"] == "needs_plate"), None)
     assert own and own["items"][0]["count"] >= 12
     admin = next((c for c in get(api, "health", token="ben-test")["checks"] if c["id"] == "needs_plate"), None)
@@ -419,7 +424,8 @@ def test_no_sql_reads_a_task_or_a_break_from_the_never_stuck_reading(api):
 def test_a_closed_sub_task_the_reader_may_not_open_says_neither_its_title_nor_why_it_was_closed(api):
     """Codex review 3: a stage that waits on what the task filed, and a private sub-task Cara may not open is closed
     with a reason. What the parent waits on is Cara's own turn now (she owns it), but its line came from the sub-task:
-    the parent's read, its brief row, its waits and her Needs you say a sub-task was closed, never which or why."""
+    the parent's read, its brief row and its waits say a sub-task was closed, never which or why. Her own turn, with
+    nothing asked of her, is not in her Needs you."""
     import json
 
     stage = {"owner": "assignee", "requirements": [{"kind": "linked_done"}]}
@@ -437,10 +443,10 @@ def test_a_closed_sub_task_the_reader_may_not_open_says_neither_its_title_nor_wh
     full = get(api, "tasks/" + parent["id"], token="cara-test")["task"]
     row = next(t for t in get(api, "tasks?brief=true", token="cara-test")["tasks"] if t["id"] == parent["id"])
     needs = [i for i in get(api, "needs-you", token="cara-test")["items"] if i.get("task_id") == parent["id"]]
-    assert needs and full["waits"] and row["turn"]
-    said = json.dumps([full, row, needs])
+    assert needs == [] and full["waits"] and row["turn"]
+    said = json.dumps([full, row])
     assert "Quiet acquisition" not in said and "Salary freeze" not in said and child["id"] not in said, said
-    assert "A sub-task was closed" in json.dumps([full["waits"], row["turn"], needs])
+    assert "A sub-task was closed" in json.dumps([full["waits"], row["turn"]])
 
 
 def test_a_private_task_goes_into_a_first_stage_that_asks_ben_only_with_ben_under_who_can_see(api):

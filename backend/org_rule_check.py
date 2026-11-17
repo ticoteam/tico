@@ -1,4 +1,4 @@
-"""Org rule checks (docs/rules-plan.md §3): a bot's output is checked against the org rules that apply to it before it
+"""Org rule checks (docs/dev/rules-plan.md §3): a bot's output is checked against the org rules that apply to it before it
 is delivered (`questions/rule-check.json`, asked through the server's Decide engine, on Decide's one monthly budget).
 
 Like ask ingest (backend/ask_ingest.py): one call per output, outside the write's transaction (`preflight`); plain
@@ -81,6 +81,7 @@ from .call_slots import NEUTRAL, Calls
 from .store import H, Problem
 from . import sources as SRC
 from .entities import rules as DR
+from .api_contract import api_v2
 
 LOG = logging.getLogger("tico.org_rule_check")
 QUESTION_SET = "rule-check"
@@ -113,15 +114,17 @@ OPERATIONS = {
     "task_update": "a change to a task",
     "task_owner": "a task assignment",
     "task_ask": "a question on a task",
+    "question": "a question to a person on a task's chat",
+    "chat_question": "a question to a person in a chat",
     "bulk": "a change to several tasks",
     "note": "a note to a bot",
     "reply": "a reply in a conversation",
     "automation": "an automation's write",
     "slack": "a Slack reply",
+    "slack_post": "a Slack channel post",
     "mail": "an email",
     "letter": "a letter",
     "update": "an update",
-    "task_question": "a question put to a person",
     "slack_message": "a Slack message",
     "slack_dm": "a Slack message to a bot",
     "threads": "a thread message",
@@ -130,13 +133,6 @@ OPERATIONS = {
     "assistant_message": "a message to the Assistant",
 }
 DRAFT_AS = {"message": "message", "comment": "comment", "task": "task_create", "assign": "task_owner"}
-
-SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS org_rule_verdicts(digest TEXT PRIMARY KEY, broken TEXT NOT NULL, "
-    "call_id TEXT, created_at TEXT NOT NULL)",
-    "CREATE INDEX IF NOT EXISTS org_rule_verdicts_created ON org_rule_verdicts(created_at)",
-    "CREATE INDEX IF NOT EXISTS org_rule_holds_task ON org_rule_holds(task_id) WHERE task_id IS NOT NULL",
-)
 
 # Send anyway's writes, by operation: fn(c, bot identity, hold, replay data, ingest) -> the write's answer. Registered
 # by the module that owns the write (backend/app.py, execution, automations), so the replay is the normal write.
@@ -151,11 +147,6 @@ AUDIENCE = {}
 PATH = contextvars.ContextVar("org_rule_path", default="")
 CHECK_FAILED = "The rule check could not run, so nothing was written. Try again."
 SUMMARY_RULES, SUMMARY_CHARS, SUMMARY_NAMES = 3, 200, 10  # a hold summary's rule previews, their length, its names
-
-
-def ensure(c):
-    for statement in SCHEMA:
-        c.execute(statement)
 
 
 def replayer(operation, prepare=None, audience=None):
@@ -1250,14 +1241,17 @@ def _review_task(c, hold_id, author, rule, reviewer):
         "A message or output was held by an org rule. Open the hold to Keep blocked, Send anyway or Edit rule. "
         "Nothing from the output is copied here.\n\nHold: " + hold_id
     )
-    task = H.task_create(
+    from . import person_asks
+
+    task = person_asks.task_for(
         c,
         H.KEEPER,
         REVIEW_TITLE,
         body,
         reviewer,
+        question="Keep it blocked, send it anyway, or edit the rule?",
+        why="An org rule held a message or output, and you review its holds.",
         labels=[REVIEW_LABEL],
-        lint=False,
         deduplicate=False,
     )
     return task["id"]
@@ -1511,10 +1505,7 @@ def _write_hold(
     judged = judged if isinstance(judged, str) or judged is None else json.dumps(judged, sort_keys=True, default=str)
     judged = judged if judged and judged != text else None
     body = (replay or {}).get("body") or {}
-    if operation == "task_answer":
-        asked = H.answer_question(c, body.get("target") or {})
-        text, text_refs = H.answer_text(asked, body.get("answers") or {}, text=text)
-    elif operation in ("answer", "reply"):
+    if operation in ("answer", "reply"):
         text, text_refs = H.answer_text(
             H.message(c, replay["message"]), replay.get("text") or body.get("text") or "", text=text
         )
@@ -2394,7 +2385,8 @@ def current_people(c, hold, audience=None, auth=None):
 
 def place_now(c, hold, people, replay=None):
     """The place the held write has now, read again on the people it reaches now (teams, outside members, the thread's
-    participants). A write that starts its thread (`start`, with no thread yet) has the place it would start."""
+    participants). A write that starts its thread (`start`, with no thread yet) has the place it would start. A bot's
+    question to a person (`ask`, a ❓: backend/question_marks.py) is one still: that is what the write is, not where."""
     stored = hold_provenance(hold).get("place")
     if not stored:
         return None
@@ -2402,7 +2394,7 @@ def place_now(c, hold, people, replay=None):
     if replay.get("start") is not None and not stored.get("thread"):
         start = replay["start"]
         audience = "personal" if "dm" in start else (start.get("audience") or "members")
-        return place_for_start(
+        found = place_for_start(
             c,
             hold["author"],
             people,
@@ -2410,7 +2402,9 @@ def place_now(c, hold, people, replay=None):
             audience_group_id=start.get("audience_group_id"),
             members=start.get("dm") or start.get("members") or (),
         )
-    return place_for(c, hold["author"], people, stored.get("thread") or "")
+    else:
+        found = place_for(c, hold["author"], people, stored.get("thread") or "")
+    return {**found, "ask": True} if stored.get("ask") else found
 
 
 def current_matched(c, hold, audience=None, auth=None):
@@ -3060,7 +3054,14 @@ def install(app, store, auth, mutate):
         )
         return mutate(request, body, lambda c: mail_decide(c, prep))
 
-    @app.get("/api/v2/rules/stats")
+    @app.get(
+        "/api/v2/rules/stats",
+        **api_v2(
+            "Rules",
+            "getRuleCheckStats",
+            "Rule checks today: checks, unchecked, blocked, dollars left under the decisions monthly cap, and whether checks are on",
+        ),
+    )
     def rules_stats(request: Request):
         """The Rules page header: checks today, unchecked, blocked, dollars left under Decide's monthly cap, and on/off."""
         who = request.state.identity
@@ -3068,7 +3069,14 @@ def install(app, store, auth, mutate):
         with store.read() as c:
             return stats(c, store.settings)
 
-    @app.get("/api/v2/rule-holds")
+    @app.get(
+        "/api/v2/rule-holds",
+        **api_v2(
+            "Rules",
+            "listRuleHolds",
+            "The held writes the caller may read, as summaries, a page at a time: a review task's holds (task), a conversation's held writes (thread), or every held write the caller may read",
+        ),
+    )
     def rule_holds(
         request: Request,
         task: str | None = None,
@@ -3084,25 +3092,46 @@ def install(app, store, auth, mutate):
             items, nxt = holds_listed(c, who, task or "", thread or "", cursor, limit, auth)
         return {"holds": items, "next_cursor": nxt}
 
-    @app.get("/api/v2/rule-holds/{hold_id}")
+    @app.get(
+        "/api/v2/rule-holds/{hold_id}",
+        **api_v2(
+            "Rules",
+            "getRuleHold",
+            "One held output as its reader sees it: the author reads the writes they made, a person or a bot; the reviewer and the person a bot reports to read the rest",
+        ),
+    )
     def rule_hold(request: Request, hold_id: str):
         who = request.state.identity
         with store.read() as c:
             hold = _hold(c, hold_id)
             return view_hold(c, who, hold, auth=auth)
 
-    @app.post("/api/v2/rule-holds/{hold_id}/keep")
+    @app.post("/api/v2/rule-holds/{hold_id}/keep", **api_v2("Rules", "keepRuleHold", "The reviewer keeps it blocked"))
     def rule_hold_keep(request: Request, hold_id: str, body: HoldEmpty):
         who = request.state.identity
         return mutate(request, body, lambda c: keep(c, who, hold_id, auth))
 
-    @app.post("/api/v2/rule-holds/{hold_id}/withdraw")
+    @app.post(
+        "/api/v2/rule-holds/{hold_id}/withdraw",
+        **api_v2(
+            "Rules",
+            "withdrawRuleHold",
+            "The author takes a held write back to edit and resend it, or the person a bot reports to withdraws its post; nothing is sent",
+        ),
+    )
     def rule_hold_withdraw(request: Request, hold_id: str, body: HoldEmpty):
         """The author takes back a held write to send it again (Edit and resend): the hold is kept, nothing is sent."""
         who = request.state.identity
         return mutate(request, body, lambda c: withdraw(c, who, hold_id, auth))
 
-    @app.post("/api/v2/rule-holds/{hold_id}/send")
+    @app.post(
+        "/api/v2/rule-holds/{hold_id}/send",
+        **api_v2(
+            "Rules",
+            "sendRuleHold",
+            "The reviewer sends it anyway, once, with the hold's nonce; for a person's write that is the rule's author, its editors or an admin",
+        ),
+    )
     def rule_hold_send(request: Request, hold_id: str, body: HoldSend):
         who = request.state.identity
         ingest, check, ident = None, None, None
@@ -3135,13 +3164,23 @@ def install(app, store, auth, mutate):
             ),
         )
 
-    @app.post("/api/v2/rule-holds/{hold_id}/appeal")
+    @app.post(
+        "/api/v2/rule-holds/{hold_id}/appeal",
+        **api_v2("Rules", "appealRuleHold", "The author bot asks the reviewer to look, with why"),
+    )
     def rule_hold_appeal(request: Request, hold_id: str, body: HoldAppeal):
         """The author bot asks the reviewer to look. Never checked by rules: it delivers nothing."""
         who = request.state.identity
         return mutate(request, body, lambda c: appeal(c, who, hold_id, body.why))
 
-    @app.post("/api/v2/rules/check")
+    @app.post(
+        "/api/v2/rules/check",
+        **api_v2(
+            "Rules",
+            "checkRuleDraft",
+            "A bot checks a draft as the write it will be; sending that exact draft then costs no second check",
+        ),
+    )
     def rules_check(request: Request, body: DraftCheck):
         """A bot checks a draft as the write it will be (`tico rules check`): the same input, and the verdict cached, so
         sending that exact draft costs no second call. A person's draft is checked as theirs."""
@@ -3187,7 +3226,6 @@ __all__ = [
     "check_as",
     "checked_as",
     "digest",
-    "ensure",
     "health_findings",
     "held_for",
     "held_note",

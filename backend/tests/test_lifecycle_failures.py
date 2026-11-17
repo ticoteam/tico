@@ -7,7 +7,7 @@ reached a busy server keeps its turn (test_lease_held.py); a restart gives lapse
 (test_recovery.py::test_restart_gives_lapsed_leases_one_more_period_instead_of_expiring_them); a refused provider
 sign-in neither replays a turn nor re-queues it in a loop (test_execution_review.py::
 test_rejected_signin_cannot_replay_a_run_that_acted); usage limits and repeated limit failures are held and probed
-once per window (test_login_holds.py, test_run_backoff.py)."""
+once per window (test_login_holds.py, test_run_failures.py)."""
 
 import json
 import random
@@ -21,6 +21,7 @@ from backend import execution
 from backend.app import create_app
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, expire, headers, post, ready, runner, setup_attempt  # noqa: F401
+from backend.tests.helpers.held_runs import no_start_wait
 
 
 def started(api, attempt, token):
@@ -71,8 +72,7 @@ def test_events_after_the_attempt_completed_are_refused_as_terminal_and_nothing_
 
 
 def test_a_turn_lapsed_before_it_started_is_offered_once_and_its_late_events_do_not_touch_the_new_one(api, monkeypatch):
-    # A lapse now waits before the job goes out again (execution.handed_back_until); not what this test is about.
-    monkeypatch.setattr(execution, "HAND_BACK_WAIT", 0)
+    no_start_wait(monkeypatch)  # a lapse's wait before the next try is not what this test is about
     r, _, old = setup_attempt(api)
     # The runner stops renewing before it starts: the lease passes and the work goes back in line.
     expire(api, old["id"])
@@ -122,8 +122,7 @@ def test_a_finished_turn_whose_lease_lapsed_before_any_sweep_is_settled_not_refu
 
 
 def test_a_late_renewal_after_the_task_went_to_another_attempt_is_refused_and_the_old_one_stays_ended(api, monkeypatch):
-    # A lapse now waits before the job goes out again (execution.handed_back_until); not what this test is about.
-    monkeypatch.setattr(execution, "HAND_BACK_WAIT", 0)
+    no_start_wait(monkeypatch)  # a lapse's wait before the next try is not what this test is about
     r, _, old = setup_attempt(api)
     expire(api, old["id"])
     ready(api, r, ["ops"])

@@ -108,7 +108,8 @@ TAGS = {
 PAGE_LEFT_OUT = {"invariant"}
 FIX_PAGE = (
     "BotOps: open the check on Settings > Health for the detail, fix the cause it names, and the check clears on the "
-    "next run. A fix only a person can make reaches a person as a Needs you card on this task."
+    "next run. A fix only a person can make: one ❓ on this task to the person who can make it, with the link to the "
+    "check or the page where they fix it."
 )
 FIX_RUN = "BotOps: nothing to do by hand; the check clears when the next run no longer finds it."
 
@@ -255,6 +256,13 @@ def _invariant_findings(c, now, at, notes):
     return read, out
 
 
+# The Health page's offline checks (computers, waiting) file as they describe the computers no silent-computer finding
+# reports (health.view `filing`): a silent computer's outage is its own finding's (computer_silent). `apply` holds one of
+# these findings, not clears it, while the computers its last text named are silent: that is no recovery.
+OFFLINE_KEYS = ("page:computers", "page:waiting")
+OFFLINE_STATE = "health-offline:state"  # registry_metadata: per offline finding, the computers its last text named
+
+
 def _page_findings(c, ctx, notes):
     """The Health page's warn and bad checks, read as the owner (a read). Their id and summary are the finding."""
     auth = ctx.get("auth")
@@ -268,7 +276,7 @@ def _page_findings(c, ctx, notes):
         github = getattr(
             ctx.get("store"), "github_app", None
         )  # install_github_app sets it: the App's health, no network
-        page = health.view(c, who, ctx["settings"], auth, github, config)
+        page = health.view(c, who, ctx["settings"], auth, github, config, filing=True)
     except Exception as exc:  # noqa: BLE001 - the page's own checks may fail on an install; the other readers still run
         log.warning("Check health: the Health page checks failed", exc_info=True)
         notes["page"] = f"failed: {type(exc).__name__}"
@@ -303,6 +311,11 @@ def _page_findings(c, ctx, notes):
                 severity=MH.BAD if check.get("status") == "bad" else MH.WARN,
             )
         )
+    offline = page.get("offline") or {}
+    notes["offline"] = {
+        "silent": list(offline.get("silent", [])),
+        "named": {key: list(offline.get(key.split(":", 1)[1], [])) for key in OFFLINE_KEYS},
+    }
     return len(page.get("checks", [])), out
 
 
@@ -358,15 +371,25 @@ def apply(c, ctx, checked, found, notes):
     wakes = []  # BotOps tasks whose change wakes BotOps this run: new, back, cleared
 
     # 1. A finding no reader saw now is gone. A filed one clears (its signature may get a comment below); a pending one just drops.
+    # An offline aggregate (OFFLINE_KEYS) is held instead while the computers it last named are silent: computer_silent files
+    # that outage, so the aggregate is not cleared for it. Without the page's read this run, the offline state is left as it is.
     gone_sigs = set()
     unread = set(notes.get("unread", []))
+    offline = notes.get("offline")
+    silent = set(offline["silent"]) if offline is not None else set()
+    named = _reg_get(c, OFFLINE_STATE) if offline is not None else {}
+    held = {}
     for row in c.execute("SELECT key,signature,pending FROM health_findings WHERE present=1").fetchall():
         if row["key"] in seen or _unread_key(row["key"], unread):
+            continue
+        if row["key"] in OFFLINE_KEYS and set(named.get(row["key"], [])) & silent:
+            held[row["key"]] = named[row["key"]]
             continue
         c.execute("UPDATE health_findings SET present=0, pending=0 WHERE key=?", (row["key"],))
         if not row["pending"]:
             gone_sigs.add(row["signature"])
             details["cleared"].append(row["key"])
+    details["held"] = sorted(held)
 
     # 2. What the readers found now: urgent files now, noisy on its second run.
     filed_sigs = set()
@@ -409,6 +432,11 @@ def apply(c, ctx, checked, found, notes):
             filed_sigs.add(item["signature"])
         else:
             details["pending"].append(key)
+
+    if offline is not None:  # what each offline finding names now, for the next run's hold (kept for a held one)
+        state = dict(held)
+        state.update({key: offline["named"][key] for key in OFFLINE_KEYS if key in seen})
+        _reg_set(c, OFFLINE_STATE, state)
 
     # 3. Setup findings: one BotOps task per signature. Tico bugs are reported (returned for the caller to file). A task
     # registered for a signature with nothing filed left (a task seeded by the Health Monitor's retirement, or one whose

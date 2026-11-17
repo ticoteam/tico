@@ -961,20 +961,15 @@ def test_secrets_sealed_before_kms_was_set_open_with_github_app_key_and_are_rese
             "app": bytes(state.github_app.row(c)["ciphertext"]),
             "entra": bytes(c.execute("SELECT ciphertext FROM directory_credentials").fetchone()[0]),
         }
-    from backend import health, slack_app
+    from backend import health
 
-    slack_app.save(
-        state.store, state.store.settings, "human:ana", "xoxb-synthetic-0000000000", "xapp-synthetic-0000000000"
-    )
     enable_kms(api)
     with state.store.read() as c:
         state.vault.cipher.key(c)  # the vault's KMS data key, as the first save under KMS makes it
-        # Nothing is lost (github-app.key and slack.key still open them), but Health says which files are still needed.
+        # Nothing is lost (github-app.key still opens them), but Health says which files are still needed.
         check = health._sealed_secrets(c, state.store.settings, state.github_app)
         assert check["status"] == "info", check
-        assert (
-            "2 secrets still need github-app.key" in check["summary"] and "1 still needs slack.key" in check["summary"]
-        )
+        assert "2 secrets still need github-app.key" in check["summary"]
         assert "keep" in check["summary"].lower()
         assert bytes(state.github_app.row(c)["ciphertext"]) == before["app"]  # Health only looks
     caplog.set_level("INFO")
@@ -996,14 +991,6 @@ def test_secrets_sealed_before_kms_was_set_open_with_github_app_key_and_are_rese
         assert state.github_app.private_key(c, state.github_app.row(c)) == PEM
     assert not [r for r in caplog.records if "re-sealed" in r.getMessage().lower()]
     assert state.github_app.key_file().read_bytes() == legacy  # left as it was, for an older backup's rows
-    with state.store.read() as c:
-        check = health._sealed_secrets(c, state.store.settings, state.github_app)
-    assert (
-        check["status"] == "info"
-        and "github-app.key" not in check["summary"]
-        and "1 secret still needs slack.key" in check["summary"]
-    )
-    assert slack_app.load(state.store, state.store.settings, state.vault)["bot_token"] == "xoxb-synthetic-0000000000"
     with state.store.read() as c:
         assert health._sealed_secrets(c, state.store.settings, state.github_app) is None  # every one re-sealed: clear
 
@@ -1705,28 +1692,6 @@ def test_links_follow_the_kind_of_account_everywhere_they_are_built():
     assert G.fixes(None, {**personal_row, "account_type": "Organization"})["permissions_url"] == (
         "https://github.com/organizations/ana-dev/settings/apps/acme-tico/permissions"
     )
-
-
-def test_an_app_connected_before_account_types_is_an_organization():
-    """The migration adds the column with the organization default, to both tables, once; a fresh database gets none
-    of its own tables from it (the module code makes them after the migrations)."""
-    import importlib.util
-    from pathlib import Path
-
-    path = Path(G.__file__).parent / "migrations" / "20261107145006_github_account_type.py"
-    spec = importlib.util.spec_from_file_location("github_account_type", path)
-    migration = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(migration)
-    with sqlite3.connect(":memory:") as c:
-        migration.up(c)
-        assert c.execute("SELECT count(*) FROM sqlite_master").fetchone()[0] == 0
-        c.execute("CREATE TABLE github_app(id TEXT PRIMARY KEY, org TEXT NOT NULL)")
-        c.execute("CREATE TABLE github_app_states(nonce TEXT PRIMARY KEY, org TEXT NOT NULL)")
-        c.execute("INSERT INTO github_app VALUES('app','Acme')")
-        migration.up(c)
-        migration.up(c)
-        assert c.execute("SELECT org,account_type FROM github_app").fetchone() == ("Acme", "Organization")
-        assert {row[1] for row in c.execute("PRAGMA table_info(github_app_states)")} == {"nonce", "org", "account_type"}
 
 
 CALLBACK = "/api/v2/github/app/callback"

@@ -4,26 +4,26 @@ from pathlib import Path
 
 from backend.store import H, encode
 from backend.tests.helpers.api import as_member, assign, get, post, runner  # noqa: F401
+from backend.tests.helpers.fake_gmail import fake_gmail  # noqa: F401
 from backend.tests.helpers.mail_api import put_mail, seed_org
 from backend import bot_settings as BS
+from backend import slack_channels as SC
+from backend.auth import Identity
 
 
 def setup_sources(api, tmp_path):
     seed_org(api)
     registry = Path(tmp_path) / "registry"
     registry.mkdir()
-    (registry / "slack-channels.yaml").write_text("""channels:
-  - id: CCHANNEL1
-    name: release_notes
-    purpose: Product changes
-    post: false
-    readers: [doc-updater]
-  - id: CCHANNEL2
-    name: uncovered
-    purpose: Nobody reads this
-    post: false
-""")
     api.app.state.store.settings.registry_dir = registry
+    store = api.app.state.store
+    with store.transaction() as c:
+        ana = Identity("human:ana", "owner", "ana@acme.example")
+        for cid, name, note, readers in (
+            ("CCHANNEL1", "release_notes", "Product changes", ["doc-updater"]),
+            ("CCHANNEL2", "uncovered", "Nobody reads this", []),
+        ):
+            SC.add(c, store.settings, ana, cid, readers=readers, post=False, note=note, name=name)
     put_mail(
         api,
         "ana@acme.example",
@@ -64,9 +64,6 @@ def setup_sources(api, tmp_path):
                 H.now(),
             ),
         )
-        c.execute(
-            "INSERT INTO slack_reads VALUES(?,?,?,?,?)", ("CCHANNEL1", "doc-updater", "1789800000.000001", H.now(), 1)
-        )
         conv = H.open_conversation(
             c, H.KEEPER, [H.KEEPER, "bot:doc-updater"], kind="chat", subject="Slack channels", scope="direct"
         )
@@ -87,7 +84,7 @@ def setup_sources(api, tmp_path):
         )
 
 
-def test_source_and_message_access_does_not_follow_bot_visibility(api, tmp_path):
+def test_source_and_message_access_does_not_follow_bot_visibility(api, tmp_path, fake_gmail):
     as_member(api, "ben@acme.example")
     setup_sources(api, tmp_path)
     ben = get(api, "messaging/bots", "ben-test")
@@ -102,6 +99,44 @@ def test_source_and_message_access_does_not_follow_bot_visibility(api, tmp_path)
         expected=403,
     )
     get(api, "messaging/bots/doc-updater/slack-digests/digest-1", "ben-test", expected=403)
+
+
+def test_a_bots_slack_source_is_the_channel_it_reads_and_an_old_pass_stays_readable(api, tmp_path, fake_gmail):
+    setup_sources(api, tmp_path)
+    bots = {bot["bot"]: bot for bot in get(api, "messaging/bots", "ana-test")["bots"]}
+    slack = [s for s in bots["doc-updater"]["sources"] if s["kind"] == "slack"]
+    assert [(s["id"], s["name"], s["purpose"], s["post"]) for s in slack] == [
+        ("slack:CCHANNEL1", "#release_notes", "Product changes", False)
+    ]
+    assert "slack_interval_minutes" not in bots["doc-updater"]
+    assert "slack_digests" not in get(api, "messaging/bots/doc-updater", "ana-test")
+    assert get(api, "messaging/bots/doc-updater/slack-digests/digest-1", "ana-test")["id"] == "digest-1"
+
+
+def test_a_bots_mail_and_review_count_are_read_from_gmail_with_rule_hits_from_runs(api, tmp_path, fake_gmail):
+    from backend import mailbox_access as MA
+
+    setup_sources(api, tmp_path)
+    with api.app.state.store.transaction() as c:
+        box = MA.ensure_mailbox(c, "ana@acme.example", person_id="ana", created_by="human:ana")
+        MA.grant(c, "human:ana", box["id"], "bot", "cpo", "read")
+        c.execute(
+            "INSERT INTO automations(id,name,owner_id,trigger_type,enabled,flow,version,created_at,created_by_id,"
+            "updated_at) VALUES('triage','Triage','person:ana','message',1,'{}',1,?,'person:ana',?)",
+            (H.now(), H.now()),
+        )
+        c.execute(
+            "INSERT INTO automation_runs(id,automation_id,version,trigger_ref,started_at,status) "
+            "VALUES('run_1','triage',1,'mail:ana@acme.example:mail1',?,'ok')",
+            (H.now(),),
+        )
+    catalog = get(api, "messaging/bots", "ana-test")
+    [source] = [s for bot in catalog["bots"] for s in bot["sources"] if s["id"] == "email:ana@acme.example"]
+    assert source["needs_review"] == 1  # Gmail's own count of hub/needs-owner
+    page = get(api, "messaging/bots/cpo?source=email:ana@acme.example", "ana-test")
+    assert [(m["msg_id"], m["subject"], m["rule_hits"]) for m in page["mail"]] == [
+        ("mail1", "Customer asks for help", ["Triage"])
+    ]
 
 
 def test_a_hidden_backlog_never_says_more_is_waiting():

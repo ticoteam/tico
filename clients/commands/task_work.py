@@ -5,11 +5,15 @@ Moved from clients/hubtools.py; clients/commands/__init__.py says how the table 
 import argparse
 import base64
 import json
+import os
+import shutil
+import subprocess
 from urllib.parse import quote
 from pathlib import Path
 from clients import s3links
 from clients.cli_spec import Arg, Command, Group
 
+from clients.bot_files import DOCUMENTS
 from clients.commands._registry import tool
 from clients.commands._schemas import DEFER_FOR, TASK_ID, _delivery, _key, _s
 from clients.commands._shared import ASKED, VERSION, VISUALS, _seen, _uploaded, _visuals, text_file
@@ -31,8 +35,7 @@ FEEDBACK_SUBJECT = _s("What was rated", enum=["message", "task"])
 
 @tool(
     "tico_feedback_give",
-    "Rate a message or task a bot or another person made, 👍 (up) or 👎 (down), with an optional reason (an ask: "
-    "tico_task_thumbs). Rating again replaces your earlier one. tell_bot (a 👎 on a bot's work only) leaves the bot a "
+    "Rate a message or task a bot or another person made, 👍 (up) or 👎 (down), with an optional reason Rating again replaces your earlier one. tell_bot (a 👎 on a bot's work only) leaves the bot a "
     "note for its next run in that conversation. People only, never on your own work.",
     {
         "subject_type": FEEDBACK_SUBJECT,
@@ -49,27 +52,6 @@ def feedback_give(api, args):
         k: args[k] for k in ("subject_type", "subject_id", "rating", "reason", "tell_bot") if args.get(k) is not None
     }
     return api.post("feedback", body, key=_key(args))
-
-
-@tool(
-    "tico_task_thumbs",
-    "Was this ask worth asking: 👍 (up) or 👎 (down) on an ask a bot put to you, with an optional note saying what was "
-    "wrong. A 👎 sends an open ask back to the bot with your words. For the person asked only.",
-    {
-        "id": _s("The task id"),
-        "requirement": _s("The ask's requirement id"),
-        "up": {"type": "boolean", "description": "true for 👍, false for 👎"},
-        "note": _s("What was wrong, in a few words (at most 2000 characters)"),
-    },
-    required=("id", "requirement", "up"),
-    writes=True,
-)
-def task_thumbs(api, args):
-    body = {"up": bool(args["up"])}
-    if args.get("note"):
-        body["note"] = args["note"]
-    path = f"tasks/{quote(args['id'], safe='')}/asks/{quote(args['requirement'], safe='')}/thumbs"
-    return api.post(path, body, key=_key(args))
 
 
 @tool(
@@ -231,9 +213,7 @@ def tag_update(api, args):
     local=True,
 )
 def task_worktree_add(api, args):
-    from runner_support.worktrees import command
-
-    return command(api, 'add', args['repo'], args.get('task'))
+    return worktree('add', args['repo'], args.get('task'))
 
 
 @tool(
@@ -245,9 +225,81 @@ def task_worktree_add(api, args):
     local=True,
 )
 def task_worktree_attach(api, args):
-    from runner_support.worktrees import command
+    return worktree('attach', args['path'], args.get('task'))
 
-    return command(api, 'attach', args['path'], args.get('task'))
+
+OLD_RUNNER = (
+    "This computer's runner is older than this Tico checkout (it has no `tico-runner worktree`); "
+    "it is being updated, so try again in a few minutes"
+)
+
+
+def runner_binary(env, root=None):
+    """The runner binary to run a worktree command with: the one built for this checkout, else the runner that
+    started this turn (the turn's `gh` is a link to it), else any other this computer has."""
+    from runner_support import engine
+
+    root = root or engine.ROOT
+    found = engine.ready(env, root)
+    if found:
+        return found
+    path = env.get("PATH")
+    gh = shutil.which("gh", path=path)
+    on_path = shutil.which("tico-runner", path=path)
+    options = [
+        *([Path(gh).resolve()] if gh and Path(gh).resolve().name == "tico-runner" else []),
+        *engine.candidates(env, root),
+        *([Path(on_path)] if on_path else []),
+    ]
+    return next((p for p in options if p.is_file() and os.access(p, os.X_OK)), None)
+
+
+def worktree(operation, value, task=None, env=None):
+    """`tico task worktree add|attach|setup`: the runner's own worktree code (`tico-runner worktree`,
+    runner-rs/src/worktrees/cli.rs) with this turn's environment. Raises APIError for Tico's refusals and failures
+    (a worktree wait keeps its `extra`; a 503 or lost connection stays retryable) and for a runner that predates the
+    command (retryable: it is mid-update), ValueError for the rest."""
+    from clients.tico import APIError
+    from runner_support import engine
+
+    env = dict(os.environ if env is None else env)
+    binary = runner_binary(env)
+    if not binary:
+        raise ValueError("No Tico runner binary on this computer to manage worktrees; update this computer's runner")
+    # The runner finds the Tico install it must keep worktrees out of from here, wherever its binary lives.
+    env.setdefault("TICO_ROOT", str(engine.ROOT))
+    done = subprocess.run(
+        [str(binary), "worktree", operation, *(["--task", task] if task else []), "--", value],
+        env=env,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if done.returncode == 2 and "unrecognized subcommand" in done.stderr:
+        # Only while an update has moved the checkout and its runner is not ready yet (release_update.py prepares
+        # the new binary before the restart), so it is one to retry.
+        raise APIError("runner_outdated", OLD_RUNNER, 0, True)
+    try:
+        reply = json.loads(done.stdout.strip().splitlines()[-1])
+    except (IndexError, ValueError):
+        reason = (done.stderr.strip().splitlines() or ["no output"])[-1][:300]
+        raise ValueError(f"tico-runner worktree failed (exit {done.returncode}): {reason}") from None
+    error = reply.get("error") if isinstance(reply, dict) else None
+    if done.returncode == 0 and not error:
+        return reply
+    error = error if isinstance(error, dict) else {"detail": str(error or "tico-runner worktree failed")}
+    if error.get("code"):
+        fields = ("code", "detail", "status", "retryable", "operation_id")
+        raise APIError(
+            error["code"],
+            error.get("detail") or "",
+            error.get("status") or 0,
+            bool(error.get("retryable")),
+            error.get("operation_id"),
+            extra={k: v for k, v in error.items() if k not in fields},
+        )
+    raise ValueError(error.get("detail") or "tico-runner worktree failed")
 
 
 @tool(
@@ -263,8 +315,8 @@ def task_run(api, args):
 
 @tool(
     "tico_task_comment",
-    "Leave a comment on a task: progress, a question for the people on it, "
-    "a link to what you found. It is on the record with your name; it is not a chat.",
+    "Leave a comment on a task: a link to what you found, a note for the people on it. Not on your own task during "
+    "your turn there: your reply is posted on it. A question to a person is tico_task_ask.",
     {
         "id": TASK_ID,
         "text": _s("The comment"),
@@ -287,11 +339,13 @@ def task_run(api, args):
         "delivery": {
             "type": "string",
             "enum": ["steer", "queue", "defer", "goal"],
-            "description": "How the comment reaches the task's bot. steer: into its running turn now (right "
-            "after it if its harness can't steer). queue: right after its current turn on this task, or now. "
-            "defer: wakes nobody; its next turn on this task reads it, at the latest after defer_for (24h). "
-            "goal: make the text the goal of its task session (no attachments or visuals; not public, not a "
-            "question). Omitted, the task's default applies.",
+            "description": "How the comment reaches the task's bot. steer: into its running turn "
+            "now (right after it if its harness can't steer). queue: right after "
+            "its current turn on this task, or now. defer: wakes nobody; its next "
+            "turn on this task reads it, at the latest after defer_for (24h). "
+            "goal: makes the text the goal of its task session (no attachments or "
+            "visuals; not public, not a question). Omitted, the task's default "
+            "applies.",
         },
         "defer_for": DEFER_FOR,
     },
@@ -384,10 +438,11 @@ def task_restore(api, args):
 
 @tool(
     "tico_task_label",
-    "Add or remove labels on a task. A project is a label; so is a kind (bug, front-end). A bot "
-    "changes labels on a task it owns or asked for; goal:on/goal:off need a person. It only adds or takes off the "
-    "labels named, so the version is optional: given, a task that changed since you were shown it is refused; left "
-    "out, the labels are read and changed at the version read, and a change made in between is refused, never lost.",
+    "Add or remove labels on a task; it only adds or takes off the labels named. A project is a "
+    "label; so is a kind (bug, front-end). A bot changes labels on a task it owns or asked for; "
+    "goal:on and goal:off need a person. The version is optional: given, a task changed since you "
+    "were shown it is refused; left out, the labels are changed at the version read, and a change "
+    "made in between is refused, never lost.",
     {
         "id": TASK_ID,
         "add": {"type": "array", "items": {"type": "string"}, "description": "Labels to add"},
@@ -415,9 +470,9 @@ def task_label(api, args):
 
 @tool(
     "tico_task_link",
-    "Attach a link to a task: the pull request you opened, an issue, a document, a page. `kind: session` links "
-    "another session working the task (a thread URL, a resume command); it is tracked only, task chat "
-    "goes to the owning bot.",
+    "Attach a link to a task: the pull request you opened, an issue, a document, a page. `kind: "
+    "session` links another session working the task (a thread URL, a resume command); it is "
+    "tracked only, task chat goes to the owning bot.",
     {
         "id": TASK_ID,
         "url": _s("The URL; for a session also a resume command or a reference"),
@@ -425,9 +480,10 @@ def task_label(api, args):
         "kind": {"type": "string", "enum": ["session"], "description": "session: another session on this task"},
         "wake_once": {
             "type": "boolean",
-            "description": "A pull request: true wakes this task once when its checks "
-            "finish (pass or fail), it is approved or gets changes requested, or a release ships it, so "
-            "you can end the turn instead of polling. It never changes the task's status. false disarms it",
+            "description": "A pull request: true wakes this task once when its checks finish "
+            "(pass or fail), it is approved or gets changes requested, or a "
+            "release ships it, so you can end the turn instead of polling. It "
+            "never changes the task's status. false disarms it",
         },
         "on_behalf_of": ASKED,
     },
@@ -537,9 +593,19 @@ def task_follow(api, args):
     "With req and page instead, attach a page to the stage's page requirement: Jev checks it, then the person it "
     "names OKs that version. Attaching again replaces it. With a new version after a send back, say what changed "
     "(changed: up to 5 one-line bullets) and what you did with each of their points (answered: "
-    "\"<point>: done|not done, <why>\"); never quote their note back to them.",
+    "\"<point>: done|not done, <why>\"); never quote their note back to them. "
+    "With document instead, the HTML in text or the .html file at path is that document's next version: one per name "
+    "per task, shown as a tab beside the task's chat; put what changed in note. Spec, QA report (the proof), Release "
+    "report and Invoice are the names a stage approves; name any other document as you like.",
     {
         "id": _s("Task id"),
+        "document": {
+            "type": "string",
+            "maxLength": 40,
+            "description": "The task's document this HTML is the next version of: "
+            + ", ".join(DOCUMENTS)
+            + " or your own name",
+        },
         "req": _s("The page requirement's name or id, e.g. Spec page"),
         "page": _s("page:<file id> for its newest version, or page:<file id>@<version>"),
         "version": VERSION,
@@ -566,6 +632,8 @@ def task_follow(api, args):
     writes=True,
 )
 def task_attach(api, args):
+    if args.get("document"):
+        return _document(api, args)
     if args.get("req") or args.get("page"):
         if not (args.get("req") and args.get("page")):
             raise ValueError("A page requirement takes both req and page, e.g. req: Spec page, page: page:file-…")
@@ -602,11 +670,36 @@ def task_attach(api, args):
     return api.post(f"tasks/{args['id']}/files", body, key=_key(args))
 
 
+def _document(api, args):
+    """A task document's next version: `text`, or the .html file at `path` with the images beside it embedded (as
+    `tico page publish` sends one: the server drops anything that would load from elsewhere)."""
+    body = {"document": args["document"]}
+    if args.get("path"):
+        from clients import bot_files as BF, visual_embed
+
+        root = BF.checkout_root()
+        try:
+            name, _, data, _ = BF.read_local(root, args["path"])
+            if not visual_embed.is_page(name):
+                raise ValueError("A document is an .html file")
+            body["text"] = visual_embed.embed(root, args["path"])[0].decode("utf-8", errors="replace")
+        except BF.Refused as exc:
+            raise ValueError(str(exc)) from None
+    elif args.get("text") is not None:
+        body["text"] = args["text"]
+    else:
+        raise ValueError("Send the document's HTML as text, or path to an .html file")
+    if args.get("note"):
+        body["note"] = args["note"]
+    return api.post(f"tasks/{args['id']}/files", body, key=_key(args))
+
+
 @tool(
     "tico_task_caps",
     "Read the task caps: how many tasks each teammate may create for another per day, with "
-    "today's count, the tasks closed before the receiver acted, and the refused creates. Also the changes bots asked "
-    "for, which a person approves or declines as approvals. A cap is off until someone sets one.",
+    "today's count, the tasks closed before the receiver acted, and the refused creates. Also the "
+    "changes bots asked for, which a person approves or declines as approvals. A cap is off until "
+    "someone sets one.",
     {},
 )
 def task_caps_read(api, args):
@@ -633,8 +726,9 @@ def task_cap_set(api, args):
 
 @tool(
     "tico_general_manager",
-    "The General Manager: whether the helper bot is on, the hourly report's switch and schedule, its last run "
-    "(\"3 departments, 7 items\" or \"Nothing to do\"), and each department's last check and open check task.",
+    "The General Manager: whether the helper bot is on, the hourly report's switch and schedule, "
+    "its last run (\"3 departments, 7 items\" or \"Nothing to do\"), and each department's last check "
+    "and open check task.",
     {},
 )
 def general_manager_status(api, args):
@@ -707,9 +801,9 @@ def _replay(api, args):
 @tool(
     "tico_replay_show",
     "What happened in a window, in time order, as you may see it: tasks made and moved, chat "
-    "messages and task comments, runs and what they said, bot status changes, goal colours. The input for a recap. "
-    "Returns {from, to, items: [{at, kind, who, task, text, ...}], truncated, next, start: {tasks, bots}, names}; "
-    "`names` maps every actor shown to a display name.",
+    "messages and task comments, runs and what they said, bot status changes, goal colours. The "
+    "input for a recap. Returns {from, to, items: [{at, kind, who, task, text, ...}], truncated, "
+    "next, start: {tasks, bots}, names}, where `names` maps each actor to a display name.",
     REPLAY_WINDOW,
 )
 def replay_show(api, args):
@@ -809,5 +903,96 @@ TAG = (
         "edit a tag's label, metadata, checklist or owner",
         args=(Arg("version", "--version"), *_TAG_TEXT),
         example="tico tag update launch --version 2 --label Launch",
+    ),
+)
+
+
+# `tico feedback ...` (clients/cli_spec.py): each leaf's flags come from its tool's schema.
+FEEDBACK = (
+    Group("feedback", "a person's 👍/👎 on a bot's work: give, list, make a rule"),
+    Command(
+        "feedback give",
+        "rate a message or task a bot made; again replaces it",
+        example="tico feedback give task T1 down --reason 'Wrong owner' --tell-bot",
+    ),
+    Command(
+        "feedback remove",
+        "take back your feedback, and its note if no run carried it",
+        example="tico feedback remove f1",
+    ),
+    Command(
+        "feedback markers",
+        "your feedback on these subjects and everyone's up/down counts",
+        args=(Arg("subject_ids", action="store", nargs="+"),),
+        example="tico feedback markers task T1 T2",
+    ),
+    Command(
+        "feedback list",
+        "feedback newest first, a page at a time",
+        args=(Arg("bot_id", "--bot"),),
+        example="tico feedback list --rating down --since 7d",
+    ),
+    Command("feedback reasons", "your five latest distinct reasons", example="tico feedback reasons"),
+    Command(
+        "feedback rule-draft",
+        "a one-sentence rule drafted from your 👎; stores nothing",
+        example="tico feedback rule-draft f1",
+    ),
+    Command(
+        "feedback rule",
+        "your 👎 as an org rule: active if you manage the bot, else suggested",
+        example="tico feedback rule f1 'Reply within a day' --all-bots",
+    ),
+)
+
+
+def _no_key(fields):
+    """The arguments without an operation id: `general-manager status` never sent one."""
+    return {k: v for k, v in fields.items() if k != "operation_id"}
+
+
+# `tico general-manager ...` (clients/cli_spec.py): on, off, schedule and bot are paths of tico_general_manager_set.
+_SET_OTHERS = ("on", "preset", "at", "bot")
+GENERAL_MANAGER = (
+    Group("general-manager", "the General Manager's hourly department check (docs/general-manager.md)"),
+    Command(
+        "general-manager status",
+        "bot, report switch and schedule, last run, each department's last check",
+        tool="tico_general_manager",
+        convert=_no_key,
+        example="tico general-manager status",
+    ),
+    Command(
+        "general-manager on",
+        "switch the hourly report on",
+        tool="tico_general_manager_set",
+        fixed=(("on", True),),
+        omit=tuple(k for k in _SET_OTHERS if k != "on"),
+        example="tico general-manager on",
+    ),
+    Command(
+        "general-manager off",
+        "switch the hourly report off",
+        tool="tico_general_manager_set",
+        fixed=(("on", False),),
+        omit=tuple(k for k in _SET_OTHERS if k != "on"),
+        example="tico general-manager off",
+    ),
+    Command("general-manager run", "run the department check now", example="tico general-manager run"),
+    Command(
+        "general-manager schedule",
+        "pick when the report runs",
+        tool="tico_general_manager_set",
+        args=(Arg("preset", positional=True),),
+        omit=("on", "bot"),
+        example="tico general-manager schedule daily --at 08:00",
+    ),
+    Command(
+        "general-manager bot",
+        "turn the General Manager bot itself on or off",
+        tool="tico_general_manager_set",
+        args=(Arg("bot", positional=True),),
+        omit=("on", "preset", "at"),
+        example="tico general-manager bot off",
     ),
 )

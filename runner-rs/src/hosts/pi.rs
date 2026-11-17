@@ -1627,11 +1627,7 @@ impl PiHost {
         let ask = uuid::Uuid::new_v4().to_string();
         *proc.sink.lock().unwrap_or_else(|p| p.into_inner()) = Some(self.0.tx.clone());
         live.queued.clear();
-        let state = Turn {
-            bot: self.0.bot.clone(),
-            cmd: self.0.cmd.clone(),
-            ..Default::default()
-        };
+        let state = Turn::default();
         live.run = Some(Run {
             host: self.clone(),
             thread: thread_id.into(),

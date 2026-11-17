@@ -13,6 +13,7 @@ from backend import automation_engine as E
 from backend import automation_flow as F
 from backend import automation_templates as T
 from backend import bot_settings as BS
+from backend.store import H
 from backend.tests.automation_fakes import Services
 from backend.tests.helpers.api import get, headers, post  # noqa: F401
 from backend.tests.helpers.automation_cli import cli
@@ -42,8 +43,8 @@ def listed(api, name):
     """A channel on the team's Slack list (Settings > Tools > Slack)."""
     with api.app.state.store.transaction() as c:
         c.execute(
-            "INSERT INTO slack_channels(key,name,readers,created_at,updated_at) VALUES(?,?,?,?,?)",
-            ("#" + name, name, "[]", "2026-10-28T00:00:00Z", "2026-10-28T00:00:00Z"),
+            "INSERT INTO slack_channels(key,name,created_at,updated_at) VALUES(?,?,?,?)",
+            ("#" + name, name, "2026-10-28T00:00:00Z", "2026-10-28T00:00:00Z"),
         )
 
 
@@ -319,7 +320,7 @@ def test_the_draft_turn_is_asked_about_the_slack_text_it_handles(api):
     assert "Can you send the deck by Friday?" in turn["prompt"]
 
 
-def test_the_turn_task_body_carries_the_mail_subject_and_body(api):
+def test_the_turn_task_carries_the_mail_subject_and_body(api):
     set_templates(api, STAFF)
     flow = bot_flow(api, "assistant")
     prompt = run_to_turn(flow, MAIL)["prompt"]
@@ -327,8 +328,8 @@ def test_the_turn_task_body_carries_the_mail_subject_and_body(api):
         started = AA.start_turn(
             c, {"id": "auto_founder", "flow": flow}, "run_1", "draft", "bot:assistant", prompt, None
         )
-        body = c.execute("SELECT body FROM tasks WHERE id=?", (started["ref"],)).fetchone()["body"]
-    assert "Board pack" in body and "Can you send the deck by Friday?" in body
+        words = H.task_words(c, started["ref"])  # the turn's instructions: Tico's, to the bot in its run
+    assert "Board pack" in words and "Can you send the deck by Friday?" in words
 
 
 def test_a_bot_that_can_run_its_own_turn_keeps_the_draft_choose(api):

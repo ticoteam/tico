@@ -108,11 +108,16 @@ def parse(
         elif due == "week":
             m.sql.append(("julianday(due_at) <= julianday(?) + 7", [now]))
     if late:
+        # late_rule.is_late, in SQL: a person's own task by its due date, any other by its stage's expected time.
         m.sql.append(
             (
-                "status='open' AND EXISTS (SELECT 1 FROM visits v WHERE v.task_id=tasks.id AND v.left_at IS NULL "
-                "AND v.late_told_at IS NOT NULL)",
-                [],
+                "status='open' AND EXISTS (SELECT 1 FROM visits v JOIN stages s ON s.id=v.stage_id "
+                "WHERE v.task_id=tasks.id AND v.left_at IS NULL AND v.late_told_at IS NOT NULL AND ("
+                "(COALESCE(tasks.owner_id, '') LIKE 'human:%' AND julianday(tasks.due_at) IS NOT NULL "
+                "AND julianday(?) >= julianday(tasks.due_at) + (CASE WHEN length(tasks.due_at)=10 THEN 1 ELSE 0 END)) "
+                "OR (COALESCE(tasks.owner_id, '') NOT LIKE 'human:%' AND COALESCE(s.expected_minutes, 0) > 0 "
+                "AND julianday(?) - julianday(v.entered_at) >= COALESCE(s.expected_minutes, 0) / 1440.0)))",
+                [now, now],
             )
         )
     return m

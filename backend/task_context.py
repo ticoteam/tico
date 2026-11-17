@@ -5,6 +5,7 @@ from fastapi import Request
 from . import context_search
 from .files import file_visible
 from .store import Problem
+from .api_contract import api_v2
 
 MAX_ITEMS = 10
 
@@ -64,7 +65,15 @@ def for_turn(c, auth, who, task):
 
 
 def install(app, store, auth):
-    @app.get("/api/v2/tasks/{tid}/context")
+    @app.get(
+        "/api/v2/tasks/{tid}/context",
+        **api_v2(
+            "Tasks",
+            "getTaskContext",
+            "Up to 10 pages and 10 meetings, newest first, filtered by your current read access; metadata only",
+            "TaskContext",
+        ),
+    )
     def context(request: Request, tid: str):
         with store.read_transaction() as c:
             return listing(c, auth, request.state.identity, tid)

@@ -1,5 +1,5 @@
 """The Rules Owner: the built-in helper that reads a document someone adds to Rules and suggests the obligations that bind us,
-and answers "can I...?" from the rules in force (docs/rules-plan.md §2, §5).
+and answers "can I...?" from the rules in force (docs/dev/rules-plan.md §2, §5).
 
 - Adding a document (`POST /api/v2/rules/read`) reads it first, outside any write: a file's text (a PDF is read as a
   link's PDF is: clients/doc_fetch.py `pdf_to_text`), or a public link fetched with clients/doc_fetch.py with no
@@ -47,6 +47,7 @@ from .auth import Identity
 from .blobs import register
 from .models import Contract
 from .store import Problem, encode
+from .api_contract import api_v2
 
 SLUG = H.RULES_OWNER
 NAME = "Rules Owner"
@@ -67,12 +68,6 @@ STOP_WORDS = frozenset(
 # Quote characters and dashes that differ in a copy of a document but say the same thing.
 _STRAIGHT = str.maketrans({"‘": "'", "’": "'", "‚": "'", "“": '"', "”": '"', "„": '"', "–": "-", "—": "-", " ": " "})
 
-# Each read the Rules Owner was asked for, one row per read task: the file version (the only versions it may cite,
-# backend/files.py asked_to_read) and the From it was asked for. Two people reading one version are two rows.
-RULE_READS = """CREATE TABLE IF NOT EXISTS rule_reads(
- task_id TEXT PRIMARY KEY, file_id TEXT NOT NULL, version INTEGER NOT NULL, requested_by TEXT NOT NULL,
- created_at TEXT NOT NULL, truncated INTEGER NOT NULL DEFAULT 0, source_id TEXT)"""
-RULE_READS_INDEX = "CREATE INDEX IF NOT EXISTS rule_reads_version ON rule_reads(file_id, version)"
 # A quote shorter than this from a private read could be a word that is in any document: too little to tie the
 # suggestion to the version it cites.
 PRIVATE_QUOTE_MIN = 20
@@ -88,24 +83,6 @@ class RuleRead(Contract):
 
 class RuleAsk(Contract):
     question: str = Field(min_length=3, max_length=QUESTION_MAX)
-
-
-def ensure(c):
-    """The table of the document versions the Rules Owner was asked to read. Unversioned, as the org-rules tables are."""
-    columns = {r[1]: r[5] for r in c.execute("PRAGMA table_info(rule_reads)")}
-    if columns and columns.get("task_id") != 1:
-        # A development table keyed by (file, version): a second reader replaced the first read's row. One row per task.
-        c.execute("ALTER TABLE rule_reads RENAME TO rule_reads_by_version")
-        c.execute(RULE_READS)
-        source = "source_id" if "source_id" in columns else "NULL"
-        c.execute(
-            "INSERT OR IGNORE INTO rule_reads(task_id, file_id, version, requested_by, created_at, truncated, "
-            f"source_id) SELECT task_id, file_id, version, requested_by, created_at, truncated, {source} "
-            "FROM rule_reads_by_version WHERE task_id IS NOT NULL"
-        )
-        c.execute("DROP TABLE rule_reads_by_version")
-    c.execute(RULE_READS)
-    c.execute(RULE_READS_INDEX)
 
 
 def available(c):
@@ -305,8 +282,6 @@ OUTWARD = tuple(
         r"^/api/send$",
         r"^/api/meetings/[^/]+/send$",
         r"^/api/v2/updates/[^/]+/reply$",
-        r"^/api/v2/automations/mail-actions/claim$",  # a mail action to send
-        r"^/api/v2/connectors/(mail/google/claim|calendar/actions/claim)$",
         r"^/api/v2/slack/",  # Slack, every write (a read is a GET)
         r"^/api/v2/webhooks",  # outbound webhooks: create, send, replay
         r"^/api/v2/triggers/[^/]+/relay",
@@ -1011,7 +986,14 @@ def ask(c, auth, who, question):
 
 
 def install(app, store, auth, mutate):
-    @app.post("/api/v2/rules/read")
+    @app.post(
+        "/api/v2/rules/read",
+        **api_v2(
+            "Rules",
+            "readRuleDocument",
+            "Add a document for the Rules Owner to read: a file you can read, or a public link (saved as a file version); the Rules Owner suggests the rules in it",
+        ),
+    )
     def rules_read_document(request: Request, body: RuleRead):
         """Add a document for the Rules Owner to read: a file you can read, or a public link (fetched now, with no credential,
         saved as a file version). The Rules Owner suggests the obligations in it as rules, each with its quote, for a person to add
@@ -1026,7 +1008,14 @@ def install(app, store, auth, mutate):
         found = None if replayed else prepare(store, auth, who, blobs, body)
         return mutate(request, body, lambda c: read(c, auth, who, files, blobs, body, found))
 
-    @app.post("/api/v2/rules/ask")
+    @app.post(
+        "/api/v2/rules/ask",
+        **api_v2(
+            "Rules",
+            "askRules",
+            "A can-I question: the active rules that share words with it, cited, and the Rules Owner's answer on a task",
+        ),
+    )
     def rules_ask(request: Request, body: RuleAsk):
         """A "can I...?" question: the rules that apply, cited, and the Rules Owner's answer as a task."""
         who = request.state.identity

@@ -22,22 +22,20 @@ documentation: some require renewed human consent. In order:
    `software/`) that calls the vendor's REST API with the token from `env`. This is the route when the MCP server is OAuth only;
    say why in one line. Keep it read-only first. The skill reads the variable; it never prints it or writes it to a file.
 
-For route 1 declare the server when you add the tool (the same request as any tool, plus three flags):
-
-    tico tool add <bot> <service> --can read --env <VARIABLE> --mcp-url https://<vendor address> --transport http \
-        --header 'Authorization: Bearer ${VARIABLE}'
-
-`${VARIABLE}` must be the `--env` name and nothing else; write it literally, never the value (the server refuses a value, and
-`tico tool update <tool-id> --bot <bot> --mcp-url ...` changes it later, as the requester). Tico passes the server to Claude Code, Codex,
-Gemini CLI and Grok Build with the credential filled in at run time; Cursor, Antigravity and pi cannot take it, so if the bot runs
-on one, say so and offer to move it or use route 2. Then do steps 1 to 6: the credential is stored and granted exactly as below.
+For route 1 the server is a tool in Tools: Tools → Add → MCP server (its address, then a pasted token or its sign-in), and the
+bot gets a level on it (`tico tool level <tool> <bot> read`). That grant is all the bot needs: Tico passes the server to Claude
+Code, Codex, Gemini CLI and Grok Build in its next run, with no `bot.yaml` entry. Cursor, Antigravity and pi cannot take it, so
+if the bot runs on one, say so and offer to move it or use route 2. Only a server Tools cannot hold (an older `sse` one) is
+declared in bot.yaml instead (`tico tool add <bot> <service> --can read --env <VARIABLE> --mcp-url <address> --transport sse
+--header 'Authorization: Bearer ${VARIABLE}'`, with `${VARIABLE}` written literally, never the value), and its key is stored and
+granted exactly as below.
 
 ## 1. Open the card
 
     tico credential request <VARIABLE> --for-bot <bot> --label "<your Jira credential>" \
         --format "<the exact shape>" --help-url <https page where they make one>
 
-- `VARIABLE` is the name the bot's `bot.yaml` `tools:` entry declares in `env:`.
+- `VARIABLE` is the name the bot reads the key under (`LINEAR_API_KEY`).
 - `--label` finishes the sentence "<Bot> needs ...": "your Jira credential", "a GitHub token".
 - `--format` is the placeholder: `you@example.com:API token` for basic auth, `ghp_...` for a token.
 - `--help-url`, when you know it:
@@ -67,11 +65,10 @@ Credentials for that bot only and removes it from the conversation. Say in one l
 removed from the chat, and next time the card keeps it off the model entirely. Never repeat the value,
 write it in a file, a task or a commit, or copy it to another bot.
 
-## 4. Declare it, then check it
+## 4. Check it
 
-The bot's `bot.yaml` `tools:` entry names the variable (`tico tool add <bot> <service> --can read --env <VARIABLE>`). A stored credential
-reaches a run only when it is granted to that bot; saving it from a card or `tico credential set` grants it to that one bot.
-Then verify with one read-only call the bot itself makes (list one project, read one issue). For an MCP server the bot's
+A stored credential reaches a run when it is granted to that bot, and nothing else is needed: no `bot.yaml` entry, and no task to
+add one. Saving it from a card or `tico credential set` grants it to that one bot. Then verify with one read-only call the bot itself makes (list one project, read one issue). For an MCP server the bot's
 Tools tab (`tico tool list --bot <bot>`) also says whether Tico's runner reached it: reachable, auth failed (the credential
 was refused: open the card again) or unreachable (the address is wrong or the vendor is down). Never paste a secret into
 `bot.yaml`, a skill, a task or a commit.

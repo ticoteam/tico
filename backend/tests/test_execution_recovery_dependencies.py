@@ -212,9 +212,12 @@ def test_no_fallback_ready_for_claim_persists_one_hold_until_named_reset(api, mo
         machine['token'],
     )
     with api.app.state.store.read() as c:
-        job = c.execute('SELECT state,held,hold_until FROM jobs WHERE id=?', (fallback['job_id'],)).fetchone()
-        assert tuple(job) == ('queued', 1, '2026-10-26T11:50:00.000000Z')
-        assert c.execute("SELECT count(*) FROM registry_metadata WHERE key LIKE 'login-hold:%'").fetchone()[0] == 1
+        # The job is queued as it was; the one login hold keeps it waiting, the bot marked as having no fallback here.
+        job = c.execute('SELECT state,held FROM jobs WHERE id=?', (fallback['job_id'],)).fetchone()
+        assert tuple(job) == ('queued', 0)
+        assert len(login_holds.every(c)) == 1
+        hold = login_holds.get(c, machine['runner_id'], '', 'fake')
+        assert hold['until'] == '2026-10-26T11:50:00.000000Z' and 'ops' in hold['stuck']
     assert '11:50' in health_detail(api, 'ops')
     for when in ('10:55', '11:07', '11:49'):
         at(monkeypatch, f'2026-10-26T{when}:00.000000Z', api)
@@ -226,9 +229,7 @@ def test_no_fallback_ready_for_claim_persists_one_hold_until_named_reset(api, mo
         assert claim(api, machine, bot='ops') is None
         with api.app.state.store.read() as c:
             assert c.execute("SELECT count(*) FROM attempts WHERE bot_id='ops'").fetchone()[0] == 2
-            assert tuple(
-                c.execute('SELECT held,hold_until FROM jobs WHERE id=?', (fallback['job_id'],)).fetchone()
-            ) == (1, '2026-10-26T11:50:00.000000Z')
+            assert login_holds.get(c, machine['runner_id'], '', 'fake')['until'] == '2026-10-26T11:50:00.000000Z'
     if release == 'try-now':
         post(api, 'bots/ops/limit/retry', {})
     else:
@@ -242,11 +243,11 @@ def test_no_fallback_ready_for_claim_persists_one_hold_until_named_reset(api, mo
 
 
 def test_missing_fallback_setup_is_not_a_capacity_or_quota_error():
-    from backend import run_backoff
+    from backend import run_failures
     from datetime import datetime, timezone
 
     error = 'No fallback configured on this computer; finish fallback setup before retrying.'
-    assert not run_backoff.is_limit(error)
+    assert not run_failures.is_limit(error)
     assert not login_holds.capacity(error)
     assert login_holds.reset_from_text(error, datetime(2026, 10, 26, 11, tzinfo=timezone.utc)) is None
 

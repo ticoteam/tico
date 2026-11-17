@@ -107,7 +107,7 @@ def test_distinct_file_and_task_provenance_is_batched(api, monkeypatch):
                     assert len(page["files"]) == 2, where
                 elif surface == "task":
                     assert len(page["runs"]) == expected, where
-                    assert len(page["comments"]) == expected * 2, where
+                    assert len(page["comments"]) == expected * 2 + 1, where  # and the release's request
                 else:
                     assert len(page["activity"]) == (1 if size == 3 else expected + 1), where
     for surface in surfaces:

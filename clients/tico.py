@@ -20,9 +20,14 @@ CLIENT_VERSION = "0.2.1"
 def gmail_read_timeout(method, path, default):
     """Live Gmail reads and organizing may mint and page before answering."""
     route = path.split("?", 1)[0]
-    if method == "POST" and route == "/api/v2/mail/messages/organize":
+    if method == "POST" and (
+        route in ("/api/v2/mail/messages/organize", "/api/v2/mail/drafts")
+        or re.fullmatch(r"/api/v2/mail/messages/[^/]+/unsubscribe", route)
+    ):
         return max(default, 90)
-    if method == "GET" and re.fullmatch(r"/api/v2/mail/(?:messages(?:/[^/]+)?|threads/[^/]+)", route):
+    if method == "GET" and re.fullmatch(
+        r"/api/v2/mail/(?:messages(?:/[^/]+(?:/attachments(?:/[^/]+)?)?)?|threads/[^/]+)", route
+    ):
         return max(default, 90)
     return default
 

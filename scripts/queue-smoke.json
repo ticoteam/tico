@@ -36,11 +36,6 @@
       "reason": "install.sh --runner with stubs"
     },
     {
-      "file": "connectors/mail/tests/test_write.py",
-      "seconds": 0.978,
-      "reason": "Mail draft and send retry safety through the CLI"
-    },
-    {
       "file": "backend/tests/test_permission_attacks.py",
       "seconds": 9.392,
       "reason": "What members, BotOps and untrusted people cannot do"
@@ -70,7 +65,7 @@
     {
       "script": "dashboard",
       "seconds": 13.808,
-      "reason": "Overview Dashboard and team pages against a fake places API: default cards, order and saves"
+      "reason": "Company and team pages against a fake places API: default cards, the Floor card, order and saves"
     },
     {
       "script": "docs",
@@ -209,7 +204,12 @@
     },
     {
       "script": "parts-first-visit",
-      "seconds": 63.0,
+      "seconds": 31.4,
+      "reason": "A cold Home, Tasks or Threads downloads the shell only; a page part that cannot load leaves Retry, and an old tab reloads"
+    },
+    {
+      "script": "parts-every-page",
+      "seconds": 54.9,
       "reason": "Every page opens on its first visit through its page part's stand-ins; a missed one breaks only that page, cold"
     }
   ]

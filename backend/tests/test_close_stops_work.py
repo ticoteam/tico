@@ -39,7 +39,7 @@ def work_events(api, task_id):
         ]
 
 
-# The close's note wakes nobody: nothing wakes a bot about a Closed task (docs/pipelines-v3.md), so only the turn stops.
+# The close's note wakes nobody: nothing wakes a bot about a Closed task (docs/dev/pipelines-v3.md), so only the turn stops.
 def test_closing_asks_the_running_turn_to_stop(api):
     machine, task, attempt, conversation = task_turn(api)
     who = requester(api, task["id"])

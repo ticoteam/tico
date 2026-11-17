@@ -3,16 +3,17 @@
 Read from the inbox (`message_deliveries`), the thread counters and the writes held for review (`org_rule_holds`), each
 row checked against the per-message rule (`threads.readable`) before it is listed. An item clears by what the person
 does, not by a click:
-- a mention is open until the person posts in its thread after it (or it is deleted);
+- a mention, or a reply to a message of the person's, is open until the person posts in its thread after it (or it is
+  deleted): the one definition Needs you reads too (backend/open_mentions.py), so a thread listed here has an item on Needs you;
 - an unread DM is open until the person reads past its last message from a person or one addressed to them. A DM with
   one bot and no one else is not: the bot is on the Team chart, which shows its unread (threads.bot_dm_unread), and a
   bot's mention there is still an item;
 - a write held for review (a native thread post or edit, a chat message, a run's reply) is open until it is decided:
   its reviewer releases or keeps it, or the person it is held for withdraws it (the hold leaves `held`);
 - a capped thread (the loop guard, spec 4.5) is open until its capped deliveries resume;
-A bot's mention of the person is the thread's question to the person and counts; a bot's post that names nobody is
-activity, not attention. A bot's question to a person is a question task, listed as a task; an ask message left from
-before step 6c is history and not listed.
+A bot's @ is not attention unless it is a reply to the person: it marks the thread unread, and a bot that needs a person
+uses a requirement (C28). A message addressed to a person without an @ is not attention either; it shows as unread in its
+thread.
 
 Every item is listed. The caller pages the whole list (views.needs_items), so nothing is cut here. A person the reader
 may not see is named only to someone in the same thread (`teammate_access.Known`), as everywhere a thread is read.
@@ -20,7 +21,6 @@ may not see is named only to someone in the same thread (`teammate_access.Known`
 
 from . import hubdb as H
 
-ADDRESSED = ("mention", "ask", "assign", "addressed", "reply")
 # The held writes that are a message: a chat's and a run's, and a native thread's post and edit (backend/org_rule_check.py).
 HELD_OPERATIONS = ("message", "reply", "threads", "threads_edit")
 
@@ -80,21 +80,21 @@ def items(c, auth, who, skip=(), with_capped=True):
 
 
 def _items(c, viewer):
-    from . import threads
+    from . import open_mentions, threads
 
     me = viewer.actor
     known = viewer.known(c)
     seen, out = set(), []
-    addressed = _addressed(c, me)
+    mentions = open_mentions.rows(c, me)
     # Each message, its thread and the viewer's standing there are read together (a query a chunk), not once an item:
     # a person named in a thousand open threads took ~2,300 statements here, on every Home and Needs you read.
     from . import task_privacy
 
-    task_privacy.prime_messages(c, H.prime_messages(c, [row["id"] for row in addressed]).values())
-    found, _ = threads.read_threads(c, viewer, [row["conversation_id"] for row in addressed])
+    task_privacy.prime_messages(c, H.prime_messages(c, [row["id"] for row in mentions]).values())
+    found, _ = threads.read_threads(c, viewer, [row["conversation_id"] for row in mentions])
     for thread in found.values():
         threads.thread_readable(c, viewer, thread)
-    for row in addressed:
+    for row in mentions:
         if row["id"] in seen:
             continue
         message = H.message(c, row["id"])
@@ -138,32 +138,6 @@ def _items(c, viewer):
             }
         )
     return out
-
-
-def _addressed(c, me):
-    """Messages a person may have to answer: a person's, or a message that names or replies to this
-    person, that they have not answered since in the same thread. A bot's plain post, one that names nobody, is not
-    theirs to answer."""
-    return [
-        dict(r)
-        for r in c.execute(
-            "SELECT m.id, m.conversation_id, m.sender_id, m.kind, m.body, m.created_at, cv.subject FROM message_deliveries d "
-            # Pin the partial index so the general recipient index cannot expand this to all of the person's deliveries.
-            # CROSS JOIN keeps deliveries first whatever sqlite_stat1 says, then each message and conversation by key.
-            "INDEXED BY message_deliveries_addressed "
-            "CROSS JOIN messages m ON m.id=d.message_id CROSS JOIN conversations cv ON cv.id=m.conversation_id "
-            "WHERE d.recipient=? AND d.reason IN ('mention','ask','assign','addressed','reply') "
-            "AND d.state IN ('pending','delivered','read') AND m.sender_id<>? "
-            f"AND {H.delivery_counts_sql('m', 'd.recipient', 'd.reason')} "
-            "AND (m.sender_id LIKE 'human:%' OR d.reason IN ('mention','reply')) "
-            "AND m.deleted_at IS NULL AND m.superseded_at IS NULL "
-            "AND cv.task_id IS NULL AND cv.closed_at IS NULL AND cv.archived_at IS NULL "
-            "AND NOT EXISTS (SELECT 1 FROM messages r WHERE r.conversation_id=m.conversation_id AND r.sender_id=? "
-            "AND r.created_at>m.created_at AND r.deleted_at IS NULL) "
-            "ORDER BY m.created_at",
-            (me, me, me),
-        ).fetchall()
-    ]
 
 
 def _unread_dms(c, viewer, me):

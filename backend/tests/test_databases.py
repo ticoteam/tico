@@ -108,16 +108,18 @@ def test_credentials_never_appear_in_errors_or_the_audit_statement():
 
 
 # ----------------------------------------------------------------------------- per-bot grants
-def test_a_bot_needs_a_declared_entry_and_the_credential(tmp_path):
+def test_the_granted_credential_is_the_grant_and_an_entry_only_narrows_it(tmp_path):
     url = f"sqlite:///{make_sqlite(tmp_path)}"
     env = {**workspace(tmp_path, "ops", [GRANT]), "DB_ACME_URL": url}
     assert D.open_database("acme", "bot:ops", env).kind == "sqlite"
-    with pytest.raises(D.Refusal) as caught:  # another bot has no entry, though the env carries the URL
-        D.open_database("acme", "bot:cpo", {**workspace(tmp_path, "cpo", []), "DB_ACME_URL": url})
-    assert caught.value.code == "grant" and "does not declare" in caught.value.detail
-    with pytest.raises(D.Refusal) as caught:
+    # Granted with no bot.yaml entry, or no bot.yaml at all: the run's connection string is the grant.
+    bare = {**workspace(tmp_path, "cpo", []), "DB_ACME_URL": url}
+    assert D.open_database("acme", "bot:cpo", bare).kind == "sqlite"
+    assert D.open_database("acme", "bot:nobody", {"HUB_WORKSPACE": str(tmp_path / "none"), "DB_ACME_URL": url})
+    assert [r["database"] for r in D.listing("bot:cpo", bare)] == ["acme"]
+    with pytest.raises(D.Refusal) as caught:  # nothing granted under that name
         D.open_database("other", "bot:ops", env)
-    assert caught.value.code == "grant"
+    assert caught.value.code == "credential"
     with pytest.raises(D.Refusal) as caught:  # declared, but no credential on this computer
         D.open_database("acme", "bot:ops", workspace(tmp_path, "ops", [GRANT]))
     assert caught.value.code == "credential"

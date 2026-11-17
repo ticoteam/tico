@@ -9,10 +9,14 @@ from . import task_privacy as privacy
 from . import reach
 from . import task_caps
 from . import task_merge as TM
+from .api_contract import api_v2
 
 
 def register(app, auth, mover, mutate, person_only, settings, store, task_view):
-    @app.get("/api/v2/deleted-tasks")
+    @app.get(
+        "/api/v2/deleted-tasks",
+        **api_v2("Tasks", "listDeletedTasks", "Deleted tasks this person may restore, newest first"),
+    )
     def deleted_tasks(request: Request):
         """Deleted tasks, newest first: all of them for someone who may move any task, otherwise the
         ones this person deleted or asked for."""
@@ -23,7 +27,14 @@ def register(app, auth, mover, mutate, person_only, settings, store, task_view):
         with store.read() as c:
             return {"tasks": trash(c, None if mover(c, who) else who.actor, audience=auth.task_sql(c, who))}
 
-    @app.post("/api/v2/tasks/{tid}/restore")
+    @app.post(
+        "/api/v2/tasks/{tid}/restore",
+        **api_v2(
+            "Tasks",
+            "restoreTask",
+            "Put a deleted task back with its conversation, comments, links and number: whoever deleted it, its requester or a mover, signed in as themselves",
+        ),
+    )
     def task_restore(request: Request, tid: str, body: M.Empty):
         """Put a deleted task back with its conversation, comments, links and number: whoever deleted
         it, its requester, or anyone who may move any task."""
@@ -98,7 +109,15 @@ def register(app, auth, mover, mutate, person_only, settings, store, task_view):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/tasks/{tid}/relations")
+    @app.post(
+        "/api/v2/tasks/{tid}/relations",
+        **api_v2(
+            "Tasks",
+            "relateTask",
+            "Relate another task to this one ({task, kind}: related, duplicate_of, follow_up, after, depends_on), or take the relation off with remove. A task waits on after, in Merge (its PRs are not queued until task merged), and on depends_on, in any stage (Blocked by task until it ends; with until: released, until production runs a release that holds task's merged PRs)",
+            "TaskResult",
+        ),
+    )
     def task_relation(request: Request, tid: str, body: M.TaskRelation):
         """Relate another task to this one (`{id} kind {task}`), or take the relation off with `remove`."""
         who = request.state.identity
@@ -134,7 +153,15 @@ def register(app, auth, mover, mutate, person_only, settings, store, task_view):
         auth.task(c, who, other_id)
         return task_id, other_id
 
-    @app.get("/api/v2/tasks/{tid}/merge")
+    @app.get(
+        "/api/v2/tasks/{tid}/merge",
+        **api_v2(
+            "Tasks",
+            "taskMergeChecks",
+            "Before dropping this task on ?into=: both tasks, why each choice (subtask, merge) cannot be done or null, and what a merge would move. People only",
+            "TaskMergeChecks",
+        ),
+    )
     def task_merge_checks(request: Request, tid: str, into: str):
         """Before the board's dialog confirms a drop of this task on `into`: both tasks, why each choice cannot be
         done (null when it can) and what a merge would move. People only."""
@@ -147,7 +174,15 @@ def register(app, auth, mover, mutate, person_only, settings, store, task_view):
             except H.Refused as exc:
                 raise refusal_problem(exc) from None
 
-    @app.post("/api/v2/tasks/{tid}/merge")
+    @app.post(
+        "/api/v2/tasks/{tid}/merge",
+        **api_v2(
+            "Tasks",
+            "mergeTask",
+            "Merge this task into another as its duplicate ({into, owner?}), in one write: the other gains its details and open subtasks, and this one is Closed and linked as a duplicate. People only",
+            "TaskMergeResult",
+        ),
+    )
     def task_merge(request: Request, tid: str, body: M.TaskMerge):
         """Merge this task into `into` as its duplicate, in one write: `into` gains its details, its open subtasks
         move under `into`, and this task is Closed and linked as a duplicate. `owner` (either task's owner) keeps
@@ -181,7 +216,15 @@ def register(app, auth, mover, mutate, person_only, settings, store, task_view):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/tasks/{tid}/parent")
+    @app.post(
+        "/api/v2/tasks/{tid}/parent",
+        **api_v2(
+            "Tasks",
+            "setTaskParent",
+            "Put this task under another as its subtask ({parent}); both keep their owners and stages. People only",
+            "TaskResult",
+        ),
+    )
     def task_parent(request: Request, tid: str, body: M.TaskParent):
         """Put this task under `parent` as its subtask. Both keep their owners, stages and pipelines; the parent waits
         on it. People only."""

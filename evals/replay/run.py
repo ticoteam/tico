@@ -88,21 +88,20 @@ def outcome(server, token, tid, bot):
 
 
 def choose(question, text):
-    """The case's words as the answer: the choice they name, else the words themselves. An OK is answered `ok`
-    unless the words say no, then `no` with the words as the note."""
-    if question["kind"] == "ok":
-        refused = text.strip().casefold().startswith(("no", "send it back"))
-        return {"value": "no", "note": text} if refused else {"value": "ok"}
-    picked = [c for c in question["choices"] if c.casefold() == text.strip().casefold()][:1]
-    return {"value": picked[0] if picked else text}
+    """The case's words as the answer to an OK: `ok` unless the words say no, then `no` with the words as the note."""
+    refused = text.strip().casefold().startswith(("no", "send it back"))
+    return {"value": "no", "note": text} if refused else {"value": "ok"}
 
 
 def answer(server, token, me, tid, now, text):
     """The simulated person answers the oldest open ask to them the way a person does in the app: through the ask's
-    answer, or a task filed for them by saying it is done. False when nothing waits on them."""
+    answer or a reply to a ❓, or a task filed for them by saying it is done. False when nothing waits on them."""
     mine = [q for q in now["open_questions"] if q["to"] == me]
     if mine:
         q = mine[0]
+        if q["kind"] == "question":  # a ❓: the person's reply in the task's chat clears it
+            ok(server, "POST", f"tasks/{q['task']}/comments", {"text": text}, token)
+            return True
         version = ok(server, "GET", f"tasks/{q['task']}", token=token)["task"]["version"]
         ok(server, "POST", f"tasks/{q['task']}/asks/{q['id']}/answer", {**choose(q, text), "version": version}, token)
         return True

@@ -223,13 +223,6 @@ def test_folded_system_runs_count_each_repeat_where_it_happened(api):
     # The Runs tab keeps one row per folded record, with its count.
     runs = {r["id"]: r for r in get(api, "automations/runs?range=1h&trigger=system")["runs"]}
     assert runs["sys_hm1"]["count"] == 24 and runs["sys_hm2"]["count"] == 3
-    # A database made before first_started gains it.
-    old = sqlite3.connect(":memory:")
-    old.execute(
-        "CREATE TABLE system_runs(id TEXT PRIMARY KEY, job TEXT NOT NULL, started_at TEXT NOT NULL, runs INTEGER)"
-    )
-    SR.ensure(old)
-    assert "first_started_at" in {r[1] for r in old.execute("PRAGMA table_info(system_runs)")}
 
 
 def _maint_run(api, minutes_ago, ok=1, trigger="schedule", cost=0.0, finished=True):

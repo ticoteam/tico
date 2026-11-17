@@ -127,20 +127,20 @@ def test_a_member_cannot_change_a_bot_that_is_not_hers_even_through_botops(api, 
 def test_a_member_may_not_add_someone_outside_the_company_domain(api, botops):
     attempt = turn(api, botops)
     refused = call(
-        api, "post", "access/people", attempt["token"], {"email": "eve@other.example", "on_behalf_of": "turn"}
+        api, "post", "access/humans", attempt["token"], {"email": "eve@other.example", "on_behalf_of": "turn"}
     )
     assert refused.status_code == 403 and "outside" in refused.json()["error"]["detail"]
-    assert call(api, "post", "access/people", "cara-test", {"email": "eve@other.example"}).status_code == 403
+    assert call(api, "post", "access/humans", "cara-test", {"email": "eve@other.example"}).status_code == 403
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM assistant_actions").fetchone()[0] == 0
     # Directly, in the company domain, she may; an admin may add anyone (an admin's click is the confirm).
-    assert call(api, "post", "access/people", "cara-test", {"email": "tim@acme.example"}).status_code == 200
-    assert call(api, "post", "access/people", "ben-test", {"email": "eve@other.example"}).status_code == 200
+    assert call(api, "post", "access/humans", "cara-test", {"email": "tim@acme.example"}).status_code == 200
+    assert call(api, "post", "access/humans", "ben-test", {"email": "eve@other.example"}).status_code == 200
     # What a member may do is set by an owner or admin.
-    assert call(api, "post", "access/people/cara", "ben-test", {"add_people": False}).status_code == 200
-    assert call(api, "post", "access/people", "cara-test", {"email": "uma@acme.example"}).status_code == 403
-    assert call(api, "post", "access/people/cara", "ben-test", {"role": "admin"}).status_code == 403  # owners only
-    assert call(api, "post", "access/people/cara", "ana-test", {"role": "admin"}).status_code == 200
+    assert call(api, "post", "access/humans/cara", "ben-test", {"add_people": False}).status_code == 200
+    assert call(api, "post", "access/humans", "cara-test", {"email": "uma@acme.example"}).status_code == 403
+    assert call(api, "post", "access/humans/cara", "ben-test", {"role": "admin"}).status_code == 403  # owners only
+    assert call(api, "post", "access/humans/cara", "ana-test", {"role": "admin"}).status_code == 200
 
 
 def test_botops_keeps_bot_rights_and_refuses_assistant_messages_and_task_comments(api, botops):
@@ -241,11 +241,11 @@ def test_a_members_bot_goes_only_on_a_computer_that_accepts_members_bots(api, bo
     assert created.status_code == 200, created.text
     # An admin opens the computer; then it is hers to use. Only owners and admins say so.
     assert (
-        call(api, "post", f"runners/{closed['runner_id']}/member-bots", "cara-test", {"accepts": True}).status_code
+        call(api, "post", f"computers/{closed['runner_id']}/member-bots", "cara-test", {"accepts": True}).status_code
         == 403
     )
     assert (
-        call(api, "post", f"runners/{closed['runner_id']}/member-bots", "ben-test", {"accepts": True}).status_code
+        call(api, "post", f"computers/{closed['runner_id']}/member-bots", "ben-test", {"accepts": True}).status_code
         == 200
     )
     assert call(api, "post", "bots/jira-manager/assignment", "cara-test", body).status_code == 200
@@ -298,7 +298,7 @@ def test_a_member_has_at_most_the_companys_limit_of_active_bots(api, botops):
     for n in range(4):
         assert call(api, "post", "bots/register", "ben-test", {"slug": f"admin-{n}"}).status_code == 200
     # A member switched off from creating bots may not.
-    assert call(api, "post", "access/people/cara", "ben-test", {"create_bots": False}).status_code == 200
+    assert call(api, "post", "access/humans/cara", "ben-test", {"create_bots": False}).status_code == 200
     assert register(api, attempt, "four").status_code == 403
 
 
@@ -333,17 +333,17 @@ def test_the_bot_limit_defaults_to_25_and_an_untouched_5_is_raised_once(api):
 def test_sign_in_is_switched_per_person_and_never_for_the_owner(api):
     assert api.get("/api/me", headers=headers("cara-test")).status_code == 200
     # A member cannot, nobody switches off their own or the owner's, and only an owner switches an admin's.
-    assert call(api, "post", "access/people/ben", "cara-test", {"sign_in": False}).status_code == 403
-    assert call(api, "post", "access/people/ben", "ben-test", {"sign_in": False}).status_code == 403
-    assert call(api, "post", "access/people/ana", "ben-test", {"sign_in": False}).status_code == 409
-    assert call(api, "post", "access/people/cara", "ben-test", {"sign_in": False}).status_code == 200
+    assert call(api, "post", "access/humans/ben", "cara-test", {"sign_in": False}).status_code == 403
+    assert call(api, "post", "access/humans/ben", "ben-test", {"sign_in": False}).status_code == 403
+    assert call(api, "post", "access/humans/ana", "ben-test", {"sign_in": False}).status_code == 409
+    assert call(api, "post", "access/humans/cara", "ben-test", {"sign_in": False}).status_code == 200
     cara = next(p for p in get(api, "access", "ben-test")["people"] if p["id"] == "cara")
     assert (cara["sign_in"], cara["can_sign_in"], cara["left"]) == (False, False, False)
     # Off: still on the roster, refused at every door, and cannot be made owner.
     assert api.get("/api/me", headers=headers("cara-test")).status_code == 403
     moved = call(api, "post", "access/owner", "ana-test", {"person": "cara", "expected_revision": 1, "confirm": True})
     assert moved.status_code == 409 and moved.json()["error"]["code"] == "sign_in"
-    assert call(api, "post", "access/people/cara", "ben-test", {"sign_in": True}).status_code == 200
+    assert call(api, "post", "access/humans/cara", "ben-test", {"sign_in": True}).status_code == 200
     assert api.get("/api/me", headers=headers("cara-test")).status_code == 200
 
 

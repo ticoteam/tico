@@ -37,7 +37,7 @@ def test_news_opens_one_private_watch_task_and_the_same_news_is_silent(environme
         first = BK.watch(c, api.app.state.auth, H.now())
     assert first["items"] == 1 and first["state"] == "opened"
     (task,) = checks(api)
-    assert task["title"] == "Watch (1)" and task["private"] == 1 and "duplicate_charge:f9" in task["body"]
+    assert task["title"] == "Watch (1)" and task["private"] == 1 and "duplicate_charge:f9" in task["words"]
     with store.transaction() as c:
         again = BK.watch(c, api.app.state.auth, H.now())
     assert again["words"] == "Nothing new to watch" and len(checks(api)) == 1
@@ -58,7 +58,7 @@ def test_the_rules_digest_skips_a_week_with_no_new_rule_and_lists_the_new_ones_a
         made = BK.rules_digest(c, api.app.state.auth, H.now())
     assert made["items"] == 1 and made["state"] == "opened"
     (task,) = checks(api)
-    assert task["title"] == "Rules digest (1)" and task["private"] == 1 and "rul_1" in task["body"]
+    assert task["title"] == "Rules digest (1)" and task["private"] == 1 and "rul_1" in task["words"]
     # Private: the company owner reads the digest (a reader), and a teammate who is not the owner does not.
     with store.read() as c:
         row = H.task(c, task["id"])
@@ -134,8 +134,8 @@ def test_a_finished_watch_task_is_not_listed_again_when_a_new_finding_arrives(en
         made = BK.watch(c, api.app.state.auth, H.shift(H.now(), hours=1))
     assert made["items"] == 1 and made["state"] == "opened", made
     (task,) = [t for t in checks(api) if t["id"] != first["id"]]
-    assert task["title"] == "Watch (1)" and "duplicate_charge:f10" in task["body"], task
-    assert "duplicate_charge:f9" not in task["body"], task["body"]
+    assert task["title"] == "Watch (1)" and "duplicate_charge:f10" in task["words"], task
+    assert "duplicate_charge:f9" not in task["words"], task["words"]
 
 
 def test_an_open_watch_task_keeps_what_it_lists_and_adds_the_new_finding(environment, monkeypatch):
@@ -154,7 +154,7 @@ def test_an_open_watch_task_keeps_what_it_lists_and_adds_the_new_finding(environ
     assert made["state"] == "updated", made
     (task,) = checks(api)
     assert task["id"] == opened["id"] and task["title"] == "Watch (2)", task
-    assert "duplicate_charge:f9" in task["body"] and "duplicate_charge:f10" in task["body"], task["body"]
+    assert "duplicate_charge:f9" in task["words"] and "duplicate_charge:f10" in task["words"], task["words"]
 
 
 def _long(kind: str, n: int) -> dict[str, object]:
@@ -182,8 +182,8 @@ def test_the_most_important_finding_is_named_first_and_one_the_body_cannot_hold_
     with store.transaction() as c:
         BK.watch(c, api.app.state.auth, H.now())
     (task,) = checks(api)
-    assert "runway:acme" in task["body"]
-    dropped = [d for d in rest if d["key"] not in task["body"]]
+    assert "runway:acme" in task["words"]
+    dropped = [d for d in rest if d["key"] not in task["words"]]
     assert dropped, "the body must not hold them all, or this does not test the cut"
     assert "runway:acme" in _seen(api)
     assert not any(d["key"] in _seen(api) for d in dropped)
@@ -192,7 +192,7 @@ def test_the_most_important_finding_is_named_first_and_one_the_body_cannot_hold_
     with store.transaction() as c:
         BK.watch(c, api.app.state.auth, H.shift(H.now(), hours=24))
     (task,) = checks(api)
-    assert all(d["key"] in task["body"] for d in dropped)
+    assert all(d["key"] in task["words"] for d in dropped)
 
 
 def test_a_finding_past_a_kinds_line_limit_is_not_stamped_seen_and_is_listed_once_there_is_room(
@@ -210,12 +210,12 @@ def test_a_finding_past_a_kinds_line_limit_is_not_stamped_seen_and_is_listed_onc
         BK.watch(c, api.app.state.auth, H.now())
     (task,) = checks(api)
     over = spend[-1]["key"]
-    assert over not in task["body"] and over not in _seen(api)
+    assert over not in task["words"] and over not in _seen(api)
     monkeypatch.setattr(FR, "watch_findings", lambda c, viewer, at: [spend[-1]])
     with store.transaction() as c:
         BK.watch(c, api.app.state.auth, H.shift(H.now(), hours=24))
     (task,) = checks(api)
-    assert over in task["body"]
+    assert over in task["words"]
 
 
 def test_an_open_watch_task_still_lists_an_item_whose_key_holds_a_space(environment, monkeypatch):
@@ -241,6 +241,6 @@ def test_an_open_watch_task_still_lists_an_item_whose_key_holds_a_space(environm
     assert made["state"] == "updated", made
     (task,) = checks(api)
     assert task["id"] == opened["id"], task
-    assert "  - unusual_spend:Acme Supplies:2026-10  Acme Supplies: 40.00 this month" in task["body"], task["body"]
+    assert "  - unusual_spend:Acme Supplies:2026-10  Acme Supplies: 40.00 this month" in task["words"], task["words"]
     with store.read() as c:
         assert "unusual_spend:Acme Supplies:2026-10" in BK._open_listed(c)

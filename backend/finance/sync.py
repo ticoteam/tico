@@ -218,7 +218,7 @@ def _provider(store: Any, vault: Any, ref: str, make: Make | None) -> Provider |
 def connection(
     store: Any, vault: Any, cid: str, *, rehearsal: bool = False, make: Make | None = None, at: str | None = None
 ) -> str:
-    """Sync one connection. `withheld` in rehearsal, `no_token`, else `ok` or `failed`."""
+    """Sync one connection. `withheld` in rehearsal, `refused` (`banking.unusable_key`), `no_token`, else `ok` or `failed`."""
     now = at or _now()
     with store.read() as c:
         row = SK.get(c, "fin_connections", cid)
@@ -243,6 +243,10 @@ def connection(
     due = not row["next_sync_at"] or str(row["next_sync_at"]) <= now
     if not (due or inbox or owed):
         return "idle"
+    refused = banking.unusable_key(store, row)
+    if refused:  # never read or send a key its connector may not use (a grant revoked, a person gone)
+        _failed(store, cid, refused, now, str(row["status"]))
+        return "refused"
     provider = _provider(store, vault, str(row["credential_ref"] or ""), make)
     if provider is None:
         _failed(store, cid, "the Mercury token is missing; store it again in Settings", now, str(row["status"]))

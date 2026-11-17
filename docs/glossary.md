@@ -13,16 +13,16 @@ The words Tico uses, and what each replaces.
 - **General Manager**: a built-in helper bot that manages the General pipeline and tidies tasks once an hour on weekdays:
   tasks that say Paused, held bots and duplicates. It sits outside the org chart and never touches bots, credentials,
   sends or spending ([General Manager](general-manager.md)).
-- **Built-in**: a bot that comes with Tico and serves everyone: Assistant, BotOps, Librarian, Strategy Owner, General Manager, Finance Owner, Rules Owner, Design Owner, Updates Owner, Automations Owner. The General Manager reports to the owner and runs the General pipeline; BotOps, the Librarian, the Strategy Owner and the Rules, Design, Updates and Automations Owners are its team (the General group). The Assistant and the Finance Owner report to the owner. They all appear as **Built-in** in Settings > Bots. Ask (bottom left, ⌘J; the phone's middle tab) opens the Assistant, which hands BotOps what needs it; the Strategy Owner is on Goals and Strategy, and the Librarian is on Docs and Strategy's Market tab. The Assistant, BotOps and the Librarian stay out of the team chart and goal owner list; the Strategy Owner stays out of the team chart too.
-- **Strategy Owner**: the built-in bot on every install that owns the **Strategy** section, the way the Librarian owns Docs and Market. It proposes the strategy to the owner, proposes the org chart that follows from it, and keeps KPIs and goal colours current. It sits under the owner at the top of the team chart, with the Heads under it ([Goals](goals-and-kpis.md#the-strategy-bot)). By default it suggests actions and acts only when a person says yes. The owner picks its level: **Passive**, **Suggests actions** (the default), or **Acts on its own**, which lets it act without asking ([Your Strategy Owner](strategy-bot.md)). It never publishes a strategy version.
-- **Strategy**: the section (`#/strategy`) where the team writes down its bets: a **summary** every bot reads on every run, a **vision**, three to five **bets**, and seven sections (Who we serve, What we sell, How we know they want it, Why now, What we know that others don't, How we sell, What we won't do). The owner writes and publishes it; the Strategy Owner proposes; **Market** is a tab under it ([Strategy](strategy.md)).
+- **Built-in**: a bot that comes with Tico and serves everyone: Assistant, BotOps, Librarian, Strategy Owner, General Manager, Finance Owner, Rules Owner, Design Owner, Updates Owner, Automations Owner, Tools Owner. The General Manager reports to the owner and runs the General pipeline; BotOps, the Librarian, the Strategy Owner and the Rules, Design, Updates, Automations and Tools Owners are its team (the General group). The Assistant and the Finance Owner report to the owner. They all appear as **Built-in** in Settings > Bots. Ask (bottom left, ⌘J; the phone's middle tab) opens the Assistant, which hands BotOps what needs it; the Strategy Owner is on Goals and Strategy, and the Librarian is on Docs and Strategy's Market tab. The Assistant, BotOps and the Librarian stay out of the team chart and goal owner list; the Strategy Owner stays out of the team chart too.
+- **Strategy Owner**: the built-in bot on every install that owns the **Strategy** section, the way the Librarian owns Docs and Market. It proposes the strategy to the owner, proposes the org chart that follows from it, and keeps KPIs and goal colours current. It sits under the owner at the top of the team chart, with the Heads under it ([Goals](goals-and-kpis.md#the-strategy-bot)). By default it suggests actions and acts only when a person says yes. The owner picks its level: **Passive**, **Suggests actions** (the default), or **Acts on its own**, which lets it act without asking ([Your Strategy Owner](strategy-bot.md)). It never changes the strategy except on the owner's own words.
+- **Strategy**: the section (`#/strategy`) where the team writes down its bets: a **summary** every bot reads on every run, a **vision**, three to five **bets**, and seven sections (Who we serve, What we sell, How we know they want it, Why now, What we know that others don't, How we sell, What we won't do). The owner writes it, and each save is live; the Strategy Owner proposes; **Market** is a tab under it ([Strategy](strategy.md)).
 - **Bet**: one of the short decisions on the Strategy page that could turn out wrong, with a why, what it rules out, a **wrong-if**, and a status (proposed, active, retired). At most seven are active. Goals link to the bet they serve, and a bet's health comes only from its goals that have a KPI.
 - **Wrong-if**: the observation that would retire a bet: a KPI crossing a threshold, a change to a market entity it
   cites, or a sentence with a check-by date ("not yet measurable"). Every active bet has one; when it trips, the
   Strategy Owner puts it in front of the owner.
 - **Guide**: the interview questions the Strategy Owner works from when it proposes a strategy, and the word for bets. Only the Default guide, in the style of YC and a16z, is offered. A guide never changes what the page stores. The other frameworks are lenses now.
-- **Lens**: a short set of questions from a known framework (Blue Ocean, Scenarios, Pre-mortem, Where to Play...), answered once and run against the published strategy or the market in one model call. The result is read, never published; its changes are added to the draft one at a time by the owner ([Lenses](lenses.md)).
-- **Version**: a published strategy, numbered, with a note. There is one draft at a time, the owner's; publishing stamps it and opens the next draft. Also a Tico release.
+- **Lens**: a short set of questions from a known framework (Blue Ocean, Scenarios, Pre-mortem, Where to Play...), answered once and run against the live strategy or the market in one model call. The result is read, never published; its changes are added to the strategy one at a time by the owner ([Lenses](lenses.md)).
+- **Version**: the strategy as one save left it, numbered, with a note. Every save that changes something is the next version. Also a Tico release.
 - **Company section**: the old Vision and Description at the top of Goals; both now live on the Strategy page, and Goals shows one line linking there ([Goals](goals-and-kpis.md#the-company-section)).
 - **Why**: one line on a goal tying it to the team's vision. The Strategy Owner proposes it and a person accepts it; a goal tied to a bet needs none ([Goals](goals-and-kpis.md#a-goals-why)).
 - **Message bot**: a bot that works a human's email or a Slack channel, such as Inbox Manager. These appear separately under **Message bots** in the sidebar, Goals and setup.
@@ -54,7 +54,7 @@ The words Tico uses, and what each replaces.
 - **Pipeline**: a line of stages a task moves through, with a manager bot. Every task is in one; General is the default
   ([Tasks](tasks.md#pipelines-and-stages)).
 - **Stage**: one place in a pipeline, with what a task needs to leave it.
-- **Ask**: a requirement on a task that names a person: an OK or an answer. It is in their Needs you
+- **Ask**: a requirement on a task that names a person: an OK. It is in their Needs you
   ([Tasks](tasks.md#asks-and-oks)).
 - **OK**: a person's yes on an ask. An OK for something that leaves the team or spends is bound to exactly what they
   were
@@ -111,6 +111,11 @@ Docs (internal and linked), Files, Meetings, Strategy (with Market as its tab), 
 | API keys | Credentials |
 | judge | Decision |
 | hub | Tico |
+| board | pipeline |
+| boards | pipelines |
+| Recurring | Routine |
+| Go through | Catch up |
+| Product Owner | Feature Owner |
 
 ## Branches
 

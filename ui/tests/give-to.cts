@@ -7,6 +7,7 @@ import type {Browser, Page} from 'playwright';
 declare const S: {emps: Record<string, unknown>[]; people: Record<string, unknown>[]; v2: {needs?: {id: string}[] | null}};
 declare function v2NeedsRead(): Promise<unknown>;
 declare function refresh(force?: boolean): Promise<void>;
+declare function uiPartLoad(part: string): Promise<void>;
 declare function giveToOpen(anchor: HTMLElement, opts: Record<string, unknown>): HTMLElement;
 declare function giveToEntries(selected?: string): {value: string; actor: string; name: string; role: string}[];
 declare function giveToMatch(q: string, entries: unknown[]): {name: {name: string}[]; role: {name: string}[]};
@@ -53,6 +54,8 @@ async function desktop(browser: Browser): Promise<void> {
   const {page, errors, data} = await open(browser, {viewport: {width: 1440, height: 900}});
   await roster(page);
   await page.evaluate(() => localStorage.clear());
+  // The matching is in the picker's page part (ui/parts.json), loaded here as its first open would.
+  await page.evaluate(() => uiPartLoad('give-to'));
 
   // AC-1 and AC-9 on the matching itself.
   const names = (q: string) => page.evaluate(q => { const m = giveToMatch(q, giveToEntries()); return [...m.name, ...m.role].map(e => e.name); }, q);
@@ -65,9 +68,9 @@ async function desktop(browser: Browser): Promise<void> {
   assert.deepEqual(everyone, ['Ana', 'Sam', 'API Engineer', 'BotOps', 'Engineer', 'Finance Owner', 'Finance Product Owner', 'Jev', 'Release Owner', 'Reviewer 1', 'Reviewer 2'],
     'people then bots, A–Z; archived bots and the Assistant stay out, BotOps (id = slug) is listed');
 
-  // AC-3: requester, bots named (title, then body), the area tag's owner, then recent; no one twice; at most 8.
+  // AC-3: requester, bots named (title, then its first message), the area tag's owner, then recent; no one twice; at most 8.
   const suggested = await page.evaluate(() => giveToSuggest(giveToEntries(), {requester_id: 'human:sam', title: 'Ask BotOps about the stuck run',
-    body: 'Then finance-po writes it up; botops again.', tags: [{owner: 'bot:b-release'}, {owner: 'human:sam'}]},
+    request: {text: 'Then finance-po writes it up; botops again.'}, tags: [{owner: 'bot:b-release'}, {owner: 'human:sam'}]},
   ['bot:eng', 'bot:botops', 'bot:api', 'bot:jev', 'bot:reviewer-1', 'bot:reviewer-2']).map(s => `${s.entry.name}: ${s.why}`));
   assert.deepEqual(suggested, ['Sam: Asked for it', 'BotOps: Named in the task', 'Finance Product Owner: Named in the task', 'Release Owner: Owns its area',
     'Engineer: Recent', 'API Engineer: Recent', 'Jev: Recent', 'Reviewer 1: Recent']);
@@ -221,8 +224,9 @@ async function giveAndSettle(page: Page, click: () => Promise<void>): Promise<vo
   await page.evaluate(() => new Promise(r => setTimeout(r, 0)));
 }
 
-// Needs you (decide.ts): Give to… on a task of yours. Suggested is who asked and the bots the title names; the current
-// owner shows ✓ but is not chosen, so Give stays off until a pick; Esc closes only the picker; Give sends the pick.
+// Needs you (decide.ts): Reassign on a stuck task's card opens Give to…. Suggested is who asked and the bots the title
+// names; the current owner shows ✓ but is not chosen, so Give stays off until a pick; Esc closes only the picker; Give
+// sends the pick.
 async function needsYou(browser: Browser): Promise<void> {
   const {page, errors} = await open(browser, {viewport: {width: 1440, height: 900}, at: '#/tasks'});
   await roster(page);
@@ -240,7 +244,7 @@ async function needsYou(browser: Browser): Promise<void> {
   await page.evaluate(() => v2NeedsRead());
   await page.waitForFunction(() => (S.v2.needs || []).some(n => n.id === 't-ny'));
   assert.equal(await page.evaluate(i => decideOpen('t-ny', [i]), item), true);
-  await page.locator('.decide [data-dc="give"]').click();
+  await page.locator('.decide [data-dc="give"]').click();  // the stuck card's Reassign
   const field = page.locator('.decide button[data-give-to]'), give = page.locator('.decide [data-dc="give-to"]');
   assert.equal(await field.locator('.gv-name').textContent(), 'Give to…');
   assert.equal(await give.isDisabled(), true, 'nothing chosen yet');
@@ -265,9 +269,9 @@ async function needsYou(browser: Browser): Promise<void> {
   assert.deepEqual(sent.map(b => (b as {owner: string}).owner), ['botops'], 'Give sends the value the old list sent');
 
   // Suggested reads the whole task the screen loads, not only the item's brief (title and requester): a bot named only
-  // in the body and the area tag's owner are suggested too, the same as the task's Owner menu (#385 in production).
+  // in its first message and the area tag's owner are suggested too, the same as the task's Owner menu (#385 in production).
   const bare = {...brief, id: 't-body', number: 9, title: 'The board shows the wrong stage', owner_id: 'bot:jev'};
-  const full = {...bare, body: 'BotOps sees it on every run; Engineer last touched the stage code.', tags: [{id: 'g-bugs', key: 'bugs', owner: 'bot:b-release'}]};
+  const full = {...bare, request: {text: 'BotOps sees it on every run; Engineer last touched the stage code.'}, tags: [{id: 'g-bugs', key: 'bugs', owner: 'bot:b-release'}]};
   const bodyItem = {id: 't-body', kind: 'task', line: bare.title, since: now, task: bare, task_id: 't-body'};
   let reads = 0;
   await page.route('**/api/v2/tasks/t-body', route => { reads++; return route.fulfill({json: {task: full}}); });
@@ -278,7 +282,7 @@ async function needsYou(browser: Browser): Promise<void> {
   assert.equal(await page.evaluate(i => decideOpen('t-body', [i]), bodyItem), true);
   await page.locator('.decide .dc-md').waitFor();
   assert.equal(reads, 1, 'the screen read the task once');
-  await page.locator('.decide [data-dc="give"]').click();
+  await page.locator('.decide [data-dc="give"]').click();  // the stuck card's Reassign
   await field.click();
   await pop.waitFor();
   assert.deepEqual(await pop.locator('[role=group]').first().locator('.gv-row').evaluateAll(rs => rs.map(r => `${r.querySelector('.gv-name')?.textContent}: ${r.querySelector('.gv-why')?.textContent}`)),

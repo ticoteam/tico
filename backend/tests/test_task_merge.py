@@ -1,9 +1,9 @@
 """Drop a task on another on the board (backend/task_merge.py, docs/tasks.md "Merge and make a subtask").
 
-Merge keeps the task dropped on: it gains the other's description under "From #A", its files and pages (linked), labels,
+Merge keeps the task dropped on: its merge note carries the other's request under "From #A", its files and pages (linked), labels,
 related links, followers and requesters; the other's open subtasks move under it; the other is Closed with the
 duplicate note and linked as a duplicate. Comments stay on the duplicate, its asks end, and the kept task's note counts
-the comments and lists each question. A bot owner is woken once; a person is not. A refusal anywhere changes nothing.
+the comments and lists each ask. A bot owner is woken once; a person is not. A refusal anywhere changes nothing.
 Make it a subtask puts the task under the other after filing: both keep their owners and stages, the parent waits on
 it, and history on both names who did it. Loops, nesting past 5, private with company, and a task with an open pull
 request are refused with one line; bots, and people who cannot change both tasks, are refused."""
@@ -21,7 +21,7 @@ from backend.tests.helpers.task_moves_routes import as_bot
 
 
 def task(api, title, owner="ops", token="ana-test", **more):
-    return post(api, "tasks", {"owner": owner, "title": title, "body": more.pop("body", "x"), **more}, token=token)
+    return post(api, "tasks", {"owner": owner, "title": title, "message": more.pop("body", "x"), **more}, token=token)
 
 
 def read(api, fn):
@@ -47,8 +47,8 @@ def test_merge_moves_the_details_and_subtasks_and_closes_the_duplicate(api):
     child = task(api, "Check the Stripe logs", parent=dup["id"])
     for n in range(7):
         post(api, f"tasks/{dup['id']}/comments", {"text": f"Note {n}"})
-    for line in ("Which plan did it fail on?", "Is it every annual customer?"):
-        post(api, f"tasks/{dup['id']}/asks", {"to": "cara", "line": line})
+    for line in ("OK the refund fix for the Pro plan?", "OK refunding every annual customer?"):
+        post(api, f"tasks/{dup['id']}/asks", {"to": "cara", "line": line, "kind": "ok"})
     r = api.put(f"/api/v2/tasks/{dup['id']}/followers", json={"actor": "cara"}, headers=headers())
     assert r.status_code == 200, r.text
     other = task(api, "Refund email copy")
@@ -58,7 +58,7 @@ def test_merge_moves_the_details_and_subtasks_and_closes_the_duplicate(api):
     assert (seen["merge"], seen["subtask"], seen["same_owner"]) == (None, None, True)
     assert seen["moves"]["comments"] == 7 and seen["moves"]["subtasks"] == 1
     assert seen["moves"]["followers"] == 2, "cara, who follows it, and ana, who asked for it"
-    assert seen["moves"]["asks"] == ["Which plan did it fail on?", "Is it every annual customer?"]
+    assert seen["moves"]["asks"] == ["OK the refund fix for the Pro plan?", "OK refunding every annual customer?"]
 
     done = post(api, f"tasks/{dup['id']}/merge", {"into": kept["id"]})
 
@@ -67,8 +67,10 @@ def test_merge_moves_the_details_and_subtasks_and_closes_the_duplicate(api):
 
     def check(c):
         b = H.task(c, kept["id"])
-        assert f"## From {n}: Annual refunds broken" in b["body"] and "Stripe returns 402" in b["body"]
-        assert b["body"].startswith("Seen on the Pro plan.")
+        # A task has no description: the duplicate's request comes over in the merge note on the kept task's chat.
+        said = [m["body"] for m in H.task_comments(c, kept["id"]) if m["kind"] == "say"]
+        assert any(f"## From {n}: Annual refunds broken" in body and "Stripe returns 402" in body for body in said)
+        assert H.task_request_text(c, kept["id"]) == "Seen on the Pro plan.", "the kept task's own request is as asked"
         H.hydrate_task_tags(c, [b])
         assert "billing" in H.task_labels(b)
         assert TR.parent_of(c, child["id"]) == kept["id"]
@@ -95,7 +97,7 @@ def test_merge_moves_the_details_and_subtasks_and_closes_the_duplicate(api):
         assert sum(1 for m in H.task_comments(c, dup["id"]) if m["kind"] == "say") >= 7, "the comments stay"
         notes = [m["body"] for m in H.task_comments(c, kept["id"]) if m["kind"] == "say"]
         assert any(
-            f"7 comments on [{n}](#/task/{dup['id']})" in body and "Which plan did it fail on?" in body
+            f"7 comments on [{n}](#/task/{dup['id']})" in body and "OK the refund fix for the Pro plan?" in body
             for body in notes
         )
         closed = [m["body"] for m in H.task_comments(c, dup["id"])]
@@ -141,7 +143,8 @@ def test_the_other_owner_keeps_it_through_the_hand_over_checks_and_a_refusal_cha
     post(api, f"tasks/{dup['id']}/merge", {"into": kept["id"], "owner": "cara"}, expected=422)
 
     def unchanged(c):
-        assert H.task(c, kept["id"])["owner_id"] == "bot:ops" and H.task(c, kept["id"])["body"] == "x"
+        assert H.task(c, kept["id"])["owner_id"] == "bot:ops" and H.task_request_text(c, kept["id"]) == "x"
+        assert not any("## From" in str(m["body"] or "") for m in H.task_comments(c, kept["id"])), "no merge note"
         assert H.task(c, dup["id"])["status"] == "open" and TR.parent_of(c, child["id"]) == dup["id"]
 
     read(api, unchanged)

@@ -1,4 +1,4 @@
-"""Org rules check people's writes (docs/rules-plan.md): a person's message, and what their Assistant or BotOps writes
+"""Org rules check people's writes (docs/dev/rules-plan.md): a person's message, and what their Assistant or BotOps writes
 for them, is checked as that person and held as theirs. Acme is test_org_rules' fictional company: Ana owns it, Ben is
 above Ops, Cara is on Support, and Eve is on no team."""
 
@@ -21,7 +21,7 @@ from backend.tests.helpers.api import get, headers, post  # noqa: F401
 from backend.tests.helpers.org_rule_check import COLOR, bodies, chat, color_rule, events, hold_row, ruled  # noqa: F401
 from backend.tests.helpers.org_rules import as_bot, org, rule  # noqa: F401
 from backend.tests.helpers.thread_api import new_thread, say  # noqa: F401
-from backend.tests.helpers.bot_home_merge import merge as merge_homes, room as chat_room_with
+from backend.tests.helpers.bot_home_merge import merge_api as merge_homes, room as chat_room_with
 
 EVERYONE = {"everyone": True}
 

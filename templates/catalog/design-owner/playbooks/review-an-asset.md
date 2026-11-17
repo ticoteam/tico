@@ -14,7 +14,7 @@ Done when: the verdict is on the task in one line with the path to the full revi
 
     tico task show <id>
 
-Find the item, its audience, where it will appear and the deadline. If the audience is missing, ask once with `tico task ask <id> --to <person> "<question>" --version N`.
+Find the item, its audience, where it will appear and the deadline. If the audience is missing, ask once with `tico task ask <id> --to <person> "<question>"`.
 
 ## 2. Review copy
 
@@ -40,7 +40,7 @@ bet stays theirs: you check, you do not take the pen.
   brand card's visual rules. A page change is checked as it will look, not as a text file.
 - A video in the bet is the Video Owner's to make. File it under this sub-task:
 
-      tico task file "Video: <title>" --parent <id> --owner video-owner --body "<what the bet needs, where it runs, the deadline>"
+      tico task file "Video: <title>" --parent <id> --owner video-owner --message "<what the bet needs, where it runs, the deadline>"
 
   and give your answer once its brief and cost are on its task.
 - With no brand card published yet (`tico brand show`), there are no rules to check against. Check the facts and

@@ -1,9 +1,10 @@
-"""`granted` (one query per subject) answers exactly what `effective_grant` answers per credential."""
+"""`explicitly_granted` (one query per subject) answers exactly what `effective_grant` answers per credential; `granted`
+adds a bot's default reads (backend/default_read.py, tested in test_default_read.py)."""
 
 import random
 import sqlite3
 
-from backend.credentials import effective_grant, granted
+from backend.credentials import effective_grant, explicitly_granted
 
 
 def test_granted_matches_effective_grant_for_every_credential_and_subject():
@@ -26,4 +27,6 @@ def test_granted_matches_effective_grant_for_every_credential_and_subject():
             (f"g{n}", rng.choice(creds), rng.choice(subjects), rng.choice([None, None, None, "2026-10-06"]), parent),
         )
     for subject in subjects:
-        assert granted(c, subject) == {cid for cid in creds if effective_grant(c, cid, subject) is not None}, subject
+        assert explicitly_granted(c, subject) == {
+            cid for cid in creds if effective_grant(c, cid, subject) is not None
+        }, subject

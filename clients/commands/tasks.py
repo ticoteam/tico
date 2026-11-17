@@ -2,8 +2,10 @@
 
 Moved from clients/hubtools.py; clients/commands/__init__.py says how the table is put together."""
 
+import os
 from urllib.parse import quote
 from clients import s3links
+from clients.cli_spec import NULL, Arg, Command, Group
 
 from clients.commands._registry import tool
 from clients.commands._schemas import STATUSES, TASK_ID, _key, _s, _target
@@ -35,20 +37,20 @@ def task_context(api, args):
 @tool(
     "tico_task_create",
     "File a task for a bot or a person. A task for a person is a decision or a review: the title says what you "
-    "ask, the body is under 120 words, and its first paragraph is the ask: one or two plain sentences on what you "
-    "need and what happens after, at most 40 words, with no ids, hashes, file paths, s3:// links or tool names "
+    "ask, the message is under 120 words, and its first paragraph is the ask: one or two plain sentences on what "
+    "you need and what happens after, at most 40 words, with no ids, hashes, file paths, s3:// links or tool names "
     "(\"PR #1555\" is fine; refused otherwise), e.g. \"Approve the video tool trial for Thursday? If yes, I'll send "
     "the invite.\" Details go below. It starts in the first stage of its pipeline (General when none is named). "
     "`dry_run` reports the checks a create would fail and writes nothing. A person’s asking criteria can refuse "
-    "the write as ask_refused, with the reason and fix; no task is created. To ask a person something on your own "
-    "task, use tico_task_ask.",
+    "the write as ask_refused, with the reason and fix; no task is created. To ask a person on your own "
+    "task, use tico_task_ask. Access: tico_access_request.",
     {
         "owner": _s(
             "Who does it: a bot slug, a person id, or `me`. Left out, a pipeline's first stage that picks from several "
             "picks one"
         ),
         "title": _s("Task title: plain words, no reference numbers or all-caps"),
-        "body": _s("The details", default=""),
+        "message": _s("The first message on its chat: what you ask, if the title doesn't say it all", default=""),
         "pipeline": _s("The pipeline's id; default general"),
         "visibility": _s(
             "People only: roadmap visibility at creation; public needs public_title. A bot is refused; "
@@ -56,7 +58,7 @@ def task_context(api, args):
             enum=["public", "private"],
         ),
         "public_title": _s("People only (a bot is refused): public title; the internal title is never published"),
-        "public_summary": _s("People only (a bot is refused): public summary; the internal body is never published"),
+        "public_summary": _s("People only (a bot is refused): public summary; the task's chat is never published"),
         "due": _s("ISO-8601 date-time with timezone"),
         "private": {
             "type": "boolean",
@@ -71,10 +73,10 @@ def task_context(api, args):
         "from_private": {
             "type": "boolean",
             "default": False,
-            "description": "From a run on your own private task with no person on it: a company-visible "
-            "task for a bot, carrying only its own words (no 12 words copied from the private "
-            "work, no secret-shaped value, no file or link of it). Parent: that private task, "
-            "or none",
+            "description": "From a run on your own private task with no person on it: a "
+            "company-visible task for a bot, carrying only its own words (no 12 "
+            "words copied from the private work, no secret-shaped value, no file "
+            "or link of it). Parent: that private task, or none",
         },
         "for_actor": _s(
             "A bot filing a person's own ask: the person (human:<id>) it is for, who becomes its requester. "
@@ -86,9 +88,10 @@ def task_context(api, args):
             "Set once, never changed"
         ),
         "request_id": _s(
-            "A person's message this task carries: BotOps continuing its own chat, or another bot handing BotOps "
-            "a person's request (their message id, or `turn` for the one that started this run). BotOps then acts "
-            "with that person's rights, or puts it to them as a Confirm card"
+            "A person's message this task carries: BotOps continuing its own chat, or another bot "
+            "handing BotOps a person's request (their message id, or `turn` for the one that "
+            "started this run). BotOps then acts with that person's rights, or puts it to them as "
+            "a Confirm card"
         ),
         "number": {
             "type": "integer",
@@ -138,7 +141,7 @@ def task_create(api, args):
     body = {
         **({"owner": _target(api, args["owner"])} if args.get("owner") else {}),
         "title": args["title"],
-        "body": args.get("body") or "",
+        **({"message": said} if (said := args.get("message") or args.get("body")) else {}),
         "due": args.get("due"),
         "goal_id": args.get("goal_id") or None,
         **({"human": _target(api, args["human"])} if args.get("human") else {}),
@@ -177,20 +180,21 @@ def task_create(api, args):
         body["roles"] = roles
     if args.get("dry_run"):
         return api.post("tasks/dry-run", body)
-    links = s3links.apply(api, body, ("body",))
+    links = s3links.apply(api, body, ("message",))
     return s3links.annotate(api.post("tasks", body, key=_key(args)), links)
 
 
 @tool(
     "tico_task_child_create",
-    "Create a subtask under a parent; you are its requester. With `check_model`, the "
-    "subtask is your own and runs on that model in a session of its own, reading only the subtask: name in its "
-    "body the PR or files to look at. Mark it done with the verdict as the note; it comes back to the parent.",
+    "Create a subtask under a parent; you are its requester. With `check_model`, the subtask is "
+    "your own and runs on that model in a session of its own, reading only the subtask: name in "
+    "its message the PR or files to look at. Mark it done with the verdict as the note; it comes "
+    "back to the parent.",
     {
         "parent": TASK_ID,
         "owner": _s("Bot slug or human id; `me` for a check_model subtask (the default)"),
         "title": _s("What to do"),
-        "body": _s("Details", default=""),
+        "message": _s("The first message on its chat", default=""),
         "check_model": _s(
             "A company-enabled runtime, optionally with a model: `grok`, `codex:gpt-6.1-sol`; `auto` for "
             "the company's check model, from a provider other than the parent's author when one can run it"
@@ -208,7 +212,7 @@ def task_child_create(api, args):
     owner = args.get("owner") or ("me" if args.get("check_model") else None)
     if not owner:
         raise ValueError("owner is required (or check_model, which files the subtask for you)")
-    return task_create(api, {**args, "owner": owner, "body": args.get("body") or args["title"]})
+    return task_create(api, {**args, "owner": owner})
 
 
 @tool("tico_task_tree", "The nested subtasks with status, owner and worst PR state.", {"id": TASK_ID}, required=("id",))
@@ -262,6 +266,13 @@ def task_text(task, actors=None, events=()):
     owner = task.get("owner_name") or _who(task.get("owner_id") or task.get("owner"), actors)
     place = [(task.get("pipeline") or {}).get("name"), stage.get("name"), f"owner {owner}" if owner else None]
     lines.append(" · ".join(p for p in place if p))
+    asked = task.get("request") if isinstance(task.get("request"), dict) else None
+    if asked and asked.get("text"):
+        # What it asks: its first chat message (a task has no description); the rest of its chat says more.
+        said = " ".join(str(asked["text"]).split())
+        lines.append(
+            f"Asked by {_who(asked.get('from'), actors) or 'someone'}: {said[:600]}" + ("…" if len(said) > 600 else "")
+        )
     if task.get("status") not in (None, "open"):
         lines.append(f"Status: {task['status']}")
     if task.get("turn"):
@@ -284,8 +295,6 @@ def task_text(task, actors=None, events=()):
         answer = item.get("answer")
         if answer:
             words.append(f"answer: {answer.get('value')}" + (f", {answer['note']}" if answer.get("note") else ""))
-        if item.get("choices"):
-            words.append("choices: " + ", ".join(str(c) for c in item["choices"]))
         words.append(f"id {item.get('requirement_id')}")
         if item.get("may"):
             words.append("you may: " + ", ".join(item["may"]))
@@ -330,10 +339,10 @@ def order_lines(task):
 
 @tool(
     "tico_task_show",
-    "One task: its version; pipeline, stage and owner; whose turn it is; what it takes to leave the stage (each "
-    "requirement, met or not, with its id and what you may do with it); the next stage; the task that filed it. "
-    "`text` says it in lines. Send its version with every change you make to the task. For several tasks, "
-    "tico_task_show_many reads them in one call.",
+    "One task: its version; pipeline, stage and owner; whose turn it is; what it takes to leave "
+    "the stage (each requirement, met or not, with its id and what you may do with it); the next "
+    "stage; the task that filed it. `text` says it in lines. Send its version with every change "
+    "you make. For several tasks, tico_task_show_many reads them in one call.",
     {"id": TASK_ID},
     required=("id",),
 )
@@ -347,8 +356,8 @@ def task_show(api, args):
 
 @tool(
     "tico_task_show_many",
-    "Several tasks in one call (up to 100): each task's fields, without history or "
-    "conversation; `missing` lists the ids that are unknown or not yours to read. Use this instead of one "
+    "Several tasks in one call (up to 100): each task's fields, without history or conversation; "
+    "`missing` lists the ids that are unknown or not yours to read. Use this instead of one "
     "tico_task_show per task.",
     {"ids": {"type": "array", "items": TASK_ID, "minItems": 1, "maxItems": 100}},
     required=("ids",),
@@ -360,9 +369,9 @@ def task_show_many(api, args):
 
 @tool(
     "tico_task_done",
-    "Say the work of this stage is finished, with what was done. It never pushes past anything: while something else "
-    "is missing it is refused with what is missing and the commands you may run instead. In the last stage the task "
-    "is Done.",
+    "Say the work of this stage is finished, with what was done. It never pushes past anything: "
+    "while something else is missing it is refused with what is missing and the commands you may "
+    "run instead. In the last stage the task is Done.",
     {
         "id": TASK_ID,
         "note": _s("What was done, in a few plain sentences"),
@@ -378,33 +387,68 @@ def task_done(api, args):
     return s3links.annotate(_asked(api, args).post(f"tasks/{args['id']}/done", body, key=_key(args)), links)
 
 
+def _from_stage(args, what):
+    """`{"from": {pipeline, stage}}` when the tool names a stage's open tasks (from_pipeline + from_stage) in place of
+    one task's id; None when it names one task. `what` says the write ("Moving") in a refusal."""
+    if not (args.get("from_pipeline") or args.get("from_stage")):
+        if not args.get("id"):
+            raise ValueError("Say which task: id (or from_pipeline and from_stage for a whole stage)")
+        return None
+    if not (args.get("from_pipeline") and args.get("from_stage")):
+        raise ValueError(f"{what} a stage's tasks needs from_pipeline and from_stage")
+    if args.get("id"):
+        raise ValueError("Give id, or from_pipeline and from_stage, not both")
+    return {"from": {"pipeline": args["from_pipeline"], "stage": args["from_stage"]}}
+
+
+# A stage's open tasks in place of one task (the board's ⋯ on a column): its pipeline and the stage.
+FROM_STAGE = {"from_pipeline": _s("Its pipeline"), "from_stage": _s("A stage")}
+
+
 @tool(
     "tico_task_move",
-    "Move a task: `next` (forward; with a why, past what is not met), back to an earlier stage by its name or id, "
-    "`done`, `closed` or `reopen`. Forward with something not met and no why is refused with what is missing and "
-    "the commands you may run. A bot says why for every move but forward; reopen needs a why from everyone. A bot "
-    "does not reopen what a person closed.",
+    "Move a task: `next`, back to a stage, `done`, `closed` or `reopen`. A bot gives a why for all but `next`; reopen "
+    "needs one from everyone; a bot never reopens what a person closed. `to_pipeline` moves it to another pipeline, "
+    "number and history kept. `from_pipeline` + `from_stage` instead of `id`: all that stage's open tasks, each moved "
+    "as one move is (`to` alone keeps them in their pipeline: `closed` closes them all).",
     {
         "id": TASK_ID,
         "to": _s("next, done, closed, reopen, or a stage's name or id"),
+        "to_pipeline": _s("Another pipeline's name or id"),
+        **FROM_STAGE,
         "why": WHY,
         "version": VERSION,
         "on_behalf_of": ASKED,
     },
-    required=("id", "to"),
     writes=True,
 )
 def task_move(api, args):
-    body = {"to": args["to"], "version": _seen(args), **_why(args)}
+    stage = _from_stage(args, "Moving")
+    if not args.get("to") and not args.get("to_pipeline"):
+        raise ValueError("Say where it goes: to, or to_pipeline")
+    if stage:
+        body = {
+            **stage,
+            **({"to_pipeline": args["to_pipeline"]} if args.get("to_pipeline") else {}),
+            **({"to": args["to"]} if args.get("to") else {}),
+            **_why(args),
+        }
+        return _asked(api, args).post("tasks/move", body, key=_key(args))
+    body = {
+        **({"to": args["to"]} if args.get("to") else {}),
+        **({"to_pipeline": args["to_pipeline"]} if args.get("to_pipeline") else {}),
+        "version": _seen(args),
+        **_why(args),
+    }
     links = s3links.apply(api, body, ("why",))
     return s3links.annotate(_asked(api, args).post(f"tasks/{args['id']}/move", body, key=_key(args)), links)
 
 
 @tool(
     "tico_task_close",
-    "Close a task, with why: it is never refused for what is missing, and its open sub-tasks close with it. A bot "
-    "cannot close a task a person asked for: it asks that person instead (tico_task_ask). BotOps closes with the "
-    "rights of the person who asked it.",
+    "Close a task, with why: it is never refused for what is missing, and its open sub-tasks "
+    "close with it. A bot cannot close a task a person asked for: it asks that person instead "
+    "(tico_task_ask). BotOps closes with the rights of the person who asked it.",
     {"id": TASK_ID, "why": WHY, "version": VERSION, "on_behalf_of": ASKED},
     required=("id",),
     writes=True,
@@ -429,9 +473,11 @@ def task_close(api, args):
 @tool(
     "tico_task_reassign",
     "Give the task to another bot or person for this stage. It raises the version and starts the tries again; the "
-    "old owner's queued wakes for it are dropped.",
+    "old owner's queued wakes for it are dropped. `from_pipeline` + `from_stage` instead of `id`: all that stage's "
+    "open tasks (a person's change, or one made for a person with on_behalf_of).",
     {
         "id": TASK_ID,
+        **FROM_STAGE,
         "owner": _s("The new owner: a bot slug, a person id, or `me`"),
         "why": WHY,
         "version": VERSION,
@@ -441,10 +487,14 @@ def task_close(api, args):
         },
         "on_behalf_of": ASKED,
     },
-    required=("id", "owner"),
+    required=("owner",),
     writes=True,
 )
 def task_reassign(api, args):
+    stage = _from_stage(args, "Reassigning")
+    if stage:
+        body = {**stage, "owner": _target(api, args["owner"]), **_why(args)}
+        return _asked(api, args).post("tasks/owner", body, key=_key(args))
     version = _seen(args)
     body = {"owner": _target(api, args["owner"]), "version": version, **_why(args)}
     if args.get("set_anyway"):
@@ -457,17 +507,22 @@ def task_reassign(api, args):
     "Set a task aside in its stage, with why: no wakes, no Late, and it leaves Needs you until its date or until "
     "someone unsnoozes it; its owner is then woken once. Give a date wherever there is one (\"vendor replies by Nov "
     "14\"); with none it is On ice and the manager bot is told. A bot's fourth snooze in one stage goes to the manager "
-    "bot instead. Any move ends a snooze.",
+    "bot instead. Any move ends a snooze. `from_pipeline` + `from_stage` instead of `id`: all that stage's open tasks "
+    "(a person's change only).",
     {
         "id": TASK_ID,
+        **FROM_STAGE,
         "until": _s("An ISO-8601 date (the start of that day, Pacific) or date-time with a zone"),
         "why": WHY,
         "version": VERSION,
     },
-    required=("id",),
     writes=True,
 )
 def task_snooze(api, args):
+    stage = _from_stage(args, "Snoozing")
+    if stage:
+        body = {**stage, **_why(args, "until"), **_why(args)}
+        return api.post("tasks/snooze", body, key=_key(args))
     body = {"version": _seen(args), **_why(args, "until"), **_why(args)}
     return api.post(f"tasks/{args['id']}/snooze", body, key=_key(args))
 
@@ -501,49 +556,44 @@ def _own_ask(api, task_id, requirement=None):
     )
 
 
+# What makes tico_task_ask a stage ask rather than a ❓: any of these.
+# A question is a message marked ❓ (backend/question_marks.py); its options and why are words in it.
+QUESTION_INSTEAD = (
+    'A question is a message: tico task ask <id> --to <person> "<question>", with no --kind or --show. Say the '
+    "options, your pick and why in the message."
+)
+_STAGE_ASK = ("kind", "show", "subject", "why")
+
+
 @tool(
     "tico_task_ask",
-    "Ask a person on this task one sentence: a question or an OK. The task waits in its stage for the answer, which "
-    "wakes you once; asking again replaces your ask. `withdraw` takes it back.",
+    "Ask a person on this task. `to` and `line`: a ❓ message on its chat, in their Needs you until they reply. A new ❓ "
+    "replaces yours, so put every question in one, numbered when there are several; options and why go in it. While it "
+    "is open you can't mark the task done or close it. An OK: `kind` ok with `show`. `withdraw` takes an OK back.",
     {
         "id": TASK_ID,
         "to": _s("The person's id"),
-        "line": _s("The one sentence asked, readable alone", maxLength=300),
+        "line": _s("The message: a short first line that reads on its own, then any detail", maxLength=4000),
         "kind": {
             "type": "string",
-            "enum": ["answer", "ok"],
-            "description": "answer (default): a question; ok: approve or send back",
+            "enum": ["ok"],
+            "description": "ok: approve or send back what `show` names",
         },
-        "choices": {
-            "type": "array",
-            "items": {"type": "string", "maxLength": 60},
-            "minItems": 2,
-            "maxItems": 6,
-            "description": "Answers to pick; they may type their own",
-        },
-        "choice": {
-            "type": "array",
-            "items": _s("Label|what happens", maxLength=221),
-            "minItems": 2,
-            "maxItems": 4,
-            "description": "Instead of choices",
-        },
-        "recommend": _s("The choice you recommend", maxLength=60),
-        "title": _s("Short heading", maxLength=60),
         "show": {
             "type": "array",
             "items": _s("page:<id>, file:<id>@<version> or a link"),
             "maxItems": 10,
-            "description": "What they look at, shown with the ask",
+            "description": "What an OK approves, shown with it",
         },
         "subject": _s(
             "An OK bound to what you will do, <kind>:<id>, covering exactly `content`; "
             "use it once with tico_ok_use just before acting"
         ),
         "content": {"description": "With subject: exactly what the OK covers (any JSON)"},
-        "withdraw": {"type": "boolean", "description": "Take back your open ask instead"},
-        "requirement": _s("With withdraw: the ask's requirement id, if several"),
-        "why": _s("Why it matters (with withdraw: why)"),
+        "withdraw": {"type": "boolean", "description": "Take back your open OK instead"},
+        "not_known": {"type": "boolean", "description": "Ask even if Tico answered"},
+        "requirement": _s("With withdraw: the OK's requirement id, if several"),
+        "why": _s("With withdraw: why"),
         "version": VERSION,
     },
     required=("id",),
@@ -557,25 +607,25 @@ def task_ask(api, args):
     missing = [name for name in ("to", "line") if not args.get(name)]
     if missing:
         raise ValueError(f"An ask names who it is for and the one line they are asked: give {' and '.join(missing)}")
+    if not any(args.get(field) for field in _STAGE_ASK):
+        # A ❓: the message on the task's chat, needing their reply (backend/question_marks.py).
+        question = {"to": args["to"], "text": args["line"]}
+        if args.get("not_known"):
+            question["not_known"] = True  # past Tico's own answer (backend/ask_known.py)
+        return api.post(f"tasks/{args['id']}/questions", question, key=_key(args))
+    if args.get("kind") != "ok" and not args.get("subject"):
+        raise ValueError(QUESTION_INSTEAD)
     body = {"to": args["to"], "line": args["line"], "version": _seen(args)}
     if args.get("subject"):
-        if args.get("choices") or args.get("kind") == "answer" or "content" not in args:
-            raise ValueError("An OK bound to a subject is an ok with its content, never a question with choices")
-        if args.get("title"):
-            raise ValueError("An OK bound to a subject shows its content, not a title: leave out title")
+        if "content" not in args:
+            raise ValueError("An OK bound to a subject is an ok with its content")
         body.update({"subject": args["subject"], "content": args["content"]})
         if args.get("show"):
             body["show"] = args["show"]
         return api.post(f"tasks/{args['id']}/oks", body, key=_key(args))
-    for field in ("kind", "choices", "show", "why", "recommend", "title"):
+    for field in ("kind", "show"):
         if args.get(field):
             body[field] = args[field]
-    if args.get("choice"):
-        if args.get("choices"):
-            raise ValueError("Give the answers once: choice (Label|what happens) or choices, not both")
-        pairs = [str(one).partition("|") for one in args["choice"]]
-        body["choices"] = [label.strip() for label, _, _ in pairs]
-        body["details"] = [detail.strip() for _, _, detail in pairs]
     return api.post(f"tasks/{args['id']}/asks", body, key=_key(args))
 
 
@@ -602,13 +652,12 @@ def ok_use(api, args):
 
 @tool(
     "tico_task_answer",
-    "Answer what you are asked on a task (a bot named on an OK or a question): ok, no (send it back, with a note), "
-    "again (look again), or your answer. The requirement id is in tico_task_show's To leave. A stage's answer is "
-    "named there (confidence): give the name instead, and a whole number in its range, one of its choices, or text.",
+    "Answer what you are asked on a task (a bot named on an OK or a question): ok, no (send it "
+    "back, with a note). The requirement id is in tico_task_show's To leave.",
     {
         "id": TASK_ID,
-        "requirement": _s("The requirement's id, or a stage's answer by its name"),
-        "value": _s("ok, no, again, or your answer: one of its choices or your own words"),
+        "requirement": _s("The requirement's id"),
+        "value": _s("ok or no", enum=["ok", "no"]),
         "note": _s("What they read with it, word for word; required with no"),
         "version": VERSION,
         "on_behalf_of": ASKED,
@@ -652,7 +701,7 @@ def task_give(api, args):
     {
         "parent": TASK_ID,
         "title": _s("What the new task is for, in plain words"),
-        "body": _s("The details; default the title"),
+        "message": _s("The first message on its chat: anything the title doesn't say"),
         "owner": _s(
             "Who does it: a bot slug, a person id, or `me` (the default; in a pipeline whose first stage picks, the "
             "stage picks)"
@@ -672,11 +721,9 @@ def task_give(api, args):
     writes=True,
 )
 def task_file(api, args):
-    fields = ("parent", "title", "pipeline", "due", "labels", "private", "after", "operation_id")
-    # A task has a body: with none given, its title is its body, as for a sub-task made with tico_task_child_create.
-    body = args.get("body") or args["title"]
+    fields = ("parent", "title", "message", "body", "pipeline", "due", "labels", "private", "after", "operation_id")
     owner = args.get("owner") or (None if _first_stage_picks(api, args.get("pipeline")) else "me")
-    return task_create(api, {**{k: args[k] for k in fields if k in args}, "body": body, "owner": owner})
+    return task_create(api, {**{k: args[k] for k in fields if k in args}, "owner": owner})
 
 
 def _first_stage_picks(api, pipeline):
@@ -693,10 +740,10 @@ def _first_stage_picks(api, pipeline):
 
 @tool(
     "tico_task_list",
-    "Tasks you may see, filtered; each has its full `id`, an 8-character `short_id` that every task tool accepts, its "
-    "`version` (send it with a change), its `stage_id` and its `turn` (whose turn it is, and the line why). Your own "
-    "come back in queue order: the first is what to do next. `all` also returns every bot you may see (`{tasks, "
-    "bots}`).",
+    "Tasks you may see, filtered; each has its full `id`, an 8-character `short_id` that every "
+    "task tool accepts, its `version` (send it with a change), its `stage_id` and its `turn` "
+    "(whose turn it is, and why). Your own come back in queue order: the first is what to do "
+    "next. `all` also returns every bot you may see (`{tasks, bots}`).",
     {
         "owner": _s("Owner: a bot slug, a human id, or `me`"),
         "requester": _s("Requester: a bot slug, a human id, or `me`"),
@@ -716,7 +763,7 @@ def _first_stage_picks(api, pipeline):
         "updated_since": _s("Only tasks changed after this ISO-8601 time with a timezone"),
         "member": _s("Only tasks this person or bot is on in some role (`me`, a human id or a bot slug)"),
         "role": _s("With member: only tasks they are on in this role"),
-        "brief": {"type": "boolean", "description": "Leave out each task's body"},
+        "brief": {"type": "boolean", "description": "Leave out each task's longer fields"},
         "all": {
             "type": "boolean",
             "default": False,
@@ -778,12 +825,11 @@ def task_list(api, args):
 
 @tool(
     "tico_task_update",
-    "Edit a task's fields: title, body, due, labels, privacy, goal, with a note. Where it is and who has it change "
+    "Edit a task's fields: title, due, labels, privacy, goal, with a note. Where it is and who has it change "
     "by tico_task_done, tico_task_move, tico_task_close and tico_task_reassign, never here.",
     {
         "id": TASK_ID,
         "title": _s("A new title; it is checked as a new task's title would be"),
-        "body": _s("A new body"),
         "due": _s("ISO-8601 date-time with timezone"),
         "labels": {"type": "array", "items": {"type": "string"}, "description": "Replace the labels"},
         "private": {
@@ -801,7 +847,7 @@ def task_list(api, args):
 )
 def task_update(api, args):
     body = {"version": _seen(args)}
-    for field in ("title", "body", "due", "labels", "private", "goal_id", "note"):
+    for field in ("title", "due", "labels", "private", "goal_id", "note"):
         if args.get(field) is not None:
             body[field] = args[field]
     if args.get("human") is not None:
@@ -843,9 +889,9 @@ def _roles(api, args):
 
 @tool(
     "tico_task_queue",
-    "Queue again: on the Merge stage, after GitHub took a PR out of the merge queue (or refused it), put it back at "
-    "its newest commit. Refused while its checks are running or failing there. Push a fix to the PR branch first when "
-    "it needs one; or move the task back instead.",
+    "Queue again: on the Merge stage, after GitHub took a PR out of the merge queue (or refused "
+    "it), put it back at its newest commit. Refused while its checks are running or failing "
+    "there. Push a fix to the PR branch first when it needs one; or move the task back instead.",
     {"id": TASK_ID, "version": VERSION, "on_behalf_of": ASKED},
     required=("id",),
     writes=True,
@@ -856,9 +902,10 @@ def task_queue(api, args):
 
 @tool(
     "tico_task_release",
-    "Cut the release a task in Release waits for: Tico runs the repository's release workflow, or creates the tag you "
-    "name where it releases from a tag, through its GitHub App. One release covers every task waiting on that "
-    "repository. Refused before a person signed the task off, and while an earlier ask still waits for its release.",
+    "Cut the release a task in Release waits for: Tico runs the repository's release workflow, or "
+    "creates the tag you name where it releases from a tag, through its GitHub App. One release "
+    "covers every task waiting on that repository. Refused before a person signed the task off, "
+    "and while an earlier ask still waits for its release.",
     {
         "id": TASK_ID,
         "tag": {"type": "string", "description": "The release's tag, where the repository releases from a tag"},
@@ -1045,3 +1092,414 @@ def task_comment_moderate(api, args):
     return api.post(
         f"tasks/{args['id']}/comments/{args['comment_id']}/moderate", {'action': args['action']}, key=_key(args)
     )
+
+
+def _call(client, name, fields, unwrapped=False):
+    """remotecli.call_tool: the tool with the request's operation id, sent only when HUB_OPERATION_ID is set. A write that
+    answers only `{"task": ...}` prints the task alone (remotecli.unwrap) when `unwrapped`."""
+    from clients import hubtools
+    from clients.remotecli import unwrap
+
+    key = os.environ.get("HUB_OPERATION_ID")
+    answer = hubtools.BY_NAME[name]["fn"](client, {**fields, "operation_id": key} if key else fields)
+    return unwrap(answer) if unwrapped else answer
+
+
+def _via(name):
+    """remotecli.via_tool for a write that answers `{"task": ...}` alone: the spec's arguments, the task printed."""
+
+    def run(client, fields):
+        return _call(client, name, fields, unwrapped=True)
+
+    return run
+
+
+def _place(text):
+    """ "Backlog/On ice" as (pipeline, stage); "Backlog" alone is (pipeline, None)."""
+    pipeline, _, stage = str(text).partition("/")
+    return pipeline.strip(), stage.strip() or None
+
+
+def _from_place(fields, from_place, shift):
+    """--from "Pipeline/Stage" in place of a task: the tool's from_pipeline and from_stage. With it the first positional
+    is the next one's (`shift`: `tico task move --from Dev/Ideas closed`, `tico task reassign --from Dev/Ideas ana`)."""
+    from clients.tico import APIError
+
+    if not from_place:
+        return
+    fields["from_pipeline"], fields["from_stage"] = _place(from_place)
+    if not fields["from_stage"]:
+        raise APIError("validation", '--from names a stage: "Pipeline/Stage"', 422)
+    if shift and fields.get("id") and not fields.get(shift):
+        fields[shift] = fields.pop("id")
+    if fields.get("id"):
+        raise APIError("validation", "Give a task, or --from, not both", 422)
+
+
+def _move(client, fields, to_place=None, from_place=None):
+    """`tico task move` with --to "Pipeline/Stage" (another pipeline) or --from "Pipeline/Stage" (a stage's open
+    tasks): the tool's to_pipeline, to, from_pipeline and from_stage."""
+    from clients.tico import APIError
+
+    if to_place:
+        if fields.get("to"):
+            raise APIError("validation", 'Give the stage in --to "Pipeline/Stage", not as well after the task', 422)
+        fields["to_pipeline"], to = _place(to_place)
+        if to:
+            fields["to"] = to
+    _from_place(fields, from_place, None if to_place else "to")
+    if not from_place and not fields.get("id"):
+        raise APIError("validation", 'Say which task, or --from "Pipeline/Stage"', 422)
+    if from_place and not fields.get("to") and not fields.get("to_pipeline"):
+        raise APIError("validation", 'Say where they go: a stage, done or closed, or --to "Pipeline/Stage"', 422)
+    return _call(client, "tico_task_move", {k: v for k, v in fields.items() if v is not None}, unwrapped=True)
+
+
+def _from_stage_via(name, shift):
+    """A task write that also takes --from "Pipeline/Stage": every open task there in place of one."""
+
+    def run(client, fields, from_place=None):
+        _from_place(fields, from_place, shift)
+        return _call(client, name, {k: v for k, v in fields.items() if v is not None}, unwrapped=True)
+
+    return run
+
+
+FROM_ARG = Arg(
+    "from_place",
+    "--from",
+    local=True,
+    metavar="PIPELINE/STAGE",
+    help="every open task in this stage, in place of an id",
+)
+
+
+def _show(client, fields, **_local):
+    """`tico task show ID ...`: one task, or several in one read (tico_task_show_many). `--json` is local: it shapes
+    what prints (remotecli), so it is taken here and never sent."""
+    from clients import hubtools
+
+    ids = fields["id"] if isinstance(fields["id"], list) else [fields["id"]]
+    if len(ids) > 1:
+        return hubtools.BY_NAME["tico_task_show_many"]["fn"](client, {"ids": ids})
+    return hubtools.task_show(client, {"id": ids[0]})
+
+
+def _label(client, fields):
+    """`tico task label`: --add and --remove take comma-separated lists, and both are always sent."""
+
+    def split(values):
+        return [x.strip() for one in values or [] for x in one.split(",") if x.strip()]
+
+    return _via("tico_task_label")(
+        client, {**fields, "add": split(fields.get("add")), "remove": split(fields.get("remove"))}
+    )
+
+
+def _link(client, fields):
+    """`tico task link`: the URL and title, `kind` session with --session, and the wake switch when it was given."""
+    sent = {"id": fields["id"], "url": fields["url"], "title": fields.get("title")}
+    if fields.get("kind"):
+        sent["kind"] = fields["kind"]
+    if fields.get("wake_once") is not None:  # --no-wake-once sends false, as the hand parser did
+        sent["wake_once"] = fields["wake_once"]
+    if fields.get("on_behalf_of"):
+        sent["on_behalf_of"] = fields["on_behalf_of"]
+    return _call(client, "tico_task_link", sent, unwrapped=True)
+
+
+# `tico task ...` (clients/cli_spec.py): the flags come from each tool's schema. A flag the schema does not name is left
+# out with `omit`. `-m` and `--why` (or `--note`) are one flag spelled twice. A write that answers `{"task": ...}` alone
+# prints the task (`_via`). The hand parser keeps the leaves clients/hubcli.py names: their arguments are not the tool's.
+TASK = (
+    Group("task", aliases=("tasks",)),
+    Command("task tree", "show nested subtasks", example="tico task tree T1"),
+    Command(
+        "task caps",
+        "the task caps: today's count per pair, the tasks closed before the receiver acted, and the changes bots asked for",
+        example="tico task caps",
+    ),
+    Group("task cap", "set a task cap: how many tasks sender may create for receiver a day"),
+    Command(
+        "task cap set",
+        "sender receiver --per-day N; 0 blocks the pair, and with no --per-day the cap is removed",
+        args=(Arg("per_day", "--per-day", default=NULL, required=False),),
+        example="tico task cap set bot:ana bot:ben --per-day 5",
+    ),
+    Command(
+        "task requesters",
+        "a task's requesters: internal contacts and counts, never tokens",
+        example="tico task requesters T1 --limit 5",
+    ),
+    Command(
+        "task requester-save",
+        "save a requester on a task: a person or organization, its contact details and a note",
+        args=(
+            Arg("important", "--important", action="store_const", const=True),
+            Arg("important", "--no-important", action="store_const", const=False),
+        ),
+        example="tico task requester-save T1 --name 'Ana Lopes' --email ana@example.com",
+    ),
+    Command("task requester-remove", "take a requester off a task", example="tico task requester-remove T1 R1"),
+    Command(
+        "task comment-moderate",
+        "hide, show again or delete a public comment on a task you manage",
+        example="tico task comment-moderate T1 C1 hide",
+    ),
+    Command(
+        "task comment-edit",
+        "change the text of a comment you wrote; it wakes nobody",
+        example="tico task comment-edit T1 C1 'Fixed wording'",
+        run=lambda client, f: _call(
+            client,
+            "tico_task_comment_edit",
+            {
+                "id": f["id"],
+                "comment_id": f["comment_id"],
+                "text": f["text"],
+                **({"ok": f["ok"]} if f.get("ok") else {}),
+            },
+        ),
+    ),
+    Command(
+        "task comment-delete",
+        "take back a comment you wrote",
+        example="tico task comment-delete T1 C1",
+        run=lambda client, f: _call(client, "tico_task_comment_delete", {"id": f["id"], "comment_id": f["comment_id"]}),
+    ),
+    Command(
+        "task delete",
+        "delete a task made by mistake: its requester or a mover, never a bot",
+        example="tico task delete T1",
+        run=lambda client, f: _call(client, "tico_task_delete", {"id": f["id"]}, unwrapped=True),
+    ),
+    Command(
+        "task deleted",
+        "deleted tasks you may restore, newest first",
+        example="tico task deleted",
+        run=lambda client, f: _call(client, "tico_task_deleted", {}),
+    ),
+    Command(
+        "task restore",
+        "put a deleted task back: whoever deleted it, its requester or a mover",
+        example="tico task restore T1",
+        run=lambda client, f: _call(client, "tico_task_restore", {"id": f["id"]}, unwrapped=True),
+    ),
+    Group("task readers", "who can see a private task: list, add, remove"),
+    Command("task readers list", "its requester, owner and readers", example="tico task readers list T1"),
+    Command(
+        "task readers add",
+        "let them see it: people, bots or group:<id>s",
+        args=(Arg("readers", action="store", nargs="+"),),
+        example="tico task readers add T1 human:ana",
+    ),
+    Command(
+        "task readers remove",
+        "take them off: they stop seeing it",
+        args=(Arg("readers", action="store", nargs="+"),),
+        example="tico task readers remove T1 human:ana",
+    ),
+    Command("task followers", "who follows a task, each at their level", example="tico task followers T1"),
+    Command(
+        "task follow",
+        "follow a task, or set your level",
+        args=(Arg("who", "--who"),),
+        omit=("unfollow",),
+        example="tico task follow T1 --level digest",
+    ),
+    Command(
+        "task unfollow",
+        "stop following a task",
+        tool="tico_task_follow",
+        fixed=(("unfollow", True),),
+        omit=("level",),
+        args=(Arg("who", "--who"),),
+        example="tico task unfollow T1",
+    ),
+    Command("task context", "readable page and meeting references for a task", example="tico task context T1"),
+    Command("task meetings", "meetings linked to a task", example="tico task meetings T1 --limit 5"),
+    Command(
+        "task list",
+        "the tasks you may see, newest first",
+        args=(
+            Arg("status", "--status", choices=("open", "done", "closed")),
+            Arg("snoozed", "--snoozed", choices=("only", "all")),
+        ),
+        example="tico task list --status open --limit 10",
+    ),
+    Command(
+        "task show",
+        "a task: its state, its asks and the next steps (--json for the whole record)",
+        args=(
+            Arg("id", nargs="+"),
+            Arg("json", "--json", action="store_true", local=True, help="print the whole task as JSON, not text"),
+        ),
+        example="tico task show T1",
+        run=_show,
+    ),
+    Command(
+        "task run",
+        "start a bot's task now, as the task",
+        example="tico task run T1",
+        run=lambda client, f: _call(client, "tico_task_run", {"id": f["id"]}, unwrapped=True),
+    ),
+    Command(
+        "task model",
+        "the model a bot-owned task's runs use; no model shows it",
+        args=(Arg("model", positional=True, nargs="?"),),
+        omit=("on_behalf_of",),
+        example="tico task model T1 gpt-6.1-sol --effort high",
+    ),
+    Command(
+        "task child",
+        "create a subtask",
+        tool="tico_task_child_create",
+        args=(
+            Arg("title", "--title"),
+            Arg("message", default=""),
+            Arg("check_model", "--check-model", nargs="?", const="auto", metavar="RUNTIME[:MODEL]"),
+            Arg("check_role", "--role"),
+        ),
+        example="tico task child T1 --title 'Check the copy'",
+    ),
+    Command(
+        "task snooze",
+        "snooze a task until a time, with why; --from \"Pipeline/Stage\" snoozes every open task there",
+        args=(Arg("id", positional=True, nargs="?"), FROM_ARG, Arg("why", "-m"), Arg("why", "--why")),
+        omit=("from_pipeline", "from_stage"),
+        example="tico task snooze T1 --until 2026-12-01 -m 'waiting on the vendor'",
+        run=_from_stage_via("tico_task_snooze", None),
+    ),
+    Command(
+        "task unsnooze",
+        "a person brings a snoozed task back now; its owner is woken once",
+        args=(Arg("why", "-m"), Arg("why", "--why")),
+        example="tico task unsnooze T1",
+        run=_via("tico_task_unsnooze"),
+    ),
+    Command(
+        "task queue",
+        "queue again: put the PRs GitHub took out of the merge queue back in it",
+        example="tico task queue T1 --version 3",
+        run=_via("tico_task_queue"),
+    ),
+    Command(
+        "task release",
+        "cut the release a task in Release waits for, the way the repository makes one",
+        example="tico task release T1",
+        run=_via("tico_task_release"),
+    ),
+    Command(
+        "task unlink",
+        "take a link off a task: a PR closed without merging, by its URL or id",
+        example="tico task unlink T1 https://github.com/acme/app/pull/12",
+        run=_via("tico_task_unlink"),
+    ),
+    Command(
+        "task done",
+        "the work of this stage is finished; never pushes past what is missing",
+        args=(Arg("note", "-m"), Arg("note", "--note")),
+        example="tico task done T1 -m 'Shipped the fix'",
+        run=_via("tico_task_done"),
+    ),
+    Command(
+        "task move",
+        "move a task: next (with -m, past what is not met), back to a stage, done, closed or reopen; "
+        '--to "Pipeline/Stage" moves it to another pipeline, --from "Pipeline/Stage" moves (or closes) every open task there',
+        args=(
+            Arg("id", positional=True, nargs="?"),
+            Arg("to", positional=True, nargs="?"),
+            Arg(
+                "to_place",
+                "--to",
+                local=True,
+                metavar="PIPELINE/STAGE",
+                help="another pipeline, and its stage after a / (its first when left out): the task keeps its label",
+            ),
+            FROM_ARG,
+            Arg("why", "-m"),
+            Arg("why", "--why"),
+        ),
+        omit=("to_pipeline", "from_pipeline", "from_stage"),
+        example="tico task move T1 review -m 'Ready for review'",
+        run=_move,
+    ),
+    Command(
+        "task close",
+        "close a task with why; its open sub-tasks close with it",
+        args=(Arg("why", "-m"), Arg("why", "--why")),
+        example="tico task close T1 -m 'Duplicate of T2'",
+        run=_via("tico_task_close"),
+    ),
+    Command(
+        "task reassign",
+        "give the task to another bot or person for this stage; --from \"Pipeline/Stage\" gives every open task there",
+        args=(
+            Arg("id", positional=True, nargs="?"),
+            Arg("owner", positional=True, nargs="?"),
+            FROM_ARG,
+            Arg("why", "-m"),
+            Arg("why", "--why"),
+        ),
+        omit=("from_pipeline", "from_stage"),
+        example="tico task reassign T1 bot:ana -m 'Ana has the data'",
+        run=_from_stage_via("tico_task_reassign", "owner"),
+    ),
+    Command(
+        "task answer",
+        "answer what you are asked on a task: ok, no, again or your answer",
+        args=(Arg("note", "-m"), Arg("note", "--note")),
+        example="tico task answer T1 R1 ok",
+        run=_via("tico_task_answer"),
+    ),
+    Command(
+        "task file",
+        "file a task under a parent: it waits until that one ends",
+        args=(
+            Arg("parent", "--parent"),
+            Arg("labels", "--label", action="append"),
+            Arg("private", "--private", action="store_const", const=True),
+        ),
+        example="tico task file 'Write the summary' --parent T1",
+        run=_via("tico_task_file"),
+    ),
+    Command(
+        "task update",
+        "edit a task's fields: title, due, labels, privacy, goal; with --version",
+        args=(
+            Arg("note", "-m"),
+            Arg("note", "--note"),
+            Arg("labels", "--label", action="append"),
+            Arg("goal_id", "--goal"),
+            Arg("private", "--private", action="store_const", const=True),
+            Arg("private", "--company", action="store_const", const=False),
+        ),
+        omit=("human",),
+        example="tico task update T1 --title 'Launch the beta' --version 2",
+        run=_via("tico_task_update"),
+    ),
+    Command(
+        "task label",
+        "add or remove labels on a task",
+        args=(Arg("add", "--add", action="append"), Arg("remove", "--remove", action="append")),
+        example="tico task label T1 --add launch",
+        run=_label,
+    ),
+    Command(
+        "task after",
+        "this task merges after another: <id> <task>; Merge waits for it",
+        example="tico task after T1 T2",
+        run=_via("tico_task_after"),
+    ),
+    Command(
+        "task link",
+        "attach a link: the pull request you opened, an issue, a document, a session",
+        args=(
+            Arg("kind", "--session", action="store_const", const="session"),
+            Arg("wake_once", "--wake-once", action="store_const", const=True),
+            Arg("wake_once", "--no-wake-once", action="store_const", const=False),
+        ),
+        example="tico task link T1 https://github.com/acme/app/pull/12 --title 'Fix PR'",
+        run=_link,
+    ),
+)

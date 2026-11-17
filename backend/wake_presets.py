@@ -41,7 +41,6 @@ else was said in between, so the same words sent again after an answer are a new
 """
 
 import json
-import logging
 
 from . import hubdb as H
 from . import bot_settings as BS
@@ -135,27 +134,8 @@ _RETIRED_OPTIONS = ("batch_seconds", "batch_scope", "sweep_seconds")
 
 
 def ensure(c):
-    """The hold's columns and trigger, and the move off the wake presets. Unversioned like the other job columns: an
-    older release never reads them, and the trigger is rebuilt whenever its text changes."""
-    H.add_column(c, "jobs", "wake_preset", "TEXT")
-    H.add_column(c, "jobs", "wake_class", "TEXT")
-    H.add_column(c, "jobs", "held", "INTEGER NOT NULL DEFAULT 0")
-    H.add_column(c, "jobs", "hold_until", "TEXT")
-    # Why a claim holds a job it could not start, its Needs-you item, and how many tries in a row failed
-    # (backend/claim_holds.py). Unversioned like the others: an older release never reads them.
-    H.add_column(c, "jobs", "hold_reason", "TEXT")
-    H.add_column(c, "jobs", "hold_task_id", "TEXT")
-    H.add_column(c, "jobs", "hold_streak", "INTEGER NOT NULL DEFAULT 0")
-    # The job whose turn carried this one's notice (a batch's newest, or its digest), for `measures`.
-    H.add_column(c, "jobs", "wake_carrier", "TEXT")
-    # The release policy's own columns (`release`, `release_after`, `released`) come from migration
-    # 20261113061438_job_release_policy, and from store.SCHEMA on a new file.
-    c.execute("CREATE INDEX IF NOT EXISTS jobs_held ON jobs(bot_id,hold_until) WHERE held=1")
-    # The few held jobs still queued, in claim order: what tick reads every pass under the write lock (HELD_*_SQL).
-    c.execute("CREATE INDEX IF NOT EXISTS jobs_held_queued ON jobs(created_at, id) WHERE held=1 AND state='queued'")
-    # The duplicate check seeks a room's messages before the new one by rowid (the index's implicit suffix), not a walk
-    # through every earlier message from the same sender in every room.
-    c.execute("CREATE INDEX IF NOT EXISTS messages_room_rowid ON messages(conversation_id)")
+    """The hold's trigger, rebuilt whenever its text changes, and the move off the wake presets. The hold's columns
+    and indexes are in the schema (backend/migrations)."""
     stored = c.execute("SELECT sql FROM sqlite_master WHERE type='trigger' AND name='wake_preset_hold'").fetchone()
     if not stored or stored[0] != HOLD_TRIGGER:
         c.execute("DROP TRIGGER IF EXISTS wake_preset_hold")
@@ -266,22 +246,13 @@ def sweep_key(refs):
     return str(refs.get("automation") or refs.get("sweep") or refs.get("task") or "")
 
 
-def release_quota_resets(c, at=None):
-    """A quota retry keeps its job and becomes claimable at the reset even between scheduler ticks."""
-    c.execute(
-        "UPDATE jobs SET held=0 WHERE held=1 AND state='queued' AND wake_class='quota-reset' "
-        "AND hold_reason IS NULL AND hold_until<=?",
-        (at or H.now(),),
-    )
-
-
 # Read on every scheduler tick under the write lock. INDEXED BY jobs_held_queued: the planner otherwise scans
 # messages and seeks each job, because the stale sqlite_stat1 row for messages (16k rows when analysed, 72k
 # now) makes that look cheapest. 40-44 ms a tick on TIDY v0.5.1, 480 ticks an hour.
 HELD_NEW_SQL = (
     "SELECT j.id,j.bot_id,j.wake_class,j.created_at,j.release,m.conversation_id,m.refs "
     "FROM jobs j INDEXED BY jobs_held_queued JOIN messages m ON m.id=j.message_id "
-    "WHERE j.held=1 AND j.hold_until IS NULL AND j.hold_reason IS NULL AND j.state='queued' "
+    "WHERE j.held=1 AND j.hold_until IS NULL AND j.state='queued' "
     "ORDER BY j.created_at,j.id"
 )
 HELD_DUE_SQL = (
@@ -289,15 +260,14 @@ HELD_DUE_SQL = (
     "m.conversation_id,m.refs "
     "FROM jobs j INDEXED BY jobs_held_queued JOIN messages m ON m.id=j.message_id "
     "WHERE j.held=1 AND j.state='queued' AND j.hold_until IS NOT NULL AND j.hold_until<=? "
-    "AND j.hold_reason IS NULL ORDER BY j.created_at,j.id"
+    "ORDER BY j.created_at,j.id"
 )
 
 
 def tick(c, at=None):
     """The one release check. Plan each newly held job's Due, then let go of what is due: a notice batch at its Due, a
     policy job at Due when it does not prefer warm, in the bot's warm window when it does, and at its deadline cold or
-    skipped; then keep active task sessions warm (backend/keep_warm.py, once a minute). Runs in the scheduler's write
-    transaction every tick."""
+    skipped. Runs in the scheduler's write transaction every tick."""
     at = at or H.now()
     hours = {}
     for job in c.execute(HELD_NEW_SQL).fetchall():
@@ -320,12 +290,8 @@ def tick(c, at=None):
                 (_batch_slot(c, job, _digest_hour(c, job["bot_id"], hours)), job["id"]),
             )
     groups, waiting = {}, {}
-    # A run a claim holds (backend/claim_holds.py) has a wait of its own, and only its claim releases it.
     for job in c.execute(HELD_DUE_SQL, (at,)).fetchall():
-        if job["wake_class"] == "quota-reset":
-            # A quota retry is the same job, not news to batch, fold into another request or turn into a digest.
-            c.execute("UPDATE jobs SET held=0 WHERE id=?", (job["id"],))
-        elif job["wake_class"] in POLICY_CLASSES:
+        if job["wake_class"] in POLICY_CLASSES:
             waiting.setdefault(job["bot_id"], []).append(job)
         else:
             per_bot = _digest_hour(c, job["bot_id"], hours) is not None
@@ -334,17 +300,6 @@ def tick(c, at=None):
         _release(c, bot, jobs)
     for bot, jobs in waiting.items():
         _release_policy(c, bot, jobs, at)
-    # Task sessions in an active stage that reach the warm window get their one-line turn (backend/keep_warm.py). Its
-    # own savepoint: a keep-warm that fails is logged and never undoes the releases above.
-    from . import keep_warm
-
-    c.execute("SAVEPOINT keep_warm")
-    try:
-        keep_warm.sweep(c, at)
-    except Exception:  # noqa: BLE001 - keep-warm is a saving, never a reason to hold the release check
-        c.execute("ROLLBACK TO keep_warm")
-        logging.getLogger("tico.keep_warm").warning("keep warm sweep failed", exc_info=True)
-    c.execute("RELEASE keep_warm")
 
 
 def _repeat_slot(c, job, due):
@@ -489,8 +444,7 @@ def _close_task(c, job, why):
 def replan(c, bot):
     """Plan the bot's held jobs again from when they were queued (the migration off the presets)."""
     c.execute(
-        "UPDATE jobs SET hold_until=NULL,release_after=NULL WHERE bot_id=? AND held=1 AND state='queued' "
-        "AND coalesce(wake_class,'')<>'quota-reset' AND hold_reason IS NULL",
+        "UPDATE jobs SET hold_until=NULL,release_after=NULL WHERE bot_id=? AND held=1 AND state='queued'",
         (bot,),
     )
 
@@ -536,7 +490,7 @@ def _batch_slot(c, job, hour):
     waiting = c.execute(
         "SELECT min(j.hold_until) FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=? "
         f"AND j.held=1 AND j.state='queued' AND j.hold_until IS NOT NULL AND j.wake_class IN ({kinds}) "
-        "AND j.hold_reason IS NULL AND (? OR m.conversation_id=?)",
+        "AND (? OR m.conversation_id=?)",
         (job["bot_id"], per_bot, job["conversation_id"]),
     ).fetchone()[0]
     if waiting:

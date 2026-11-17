@@ -122,7 +122,8 @@ def make_view(api):
         task(f"Plain task {i}", owner=["ben", "cara", "ops"][i % 3], token=["ana-test", "ben-test"][i % 2])
     pushed = task("Guest checkout", labels=["ui"])
     post(api, f"tasks/{pushed['id']}/move", {"to": "build", "why": "The spec is in the PR"})
-    late = task("Late one in spec", owner="cara")
+    # A person's task is Late only past its due date, so this one is past it.
+    late = task("Late one in spec", owner="cara", due=H.shift(now, days=-1))
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE visits SET late_told_at=? WHERE task_id=? AND left_at IS NULL", (now, late["id"]))
     secret = task("Secret latency plan", private=True, labels=["perf"])

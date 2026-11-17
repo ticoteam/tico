@@ -45,70 +45,6 @@ def assert_no_page(api):
         assert not c.execute("SELECT 1 FROM bot_file_versions").fetchone()
 
 
-def test_old_runner_never_claims_make_page_and_upgrade_recovers_the_same_request(api):
-    from runner_support.state import session_key
-
-    t = task(api, private=False)
-    machine, private = assistant_turn(api, "ben-test", text="PRIVATE_MARKER")
-    post(api, f"attempts/{private['id']}/started", {"thread_id": "private-provider-session"}, machine["token"])
-    post(api, f"attempts/{private['id']}/complete", {"outcome": "completed", "last_seq": 0}, machine["token"])
-    sent = post(
-        api, f"tasks/{t['id']}/make-page", {"text": "Make a plan with the previously discussed marker"}, "ben-test"
-    )["message"]
-    # Rechecking the retryable card preserves the queued request and never creates a provider turn on the old runner.
-    for _ in range(2):
-        assert post(api, "jobs/claim", {"next_run": True}, machine["token"])["attempt"] is None
-        assert status(api, t["id"]) == {
-            "message_id": sent["id"],
-            "conversation_id": sent["conversation_id"],
-            "state": "update_required",
-        }
-    with api.app.state.store.read() as c:
-        job = c.execute("SELECT state,held,attempt_id FROM jobs WHERE message_id=?", (sent["id"],)).fetchone()
-        assert tuple(job) == ("queued", 0, None)
-        assert [r[0] for r in c.execute("SELECT id FROM attempts WHERE bot_id='assistant'")] == [private["id"]]
-    ready(
-        api,
-        machine,
-        ["assistant"],
-        capabilities=[
-            "task_lanes_v2",
-            "session_roots_v1",
-            "task_goals_v1",
-            "capacity_continue_v1",
-            "source_continue_v1",
-            "model_sign_out_v1",
-            "model_keys_v1",
-            "model_switch_type_v1",
-            "model_remove_v1",
-            "model_switch_to_key_v1",
-            "model_connect_v1",
-            "turns_at_once_v1",
-            "private_lanes_v1",
-            "model_subscriptions_v1",
-            "model_subscription_activation_v1",
-            "browser_exit_v1",
-            "threads_v1",
-            "harness_allocation_v1",
-            "make_page",
-            "computer_logins_v1",
-            "screen_v1",
-        ],
-    )
-    claimed = post(api, "jobs/claim", {"next_run": True}, machine["token"])["attempt"]
-    assert claimed["message"]["id"] == sent["id"]
-    assert claimed["make_page"]["task"]["id"] == t["id"]
-    assert [m["id"] for m in claimed["history"]] == [sent["id"]]
-    assert "PRIVATE_MARKER" not in json.dumps(claimed)
-    assert not claimed.get("continue_thread")
-    assert session_key(claimed["config"], claimed) != session_key(private["config"], private)
-    assert status(api, t["id"])["state"] == "making"
-    post(api, f"attempts/{claimed['id']}/started", {"thread_id": "fresh-page-session"}, machine["token"])
-    made = page(api, claimed, task=t["id"])
-    assert made.status_code == 200, made.text
-    assert status(api, t["id"])["state"] == "made"
-
-
 def test_make_page_files_and_pins_clean_html_as_the_person_with_authenticated_attempt(api):
     t = task(api, private=False)
     mid = record(api, {"private": False})
@@ -349,8 +285,6 @@ def test_mcp_offers_page_publish_to_the_assistant_and_keeps_the_person_and_attem
 
 
 def test_make_page_keeps_private_chat_history_and_other_queued_work_out_of_the_turn(api):
-    from runner_support.state import session_key
-
     t = task(api, private=False)
     earlier = say(api, "Private chat content unrelated to this task", "ben-test")["message"]
     with api.app.state.store.transaction() as c:
@@ -370,10 +304,7 @@ def test_make_page_keeps_private_chat_history_and_other_queued_work_out_of_the_t
     assert [m["id"] for m in attempt["history"]] == [message["id"]]
     assert attempt["next_run"] == [] and attempt["notes"] == []
     assert attempt["deferred"] == "" and attempt["chat_goal"] is None
-    key = session_key({"session": "bot"}, attempt)
-    assert key == "make-page:" + attempt["id"]
-    ordinary = {k: v for k, v in attempt.items() if k != "make_page"}
-    assert session_key({"session": "bot"}, ordinary) != key
+    assert isinstance(attempt["make_page"]["task"], dict)
     say(api, "An unrelated private follow-up", "ben-test")
     assert post(api, f"attempts/{attempt['id']}/inputs", {}, machine["token"])["messages"] == []
     with api.app.state.store.read() as c:
@@ -481,7 +412,7 @@ def test_make_page_does_not_fall_back_to_bot_rights_after_person_loses_sign_in(a
     assign(api, machine, "assistant")
     ready(api, machine, ["assistant"], capabilities=["make_page"])
     request = post(api, f"tasks/{t['id']}/make-page", {"text": "Make the plan"}, "ben-test")["message"]
-    post(api, "access/people/ben", {"sign_in": False})
+    post(api, "access/humans/ben", {"sign_in": False})
     assert post(api, "jobs/claim", {"next_run": True}, machine["token"])["attempt"] is None
     with api.app.state.store.read() as c:
         assert not c.execute(
@@ -593,9 +524,9 @@ def test_cached_make_page_claim_requires_the_current_person_and_computer(api):
     t = task(api, private=True)
     machine, attempt, sent = start(api, t["id"])
     key, body = "claim:" + sent["id"], {"next_run": True}
-    post(api, "access/people/ben", {"sign_in": False})
+    post(api, "access/humans/ben", {"sign_in": False})
     post(api, "jobs/claim", body, machine["token"], key, expected=403)
-    post(api, "access/people/ben", {"sign_in": True})
+    post(api, "access/humans/ben", {"sign_in": True})
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0}, machine["token"])
     other = runner(api)
     assign(api, other, "assistant", generation=attempt["generation"])

@@ -101,8 +101,7 @@ def install(app, store, auth, mutate):
             found["sending_policy"] = effective(c, bot=bot)
             # What Tico may do in Tools is the company's own switch over every bot's: with Send mail off
             # every send is refused (backend/mailbox_access.py caps `send`), and the bot reads sending as off.
-            # Organize mail and Change calendar gate the connector's other writes the same way, whichever credential it
-            # holds (connectors/mail/oauth.py company_allows).
+            # Organize mail and Change calendar gate Tico's other writes the same way, whichever credential it holds.
             from .google_workspace import permissions
 
             may = permissions(c)

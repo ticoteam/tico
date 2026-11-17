@@ -22,8 +22,9 @@ Rules:
   Do not list them. Access to another bot's or a product repository still needs a declaration.
 - Messages to outsiders (`send`, `post`, `publish`) follow the bot's sending policy in Tico (Settings > Bots > <bot> > Email sending: On their own, Ask first or Never), never a line in `bot.yaml`. Every email goes through Tico's send queue, which decides it; under Ask first a person approves it in Tico. Act within the requested work and the declared Tools. Spending follows the requested budget and Tools; it does not depend on the sending policy.
 - The secret named in `env` lives in `~/tico-work/secrets/<slug>.env` on the machine that runs
-  the team. If it is missing, the app shows "not connected" and the bot asks a person on its
-  task (`tico task ask`) rather than improvise.
+  the team. If it is missing, the app shows "not connected" and the bot files it for BotOps
+  (`tico task file --parent <id> --owner botops "<title>"`), which asks the person who can fix it, rather than
+  improvise. Never ask people about your own setup yourself.
 - A value in that file may be a 1Password reference instead of the secret itself:
   `UPFLUENCE_PASSWORD=op://vault/item/field`. The runner reads it from
   the **Acme Bots** vault at the start of the turn with a read-only service account
@@ -34,10 +35,10 @@ Rules:
   `gmail` entry with `send` in `can`. No entry means the bot cannot email anyone from any address.
 - Calendar appointments are a team-wide capability for every bot, separate from Gmail access.
   Every address in `registry/people.yaml` may be read or scheduled through the guarded Hub tools
-  or mail CLI; a Gmail `read_only: true` entry does not restrict calendar use:
-  `tico_calendar_list` reads the connector's bounded snapshot and `tico_calendar_schedule`
-  queues an audited provider action. `tico_calendar_status` must say `succeeded` before the bot
-  claims the event exists. `mail calendar add|list|get` is the direct audited path on the runner.
+  or `tico calendar`; a Gmail `read_only: true` entry does not restrict calendar use:
+  `tico_calendar_list` reads the calendar live and `tico_calendar_schedule`
+  makes an audited booking. `tico_calendar_status` must say `succeeded` before the bot
+  claims the event exists.
   Invitations may include guests outside the team (the owner can turn that off with
   `TICO_BLOCK_EXTERNAL_INVITES=1`, which limits bots to roster attendees). This standing grant does
   not add Gmail read, draft or send authority.
@@ -45,19 +46,16 @@ Rules:
   every bot. There is no separate incoming-attachment permission; outbound attachment
   restrictions remain unchanged.
 - A Gmail entry may set `read_only: true` to restrict `read` to reading messages and downloading
-  attachments. This refuses labels, archive, mark-read, star, rules, drafts, and sends even if
+  attachments. This refuses labels, archive, mark-read, star, drafts, and sends even if
   another verb is accidentally listed. Without this flag, existing `read` permissions retain
-  their mailbox-filing behavior. An optional top-level `default_mailbox` selects one declared
-  mailbox when a CLI command omits `--mailbox`; it grants no additional access. Without it, a
-  command with no `--mailbox` acts as the one gmail identity the manifest declares; org-tree
-  reads (below) never become the default, and two declared identities make `--mailbox` required.
+  their mailbox-filing behavior. Every `tico email` command names its mailbox; there is no
+  default mailbox.
 - A person's `inbox_bot` in `registry/people.yaml` may read that person's mailbox only. A gmail
   entry may set `org_read: true` to also read everyone who reports to that identity's person
   (`reports_to`); without it, reports' mail is refused, for the mail command and for the
-  runner's token. Draft and send stay on the declared mailbox. Each mailbox has
-  its own rules in `registry/mail-rules.yaml`. `mail inbox --all-mailboxes` and
-  `mail rules run --all-mailboxes` walk the tree. Marketing, skip-list, and notification rules
-  file noise before a model reads anything.
+  runner's token. Draft and send stay on the declared mailbox. Each person's inbox has its
+  own Message automation on the server, whose rules file marketing, notifications and other
+  noise before a model reads anything.
 - The browser is one service, `aside`, with two extra fields: `sites:` (the hosts the bot may open;
   subdomains count) and `can: [read]` or `[read, act]`. `read` is looking: snapshots, titles,
   screenshots. `act` is clicking, typing, and handing a task to Aside's agent. Logins are never a
@@ -68,5 +66,5 @@ Rules:
   channel in this list still needs to be on the Slack channel list (Settings > Tools > Slack channels) and Tico must
   be a member. Set `dms: false` when the role must not read the shared app's DM inbox; `inbox`
   enforces it from `--as <slug>` or `HUB_BOT`.
-- Changing `tools:` is a Tico-level decision: ask the owner on your task rather than editing
-  your own manifest.
+- Changing `tools:` is a Tico-level decision: file it for BotOps rather than editing your own
+  manifest.

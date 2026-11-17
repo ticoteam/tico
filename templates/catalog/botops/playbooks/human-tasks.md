@@ -1,7 +1,7 @@
 # Asks and tasks you put to a human
 
 What you put to a human is a "Needs you" item: a record to create, a person to add, a key to paste, a decision to make.
-It waits for one condition. A decision or an answer is an ask on your task. Real work that takes them time is a task they
+It waits for one condition. A decision or an answer is a ❓ on your task. Real work that takes them time is a task they
 own, filed under yours.
 
 Inputs: the condition the person must settle (a record, a person to add, a key, a decision) and who must settle it.
@@ -18,15 +18,16 @@ settled.
 ## How to write it
 Write it for someone busy who reads only the first line.
 - **The line, under 40 words:** what you need, your recommendation, and what you do after. No task IDs, commit SHAs,
-  command IDs or file paths there. Put evidence in the body or a report.
-- **An ask** names the person, on your task: `tico task ask <id> --to <person> "<what to do>" --version N`. For a refusal,
-  the line is its `fix` in plain words, one sentence plus its `link`, then what you do after ("Turn on GitHub access in
-  Settings? I'll finish the setup once it is on."). No command, path or tool name. Tico refuses an ask that has them.
+  command IDs or file paths there. Put evidence in a comment or a report.
+- **A ❓** names the person, on your task: `tico task ask <id> --to <person> "<what to do>"`. One per setup cause. For a
+  refusal or a Health check, the first line is its `fix` in plain words, then what you do after ("Turn on GitHub access
+  in Settings? I'll finish the setup once it is on."), and the `link` under it. No command, path or tool name in the
+  first line.
 - **A sub-task** for real work they must do: `tico task file --parent <id> "<the action, under 10 words>"`.
 
 ## Asking for yes or a choice
-Ask on the task: `tico task ask <id> --to <person> "<question>" [--choices a,b] --version N`. One open ask per task; asking
-again replaces it. The same question for several bots (a backup model for each) is one ask that names them all.
+Ask on the task: `tico task ask <id> --to <person> "<question>"`, with the options in the message. One open ❓ per task;
+asking again replaces it. The same question for several bots (a backup model for each) is one ❓ that names them all.
 
 ## The answer goes on the task
 Never tell a person to "message BotOps with ..." or to repeat a phrase in another chat. Their reply on the task is them asking.

@@ -1,5 +1,0 @@
-{
-  "backend/tests/test_claim_refusals.py": {
-    "F841": 2
-  }
-}

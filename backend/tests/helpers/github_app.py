@@ -50,6 +50,21 @@ EVENT_PERMISSIONS = {
 }
 
 
+def stateless_token(app_id=4242):
+    """A synthetic installation token in GitHub's stateless format (rolled out April to October 2026, the default since):
+    `ghs_<app id>_<JWT>`, about 520 characters with dots, dashes and underscores, where the old one was `ghs_` and 36
+    letters and digits. https://github.blog/changelog/2026-10-02-stateless-github-app-installation-tokens-rolled-out/"""
+    import base64
+    import secrets
+
+    def part(data):
+        return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+    header = part(json.dumps({"alg": "RS256", "typ": "JWT"}).encode())
+    payload = part(json.dumps({"iid": 77, "nonce": secrets.token_hex(24), "exp": int(time.time()) + 3600}).encode())
+    return f"ghs_{app_id}_{header}.{payload}.{part(secrets.token_bytes(256))}"
+
+
 def manifest_refusal(body):
     """What GitHub's Create GitHub App page says to a manifest it refuses, or "" for one it accepts."""
     permissions = body.get("default_permissions") or {}
@@ -88,6 +103,9 @@ class FakeGitHub:
         self.refuse_actions_write = False  # refuse Actions: write whatever the live permissions say
         self.refuse_workflows_write = False  # refuse Workflows: write whatever the live permissions say
         self.on_token = None  # called with each token request's body before it is answered
+        self.new_token = lambda: (
+            "ghs_" + uuid.uuid4().hex
+        )  # each installation token's value (stateless_token: GitHub's)
         self.accounts = {"acme": "Organization"}  # GET /users/{name}: lowercase login -> "User" or "Organization"
         self.account_status = None  # an int, or (int, headers): every account lookup answers that instead
         self.account_down = False  # every account lookup fails to connect
@@ -226,7 +244,7 @@ class FakeGitHub:
                 return httpx.Response(422, json={"message": "Repository is not in this selected installation"})
             exp = datetime.fromtimestamp(self.clock(), timezone.utc) + timedelta(seconds=self.ttl)
             return httpx.Response(
-                201, json={"token": "ghs_" + uuid.uuid4().hex, "expires_at": exp.strftime("%Y-%m-%dT%H:%M:%SZ")}
+                201, json={"token": self.new_token(), "expires_at": exp.strftime("%Y-%m-%dT%H:%M:%SZ")}
             )
         if path.startswith("/orgs/") and path.endswith("/repos"):
             repository = path.split("/")[2] + "/" + body["name"]

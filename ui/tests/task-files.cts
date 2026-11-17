@@ -76,7 +76,7 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
       };
     });
     const now = Date.now(), at = (mins: number) => new Date(now - mins * 60000).toISOString();
-    const me = {id: 'ana', name: 'Ana', email: 'ana@acme.example', role: 'owner', mover: true, cloud: false};
+    const me = {id: 'ana', name: 'Ana', email: 'ana@acme.example', role: 'owner', mover: true};
     const bots = [{name: 'editor', display_name: 'Editor', host: 'keeper', status: 'active', can_chat: true}];
     const url = (id: string, n: number, part = '') => `/api/v2/files/${id}${part}?v=${n}`;
     const version = (id: string, n: number, over: Record<string, unknown>) => ({n, size: 2048, mime: '', sha256: 'x' + n, created_at: at(200 - n * 30), by: 'bot:editor', comment_id: null, note: null,
@@ -101,9 +101,8 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
     const csv = 'shot,length\n' + Array.from({length: 260}, (_, i) => `s${i + 1},${i % 7 + 1}s`).join('\n');
     const task = {id: 't1', title: 'Cut the launch video', owner_id: 'bot:editor', requester_id: 'human:ana', status: 'review', lane: 'company', rank: 1,
       labels: [], links: [], parts: {total: 0, done: 0}, version: 4, created_at: at(400), updated_at: at(5), open_asks: 1,
-      body: 'Reference frame: ![frame](https://img.example.com/ref.png)\n\nMood: https://img.example.com/mood.jpg',
       attachments: [{id: 'f-frame', name: 'frame.png', content_type: 'image/png', size: 2048, url: '/api/v2/files/f-frame'}]};
-    const plain = {...task, id: 't2', title: 'Write the captions', status: 'doing', open_asks: 0, attachments: [], body: 'Captions for the cut.', updated_at: at(60)};
+    const plain = {...task, id: 't2', title: 'Write the captions', status: 'doing', open_asks: 0, attachments: [], updated_at: at(60)};
     // t2 is one Ana may read but not comment on; one of its questions was answered by an older runner: {by, text, at}
     const plainComments = [
       {id: 'p1', kind: 'ask', sender_id: 'bot:editor', body: 'Which tone?', created_at: at(50), answers: [{by: 'human:sam', text: 'Keep it warm and short.', at: at(40)}],
@@ -114,6 +113,8 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
     const plainFiles = [{id: 'f-notes', name: 'captions.md', mime: 'text/markdown', current_version: 1, archived: false,
       versions: [version('f-notes', 1, {mime: 'text/markdown', ask: {questions: [{id: 'ok', question: 'Good to go?', options: [{label: 'Yes'}, {label: 'No'}]}], who: null}})]}];
     const comments: CommentRow[] = [
+      // What the task asks is its first message: a task is a title and a chat.
+      {id: 'm0', kind: 'say', sender_id: 'human:ana', body: 'Reference frame: ![frame](https://img.example.com/ref.png)\n\nMood: https://img.example.com/mood.jpg', created_at: at(400), refs: {task: 't1', comment: true}},
       {id: 'm1', kind: 'say', sender_id: 'bot:editor', body: 'Second pass and a frame grab.', created_at: at(140), refs: {task: 't1', comment: true}},
       {id: 'm2', kind: 'ask', sender_id: 'bot:editor', body: 'Which music and thumbnail?', created_at: at(90), answers: [], refs: {task: 't1',
         questions: [{id: 'music', header: 'Music', question: 'Which tracks fit?', options: [{label: 'Upbeat'}, {label: 'Calm'}, {label: 'None'}], multi: true, other: true},
@@ -278,17 +279,21 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
     await page.evaluate(() => tfLoad($('#task-modal'), 't1'));
     await modal.locator('.tf-tile .tf-name', {hasText: 'mockup.png'}).waitFor({state: 'detached'});
     // a comment that carried files: a small thumb for the image, a chip for the video at its version
-    const tab = (name: string) => modal.locator(`[data-task-tab="${name}"]`).click();
+    // Details (what the task is first) is the head's icon, pressed while it shows; pressed again, the chat.
+    const tab = async (name: string) => {
+      const pressed = (await modal.locator('[data-task-tab="details"]').getAttribute('aria-pressed')) === 'true';
+      if (pressed !== (name !== 'chat')) await modal.locator('[data-task-tab="details"]').click();
+    };
     await tab('chat');
     const m1 = modal.locator('.tcomment', {hasText: 'Second pass and a frame grab.'});
     await m1.locator('.tc-thumb[data-tf-jump="f-frame"]').waitFor();
     assert.equal((await m1.locator('.tc-file[data-tf-jump="f-cut"]').textContent())!.replace(/\s+/g, ' ').trim(), 'VIDEOcut.mp4 v2');
     assert.equal(await m1.locator('video, .tf-media').count(), 0, 'no big media in a comment');
-    // the linked images in the details show inline, lazily, and open full size
-    await tab('desc');
-    await modal.locator('.tdesc img[src="https://img.example.com/ref.png"].ready').waitFor();
-    assert.equal(await modal.locator('.tdesc > p > img').getAttribute('loading'), 'lazy');
-    await modal.locator('.tdesc .inline-thumb.ready').waitFor();
+    // the linked images in its first message show inline, lazily, and open full size
+    const asked = modal.locator('[data-message="m0"] .th-body');
+    await asked.locator('img[src="https://img.example.com/ref.png"].ready').waitFor();
+    assert.equal(await asked.locator(':scope > p > img').getAttribute('loading'), 'lazy');
+    await asked.locator('.inline-thumb.ready').waitFor();
     for (const mode of ['dark', 'light']) { await theme(mode); await shot(`task-files-strip-desktop-${mode}`); }
     await theme('dark');
 
@@ -310,10 +315,10 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
     assert.deepEqual(await view.locator('.tf-vers button').allTextContents(), ['v1', 'v2', 'v3']);
     assert.match(await view.locator('.tf-vmeta').innerText(), /Editor · \d+h[\s\S]*Tighter intro, new music\./);
     assert.equal(await cutTile.getAttribute('aria-expanded'), 'true');
-    // the file's question: chip, question, options with their description
+    // the file's question: its chip and question, no choices (a reply in the thread answers it)
     const fileAsk = view.locator('.ask');
     assert.match(await fileAsk.locator('.ask-line').innerText(), /ROUGH CUT|Rough cut/);
-    assert.equal(await fileAsk.locator('.ask-opt').nth(1).getAttribute('title'), 'Say what to change');
+    assert.equal(await fileAsk.locator('.ask-opt, .ask button').count(), 0, 'no choices');
     for (const mode of ['dark', 'light']) { await theme(mode); await shot(`task-video-versions-desktop-${mode}`); }
     await theme('dark');
     // Compare: two versions side by side
@@ -408,8 +413,8 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
     await fold();
     await modal.locator('[data-modal-close]').click();
 
-    // ---- a reader (can_comment false): the questions, their choices and answers, no controls and no comment box;
-    // an older runner's answer reads as its text, folded
+    // ---- a reader (can_comment false): the questions and their answers, no controls and no comment box; an older
+    // runner's answer reads as its text
     const answersBefore = posted.filter(x => x.path.endsWith('/answers')).length;
     for (const [width, height, where] of [[390, 844, 'phone'], [1280, 900, 'desktop']] as [number, number, string][]) {
       await page.setViewportSize({width, height});
@@ -417,13 +422,11 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
       const legacy = modal.locator('.tcomment', {has: page.locator('.ask-q[data-qid="tone"]')});
       await legacy.locator('.ask.answered').waitFor();
       assert.match(await legacy.locator('.ask-answers').innerText(), /Sam\s*Keep it warm and short\./);
-      assert.equal(await legacy.locator('.ask-opt').first().isVisible(), false, 'answered: folded');
       const font = modal.locator('.tcomment', {has: page.locator('.ask-q[data-qid="font"]')});
-      assert.equal(await font.locator('.ask-opt.ro').count(), 2);
+      assert.equal(await font.locator('.ask-text').innerText(), 'Which font?', 'the question alone, no choices');
       assert.equal(await modal.locator('.task-chat .ask button, .task-chat .ask input').count(), 0, 'no answer controls');
       assert.equal(await modal.locator('.task-chat form').isHidden(), true, 'no comment box');
       assert.equal(await modal.locator('.task-files [data-tf-add]').isHidden(), true, 'a reader cannot add files');
-      await font.locator('.ask-opt.ro').first().click();
       await tab('details'); await modal.locator('.tf-tile[data-tf-file="f-notes"]').click();
       await view.locator('.ask-q[data-qid="ok"]').waitFor();
       assert.equal(await view.locator('.ask button, .ask input').count(), 0);

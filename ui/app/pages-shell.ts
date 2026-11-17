@@ -40,7 +40,7 @@ function gsSetupOpen(): boolean {
 
 // first-run.ts
 // ----------------------------------------------------------------- the bot page and the org chart
-const frNeedsSetup = (e: FrBot | null | undefined): e is FrBot => !!e && ['needs_setup', 'needs_onboarding'].includes(String(e.onboarding_state));
+const frNeedsSetup = (e: FrBot | null | undefined): e is FrBot => !!e && e.onboarding_state === 'needs_setup';
 // The org chart's mark: small, beside the name, a gear so the name keeps the row; it says the bot page's words on hover.
 const frTreeMark = (e: FrBot | null | undefined): string => (frNeedsSetup(e) ? '<span class="tree-setup" role="img" aria-label="Onboarding" title="Onboarding: it learns in chat and takes no work until someone above it marks onboarding complete"><span class="nav-icon" aria-hidden="true">settings</span></span>' : '');
 
@@ -178,7 +178,7 @@ const SETTINGS_TABS = ['general', 'people', 'bots', 'devices', 'models', 'tasks'
 // controls because changing who can use a bot must never silently move its runtime (or vice versa).
 // Teams come from the team's data; a name reads as its words (`success-owner` is Customer Success).
 const teamLabel = (t?: string) => (S.orgGroups || []).find(g => g.id === t)?.name || String(t || '').replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-let SETTINGS_DATA: SettingsData = {people: [], machines: [], services: [], models: [], issues: [], history: {changes: [], transitions: []}};
+let SETTINGS_DATA: SettingsData = {people: [], machines: [], services: [], models: [], issues: [], history: {changes: []}};
 // Presence is judged when a response arrives, never by aging a cached heartbeat on a later paint.
 const SETTINGS_PRESENCE: SettingsPresence = {interval: 25000, timeout: 10000, at: 0, checking: false, failed: false, timer: null, pending: null, request: 0, applied: 0};
 const harnessCaps = (id: string | undefined): HarnessCaps => harnessRow(id)?.capabilities || {};
@@ -283,6 +283,7 @@ function toolsRoute(r: string): boolean {
   if (!rdUnder(path, TOOLS_ROUTE)) return false;
   const parts = path.slice(TOOLS_ROUTE.length).split('/').filter(Boolean).map(p => { try { return decodeURIComponent(p); } catch { return p; } });
   if (!parts.length) { pageTools(); return true; }
+  if (parts[0] === 'vendor' && parts[1]) { void pageToolVendor(parts[1]); return true; }
   if (parts[0] === 'api' && parts[1]) { pageToolApi(parts[1], parts[2] === 'activity' ? 'activity' : ''); return true; }
   if (parts[0] === 'website' && parts[1]) { void pageToolWebsite(parts[1], parts[2] === 'activity' ? 'activity' : ''); return true; }
   // Keys was its own page; a tool's keys are on the tool's page now: the list with Keys' filters, a tool, or a key.
@@ -321,25 +322,6 @@ function isAutomationsRoute(r: string): boolean { return auUnder(r, AUTOMATIONS)
 let USE: UseState | null = null;
 
 // app/computer-screen.ts
-// A task's owner bot's screen, in the task's header: a monitor icon, as quiet as the header's other icon buttons.
-const taskScreenLinkHTML = (owner: string | null | undefined) => {
-  const id = botScreenComputer(actorSlug(owner));
-  return id ? `<a class="ghost peek-btn" href="${screenHref(id)}" aria-label="Screen" title="Screen">${TL_ICON.screen}</a>` : '';
-};
-
-// app/overview.ts
-// Read by ui/app/refresh.ts on every live change.
-let OVERVIEW_PAGE: OverviewPageState | null = null;
-async function overviewLoadComputers() {
-  const state = OVERVIEW_PAGE;
-  if (!state || state.loadingComputers) return;
-  state.loadingComputers = true;
-  try {
-    const result = await get<OverviewComputersAnswer>('/v2/computers');
-    if (OVERVIEW_PAGE === state && Array.isArray(result.computers)) state.computers = result.computers.map(c => ({id: c.id, label: c.label, revoked_at: c.revoked_at}));
-  } catch {} // Readable bot assignments still provide their buildings when inventory is unavailable.
-  finally { state.loadingComputers = false; }
-}
 
 // app/finance.ts
 const FIN_ROUTE = '#/finance';
@@ -357,7 +339,7 @@ const GR_OLD_ROUTE = '#/strategy/growth', GTM_OLD_ROUTE = '#/strategy/gtm';
 // app/org-rules.ts
 const RULES_ROUTE = '#/rules';
 // Every kind of rule, in the page's order (Stage rules spec, The Rules page): each tab's count comes from /rule-groups.
-// The shell keeps it (and SETTINGS_TABS), since a "Page → Tab" phrase in Needs you reads it before either page is opened.
+// The shell keeps it, beside SETTINGS_TABS.
 const RU_TABS: [RuleTab, string][] = [['internal', 'Company'], ['external', 'Outside'], ['stages', 'Pipelines and stages'], ['due', 'Due'],
   ['wakes', 'Wakes'], ['automations', 'Automations on tasks'], ['builtin', 'Built in'], ['suggested', 'Suggested']];
 // A refusal in one line: a 403 is about permission, the rest say what the server said (the Rules page and a stage's
@@ -1105,8 +1087,7 @@ const botScreenKey = (s: ScreenRow): string => [s.state, s.id, s.machine?.screen
 const SCREEN_SETUP_PENDING = new Set<string>(), SCREEN_SAVING = new Set<string>();
 
 // app/redesign-org.ts
-// The groups with their leads: GET /v2/groups when it has answered (a list, or {groups} from an older hub), else the
-// roster's copy, which carries no leads.
+// The groups with their leads: GET /v2/groups when it has answered, else the roster's copy, which carries no leads.
 const rdoGroups = (): OrgGroup[] => RDO?.groups || S.orgGroups || [];
 
 // app/settings-bots.ts
@@ -1276,3 +1257,58 @@ function botTaskRowHTML(t: TaskAny): string {
   const stage = t.status === 'open' ? botTaskStage(t) : '';
   return taskRowHTML(t, {after: stage ? `<span class="muted">${esc(stage)}</span>` : ''});
 }
+
+// ----------------------------------------------------------------- the Threads page
+// What the shell draws with, of the Threads page (ui/app/thread-rail.ts, ui/app/new-message.ts): the rail's icons, the
+// `#` or lock before a thread's name, the thread last opened here, the teammates a picker offers and the thread dialogs.
+// The page itself is the threads-rail part (ui/parts.json).
+const TR_SVG = {
+  plus: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>',
+  catchUp: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="4" y="9" width="16" height="11" rx="2"/><path d="M6 6h12M8 3h8"/></svg>',
+  browse: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>',
+  lock: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
+  pin: (on: boolean) => `<svg width="15" height="15" viewBox="0 0 24 24" fill="${on ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="${on ? 0 : 1.6}" stroke-linejoin="round" aria-hidden="true"><path d="M15 3l6 6-3 1-4 4 .5 5-1.5 1.5-4-4-5 5-1-1 5-5-4-4L5 10l5 .5 4-4z"/></svg>`,
+};
+
+// `#` before a thread's name, a lock for a private one.
+const threadHashHTML = (t: ThreadRow | null | undefined) => `<span class="tr-mark" aria-hidden="true">${threadPrivate(t) ? TR_SVG.lock : '#'}</span>`;
+
+// The thread last opened here, which #/threads opens again.
+const THREADS_LAST_KEY = 'tico.threads.last';
+function threadsLastGet() { try { return localStorage.getItem(THREADS_LAST_KEY) || ''; } catch { return ''; } }
+function threadsLastSet(id: string) { try { localStorage.setItem(THREADS_LAST_KEY, id); } catch { /* not kept */ } }
+
+// ---- Thread dialogs and the teammates a picker offers: shared by the rail, New message and a thread's Members and
+// settings (the threads-page part, ui/app/threads-page.ts).
+// Whom the viewer may add: a bot, a person or (except to a DM, which names its people) a group they may write to. The
+// helpers and the viewer are never listed.
+function threadAddable({groups = true}: {groups?: boolean} = {}): ThdPick[] {
+  const bots = shownEmps().filter(e => e.can_chat !== false && (!e.my_access || e.my_access.write))
+    .map(e => ({actor: 'bot:' + e.name, label: (e.display_name || e.name)!}));
+  const people = (S.people || []).filter((p: ThdAccessible & (typeof S.people)[number]) => p.id && !p.hidden && p.id !== S.me?.id && p.my_access?.write !== false)
+    .map(p => ({actor: 'human:' + p.id, label: p.name || p.id}));
+  const teams = groups ? (S.orgGroups || []).filter((g: ThdAccessible & OrgGroup) => g.id && g.my_access?.write).map(g => ({actor: 'group:' + g.id, label: g.name || g.id})) : [];
+  return [...people, ...teams, ...bots].sort((a, b) => a.label.localeCompare(b.label));
+}
+function threadDialog(id: string, label: string): HTMLDialogElement {
+  let dlg = document.getElementById(id) as HTMLDialogElement | null;
+  if (!dlg) {
+    dlg = document.createElement('dialog'); dlg.id = id; dlg.className = 'tmodal tmodal-shell dash-dialog thd-dialog'; document.body.append(dlg);
+    // A route change (a link, the phone's Back) leaves the page the dialog was for.
+    addEventListener('hashchange', () => { if (dlg?.open) dlg.close(); });
+  }
+  dlg.setAttribute('aria-label', label);
+  return dlg;
+}
+const threadDialogHead = (title: string) => `<header class="tmodal-head"><h2>${esc(title)}</h2><span class="spacer"></span>
+  <button class="ghost tmodal-x" type="button" data-close aria-label="Close">✕</button></header>`;
+function threadDialogWire(dlg: HTMLDialogElement): void { dlg.querySelectorAll<HTMLElement>('[data-close]').forEach(b => { b.onclick = () => dlg.close(); }); }
+
+// ----------------------------------------------------------------- Library › Files
+// What the shell draws with of Library › Files (ui/app/library-files.ts): the kinds a search and a bot's file picker
+// offer, the icon of a search hit, and the open list the router resets.
+const LF_KINDS = [['', 'All kinds'], ['page', 'Pages'], ['document', 'Documents'], ['image', 'Images'], ['data', 'Data'],
+  ['media', 'Video and audio'], ['other', 'Other']];
+const LF_ICON: Record<string, string> = {page: 'article', document: 'description', image: 'palette', data: 'analytics', media: 'play_arrow', other: 'inventory_2'};
+// The open Files page's state; null until it opens, and again once another page is shown.
+let LF: LfState | null = null;

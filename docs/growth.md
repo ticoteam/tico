@@ -261,7 +261,7 @@ Unknown and the run result carries a note. `sync` runs it.
 ## Marketing tasks
 
 A growth experiment is a task in **Growth Experiments** (Ideas, Building, Running), and a thing that worked and is kept
-is a task in **Growth Monitoring** (Watching, Slipping): docs/pipelines-v3.md "Growth and Success". Each channel has an
+is a task in **Growth Monitoring** (Watching, Slipping): docs/dev/pipelines-v3.md "Growth and Success". Each channel has an
 Owner that files its ideas and owns its tasks in both pipelines from start to finish: SEO, Content, Email, CRO, Search
 Ads and Social Ads (the growth channel packs in the same section).
 
@@ -358,7 +358,7 @@ tico growth cohort set --channel SLUG|unknown --month YYYY-MM [--spend N] [--bot
                  [--quality actual|estimate] [--source FIELD=TEXT]
 tico growth settings [--set KEY=VALUE]
 tico kpi log <kpi id> <value> [note] --period-start YYYY-MM-DD --period-end YYYY-MM-DD
-tico task create --owner <who> --label idea:on-deck --label channel:<slug> --title "..." --body "..."
+tico task create --owner <who> --label idea:on-deck --label channel:<slug> --title "..." --message "..."
 tico task list --label channel:<slug>
 tico card add growth_number --place growth --metric cac [--channel SLUG]
 tico card add growth_channels --place growth --count 10

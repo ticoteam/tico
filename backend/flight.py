@@ -17,8 +17,10 @@ The request path pays for two clock reads and a deque append (`Recorder.request`
 short transaction. Nothing leaves the server: no query text with values (SQL is reduced to its shape), no request paths
 with ids (route templates only), no bodies, no setting values. Owners, admins and the team's bots read it at
 `GET /api/v2/system/metrics` (bots without the slow requests' actors), and owners and admins on the Health page.
-Retention: minutes for two days, then hours; requests, slow requests and process rows 14 days, SQL, database and events
-90 days (`sweep`, run by the scheduler's hourly sweep).
+People's browsers add their own first-load and interaction times (LCP, INP) per screen through
+`POST /api/v2/web-timings`, kept as histogram buckets only (`flight_web`, made by its migration).
+Retention: minutes for two days, then hours; requests, browser timings, slow requests and process rows 14 days, SQL,
+database and events 90 days (`sweep`, run by the scheduler's hourly sweep).
 """
 
 import bisect
@@ -39,24 +41,6 @@ import traceback
 from . import hubdb
 
 LOG = logging.getLogger("tico.flight")
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS flight_requests(created_at INTEGER NOT NULL, span INTEGER NOT NULL, route TEXT NOT NULL,
-  caller TEXT NOT NULL, n INTEGER NOT NULL, errors INTEGER NOT NULL, bytes INTEGER NOT NULL, total_ms REAL NOT NULL,
-  p50 REAL, p95 REAL, max_ms REAL, hist TEXT, PRIMARY KEY(created_at, span, route, caller)) WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS flight_slow(id INTEGER PRIMARY KEY, created_at INTEGER NOT NULL, route TEXT, caller TEXT,
-  actor TEXT, ms REAL, bytes INTEGER, status INTEGER, sql_ms REAL, wait_ms REAL, queries INTEGER, top TEXT);
-CREATE TABLE IF NOT EXISTS flight_process(created_at INTEGER PRIMARY KEY, cpu REAL, rss INTEGER, threads INTEGER,
-  fds INTEGER, sockets INTEGER, lag_p95 REAL, lag_max REAL, requests INTEGER, queries INTEGER, sql_ms REAL,
-  txns INTEGER, wait_max REAL, hold_max REAL, hold_p95 REAL, locked INTEGER, dropped INTEGER);
-CREATE TABLE IF NOT EXISTS flight_sql(created_at INTEGER NOT NULL, fingerprint TEXT NOT NULL, n INTEGER NOT NULL,
-  total_ms REAL NOT NULL, p95 REAL, max_ms REAL, hist TEXT, PRIMARY KEY(created_at, fingerprint)) WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS flight_db(created_at INTEGER PRIMARY KEY, bytes INTEGER, wal_bytes INTEGER, free_bytes INTEGER,
-  detail TEXT);
-CREATE TABLE IF NOT EXISTS flight_events(id INTEGER PRIMARY KEY, created_at INTEGER NOT NULL, kind TEXT NOT NULL,
-  detail TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS flight_events_kind ON flight_events(kind, created_at);
-"""
 
 SLOW_MS = 1000  # a request this slow is logged on its own
 SLOW_PER_MINUTE = 50
@@ -90,12 +74,31 @@ BIG = {
     "idempotency": "created_at",
     "changes": "created_at",
     "tasks": "created_at",
-    "mail_messages": None,
     "flight_requests": None,
 }
 # Histogram bucket edges in milliseconds: 25% apart from 0.05 ms to about a minute. A percentile is its bucket's upper
 # edge, so it reads at most a quarter high and never low.
 EDGES = [0.05 * 1.25**i for i in range(64)]
+# What people's browsers measure (ui/observability.ts, `vitals`): first-load LCP and the slowest interaction (INP) per
+# screen visit, per screen template. A reading is only its metric, screen and histogram bucket in the minute it came;
+# never who, which device, the URL or the element. `dropped` counts readings over a person's per-minute allowance.
+WEB_METRICS = ("lcp", "inp")
+# The app's screens (ui/observability.ts SCREENS, from ui/app/router.ts): `/<screen>`, or `/<screen>/<placeholder>` for
+# its pages, never with an id.
+WEB_SCREENS = (
+    "assistant automations bot calendar changelog chat company-page computers credentials decide docs file finance getting-started "
+    "goals growth health help home inbox integrations learnings library listening mail market meetings messaging notes "
+    "overview page person recordings replay repositories roadmap rules runs seat settings skills sql strategy style-guide "
+    "subscriptions tag tags task tasks team thread threads tools triggers updates usage webhooks welcome"
+).split()
+_PLACEHOLDERS = {"bot": ":bot", "person": ":person", "task": ":task", "thread": ":thread"}
+WEB_ROUTES = frozenset(
+    route for screen in WEB_SCREENS for route in ("/" + screen, f"/{screen}/{_PLACEHOLDERS.get(screen, ':sub')}")
+)
+WEB_TIMINGS_ROUTE = "POST /api/v2/web-timings"  # the browsers' own sends: listed apart from people's routes
+WEB_MAX_MS = 60_000
+WEB_PER_MINUTE = 120  # readings one person sends in a minute, at most; the rest are dropped and counted
+WEB_BATCH = 20  # readings in one request, at most
 
 _LITERAL = re.compile(r"'(?:[^']|'')*'")
 _NUMBER = re.compile(r"\b\d+(?:\.\d+)?\b")
@@ -305,6 +308,8 @@ class Recorder:
         self.hold = {}
         self.locked = 0
         self.long_holds = []
+        self.web = {}  # (metric, route) -> hist
+        self.web_dropped = 0
 
     # The hot paths: one append each, safe from any thread. A full buffer (the background thread is not keeping up)
     # discards the oldest sample; `dropped` counts them, approximately, so the gap shows in the minute's row.
@@ -339,6 +344,15 @@ class Recorder:
         cost = _COST.get()
         if cost is not None:
             cost[1] += wait_ms
+
+    def web_timing(self, metric, route, ms):
+        """One reading from a person's browser, already checked (`install`, POST /api/v2/web-timings)."""
+        if len(self.samples) >= BUFFER:
+            self.dropped += 1
+        self.samples.append(("w", metric, route, ms))
+
+    def web_drop(self, n=1):
+        self.samples.append(("wd", n))
 
     def long_hold(self, route, site, hold_ms, wait_ms):
         """A write transaction that held the lock for LONG_HOLD_MS or more, from the thread that held it."""
@@ -455,6 +469,11 @@ class Recorder:
                 elif kind == "l":
                     _add(self.lag, s[1])
                     self.lag_max = max(self.lag_max, s[1])
+                elif kind == "w":
+                    _, metric, route, ms = s
+                    _add(self.web.setdefault((metric, route), {}), ms)
+                elif kind == "wd":
+                    self.web_dropped += s[1]
 
     def start_drain(self, every=TICK):
         """Drains `samples` on a thread of its own, every `every` seconds, so nothing that waits on the database (a
@@ -511,6 +530,7 @@ class Recorder:
         self.drain()  # everything recorded so far is in this minute, drained or not
         with self.lock:
             requests, slow, lag, lag_max = self.requests, self.slow, self.lag, self.lag_max
+            web, web_dropped = self.web, self.web_dropped
             long_holds = self.long_holds + self.open_holds()
             totals = (self.queries, self.sql_ms, self.txns, self.wait_max, self.hold_max, self.hold, self.locked)
             wait_sum = self.wait_sum
@@ -631,8 +651,15 @@ class Recorder:
                 for fp, (n, total, peak, hist) in kept
             ]
         holds = [{"kind": "long_hold", **h} for h in long_holds]
+        web_rows = [
+            (minute, 60, metric, route, sum(hist.values()), json.dumps(hist, separators=(",", ":")))
+            for (metric, route), hist in web.items()
+        ]
+        if web_dropped:
+            web_rows.append((minute, 60, "dropped", "", web_dropped, "{}"))
         return {
             "requests": rows,
+            "web": web_rows,
             "slow": slow,
             "process": proc,
             "sql": sql_rows,
@@ -650,6 +677,7 @@ def write(c, taken):
     )
     c.execute("INSERT OR REPLACE INTO flight_process VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", taken["process"])
     c.executemany("INSERT OR REPLACE INTO flight_sql VALUES(?,?,?,?,?,?,?)", taken["sql"])
+    c.executemany("INSERT OR REPLACE INTO flight_web VALUES(?,?,?,?,?,?)", taken.get("web") or [])
     for hold in taken.get("long_holds") or []:
         _event(c, "long_hold", {k: v for k, v in hold.items() if k != "ts"}, hold["ts"])
 
@@ -1069,9 +1097,11 @@ def sweep(store, now=None):
                     ),
                 )
             c.execute("DELETE FROM flight_requests WHERE span=60 AND created_at>=? AND created_at<?", (hour, end))
+    _sweep_web(store, cutoff)
     short, long = now - SHORT_DAYS * 86400, now - LONG_DAYS * 86400
     with store.transaction() as c:
         c.execute("DELETE FROM flight_requests WHERE created_at<?", (short,))
+        c.execute("DELETE FROM flight_web WHERE created_at<?", (short,))
         c.execute(
             "DELETE FROM flight_slow WHERE created_at<? OR id<=(SELECT max(id) FROM flight_slow)-?", (short, SLOW_KEEP)
         )
@@ -1083,6 +1113,36 @@ def sweep(store, now=None):
             "DELETE FROM flight_events WHERE kind='start' AND id NOT IN "
             "(SELECT id FROM flight_events WHERE kind='start' ORDER BY id DESC LIMIT 500)"
         )
+
+
+def _sweep_web(store, cutoff):
+    """Browser timing minutes older than `cutoff` become hours, an hour per transaction, as request minutes do."""
+    while True:
+        with store.transaction() as c:
+            row = c.execute(
+                "SELECT min(created_at) FROM flight_web WHERE span=60 AND created_at<?", (cutoff,)
+            ).fetchone()
+            if row[0] is None:
+                return
+            hour = row[0] // 3600 * 3600
+            end = min(hour + 3600, cutoff)
+            merged = {}
+            for r in c.execute(
+                "SELECT metric,route,n,hist FROM flight_web WHERE (span=60 AND created_at>=? AND created_at<?) "
+                "OR (span=3600 AND created_at=?)",
+                (hour, end, hour),
+            ):
+                m = merged.setdefault((r[0], r[1]), [0, {}])
+                m[0] += r[2]
+                _merge(m[1], json.loads(r[3] or "{}"))
+            c.executemany(
+                "INSERT OR REPLACE INTO flight_web VALUES(?,?,?,?,?,?)",
+                [
+                    (hour, 3600, metric, route, n, json.dumps(hist, separators=(",", ":")))
+                    for (metric, route), (n, hist) in merged.items()
+                ],
+            )
+            c.execute("DELETE FROM flight_web WHERE span=60 AND created_at>=? AND created_at<?", (hour, end))
 
 
 # ---------------------------------------------------------------------------- the background thread
@@ -1312,14 +1372,18 @@ class Flight(threading.Thread):
 
 # ---------------------------------------------------------------------------- reading it back
 
-SECTIONS = ("requests", "slow", "process", "sql", "db", "events")
+SECTIONS = ("requests", "slow", "process", "sql", "db", "events", "web")
+CALLERS = ("human", "bot", "runner", "service", "anonymous")
 
 
-def _requests(c, since, until=None, top=25):
+def _requests(c, since, until=None, top=25, caller=None):
+    """Per route: n, errors, bytes, total time and p50/p95/p99 over the window. With `caller` (a CALLERS kind), only
+    that kind's calls count, and the routes are ranked by its requests rather than by total time, with the browsers' timing sends apart (`web_timings`)."""
     merged = {}
     for r in c.execute(
-        "SELECT route,caller,n,errors,bytes,total_ms,max_ms,hist FROM flight_requests WHERE created_at>=? AND created_at<?",
-        (since, until if until is not None else 2**62),
+        "SELECT route,caller,n,errors,bytes,total_ms,max_ms,hist FROM flight_requests WHERE created_at>=? AND created_at<?"
+        + (" AND caller=?" if caller else ""),
+        (since, until if until is not None else 2**62, *((caller,) if caller else ())),
     ):
         m = merged.setdefault(
             r[0],
@@ -1336,15 +1400,58 @@ def _requests(c, since, until=None, top=25):
     for m in merged.values():
         hist = m.pop("_h")
         _merge(every, hist)
-        rows.append({**m, "total_ms": round(m["total_ms"], 1), "p50": quantile(hist, 0.5), "p95": quantile(hist, 0.95)})
-    rows.sort(key=lambda r: -r["total_ms"])
+        rows.append(
+            {
+                **m,
+                "total_ms": round(m["total_ms"], 1),
+                "p50": quantile(hist, 0.5),
+                "p95": quantile(hist, 0.95),
+                "p99": quantile(hist, 0.99),
+            }
+        )
+    rows.sort(key=(lambda r: (-r["n"], -r["total_ms"])) if caller else (lambda r: -r["total_ms"]))
+    # Ranked by one kind of caller, the browsers' own timing sends (one per screen visit) would take a place among the
+    # routes people wait on; they are counted in the totals and listed apart.
+    beacon = [r for r in rows if r["route"] == WEB_TIMINGS_ROUTE] if caller else []
+    ranked = [r for r in rows if r["route"] != WEB_TIMINGS_ROUTE] if caller else rows
     return {
+        **({"caller": caller} if caller else {}),
         "n": sum(r["n"] for r in rows),
         "errors": sum(r["errors"] for r in rows),
         "p50": quantile(every, 0.5),
         "p95": quantile(every, 0.95),
-        "routes": rows[:top],
+        "p99": quantile(every, 0.99),
+        "routes": ranked[:top],
+        **({"web_timings": beacon[0]} if caller and beacon else {}),
     }
+
+
+def _web(c, since, until=None):
+    """People's browser timings over the window: per metric and screen n, p50, p75, p95, p99 and max (each a bucket's
+    upper edge, as for requests), busiest first; and the readings dropped over a person's per-minute allowance."""
+    merged, dropped = {}, 0
+    for metric, route, n, hist in c.execute(
+        "SELECT metric,route,n,hist FROM flight_web WHERE created_at>=? AND created_at<?",
+        (since, until if until is not None else 2**62),
+    ):
+        if metric == "dropped":
+            dropped += n
+            continue
+        m = merged.setdefault((metric, route), [0, {}])
+        m[0] += n
+        _merge(m[1], json.loads(hist or "{}"))
+    rows = [
+        {
+            "metric": metric,
+            "route": route,
+            "n": n,
+            **{f"p{int(q * 100)}": quantile(hist, q) for q in (0.5, 0.75, 0.95, 0.99)},
+            "max_ms": round(EDGES[min(max(hist), len(EDGES) - 1)], 2) if hist else 0,
+        }
+        for (metric, route), (n, hist) in merged.items()
+    ]
+    rows.sort(key=lambda r: (WEB_METRICS.index(r["metric"]) if r["metric"] in WEB_METRICS else 9, -r["n"], r["route"]))
+    return {"timings": rows, "dropped": dropped}
 
 
 def _sql(c, since):
@@ -1426,7 +1533,7 @@ def _db(c, now):
     }
 
 
-def view(c, minutes=60, sections=SECTIONS, now=None, since=None, until=None, routes=25):
+def view(c, minutes=60, sections=SECTIONS, now=None, since=None, until=None, routes=25, caller=None):
     """The last `minutes`, or with `since` the minutes from `since` up to `until` (epoch seconds, `until` excluded): a
     load run reads exactly its steady window this way. Requests and process minutes keep to the window; slow requests,
     SQL hours and events start at `since`."""
@@ -1434,11 +1541,13 @@ def view(c, minutes=60, sections=SECTIONS, now=None, since=None, until=None, rou
     if since is not None:  # the window's own length, in whole minutes
         minutes = max(0, -(-(int(until if until is not None else now) - int(since)) // 60))
     since = int(since) if since is not None else now - minutes * 60
-    out = {"since": since, "now": now, "minutes": minutes}
+    out: dict = {"since": since, "now": now, "minutes": minutes}
     if until is not None:
         out["until"] = int(until)
     if "requests" in sections:
-        out["requests"] = _requests(c, since, until, routes)
+        out["requests"] = _requests(c, since, until, routes, caller)
+    if "web" in sections:
+        out["web"] = _web(c, since, until)
     if "slow" in sections:
         out["slow"] = [
             {**{k: r[k] for k in r.keys() if k != "top"}, **({"top": json.loads(r["top"])} if r["top"] else {})}
@@ -1481,10 +1590,12 @@ def install(app, store, auth):
         since: int | None = None,
         until: int | None = None,
         routes: int = 25,
+        caller: str | None = None,
     ):
         """The flight recorder (backend/flight.py): owners, admins and the team's bots. `since` and `until` (epoch
         seconds) read one window instead of the last `minutes`, and `routes` how many routes to list (1 to 500): the
-        load gate (bench/load_gate) reads its steady window this way."""
+        load gate (bench/load_gate) reads its steady window this way. `caller` (human, bot, runner, service or
+        anonymous) keeps the requests to that kind of caller, ranked by its requests."""
         who = request.state.identity
         auth.domain(who)
         if not auth.bot_admin(who) and who.role != "bot":
@@ -1494,6 +1605,8 @@ def install(app, store, auth):
             raise Problem("section", "section is all or a list of: " + ", ".join(SECTIONS), 422)
         if since is not None and until is not None and until <= since:
             raise Problem("window", "until must be after since", 422)
+        if caller is not None and caller not in CALLERS:
+            raise Problem("caller", "caller is one of: " + ", ".join(CALLERS), 422)
         with store.read() as c:
             out = view(
                 c,
@@ -1502,6 +1615,7 @@ def install(app, store, auth):
                 since=since,
                 until=until,
                 routes=max(1, min(int(routes), 500)),
+                caller=caller or None,
             )
         if who.role == "bot":
             # A slow request's actor names the person or bot who made it; a bot doing performance work needs the
@@ -1509,6 +1623,73 @@ def install(app, store, auth):
             for row in out.get("slow") or []:
                 row.pop("actor", None)
         return out
+
+    # On app.state so a test can hold the minute still (backend/tests/test_web_timings.py).
+    allowance = app.state.web_allowance = WebAllowance()
+
+    @app.post("/api/v2/web-timings", status_code=202)
+    async def web_timings(request: Request):
+        """People's browsers send their own speed here (ui/observability.ts, `vitals`): {"timings": [{metric, route,
+        ms}]}, at most WEB_BATCH. Only people: a bot's or runner's token is refused. A metric other than WEB_METRICS, a
+        screen outside WEB_ROUTES or a value outside 0 to WEB_MAX_MS refuses the whole request, and nothing is kept.
+        Each reading goes to the recorder's memory (no write on this path) as its bucket; nothing else of the request
+        is kept. Over WEB_PER_MINUTE readings a minute from one person, the rest are dropped and counted."""
+        who = request.state.identity
+        auth.domain(who)
+        if caller_kind(who) != "human":
+            raise Problem("forbidden", "Only a person's browser sends its speed", 403)
+        try:
+            body = await request.json()
+        except ValueError:
+            raise Problem("timings", "The body is JSON: {\"timings\": [{metric, route, ms}]}", 422) from None
+        readings = body.get("timings") if isinstance(body, dict) else None
+        if not isinstance(readings, list) or not readings or len(readings) > WEB_BATCH:
+            raise Problem("timings", f"timings is a list of 1 to {WEB_BATCH} readings", 422)
+        clean = []
+        for item in readings:
+            ms = item.get("ms") if isinstance(item, dict) else None
+            if (
+                not isinstance(item, dict)
+                or item.get("metric") not in WEB_METRICS
+                or item.get("route") not in WEB_ROUTES
+                or isinstance(ms, bool)
+                or not isinstance(ms, (int, float))
+                or not 0 <= ms <= WEB_MAX_MS
+            ):
+                raise Problem(
+                    "timing",
+                    "Each reading is {metric: lcp or inp, route: a screen template, ms: 0 to 60000}",
+                    422,
+                )
+            clean.append((item["metric"], item["route"], float(ms)))
+        kept = allowance.take(getattr(who, "actor", "") or "", len(clean))
+        recorder = getattr(store, "recorder", None)
+        if recorder is not None:
+            for metric, route, ms in clean[:kept]:
+                recorder.web_timing(metric, route, ms)
+            if kept < len(clean):
+                recorder.web_drop(len(clean) - kept)
+        return {"kept": kept if recorder is not None else 0, "dropped": len(clean) - kept}
+
+
+class WebAllowance:
+    """How many browser timings each person may still send this minute (WEB_PER_MINUTE), in memory only."""
+
+    def __init__(self, per_minute=WEB_PER_MINUTE, clock=time.time):
+        self.per_minute, self.clock = per_minute, clock
+        self.lock = threading.Lock()
+        self.minute, self.used = None, {}
+
+    def take(self, who, n):
+        """How many of `n` readings `who` may send now; those are counted against this minute."""
+        with self.lock:
+            minute = int(self.clock() // 60)
+            if minute != self.minute:
+                self.minute, self.used = minute, {}
+            used = self.used.get(who, 0)
+            kept = max(0, min(n, self.per_minute - used))
+            self.used[who] = used + kept
+            return kept
 
 
 # ---------------------------------------------------------------------------- reading the file, server or no server

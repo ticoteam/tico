@@ -2,20 +2,23 @@
 
 Moved from clients/hubtools.py; clients/commands/__init__.py says how the table is put together."""
 
+import json
 from urllib.parse import quote
 
+from clients.cli_spec import Arg, Command, Group
 from clients.commands._registry import tool
 from clients.commands._schemas import _key, _s
 from clients.commands._requester import _as_person
+from clients.tico import APIError
 
 
 @tool(
     "tico_event_types",
-    "Every event Tico names (task.done, task.closed, webhook.received, custom.<name>...), each with "
-    "its group, a plain description, its version and an example payload (`data`). Automations (an event trigger), wake rules and "
-    "outgoing webhooks read this one list; some events have an older spelling (`aliases`) that still works, and "
-    "`sourceless` marks the events a rule judges with no task (webhook.received, tico.notice); `outbound` is false "
-    "for those two, which an outgoing webhook cannot subscribe to.",
+    "Every event Tico names (task.done, task.closed, webhook.received, custom.<name>...), each "
+    "with its group, description, version and example payload (`data`). Automations, wake rules "
+    "and outgoing webhooks read this list; older spellings (`aliases`) still work. `sourceless` "
+    "(webhook.received, tico.notice) marks events a rule judges with no task; `outbound` is false "
+    "for those, which an outgoing webhook cannot subscribe to.",
     {
         "group": _s(
             "Only this group: task, approval, needs_you, bot, release, meeting, strategy, market, inbound, health, "
@@ -46,23 +49,29 @@ _AUTO_FIELDS = {
     "destinations": {
         "type": ["array", "null"],
         "items": {"type": "object"},
-        "description": "Named chains a filter rule's `to` runs, at most 20: {id (a name like legal), name, "
-        "color (amber, orange, violet, green, blue, teal, pink, gray or red; optional), then: "
-        "the actions, at most 10 (empty = ignore)}. A rule sends a thread there with `to`, "
-        "after its own actions; null takes them away",
+        "description": "Named chains a filter rule's `to` runs, at most 20: {id (a name like "
+        "legal), name, color (amber, orange, violet, green, blue, teal, pink, gray "
+        "or red; optional), then: up to 10 actions (empty = ignore)}. `to` sends a "
+        "thread there after the rule's own actions; null takes them away.",
     },
     "trigger": {
         "type": "object",
-        "description": "{type: message|task_received|schedule|webhook|listening|event|due, ...}; a due trigger is {type: due, first_due: YYYY-MM-DD, repeats: once|weekly|monthly|quarterly|yearly, open_days (default 14), tz}",
+        "description": "{type: message|task_received|schedule|webhook|listening|event|due, ...}; "
+        "a due trigger is {type: due, first_due: YYYY-MM-DD, repeats: "
+        "once|weekly|monthly|quarterly|yearly, open_days (default 14), tz}",
     },
     "steps": {
         "type": "array",
         "items": {"type": "object"},
-        "description": "The whole step tree (filter, decide, llm, find, bot_turn, paths, action). An action step is "
-        "{type: action, do, args}; args by do: draft_reply and send_reply body (or text), to, bot "
-        "(Slack send); forward to, body, webhook; label name (or tag); create_task title, body, owner, due (a date; a due trigger's day by default); "
-        "assign owner, text; note text (or note), bot; wake_bot bot, text; post_update to ([updates, market]), text (none posts what the bot_turn before it wrote); "
-        "call_webhook webhook, type, data; archive, leave_for_you and unsubscribe take none",
+        "description": "The step tree (filter, decide, llm, find, bot_turn, paths, action). An "
+        "action step is {type: action, do, args}. Args by do: draft_reply, "
+        "send_reply (body or text, to, bot; Slack send); forward (to, body, "
+        "webhook); label (name or tag); create_task (title, body, owner, due: a "
+        "date, a due trigger's day by default); assign (owner, text); note (text "
+        "or note, bot); wake_bot (bot, text); post_update (to: updates, market or "
+        "[updates, market]; text, or none to post what the bot_turn before it "
+        "wrote); call_webhook (webhook, type, data); archive, leave_for_you, "
+        "unsubscribe: none.",
     },
 }
 
@@ -123,9 +132,9 @@ def automation_templates(api, args):
 
 @tool(
     "tico_automation_template",
-    "One inbox template filled in for an owner and an inbox: the flow the hub would save, "
-    "with its roles resolved on the org chart and what the owner may not use taken out. Nothing is saved; save it "
-    "with tico_automation_create (off until turned on).",
+    "One inbox template filled in for an owner and an inbox: the flow the hub would save, with "
+    "its roles resolved on the org chart and what the owner may not use taken out. Nothing is "
+    "saved; save it with tico_automation_create (off until turned on).",
     {
         "id": _s("founder, support, sales or blank"),
         "owner": _s("person:<id>, bot:<slug> or group:<id>"),
@@ -140,12 +149,11 @@ def automation_template(api, args):
 
 @tool(
     "tico_automation_create",
-    "Save a new automation (version 1). Checked on save: a bad flow is refused with why. "
-    "In Assistant chat a Message routine saves off and returns an approval action card; only the person's click "
-    "turns it on. Omit enabled or set false. Choose defaults to Draft; use Reply only when the person explicitly "
-    "asks to send replies and the inbox permits sending. "
-    "BotOps saves it off unless `enabled` is sent. A bot without rights to it saves a proposal: off, its first "
-    "version pending, for a person to turn on.",
+    "Save a new automation (version 1); a bad flow is refused on save, with why. In Assistant "
+    "chat a Message routine saves off and returns an approval card; only the person's click turns "
+    "it on, so omit `enabled` or set it false. Choose defaults to Draft; use Reply only when the "
+    "person explicitly asks for replies and the inbox permits sending. BotOps saves it off unless "
+    "`enabled` is sent. A bot without rights saves a proposal for a person to turn on.",
     {k: v for k, v in _AUTO_FIELDS.items()},
     required=("name", "owner", "trigger"),
     writes=True,
@@ -157,10 +165,11 @@ def automation_create(api, args):
 
 @tool(
     "tico_automation_update",
-    "Change an automation. A new trigger, steps or batch times is a new version. "
-    "The Assistant must propose Message routine edits with tico_assistant_propose (PATCH "
-    "/api/v2/automations/<id>); pausing with enabled:false is direct. A bot "
-    "without edit rights gets back `pending` (a proposal a person restores). Action args are named in `steps`. Then check `problems`.",
+    "Change an automation. A new trigger, steps or batch times is a new version. The Assistant "
+    "must propose Message routine edits with tico_assistant_propose (PATCH "
+    "/api/v2/automations/<id>); pausing with enabled:false is direct. A bot without edit rights "
+    "gets `pending` (a proposal a person restores). Action args are named in `steps`. Then check "
+    "`problems`.",
     {"id": _s("auto_..."), **_AUTO_FIELDS, "summary": _s("A few words on the change")},
     required=("id",),
     writes=True,
@@ -302,3 +311,110 @@ def inbox_send(api, args):
     if "send" not in args:
         return _as_person(api).get(path)
     return _as_person(api).patch(path, {"send": bool(args["send"])}, key=_key(args))
+
+
+def _run_input(fields):
+    """`--input` is a JSON object standing in for the trigger's output; left out, it is {} (the tool's own default)."""
+    text = fields.pop("input", None)
+    try:
+        fields["input"] = json.loads(text) if text else {}
+    except ValueError:
+        raise APIError("input", "--input must be JSON") from None
+    return fields
+
+
+# `tico automation ...` (clients/cli_spec.py). `create`, `update` and `inbox` stay hand-built (clients/hubcli.py): create
+# and update take a whole flow from `--file`, a JSON object spread into the arguments, and update's --enable/--disable is
+# one switch; `inbox` runs tico_inbox_send, which a spec would name `inbox send` where the CLI says `automation inbox`.
+AUTOMATION = (
+    Group("automation", "automations: a trigger and steps", aliases=("automations",)),
+    Command(
+        "automation list",
+        "the automations you may see, newest first, each with whether you can edit it and its problems",
+        example="tico automation list --owner bot:<slug>",
+    ),
+    Command(
+        "automation show",
+        "one automation: its trigger, steps, version, today's counts, next run and its problems",
+        tool="tico_automation_get",
+        example="tico automation show auto_123",
+    ),
+    Command(
+        "automation delete",
+        "delete an automation; its runs stay (a built-in one is refused: pause it instead)",
+        example="tico automation delete auto_123",
+    ),
+    Command(
+        "automation run",
+        "run it now, whatever its trigger says, and print the run",
+        args=(Arg("input", type=str, metavar="JSON"),),
+        convert=_run_input,
+        example="tico automation run auto_123 --input '{\"text\": \"hi\"}'",
+    ),
+    Command(
+        "automation runs",
+        "an automation's runs, newest first, with step detail for 30 days and daily counts",
+        example="tico automation runs auto_123 --limit 10",
+    ),
+    Command(
+        "automation held",
+        "end a run-guard hold: `release` queues its held runs, `drop` skips them",
+        example="tico automation held auto_123 release",
+    ),
+    Command(
+        "automation recent-runs",
+        "runs across every automation you may see, newest first: what started each, its outcome, steps and cost",
+        example="tico automation recent-runs --range 24h --status failed",
+    ),
+    Command(
+        "automation stats",
+        "runs, failures and cost per automation over a range, with totals",
+        example="tico automation stats --range 7d",
+    ),
+    Command(
+        "automation versions",
+        "an automation's versions, newest first; --pending lists the proposals only",
+        args=(Arg("status", flag="--pending", action="store_const", const="pending"),),
+        example="tico automation versions auto_123 --pending",
+    ),
+    Command(
+        "automation restore",
+        "make a version current: a pending one keeps its number, an older one is saved as a new version",
+        example="tico automation restore auto_123 3",
+    ),
+    Command(
+        "automation discard",
+        "drop a pending version: a proposal a bot made; the automation stays as it is",
+        example="tico automation discard auto_123 4",
+    ),
+    Command(
+        "automation question-sets",
+        "the question sets a Decide step may name",
+        example="tico automation question-sets",
+    ),
+    Command(
+        "automation guide",
+        "how BotOps builds automations, with the flow format",
+        example="tico automation guide",
+    ),
+    Command(
+        "automation templates",
+        "the inbox templates: founder, support, sales, blank",
+        example="tico automation templates",
+    ),
+    Command(
+        "automation template",
+        "one inbox template filled in for an owner and an inbox (saves nothing)",
+        args=(Arg("owner", flag="--owner"), Arg("inbox", flag="--inbox")),
+        example="tico automation template founder --owner person:ana --inbox support@example.com",
+    ),
+)
+
+# `tico event-types`: a top-level leaf.
+EVENT_TYPES = (
+    Command(
+        "event-types",
+        "every event Tico names, with a one-line description and an example payload",
+        example="tico event-types --group task",
+    ),
+)

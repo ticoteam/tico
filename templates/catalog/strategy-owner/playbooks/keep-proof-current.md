@@ -15,8 +15,8 @@ At Passive, run it only when the owner asks.
 
 ## 1. Check what is there
 
-- `tico strategy show`: `current.sections.proof` is the published text. `proof_since` is when it last changed (null when
-  it is empty or nothing is published).
+- `tico strategy show`: `current.sections.proof` is the live text. `proof_since` is when it last changed (null when
+  it is empty or there is no strategy yet).
 - `tico proposal list`: a pending `strategy_draft` that already changes `proof` is waiting for the owner. Do not file
   another. Say in your note that it is waiting.
 
@@ -56,7 +56,7 @@ Rules:
 
 ## 4. Propose it
 
-If the text says what the published one says, stop: there is nothing to propose. Otherwise file one proposal:
+If the text says what the live one says, stop: there is nothing to propose. Otherwise file one proposal:
 
     tico proposal create --kind strategy_draft --payload-file proof.json --reason "<one sentence: what changed in the evidence>"
 

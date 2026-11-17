@@ -28,6 +28,7 @@ from .finance import receipts as finance_receipts_mod
 from .finance import subscriptions as finance_subscriptions
 from .models import ID, Contract
 from .store import Problem
+from .api_contract import api_v2
 
 STATUS = {
     "not_found": 404,
@@ -168,6 +169,12 @@ def books_problem(e: books_link.BrokerFailed) -> Problem:
     return Problem("books_unavailable", "HQ could not finish that books step: try again in a moment", 502)
 
 
+TAX_CSV = {
+    "description": "The workpaper as CSV (text/csv, sent as an attachment)",
+    "content": {"text/csv": {"schema": {"type": "string"}}},
+}
+
+
 def install(app, store, auth, mutate):
     # The private-line audit a request has armed (spec §7.5): its reader, the private accounts that reader sees in full,
     # and the ids the request names. `viewer` clears it at the start of every request, so it never outlives one.
@@ -245,7 +252,15 @@ def install(app, store, auth, mutate):
         audit_private_read(request, actor)
         return actor
 
-    @app.get("/api/v2/finance/budgets")
+    @app.get(
+        "/api/v2/finance/budgets",
+        **api_v2(
+            "Finance",
+            "listFinanceBudgets",
+            "The budgets the caller sees, each with where it stands today, or with at=YYYY-MM-DD in the period holding that day (the version in effect then); amounts in cents. The owner may pass view_as",
+            "FinanceBudgets",
+        ),
+    )
     def finance_budgets(
         request: Request,
         include_inactive: bool = False,
@@ -258,7 +273,15 @@ def install(app, store, auth, mutate):
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.budgets(c, actor, include_inactive=include_inactive, limit=limit, on=at))
 
-    @app.get("/api/v2/finance/subscriptions")
+    @app.get(
+        "/api/v2/finance/subscriptions",
+        **api_v2(
+            "Finance",
+            "listFinanceSubscriptions",
+            "The subscriptions the caller sees: recurring charges the daily look suggests and the Finance Owner confirms, each with its cadence, expected amount and monthly cost in cents, next charge, card, seats and attribution, and the monthly total of the active ones. status narrows them",
+            "FinanceSubscriptions",
+        ),
+    )
     def finance_subscriptions_list(
         request: Request,
         status: Literal["suggested", "active", "ignored", "cancelled"] | None = None,
@@ -270,7 +293,15 @@ def install(app, store, auth, mutate):
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_subscriptions.read(c, actor, status))
 
-    @app.get("/api/v2/finance/brief")
+    @app.get(
+        "/api/v2/finance/brief",
+        **api_v2(
+            "Finance",
+            "getFinanceBrief",
+            "What changed in Finance for the caller: a few short lines about the money they may see, with as_of (when those numbers last moved) and changed_since. Empty lines when there is nothing to say. The owner may pass view_as",
+            "FinanceBrief",
+        ),
+    )
     def finance_brief(request: Request, view_as: str | None = None):
         """What changed in Finance for the caller: a few short lines about the money they may see (their budgets, their
         team's, cash and burn where they see the company), with `as_of` when those numbers last moved and `changed_since`
@@ -282,7 +313,15 @@ def install(app, store, auth, mutate):
         except finance.FinanceError as e:
             raise problem(e) from None
 
-    @app.get("/api/v2/finance/pnl")
+    @app.get(
+        "/api/v2/finance/pnl",
+        **api_v2(
+            "Finance",
+            "getFinancePnl",
+            "The P&L the caller sees, by day, week, month, quarter or year (past, current and projected columns), with budget and projection beside each actual; each row says its section. view=expenses filters by teams and teammates (several at once), who (bots, people or both) and unattributed. The owner may pass view_as",
+            "FinancePnl",
+        ),
+    )
     def finance_pnl(
         request: Request,
         start: str | None = None,
@@ -322,13 +361,29 @@ def install(app, store, auth, mutate):
             )
         )
 
-    @app.get("/api/v2/finance/balance-sheet")
+    @app.get(
+        "/api/v2/finance/balance-sheet",
+        **api_v2(
+            "Finance",
+            "getFinanceBalanceSheet",
+            "Assets, liabilities and equity on a day, each line with its sources. Owner-only unless granted",
+            "FinanceBalanceSheet",
+        ),
+    )
     def finance_balance_sheet(request: Request, as_of: str | None = None, view_as: str | None = None):
         """Assets, liabilities and equity on a day, each line with its sources. Owner-only unless granted."""
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.balance_sheet(c, actor, as_of))
 
-    @app.get("/api/v2/finance/transactions")
+    @app.get(
+        "/api/v2/finance/transactions",
+        **api_v2(
+            "Finance",
+            "listFinanceTransactions",
+            "Feed rows and entries the caller sees, newest first, with filters, search and a cursor",
+            "FinanceTransactions",
+        ),
+    )
     def finance_transactions(
         request: Request,
         source: Literal["all", "feed", "entry"] = "all",
@@ -369,7 +424,15 @@ def install(app, store, auth, mutate):
             )
         )
 
-    @app.get("/api/v2/finance/cards")
+    @app.get(
+        "/api/v2/finance/cards",
+        **api_v2(
+            "Finance",
+            "listFinanceCards",
+            "The cards the caller follows, last 4 only, with allocation and spend this period",
+            "FinanceCards",
+        ),
+    )
     def finance_cards(
         request: Request,
         status: Literal["active", "frozen", "canceled"] | None = None,
@@ -389,7 +452,15 @@ def install(app, store, auth, mutate):
             )
         )
 
-    @app.get("/api/v2/finance/sources")
+    @app.get(
+        "/api/v2/finance/sources",
+        **api_v2(
+            "Finance",
+            "listFinanceSources",
+            "Every source of the books grouped with counts, each with its account mapping, sync and access. Owner-only unless granted",
+            "FinanceSources",
+        ),
+    )
     def finance_sources(request: Request, group: str | None = None, view_as: str | None = None):
         """Every source of the books, grouped with counts; mapping, sync and access per source. Owner-only unless
         granted."""
@@ -400,44 +471,29 @@ def install(app, store, auth, mutate):
             )
         )
 
-    @app.get("/api/v2/finance/webhook-deliveries")
-    def finance_webhook_deliveries(request: Request, limit: int = Query(20, ge=1, le=100)):
-        """Calls to Finance's triggers (Mercury) still kept, newest first, with their bodies: for a finance admin who
-        sees sources. The ordinary trigger routes never show these bodies."""
-        who = viewer(request)
-        audit_private_read(request, who.actor)
-        return read(lambda c: finance_reads.webhook_deliveries(c, who.actor, limit=limit))
-
-    @app.get("/api/v2/finance/access")
+    @app.get(
+        "/api/v2/finance/access",
+        **api_v2(
+            "Finance",
+            "getFinanceAccess",
+            "Who can see what in Finance: teams, each teammate's default, grants and rights, whether the caller may grant them more (may_grant), private lines, the defaults",
+            "FinanceAccess",
+        ),
+    )
     def finance_access(request: Request):
         """Who can see what in Finance: the org chart with defaults and grants, private lines and the defaults."""
         who = viewer(request)
         return read(lambda c: finance_reads.access(c, who.actor))
 
-    @app.get("/api/v2/finance/payments")
-    def finance_payments(
-        request: Request,
-        status: Literal[
-            "queued",
-            "sending",
-            "awaiting_bank_approval",
-            "submitted",
-            "settled",
-            "returned",
-            "failed",
-            "canceled",
-            "unknown",
-        ]
-        | None = None,
-        cursor: str | None = Query(None, max_length=100),
-        limit: int = Query(50, ge=1, le=200),
-        view_as: str | None = None,
-    ):
-        """Payments the caller made or whose line they see, newest first, with their lifecycle status."""
-        actor = as_viewer(request, view_as)
-        return read(lambda c: finance_reads.payments(c, actor, status=status, cursor=cursor, limit=limit))
-
-    @app.get("/api/v2/finance/transfers")
+    @app.get(
+        "/api/v2/finance/transfers",
+        **api_v2(
+            "Finance",
+            "listFinanceTransfers",
+            "Internal transfers between two money accounts the caller sees, newest first, with their status and a cursor; errors only for the maker or a finance admin",
+            "FinanceTransfers",
+        ),
+    )
     def finance_transfers(
         request: Request,
         cursor: str | None = Query(None, max_length=100),
@@ -448,42 +504,30 @@ def install(app, store, auth, mutate):
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.transfers(c, actor, cursor=cursor, limit=limit))
 
-    @app.get("/api/v2/finance/recipients")
-    def finance_recipients(request: Request):
-        """Current recipients, last 4 only, for teammates who may pay."""
-        who = viewer(request)
-        return read(lambda c: finance_reads.recipients(c, who.actor))
-
-    @app.get("/api/v2/finance/mercury-users")
+    @app.get(
+        "/api/v2/finance/mercury-users",
+        **api_v2(
+            "Finance",
+            "listFinanceMercuryUsers",
+            "Mercury's users as last synced, to pick a card holder, for teammates who may issue cards; emails (masked) only for a finance admin",
+            "FinanceMercuryUsers",
+        ),
+    )
     def finance_mercury_users(request: Request):
         """Mercury's users as the last sync read them, to pick a card holder: for teammates who may issue cards. A
         finance admin also sees each email, masked."""
         who = viewer(request)
         return read(lambda c: finance_reads.provider_users(c, who.actor))
 
-    @app.get("/api/v2/finance/reconciliations")
-    def finance_reconciliations(
-        request: Request,
-        money_account_id: str | None = None,
-        limit: int = Query(50, ge=1, le=200),
-        view_as: str | None = None,
-    ):
-        """Reconciliations of the money accounts the caller sees, with each account's locked-through day."""
-        actor = as_viewer(request, view_as)
-        return read(lambda c: finance_reads.reconciliations(c, actor, money_account_id=money_account_id, limit=limit))
-
-    @app.get("/api/v2/finance/statements")
-    def finance_statements(
-        request: Request,
-        money_account_id: str | None = None,
-        limit: int = Query(50, ge=1, le=200),
-        view_as: str | None = None,
-    ):
-        """Bank and card statements for the money accounts the caller sees."""
-        actor = as_viewer(request, view_as)
-        return read(lambda c: finance_reads.statements(c, actor, money_account_id=money_account_id, limit=limit))
-
-    @app.post("/api/v2/finance/statements/preview")
+    @app.post(
+        "/api/v2/finance/statements/preview",
+        **api_v2(
+            "Finance",
+            "previewFinanceStatement",
+            "Review a bank or card statement file before it posts: each row New or Already in Tico, its vendor and attribution, and the tie-out. Writes only a short-lived preview token",
+            "FinanceStatementReview",
+        ),
+    )
     def finance_statement_preview(request: Request, body: FinanceStatementPreviewRequest):
         """Review a bank or card statement file before it posts: each row New or Already in Tico, its vendor and the rule
         that would attribute it, and the tie-out against the statement's balances. Writes nothing but a short-lived token
@@ -502,34 +546,60 @@ def install(app, store, auth, mutate):
             raise problem(e) from None
         return audited(review)
 
-    @app.get("/api/v2/finance/rules")
-    def finance_rules(request: Request, external_rule_id: str | None = Query(None, max_length=120)):
-        """Finance gate rules for teammates who may write them; `external_rule_id` lists those linked to one."""
-        who = viewer(request)
-        return read(lambda c: finance_reads.rules(c, who.actor, external_rule_id=external_rule_id))
-
-    @app.get("/api/v2/finance/attribution-rules")
+    @app.get(
+        "/api/v2/finance/attribution-rules",
+        **api_v2(
+            "Finance",
+            "listFinanceAttributionRules",
+            "The attribution rules in the book (vendor, P&L account or money account matches, their shares, enabled and apply_from); needs the finance.attribution right or admin",
+            "FinanceAttributionRules",
+        ),
+    )
     def finance_attribution_rules(request: Request):
         """The book's attribution rules (vendor, P&L account or money account, and their shares); needs the attribution
         right or admin."""
         who = viewer(request)
         return read(lambda c: finance_reads.attribution_rules(c, who.actor))
 
-    @app.get("/api/v2/finance/attribution/dimensions")
+    @app.get(
+        "/api/v2/finance/attribution/dimensions",
+        **api_v2(
+            "Finance",
+            "listFinanceAttributionDimensions",
+            "The classes, departments (locations) and projects seen on P&L lines in the last 12 months the caller sees, largest amount first, each with its line count, amount and rule (its shares, or null); needs the finance.attribution right or admin. Set them with the attribution_map action",
+            "FinanceAttributionDimensions",
+        ),
+    )
     def finance_attribution_dimensions(request: Request):
         """The classes, locations and projects on the P&L lines of the last 12 months, with their rules; needs the
         attribution right or admin."""
         who = viewer(request)
         return read(lambda c: finance_reads.attribution_dimensions(c, who.actor))
 
-    @app.get("/api/v2/finance/lines/{line_id}/attribution")
+    @app.get(
+        "/api/v2/finance/lines/{line_id}/attribution",
+        **api_v2(
+            "Finance",
+            "getFinanceLineAttribution",
+            "One posted P&L line's attribution: the shares in force (source: person, bot, rule or tags), their amounts, and the line's history newest first, as far as the caller sees the line",
+            "FinanceLineAttribution",
+        ),
+    )
     def finance_line_attribution(request: Request, line_id: str, view_as: str | None = None):
         """One posted P&L line's attribution: the shares in force, their amounts and the line's history, as far as the
         caller sees the line. The owner may pass view_as."""
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.line_attribution(c, actor, line_id))
 
-    @app.get("/api/v2/finance/bills")
+    @app.get(
+        "/api/v2/finance/bills",
+        **api_v2(
+            "Finance",
+            "listFinanceBills",
+            "Bills the caller sees (payables: a view grant or finance.ap), newest first, filtered by status (comma-separated, or unpaid), vendor, dates, aging bucket or late, and a search, with the open total by aging bucket and a cursor; order=paid_on lists the last paid first",
+            "FinanceBills",
+        ),
+    )
     def finance_bills(
         request: Request,
         status: str | None = Query(None, max_length=80),
@@ -565,38 +635,29 @@ def install(app, store, auth, mutate):
             )
         )
 
-    @app.get("/api/v2/finance/bills/{bill_id}")
+    @app.get(
+        "/api/v2/finance/bills/{bill_id}",
+        **api_v2(
+            "Finance",
+            "getFinanceBill",
+            "One bill with its lines, the payments settled against it, its attachments and the actions and approvals on it",
+            "FinanceDocument",
+        ),
+    )
     def finance_bill(request: Request, bill_id: ID, view_as: str | None = None):
         """One bill with its lines, payments against it, attachments and the actions and approvals on it."""
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.bill(c, actor, bill_id))
 
-    @app.get("/api/v2/purchase-orders")
-    def finance_purchase_orders(
-        request: Request,
-        status: str | None = Query(None, max_length=80),
-        vendor_id: str | None = Query(None, max_length=80),
-        q: str = Query("", max_length=100),
-        cursor: str | None = Query(None, max_length=600),
-        limit: int = Query(50, ge=1, le=200),
-        view_as: str | None = None,
-    ):
-        """Purchase orders the caller sees (payables), newest first; `next_cursor` pages. `status` takes
-        draft|sent|approved|partial|closed|void, and `q` searches number, memo and vendor name."""
-        actor = as_viewer(request, view_as)
-        return read(
-            lambda c: finance_reads.orders(
-                c, actor, status=status, vendor_id=vendor_id, q=q, cursor=cursor, limit=limit
-            )
-        )
-
-    @app.get("/api/v2/purchase-orders/{po_id}")
-    def finance_purchase_order(request: Request, po_id: ID, view_as: str | None = None):
-        """One purchase order with its lines and what each line has billed."""
-        actor = as_viewer(request, view_as)
-        return read(lambda c: finance_reads.order(c, actor, po_id))
-
-    @app.get("/api/v2/estimates")
+    @app.get(
+        "/api/v2/estimates",
+        **api_v2(
+            "Finance",
+            "listEstimates",
+            "Estimates the caller sees (receivables), newest first, by status, customer and a search over number, memo and customer name, with a cursor",
+            "Estimates",
+        ),
+    )
     def finance_estimates(
         request: Request,
         status: str | None = Query(None, max_length=80),
@@ -615,13 +676,15 @@ def install(app, store, auth, mutate):
             )
         )
 
-    @app.get("/api/v2/estimates/{estimate_id}")
-    def finance_estimate(request: Request, estimate_id: ID, view_as: str | None = None):
-        """One estimate with its lines; each line says whether it is taxable."""
-        actor = as_viewer(request, view_as)
-        return read(lambda c: finance_reads.estimate(c, actor, estimate_id))
-
-    @app.get("/api/v2/locations")
+    @app.get(
+        "/api/v2/locations",
+        **api_v2(
+            "Finance",
+            "listLocations",
+            "Locations by name; q searches names, archived hides them (default), shows only them or both; with a cursor",
+            "Locations",
+        ),
+    )
     def finance_locations(
         request: Request,
         q: str = Query("", max_length=100),
@@ -639,13 +702,15 @@ def install(app, store, auth, mutate):
             )
         )
 
-    @app.get("/api/v2/locations/{location_id}")
-    def finance_location(request: Request, location_id: ID, view_as: str | None = None):
-        """One location, archived or not."""
-        actor = as_viewer(request, view_as)
-        return read(lambda c: finance_reads.record(c, actor, kind="location", record_id=location_id))
-
-    @app.get("/api/v2/items")
+    @app.get(
+        "/api/v2/items",
+        **api_v2(
+            "Finance",
+            "listItems",
+            "Products and services by name or sku; q searches both, archived hides them (default), shows only them or both; with a cursor. An item's accounts show to viewers who see them; its price shows with its income account",
+            "Items",
+        ),
+    )
     def finance_items(
         request: Request,
         q: str = Query("", max_length=100),
@@ -661,13 +726,29 @@ def install(app, store, auth, mutate):
             lambda c: finance_reads.records(c, actor, kind="item", q=q, archived=archived, cursor=cursor, limit=limit)
         )
 
-    @app.get("/api/v2/items/{item_id}")
+    @app.get(
+        "/api/v2/items/{item_id}",
+        **api_v2(
+            "Finance",
+            "getItem",
+            "One product or service, archived or not; its accounts show to viewers who see them",
+            "ItemOne",
+        ),
+    )
     def finance_item(request: Request, item_id: ID, view_as: str | None = None):
         """One product or service, archived or not, without the accounts it posts to."""
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.record(c, actor, kind="item", record_id=item_id))
 
-    @app.get("/api/v2/projects")
+    @app.get(
+        "/api/v2/projects",
+        **api_v2(
+            "Finance",
+            "listProjects",
+            "Projects by name; q searches names, archived hides them (default), shows only them or both; with a cursor",
+            "Projects",
+        ),
+    )
     def finance_projects(
         request: Request,
         q: str = Query("", max_length=100),
@@ -685,13 +766,23 @@ def install(app, store, auth, mutate):
             )
         )
 
-    @app.get("/api/v2/projects/{project_id}")
+    @app.get(
+        "/api/v2/projects/{project_id}", **api_v2("Finance", "getProject", "One project, archived or not", "ProjectOne")
+    )
     def finance_project(request: Request, project_id: ID, view_as: str | None = None):
         """One project, archived or not."""
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.record(c, actor, kind="project", record_id=project_id))
 
-    @app.get("/api/v2/finance/invoices")
+    @app.get(
+        "/api/v2/finance/invoices",
+        **api_v2(
+            "Finance",
+            "listFinanceInvoices",
+            "Invoices the caller sees (receivables: a view grant or finance.ar), newest first, with the same filters as bills",
+            "FinanceInvoices",
+        ),
+    )
     def finance_invoices(
         request: Request,
         status: str | None = Query(None, max_length=80),
@@ -724,13 +815,29 @@ def install(app, store, auth, mutate):
             )
         )
 
-    @app.get("/api/v2/finance/invoices/{invoice_id}")
+    @app.get(
+        "/api/v2/finance/invoices/{invoice_id}",
+        **api_v2(
+            "Finance",
+            "getFinanceInvoice",
+            "One invoice with its lines, the payments received, its attachments and the actions and approvals on it",
+            "FinanceDocument",
+        ),
+    )
     def finance_invoice(request: Request, invoice_id: ID, view_as: str | None = None):
         """One invoice with its lines, payments received, attachments and the actions and approvals on it."""
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.invoice(c, actor, invoice_id))
 
-    @app.get("/api/v2/finance/contacts")
+    @app.get(
+        "/api/v2/finance/contacts",
+        **api_v2(
+            "Finance",
+            "listFinanceContacts",
+            "Vendors (to whoever sees payables) and customers (receivables) by name, with what their open documents owe; a tax id's last 4 only for a finance admin",
+            "FinanceContacts",
+        ),
+    )
     def finance_contacts(
         request: Request,
         kind: Literal["vendor", "customer", "both"] | None = None,
@@ -746,7 +853,15 @@ def install(app, store, auth, mutate):
             lambda c: finance_reads.contacts(c, actor, kind=kind, q=q, active=active, cursor=cursor, limit=limit)
         )
 
-    @app.get("/api/v2/finance/chart")
+    @app.get(
+        "/api/v2/finance/chart",
+        **api_v2(
+            "Finance",
+            "getFinanceChart",
+            "The lines the caller may post to (id, number, name, type), for the bill, invoice and journal forms; for= bill keeps expense and asset lines, invoice income lines; for teammates who write to the books",
+            "FinanceChart",
+        ),
+    )
     def finance_chart(
         request: Request,
         for_: Literal["bill", "invoice", "journal"] | None = Query(None, alias="for"),
@@ -757,20 +872,44 @@ def install(app, store, auth, mutate):
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.chart(c, actor, for_=for_))
 
-    @app.get("/api/v2/finance/pay-from")
+    @app.get(
+        "/api/v2/finance/pay-from",
+        **api_v2(
+            "Finance",
+            "listFinancePayFrom",
+            "The connected bank accounts the caller may pay bills from (finance.pay); balances only where the caller sees that account",
+            "FinancePayFrom",
+        ),
+    )
     def finance_pay_from(request: Request, view_as: str | None = None):
         """The connected bank accounts the caller may pay bills from (finance.pay); balances only where the caller
         sees that account."""
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.pay_from(c, actor))
 
-    @app.get("/api/v2/finance/feed/{feed_id}/expected")
+    @app.get(
+        "/api/v2/finance/feed/{feed_id}/expected",
+        **api_v2(
+            "Finance",
+            "listFinanceFeedExpected",
+            "The payments marked paid a settled bank row not yet in the books may be the bank side of (same money account and direction, at most its amount, marked within 5 days), capped at 20, for the feed_match action",
+            "FinanceFeedExpected",
+        ),
+    )
     def finance_feed_expected(request: Request, feed_id: ID, view_as: str | None = None):
         """The payments marked paid a bank row may be the bank side of, for feed_match."""
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.feed_expected(c, actor, feed_id))
 
-    @app.get("/api/v2/finance/inbox")
+    @app.get(
+        "/api/v2/finance/inbox",
+        **api_v2(
+            "Finance",
+            "getFinanceInbox",
+            "The caller's Finance work queue: uncategorized rows, bills to enter, unmatched and missing receipts, bills due, overdue invoices, budgets near their limit, failed syncs and months ready to close, with counts and a cursor",
+            "FinanceInbox",
+        ),
+    )
     def finance_inbox(
         request: Request,
         cursor: str | None = Query(None, max_length=100),
@@ -784,7 +923,15 @@ def install(app, store, auth, mutate):
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.inbox(c, actor, cursor=cursor, limit=limit, kind=kind))
 
-    @app.get("/api/v2/finance/reports/{kind}")
+    @app.get(
+        "/api/v2/finance/reports/{kind}",
+        **api_v2(
+            "Finance",
+            "getFinanceReport",
+            "pnl (cash or accrual), balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging, spend_by or campaigns, cut to the caller's view; compare=prior adds the window before; rows past top_n fold into one Other row (key \" other\"; the group with no vendor, team or teammate is keyed \" unattributed\": no real key starts with a space)",
+            "FinanceReportOf",
+        ),
+    )
     def finance_report(
         request: Request,
         kind: Report,
@@ -807,7 +954,15 @@ def install(app, store, auth, mutate):
             )
         )
 
-    @app.get("/api/v2/finance/tax/sales-tax")
+    @app.get(
+        "/api/v2/finance/tax/sales-tax",
+        **api_v2(
+            "Finance",
+            "getFinanceSalesTax",
+            "The sales tax workpaper for a year (this year when omitted): each jurisdiction's quarters with taxable and exempt sales, tax collected and remitted, what is due and when. Full view only",
+            "FinanceSalesTax",
+        ),
+    )
     def finance_sales_tax(
         request: Request, year: int | None = Query(None, ge=2000, le=2100), view_as: str | None = None
     ):
@@ -817,7 +972,15 @@ def install(app, store, auth, mutate):
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.sales_tax_report(c, actor, year))
 
-    @app.get("/api/v2/finance/tax/sales-tax.csv")
+    @app.get(
+        "/api/v2/finance/tax/sales-tax.csv",
+        **api_v2(
+            "Finance",
+            "getFinanceSalesTaxCsv",
+            "The sales tax workpaper as CSV, the same lines as on screen. Full view only",
+            answer=TAX_CSV,
+        ),
+    )
     def finance_sales_tax_csv(
         request: Request, year: int | None = Query(None, ge=2000, le=2100), view_as: str | None = None
     ):
@@ -834,7 +997,15 @@ def install(app, store, auth, mutate):
             },
         )
 
-    @app.get("/api/v2/finance/tax/1099")
+    @app.get(
+        "/api/v2/finance/tax/1099",
+        **api_v2(
+            "Finance",
+            "getFinance1099",
+            "The 1099 workpaper for a year (this year when omitted): each flagged vendor's cash paid with card payments left out, the threshold, whether a 1099-NEC is due and when. Full view only",
+            "Finance1099",
+        ),
+    )
     def finance_form_1099(
         request: Request, year: int | None = Query(None, ge=2000, le=2100), view_as: str | None = None
     ):
@@ -844,7 +1015,15 @@ def install(app, store, auth, mutate):
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.form_1099_report(c, actor, year))
 
-    @app.get("/api/v2/finance/tax/1099.csv")
+    @app.get(
+        "/api/v2/finance/tax/1099.csv",
+        **api_v2(
+            "Finance",
+            "getFinance1099Csv",
+            "The 1099 workpaper as CSV, the same lines as on screen. Full view only",
+            answer=TAX_CSV,
+        ),
+    )
     def finance_form_1099_csv(
         request: Request, year: int | None = Query(None, ge=2000, le=2100), view_as: str | None = None
     ):
@@ -861,7 +1040,15 @@ def install(app, store, auth, mutate):
             },
         )
 
-    @app.get("/api/v2/finance/search")
+    @app.get(
+        "/api/v2/finance/search",
+        **api_v2(
+            "Finance",
+            "searchFinance",
+            "Search entries, bank and card rows, bills, invoices, contacts and rules the caller sees; with kind it pages by cursor, without it returns the first few of each kind",
+            "FinanceSearch",
+        ),
+    )
     def finance_search(
         request: Request,
         kind: Literal[
@@ -921,7 +1108,15 @@ def install(app, store, auth, mutate):
             lambda c: finance_reads.search(c, actor, kind=kind, q=q, filters=filters, limit=limit, cursor=cursor)
         )
 
-    @app.get("/api/v2/finance/metrics/{name}")
+    @app.get(
+        "/api/v2/finance/metrics/{name}",
+        **api_v2(
+            "Finance",
+            "getFinanceMetric",
+            "One number with when it was worked out (and for bank-backed numbers how fresh the data is): cash, burn, runway_months, revenue, spend, budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, unreconciled_days, unattributed, ad_spend, per_conversion",
+            "FinanceMetric",
+        ),
+    )
     def finance_metric(
         request: Request,
         name: Metric,
@@ -953,7 +1148,15 @@ def install(app, store, auth, mutate):
             )
         )
 
-    @app.get("/api/v2/finance/unattributed")
+    @app.get(
+        "/api/v2/finance/unattributed",
+        **api_v2(
+            "Finance",
+            "listFinanceUnattributed",
+            "The Unattributed queue: the P&L lines in the period (this month by default) with no team, teammate or attribution in force, newest first, paged by cursor, cut to what the caller sees",
+            "FinanceUnattributed",
+        ),
+    )
     def finance_unattributed(
         request: Request,
         start: str | None = Query(None, pattern=DAY),
@@ -967,7 +1170,15 @@ def install(app, store, auth, mutate):
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.unattributed(c, actor, start=start, end=end, cursor=cursor, limit=limit))
 
-    @app.get("/api/v2/finance/close/{month}")
+    @app.get(
+        "/api/v2/finance/close/{month}",
+        **api_v2(
+            "Finance",
+            "getFinanceCloseChecklist",
+            "A month's close checklist (YYYY-MM) for teammates who do the books, and whether it is ready to close",
+            "FinanceCloseChecklist",
+        ),
+    )
     def finance_close(request: Request, month: str, top_n: int = Query(20, ge=1, le=200)):
         """A month's close checklist, for teammates who do the books. The money accounts still behind are listed up to
         `top_n`; the rest fold into "Other · n"."""
@@ -975,7 +1186,15 @@ def install(app, store, auth, mutate):
         audit_private_read(request, who.actor)
         return read(lambda c: finance_reads.close_checklist(c, who.actor, month, top_n=top_n))
 
-    @app.get("/api/v2/finance/action-kinds")
+    @app.get(
+        "/api/v2/finance/action-kinds",
+        **api_v2(
+            "Finance",
+            "listFinanceActionKinds",
+            "Every Finance action kind in a line, or with kind= one kind's payload fields, right and approval kind",
+            "FinanceActionKinds",
+        ),
+    )
     def finance_action_kinds(request: Request, kind: str | None = Query(None, max_length=80)):
         """Every Finance action kind in a line, or one kind's payload fields, right and approval kind."""
         viewer(request)
@@ -984,13 +1203,24 @@ def install(app, store, auth, mutate):
         except finance.FinanceError as e:
             raise problem(e) from None
 
-    @app.post("/api/v2/finance/connections")
+    @app.post(
+        "/api/v2/finance/connections",
+        **api_v2(
+            "Finance",
+            "createFinanceConnection",
+            "Connect Mercury with a stored token credential (finance admins): the token is tested, its accounts listed and mapped into the books. The Idempotency-Key is the action's key",
+            "FinanceConnectionResult",
+        ),
+    )
     def finance_connect(request: Request, body: FinanceConnectionRequest):
         """Connect Mercury, Stripe or Brex: the credential is tested and its accounts listed (outside any transaction), then
         the connection_create action maps them into the books. A finance admin's action; the Idempotency-Key is its key."""
         who = viewer(request)
         if not read(lambda c: finance_reads.may_connect(c, who.actor)):
             raise Problem("denied", "connecting a bank is for finance admins", 403)
+        if not read(lambda c: finance.may_use_credential(c, who.actor, body.credential_id)):
+            # Before the probe: probing sends the key to the provider (connection_create checks again).
+            raise Problem("denied", finance.KEY_NOT_YOURS, 403)
         probe = {"stripe": finance.stripe_probe, "brex": finance.brex_probe}.get(body.provider, finance.mercury_probe)
         found, why = probe(store, request.app.state.vault, body.credential_id)
         if why:
@@ -1124,27 +1354,15 @@ def install(app, store, auth, mutate):
             raise books_problem(e) from None
         return {"connection_id": connection_id, "status": "disconnected"}
 
-    @app.get("/api/v2/finance/expenses")
-    def finance_expenses(
-        request: Request,
-        start: str | None = None,
-        end: str | None = None,
-        by: Group = "department",
-        account_id: str | None = None,
-        team: str | None = None,
-        teammate: str | None = None,
-        top_n: int = Query(20, ge=1, le=200),
-        view_as: str | None = None,
-    ):
-        """Expenses the caller sees, grouped by department, team, teammate, bot, person, vendor or line."""
-        actor = as_viewer(request, view_as)
-        return read(
-            lambda c: finance_reads.expenses(
-                c, actor, start, end, by, account_id=account_id, team=team, teammate=teammate, top_n=top_n
-            )
-        )
-
-    @app.get("/api/v2/finance/lines/{account_id}")
+    @app.get(
+        "/api/v2/finance/lines/{account_id}",
+        **api_v2(
+            "Finance",
+            "getFinanceLine",
+            "One line's spend by vendor, team and teammate, its entries, how they were paid (paid_by) and next month's projection (next_month; by vendor, team and teammate in next_by, named in next_labels), as far as the caller sees; vendor narrows it to one vendor, and teams[], teammates[], who and unattributed filter it as the P&L's expenses view does (private totals only from whole cohorts). Rows past top_n fold into one Other row keyed \" other\", and the group with none is keyed \" unattributed\". The owner may pass view_as",
+            "FinanceReport",
+        ),
+    )
     def finance_line(
         request: Request,
         account_id: str,
@@ -1180,7 +1398,15 @@ def install(app, store, auth, mutate):
             )
         )
 
-    @app.get("/api/v2/finance/receipts")
+    @app.get(
+        "/api/v2/finance/receipts",
+        **api_v2(
+            "Finance",
+            "listFinanceReceipts",
+            "The receipts the caller sees, newest first: each Library file with what it reads as (amount, date, vendor) and its suggested or filed bank or card row; ?status= narrows them, and a cursor pages them",
+            "FinanceReceipts",
+        ),
+    )
     def finance_receipts(
         request: Request,
         status: Literal["unread", "suggested", "unmatched", "attached", "rejected"] | None = None,
@@ -1215,7 +1441,15 @@ def install(app, store, auth, mutate):
                 if row is None or row["state"] == "deleted" or not files.visible(c, who, row, cache):
                     raise Problem("not_found", f"No such file in the Library: {fid[:80]}", 404)
 
-    @app.post("/api/v2/finance/actions")
+    @app.post(
+        "/api/v2/finance/actions",
+        **api_v2(
+            "Finance",
+            "requestFinanceAction",
+            "Request a Finance action: committed, sent to one person for approval, denied or failed. The Idempotency-Key is the action's key; a retry re-reads the rest through the caller's current view. dry_run writes nothing and says what would happen",
+            "FinanceAction",
+        ),
+    )
     def finance_act(request: Request, body: FinanceActionRequest):
         """Request a Finance action: committed, sent to one person for approval, denied or failed. The Idempotency-Key
         is the action's key, so a retry never acts twice. `dry_run` writes nothing and says what would happen. Files it
@@ -1270,7 +1504,15 @@ def install(app, store, auth, mutate):
             now = finance_reads.action_for(c, who.actor, saved["action_id"])
         return audited({**saved, **now} if now else saved)
 
-    @app.get("/api/v2/finance/actions/{action_id}")
+    @app.get(
+        "/api/v2/finance/actions/{action_id}",
+        **api_v2(
+            "Finance",
+            "getFinanceAction",
+            "An action's status, for whoever asked, its approver, or whose view covers it; its reason for the approver, and otherwise only while that view covers it",
+            "FinanceAction",
+        ),
+    )
     def finance_action(request: Request, action_id: ID):
         """An action's status, for whoever asked for it, the person named to decide its approval, or whoever's current
         view covers what it is about. Its reason shows to the approver, and to others only while their view covers it."""

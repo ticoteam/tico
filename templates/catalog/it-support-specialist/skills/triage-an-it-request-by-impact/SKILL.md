@@ -11,7 +11,7 @@ Steps:
    already tried.
 2. Pick one category: account and access, device, network, software, or security. If two fit, pick the one that stops
    the person more.
-3. Count who is stopped: one person, a small group, or the team. Ask one question with `tico task ask <id> --to <person> "<question>" --version N` only when the
+3. Count who is stopped: one person, a small group, or the team. Ask one question with `tico task ask <id> --to <person> "<question>"` only when the
    answer would change the priority.
 4. Set the priority:
    - P1: many people stopped, a suspected compromise (a login they did not make, a link that asked for a password, a lost

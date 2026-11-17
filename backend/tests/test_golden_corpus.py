@@ -290,23 +290,20 @@ def test_display_names_add_names_beside_ids_and_keep_every_body_as_written(named
         assert message["sender_name"] == "Operations"
         assert message["recipient_name"] == "Ana Example"
 
-    # The inbox through the door route_renames.py adds (v0.3.10 lost its names), and the old door, which is not a
-    # stable route: no names there, and the same words.
-    for url in ("/api/v2/messages", "/api/v2/messages?unread=1", "/api/v2/inbox"):
-        named_door = url.startswith("/api/v2/messages")
+    # The inbox (v0.3.10 lost its names): the messages door names the people and bots in its notices.
+    for url in ("/api/v2/messages", "/api/v2/messages?unread=1"):
         result = api.get(url, headers=headers())
         assert result.status_code == 200, (url, result.text)
         inbox = result.json()
         shown = next(m for m in inbox["notices"] if m["id"] == notice["id"])
-        if named_door:
-            assert inbox["actors"] == {"bot:ops": "Operations", "human:ana": "Ana Example"}, url
-            assert shown["body"] == "New task from Operations: Brightwater handover", url
-            assert shown["body_raw"] == "New task from bot:ops: Brightwater handover", url
-        else:
-            assert shown["body"] == "New task from bot:ops: Brightwater handover", url
+        assert inbox["actors"] == {"bot:ops": "Operations", "human:ana": "Ana Example"}, url
+        assert shown["body"] == "New task from Operations: Brightwater handover", url
+        assert shown["body_raw"] == "New task from bot:ops: Brightwater handover", url
 
     read = api.get("/api/v2/tasks/" + task["id"], headers=headers()).json()
-    assert read["task"]["body"] == texts[0][1]
+    assert (
+        read["task"]["request"]["text"] == texts[0][1].strip()
+    )  # the first message, as written (trimmed, as a comment is)
     assert read["task"]["owner_name"] == "Operations" and read["task"]["requester_name"] == "Ana Example"
     shown = api.get("/api/v2/docs/" + doc["id"], headers=headers()).json()["doc"]
     assert shown["body"] == _text(CORPUS / "kept" / "customer-export.json")  # byte for byte, ends included

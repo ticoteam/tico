@@ -13,6 +13,7 @@ from fastapi import Request
 from pydantic import Field
 
 from . import models as M
+from . import runner_online
 from .store import H, Problem, encode
 
 IMPORTERS = {
@@ -79,13 +80,12 @@ def install_meeting_importers(app, store, auth, execution, mutate, importer):
 
     def computers(c):
         allowed = set(eligible_operators(c))
-        now = H.now()
         return [
             {
                 "id": r["id"],
                 "label": r["label"],
                 "platform": r["platform"] or "",
-                "online": bool(r["last_seen_at"] and r["last_seen_at"] >= H.shift(now, minutes=-5)),
+                "online": runner_online.is_online(r["last_seen_at"]),
                 "last_seen_at": r["last_seen_at"],
             }
             for r in c.execute(

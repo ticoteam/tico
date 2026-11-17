@@ -58,22 +58,6 @@
                 }
             },
             {
-                "code": "reportFunctionMemberAccess",
-                "range": {
-                    "startColumn": 11,
-                    "endColumn": 16,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportFunctionMemberAccess",
-                "range": {
-                    "startColumn": 11,
-                    "endColumn": 24,
-                    "lineCount": 1
-                }
-            },
-            {
                 "code": "reportAttributeAccessIssue",
                 "range": {
                     "startColumn": 44,

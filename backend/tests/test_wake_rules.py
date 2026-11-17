@@ -204,8 +204,6 @@ def test_each_always_wake_case_is_never_filtered_even_on_a_parked_task_by_its_ow
     # One story for every always-wake case, each on its own fresh parked task (one setup, not one per case).
     cases = [
         ("say", {}, "Hi", "person"),
-        ("ask", {}, "Which release?", "ask"),
-        ("answer", {}, "v0.3.62", "ask"),
         ("steer", {}, "Stop and fix the tests", "ask"),
         ("notice", {"approval": "a1"}, "Approved", "approval"),
         ("notice", {"questions": [{"id": "q"}]}, "Pick one", "approval"),

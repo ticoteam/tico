@@ -2,8 +2,12 @@
    it. The list is laid out the way Automations is (style guide: "Tools and Automations: one layout"), on Automations'
    own layout classes (ui/styles/automations.css .au-*): search and filters in a rail on the left (Kind, Needs you, Who
    has access, each a plain list with counts; picking one narrows the list), one list on the right grouped In use, then
-   Available. A row is the tool's mark and name, who can use it as faces, and a pill only when something is wrong; a
-   tool that needs someone sorts to the top of its group. A row opens the tool as its own page, which holds its issues,
+   Available. A row is the tool's mark and name, a lock when Tico holds its key and an eye-off when only those listed
+   see it, who can use it as faces, and a pill only when something is wrong; a tool that needs someone sorts to the top
+   of its group. The list has one row a vendor (the hub's `vendor`: Raygun, not "Raygun production" and "Raygun dev and
+   staging"), which opens the vendor's page (#/tools/vendor/<service>): everything Tico holds for it, website logins,
+   MCP servers and API keys with their levels, who can use them and their Settings, each opening its own page. A
+   vendor with one tool, or a tool with no vendor, is that tool's own row under its own name. A row opens the tool as its own page, which holds its issues,
    who has it and its keys: Keys is not a page of its own any more. Adding is a quiet + in the header; ⋯ is last.
    On a phone the search moves into the header, the filters fold behind a button (sections that open one at a time)
    and the list is rows.
@@ -15,6 +19,7 @@
    access name teams, a team counting the teams under it.
    Addresses:
      #/tools[?show=api|websites|mail|other|keys][&needs=1][&who=bot:<id>|human:<id>|group:<id>][&q=<words>]   the list
+     #/tools/vendor/<service>                         one vendor: its tools, keys, levels and settings (this file)
      #/tools/api/<id>[/activity]                      one API tool (ui/app/tools-api.ts)
      #/tools/website/<id>[/activity]                  one website tool (ui/app/tools-website.ts)
      #/tools/mailbox/<address or id>[/activity]       one mailbox  ┐
@@ -36,12 +41,14 @@ interface ToolsStatus { tone?: string; text?: string; }
 // list shows; a group carries its member count.
 interface ToolsWho { kind: string; id: string; name?: string; members?: number | undefined; }
 // One row of the hub's list, as it sends it for this reader.
-interface ToolsRow { id: string; kind: string; name: string; detail?: string; way?: string; href?: string; private?: boolean; needs_you?: boolean; status?: ToolsStatus; who?: ToolsWho[]; who_total?: number; service?: string; }
+interface ToolsRow { id: string; kind: string; name: string; detail?: string; way?: string; href?: string; private?: boolean; needs_you?: boolean; status?: ToolsStatus; who?: ToolsWho[]; who_total?: number; service?: string; vendor?: string; vendor_name?: string; delivery?: string; }
 // One row as the list draws it, from the hub's row, a declared tool or a loose key. `facet`: its Kind; `group`: In use
-// or Available; `trouble`: the pill's words when something is wrong ('' otherwise), in `tone`; `text`: what search reads.
+// or Available; `trouble`: the pill's words when something is wrong ('' otherwise), in `tone`; `text`: what search reads;
+// `vendor`: who makes it (the hub's `vendor`: one row a vendor, named `vendorName`); `proxy`: Tico holds its key.
 interface ToolsItem {
   key: string; kind: string; facet: string; group: string; name: string; title: string; href: string; icon: string;
   trouble: string; tone: string; private: boolean; who: ToolsWho[]; whoTotal: number; text: string;
+  vendor: string; vendorName: string; proxy: boolean;
 }
 // The list's state: its run (a newer pageTools wins), what was read, the rows built from it, the error, and the filters
 // (they ride in the address); `fopen` is a phone's open filter sections, `closed` the groups folded.
@@ -99,11 +106,12 @@ const toolsWhoPicked = (): string => TL?.who || '';
 function toolsFromRow(r: ToolsRow): ToolsItem {
   const who = r.who || [], total = Math.max(r.who_total || 0, who.length), tone = r.status?.tone || 'idle';
   const wrong = !!r.needs_you || tone === 'fail', facet = TOOLS_FACET[r.kind] || 'other';
+  const vendor = r.vendor || '', vendorName = r.vendor_name || r.name || r.id;
   return {key: r.id, kind: r.kind, facet, group: total ? 'In use' : 'Available', name: r.name || r.id, title: [r.name, r.detail].filter(Boolean).join(' · '),
     href: r.href || TOOLS_ROUTE, icon: TOOLS_ICONS[r.kind] || 'link', trouble: wrong ? r.status?.text || 'Needs you' : '', tone: tone === 'fail' ? 'fail' : 'waiting',
-    private: !!r.private, who, whoTotal: total,
-    // Search reads the words, not the cells: a status or "Nobody yet" the row leaves blank still finds it.
-    text: [r.name, r.detail, r.way, r.status?.text, total ? '' : 'Nobody yet', ...who.map(w => w.name)].join(' ').toLowerCase()};
+    private: !!r.private, who, whoTotal: total, vendor, vendorName, proxy: r.kind === 'api' && r.delivery === 'proxy',
+    // Search reads the words, not the cells: a status, its vendor or "Nobody yet" the row leaves blank still finds it.
+    text: [r.name, vendor ? vendorName : '', r.detail, r.way, r.status?.text, total ? '' : 'Nobody yet', ...who.map(w => w.name)].join(' ').toLowerCase()};
 }
 // The faces of a declared tool or a key, from who the bots' entries and the vault's grants say has it.
 const toolsLcWho = (it: LcItem): ToolsWho[] => [
@@ -116,6 +124,7 @@ function toolsFromLc(it: LcItem, row: LcTool): ToolsItem {
   const trouble = !it.issues.length ? '' : it.issues.some(i => i.bot) ? 'Problem' : 'No key';
   return {key: 'service:' + it.key, kind: 'declared', facet: TOOLS_LC_FACET[row.kind] || 'api', group: it.group, name: it.title, title: [it.title, it.kind].filter(Boolean).join(' · '),
     href: TOOLS_ROUTE + '/' + encodeURIComponent(it.key), icon: it.icon, trouble, tone: 'fail', private: false, who, whoTotal: who.length,
+    vendor: '', vendorName: it.title, proxy: false,
     text: [it.text, it.issues.map(i => i.text).join(' '), who.length ? '' : 'Nobody yet', ...who.map(w => w.name)].join(' ').toLowerCase()};
 }
 // A stored key no tool holds: in use once it is granted to someone or to the computers.
@@ -123,7 +132,7 @@ function toolsFromKey(it: LcItem, cred: LcCredential): ToolsItem {
   const who = toolsLcWho(it), computers = (cred.grants || []).some(g => g.subject === 'computers' || g.subject.startsWith('computer:'));
   return {key: it.key, kind: 'key', facet: 'keys', group: who.length || computers ? 'In use' : 'Available', name: cred.name, title: [cred.name, cred.env].filter(Boolean).join(' · '),
     href: TOOLS_ROUTE + '/key/' + encodeURIComponent(cred.id), icon: 'key_vertical', trouble: cred.stored ? '' : 'No value', tone: 'fail', private: false,
-    who, whoTotal: who.length, text: [it.text, cred.stored ? '' : 'No value', ...who.map(w => w.name)].join(' ').toLowerCase()};
+    who, whoTotal: who.length, vendor: '', vendorName: '', proxy: false, text: [it.text, cred.stored ? '' : 'No value', ...who.map(w => w.name)].join(' ').toLowerCase()};
 }
 // Every row: the hub's, then the declared tools it has no row for (a service its rows already cover is drawn once), then
 // the keys no tool holds (a key on an API tool is on that tool's page).
@@ -244,9 +253,11 @@ async function pageTools() {
   const add = toolsAddItems().length;
   $('#main').classList.add('au-layout');
   // The one page header (ui/app/page-head.ts): a phone's filter button and the owner's chat in its tools, the quiet +
-  // (Automations' .au-plus) for adding, then ⋯ with mail Settings, last.
+  // (Automations' .au-plus) for adding, then ⋯ with mail Settings, last. Flow's mark beside the title while no tool is
+  // set up (ui/app/setup-gaps.ts).
+  void setupGapsWatch();
   $('#main').innerHTML = `<div class="au tt-au" id="tools-root" data-screen="list">
-    ${pageHead({title: 'Tools', hook: 'tt-head', pad: true,
+    ${pageHead({title: 'Tools', hook: 'tt-head', pad: true, after: '<span data-setup-mark="tools"></span>',
       tools: `<button type="button" class="au-fbtn" data-tl-filters aria-label="Filters" aria-expanded="false">${filterIcon(18)}<span class="au-fbn" hidden></span></button>`,
       primary: add ? `<span class="au-newbox"><button class="ghost ph-go au-plus" type="button" data-tl-add aria-label="Add tool" title="Add tool" aria-haspopup="menu" aria-expanded="false"><span class="nav-icon" aria-hidden="true">add</span></button><div class="au-newm" role="menu" aria-label="Add tool" hidden></div></span>` : '',
       more: `<a href="#/tools/settings" data-tl-settings>Settings</a>`})}
@@ -308,6 +319,35 @@ function toolsChanged(): void {
 }
 function toolsDraw(): void { toolsFacetsDraw(); toolsListDraw(); }
 
+// Marks after a row's name, no words: a lock when Tico holds the key (the proxy adds it to each call; bots never see it),
+// an eye-off when only those listed can see the tool.
+const TOOLS_PROXY_MARK = '<span class="nav-icon tt-lock" role="img" aria-label="Tico holds the key" title="Tico holds the key" data-proxy>lock</span>';
+const TOOLS_PRIVATE_MARK = '<span class="tt-lock tt-eye" role="img" aria-label="Only listed" title="Only listed" data-private><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false"><path d="M3 3l18 18M10.6 5.1A9.8 9.8 0 0 1 12 5c5 0 8.5 4.2 9.5 7-.4 1.1-1.2 2.5-2.4 3.7M6.6 6.6C4.6 8 3.1 10 2.5 12c1 2.8 4.5 7 9.5 7 1.9 0 3.6-.6 5-1.5M9.9 9.9a3 3 0 0 0 4.2 4.2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>';
+// One row a vendor: the tools of one vendor the list shows, or one tool on its own (a vendor with a single tool shown,
+// or a tool with no vendor, is that tool's row). A vendor's row is In use when any of its tools is; its pill is its
+// worst tool's (a failure before a wait), its faces everyone who can use any of them; it opens the vendor's page.
+function toolsVendorUnits(items: ToolsItem[]): ToolsItem[] {
+  const by = new Map<string, ToolsItem[]>(), out: ToolsItem[] = [];
+  for (const i of items) {
+    if (i.vendor) by.set(i.vendor, [...(by.get(i.vendor) || []), i]);
+    else out.push(i);
+  }
+  for (const [vendor, list] of by) {
+    const first = list[0];
+    if (!first) continue;
+    if (list.length === 1) { out.push(first); continue; }
+    const worst = list.find(i => i.trouble && i.tone === 'fail') || list.find(i => i.trouble);
+    const who = [...new Map(list.flatMap(i => i.who).map(w => [toolsWhoKey(w), w])).values()];
+    out.push({key: 'vendor:' + vendor, kind: 'vendor', facet: first.facet, group: list.some(i => i.group === 'In use') ? 'In use' : 'Available',
+      name: first.vendorName, title: first.vendorName, href: TOOLS_ROUTE + '/vendor/' + encodeURIComponent(vendor), icon: toolsVendorIcon(list),
+      trouble: worst?.trouble || '', tone: worst?.tone || 'waiting', private: false, who, whoTotal: Math.max(who.length, ...list.map(i => i.whoTotal)),
+      text: list.map(i => i.text).join(' '), vendor, vendorName: first.vendorName, proxy: false});
+  }
+  return out;
+}
+// A vendor's mark: its tools' own when they are all of one kind, else the generic one.
+const toolsVendorIcon = (list: ToolsItem[]): string => list.every(i => i.icon === list[0]?.icon) ? list[0]?.icon || 'category' : 'category';
+
 function toolsListDraw(): void {
   const state = TL, box = $('#tools-root [data-tl-table]') as HTMLElement | null;
   if (!state || !box || !state.items) return;
@@ -324,12 +364,11 @@ function toolsListDraw(): void {
     return;
   }
   const by = (a: ToolsItem, b: ToolsItem): number => Number(!a.trouble) - Number(!b.trouble) || a.name.localeCompare(b.name, undefined, {numeric: true});
-  const lock = '<span class="nav-icon tt-lock" role="img" aria-label="Private" title="Private" data-private>lock</span>';
   const tr = (i: ToolsItem): string => `<tr class="au-row" data-tl-row="${esc(i.key)}" data-tl-kind="${esc(i.kind)}"${i.trouble ? ' data-tl-needs' : ''}>`
-    + `<td class="au-tn"><div><a href="${esc(i.href)}" title="${esc(i.title)}">${auIconHTML(i.icon)}<span class="au-nm">${esc(i.name)}</span>${i.private ? lock : ''}</a>`
+    + `<td class="au-tn"><div><a href="${esc(i.href)}" title="${esc(i.title)}">${auIconHTML(i.icon)}<span class="au-nm">${esc(i.name)}</span>${i.proxy ? TOOLS_PROXY_MARK : ''}${i.private ? TOOLS_PRIVATE_MARK : ''}</a>`
     + `${i.trouble ? `<span class="pill ${i.tone} tt-pill">${esc(i.trouble)}</span>` : ''}</div></td><td class="tt-who">${toolsWhoHTML(i)}</td></tr>`;
   const body = TOOLS_GROUPS.map(g => {
-    const rows = shown.filter(i => i.group === g).sort(by), closed = state.closed.has(g);
+    const rows = toolsVendorUnits(shown).filter(i => i.group === g).sort(by), closed = state.closed.has(g);
     if (!rows.length) return '';
     return `<tr class="au-grp${closed ? ' closed' : ''}" data-tl-grp="${g}" role="button" tabindex="0" aria-expanded="${!closed}"><td colspan="2">${auIconHTML('expand_more').replace('nav-icon', 'nav-icon au-chev')}${g}<span class="au-fn">${rows.length}</span></td></tr>`
       + (closed ? '' : rows.map(tr).join(''));
@@ -412,7 +451,7 @@ function toolsAddItems(): [string, string, string][] {
   const admin = settingsIsAdmin();
   const kinds: InboxKind[] = Object.values(INBOX_KINDS).filter((k: InboxKind) => k.add && (!k.add.admin || admin)).sort((a: InboxKind, b: InboxKind) => a.order - b.order);
   return [
-    ...(S.me?.credential_access || admin ? [['api', 'API', 'api'], ['website', 'Website', 'travel_explore']] as [string, string, string][] : []),
+    ...(S.me?.credential_access || admin ? [['api', 'API', 'api'], ['mcp', 'MCP server', 'hub'], ['website', 'Website', 'travel_explore']] as [string, string, string][] : []),
     ...kinds.map((k): [string, string, string] => ['kind:' + k.key, k.add?.label || k.label, TOOLS_ICONS[k.key] || 'mail']),
     ['webhook', 'Outgoing webhook', 'open_in_new'],
     ...(VAULT?.can_manage ? [['key', 'Key', 'key_vertical']] as [string, string, string][] : []),
@@ -421,6 +460,7 @@ function toolsAddItems(): [string, string, string][] {
 function toolsAdd(item: string): void {
   if (item === 'api') { toolsApiCreate(); return; }
   if (item === 'website') { toolsWebsiteCreate(); return; }
+  if (item === 'mcp') { toolsMcpCreate(); return; }
   if (item === 'webhook') { location.hash = WH_HOOKS_ROUTE; void whHookDialog(null); return; }
   if (item === 'key') { vaultEdit(); return; }
   INBOX_KINDS[item.slice(5)]?.add?.open(inboxesCtx(IB.run));
@@ -434,4 +474,41 @@ function toolsInboxPage(view: string) {
   void inboxesRender();
 }
 // Leaving Tools drops the list, so coming back reads the hub again.
-function toolsStop() { TL = null; INBOXES_VIEW = ''; rdToolsStop(); toolApiStop(); toolWebsiteStop(); }
+function toolsStop() { TL = null; TV = null; INBOXES_VIEW = ''; rdToolsStop(); toolApiStop(); toolWebsiteStop(); }
+
+// ----------------------------------------------------------------- one vendor
+// #/tools/vendor/<vendor>: everything Tico holds for one vendor, a card a tool (website logins, MCP servers, API tools,
+// its connections), each opening its own page, in one read (GET /api/v2/tool-vendors/<vendor>: its Tools rows, an API
+// tool's with its keys at their levels, who can use it and its Settings). Marks, not words: the lock when Tico holds the
+// key, the eye-off when only those listed see it.
+interface ToolsVendorRow extends ToolsRow { keys?: ToolApiKey[]; access?: ToolApiAccess[]; settings?: ToolApiSetting[]; }
+let TV: {run: number; vendor: string} | null = null;
+async function pageToolVendor(vendor: string): Promise<void> {
+  const state = {run: (TV?.run || 0) + 1, vendor: vendor.toLowerCase()};
+  TV = state;
+  $('#main').classList.remove('au-layout');
+  $('#main').innerHTML = `<div class="tt tt-page" id="tool-vendor" data-vendor="${esc(state.vendor)}">
+    <nav class="tt-crumb" aria-label="Breadcrumb"><a href="${TOOLS_ROUTE}">Tools</a><span aria-hidden="true">›</span><span data-tv-crumb>${esc(vendor)}</span></nav>
+    <div data-tv-head></div><div data-tv-body>${skelRows(3, {card: true})}</div></div>`;
+  const root = $('#tool-vendor');
+  let page: {name?: string; rows?: ToolsVendorRow[]};
+  try { page = await get(`/v2/tool-vendors/${encodeURIComponent(state.vendor)}`, {fresh: true}); }
+  catch (e) { if (TV === state) root.querySelector('[data-tv-body]').innerHTML = `<div class="empty">${esc(errorMessage(e, ''))}</div>`; return; }
+  if (TV !== state || !root.isConnected) return;
+  const rows = page.rows || [], name = page.name || vendor;
+  root.querySelector('[data-tv-crumb]').textContent = name;
+  root.querySelector('[data-tv-head]').innerHTML = `<header class="tt-title"><span class="tt-tile lg" aria-hidden="true"><span class="nav-icon">${toolsVendorIcon(rows.map(toolsFromRow))}</span></span>
+    <div class="tt-title-text"><h1>${esc(name)}</h1></div></header>`;
+  root.querySelector('[data-tv-body]').innerHTML = `<div class="tt-vendor-cards">${rows.map(toolsVendorCard).join('')}</div>`;
+}
+function toolsVendorCard(r: ToolsVendorRow): string {
+  const item = toolsFromRow(r), level = (k?: string | null) => (TA_LEVELS.find(([v]) => v === k) || ['', k || ''])[1];
+  const d = r.kind === 'api' ? r : null;
+  const keys = (d?.keys || []).map(k => `<li data-tv-key="${esc(k.id)}"><span class="nav-icon" aria-hidden="true">key_vertical</span>${esc(k.name)} <span class="pill${k.access_level === 'read' ? '' : ' in-progress'}">${esc(level(k.access_level))}</span></li>`).join('');
+  const access = (d?.access || []).map(a => `<li data-tv-access="${esc(a.subject)}">${esc(a.name || a.subject)} <span class="muted">${esc(level(a.level))}</span>${a.read_not_enforced ? TA_READ_NOT_ENFORCED : ''}</li>`).join('');
+  const settings = (d?.settings || []).map(v => `<li data-tv-setting="${esc(v.name)}"><span class="mono">${esc(v.name)}</span> <span class="mono muted">${esc(v.value)}</span></li>`).join('');
+  const list = (what: string, html: string) => html ? `<ul class="tt-vendor-list" data-tv-list="${what}">${html}</ul>` : '';
+  return `<section class="card tt-vendor-card" data-tv-item="${esc(r.id)}"><header><h2><a href="${esc(item.href)}">${auIconHTML(item.icon)}<span>${esc(item.name)}</span></a>${
+      item.proxy ? TOOLS_PROXY_MARK : ''}${item.private ? TOOLS_PRIVATE_MARK : ''}</h2>${item.trouble ? `<span class="pill ${item.tone}">${esc(item.trouble)}</span>` : ''}</header>
+    ${d ? list('keys', keys) + list('access', access) + list('settings', settings) : `<div class="tt-vendor-who">${toolsWhoHTML(item)}</div>`}</section>`;
+}

@@ -29,7 +29,7 @@ def _reader_merges_edits_and_send_applies_final_fields_once(api):
     assert len({r.json()['item']['result_ref'] for r in results}) == 1
     tid = next(r.json()['item']['result_ref'] for r in results if r.status_code == 200)
     task = get(api, 'tasks/' + tid)['task']
-    assert task['title'] == 'Final words' and 'Final details' in task['body']
+    assert task['title'] == 'Final words' and 'Final details' in task['request']['text']
     change(api, rid, item, {'text': 'Too late'}, expected=409)
     change(api, rid, item, {'detail': {'owner': 'human:cara'}}, expected=409)
     change(api, rid, item, {'status': 'dismissed'}, expected=409)
@@ -255,7 +255,8 @@ def _future_link_proposal_column_is_redacted_at_every_boundary(api):
     iid = add(api, rid, {'section': 'task', 'text': 'Follow up'})['item']['id']
     with api.app.state.store.transaction() as c:
         # The proposal migration is built separately; exercise its column when present.
-        events.H.add_column(c, 'meeting_items', 'proposed_task_id', 'TEXT')
+        if 'proposed_task_id' not in {r[1] for r in c.execute('PRAGMA table_info(meeting_items)')}:
+            c.execute('ALTER TABLE meeting_items ADD COLUMN proposed_task_id TEXT')
         c.execute('UPDATE meeting_items SET proposed_task_id=? WHERE id=?', (tid, iid))
     proposal = next(i for i in items(api, rid, 'cara-test')['sections']['task'] if i['id'] == iid)
     assert proposal['proposed_task_id'] is None

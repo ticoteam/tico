@@ -352,15 +352,6 @@ def test_the_strategy_bot_no_longer_drafts_and_people_s_words_stay_theirs(api):
     from backend import lifecycle
 
     with api.app.state.store.transaction() as c:
-        # The seats table as the release before recruiting left it, with a person's text: an upgrade keeps it theirs.
-        c.execute("DROP TABLE seats")
-        c.execute(lifecycle.SCHEMA)
-        c.execute(
-            "INSERT INTO seats(id,title,description,reports_to,created_at,created_by,updated_at,updated_by) "
-            "VALUES('s-old','Role','Keeps the books.','assistant',?,'human:ana',?,'human:ben')",
-            (H.now(), H.now()),
-        )
-        lifecycle.ensure(c)
         owner = Identity("human:ana", "owner")
         chart = lifecycle.create_seat(
             api.app.state.auth,
@@ -373,7 +364,6 @@ def test_the_strategy_bot_no_longer_drafts_and_people_s_words_stay_theirs(api):
         )
     mine = post(api, "seats", {"title": "Support lead", "reports_to": "assistant", "description": "Answers email."})
     assert get(api, f"seats/{mine['id']}")["description_by"] == "person"
-    assert get(api, "seats/s-old")["description_by"] == "person"
     shown = get(api, f"seats/{chart['id']}")
     assert shown["description_by"] == "chart" and "draft" not in shown and shown["can_edit"] is True
     for route in (f"seats/{mine['id']}/open", f"seats/{mine['id']}/draft"):

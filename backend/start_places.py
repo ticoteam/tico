@@ -7,28 +7,17 @@ from .store import H, readiness_document
 from . import bot_settings as BS
 
 START_SECONDS = 180
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS start_places(
- attempt_id TEXT PRIMARY KEY REFERENCES attempts(id) ON DELETE CASCADE,
- start_until TEXT, managed INTEGER NOT NULL DEFAULT 0, wait_reason TEXT NOT NULL DEFAULT '', waiting_since TEXT
-);
-"""
 
 
 def restore_waits(c):
-    """An upgrade preserves the same legacy waits the live event reader recognises."""
-    from .login_waits import wait
-
-    H.add_column(c, "start_places", "managed", "INTEGER NOT NULL DEFAULT 0")
+    """An upgrade gives every leased attempt without one a start place, waiting on nothing."""
     for row in c.execute(
-        "SELECT a.id,a.created_at FROM attempts a WHERE a.state='leased' "
+        "SELECT a.id FROM attempts a WHERE a.state='leased' "
         "AND NOT EXISTS(SELECT 1 FROM start_places p WHERE p.attempt_id=a.id)"
     ).fetchall():
-        payload = wait(c, row['id'])
-        reason = ('shared login' if payload.get('login') else 'pre-start requirements') if payload else ''
         c.execute(
             "INSERT INTO start_places(attempt_id,start_until,wait_reason,waiting_since) VALUES(?,?,?,?)",
-            (row['id'], None, reason, row['created_at'] if reason else None),
+            (row['id'], None, '', None),
         )
 
 
@@ -57,7 +46,6 @@ def ready_waiting(c, runner_id):
 
 MEMORY_HOLD = 'computer busy: memory'
 NOT_REPORTING = 'computer not reporting'
-ALLOCATION_REPORTING = 'harness_allocation_v1'
 
 
 def hold_rows(c, runner_ids):
@@ -215,9 +203,7 @@ def held_totals(c):
     return {r[0]: r[1] for r in c.execute(HELD_TOTALS_SQL, (now, now))}
 
 
-# A computer's "Turns at once" (runners.turns_at_once, NULL: automatic, its own capacity). A runner that cannot take a
-# raised setting has no TURNS_AT_ONCE capability, so it is capped at the capacity it reports.
-TURNS_AT_ONCE = "turns_at_once_v1"
+# A computer's "Turns at once" (runners.turns_at_once, NULL: automatic, its own capacity).
 BOT_KEY = "turns_at_once"
 MAX_TURNS = 256
 # The wait a parked turn shows when the bot is at its own limit: the same words Health and the task use for it.
@@ -228,11 +214,7 @@ def turn_limit(runner):
     """The most turns this computer may hold now: its setting, or its reported capacity when the setting is clear."""
     reported = runner["capacity"] or 1
     setting = runner["turns_at_once"]
-    if setting is None:
-        return reported
-    if TURNS_AT_ONCE in frozenset(H._json(runner["capabilities"], []) or []):
-        return setting
-    return min(setting, reported)
+    return reported if setting is None else setting
 
 
 # One build at once per this many bytes of a computer's reported disk. A turn on a task with a worktree on the computer
@@ -451,12 +433,8 @@ def reserve(c, attempt, settings=None, *, harness_allocated=False):
     # leaves that process alive and renewing, and its own memory can prevent the computer from ever recovering.
     place = c.execute("SELECT * FROM start_places WHERE attempt_id=?", (aid,)).fetchone()
     runner = c.execute("SELECT * FROM runners_with_state WHERE id=?", (rid,)).fetchone()
-    # An older runner cannot distinguish preparation from allocation, so memory cannot revoke its existing grant.
-    legacy_grant = bool(
-        place and place['start_until'] and ALLOCATION_REPORTING not in (H._json(runner['capabilities'], []) or [])
-    )
     person = from_person(c, attempt['job_id'])
-    hold = computer_hold(c, rid, row=runner, person=person, harness_allocated=harness_allocated or legacy_grant)
+    hold = computer_hold(c, rid, row=runner, person=person, harness_allocated=harness_allocated)
     if hold:
         waiting(c, aid, hold[0])
         return {"reserved": False, "waiting": hold[1]}

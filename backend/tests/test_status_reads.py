@@ -1,12 +1,13 @@
 """The status page reads each table once for every bot, and says exactly what each bot's own status line says."""
 
+from backend import holds, usage_limits
 from backend import task_engine as E
-from backend import task_privacy as privacy, usage_limits
+from backend import task_privacy as privacy
 from backend.events import prime_status_lines, status_line
 from backend.store import H
+from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import assign, claim, post, ready  # noqa: F401
-from backend.tests.helpers.run_backoff import hold_bot, setup
-from backend import usage_limits
+from backend.tests.helpers.run_failures import failing, hold_bot, setup
 from backend.tests.helpers.status_reads import busy, page
 
 
@@ -36,10 +37,10 @@ def test_primed_status_lines_match_each_bots_own_and_read_each_table_once(api, m
     with api.app.state.store.transaction() as c:
         for slug, state in (("cpo", "idle"), ("finance", "idle"), ("assistant", "crashed"), ("inbox", "idle")):
             H.status_set(c, H.KEEPER, slug, state=state, focus="Checked the queue")
-        c.execute("INSERT INTO bot_budget(bot,held_at,window,runs,budget) VALUES('cpo',?,'hour',301,300)", (H.now(),))
-        c.execute(
-            "INSERT INTO run_backoff(bot,fails,wait_until) VALUES('finance',2,?)", (H.shift(H.now(), seconds=600),)
+        holds.put(
+            c, holds.RUNAWAY, "bot", "cpo", actor=H.KEEPER, details={"window": "hour", "runs": 301, "budget": 300}
         )
+        failing(c, "finance", 2, until_at=H.shift(H.now(), seconds=600))
         usage_limits.save_own(c, "assistant", {"daily_usd": 0.000001}, "human:ana")
     slugs = ["assistant", "cpo", "doc-updater", "finance", "inbox", "ops", "product-design"]
     each, plain = lines(api, slugs, primed=False)
@@ -186,7 +187,7 @@ def test_status_task_reads_skip_finished_tasks_come_back_as_one_row_and_keep_pri
             # Only the task read is counted: each new task also gets a room under a random id, and where those ids
             # fall moves the later reads' index seeks by a step or two, whatever the tasks' status.
             c.set_progress_handler(lambda: steps.__setitem__(0, steps[0] + 1), 1)
-            c.execute(privacy.status_tasks_sql(marks), actors * 4).fetchall()
+            c.execute(privacy.status_tasks_sql(marks), actors * 5).fetchall()
             c.set_progress_handler(None, 1)
             # The rows an unindexed read of the same filter gives: live or private tasks a bot owns or asked for.
             wanted = {
@@ -217,7 +218,8 @@ def test_status_task_reads_skip_finished_tasks_come_back_as_one_row_and_keep_pri
             )
             E.move(c, task["id"], E.DONE if n % 2 else E.CLOSED, H.KEEPER, "Finished")
     after, more = read()
-    assert after == before and more == steps and steps
+    # Seeks move a step or two with the random ids of new rows; reading the 40 finished tasks costs far more than 5.
+    assert after == before and abs(more - steps) <= 5 and steps
 
     # Tico Team: the status task read stepped 1,100 rows a page (850 of them private tasks), each step the GIL given up
     # and taken back; with other requests running Python it took 100 ms to 1 s for 2 ms of SQLite work. The rows now
@@ -235,17 +237,17 @@ def test_status_task_reads_skip_finished_tasks_come_back_as_one_row_and_keep_pri
         return sorted(tuple((k, type(v).__name__, v) for k, v in row.items()) for row in rows)
 
     with store.read_transaction() as c:
-        stepped = [dict(row) for row in c.execute(privacy.status_tasks_sql(marks), actors * 4)]
+        stepped = [dict(row) for row in c.execute(privacy.status_tasks_sql(marks), actors * 5)]
         seen = []
         c.set_trace_callback(seen.append)
-        packed = privacy.status_tasks(c, marks, actors * 4)
+        packed = privacy.status_tasks(c, marks, actors * 5)
         c.set_trace_callback(None)
         assert len(seen) == 1 and len(c.execute(seen[0]).fetchall()) == 1
         assert [list(row) for row in packed] == [privacy.STATUS_TASK_COLUMNS.split(",")] * len(packed)
         assert typed(packed) == typed(stepped)
         for bot in actors:
-            assert typed(privacy.status_tasks(c, "=?", (bot,) * 4)) == typed(
-                dict(row) for row in c.execute(privacy.status_tasks_sql("=?"), (bot,) * 4)
+            assert typed(privacy.status_tasks(c, "=?", (bot,) * 5)) == typed(
+                dict(row) for row in c.execute(privacy.status_tasks_sql("=?"), (bot,) * 5)
             )
     ids = {row["id"] for row in packed}
     assert shared["id"] in ids and done["id"] not in ids
@@ -375,7 +377,17 @@ def test_a_bots_open_asks_count_in_its_needs_human_only_on_tasks_the_reader_may_
         secret = H.task_create(c, "human:ana", "Acme acquisition", "Look into it.", "bot:ops", private=True)
         for task in (shared, secret):
             version = H.task(c, task["id"])["version"]
-            H.task_ask(c, "bot:ops", task["id"], "human:ana", "Spend $5 on the test?", kind="ok", seen_version=version)
+            shows = X.shown(c)
+            H.task_ask(
+                c,
+                "bot:ops",
+                task["id"],
+                "human:ana",
+                "Spend $5 on the test?",
+                kind="ok",
+                shows=shows,
+                seen_version=version,
+            )
         assert H.status_counts(c, "bot:ops")[1] == 2
     with store.read_transaction() as c:
         seen = {

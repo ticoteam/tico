@@ -17,8 +17,6 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from connectors.mail import policy as mail_policy
-
 ROOT = Path(__file__).resolve().parents[2]
 STAFF = "k" * 32
 URL = "https://hq.example"
@@ -248,9 +246,9 @@ def rig(hq, tmp_path, monkeypatch):
     # A mode of None is a Tico the run cannot reach.
     server = {"mode": "on_their_own"}
     monkeypatch.setattr(
-        mail_policy,
-        "HUB_GET",
-        lambda path: (
+        tickets_cli,
+        "tico_get",
+        lambda env, path: (
             {"effective": {"mode": server["mode"]}}
             if path == "bots/support/email-sending-policy" and server["mode"]
             else None
@@ -400,13 +398,13 @@ def test_ask_first_posts_only_on_an_ok_for_exactly_this_reply_and_never_closes_b
     rig.setting["mode"] = "ask_first"
     posts, refuse = [], set()
 
-    def tico(path, body, key=None):
+    def tico(env, path, body):
         posts.append((path, body))
         if path in refuse:
-            raise mail_policy.HubFailed("http_409", status=409)
+            raise tickets_cli.TicoFailed("http_409")
         return {"task_id": "T1", "requirement_id": "r1"} if path.endswith("/oks") else {}
 
-    monkeypatch.setattr(mail_policy, "HUB_POST", tico)
+    monkeypatch.setattr(tickets_cli, "tico_post", tico)
     tid = hq.file("The board will not load")
     reply = tmp_path / "reply.md"
     reply.write_text("Try the latest release.\n")
@@ -439,6 +437,35 @@ def test_ask_first_posts_only_on_an_ok_for_exactly_this_reply_and_never_closes_b
 
     code, text = rig.cli("close-signature", "hm-a1b2c3d4e5f6", str(reply))
     assert code == 1 and "keep the reply as a draft" in text and len(hq.seen) == 1
+
+
+def test_tico_is_asked_through_its_own_client_as_the_bot(monkeypatch):
+    """The script reads the sending policy and posts OKs with Tico's client (clients/tico.py) from HUB_DIR."""
+    calls = []
+
+    class Client:
+        def __init__(self, url, token, **options):
+            calls.append((url, token, options))
+
+        def get(self, path):
+            return {"path": path}
+
+        def post(self, path, body):
+            raise type("APIError", (Exception,), {"status": 403})()
+
+    import clients.tico
+
+    monkeypatch.setattr(clients.tico, "Client", Client)
+    env = {"HUB_API_URL": "https://tico.example", "HUB_TOKEN": "t", "HUB_DIR": str(ROOT)}
+    assert tickets_cli.tico_get(env, "bots/support/email-sending-policy") == {
+        "path": "bots/support/email-sending-policy"
+    }
+    with pytest.raises(tickets_cli.TicoFailed, match="forbidden"):
+        tickets_cli.tico_post(env, "oks/r1/use", {})
+    assert calls[-1] == ("https://tico.example", "t", {"timeout": tickets_cli.TICO_POST_TIMEOUT, "retries": 0})
+    assert tickets_cli.tico_get({}, "anything") is None
+    with pytest.raises(tickets_cli.Refused, match="cannot reach Tico"):
+        tickets_cli.tico_post({}, "oks/r1/use", {})
 
 
 def test_a_run_that_does_not_name_its_bot_keeps_the_draft(rig, hq, tmp_path):

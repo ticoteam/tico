@@ -133,15 +133,32 @@ def moved(
     by: str,
     why: str | None = None,
     revision: str | None = None,
+    *,
+    batch: str | None = None,
 ) -> None:
-    """A task moved: `kind` is forward, back, done, closed or reopen. `before` and `after` are `task_engine.task()`'s
-    shape; `revision` is the id of the move's history row."""
+    """A task moved: `kind` is forward, back, done, closed, reopen or moved (to another pipeline). `before` and `after`
+    are `task_engine.task()`'s shape; `revision` is the id of the move's history row; `batch` is the bulk move it is
+    part of."""
     H = _h()
     actor = cause(by)
     old, new = str(before.get("status")), str(after.get("status"))
     if before.get("stage_id") != after.get("stage_id"):
+        # The old stage's "leaves" and the new stage's "enters" read this one event: its from and its to.
         change: Row = {"field": "stage", "from": before.get("stage_id"), "to": after.get("stage_id"), "move": kind}
         _publish(conn, "task.step_changed", after, actor, change, revision)
+    if before.get("pipeline_id") != after.get("pipeline_id"):
+        moved: Row = {
+            "field": "pipeline",
+            "from": before.get("pipeline_id"),
+            "to": after.get("pipeline_id"),
+            "from_pipeline": before.get("pipeline_id"),
+            "from_stage": before.get("stage_id"),
+            "to_pipeline": after.get("pipeline_id"),
+            "to_stage": after.get("stage_id"),
+            "by": actor,
+            "batch_id": batch,
+        }
+        _publish(conn, "task.moved", after, actor, moved, revision)
     if before.get("owner_id") != after.get("owner_id"):
         # The next stage has another owner. What follows the owner already happened (`owner_moved`).
         _publish_owner(conn, before, after, actor, revision)
@@ -185,11 +202,11 @@ def owner_moved(conn: "sqlite3.Connection", before: Row, after: Row, by: str) ->
         _follow_owner(conn, before, after, cause(by))
 
 
-def _follow_owner(conn: "sqlite3.Connection", before: Row, after: Row, actor: str) -> None:
+def _follow_owner(conn: "sqlite3.Connection", before: Row, after: Row, actor: str, *, rerank: bool = True) -> None:
     """What follows a task's owner, whichever way it changed (a reassignment, or a move into a stage someone else
     owns): the new owner's private default, the sessions and worktree, the per-task model, the followers, the old
-    owner's goal on the task and its place in the new owner's queue. Before anything about the change is published or
-    woken."""
+    owner's goal on the task and, with `rerank`, its place at the end of the new owner's queue. Before anything about
+    the change is published or woken."""
     H = _h()
     task_id = after["id"]
     old, new = before.get("owner_id"), after.get("owner_id")
@@ -222,7 +239,8 @@ def _follow_owner(conn: "sqlite3.Connection", before: Row, after: Row, actor: st
     models.moved(conn, actor, task_id)
     followers: Any = task_followers
     followers.owner_moved(conn, before, old, new)
-    conn.execute("UPDATE tasks SET rank=? WHERE id=?", (H._queue_end(conn, new) if new else None, task_id))
+    if rerank:
+        conn.execute("UPDATE tasks SET rank=? WHERE id=?", (H._queue_end(conn, new) if new else None, task_id))
     reconnects_: Any = reconnects
     reconnects_.moved(conn, task_id, "owner", old, new)
 
@@ -247,7 +265,10 @@ def reassigned(
 
     runs: Any = run_triggers
     runs.turn_result(conn, actor, before, "overridden", H.event)
-    _follow_owner(conn, before, after, actor)
+    # The task stays in its stage, so it keeps its rank: rank is one order, read by the stage's board as well as by
+    # each owner's queue, and a person may have put it at the top of the stage on purpose. Only a task with no rank
+    # yet takes the end of the new owner's queue.
+    _follow_owner(conn, before, after, actor, rerank=before.get("rank") is None)
     _publish_owner(conn, before, after, actor, revision)
     H.event(conn, actor, "task.update", after["id"], {"owner": new, "note": why})
     H.recount(conn, [new, old, after.get("requester_id")])

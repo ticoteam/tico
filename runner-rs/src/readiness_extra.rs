@@ -24,7 +24,6 @@ pub const OPTIONAL: &[&str] = &[
     "worktree_waits",
     "worktrees",
     "harnesses",
-    "mail_key",
     "shared_env",
     "recent_errors",
     "container_exec",
@@ -33,7 +32,6 @@ pub const OPTIONAL: &[&str] = &[
     "disk",
     "disk_cleanup",
     "screen",
-    "appdriver",
     "isolated",
 ];
 

@@ -8,7 +8,7 @@ Re-enrolling the same physical computer can leave an older registration behind. 
 registration after more than 24 hours offline only when a newer, active registration has the same reported device
 identity, owner, name and platform, and was enrolled or contacted Tico after the old registration's last contact.
 The old registration must have no assigned bots, cloud machine, shared browser access, saved or reported sign-ins,
-keys, subscriptions, profiles or app delivery. Computers with an unknown device identity stay listed. The runner
+keys, subscriptions or profiles. Computers with an unknown device identity stay listed. The runner
 reports an app-salted hash of the OS device identity; the raw identity stays on the computer.
 
 **Settings → Models** holds the company's model settings:
@@ -57,8 +57,8 @@ behind the sign-in, is the fallback when no computer can run it: the token from 
 
 Switching a computer's subscription stops that tool's running tasks on that computer and starts them again, and every
 session of that tool there starts fresh. When tasks are running, Tico asks first and says how many. Removing a
-subscription does the same on each computer that had it. A computer on an older Tico says **Needs update** instead of a
-picker until it updates.
+subscription does the same on each computer that had it. A computer below the minimum release (0.6.0-rc.1) is paused, and shows no
+picker, until it updates.
 
 Settings → Models lists subscriptions under each owner's avatar and name, yours first, with API keys under **No
 owner**. Inside a group each tool's plans are in the order a person's plans are used: the plan in use names its computer,
@@ -91,7 +91,7 @@ a claim ends. A turn claimed past the limit holds no place: its start is refused
 login, quota or other pre-start wait is parked: the turn keeps its claim but takes no start place, so
 other work can start beside it. Waiting for
 a lane or login releases only the start reservation; continuing requires a fresh atomic reservation. Two turns cannot
-take the last start reservation together. Codex's shared ChatGPT login does not normally queue turns
+take the last start reservation together. Codex's shared ChatGPT login does not queue turns
 ([sharing a sign-in](#bots-sharing-one-chatgpt-sign-in-run-side-by-side)).
 
 ### Builds at once
@@ -133,8 +133,7 @@ allocated process on start-place and started requests, so neither the runner nor
 allocation’s memory use. The boundary stays crossed through fallback. If a lazy harness acknowledges its start but
 fails to launch, its fallback checks memory locally until it allocates a process, keeping the running turn's place.
 It does not request pre-start admission again. Runners advertise allocation reporting through the
-`harness_allocation_v1` heartbeat capability. For runners without it, memory pressure never revokes an existing
-start grant. A runner talking to an older hub drops the new field or capability if that hub refuses it.
+`harness_allocation_v1` heartbeat capability. Every runner the server accepts advertises it (the minimum release is 0.6.0-rc.1). A runner talking to an older hub drops the new field or capability if that hub refuses it.
 The Mac runner never parks a turn on local memory readings;
 macOS's Memory Used includes memory it can reclaim through compression and swap. This does not cap the memory of
 tools already running inside a turn, or change your account, model or computer size.
@@ -222,12 +221,12 @@ A **connection** is one login an AI tool on a computer runs on. It is one of:
   line to change its account. To run bots on a different account for the same tool, add another computer (another
   runner, which can be on the same machine; see [Install](install.md#add-computers-to-run-your-bots)).
 - **An API key**: the computer's login can run on a model API key instead of a plan (Codex, Claude Code, Cursor Agent
-  and Muse Code take one). The key is the computer's own (added from Tico), a shared key, or a key set on
-  the computer itself. See [API keys on a Computer](#api-keys-on-a-computer).
+  and Muse Code take one). The key is one given to the computer in **Settings > Models**, or a key set on the
+  computer itself. See [API keys on a Computer](#api-keys-on-a-computer).
 
 Plan logins stay on the computer that holds them. Tico stores each connection's name, sign-in state, the account it
-reports and its usage readings, never the login itself. A key added from Tico is kept sealed in Tico's credential vault
-for that computer alone.
+reports and its usage readings, never the login itself. A key added in Settings > Models is kept sealed in Tico's
+credential vault.
 
 Named subscriptions that an earlier release signed in on a computer are no longer used or shown. Bots that ran on one
 now run on the computer's login for that tool, which must be signed in for them to run
@@ -243,12 +242,9 @@ the login check resumes when they report again.
 An unknown account type gives no API-key warning; a retained named login may need its next account report first.
 When a tool cannot write its data folder, Health names the reported folder problem for the computer operator.
 
-**Shared connections.** A model key stored under Credentials can be shared with **Every computer** or with computers
-by name. It signs in each computer that has no login of its own for that tool ([Install](install.md#add-computers-to-run-your-bots)).
-Each computer it serves shows it as a chip, its pop-up line marked **Shared** and listing those computers, even before
-the computer has used it. Only credential administrators see the key's name and preview; an operator sees which
-computers it serves. Replacing or clearing it from one computer asks whether to change **This computer only** or **All
-listed computers** ([Shared keys](#api-keys-on-a-computer)).
+**Shared connections.** A model key added in **Settings > Models** can be given to several computers. Each computer it
+serves shows it as a chip, its pop-up line marked **Shared** and listing those computers. Only credential administrators
+see the key's name and preview; an operator sees which computers it serves ([API keys on a Computer](#api-keys-on-a-computer)).
 
 ### Which connection a bot runs on
 
@@ -307,7 +303,7 @@ changes.
   else wait. A bot waiting on the old plan's limit resumes on the new plan at once when a computer is switched to it.
 - If the provider refuses it, it shows **Needs reconnect** and is passed over (the computer's own login, then the
   Gateway) until someone saves a new value with **Reconnect**. The computer's own login is left alone.
-- A computer on an older runner does not take subscriptions; its bots run as before until it updates.
+- A computer below the minimum release (0.6.0-rc.1) is paused and takes no subscriptions until it updates.
 
 One computer is one trust group ([SECURITY.md](../SECURITY.md#bots-on-one-computer-share-a-trust-boundary-on-purpose)):
 while a turn runs on a subscription, another bot's turn on the same computer could read it.
@@ -321,7 +317,7 @@ plan, nothing moves. An API key is not a plan.
 
 | Role | | Claude only | ChatGPT only | Both |
 | --- | --- | --- | --- | --- |
-| Builder, Reviewer 1, every Owner, Product Owner and manager, every other role | bot | Haiku 5.5, extra high | GPT-6.1 Terra, medium | Haiku 5.5, extra high |
+| Builder, Reviewer 1, every Owner, Feature Owner and manager, every other role | bot | Haiku 5.5, extra high | GPT-6.1 Terra, medium | Haiku 5.5, extra high |
 | | tasks | Opus 5.5, medium | GPT-6.1 Sol, high | Opus 5.5, medium |
 | The Assistant (it chats; no task model) | bot | Opus 5.5, medium | GPT-6.1 Sol, high | Opus 5.5, medium |
 | Reviewer 2 (no task model) | bot | Haiku 5.5, extra high | GPT-6.1 Terra, medium | GPT-6.1 Sol, high |
@@ -347,6 +343,13 @@ one older than a day is marked as possibly out of date, and after its reset it r
 fresh 100%. An API key has no plan, so it shows "No plan usage (API key)". Details are in
 [Signed-in account and usage windows](#signed-in-account-and-usage-windows).
 
+An admin can read a Claude plan's week now: the **↻** beside its row's **⋯** menu on the Subscriptions page asks one
+computer that has the plan. That computer sends a one-line prompt to Haiku with the plan's token, in a temporary home it
+deletes after, and sends back the week's percent and reset from that reply. A setup-token can only run prompts, so
+Claude Code's `/usage` cannot read it; the prompt uses a few tokens of the plan. The token is used for that one read and
+is not kept there. One read runs at a time, and a plan can be read again a minute after the last. ChatGPT plans have no
+such button.
+
 ## The computers list
 
 One row per computer. On a phone the table scrolls sideways inside its card.
@@ -369,9 +372,9 @@ characters; a cloud machine made again keeps the name). Its sections, top to bot
 
 1. **Connections**: one line per AI tool, the computer's login for it: the tool, "Computer's login" (or "Shared key"),
    the signed-in account and plan, sign-in state, usage (weekly and, where the tool reports one, the 5-hour window) and
-   the bots using it. Each line has its actions: **Sign in**, **Switch account** and **Sign out** for a plan login;
-   **Add key**, **Replace key** and **Clear key** for a key. **Add connection** at the end opens its own pop-up to sign
-   in an installed tool or add a key.
+   the bots using it. Each line has its actions: **Sign in**, **Switch account** and **Sign out** for a plan login. A
+   key is added, replaced and taken off in **Settings > Models**. **Add connection** at the end opens its own pop-up to
+   sign in an installed tool.
 2. **Screen**: an on/off switch, then **View** or **Control** when enabled (Beta). Enabling a screen that needs setup reveals the runner command, as described in [Install](install.md#screen).
 3. **Internet**: **Share internet with bots**, then the bots that may use it and the **Daily cap (GB)**, and today's
    total, which opens to the sites that went through. Only on your own computer; an admin sees only the switch, to turn
@@ -385,9 +388,8 @@ characters; a cloud machine made again keeps the name). Its sections, top to bot
    **Performance**, and **Revoke computer** at the bottom.
 
 When the computer is offline, the pop-up says "Computer is offline" and its sign-in, usage refresh, screen and update
-actions are disabled until it is back. So are a connection's **Sign out**, **Switch account**, **Replace key**,
-**Clear key** and the switches between a subscription and an API key: they stay on the line, greyed, and say "Computer
-is offline" on hover; nothing is queued for later.
+actions are disabled until it is back. So are a connection's **Sign out**, **Switch account** and **Use the shared
+key**: they stay on the line, greyed, and say "Computer is offline" on hover; nothing is queued for later.
 
 ### Who sees and changes what
 
@@ -503,7 +505,7 @@ refused too. Each view, and each time the setting changes, is a line in the audi
 The page a view shows offers nothing that writes, so a screenshot never suggests the bot could act: New task, Follow,
 the page + and answer buttons are not shown, the message box is a grey "Read-only view" line, and other controls that
 change something show greyed out. Tasks lists the bot's own open tasks by stage (Needs you is a person's list), and
-Company › Mine is one card of them.
+Company is one card of them.
 
 API: `GET/POST /api/v2/bots/{bot}/app-view`, `POST /api/v2/app-view` ([OpenAPI](api.md#the-contract)).
 
@@ -530,11 +532,9 @@ Choose **API key** when you pay the provider for each use:
 - Bots on one OpenAI API key run side by side, as do bots on one ChatGPT sign-in
   ([sharing a sign-in](#bots-sharing-one-chatgpt-sign-in-run-side-by-side)).
 - Where the key goes:
-  - **Add key** gives this computer a key of its own, for Codex, Claude Code, Cursor Agent and Muse Code. Only this
-    computer uses it.
-  - **Credentials** holds a key that several computers share (the company's key given to **Every computer**), and the
-    key of a tool whose key belongs to each bot, such as the Gemini CLI. **Add connection** offers **Open Keys**
-    for those.
+  - **Settings > Models** holds the keys for Codex, Claude Code, Cursor Agent and Muse Code, each given to one
+    computer or several.
+  - **Credentials** holds the key of a tool whose key belongs to each bot, such as the Gemini CLI.
 
 ### Add one
 
@@ -549,11 +549,8 @@ In a computer's pop-up, **Add connection** (at the end of Connections) opens its
      the browser relays the provider's link and code, and the provider writes the login on the computer. A tool
      already signed in here has **Subscription** greyed out: change its account with **Switch account** on its line,
      or add another computer for a second account.
-   - **API key**: for a tool that takes a key of the computer's own, **Add key** opens the key pop-up (see
-     [API keys on a Computer](#api-keys-on-a-computer)). A credential administrator can set **Shared with:** to other
-     computers, or pick a key that is already shared instead of pasting one. An operator adds a key for this computer
-     only. If a key already signs the tool in here, **Replace key** is on
-     its line instead. For any other tool, **Open Keys**, where model keys are added and shared with computers.
+   - **API key**: links to **Settings > Models**, where the key is added and given to this computer (see
+     [API keys on a Computer](#api-keys-on-a-computer)).
 4. The new connection's chip appears on the computer's row once the computer reports it; the computer does not need a
    restart.
 
@@ -612,47 +609,22 @@ and on a current runner; an older one answers `Update <computer> to sign out fro
   the old account working, and the side folder is removed (kept, and named in the message, only if the old files could
   not be put back). Runs that start afterwards use the new account. The account and usage readings of the old account
   are cleared.
-- A **Computer's own login that someone signed out stays signed out**. The company's model key given to **Every
-  computer** does not sign it back in: the server does not hand it out for that runtime, the runner neither applies it
+- A **Computer's own login that someone signed out stays signed out**. The model key given to it in Settings > Models
+  does not sign it back in: the server does not hand it out for that runtime, the runner neither applies it
   again (its ten-minute retry included) nor puts it in turns, and Claude Code no longer reads "ready" because of it.
   Signing in again, or **Use the shared key** next to it, ends that.
   A signed-out login reads **Signed out · Sign in** and its chip has a red dot, with or without bots on it. The
   confirmation names the bots in a line: "Reviewer 1, QA and 2 more will stop running until this is signed in again"
   (every name on hover).
-- **Switch to subscription** sits on a Computer's own login that runs on an API key (the shared key, the Computer's
-  own key or one set in its terminal): in place of **Switch account**, or next to **Replace key** and **Clear key**. It
-  is the same sign-in on the side: until the subscription is signed in and in place the key stays in use, and
-  canceling, failing or running out of time leaves it so. Once the subscription is in place the key is removed as
-  **Clear key** removes it (the Computer's copies, and its own key in the vault), and no key reaches that login again:
-  not readiness, not the ten-minute key login and not a turn's environment, so the next turn runs on the subscription.
-  The server stops handing it the **Every computer** key too. Unlike a sign-out, a later sign-in or Switch account does
-  not bring a key back; **Add key** or **Use the shared key** does. Bots keep the connection. After **Clear key** or
-  **Sign out** there is no key to keep, so a switch started from a page drawn before it is refused ("has no API key
-  to switch from … Sign in instead") rather than run as a plain sign-in whose cancel would leave no login. Not offered for Claude
-  Code on a Mac (Keychain), and it needs a runner that knows it (`Update <computer> to switch to a subscription from
-  here` otherwise).
-- **Switch to API key** is the way back: it sits on a Computer's own login on a subscription, next to **Switch
-  account** and **Sign out**, for Codex and Claude Code. The key is pasted once and kept in the vault as the Computer's
-  own key (like **Add key**). The subscription stays signed in and in use while the Computer checks the key with the
-  provider, in a home of its own with no login so the subscription cannot answer for it (Codex signs in with the key;
-  Claude Code asks Anthropic for one short reply). **Cancel switch**, closing the dialog, a key that doesn't work or
-  running out of time deletes the key and leaves the subscription as it was. Once the key works there it is put in place, the marks **Switch to subscription** and **Clear
-  key** left are lifted so the next turn runs on the key, and then the subscription is signed out. Codex keeps both
-  logins in one file, so its key login has already replaced the subscription's and nothing more is signed out; Claude
-  Code keeps them apart, so its login files are kept aside, its subscription is logged out and the key stays. If any
-  step after the check fails, or the sign-in check gives no answer, the Computer puts back everything it changed and
-  the subscription stays in use; when it cannot put something back, the dialog says what and where, not that the
-  subscription is in use. Bots keep the connection. Not offered for Claude Code on a Mac, where the subscription is in
-  the Keychain and a logout could not be undone (sign out, then **Add key**). It needs a runner that knows it
-  (`Update <computer> to switch to an API key from here` otherwise).
+- To move a Computer's login **from an API key to a subscription**, take the key off the computer in **Settings >
+  Models**, then sign it in. To move it **to an API key**, give it the key there. (The **Switch to subscription** and
+  **Switch to API key** buttons are gone; a page drawn before that asks for one is told so.)
 
-None of this restarts the runner. `POST /api/v2/runners/{runner_id}/logouts` with `{"runtime":"codex"}` (and
-`"profile"` for a named subscription left from an earlier release) signs out; `GET /api/v2/runners/{runner_id}/logouts/bots?runtime=codex` lists the
-bots it stops; `POST /api/v2/runners/{runner_id}/logins` with `"switch": true` switches (with `"to": "subscription"`,
-switches the Computer's own login off its API key); `POST /api/v2/runners/{runner_id}/keys` with `"switch": true`
-switches it from its subscription to the key in `secret`; `POST
-/api/v2/runners/{runner_id}/shared-key` with `{"runtime":"codex"}` lets the shared key back. Each is followed like a
-sign-in, with `GET /api/v2/runners/{runner_id}/logins/{id}` (`kind` says which; a sign-out ends `signed_out`). BotOps
+None of this restarts the runner. `POST /api/v2/computers/{runner_id}/logouts` with `{"runtime":"codex"}` (and
+`"profile"` for a named subscription left from an earlier release) signs out; `GET /api/v2/computers/{runner_id}/logouts/bots?runtime=codex` lists the
+bots it stops; `POST /api/v2/computers/{runner_id}/logins` with `"switch": true` switches; `POST
+/api/v2/computers/{runner_id}/shared-key` with `{"runtime":"codex"}` lets the key the computer is given back. Each is followed like a
+sign-in, with `GET /api/v2/computers/{runner_id}/logins/{id}` (`kind` says which; a sign-out ends `signed_out`). BotOps
 cannot sign a login out, because it stops bots. A turn already running when the account changes is not stopped and
 may finish on the old account. On a Mac, Claude Code keeps its login in the Keychain rather than in files, so there is
 no side to sign in on: Switch account isn't offered for it there (the server and the runner refuse it too); sign out,
@@ -665,66 +637,25 @@ the change, redrawing **Settings → Computers**, for about a minute.
 ### API keys on a Computer
 
 A Computer's own login can run on a model API key instead of a subscription (Codex, Claude Code, Cursor Agent and
-Muse Code take one). Its line in the computer's pop-up says whose key it is, by its preview only (`sk-…xyz`): **this
-computer's key** (added from Tico), **a shared key** (a credential shared with this computer by name or with **Every computer**), or **a
-key set on the computer** (its environment or `secrets/_shared.env`). The same people who may sign it in (the Computer's
-operator, owners and admins) see **Replace key** and **Clear key** in place of **Sign out**, and **Add key** next to a
-login with none. The Computer must be online and on a current runner; an older one answers `Update <computer> to …`.
+Muse Code take one). Keys are subscriptions in **Settings > Models**: added there, sealed in Tico's credential vault and
+never shown again in full, and given to one computer or several. The Computer fetches the key it is given over its own
+connection, at start-up and every ten minutes (`GET /api/v2/runner-model-credentials`). Its line in the computer's pop-up
+says whose key it is, by its preview only (`sk-…xyz`): **this computer's key** (given to it alone), **a shared key**
+(given to several computers, listed on the line), or **a key set on the computer** (its environment or
+`secrets/_shared.env`).
 
-- **Add key** and **Replace key** take the key in a password field. It goes once to Tico's credential vault, sealed
-  like any other credential, for that Computer alone, and is never shown again in full. The Computer fetches it over its
-  own connection (the sign-in queue never carries a key) and checks it (Codex signs in with it; the others read it on
-  each turn). Until the check passes and Tico agrees the key goes in, the old key stays in use for runs and in the
-  Computer's key files, and the Computer's regular key fetch leaves them alone. From Tico's yes the change can no longer
-  be canceled: the key it replaces is deleted from the vault, and a key set on the computer is taken out of
-  `secrets/_shared.env`. A key that does not work, a cancel, or a check that runs out of time deletes the new key and
-  leaves the old one in use (for Codex, signed in again with it). Runs that start afterwards use the new key; for Claude
-  Code, a key added here is used even when the computer also has a browser login.
-- **Clear key** first names the bots that stop, like **Sign out**. The Computer then deletes the key from its key files
-  (and, for Codex, logs out a login the key made; a browser or subscription login is not the key's and stays), and
-  Tico deletes this computer's key from the vault. Bots and assignments stay. Afterwards the line reads **No key ·
-  Add key**, with **Sign in** and **Use the shared key** beside it, and its chip has a red dot: like a sign-out, a shared key does not sign it back in (the server does not hand it
-  out, and the runner's ten-minute re-apply skips it) until someone adds a key, signs in or chooses **Use the shared
-  key**.
+- **Replacing** the key in Settings > Models reaches each computer given it at its next key fetch.
+- **Taking it off** a computer, or deleting it, tells each computer to delete its copies at its next key fetch (Codex
+  also logs out the login the key made; a browser or subscription login is not the key's and stays). An offline
+  Computer does so when it is next online. Bots and assignments stay; the line reads **No key**, with **Sign in** and
+  **Use the shared key** beside it, and its chip has a red dot.
+- A Computer **signed out** from here is not handed its key again until someone signs it in or chooses **Use the
+  shared key**, which lifts the mark here and on the Computer.
 
-**Shared keys.** A key in **Credentials** can be shared with **Every computer** or with computers by name; only a
-credential administrator can do either, in Credentials or from **Add connection**. Several rules decide which key a
-computer uses:
-
-- A key shared by name comes before the **Every computer** key.
-- Picking or sharing a key for a tool on a computer replaces the key shared with it before.
-- A computer that was cleared, or switched to a subscription, from here takes the shared key again when it is given one.
-  That is refused, naming the computer, while it is offline.
-
-Replacing or clearing a shared key from one Computer first asks **This computer only** or **All listed computers**,
-naming every Computer it signs in and which of them are offline. The second choice warns that it changes every one.
-
-- *This computer only*: Replace gives this Computer a key of its own, which signs it in before the shared one; Clear
-  stops this Computer using the shared key. The others keep it.
-- *All listed computers*, Replace: the shared credential's value is replaced, in **Credentials** too. Only someone who may manage
-  credentials can do this. Online Computers fetch it at once; an offline one gets it when it is next online. Claude
-  Code takes an OAuth token or an API key, each its own credential: the **Kind** chosen is the one replaced (by default
-  the one this Computer runs on), and a kind that is not shared is refused rather than written into the other.
-- *All listed computers*, Clear: offered only to someone who may change every Computer listed (otherwise Tico names the ones they
-  may not). Each online Computer clears its copy as above. **An offline Computer keeps its copy only until it is next
-  online**: Tico marks it cleared at once, so its first key fetch when it comes back (at start-up, then every ten
-  minutes) tells it to clear the key, and it does, with no one needing to act. That needs a current runner: while any
-  Computer listed, online or offline, runs one too old to clear its key, **All listed computers** is not offered and Tico answers
-  `Update <computer> to clear its key from here, or delete the shared key in Credentials`. A computer that
-  joins later still gets the shared key, which stays in **Credentials**.
-
-A Computer's own key is also a credential in **Credentials**. Deleting it there: the Computer falls back to the shared
-key at its next key fetch (Codex signs in again with it). With no shared key, the deletion is **Clear key** on that
-Computer: its next key fetch deletes its copies and logs out the login the key made, and the line reads **No key ·
-Add key**. A key a Computer is still checking cannot be deleted there; cancel **Replace key** or let the check
-end first.
-
-`GET /api/v2/runners/{runner_id}/keys?runtime=codex` says which key signs it in (`source`, `preview`) and, for the
-shared key, the Computers it serves. `POST /api/v2/runners/{runner_id}/keys` with `{"runtime":"codex","secret":"…",
-"scope":"this"}` adds or replaces a key and returns a `use_key` row to follow with `GET …/logins/{id}` (it ends `done`
-or `failed`); `"scope":"all"` replaces the shared key. `POST /api/v2/runners/{runner_id}/keys/clear` with
-`{"runtime":"codex","scope":"this"}` (or `"all"`) clears it and returns each Computer's `clear_key` row, or `waiting`
-for one that is offline.
+Before keys became subscriptions, Settings > Computers kept keys of its own (**Add key**, **Replace key**, **Clear
+key**, **Switch to subscription** and **Switch to API key**). Upgrading moved each key a computer ran on into Settings >
+Models, given to that computer, and a computer switched to a subscription stays on it. `GET` and `POST
+/api/v2/computers/{runner_id}/keys` and `POST …/keys/clear` now answer `410` (`moved`) with where keys are changed.
 
 ## Subscriptions from earlier releases
 
@@ -732,9 +663,9 @@ Earlier releases let a computer sign in named subscriptions besides its own logi
 computer now has one login per AI tool for all its bots. Upgrading deletes the bots' choices (the bot then runs on its
 computer's login), and nothing signs a named subscription in or runs on one. A computer that still has some keeps
 reporting them, unread and unshown, for one release; their folders stay on the computer. The computer's operator or an
-admin can take one off with `POST /api/v2/runners/{runner_id}/removals` (`{"runtime":"codex","profile":"team-chatgpt"}`,
+admin can take one off with `POST /api/v2/computers/{runner_id}/removals` (`{"runtime":"codex","profile":"team-chatgpt"}`,
 online computers on a runner that knows it, `model_remove_v1`) or sign it out with `POST
-/api/v2/runners/{runner_id}/logouts` (`{"runtime":"codex","profile":"team-chatgpt"}`).
+/api/v2/computers/{runner_id}/logouts` (`{"runtime":"codex","profile":"team-chatgpt"}`).
 
 The server and runner negotiate this change with `computer_logins_v1` in config, assignments and attempts, and an
 acknowledgement in the runner's capabilities and readiness. An updated runner keeps an older server's
@@ -779,7 +710,7 @@ Only owners and admins and the Computer's operator see accounts in `GET /api/v2/
 
 Next to the weekly window, a profile reports Codex's 5-hour window (`five_hour`, from the same rate-limit events) with its own reset and observation time. A 5-hour reading whose reset is more than 5 hours 10 minutes after it was taken (10 minutes for clock skew) is unknown; the weekly window keeps its 8-day limit. The computer's pop-up shows both windows on each connection line as "% left" bars with the reading's age; each tool's installed version and Enabled switch are under **Versions and updates**. Tools without an account or usage source (Gemini CLI, Cursor Agent, pi, Grok) read "unavailable", never empty or full.
 
-The Computer's own login (the one its bots use when no profile is assigned) reports the same two windows on its runtime row in readiness (`weekly`, `five_hour`), checked against the same limits and shown to the same people as its account. Claude reads them from each turn's `rate_limit_event`: Claude Code 2.1.30x sends both windows in `unifiedWindows` with a 0–1 `utilization`, which becomes the percentage used (the page shows what is left). That field is undocumented, so a missing or out-of-range value reads "percentage unavailable", never 0% or 100%, and an older CLI reports only the reset as before. Until a Claude turn runs on that login, the line says "Weekly usage unavailable · reported after a Claude Code turn on this computer": Tico never starts a turn just to read usage. Codex's windows come from the same background app-server session that reads its account (at most every ten minutes, `account/rateLimits/read`, no turn and no paid request), for the own login and each named profile; an API-key login has no plan usage and is not asked. A server from before this change refuses the two runtime fields; the runner then leaves them out for ten minutes and sends the rest.
+The Computer's own login (the one its bots use when no profile is assigned) reports the same two windows on its runtime row in readiness (`weekly`, `five_hour`), checked against the same limits and shown to the same people as its account. Claude reads them from each turn's `rate_limit_event`, and from the limit a reply it blocked carries (`api_error_params.rate_limit_info`), since Claude Code does not repeat an unchanged event: Claude Code 2.1.30x sends both windows in `unifiedWindows` with a 0–1 `utilization`, which becomes the percentage used (the page shows what is left). That field is undocumented, so a missing or out-of-range value reads "percentage unavailable", never 0% or 100%, and an older CLI reports only the reset as before. Until a Claude turn runs on that login, the line says "Weekly usage unavailable · reported after a Claude Code turn on this computer": Tico never starts a turn just to read usage. Codex's windows come from the same background app-server session that reads its account (at most every ten minutes, `account/rateLimits/read`, no turn and no paid request), for the own login and each named profile; an API-key login has no plan usage and is not asked. A server from before this change refuses the two runtime fields; the runner then leaves them out for ten minutes and sends the rest.
 
 ### A bot's connection in the API
 
@@ -793,7 +724,7 @@ state. Unknown sign-in state is `null`.
 ### Sign-in and profiles on the computer
 
 The Computer operator can manage sign-in on their own Computer; owners and admins can manage it on any Computer. A
-sign-in, switch or switch to a subscription is for the Computer's login: `POST /api/v2/runners/{runner_id}/logins`
+sign-in, switch or switch to a subscription is for the Computer's login: `POST /api/v2/computers/{runner_id}/logins`
 with `{"runtime":"codex"}` (or `claude`). One with a named `"profile"` is refused (422 `one_login`), and so is
 `tico-runner profile login <name>` for any profile but the computer's own. The browser relays the provider's link and
 code; the provider writes its credentials locally. A Computer's login can itself be a profile folder: the one named

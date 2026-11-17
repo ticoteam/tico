@@ -17,7 +17,6 @@ from fastapi import Request
 from . import botkpis
 from . import strategy_acts as CA
 from . import strategy_bot
-from . import strategy_merge as CM
 from . import strategy_suggest as CS
 from . import company as C
 from . import goal_asks as GA
@@ -31,6 +30,7 @@ from . import strategy as S
 from . import task_rule_gate
 from . import views
 from .store import H, Problem
+from .api_contract import api_v2
 
 
 DRAFT_PAGE_KINDS = ("brand_draft",)
@@ -48,7 +48,7 @@ def company_editor(who, tap=False):
 
 
 def strategy_visible(who, proposal, auth=None):
-    """A strategy proposal carries unpublished draft text (strategy_draft) or every affected goal's title
+    """A strategy proposal carries text the owner has not confirmed (strategy_draft) or every affected goal's title
     (strategy_realign): the owner reads it, and the bot that proposed it; no one else. A brand draft proposal
     (backend/brand.py) is the same for the owner and the admins, who write that draft."""
     if proposal["kind"] in DRAFT_PAGE_KINDS:
@@ -208,7 +208,7 @@ def install(app, store, auth, mutate, settings):
                 CA.gate(c, who.actor, "target", gated)
             raise Problem(
                 "forbidden",
-                f"The {strategy_bot.name(c)} proposes {what}; the owner confirms it (POST /api/v2/goal-proposals)",
+                f"The {strategy_bot.name(c)} proposes {what}; the owner confirms it (POST /api/v2/proposals)",
                 403,
             )
 
@@ -388,12 +388,12 @@ def install(app, store, auth, mutate, settings):
             raise Problem(
                 "forbidden",
                 "A person sets a goal's Why on their own click; a bot proposes one "
-                "(POST /api/v2/goal-proposals, kind goal_why)",
+                "(POST /api/v2/proposals, kind goal_why)",
                 403,
             )
 
     def company_view(c, who):
-        # The vision has one source, the strategy: the owner reads the draft's, everyone else the published one.
+        # The vision has one source, the strategy: the owner reads the draft's, everyone else the live one (the same).
         record = {**C.profile(c), "vision": S.vision(c, editor=company_editor(who))}
         by = record.get("updated_by")
         known = N.lookup(c, {by}) if by else {}
@@ -403,7 +403,15 @@ def install(app, store, auth, mutate, settings):
         }
 
     # ------------------------------------------------------------------ the company
-    @app.get("/api/v2/company")
+    @app.get(
+        "/api/v2/company",
+        **api_v2(
+            "Goals",
+            "getCompany",
+            "The team's Vision and Description (the Company section at the top of Goals), and whether the caller may edit them. The Vision is the strategy's: the draft's for the owner, the published one for everyone else",
+            "CompanyResult",
+        ),
+    )
     def company_show(request: Request):
         """The company's Vision and Description, at the top of Goals."""
         who = request.state.identity
@@ -411,7 +419,15 @@ def install(app, store, auth, mutate, settings):
         with store.read() as c:
             return company_view(c, who)
 
-    @app.post("/api/v2/company")
+    @app.post(
+        "/api/v2/company",
+        **api_v2(
+            "Goals",
+            "updateCompany",
+            "The owner, on their own click: change the Vision (written to the strategy draft) and/or the Description; never an admin or a bot, the Strategy Owner included. Each change is kept with who and when",
+            "CompanyResult",
+        ),
+    )
     def company_update(request: Request, body: M.CompanyUpdate):
         """The owner writes the Vision and the Description; every change is kept with who and when."""
         who = request.state.identity
@@ -443,10 +459,15 @@ def install(app, store, auth, mutate, settings):
         return mutate(request, body, work)
 
     # ------------------------------------------------------------------ how much the Strategy Owner does
-    # The /api/v2/ceo-bot paths are the Strategy Owner's old ones: clients built before the rename still call them, so
-    # each stays a hidden alias of the route under it.
-    @app.post("/api/v2/ceo-bot/level", include_in_schema=False)
-    @app.post("/api/v2/strategy-bot/level")
+    @app.post(
+        "/api/v2/strategy-bot/level",
+        **api_v2(
+            "Goals",
+            "setStrategyBotLevel",
+            "Settings > Strategy Owner, \"How much your Strategy Owner does\": the owner picks Passive (1), Suggests actions (2) or Acts on its own (3) on their own click, logged with who and when. No admin or bot may, the Strategy Owner included",
+            "StrategyBotView",
+        ),
+    )
     def strategy_bot_level(request: Request, body: M.StrategyBotLevel):
         """Settings > Strategy Owner, "How much your Strategy Owner does": the owner picks Passive (1), Suggests actions (2)
         or Acts on its own (3) on their own click or their tap on a Confirm card; each change is kept with who and when. An admin or a member never
@@ -467,8 +488,15 @@ def install(app, store, auth, mutate, settings):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/ceo-bot/checks", include_in_schema=False)
-    @app.post("/api/v2/strategy-bot/checks")
+    @app.post(
+        "/api/v2/strategy-bot/checks",
+        **api_v2(
+            "Goals",
+            "setStrategyBotChecks",
+            "Settings > Strategy Owner, \"Regular checks\": the owner turns the KPI pass and the automatic goal colours on or off, on their own click. Off, neither runs until they are turned back on. No admin or bot may",
+            "StrategyBotView",
+        ),
+    )
     def strategy_bot_checks(request: Request, body: M.StrategyBotChecks):
         """Settings > Strategy Owner, "Regular checks": the owner turns the KPI pass and the automatic goal colours on or
         off, on their own click. Off, neither runs until they turn them back on; their chat with the Strategy Owner still
@@ -493,33 +521,15 @@ def install(app, store, auth, mutate, settings):
         if who.actor != "bot:" + strategy_bot.SLUG or who.via:
             raise Problem("forbidden", f"Only the {strategy_bot.name(c)} {what}", 403)
 
-    @app.post("/api/v2/ceo-bot/merge", include_in_schema=False)
-    @app.post("/api/v2/strategy-bot/merge")
-    def strategy_bot_merge(request: Request, body: M.StrategyBotMerge):
-        """At level 2 or 3, the Strategy Owner makes several bots' asks waiting on one person a single item of its own;
-        the person's answer to it goes to each bot that asked (backend/strategy_merge.py)."""
-        who = request.state.identity
-        # The merged item is the Strategy Owner's ask of the person: checked like any bot's ask (backend/task_rule_gate.py),
-        # refused with the rule's words when a rule covers it.
-        rules = request.app.state.task_rules
-        said = [("Title", body.title), ("Question", body.question)]
-
-        def reach(c):
-            return [rules.rule_target(c, who, body.person)]
-
-        verdict = rules.check_words(who, "strategy_merge", said, reach)
-
-        def work(c):
-            auth.domain(who)
-            strategy_itself(c, who, "merges the asks waiting on a person")
-            rules.apply_words(c, who, verdict, said, reach, ask=True)
-            person = H.resolve_actor(c, body.person) or body.person
-            return CM.merge(c, who.actor, person, body.title, body.question, body.tasks)
-
-        return mutate(request, body, work)
-
-    @app.post("/api/v2/ceo-bot/level3-offer", include_in_schema=False)
-    @app.post("/api/v2/strategy-bot/level3-offer")
+    @app.post(
+        "/api/v2/strategy-bot/level3-offer",
+        **api_v2(
+            "Goals",
+            "recordStrategyBotLevel3Offer",
+            "The Strategy Owner only: record that its Monday note offered level 3. Refused (422) unless level3_offer.due: 10 recoveries approved in a row with its pick unchanged, and no offer in 30 days. It never raises its own level",
+            "StrategyBotLevel3OfferResult",
+        ),
+    )
     def strategy_bot_level3_offer(request: Request, body: M.Empty):
         """The Strategy Owner records that its Monday note offered level 3: refused unless 10 approvals in a row at level
         2 make it due, and never more often than every 30 days. Offering never changes the level."""
@@ -533,8 +543,15 @@ def install(app, store, auth, mutate, settings):
         return mutate(request, body, work)
 
     # ------------------------------------------------------------------ what the Strategy Owner does alone (level 3)
-    @app.post("/api/v2/ceo-bot/decisions", include_in_schema=False)
-    @app.post("/api/v2/strategy-bot/decisions")
+    @app.post(
+        "/api/v2/strategy-bot/decisions",
+        **api_v2(
+            "Goals",
+            "makeStrategyBotDecision",
+            "The Strategy Owner only, at level 3: one decision made alone, with its reason: bot tasks created, moved to the top of their queue, given to another bot or closed, under one action id in the Strategy Owner log. A person's task, a bot offline or a refusal becomes one proposal in the owner's Needs you instead, never dropped",
+            "StrategyBotLogEntry",
+        ),
+    )
     def strategy_bot_decide(request: Request, body: M.StrategyBotDecision):
         """The Strategy Owner only, at level 3: one decision made alone, with its reason: bot tasks created, moved to the
         top of their queue, given to another bot or closed, all under one action id in the Strategy Owner log. What it may
@@ -600,8 +617,15 @@ def install(app, store, auth, mutate, settings):
 
         return mutate(request, body, work)
 
-    @app.get("/api/v2/ceo-bot/log", include_in_schema=False)
-    @app.get("/api/v2/strategy-bot/log")
+    @app.get(
+        "/api/v2/strategy-bot/log",
+        **api_v2(
+            "Goals",
+            "listStrategyBotLog",
+            "The Strategy Owner log, newest first: each decision it made alone and each thing it proposed because it stays the owner's (cost, publishing, outside sends, adding or removing bots, goal and KPI targets, the vision, a bot's instructions, a person's task), with the reason. The owner only; anyone else is refused (403)",
+            "StrategyBotLog",
+        ),
+    )
     def strategy_bot_log(request: Request, before: str | None = None, limit: int = CA.LOG_PAGE):
         """The Strategy Owner log, newest first: each decision it made alone with its reason and what it changed, and each
         thing it proposed instead because it stays the owner's. The owner reads it, who decides on its proposals and
@@ -616,8 +640,15 @@ def install(app, store, auth, mutate, settings):
             out["can_undo"] = company_editor(who)
             return out
 
-    @app.post("/api/v2/ceo-bot/log/{action_id}/undo", include_in_schema=False)
-    @app.post("/api/v2/strategy-bot/log/{action_id}/undo")
+    @app.post(
+        "/api/v2/strategy-bot/log/{action_id}/undo",
+        **api_v2(
+            "Goals",
+            "undoStrategyBotDecision",
+            "The owner, on their own click, undoes one decision the Strategy Owner made alone: each task goes back where nobody changed it since, a later change is kept and named, a task it made is closed, and each bot is told",
+            "StrategyBotLogEntry",
+        ),
+    )
     def strategy_bot_undo(request: Request, action_id: str, body: M.Empty):
         """The owner, on their own click, undoes one decision the Strategy Owner made alone: the tasks it changed go back
         unless anything happened to them since (those stay as they are and are named), and each bot whose task changed
@@ -634,7 +665,15 @@ def install(app, store, auth, mutate, settings):
 
         return mutate(request, body, work)
 
-    @app.get("/api/v2/company/history")
+    @app.get(
+        "/api/v2/company/history",
+        **api_v2(
+            "Goals",
+            "getCompanyHistory",
+            "Every change to the Vision and the Description, newest first, with who made it and when",
+            "CompanyHistory",
+        ),
+    )
     def company_history(request: Request):
         """Every change to the Vision and the Description, newest first, with who made it."""
         who = request.state.identity
@@ -650,7 +689,15 @@ def install(app, store, auth, mutate, settings):
             with store.transaction() as c:
                 G.mark_read(c, who.actor, due)
 
-    @app.get("/api/v2/goals")
+    @app.get(
+        "/api/v2/goals",
+        **api_v2(
+            "Goals",
+            "listGoals",
+            "The caller's own goals, the chain above them and their reports' goals; ?all=true is every goal the caller may read (?status=red,gray filters); ?owner= names someone else",
+            "GoalList",
+        ),
+    )
     def goals_list(request: Request, owner: str | None = None, all: bool = False, status: str | None = None):
         """`tico goal list`: mine, the chain above and my reports' by default; `all` is every goal, or every one
         `owner` owns."""
@@ -673,7 +720,15 @@ def install(app, store, auth, mutate, settings):
         mark_read(who, due)
         return out
 
-    @app.get("/api/v2/goals/tree")
+    @app.get(
+        "/api/v2/goals/tree",
+        **api_v2(
+            "Goals",
+            "getGoalTree",
+            "Every goal with its owner, its KPIs (each with its target and colour), the KPIs no goal uses and the pending proposals: what the Goals page draws",
+            "GoalTree",
+        ),
+    )
     def goals_tree(request: Request):
         """Every goal with its owner's name and kind, its KPIs (each with its target and colour), and the KPIs no
         goal uses, for the page's tree and list."""
@@ -744,7 +799,15 @@ def install(app, store, auth, mutate, settings):
                 ],
             }
 
-    @app.get("/api/v2/goals/needs-you")
+    @app.get(
+        "/api/v2/goals/needs-you",
+        **api_v2(
+            "Goals",
+            "getGoalsNeedsYou",
+            "Red KPIs on goals the caller owns, stale KPIs they own, and definitions or targets they are asked to confirm; for a person each is a Strategy Owner task (`task`), the one Tasks and Decide show",
+            "GoalsNeedsYou",
+        ),
+    )
     def goals_needs_you(request: Request):
         """What waits on the caller here: red KPIs on goals they own, stale KPIs they own, and definitions and
         targets they are asked to confirm. For a person each is a Strategy Owner task (backend/goal_asks.py), shown
@@ -1040,6 +1103,8 @@ def install(app, store, auth, mutate, settings):
             row = G.goal(c, p["goal_id"]) if p["goal_id"] else None
             if row:
                 watch.append(row["id"])
+            # rc.1 clients reject any other spelling in a read-back step (their goal save whitelist accepts only
+            # goal-proposals/.../decide, kept below as an alias): keep this one until the floor moves past rc.1.
             step(f"/api/v2/goal-proposals/{p['id']}/decide", {"decision": raw["decision"]})
             about = bold(row["title"]) if row else q((K.kpi(c, p["kpi_id"]) or {}).get("name") or "")
             text = (
@@ -1102,7 +1167,14 @@ def install(app, store, auth, mutate, settings):
             c.execute("ROLLBACK TO goal_read_back")
             c.execute("RELEASE goal_read_back")
 
-    @app.post("/api/v2/goals/read-back")
+    @app.post(
+        "/api/v2/goals/read-back",
+        **api_v2(
+            "Goals",
+            "readBackGoalChanges",
+            "The Strategy Owner only, in the owner's own chat: Tico writes the read-back of the whole plan (up to 500 changes to goals, measures and suggestions) as its reply and stores the exact saves. The owner's reply agreeing to the newest read-back (in any words, or a yes to some by number) lets exactly those saves through (each step's method, path and body, sent as it is), cited with X-Tico-On-Behalf-Of, until a newer read-back replaces it or the owner says stop; anything else is 403 not_agreed. A colour, done or dropped, archiving, a reading or the Vision is refused here: it stays a click",
+        ),
+    )
     def goal_read_back(request: Request, body: M.GoalReadBack):
         """The owner's Assistant, in their own chat: Tico writes the read-back of the whole plan as its reply and
         stores the exact saves; the owner's yes to it is what lets them through (backend/goal_read_back.py)."""
@@ -1159,7 +1231,14 @@ def install(app, store, auth, mutate, settings):
 
         return write(request, body, work)
 
-    @app.get("/api/v2/goals/read-back/{mid}")
+    @app.get(
+        "/api/v2/goals/read-back/{mid}",
+        **api_v2(
+            "Goals",
+            "getGoalReadBack",
+            "One goal read-back: each change with its exact saves, whether it is saved and, in the turn the owner's reply started, whether that reply says yes to it and why not",
+        ),
+    )
     def goal_read_back_show(request: Request, mid: str):
         """One read-back as it stands: each change, its saves (the exact calls), whether it is saved, and, in the turn
         the owner's reply started, whether their reply says yes to it and why not."""
@@ -1215,7 +1294,15 @@ def install(app, store, auth, mutate, settings):
                 )
             return {"message_id": mid, "created_at": back["created_at"], "changes": out}
 
-    @app.post("/api/v2/goals/refresh")
+    @app.post(
+        "/api/v2/goals/refresh",
+        **api_v2(
+            "Goals",
+            "refreshGoalStatuses",
+            "The Strategy Owner's status pass (or the owner's): work automatic colours out again. A colour a person set only gets a suggestion",
+            "GoalRefreshView",
+        ),
+    )
     def goals_refresh(request: Request, body: M.GoalRefresh):
         """The Strategy Owner's status pass: work every live goal's automatic colour out again (a goal a
         person set only gets a suggestion). The owner may run it too."""
@@ -1229,7 +1316,15 @@ def install(app, store, auth, mutate, settings):
 
         return mutate(request, body, work)
 
-    @app.get("/api/v2/goals/{gid}")
+    @app.get(
+        "/api/v2/goals/{gid}",
+        **api_v2(
+            "Goals",
+            "getGoal",
+            "One goal with its KPIs, the goals under and above it, tasks, history, recent check-ins and pending proposals",
+            "GoalResult",
+        ),
+    )
     def goal_show(request: Request, gid: str):
         who = request.state.identity
         auth.domain(who)
@@ -1242,7 +1337,15 @@ def install(app, store, auth, mutate, settings):
         mark_read(who, due)
         return out
 
-    @app.post("/api/v2/goals")
+    @app.post(
+        "/api/v2/goals",
+        **api_v2(
+            "Goals",
+            "createGoal",
+            "Set a goal for yourself, under a goal you own, or for someone below you; the team owner sets team goals",
+            "GoalResult",
+        ),
+    )
     def goal_create(request: Request, body: M.GoalCreate):
         who = request.state.identity
 
@@ -1265,7 +1368,15 @@ def install(app, store, auth, mutate, settings):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/goals/{gid}/status")
+    @app.post(
+        "/api/v2/goals/{gid}/status",
+        **api_v2(
+            "Goals",
+            "setGoalStatus",
+            "Set the colour by hand with one sentence (red, yellow, green) or end the goal (done, dropped). It sticks, with the setter's name, until a person hands it back",
+            "GoalResult",
+        ),
+    )
     def goal_status(request: Request, gid: str, body: M.GoalStatus):
         """Set the colour by hand: it sticks, with the setter's name and note, until a person hands it back."""
         who = request.state.identity
@@ -1284,7 +1395,15 @@ def install(app, store, auth, mutate, settings):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/goals/{gid}/reopen")
+    @app.post(
+        "/api/v2/goals/{gid}/reopen",
+        **api_v2(
+            "Goals",
+            "reopenGoal",
+            "Bring a done or dropped goal back with a colour and one line why, or auto for the colour it had; whoever may set its colour",
+            "GoalResult",
+        ),
+    )
     def goal_reopen(request: Request, gid: str, body: M.GoalReopen):
         """Reopen a done or dropped goal with a colour and one line why, or `auto` for the colour it had, worked out
         again: whoever may set its colour. `undo` alone puts a removed goal back as it was, from its history."""
@@ -1304,7 +1423,15 @@ def install(app, store, auth, mutate, settings):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/goals/{gid}/status/auto")
+    @app.post(
+        "/api/v2/goals/{gid}/status/auto",
+        **api_v2(
+            "Goals",
+            "handBackGoalStatus",
+            "\"Let Strategy Owner set it\": end a colour set by hand; the automatic colour is worked out at once",
+            "GoalResult",
+        ),
+    )
     def goal_status_auto(request: Request, gid: str, body: M.Empty):
         """ "Let Strategy Owner set it": a person ends their override and the colour is worked out again now."""
         who = request.state.identity
@@ -1322,7 +1449,15 @@ def install(app, store, auth, mutate, settings):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/goals/{gid}")
+    @app.post(
+        "/api/v2/goals/{gid}",
+        **api_v2(
+            "Goals",
+            "updateGoal",
+            "Change a goal's title, body, parent, owner or place in its owner's order",
+            "GoalResult",
+        ),
+    )
     def goal_update(request: Request, gid: str, body: M.GoalUpdate):
         who = request.state.identity
 
@@ -1383,7 +1518,15 @@ def install(app, store, auth, mutate, settings):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/goals/{gid}/why")
+    @app.post(
+        "/api/v2/goals/{gid}/why",
+        **api_v2(
+            "Goals",
+            "setGoalWhy",
+            "A person who may edit the goal writes its Why (one line tying it to the vision) or clears it; a bot proposes one instead (kind goal_why)",
+            "GoalResult",
+        ),
+    )
     def goal_why(request: Request, gid: str, body: M.GoalWhy):
         """Write a goal's Why (one line tying it to the vision) or clear it; whoever may edit the goal, a person."""
         who = request.state.identity
@@ -1404,7 +1547,10 @@ def install(app, store, auth, mutate, settings):
         return mutate(request, body, work)
 
     # ------------------------------------------------------------------ check-ins
-    @app.get("/api/v2/goals/{gid}/checkins")
+    @app.get(
+        "/api/v2/goals/{gid}/checkins",
+        **api_v2("Goals", "listGoalCheckins", "A goal's check-ins, newest first", "GoalCheckins"),
+    )
     def goal_checkins(request: Request, gid: str):
         who = request.state.identity
         auth.domain(who)
@@ -1414,7 +1560,15 @@ def install(app, store, auth, mutate, settings):
                 raise Problem("not_found", "Unknown goal", 404)
             return {"goal_id": gid, "checkins": G.checkins(c, gid)}
 
-    @app.post("/api/v2/goals/{gid}/checkins")
+    @app.post(
+        "/api/v2/goals/{gid}/checkins",
+        **api_v2(
+            "Goals",
+            "addGoalCheckin",
+            "The owner's own words on how it is going, with an optional signal; it colours a goal that has no KPI",
+            "GoalCheckinResult",
+        ),
+    )
     def goal_checkin(request: Request, gid: str, body: M.GoalCheckin):
         """The owner's own words on how it is going (a person, or the Strategy Owner recording their answer)."""
         who = request.state.identity
@@ -1437,7 +1591,15 @@ def install(app, store, auth, mutate, settings):
         return mutate(request, body, work)
 
     # ------------------------------------------------------------------ KPIs on goals
-    @app.post("/api/v2/goals/{gid}/kpis")
+    @app.post(
+        "/api/v2/goals/{gid}/kpis",
+        **api_v2(
+            "Goals",
+            "linkGoalKpi",
+            "Link a goal to a KPI (kpi_id) or make a new one and link it (name), with the target on the link; linking again replaces the target",
+            "GoalKpiResult",
+        ),
+    )
     def goal_kpi_link(request: Request, gid: str, body: M.GoalKpiLink):
         """Link a goal to a KPI (`kpi_id`), or make a new one and link it (`name`). The target is on the link."""
         who = request.state.identity
@@ -1474,7 +1636,15 @@ def install(app, store, auth, mutate, settings):
     def views_of(c, goal_id, kpi_id):
         return next(v for v in K.goal_views(c, [goal_id])[goal_id] if v["id"] == kpi_id)
 
-    @app.post("/api/v2/goals/{gid}/kpis/{kid}")
+    @app.post(
+        "/api/v2/goals/{gid}/kpis/{kid}",
+        **api_v2(
+            "Goals",
+            "setGoalKpiTarget",
+            "Change the target on a goal's link to a KPI: an improvement (baseline, target, deadline), a range (min, max) or none",
+            "GoalKpiResult",
+        ),
+    )
     def goal_kpi_target(request: Request, gid: str, kid: str, body: M.KpiTarget):
         """Set the target on a goal's link to a KPI: an improvement (baseline, target, deadline), a range, or none."""
         who = request.state.identity
@@ -1499,7 +1669,10 @@ def install(app, store, auth, mutate, settings):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/goals/{gid}/kpis/{kid}/unlink")
+    @app.post(
+        "/api/v2/goals/{gid}/kpis/{kid}/unlink",
+        **api_v2("Goals", "unlinkGoalKpi", "Take a KPI off a goal; the KPI and its readings stay", "GoalResult"),
+    )
     def goal_kpi_unlink(request: Request, gid: str, kid: str, body: M.Empty):
         who = request.state.identity
 
@@ -1571,7 +1744,15 @@ def install(app, store, auth, mutate, settings):
             "may_log": may_log(c, who, record) and not K.auto(record["id"]),
         }
 
-    @app.get("/api/v2/kpis")
+    @app.get(
+        "/api/v2/kpis",
+        **api_v2(
+            "KPIs",
+            "listKpis",
+            "The KPIs the caller may see; archived KPIs are omitted unless include_archived=true; goal_id, owner, unlinked=true narrow it; auto_for=<bot> is that bot's five automatic KPIs",
+            "KpiList",
+        ),
+    )
     def kpi_list(
         request: Request,
         goal_id: str | None = None,
@@ -1616,7 +1797,15 @@ def install(app, store, auth, mutate, settings):
                 out.append(item)
             return {"kpis": out}
 
-    @app.post("/api/v2/kpis")
+    @app.post(
+        "/api/v2/kpis",
+        **api_v2(
+            "KPIs",
+            "createKpi",
+            "Make a KPI (definition, unit, direction, cadence, owner, source note); with goal_id it is linked, the target fields on the link",
+            "KpiDetail",
+        ),
+    )
     def kpi_create(request: Request, body: M.KpiCreate):
         """A new KPI. With `goal_id` it is linked to that goal, with the target fields on the link."""
         who = request.state.identity
@@ -1645,14 +1834,27 @@ def install(app, store, auth, mutate, settings):
 
         return mutate(request, body, work)
 
-    @app.get("/api/v2/kpis/{kid}")
+    @app.get(
+        "/api/v2/kpis/{kid}",
+        **api_v2(
+            "KPIs",
+            "getKpi",
+            "One KPI: definition and its versions, the goals using it with each target and colour, every reading, check-ins, pending proposals",
+            "KpiDetail",
+        ),
+    )
     def kpi_show(request: Request, kid: str):
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
             return kpi_detail(c, who, kpi_or_404(c, who, kid))
 
-    @app.post("/api/v2/kpis/{kid}")
+    @app.post(
+        "/api/v2/kpis/{kid}",
+        **api_v2(
+            "KPIs", "updateKpi", "Change a KPI; a change to what it measures is a new definition version", "KpiDetail"
+        ),
+    )
     def kpi_update(request: Request, kid: str, body: M.KpiUpdate):
         """Change a KPI. A change to what it measures is a new definition version."""
         who = request.state.identity
@@ -1700,17 +1902,41 @@ def install(app, store, auth, mutate, settings):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/kpis/{kid}/archive")
+    @app.post(
+        "/api/v2/kpis/{kid}/archive",
+        **api_v2(
+            "KPIs",
+            "archiveKpi",
+            "Hide a KPI from active views; only its owner or someone above them; definitions, links, readings and audit history stay",
+            "KpiDetail",
+        ),
+    )
     def kpi_archive(request: Request, kid: str, body: M.Empty):
         """Hide a stored KPI from active lists and freshness checks. Its history and links stay intact."""
         return kpi_archive_change(request, kid, body, True)
 
-    @app.post("/api/v2/kpis/{kid}/restore")
+    @app.post(
+        "/api/v2/kpis/{kid}/restore",
+        **api_v2(
+            "KPIs",
+            "restoreKpi",
+            "Restore an archived KPI to active views; only its owner or someone above them; history stays",
+            "KpiDetail",
+        ),
+    )
     def kpi_restore(request: Request, kid: str, body: M.Empty):
         """Restore an archived KPI to active lists without changing its history or links."""
         return kpi_archive_change(request, kid, body, False)
 
-    @app.get("/api/v2/kpis/{kid}/readings")
+    @app.get(
+        "/api/v2/kpis/{kid}/readings",
+        **api_v2(
+            "KPIs",
+            "listKpiReadings",
+            "Every reading oldest first, each with the reading that superseded it; effective=true leaves out the corrected ones",
+            "KpiReadings",
+        ),
+    )
     def kpi_readings(request: Request, kid: str, effective: bool = False):
         who = request.state.identity
         auth.domain(who)
@@ -1718,7 +1944,15 @@ def install(app, store, auth, mutate, settings):
             record = kpi_or_404(c, who, kid)
             return {"kpi": record, "readings": K.readings(c, kid, effective=effective)}
 
-    @app.post("/api/v2/kpis/{kid}/readings")
+    @app.post(
+        "/api/v2/kpis/{kid}/readings",
+        **api_v2(
+            "KPIs",
+            "addKpiReading",
+            "Log a reading: a value with its period, evidence and quality. Never edited; supersedes names the reading it corrects",
+            "KpiReadingResult",
+        ),
+    )
     def kpi_log(request: Request, kid: str, body: M.KpiReading):
         """A reading: a fact with a period, evidence and a quality. Never edited; a correction is a new
         reading that names the one it supersedes."""
@@ -1738,7 +1972,15 @@ def install(app, store, auth, mutate, settings):
 
         return mutate(request, body, work)
 
-    @app.get("/api/v2/bots/{bot}/kpis")
+    @app.get(
+        "/api/v2/bots/{bot}/kpis",
+        **api_v2(
+            "KPIs",
+            "listBotKpis",
+            "A bot's five automatic KPIs, computed from Tico's own data (Read on the bot)",
+            "BotKpis",
+        ),
+    )
     def bot_kpis(request: Request, bot: str):
         """A bot's automatic KPIs, computed from Tico's own data: tasks done, time to first response, approval
         rate, failed runs, model cost. Read on the bot."""
@@ -1752,7 +1994,15 @@ def install(app, store, auth, mutate, settings):
             return {"bot": bot, "kpis": botkpis.for_bot(c, bot)}
 
     # ------------------------------------------------------------------ proposals
-    @app.get("/api/v2/goal-proposals")
+    @app.get(
+        "/api/v2/proposals",
+        **api_v2(
+            "Goals",
+            "listGoalProposals",
+            "Proposals (pending by default; status=confirmed|rejected|all), each saying whether the caller may decide it",
+            "GoalProposalList",
+        ),
+    )
     def proposal_list(request: Request, status: str = "pending", goal_id: str | None = None, kpi_id: str | None = None):
         who = request.state.identity
         auth.domain(who)
@@ -1777,7 +2027,15 @@ def install(app, store, auth, mutate, settings):
                 )
             return {"proposals": rows}
 
-    @app.post("/api/v2/goal-proposals")
+    @app.post(
+        "/api/v2/proposals",
+        **api_v2(
+            "Goals",
+            "createGoalProposal",
+            "Propose a change the caller may not make: goal wording, a KPI for a goal, a definition, a target, or a flag; the Strategy Owner at level 2 or 3, a recovery for a red or stalled goal (evidence, options of bot-task changes, its pick)",
+            "GoalProposalResult",
+        ),
+    )
     def proposal_create(request: Request, body: M.GoalProposal):
         """Propose a change the caller may not make: clearer wording, a KPI for a goal, a new definition,
         a target, or a flag (vague or duplicate). The owner confirms or rejects."""
@@ -1796,7 +2054,16 @@ def install(app, store, auth, mutate, settings):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/goal-proposals/{pid}/decide")
+    @app.post(
+        "/api/v2/proposals/{pid}/decide",
+        **api_v2(
+            "Goals",
+            "decideGoalProposal",
+            "A person's own decision, made by whoever owns the goal or KPI: confirm makes the change as them, reject drops it. An Add a KPI suggestion may be confirmed with a `target` for the link (as a goal's KPI target), used in place of its own. A recovery applies exactly the chosen option (`option`, else the Strategy Owner's pick) in the Strategy Owner's name; what can't be done comes back as a new recovery saying why",
+            "GoalProposalResult",
+        ),
+    )
+    @app.post("/api/v2/goal-proposals/{pid}/decide", deprecated=True)  # rc.1 CLI (on_behalf_of)
     def proposal_decide(request: Request, pid: str, body: M.GoalProposalDecision):
         """A person's own decision: confirm makes the change as them, reject drops it."""
         who = request.state.identity
@@ -1854,7 +2121,8 @@ def install(app, store, auth, mutate, settings):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/goal-proposals/turned-down")
+    @app.post("/api/v2/proposals/turned-down")
+    @app.post("/api/v2/goal-proposals/turned-down", deprecated=True)  # rc.1 CLI and playbooks
     def proposal_turned_down(request: Request, body: M.GoalProposal):
         """The owner's "no" in their Assistant chat to a suggestion the Strategy Owner would make (a number or a date, a
         measure, new words, a flag): stored in this one call as a turned-down suggestion on the goal, with the owner's
@@ -1904,7 +2172,15 @@ def install(app, store, auth, mutate, settings):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/goal-proposals/{pid}/note")
+    @app.post(
+        "/api/v2/proposals/{pid}/note",
+        **api_v2(
+            "Goals",
+            "addGoalProposalReason",
+            "After a reject, the person who turned the suggestion down adds one line on why (at most 280 characters), once, while it has none; a pending or confirmed suggestion, anyone else, a second reason or an empty one is refused. The Strategy Owner reads it before suggesting again",
+            "GoalProposalResult",
+        ),
+    )
     def proposal_reason(request: Request, pid: str, body: M.GoalProposalReason):
         """After "No, leave it": the person who turned the suggestion down tells the Strategy Owner why, in one line, once."""
         who = request.state.identity

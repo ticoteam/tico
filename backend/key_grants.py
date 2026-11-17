@@ -290,9 +290,11 @@ def _save(c: Any, message_id: str, card: Row) -> None:
 def grant(store: Any, vault: Any, who: Any, message_id: str, keep: list[int] | None = None) -> Row:
     """The person's Grant: exactly the rows kept (`keep`: their positions; None keeps all), then each tool's check.
     The card after it, with a result per row: Connected to <tool>, or Didn't work: <reason>."""
-    api_tools, credentials = _api_tools(), _credentials()
+    api_tools = _api_tools()
     with store.transaction() as c:
-        credentials.require_admin(c, who, vault.admins)
+        from . import tool_access as TA
+
+        TA.require(c, who, TA.tool(), action=TA.GRANT, admins=vault.admins, auth=vault.auth)  # an administrator's tap
         message: Row | None = H.message(c, message_id)
         card = _card(message or {})
         owner = _owner(c)

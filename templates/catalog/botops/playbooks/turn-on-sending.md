@@ -53,7 +53,7 @@ turn it off again in one message.
    `tico email policy --bot <slug> --settings '{"mode":"on_their_own"}'` with their own token.
 6. **Report in one message.** Say what you changed, what the rules are (the recipients and forward address(es) by
    name), what each mode means, that Tico's always-ask rules, caps and blocklist still apply, and how to turn it off
-   (the same setting, Never). Once they say it is set, `$HUB_DIR/scripts/mail.sh policy show --as <slug>` prints the
+   (the same setting, Never). Once they say it is set, `tico email policy --bot <slug>` prints the
    mode.
 
 ## Turning it off, or changing who it forwards to
@@ -66,7 +66,7 @@ is a change to the rules in `## Sending`. Taking an address off the list is reve
 - **The server refuses `tico tool add` or `tico tool update`.** They do not manage the bot. Say who does.
 - **`on_behalf_of` refused.** The run was not started by the human's own chat message or comment. Tell whoever is on the task;
   do not act as anyone and do not turn anything on.
-- **`mail.sh policy show` says Never.** The person has not set it in Tico yet. Never report "on" before it says
+- **`tico email policy --bot <slug>` says Never.** The person has not set it in Tico yet. Never report "on" before it says
   On their own or Ask first.
 - **The bot is not its person's message bot yet.** `tico health check` says so; link it as them
   (`playbooks/set-up-a-bot.md`, step 3).

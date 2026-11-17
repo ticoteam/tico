@@ -83,12 +83,6 @@ HINTS = {
         "exactly, then mail send with --approval set to its send approval, and report invoice_delivery"
     ),
 }
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS bookkeeper_seen(
- key TEXT PRIMARY KEY, stamp TEXT NOT NULL, seen_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS bookkeeper_watch_listed(
- task_id TEXT NOT NULL, key TEXT NOT NULL, PRIMARY KEY (task_id, key));
-"""
 
 
 def built(c):
@@ -284,7 +278,7 @@ def filing(c, owner):
     if not found:
         return None, None
     last = c.execute(
-        "SELECT id, owner FROM stages WHERE pipeline_id=? AND kind='work' AND retired_at IS NULL "
+        "SELECT id, owner FROM stages WHERE pipeline_id=? AND kind='work' AND side=0 AND retired_at IS NULL "
         "ORDER BY position DESC LIMIT 1",
         (found[0],),
     ).fetchone()
@@ -417,15 +411,18 @@ def deliver(c, body, count, *, name=TITLE, event=EVENT):
     title = f"{name} ({count})"
     open_task = _open_check(c, name)
     if open_task:
-        if open_task["body"] == body:
+        from . import task_wakes
+
+        if task_wakes.instructions(c, open_task["id"]) == body.strip():
             return open_task["id"], "unchanged"
-        H.task_update(c, H.KEEPER, open_task["id"], title=title, body=body)
+        H.task_update(c, H.KEEPER, open_task["id"], title=title)
+        # The new report replaces the old as the bot's instructions, in its run: a task has no description to rewrite.
         H._wake(
             c,
             H.task(c, open_task["id"]),
             ACTOR,
-            f"The books changed: {title}",
-            {"wake": event},
+            task_wakes.with_instructions(f"The books changed: {title}", body.strip()),
+            {"wake": event, **task_wakes.replace_refs(body)},
             trigger="schedule",
             source=event,
         )

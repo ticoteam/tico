@@ -7,19 +7,6 @@ type ClEntry = import('./types/api').ChangelogEntry;
 type ClList = import('./types/api').ChangelogList;
 type ClRead = import('./types/api').ChangelogReadResult;
 
-window.renderChangelogNotice = function () {
-  const count = Number(S.config.changelog?.unread_count) || 0;
-  const notice = document.querySelector<HTMLElement>('#changelog-notice');
-  const badge = document.querySelector<HTMLElement>('#changelog-badge');
-  if (notice) {
-    // The sidebar's one version row (ui/app/notices.ts): while a newer release is offered, that row stands in for this one.
-    notice.hidden = !count || nvUpdateShown();
-    const label = notice.querySelector<HTMLElement>('.changelog-notice-label');
-    if (label) label.textContent = S.config.version ? `Updated to ${nvVersion(S.config.version)}` : "What's new";
-  }
-  if (badge) { badge.hidden = !count; if (window.countSet) window.countSet(badge, count); else badge.textContent = String(count); }   // ticks (ui/app/motion.ts)
-};
-
 // The top of What's new: the Beta features, from the server's one list (backend/beta.py), each with its pages in the
 // manual, and the known issues in the running version, as Tico HQ lists them with the update check (backend/releases.py).
 function changelogBetaHTML() {
@@ -42,12 +29,13 @@ function changelogKnownIssuesHTML() {
   return `<section class="changelog-top changelog-known-issues" id="changelog-known-issues" aria-labelledby="changelog-ki-h"><h2 id="changelog-ki-h">Known issues in your version</h2>${body}</section>`;
 }
 
+// The What's new page. This file is a page part (ui/parts.json "changelog"); the sidebar's notice is in ui/app/notices.ts.
 // What the Changelog shows: the product updates since the last look, all of them, or every change with the bots' activity.
 const CL_VIEWS: [string, string][] = [['unread', 'Since last look'], ['product', 'All product updates'], ['', 'All activity']];
 // The shared popover's host (task-list-menus.ts tasksMenu keeps its anchor here).
 const CL_MENU: TasksMenuHost = {};
 
-window.pageChangelog = async function () {
+async function pageChangelog() {
   const root = document.querySelector<HTMLElement>('#main');
   if (!root) return;
   // The one page header (ui/app/page-head.ts): search and the shared filter icon as its tools, a quiet + for a product
@@ -92,7 +80,7 @@ window.pageChangelog = async function () {
   };
   const notice = (count: number) => {
     S.config.changelog = {unread_count: count};
-    window.renderChangelogNotice();
+    renderChangelogNotice();
   };
   const bullet = (b: string) => esc(typeof plainMd === 'function' ? plainMd(b) : b);
   // The quiet + (style guide: "A page whose adding is rare has a quiet + there instead"), only for who may add.
@@ -230,4 +218,4 @@ window.pageChangelog = async function () {
     };
   }
   await load(true);
-};
+}

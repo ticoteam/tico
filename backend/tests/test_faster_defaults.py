@@ -9,24 +9,24 @@ from backend.tests.helpers.member_bots import botops, call, turn  # noqa: F401  
 def test_which_routes_run_without_a_card_and_which_still_need_one():
     to_bot = lambda name: str(name).startswith("bot:")
     direct = [
-        ("POST", "runners/r1/restart", None),
+        ("POST", "computers/r1/restart", None),
         ("POST", "credentials/c1/grants/g1/revoke", None),
         ("PUT", "usage/limits/ops", None),
         ("PUT", "usage/limits", None),
         ("PUT", "providers", None),
         ("POST", "chat/ops", None),
         ("POST", "messages", {"to": "bot:ops"}),
-        ("POST", "runners/r1/logins", None),
-        ("GET", "runners/r1/logins/l1", None),
-        ("POST", "runners/r1/inbox-only", None),
+        ("POST", "computers/r1/logins", None),
+        ("GET", "computers/r1/logins/l1", None),
+        ("POST", "computers/r1/inbox-only", None),
         ("PUT", "bots/ops/github-repos", None),
         ("POST", "bots/ops/archive", None),
         ("POST", "system/update", None),
         ("PUT", "access/rules", None),
     ]
     cards = [
-        ("POST", "runners/r1/revoke", None),
-        ("POST", "runners/r1/member-bots", None),
+        ("POST", "computers/r1/revoke", None),
+        ("POST", "computers/r1/member-bots", None),
         ("PUT", "access/allow", None),
         ("PUT", "access/limits", None),
         ("POST", "messages", {"to": "human:ben"}),
@@ -38,14 +38,14 @@ def test_which_routes_run_without_a_card_and_which_still_need_one():
     for method, path, body in cards:
         assert B.classify(method, path, body, None, to_bot) == "confirm", (method, path)
     # The pasted sign-in code and personal tokens are never BotOps's.
-    assert B.classify("POST", "runners/r1/logins/l1/code", {}, None, to_bot) is None
+    assert B.classify("POST", "computers/r1/logins/l1/code", {}, None, to_bot) is None
     assert B.classify("POST", "me/tokens", {}, None, to_bot) is None
     # The owner's rule turns providers and limits back into cards, and nothing else.
     tight = {"botops_direct": False}
     for method, path in (("PUT", "providers"), ("PUT", "usage/limits"), ("PUT", "usage/limits/ops")):
         assert B.classify(method, path, {}, tight, to_bot) == "confirm", path
     for method, path in (
-        ("POST", "runners/r1/restart"),
+        ("POST", "computers/r1/restart"),
         ("POST", "chat/ops"),
         ("POST", "credentials/c1/grants/g1/revoke"),
     ):
@@ -55,16 +55,16 @@ def test_which_routes_run_without_a_card_and_which_still_need_one():
 def test_botops_restarts_a_computer_and_starts_a_model_sign_in_without_a_card(api, botops):
     ready(api, botops, ["botops"])
     ana = turn(api, botops, person="ana-test", text="Restart the Mac and sign Claude in")
-    restarted = act(api, ana, "POST", f"runners/{botops['runner_id']}/restart", {})
+    restarted = act(api, ana, "POST", f"computers/{botops['runner_id']}/restart", {})
     assert restarted.status_code == 200 and restarted.json()["requested"] is True, restarted.text
-    started = act(api, ana, "POST", f"runners/{botops['runner_id']}/logins", {"runtime": "claude"})
+    started = act(api, ana, "POST", f"computers/{botops['runner_id']}/logins", {"runtime": "claude"})
     assert started.status_code == 200 and started.json()["state"] == "requested", started.text
-    read = act(api, ana, "GET", f"runners/{botops['runner_id']}/logins/{started.json()['id']}")
+    read = act(api, ana, "GET", f"computers/{botops['runner_id']}/logins/{started.json()['id']}")
     assert read.status_code == 200
     # Requester rights reach the code route; its sign-in state check still applies.
     assert (
         act(
-            api, ana, "POST", f"runners/{botops['runner_id']}/logins/{started.json()['id']}/code", {"code": "abcdef"}
+            api, ana, "POST", f"computers/{botops['runner_id']}/logins/{started.json()['id']}/code", {"code": "abcdef"}
         ).status_code
         == 409
     )
@@ -76,7 +76,7 @@ def test_botops_restarts_a_computer_and_starts_a_model_sign_in_without_a_card(ap
 
 def test_botops_keeps_a_computer_for_inbox_bots_as_the_person_who_asked(api, botops):
     ana = turn(api, botops, person="ana-test", text="Stop keeping this computer for inbox bots")
-    path = f"runners/{botops['runner_id']}/inbox-only"
+    path = f"computers/{botops['runner_id']}/inbox-only"
     assert act(api, ana, "POST", path, {"enabled": False}).json() == {"enabled": False}
     refused = act(api, ana, "POST", path, {"enabled": True})  # BotOps itself runs there
     assert refused.status_code == 409 and "Move these bots" in refused.json()["error"]["detail"]

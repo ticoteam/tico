@@ -1,7 +1,5 @@
 """Urgent task news bypasses every profile's digest; ordinary progress remains batched."""
 
-import json
-
 import pytest
 
 from backend import hubdb as H, rules as R, wake_presets as W
@@ -89,14 +87,11 @@ def test_creation_tags_incident_titles_and_preserves_existing_tags(api):
 
 
 def test_watcher_incident_flag_survives_protocol_and_marks_new_tasks(api):
-    from clients.watchers import events
     from backend.tests.helpers.watchers import hosted, report
 
     r = hosted(api)
     raw = {'op': 'task', 'key': 'error:outage', 'title': 'Error Monitor: Outage', 'incident': True}
-    parsed, _ = events('tico-event ' + json.dumps(raw))
-    assert parsed[0]['incident'] is True
-    first = report(api, r, parsed[0])
+    first = report(api, r, raw)
     tid = first['tasks']['error:outage']
     with api.app.state.store.transaction() as c:
         assert 'incident' in H.task_labels(H.task(c, tid))
@@ -121,7 +116,7 @@ def test_a_named_waking_rule_keeps_its_name_and_an_urgent_comment_stays_editable
 
 
 def test_incident_news_to_a_requester_bot_without_the_turn_starts_no_run(api):
-    """docs/pipelines-v3.md "It only wakes whoever has the turn": urgent only skips the digest. News about an incident
+    """docs/dev/pipelines-v3.md "It only wakes whoever has the turn": urgent only skips the digest. News about an incident
     whose turn is its owner's starts no run for the bot that asked for it; the news stays on the task for its next
     look, and the owner's turn is untouched."""
     r = runner(api)

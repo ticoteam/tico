@@ -19,14 +19,6 @@ import re
 
 ROLE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")  # a role name: a short lower-case slug
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS task_roles(
-  task_id TEXT NOT NULL REFERENCES tasks(id), role TEXT NOT NULL,
-  actor TEXT NOT NULL, added_by TEXT, created_at TEXT NOT NULL,
-  PRIMARY KEY(task_id, role, actor));
-CREATE INDEX IF NOT EXISTS task_roles_actor ON task_roles(actor, role);
-"""
-
 
 def _H():
     from . import hubdb
@@ -38,12 +30,6 @@ def role_name(value):
     """A role as stored, or None when the value is not a role name."""
     name = str(value or "").strip().lower()
     return name if ROLE.match(name) else None
-
-
-def migrate(conn):
-    for statement in SCHEMA.split(";"):
-        if statement.strip():
-            conn.execute(statement)
 
 
 # ----------------------------------------------------------------------------- reads

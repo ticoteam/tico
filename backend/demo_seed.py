@@ -24,7 +24,7 @@ warnings.filterwarnings("ignore", message=".*starlette.testclient.*")
 from fastapi.testclient import TestClient
 
 from . import demo_content as D
-from . import docs, goals as G, hubdb, market, onboarding, providers, routines, slack_app, updates
+from . import docs, goals as G, hubdb, market, onboarding, providers, question_marks, routines, slack_app, updates
 from .auth import Identity
 from .scheduler import next_due, stamp
 from .store import H, encode
@@ -315,7 +315,7 @@ class Builder:
                     "configuration_valid": True,
                     "problems": [],
                 }
-                for slug in [*(slug for slug, _, _ in D.BOTS), "librarian", "strategy-owner"]
+                for slug in [*(slug for slug, _, _ in D.BOTS), *D.READY_BUILT_INS]
             }
             readiness = {
                 "schema_version": 1,
@@ -581,11 +581,14 @@ class Builder:
                     )
                     self.tasks[key] = made["id"]
                 elif kind == "ask":
+                    # The bot's own task, with its question to the person: Needs you holds what is asked of a person,
+                    # never a task only handed to them (backend/waiting_on.py needs).
                     key, title, owner, target, body, _created, _status = row
                     due = stamp(self.now + timedelta(days=D.ASK_DUE[key])) if key in D.ASK_DUE else None
-                    self.tasks[key] = hubdb.task_create(c, owner, title, body, target, due=due, allow_planned=True)[
-                        "id"
-                    ]
+                    made = hubdb.task_create(c, owner, title, body, owner, due=due, allow_planned=True)
+                    self.tasks[key] = made["id"]
+                    question = body.split("?", 1)[0] + "?"
+                    question_marks.ask(c, owner, made["id"], target, question, checked=False)
                 else:
                     self.work_task(c, row)
 
@@ -627,8 +630,8 @@ class Builder:
         if note:
             hubdb.task_update(c, owner, tid, note=note, seen_version=version(c, tid))
         if key in D.TASK_ASKS:
-            person, line, kind, choices = D.TASK_ASKS[key]
-            hubdb.task_ask(c, owner, tid, person, line, kind=kind, choices=choices, seen_version=version(c, tid))
+            person, line = D.TASK_ASKS[key]
+            question_marks.ask(c, owner, tid, person, line, checked=False)
         if key in D.TASK_SNOOZES:
             why, days = D.TASK_SNOOZES[key]
             hubdb.task_snooze(c, owner, tid, why, stamp(self.now + timedelta(days=days)), version(c, tid))
@@ -959,31 +962,6 @@ class Builder:
 
     def messaging(self):
         self.at(hours=2)
-        address = D.INBOX
-        messages = []
-        for index, (subject, body, labels, sender, to) in enumerate(D.MAIL):
-            at = self.ago(hours=2 - index / 4)
-            messages.append(
-                {
-                    "msg_id": f"demo-mail-{index}",
-                    "thread_id": "demo-calibration" if index < 2 else "demo-second-kit",
-                    "epoch": int(at.timestamp()),
-                    "date": at.isoformat(),
-                    "from_addr": sender,
-                    "from_header": sender,
-                    "to": [to],
-                    "subject": subject,
-                    "snippet": body[:120],
-                    "body": body,
-                    "labels": labels,
-                }
-            )
-        self.call(
-            "POST",
-            "connectors/mail/messages",
-            {"mailbox": address, "messages": messages, "synced_at": H.now()},
-            token=self.linux["token"],
-        )
         self.call(
             "POST",
             "slack/channels",
@@ -995,9 +973,9 @@ class Builder:
                 "note": D.SLACK["note"],
             },
         )
-        # The app is connected as far as this machine can show: tokens sealed with a local key, the gateway's line set to
+        # The app is connected as far as this machine can show: tokens sealed in the vault, the gateway's line set to
         # connected. No gateway runs in the demo, so nothing dials Slack; the tokens are placeholders.
-        slack_app.save(self.store, self.settings, "human:ana", "xoxb-demo-placeholder", "xapp-demo-placeholder")
+        slack_app.save(self.store, "human:ana", "xoxb-demo-placeholder", "xapp-demo-placeholder")
         slack_app.pin(self.store, D.SLACK["team"], D.SLACK["app"])
         slack_app.report(self.store, "connected", "Connected to the Acme Lights workspace.", team=D.SLACK["team"])
 
@@ -1040,9 +1018,6 @@ class Builder:
             c.execute(
                 "INSERT INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
                 (message["id"], "CDEMOTEAM1", timestamp, "support-owner", D.SLACK["draft"], "ready", H.now(), H.now()),
-            )
-            c.execute(
-                "INSERT INTO slack_reads VALUES(?,?,?,?,?)", ("CDEMOTEAM1", "support-owner", timestamp, H.now(), 1)
             )
 
         self.write(work)

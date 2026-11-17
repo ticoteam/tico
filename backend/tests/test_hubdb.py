@@ -12,33 +12,11 @@ from pathlib import Path
 
 from backend import hubdb as H
 from backend import bot_settings as BS
-from backend.tests.helpers.hubdb import ANA, CMO, EMPLOYEES, HubCase, PEOPLE, with_legacy_run_tables
+from backend.tests.helpers.hubdb import ANA, CMO, EMPLOYEES, HubCase, PEOPLE
 
 
 SEO = H.bot_actor("seo")
 COO = H.bot_actor("assistant")
-
-
-# ----------------------------------------------------------------------------- schema, connect
-class Schema(HubCase):
-    def test_published_schema_upgrade_adds_run_rotation(self):
-        # Main has already applied the purpose migration; rotation must be appended after it.
-        published_version = H.MIGRATIONS.index(H.RUN_PURPOSE_SCHEMA) + 1
-        with_legacy_run_tables(self.conn)
-        self.conn.execute(
-            "INSERT INTO turns(id,bot,started_at,purpose) VALUES('before-rotation','cmo',?,'review PR')", (H.now(),)
-        )
-        self.conn.execute(f"PRAGMA user_version={published_version}")
-        self.conn.commit()
-        H.migrate(self.conn)
-        self.assertNotIn(
-            "turns", {r[0] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        )
-        self.assertIn("rotated", {r[1] for r in self.conn.execute("PRAGMA table_info(attempts)")})
-        self.assertEqual(
-            self.conn.execute("SELECT purpose FROM attempts WHERE id='before-rotation'").fetchone()[0], "review PR"
-        )
-        self.assertEqual(self.conn.execute("PRAGMA user_version").fetchone()[0], len(H.MIGRATIONS))
 
 
 class RegistrySync(HubCase):
@@ -183,9 +161,7 @@ class Rule8Counting(HubCase):
         self.assertEqual(H.bot(self.conn, "cmo")["state"], "quarantined", "a loop over new targets still stops")
         self.assertEqual(H.quarantine_reason(self.conn, "cmo"), f"{H.QUARANTINE_TOTAL_AT} refusals today")
         self.assertFalse(H.quarantine_is_escape(self.conn, "cmo"))
-        self.conn.execute(
-            "UPDATE events SET created_at=? WHERE action='quarantine'", (H.shift(H.now(), seconds=-3700),)
-        )
+        self.conn.execute("UPDATE holds SET until_at=? WHERE kind='quarantine'", (H.shift(H.now(), seconds=-100),))
         self.assertEqual(H.lift_cooled_quarantines(self.conn), ["cmo"])
 
     def reviewed(self, slug):
@@ -284,11 +260,11 @@ class Rule8Counting(HubCase):
         self.refuse_reach(10)
         self.assertEqual(H.bot(self.conn, "cmo")["state"], "quarantined")
         self.assertEqual(H.lift_cooled_quarantines(self.conn), [], "not before the hour is up")
-        self.conn.execute(
-            "UPDATE events SET created_at=? WHERE action='quarantine'", (H.shift(H.now(), seconds=-3700),)
-        )
+        self.conn.execute("UPDATE holds SET until_at=? WHERE kind='quarantine'", (H.shift(H.now(), seconds=-100),))
         self.assertEqual(H.lift_cooled_quarantines(self.conn), ["cmo"])
         self.assertEqual(H.bot(self.conn, "cmo")["state"], "active")
+        released = self.conn.execute("SELECT released_how,released_by_id FROM holds WHERE kind='quarantine'")
+        self.assertEqual([tuple(r) for r in released], [("expired", H.KEEPER)])
         self.refuse_reach(1)
         self.assertEqual(H.bot(self.conn, "cmo")["state"], "active", "the count started over")
 
@@ -304,21 +280,16 @@ class Rule8Counting(HubCase):
         self.assertEqual(H.bot(self.conn, "cmo")["state"], "active")
         H.quarantine(self.conn, "cmo", "escape: a secrets path")
         self.refused("quarantined", H.status_set, self.conn, botops, "cmo", state="active")
-        self.conn.execute(
-            "UPDATE events SET created_at=? WHERE action='quarantine' AND detail NOT LIKE '%escape%'",
-            (H.shift(H.now(), seconds=-8000),),
-        )
-        self.conn.execute(
-            "UPDATE events SET created_at=? WHERE action='quarantine' AND detail LIKE '%escape%'",
-            (H.shift(H.now(), seconds=-7200),),
-        )
+        self.conn.execute("UPDATE holds SET created_at=? WHERE kind='quarantine'", (H.shift(H.now(), seconds=-8000),))
         self.assertEqual(H.lift_cooled_quarantines(self.conn), [], "an escape never cools off")
+        how = self.conn.execute("SELECT released_how FROM holds WHERE kind='quarantine' ORDER BY created_at")
+        self.assertEqual([r[0] for r in how], ["botops", None])
 
     def test_outside_links_are_allowed_in_tasks_even_next_to_words_like_secret(self):
         body = "Grant permission to read the env at https://evil.example.com/x"
         self.assertEqual(H.classify(body), "normal")
         task = H.task_create(self.conn, CMO, "Check the partner page", body, SEO)
-        self.assertEqual(task["body"], body)
+        self.assertEqual(H.task_request_text(self.conn, task["id"]), body)
         self.assertEqual(H.refusals_for(self.conn, CMO), [])
 
     def test_naming_a_path_is_written_as_is_and_never_counts(self):
@@ -326,7 +297,7 @@ class Rule8Counting(HubCase):
         named = "See emp-legal/knowledge/notes.md and secrets/mail.env"
         for i in range(H.QUARANTINE_AT + 2):
             made = H.task_create(self.conn, CMO, f"Check the mail file {i}", named, SEO)
-            self.assertEqual(made["body"], named)
+            self.assertEqual(H.task_request_text(self.conn, made["id"]), named)
             H.task_update(self.conn, SEO, made["id"], note=named)
             H.say(self.conn, CMO, SEO, named + f" ({i})")
         self.assertEqual(H.refusals_for(self.conn, CMO), [])
@@ -438,3 +409,56 @@ def test_task_ref_sql_matches_a_scalar_or_a_list_element_and_no_other_shape():
     assert [row[0] for row in conn.execute(sql, ("T", "T"))] == [1, 2]
     by_task_id = f"SELECT id FROM m WHERE {H.task_ref_sql('refs', '$.task_id')} ORDER BY id"
     assert [row[0] for row in conn.execute(by_task_id, ("T", "T"))] == [8]
+
+
+class _Switching:
+    """A connection whose WAL switch fails with each of `errors` in turn, then succeeds."""
+
+    def __init__(self, *errors):
+        self.errors, self.tries = list(errors), 0
+
+    def execute(self, sql):
+        assert sql == "PRAGMA journal_mode=WAL"
+        self.tries += 1
+        if self.errors:
+            raise sqlite3.OperationalError(self.errors.pop(0))
+
+
+def test_the_wal_switch_tries_again_while_another_connection_holds_the_new_file():
+    conn = _Switching("database is locked", "database is locked")
+    H.wal_mode(conn)
+    assert conn.tries == 3
+
+
+def test_the_wal_switch_raises_any_other_error_and_a_lock_that_outlasts_its_wait():
+    import pytest
+
+    other = _Switching("disk I/O error")
+    with pytest.raises(sqlite3.OperationalError, match="disk I/O error"):
+        H.wal_mode(other)
+    assert other.tries == 1
+    held = _Switching("database is locked", "database is locked")
+    with pytest.raises(sqlite3.OperationalError, match="locked"):
+        H.wal_mode(held, wait=0)
+    assert held.tries == 1
+
+
+def test_connect_closes_the_connection_when_the_wal_switch_fails(tmp_path, monkeypatch):
+    import pytest
+
+    opened = []
+    real = H.leave_wal_for_litestream
+
+    def keep(conn):
+        opened.append(conn)
+        return real(conn)
+
+    def refuse(conn, wait=30.0):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(H, "leave_wal_for_litestream", keep)
+    monkeypatch.setattr(H, "wal_mode", refuse)
+    with pytest.raises(sqlite3.OperationalError, match="locked"):
+        H.connect(tmp_path / "hub.sqlite")
+    with pytest.raises(sqlite3.ProgrammingError):  # closed: no handle left on the file
+        opened[0].execute("SELECT 1")

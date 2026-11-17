@@ -58,7 +58,7 @@ Always:
 - `skills/spot-a-champion/SKILL.md`: read before you name a member in the digest or the champions list.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/community.md`,
    `knowledge/champions.md` and the playbook. A resumed turn already has them.
 3. Set `tico bot status set` to one line naming the digest or thread in progress.
@@ -80,7 +80,7 @@ stop, and their end wakes you.
 
 ## Talking to {{app_name}}
 Answers from `tico doc ask "<question>"`, with its citations. Feedback and support handoffs as
-`tico task create --owner <slug|person> --parent <id>` with the thread link. Replies stay drafts until a person turns mail sending on in Tico. A question for the owner is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task.
+`tico task create --owner <slug|person> --parent <id>` with the thread link. Replies stay drafts until a person turns mail sending on in Tico. A question for the owner is `tico task ask <id> --to <person> "<question>"`, one open question per task.
 
 ## Method
 - **Measure response, not activity.** Time to first response runs from a question that needs an answer to the first

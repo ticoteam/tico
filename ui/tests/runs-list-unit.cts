@@ -1,5 +1,5 @@
 // No browser: the two Runs lists (Settings > History > Runs, ui/app/settings-history.ts settingsRunsHTML, and a bot's
-// Runs card, ui/app/issues.ts runsTable) drawn from rows shaped as GET /api/runs sends them (backend/views.py run_view).
+// Runs card, ui/app/bot-issues.ts runsTable) drawn from rows shaped as GET /api/runs sends them (backend/views.py run_view).
 // - each Log link opens /api/runs/<the row's id>/log: the row has `id` and no `run`;
 // - a live run (state leased, running or input; exit and finished_at null) reads Running, with no failure pill,
 //   no "exit" and no Finished time;
@@ -25,7 +25,7 @@ const ctx = vm.createContext({
   window: {},
   document: {querySelectorAll: () => []},
 });
-for (const name of ['issues.ts', 'settings-history.ts']) {
+for (const name of ['issues.ts', 'bot-issues.ts', 'settings-history.ts']) {
   const file = path.join(__dirname, '..', 'app', name);
   vm.runInContext(stripTypeScriptTypes(fs.readFileSync(file, 'utf8')), ctx, {filename: name});
 }

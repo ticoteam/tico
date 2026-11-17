@@ -143,8 +143,8 @@ Team row, unless explicitly marked as a helper. Shared mailboxes such as `shared
 
 Every Acme address is `<firstname>@acme.example`. Personal message bots come from the `inbox-manager`
 template and read only the assigned mailbox by default. The template seeds one weekday 07:30 Routine in America/Los_Angeles, initially disabled.
-Extra passes are optional owner choices; reading a report's mail is a grant that report gives (Tools). Each mailbox has its
-own rules in `registry/mail-rules.yaml`. Photos prefer a Google Workspace Directory thumbnail
+Extra passes are optional owner choices; reading a report's mail is a grant that report gives (Tools). Each person's inbox has its
+own rules in its Message automation. Photos prefer a Google Workspace Directory thumbnail
 when domain-wide delegation includes `admin.directory.user.readonly`; otherwise the Slack
 profile image stored on the roster.
 
@@ -152,7 +152,7 @@ profile image stored on the roster.
 
 | Group | Bots |
 |---|---|
-| marketing | The Head of Marketing (`growth-manager`), and under it the six channel Owners of the growth packs (SEO, Content, Email, CRO, Search Ads, Social Ads; docs/pipelines-v3.md "Growth and Success") and the Video Owner, which reports to the built-in Design Owner. |
+| marketing | The Head of Marketing (`growth-manager`), and under it the six channel Owners of the growth packs (SEO, Content, Email, CRO, Search Ads, Social Ads; docs/dev/pipelines-v3.md "Growth and Success") and the Video Owner, which reports to the built-in Design Owner. |
 | product | The Product Manager bot and everything under it. |
 | sales | Sales operations and the sales-process bots. |
 | engineering | The CTO bot, which monitors CI, deploys, alerts, security and cost. |

@@ -32,27 +32,9 @@ from . import manual
 from . import names
 from . import visuals
 from .store import H, Problem
+from .api_contract import api_v2
 
 LOG = logging.getLogger("tico.files")
-
-SCHEMA = [
-    # Which version of each file the index holds; `doc` is the file's row id in file_text.
-    "CREATE TABLE IF NOT EXISTS file_text_state(doc INTEGER PRIMARY KEY AUTOINCREMENT, file_id TEXT NOT NULL UNIQUE, "
-    "version INTEGER NOT NULL, indexed_at TEXT NOT NULL)",
-    # One row per hard-deleted file: who and when, never what it held.
-    "CREATE TABLE IF NOT EXISTS file_deletions(file_id TEXT PRIMARY KEY, actor TEXT NOT NULL, versions INTEGER NOT NULL, "
-    "created_at TEXT NOT NULL)",
-    # Bytes a deletion left unused, removed from storage after the write commits and retried until gone.
-    "CREATE TABLE IF NOT EXISTS blob_purges(digest TEXT PRIMARY KEY, kind TEXT NOT NULL DEFAULT '', "
-    "queued_at TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '')",
-    # Versions are immutable, except that a hard delete (a file_deletions row, written first) removes them.
-    "DROP TRIGGER IF EXISTS bot_file_versions_no_delete",
-    "CREATE TRIGGER bot_file_versions_no_delete BEFORE DELETE ON bot_file_versions "
-    "WHEN NOT EXISTS (SELECT 1 FROM file_deletions WHERE file_id=OLD.file_id) "
-    "BEGIN SELECT RAISE(ABORT, 'file versions are immutable'); END",
-]
-# Created apart so a SQLite built without FTS5 still starts: search then matches titles only.
-FTS = "CREATE VIRTUAL TABLE IF NOT EXISTS file_text USING fts5(title, text, tokenize='porter unicode61')"
 
 LIST_MAX = 100
 SEARCH_MAX = 50
@@ -112,22 +94,12 @@ def kind_filter(kind):
     ), stored
 
 
-def ensure(c):
-    """Unversioned, like the trash: runs inside initialize's transaction at every start."""
-    for statement in SCHEMA:
-        c.execute(statement)
-    try:
-        c.execute(FTS)
-    except sqlite3.OperationalError:
-        pass
-
-
 def has_fts(c):
     return c.execute("SELECT 1 FROM sqlite_master WHERE name='file_text'").fetchone() is not None
 
 
 def own_place(who):
-    """The reader's My dashboard (backend/cards.py person places), or '' for anyone who has none."""
+    """The reader's Company page (backend/cards.py person places), or '' for anyone who has none."""
     actor = str(who.actor or "")
     return "person:" + actor[6:] if who.role in ("owner", "human") and actor.startswith("human:") else ""
 
@@ -415,7 +387,7 @@ class Library:
         out = []
         for r in c.execute("SELECT DISTINCT place FROM pins WHERE item=?", ("page:" + fid,)):
             place = str(r["place"])
-            if place.startswith("person:") and place != own_place(who):  # someone's My dashboard is theirs alone
+            if place.startswith("person:") and place != own_place(who):  # someone's Company page is theirs alone
                 continue
             if place.startswith("task:") and not self.files.task_info(c, who, place[5:], cache):
                 continue
@@ -844,7 +816,15 @@ def install_library(app, store, auth, files):
     library = Library(app, store, auth, files)
     app.state.library = library
 
-    @app.get("/api/v2/files")
+    @app.get(
+        "/api/v2/files",
+        **api_v2(
+            "Files",
+            "listFiles",
+            "Library › Files: every file the caller may see, newest activity first, filtered by kind, bot, team, task, date, pinned or archived; paged and byte-capped, no totals",
+            "FileLibrary",
+        ),
+    )
     def listing(
         request: Request,
         kind: str = "",
@@ -873,12 +853,28 @@ def install_library(app, store, auth, files):
             cursor=cursor,
         )
 
-    @app.get("/api/v2/files/search")
+    @app.get(
+        "/api/v2/files/search",
+        **api_v2(
+            "Files",
+            "searchFiles",
+            "Search the files the caller may read by title and text, filtered by kind, best first with an excerpt",
+            "FileSearch",
+        ),
+    )
     def search(request: Request, q: str = "", limit: int = 20, kind: str = ""):
         """Search the files the caller may read by title and text, filtered by kind, best first with an excerpt."""
         return library.search(request.state.identity, q[:500], max(1, min(limit, SEARCH_MAX)), kind=kind)
 
-    @app.delete("/api/v2/files/{fid}")
+    @app.delete(
+        "/api/v2/files/{fid}",
+        **api_v2(
+            "Files",
+            "deleteFile",
+            "The owner deletes a file for good: every version's bytes leave storage; activity keeps who and when",
+            "FileDeleted",
+        ),
+    )
     async def delete(request: Request, fid: str):
         """The owner deletes a file for good: every version's bytes leave storage. Its activity keeps that it was
         deleted, by whom and when."""

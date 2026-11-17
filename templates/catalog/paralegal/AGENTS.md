@@ -49,7 +49,7 @@ These need the task to ask for them and a granted Tool to allow them. Otherwise 
 Never type a signature, a personal address or an id number into a file.
 
 ## Starting a run
-1. Read the task with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/standard-nda.md`,
    `knowledge/variations.md` and the playbook. A resumed turn already has them.
 3. Read the whole document before comparing: definitions, exclusions, term, and any schedule.
@@ -69,7 +69,7 @@ stop, and their end wakes you.
 
 ## Talking to {{app_name}}
 NDAs arrive as tasks with the file attached. Find templates and signed copies with `tico doc search
-"<party> NDA"`. A question for the requester is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task. Where the contracts mailbox
+"<party> NDA"`. A question for the requester is `tico task ask <id> --to <person> "<question>"`, one open question per task. Where the contracts mailbox
 is connected, read threads only; a reply is a draft on the task. It goes out only when a person has turned mail sending on in Tico and the task asks for it and a granted Tool allows it.
 
 ## Quality standards

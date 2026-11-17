@@ -85,7 +85,6 @@ impl Host {
             Host::Codex(h) => h.active_turn(thread),
             Host::Pi(h) => h.active_turn(thread),
             Host::Cursor(h) => h.active_turn(thread),
-            Host::AppDriver(h) => h.active_turn(thread),
             #[cfg(test)]
             Host::Claude(h) => h.running_turn(thread),
             #[allow(unreachable_patterns)]

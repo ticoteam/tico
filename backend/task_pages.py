@@ -1,5 +1,5 @@
 # pyright: strict
-"""Pages attached to a page requirement (docs/pipelines-v3.md "The nine requirement kinds", 3; spec S3, S4).
+"""Pages attached to a page requirement (docs/dev/pipelines-v3.md "The nine requirement kinds", 3; spec S3, S4).
 
 The owner attaches a page (a Tico file, `page:<file id>`, at a version) to one page requirement of the task's open visit:
 `tico task attach <task> page:<file id>[@<version>] --req "<requirement>"`, the MCP tool `tico_task_attach` with `req`,
@@ -62,6 +62,19 @@ def newest_for_task(conn: "sqlite3.Connection", task_id: str, stage_id: str) -> 
     )
 
 
+def earlier(conn: "sqlite3.Connection", task_id: str, visit_id: str) -> Row | None:
+    """The page that counted last on an earlier visit of the task, any stage: the newest current page of a visit
+    other than `visit_id`, with that visit's `stage_id`. What an OK that names nothing to show shows (the QA page at
+    OK release, #3784). None when no earlier visit had one."""
+    return _one(
+        conn,
+        "SELECT p.file_id, p.version, p.requirement_id, v.stage_id FROM requirement_pages p "
+        "JOIN visits v ON v.id = p.visit_id WHERE v.task_id=? AND v.id<>? AND p.replaced_at IS NULL "
+        "ORDER BY v.entered_at DESC, p.created_at DESC, p.id DESC LIMIT 1",
+        (task_id, visit_id),
+    )
+
+
 def _refuse(conn: "sqlite3.Connection", by: str, rule: str, detail: str, task_id: str | None = None) -> NoReturn:
     from . import hubdb
 
@@ -74,7 +87,7 @@ def _refuse(conn: "sqlite3.Connection", by: str, rule: str, detail: str, task_id
 NOT_HTML = (
     "A page for an OK must be HTML, and this version is not (it reads as Markdown or plain text). Write it as HTML: "
     "two or three lines at the top saying what it is and what to decide, then the sections, with simple inline CSS and "
-    "screenshots as images. Every such page: skills/build-the-page (a spec, Checked in production, a review, a QA "
+    "screenshots as images. Every such page: .claude/skills/build-the-page (a spec, Checked in production, a review, a QA "
     "page). "
     "Then tico page publish the .html and attach the new version."
 )
@@ -138,10 +151,9 @@ def judged_against(conn: "sqlite3.Connection", row: Row, requirement: Row) -> tu
     same page on another task is another verdict), `heads` (the newest commit of each PR the task links, so a page that
     says the checks pass at the newest commit can be checked; at_head keeps every linked PR, one not read yet as None,
     and `attach` waits for it; any other page gets only the commits Tico has read, so a PR not read yet never holds a
-    page up), `release` (with_release); and the rules people added to the check from Flow's suggested rules
-    (flow_suggestions.added), each asked as one more part beside the rubric's own."""
+    page up), `release` (with_release); and no added rules: Flow's suggested rules were removed, and a rule added
+    there no longer binds its check (nothing showed it or could remove it)."""
     from .item_sources import github as F
-    from . import flow_suggestions as FS
     from . import task_requirements as R
 
     settings: Row = requirement.get("settings") or {}
@@ -154,7 +166,7 @@ def judged_against(conn: "sqlite3.Connection", row: Row, requirement: Row) -> tu
         context["heads"] = heads
     if settings.get("with_release"):
         context["release"] = release_tags(conn, row["id"])
-    rules: list[str] = FS.added(conn, str(requirement["id"]))
+    rules: list[str] = []
     return rubric, context, rules
 
 
@@ -179,15 +191,12 @@ def attach(
     with this version (page_rounds.said), kept on the `page_attached` event. The route checks the caller may open the
     file. Returns the `requirement_pages` row, with `said` when the new version keeps a person's OK (`ok_kept`): what the
     bot is told, as the task's history says it too."""
-    from . import hubdb
     from . import hubdb_core
     from . import page_rounds as R
-    from . import page_verdicts as V
     from . import task_engine as E
     from . import task_requirements as TR
     from . import waiting_on as W
 
-    H: Any = hubdb
     core: Any = hubdb_core
     row = E.task(conn, task_id)
     if not row:
@@ -220,6 +229,71 @@ def attach(
         _refuse(conn, by, "lint", wrong, task_id)
     if R.quoted_back(R.last_sent_back(conn, task_id, found["id"]), R.parts_of(saying)):
         _refuse(conn, by, "lint", R.QUOTED, task_id)
+    document = TR.document_of(found)
+    if document:
+        _as_document(conn, by, task_id, document, file_id)
+    return _pin(conn, row, found, file_id, version, by, saying)
+
+
+def _as_document(conn: "sqlite3.Connection", by: str, task_id: str, document: str, file_id: str) -> None:
+    """A page attached to a document approval is that document: the task's own file of that name, or, while the task
+    has none, it becomes it. Another file is refused: the approval is for the task's one document of that name."""
+    from . import task_documents as TD
+
+    found = _one(conn, "SELECT file_id FROM task_documents WHERE task_id=? AND name=?", (task_id, document))
+    if found and found["file_id"] != file_id:
+        _refuse(conn, by, "task_requirement", WRITE_DOCUMENT.format(task=task_id, document=document), task_id)
+    if not found:
+        TD.record(conn, task_id, document, file_id)
+
+
+# What a bot is told when it attaches another file to a document approval: the document is written, not attached.
+WRITE_DOCUMENT = (
+    "This stage approves the task's {document}. Write it: tico task attach {task} page.html --doc '{document}'"
+)
+
+
+def submit(conn: "sqlite3.Connection", task_id: str, document: str, file_id: str, version: int, by: str) -> Row | None:
+    """A new version of a task document, written while the task is in a stage that names it for approval, is the
+    submission: it is pinned to that approval as `attach` pins a page, and the decision model checks it. Anywhere else,
+    or written by a bot that neither owns nor holds the task, it is just a new version: None. The pinned
+    `requirement_pages` row otherwise."""
+    from . import hubdb_core
+    from . import task_engine as E
+    from . import task_requirements as TR
+    from . import waiting_on as W
+
+    core: Any = hubdb_core
+    row = E.task(conn, task_id)
+    if not row or row["status"] != "open" or not row.get("visit"):
+        return None
+    found = next(
+        (r for r in TR.for_visit(conn, row["visit"]) if TR.document_of(r) == document),
+        None,
+    )
+    if found is None:
+        return None
+    if by not in (row.get("owner_id"), W.holder(conn, row)) and not core.is_human(by):
+        return None
+    _, context, _ = judged_against(conn, row, found)
+    heads: dict[str, str | None] = context.get("heads") or {}
+    if not all(heads.values()):
+        return None  # a PR not read yet: a version written now stays unsubmitted rather than fail the write
+    return _pin(conn, row, found, file_id, version, by, {})
+
+
+def _pin(conn: "sqlite3.Connection", row: Row, found: Row, file_id: str, version: int, by: str, saying: Row) -> Row:
+    """Pin one page version to a page requirement of the task's open visit: the `requirement_pages` row, the decision
+    model's check owed on it, the task's history, then the task advances or is told it changed."""
+    from . import hubdb
+    from . import hubdb_core
+    from . import page_verdicts as V
+    from . import task_engine as E
+    from . import task_requirements as TR
+
+    H: Any = hubdb
+    core: Any = hubdb_core
+    task_id = row["id"]
     rubric, context, rules = judged_against(conn, row, found)
     heads: dict[str, str | None] = context.get("heads") or {}
     unread = sorted(ref_ for ref_, sha in heads.items() if not sha)
@@ -227,6 +301,7 @@ def attach(
         _refuse(
             conn, by, "task_requirement", f"Tico is still reading {unread[0]} from GitHub. Try again soon.", task_id
         )
+    document = TR.document_of(found)
     key = V.rubric_hash(rubric, context, rules)
     visit_id = row["visit"]["id"]
     was = current(conn, visit_id, found["id"])
@@ -264,7 +339,13 @@ def attach(
         f"page:{was['file_id']}@{was['version']}" if was else None,
         f"page:{file_id}@{version}",
         None,
-        {"requirement": found["id"], "file_id": file_id, "version": version, **{k: v for k, v in saying.items() if v}},
+        {
+            "requirement": found["id"],
+            "file_id": file_id,
+            "version": version,
+            **({"document": document} if document else {}),
+            **{k: v for k, v in saying.items() if v},
+        },
     )
     if kept:
         # A new version of the page a person OK'd, at the commits they OK'd: their OK stands (task_requirements._page).

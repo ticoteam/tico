@@ -13,6 +13,13 @@ package = "@anthropic-ai/claude-code"
 [version]
 args = ["--version"]
 pattern = '(\d+\.\d+\.\d+)'
+# The oldest release that has every flag and setting the runner passes unconditionally: the `autoMemoryDirectory`
+# setting (`--settings`, on every turn that keeps memory in its repository) first appeared in 2.1.74. A flag gated by
+# version (`--effort`, 2.1.38) is passed only to a release that has it (hosts/claude.rs).
+minimum = "2.1.74"
+# Releases the daily update skips, staying on the installed one: a version ("2.1.301") or a range (">=2.1.300 <2.1.305").
+# Say why beside each entry.
+broken = []
 
 [update]
 policy = "latest"

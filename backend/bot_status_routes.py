@@ -118,7 +118,7 @@ def register(app, auth, delegated_identity, mutate, settings_admin, store, reset
 
             quarantined = (H.bot(c, bot) or {}).get("state") == "quarantined"
             held = c.execute(
-                "SELECT 1 FROM quarantine_holds WHERE bot_id=? AND released_at IS NULL LIMIT 1", (bot,)
+                "SELECT 1 FROM holds WHERE kind='quarantine' AND bot_id=? AND released_at IS NULL LIMIT 1", (bot,)
             ).fetchone()
             if not quarantined and not held:
                 raise Problem("quarantined", "This bot is not quarantined", 409)
@@ -136,8 +136,11 @@ def register(app, auth, delegated_identity, mutate, settings_admin, store, reset
 
         return mutate(request, body, work)
 
-    @app.get("/api/v2/inbox")
-    def inbox(request: Request):
+    @app.get("/api/v2/messages")
+    def messages(request: Request, unread: bool = True):
+        """The caller's unread messages, with any notices: the only list there is. `unread=0` is refused."""
+        if not unread:
+            raise Problem("unread_only", "Only unread messages are listed: pass unread=1", 422)
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:

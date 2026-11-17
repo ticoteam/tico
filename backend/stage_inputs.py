@@ -1,5 +1,5 @@
 # pyright: strict
-"""What earlier stages handed on to the one a task is in (docs/pipelines-v3.md, "What a stage is handed").
+"""What earlier stages handed on to the one a task is in (docs/dev/pipelines-v3.md, "What a stage is handed").
 
 A stage's bot works from what came before it: the Spec page, the pull request, each Review page, what the Builder said
 it fixed. Those live on other visits (and, for the Spec, on the task that filed this one), so a stage's own
@@ -224,7 +224,7 @@ def _missing(conn: "sqlite3.Connection", task: Row, attached: set[str]) -> list[
     from . import task_engine
     from . import task_requirements as R
 
-    work = [s for s in task_engine.stages(conn, task["pipeline_id"]) if s["kind"] == "work"]
+    work = task_engine.main_work(task_engine.stages(conn, task["pipeline_id"]))
     at = next((i for i, s in enumerate(work) if s["id"] == task.get("stage_id")), 0)
     out: list[Row] = []
     for stage in work[:at]:

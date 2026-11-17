@@ -251,14 +251,14 @@ def test_owner_issue_lists_read_an_open_and_a_resolved_incident(api):
     waiters(api, n=39, running=1)
     with api.app.state.store.transaction() as c:
         org_turns.observe(c, api.app.state.store.settings)
-    for path in ('fleet/check', 'health/issues'):
+    for path in ('health/issues',):
         issue = next(i for i in get(api, path)['issues'] if i['kind'] == 'company_turns')
         assert issue['name'] == 'Company turns' and issue['opened_at'] and issue['severity'] == 'medium'
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE attempts SET state='completed' WHERE id='attempt-39'")
         c.execute("UPDATE jobs SET state='completed' WHERE attempt_id='attempt-39'")
         org_turns.observe(c, api.app.state.store.settings)
-    for path in ('fleet/check', 'health/issues'):
+    for path in ('health/issues',):
         assert not any(i['kind'] == 'company_turns' for i in get(api, path)['issues'])
 
 

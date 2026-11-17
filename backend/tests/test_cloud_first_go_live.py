@@ -15,7 +15,7 @@ from backend import cloud_access
 from backend.tests.helpers.botops_parity import act
 from backend.tests.helpers.cloud_access import signals
 from backend.tests.helpers.cloud_machines import FakeHQ
-from backend.tests.helpers.sample_company import booted, environment, machine, rows, signed_in  # noqa: F401
+from backend.tests.helpers.fresh_install import booted, environment, machine, rows, signed_in  # noqa: F401
 
 
 def _post(api, path, body, token):
@@ -56,7 +56,7 @@ def _state(api, bot):
 
 def test_botops_takes_the_builder_live_on_a_cloud_company_before_its_own_machine_exists(environment, monkeypatch):
     api = environment()
-    done = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+    done = api.post("/api/v2/setup/complete", json={}, headers=signed_in())
     assert done.status_code == 200, done.text
     cloud_access.apply(api.app.state.store, cloud_access.parse(signals("open")))
     hq, manager = FakeHQ(), api.app.state.cloud_machines

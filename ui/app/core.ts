@@ -4,7 +4,7 @@
 
 const API = '/api';
 const GH = 'https://github.com/ticoteam/tico';
-// My dashboard (Company › Mine) is where the app opens; Company › Dashboard is the company's.
+// Company (the place person:me, the reader's own) is where the app opens.
 const HOME = '#/home';
 const OVERVIEW = '#/overview';
 const WELCOME = '#/welcome';          // first run: names, the team, the bot templates, a computer

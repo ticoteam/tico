@@ -121,8 +121,9 @@ def slack_rows(v):
         return []
     readers = []
     if table(v.c, "slack_channels"):
-        for (raw,) in v.c.execute("SELECT readers FROM slack_channels"):
-            readers += [str(r).removeprefix("bot:") for r in (H._json(raw, []) or []) if isinstance(r, str)]
+        from . import slack_channels as SC
+
+        readers = [bot for entry in SC.listing(v.c, None) for bot in entry["readers"]]
     bots, more = v.bots(readers)
     status = {"off": "off", "waiting": "waiting", "connected": "on"}.get(state["state"], "error")
     return [
@@ -190,7 +191,10 @@ def mailbox_rows(v):
     if not boxes:
         return []
     mine = set() if v.admin else set(mail.visible_addresses(v.c, v.who)) if v.person else set()
-    synced = {r["address"]: r for r in v.c.execute("SELECT address, synced_at, error FROM mail_mailboxes")}
+    synced = {
+        r["address"]: {"synced_at": r["checked_at"], "error": r["check_error"]}
+        for r in v.c.execute("SELECT address, checked_at, check_error FROM mailboxes")
+    }
     out = []
     for box in boxes:
         address = box["address"]

@@ -185,7 +185,8 @@ def closed_home(api, slug="ops"):
             "UPDATE messages SET legacy_audience=?, restricted=1 WHERE conversation_id=?",
             ("shared:" + slug, room["id"]),
         )
-        threads._store_shared_homes(c, slug)
+        # As the threads migration (up to rc.1) made a bot's open shared room its Home.
+        c.execute("UPDATE conversations SET audience='home', owner_id=? WHERE id=?", ("bot:" + slug, room["id"]))
         threads.post(c, bot, room["id"], "New plan")
     return room["id"]
 

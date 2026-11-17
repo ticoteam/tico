@@ -1,4 +1,4 @@
-"""A merge conflict before Merge is the Builder's (backend/pr_conflicts.py, docs/pipelines-v3.md "GitHub").
+"""A merge conflict before Merge is the Builder's (backend/pr_conflicts.py, docs/dev/pipelines-v3.md "GitHub").
 
 Acme rc.3 (Nov 11, 08:48): the Engineering task's PR went conflicting while Reviewer 2 held Review 2 (its page waiting
 on a person then; on a bot now, #3283). The conflict went to Reviewer 2 as a quiet note (it cannot push) and nothing
@@ -101,7 +101,7 @@ def test_a_conflict_while_a_reviewer_holds_the_stage_wakes_the_builder_once_per_
     # What it waits on: the Builder first (the ladder's turn), the reviewer's page still there.
     waits = W.of(c, row)
     assert [(w.state, w.who) for w in waits] == [(W.BOT, "bot:builder"), (W.BOT, "bot:rev-b")]
-    assert waits[1].line.startswith("Jev sent it back")
+    assert waits[1].line.startswith("Decision model sent it back")
     assert W.turn(c, row) == "bot:builder"
     assert "bot:builder" in W.turns(c, row)  # its run is not held (task_wakes.may_start)
     line = next(w.line for w in waits if w.who == "bot:builder")
@@ -231,8 +231,10 @@ def test_a_conflict_while_the_stage_waits_on_a_persons_ok_waits_for_the_ok_then_
     assert not E.advance(c, eng)
     [ask] = [n for n in W.needs(c, X.ANA) if n["task_id"] == eng]
     assert ask["kind"] == "ask" and ask["requirement_id"] == rid
-    assert ask["line"].endswith("OK Ana (version 1). The PR has a merge conflict: builder fixes it after your OK.")
-    assert "New commits since the reviews (now at bbb)" in ask["line"]
+    # The row is the document's name and what the person's OK hands on; why they are asked again is a notice beside it.
+    assert ask["line"] == "QA report. The PR has a merge conflict: builder fixes it after your OK."
+    notices = [n for s in R.standings(c, E.task(c, eng)) for n in s.notices]
+    assert any("New commits since the reviews (now at bbb)" in n for n in notices)
 
     # Ana OKs: the conflict is the Builder's now, one wake, and the page stays OK'd.
     A.answer(c, eng, rid, X.ANA, "ok")

@@ -146,8 +146,9 @@ function audit(where: string): {rule: number; element: string; why: string}[] {
     if (!el || !STATE.test(own) || own.length > 70 || !shown(el) || el.closest('script, style, option, [contenteditable], textarea')) continue;
     // A heading, tab, filter or menu item names a place, not a state; a control is its own way forward.
     if (el.closest('h1, h2, nav, [role="tab"], [role="tablist"], label, legend, a[href], button, [role="button"], summary, select')) continue;
-    // Its own line or card: a link somewhere else on the page is not beside it.
-    const home = el.closest('li, tr, [role="listitem"], [role="row"], .card, .row, .banner, .notice, p') || el.parentElement!;
+    // Its own line or card: a link somewhere else on the page is not beside it. A status row (a task's "Waiting on
+    // you" with its Answer) is one line.
+    const home = el.closest('li, tr, [role="listitem"], [role="row"], [role="status"], .card, .row, .banner, .notice, p') || el.parentElement!;
     if (said.has(home)) continue;
     said.add(home);
     const controls = [...home.querySelectorAll('a[href], button, [role="button"], [role="link"], [onclick], summary')]

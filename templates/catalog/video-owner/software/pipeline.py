@@ -264,7 +264,7 @@ def request(project, cfg, stage, files, task, owner):
             task,
             "--title",
             f"Review {stage['id']} files for {project.name}",
-            "--body",
+            "--message",
             "\n".join(lines),
         ]
         steps.append(f"2. {shlex.join(create)}")

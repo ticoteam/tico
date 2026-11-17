@@ -33,7 +33,7 @@ ENROLLMENTS_PATH = (
 COMPUTERS_PATH = (
     "/api/v2/operations"  # GET, owner auth: {"machines": [{label, last_seen_at, revoked_at}], "server_time"}
 )
-ONLINE_SECONDS = 60  # a computer is online when it reported in this recently (backend/onboarding.py)
+ONLINE_SECONDS = 120  # a computer is online when the server heard from it this recently (backend/runner_online.py)
 
 HEALTH_PATH = "/healthz"
 REDIRECT_PATH = "/auth/callback"
@@ -106,7 +106,6 @@ ENV_ORDER = (
     "TICO_OWNER_LINK_HASH",
     "TICO_SETUP_HANDOFF_HASH",
     "TICO_INSTALL_PRESET",
-    "TICO_SAMPLE_COMPANY",
     "TICO_MODELS_PRESET",
     "TICO_SUPPORT",
     "TICO_GATEWAY_INVITE",

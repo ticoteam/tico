@@ -231,7 +231,9 @@ async function open(browser: Browser, {viewer = 'ana', viewport = DESKTOP, hash 
   if (ready) await page.locator('#cp-readers .cp-sec-ready, #cp-readers header').first().waitFor();
   return {page, hub, errors, natives, close: () => context.close()};
 }
-const tabLabels = (page: Page) => page.locator('.dash-tabs a').allInnerTexts();
+// Share is in Company's ⋯ for owners and admins; Share's own header leads back to Company.
+const shareItems = (page: Page) => page.locator('#main header.ph .ph-menu [data-dash-share]').count();
+const backHref = (page: Page) => page.locator('#main header.ph .ph-back').getAttribute('href');
 const loaded = (page: Page) => page.waitForFunction(() => !document.querySelector('#cp-page .skel'));
 const flat = async (page: Page, what: string) => {
   const info = await page.evaluate(() => {
@@ -271,14 +273,15 @@ async function shotPart(page: Page, id: string, name: string) {
     await shot(page, 'denied-1280');
     assert.deepEqual(errors, []);
     await close();
-    // Overview as it always was: no tab, no way in by address, and search doesn't offer it.
-    const tab = await open(browser, {viewer: 'erin', hash: '#/overview', ready: false});
-    assert.deepEqual(await tabLabels(tab.page), ['Mine', 'Dashboard', 'Campus', 'Graph', 'Factories']);
+    // Company as it always was: no Share in its ⋯, no way in by address, and search doesn't offer it.
+    const tab = await open(browser, {viewer: 'erin', hash: '#/home', ready: false});
+    await tab.page.locator('#main header.ph h1').waitFor();
+    assert.equal(await shareItems(tab.page), 0);
     assert.equal(await tab.page.evaluate(() => searchEntries().some(x => x.label === 'Share')), false);
     await tab.page.evaluate((h: string) => { location.hash = h; }, '#/overview/company-page');
     await tab.page.locator('#cp-tab-body .empty-state').waitFor();
     assert.equal(await tab.page.locator('.cp-frame, [data-cp-preview], [data-cp-share], [data-cp-manage]').count(), 0, 'no frame, no controls');
-    assert.deepEqual(await tabLabels(tab.page), ['Mine', 'Dashboard', 'Campus', 'Graph', 'Factories']);
+    assert.equal(await backHref(tab.page), '#/home');
     assert.deepEqual(tab.hub.reads, [], 'a member asks the server for nothing here');
     assert.deepEqual(tab.hub.previews, []);
     assert.deepEqual(tab.errors, []);
@@ -291,7 +294,7 @@ async function shotPart(page: Page, id: string, name: string) {
     assert.match(await page.locator('#cp-page').innerText(), /Owners and admins only/);
     await page.evaluate((h: string) => { location.hash = h; }, '#/overview/company-page');
     await page.locator('#cp-tab-body .empty-state').waitFor();
-    assert.deepEqual(await tabLabels(page), ['Mine', 'Dashboard', 'Campus', 'Graph', 'Factories', 'Share']);
+    assert.equal(await backHref(page), '#/home');
     assert.equal(await page.locator('.cp-frame').count(), 0, 'no frame');
     assert.equal(await page.locator('[data-cp-tab-pick], [data-cp-share], [data-cp-manage]').count(), 0, 'no controls');
     assert.deepEqual(hub.previews, []);
@@ -715,25 +718,25 @@ async function shotPart(page: Page, id: string, name: string) {
       await failed.close();
     }
   }
-  // Overview's tab: the page in a sandboxed frame, the share panel, Manage and back.
+  // Share, from Company's ⋯: the page in a sandboxed frame, the share panel, Manage and back.
   {
-    const {page, hub, errors, natives, close} = await open(browser, {hash: '#/overview', theme: 'dark', ready: false});
-    assert.deepEqual(await tabLabels(page), ['Mine', 'Dashboard', 'Campus', 'Graph', 'Factories', 'Share']);
+    const {page, hub, errors, natives, close} = await open(browser, {hash: '#/home', theme: 'dark', ready: false});
+    await page.locator('#main header.ph h1').waitFor();
+    assert.equal(await shareItems(page), 1);
     assert.equal(await page.evaluate(() => searchEntries().find(x => x.label === 'Share')?.href), '#/overview/company-page', 'search finds it');
-    // Share is the sixth tab: it waits in ⋯ until it is the one open.
     await page.locator('#main header.ph > .ph-more').click();
-    await page.locator('#main header.ph .ph-menu .ph-mtab', {hasText: 'Share'}).click();
+    await page.locator('#main header.ph .ph-menu [data-dash-share]').click();
     const frame = page.locator('iframe.cp-frame');
     await frame.waitFor();
     assert.equal(await frame.getAttribute('sandbox'), 'allow-scripts', 'the frame gets no origin');
     assert.match((await frame.getAttribute('src'))!, /\/api\/v2\/company-page\/preview\?audience=a-board&theme=dark$/, 'the first audience on, in the app\'s theme');
     assert.ok(await page.locator('#side a[data-nav="overview"]').evaluate((a: HTMLElement) => a.classList.contains('cur')), 'Company stays lit');
-    assert.equal(await page.locator('.dash-tabs a.cur').innerText(), 'Share');
-    // The shared header: Share takes the fifth place on the row while it is open, Factories waits in ⋯; the tools are
-    // the audience picker (named as a preview, no caption beside it) and Share; Manage is in ⋯; ⋯ is last.
+    // The shared header: Share, back to Company, no tabs; the tools are the audience picker (named as a preview, no
+    // caption beside it) and Share; Manage is in ⋯; ⋯ is last.
     const head = page.locator('#main header.ph');
-    assert.deepEqual(await head.locator('.ph-tabs > .ph-tab:visible').allInnerTexts(), ['Mine', 'Dashboard', 'Campus', 'Graph', 'Share']);
-    assert.deepEqual(await head.locator('.ph-menu .ph-mtab').allTextContents(), ['Factories']);
+    assert.equal(await head.locator('h1').innerText(), 'Share');
+    assert.equal(await backHref(page), '#/home');
+    assert.equal(await head.locator('.ph-tabs').count(), 0);
     assert.equal(await head.locator('.ph-menu [data-cp-manage]').count(), 1, 'Manage is in ⋯');
     assert.equal(await page.locator('.cp-tab-preview').count(), 0, 'no Preview caption');
     const pick = page.locator('[data-cp-tab-pick] select');

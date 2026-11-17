@@ -21,6 +21,7 @@ import logging
 
 from . import hubdb as H
 from . import sources as SRC
+from .api_contract import api_v2
 
 LOG = logging.getLogger("tico.thread_catchup")
 SCOPES = ("subtree", "thread")
@@ -94,7 +95,7 @@ def transcript(c, viewer, thread, scope, me):
         "JOIN conversations cv ON cv.id=m.conversation_id "
         "LEFT JOIN thread_followers f ON f.thread_id=m.conversation_id AND f.actor=? "
         f"WHERE {where} AND m.seq>MAX(COALESCE(f.last_read_seq, 0), ?) AND m.created_at>=? AND m.sender_id<>? "
-        "AND m.kind IN ('say','ask','answer','notice') AND m.deleted_at IS NULL "
+        "AND m.kind IN ('say','notice') AND m.deleted_at IS NULL "
         "ORDER BY m.seq DESC LIMIT ?",
         [me, *args, carried, joined, me, SCAN_LIMIT],
     ).fetchall()
@@ -208,7 +209,15 @@ def install(app, store, auth, mutate):
     class CatchUp(Contract):
         scope: str = Field(default="subtree", max_length=10)
 
-    @app.post("/api/v2/threads/{thread_id}/catch-up")
+    @app.post(
+        "/api/v2/threads/{thread_id}/catch-up",
+        **api_v2(
+            "Conversations",
+            "catchUpThread",
+            "What is new in a thread (scope subtree: its sub-threads too) that you may read, summarized and posted to your Assistant DM; the newest 40 messages at most. Nothing new posts nothing",
+            "CatchUpResult",
+        ),
+    )
     def catch_up(request: Request, thread_id: str, body: CatchUp):
         """A bounded summary of what is new in a thread (scope `subtree`: its sub-threads too), posted to the caller's
         Assistant DM. Nothing new is a reply with `posted` null and `left_out` 0; a reply with `posted` null and

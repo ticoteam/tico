@@ -92,10 +92,7 @@ The UI's scripts have a strict type check (`python3 scripts/check_ui_strict.py`,
 type check of the `.js` files left (`bash scripts/check_ui_types.sh`) and a Biome lint (`bash scripts/check_ui_lint.sh`),
 all seconds long. Each counts findings per file against its own baseline file: `ui/baselines/strict/<path>.json` for a
 `.ts` file with strict findings (a new `.ts` file must be at zero), `ui/baselines/tsc/<path>.json` for a `.js` file, or
-`ui/baselines/biome/<path>.json` (a file with no findings has none). Flipping a `.js` file to `.ts` is
-`python3 scripts/ui_flip.py`: it moves the file and its baselines, and changes its references and its script tag in
-`ui/index.html`, which keeps a blank line between script tags so that flips of different files do not conflict in a
-merge. The counts only shrink: after you fix findings, lower the baseline with
+`ui/baselines/biome/<path>.json` (a file with no findings has none). The counts only shrink: after you fix findings, lower the baseline with
 `python3 scripts/check_ui_strict.py --write` (or `python3 scripts/ui_baseline.py tsc --write`, or `biome`).
 `ui/index.html` must keep the blank lines: `python3 scripts/ui_baseline.py migrate` adds them.
 The TypeScript that Node runs directly outside `ui/` (the `.cts` and `.mts` scripts under `scripts/` and `recorder/`)
@@ -167,8 +164,8 @@ company already owns, so their commits need no sign-off, and their pull requests
   wording or docs prose, trivial getters or exhaustive parametrizations of one path. Mark a test
   `@pytest.mark.slow` if it needs real git, Docker or a server.
 - Added or changed an icon in `ui/`? Run `python3 scripts/build-icon-font.py` to rebuild the icon font subset (a test fails until you do).
-- New UI files are TypeScript (`ui/app/name.ts`, strict types, no `any`). After `npm ci`, `npm run build:ui` compiles
-  them to `build/ui/` (`npm run watch:ui` while editing); the server will not serve a stale build.
+- New UI files are TypeScript (`ui/app/name.ts`, strict types, no `any`). After `npm ci`, `npm run build:ui` builds
+  the UI into `build/ui/`, which is what the server serves (`npm run watch:ui` while editing, then reload).
   `bash scripts/check_ui_types.sh` type-checks them.
 - Keep the tests green, and do not add a dependency, a network call in the UI or a build step
   without saying why.

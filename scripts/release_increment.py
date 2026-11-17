@@ -470,7 +470,9 @@ class Checkout:
         changed = pr_checks.changed_files(base, head, root=self.root)
         added = pr_checks.changed_files(base, head, root=self.root, only="A")
         changed = sorted(set(changed) | set(pr_checks.script_changes(base, head, changed, root=self.root)))
-        if self._graph is None:
+        if self._graph is None and any(
+            not pr_checks.unread(path) and not pr_checks.owned_data(path) for path in changed
+        ):
             self._graph = pr_checks.DependencyMap(self.root)
         selected = pr_checks.selection(
             changed, "merge_group", root=self.root, graph=self._graph, base=base, added=added

@@ -3,10 +3,13 @@
 Per route, the last 300 requests: how long signing in took (it waits for a worker thread) and how
 long the whole answer took on the server. Also how late the event loop wakes up (a blocked loop
 delays every request) and how many requests are in flight. Numbers only: no paths with ids, no
-bodies, no people. `GET /api/v2/ops/timing` reads it; every answer carries `Server-Timing`. When the
+bodies, no people. `GET /api/v2/operations/timing` reads it; every answer carries `Server-Timing`. When the
 flight recorder is on (backend/flight.py), every request and loop wake is also handed to it, which keeps
 history in the database.
 """
+
+from fastapi import Request
+from .store import Problem
 
 import asyncio
 import threading
@@ -84,3 +87,67 @@ async def watch_loop(timing, stop, every=0.5):
     finally:
         if timing.recorder is not None:
             timing.recorder.beat = None  # a probe that stopped is not a stalled loop
+
+
+def install_middleware(app, flight, recorder):
+    @app.middleware("http")
+    async def request_timing(request, call_next):
+        started = time.perf_counter()
+        request.state.auth_ms = 0.0
+        app.state.timing.begin()
+        # This request's SQL time and write-lock wait, added to by the threads it runs on (backend/flight.py).
+        cost, cost_token = (
+            flight.request_started(request.method, request.scope) if recorder is not None else (None, None)
+        )
+        route = request.url.path
+        response = None
+        try:
+            response = await call_next(request)
+            found = request.scope.get("route")
+            route = getattr(found, "path", None) or ("static" if not route.startswith("/api") else "unmatched")
+            total = (time.perf_counter() - started) * 1000
+            extra = getattr(request.state, "server_timing", "")
+            response.headers["Server-Timing"] = (
+                f"auth;dur={request.state.auth_ms:.1f}, app;dur={total:.1f}"
+                + (f", sql;dur={cost[0]:.1f}, wait;dur={cost[1]:.1f}" if cost is not None else "")
+                + (", " + extra if extra else "")
+            )
+            return response
+        finally:
+            found = request.scope.get("route")
+            key = (
+                request.method
+                + " "
+                + (
+                    getattr(found, "path", None)
+                    or ("static" if not request.url.path.startswith("/api") else "unmatched")
+                )
+            )
+            # The flight recorder's caller kind, status and size (backend/flight.py); a raised error counts as a 500.
+            who = getattr(request.state, "identity", None)
+            size = response.headers.get("content-length") if response is not None else None
+            # Screen long-polls wait for new pixels; retain SQL/lock/processing time, exclude only deliberate sleeps.
+            active_ms = max(0, (time.perf_counter() - started) * 1000 - getattr(request.state, "idle_wait_ms", 0))
+            app.state.timing.end(
+                key,
+                request.state.auth_ms,
+                active_ms,
+                flight.caller_kind(who),
+                response.status_code if response is not None else 500,
+                int(size) if size and size.isdigit() else 0,
+                getattr(who, "actor", "") or "",
+                cost,
+            )
+            if cost_token is not None:
+                flight.request_finished(cost_token)
+
+
+def register(app):
+
+    @app.get("/api/v2/operations/timing")
+    def request_timings(request: Request):
+        """Where requests spend their time (backend/timing.py): the owner, or BotOps."""
+        who = request.state.identity
+        if who.role != "owner" and who.actor != "bot:botops":
+            raise Problem("forbidden", "Request timings are for the owner and BotOps", 403)
+        return app.state.timing.summary()

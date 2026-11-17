@@ -80,10 +80,10 @@ def test_task_place_stops_disclosing_presence_after_bot_access_is_revoked(api):
 
 
 def test_concurrent_task_field_changes_refuse_stale_version_and_keep_other_fields(api):
-    task = post(api, 'tasks', {'owner': 'human:ben', 'title': 'Review the launch', 'body': 'Review the plan.'})
+    task = post(api, 'tasks', {'owner': 'human:ben', 'title': 'Review the launch', 'message': 'Review the plan.'})
     path = '/api/v2/tasks/' + task['id']
     saved = api.post(
-        path, json={'version': task['version'], 'body': 'Review the updated launch plan.'}, headers=headers('ben-test')
+        path, json={'version': task['version'], 'note': 'Review the updated launch plan.'}, headers=headers('ben-test')
     )
     assert saved.status_code == 200, saved.text
     stale = api.post(path, json={'version': task['version'], 'title': 'Review the rollout'}, headers=headers())
@@ -93,9 +93,9 @@ def test_concurrent_task_field_changes_refuse_stale_version_and_keep_other_field
         path, json={'version': current['task']['version'], 'title': 'Review the rollout'}, headers=headers()
     )
     assert retry.status_code == 200, retry.text
-    assert retry.json()['task']['body'] == 'Review the updated launch plan.'
+    assert retry.json()['task']['note'] == 'Review the updated launch plan.'
     detail = api.get(path, headers=headers()).json()
-    assert [(e['field'], e['actor']) for e in detail['events'] if e['field'] in ('title', 'body')][-2:] == [
-        ('body', 'human:ben'),
+    assert [(e['field'], e['actor']) for e in detail['events'] if e['field'] in ('title', 'note')][-2:] == [
+        ('note', 'human:ben'),
         ('title', 'human:ana'),
     ]

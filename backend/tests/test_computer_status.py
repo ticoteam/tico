@@ -8,7 +8,7 @@ import pytest
 
 from backend import cloud_machines as CM, computers, runner_states
 from backend import bot_settings as BS
-from backend.getting_started import ONLINE_SECONDS
+from backend.runner_online import ONLINE_SECONDS
 from backend.scheduler import Scheduler
 from backend.store import H
 from backend.tests.helpers.api import assign, get, post, ready, runner  # noqa: F401
@@ -111,7 +111,7 @@ def test_retirement_preserves_assigned_cloud_recent_and_never_seen_computers(api
     cutoff = H.shift(now, seconds=-computers.UNASSIGNED_OFFLINE_RETIRE_SECONDS)
     boxes = {
         name: runner(api, label=name, device_id=sha256(name.encode()).hexdigest())
-        for name in ("assigned", "cloud", "delivery", "recent", "boundary", "new", "never-seen")
+        for name in ("assigned", "cloud", "recent", "boundary", "new", "never-seen")
     }
     replacements = {name: runner(api, label=name, device_id=sha256(name.encode()).hexdigest()) for name in boxes}
     assign(api, boxes["assigned"], "ops")
@@ -134,7 +134,6 @@ def test_retirement_preserves_assigned_cloud_recent_and_never_seen_computers(api
             "INSERT INTO cloud_machines(bot,runner_id,state,updated_at) VALUES('cpo',?,'stopped',?)",
             (boxes["cloud"]["runner_id"], now),
         )
-        BS.write(c, "cpo", {"app_delivery": {"computer": boxes["delivery"]["runner_id"]}})
     assert computers.sweep(store, now) == [boxes["never-seen"]["runner_id"]]
     with store.read() as c:
         kept = {r["id"] for r in c.execute("SELECT id FROM runners WHERE revoked_at IS NULL")}
@@ -234,34 +233,18 @@ def test_retirement_keeps_nested_reported_logins(api, field, report):  # noqa: F
     assert computers.sweep(store, H.now()) == []
 
 
-@pytest.mark.parametrize("hold", ["google_grant", "google_holder", "google_mail", "meetings"])
-def test_retirement_keeps_a_computer_holding_a_google_grant_or_meeting_importer(api, hold):  # noqa: F811
-    from backend import google_connect
-
+def test_retirement_keeps_a_computer_holding_a_meeting_importer(api):  # noqa: F811
     old, _ = replaced_computer(api)
     store, rid = api.app.state.store, old["runner_id"]
     with store.transaction() as c:
-        google_connect.ensure_schema(c)
-        if hold.startswith("google_") and hold != "google_mail":
-            column = "runner_id" if hold == "google_grant" else "holder"
-            c.execute(
-                f"INSERT INTO google_connects(person_id,mailbox,status,{column},created_at,updated_at) "
-                "VALUES('ana','ana@example.com','connected',?,?,?)",
-                (rid, H.now(), H.now()),
-            )
-        elif hold == "google_mail":
-            c.execute("INSERT INTO google_mail_holders(runner_id,holds,seen_at) VALUES(?,1,0)", (rid,))
-        else:
-            c.execute(
-                "INSERT INTO meeting_importers(source,enabled,runner_id,updated_by,updated_at) "
-                "VALUES('zoom',1,?,'ana',?)",
-                (rid, H.now()),
-            )
+        c.execute(
+            "INSERT INTO meeting_importers(source,enabled,runner_id,updated_by,updated_at) VALUES('zoom',1,?,'ana',?)",
+            (rid, H.now()),
+        )
     assert computers.sweep(store, H.now()) == []
-    if hold == "meetings":
-        with store.transaction() as c:
-            c.execute("UPDATE meeting_importers SET enabled=0 WHERE source='zoom'")
-        assert computers.sweep(store, H.now()) == [rid]
+    with store.transaction() as c:
+        c.execute("UPDATE meeting_importers SET enabled=0 WHERE source='zoom'")
+    assert computers.sweep(store, H.now()) == [rid]
 
 
 def test_retirement_keeps_a_sharing_browser_exit_until_sharing_is_off(api):  # noqa: F811
@@ -306,8 +289,13 @@ def test_retirement_keeps_stored_or_reported_logins(api, login):  # noqa: F811
                 (H.now(), H.now()),
             )
             c.execute(
-                "INSERT INTO computer_keys(credential_id,runner_id,runtime,state,created_at,created_by) "
-                "VALUES('key',?,'claude','active',?,'human:ana')",
+                "INSERT INTO model_subscriptions(id,name,kind,sealed,added_by,created_at,updated_at,credential_id) "
+                "VALUES('plan','Computer key','anthropic_key','','human:ana',?,?,'key')",
+                (H.now(), H.now()),
+            )
+            c.execute(
+                "INSERT INTO computer_subscriptions(runner_id,runtime,subscription_id,set_by,updated_at) "
+                "VALUES(?,'claude','plan','human:ana',?)",
                 (rid, H.now()),
             )
         else:

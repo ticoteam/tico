@@ -14,7 +14,7 @@ type Route = import('playwright').Route;
   try {
     const tasks = Array.from({length: 12}, (_, i) => task(`t-${300 + i}`, `Errand ${300 + i}`, 'spec', {owner_id: 'human:ana', relations: {}}));
     const by = (n: number) => tasks.find(t => t.number === n)!;
-    const since = '2026-11-13T05:00:00Z';
+    const since = '2026-11-13T12:00:00Z'; // noon UTC: Nov 13 in every zone from UTC-11 to UTC+11
     const dep = (n: number, direction: string, stage = 'Build') => ({id: by(n).id, title: by(n).title, status: 'open', owner_id: 'bot:builder',
       direction, number: n, stage, since});
     by(304).title = 'Growth <b>synced</b> sources part 1';
@@ -36,7 +36,7 @@ type Route = import('playwright').Route;
       await page.evaluate(() => { location.hash = '#/tasks'; });
       await page.evaluate(() => { location.hash = '#/task/t-307'; });
       // A phone shows one tab at a time; the dependency lives under Info.
-      await page.locator('#task-modal[open]').getByRole('tab', {name: /^Details/}).click();
+      await page.locator('#task-modal[open]').getByRole('button', {name: /^Details/}).click();
       const blocked = page.locator('#task-modal[open][data-task="t-307"] .task-depends');
       await blocked.waitFor();
       assert.deepEqual(await text('#task-modal[open] .task-depends'),
@@ -64,7 +64,7 @@ type Route = import('playwright').Route;
     // The task others wait for.
     await page.evaluate(() => { location.hash = '#/tasks'; });
     await page.evaluate(() => { location.hash = '#/task/t-304'; });
-    await page.locator('#task-modal[open]').getByRole('tab', {name: /^Details/}).click();
+    await page.locator('#task-modal[open]').getByRole('button', {name: /^Details/}).click();
     await page.locator('#task-modal[open][data-task="t-304"] .task-blocks').waitFor();
     const blocks = await text('#task-modal[open] .task-blocks');
     assert.equal(blocks.length, 1);

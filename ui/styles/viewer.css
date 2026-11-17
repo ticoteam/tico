@@ -55,6 +55,11 @@
 .s3-chip-name{min-width:0}
 .s3-chip-copy{flex:none;border:0;border-radius:999px;padding:2px 8px;background:transparent;color:var(--ink);font:inherit;font-size:var(--t-xs);cursor:pointer}
 .s3-chip-copy:hover,.s3-chip-copy:focus-visible{background:var(--hover)}
+/* a document named by reference (ui/app/markdown.ts docRefs): its title, cut to one line, and its version, muted */
+.md-doc-ref{display:inline-flex;align-items:baseline;gap:5px;max-width:min(100%,32ch);min-width:0;box-sizing:border-box;vertical-align:bottom;padding:1px 8px;border:1px solid var(--line);border-radius:999px;background:var(--surface2);color:var(--ink);font-size:.92em;line-height:var(--lh-tight);text-decoration:none}
+.md-doc-ref:hover,.md-doc-ref:focus-visible{border-color:var(--focus)}
+.md-doc-ref-t{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.md-doc-ref-v{flex:none;color:var(--muted);font-size:var(--t-xs);font-variant-numeric:tabular-nums}
 @media (max-width:760px){
   .doc-viewer,.doc-viewer.viewer-media{width:100vw;max-width:100vw;height:100dvh;max-height:100dvh;margin:0;border-radius:0}
   .doc-viewer[open]{display:flex}

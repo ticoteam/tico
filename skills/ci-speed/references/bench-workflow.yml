@@ -1,0 +1,36 @@
+# A throwaway benchmark: copy to .github/workflows/bench-<topic>.yml on a branch named bench/<topic>, push, read the
+# step summaries, then delete the branch and its cache entries. It runs on push to that branch only: never in a pull
+# request, never merged. On a public repo, GitHub-hosted runners cost nothing.
+name: Bench <topic>
+on:
+  push:
+    branches: [bench/<topic>]
+permissions:
+  contents: read
+jobs:
+  bench:
+    strategy:
+      fail-fast: false
+      matrix:
+        rep: [1, 2, 3]          # identical runners vary (0.6 s to 8 s for one step): never trust one run
+        variant: [before, after]
+    runs-on: ubuntu-24.04       # the runner label the real job uses
+    steps:
+      - uses: actions/checkout@<full commit sha> # <version>
+        with:
+          persist-credentials: false
+      # Untimed setup (downloads, caches) goes in its own steps, so download and work stay separate.
+      - name: Timed work
+        env:
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          s=$(date +%s.%N)
+          if [ "$VARIANT" = before ]; then
+            : # today's command
+          else
+            : # the candidate
+          fi
+          echo "$VARIANT: $(echo "$(date +%s.%N) - $s" | bc) s" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: The result still works
+        run: |
+          : # run the real program on what the timed step produced; a fast broken result is not a result

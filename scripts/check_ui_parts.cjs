@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Checks the page parts (ui/parts.json, backend/ui_bundle.py): code outside a part may use the part's names only
+// Checks the page parts (ui/parts.json, scripts/build-ui.cjs): code outside a part may use the part's names only
 // through its entries, since the part is not loaded until a person goes to one of its pages.
 //
 //   npx --yes -p typescript@5.9.3 -c 'node scripts/check_ui_parts.cjs'     (scripts/check_ui_types.sh runs it)
@@ -145,7 +145,7 @@ function main() {
       const name = n.text, home = owner.get(name);
       const theirs = home && partOf.get(home);
       const at = `ui/${file}:${sf.getLineAndCharacterOfPosition(n.getStart()).line + 1}`;
-      // Served as separate files (TICO_UI_BUNDLE=off), every file runs in index.html's order, page parts included: a
+      // Every file runs in index.html's order (the shell's, and each part's within it): a
       // name used as a file runs must come from a file listed before it. `typeof NAME` only asks whether it is there.
       if (!inFn && home && home !== file && order.indexOf(home) > order.indexOf(file)) {
         const around = ts.isPropertyAccessExpression(n.parent) && n.parent.name === n ? n.parent : n;

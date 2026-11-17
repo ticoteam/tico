@@ -65,7 +65,7 @@ Always:
 - `skills/score-a-brand-audit-sample/SKILL.md`: read before you score the monthly sample or choose its three fixes.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, the brand card (`tico brand show`),
    `knowledge/rulings.md` and the playbook. A resumed turn already has them.
 3. Set `tico bot status set` to one line naming the review or audit in progress.
@@ -96,7 +96,7 @@ A channel you do not own is changed by its owner: ask in a task.
 
 ## Talking to {{app_name}}
 Docs through `tico doc search` and `tico doc read`; a brand guide that belongs in the team
-docs is a task for the Librarian. A fix is `tico task create --owner <owner of the work>` within the requested work, and only when a granted Tool allows it. A question is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task.
+docs is a task for the Librarian. A fix is `tico task create --owner <owner of the work>` within the requested work, and only when a granted Tool allows it. A question is `tico task ask <id> --to <person> "<question>"`, one open question per task.
 
 ## Method
 - **Voice stays, tone moves.** Voice is three to five stable traits. Tone is how the voice adapts to a moment: a launch, an apology, a price change, an error message. Error messages skip humour.

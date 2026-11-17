@@ -11,7 +11,7 @@ the shared prompt in backend/strategy_prompt.py (Tico HQ's setup page asks the s
 sections (How we know they want it and Why now only when the pages show it) and three bets the site implies, each with what it rules out and a suggested wrong-if. It asks for no vision:
 `found` keeps `vision: ""` and the draft's vision is left as it is.
 
-What it writes, as the owner who started it, and never published:
+What it writes, as the owner who started it, live at once as one version (backend/strategy.py go_live):
 - the summary, and each of the seven sections, only where the draft's is empty; each section starts with
   the UNCONFIRMED line, which the owner deletes by keeping or editing the text;
 - each bet as `proposed`, its wrong-if a sentence with a check date CHECK_DAYS out.
@@ -40,6 +40,7 @@ from . import models as M
 from . import strategy as S
 from . import strategy_prompt as P
 from .store import Problem, encode
+from .api_contract import api_v2
 
 log = logging.getLogger("tico.strategy_setup")
 
@@ -414,7 +415,7 @@ def finish(c, job_id, found):
     }
     lines = {k: found[k] for k in ("summary", "vision") if found.get(k) and not row[k].strip()}
     if sections or lines:
-        S.update_draft(c, actor, row["revision"], sections=sections or None, **lines)
+        S.update_draft(c, actor, row["revision"], sections=sections or None, live=False, **lines)
     made = []
     live = [b for b in S.bets(c) if b["status"] != "retired"]
     known = {b["statement"].strip().lower() for b in live}
@@ -425,7 +426,9 @@ def finish(c, job_id, found):
         wrong = {"kind": "text", "text": item["wrong_if"], "check_by": check_by} if item["wrong_if"] else None
         c.execute("SAVEPOINT draft_from_bet")
         try:
-            bet, _ = S.add_bet(c, actor, item["statement"], item["why"], item["rules_out"], wrong, None, "proposed")
+            bet, _ = S.add_bet(
+                c, actor, item["statement"], item["why"], item["rules_out"], wrong, None, "proposed", live=False
+            )
         except H.Refused:
             c.execute("ROLLBACK TO draft_from_bet")
             bet = None
@@ -433,6 +436,7 @@ def finish(c, job_id, found):
         if bet:
             made.append(bet["id"])
             known.add(item["statement"].lower())
+    S.go_live(c, actor)
     return _put(
         c,
         {
@@ -464,7 +468,14 @@ def install(app, store, auth, mutate):
                 "forbidden", "Only the owner drafts the strategy from the team's website, on their own click", 403
             )
 
-    @app.post("/api/v2/strategy/draft-from")
+    @app.post(
+        "/api/v2/strategy/draft-from",
+        **api_v2(
+            "Strategy",
+            "draftStrategyFrom",
+            "Owner only: research the team's website and/or the owner's words into the draft; answers the job (running, or no_model with no model)",
+        ),
+    )
     def strategy_draft_from(request: Request, body: M.StrategyDraftFrom):
         """Owner only: research the team's website and/or the owner's words into the draft. Answers the job; poll
         GET /strategy/draft-from/{id}."""
@@ -475,7 +486,14 @@ def install(app, store, auth, mutate):
             spawn(lambda: run(store, job["id"]))
         return job
 
-    @app.get("/api/v2/strategy/draft-from/{job_id}")
+    @app.get(
+        "/api/v2/strategy/draft-from/{job_id}",
+        **api_v2(
+            "Strategy",
+            "getStrategyDraftFromJob",
+            "Owner only: one research job (latest for the newest): running, done, gave_up, failed or no_model, with what it found and wrote",
+        ),
+    )
     def strategy_draft_from_job(request: Request, job_id: str):
         """Owner only: one research job (`latest` for the newest): its state, the pages read, what it found and what
         it wrote."""

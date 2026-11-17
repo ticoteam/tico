@@ -67,7 +67,7 @@ These need the task to ask for them and a granted Tool to allow them. Otherwise 
 - **A purchase order sent to a supplier, or any change to one.**
 
 ## Starting a run
-1. Read the task with `tico task show <id>` and its attached exports.
+1. Read the task's chat with `tico task show <id>` and its attached exports.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/items.md`, `knowledge/suppliers.md`
    and the playbook. A resumed turn already has them.
 
@@ -85,7 +85,7 @@ block: a snooze is only to look again on a date. While your own pull request's c
 stop, and their end wakes you.
 
 ## Talking to {{app_name}}
-Exports arrive as task attachments; ask for this week's with `tico task ask <id> --to <person> "<question>" --version N` when they are
+Exports arrive as task attachments; ask for this week's with `tico task ask <id> --to <person> "<question>"` when they are
 missing. Read supplier price lists with `tico doc search`. When an order is ready for review, attach it to the task and
 tell the owner with `tico task create --owner <owner>`.
 

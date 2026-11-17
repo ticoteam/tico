@@ -144,7 +144,7 @@ def test_undo_leaves_a_task_alone_when_anything_happened_to_it_since(c):
         [{"do": "create", "owner": "ops", "title": title} for title in ("Call the vendor", "Plan Q3", "Fix signup")],
     )
     asked, snoozed, parent = (x["task_id"] for x in made["done"])
-    H.task_ask(c, OWNER, asked, OWNER, "Which vendor do you mean?")
+    H.task_ask(c, OWNER, asked, "human:ben", "OK the vendor call", kind="ok")  # a person's OK needs no shows
     H.task_snooze(c, OWNER, snoozed, "After the board meeting")
     sub = H.task_create(c, OWNER, "Write the signup test", "Work it.", "bot:ops", parent_id=parent, lint=False)["id"]
     given = _filed(c, "ops", "Reconcile the vendor invoices")
@@ -227,12 +227,21 @@ def task(api, task_id):
         return H.task(c, task_id)
 
 
+def words(api, task_id):
+    """What the task was filed with: its first message (and any instructions Tico gave its bot)."""
+    with api.app.state.store.read() as c:
+        return H.task_words(c, task_id)
+
+
 def proposals(api):
+    """The decision's proposals to the owner, each with `words`: what it was filed with."""
     with api.app.state.store.read() as c:
         return [
-            dict(r)
+            {**dict(r), "words": H.task_words(c, r["id"])}
             for r in c.execute(
-                "SELECT * FROM tasks WHERE requester_id=? AND owner_id=? AND title LIKE 'Decide %' ORDER BY created_at",
+                # Its question to the owner, a ❓ on its own task (backend/person_asks.py).
+                "SELECT * FROM tasks t WHERE requester_id=? AND title LIKE 'Decide %' AND EXISTS (SELECT 1 FROM "
+                "question_marks q WHERE q.task_id=t.id AND q.person_id=?) ORDER BY created_at",
                 (STRATEGY_BOT, OWNER),
             )
         ]
@@ -320,7 +329,7 @@ def test_a_change_a_bot_offline_or_a_person_would_take_becomes_one_proposal_neve
     assert made["state"] == "done" and len(made["done"]) == 1 and len(made["left"]) == 2
     asked = proposals(api)
     assert len(asked) == 1 and asked[0]["id"] == made["proposal_task"]
-    assert "is paused right now" in asked[0]["body"] and "a task for a person stays the person's" in asked[0]["body"]
+    assert "is paused right now" in asked[0]["words"] and "a task for a person stays the person's" in asked[0]["words"]
 
 
 def test_everything_on_the_owners_list_is_refused_on_the_server_and_proposed_instead(api):
@@ -532,7 +541,7 @@ def test_a_private_task_never_reaches_the_strategy_bot_log_or_the_owners_proposa
     assert r.status_code == 422 and "Merge with Globex" not in r.text, r.text
 
 
-def test_undo_leaves_open_a_task_it_made_whose_title_or_body_was_edited_since(api):
+def test_undo_leaves_open_a_task_it_made_whose_title_or_due_date_was_edited_since(api):
     """A task the decision made and a person reworded since is theirs now: Undo keeps it open and says why."""
     strategy_token = with_strategy_bot(api)
     bot(api, "ops")
@@ -545,12 +554,12 @@ def test_undo_leaves_open_a_task_it_made_whose_title_or_body_was_edited_since(ap
             {"do": "create", "owner": "ops", "title": "Write the release note"},
         ],
     )
-    titled, bodied = (x["task_id"] for x in made["done"])
+    titled, dated = (x["task_id"] for x in made["done"])
     with api.app.state.store.transaction() as c:
         H.task_update(c, "bot:ops", titled, title="Fix the setup step and the signup form")
-        H.task_update(c, "bot:ops", bodied, body="Cover the new billing page too.")
+        H.task_update(c, "bot:ops", dated, due="2026-12-01")
     undone = post(api, f"strategy-bot/log/{made['id']}/undo", {})
-    assert task(api, titled)["status"] != "closed" and task(api, bodied)["status"] != "closed"
+    assert task(api, titled)["status"] != "closed" and task(api, dated)["status"] != "closed"
     assert undone["undo"]["text"].count("which it made, was changed since") == 2, undone["undo"]["text"]
 
 
@@ -775,7 +784,8 @@ def test_a_bot_the_strategy_bot_cant_see_is_answered_as_a_bot_that_isnt_there(ap
             ],
         )
         assert made["state"] == "proposed" and not made["done"], made
-        body = task(api, made["proposal_task"])["body"]
+        body = words(api, made["proposal_task"])
+        assert body
         return made, [(x["text"], x["why"]) for x in made["left"]], body
 
     hidden, hidden_left, hidden_body = left("finance")

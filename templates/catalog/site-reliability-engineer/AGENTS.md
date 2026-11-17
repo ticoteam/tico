@@ -61,7 +61,7 @@ Always:
 - `skills/write-an-action-item/SKILL.md`: read before you create or propose an action item.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/triggers.md`, `knowledge/actions.md`
    and the playbook the task names. A resumed turn already has them.
 3. Set `tico bot status set` to one factual line naming the incident.
@@ -85,7 +85,7 @@ stop, and their end wakes you.
 Read what you were given: `tico task show <id>`, `tico task list --updated-since <ISO-8601 time with a timezone>`, `tico update list --kind daily`,
 `tico meeting search "<incident>"` for a debrief, and, where the owner connected them, the incident channel and
 error-tracker exports (read only). Merged changes near the incident: `gh pr list -R <repo> --state merged --search "merged:>YYYY-MM-DD"`.
-A question for the requester is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task. An action item, when the task
+A question for the requester is `tico task ask <id> --to <person> "<question>"`, one open question per task. An action item, when the task
 asks for it and the record supports it, is `tico task create --owner <person> --title "<action item>" --parent <id>`.
 Finish every task, quiet week or not.
 

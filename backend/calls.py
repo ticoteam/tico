@@ -51,6 +51,7 @@ from . import (
 from .models import Contract
 from .store import H, Problem
 from .views import human_only
+from .api_contract import api_v2
 
 log = logging.getLogger("tico.calls")
 
@@ -1711,7 +1712,15 @@ def install_calls(app, store, auth, write):
         app.state.call_media = call_media.LiveKitMedia(config) if config else None
     calls = app.state.calls = Calls(app, store, auth)
 
-    @app.get("/api/v2/threads/{thread_id}/calls")
+    @app.get(
+        "/api/v2/threads/{thread_id}/calls",
+        **api_v2(
+            "Calls",
+            "listCalls",
+            "The calls in a thread, newest first, a page at a time: before=<next_before> reads the next page",
+            "CallList",
+        ),
+    )
     def list_calls(request: Request, thread_id: str, limit: int = 25, before: str = ""):
         """A thread's calls, newest first, a page at a time. `next_before` is the cursor for the next page, or null.
         `providers` is what the viewer could start, in the order `auto` tries them; `available` is whether that is
@@ -1749,7 +1758,15 @@ def install_calls(app, store, auth, write):
             "providers": offered,
         }
 
-    @app.post("/api/v2/threads/{thread_id}/calls")
+    @app.post(
+        "/api/v2/threads/{thread_id}/calls",
+        **api_v2(
+            "Calls",
+            "startCall",
+            "Start a call in a thread you can write to: provider auto (Google Meet when your Workspace mailbox has it, else Tico Meet), google_meet or tico. A Google Meet start makes the space, posts the call's card and rings",
+            "Call",
+        ),
+    )
     def start_call(request: Request, thread_id: str, body: StartCall):
         """Start a call. A Google Meet start makes its space before the write, outside any transaction; a retry with the
         same idempotency key is answered from the first answer and makes no second space (the lock keeps two copies
@@ -1788,20 +1805,34 @@ def install_calls(app, store, auth, write):
             calls.ring_started(result["id"])
         return result
 
-    @app.get("/api/v2/calls/ringing")
+    @app.get(
+        "/api/v2/calls/ringing",
+        **api_v2("Calls", "listRingingCalls", "The live calls ringing you now, in threads you can read", "CallRinging"),
+    )
     def ringing_calls(request: Request):
         """The live calls ringing the caller now (page load and reconnect), in threads they can read."""
         who = request.state.identity
         with store.read() as c:
             return calls.ringing(c, who)
 
-    @app.get("/api/v2/calls/{call_id}")
+    @app.get(
+        "/api/v2/calls/{call_id}",
+        **api_v2("Calls", "getCall", "A call: its state, people, bots and how it ended", "Call"),
+    )
     def call_detail(request: Request, call_id: str):
         who = request.state.identity
         with store.read() as c:
             return calls.readable_view(c, who, call_id)
 
-    @app.post("/api/v2/calls/{call_id}/join")
+    @app.post(
+        "/api/v2/calls/{call_id}/join",
+        **api_v2(
+            "Calls",
+            "joinCall",
+            "Join a call. Tico Meet: its media URL and a token good for 5 minutes. Google Meet: the Meet link as you open it, no token",
+            "CallJoin",
+        ),
+    )
     def join_call(request: Request, call_id: str, body: Empty):
         who = request.state.identity
         result = write(
@@ -1813,7 +1844,16 @@ def install_calls(app, store, auth, write):
             return {"call": result, "url": result.get("join_url")}  # Google runs the media: no token
         return {"call": result, **calls.token_payload(row, who.actor)}
 
-    @app.post("/api/v2/calls/{call_id}/token")
+    @app.post(
+        "/api/v2/calls/{call_id}/token",
+        **api_v2(
+            "Calls",
+            "refreshCallToken",
+            "A fresh token for a Tico Meet call you have joined; 409 not_tico_meet for a Google Meet",
+            "CallToken",
+            idempotency="Not needed: a refresh writes nothing; the header is ignored.",
+        ),
+    )
     def refresh_token(request: Request, call_id: str):
         who = request.state.identity
         human_only(who)
@@ -1833,14 +1873,17 @@ def install_calls(app, store, auth, write):
                 raise Problem("call_ended", "This call has ended", 409)
             return calls.token_payload(row, who.actor)
 
-    @app.post("/api/v2/calls/{call_id}/leave")
+    @app.post("/api/v2/calls/{call_id}/leave", **api_v2("Calls", "leaveCall", "Leave a call you joined", "Call"))
     def leave_call(request: Request, call_id: str, body: Empty):
         who = request.state.identity
         result = write(request, body, lambda c: calls.leave(c, who, call_id))
         calls.drop_from_media(call_id, who.actor)  # LiveKit drops the person now; a failure is retried by the sweep
         return result
 
-    @app.post("/api/v2/calls/{call_id}/end")
+    @app.post(
+        "/api/v2/calls/{call_id}/end",
+        **api_v2("Calls", "endCall", "End a call you started; its transcript is posted to the thread", "Call"),
+    )
     def end_call(request: Request, call_id: str, body: Empty):
         who = request.state.identity
         with store.read() as c:
@@ -1852,34 +1895,68 @@ def install_calls(app, store, auth, write):
         calls.after_end(call_id)
         return result
 
-    @app.post("/api/v2/calls/{call_id}/action-items/retry")
+    @app.post(
+        "/api/v2/calls/{call_id}/action-items/retry",
+        **api_v2(
+            "Calls",
+            "retryCallActionItems",
+            "Ask again for a call's action items the Gateway could not make; the sweep makes them",
+            "Call",
+        ),
+    )
     def retry_call_action_items(request: Request, call_id: str, body: Empty):
         who = request.state.identity
         return write(request, body, lambda c: calls.retry_action_items(c, who, call_id))
 
-    @app.post("/api/v2/calls/{call_id}/bots")
+    @app.post(
+        "/api/v2/calls/{call_id}/bots",
+        **api_v2("Calls", "attachCallBots", "Let bots listen to a call and reply in its thread", "Call"),
+    )
     def attach_call_bots(request: Request, call_id: str, body: CallBots):
         who = request.state.identity
         return write(request, body, lambda c: calls.attach_bots(c, who, call_id, body.bots))
 
-    @app.delete("/api/v2/calls/{call_id}/bots/{bot}")
+    @app.delete(
+        "/api/v2/calls/{call_id}/bots/{bot}", **api_v2("Calls", "detachCallBot", "Take a bot out of a call", "Call")
+    )
     def detach_call_bot(request: Request, call_id: str, bot: str, body: Empty):
         who = request.state.identity
         return write(request, body, lambda c: calls.detach_bot(c, who, call_id, bot))
 
-    @app.post("/api/v2/calls/{call_id}/presence")
+    @app.post(
+        "/api/v2/calls/{call_id}/presence",
+        **api_v2(
+            "Calls",
+            "reportCallPresence",
+            "The recording source's Recorder reports the names in the Meet; kept only while Google gives no status",
+            "Call",
+        ),
+    )
     def call_presence(request: Request, call_id: str, body: Presence):
         """The recording source's Recorder reports the names in the Meet window; kept only while Google gives none."""
         who = request.state.identity
         return write(request, body, lambda c: calls.presence(c, who, call_id, body.names))
 
-    @app.post("/api/v2/calls/{call_id}/recorder")
+    @app.post(
+        "/api/v2/calls/{call_id}/recorder",
+        **api_v2(
+            "Calls",
+            "claimCallRecorder",
+            "Make your Tico Recorder a live Google Meet call's recording source: the first claim wins, if you are in the call",
+            "CallRecorderSource",
+        ),
+    )
     def claim_call_recorder(request: Request, call_id: str, body: Empty):
         """Make the caller's Tico Recorder the call's recording source: the first claim wins and its holder keeps it."""
         who = request.state.identity
         return write(request, body, lambda c: calls.claim_recorder(c, who, call_id))
 
-    @app.delete("/api/v2/calls/{call_id}/recorder")
+    @app.delete(
+        "/api/v2/calls/{call_id}/recorder",
+        **api_v2(
+            "Calls", "releaseCallRecorder", "Stop your Recorder being the call's recording source", "CallRecorderSource"
+        ),
+    )
     def release_call_recorder(request: Request, call_id: str, body: Empty):
         """The holder's Recorder stops being the call's recording source."""
         who = request.state.identity

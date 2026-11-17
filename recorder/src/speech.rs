@@ -4,7 +4,7 @@
 //! directly. Unset follows whether a Tico is connected; startup settles it once for an install
 //! that already has its own keys (`settle`), so they keep working as before.
 use crate::{
-    network::{self, OLD_TICO},
+    network,
     settings::{self, Destination, Settings},
 };
 use anyhow::{Context, Result, ensure};
@@ -124,16 +124,12 @@ fn remember_at(destination: &Destination, answer: Result<Services, String>, vers
         );
 }
 
-/// Asks the Tico what it can do now, and remembers the answer. A Tico without the relay
-/// answers as one that can do nothing.
+/// Asks the Tico what it can do now, and remembers the answer.
 pub fn refresh(destination: &Destination) -> Result<Services> {
     let version = settings::version();
     let result = crate::signin::token(&destination.id).and_then(|token| fetch(destination, &token));
     let answer = match &result {
         Ok(services) => Ok(*services),
-        Err(error) if error.chain().any(|cause| cause.to_string() == OLD_TICO) => {
-            Ok(Services::default())
-        }
         Err(error) => Err(format!("{error:#}")),
     };
     remember_at(destination, answer, version);
@@ -243,9 +239,6 @@ pub fn stream_url(destination: &Destination) -> Result<String> {
 /// the token) is in it.
 pub fn plain(error: anyhow::Error, what: &str) -> anyhow::Error {
     let text = format!("{error:#}");
-    if text.contains(OLD_TICO) {
-        return anyhow::anyhow!("Your Tico can't {what} yet. Update Tico, or use your own keys.");
-    }
     match status(&text) {
         Some(code) => anyhow::anyhow!("Your Tico can't {what} right now — HTTP {code}"),
         None if text.contains("Sign in") || text.contains("sign-in") => error,

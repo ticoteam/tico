@@ -67,7 +67,7 @@ All of these before the job is done:
    so, do not call go-live again or wait for it, do not copy the repository there yourself (AGENTS.md rule 9),
    and skip step 7. A refusal is read as in step 2.
 7. **Optionally, test it once.** Give the bot one small, read-only job that proves the connection, with
-   `tico task create --owner <slug> --title "..." --body "..."`, and wait for the answer. If it fails,
+   `tico task create --owner <slug> --title "..." --message "..."`, and wait for the answer. If it fails,
    read why, fix what is yours to fix, and try once more. Skip it when they want it live now, and say
    in the report that it was not tested.
 8. **Close what you filed.** Any task you filed for them while building ("Create the Jira Manager record", "Add

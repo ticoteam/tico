@@ -14,7 +14,7 @@ applications were summarised and which could not be read.
 
 ## 1. Read the role file first
 
-`knowledge/roles/<role>.md`. If it has no written criteria, stop and ask the manager one question with `tico task ask <id> --to <person> "<question>" --version N`.
+`knowledge/roles/<role>.md`. If it has no written criteria, stop and ask the manager one question with `tico task ask <id> --to <person> "<question>"`.
 
 ## 2. Read the application
 

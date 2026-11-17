@@ -1,5 +1,5 @@
 # pyright: strict
-"""Related input: a requirement kind, `related_input` (docs/pipelines-v3.md, "Related input").
+"""Related input: a requirement kind, `related_input` (docs/dev/pipelines-v3.md, "Related input").
 
 Jev reads a task's pitch and spec page against the company's bots (name, job, team) and scores how much the work
 touches each bot's area, 0 to 1. The top MOST (2) at or over the bar (0.8) are each woken once on the task: "comment
@@ -54,8 +54,8 @@ PICKED, NONE, FAILED = "picked", "none", "failed"
 # The engine a test sets: (state, questions, label) -> {"answers": {...}, ...}. None asks the server's Jev.
 ENGINE: "Callable[[Row, Row, str], Row] | None" = None
 ASK = (
-    'Related input: Jev picked you for "{title}" ({score}): it touches your area. Read the task and its spec page, '
-    "then comment on the task once from your area: what it changes for you, risks, and anything to add or change. "
+    'Related input: The decision model picked you for "{title}" ({score}): it touches your area. Read the task\'s chat and its '
+    "documents, then comment on the task once from your area: what it changes for you, risks, and anything to add or change. "
     'tico task comment {task} "<your comment>". One round only: don\'t move, take or edit the task.'
 )
 
@@ -156,10 +156,10 @@ def standing(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Ro
     row = _row(conn, str(visit["id"]), str(requirement["id"]))
     if not row or not row.get("scored_at"):
         if over:
-            return R.Standing(requirement, R.MET, line=f"{_hours(wait)} passed before Jev picked anyone")
-        return R.Standing(requirement, R.WAITING, R.JEV, "Jev is picking related bots")
+            return R.Standing(requirement, R.MET, line=f"{_hours(wait)} passed before the Decision model picked anyone")
+        return R.Standing(requirement, R.WAITING, R.JEV, "Decision model is picking related bots")
     if row["outcome"] == FAILED:
-        return R.Standing(requirement, R.MET, line="Jev couldn't pick related bots, so nobody was asked")
+        return R.Standing(requirement, R.MET, line="Decision model couldn't pick related bots, so nobody was asked")
     picks: list[str] = [str(bot) for bot in row["picks"]]
     if not picks:
         return R.Standing(requirement, R.MET, line=str(row.get("done_line") or f"No bot cleared the bar ({bar:g})"))
@@ -302,7 +302,7 @@ def questions_for(qset: Row, bots: list[Row]) -> Row:
 def _state(task: Row, spec: str, cut: bool, bots: list[Row]) -> Row:
     work: Row = {
         "title": " ".join(str(task.get("title") or "").split()),
-        "pitch": str(task.get("body") or "")[:PITCH_CHARS],
+        "pitch": str(task.get("request") or "")[:PITCH_CHARS],
         "spec": spec,
     }
     if cut:
@@ -415,6 +415,7 @@ def run(store: Any, now: str | None = None) -> int:
             if standing(c, task, requirement).met:
                 continue  # its time ran out before Jev answered: closed below, and nobody is asked late
             spec, cut = _spec_text(c, task)
+            task["request"] = _h().task_request_text(c, str(task_id))  # its pitch: the task's first message
             jobs.append(
                 ({"visit_id": visit_id, "requirement_id": requirement_id}, task, candidates(c, task), spec, cut)
             )
@@ -525,7 +526,7 @@ def _scored(
     )
     said = "; ".join(f"{s['name']} {float(s['score']):.2f}" for s in ranked[:SHOWN])
     named = ", ".join(f"{s['name']} ({float(s['score']):.2f})" for s in picks)
-    note = f"Related input: Jev picked {named}" if picks else f"Related input: {line}"
+    note = f"Related input: Decision model picked {named}" if picks else f"Related input: {line}"
     data: Row = {"requirement": key["requirement_id"], "picks": actors, "bar": bar, "scores": ranked[:SHOWN]}
     E._event(conn, str(task["id"]), E.SYSTEM, "related_input", None, PICKED if picks else NONE, note, data)  # pyright: ignore[reportPrivateUsage]
     LOG.info("related input for task %s: %s", task["id"], said or "no bots")

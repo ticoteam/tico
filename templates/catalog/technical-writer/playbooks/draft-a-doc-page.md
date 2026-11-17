@@ -54,4 +54,4 @@ then the draft in the docs repository's format, then the list of items marked to
 
 ## When you cannot verify
 
-Ask once with `tico task ask <id> --to <person> "<question>" --version N`, naming the sentence and the human who knows. Ship the draft with the gap marked.
+Ask once with `tico task ask <id> --to <person> "<question>"`, naming the sentence and the human who knows. Ship the draft with the gap marked.

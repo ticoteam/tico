@@ -1,7 +1,8 @@
 """Credentials asked for in chat, and set for a bot (docs/credential-vault.md).
 
 A bot that needs a secret opens a card in the conversation where it asked (`POST /api/v2/credential-requests`): what it is
-for, the format it takes and where to get one. The person types the value into the card. It goes from their browser to
+for, the format it takes and where to get one. BotOps and the Tools page's owner (the Tools Owner) may open one for
+another bot (`for_bot`); the Tools owner never for itself. The person types the value into the card. It goes from their browser to
 `POST /api/v2/credential-requests/{id}/save`, is checked here, stored in the vault under the variable's name and
 granted to that one bot. The bot is told it is saved; the value never enters a message, an event, a log or the model.
 
@@ -28,7 +29,7 @@ from pydantic import Field, SecretStr
 from .auth import validate_identity
 from .credentials import CredentialWrite, administrator, admin_names as _admin_names, ask_admin_detail, owned
 from .models import Contract, ID
-from . import reconnects
+from . import reconnect_tasks, reconnects, runner_online
 from .store import H, Problem
 
 ENV = r"^[A-Z_][A-Z0-9_]{0,99}$"
@@ -37,19 +38,6 @@ MAX_VALUE = 4096
 REMEMBER_S = 3600
 KINDS = ("api_key", "password", "token", "connection")
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS credential_requests(
- id TEXT PRIMARY KEY, requester TEXT NOT NULL, conversation_id TEXT NOT NULL, bot TEXT NOT NULL, asker TEXT NOT NULL,
- env TEXT NOT NULL, label TEXT NOT NULL DEFAULT '', format TEXT NOT NULL DEFAULT '', help_url TEXT NOT NULL DEFAULT '',
- kind TEXT NOT NULL DEFAULT 'api_key', status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL,
- updated_at TEXT NOT NULL, credential_id TEXT, message_id TEXT);
-CREATE INDEX IF NOT EXISTS credential_requests_pending ON credential_requests(requester, status);
-CREATE TABLE IF NOT EXISTS credential_imports(
- id TEXT PRIMARY KEY, requester TEXT NOT NULL, bot TEXT NOT NULL, env TEXT NOT NULL, name TEXT NOT NULL DEFAULT '',
- kind TEXT NOT NULL DEFAULT 'api_key', state TEXT NOT NULL DEFAULT 'requested', message TEXT NOT NULL DEFAULT '',
- credential_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS credential_imports_state ON credential_imports(state, bot);
-"""
 # A variable the run never takes from the vault, or takes from the computer itself (runner-rs/src/env.rs).
 # The one reserved list (clients/access_entry.py), plus two an import never moves: the computer's OpenRouter sign-in
 # and its 1Password token, which a bot's secrets file may echo but which belong to the computer.
@@ -57,7 +45,6 @@ from clients.access_entry import RESERVED_PREFIXES as RESERVED_ENV_PREFIXES, RES
 
 RESERVED_ENV = _RESERVED | {"OPENROUTER_API_KEY", "OP_SERVICE_ACCOUNT_TOKEN"}
 IMPORT_EXPIRES_S = 600
-ONLINE_S = 120
 
 
 class CredentialRequest(Contract):
@@ -83,6 +70,9 @@ class CredentialSet(Contract):
     username: str = Field(default="", max_length=250)
     redact: bool = True
     on_behalf_of: ID | None = None
+    # A bot's own key (`for_bot` itself, no `on_behalf_of`): the tool whose vendor it goes under, and its level.
+    tool: ID | None = None
+    level: Literal["read", "read_write"] = "read_write"
 
 
 class CredentialImport(Contract):
@@ -160,19 +150,16 @@ def admin_names(c, vault):
     return _admin_names(c, vault.admins)
 
 
-def store_for_bot(c, vault, who, env, bot, value, name="", kind="api_key", username=""):
-    """The credential for `env` on `bot`, created or replaced, and granted to that bot alone. `who` is the person."""
+def store_for_bot(c, vault, who, env, bot, value, name="", kind="api_key", username="", tool=None, level="read_write"):
+    """The credential for `env` on `bot`, created or replaced, and granted to that bot alone. `who` is the person, or
+    the bot itself for its own key (backend/tool_access.py `_itself`): that one goes on a tool of its own under the
+    vendor of `tool` (backend/api_tools.py `own_tool`) at `level`."""
     validate_identity(c, who)
     row = H.bot(c, bot)
-    admin = administrator(c, who, vault.admins)
-    if not admin and not (row and vault.member_stores(c, who, bot)):
-        names = admin_names(c, vault)
-        raise Problem(
-            "forbidden",
-            "Only a credential admin, or someone who manages this bot, can store credentials for it"
-            + (". Ask " + ", ".join(names[:3]) if names else ""),
-            403,
-        )
+    from . import tool_access as TA
+
+    TA.require(c, who, TA.key(), "bot:" + bot, TA.STORE, admins=vault.admins, auth=vault.auth)
+    admin = TA.admin(c, who, vault.admins)
     if not row:
         raise Problem("not_found", "Bot not found", 404)
     subject = "bot:" + bot
@@ -217,6 +204,10 @@ def store_for_bot(c, vault, who, env, bot, value, name="", kind="api_key", usern
                 "UPDATE credential_grants SET revoked_at=?,revoked_by=? WHERE credential_id=? AND subject=? AND revoked_at IS NULL",
                 (H.now(), who.actor, r["id"], subject),
             )
+    if who.role == "bot":
+        from .api_tools import own_tool
+
+        own_tool(c, who, saved["id"], tool or "", level)
     H.event(c, who.actor, "credential.set_for_bot", saved["id"], {"env": env, "bot": bot, "replaced": bool(existing)})
     # A replaced value keeps its grant, so the grant's own hook did not run: the waiting tasks go on here.
     from . import reconnects
@@ -282,13 +273,29 @@ def redact_value(c, person, value, env, conversation_id="", attempt_id="", messa
 def install_credential_cards(app, store, vault, auth, botops, delegate, manager):
     """`botops` is the built-in bot's slug, `delegate(c, who, ref)` BotOps' acting-as-the-requester check, and
     `manager(c, person, bot)` the rule for who may manage a bot."""
+    from . import tool_access as TA
 
     def view(c, row, viewer):
         bot = H.bot(c, row["bot"]) or {}
         name = bot.get("display_name") or bot.get("slug") or row["bot"]
-        allowed = administrator(c, viewer, vault.admins) or vault.member_stores(c, viewer, row["bot"])
+        # A Reconnect card (backend/reconnect_tasks.py) replaces a tool's key: whoever may change that tool saves it.
+        replacing = reconnect_tasks.card_tool(c, row)
+        allowed = (
+            reconnect_tasks.may_replace(c, viewer, replacing)
+            if replacing is not None
+            else TA.may_change_access(
+                c, viewer, TA.key(), "bot:" + row["bot"], TA.STORE, admins=vault.admins, auth=vault.auth
+            )
+        )
         note = None
-        if row["status"] == "pending" and not allowed:
+        if replacing is not None and not allowed:
+            names = admin_names(c, vault)
+            note = (
+                "Only a credential admin can replace this key"
+                + (". Ask " + ", ".join(names[:3]) if names else "")
+                + "."
+            )
+        elif row["status"] == "pending" and not allowed:
             names = admin_names(c, vault)
             note = (
                 "Only a credential admin, or someone who manages this bot, can store this"
@@ -311,6 +318,13 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
             "credential_id": row["credential_id"],
         }
 
+    def tools_page_owner(c):
+        """The Tools page's own owner (never the General Manager standing in): it asks for any bot's credential, as BotOps
+        does, and holds none itself. The person still types the value, and saving it checks they manage that bot."""
+        from . import page_owners
+
+        return page_owners.owner(c, "tools", fallback=False)
+
     def turn_of(c, who):
         row = (
             c.execute(
@@ -324,9 +338,20 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
     def requester(c, who, ref="turn"):
         """(the person a bot's turn is for, the message whose conversation the card goes in, the task or None): the
         one whose own chat message started it, or on a task the person who fixes the bot's accounts."""
-        if (who.role != "bot" and who.via != "botops") or not who.attempt_id:
-            raise Problem("forbidden", "Only a bot in a turn asks for a credential", 403)
+        if (who.role != "bot" and who.via not in ("botops", "assistant")) or not who.attempt_id:
+            raise Problem(
+                "forbidden",
+                "A credential card is opened by a bot in a turn: ask the Tools Owner or your Assistant in chat, or add the "
+                "key yourself in Tools",
+                403,
+            )
         turn = turn_of(c, who)
+        if who.via == "assistant":
+            # The person's own Assistant, in their chat: the card is for them, in that chat, as the message that started
+            # this turn asked (backend/assistant.py checks the turn is theirs before any write).
+            if not turn or turn["sender_id"] != who.actor:
+                raise Problem("no_person", "A credential card needs the person's own chat message to answer", 409)
+            return who, turn, None
         if who.actor == "bot:" + botops or who.via == "botops":
             person = delegate(c, who, ref or "turn")
             if person.role not in ("owner", "human"):
@@ -405,10 +430,29 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
         with store.transaction() as c:
             validate_identity(c, who)
             person, msg, task = requester(c, who, body.on_behalf_of or "turn")
-            asker = botops if who.via == "botops" and who.role in ("owner", "human") else H.actor_id(who.actor)
+            asker = (
+                botops
+                if who.via == "botops" and who.role in ("owner", "human")
+                else H.actor_id(who.task_actor)
+                if who.via == "assistant"
+                else H.actor_id(who.actor)
+            )
             target = (H.resolve_bot(c, body.for_bot) or {}).get("id", body.for_bot) if body.for_bot else asker
-            if target != asker and asker != botops:
-                raise Problem("forbidden", "A bot asks for its own credential", 403)
+            # BotOps, the Tools page's owner and a person's own Assistant ask for any bot's key; a bot for its own.
+            for_anyone = asker == botops or who.via == "assistant" or tools_page_owner(c) == "bot:" + asker
+            if target != asker and not for_anyone:
+                raise Problem(
+                    "forbidden",
+                    "A bot asks for its own credential; BotOps, the Tools Owner and your Assistant ask for any bot's. "
+                    "Ask the Tools Owner to open the card for that bot",
+                    403,
+                )
+            if for_anyone and asker != botops and target == asker:
+                raise Problem(
+                    "forbidden",
+                    "Name the bot that needs the key (`--for-bot`): the Tools Owner and the Assistant hold none themselves",
+                    403,
+                )
             if not H.bot(c, target):
                 raise Problem("not_found", "Bot not found", 404)
             manager(c, person, target)
@@ -527,6 +571,10 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
             if row["status"] != "pending":
                 raise Problem("state", "This card is already " + row["status"], 409)
             value = check_format(row["format"], body.value.get_secret_value())
+            if reconnect_tasks.card_tool(c, row) is not None:
+                # A Reconnect card: the value replaces the tool's key in place, every grant kept, and its task ends.
+                reconnect_tasks.save(c, vault, who, row, value)
+                return view(c, c.execute("SELECT * FROM credential_requests WHERE id=?", (rid,)).fetchone(), who)
             manager(c, auth.identity_for_actor(c, row["requester"]), row["bot"])
             stored = store_for_bot(c, vault, who, row["env"], row["bot"], value, kind=row["kind"])
             c.execute(
@@ -563,12 +611,18 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
         caller = request.state.identity
         with store.transaction() as c:
             validate_identity(c, caller)
-            person = acting(c, caller, body.on_behalf_of)
             bot = (H.resolve_bot(c, body.for_bot) or {}).get("id", body.for_bot)
-            manager(c, person, bot)
+            # A bot storing a value it already holds for itself, as itself: its own key (backend/tool_access.py
+            # `_itself` decides); for anyone else a bot acts only with a person's rights.
+            own = not body.on_behalf_of and caller.role == "bot" and not caller.via and caller.actor == "bot:" + bot
+            person = caller if own else acting(c, caller, body.on_behalf_of)
+            if not own:
+                manager(c, person, bot)
             value = check_format("", body.value.get_secret_value())
-            stored = store_for_bot(c, vault, person, body.env, bot, value, body.name, body.kind, body.username)
-            if (body.on_behalf_of and caller.role == "bot") or (caller.via == "botops" and caller.attempt_id):
+            stored = store_for_bot(
+                c, vault, person, body.env, bot, value, body.name, body.kind, body.username, body.tool, body.level
+            )
+            if own or (body.on_behalf_of and caller.role == "bot") or (caller.via == "botops" and caller.attempt_id):
                 turn = turn_of(c, caller)
                 stored["redacted"] = (
                     redact_value(
@@ -673,7 +727,7 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
             ).fetchone()
             if not place:
                 raise Problem("no_computer", "That bot is not on a computer, so there is no secrets file to read", 409)
-            if not place["last_seen_at"] or place["last_seen_at"] < H.shift(H.now(), seconds=-ONLINE_S):
+            if not runner_online.is_online(place["last_seen_at"]):
                 raise Problem(
                     "offline", f"{place['label']}, where that bot runs, is offline; try again when it is back", 409
                 )

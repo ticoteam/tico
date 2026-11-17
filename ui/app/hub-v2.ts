@@ -61,7 +61,8 @@ interface HubTask {
   filer?: string | null | undefined;
   owner_id?: string | null | undefined;
   title?: string | null | undefined;
-  body?: string | null | undefined;
+  /** The first chat message: who asked, and what. */
+  request?: {id?: string; from?: string | null; text?: string | null; at?: string | null} | null | undefined;
   attachments?: readonly unknown[] | null | undefined;
 }
 /** A read of Needs you (GET /v2/needs-you): a page, the whole list, the items named by `ids=`, or `unchanged`. */
@@ -75,9 +76,10 @@ interface NeedsRead {
   plate_count?: number | null;
   by_kind?: Record<string, number> | null;
   folded_task_ids?: string[] | null;
-  went_away?: WentAway | null;
   unchanged?: boolean;
   restart?: boolean;
+  /** When the first ask this person snoozed for themselves comes back (backend/ask_snoozes.py): read again then. */
+  snoozed_until?: string | null;
   /** An `ids=` read: each item's place in the list at `version`. */
   positions?: Record<string, number>;
 }
@@ -93,7 +95,7 @@ interface NeedsChange extends NeedsRead {
 // Every bot is hosted by the keeper (`host: keeper`, the only host there is), so the record is hub.db, not GitHub:
 // chat is `messages`, work is `tasks`, approvals are one tap, and every bot has one status row with
 // its history. Every fetch is guarded, so a hub with no hub.db yet looks exactly as it does today.
-// A bot that waits on someone or on another task is not running: it reads Idle (docs/pipelines-v3.md S14, S18). Who has
+// A bot that waits on someone or on another task is not running: it reads Idle (docs/dev/pipelines-v3.md S14, S18). Who has
 // a task's turn is the task's own line, never the bot's.
 const V2_WORD: Record<string, string> = {idle: 'Idle', running: 'Running', waiting_human: 'Idle', waiting_bot: 'Idle', blocked: 'Idle',
                  limited: 'Rate limited', crashed: 'Crashed', paused: 'Paused', quarantined: 'Paused for review'};
@@ -101,8 +103,6 @@ const V2_WORD: Record<string, string> = {idle: 'Idle', running: 'Running', waiti
 const statusWord = (status: unknown) => status === 'planned' ? 'Setting up' : String(status || '');
 const V2_PILL: Record<string, string> = {running: 'in-progress', waiting_human: '', waiting_bot: '', blocked: '',
                  limited: 'waiting', crashed: 'fail', quarantined: 'fail', idle: ''};
-const V2_KIND: Record<string, string> = {decision: 'Decision', approval: 'Approval', review: 'Review', declined: 'Declined',
-                 question: 'Question', task: 'Task', notice: 'Message', setup: 'Set up'};
 const v2StatusOf = (slug: string | null | undefined) => S.v2.status[String(slug)] || null;
 const actorSlug = (a: unknown) => String(a || '').startsWith('bot:') ? String(a).slice(4) : '';
 const actorPerson = (a: unknown) => String(a || '').startsWith('human:') ? String(a).slice(6) : '';
@@ -147,12 +147,10 @@ const taskRequester = (t: HubTask) => t.requester_id === 'keeper' ? t.origin_act
 const taskFiledByBuiltin = (t: HubTask) => SOURCE_BUILTINS[String(t.filer || '')] || '';
 const taskAsker = (t: HubTask) => t.filer || taskRequester(t);
 const taskAskerLabel = (t: HubTask) => taskFiledByBuiltin(t) || actorLabel(taskAsker(t));
-// Hide the generated attachment trailer and rename the schedule footer; authored text stays intact.
+// What the task asks: its first chat message (a task has no description), without the attachments' trailer.
 const taskBody = (t: HubTask) => {
-  const raw = String(t.body || '');
-  const body = (t.attachments || []).length ? raw.replace(/\n\nAttachments \(untrusted source material; authenticated downloads\):\n[^]*$/, '') : raw;
-  if (t.requester_id !== 'keeper' || !actorSlug(t.owner_id) || !body.startsWith(`Run playbook ${t.title}.`)) return body;
-  return body.replace(/\n\n_Created by the keeper from schedule `([^`\n]+)`\._$/, '\n\n_Created from schedule `$1`._');
+  const raw = String(t.request?.text || '');
+  return (t.attachments || []).length ? raw.replace(/\n\nAttachments \(untrusted source material; authenticated downloads\):\n[^]*$/, '') : raw;
 };
 
 // ---- who or what wrote a row: `source` on message, task history and event rows (docs/threads.md, "Who wrote it")
@@ -240,19 +238,11 @@ function sourceGroupToggle(set: Set<string> | null | undefined, el: EventTarget 
   if (!set || !(el instanceof HTMLDetailsElement) || !el?.matches?.('details.src-group')) return;
   for (const row of el.querySelectorAll<HTMLElement>('[data-message]')) set[el.open ? 'add' : 'delete'](row.dataset.message!);
 }
-const actorChip = (a: unknown) => {
-  const slug = actorSlug(a);
-  return slug && botRow(slug)
-    ? `<a class="chip" href="#/bot/${encodeURIComponent(slug)}">${avatar(slug, 16)}<span>${empName(slug)}</span></a>`
-    : `<span class="chip">${personCircle(actorLabel(a), 16)}<span>${esc(actorLabel(a))}</span></span>`;
-};
 const v2Firstline = (body: unknown) => String(body || '').split('\n').map(s => s.trim()).find(Boolean) || '';
 const myActor = () => S.me?.id ? `human:${S.me.id}` : '';
 // The person on a chat bubble is the local part of their address: jo@example.com is "jo".
 // Takes an actor (human:jo), an email, a roster id, or the Issue's "Jo"; '' when unknown.
 const personHandle = (x: unknown) => (actorPerson(x) || String(x || '')).split('@')[0]!.trim().toLowerCase();
-const ownerHandle = () => S.me?.owner_id || 'owner';           // unsigned Issue text is the owner's
-const myHandle = () => personHandle(S.me?.id || S.me?.email) || ownerHandle();
 const unsigned = (body: unknown) => String(body || '').replace(/\n*_?— [^\s_]+@[^\s_]+ via the hub_?\s*$/, '');
 // every v2 read is optional: a hub without hub.db answers 404 and the caller falls back
 async function v2Get<T = UntypedJson>(path: string, opts?: {fresh?: boolean}): Promise<T | null> { try { return await get<T>(path, opts); } catch { return null; } }
@@ -267,7 +257,6 @@ async function v2Refresh() {
   if (st) S.v2.status = Object.fromEntries((st.bots || []).map(b => [b.bot, b]));
   // when Tico is updating itself, say so at the top of the sidebar
   if (st) { const el = $('#side-update'); if (el) el.hidden = !st.updating; }
-  if (needs && typeof OVERVIEW_PAGE !== 'undefined' && OVERVIEW_PAGE) overviewNeedsDraw();
   if (needs && !needs.unchanged && typeof BOT !== 'undefined' && BOT) botNeedsChanged(BOT.slug);
   if (needs && !needs.unchanged && typeof DEC !== 'undefined' && DEC) decideRefresh(DEC, S.v2.needs || []);   // the open Needs you card
   if (needs && !needs.unchanged && typeof notifyNewThreadNeeds === 'function') notifyNewThreadNeeds(S.v2.needs || []);
@@ -305,8 +294,20 @@ async function v2NeedsRead() {
   NEEDS_KEPT = seq;
   if (!needs.unchanged) needsTake(needs);
   else if (needs.plate_count != null) { S.v2.needsPlateCount = needs.plate_count; needsListsRedraw(); }
-  S.v2.wentAway = needs.went_away || null;
+  needsWakeAt(needs.snoozed_until || null);
   return needs;
+}
+// A snoozed ask comes back with nothing run on the server (the list leaves it out only until its time): the page reads
+// Needs you again when the first one ends.
+let NEEDS_WAKE = 0, NEEDS_WAKE_AT = 0;
+/** Reads Needs you again at `until` (an ISO moment), or sooner when an earlier end is already set. */
+function needsWakeAt(until: string | null) {
+  const at = until ? Date.parse(until) : NaN;
+  if (Number.isNaN(at) || (NEEDS_WAKE && NEEDS_WAKE_AT <= at && NEEDS_WAKE_AT > Date.now())) return;
+  clearTimeout(NEEDS_WAKE);
+  NEEDS_WAKE_AT = at;
+  // A browser timer holds at most ~24.8 days; a later end is set again when that one fires and reads the list.
+  NEEDS_WAKE = window.setTimeout(() => { NEEDS_WAKE = 0; void v2Refresh(); }, Math.min(Math.max(at - Date.now(), 0) + 1000, 2 ** 31 - 1));
 }
 // The next page, one read at a time. Resolves true when the list grew (or was read again because it moved).
 let NEEDS_MORE: Promise<boolean> | null = null;
@@ -351,10 +352,7 @@ async function v2NeedsDrain(): Promise<boolean> {
   let moved = false;
   while (NEEDS_PENDING.length) {
     const held = S.v2.needsVersion, last = held ? NEEDS_PENDING.map(p => p.d.version).lastIndexOf(held) : -1;
-    if (last >= 0) {
-      for (const p of NEEDS_PENDING.splice(0, last + 1)) if (p.d.went_away) S.v2.wentAway = p.d.went_away;
-      continue;
-    }
+    if (last >= 0) { NEEDS_PENDING.splice(0, last + 1); continue; }
     const next = NEEDS_PENDING.shift()!;
     const r = await v2NeedsMend(next.d);
     if (r !== 'whole') { moved = r || moved; continue; }
@@ -366,7 +364,6 @@ async function v2NeedsDrain(): Promise<boolean> {
 }
 /** One event onto the held list: true when it moved, 'whole' when only a whole read will do (v2NeedsDrain sends it). */
 async function v2NeedsMend(d: NeedsChange): Promise<boolean | 'whole'> {
-  if (d.went_away) S.v2.wentAway = d.went_away;
   if (Array.isArray(d.items)) {       // a server without changes
     NEEDS_REVISION++;
     needsTake({...d, version: null, next: null});

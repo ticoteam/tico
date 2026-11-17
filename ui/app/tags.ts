@@ -21,7 +21,7 @@ function tagSummary(tag: TagSummaryInput | null | undefined) {
 function tagChips(keys: string[] | null | undefined, tags: import('../types/api').Tag[] = [], removable = false, interactive = true) {
   return (keys || []).map(key => {
     const tag = tags.find(tag => tag.key === key) || {key, label: key};
-    return `<span class="tlabel"><span${interactive ? ` role="link" tabindex="0" data-tag-key="${esc(key)}"` : ''} title="${esc(key)}">${esc(tagSummary(tag))}</span>${removable ? `<button type="button" class="x" data-drop-label="${esc(key)}" aria-label="Remove ${esc(tag.label)}">×</button>` : ''}</span>`;
+    return `<span class="tlabel"><span${interactive ? ` role="link" tabindex="0" data-tag-key="${esc(key)}"` : ''} title="${esc(key)}">${esc(tagSummary(tag))}</span>${removable ? `<button type="button" class="x tap-mark" data-drop-label="${esc(key)}" aria-label="Remove ${esc(tag.label)}">×</button>` : ''}</span>`;
   }).join('');
 }
 function openTagChip(event: Event) {

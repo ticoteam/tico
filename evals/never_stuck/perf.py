@@ -37,7 +37,7 @@ def fill(world: World, count: int, rng: random.Random, *, queued: bool = False) 
             )
             roll = rng.random()
             if roll < 0.10:
-                E.add_requirement(c, row["id"], ANA, "answer", rng.choice((BEN, CARA)), "Which one?")
+                E.add_requirement(c, row["id"], ANA, "ok", rng.choice((BEN, CARA)), "OK the plan")
                 kinds["waits on a person"] += 1
             elif roll < 0.15:
                 E.snooze(c, row["id"], ANA, None, H.shift(H.now(), days=3))

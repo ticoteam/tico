@@ -1,5 +1,6 @@
 """CI selection cannot omit uncertain work or turn an empty/red test run green."""
 
+import ast
 from collections import Counter
 from functools import partial
 import json
@@ -23,6 +24,24 @@ from scripts import pr_checks as checks
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_import_roots_include_nested_suites_and_exclude_relative_imports():
+    tree = ast.parse("""
+class Worker:
+    async def run(self, event):
+        try:
+            match event:
+                case True:
+                    import example.one as one, another
+        except Exception:
+            from recovery.handlers import retry
+        else:
+            from .relative import helper
+        finally:
+            from cleanup import finish
+""")
+    assert checks.imported_roots(tree) == {"example", "another", "recovery", "cleanup"}
+
+
 @pytest.fixture(scope="module")
 def repo_map():
     return checks.DependencyMap(ROOT)
@@ -33,6 +52,15 @@ def mapped(monkeypatch, repo_map):
     """Selections on this checkout reuse one measured map; temporary trees build their own."""
     build = checks.DependencyMap
     monkeypatch.setattr(checks, "DependencyMap", lambda root: repo_map if root == ROOT else build(root))
+
+
+def test_diff_facts_change_selects_its_tests(repo_map):
+    changed = ["scripts/diff_facts.py"]
+    test = "scripts/tests/test_diff_facts.py"
+    assert test in repo_map.run_by[changed[0]]
+    picked = checks.selection(changed, graph=repo_map)
+    assert test in picked["python"]
+    assert test in checks.narrow(picked, changed, "pull_request", graph=repo_map)["python"]
 
 
 def test_uncertain_changes_run_the_smoke_set_never_everything_and_ui_keeps_its_map(tmp_path, mapped):
@@ -314,24 +342,47 @@ def test_install_retry_is_bounded_and_warm_browser_or_python_never_downloads_apt
     (venv / "python").chmod(0o755)
     for name in ("sudo", "npm", "npx"):
         stub(name, f'echo "{name} $*" >> "$CALL_LOG"')
+    stub("dpkg-query", "")  # the snapshot's before/after package lists; empty under the stubs
     cache = tmp_path / "playwright-system"
     cache.mkdir()
-    (cache / "complete").touch()
-    for suite in ("python", "browser"):
+    (cache / "installed.tar").touch()
+    for suite in ("python", "browser", "types"):
         log.write_text("")
         result = subprocess.run(
             ["bash", str(ROOT / "scripts/ci_install.sh"), "--once", suite], env=env, capture_output=True
         )
         assert result.returncode == 0, result.stderr.decode()
         calls = log.read_text()
-        assert "update" not in calls and "--download-only" not in calls and "--with-deps" not in calls
-        if suite == "python":
+        assert "apt-get" not in calls and "--with-deps" not in calls  # a restored snapshot never contacts apt
+        if suite == "types":
+            assert calls == ""  # the venv alone: no npm, no UI build, no system packages
+        elif suite == "python":
             assert calls.splitlines() == [
                 "npm ci --fetch-retries=1 --no-audit --no-fund --prefer-offline",
                 "npm run --silent build:ui",
             ]
         else:
-            assert "--no-download install" in calls and "playwright install chromium webkit" in calls
+            lines = calls.splitlines()
+            unpack = lines.index(f"sudo tar -xpf {cache}/installed.tar -C /")
+            # The snapshot unpacks beside pip and npm, and is in place before the browsers install.
+            assert lines[unpack + 1] == "sudo ldconfig"
+            assert unpack < next(i for i, line in enumerate(lines) if "playwright install chromium webkit" in line)
+    # A cold cache: apt installs the packages (dpkg without fsync), and the snapshot is made from what changed and
+    # moved into the cache folder the job saves.
+    (cache / "installed.tar").unlink()
+    log.write_text("")
+    result = subprocess.run(
+        ["bash", str(ROOT / "scripts/ci_install.sh"), "--once", "browser"], env=env, capture_output=True
+    )
+    assert result.returncode == 0, result.stderr.decode()
+    lines = log.read_text().splitlines()
+    update = next(i for i, line in enumerate(lines) if line.startswith("sudo apt-get") and line.endswith(" update"))
+    install = next(i for i, line in enumerate(lines) if "--force-unsafe-io install -y --no-install-recommends" in line)
+    assert install > update and lines[install].endswith("liba libb")
+    pack = next(i for i, line in enumerate(lines) if line.startswith("sudo tar --no-recursion -cf "))
+    work = tmp_path / "playwright-system-work"
+    assert lines[pack + 1] == f"sudo mv {work}/installed.tar {cache}/installed.tar"
+    assert install < pack < next(i for i, line in enumerate(lines) if "playwright install chromium webkit" in line)
 
 
 def test_cached_system_packages_match_the_locked_browser_version():
@@ -396,7 +447,13 @@ def test_free_disk_removes_the_unused_sdks_only_under_the_space_a_job_needs(tmp_
 def test_a_route_change_selects_the_contract_tests(repo_map):
     # The spec is generated from the code, so no committed spec file in a route's diff reaches the contract test any more.
     # The route's module reaches it through the app's imports, and the generator reaches it directly.
-    for changed in ("backend/computers_routes.py", "backend/openapi_v2.py"):
+    for changed in (
+        "backend/computers_routes.py",
+        "backend/openapi_v2.py",
+        "backend/api_contract.py",
+        "backend/api_schemas/bots.py",
+        "backend/calendar_api.py",  # declares its routes with **api_v2(...) but is not a *_routes.py
+    ):
         picked = checks.selection([changed], graph=repo_map)
         assert "backend/tests/test_openapi_v2.py" in picked["python"], changed
         # A light pull request narrows the plan (depth 1, the hub app.py is not followed): the contract test must stay.
@@ -484,6 +541,8 @@ def test_a_ui_change_runs_the_release_only_browser_scripts_it_picks_before_it_me
         assert set(light(["ui/tests/support/page.cts"], event)["browser"]) >= every
         # UI source outside UI_MAP runs the scripts named after it, beside the smoke set.
         assert {"tools", "bot-tools", "redesign-e2e-tools"} <= set(light(["ui/app/tools.ts"], event)["browser_direct"])
+        # And the scripts UI_ALSO adds for it: the big board's flood check for the board's live drawing.
+        assert "board-flood" in light(["ui/app/task-pipelines.ts"], event)["browser_direct"]
         # A change outside ui/ picks none: its plan is what it was.
         assert light(["backend/health.py"], event)["browser_direct"] == []
     assert light(["backend/health.py"])["browser"] == []
@@ -514,9 +573,7 @@ def test_rule_6_follows_helpers_matches_names_and_runs_every_script_past_the_lim
 
 
 def test_rule_6_runs_the_scripts_that_name_a_ui_function_the_diff_changes(tmp_path):
-    # Nov 12: #3485 changed taskModalOpen in ui/app/task-modal.ts; task-code.cts calls it but was not selected, and the
-    # release check went red. A script that names a top-level function or const whose definition the diff changes runs;
-    # one that names only an unchanged global of the same file does not.
+    # Diff hints find callers of changed definitions. The dependency map also links callers of the file's other globals.
     def git(*args):
         return subprocess.check_output(
             ["git", "-c", "user.name=t", "-c", "user.email=t@acme.example", *args], cwd=tmp_path, text=True
@@ -544,13 +601,16 @@ def test_rule_6_runs_the_scripts_that_name_a_ui_function_the_diff_changes(tmp_pa
     line = modal[body : modal.index("\n", body) + 1]
     picked = change(line, line + "  void 0;\n")  # one line inside taskModalOpen
     assert "task-code" in picked["browser_direct"] and "task-code" in picked["browser"]
-    assert "other" not in picked["browser_direct"]
+    assert "other" in picked["browser_direct"]
     assert checks.changed_definitions(base, "HEAD", ["ui/app/task-modal.ts"], tmp_path) == {
         "ui/app/task-modal.ts": {"taskModalOpen"}
     }
     git("reset", "-q", "--hard", base)
     picked = change("function taskModalLoadFailed(", "function taskModalLoadFailed(/* changed */ ")
-    assert "other" in picked["browser_direct"] and "task-code" not in picked["browser_direct"]
+    assert {"other", "task-code"} <= set(picked["browser_direct"])
+    assert checks.changed_definitions(base, "HEAD", ["ui/app/task-modal.ts"], tmp_path) == {
+        "ui/app/task-modal.ts": {"taskModalLoadFailed"}
+    }
     # A deleted UI file names its old functions: a script still calling one runs.
     git("reset", "-q", "--hard", base)
     git("rm", "-q", "ui/app/task-modal.ts")
@@ -626,6 +686,180 @@ def source(root, name, text):
 def smoke_tree(root):
     """A temporary tree reads its own copy of the smoke set (rules 2 to 4 run it)."""
     source(root, checks.SMOKE_FILE, (ROOT / checks.SMOKE_FILE).read_text())
+
+
+def test_browser_links_globals_selectors_styles_and_typescript_imports(tmp_path):
+    smoke_tree(tmp_path)
+    source(
+        tmp_path,
+        "ui/app/widget.ts",
+        'function widgetOpen() {}\nconst html = `<div class="widget-card" data-widget-open></div>`;\n',
+    )
+    source(tmp_path, "ui/styles/widget.css", '.widget-card { color: red; }\n')
+    source(tmp_path, "ui/app/dependency.ts", 'export const value = 1;\n')
+    source(tmp_path, "ui/app/entry.ts", "import {value} from './dependency.js';\n")
+    source(tmp_path, "ui/tests/call.cts", 'await page.evaluate(() => widgetOpen());\n')
+    source(tmp_path, "ui/tests/layout.cts", "await page.locator('.widget-card [data-widget-open]').click();\n")
+    source(tmp_path, "ui/tests/import.cts", "import '../app/entry';\n")
+    source(tmp_path, "ui/tests/unrelated.cts", "await page.locator('.other-card').click();\n")
+    graph = checks.DependencyMap(tmp_path)
+    assert "ui/app/dependency.ts" in graph.runs["ui/app/entry.ts"]
+    assert "ui/app/entry.ts" in graph.runs["ui/tests/import.cts"]
+    for changed, expected in (
+        ("ui/app/widget.ts", {"call", "layout"}),
+        ("ui/styles/widget.css", {"layout"}),
+        ("ui/app/dependency.ts", {"import"}),
+    ):
+        plan = checks.selection([changed], root=tmp_path, graph=graph, core=[])
+        light = checks.narrow(plan, [changed], "pull_request", root=tmp_path, graph=graph)
+        assert expected <= set(light["browser_direct"]) <= set(light["browser"])
+        assert "unrelated" not in light["browser"]
+    assert not checks.ui_selectors('.button #fff .value')
+
+
+def test_typescript_source_guards_follow_their_walked_folder(tmp_path):
+    smoke_tree(tmp_path)
+    source(tmp_path, "ui/app/new.ts", 'function openNew() {}\n')
+    source(
+        tmp_path,
+        "ui/tests/guard.cts",
+        "const walk = (dir: string) => fs.readdirSync(dir).flatMap(entry => walk(entry));\nfor (const f of walk('ui/app')) fs.readFileSync(f);\n",
+    )
+    graph = checks.DependencyMap(tmp_path)
+    assert "ui/app/" in graph.reads["ui/tests/guard.cts"]
+    picked = checks.selection(["ui/app/new.ts"], root=tmp_path, graph=graph, core=[])
+    light = checks.narrow(picked, ["ui/app/new.ts"], "pull_request", root=tmp_path, graph=graph)
+    assert "guard" in light["browser"]
+
+
+def test_ui_links_skip_oversized_and_binary_sources_and_browser_scripts(tmp_path):
+    source(tmp_path, "ui/app/page.ts", "function openPage() {}\n")
+    source(tmp_path, "ui/app/large.ts", "function openLarge() {}\n" + " " * (512 * 1024))
+    source(tmp_path, "ui/app/binary.ts", "\0function openBinary() {}\n")
+    calls = "openPage(); openLarge(); openBinary();\n"
+    walk = "const walk = dir => fs.readdirSync(dir);\nwalk('ui/app');\n"
+    source(tmp_path, "ui/tests/page.cts", calls)
+    source(tmp_path, "ui/tests/large.cts", calls + walk + " " * (512 * 1024))
+    source(tmp_path, "ui/tests/binary.cts", "\0" + calls + walk)
+    graph = checks.DependencyMap(tmp_path)
+    assert graph.runs["ui/tests/page.cts"] == {"ui/app/page.ts"}
+    for script in ("large", "binary"):
+        assert not graph.runs[f"ui/tests/{script}.cts"]
+        assert not graph.reads[f"ui/tests/{script}.cts"]
+
+
+def test_ui_walk_helpers_use_only_a_bounded_binding_before_each_listing(tmp_path):
+    source(tmp_path, "ui/app/page.ts", "function openPage() {}\n")
+    declarations = "\n".join(f"const value{i} = {i}" for i in range(2000))
+    source(
+        tmp_path,
+        "ui/tests/guard.cts",
+        declarations + "\nconst walk = dir => fs.readdirSync(dir)\nwalk('ui/app')\n",
+    )
+    source(
+        tmp_path,
+        "ui/tests/unrelated.cts",
+        "const unrelated = 1\n" + " " * 301 + "fs.readdirSync(dir)\nunrelated('ui/app')\n",
+    )
+    graph = checks.DependencyMap(tmp_path)
+    assert "ui/app/" in graph.reads["ui/tests/guard.cts"]
+    assert "ui/app/" not in graph.reads["ui/tests/unrelated.cts"]
+
+
+def test_browser_comments_do_not_run_the_python_modules_they_describe(tmp_path):
+    source(tmp_path, "backend/health.py", "VALUE = 1\n")
+    source(tmp_path, "ui/app/page.ts", "function openPage() {}\n")
+    source(
+        tmp_path,
+        "ui/tests/page.cts",
+        "// backend/health.py serves this shape.\n/* backend.health.VALUE */\n"
+        "const url = 'https://acme.example'; openPage(); // backend.health\n",
+    )
+    graph = checks.DependencyMap(tmp_path)
+    assert graph.runs["ui/tests/page.cts"] == {"ui/app/page.ts"}
+    assert "https://acme.example" in checks.without_js_comments((tmp_path / "ui/tests/page.cts").read_text())
+
+
+def test_command_names_and_table_sweeps_link_to_defining_modules(tmp_path):
+    smoke_tree(tmp_path)
+    source(
+        tmp_path,
+        "clients/commands/widgets.py",
+        '@tool("tico_widget_add")\ndef add(): pass\nCLI = [Command("widget add", "add a widget")]\n',
+    )
+    source(tmp_path, "clients/commands/other.py", '@tool("tico_other_list")\ndef listing(): pass\n')
+    source(tmp_path, "clients/tests/test_mcp_widget.py", 'def test_x(): assert tools["tico_widget_add"]\n')
+    source(tmp_path, "clients/tests/test_cli_widget.py", 'def test_x(): run(["widget", "add", "--name", "sample"])\n')
+    source(tmp_path, "clients/tests/test_tree.py", 'def test_x(): hubcli.parser()\n')
+    source(tmp_path, "clients/tests/test_other.py", 'def test_x(): assert tools["tico_other_list"]\n')
+    graph = checks.DependencyMap(tmp_path)
+    tests = {"clients/tests/test_mcp_widget.py", "clients/tests/test_cli_widget.py", "clients/tests/test_tree.py"}
+    assert graph.run_by["clients/commands/widgets.py"] == tests - {"clients/tests/test_tree.py"}
+    assert graph.command_sweeps_for("clients/commands/widgets.py") == {"clients/tests/test_tree.py"}
+    changed = ["clients/commands/widgets.py"]
+    picked = checks.selection(changed, root=tmp_path, graph=graph, core=[])
+    light = checks.narrow(picked, changed, "pull_request", root=tmp_path, graph=graph)
+    assert tests <= set(light["python"])
+    assert "clients/tests/test_other.py" not in light["python"]
+
+
+def test_command_sweeps_do_not_change_hub_counts_or_propagate_from_dependencies(tmp_path):
+    smoke_tree(tmp_path)
+    source(tmp_path, "clients/dbquery.py", "def query(): pass\n")
+    source(
+        tmp_path,
+        "clients/commands/strategy.py",
+        'from clients.dbquery import query\n@tool("tico_growth_source_run")\ndef run(): query()\n',
+    )
+    test = "backend/tests/test_growth_db_query.py"
+    source(tmp_path, test, "from clients.commands import strategy\ndef test_x(): strategy.run()\n")
+    sweeps = {f"clients/tests/test_sweep{i}.py" for i in range(checks.HUB_TEST_USERS + 1)}
+    for sweep in sweeps:
+        source(tmp_path, sweep, 'def test_x(): hubcli.parser(); tools["tico_growth_source_run"]\n')
+    graph = checks.DependencyMap(tmp_path)
+    assert graph.run_by["clients/commands/strategy.py"] == {test}
+    changed = ["clients/dbquery.py"]
+    picked = checks.selection(changed, root=tmp_path, graph=graph, core=[])
+    light = checks.narrow(picked, changed, "merge_group", root=tmp_path, graph=graph)
+    assert test in light["python"] and light["narrow"]["tier"][test] == 3
+    assert not sweeps & set(picked["python"])
+    for module in ("clients/commands/strategy.py", "clients/commands/gone.py"):
+        changed = [module]
+        picked = checks.selection(changed, root=tmp_path, graph=graph, core=[])
+        light = checks.narrow(picked, changed, "pull_request", root=tmp_path, graph=graph)
+        assert sweeps <= set(light["python"])
+
+
+def test_dbquery_keeps_its_growth_query_coverage_in_the_merge_queue(repo_map):
+    changed = ["clients/dbquery.py"]
+    picked = checks.selection(changed, "merge_group", graph=repo_map)
+    light = checks.narrow(picked, changed, "merge_group", graph=repo_map)
+    assert "backend/tests/test_growth_db_query.py" in light["python"]
+
+
+def test_the_explicit_upgrade_checks_exist():
+    assert all((ROOT / test).is_file() for test in checks.UPGRADE_TESTS)
+
+
+def test_package_initialization_reaches_tests_through_one_helper_but_still_stops_at_hubs(tmp_path, monkeypatch):
+    smoke_tree(tmp_path)
+    source(tmp_path, "backend/sections/__init__.py", "from . import growth\n")
+    source(tmp_path, "backend/sections/growth.py", "VALUE = 1\n")
+    source(tmp_path, "backend/sections/finance.py", "VALUE = 2\n")
+    source(tmp_path, "backend/tests/helpers/demo.py", "from backend.sections import finance\n")
+    source(tmp_path, "backend/tests/test_demo.py", "from backend.tests.helpers import demo\ndef test_x(): pass\n")
+    source(tmp_path, "backend/tests/test_direct.py", "from backend.sections import finance\ndef test_x(): pass\n")
+    source(tmp_path, "backend/tests/test_other.py", "def test_x(): pass\n")
+    graph = checks.DependencyMap(tmp_path)
+    changed = ["backend/sections/growth.py"]
+    picked = checks.selection(changed, root=tmp_path, graph=graph, core=[])
+    light = checks.narrow(picked, changed, "pull_request", root=tmp_path, graph=graph)
+    assert "backend/tests/test_demo.py" in light["python"]
+    assert light["narrow"]["tier"]["backend/tests/test_demo.py"] == 4
+    assert "backend/tests/test_other.py" not in light["python"]
+    monkeypatch.setattr(checks, "HUB_TEST_USERS", 0)
+    capped = checks.narrow(picked, changed, "pull_request", root=tmp_path, graph=graph)
+    assert "backend/tests/test_demo.py" not in capped["python"]
 
 
 def test_hub_change_selects_every_test_that_imports_it_transitively_and_no_other(tmp_path, mapped):
@@ -1113,7 +1347,7 @@ def test_the_main_cache_warm_up_saves_the_keys_pr_checks_restore():
             assert len(setup) == 1 and steps[setup[0]].get("id") == "python" and setup[0] < at[0], name
             install = [i for i, step in enumerate(steps) if "scripts/ci_install.sh" in str(step.get("run", ""))]
             assert install and at[0] < install[0], name
-    assert sum(venv in str(job) for job in pr["jobs"].values()) == 4  # plan, tests, static, caddy-linux
+    assert sum(venv in str(job) for job in pr["jobs"].values()) == 5  # plan, tests, static, types, caddy-linux
     for ident, uses, args, runner, lookup in warmed:
         assert runner in ("ubuntu-24.04", "macos-latest"), ident
         assert any((uses, args) == (r[1], r[2]) and runner == r[3] for r in restored), ident
@@ -1279,6 +1513,7 @@ def test_every_job_runs_on_a_github_hosted_runner_and_only_a_ready_pull_request_
     assert set(jobs) == {
         "plan",
         "static",
+        "types",
         "tests",
         "checks",
         "rust-lint",
@@ -1303,9 +1538,10 @@ def test_a_draft_starts_no_job_and_marking_it_ready_or_pushing_to_a_ready_pull_r
     # On a ready pull request nothing but the draft flag holds back the plan, the static checks and the gate. The static
     # checks run on pull requests only: the merge queue runs them in the plan's merge commit checks.
     assert doc["jobs"]["plan"]["if"] == "${{ !github.event.pull_request.draft }}"
-    assert (
-        doc["jobs"]["static"]["if"] == "${{ github.event_name == 'pull_request' && !github.event.pull_request.draft }}"
-    )
+    for name in ("static", "types"):
+        assert (
+            doc["jobs"][name]["if"] == "${{ github.event_name == 'pull_request' && !github.event.pull_request.draft }}"
+        ), name
     assert doc["jobs"]["checks"]["if"] == "${{ always() && !github.event.pull_request.draft }}"
     # Every other workflow that runs on a pull request holds its jobs back on a draft too (a push to main still runs).
     for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
@@ -1508,7 +1744,7 @@ def test_a_ui_file_outside_the_map_runs_its_readers_its_linked_scripts_and_the_s
 
 
 def test_index_html_script_urls_map_to_the_files_the_server_serves():
-    # The page names scripts by URL (backend/ui_bundle.py): /tico/ui/x is ui/x, /vendor/x is ui/vendor/x.
+    # The page names scripts by URL (scripts/build-ui.cjs): /tico/ui/x is ui/x, /vendor/x is ui/vendor/x.
     diff = (
         '+<script src="/tico/ui/app/b.ts"></script>\n'
         '+<script src="/vendor/marked.min.js"></script>\n'
@@ -1879,11 +2115,16 @@ def test_a_queue_group_runs_every_whole_tree_static_check_on_its_merge_commit_be
     script = (ROOT / "scripts/ci/merge_commit_checks.sh").read_text()
     # Every static check runs on the merge commit too, the per-file ones included: they share configuration (a lint rule
     # one pull request turns on can fail the other's new code).
-    static = [str(step.get("run", "")) for step in jobs["static"]["steps"] if step.get("run")]
+    static = [str(step.get("run", "")) for job in ("static", "types") for step in jobs[job]["steps"] if step.get("run")]
     found = {re.search(r"scripts/[\w/]+\.(?:py|sh)", run).group(0) for run in static if "scripts/" in run}
     found -= {"scripts/ci_install.sh"}  # the static job's install, which the plan job has already done
     found |= {"-m backend.openapi_v2 --check", "npm ci --ignore-scripts", "pinned_tool.sh actionlint"}
-    assert found >= {"scripts/check_migration_order.py", "scripts/lint.sh", "scripts/check_ui_lint.sh"}
+    assert found >= {
+        "scripts/check_migration_order.py",
+        "scripts/lint.sh",
+        "scripts/check_ui_lint.sh",
+        "scripts/check_types.sh",
+    }
     for name in found:
         assert name in script, name
     assert 'LINT_BASE_REF="$base"' in script and 'PYRIGHT_BASE_REF="$base"' in script
@@ -2415,7 +2656,6 @@ def test_a_migration_change_runs_the_upgrade_tests_even_in_a_light_plan(event, r
         light = checks.narrow(picked, changed, event, added=[], graph=repo_map)
         assert set(checks.UPGRADE_TESTS) <= set(light["python"]), changed
         assert all(light["narrow"]["tier"][t] == 0 for t in checks.UPGRADE_TESTS), changed
-    assert all((ROOT / t).is_file() for t in checks.UPGRADE_TESTS)
     # Another change keeps its own plan: the upgrade tests it reaches are not lifted to always run.
     other = ["backend/health.py"]
     tier = checks.narrow(checks.selection(other, event, graph=repo_map), other, event, graph=repo_map)["narrow"]["tier"]
@@ -2425,26 +2665,6 @@ def test_a_migration_change_runs_the_upgrade_tests_even_in_a_light_plan(event, r
 def light_plan(changed, event, repo_map, added):
     picked = checks.selection(changed, event, graph=repo_map, added=added)
     return checks.narrow(picked, changed, event, added=added, graph=repo_map)
-
-
-@pytest.mark.parametrize("event", ["pull_request", "merge_group"])
-@pytest.mark.parametrize(
-    "changed",
-    [
-        # Nov 13: #3335 added tools columns and #3604 listening_items.delivered without backend/rows.py; neither plan
-        # picked test_rows_schema.py and main went red twice (fixed by #3603 and #3625).
-        ["backend/migrations/20261111145540_website_tools.py", "backend/website_tools.py", "backend/api_tools.py"],
-        ["backend/migrations/20261113030739_listening_items_delivered.py", "backend/listening.py"],
-    ],
-)
-def test_a_migration_runs_the_rows_schema_test_even_in_a_light_plan(event, changed, repo_map):
-    light = light_plan(changed, event, repo_map, added=changed[:1])
-    assert checks.ROWS_SCHEMA in light["python"] and light["narrow"]["tier"][checks.ROWS_SCHEMA] == 0
-    assert checks.ROWS_SCHEMA in light["guards"] and (ROOT / checks.ROWS_SCHEMA).is_file()
-    # The same modules without the migration leave it to the map: it is not lifted to always run.
-    rest = changed[1:]
-    tier = light_plan(rest, event, repo_map, added=[])["narrow"]["tier"]
-    assert tier.get(checks.ROWS_SCHEMA) != 0
 
 
 @pytest.mark.parametrize("event", ["pull_request", "merge_group"])
@@ -2472,52 +2692,32 @@ def test_a_cli_command_change_runs_the_cli_spec_test_even_in_a_light_plan(event,
     assert checks.CLI_SPEC not in light_plan(["backend/growth.py"], event, repo_map, added=[])["guards"]
 
 
-def test_a_schema_line_in_a_backend_module_runs_the_rows_schema_test(tmp_path):
-    # A column added to a CREATE TABLE string (hubdb.py, store.py) or to the column list an ALTER TABLE loop reads
-    # changes the hub's schema without a migration: rows.py must follow, so test_rows_schema.py runs.
-    def git(*args):
-        return subprocess.check_output(
-            ["git", "-c", "user.name=t", "-c", "user.email=t@acme.example", *args], cwd=tmp_path, text=True
-        ).strip()
+@pytest.mark.parametrize("event", ["pull_request", "merge_group"])
+@pytest.mark.parametrize(
+    "path",
+    [
+        "ui/app/sidebar.ts",
+        "ui/parts.json",
+        "ui/index.html",
+        "ui/vendor/marked.min.js",
+        "backend/ui_build.py",
+        "scripts/build-ui.cjs",
+        "package-lock.json",
+    ],
+)
+def test_a_change_that_can_grow_the_shell_runs_the_size_ceiling_even_in_a_light_plan(event, path, repo_map):
+    # P05b: between P05's two pull requests the code a cold open of Home downloads crept from 341 to 383 KB, and no
+    # check noticed. Every path that can move that number runs the ceiling, in a light plan too.
+    light = light_plan([path], event, repo_map, added=[])
+    assert checks.UI_SHELL_SIZE in light["guards"] and checks.UI_SHELL_SIZE in light["python"]
+    assert light["narrow"]["tier"][checks.UI_SHELL_SIZE] == 0 and (ROOT / checks.UI_SHELL_SIZE).is_file()
 
-    hubdb = 'SCHEMA = """\nCREATE TABLE IF NOT EXISTS kpis(\n  id TEXT PRIMARY KEY,\n  name TEXT NOT NULL\n);\n"""\n'
-    loop = 'COLUMNS = (("slug", "TEXT"),)\n\n\ndef add(c):\n    for name, kind in COLUMNS:\n'
-    loop += '        c.execute(f"ALTER TABLE seats ADD COLUMN {name} {kind}")\n'
-    git("init", "-q", "-b", "main")
-    smoke_tree(tmp_path)
-    source(tmp_path, checks.ROWS_SCHEMA, "def test_rows():\n    pass\n")
-    source(tmp_path, "backend/hubdb.py", hubdb + "\n\ndef count():\n    return 1\n")
-    source(tmp_path, "backend/lifecycle.py", loop)
-    git("add", "-A")
-    git("commit", "-qm", "Start")
-    base = git("rev-parse", "HEAD")
 
-    def change(name, old, new):
-        text = (tmp_path / name).read_text()
-        assert old in text
-        source(tmp_path, name, text.replace(old, new, 1))
-        git("commit", "-qam", "Change")
-        found = checks.schema_changes(base, "HEAD", [name], tmp_path)
-        picked = checks.selection([name], root=tmp_path, base=base, head="HEAD", core=[], added=[])
-        git("reset", "-q", "--hard", base)
-        assert (checks.ROWS_SCHEMA in picked["guards"]) == bool(found)
-        assert (checks.ROWS_SCHEMA in picked["python"]) == bool(found)
-        return found
-
-    assert change("backend/hubdb.py", "  name TEXT NOT NULL\n", "  name TEXT NOT NULL,\n  slug TEXT\n")
-    assert change("backend/lifecycle.py", '(("slug", "TEXT"),)', '(("slug", "TEXT"), ("rank", "INTEGER"))')
-    assert not change("backend/hubdb.py", "return 1", "return 2")  # code beside the schema: the map decides
-    # A deleted module drops its tables.
-    git("rm", "-q", "backend/hubdb.py")
-    git("commit", "-qm", "Delete")
-    assert checks.schema_changes(base, "HEAD", ["backend/hubdb.py"], tmp_path) == {"backend/hubdb.py"}
-    git("reset", "-q", "--hard", base)
-    # Without a base (no diff to read), a module that holds a CREATE or ALTER TABLE counts; tests and migrations never.
-    assert checks.schema_changes(None, "HEAD", ["backend/hubdb.py", "backend/lifecycle.py"], tmp_path) == {
-        "backend/hubdb.py",
-        "backend/lifecycle.py",
-    }
-    assert not checks.schema_changes(None, "HEAD", [checks.ROWS_SCHEMA, "ui/app/x.ts"], tmp_path)
+@pytest.mark.parametrize(
+    "path", ["ui/tests/thread-redraw.cts", "ui/baselines/home.png", "ui/README.md", "backend/growth.py"]
+)
+def test_a_change_that_cannot_grow_the_shell_leaves_the_size_ceiling_out(path, repo_map):
+    assert checks.UI_SHELL_SIZE not in light_plan([path], "pull_request", repo_map, added=[])["guards"]
 
 
 def test_a_light_plan_caps_its_python_tests_by_priority_and_a_changed_test_always_runs():

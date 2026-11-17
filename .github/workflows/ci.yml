@@ -20,7 +20,7 @@ on:
       previous_release:
         description: Published stable release for install/upgrade/rollback
         required: true
-        default: v0.3.48
+        default: v0.6.0
         type: string
       version:
         description: The version this candidate will be released as (vX.Y.Z); it is built into the images
@@ -330,6 +330,13 @@ jobs:
       PYTHONUNBUFFERED: '1'
       # The slowest tests of each part, so a part that outruns the others shows what holds it.
       PYTEST_ADDOPTS: '--durations=25'
+      # The live git check (runner_support/tests/test_github_git.py): a GitHub App token, minted as Tico mints one for
+      # a bot, pushes a branch to a scratch repository through the runner's credential helper. Python VMs only (the
+      # others run no Python tests); while these secrets are absent it skips and names them.
+      TICO_GIT_CHECK_APP_ID: ${{ matrix.part == 'python' && secrets.TICO_GIT_CHECK_APP_ID || '' }}
+      TICO_GIT_CHECK_PRIVATE_KEY: ${{ matrix.part == 'python' && secrets.TICO_GIT_CHECK_PRIVATE_KEY || '' }}
+      TICO_GIT_CHECK_INSTALLATION_ID: ${{ matrix.part == 'python' && secrets.TICO_GIT_CHECK_INSTALLATION_ID || '' }}
+      TICO_GIT_CHECK_REPOSITORY: ${{ matrix.part == 'python' && secrets.TICO_GIT_CHECK_REPOSITORY || '' }}
     steps:
       - name: Free disk on a GitHub-hosted runner (about 14 GB free there; RunsOn's volume is 30 GB)
         if: vars.TICO_CI_HOSTED == 'true' || (inputs.anchor != '' && matrix.part != 'product' && matrix.part != 'desktop')

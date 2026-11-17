@@ -51,6 +51,7 @@ from typing import NamedTuple, Optional
 
 from . import event_catalog as CAT, hubdb as H, templating, tico_notices, task_trigger_rules as TTR
 from .migrations import renames
+from .api_contract import api_v2
 
 log = logging.getLogger(__name__)
 
@@ -392,21 +393,9 @@ BUILTINS = _builtins()
 BUILTIN_IDS = frozenset(r["id"] for r in BUILTINS)
 
 
-# ----------------------------------------------------------------------------- schema
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS rules(
- id TEXT PRIMARY KEY, scope_kind TEXT NOT NULL, scope_id TEXT NOT NULL DEFAULT '', event TEXT NOT NULL,
- condition TEXT NOT NULL DEFAULT '{}', then_outcome TEXT NOT NULL, params TEXT NOT NULL DEFAULT '{}',
- enabled INTEGER NOT NULL DEFAULT 1, position INTEGER NOT NULL DEFAULT 0, note TEXT NOT NULL DEFAULT '',
- created_by TEXT NOT NULL, action_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1);
-CREATE INDEX IF NOT EXISTS rules_event ON rules(event, enabled);
-CREATE INDEX IF NOT EXISTS rules_scope ON rules(scope_kind, scope_id);
-"""
-
-
 def ensure_schema(c):
-    """Keep creator attribution separate from the person responsible for a task action."""
-    H.add_column(c, "rules", "action_by", "TEXT")
+    """Keep creator attribution separate from the person responsible for a task action: a rule made without one
+    (backend/profiles.py) acts as its creator until it is revised."""
     # Only an unedited legacy rule is known to carry its creator's action. Revised legacy rules fail open on private
     # tasks until someone saves their action again, rather than borrowing an unknown editor's creator permissions.
     c.execute("UPDATE rules SET action_by=created_by WHERE action_by IS NULL AND revision=1")
@@ -886,21 +875,43 @@ def _ask_without_task(conn, decision, actor, body, target, conv):
     sender = "Tico" if actor == H.KEEPER else H.actor_id(actor)
     text = str(body or "").strip()[:1500]
     heading = " ".join(text.split())[:80] or f"a message to {H.actor_id(target)}"
-    made = H.task_create(
+    from . import person_asks
+
+    made = person_asks.task_for(
         conn,
         H.KEEPER,
         f"A rule needs you: {heading}"[:300],
         f"The rule {decision.rule} asked for a person on a message to {H.actor_id(target)}.\n\nFrom {sender}: {text}",
         who,
-        lint=False,
+        question=f"A rule stopped a message to {H.actor_name(conn, target)}. Should it go on?",
+        why="A rule asks a person before this message goes on.",
+        asker=_rules_asker(),
         deduplicate=False,
         private=True,  # the message was for the bot: only the person it falls to reads it
     )
     H.event(conn, H.KEEPER, ASKED, made["id"], {"rule": decision.rule, "about": about})
 
 
+# Only bots write questions (backend/question_marks.py): a rule's ❓ is the Rules Owner's, or BotOps' when it is not
+# here (person_asks.author).
+def _rules_asker():
+    return f"bot:{H.RULES_OWNER}"
+
+
+def _rule_ask(conn, tid, person, text):
+    """The Rules Owner's ❓ to `person` on the task `tid`: `text`, its first line plain. Raises when no bot can ask or
+    the person may not read the task's chat (a private task is not opened to them for a rule). Returns the ❓'s wait id."""
+    from . import person_asks, question_marks
+
+    asker = person_asks.author(conn, _rules_asker())
+    if not asker:
+        raise ValueError("no bot to ask")
+    marked = question_marks.ask(conn, asker, str(tid), person, text, checked=False, let_in=False)
+    return question_marks.wait_id(marked)
+
+
 def _ask(conn, decision, row, actor, body, target=None, conv=None):
-    """An ask on the message's task (H.task_ask), for its requester when that is a person, else the owner bot's
+    """A ❓ on the message's task (`_rule_ask`), for its requester when that is a person, else the owner bot's
     operator; while one this rule added still waits, nothing more. With no task, a task for a person
     (`_ask_without_task`). Raises when nobody can be asked or the ask is refused (the person may not read a private
     task), so the message wakes the bot instead of waiting for no one."""
@@ -920,15 +931,11 @@ def _ask(conn, decision, row, actor, body, target=None, conv=None):
     who = (row["requester_id"] if H.is_human(row["requester_id"]) else None) or _operator(conn, row["owner_id"])
     if not who:
         raise ValueError("no person to ask")
-    sender = "Tico" if actor == H.KEEPER else H.actor_id(actor)
+    sender = "Tico" if actor == H.KEEPER else H.actor_name(conn, actor)
     text = " ".join(str(body or "").split())[:400]
-    line = (
-        f"The rule {decision.rule} asks you about this. {sender} said: {text}"
-        if text
-        else (f"The rule {decision.rule} asks you about this.")
-    )
-    added = H.task_ask(conn, H.KEEPER, row["id"], who, line)
-    H.event(conn, H.KEEPER, ASKED, row["id"], {"rule": decision.rule, "requirement": added.get("requirement_id")})
+    said = f"A rule holds a message from {sender} until you reply. Should it go on?\n\nRule {decision.rule}"
+    wait = _rule_ask(conn, row["id"], who, f"{said}:\n> {text}" if text else said)
+    H.event(conn, H.KEEPER, ASKED, row["id"], {"rule": decision.rule, "requirement": wait})
 
 
 def _act(conn, decision, row, message=None):
@@ -1008,8 +1015,8 @@ def _needs_why(conn, tid, to):
     here = row["stage"]
     if target["kind"] == "closed" or here["kind"] != "work":
         return True  # a close, or a reopen into a work stage
-    work = [s["id"] for s in order if s["kind"] == "work"]
-    return target["kind"] == "work" and work.index(target["id"]) < work.index(here["id"])
+    work = [s["id"] for s in E.main_work(order)]
+    return E.is_main_work(target) and E.is_main_work(here) and work.index(target["id"]) < work.index(here["id"])
 
 
 def _move(conn, tid, params, said):
@@ -1020,11 +1027,12 @@ def _move(conn, tid, params, said):
 
 
 def _ask_person(conn, tid, params, said):
-    """`params.person` is asked `params.line` on the task (with `params.choices` when there are some)."""
+    """`params.person` is asked `params.line` on the task, a ❓ (`_rule_ask`); `params.choices`, when there are some,
+    are named in it."""
     person, line = str(params["person"]), str(params.get("line") or said)
     choices = params.get("choices") if isinstance(params.get("choices"), list) else None
-    added = H.task_ask(conn, H.KEEPER, tid, person, line, choices=[str(c) for c in choices] if choices else None)
-    return {"person": person, "requirement": added.get("requirement_id")}
+    text = f"{line}\n\nReply {' or '.join(str(c) for c in choices)}." if choices else line
+    return {"person": person, "requirement": _rule_ask(conn, tid, person, text)}
 
 
 def _relate(conn, tid, params, said):
@@ -1417,13 +1425,17 @@ def _event_ask(conn, row, name, params, values, ctx):
         return True, "already asked"
     text = templating.render(str(params.get("text") or ""), values, cap=1500).strip() or f"{name} happened."
     heading = " ".join(text.split())[:80]
-    made = H.task_create(
+    from . import person_asks
+
+    made = person_asks.task_for(
         conn,
         H.KEEPER,
         f"A rule needs you: {heading}"[:300],
         f"The rule {row['id']} asked for a person.\n\n{text}",
         who,
-        lint=False,
+        question=f"A rule needs you: {heading}",
+        why="A rule asks a person to look at it when this happens.",
+        asker=_rules_asker(),
         deduplicate=False,
     )
     H.event(conn, H.KEEPER, ASKED, made["id"], {"rule": row["id"], "event": name})
@@ -1616,7 +1628,15 @@ def install(app, store, auth):
     decides by them."""
     from fastapi import Request
 
-    @app.get("/api/v2/event-types")
+    @app.get(
+        "/api/v2/event-types",
+        **api_v2(
+            "Events",
+            "listEventTypes",
+            "Every named event with its description, version and an example payload (`group` narrows it)",
+            "EventTypeList",
+        ),
+    )
     def event_types(request: Request, group: str | None = None):
         """Every event Tico names, with a plain description and an example payload (`data`): what automations and
         outgoing webhooks read. Nothing secret."""

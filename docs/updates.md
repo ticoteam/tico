@@ -97,8 +97,8 @@ The runner image brings its own Python, and a release can move it to a new minor
 release that moved the images to Debian trixie). The image's own venv (`/opt/tico/.venv`) comes with it. The runner's
 home volume (`/home/runner`) is kept across updates, and a Python environment there belongs to the Python that built it:
 
-- **Tico's mail venv** (`~/tools/mail-venv`, or `TICO_MAIL_VENV`) rebuilds itself on the next `mail.sh`, which logs
-  "built by another Python, rebuilding it". Nothing to do.
+- **Tico's old mail venv** (`~/tools/mail-venv`) is deleted when the runner starts, since mail runs on the server
+  now. Nothing to do.
 - **A venv a bot or person made** (a project's `.venv`, say) still points at the old interpreter, which the new image
   does not have, so its `python` fails with "No such file or directory". Delete it and build it again with the image's
   Python, or let the project's own setup do so.
@@ -158,11 +158,12 @@ The runner is a git checkout. When the server's release is newer, the runner:
    `rolled_back` (or `failed` if the old code does not start either). It does not retry that release for six hours,
    or until the server's release changes. A disk-space failure retries as soon as free space increases.
 6. once the runner is healthy on the new release, restarts the background jobs that are installed on this Mac
-   (`connectors`, `close-calls`, `importers`; the same `launchctl kickstart -k` or `systemctl --user restart` as
-   `scripts/tico-computer restart`), so none keeps the old release in memory. A job that is not installed is left alone. Each job also checks the checkout's
+   (`close-calls`, `importers`; the same `launchctl kickstart -k` or `systemctl --user restart` as
+   `scripts/tico-computer restart`), so none keeps the old release in memory. A job that is not installed is left alone.
+   An old `connectors` job left from before mail moved to the server is removed instead. Each job also checks the checkout's
    revision about once a minute and exits when it changes, so its supervisor starts it on the new code even after a
    `scripts/tico-computer update` or a pull by hand. Each restart is a line in the job's log
-   (`scripts/tico-computer logs connectors`) and in `update.log`. A Docker runner replaces its container, jobs included.
+   (`scripts/tico-computer logs importers`) and in `update.log`. A Docker runner replaces its container, jobs included.
 
 A runner's release is the one it started on, not whatever the checkout names now. The runners of several company
 environments (`scripts/tico-computer -e <env> install`) may share one checkout: the first to update moves it, and each other
@@ -203,10 +204,10 @@ So a checkout runner that nothing supervises **refuses the update and says so** 
 Run it once on that computer, as the user the runner runs as (enroll first: [install.md](install.md#a-linux-checkout-systemd)):
 
 ```
-scripts/tico-computer install            # the runner, connectors, close-calls and importers
+scripts/tico-computer install            # the runner, close-calls and importers
 ```
 
-It writes four systemd **user** units under `~/.config/systemd/user` (`tico-bot.service`, `tico-connectors.service`,
+It writes three systemd **user** units under `~/.config/systemd/user` (`tico-bot.service`,
 `tico-close-calls.service`, `tico-importers.service`; `tico-<env>-...` for a team environment), each with
 `Restart=always`, and starts them. Nothing needs root. The units set `TICO_SUPERVISED=1` and `TICO_SYSTEMD_UNIT`, which is how
 the runner knows something will start it again and how the update restarts it through `systemctl --user restart`. The update
@@ -428,10 +429,11 @@ had, the runner does not start: it logs why and launchd or systemd tries again. 
 not drive is not ready, with the reason on that bot; the other bots on the computer run.
 
 The Python runner is gone. `"engine": "python"` in `runner.json` and `TICO_RUNNER_ENGINE=python` are ignored. Python
-still runs the side jobs (connectors, Close calls, meeting importers), the catalog set-up and the update process, from
-`runner_support/`. A small `runner/` package forwards the old `python -m runner ...` commands and imports there, so
-launchd plists, systemd units and cloud machine images written before the move, and a runner or update process of an
-earlier release still running while its checkout moves, keep working. What is saved on a computer and started later
+still runs the side jobs (Close calls, meeting importers), the catalog set-up and the update process, from
+`runner_support/`. A small `runner/` package forwards the two entry points saved things still start: `python -m runner ...`
+(launchd plists and systemd units, written before the move and by this release) and `python -m runner.cloud_machine boot`
+(cloud machine images). The other old `runner.<module>` paths were removed once no supported release predated the move, so
+an earlier release's process that still imports one when its checkout moves will fail. What is saved on a computer and started later
 keeps the old names on purpose: `scripts/tico-computer install` still writes `python -m runner --config <path> <job>` into the
 launchd plists and systemd units, and a cloud machine image still boots `python -m runner.cloud_machine boot`. So a
 computer moved back to a release from before the move (hosted staff can set an older target) still starts.
@@ -496,9 +498,10 @@ Automatic rollback covers a release that does not come up. To go back by choice:
 
 Every bot made from a template (built-in, starter or one that fills a seat) takes the newer template's files after an
 update, before its first run once its computer has the new release (once per start of the runner, never mid-run).
-These files are the template's: the ones its card calls Tico's own (`AGENTS.md`, `playbooks/`, `skills/`), the
-permissions file `.claude/settings.json` (no template ships a Codex settings file), and the template's `knowledge/`
-pages. `knowledge/company.md` (written from the onboarding answers), `memory/`, `reports/`, `bot.yaml` and
+These files are the template's: the ones its card calls Tico's own (`AGENTS.md`, `playbooks/`, `skills/`,
+`.claude/skills/`), the permissions file `.claude/settings.json` (no template ships a Codex settings file), and the
+template's `knowledge/` pages. A template's files include what it takes from the catalog's base and shared files
+(`templates/catalog/_base/` and `_shared/`), so a change there reaches every bot made from a template that takes it. `knowledge/company.md` (written from the onboarding answers), `memory/`, `reports/`, `bot.yaml` and
 anything the bot wrote itself are never touched.
 
 A file the bot or a person changed since the bot was given it (when it was made, or by the last refresh) is kept, not
@@ -507,7 +510,7 @@ seat bot's `AGENTS.md` keeps its `## Job description`. The repository's `.tico-t
 given; a bot made before that record counts its first commit ("Set up ... from the ... template") as what it was given.
 
 The Assistant, BotOps, the Librarian and the Strategy Owner are the exception for `AGENTS.md`, `playbooks/` and
-`skills/`: the release's text wins over their edits, which stay in the repository's history.
+skills: the release's text wins over their edits, which stay in the repository's history.
 
 Each refresh is a `bot.template_refreshed` event naming the bot, the release its files came from and the one they come
 from now, and the files added, updated, removed and kept because they were changed. The bot's `template_version` moves
@@ -523,10 +526,10 @@ files refreshed but cannot record them; the version is reported again after the 
 
 ### From 0.5 to 0.6: every company starts over
 
-Tico 0.6 does not carry tasks over. Every company starts on a new database. A 0.6 server refuses to start on a 0.5
-database that has tasks and changes nothing: "This database has tasks from Tico 0.5. Tico 0.6 does not carry tasks
-over: every company starts on a new database. Nothing was changed. Run Tico 0.5 on this database, or set up a new
-company on 0.6."
+Tico 0.6 does not carry tasks over. Every company starts on a new database. A 0.6 server opens only a database that
+Tico 0.6.0-rc.1 or later made, and refuses a 0.5 database without changing it: "This database was made by a Tico older
+than 0.6.0, or not by Tico. Tico 0.6 does not carry tasks over: every company starts on a new database. Nothing was
+changed. Run the release that made it on this database, or set up a new company on 0.6."
 
 ### Moving to Automations (one time)
 

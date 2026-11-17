@@ -97,7 +97,7 @@ def test_a_mirror_another_user_owns_is_cloned_and_fetched_with_the_trust_file(tm
         [*local, 'clone', '-q', mirror.as_uri(), str(clone)], env=trusted, capture_output=True, text=True
     )
     assert done.returncode == 0, done.stderr
-    # The checkout itself is trusted on the command line, as runner_support/repositories.py does: git checks it in-process.
+    # The checkout itself is trusted on the command line, as runner-rs/src/repositories.rs does: git checks it in-process.
     done = subprocess.run(
         [
             *local,

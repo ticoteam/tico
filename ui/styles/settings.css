@@ -461,9 +461,6 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .machine-usage-bar{width:64px;height:8px;flex-shrink:0}
 /* Desktop apps: the same rows as AI tools (app | installed version | state and its detail). On a phone the head row
    keeps only its title, so the rows still say they are desktop apps. */
-.machine-apps{grid-template-columns:minmax(90px,max-content) minmax(0,110px) minmax(160px,1fr);margin-top:6px}
-.machine-app-detail{flex-basis:100%;font-size:var(--t-xs);overflow-wrap:anywhere}
-@media (max-width:900px){.machine-apps{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.machine-apps .machine-tool-name,.machine-apps .machine-tool-signin{grid-column:1/-1}.machine-apps .machine-tool-head{display:contents}.machine-apps .machine-tool-head>[role=columnheader]{display:none}.machine-apps .machine-tool-head>:first-child{display:flex;grid-column:1/-1}}
 .settings-services summary{cursor:pointer;font-weight:600}
 .settings-services-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:6px 14px;margin-top:12px;font-size:var(--t-sm)}
 /* Team icon: one row like the card's others, the icon, its name, then Change icon at the right edge */
@@ -604,7 +601,7 @@ dialog.access-editor .access-body{flex:1;min-height:0;overflow:auto}
 }
 .settings-history-row{display:grid;grid-template-columns:28px minmax(0,1fr) auto;gap:10px;align-items:start;padding:10px 0;border-bottom:1px solid var(--line)}
 .settings-history-row:last-child{border-bottom:0}.settings-history-row p{margin:2px 0 0;font-size:var(--t-sm);color:var(--muted)}
-.settings-history-row .history-action{display:flex;gap:6px;align-items:center}.settings-history-row details{grid-column:2/-1;font-size:var(--t-sm)}
+.settings-history-row .history-action{display:flex;gap:6px;align-items:center}
 .transition-dialog{width:min(580px,92vw);padding:0;border:0;background:var(--surface);color:var(--ink)}
 .transition-body{padding:16px 18px 18px}.transition-progress{margin:12px 0;padding:10px;border-radius:7px;background:var(--bg)}
 .transition-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
@@ -1208,7 +1205,7 @@ section.card>header .settings-head-act{margin-left:auto}
   .settings-machines .machine-name{display:inline-flex;align-items:center;min-height:44px}
   #settings-token-form button{min-height:44px}   /* chat.css still sets this form's button to 40px on a phone */
 }
-/* A form's forward button (Save, Add bot, Prepare change) is last at the right, Cancel at the left (style guide, Button order) */
+/* A form's forward button (Save, Add bot, Change) is last at the right, Cancel at the left (style guide, Button order) */
 .settings-go{margin-left:auto}
 /* Computers: a tool signed in with nothing wrong reads as quiet text, not a pill (style guide, Status: "a row with
    nothing wrong has no pill"); it stays the button that opens the computer. */

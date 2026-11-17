@@ -1,5 +1,5 @@
 /* ui/app/task-props.ts — A task's facts in its Details, Linear style: one click-to-edit line each (Stage, Owner, Part of,
-   Human, Asked by, Due, Tags, Goal…), their menus and pickers, and the task's ⋯ menu (docs/pipelines-v3.md S4, S5).
+   Human, Asked by, Due, Tags, Goal…), their menus and pickers, and the task's ⋯ menu (docs/dev/pipelines-v3.md S4, S5).
    Used by the task's window (#task-modal); each change saves at once with the task's version.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
@@ -73,15 +73,17 @@ function snoozeItems(): {value: string; text: string; html: string}[] {
   return ([['Tomorrow', day(1)], ['Next week', day(monday)], ['In two weeks', day(14)], ['In a month', day(30)]] satisfies [string, Date][]).map(([text, at]) =>
     ({value: at.toISOString(), text, html: `<span>${esc(text)}</span><span class="tl-mi-sub">${esc(at.toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric'}))}</span>`}));
 }
-function snoozeMenu(d: TaskDialog, anchor: HTMLElement, save: TaskSave): void {
-  propMenu(d, anchor, {label: 'Snooze until', items: snoozeItems(), entry: 'A date, like 2026-11-02', none: 'Type a date, then Enter',
-    onPick: it => void save('snooze', {snooze: it.value}),
+/** Snooze until: the choices, or a typed date; `run` takes the time picked. A task's Snooze, and a stage's Snooze all…. */
+function snoozePick(host: HTMLElement, anchor: HTMLElement, run: (until: string) => unknown): void {
+  propMenu(host, anchor, {label: 'Snooze until', items: snoozeItems(), entry: 'A date, like 2026-11-02', none: 'Type a date, then Enter',
+    onPick: it => run(it.value),
     onEntry: v => {
       const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v.trim()), at = m && new Date(+m[1]!, +m[2]! - 1, +m[3]!);
       if (!at || at.getDate() !== +m![3]! || at <= new Date()) { toast('Pick a date in the future, like 2026-11-02', true); return; }
-      void save('snooze', {snooze: at.toISOString()});
+      run(at.toISOString());
     }});
 }
+const snoozeMenu = (d: TaskDialog, anchor: HTMLElement, save: TaskSave): void => snoozePick(d, anchor, until => void save('snooze', {snooze: until}));
 // The task window (task-modal.ts) as its tabs and sections read it: the same dialog, typed with what that file keeps on it.
 const taskModalOf = (d: TaskDialog) => d as ModalDialog;
 // What the window passes in that this file does not draw: the Runs on row (task-modal.ts) and the goal's id.
@@ -301,7 +303,7 @@ function taskPropsMsgPaint(d: TaskDialog): void {
 }
 
 // ---- one small menu for every row (and the "…" menu): arrow keys, Home/End, Enter, Esc; an optional find box
-function propMenu<T extends PropMenuItem>(d: TaskDialog, anchor: HTMLElement, {label, items = [], find = '', entry = '', none = 'Nothing to pick', onPick, onEntry, search}: PropMenuOptions<T>): PropPop | undefined {
+function propMenu<T extends PropMenuItem>(d: HTMLElement, anchor: HTMLElement, {label, items = [], find = '', entry = '', none = 'Nothing to pick', onPick, onEntry, search}: PropMenuOptions<T>): PropPop | undefined {
   let pop: PropPop | null = $('.prop-pop', d);
   if (pop?.matches(':popover-open')) { const same = pop.anchor === anchor; pop.hidePopover(); if (same) return; }
   if (pop?.anchor && pop.anchor !== anchor) pop.anchor.setAttribute('aria-expanded', 'false');   // only one menu, only one expanded
@@ -355,7 +357,9 @@ function propMenu<T extends PropMenuItem>(d: TaskDialog, anchor: HTMLElement, {l
       timer = window.setTimeout(() => void search(input.value.trim()).then(show, () => show([])), 200);
       return;
     }
-    for (const b of pop.querySelectorAll<HTMLElement>('.tl-mi')) b.hidden = !!q && !b.dataset.label!.includes(q);
+    // Each word typed finds the item on its own ("back ice" finds "Backlog › On ice").
+    const words = q.split(/\s+/).filter(Boolean);
+    for (const b of pop.querySelectorAll<HTMLElement>('.tl-mi')) b.hidden = !words.every(w => b.dataset.label!.includes(w));
   };
   pop.onclick = ev => {
     const b = eventElement(ev)?.closest<HTMLElement>('[data-pick]'); if (!b) return;
@@ -542,6 +546,13 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
   if (more) more.onclick = () => {
     const r = taskPropRights(task), items: PropMenuAction[] = [], cur = (d.liveTask || task) as PropTask;
     const phone = matchMedia('(max-width:600px)').matches;
+    // A phone's head with document tabs holds only the title, the tabs, ⋯ and ✕ (task-code.css): Details, Done and
+    // Archive are here, first, and press the head's own.
+    for (const [sel, text, icon] of [['[data-task-tab="details"]', 'Details', 'fact_check'], ['[data-task-finish="done"]', 'Done', 'task_alt'],
+      ['[data-task-finish="close"]', 'Archive', 'archive']] as const) {
+      const b = $(`.tw-head ${sel}`, d) as HTMLElement | null;
+      if (phone && b && !b.offsetParent) items.push({text, icon, ...(b.hasAttribute('aria-pressed') ? {checked: b.getAttribute('aria-pressed') === 'true', read: true} : {}), run: () => b.click()});
+    }
     // The owning bot's screen (computer-screen.ts), where its session can be watched.
     const screen = !taskFinished(task) ? botScreenComputer(actorSlug(task.owner_id)) : '';
     if (screen) items.push({text: 'Watch the session', icon: 'computer', read: true, run: () => { location.hash = screenHref(screen); }});
@@ -558,6 +569,13 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
     if (r.snooze) items.push(taskSnoozed(task) ? {text: 'Unsnooze', icon: 'schedule', run: () => save('snooze', {unsnooze: true})}
       : {text: 'Snooze…', icon: 'schedule', run: () => setTimeout(() => snoozeMenu(d, more, save))});
     if (r.edit && task.pipeline_id) items.push({text: 'Move to a stage…', icon: 'arrow_forward', run: () => setTimeout(() => void taskStageMenu(d, more, task, save))});
+    // Another pipeline: anyone who reads the task may re-file it there (docs/pipelines-v3.md, "Who may move").
+    if (task.pipeline_id) items.push({text: 'Move to…', icon: 'swap_horiz', run: () => setTimeout(() => void taskMoveToMenu(d, more, {
+      pipeline: task.pipeline_id ?? null, stage: task.stage_id ?? null,
+      run: (p, st, why) => void save('stage', {move: String(st.id), pipeline: p.id, where: `${p.name} › ${st.name}`, ...(why ? {why} : {})})}))});
+    // Ask someone: To leave's +, whose section shows nothing while the stage has nothing to leave by (task-code.css).
+    const ask = $('.task-requirements.tsec-empty [data-req-ask]', d) as HTMLElement | null;
+    if (ask) items.push({text: 'Ask someone…', icon: 'person_search', run: () => { taskTabShow(taskModalOf(d), 'details'); ask.click(); }});
     if (r.edit) items.push({text: 'Reassign…', icon: 'person', run: () => setTimeout(() => { taskTabShow(taskModalOf(d), 'details'); ($('[data-prop="owner"]', d) as HTMLElement | null)?.click(); })});
     // Empty facts wait hidden in Details (a passed wake time counts as no due date); these show one and open its editor.
     const waiting = (key: string) => !!$(`[data-prop-row="${key}"][hidden]`, d);
@@ -585,7 +603,7 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
       const b = $(`.tw-head [data-fb-rate="${rate}"]`, d) as HTMLElement | null;
       if (b) items.push({text, icon, sep: rate === 'up', checked: b.getAttribute('aria-pressed') === 'true', run: () => b.click()});
     }
-    // A reopen says why (docs/pipelines-v3.md C24): the menu takes the note, and Enter reopens it. The head's way back
+    // A reopen says why (docs/dev/pipelines-v3.md C24): the menu takes the note, and Enter reopens it. The head's way back
     // does the same; this keeps it where it always was.
     if (!r.live && r.reopen) items.push({text: 'Reopen…', icon: 'unarchive', run: () => setTimeout(() => propMenu(d, more, {label: 'Reopen', entry: 'Why reopen it?',
       none: '', onEntry: v => void save('stage', {move: 'reopen', why: v})}))});
@@ -612,6 +630,31 @@ async function taskStageMenu(d: TaskDialog, anchor: HTMLElement, task: PropTask,
   propMenu(d, anchor, {label: only === 'back' ? 'Move back to' : 'Move to', items, none: 'No earlier stage', onPick: it => {
     if (it.value === 'next') taskMoveOn(d, anchor, save);
     else void save('stage', {move: it.value});
+  }});
+}
+/** Move to… (docs/pipelines-v3.md S5): every pipeline's work stages as "Backlog › On ice", the pipeline's first stage
+    first; typing filters by each word. The stage the task is in is left out. Then the why, which a person may leave
+    empty, and Move; `confirm` is the line above it for many tasks ("Move 217 tasks to Backlog › On ice?"). `done`: the
+    task's own pipeline comes first, its stages by name alone, then Done (`st.id` 'done'); then the other pipelines. */
+async function taskMoveToMenu(host: HTMLElement, anchor: HTMLElement, opts: {pipeline: string | null; stage: string | null; done?: boolean;
+  confirm?: (where: string) => string; run: (p: PipelineRec, st: Pick<PipelineStageRec, 'id' | 'name'>, why: string) => unknown}): Promise<void> {
+  if (!TASK_PIPELINES) await tasksPipelinesRead().catch(() => []);
+  if (!anchor.isConnected) return;
+  type Spot = PropMenuItem & {p: PipelineRec; st: Pick<PipelineStageRec, 'id' | 'name'>};
+  const live = (TASK_PIPELINES || []).filter(p => !p.retired_at);
+  const own = opts.done ? live.filter(p => p.id === opts.pipeline) : [];
+  const spots: Spot[] = [...own, ...live.filter(p => !own.includes(p))].flatMap(p => [...p.stages, ...(own.includes(p) ? [{id: 'done', name: 'Done'}] : [])]
+    .filter(st => st.id && st.id !== opts.stage)
+    .map(st => ({p, st, value: `${p.id}/${st.id}`, text: own.includes(p) ? st.name : `${p.name} › ${st.name}`,
+      html: own.includes(p) ? `<span>${esc(st.name)}</span>` : `<span>${esc(p.name)}</span><span class="muted"> › </span><span>${esc(st.name)}</span>`})));
+  propMenu(host, anchor, {label: 'Move to', items: spots, find: 'Pipeline or stage', none: 'Nothing found', onPick: spot => {
+    const where = own.includes(spot.p) ? spot.st.name : `${spot.p.name} › ${spot.st.name}`;
+    setTimeout(() => {
+      let pop: PropPop | undefined;
+      const typed = (): string => pop?.querySelector<HTMLInputElement>('.tl-menu-q')?.value.trim() ?? '';
+      pop = propMenu(host, anchor, {label: opts.confirm ? opts.confirm(where) : where, entry: 'Why (optional)',
+        items: [{text: 'Move'}], onEntry: why => opts.run(spot.p, spot.st, why), onPick: () => opts.run(spot.p, spot.st, typed())});
+    });
   }});
 }
 // Move on: when the engine refuses for what is missing, the menu names it and takes a why to move on anyway.

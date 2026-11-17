@@ -201,7 +201,7 @@ def _drop_spent(conn, H, attempt_id, job, note):
 
 def _drop_jobs(conn, H, jobs, note, attempt_id=None):
     """Cancel queued deadline runs with no deferred items left to carry."""
-    from . import claim_holds
+    from . import bot_stops
 
     for spent_job in jobs:
         if conn.execute(
@@ -209,7 +209,7 @@ def _drop_jobs(conn, H, jobs, note, attempt_id=None):
             "SELECT 1 FROM deferrals WHERE fired_job=? AND settled_at IS NULL)",
             (spent_job, spent_job),
         ).rowcount:
-            claim_holds.clear(conn, spent_job, note)
+            bot_stops.clear_claim(conn, spent_job, note)
             H.event(conn, H.KEEPER, "delivery.deferred.spent", spent_job, {"attempt": attempt_id})
 
 
@@ -315,6 +315,16 @@ def due(conn, at, failures=None):
             if job := _fire(conn, H, bot, conversation_id, at, EXTERNAL_HARNESSES):
                 out.append(job)
     return out
+
+
+def now(conn, bot, conversation_id):
+    """Start `bot`'s run in this session now, carrying everything deferred for it there, as its deadline would (a
+    person's reply to the bot's ❓, which wakes that bot only). The run's job, or None: a run already queued there
+    carries it, or nothing waits."""
+    from .harnesses import EXTERNAL_HARNESSES
+
+    H = _H()
+    return _fire(conn, H, H.actor_id(bot), conversation_id, H.now(), EXTERNAL_HARNESSES)
 
 
 def _fire(conn, H, bot, conversation_id, at, external):

@@ -7,7 +7,7 @@ report the rest.
 """
 
 from . import bot_tools, usage_limits
-from .getting_started import _online_runners
+from . import runner_online
 from .health import missing_repositories, repository_fix
 from .statuses import is_parked
 from .store import H
@@ -43,7 +43,7 @@ def prime_pause_reasons(c, bots):
 
 
 def check(c, who, auth, settings):
-    online = {r["id"] for r in _online_runners(c)}
+    online = {r["id"] for r in runner_online.online_rows(c)}
     from .cloud_machines import resting as resting_machines
 
     resting = resting_machines(c)  # a cloud machine stopped when idle starts for work: not offline
@@ -221,13 +221,13 @@ def check(c, who, auth, settings):
                             "docs/mail.md, 'Who can read the key'",
                         )
                         continue
-                    if tool["env"] == "GOOGLE_SA_KEY":  # the key lives on the computer, not in a bot's environment
+                    if tool["env"] == "GOOGLE_SA_KEY":  # mail and calendar run on the server, never on a computer
                         add(
                             bot,
                             "missing_credential",
                             HIGH,
-                            f"{name} needs {what}: its computer has no Google service-account key and no connected Google account.",
-                            "put the key in the computer's state directory (docs/mail.md, 'Who can read the key')",
+                            f"{name} needs {what}: Tico has no Google access for its mailbox.",
+                            "connect Google in Tools > Settings > Email and give the bot its mailbox (docs/mail.md)",
                         )
                         continue
                     add(

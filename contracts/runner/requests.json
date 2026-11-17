@@ -2,7 +2,7 @@
  "$defs": {
   "AppDriverApp": {
    "additionalProperties": false,
-   "description": "One desktop app the computer's app driver can operate for a synced bot (backend/app_delivery.py).",
+   "description": "One desktop app the computer's app driver could operate for a synced bot.",
    "properties": {
     "background_ok": {
      "default": false,
@@ -1045,6 +1045,7 @@
        "turns_at_once_v1",
        "private_lanes_v1",
        "model_subscriptions_v1",
+       "plan_usage_v1",
        "browser_exit_v1",
        "model_subscription_activation_v1",
        "model_connect_v1",

@@ -104,12 +104,10 @@ def parts_of(saying: Row) -> list[str]:
 
 def last_sent_back(conn: "sqlite3.Connection", task_id: str, requirement_id: str) -> str | None:
     """The newest send-back note on this page requirement of the task, any visit, not undone."""
-    found = conn.execute(
-        "SELECT a.notes FROM answers a JOIN visits v ON v.id = a.visit_id WHERE v.task_id=? AND a.requirement_id=? "
-        "AND a.answer='no' AND a.undone_at IS NULL ORDER BY a.created_at DESC, a.id DESC LIMIT 1",
-        (task_id, requirement_id),
-    ).fetchone()
-    return str(found[0]) if found and found[0] else None
+    from . import task_requirements
+
+    found = task_requirements.last_sent_back(conn, requirement_id, task_id=task_id)
+    return str(found["notes"]) if found and found["notes"] else None
 
 
 def _rows(conn: "sqlite3.Connection", sql: str, args: tuple[Any, ...]) -> list[Row]:
@@ -125,7 +123,7 @@ def _jev(verdict: Row | None) -> Row:
     said_ = str(verdict["verdict"])
     reason = " ".join(str(verdict.get("last_error") if said_ == "failed" else verdict.get("reasons") or "").split())
     if said_ == "failed":
-        reason = f"Jev couldn't check this: {reason}" if reason else "Jev couldn't check this"
+        reason = f"Decision model couldn't check this: {reason}" if reason else "Decision model couldn't check this"
     else:
         reason = _P_VALUE.sub("", reason, count=1)
     return {"verdict": said_, "reason": reason}
@@ -222,5 +220,5 @@ def notices(conn: "sqlite3.Connection", task_id: str, requirement_id: str) -> li
     out = list(mine.notices)
     held = next((s for s in standings if pr_conflicts.held(s)), None)
     if held is not None:
-        out.append(pr_conflicts.ask_line(conn, held, str(mine.requirement.get("kind") or "")))
+        out.append(pr_conflicts.ask_line(conn, held))
     return out

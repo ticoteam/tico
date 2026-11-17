@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from backend import github as G
 from backend import hubdb as H
+from backend import question_marks
 from backend.app import create_app
 from backend.config import Settings
 from backend.store import encode
@@ -382,7 +383,7 @@ def test_grouped_wakes_retry_bad_rows_and_send_open_tasks(api, monkeypatch):
 
 
 def test_a_review_request_puts_the_person_in_the_configured_role(api):
-    assert post(api, "people/ana", {"github": "@Ana-Dev"})["github"] == "ana-dev"
+    assert post(api, "humans/ana", {"github": "@Ana-Dev"})["github"] == "ana-dev"
     task = post(api, "tasks", {"owner": "cpo", "title": "Ship the pricing page", "body": "x", "links": [PR]})
     asked = {**pr_event("review_requested"), "requested_reviewer": {"login": "Ana-Dev"}}
     roles = lambda: get(api, "tasks/" + task["id"])["task"].get("roles") or {}
@@ -405,7 +406,7 @@ def test_a_review_request_puts_the_person_in_the_configured_role(api):
         people["people"].append({"id": "bo", "email": "bo@acme.example"})
         c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(people),))
         H.sync_registry(c, {}, people)
-    post(api, "people/bo", {"github": "ANA-dev"}, expected=409)
+    post(api, "humans/bo", {"github": "ANA-dev"}, expected=409)
     with api.app.state.store.transaction() as c:
         people["people"][-1]["github"] = "ana-dev"
         c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(people),))
@@ -1679,7 +1680,8 @@ def test_a_burst_wakes_only_a_bot_whose_turn_it_is_and_never_messages_a_person(a
     their Needs you)."""
     mine = post(api, 'tasks', {'owner': 'cpo', 'title': 'Repair checks', 'body': 'x', 'links': [PR]})
     asked = post(api, 'tasks', {'owner': 'cpo', 'title': 'Ask first', 'body': 'x', 'links': [PR]})
-    post(api, f"tasks/{asked['id']}/asks", {'to': 'ana', 'line': 'Which plan?', 'version': asked['version']})
+    with api.app.state.store.transaction() as c:
+        question_marks.ask(c, 'bot:cpo', asked['id'], 'human:ana', 'Which plan?')  # the bot's ❓ waits on Ana
     theirs = post(api, 'tasks', {'owner': 'ana', 'title': 'Read the PR', 'body': 'x', 'links': [PR]})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='canceled' WHERE state='queued'")

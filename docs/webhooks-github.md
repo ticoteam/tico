@@ -72,8 +72,8 @@ If you would rather keep GitHub's own event name, leave step 4 out, use `issues`
 
 ## 6. Try it
 
-Open an issue in a repository of the organization. In a few seconds `ops` is woken with a notice in its room that holds your text
-and, fenced as data, the start of the call. If it does not wake:
+Open an issue in a repository of the organization. In a few seconds `ops` is woken by a notice that holds your text
+and, fenced as data, the start of the call; its run's log on `ops`'s Runs shows it. If it does not wake:
 
 - Open **Recent calls**. No row means GitHub never reached Tico. A refused row means the signature or address is wrong.
 - A row marked accepted with no result means nothing matched. Open it with **View payload** and compare `type` to the

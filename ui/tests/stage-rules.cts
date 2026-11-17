@@ -7,7 +7,7 @@ import type {Page, Route} from 'playwright';
 // the timers, + Rule), To leave (requirement rows) and More rules, one shut line that opens the rules that act on
 // neither entering nor a timer (a bot's snooze, an owner change; + Rule) and, after them, the built-in ones; it stays
 // open through a redraw and a save. A rule's row is one line: the rule mark, what it checks in its own words (never
-// "Jev decides", no arrows), a bolt when Jev checks it, its action as a mark, then ⋯. A rule's card, opened from a
+// "Decision model decides", no arrows), a bolt when the Decision model checks it, its action as a mark, then ⋯. A rule's card, opened from a
 // stage, has no Name and no When: a timer's After, Then and Message; a snooze rule's "Refuse the snooze when". What is
 // not ready yet is listed, off, with a small Soon. A rule saves at once, in a card over the editor, and a Goal or a
 // Limit set in the stage meanwhile is kept and saved by the stage's own Save. Built in has no controls. A member who
@@ -72,7 +72,7 @@ async function serve(page: Page, errors: string[], mayChange: boolean): Promise<
       suggests: 'sr_quiet', retire_why: 'Covered by the Late rule.'},
   ];
   const view = (r: Rule) => ({...r, scope: !r.pipeline_id ? 'company' : r.stages.length ? 'stage' : 'pipeline', pipeline_name: r.pipeline_id ? 'Engineering' : '',
-    stage_names: r.stages.map(s => s === 'build' ? 'Build' : 'Spec'), cost: r.jev ? 'one Jev call per event' : 'free', can_edit: mayChange,
+    stage_names: r.stages.map(s => s === 'build' ? 'Build' : 'Spec'), cost: r.jev ? 'one Decision model call per event' : 'free', can_edit: mayChange,
     // As backend/stage_rules.py not_acting: Tell or Move back on an action When never acts in step 1.
     not_acting: r.event !== 'timer' && r.then !== 'block' ? NEEDS_TIMER : ''});
   const order = ['stage', 'pipeline', 'company'];
@@ -88,7 +88,7 @@ async function serve(page: Page, errors: string[], mayChange: boolean): Promise<
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', email: 'ana@acme.example', role: mayChange ? 'owner' : 'member', mover: true, cloud: true, config});
     if (p === '/api/v2/config') return json(config);
     if (p === '/api/employees') return json([]);
-    if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
+    if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
     if (p === '/api/v2/pipelines') return json({pipelines: [pipelineOf(mayChange), product]});
     if (p === '/api/v2/pipelines/eng' && r.method() === 'POST') {
       const body = (r.postDataJSON() || {}) as Record<string, unknown>;
@@ -199,14 +199,16 @@ const waitCount = (page: Page, sid: string, n: string) => page.waitForFunction((
     // A screen reader hears whose rules: the stage, then the count (each column has one).
     assert.equal(await mark.getAttribute('aria-label'), 'Build: 1 rule of its own');
     assert.equal(await desk.locator('[data-pv-col="spec"] [data-sr-open]').getAttribute('aria-label'), 'Spec: 1 rule of its own');
-    // The muted gavel, never dimmed or struck through; last in the header, at its far right edge (▶'s slot before it).
+    // The muted gavel, never dimmed or struck through; at the header's right, just before the stage's ⋯, which ends it
+    // at its far right edge (▶'s slot before the gavel).
     assert.equal(await mark.evaluate(el => getComputedStyle(el.querySelector('.nav-icon')!).opacity), '1');
     assert.equal(await mark.evaluate(el => getComputedStyle(el, '::after').content), 'none', 'no strike-through');
     const edge = (sel: string) => desk.locator(sel).evaluateAll(els => els.map(el => {
-      const h = el.parentElement!, hb = h.getBoundingClientRect(), b = el.getBoundingClientRect();
-      return {last: h.lastElementChild === el, gap: Math.round(hb.right - parseFloat(getComputedStyle(h).paddingRight) - b.right)};
+      const h = el.parentElement!, more = el.nextElementSibling, last = h.lastElementChild!;
+      const gap = Math.round(h.getBoundingClientRect().right - parseFloat(getComputedStyle(h).paddingRight) - last.getBoundingClientRect().right);
+      return {next: more?.matches('[data-pv-col-menu]') && more === last, gap};
     }));
-    assert.deepEqual(await edge('.pv-col-head [data-sr-open]'), [{last: true, gap: 0}, {last: true, gap: 0}], 'at the far right of each column header');
+    assert.deepEqual(await edge('.pv-col-head [data-sr-open]'), [{next: true, gap: 0}, {next: true, gap: 0}], 'at the right of each column header, then its ⋯');
 
     // Build's mark opens Build's editor at its first phase with rules (While here: the pipeline's timer), scrolled to,
     // its heading focused. No other dialog.
@@ -225,9 +227,9 @@ const waitCount = (page: Page, sid: string, n: string) => page.waitForFunction((
     assert.equal(await desk.locator(`${ENTER} :is(input, select, fieldset)`).count(), 0, 'On entering has no fields');
     assert.deepEqual(await desk.locator(`${ENTER} [data-pe-enter-add]`).evaluateAll(els => els.map(el => [(el.textContent || '').trim(), el.getAttribute('data-pe-enter-add'),
       el.classList.contains('ghost')])), [['+ Rule', 'rule', true], ['+ Action', 'act', true]]);
-    // While here: Late after (the stage's expected time); no Keep warm, no Owner.
+    // While here: Late after (the stage's expected time); no Owner.
     assert.equal(await desk.locator('#pe-dialog .pe-phase[data-pe-phase="here"] .pe-f-time > span').first().innerText(), 'Late after');
-    assert.equal(await desk.locator('#pe-dialog :is([data-pe-sf="keep_warm_hours"], [data-pe-sf="owner"], [data-pe-seg="by_hand"])').count(), 0);
+    assert.equal(await desk.locator('#pe-dialog :is([data-pe-sf="owner"], [data-pe-seg="by_hand"])').count(), 0);
     // Each rule sits where it acts: a timer While here; an owner change and a bot's snooze under More rules, the stage's
     // own first. Every When lands in exactly one place.
     assert.deepEqual(await phaseRules(desk, 'enter'), []);
@@ -259,21 +261,21 @@ const waitCount = (page: Page, sid: string, n: string) => page.waitForFunction((
     assert.equal(await desk.locator(`${SEC()} .sr-r :is(.sr-name, .sr-what, .sr-says)`).count(), 0, 'no title or second line');
     assert.deepEqual(await desk.locator(`${SEC()} .sr-r`).evaluateAll(els => [...new Set(els.map(e => Math.round(e.querySelector('.sr-line')!.getBoundingClientRect().height)))]), [36]);
     assert.equal(await desk.locator(`${SEC()} [data-sr-rule="sr_quiet"] .sr-then .rule-outcome`).getAttribute('data-icon'), 'gavel', 'every rule leads with the rule mark');
-    // The line: no When for the phase it sits in, no arrows, never "Jev decides"; a Jev rule's line is its question.
+    // The line: no When for the phase it sits in, no arrows, never "Decision model decides"; a Decision model rule's line is its question.
     assert.equal(await rowText(desk, 'sr_quiet'), '6 h quiet');
     assert.equal(await rowText(desk, 'sr_owner'), 'The owner changes · owner not on engineering');
     assert.equal(await rowText(desk, 'sr_snooze'), 'A bot snoozes · Waiting on something outside, or blocked?');
-    assert.doesNotMatch(await desk.locator('#pe-body').innerText(), /Jev decides|→/);
+    assert.doesNotMatch(await desk.locator('#pe-body').innerText(), /Decision model decides|→/);
     // Its action is a mark at the right, named for what it does.
     const act = (id: string) => desk.locator(`${SEC()} [data-sr-rule="${id}"] .sr-marks [data-sr-then]`).evaluate(el => [el.getAttribute('role'), el.getAttribute('aria-label'), el.getAttribute('data-icon')]);
     assert.deepEqual(await act('sr_owner'), ['img', 'Block', 'block']);
     assert.deepEqual(await act('sr_quiet'), ['img', 'Tell the manager', 'supervisor_account']);
     assert.equal(await desk.locator(`${SEC()} [data-sr-group="builtin"] [data-sr-then]`).count(), 0, 'a built-in has no action mark');
-    // Jev checking it is a bolt, named for what it costs; a fixed check has no mark. No pill on a row.
+    // The Decision model checking it is a bolt, named for what it costs (the server's words); a fixed check has no mark. No pill on a row.
     assert.equal(await desk.locator(`${SEC()} :is(.sr-cost, .pill)`).count(), 0, 'no pill');
     assert.equal(await desk.locator(`${SEC()} [data-sr-rule="sr_owner"] [data-sr-cost]`).count(), 0, 'a free rule has no mark');
     assert.deepEqual(await desk.locator(`${SEC()} [data-sr-rule="sr_snooze"] [data-sr-cost]`).evaluate(el => [el.getAttribute('role'), el.getAttribute('aria-label'), el.textContent]),
-      ['img', 'One Jev call per event', 'bolt']);
+      ['img', 'One Decision model call per event', 'bolt']);
     // A shared rule wears one quiet mark saying where else it applies; the stage's own wears none.
     assert.deepEqual(await desk.locator(`${SEC()} [data-sr-rule]`).evaluateAll(els => els.map(e => `${(e as HTMLElement).dataset['srRule']}: ${e.querySelector('[data-sr-shared]')?.getAttribute('aria-label') ?? ''}`)),
       ['sr_quiet: In every stage of Engineering', 'sr_owner: ', 'sr_snooze: In every pipeline']);
@@ -314,7 +316,7 @@ const waitCount = (page: Page, sid: string, n: string) => page.waitForFunction((
     await rulePick.waitFor();
     assert.deepEqual(await rulePick.locator('[data-pe-enter-pick]').allTextContents(), ["The owner's team…", 'Limit']);
     assert.deepEqual(await rulePick.locator('.pe-mi-soon').evaluateAll(els => els.map(e => [e.firstChild?.textContent, e.querySelector('.pill.soon')?.textContent, (e as HTMLButtonElement).disabled])),
-      [['A question Jev answers…', 'Soon', true], ['In your own words…', 'Soon', true]]);
+      [['A question Decision model answers…', 'Soon', true], ['In your own words…', 'Soon', true]]);
     await rulePick.locator('[data-pe-enter-pick="limit"]').click();
     await desk.locator(`${ENTER} [data-pe-sf="task_limit"]`).fill('3');
     assert.equal((await draftStage(desk)).task_limit, 3);
@@ -336,7 +338,7 @@ const waitCount = (page: Page, sid: string, n: string) => page.waitForFunction((
     assert.equal(await card.locator(':is([name=name], [name=event], [name=stage]):not([type=hidden])').count(), 0, 'no Name, no When, no On');
     assert.deepEqual(await card.locator('.ru-lbl').allInnerTexts().then(a => a.map(t => t.toLowerCase())), ['refuse the snooze when', 'the bot is told']);
     assert.equal(await card.locator('textarea[name=jev]').inputValue(), 'Waiting on something outside, or blocked?');
-    assert.doesNotMatch(await desk.locator('#sr-panel').innerText(), /Jev decides|Cost:/i);
+    assert.doesNotMatch(await desk.locator('#sr-panel').innerText(), /Decision model decides|Cost:/i);
     assert.equal(await desk.locator('#pe-dialog').isVisible(), true, 'the editor stays under the card');
     await card.locator('[data-sr-back]').last().click();
     await desk.waitForFunction(() => document.activeElement?.closest('#pe-dialog [data-sr-rule]')?.getAttribute('data-sr-rule') === 'sr_snooze');
@@ -506,8 +508,9 @@ const waitCount = (page: Page, sid: string, n: string) => page.waitForFunction((
     await serve(member, errors, false);
     await member.goto('http://tico-ui.test/#/tasks?pipeline=eng&layout=list');
     await waitCount(member, 'build', '1 rule of its own');
-    const listMark = member.locator('.pv-group[aria-label="Build"] .pv-group-head > :last-child');
-    assert.equal(await listMark.getAttribute('data-sr-open'), 'build', 'the list\'s mark ends its header too');
+    const listMark = member.locator('.pv-group[aria-label="Build"] .pv-group-head > [data-sr-open]');
+    assert.equal(await listMark.evaluate(el => !el.nextElementSibling || el.nextElementSibling.matches('[data-pv-col-menu]:last-child')), true,
+      'the list\'s mark ends its header too, before the stage\'s ⋯');
     await listMark.click();
     await member.locator(`${PH('here')} [data-sr-rule]`).first().waitFor();
     await member.waitForFunction(sel => document.activeElement?.matches(sel) ?? false, HERE_H);
@@ -544,7 +547,8 @@ const waitCount = (page: Page, sid: string, n: string) => page.waitForFunction((
     await waitCount(phone, 'build', '1 rule of its own');
     const button = await phone.locator('.pv-phone-head [data-sr-open="build"]').boundingBox();
     assert.ok(button && button.height >= 44 && button.width >= 44, 'the phone mark is a 44 px target');
-    assert.equal(await phone.locator('.pv-phone-head > :last-child').getAttribute('data-sr-open'), 'build', 'last in the row');
+    assert.equal(await phone.locator('.pv-phone-head > [data-sr-open="build"]').evaluate(el => !el.nextElementSibling
+      || el.nextElementSibling.matches('[data-pv-col-menu]:last-child')), true, 'last in the row, but for the stage\'s ⋯');
     // Its whole target is its own: a tap near each corner (inside its rounding) and at the centre lands on the mark, not
     // on a stage tab beside it.
     assert.deepEqual(await phone.locator('.pv-phone-head [data-sr-open="build"]').evaluate(el => {

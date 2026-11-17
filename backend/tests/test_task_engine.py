@@ -1,4 +1,4 @@
-"""The one writer of a task's stage, owner and status (backend/task_engine.py, docs/pipelines-v3.md "How a task moves").
+"""The one writer of a task's stage, owner and status (backend/task_engine.py, docs/dev/pipelines-v3.md "How a task moves").
 
 Synthetic rows only (backend/tests/helpers/engine.py): a General pipeline, a three-stage Build pipeline, the fictional
 company's person and two bots.
@@ -218,7 +218,7 @@ def test_closing_a_task_leaves_open_a_filed_task_whose_pr_merged(c, general):
     H.task_link(c, ANA, merged["id"], "https://github.com/acme/app/pull/1")
     F.save_pr(c, "acme/app", 1, {"state": "merged", "head_sha": "a", "merged_sha": "m"}, 1)
     E.move(c, top["id"], E.CLOSED, ANA, "The flow is off")
-    # Its work is in the code (docs/pipelines-v3.md scenario 24): it stays open to reach a release or be closed.
+    # Its work is in the code (docs/dev/pipelines-v3.md scenario 24): it stays open to reach a release or be closed.
     states = [E.task(c, t["id"])["status"] for t in (top, merged, other)]
     assert states == ["closed", "open", "closed"]
 
@@ -392,16 +392,13 @@ def test_a_requirement_added_to_one_task_holds_it_until_answered_withdrawn_or_th
     E.fill_open_slots(c)
     row = E.task(c, row["id"])
     seen = row["version"]
+    plan = X.shown(c)  # what the bot's OK shows
     with _refused("task_changed"):
-        E.add_requirement(c, row["id"], "bot:builder", "answer", ANA, "Retry how many times?")
+        E.add_requirement(c, row["id"], "bot:builder", "ok", ANA, "OK the retry plan", shows=plan)
     with _refused("task_requirement"):
         E.add_requirement(c, row["id"], "bot:builder", "owner_done", ANA, "Is it done?", seen_version=seen)
-    first = E.add_requirement(
-        c, row["id"], "bot:builder", "answer", ANA, "Retry how many times?", choices=["3", "5"], seen_version=seen
-    )
-    second = E.add_requirement(
-        c, row["id"], "bot:builder", "answer", ANA, "Retry 3 or 5 times?", choices=["3", "5"], seen_version=seen
-    )
+    first = E.add_requirement(c, row["id"], "bot:builder", "ok", ANA, "OK 3 retries", shows=plan, seen_version=seen)
+    second = E.add_requirement(c, row["id"], "bot:builder", "ok", ANA, "OK 5 retries", shows=plan, seen_version=seen)
     open_ones = R.on_visit(c, row["visit"]["id"])
     assert [r["id"] for r in open_ones] == [second["requirement_id"]]  # a bot's second replaces its first
     assert first["version"] == row["version"]  # asking is not a move
@@ -409,7 +406,7 @@ def test_a_requirement_added_to_one_task_holds_it_until_answered_withdrawn_or_th
     assert len(R.on_visit(c, row["visit"]["id"])) == 2  # a person has no such limit
     X.say_done(c, row)
     assert E.advance(c, row["id"]) is None  # the stage's own requirement is met: the task still waits
-    X.answer(c, row, second["requirement_id"], "5", ANA)
+    X.answer(c, row, second["requirement_id"], "ok", ANA)
     assert E.advance(c, row["id"]) is None
     moved = E.withdraw_requirement(c, mine["requirement_id"], ANA)
     assert moved["stage"]["name"] == "Review"

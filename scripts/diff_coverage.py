@@ -17,7 +17,7 @@ here`). `pragmas` fails a bare one, so the check runs on every push, before anyt
 """
 
 import argparse
-from collections import defaultdict
+from collections import Counter, defaultdict
 import json
 import os
 from pathlib import Path
@@ -83,6 +83,33 @@ def added_text(diff_text):
     return out
 
 
+def removed_text(diff_text):
+    """Counter of the removed lines' stripped text, from a `git diff -U0` text."""
+    out, current = Counter(), None
+    for line in diff_text.split("\n"):
+        if line.startswith("--- "):
+            current = line[6:] if line.startswith("--- a/") else None
+        elif current is not None and line.startswith("-") and measured(current) and line[1:].strip():
+            out[line[1:].strip()] += 1
+    return out
+
+
+def unmoved(added, removed):
+    """`added` ({file: [(line number, text)]}) without the lines that only moved: an added line whose text, ignoring
+    indentation, the same change removes elsewhere is not new code. Each removed line excuses one added line, so code
+    that is copied rather than moved still counts."""
+    left = Counter(removed)
+    out = {}
+    for name, lines in sorted(added.items()):
+        for number, text in lines:
+            key = text.strip()
+            if key and left[key]:
+                left[key] -= 1
+            else:
+                out.setdefault(name, []).append(number)
+    return out
+
+
 def diff_text(base, head, files=None):
     args = ["diff", "-U0", "--no-renames", "--no-color", base, head]
     if files:
@@ -133,7 +160,10 @@ def plan_coverage(base, head, root=ROOT, changed=None):
         files = sorted(n for n in changed if measured(n) and (root / n).is_file())
     if not files:
         return {"lines": {}}
-    added = {f: lines for f, lines in added_lines(diff_text(base, head, files)).items() if lines}
+    # Code a change moves (a split, a function to another module) brings no new statements; its tests did not move.
+    text = diff_text(base, head, files)
+    moved_from = removed_text(diff_text(base, head, list(MEASURED)))
+    added = {f: lines for f, lines in unmoved(added_text(text), moved_from).items() if lines}
     statements = statement_lines(sorted(added), root)
     lines = {f: sorted(set(added[f]) & statements[f]) for f in sorted(added)}
     return {"lines": {f: ls for f, ls in lines.items() if ls}}

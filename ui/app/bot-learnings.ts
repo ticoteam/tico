@@ -8,7 +8,7 @@
    to answer, then its summary and the commits it made. A question also shows as a small card on the bot's page, and the button carries a mark. */
 'use strict';
 
-/** A dream's open questions: its ask on the dream task (the requirement), its text, and whether they are yours to answer. */
+/** A dream's open questions: its ❓ on the dream task (`qmark:<id>`), its text, and whether they are yours to answer. */
 interface DreamQuestions { task_id: string; requirement_id: string; mine: boolean; text: string; }
 /** The bot's dream (GET /api/v2/bots/{bot}/dream): what it is doing, and its questions while it asks. */
 interface BotDream {
@@ -21,7 +21,7 @@ interface BotDream {
   auto: boolean;
   questions: DreamQuestions | null;
 }
-interface DreamCard { n: string; text: string; suggested: string; intro?: string; }
+interface DreamCard { n: string; text: string; intro?: string; }
 /** Where an update was learned (backend/memory_history.py source): the bot's run, and its task or chat message. */
 interface LearnSource {
   bot_id: string; task?: string | null; title?: string | null;
@@ -58,7 +58,7 @@ async function botLearningsLoad(slug: string) {
   const button = $('#bot-learn');
   if (!button) return;
   let data: LearnPage;
-  try { data = await get<LearnPage>(`${learnApi(slug)}?include_documents=false`); } catch { return; }          // an older server has no history: no button
+  try { data = await get<LearnPage>(`${learnApi(slug)}?include_documents=false`); } catch { return; }          // a failed read: no button
   if (BOT?.slug !== slug || !button.isConnected) return;
   const docs: Record<string, string> = data.documents || {};
   if (!(data.updates || []).length && !Object.values(docs).some(t => String(t).trim()) &&
@@ -75,7 +75,7 @@ async function botLearningsLoad(slug: string) {
   };
 }
 
-// The bot's dream, or null: an older server has none, and a failed read shows the panel as it was.
+// The bot's dream, or null when there is none or the read failed (the panel shows as it was).
 async function dreamFetch(slug: string, fresh = false): Promise<BotDream | null> {
   try { return (await get<{dream?: BotDream | null}>(dreamApi(slug), {fresh}))?.dream || null; } catch { return null; }
 }
@@ -105,8 +105,7 @@ function dreamPageShow(slug: string, dream: BotDream | null) {
   dreamWire(host, q, () => { host.innerHTML = ''; host.dataset.ask = ''; });
 }
 
-// A question's text as cards: numbered questions ("1. …", "2) …") each get one, anything else is one card. A
-// "Suggested: …" (or "Suggestion:", "Suggested answer:") at its end becomes a chip that fills the box.
+// A question's text as cards: numbered questions ("1. …", "2) …") each get one, anything else is one card.
 function dreamSplit(text: string | null | undefined): DreamCard[] {
   const lines = String(text || '').split('\n');
   const parts: {n: string; lines: string[]}[] = [];
@@ -117,11 +116,7 @@ function dreamSplit(text: string | null | undefined): DreamCard[] {
     else if (parts.length) parts[parts.length - 1]?.lines.push(line);
     else lead.push(line);
   }
-  const card = (n: string, body: string[]): DreamCard => {
-    const t = body.join('\n').trim();
-    const s = t.match(/\(?\b(?:suggested(?: answer)?|suggestion|my suggestion)\s*:\s*([^\n]+?)\)?\s*$/i);
-    return {n, text: s ? t.slice(0, s.index).trim() : t, suggested: s ? (s[1] ?? '').trim() : ''};
-  };
+  const card = (n: string, body: string[]): DreamCard => ({n, text: body.join('\n').trim()});
   if (parts.length < 2) return [card('', lines)];
   const intro = lead.join('\n').trim();
   return parts.map((p, i) => ({...card(p.n, p.lines), intro: i === 0 ? intro : ''}));
@@ -134,27 +129,17 @@ function dreamQuestionsHTML(q: DreamQuestions) {
     ${cards.map((c, i) => `<div class="dream-q" style="--i:${i}">
       ${c.intro ? `<div class="dream-intro">${md(c.intro)}</div>` : ''}
       <label class="dream-q-text" for="${key}-${i}">${c.n ? `<span class="dream-n">${esc(c.n)}</span>` : ''}<span class="md">${md(c.text)}</span></label>
-      ${c.suggested ? `<button type="button" class="dream-chip" data-dream-fill="${i}" title="Use the suggested answer">${esc(c.suggested)}</button>` : ''}
       <textarea id="${key}-${i}" rows="2" data-dream-n="${esc(c.n)}" placeholder="Your answer"></textarea>
     </div>`).join('')}
     <div class="dream-actions"><button class="primary" type="submit">Send</button></div>
   </form>`;
 }
 
-// Send the answers as one answer to the dream's ask, numbered to match, as Needs you answers it: it wakes the bot.
+// Send the answers as one reply on the dream's chat, numbered to match: it clears the ❓ (backend/question_marks.py)
+// and wakes the bot, whose dream goes on where it stopped.
 function dreamWire(root: HTMLElement, q: DreamQuestions, sent: () => void) {
   const form = root.querySelector<HTMLFormElement>('.dream-form');
   if (!form) return;
-  const cards = dreamSplit(q.text);
-  form.addEventListener('click', ev => {
-    const chip = ev.target instanceof Element ? ev.target.closest<HTMLElement>('[data-dream-fill]') : null;
-    if (!chip) return;
-    const i = Number(chip.dataset.dreamFill);
-    const box = form.querySelectorAll<HTMLTextAreaElement>('textarea')[i], card = cards[i];
-    if (!box || !card) return;
-    box.value = card.suggested;
-    box.focus();
-  });
   form.addEventListener('submit', async ev => {
     ev.preventDefault();
     const boxes = [...form.querySelectorAll<HTMLTextAreaElement>('textarea')];
@@ -164,7 +149,7 @@ function dreamWire(root: HTMLElement, q: DreamQuestions, sent: () => void) {
     const button = form.querySelector<HTMLButtonElement>('[type="submit"]');
     if (button) button.disabled = true;
     try {
-      await taskAnswer(q.task_id, q.requirement_id, text || '', null);
+      await post(`/v2/tasks/${encodeURIComponent(q.task_id)}/comments`, {text: text || ''});
       sent();
     } catch (e) { if (button) button.disabled = false; toast(errorMessage(e, '')); }
   });

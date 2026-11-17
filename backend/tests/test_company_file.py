@@ -53,6 +53,8 @@ def depts(draft):
 
 
 SPEC_COUNTS = {"everything": 69, "software": 48, "services": 35, "local": 38, "store": 36}
+# The Everything model's chart: its core bots and its seats, as its data file lists them.
+EVERYTHING_BOTS = len(C.MODELS["everything"]["core"]) + len(C.MODELS["everything"]["seats"])
 
 
 def test_1_each_model_has_its_spec_seat_count_and_every_seat_names_a_template_or_a_seat_to_build():
@@ -212,8 +214,8 @@ def test_7_show_me_everything_switches_the_chart_to_the_everything_model():
         ("model_use", {"model": "everything"}),
     )
     assert all(r["ok"] for r in results), results
-    assert results[2]["said"] == "The chart is now the Everything model (69 seats)."
-    assert len(draft["bots"]) == 69 and depts(draft)["finance"] == 11
+    assert results[2]["said"] == f"The chart is now the Everything model ({EVERYTHING_BOTS} seats)."
+    assert len(draft["bots"]) == EVERYTHING_BOTS and depts(draft)["finance"] == 11
     assert next(b for b in draft["bots"] if b["title"] == "Equity Manager")["person"] == "ana", "a held seat stays"
     assert "undo" in draft, "switching models is a change the visitor can undo"
     for key in ("software", "services", "local", "store"):
@@ -265,7 +267,7 @@ def test_filling_a_seat_on_an_empty_team_keeps_the_visitor_the_owner():
 
 def test_8_a_company_no_model_fits_starts_from_everything():
     draft, line = first_chart("We do a bit of everything.", ["small_team"])
-    assert len(draft["bots"]) == 69
+    assert len(draft["bots"]) == EVERYTHING_BOTS
     assert line == "Nothing you said points to one kind of company, so we started from the Everything model."
 
 

@@ -116,9 +116,6 @@ def test_tasks_and_chat_route_only_to_an_active_branch_while_enabled(api):
     assert mine['owner_id'] == branch_actor
     other = post(api, 'tasks', {'owner': 'cpo', 'title': 'Review another design', 'body': 'Please review.'})
     assert other['owner_id'] == 'bot:cpo'
-    task_chat = post(api, f'tasks/{other["id"]}/chat', {'text': 'Discuss the design'}, 'cara-test')
-    assert task_chat['bot'] == bot_id(api, 'cpo-cara')
-    assert task_chat['message']['recipient_id'] == branch_actor
     chat = post(api, 'chat/cpo', {'text': 'Hello'}, 'cara-test')
     assert chat['recipient_id'] == branch_actor
     conversation = get(api, 'conversations?chat_with=cpo-cara', 'cara-test')['conversations'][0]

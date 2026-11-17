@@ -29,7 +29,7 @@ from backend.observability import Observability
 from backend.store import H
 from backend.tests.helpers.cloud_access import signals
 from backend.tests.helpers.cloud_machines import FakeHQ
-from backend.tests.helpers.sample_company import OWNER_EMAIL, settings_for, signed_in
+from backend.tests.helpers.fresh_install import OWNER_EMAIL, settings_for, signed_in
 from backend.tests.helpers.template_renames import CHARTS, employees_file
 from backend.tests.helpers.upgrade import FIXTURES
 from clients.environments import seed_registry
@@ -241,6 +241,24 @@ def updated(before):
         if not any(r["stage"] == "Fixes 2" and r["kind"] == "owner_done" for r in requirements):
             requirements.insert(first, {**rule, "stage": "Fixes 2", "kind": "owner_done"})
         engineering["requirements"] = requirements
+    # onboarding.ensure_tools_owner: a company from before the Tools Owner was built in gets it once, under the General
+    # Manager, on BotOps' computer and the shared cloud machine like the other built-ins, with its weekly review.
+    if "tools-owner" not in after["bots"]:
+        after["bots"]["tools-owner"] = {
+            "name": "Tools Owner",
+            "state": "active",
+            "manager": "general-manager",
+            "team": "built-in",
+            "setup": None,
+        }
+        after["automations"] = sorted([*after["automations"], ("Review the tools", "tools-owner", "schedule", 1)])
+        botops = next(runner for bot, runner in after["placed"] if bot == "botops")
+        after["placed"] = sorted([*after["placed"], ("tools-owner", botops)])
+        after["cloud"] = sorted([*after["cloud"], ("tools-owner", "cloud", "shared", None, None)])
+    # onboarding.ensure_builtin_routines: the Tools Owner's daily learn-from-use reaches one from before it, once, on.
+    learn = ("Learn from how tools are used", "tools-owner", "schedule", 1)
+    if learn not in after["automations"]:
+        after["automations"] = sorted([*after["automations"], learn])
     return after
 
 

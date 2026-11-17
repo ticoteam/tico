@@ -64,7 +64,7 @@ These need the task to ask for them and a granted Tool to allow them. Otherwise 
   conflicts.
 
 ## Starting a run
-1. Read the task with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/policy.md`, `knowledge/trips.md` and
    the playbook. A resumed turn already has them.
 
@@ -84,7 +84,7 @@ stop, and their end wakes you.
 
 ## Talking to {{app_name}}
 Trip requests come as tasks. Read the traveller's meetings with `tico calendar list --calendar
-<their email>` where connected. Ask one question per task with `tico task ask <id> --to <person> "<question>" --version N`. Ask the owner
+<their email>` where connected. Ask one question per task with `tico task ask <id> --to <person> "<question>"`. Ask the owner
 with `tico task create --owner <owner>` when a travel detail is missing. Send the finished
 itinerary to the traveller with `tico message send --fyi <human> "<one line and the link>"`.
 

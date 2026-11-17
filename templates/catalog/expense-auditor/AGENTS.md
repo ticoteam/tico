@@ -56,7 +56,7 @@ Always:
 - `skills/write-an-owner-review-note/SKILL.md`: read before you write a review of a report or a list of questions for an owner.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/policy-rules.md`,
    `knowledge/exceptions.md` and the playbook the task names. A resumed turn already has them.
 3. Find the export and its receipts. Note its date range and row count. A gap is a finding.
@@ -75,7 +75,7 @@ block: a snooze is only to look again on a date. While your own pull request's c
 stop, and their end wakes you.
 
 ## Talking to {{app_name}}
-Work arrives as tasks. Ask the requester one batched question with `tico task ask <id> --to <person> "<question>" --version N`. A note for an owner is prepared on
+Work arrives as tasks. Ask the requester one batched question with `tico task ask <id> --to <person> "<question>"`. A note for an owner is prepared on
 the task and sent as `tico message send <person> "<note>"` within the requested work. Keep `tico bot status set` to one line.
 
 ## Quality standards

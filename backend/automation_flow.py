@@ -388,7 +388,7 @@ def _check_due(trigger):
     except ValueError:
         raise Invalid("trigger: first_due is a date such as 2027-01-31") from None
     _need(trigger["repeats"] in D.REPEATS, "trigger", "repeats is once, weekly, monthly, quarterly or yearly")
-    open_days = trigger.get("open_days", D.OPEN_DAYS)
+    open_days = trigger.get("open_days", D.DEFAULT_OPEN_DAYS)
     _need(
         type(open_days) is int and 0 <= open_days <= D.MAX_OPEN_DAYS,
         "trigger",
@@ -802,7 +802,7 @@ def render_prompt(text, values, cap=MAX_TEXT):
 # ---------------------------------------------------------------------------------------------------- Decide's state
 # The trigger's object a Decide step judges, first found wins: a find's item, then the trigger's own object.
 OBJECTS = ("item", "message", "task", "event", "listening", "webhook", "schedule", "due")
-SNIPPET_CHARS = 400  # as the mail connector's brief listing (connectors/mail/judge.py)
+SNIPPET_CHARS = 400  # a message's snippet a Decide step reads: enough to judge, short enough to stay cheap
 
 
 def mail_state(m):
@@ -946,7 +946,7 @@ def shape_text():
         f"{MAX_RULES} rules per filter, {MAX_CONDS} conditions per rule or path, {MAX_PATHS} paths per fork, "
         f"{MAX_DEPTH} levels of forks inside forks, {MAX_STEPS} steps, {MAX_PROMPT} characters per prompt.",
         "",
-        "Decide asks Jev, the one decision model. A `paths` path has `name`, `match` (all or any, default all), "
+        "Decide asks the decision model. A `paths` path has `name`, `match` (all or any, default all), "
         "`when` and `steps`; `otherwise` takes `steps` too. A filter rule has `when`, `match`, `then` (actions), `stop`, "
         "`next` (end, rule or step) and `to` (a destination id). With `to`, or with `stop` true, `next` is end or left out.",
         "",

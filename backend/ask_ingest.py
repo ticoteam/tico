@@ -11,7 +11,7 @@ on their Needs you, snoozed ones left out), in this order:
 
   - a status update: FYI, off their plate;
   - the bot's own work, or not clear: refused;
-  - a decision: refused, to be asked as a question on the bot's own task (`tico task ask`), with its choices;
+  - a decision: refused, to be asked with a ❓ message on the bot's own task (`tico task ask`);
   - otherwise the budget B (default 10): under B clear; B to 3B also meets one of the person's criteria; 3B to 10B
     also meets one of the criteria and recommends; 10B or more urgency 3. Urgency 3 always passes.
 
@@ -79,20 +79,6 @@ DECISION, CHORE, STATUS, OWN_WORK, SETUP = "decision", "chore", "status", "own_w
 # open one), `refused` (the write raised: a refusal), `error` (it raised otherwise). A replay's call is `replay`.
 UNRECORDED = "ask_ingest.unrecorded"
 REPLAY = "replay"
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS ask_ingest_settings(
- person TEXT PRIMARY KEY, mode TEXT NOT NULL, budget INTEGER NOT NULL, chores_budget INTEGER NOT NULL,
- criteria TEXT NOT NULL, updated_at TEXT NOT NULL, updated_by TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS ask_ingest_items(
- id TEXT PRIMARY KEY, person TEXT NOT NULL, asker TEXT NOT NULL, kind TEXT NOT NULL, ref TEXT NOT NULL,
- message_id TEXT, mode TEXT NOT NULL, outcome TEXT NOT NULL, would TEXT NOT NULL, reason TEXT NOT NULL, load INTEGER NOT NULL,
- call_id TEXT, created_at TEXT NOT NULL, let_through_at TEXT, let_through_by TEXT, merged_into TEXT, passed_at TEXT);
-CREATE INDEX IF NOT EXISTS ask_ingest_items_person ON ask_ingest_items(person, created_at);
-CREATE INDEX IF NOT EXISTS ask_ingest_items_ref ON ask_ingest_items(ref);
-CREATE INDEX IF NOT EXISTS ask_ingest_items_merged ON ask_ingest_items(merged_into) WHERE merged_into IS NOT NULL;
-"""
-
 
 # ---- settings ---------------------------------------------------------------------------------------------------
 
@@ -181,11 +167,13 @@ def gated(who, assistant_bot=""):
 
 
 def _needs(c, person):
-    """The person's Needs you as the engine reads it (backend/waiting_on.py `needs`): their tasks, the asks that name
-    them and the Paused causes they can fix, snoozed tasks left out."""
+    """The person's plate as the engine reads it (backend/waiting_on.py `needs` with `own_work`): the asks that name
+    them, the Paused causes they can fix, and the tasks whose work is theirs, snoozed tasks left out. Needs you itself
+    holds no task that is only theirs, but a task a bot hands a person still weighs on them, so the gate counts it,
+    and a repeat of one joins it."""
     from . import waiting_on
 
-    return waiting_on.needs(c, person)
+    return waiting_on.needs(c, person, own_work=True)
 
 
 def _plate_tasks(c, person):
@@ -194,8 +182,8 @@ def _plate_tasks(c, person):
 
 
 def load(c, person):
-    """The open items on the person's Needs you: each task of theirs, each ask that names them and each Paused cause
-    they can fix, snoozed ones left out. Read before the item is written, so it never counts itself."""
+    """The open items on the person's plate (`_needs`): each task of theirs, each ask that names them and each Paused
+    cause they can fix, snoozed ones left out. Read before the item is written, so it never counts itself."""
     return len(_needs(c, person))
 
 
@@ -308,66 +296,8 @@ def _criteria(own):
     return {f"line-{n}": line for n, line in enumerate(own["criteria"], 1)}
 
 
-def _line(value, limit):
-    """One field of a question, whitespace folded and cut to `limit` characters."""
-    return " ".join(str(value or "").split())[:limit]
-
-
-def _question_lines(questions, limit):
-    """The lines a structured question puts on the item: each question's line, its why, each option with what it
-    `then` does, and the recommended option(s). A why and a then are cut to `limit` characters."""
-    lines = []
-    for q in questions or []:
-        if not isinstance(q, dict):
-            continue
-        line = _line(q.get("question"), 300)
-        if not line:
-            continue
-        lines.append(f"Question: {line}")
-        why = _line(q.get("why"), limit)
-        if why:
-            lines.append(f"Why: {why}")
-        options = [o for o in (q.get("options") if isinstance(q.get("options"), list) else []) if isinstance(o, dict)]
-        options = [(_line(o.get("label"), 60), o) for o in options]
-        options = [(label, o) for label, o in options if label]
-        for label, o in options:
-            then = _line(o.get("then"), limit)
-            lines.append(f"Option: {label}" + (f" (then: {then})" if then else ""))
-        recommended = [label for label, o in options if o.get("recommended") is True]
-        if recommended:
-            lines.append("Recommended: " + ", ".join(recommended))
-    return "\n".join(lines)
-
-
-def structured_text(questions, text):
-    """The text the model reads for an item. `questions` is the item's refs.questions as stored, or None. Without
-    them, the text is the item's text cut to MAX_TEXT, as before. With them, the lines come first, in order: each
-    question's line, its why, each option with its then, which option is recommended; then the item's text. The lines
-    are never cut, so a question set larger than MAX_TEXT on its own (the schema's largest is about 4 questions of 6
-    options) reads in full with no body; the item's text fills what is left up to MAX_TEXT."""
-    body = str(text or "")
-    head = _question_lines(questions, 200) if isinstance(questions, list) else ""
-    if not head:
-        return body[:MAX_TEXT]
-    room = MAX_TEXT - len(head) - 2
-    return f"{head}\n\n{body[:room]}" if room > 0 and body else head
-
-
-def _judged_text(refs, message_text, task):
-    """What a question was judged with, as replayed. A task question (`refs.task_question`, set by the server when it
-    writes the question) was judged with the body its task was filed with, which the ask message does not carry: the
-    question's line stands in for a body that was not given. Any other question judged its message text."""
-    questions = refs.get("questions")
-    first = questions[0] if isinstance(questions, list) and questions and isinstance(questions[0], dict) else {}
-    if not task or refs.get("task_question") is not True:
-        return message_text
-    body = str(task.get("body") or "")
-    return "" if body.strip() == str(first.get("question") or "").strip() else body
-
-
-def _call(qset, own, items, asker, person_name, title, text, asked=None):
-    """(state, questions, criteria) of the one call about one item. `asked` is the item's structured questions as
-    stored (refs.questions), or None."""
+def _call(qset, own, items, asker, person_name, title, text):
+    """(state, questions, criteria) of the one call about one item."""
     criteria = _criteria(own)
     questions = {qid: qset["questions"][qid] for qid in ("clear", "kind", "urgency", "recommends")}
     if criteria:
@@ -375,17 +305,16 @@ def _call(qset, own, items, asker, person_name, title, text, asked=None):
     if items:
         questions["covered"] = J.with_options(qset["questions"]["covered"], {name: t for name, (_, t) in items.items()})
     state = {
-        "item": {"title": str(title or "")[:300], "text": structured_text(asked, text)},
+        "item": {"title": str(title or "")[:300], "text": str(text or "")[:MAX_TEXT]},
         "asker": asker,
         "person": person_name,
     }
     return state, questions, criteria
 
 
-def _judge(store, engine, qset, own, items, asker, person_name, title, text, kind, replay=False, asked=None):
-    """One call on the set for one item, and its judge.call row (never the item's text): (answers, call id, error).
-    `asked` is the item's structured questions as stored (refs.questions), or None."""
-    state, questions, criteria = _call(qset, own, items, asker, person_name, title, text, asked)
+def _judge(store, engine, qset, own, items, asker, person_name, title, text, kind, replay=False):
+    """One call on the set for one item, and its judge.call row (never the item's text): (answers, call id, error)."""
+    state, questions, criteria = _call(qset, own, items, asker, person_name, title, text)
     result, error = _ask(calls_for(store), engine, state, questions, qset["label"])
     if error in REFUSED:
         return None, None, error  # no call was made: no judge.call row, and the day's count is kept
@@ -414,11 +343,10 @@ def _judge(store, engine, qset, own, items, asker, person_name, title, text, kin
     return answers, call["id"], error
 
 
-def preflight(store, primary, who, target, title, text, kind="task", asked=None):
+def preflight(store, primary, who, target, title, text, kind="task"):
     """Ask the set about one item for the person `target` names, outside any transaction. Returns the verdict
     `apply` reads: {person, asker, kind, mode, answers (typed values, None where under threshold), items, criteria,
-    call, error}; None when the write is not gated (a person's, not to a person, mode Off). `asked` is the item's
-    structured questions (refs.questions), judged with its text. Never raises."""
+    call, error}; None when the write is not gated (a person's, not to a person, mode Off). Never raises."""
     verdict = None
     try:
         if not target or not gated(who, store.settings.assistant_bot):
@@ -458,9 +386,7 @@ def preflight(store, primary, who, target, title, text, kind="task", asked=None)
             items = open_items(c, person, who.actor)
             asker = _bot_line(c, who.actor)
             person_name = H.person_name(c, H.actor_id(person)) or H.actor_id(person)
-        answers, call, error = _judge(
-            store, engine, qset, own, items, asker, person_name, title, text, kind, asked=asked
-        )
+        answers, call, error = _judge(store, engine, qset, own, items, asker, person_name, title, text, kind)
         verdict.update(answers=answers, call=call, error=error)
         return {**verdict, "items": {n: i for n, (i, _) in items.items()}, "criteria": _criteria(own)}
     except Exception as exc:  # the gate never stops the write
@@ -530,8 +456,8 @@ def decide(answers, budget, decisions):
     if kind == OWN_WORK:
         return (THROUGH, "urgent") if urgent else (SENT_BACK, "own_work")
     if kind == DECISION:
-        # A decision is asked, not filed: as a question on the bot's own task, with its choices and recommendation
-        # (Tasks spec "Bots ask people a question with choices", AC-6). Urgent or not: an ask reaches them as fast.
+        # A decision is asked, not filed: a ❓ message on the bot's own task (backend/question_marks.py). Urgent or
+        # not: a ❓ reaches them as fast.
         return SENT_BACK, "decision"
     clear = answers["clear"]
     if clear is False:
@@ -568,8 +494,8 @@ def message(reason, name, load_now, manager_name, handle=""):
     --to` names the person."""
     if reason == "decision":
         return (
-            f"This asks {name} to decide, so ask it as a question on your own task: tico task ask <task> --to "
-            f"{handle or name}, with why it matters, your choices and your recommendation."
+            f'This asks {name} to decide, so ask it on your own task: tico task ask <task> --to {handle or name} '
+            '"<question>". Say why, the options and your pick in the message.'
         )
     why = REASONS.get(reason, "it doesn't meet {name}'s asking criteria").format(name=name, load=load_now)
     ask = f"ask {manager_name}, " if manager_name else ""
@@ -794,7 +720,7 @@ def reconcile(c, start, end):
 
 def on_reply(c, actor, task_id, text, *, text_sources=()):
     """A person's comment on an open item the gate merged repeats into (hubdb.task_comment): passed once to each bot
-    that asked the same thing, on its own task (waking it) or, for an old question outside any task, as a message. The Strategy Owner's merge (backend/strategy_merge.py) relays the same way for its own merged items."""
+    that asked the same thing, on its own task (waking it) or, for an old question outside any task, as a message."""
     if not H.is_human(actor) or not task_id or not str(text or "").strip():
         return
     try:
@@ -882,8 +808,12 @@ def _next_day(day):
     return (dt.date.fromisoformat(day) + dt.timedelta(days=1)).isoformat() + "T00:00:00"
 
 
+# Theirs then: a task they owned, or one a bot asked them on (backend/person_asks.py: a bot's task for a person is its
+# own, with its ❓ or OK to them).
 _ACTIVE_AT = (
-    "owner_id=? AND created_at<? AND (done_at IS NULL OR done_at>?) AND (closed_at IS NULL OR closed_at>?) "
+    "(owner_id=? OR id IN (SELECT v.task_id FROM visits v JOIN requirements r ON r.visit_id=v.id "
+    "WHERE r.person_id=? AND r.created_at<?) OR id IN (SELECT task_id FROM question_marks WHERE person_id=? "
+    "AND created_at<?)) AND created_at<? AND (done_at IS NULL OR done_at>?) AND (closed_at IS NULL OR closed_at>?) "
     "AND NOT EXISTS (SELECT 1 FROM snoozes sz WHERE sz.task_id=tasks.id AND sz.ended_at IS NULL "
     "AND (sz.until_at IS NULL OR sz.until_at>?))"
 )
@@ -905,12 +835,11 @@ _OWNER_THEN = (
 
 def replay_items(c, person, start, end, assistant_bot=None):
     """What bots put on this person between `start` and `end`, oldest first, as the gate would have seen each: tasks
-    filed for them and questions asked of them (on a task or loose). The owner then comes from the owner history
+    filed for them. The owner then comes from the owner history
     (`_OWNER_THEN`), today's owner where a task never changed hands. A merged task, or an older item the check kept
     with its bot, is found by its ask row for this person as well. Refusals have no saved text or ref to replay.
-    Each ask row with a surviving item is one placement, listed on its own day. Bot owner changes to the person are also placements when the check was off and wrote no ask row. A
-    question carries its structured questions (refs.questions); a task row carries none, its questions are the ask
-    messages replayed beside it."""
+    Each ask row with a surviving item is one placement, listed on its own day. Bot owner changes to the person are also
+    placements when the check was off and wrote no ask row."""
     skip = H.bot_actor(assistant_bot) if assistant_bot else ""
     # A task counts on the day it was filed for them, while they owned it, unless the gate judged that filing: an ask row
     # for them written no later than the task's first owner change leaves the filing to the second branch. That branch
@@ -924,67 +853,57 @@ def replay_items(c, person, start, end, assistant_bot=None):
             "ref": r["id"],
             "asker": r["asker"],
             "title": r["title"] or "",
-            "text": r["body"] or "",
-            "asked": None,
+            "text": H.task_request_text(c, r["id"]),  # what it asked: its first message
             "created_at": r["at"],
         }
         for r in c.execute(
-            "SELECT t.id,t.title,t.body,t.requester_id AS asker,t.created_at AS at "
+            "SELECT t.id,t.title,t.requester_id AS asker,t.created_at AS at "
             "FROM tasks t "
-            f"WHERE {_OWNER_THEN}=? AND t.created_at>=? AND t.created_at<? "
+            # Theirs then, or the asking bot's own task with its ❓ or OK to them (backend/person_asks.py).
+            f"WHERE ({_OWNER_THEN}=? OR t.id IN (SELECT v.task_id FROM visits v JOIN requirements r ON "
+            "r.visit_id=v.id WHERE r.person_id=? AND r.added_by_id=t.requester_id) OR t.id IN (SELECT q.task_id "
+            "FROM question_marks q WHERE q.person_id=? AND q.bot_id=t.requester_id)) AND t.created_at>=? AND t.created_at<? "
             "AND t.requester_id LIKE 'bot:%' AND t.requester_id<>? AND NOT EXISTS "
             "(SELECT 1 FROM ask_ingest_items i WHERE i.ref=t.id AND i.person=? AND i.kind='task' "
             f"AND julianday(i.created_at)<=COALESCE({_FIRST_OWNER_CHANGE}, 1e9)) "
-            "UNION ALL SELECT t.id,t.title,t.body,i.asker,i.created_at FROM ask_ingest_items i "
+            "UNION ALL SELECT t.id,t.title,i.asker,i.created_at FROM ask_ingest_items i "
             "JOIN tasks t ON t.id=i.ref WHERE i.person=? AND i.kind='task' AND i.created_at>=? "
             "AND i.created_at<? AND i.asker LIKE 'bot:%' AND i.asker<>? "
-            "UNION ALL SELECT t.id,t.title,t.body,h.actor_id,h.created_at FROM history_events h "
+            "UNION ALL SELECT t.id,t.title,h.actor_id,h.created_at FROM history_events h "
             "JOIN tasks t ON t.id=h.subject_id WHERE h.subject_type='task' AND h.kind='reassign' "
             "AND h.new=? AND h.actor_id LIKE 'bot:%' AND h.actor_id<>? "
             "AND h.created_at>=? AND h.created_at<? AND NOT EXISTS "
             "(SELECT 1 FROM ask_ingest_items i WHERE i.person=? AND i.kind='task' AND i.ref=t.id "
             "AND i.asker=h.actor_id AND abs(julianday(i.created_at)-julianday(h.created_at))<=1.0/86400)",
-            (person, start, end, skip, person, person, start, end, skip, person, skip, start, end, person),
+            (
+                person,
+                person,
+                person,
+                start,
+                end,
+                skip,
+                person,
+                person,
+                start,
+                end,
+                skip,
+                person,
+                skip,
+                start,
+                end,
+                person,
+            ),
         )
     ]
-    for m in H._rows(
-        c.execute(
-            "SELECT * FROM messages WHERE recipient_id=? AND kind='ask' AND created_at>=? AND created_at<? "
-            "AND superseded_at IS NULL AND sender_id LIKE 'bot:%' AND sender_id<>?",
-            (person, start, end, skip),
-        )
-    ):
-        msg = H.message(c, m["id"]) or m
-        tid = H.message_task_id(msg)
-        task = H.task(c, tid) if tid else None
-        title = (task or {}).get("title", "") if tid else ""
-        body = str(m.get("body") or "")
-        refs = H._json(m.get("refs"), {}) or {}
-        out.append(
-            {
-                "kind": "question" if tid else "loose",
-                "ref": tid or m["id"],
-                "asker": m["sender_id"],
-                "title": title or body.strip().split("\n")[0][:300],
-                "text": _judged_text(refs, body, task),
-                "asked": refs.get("questions"),
-                "created_at": m["created_at"],
-            }
-        )
     return sorted(out, key=lambda it: it["created_at"])
-
-
-def _leave_out(it):
-    """The task a replayed item leaves out of its own plate: a task is itself, so it does not count itself. A question
-    is about a task already on the plate, which counts there once, as the live gate counted it."""
-    return it["ref"] if it["kind"] == "task" else ""
 
 
 def load_at(c, person, at, leave_out=""):
     """Roughly how full the person's plate was just before `at`: their tasks open then, snoozed ones left out, and the
     replayed item itself (put on them after it was created, it may already be theirs)."""
     return c.execute(
-        f"SELECT COUNT(*) FROM tasks WHERE {_ACTIVE_AT} AND id<>?", (person, at, at, at, at, leave_out)
+        f"SELECT COUNT(*) FROM tasks WHERE {_ACTIVE_AT} AND id<>?",
+        (person, person, at, person, at, at, at, at, at, leave_out),
     ).fetchone()[0]
 
 
@@ -994,7 +913,7 @@ def open_items_at(c, person, at, leave_out="", asker=""):
     out = {}
     for r in c.execute(
         f"SELECT id,title FROM tasks WHERE {_ACTIVE_AT} AND id<>? ORDER BY created_at DESC",
-        (person, at, at, at, at, leave_out),
+        (person, person, at, person, at, at, at, at, at, leave_out),
     ):
         if len(out) >= MAX_ITEMS:
             break
@@ -1004,12 +923,10 @@ def open_items_at(c, person, at, leave_out="", asker=""):
 
 
 def _shown(c, viewer, person, it, can_read=None):
-    """Whether `viewer` may read a replayed item's title: the person their own tasks and questions, and a task the
-    check kept with its bot only if they may read it; anyone else (an owner or admin) only a task they may read, never
-    a bot's question to the person outside any task. `can_read(c, task)` is the full task-read policy for the viewer
-    (auth.task_row: a private task's readers, Read on every bot it involves); without it, privacy alone decides."""
-    if it["kind"] == "loose":
-        return viewer in (None, person)
+    """Whether `viewer` may read a replayed item's title (each is a task): the person their own tasks, and a task the
+    check kept with its bot only if they may read it; anyone else (an owner or admin) only a task they may read.
+    `can_read(c, task)` is the full task-read policy for the viewer (auth.task_row: a private task's readers, Read on
+    every bot it involves); without it, privacy alone decides."""
     task = H.task(c, it["ref"])
     if not task:
         return False
@@ -1037,8 +954,8 @@ def replay(store, primary, person, start, end, offset=0, limit=REPLAY_PAGE, view
         prepared = [
             (
                 it,
-                load_at(c, person, it["created_at"], _leave_out(it)),
-                open_items_at(c, person, it["created_at"], _leave_out(it), it["asker"]),
+                load_at(c, person, it["created_at"], it["ref"]),
+                open_items_at(c, person, it["created_at"], it["ref"], it["asker"]),
                 _bot_line(c, it["asker"]),
                 _shown(c, viewer, person, it, can_read),
             )
@@ -1076,7 +993,7 @@ def _replay_judge(store, engine, qset, own, person_name, prepared):
     calls_pool = calls_for(store)
     label = qset["label"]
     asked = [
-        (it, items, *_call(qset, own, items, asker, person_name, it["title"], it["text"], it["asked"]))
+        (it, items, *_call(qset, own, items, asker, person_name, it["title"], it["text"]))
         for it, _plate, items, asker, _shown in prepared
     ]
     pairs = [(state, questions) for _it, _items, state, questions, _criteria in asked]

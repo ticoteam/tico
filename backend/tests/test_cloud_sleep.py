@@ -38,7 +38,7 @@ def asleep_bot(cloud):
 
 def waiting_task(cloud):
     """A task of ops's set aside by a person (a snooze, with no end), and Tico's notice about it queued 4 hours ago:
-    the claim holds it as `task_wait` until the snooze ends (docs/pipelines-v3.md, rule 7)."""
+    the claim holds it as `task_wait` until the snooze ends (docs/dev/pipelines-v3.md, rule 7)."""
     with cloud.store.transaction() as c:
         task = H.task_create(c, 'human:ana', 'Wait for a decision', '', 'bot:ops', private=False, lint=False)
         c.execute("UPDATE jobs SET state='completed' WHERE bot_id='ops' AND state='queued'")  # its first wake ran
@@ -171,7 +171,6 @@ def test_a_sleeping_bots_hold_does_not_hide_its_signed_out_check(cloud, company_
         ('company_limit', ('check_model', None), 'check_model'),
         ('task_wait', ('task_wait', None, 'check_model'), 'check_model'),
         ('company_limit', (None, 'uncertain'), 'uncertain'),
-        ('task_wait', ('task_wait', None, 'private_update'), 'private_update'),
         ('company_limit', (*health.QUEUE_WAITS, None, 'unreadable'), 'unreadable'),
         ('company_limit', (None, 'check_model', 'uncertain'), 'check_model'),
         ('company_limit', ('uncertain', None, 'check_model'), 'uncertain'),

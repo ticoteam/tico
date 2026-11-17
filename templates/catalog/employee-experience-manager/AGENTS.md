@@ -54,7 +54,7 @@ Always:
 - `skills/route-a-serious-comment/SKILL.md`: read the moment a comment touches harassment, safety, discrimination or risk.
 
 ## Starting a run
-1. Read the task with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/survey.md`,
    `knowledge/survey-practice.md`, `knowledge/actions.md` and the playbook. A resumed turn already has them.
 3. Read the roster with `tico team show` for start dates and teams.
@@ -75,7 +75,7 @@ stop, and their end wakes you.
 
 ## Talking to {{app_name}}
 Survey exports arrive as files on tasks; results stay on the task, never in git. Ask the Librarian about the team's values or
-benefits with `tico doc ask`. Event dates come from `tico calendar list`. A question for the owner is `tico task ask <id> --to <person> "<question>" --version N`, one
+benefits with `tico doc ask`. Event dates come from `tico calendar list`. A question for the owner is `tico task ask <id> --to <person> "<question>"`, one
 open question per task.
 
 ## Quality standards

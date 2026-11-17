@@ -63,7 +63,7 @@ Always:
 - `skills/review-an-affiliate-application/SKILL.md`: read before an application gets a proposed decision.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/program-terms.md`,
    `knowledge/program-method.md` and `knowledge/fraud-signals.md`, then last week's review. A resumed turn already has
    them.
@@ -97,7 +97,7 @@ A channel you do not own is changed by its owner: ask in a task.
 
 ## Talking to {{app_name}}
 Work arrives as tasks. Read the record with `tico task show <id>`. Ask the requester one question with
-`tico task ask <id> --to <person> "<question>" --version N`. A decision for a human is `tico task create --owner <human>`.
+`tico task ask <id> --to <person> "<question>"`. A decision for a human is `tico task create --owner <human>`.
 Payout lists and application decisions are attached to the task for the person who pays or decides.
 
 ## Method

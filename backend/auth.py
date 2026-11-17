@@ -286,6 +286,26 @@ def reader_sql(c, actor):
     )
 
 
+def followed_credential_admins(c, owner_email, admins):
+    """The credential administrators when the server names none (TICO_CREDENTIAL_ADMINS unset): the owner and the
+    Admins, or the owner alone when the owner's rule "Admins store credentials" is off. `Auth.sync_access` adopts this
+    for each request; `credential_admins` gives it to work that runs outside one."""
+    admins = sorted(admins) if team_rules.load(c)["admin_credentials"] else []
+    return tuple(dict.fromkeys(e for e in (owner_email, *admins) if e))
+
+
+def credential_admins(c, settings):
+    """The credential administrators in force for work outside a request (a worker, a timer with no sign-in): the
+    server's own list when it names one, else `followed_credential_admins` of the stored owner and Admins, so a
+    transfer counts here as it does in `Auth.sync_access`, never the owner the settings were started with."""
+    from . import access
+
+    if not getattr(settings, "credential_admins_follow_owner", False):
+        return tuple(settings.credential_admins)
+    owner = access.load_owner(c, settings)["email"]
+    return followed_credential_admins(c, owner, access.load_access(c, settings)["admins"])
+
+
 class Auth:
     def __init__(self, store):
         self.store = store
@@ -345,8 +365,7 @@ class Auth:
                 else ((previous,) if previous else ())
             )
             if tuple(self.settings.credential_admins) == expected:
-                admins = sorted(lists["admins"]) if team_rules.load(c)["admin_credentials"] else []
-                self._credential_followed = tuple(dict.fromkeys(e for e in (self.owner_email, *admins) if e))
+                self._credential_followed = followed_credential_admins(c, self.owner_email, lists["admins"])
                 self.settings.credential_admins = self._credential_followed
 
     def admits(self, email):
@@ -797,7 +816,7 @@ class Auth:
 
     def system_bot(self, slug):
         """The built-in bots (the Assistant, BotOps, the Librarian, the Strategy Owner, the Health Monitor, the General
-        Manager, the Finance Owner, the Rules Owner, the Design Owner, the Updates Owner, the Automations Owner): they act for the whole company, so only the company owner changes them. Admins
+        Manager, the Finance Owner, the Rules Owner, the Design Owner, the Updates Owner, the Automations Owner, the Tools Owner): they act for the whole company, so only the company owner changes them. Admins
         manage every other bot."""
         return slug in (
             self.settings.assistant_bot,
@@ -812,6 +831,7 @@ class Auth:
             H.DESIGN_OWNER,
             "updates-owner",
             "automations-owner",
+            H.TOOLS_OWNER,
         )
 
     def bot_manager(self, c, who, slug, operator=None):
@@ -919,25 +939,6 @@ class Auth:
             if H.actor_id(row["reports_to"] or declared.get("reports_to") or "") != me:
                 return False
         return report_managers.manages(c, me)
-
-    @staticmethod
-    def member_bot_row(c, slug):
-        """The same as `member_bot`, from the database alone (Health has no Auth): the creator's role."""
-        row = c.execute("SELECT created_by FROM bot_config WHERE bot=?", (slug,)).fetchone()
-        creator = (
-            H.human(c, H.actor_id(row["created_by"]))
-            if row and str(row["created_by"] or "").startswith("human:")
-            else None
-        )
-        if not creator:
-            return False
-        from . import access
-
-        email = str(creator.get("email") or "").lower()
-        stored = access._load_json(c, access.ACCESS) or {}
-        admins = access.emails(stored["admins"] if "admins" in stored else stored.get("bot_admins"))
-        owner_row = access._load_json(c, access.OWNER) or {}
-        return email not in admins and email != str(owner_row.get("email") or "").lower()
 
     def member_bot(self, c, slug, row=None, creators=None):
         """Whether a member (not an owner or an Admin) created this bot: those go only on computers that
@@ -1400,6 +1401,23 @@ class Auth:
             if rows:
                 return rows[0]["id"]
             raise Problem("not_found", "No task %s" % ident, 404)
+
+        # A task's label (`D18450`, or `D-18450`): the prefix it was made with and its number, wherever it is now.
+        label = re.fullmatch(r"([A-Za-z]{1,2})-?(\d{1,18})", ident)
+        if label:
+            rows = readable(
+                H._rows(
+                    c.execute(
+                        "SELECT id,title,owner_id,requester_id FROM tasks WHERE number=? AND upper(COALESCE(prefix, "
+                        "(SELECT p.prefix FROM pipelines p WHERE p.id = tasks.pipeline_id), ''))=? AND ("
+                        + visible
+                        + ")",
+                        (int(label.group(2)), label.group(1).upper()),
+                    )
+                )
+            )
+            if rows:
+                return rows[0]["id"]
 
         if TASK_PREFIX_MIN <= len(ident) < 36:
             rows = readable(

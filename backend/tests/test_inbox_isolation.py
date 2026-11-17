@@ -59,7 +59,7 @@ def place(api, bot, runner, generation=0):
 
 def keep(api, runner, enabled=True):
     return api.post(
-        f"/api/v2/runners/{runner}/inbox-only",
+        f"/api/v2/computers/{runner}/inbox-only",
         json={"enabled": enabled},
         headers={**signed_in(), "Idempotency-Key": str(uuid.uuid4())},
     )

@@ -1,226 +1,324 @@
 #!/usr/bin/env python3
-"""Unit tests for connectors/slack.py. No network, no token.
+"""Unit tests for connectors/slack.py, a thin client of Tico's Slack routes. No network, no token: Tico's answers are
+faked at `slack.hub` and `slack.client`.
 
 python3 -m unittest discover -s connectors
 """
 
-import contextlib, io, json, os, stat, sys, tempfile, unittest
-from datetime import datetime, timedelta
+import contextlib, email.message, io, json, os, stat, sys, tempfile, unittest, urllib.error
+from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import slack  # noqa: E402
+from clients.tico import APIError  # noqa: E402
 
 TZ = "America/Los_Angeles"
 NOW = datetime(2026, 9, 2, 10, 30, tzinfo=slack.zone(TZ))  # a Wednesday morning in LA
 
 
-class PostPolicy(unittest.TestCase):
-    channels = [
-        {"id": "C0000000001", "name": "marketing", "post": True},
-        {"id": "C0000000002", "name": "release_notes", "post": False},
-        {"id": None, "name": "agents", "post": True},
-        {"id": "C0000000003", "name": "random"},
-    ]
-
-    def test_employee_must_declare_slack_post(self):
-        allowed = {"access": [{"service": "slack", "can": ["read", "post"]}]}
-        self.assertEqual(slack.check_can_post(allowed, "doc-updater")["service"], "slack")
-        with self.assertRaises(slack.Refused):
-            slack.check_can_post({"access": [{"service": "slack", "can": ["read"]}]}, "doc-updater")
-        with self.assertRaises(slack.Refused):
-            slack.check_can_post({"access": [{"service": "gmail", "can": ["post"]}]}, "seo")
-        with self.assertRaises(slack.Refused):
-            slack.check_can_post({}, "seo")
-
-    def test_channel_must_be_registered_and_postable(self):
-        entry = slack.find_registry_channel(self.channels, "#marketing")
-        self.assertEqual(slack.check_channel_postable(entry, "#marketing"), "C0000000001")
-        self.assertIs(slack.find_registry_channel(self.channels, "C0000000001"), entry)
-        with self.assertRaises(slack.Refused):
-            slack.find_registry_channel(self.channels, "#general")
-        with self.assertRaises(slack.Refused):
-            slack.check_channel_postable(slack.find_registry_channel(self.channels, "release_notes"), "release_notes")
-        with self.assertRaises(slack.Refused):
-            slack.check_channel_postable(slack.find_registry_channel(self.channels, "#agents"), "#agents")
-
-    def test_a_channel_that_says_nothing_about_posting_is_postable(self):
-        entry = slack.find_registry_channel(self.channels, "#random")
-        self.assertEqual(slack.check_channel_postable(entry, "#random"), "C0000000003")
-
-    def test_externally_shared_channels_are_refused(self):
-        slack.check_not_external({"channel": {"name": "marketing"}}, "#marketing")
-        for flag in ("is_ext_shared", "is_shared", "is_pending_ext_shared", "is_org_shared"):
-            with self.assertRaises(slack.Refused):
-                slack.check_not_external({"channel": {"name": "partner", flag: True}}, "#partner")
+def run(*argv):
+    """(exit code, stdout, stderr) of one command."""
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = slack.main(list(argv))
+    return code, out.getvalue(), err.getvalue()
 
 
-class DmPolicy(unittest.TestCase):
-    allowed = {"ana@acme.example", "cara@acme.example"}
+class Tico:
+    """Tico's answers by (method, path); every call is kept."""
 
-    def person(self, **kw):
-        row = {
-            "id": "U9",
-            "name": "cara",
-            "display": "Cara",
-            "real_name": "Cara",
-            "email": "cara@acme.example",
-            "is_bot": False,
-            "deleted": False,
-        }
-        row.update(kw)
-        return row
+    def __init__(self, answers):
+        self.answers, self.calls = answers, []
 
-    def test_bots_and_deactivated_accounts_are_refused(self):
-        with self.assertRaises(slack.Refused):
-            slack.check_recipient(self.person(is_bot=True), self.allowed, "@companyhub")
-        with self.assertRaises(slack.Refused):
-            slack.check_recipient(self.person(id="USLACKBOT"), self.allowed, "@slackbot")
-        with self.assertRaises(slack.Refused):
-            slack.check_recipient(self.person(deleted=True), self.allowed, "@gone")
+    def __call__(self, method, path, body=None, query=None, timeout=30):
+        self.calls.append((method, path, body, query))
+        answer = self.answers[(method, path)]
+        if isinstance(answer, list):
+            answer = answer.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
 
 
-class FakeHTTP:
-    """Replaces slack._request. Each response is (status, headers, payload)."""
+class Times(unittest.TestCase):
+    def test_yesterday_is_the_whole_previous_day(self):
+        start, end = slack.time_range("yesterday", None, TZ, NOW)
+        self.assertEqual((start.day, start.hour, end.day, end.hour), (1, 0, 2, 0))
+        start, end = slack.time_range("2026-08-30", "yesterday", TZ, NOW)
+        self.assertEqual((start.day, end.day), (30, 2))
 
-    def __init__(self, *responses):
-        self.responses, self.calls = list(responses), []
+    def test_relative_iso_and_today(self):
+        start, end = slack.time_range("90m", None, TZ, NOW)
+        self.assertEqual((end - start).total_seconds(), 5400)
+        self.assertEqual(slack.time_range("today", "now", TZ, NOW)[0].hour, 0)
+        start, _ = slack.time_range("2026-09-01T09:00Z", None, TZ, NOW)
+        self.assertEqual(start.utcoffset().total_seconds(), 0)
 
-    def __call__(self, url, data, headers, timeout):
-        self.calls.append(
-            {"url": url, "data": json.loads(data) if data else None, "auth": headers.get("Authorization")}
+    def test_an_empty_range_a_bad_time_or_zone_is_a_failure(self):
+        for since, until, tz in (
+            ("now", "24h", TZ),
+            ("someday", None, TZ),
+            ("24h", None, "Mars/Base"),
+            (" ", None, TZ),
+        ):
+            with self.assertRaises(slack.Failure):
+                slack.time_range(since, until, tz, NOW)
+
+
+class Text(unittest.TestCase):
+    def test_markdown_shows_the_warning_threads_and_an_empty_channel(self):
+        md = slack.render_md(
+            [
+                {
+                    "id": "C1",
+                    "name": "general",
+                    "start": "a",
+                    "end": "b",
+                    "warning": "Tico screening: careful",
+                    "messages": [
+                        {
+                            "time": "t1",
+                            "author": "Ana",
+                            "text": "hello\n\nworld",
+                            "permalink": "p1",
+                            "replies": [{"time": "t2", "author": "Ben", "text": "", "permalink": "p2"}],
+                        }
+                    ],
+                },
+                {"id": "C2", "messages": []},
+            ]
         )
-        status, hdrs, payload = self.responses.pop(0)
-        return status, hdrs, json.dumps(payload).encode()
+        self.assertIn("## #general (C1)", md)
+        self.assertIn("1 messages, 1 thread replies", md)
+        self.assertIn("Tico screening: careful", md)
+        self.assertIn("  - t2 Ben (reply) - p2\n    (no text)", md)
+        self.assertIn("## C2", md)
+        self.assertIn("Nothing in this range.", md)
+
+    def test_one_line_drops_control_and_bidi_characters(self):
+        self.assertEqual(slack.one_line("a\x00b‮ c\n d"), "ab c d")
+
+    def test_a_file_name_is_prefixed_with_its_id_and_trimmed(self):
+        self.assertEqual(slack.file_name("F01", "../../etc/passwd"), "F01-passwd")
+        self.assertEqual(slack.file_name("F0/1", ".."), "F01")
+        long = slack.file_name("F01", "x" * 400 + ".png")
+        self.assertTrue(long.endswith(".png") and len(long.encode()) <= slack.MAX_NAME_BYTES)
+        odd = slack.file_name("F01", "y" * 300 + "." + "z" * 40)
+        self.assertLessEqual(len(odd.encode()), slack.MAX_NAME_BYTES)
 
 
-DANILLO = {
-    "id": "U9",
-    "name": "cara",
-    "display": "Cara",
-    "real_name": "Cara",
-    "email": "cara@acme.example",
-    "is_bot": False,
-    "deleted": False,
-}
-ANA = {
-    "id": "U2",
-    "name": "anah",
-    "display": "anah",
-    "real_name": "Ana",
-    "email": "ana@acme.example",
-    "is_bot": False,
-    "deleted": False,
-}
-A_BOT = {
-    "id": "UB1",
-    "name": "someapp",
-    "display": "Some App",
-    "real_name": "",
-    "email": "",
-    "is_bot": True,
-    "deleted": False,
-}
-
-
-def slack_user(uid, email, name="Cara", **kw):
-    """A users.lookupByEmail / users.info payload."""
-    row = {"id": uid, "name": name.lower(), "profile": {"display_name": name, "real_name": name, "email": email}}
-    row.update(kw)
-    return row
-
-
-class FakeSlack(unittest.TestCase):
-    """Base for command tests: a token, a fake employee, no disk writes, no network."""
-
-    slug = "doc-updater"
-
+class Saving(unittest.TestCase):
     def setUp(self):
-        self.real_request, self.real_projects = slack._request, slack.PROJECTS
-        self.real_audit, self.audited = slack.audit, []
-        self.old_token = os.environ.get("SLACK_BOT_TOKEN")
-        os.environ["SLACK_BOT_TOKEN"] = "xoxb-test"
-        self.env = mock.patch.dict(os.environ)  # restored in tearDown: a test sets its own hub variables
-        self.env.start()
-        for name in ("HUB_BOT", "HUB_EMPLOYEE", "HUB_TOKEN", "HUB_API_URL"):
-            os.environ.pop(name, None)  # a run inside a bot turn must not leak into these tests
-        slack._CACHE.clear()
-        slack._CACHE["directory"] = [DANILLO, ANA, A_BOT]  # no users.list call
         self.tmp = tempfile.TemporaryDirectory()
-        slack.PROJECTS = Path(self.tmp.name)
-        self.employee("doc-updater", ["read", "post"])
-        self.employee("reader", ["read"])
-        slack.audit = lambda *a, **k: self.audited.append((a, k))
-        access = Path(self.tmp.name) / "hub-access.yaml"  # the company list, never the checkout's own
-        access.write_text("owner: ana@acme.example\nallowed: [cara@acme.example]\n")
-        self.real_hub_access = slack.load_hub_access
-        slack.load_hub_access = lambda path=access: self.real_hub_access(path)
-        self.real_hub_get, self.stage = slack.HUB_GET, "active"  # Tico says the bot is past onboarding
-        slack.HUB_GET = lambda path: {"stage": self.stage} if path.startswith("bots/") and self.stage else None
+        self.dir = Path(self.tmp.name)
 
     def tearDown(self):
-        slack._request, slack.PROJECTS, slack.audit = (self.real_request, self.real_projects, self.real_audit)
-        slack.HUB_GET = self.real_hub_get
-        slack.load_hub_access = self.real_hub_access
-        os.environ.pop("SLACK_BOT_TOKEN", None)
-        if self.old_token is not None:
-            os.environ["SLACK_BOT_TOKEN"] = self.old_token
-        slack._CACHE.clear()
         self.tmp.cleanup()
-        self.env.stop()
 
-    def employee(self, slug, can):
-        d = Path(self.tmp.name) / f"emp-{slug}"
-        d.mkdir(parents=True, exist_ok=True)
-        (d / "employee.yaml").write_text(
-            "slug: %s\naccess:\n  - service: slack\n    can: [%s]\n" % (slug, ", ".join(can))
+    def test_a_file_is_never_replaced_or_followed(self):
+        target = self.dir / "F1-a.txt"
+        target.write_bytes(b"old")
+        saved = slack.save_new(target, b"new", folder=True)
+        self.assertEqual((saved.name, target.read_bytes(), saved.read_bytes()), ("F1-a-2.txt", b"old", b"new"))
+        with self.assertRaises(slack.Refused):
+            slack.save_new(target, b"new", folder=False)
+        with self.assertRaises(slack.Failure):
+            slack.save_new(self.dir / "missing" / "x", b"", folder=False)
+
+    def test_the_default_folder_is_made_private_and_refused_unless_it_is_a_real_folder(self):
+        folder = self.dir / "files"
+        self.assertEqual(slack.files_dir(folder), folder)
+        os.chmod(folder, 0o755)
+        slack.files_dir(folder)
+        self.assertEqual(stat.S_IMODE(os.lstat(folder).st_mode), 0o700)
+        link = self.dir / "link"
+        link.symlink_to(self.dir)
+        with self.assertRaises(slack.Refused):
+            slack.files_dir(link)
+        with self.assertRaises(slack.Failure):
+            slack.files_dir(self.dir / "no" / "such")
+
+
+class Calls(unittest.TestCase):
+    def test_without_a_tico_credential_nothing_is_asked(self):
+        with mock.patch.dict(os.environ, {"HUB_API_URL": "", "HUB_TOKEN": ""}):
+            code, _, err = run("channels")
+        self.assertEqual(code, 1)
+        self.assertIn("no Tico credential", err)
+
+    def test_ticos_refusal_exits_2_and_anything_else_exits_1(self):
+        api = mock.Mock()
+        with mock.patch.object(slack, "client", return_value=api):
+            api.call.side_effect = APIError("slack_scope", "may not read #x", 403)
+            with self.assertRaises(slack.Refused):
+                slack.hub("GET", "slack/history")
+            api.call.side_effect = APIError("slack_gateway_off", "Start it", 503)
+            with self.assertRaises(slack.Failure) as caught:
+                slack.hub("GET", "slack/history")
+            self.assertNotIsInstance(caught.exception, slack.Refused)
+            self.assertEqual(slack.failed("slack_timeout", "", 504).hint, "Try again shortly.")
+
+    def test_doctor_says_when_the_gateway_is_off(self):
+        tico = Tico(
+            {("GET", "me"): {"actor": "bot:ops"}, ("GET", "slack/channels"): {"channels": [{}], "gateway": "off"}}
         )
+        with mock.patch.object(slack, "hub", tico):
+            code, out, err = run("doctor")
+        self.assertEqual(code, 1)
+        self.assertIn("gateway   off", out)
+        self.assertIn("TICO_SLACK_GATEWAY_ENABLED", err)
+        tico.answers[("GET", "slack/channels")] = {"channels": [], "gateway": "connected"}
+        with mock.patch.object(slack, "hub", tico):
+            self.assertEqual(run("doctor", "--json")[0], 0)
 
-    def run_cli(self, argv, responses=()):
-        slack._request = FakeHTTP(*responses)
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
-            rc = slack.main(argv)
-        return rc, out.getvalue(), slack._request.calls
+    def test_channels_lists_the_list(self):
+        rows = [{"channel": "#general", "post": True, "readers": ["ops"], "note": "Team\nnews"}, {"channel": "#q"}]
+        tico = Tico({("GET", "slack/channels"): {"channels": rows}})
+        with mock.patch.object(slack, "hub", tico):
+            code, out, _ = run("channels")
+            self.assertEqual(json.loads(run("channels", "--json")[1]), rows)
+        self.assertEqual(code, 0)
+        self.assertIn("#general", out)
+        self.assertIn("  Team news", out)
+        self.assertIn("2 channels on the list", out)
 
+    def test_history_asks_tico_for_each_channel_and_renders_it(self):
+        answer = {
+            "id": "C1",
+            "name": "general",
+            "warning": "Tico screening: careful",
+            "messages": [{"ts": "1788000000.0001", "author": "Ana", "text": "hi", "replies": [{"ts": "1788000001.0"}]}],
+        }
+        tico = Tico({("GET", "slack/history"): answer})
+        with mock.patch.object(slack, "hub", tico):
+            code, out, _ = run("history", "--channel", "#general,C2", "--since", "7d", "--threads")
+        self.assertEqual(code, 0)
+        self.assertEqual([q["channel"] for _, _, _, q in tico.calls], ["#general", "C2"])
+        self.assertEqual(tico.calls[0][3]["threads"], "true")
+        self.assertIn("Tico screening: careful", out)
+        with mock.patch.object(slack, "hub", tico):
+            code, out, _ = run("history", "--channel", "C1", "--format", "json")
+        self.assertEqual(json.loads(out)["channels"][0]["messages"][0]["time"][:4], "2026")
 
-OK_OPEN = (200, {}, {"ok": True, "channel": {"id": "D0123"}})
-OK_POST = (200, {}, {"ok": True, "ts": "1756742400.000100"})
-OK_AUTH = (200, {}, {"ok": True, "user_id": "U0BOT", "url": "https://acme.slack.com"})
-
-
-class DmGates(FakeSlack):
-    def test_hub_access_is_a_file_people_write_so_its_owner_key_stays_owner(self):
-        self.assertIn("ana@acme.example", slack.load_hub_access())
-
-    def test_someone_outside_hub_access_is_refused_and_nothing_is_posted(self):
-        rc, out, calls = self.run_cli(
-            ["dm", "--as", self.slug, "--to", "lead@acme.com", "--text", "hi", "--json"],
-            [(200, {}, {"ok": True, "user": slack_user("U77", "lead@acme.com", "Lead")})],
+    def test_a_post_is_followed_until_slack_has_it(self):
+        tico = Tico(
+            {
+                ("POST", "slack/posts"): {"message_id": "m1", "state": "ready", "channel": "C1", "name": "general"},
+                ("GET", "slack/posts/m1"): [{"state": "ready"}, {"state": "sent", "permalink": "https://x/p1"}],
+            }
         )
-        body = json.loads(out)
-        self.assertEqual(rc, 2)
-        self.assertEqual(len(calls), 1)  # the lookup, then it stopped
-        self.assertIn("lead@acme.com", body["error"])
-        self.assertIn("hub-access.yaml", body["hint"])
-        self.assertEqual(self.audited, [])
+        with mock.patch.object(slack, "hub", tico), mock.patch.object(slack.time, "sleep"):
+            code, out, _ = run("post", "--channel", "#general", "--text", "Shipped", "--thread", "1.2")
+        self.assertEqual((code, out.strip()), (0, "posted to #general: https://x/p1"))
+        self.assertEqual(tico.calls[0][2], {"channel": "#general", "text": "Shipped", "thread_ts": "1.2"})
 
-    def test_an_onboarding_bot_or_one_whose_stage_tico_cannot_confirm_sends_nothing(self):
-        for stage in ("onboarding", None):  # None: no hub credential, or Tico unreachable
-            self.stage = stage
-            for argv in (
-                ["post", "--as", self.slug, "--channel", "#agents", "--text", "hi", "--json"],
-                ["dm", "--as", self.slug, "--to", "cara@acme.example", "--text", "hi", "--json"],
-            ):
-                rc, out, calls = self.run_cli(argv, [OK_OPEN, OK_POST, OK_AUTH])
-                self.assertEqual((rc, calls), (2, []), (stage, argv[0], out))
-                self.assertIn("onboarding", json.loads(out)["error"])
-        self.assertEqual(self.audited, [])
+    def test_a_canceled_post_is_refused_and_a_failed_one_fails(self):
+        for state, code in (("canceled", 2), ("failed", 1)):
+            tico = Tico(
+                {
+                    ("POST", "slack/posts"): {"message_id": "m1", "channel": "C1"},
+                    ("GET", "slack/posts/m1"): {"state": state, "error": "Slack Connect channel"},
+                }
+            )
+            with mock.patch.object(slack, "hub", tico):
+                got, _, err = run("post", "--channel", "#partners", "--text", "hi")
+            self.assertEqual(got, code)
+            self.assertIn("Slack Connect channel", err)
+
+    def test_a_held_post_says_why_and_sends_nothing(self):
+        tico = Tico({("POST", "slack/posts"): {"held": {"reason": "No prices in public channels"}}})
+        with mock.patch.object(slack, "hub", tico):
+            code, out, _ = run("post", "--channel", "#general", "--text", "$5", "--json")
+        self.assertEqual(code, 2)
+        self.assertIn("No prices in public channels", json.loads(out)["error"])
+
+    def test_a_dm_goes_to_one_person_and_text_can_come_from_stdin(self):
+        tico = Tico(
+            {
+                ("POST", "slack/dms"): {"message_id": "m2", "to": "ana@acme.example"},
+                ("GET", "slack/posts/m2"): {"state": "queued"},
+            }
+        )
+        with (
+            mock.patch.object(slack, "hub", tico),
+            mock.patch.object(slack.time, "sleep"),
+            mock.patch.object(sys, "stdin", io.StringIO("from stdin")),
+        ):
+            code, out, _ = run("dm", "--to", "ana@acme.example", "--text", "-")
+        self.assertEqual((code, out.strip()), (0, "queued"))
+        self.assertEqual(tico.calls[0][2], {"to": "ana@acme.example", "text": "from stdin"})
+        tico.answers[("GET", "slack/posts/m2")] = {"state": "sent", "permalink": "https://x/d"}
+        with mock.patch.object(slack, "hub", tico):
+            self.assertIn("https://x/d", run("dm", "--to", "ana@acme.example", "--text", "hi")[1])
+            self.assertEqual(run("dm", "--to", "a@x,b@x", "--text", "hi")[0], 2)
+
+
+class Files(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def api(self, opened):
+        api = mock.Mock(url="https://tico.example")
+        api.bearer.return_value = "token"
+        api.opener.open.side_effect = opened
+        return api
+
+    def test_a_file_from_tico_is_saved_beside_others_with_the_screening_line(self):
+        headers = email.message.Message()
+        for k, v in (
+            ("X-Slack-File-Name", "a%20b.txt"),
+            ("X-Slack-File-Type", "text/plain"),
+            ("X-Tico-Screening", "Careful"),
+        ):
+            headers[k] = v
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.read.return_value, response.headers = b"data", headers
+        with mock.patch.object(slack, "client", return_value=self.api(lambda req, timeout: response)):
+            code, out, _ = run("file", "--id", "F0FILE0001", "--out", str(self.dir), "--json")
+        row = json.loads(out)
+        self.assertEqual((code, row["name"], row["warning"], row["bytes"]), (0, "a b.txt", "Careful", 4))
+        self.assertEqual(Path(row["path"]).read_bytes(), b"data")
+        self.assertEqual(Path(row["path"]).name, "F0FILE0001-a b.txt")
+        with (
+            mock.patch.object(slack, "client", return_value=self.api(lambda req, timeout: response)),
+            mock.patch.object(slack, "FILES_DIR", self.dir / "default"),
+        ):
+            code, out, _ = run("file", "--id", "F0FILE0001")
+        self.assertEqual(code, 0)
+        self.assertIn("Careful", out)
+        response.read.return_value = b"x" * (slack.MAX_FILE_BYTES + 1)
+        with mock.patch.object(slack, "client", return_value=self.api(lambda req, timeout: response)):
+            self.assertEqual(run("file", "--id", "F0FILE0001", "--out", str(self.dir / "big"))[0], 2)
+
+    def test_ticos_refusal_or_no_answer_saves_nothing(self):
+        def refused(req, timeout):
+            body = io.BytesIO(json.dumps({"error": {"code": "slack_scope", "detail": "not your channel"}}).encode())
+            raise urllib.error.HTTPError(req.full_url, 403, "Forbidden", email.message.Message(), body)
+
+        with mock.patch.object(slack, "client", return_value=self.api(refused)):
+            code, _, err = run("file", "--id", "F0FILE0001", "--out", str(self.dir))
+        self.assertEqual(code, 2)
+        self.assertIn("not your channel", err)
+
+        def down(req, timeout):
+            raise urllib.error.URLError("refused")
+
+        with mock.patch.object(slack, "client", return_value=self.api(down)):
+            self.assertEqual(run("file", "--id", "F0FILE0001", "--out", str(self.dir))[0], 1)
+        self.assertEqual(list(self.dir.iterdir()), [])
 
 
 class Workspace(unittest.TestCase):
-    """A bot's bot.yaml is found under TICO_PROJECTS_DIR when the runner sets it, else beside the checkout."""
+    """browser.py finds a bot's bot.yaml under TICO_PROJECTS_DIR when the runner sets it, else beside the checkout. These
+    lived beside Slack's when slack.py read bot.yaml too; it no longer does (Tico holds each bot's Slack scope)."""
 
     def projects(self, value):
         import subprocess
@@ -228,9 +326,8 @@ class Workspace(unittest.TestCase):
         env = {k: v for k, v in os.environ.items() if k != "TICO_PROJECTS_DIR"}
         if value:
             env["TICO_PROJECTS_DIR"] = value
-        code = "import browser, slack; print(browser.PROJECTS); print(slack.PROJECTS)"
         out = subprocess.run(
-            [sys.executable, "-c", code],
+            [sys.executable, "-c", "import browser; print(browser.PROJECTS)"],
             cwd=Path(__file__).resolve().parent,
             env=env,
             capture_output=True,
@@ -241,8 +338,8 @@ class Workspace(unittest.TestCase):
 
     def test_the_workspace_follows_tico_projects_dir_and_defaults_to_the_folder_around_the_checkout(self):
         with tempfile.TemporaryDirectory() as workspace:
-            self.assertEqual(self.projects(workspace), [workspace] * 2)
-        self.assertEqual(self.projects(None), [str(Path(__file__).resolve().parents[2])] * 2)
+            self.assertEqual(self.projects(workspace), [workspace])
+        self.assertEqual(self.projects(None), [str(Path(__file__).resolve().parents[2])])
 
     def test_a_slug_cannot_name_a_folder_outside_the_workspace(self):
         import browser
@@ -253,493 +350,44 @@ class Workspace(unittest.TestCase):
             outside.mkdir()
             (workspace / "bot-real" / "bot.yaml").write_text("tools: []\n")
             (outside / "bot.yaml").write_text("tools: []\n")
-            saved = browser.PROJECTS, slack.PROJECTS
-            browser.PROJECTS = slack.PROJECTS = workspace
-            try:
-                self.assertEqual(slack.manifest_of("real")[0], workspace / "bot-real" / "bot.yaml")
+            with mock.patch.object(browser, "PROJECTS", workspace):
                 self.assertEqual(browser.load_manifest("real"), {"tools": []})
                 for slug in ("real/../../outside", "../outside", "/tmp", "", "real/.."):
-                    with self.assertRaises(slack.Refused, msg=slug):
-                        slack.manifest_of(slug)
                     with self.assertRaises(browser.Refused, msg=slug):
                         browser.load_manifest(slug)
-            finally:
-                browser.PROJECTS, slack.PROJECTS = saved
 
     def test_a_runs_own_bot_is_read_from_the_folder_the_runner_names(self):
         # A bot made with a UUID id runs as HUB_BOT=<id> in the folder named from its first slug, which a rename keeps:
-        # bot-<HUB_BOT> is not its folder, HUB_BOT_FOLDER is. Another bot named by slug is still found by its slug.
+        # bot-<HUB_BOT> is not its folder, HUB_BOT_FOLDER is.
         import browser
-
-        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-        from connectors import mail
 
         bot = "01a19806-0460-77a7-860b-b797cea3f270"
         with tempfile.TemporaryDirectory() as root:
             workspace = Path(root)
-            for folder, text in (("bot-sales-helper", "tools: [own]\n"), ("bot-ops", "tools: [ops]\n")):
-                (workspace / folder).mkdir()
-                (workspace / folder / "bot.yaml").write_text(text)
-            saved = browser.PROJECTS, slack.PROJECTS
-            browser.PROJECTS = slack.PROJECTS = workspace
-            env = {"HUB_BOT": bot, "HUB_BOT_FOLDER": "bot-sales-helper"}
-            try:
-                with mock.patch.dict(os.environ, env):
-                    self.assertEqual(slack.manifest_of(bot)[0], workspace / "bot-sales-helper" / "bot.yaml")
+            (workspace / "bot-sales-helper").mkdir()
+            (workspace / "bot-sales-helper" / "bot.yaml").write_text("tools: [own]\n")
+            with mock.patch.object(browser, "PROJECTS", workspace):
+                with mock.patch.dict(os.environ, {"HUB_BOT": bot, "HUB_BOT_FOLDER": "bot-sales-helper"}):
                     self.assertEqual(browser.load_manifest(bot), {"tools": ["own"]})
-                    self.assertEqual(mail.repo_dir(workspace, bot), workspace / "bot-sales-helper")
-                    self.assertEqual(slack.manifest_of("ops")[0], workspace / "bot-ops" / "bot.yaml")
-                    self.assertEqual(mail.repo_dir(workspace, "ops"), workspace / "bot-ops")
-                with mock.patch.dict(os.environ, {**env, "HUB_BOT_FOLDER": "../outside"}):
-                    self.assertEqual(slack.manifest_of(bot)[0], workspace / f"bot-{bot}" / "bot.yaml")
-            finally:
-                browser.PROJECTS, slack.PROJECTS = saved
 
 
-class ChannelList(FakeSlack):
-    """The channel list is the hub's (Settings > Tools > Slack); the old registry file counts only until it is imported."""
+class Standalone(unittest.TestCase):
+    """The script as a bot's turn runs it: from another folder, with nothing of the checkout on sys.path (these tests
+    put it there themselves, which hid a missing import path)."""
 
-    rows = [
-        {"id": "C0000000010", "name": "customer_success", "post": True, "readers": ["reader"], "note": ""},
-        {"id": "", "name": "agents", "post": True, "readers": [], "note": ""},
-        {"id": "C0000000011", "name": "release_notes", "post": False, "readers": [], "note": ""},
-    ]
+    def test_it_reaches_tico_from_outside_the_checkout(self):
+        import subprocess
 
-    def setUp(self):
-        super().setUp()
-        self.asked = []
-        self.file = Path(self.tmp.name) / "slack-channels.yaml"
-        self.answer = {"channels": self.rows, "registry_file": {"present": False, "channels": 0, "imported": True}}
-        slack.HUB_GET = lambda path: (
-            {"stage": "active"} if path.startswith("bots/") else (self.asked.append(path), self.answer)[1]
-        )
-
-    def tearDown(self):
-        super().tearDown()
-
-    def test_a_run_reads_the_list_from_the_hub_and_the_file_only_until_it_is_imported(self):
-        self.file.write_text("channels:\n  - {id: C0000000012, name: old_one, readers: reader}\n")
-        self.assertEqual(
-            [c["name"] for c in slack.load_channels(self.file)], ["customer_success", "agents", "release_notes"]
-        )
-        self.assertEqual(self.asked, ["slack/channels"])
-        slack._CACHE.clear()
-        self.answer["registry_file"]["imported"] = False
-        self.assertEqual(
-            [c["name"] for c in slack.load_channels(self.file)],
-            ["customer_success", "agents", "release_notes", "old_one"],
-        )
-
-    def test_without_the_hub_the_file_is_used_and_with_neither_the_refusal_says_where_the_list_is(self):
-        self.answer = None
-        with self.assertRaises(slack.Refused) as refused:
-            slack.load_channels(self.file)
-        self.assertIn("Settings > Tools > Slack", refused.exception.hint)
-        slack._CACHE.clear()
-        self.file.write_text("channels:\n  - {id: C0000000012, name: old_one}\n")
-        self.assertEqual([c["name"] for c in slack.load_channels(self.file)], ["old_one"])
-
-    def test_a_reader_on_the_list_may_read_a_channel_outside_its_declared_scope(self):
-        manifest = {"tools": [{"service": "slack", "can": ["read"], "channels": ["agents"]}]}
-        rows = slack.load_channels(self.file)
-        slack.check_history_scope(manifest, "reader", ["#agents", "C0000000010"], rows)
-        with self.assertRaises(slack.Refused):  # listed, but its reader is someone else
-            slack.check_history_scope(manifest, "other-bot", ["#customer_success"], rows)
-        with self.assertRaises(slack.Refused):  # not on the list at all
-            slack.check_history_scope(manifest, "reader", ["#general"], rows)
-        # A declared channel the list does not have no longer refuses every read.
-        stale = {"tools": [{"service": "slack", "can": ["read"], "channels": ["gone", "agents"]}]}
-        slack.check_history_scope(stale, "reader", ["#agents"], rows)
-
-    def test_without_channels_a_bot_reads_only_the_channels_that_name_it_as_a_reader(self):
-        manifest = {"tools": [{"service": "slack", "can": ["read"]}]}
-        rows = slack.load_channels(self.file)
-        slack.check_history_scope(manifest, "reader", ["#customer_success", "C0000000010"], rows)
-        for refs in (["#agents"], ["#release_notes"], ["#general"]):  # no reader, or not on the list at all
-            with self.assertRaises(slack.Refused, msg=refs):
-                slack.check_history_scope(manifest, "reader", refs, rows)
-        with self.assertRaises(slack.Refused):  # listed, but its reader is someone else
-            slack.check_history_scope(manifest, "other-bot", ["#customer_success"], rows)
-
-    def test_a_reader_named_by_its_label_matches_the_bot_id_the_list_stores(self):
-        bot_id = "0190f2a1-7c3e-7d1a-9b2e-5f4a3c2b1a00"  # a bot made after the id/slug split
-        manifest = {"tools": [{"service": "slack", "can": ["read"], "channels": []}]}
-        rows = [{"id": "C0000000030", "name": "finance", "post": False, "readers": [bot_id], "note": ""}]
-        slack.HUB_GET = lambda path: {"stage": "active", "id": bot_id} if path == "bots/mira" else None
-        slack.check_history_scope(manifest, "mira", ["#finance"], rows)
-        with self.assertRaises(slack.Refused):  # another bot, no id from Tico
-            slack.check_history_scope(manifest, "other-bot", ["#finance"], rows)
-
-    def test_a_post_follows_the_list_and_externally_shared_channels_stay_refused(self):
-        listing = (200, {}, {"ok": True, "channels": [{"id": "C0000000020", "name": "agents"}]})
-        rc, out, calls = self.run_cli(
-            ["post", "--as", self.slug, "--channel", "#agents", "--text", "hi", "--json"],
-            [listing, (200, {}, {"ok": True, "channel": {"id": "C0000000020", "name": "agents"}}), OK_POST, OK_AUTH],
-        )
-        self.assertEqual(rc, 0, out)
-        self.assertEqual(calls[-2]["data"]["channel"], "C0000000020")  # listed by name: Slack gave the id
-        self.assertEqual(len(self.audited), 1)
-        self.audited.clear()
-        slack._CACHE.clear()
-        rc, out, calls = self.run_cli(
-            ["post", "--as", self.slug, "--channel", "#release_notes", "--text", "hi", "--json"]
-        )
-        self.assertEqual((rc, calls), (2, []))  # the list says bots may not post there
-        self.assertIn("Settings > Tools > Slack", json.loads(out)["hint"])
-        rc, out, calls = self.run_cli(["post", "--as", self.slug, "--channel", "#general", "--text", "hi", "--json"])
-        self.assertEqual((rc, calls), (2, []))  # not on the list
-        slack._CACHE.clear()
-        rc, out, calls = self.run_cli(
-            ["post", "--as", self.slug, "--channel", "C0000000010", "--text", "hi", "--json"],
-            [(200, {}, {"ok": True, "channel": {"name": "customer_success", "is_ext_shared": True}})],
-        )
-        self.assertEqual(rc, 2)
-        self.assertEqual(len(calls), 1)  # conversations.info, then it stopped
-        self.assertEqual(self.audited, [])
-
-
-PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
-SHOT = {
-    "id": "F0SHOT1",
-    "name": "checkout-error.png",
-    "mimetype": "image/png",
-    "size": len(PNG),
-    "url_private": "https://files.slack.com/files-pri/T1-F0SHOT1/checkout-error.png",
-    "url_private_download": "https://files.slack.com/files-pri/T1-F0SHOT1/download/checkout-error.png",
-    "channels": [],
-    "groups": [],
-    "ims": ["D0123"],
-}
-
-
-class FileDownload(FakeSlack):
-    """`file --id` reads files.info, then fetches url_private with the bot token, as files:read allows."""
-
-    def setUp(self):
-        super().setUp()
-        self.real_download, self.fetched = slack._download, []
-        self.served = (200, {"Content-Type": "image/png"}, PNG)
-        slack._download = lambda url, headers, timeout, limit: (self.fetched.append((url, headers)), self.served)[1]
-        self.out = Path(self.tmp.name) / "slack-files"
-
-    def tearDown(self):
-        slack._download = self.real_download
-        super().tearDown()
-
-    def fetch(self, info=SHOT, slug="reader"):
-        return self.run_cli(
-            ["file", "--as", slug, "--id", info["id"], "--out", str(self.out) + "/", "--json"],
-            [(200, {}, {"ok": True, "file": info})],
-        )
-
-    def test_a_screenshot_shared_in_a_dm_is_saved_with_the_bot_token(self):
-        rc, out, calls = self.fetch()
-        self.assertEqual(rc, 0, out)
-        self.assertEqual(calls[0]["url"], slack.API + "files.info?file=F0SHOT1")
-        url, headers = self.fetched[0]
-        self.assertEqual(url, SHOT["url_private_download"])
-        self.assertEqual(headers["Authorization"], "Bearer xoxb-test")
-        saved = Path(json.loads(out)["path"])
-        self.assertEqual((saved.name, saved.read_bytes()), ("F0SHOT1-checkout-error.png", PNG))
-
-    def test_a_shared_name_never_replaces_or_follows_a_file_that_is_there(self):
-        self.out.mkdir()
-        agent = self.out / "AGENT.md"
-        agent.write_text("the bot's instructions")
-        outside = Path(self.tmp.name) / "outside.txt"
-        outside.write_text("untouched")
-        (self.out / "F0SHOT1-pic.png").symlink_to(outside)
-        for name in ("../AGENT.md", "AGENT.md", "pic.png"):
-            rc, out, _ = self.fetch({**SHOT, "name": name})
-            self.assertEqual(rc, 0, out)
-            self.assertNotEqual(Path(json.loads(out)["path"]).resolve(), agent.resolve())
-        self.assertEqual(agent.read_text(), "the bot's instructions")
-        self.assertEqual(outside.read_text(), "untouched")
-        self.assertEqual(
-            sorted(p.name for p in self.out.iterdir()),
-            ["AGENT.md", "F0SHOT1-AGENT-2.md", "F0SHOT1-AGENT.md", "F0SHOT1-pic-2.png", "F0SHOT1-pic.png"],
-        )
-        # An exact --out path that exists is refused, a symlink included.
-        for existing in (agent, self.out / "F0SHOT1-pic.png"):
-            rc, out, _ = self.run_cli(
-                ["file", "--as", "reader", "--id", "F0SHOT1", "--out", str(existing), "--json"],
-                [(200, {}, {"ok": True, "file": SHOT})],
-            )
-            self.assertEqual(rc, 2, out)
-        self.assertEqual((agent.read_text(), outside.read_text()), ("the bot's instructions", "untouched"))
-
-    def test_by_default_the_file_lands_outside_the_repository(self):
-        real, slack.FILES_DIR = slack.FILES_DIR, self.out
-        try:
-            rc, out, _ = self.run_cli(
-                ["file", "--as", "reader", "--id", "F0SHOT1", "--json"],
-                [(200, {}, {"ok": True, "file": {**SHOT, "size": "big"}})],
-            )
-        finally:
-            slack.FILES_DIR = real
-        self.assertEqual(rc, 0, out)
-        self.assertEqual(Path(json.loads(out)["path"]).parent, self.out)
-        self.assertNotIn(str(slack.HUB), str(real))
-        self.assertEqual(stat.S_IMODE(self.out.stat().st_mode), 0o700)
-        if hasattr(os, "getuid"):
-            self.assertTrue(real.name.endswith(f"-{os.getuid()}"), real)  # one folder per local user
-
-    def test_the_default_folder_is_refused_unless_it_is_this_users_own_folder(self):
-        real = slack.FILES_DIR
-        try:
-            elsewhere = Path(self.tmp.name) / "elsewhere"
-            elsewhere.mkdir()
-            slack.FILES_DIR = self.out
-            self.out.symlink_to(elsewhere)  # planted link: refused
-            rc, out, _ = self.run_cli(
-                ["file", "--as", "reader", "--id", "F0SHOT1", "--json"], [(200, {}, {"ok": True, "file": SHOT})]
-            )
-            self.assertEqual(rc, 2, out)
-            self.assertEqual(list(elsewhere.iterdir()), [])
-            self.out.unlink()
-            self.out.mkdir(mode=0o777)
-            os.chmod(self.out, 0o777)
-            with mock.patch.object(slack.os, "getuid", return_value=os.getuid() + 1):  # someone else's
-                rc, out, _ = self.run_cli(
-                    ["file", "--as", "reader", "--id", "F0SHOT1", "--json"], [(200, {}, {"ok": True, "file": SHOT})]
+        script = str(Path(__file__).resolve().parent / "slack.py")
+        env = {"PATH": os.environ.get("PATH", ""), "HUB_API_URL": "http://127.0.0.1:9", "HUB_TOKEN": "t"}
+        with tempfile.TemporaryDirectory() as elsewhere:
+            for argv in (["channels"], ["file", "--id", "F0FILE0001"]):
+                out = subprocess.run(
+                    [sys.executable, "-I", script, *argv], cwd=elsewhere, env=env, capture_output=True, text=True
                 )
-            self.assertEqual(rc, 2, out)
-            self.assertEqual(list(self.out.iterdir()), [])
-            rc, out, _ = self.run_cli(
-                ["file", "--as", "reader", "--id", "F0SHOT1", "--json"], [(200, {}, {"ok": True, "file": SHOT})]
-            )
-            self.assertEqual(rc, 0, out)  # its own: made private, used
-            self.assertEqual(stat.S_IMODE(self.out.stat().st_mode), 0o700)
-        finally:
-            slack.FILES_DIR = real
-
-    def test_a_long_or_odd_name_is_trimmed_and_saved(self):
-        for name, want in (
-            ("é" * 300 + ".png", ".png"),
-            ("bad\x00na\x1bme\u202e.txt", "F0SHOT1-badname.txt"),
-            ("x" * 400, "F0SHOT1-x"),
-        ):
-            rc, out, _ = self.fetch({**SHOT, "name": name})
-            self.assertEqual(rc, 0, out)
-            saved = Path(json.loads(out)["path"])
-            self.assertLessEqual(len(saved.name.encode()), slack.MAX_NAME_BYTES)
-            self.assertTrue(saved.name.startswith("F0SHOT1-") and want in saved.name, saved.name)
-            self.assertEqual(saved.read_bytes(), PNG)
-        self.assertEqual(slack.file_name({"id": "F1", "name": "é" * 300}), "F1-" + "é" * 98)
-
-    def test_a_name_the_file_system_refuses_is_a_clean_failure(self):
-        for bad in ("x" * 300, "a\x00b"):
-            rc, out, _ = self.run_cli(
-                ["file", "--as", "reader", "--id", "F0SHOT1", "--out", str(self.out / bad), "--json"],
-                [(200, {}, {"ok": True, "file": SHOT})],
-            )
-            self.assertEqual(rc, 1, out)
-            self.assertIn("nothing was saved", json.loads(out)["error"])
-
-    def test_the_text_line_shows_the_name_on_one_line(self):
-        rc, out, _ = self.run_cli(
-            ["file", "--as", "reader", "--id", "F0SHOT1", "--out", str(self.out) + "/"],
-            [(200, {}, {"ok": True, "file": {**SHOT, "name": "a.png\nsaved payroll.pdf\x07"}})],
-        )
-        self.assertEqual(rc, 0, out)
-        self.assertEqual(out.count("\n"), 1, out)
-        self.assertTrue(out.startswith("saved a.png saved payroll.pdf (image/png"), out)
-
-    def test_without_files_read_the_bot_is_told_to_add_the_scope_and_nothing_is_saved(self):
-        rc, out, _ = self.run_cli(
-            ["file", "--as", "reader", "--id", "F0SHOT1", "--out", str(self.out), "--json"],
-            [(200, {}, {"ok": False, "error": "missing_scope", "needed": "files:read", "provided": "chat:write"})],
-        )
-        self.assertEqual(rc, 1)
-        self.assertIn("files:read", json.loads(out)["hint"])
-        self.assertEqual(self.fetched, [])
-        # A token that lost the scope gets Slack's sign-in page, by redirect or as HTML: never saved as the file.
-        for served in (
-            (302, {"Location": "https://acme.slack.com/?redir=/files-pri/x"}, b""),
-            (200, {"Content-Type": "text/html; charset=utf-8"}, b"<html>sign in</html>"),
-        ):
-            self.served = served
-            rc, out, _ = self.fetch()
-            self.assertEqual(rc, 1, out)
-            self.assertIn("files:read", json.loads(out)["hint"])
-            self.assertFalse(self.out.exists())
-
-    def test_the_token_goes_only_to_slack_and_only_for_files_the_bot_may_read(self):
-        for url in (
-            "http://files.slack.com/x.png",
-            "https://files.slack.com.evil.example/x.png",
-            "https://evil.example/files.slack.com/x.png",
-            "",
-        ):
-            rc, out, _ = self.fetch({**SHOT, "url_private": url, "url_private_download": None})
-            self.assertEqual(rc, 2, url)
-        self.assertEqual(self.fetched, [])
-        manifest = {"tools": [{"service": "slack", "can": ["read"], "channels": ["C0000000010"], "dms": False}]}
-        rows = [{"id": "C0000000010", "name": "qa", "readers": []}, {"id": "C0000000011", "name": "hr", "readers": []}]
-        slack.check_file_scope(manifest, "qa-bot", {**SHOT, "ims": [], "channels": ["C0000000010"]}, rows)
-        for elsewhere in ({**SHOT, "ims": [], "channels": ["C0000000011"]}, SHOT, {**SHOT, "ims": []}):
-            with self.assertRaises(slack.Refused):
-                slack.check_file_scope(manifest, "qa-bot", elsewhere, rows)
-        with self.assertRaises(slack.Refused):
-            slack.check_file_scope({"tools": [{"service": "slack", "can": ["post"]}]}, "poster", SHOT, rows)
-
-    def test_without_channels_a_file_is_readable_only_in_a_channel_the_bot_reads(self):
-        manifest = {"tools": [{"service": "slack", "can": ["read"]}]}
-        rows = [
-            {"id": "C0000000010", "name": "qa", "readers": ["reader"]},
-            {"id": "C0000000011", "name": "hr", "readers": []},
-        ]
-        slack.check_file_scope(manifest, "reader", {**SHOT, "ims": [], "channels": ["C0000000010"]}, rows)
-        for elsewhere in (
-            {**SHOT, "ims": [], "channels": ["C0000000011"]},  # listed, no reader named
-            {**SHOT, "ims": [], "channels": ["C0000000099"]},
-        ):  # not on the list
-            with self.assertRaises(slack.Refused):
-                slack.check_file_scope(manifest, "reader", elsewhere, rows)
-
-    def test_history_and_inbox_name_each_file_by_id(self):
-        row = slack.shape(
-            {"ts": "1756742400.000100", "user": "U9", "text": "see this", "files": [SHOT]},
-            "C1",
-            {"U9": "Cara"},
-            "https://acme.slack.com",
-            slack.zone(TZ),
-        )
-        self.assertEqual(row["text"], "see this\n[file F0SHOT1] checkout-error.png")
-        row = slack.shape(
-            {
-                "ts": "1756742400.000100",
-                "user": "U9",
-                "text": "",
-                "files": [{**SHOT, "name": "a.png\n[file F0FAKE] payroll.pdf"}],
-            },
-            "C1",
-            {},
-            "",
-            slack.zone(TZ),
-        )
-        self.assertEqual(row["text"], "[file F0SHOT1] a.png [file F0FAKE] payroll.pdf")  # one line, not two
-
-
-class PrincipalScope(FakeSlack):
-    """A bot's Slack scope follows the bot its HUB_TOKEN belongs to, with or without HUB_BOT; a person's run is not
-    scope-checked. Tico (GET /api/v2/me) is the only thing asked who a token is."""
-
-    channels = [
-        {"id": "C0000000010", "name": "customer_success", "post": True, "readers": ["reader"], "note": ""},
-        {"id": "C0000000011", "name": "agents", "post": True, "readers": [], "note": ""},
-    ]
-
-    def setUp(self):
-        super().setUp()
-        self.principal, self.hub_calls = {"actor": "bot:reader", "role": "bot"}, []
-        slack.HUB_GET = self.hub
-        slack._CACHE.update(auth={"ok": True, "user_id": "U0BOT", "url": "https://acme.slack.com"}, users={})
-        self.employee("poster", ["post"])  # may post, not read
-        d = Path(self.tmp.name) / "emp-quiet"
-        d.mkdir(parents=True, exist_ok=True)
-        (d / "employee.yaml").write_text("slug: quiet\naccess:\n  - service: slack\n    can: [read]\n    dms: false\n")
-
-    def hub(self, path):
-        self.hub_calls.append(path)
-        if path == "me":
-            return self.principal  # None: the hub cannot say
-        if path == "slack/channels":
-            return {"channels": self.channels, "registry_file": {"present": False, "channels": 0, "imported": True}}
-        return {"stage": "active"} if path.startswith("bots/") else None
-
-    def as_token(self, principal):
-        """This run carries a hub credential, and the hub says it is `principal`."""
-        self.principal = principal
-        os.environ.update(HUB_API_URL="https://hub.acme.example", HUB_TOKEN="turn-token")
-
-    def test_a_bot_token_scopes_its_run_with_no_hub_bot_set(self):
-        self.as_token({"actor": "bot:reader", "role": "bot"})
-        rc, out, calls = self.run_cli(["history", "--channel", "#agents", "--format", "json"])
-        self.assertEqual((rc, calls), (2, []), out)  # out of scope: nothing sent to Slack
-        self.assertIn("reader", json.loads(out)["error"])
-        rc, out, calls = self.run_cli(
-            ["history", "--channel", "#customer_success", "--format", "json"], [(200, {}, {"ok": True, "messages": []})]
-        )
-        self.assertEqual(rc, 0, out)
-        self.assertEqual([c["url"].split("?")[0] for c in calls], [slack.API + "conversations.history"])
-        self.assertEqual(self.hub_calls.count("me"), 1)  # asked once per process
-
-    def test_a_bot_that_may_not_read_is_refused_even_in_its_own_channel(self):
-        self.as_token({"actor": "bot:poster", "role": "bot"})
-        rc, out, calls = self.run_cli(["history", "--channel", "#customer_success", "--format", "json"])
-        self.assertEqual((rc, calls), (2, []), out)
-        self.assertIn("not read history", json.loads(out)["error"])
-
-    def test_a_bot_inbox_obeys_its_own_dms_setting(self):
-        self.as_token({"actor": "bot:quiet", "role": "bot"})
-        rc, out, calls = self.run_cli(["inbox", "--format", "json"])
-        self.assertEqual((rc, calls), (2, []), out)
-        self.assertIn("DMs", json.loads(out)["error"])
-
-    def test_a_bot_cannot_name_another_bot_with_as_or_hub_bot(self):
-        self.as_token({"actor": "bot:reader", "role": "bot"})
-        rc, out, calls = self.run_cli(
-            ["history", "--as", "poster", "--channel", "#customer_success", "--format", "json"]
-        )
-        self.assertEqual((rc, calls), (2, []), out)
-        os.environ["HUB_BOT"] = "poster"
-        rc, out, calls = self.run_cli(["history", "--channel", "#customer_success", "--format", "json"])
-        self.assertEqual((rc, calls), (2, []), out)
-        os.environ["HUB_BOT"] = "reader"  # the same bot: allowed
-        rc, out, calls = self.run_cli(
-            ["history", "--channel", "#customer_success", "--format", "json"], [(200, {}, {"ok": True, "messages": []})]
-        )
-        self.assertEqual(rc, 0, out)
-
-    def test_a_bot_cannot_post_or_dm_as_another_bot(self):
-        self.as_token({"actor": "bot:reader", "role": "bot"})
-        rc, out, calls = self.run_cli(["post", "--as", "poster", "--channel", "#agents", "--text", "hi"])
-        self.assertEqual((rc, calls), (2, []), out)
-        rc, out, calls = self.run_cli(["dm", "--as", "poster", "--to", "ben@acme.example", "--text", "hi"])
-        self.assertEqual((rc, calls), (2, []), out)
-
-    def test_a_bot_file_shared_outside_its_channels_is_not_downloaded(self):
-        self.as_token({"actor": "bot:reader", "role": "bot"})
-        outside = {**SHOT, "channels": ["C0000000011"], "groups": [], "ims": []}
-        inside = {**SHOT, "channels": ["C0000000010"], "groups": [], "ims": []}
-        with mock.patch.object(slack, "_download", return_value=(200, {"Content-Type": "image/png"}, PNG)) as download:
-            rc, out, calls = self.run_cli(
-                ["file", "--id", "F0SHOT1", "--json"], [(200, {}, {"ok": True, "file": outside})]
-            )
-            self.assertEqual(rc, 2, out)
-            download.assert_not_called()
-            saved = Path(self.tmp.name) / "shot.png"
-            rc, out, calls = self.run_cli(
-                ["file", "--id", "F0SHOT1", "--out", str(saved), "--json"], [(200, {}, {"ok": True, "file": inside})]
-            )
-            self.assertEqual(rc, 0, out)
-            download.assert_called_once()
-            self.assertEqual(saved.read_bytes(), PNG)
-
-    def test_a_persons_run_is_not_scope_checked(self):
-        self.as_token({"actor": "human:member", "role": "human"})  # a personal token
-        with mock.patch.object(slack, "check_history_scope") as scope:
-            rc, out, calls = self.run_cli(
-                ["history", "--channel", "#agents", "--format", "json"], [(200, {}, {"ok": True, "messages": []})]
-            )
-        self.assertEqual(rc, 0, out)
-        scope.assert_not_called()
-        self.assertEqual([c["url"].split("?")[0] for c in calls], [slack.API + "conversations.history"])
-
-    def test_a_terminal_with_no_hub_credential_asks_no_one_and_is_not_scope_checked(self):
-        self.principal = {"actor": "bot:reader", "role": "bot"}  # would scope a bot, if it were asked
-        rc, out, calls = self.run_cli(
-            ["history", "--channel", "#agents", "--format", "json"], [(200, {}, {"ok": True, "messages": []})]
-        )
-        self.assertEqual(rc, 0, out)
-        self.assertNotIn("me", self.hub_calls)
-
-    def test_a_hub_credential_the_hub_cannot_identify_reads_nothing(self):
-        self.as_token(None)
-        rc, out, calls = self.run_cli(["history", "--channel", "#customer_success", "--format", "json"])
-        self.assertEqual((rc, calls), (2, []), out)
-        self.assertIn("identity", json.loads(out)["error"])
+                self.assertNotIn("ModuleNotFoundError", out.stderr, argv)
+                self.assertNotIn("Traceback", out.stderr, argv)
+                self.assertEqual(out.returncode, 1, (argv, out.stdout, out.stderr))  # Tico unreachable: a failure
 
 
 if __name__ == "__main__":

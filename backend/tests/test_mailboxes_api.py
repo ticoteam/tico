@@ -268,10 +268,9 @@ def test_the_declared_answers_match_the_live_ones(mb):
 
 def test_each_row_says_who_uses_it_and_how_its_last_sync_went(mb, monkeypatch):
     """The list's Used by and status: a person's own mailbox counts its person and grants add people and bots, people
-    named first, the names cut short; the last successful read, and while a computer reports it failing, why, a refused
-    sign-in outranking another computer's network error (only a person fixes it)."""
-    from backend import google_rights
-    from backend.store import H
+    named first, the names cut short; the server's last good Gmail check, and while a check fails, why: a refused
+    sign-in (reconnects keeps it) says `signin`, any other failure `failed`."""
+    from backend import reconnects
 
     monkeypatch.setattr(mailboxes, "USED_BY_NAMES", 2)
     cara = connect(mb, "cara@acme.example")["mailbox"]
@@ -282,32 +281,28 @@ def test_each_row_says_who_uses_it_and_how_its_last_sync_went(mb, monkeypatch):
     grant(mb, support, "ben")
     grant(mb, support, "cara")
     with mb.app.state.store.transaction() as c:
-        c.execute(
-            "INSERT INTO mail_mailboxes(address,person_id,runner_id,synced_at,message_count,oldest_epoch,newest_epoch,error) "
-            "VALUES(?,?,?,?,?,?,?,NULL)",
-            ("cara@acme.example", "cara", "", "2026-01-02T03:04:05Z", 4, 1767000000, 1767300000),
-        )
-        google_rights.report(c, "mail", "rn-a", H.now(), failing={"support@acme.example": ("timed out", "network")})
-        google_rights.report(c, "mail", "rn-b", H.now(), failing={"Support@acme.example": ("invalid_grant", "signin")})
+        c.execute("UPDATE mailboxes SET checked_at='2026-01-02T03:04:05Z' WHERE address='cara@acme.example'")
+        c.execute("UPDATE mailboxes SET check_error='Gmail did not answer; try again' WHERE address='dan@acme.example'")
+        c.execute("UPDATE mailboxes SET check_error='Gmail refused this read' WHERE address='support@acme.example'")
+        reconnects.google_report(c, "mail", ["support@acme.example"], ["support@acme.example"], ok=[])
     listed = get(mb, "mailboxes")
     rows = {m["address"]: m for m in listed["mailboxes"]}
     assert rows["cara@acme.example"]["used_by"] == {"people": 2, "bots": 0, "names": [cara["person_name"], ben]}
     used = rows["support@acme.example"]["used_by"]
     assert (used["people"], used["bots"], len(used["names"])) == (2, 1, 2) and "ops" not in used["names"]
     assert rows["dan@acme.example"]["used_by"] == {"people": 0, "bots": 0, "names": []}
-    assert {k: rows["cara@acme.example"][k] for k in ("synced_at", "newest_epoch", "sync", "sync_error")} == {
+    assert {k: rows["cara@acme.example"][k] for k in ("synced_at", "sync", "sync_error")} == {
         "synced_at": "2026-01-02T03:04:05Z",
-        "newest_epoch": 1767300000,
         "sync": "",
         "sync_error": "",
     }
     assert (rows["support@acme.example"]["sync"], rows["support@acme.example"]["sync_error"]) == (
         "signin",
-        "invalid_grant",
+        "Gmail refused this read",
     )
-    assert rows["support@acme.example"]["synced_at"] is None
+    assert (rows["dan@acme.example"]["sync"], rows["support@acme.example"]["synced_at"]) == ("failed", None)
     # A member's own row carries the same fields.
-    assert get(mb, "mailboxes", "cara-test")["mine"]["newest_epoch"] == 1767300000
+    assert get(mb, "mailboxes", "cara-test")["mine"]["synced_at"] == "2026-01-02T03:04:05Z"
     document = mb.get("/api/v2/openapi.json", headers=headers()).json()
     schema = next(
         op for ops in document["paths"].values() for op in ops.values() if op.get("operationId") == "listMailboxes"

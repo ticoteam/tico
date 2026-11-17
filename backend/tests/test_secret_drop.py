@@ -190,7 +190,9 @@ def _proposal_world(api, monkeypatch):
     post(api, f"threads/{dm['id']}/messages", {'text': 'for close [saved JIRA_LOGIN for Close CRM]'})
     bot = claim(api, machine)['token']
     sent = []
-    monkeypatch.setattr(api_tools, 'send_check', lambda url, hdrs, params: sent.append(hdrs) or sent_code[0])
+    monkeypatch.setattr(
+        api_tools, 'send_check', lambda url, hdrs, params: sent.append(hdrs) or api_tools.Reply(sent_code[0])
+    )
     sent_code = [200]
     return dm, tid, saved, bot, sent, sent_code
 

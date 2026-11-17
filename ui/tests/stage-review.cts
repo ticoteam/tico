@@ -6,7 +6,7 @@
 //    header (columns and list alike), and a phone's tabs and tab strip keep their widths as Needs you and the Rules
 //    counts arrive and across stages whose Rules counts differ in digits, a stage with items getting a dot;
 //  - Flow opens full screen on a phone; the crumb's menu switches the walk to Spec, with only Spec's items in it;
-//  - an answer, a send back with a note, or an OK is saved and the next item shows without leaving the screen;
+//  - an OK, or a send back with a note, is saved and the next item shows without leaving the screen;
 //  - a clear stage says All done, and the menu then walks Review's items;
 //  - a new ask in the stage joins the walk while it is open, without moving off the item on screen;
 //  - Tasks › You shows one chip per stage with items, and Other; a chip opens that stage's review;
@@ -23,6 +23,11 @@ type Task = import('./tasks-page.cts').Task;
 type Requirement = import('../types/api').TaskRequirement;
 
 const PHONE = {width: 390, height: 844};
+/** A phone's Chat tab, where an OK's chat is (it opens on its document); nothing on a wide screen. */
+async function chatTab(page: import('playwright').Page) {
+  const tab = page.locator('#need-card [data-dc="tab"][data-dc-tab="chat"]');
+  if (await tab.isVisible()) await tab.click();
+}
 const ago = (minutes: number) => new Date(Date.now() - minutes * 60000).toISOString();
 const waiting = {state: 'person' as const, who: 'human:ana', line: 'Waiting on Ana', since: ago(60), until: null, ask: true, requirement_id: null};
 
@@ -37,19 +42,18 @@ function tasks(): Task[] {
     task('t-7', 'Book the team offsite', 'todo', {owner_id: 'human:ana', turn: {...waiting, ask: false}}),
   ];
 }
-const ask = (rid: string, kind: 'ok' | 'answer', line: string, choices: string[] | null = null): Requirement => ({requirement_id: rid, kind, line,
-  who: 'human:ana', asked_by: 'bot:pm', choices, may: kind === 'ok' ? ['ok', 'no', 'thumbs'] : ['answer', 'thumbs'], met: false, shows: [],
-  standing: 'waiting', answer: null});
+const ask = (rid: string, line: string): Requirement => ({requirement_id: rid, kind: 'ok', line, who: 'human:ana', asked_by: 'bot:pm',
+  may: ['ok', 'no'], met: false, shows: [], standing: 'waiting', answer: null});
 function needsOf(list: Task[]): Need[] {
   const of = (id: string) => brief(list.find(t => t.id === id)!);
-  const asked = (id: string, rid: string, kind: 'ok' | 'answer', line: string, minutes: number, choices: string[] | null = null): Need =>
-    ({kind: 'ask', id: `a-${rid}:${rid}`, task_id: id, requirement_id: rid, line, since: ago(minutes), task: of(id), ask: ask(rid, kind, line, choices)});
+  const asked = (id: string, rid: string, line: string, minutes: number): Need =>
+    ({kind: 'ask', id: `a-${rid}:${rid}`, task_id: id, requirement_id: rid, line, since: ago(minutes), task: of(id), ask: ask(rid, line)});
   return [
-    asked('t-1', 'r1', 'ok', 'OK the spec for Review a stage', 300),
-    asked('t-2', 'r2', 'ok', 'OK the spec for Funnel export', 200),
-    asked('t-3', 'r3', 'answer', 'Which reminder goes first?', 100, ['Email', 'Text']),
-    asked('t-5', 'r5', 'ok', 'OK the release note for Task page clarity', 90),
-    asked('t-6', 'r6', 'answer', 'Ship it this week?', 80, ['Yes', 'No']),
+    asked('t-1', 'r1', 'OK the spec for Review a stage', 300),
+    asked('t-2', 'r2', 'OK the spec for Funnel export', 200),
+    asked('t-3', 'r3', 'OK the reminder order', 100),
+    asked('t-5', 'r5', 'OK the release note for Task page clarity', 90),
+    asked('t-6', 'r6', 'OK shipping it this week', 80),
     {kind: 'task', id: 'task:t-7', task_id: 't-7', line: 'Book the team offsite', since: ago(400), task: of('t-7')},
     {kind: 'paused', id: 'paused:github', line: 'Connect GitHub', since: ago(500), task: null, task_ids: ['t-4'], bots: ['eng']},
   ];
@@ -108,11 +112,21 @@ async function nothingMoves(browser: Browser) {
     release();
     await page.locator('[data-pv-play]').first().waitFor();
     assert.deepEqual(await layoutOf(page), before, `${layout}: the counts and ▶'s slot stay where they were`);
+    // ▶ sits just before its stage's ⋯, the header's last part, which ends it at the right edge (task-pipelines.ts,
+    // pvColMenuHTML). The ⋯'s own margin takes 4 px of the header's 8 px gap, so ▶ is 4 px left of it; a gap past that
+    // (or one that overlaps) is a layout bug.
     const right = await page.locator('.pv-play').evaluateAll(els => els.map(e => {
-      const h = e.parentElement!.getBoundingClientRect(), r = e.getBoundingClientRect();
-      return {gap: Math.round(h.right - r.right - parseFloat(getComputedStyle(e.parentElement!).paddingRight)), w: Math.round(r.width)};
+      const h = e.parentElement!, hb = h.getBoundingClientRect(), r = e.getBoundingClientRect();
+      const menu = h.lastElementChild, mb = menu?.getBoundingClientRect();
+      return {
+        menu: !!menu?.matches('[data-pv-col-menu]'),
+        edge: mb ? Math.round(hb.right - parseFloat(getComputedStyle(h).paddingRight) - mb.right) : null,
+        gap: mb ? Math.round(mb.left - r.right) : null,
+        w: Math.round(r.width),
+      };
     }));
-    assert.ok(right.every(x => x.gap === 0 && x.w >= 40), `${layout}: ▶ at the header's right edge, 40 px or more: ${JSON.stringify(right)}`);
+    assert.ok(right.every(x => x.menu && x.edge === 0 && x.gap !== null && x.gap >= 0 && x.gap <= 8 && x.w >= 40),
+      `${layout}: ▶ just before the stage's ⋯, which ends the header, 40 px or more: ${JSON.stringify(right)}`);
     assert.deepEqual(errors, []);
     await page.close();
   }
@@ -169,36 +183,38 @@ async function walkOnAPhone(browser: Browser) {
   await page.locator('#need-card .dc-menu [data-dc-walk="spec"]').click();
   await page.waitForFunction(() => document.querySelector('#need-card .dc-crumb')?.textContent === 'All mine/Product/Spec');
   assert.equal(await left(page), 3);
-  // Only Spec's items, answers first, then OKs: page through them, and back.
+  // Only Spec's items, in the list's order: page through them, and back.
   const seen = [await question(page)];
   for (let i = 0; i < 2; i++) { await page.locator('#need-card [data-dc="next"]').dispatchEvent('click'); seen.push(await question(page)); }
-  assert.deepEqual(seen, ['Which reminder goes first?', 'OK the spec for Review a stage', 'OK the spec for Funnel export'], `the walk is Spec's: ${seen.join(' | ')}`);
+  assert.deepEqual(seen, ['OK the spec for Review a stage', 'OK the spec for Funnel export', 'OK the reminder order'], `the walk is Spec's: ${seen.join(' | ')}`);
   for (let i = 0; i < 2; i++) await page.locator('#need-card [data-dc="prev"]').dispatchEvent('click');
-  // A question's answer: saved, and the next shows without leaving the screen.
-  await page.locator('#need-card [data-dc-choice="Email"]').click();
-  await leftIs(page, 2);
-  assert.ok(posts.some(x => x.p === '/api/v2/tasks/t-3/asks/r3/answer' && x.body.value === 'Email'));
-  // Approve.
+  // Approve: saved, and the next shows without leaving the screen.
   assert.equal(await question(page), 'OK the spec for Review a stage');
   await page.locator('#need-card [data-dc="approve"]:not([disabled])').click();
-  await leftIs(page, 1);
+  await leftIs(page, 2);
   assert.ok(posts.some(x => x.p === '/api/v2/tasks/t-1/asks/r1/answer' && x.body.value === 'ok'), 'the OK was sent');
+  // A reply in the task's chat sends it back with the words.
+  assert.equal(await question(page), 'OK the spec for Funnel export');
+  await chatTab(page);
+  await page.locator('#need-card .dc-chat .p-text').fill('Name the stage in the top bar.');
+  await page.locator('#need-card .dc-chat .p-send').click();
+  await leftIs(page, 1);
+  assert.ok(posts.some(x => x.p === '/api/v2/tasks/t-2/asks/r2/answer' && x.body.value === 'no' && x.body['note'] === 'Name the stage in the top bar.'));
   // A new OK on a task in Spec joins the walk; the item on screen stays.
   const before = await question(page);
   // DEC and decideRefresh are the app's script globals: a live refresh hands the screen the new list.
-  await page.evaluate(`S.v2.needs = [...S.v2.needs, {...S.v2.needs.find(n => n.requirement_id === 'r2'), id: 'a-r9:r9', requirement_id: 'r9',
+  await page.evaluate(`S.v2.needs = [...S.v2.needs, {...S.v2.needs.find(n => n.requirement_id === 'r3'), id: 'a-r9:r9', requirement_id: 'r9',
     line: 'OK the late spec'}]; decideRefresh(DEC, S.v2.needs)`);
   assert.equal(await left(page), 2, 'the new one joins the walk');
   assert.equal(await question(page), before, 'and the item on screen stays');
-  // Send back with a note. The server never had the late OK, so the read after the answer takes it out (answered
-  // elsewhere, it leaves): the stage is done, and the menu walks Review's items.
-  await page.locator('#dc-notes').fill('Name the stage in the top bar.');
-  await page.locator('#need-card [data-dc="sendback"]').click();
+  // The server never had the late OK, so the read after the answer takes it out (answered elsewhere, it leaves): the
+  // stage is done, and the menu walks Review's items.
+  await page.locator('#need-card [data-dc="approve"]:not([disabled])').click();
   await page.locator('#need-card .dc-done h2').waitFor();
-  assert.ok(posts.some(x => x.p === '/api/v2/tasks/t-2/asks/r2/answer' && x.body.value === 'no' && x.body['note'] === 'Name the stage in the top bar.'));
+  assert.ok(posts.some(x => x.p === '/api/v2/tasks/t-3/asks/r3/answer' && x.body.value === 'ok'));
   await walkTo(page, 'review');
   await leftIs(page, 2);
-  assert.equal(await question(page), 'Ship it this week?');
+  assert.equal(await question(page), 'OK the release note for Task page clarity');
   assert.deepEqual(errors, []);
   await page.close();
   console.log('Flow on a phone: full screen, the menu switches to a stage, answers move on, new items join, the menu walks on: ok');
@@ -275,15 +291,12 @@ async function phonePolish(browser: Browser) {
     await page.locator('#task-play').click();
     await page.locator('#need-card[open]').waitFor();
     await walkTo(page, 'spec');
-    await page.locator('#need-card[open] [data-dc-choice]').first().waitFor();
-    r = await smallTargets(page, '#need-card');
-    assert.deepEqual(r.small, [], 'the review screen, a question: 44 px');
-    await page.locator('#need-card [data-dc="next"]').dispatchEvent('click');
     await page.locator('#need-card[open] [data-dc="approve"]:not([disabled])').waitFor();
     r = await smallTargets(page, '#need-card');
     assert.deepEqual(r.small, [], 'the review screen, an OK: 44 px');
-    // With the keyboard up (the visible height cut to 420 px), Approve and Send back stay on screen.
-    await page.locator('#dc-notes').focus();
+    // With the keyboard up (the visible height cut to 420 px), Approve stays on screen.
+    await chatTab(page);
+    await page.locator('#need-card .dc-chat .p-text').focus();
     await page.evaluate(`document.documentElement.style.setProperty('--chat-viewport-height', '420px')`);
     const acts = await page.locator('#need-card [data-dc="approve"]').boundingBox();
     assert.ok(acts && acts.y + acts.height <= 420, `Approve above the keyboard: ${JSON.stringify(acts)}`);

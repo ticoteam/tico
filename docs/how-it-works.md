@@ -50,7 +50,7 @@ Words are defined in the [Glossary](glossary.md).
   Record states: `active`, `paused`, `planned`, `quarantined`. Live status while it works:
   `idle`, `running`, `waiting_human`, `waiting_bot`, `blocked`, `limited`, `crashed`, `paused`,
   `quarantined`.
-- **Task** — a unit of work with a requester, an owner (bot or human), a title, a body and a
+- **Task** — a unit of work with a requester, an owner (bot or human), a title, a first message and a
   note; a pipeline and a stage in it, a `rank` in its owner's queue, labels, links (a pull request first), the tasks
   it filed, and relations to other tasks (related, duplicates, follow-ups). Status: `open`, `done` or `closed`; what
   an open task waits on is read, never stored ([Whose turn it is](tasks.md#whose-turn-it-is)). The owner says
@@ -63,7 +63,7 @@ Words are defined in the [Glossary](glossary.md).
   nobody until the bot's next turn there or a deadline. Chat says which, and Stop and redirect ends the turn so the next
   one starts with that message. A requesting bot steers its delegated task's running turn with
   `tico message send --steer --ref task:<id>`.
-  A bot's question to a person is an ask on its task, and it lands in their **Needs you**
+  A bot's question to a person is a ❓ on its chat message, and it lands in their **Needs you**
   ([Asks and OKs](tasks.md#asks-and-oks)). An OK on one exact action (send this email, spend, publish) is an ask bound
   to
   exactly what the person was shown: only they give it, by their own click, and it is used once. Authorized work needs
@@ -128,7 +128,7 @@ tasks. It never runs a bot. It runs from the Docker image ([install.md](install.
 on the same host, the Slack gateway (`backend/slack_gateway.py`, its own unit) turns a DM to
 Tico or an `@Tico` in a channel into a message for the bot the decision model routes it to, posts the
 reply back under that bot's name, and stores everything else said in the channels Tico is
-in so that each channel's readers see it within the hour (`docs/slack-gateway.md`).
+in; a channel bots read comes into a read-only thread they catch up on within the hour (`docs/slack-gateway.md`).
 Pages: **Tasks** (where the app opens), **Meetings** (imported transcripts, source sync status, Import, and each meeting's
 action items), **Docs**,
 **Tools**, **Changelog**, the **Team** tree, and under your email **Settings**
@@ -149,24 +149,26 @@ one `SELECT` at a time, each caller seeing only what the JSON API would show it,
 
 **Your Mac's runner** — the Rust runner `tico-runner` (`runner-rs/`), with Python helpers in `runner_support/` for the side
 jobs, registered once with **Add computer** in **Settings → Computers** (`scripts/setup-runner.sh`, credential in
-`~/.config/tico/runner.json`). Four launchd jobs, installed and managed with `scripts/tico-computer`. Their plists name
+`~/.config/tico/runner.json`). Three launchd jobs, installed and managed with `scripts/tico-computer`. Their plists name
 `runner`, which forwards to `runner_support/` (runner/__init__.py), so a computer moved back to an older release still
 starts them:
 
 | Job | Command | What it does |
 |---|---|---|
 | `team.tico.tico-bot` | `python -m runner run` (execs `tico-runner run`) | Heartbeats every 15 s with readiness, claims work for the bots assigned to this computer, runs each run in the bot's local repository with the local model CLI, streams output back |
-| `team.tico.tico-connectors` | `python -m runner connectors` | Publishes calendar snapshots, executes Tico-queued calendar appointments, and pushes persisted mail from local Google access (Ana's Mac, or a Linux runner that holds the Google key) |
 | `team.tico.tico-close-calls` | `python -m runner close-calls` | Every five minutes, imports available Close call and Notetaker meeting transcripts without fetching audio, using the local Close key (Ana's Mac only; `scripts/tico-computer install close-calls`) |
 | `team.tico.tico-importers` | `python -m runner importers` | Runs the meeting importers the owner turned on for this computer (Zoom, Google Meet, Granola), using credentials kept in `secrets/` here; see [Meetings](meetings.md#meeting-importers) (`scripts/tico-computer install importers`) |
 
 A Linux runner (the Docker image) has no launchd: with `TICO_SIDE_JOBS=1` (set by the image) `tico-runner run` supervises `importers` (while Tico assigns importers to this computer) and
-`close-calls` (while the Close key is in `secrets/`) and `connectors` (while `secrets/google-sa.json` is there, or
-Tico names this computer's owner in `TICO_PROCESSING_OPERATORS`) as child processes with restart and backoff
+`close-calls` (while the Close key is in `secrets/`) as child processes with restart and backoff
 (`runner-rs/src/sidejobs.rs`). A Mac keeps its checkout-sibling layout; a Linux runner names the same places with
-`TICO_PROJECTS_DIR` and `TICO_MAIL_VENV` (see [Message bots](mail.md#works-on-linux-runners)).
+`TICO_PROJECTS_DIR`.
 
-Logs are `~/.config/tico/logs/tico-{bot,connectors,close-calls,importers}.log`. The runner makes outbound
+No computer runs a mail or calendar job: the server reads Gmail and Google Calendar live, watches mailboxes, sends
+queued mail and books calendars ([Message bots](mail.md#how-tico-hears-new-mail)). An update removes the old
+`tico-connectors` job from a computer that still has one.
+
+Logs are `~/.config/tico/logs/tico-{bot,close-calls,importers}.log`. The runner makes outbound
 HTTPS calls only; nothing listens on the Mac. Model subscriptions (Codex, Claude, Gemini, Grok
 Build) are signed in on the Mac and never leave it. Bot Credentials are stored in
 **Tools → Credentials**, granted to each bot and delivered only for its run. Existing own files,
@@ -184,11 +186,11 @@ the same routes and `backend/hubdb.py` rules; there is no privileged path.
 Calendar appointments are three shared Tico tools available to every bot:
 `tico_calendar_list`, `tico_calendar_schedule`, and `tico_calendar_status`. Events and bookings have their own
 tools: `tico_calendar_events`, `tico_calendar_free`, `tico_calendar_search`, and the writes `tico_calendar_add`,
-`tico_calendar_move`, `tico_calendar_cancel`. Reads come from the
-bounded calendar snapshot, limited to the team owner's or the bot operator's calendar
-([calendar paths](mail.md#calendar)). A schedule call writes an idempotent Tico action; the private calendar tool
-claims it once, creates the Google event and invitations locally, and reports the result. Bots must
-see `succeeded` before saying the appointment exists. This path grants no generic Gmail authority.
+`tico_calendar_move`, `tico_calendar_cancel`. Reads come live from Google on the server,
+limited to the team owner's or the bot operator's calendar ([calendar paths](mail.md#calendar)). A schedule call
+makes the Google event on the server in the same request and queues its invitation as an email through the send
+rules; its receipt says `succeeded`, `failed` or `unknown`. Bots must see `succeeded` before saying the appointment
+exists. This path grants no generic Gmail authority.
 
 One of those tools is a second model, the decision model. `tico_decision_ask` (`tico decision ask`) sends a JSON state and typed
 questions to the decision model, and gets a calibrated answer per question back:
@@ -196,7 +198,7 @@ a choice with a confidence, a score on ordered levels, or the probability a stat
 It writes no prose, so a bot uses it to decide (sort a listing, dedupe, route, gate a draft) and
 its own model to write. Tico holds the one key and audits every call by label, never the
 state (`backend/judge.py`); the decisions themselves are versioned files in `questions/`
-(`questions/README.md`), which the meeting brain and the mail CLI read the same way a bot does.
+(`questions/README.md`), which the meeting brain reads the same way a bot does.
 `skills/decisions/SKILL.md` says when to reach for it.
 
 **Bot ids** — a bot has a stable id and a renameable slug. A bot made before ids keeps its slug as its id; a bot made now
@@ -417,7 +419,9 @@ turn; a subscription profile that shares the computer's own sign-in counts as th
 after a hold began can end it by working, so a run that started earlier and finishes later does not. When it ends, one queued run goes first; the others on the login wait for
 its result, so a login sees one try per window however many runs wait. **Settings → General → Health → Details** says whose login it is
 and when it resumes. When the provider gave no known reset time, a person's message written after the limit
-lets it try once at once. A known reset keeps new messages queued until then. **Try now** explicitly ends a hold (and also works while
+lets it try once at once. A known reset keeps new messages queued until then. The hold is the only record of the
+limit that decides anything: the bot shows *limited* exactly while a hold keeps its next run waiting (its own login's,
+with no fallback ready, or the Gateway's for a Tico model), and the scheduler clears that the moment none does. **Try now** explicitly ends a hold (and also works while
 only the bot's own login is held and its work goes on on a fallback); a run that
 hits the limit again goes back to the hold. **Try now**, beside the warning on the bot's page and in its Chat line for anyone who
 manages the bot (`POST /api/v2/bots/{bot}/limit/retry`, BotOps as the person who asked), ends the
@@ -460,11 +464,10 @@ conversation session stays separate. Before a fallback starts, its pending hando
 its confirmed side session is then saved locally and on the server while the turn is still running. A safe lost lease
 can therefore continue that session once, even before any quota/capacity result. An unconfirmed side session never
 resumes the old primary; unknown effects and final answers keep their settlement safeguards. Late diagnostics cannot
-erase an already recorded continuation decision. The result field is sent only when the server advertises `source_continue`;
-older runners are not handed these continuations. Other turns try the bot's own provider first, so the
+erase an already recorded continuation decision. The result field is sent to every runner the server accepts (each advertises `source_continue_v1`). Other turns try the bot's own provider first, so the
 bot moves back on its own once the limit resets. The owner turns this off in **Settings → Models**
-(*Fall back when a plan runs out*, `auto_fallback`). Company › Campus lists how many bots are on a fallback and
-since when, and how many are limited.
+(*Fall back when a plan runs out*, `auto_fallback`). Settings › Health's *What bots run on* check lists the bots running
+on a fallback, and `GET /api/v2/health` names them (`on_fallback`, `limited`).
 
 **Held runs after a usage limit (Unreleased).** Safe runs previously held after the primary hit its limit and the fallback failed to start recover automatically.
 Tico puts them back in the queue, oldest first, after the provider's reset, a model change, or a configured fallback becoming ready.
@@ -541,8 +544,7 @@ For example, a failed fallback that did nothing can retry after the reset; a sto
 one ChatGPT sign-in run turns at the same time, just as Claude bots do. This includes every bot on the
 computer's login and separate task lanes of one bot.
 They share the plan's usage allowance; when it runs out, the usage-limit and fallback rules above apply.
-A busy ChatGPT login does not queue another bot's turn or show a login-wait message. Codex has
-`one_turn_per_login = false` in its harness manifest; the optional login queue is dormant.
+A busy ChatGPT login does not queue another bot's turn.
 Tico keeps using the original login in its own home. It never copies a login into another bot's home:
 copies can rotate apart when the provider refreshes the token.
 
@@ -563,8 +565,9 @@ Home and other turns share one more. BotOps (and any bot set to `session: task`)
 thread its own provider thread, so unrelated requesters stay separate; `session: bot` keeps
 everything on one thread. A subtask someone else filed continues its parent task's thread when the bot owns both; one
 the bot filed for itself gets its own (`subtask_session: own` gives every subtask its own). Each bot task has its own
-thread, so the main thread reads only the Home plus a quiet line when a task starts, is done or closed
-([Tasks](tasks.md#done-closed-and-reopen)). Wakes about the same task resume its thread. A task's set-up worktrees
+thread, so the main thread reads only the Home plus a quiet line when a task starts
+([Tasks](tasks.md#done-closed-and-reopen)); a task's end is a quiet note in the task's own thread, which the main
+thread does not read. Wakes about the same task resume its thread. A task's set-up worktrees
 on that computer join its session (Claude Code's `--add-dir`), and the prompt carries each repo's
 AGENTS.md (else CLAUDE.md), labelled as rules for writing code there that never grant access;
 a link out of the worktree is refused, the whole is capped at 16 KB, and a resumed thread gets
@@ -587,8 +590,8 @@ thread and that command, because a compacted session, or one on a new model, no 
 all of it. The runner fast-forwards the checkout from origin before the run, and
 pulls or clones any `reads:` sibling repos beside it.
 
-**A bot needs you.** It adds an ask to its task (`tico task ask <id> --to <you> "<question>"`, or `--kind ok` for
-an OK) or files a sub-task for you to do. The ask, or the first paragraph of a task it gives you, must say in one
+**A bot needs you.** It asks on its task (`tico task ask <id> --to <you> "<question>"` marks a ❓ in the task's chat, or
+`--kind ok` for an OK) or files a sub-task for you to do. The question, or the first paragraph of a task it gives you, must say in one
 or two plain sentences what it needs and what happens after, with no ids, file paths or tool names; Tico refuses
 it otherwise. The task stays in its stage until you answer ([Asks and OKs](tasks.md#asks-and-oks)).
 **Needs you** at the top of **Tasks** lists every ask with your name and every task that is your turn, across
@@ -693,18 +696,18 @@ made or revoked is an `events` row (`token.create`, `token.revoke`).
 |---|---|
 | `backend/` | the cloud API, authorization, write layer, scheduler, backups (FastAPI, SQLite) |
 | `runner-rs/` | the local runner (`tico-runner`): enrolment, readiness, leases, runs, harnesses, updates |
-| `runner_support/` | the runner's Python helpers: the `python -m runner_support run` shim, connectors, Close call and meeting import, catalog set-up, the update process |
+| `runner_support/` | the runner's Python helpers: the `python -m runner_support run` shim, Close call and meeting import, catalog set-up, the update process |
 | `clients/` | what bots and the runner call: the `tico` CLI, the HTTP client, attachment download, routine validation, preflight, the docs read and write commands |
-| `connectors/` | shared Slack, mail/calendar and browser adapters bots use instead of vendor APIs |
+| `connectors/` | shared Slack and browser adapters bots use instead of vendor APIs (mail and calendar run on the server) |
 | `integrations/` | one page per outside system (what it is, how a bot uses it, rules, recipes) and the query lists; served as **Tools** and `tico tool show <service>`, with the learnings bots add |
-| `questions/` | the question sets the decision model answers (`tico_decision_ask`, `tico decision ask`, `mail inbox --decisions`, the meeting brain): one versioned JSON file per decision, with its thresholds |
+| `questions/` | the question sets the decision model answers (`tico_decision_ask`, `tico decision ask`, an automation's decide step, the meeting brain): one versioned JSON file per decision, with its thresholds |
 | `ui/` | the web interface (`index.html`, `app/` scripts, `styles/`, feature scripts, browser tests; see `ui/README.md`) |
 | `app/` | the native macOS shell around hub.acme.example |
 | `infra/` | the EC2 stack, release packaging, deploy and restore scripts |
 | `scripts/` | `tico` (the teamwork CLI bots and people use), `tico-computer` (operate this computer), `hub` (`tico`'s old name), setup, publishing and maintenance |
 | `docs/` | team knowledge |
 | `policies/` | rules every bot follows: approvals, access, handoffs, writing, shared rules |
-| `registry/` | bootstrap data: humans, sign-in access, mail rules, Slack channels; `employees.yaml` seeds a new database only |
+| `registry/` | bootstrap data: humans, sign-in access, mail rules; `employees.yaml` seeds a new database only |
 | `templates/` | the bot repository contract and prompt templates |
 | `skills/` | shared runtime skills for bots |
 
@@ -717,8 +720,8 @@ final answer. To get an answer back, send it flagged `--needs-action`
 (`tico message send <bot> "<question>" --needs-action`). A bot receiving an ordinary message that asks for a reply
 sends that reply explicitly with `tico message send`. Humans' replies are delivered automatically.
 
-A bot never answers an ask for a person. A person answers it in **Needs you**, and the bot hears the answer
-once.
+A bot never answers a question or an OK for a person. A person answers it in **Needs you** (a reply in the chat, for a ❓),
+and the bot hears the answer once.
 
 Computer readiness covers only bots assigned to that Computer. Eligible bots are placement
 options, and their missing repositories do not count as readiness or Health failures there.
@@ -728,7 +731,7 @@ options, and their missing repositories do not count as readiness or Health fail
 Every task is in one pipeline, at one stage, with one owner whose turn it is. A new company has one pipeline,
 General, with one stage, To do, managed by the General Manager. A task's status is `open`, `done` or `closed`; only
 the task engine moves it. See [Pipelines and stages](tasks.md#pipelines-and-stages) and
-[Pipelines](pipelines-v3.md).
+[Pipelines](dev/pipelines-v3.md).
 
 ## On computers
 

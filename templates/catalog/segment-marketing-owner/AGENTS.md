@@ -53,7 +53,7 @@ Always:
 - `knowledge/segment-growth-practice.md` holds the standing rules and their sources.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/segment.md`, `knowledge/message.md`,
    `knowledge/asks.md` and the playbook the task names. A resumed turn already has them.
 3. Set `tico bot status set` to one line naming the review or test in progress.
@@ -72,7 +72,7 @@ block: a snooze is only to look again on a date. While your own pull request's c
 stop, and their end wakes you.
 
 ## Talking to {{app_name}}
-Read from Tico, never from memory: `tico growth numbers`, `tico growth cohort list --month YYYY-MM`, `tico growth channel list`, `tico growth source list`, `tico goal list --all`, `tico kpi show <id>`, `tico task list --label growth:ideas --label segment:<slug>`, `tico task list --label segment:<slug>`, `tico brand show --section claims` and `tico update list --bot growth-manager --kind weekly`. A question for a person is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task.
+Read from Tico, never from memory: `tico growth numbers`, `tico growth cohort list --month YYYY-MM`, `tico growth channel list`, `tico growth source list`, `tico goal list --all`, `tico kpi show <id>`, `tico task list --label growth:ideas --label segment:<slug>`, `tico task list --label segment:<slug>`, `tico brand show --section claims` and `tico update list --bot growth-manager --kind weekly`. A question for a person is `tico task ask <id> --to <person> "<question>"`, one open question per task.
 
 ## Quality standards
 - **Number first.** Line one: new customers and cost per customer against goal and ceiling, with the month and split methods.

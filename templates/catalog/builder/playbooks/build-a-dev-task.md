@@ -5,7 +5,7 @@ past it the task is Late and the Engineering Manager looks at it.
 
 Inputs: the task and its conversation (`tico task show <id>`), the Spec page it links (`page:<file id>@<version>`,
 listed under "From earlier stages"; read with `tico file read <file id>`), the person's notes on the spec under it in
-the task's body (what they said with their OK: it answers the spec's open questions, so do not ask them again),
+the task's first message (what they said with their OK: it answers the spec's open questions, so do not ask them again),
 `knowledge/standards.md` and `knowledge/patterns.md`.
 
 Outcome: one pull request linked to the task, opened as a draft and marked ready once, with the checks passing at its
@@ -16,11 +16,11 @@ description says what changed, why and how it was tested, and the task links the
 
 ---
 
-## 1. Read the task
+## 1. Read the task's chat
 
     tico task show <id>
 
-Read the spec page, its acceptance criteria and the last conversation. If the task is unclear, ask once with `tico task ask <id> --to <person> "<question>" --version N`
+Read the spec page, its acceptance criteria and the last conversation. If the task is unclear, ask once with `tico task ask <id> --to <person> "<question>"`
 and keep going on what is clear. Do not build a behaviour the spec does not state.
 
 ## 2. Branch, set up and open a draft
@@ -91,8 +91,8 @@ they pass at the head; a failing check wakes you with its names (`skills/get-the
 When the same check fails on main too, follow that skill's "When main is red": comment `Blocks #<your task>` on the
 one open `Main red:` task (file it only when none is open), make your task depend on it rather than snooze, and once
 main is fixed rebase on it and push; never re-run the failed jobs.
-Leave a note on the task with the head commit, the checks you ran and the ones you could not:
+Say in your reply (it is posted on the task) the head commit, the checks you ran and the ones you could not:
 
-    tico task comment <id> "PR <pull request url> at <head sha>: checks run <list>; not checked <list>"
+    PR <pull request url> at <head sha>: checks run <list>; not checked <list>
 
 Review findings come back in Fixes 1 and Fixes 2: `playbooks/fix-what-review-found.md`. Then QA: `playbooks/qa.md`.

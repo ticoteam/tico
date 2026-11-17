@@ -9,8 +9,8 @@
 
 /** The controls a view hides outright (styles/components.css, html.view-only; the task window's own in task-code.css). */
 const VIEW_HIDDEN = [
-  '#task-mi-new', '#task-mi-edit', '#task-play', '.add-ctl', '[data-need-answer]', '[data-task-follow]', '.p-follow', '.tm-page-add', 'header.ph .ph-add',
-  '[data-page-add]', '[data-page-link]', '[data-answer]', '[data-dash-mode]', '[data-dash-add]',
+  '#task-mi-new', '#task-mi-edit', '#task-play', '.add-ctl', '[data-task-follow]', '.p-follow', '.tm-page-add', 'header.ph .ph-add',
+  '[data-page-add]', '[data-page-link]', '[data-dash-mode]', '[data-dash-add]',
   // 👍 👎 on a bot's or a person's work (feedback.ts): the task window's head and their messages.
   '[data-fb-rate]',
   // The task window: its page +, Ask someone, Follow, Answer, Done or Close, and Stop on a run.
@@ -20,7 +20,7 @@ const VIEW_HIDDEN = [
   // description and the roadmap's "I want this"; a section left with only its heading goes with them.
   '#task-modal [data-task-reopen]', '#task-modal [data-tp-drop]', '#task-modal .prop-add', '#task-modal .prop-x',
   '#task-modal [data-drop-link]', '#task-modal [data-drop-rel]', '#task-modal [data-req-withdraw]', '#task-modal [data-tp-unlink]',
-  '#task-modal [data-depends-add]', '#task-modal [data-task-body-edit]', '#task-modal [data-requester-self]',
+  '#task-modal [data-depends-add]', '#task-modal [data-requester-self]',
   // A bot's ⋯: the private chat's Archive (and its line) is a write.
   '#bot-dm-arch-host',
 ];
@@ -38,10 +38,10 @@ const VIEW_READS = [
   // A bot's page: its ⋯ (the detail views), the lock and Incognito in ⋯ (they only move between its chats), and the
   // rail's ⋯ (the task lists that did not fit). The private chat's Archive in that ⋯ is a write: hidden (VIEW_HIDDEN).
   '#bot-more-btn', '#bot-incognito', '#bot-more-menu [data-bot-incognito]', '.bot-tab-more',
-  // The task window: opening a subtask or a related task (and unfolding the subtasks), Show more on a long message,
-  // opening a file, copying a session's resume command, and the head's ⋯, which in a view holds only reads (Copy link,
+  // The task window: opening a subtask or a related task (and unfolding the subtasks), opening a file, copying a session's
+  // resume command, and the head's ⋯, which in a view holds only reads (Copy link,
   // Copy session ID, Watch the session; task-props.ts leaves the rest out).
-  '[data-open-task]', '[data-sub-open]', '[data-sub-toggle]', '[data-msg-more]', '[data-tf-file]', '[data-copy-session]', '[data-task-more]',
+  '[data-open-task]', '[data-sub-open]', '[data-sub-toggle]', '[data-tf-file]', '[data-copy-session]', '[data-task-more]',
   // Replay, Changelog, Usage, Roadmap and What it has learned (the pages a view opens; Usage and Learnings answer a bot
   // with an error): Retry after a failed load, the shared filter icon, and in the shared popover a filter's choices and
   // its search.
@@ -77,6 +77,10 @@ function viewComposer(form: Element) {
 }
 
 function viewSweep(root: ParentNode) {
+  if (root instanceof Element) {
+    if (root.matches(VIEW_COMPOSERS)) viewComposer(root);
+    if (root.matches(VIEW_CONTROLS)) viewOff(root);
+  }
   for (const form of root.querySelectorAll(VIEW_COMPOSERS)) viewComposer(form);
   for (const el of root.querySelectorAll(VIEW_CONTROLS)) viewOff(el);
 }
@@ -86,12 +90,10 @@ function viewOnlyStart() {
   if (!S.me?.read_only_view || document.documentElement.classList.contains('view-only')) return;
   document.documentElement.classList.add('view-only');
   viewSweep(document);
-  // Each page and window draws itself again often; a frame's sweep covers whatever a redraw put in.
-  let queued = false;
-  new MutationObserver(() => {
-    if (queued) return;
-    queued = true;
-    requestAnimationFrame(() => { queued = false; viewSweep(document); });
+  // Each page and window draws itself again often. What a redraw put in is swept in the same turn it was drawn (a
+  // mutation observer runs before the next task), so no screenshot or click ever finds a write still enabled.
+  new MutationObserver(records => {
+    for (const r of records) for (const node of r.addedNodes) if (node instanceof Element && node.isConnected) viewSweep(node);
   }).observe(document.body, {childList: true, subtree: true});
   // A control drawn and clicked inside one frame is still refused before its own handler runs.
   const refuse = (ev: Event) => {

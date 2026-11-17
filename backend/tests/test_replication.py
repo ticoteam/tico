@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from backend import replication
+from backend import migrations, replication
 from backend.hubdb import leave_wal_for_litestream
 from backend.tests.helpers.replication import entrypoint, prepare
 
@@ -335,7 +335,7 @@ def seal_secrets(data):
         directory.put_credentials(
             c, "human:ana", "entra", {"tenant": "t", "client_id": "c", "client_secret": "s"}, "app c in t"
         )
-    slack_app.save(store, settings, "human:ana", SLACK_BOT, SLACK_APP)
+    slack_app.save(store, "human:ana", SLACK_BOT, SLACK_APP)
 
 
 def open_secrets(data):
@@ -360,7 +360,7 @@ def open_secrets(data):
             found["directory"] = directory.credentials(c, "entra")["client_secret"]
         except Problem as exc:
             found["directory"] = exc.detail
-    stored = slack_app.load(store, settings)
+    stored = slack_app.load(store)
     found["slack"] = stored["bot_token"] if stored else None
     found["webhook"] = app.webhook_secret()
     return found
@@ -389,7 +389,7 @@ def test_a_restore_into_a_fresh_volume_can_decrypt_the_github_directory_and_slac
     for name in replication.KEY_FILES:
         assert (tmp_path / "backups" / "credential-key" / name).stat().st_mode & 0o077 == 0
         assert (tmp_path / "data" / name).stat().st_mode & 0o777 == 0o600
-    assert "restored github-app.key" in result.stdout and "restored slack.key" in result.stdout
+    assert "restored github-app.key" in result.stdout and "holds no slack.key" in result.stdout  # the vault has them
     status = replication.status(key_env(tmp_path))
     assert set(status["key_files"]) == set(replication.KEY_FILES)
 
@@ -410,7 +410,8 @@ def test_an_older_backup_without_the_other_key_files_still_restores_and_reads_cr
     assert "holds no github-app.key" in result.stdout and "holds no slack.key" in result.stdout
     found = open_secrets(tmp_path / "data")
     assert "github-app.key" in found["github"] and "missing" in found["github"]
-    assert "github-app.key" in found["directory"] and found["slack"] is None and found["webhook"] == ""
+    assert "github-app.key" in found["directory"] and found["webhook"] == ""
+    assert found["slack"] == SLACK_BOT  # in the vault: credential.key opens them
     # Reading did not make a new key that would hide the missing one (and that a later restore would keep).
     assert not any((tmp_path / "data" / name).exists() for name in replication.KEY_FILES)
 
@@ -418,17 +419,41 @@ def test_an_older_backup_without_the_other_key_files_still_restores_and_reads_cr
 def test_the_other_key_files_go_to_the_bucket_beside_the_credential_key(tmp_path):
     fake = FakeS3()
     mirror = replication.S3Mirror(fake, "bucket", "tico/")
-    for name in replication.KEY_FILES:
+    for name in replication.KEY_FILES + replication.OLD_KEY_FILES:  # an older backup's slack.key too
         (tmp_path / name).write_bytes(KEY)
         assert replication.sync_credential_key(tmp_path / name, mirror, {}, replication.key_copy(name))
         assert fake.objects["tico/credential-key/" + name] == KEY
     env = {"TICO_DB": str(tmp_path / "fresh" / "hub.sqlite")}
     assert replication.restore_key_files(env, mirror=mirror) == 0
-    assert all((tmp_path / "fresh" / name).read_bytes() == KEY for name in replication.KEY_FILES)
+    assert all((tmp_path / "fresh" / name).read_bytes() == KEY for name in replication.KEY_FILES + ("slack.key",))
     fake.objects["tico/credential-key/slack.key"] = b"short"
     (tmp_path / "fresh" / "slack.key").unlink()
     assert replication.restore_key_files(env, mirror=mirror) == 1  # said, and the other files still restored
     assert not (tmp_path / "fresh" / "slack.key").exists()
+
+
+def test_slack_key_is_copied_only_while_an_older_servers_slack_row_is_left(tmp_path):
+    """An older server's slack.key opens a Slack row the gateway has not moved into the vault yet: the loop keeps
+    copying it until that row is gone, then stops."""
+    env = key_env(tmp_path)
+    data, copy = tmp_path / "data", tmp_path / "backups" / "credential-key" / "slack.key"
+    (data / "slack.key").write_bytes(KEY)
+    db = sqlite3.connect(data / "hub.sqlite")
+    db.execute("CREATE TABLE slack_credentials(id TEXT PRIMARY KEY)")
+    db.execute("INSERT INTO slack_credentials VALUES('app')")
+    db.commit()
+    assert replication.old_key_files(data / "hub.sqlite") == ("slack.key",)
+    replication.loop(env, sleep=lambda s: None, rounds=1)
+    assert copy.read_bytes() == KEY
+    copy.unlink()
+    db.execute("DELETE FROM slack_credentials")
+    db.commit()
+    db.close()
+    assert replication.old_key_files(data / "hub.sqlite") == ()
+    replication.loop(env, sleep=lambda s: None, rounds=1)
+    assert not copy.exists()
+    # A database that cannot be read keeps the key: copying it costs nothing, losing it loses the tokens.
+    assert replication.old_key_files(tmp_path / "missing" / "hub.sqlite") == ("slack.key",)
 
 
 def test_a_new_key_never_overwrites_the_backups_only_good_copy(tmp_path):
@@ -465,8 +490,8 @@ def test_a_new_key_never_overwrites_the_backups_only_good_copy(tmp_path):
         assert aside.read_bytes() == good[name]
         assert (tmp_path / "backups" / "credential-key" / name).read_bytes() == b"\x07" * 32
     # The same key again (another fresh process) keeps nothing more aside.
-    replication.sync_credential_key(live / "slack.key", mirror, {}, replication.key_copy("slack.key"))
-    assert len(list((tmp_path / "backups" / "credential-key").glob("slack.key.replaced-*"))) == 1
+    replication.sync_credential_key(live / "github-app.key", mirror, {}, replication.key_copy("github-app.key"))
+    assert len(list((tmp_path / "backups" / "credential-key").glob("github-app.key.replaced-*"))) == 1
 
 
 def test_the_backup_status_lists_only_the_newest_level(tmp_path):
@@ -928,7 +953,7 @@ def test_a_restore_points_the_config_at_the_generation_environment_json_names(tm
     with sqlite3.connect(
         tmp_path / "source.sqlite"
     ) as restored:  # the database a restore brings back, with its id table
-        restored.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value TEXT)")
+        migrations.apply(restored)  # a Tico database: the baseline schema
     config = tmp_path / "litestream.yml"
     result, _ = prepare(tmp_path, STUB_DB=str(tmp_path / "source.sqlite"), TICO_LITESTREAM_CONFIG=str(config))
     assert result.returncode == 0, result.stderr
@@ -947,7 +972,7 @@ def test_a_start_with_a_cached_generation_uses_it_even_when_the_bucket_is_unreac
     data = tmp_path / "data"
     data.mkdir()
     with sqlite3.connect(data / "hub.sqlite") as db:
-        db.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value TEXT)")
+        migrations.apply(db)  # a Tico database: the baseline schema
     replication.write_generation_cache(data, GENERATION)
     config = tmp_path / "litestream.yml"
     result, _ = prepare(
@@ -1003,7 +1028,7 @@ def test_an_unreadable_generation_file_stops_the_start_before_the_config_is_writ
     data = tmp_path / "data"
     data.mkdir()
     with sqlite3.connect(data / "hub.sqlite") as db:
-        db.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value TEXT)")
+        migrations.apply(db)  # a Tico database: the baseline schema
     (data / replication.GENERATION_CACHE).write_text("not a generation\n")
     config = tmp_path / "litestream.yml"
     result, _ = prepare(tmp_path, TICO_LITESTREAM_CONFIG=str(config))
@@ -1115,7 +1140,7 @@ def test_a_seed_moves_a_wal_left_without_its_database_aside_before_it_restores(t
     (tmp_path / "data").mkdir()
     (tmp_path / "data" / "hub.sqlite-wal").write_bytes(b"orphan commits")
     with sqlite3.connect(tmp_path / "source.sqlite") as source:
-        source.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value TEXT)")
+        migrations.apply(source)  # a Tico database: the baseline schema
     result, data = prepare(tmp_path, STUB_DB=str(tmp_path / "source.sqlite"))
     assert result.returncode == 0, result.stderr
     assert not (data / "hub.sqlite-wal").exists()

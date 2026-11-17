@@ -238,9 +238,9 @@ impl Tico {
             "",
         )
     }
-    /// Tasks whose title has every word typed, or the one numbered "#42" (or "42"). The task list takes no type
-    /// filter (it refuses a filter it does not know), so `_kind` is not sent.
-    pub fn search_tasks(&self, query: &str, _kind: &str, offset: usize) -> Result<Value> {
+    /// Tasks whose title has every word typed, or the one numbered "#42" (or "42"). `pipeline` is a pipeline id, the
+    /// list's `pipeline` filter; "" is every pipeline.
+    pub fn search_tasks(&self, query: &str, pipeline: &str, offset: usize) -> Result<Value> {
         let query = query.trim();
         let query = if !query.is_empty()
             && query.len() <= 10
@@ -256,6 +256,9 @@ impl Tico {
             .append_pair("limit", "30")
             .append_pair("brief", "true")
             .append_pair("offset", &offset.to_string());
+        if !pipeline.is_empty() {
+            url.query_pairs_mut().append_pair("pipeline", pipeline);
+        }
         let reply = self.call(
             &format!("/api/v2/tasks?{}", url.query().unwrap_or("")),
             None,
@@ -265,18 +268,20 @@ impl Tico {
         Ok(json!({"tasks":tasks,"next_offset":reply["next_offset"]}))
     }
 
-    /// The org's task types for the picker's filter: id and name only.
-    pub fn task_types(&self) -> Result<Value> {
-        let reply = self.call("/api/v2/task-types", None, "")?;
-        let types: Vec<Value> = reply["types"]
+    /// The team's pipelines for the picker's filter: id and name only, the ones still in use (a retired pipeline
+    /// holds no open task).
+    pub fn pipelines(&self) -> Result<Value> {
+        let reply = self.call("/api/v2/pipelines", None, "")?;
+        let pipelines: Vec<Value> = reply["pipelines"]
             .as_array()
             .into_iter()
             .flatten()
+            .filter(|row| row["retired_at"].is_null())
             .filter_map(|row| {
                 Some(json!({"id": row["id"].as_str()?, "name": row["name"].as_str()?}))
             })
             .collect();
-        Ok(json!(types))
+        Ok(json!(pipelines))
     }
 
     /// Recheck all ids in one bounded read. A missing or no longer readable task disappears.

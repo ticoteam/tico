@@ -29,16 +29,13 @@ def columns():
 
 def table():
     rows = [
-        '| Column | Enforced by | NULL | Values | Retired spelling (mapped to) |',
-        '|---|---|---|---|---|',
+        '| Column | Enforced by | NULL | Values |',
+        '|---|---|---|---|',
     ]
     for col in columns():
         values = ', '.join(f'`{v}`' for v in col.values)
-        retired = ', '.join(f'`{old}` (`{new}`)' for old, new in col.retired) or ''
         nulls = 'allowed' if col.nullable else 'refused'
-        rows.append(
-            f'| [`{col.table}.{col.column}`](#{col.table}{col.column}) | {col.enforce} | {nulls} | {values} | {retired} |'
-        )
+        rows.append(f'| [`{col.table}.{col.column}`](#{col.table}{col.column}) | {col.enforce} | {nulls} | {values} |')
     return '\n'.join(rows)
 
 

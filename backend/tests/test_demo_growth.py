@@ -1,8 +1,9 @@
 """Growth in demo mode: the numbers page tells one season's story from one model, the weekly routine's runs are its
-history and its next run is the next Monday, and the paid test that loses is closed: a dropped idea."""
+history and its next run is the next Monday, and the paid test that loses is closed: a dropped idea. The store's customer
+export, loaded when the demo is built, makes the Retention card compute its cohorts, and they agree with the typed rows."""
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 import time_machine
@@ -10,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from backend import demo
 from backend.app import create_app
+from backend.demo_sections import growth as growth_demo
 
 NOW = datetime(2026, 9, 25, 18, 30, tzinfo=timezone.utc)  # a Friday, so the Monday runs of the window are all past
 CHANNELS = ["creator-videos", "online-store", "marketplace", "retail-partners", "paid-ads", "unknown"]
@@ -127,6 +129,50 @@ def _weekly_numbers_routine_is_an_automation_next_due_on_a_monday_with_eight_ok_
     assert task["title"] == "Weekly numbers" and task["status"] == "done"
 
 
+def _retention_is_computed_from_the_loaded_customers_and_cuts_by_channel_segment_and_plan(built):
+    with signed_in(built) as api:
+        by_channel = api.get("/api/v2/growth/computed", params={"by": "channel", "month": "2026-07"}).json()
+        cuts = {cut: api.get("/api/v2/growth/computed", params={"by": cut}).json() for cut in ("segment", "plan")}
+    assert by_channel["computed_from"] > 0 and by_channel["loads"][0]["source"] == "upload"
+    july = {row["value"]: row for row in by_channel["cohorts"]}
+    creators = july["creator-videos"]["kept_d30"]
+    assert creators["status"] == "ok" and creators["origin"] == "computed" and 80 <= creators["value"] < 90
+    assert {row["value"] for row in cuts["segment"]["cohorts"]} == {"home", "business"}
+    assert {row["value"] for row in cuts["plan"]["cohorts"]} == {"lights-only", "scene-library"}
+    # A month whose customers are not all 30 days old yet says when day 30 fills, never 0%.
+    september = [row for row in cuts["plan"]["cohorts"] if row["period"] == "2026-09"]
+    assert september and {row["kept_d30"]["status"] for row in september} == {"not_yet"}
+
+
+def _a_retention_figure_opens_to_the_synthetic_customer_keys(built):
+    with signed_in(built) as api:
+        found = api.get(
+            "/api/v2/growth/computed",
+            params={"by": "channel", "month": "2026-07", "channel": "creator-videos", "customers": "true"},
+        ).json()
+    assert found["keys_visible"]
+    (cohort,) = found["cohorts"]
+    trace = cohort["kept_d30"]["customers"]
+    assert trace["still"] and trace["churned"]
+    assert all(key.startswith("ACME-") for key in trace["still"] + [row["key"] for row in trace["churned"]])
+    assert all(row["churned"] for row in trace["churned"])
+    assert len(trace["still"]) + len(trace["churned"]) == cohort["new_customers"]["value"]
+
+
+def _no_typed_actual_differs_from_its_computed_figure(built):
+    with signed_in(built) as api:
+        cohorts = api.get("/api/v2/growth/cohorts", params={"limit": 100}).json()["cohorts"]
+    differs = [
+        (row["channel"], row["month"], field)
+        for row in cohorts
+        for field, origin in (row.get("origins") or {}).items()
+        if (origin or {}).get("differs")
+    ]
+    assert differs == []
+    with sqlite3.connect(built.db_path) as db:
+        assert db.execute("SELECT count(*) FROM growth_computed_choices").fetchone()[0] == 0
+
+
 def test_the_demo_growth_tells_its_story(built, numbers, subtests):
     """Every check reads the one demo build, in file order, each as its own subtest."""
     for check in (
@@ -141,6 +187,47 @@ def test_the_demo_growth_tells_its_story(built, numbers, subtests):
     for check in (
         _the_channel_pages_hold_their_ideas,
         _weekly_numbers_routine_is_an_automation_next_due_on_a_monday_with_eight_ok_runs,
+        _retention_is_computed_from_the_loaded_customers_and_cuts_by_channel_segment_and_plan,
+        _a_retention_figure_opens_to_the_synthetic_customer_keys,
+        _no_typed_actual_differs_from_its_computed_figure,
     ):
         with subtests.test(check.__name__):
             check(built)
+
+
+def loaded(people, now):
+    """The rows the demo's load step sends when the demo is built at `now`."""
+
+    class Build:
+        def __init__(self):
+            self.now, self.sent = now, []
+
+        def call(self, method, path, body):
+            self.sent.append((method, path, body))
+
+    build = Build()
+    growth_demo.load_customers(build, people)
+    ((method, path, body),) = build.sent
+    assert (method, path) == ("POST", "growth/customers")
+    return body["rows"]
+
+
+def test_a_month_whose_day_30_has_filled_sends_every_stop_on_any_build_day():
+    """The demo is built on the real clock, so on every day of a year the export sends each lost customer's stop day
+    once their month's day 30 has filled, and the computed share is the typed one (day 30 filling between the last
+    Monday and the build day once left those customers kept, and asked an owner to choose)."""
+    day = datetime(2026, 1, 1, 18, 30, tzinfo=timezone.utc)
+    while day.year == 2026:
+        start, runs = growth_demo.window(day)
+        people = growth_demo.customers(growth_demo.model(start, runs))
+        today = day.astimezone(growth_demo.ZONE).date()
+        sent = {row["customer key"]: row["churned"] for row in loaded(people, day)}
+        months = {}
+        for person in people:
+            months.setdefault((person["channel"], f"{person['day']:%Y-%m}"), []).append(person)
+        for group in months.values():
+            if max(p["day"] for p in group) + timedelta(days=30) > today:
+                continue  # not yet: Growth shows when day 30 fills
+            kept = sum(1 for p in group if sent[p["key"]] is None)
+            assert round(kept * 100 / len(group), 1) == growth_demo.kept_share(group), (day, group[0]["channel"])
+        day += timedelta(days=1)

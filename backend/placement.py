@@ -9,7 +9,7 @@ in the scheduler tries again as computers arrive.
 
 from types import SimpleNamespace
 
-from .getting_started import _online_runners
+from . import runner_online
 from .store import H, Problem
 from . import bot_settings as BS
 
@@ -22,7 +22,7 @@ def candidates(c, auth, bot):
     if not config:
         return []
     operator, owner, member = config["owner_id"], auth.owner_id(c), auth.member_bot(c, bot)
-    online = {r["id"] for r in _online_runners(c)}
+    online = {r["id"] for r in runner_online.online_rows(c)}
     load = {
         r["runner_id"]: r["n"]
         for r in c.execute(

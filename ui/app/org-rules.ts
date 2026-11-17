@@ -1,4 +1,4 @@
-/* ui/app/org-rules.ts — Rules (docs/rules-plan.md, Screens 1, 2, 4–8; docs/reach.md): the Rules page with a tab for every
+/* ui/app/org-rules.ts — Rules (docs/dev/rules-plan.md, Screens 1, 2, 4–8; docs/reach.md): the Rules page with a tab for every
    kind of rule, each with its count (GET /rule-groups): Company (internal; Reach: the org chart and a party's panel),
    Outside (external), Pipelines and stages (stage rules by pipeline, then stage, in the stage panel's one-line row; one
    the viewer may change opens the panel's form, and its ⋯ has Edit and Retire, stage-rules.ts), Due, Wakes and Automations on tasks (listed, edited on the Automations page), Built in (read-only)
@@ -22,8 +22,8 @@ const RU_STATUS: Record<string, [string, string]> = {overdue: ['Overdue', 'fail'
 // satisfied rows say nothing, and the Status filter still names them.
 const RU_STATUS_QUIET = new Set(['upcoming', 'satisfied']);
 const RU_KINDS: [string, string][] = [['vendor', 'Vendor'], ['customer', 'Customer'], ['government', 'Government'], ['other', 'Other']];
-// If broken: the stored values stay block / escalate / warn; each label says what happens (org-rule-holds.js and
-// overview-graph.js use the same words).
+// If broken: the stored values stay block / escalate / warn; each label says what happens (org-rule-holds.js uses the
+// same words).
 const RU_BROKEN: [IfBroken, string][] = [['block', 'Stop'], ['escalate', 'Ask first'], ['warn', 'Warn']];
 const RU_BROKEN_HINT: Record<string, string> = {block: 'The output is refused.', escalate: 'Held until the reviewer OKs it.', warn: 'It goes through with a note.'};
 const RU_PAGES = 50;        // pages read for one list at most (a page stops at 100 rows or at its byte budget)
@@ -31,7 +31,7 @@ const RU_PAGES = 50;        // pages read for one list at most (a page stops at 
 type RuleTab = 'internal' | 'external' | 'stages' | 'due' | 'wakes' | 'automations' | 'builtin' | 'suggested';
 /** An automation the Rules page lists and the Automations page edits: a What wakes one, or one a task starts. */
 interface RuleAuto { id: string; name: string; enabled: boolean }
-/** GET /rule-groups: each tab's count, and the rows of the read-only tabs. Optional: an older hub answers without them. */
+/** GET /rule-groups: each tab's count, and the rows of the read-only tabs. */
 interface RuleGroups {
   groups?: {key: RuleTab; label: string; count: number}[];
   wakes?: RuleAuto[]; automations?: RuleAuto[]; built_in?: StageBuiltIn[];
@@ -321,7 +321,7 @@ async function ruLoad(tab: RuleTab): Promise<boolean> {
   const state = ruOpen(), seq = ++state.seq;
   try {
     if (tab === 'internal') {
-      // A hub without Reach still lists the rules; the panel says what went wrong.
+      // A failed Reach read still lists the rules; the panel says what went wrong.
       const [rules, reach, groups] = await Promise.all([ruAll('/v2/rules?kind=internal'),
         get<ReachData>('/v2/reach', {fresh: true}).then((d): {d?: ReachData; e?: unknown} => ({d}), (e: unknown): {d?: ReachData; e?: unknown} => ({e})),
         get<OrgGroup[] | {groups?: OrgGroup[]} | null>('/v2/groups').catch(() => null)]);
@@ -565,8 +565,8 @@ function rrFrom(p: string, eff: ReachEff, f: string) {
 // The panel's source tag reads as a state on its label line: "Default", "From Sales".
 const rrFromTag = (p: string, eff: ReachEff, f: string) => { const w = rrFrom(p, eff, f); return w ? `<span class="rr-from">${esc(w[0]?.toUpperCase() + w.slice(1))}</span>` : ''; };
 const rrMay = (p: string) => ruOpen().reach.mayEdit.has(p);
-// A hub from before Reach has no /v2/reach: its rules still list.
-const rrError = (e: unknown) => errorStatus(e) === 404 ? 'Reach needs a newer hub.' : errorMessage(e, 'Something went wrong.');
+// A failed Reach read leaves its rows out: the rules still list.
+const rrError = (e: unknown) => errorMessage(e, 'Something went wrong.');
 // A party's lines as its panel lists them: those it sends first ("To"), then those it receives ("From").
 const rrLinesOf = (p: string | null, R: ReachNormal = ruOpen().reach) => R.lines.filter(l => (l.sender === p) !== (l.receiver === p))
   .map(l => ({l, dir: l.sender === p ? 'to' : 'from', other: l.sender === p ? l.receiver : l.sender}))
@@ -2010,7 +2010,7 @@ let RU_BOT_GEN = 0;   // each read of the tab; an older response (or its More) n
 // sends or receives. Each row's link opens the panel, where it is changed.
 const RR_MODE_WORDS: Record<string, string> = {open: 'anyone', nearby: 'nearby', closed: "only who's listed"};
 function botReachRows(slug: string, data: ReachData | null | undefined) {
-  if (!data) return [];   // a hub from before Reach
+  if (!data) return [];   // no Reach answer: no rows
   const p = 'bot:' + slug, R = rrNormal(data), eff = rrEff(p, R), href = ruHref('internal', {party: p});
   const row = (text: string, from = '') => `<div class="ru-row ru-setting" role="row"><span class="ru-txt">${esc(text)}${from ? ` <span class="rr-from">${esc(from)}</span>` : ''}</span>`
     + `<span class="ru-c ru-none">—</span><span class="ru-c"><a class="ru-set" href="${esc(href)}">Setting ›</a></span></div>`;

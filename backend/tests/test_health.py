@@ -5,7 +5,7 @@ import re
 
 import pytest
 
-from backend import health, models_preset, releases, replication
+from backend import health, models_preset, question_marks, releases, replication, runner_online
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.helpers.getting_started import SIGNED_IN, add_bot, enrolled, heartbeat  # noqa: F401
@@ -116,7 +116,7 @@ def test_a_computer_silent_with_work_queued_goes_to_its_owner(environment):
     assert (
         machine_issue(api, riley)["title"] == "Owner Mac is offline" and not machine_issue(api, riley)["needs_person"]
     )
-    # Past ten minutes with work queued it is an outage: said on Health and Overview, nobody interrupted yet.
+    # Past ten minutes with work queued it is an outage: said on Health, nobody interrupted yet.
     heartbeat(api, runner, seconds_ago=700, runtimes=SIGNED_IN)
     issue = machine_issue(api, riley)
     assert (
@@ -133,7 +133,7 @@ def test_a_computer_silent_with_work_queued_goes_to_its_owner(environment):
     assert machine_issue(api, riley)["needs_person"] and machine_issue(api, riley)["action"]
     assert not machine_issue(api, quinn)["needs_person"] and not machine_issue(api, owner)["needs_person"]
     # Once they have left, the company owner is the one asked.
-    assert api.post("/api/v2/people/riley", json={"left": True}, headers=owner).status_code == 200
+    assert api.post("/api/v2/humans/riley", json={"left": True}, headers=owner).status_code == 200
     assert machine_issue(api, owner)["needs_person"]
 
 
@@ -346,8 +346,6 @@ def test_a_local_credential_key_that_is_not_backed_up_is_a_warning_or_a_note():
 
 
 def test_secrets_a_missing_key_file_cannot_open_are_named_with_the_fix(environment):
-    from backend import slack_app
-
     api = environment()
     state = api.app.state
     settings, store, github = state.store.settings, state.store, state.github_app
@@ -366,27 +364,20 @@ def test_secrets_a_missing_key_file_cannot_open_are_named_with_the_fix(environme
             },
         )
         state.directory.put_credentials(c, "human:ana", "entra", {"client_secret": "s"}, "app c in t")
-    slack_app.save(store, settings, "human:ana", "xoxb-synthetic-0000000000", "xapp-synthetic-0000000000")
     assert "sealed_secrets" not in health_of(api)[1]
     data = settings.db_path.parent
-    for name in ("github-app.key", "slack.key"):
-        (data / name).rename(data / (name + ".elsewhere"))
+    (data / "github-app.key").rename(data / "github-app.key.elsewhere")
     check = health_of(api)[1]["sealed_secrets"]
     assert check["status"] == "warn" and check["fixes"]
     for words in (
         "GitHub App",
         "directory sync",
-        "Slack tokens",
         "github-app.key is missing",
-        "slack.key is missing",
         "credential-key/github-app.key",
     ):
         assert words in check["summary"]
     assert not (data / "github-app.key").exists()  # Health and the reads behind it make no new key
-    (data / "slack.key").write_bytes(b"\x01" * 32)  # the wrong key is named too
-    assert "the key they were sealed with" in health_of(api)[1]["sealed_secrets"]["summary"]
-    for name in ("github-app.key", "slack.key"):
-        (data / (name + ".elsewhere")).replace(data / name)
+    (data / "github-app.key.elsewhere").replace(data / "github-app.key")
     assert "sealed_secrets" not in health_of(api)[1]
 
 
@@ -847,7 +838,7 @@ def _parked(api, slug, days_ago, created_by="", operator="morgan"):
 
 def test_a_bot_left_in_setup_warns_once_its_held_work_is_old_is_stuck_for_a_day_and_is_nudged_once(environment):
     """One install: held work an hour old warns (a parked bot holds work on purpose, so it is not "slow"); a bot parked
-    over a day is on Overview's stuck list and only someone who may manage it gets the finish; and a bot left in setup
+    over a day is on Health's stuck list and only someone who may manage it gets the finish; and a bot left in setup
     is nudged once to whoever its setup reminder goes to, and to nobody while that reminder is open."""
     from backend import setup_stuck
 
@@ -993,8 +984,8 @@ def test_a_harness_deny_on_a_github_write_the_access_allows_is_named(environment
         },
     )
     assert "harness_denies" not in health_of(api)[1]
-    # Denying `gh` writes to a bot that may push is its job's policy, not a leftover: a Release Owner given write to
-    # push fixes denies opening and commenting on pull requests, because Tico queues and merges them itself.
+    # Denying `gh` writes to a bot that may push is its owner's policy, not a leftover: write access says nothing about
+    # whether its work opens, comments on or merges pull requests.
     _hosted(
         api,
         runner,
@@ -1190,7 +1181,8 @@ def test_refusal_quarantine_explains_the_claim_hold_and_matches_bot_status(envir
                 H.refuse(c, "bot:helper", "identity", words)
         assert H.bot(c, "helper")["state"] == "quarantined"
         c.execute(
-            "UPDATE events SET created_at='2030-10-26T23:55:00Z' WHERE action='quarantine' AND target='bot:helper'"
+            "UPDATE holds SET updated_at='2030-10-26T23:55:00Z', until_at='2030-10-27T00:55:00.000000Z' "
+            "WHERE kind='quarantine' AND holdable_id='helper'"
         )
     body, checks = health_of(api)
     [held] = body["stuck"]
@@ -1293,7 +1285,7 @@ def test_an_interrupted_run_fence_explains_a_busy_bot_queue(environment, monkeyp
             "VALUES('helper-running',?,'helper',?,1,'x','running',?,?,?)",
             (running_job, runner, H.shift(H.now(), hours=1), H.now(), H.now()),
         )
-        online = {r["id"] for r in health._online_runners(c)}
+        online = {r["id"] for r in runner_online.online_rows(c)}
         monkeypatch.setattr(execution, "bot_claimable", lambda *args, **kwargs: ("lane_held", None, False))
 
         [row] = health._waiting(c, online)[1]
@@ -1348,7 +1340,7 @@ def test_work_held_on_purpose_behind_an_interrupted_run_is_not_stuck(environment
         )
         claimable(c, runner, "helper")
         jobs = fenced_task_jobs(c, "helper", H.shift(H.now(), minutes=-30))
-        online = {r["id"] for r in health._online_runners(c)}
+        online = {r["id"] for r in runner_online.online_rows(c)}
         # Unheld, the fenced work is stuck behind the interrupted run until someone reviews it.
         [row] = health._waiting(c, online)[2]
         assert (row["bot"], row["reason"], row["queued"], row["dead"]) == ("helper", "uncertain", 0, len(jobs))
@@ -1385,7 +1377,7 @@ def test_a_persons_message_waiting_two_minutes_on_a_computer_with_room_is_stuck(
         owner = "human:" + c.execute("SELECT id FROM humans ORDER BY id LIMIT 1").fetchone()[0]
         chat = H.open_conversation(c, owner, [owner, "bot:ops"], kind="chat")
         H._write_message(c, owner, "bot:ops", "hello?", chat, "say", {}, None, None)
-        online = {r["id"] for r in health._online_runners(c)}
+        online = {r["id"] for r in runner_online.online_rows(c)}
         assert health._waiting(c, online)[1] == []  # just sent
         c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops'", (H.shift(H.now(), minutes=-3),))
         [row] = health._waiting(c, online)[1]
@@ -1423,16 +1415,16 @@ def test_work_a_computer_holds_while_it_waits_to_update_is_the_update_not_a_tico
             (job, runner, H.shift(H.now(), hours=1), H.now()),
         )
         c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops'", (H.shift(H.now(), minutes=-30),))
-        online = {r["id"] for r in health._online_runners(c)}
+        online = {r["id"] for r in runner_online.online_rows(c)}
         [row] = health._waiting(c, online)[2]
         assert row["bot"] == "ops" and row["reason"] == "slow"  # nothing says it is updating: a bug
         c.execute(
             "INSERT INTO runner_versions(runner_id,release,kind,update_state,update_target,reported_at) "
-            "VALUES(?,'0.4.46','docker','waiting','0.4.48',?)",
+            "VALUES(?,'0.6.0-rc.1','docker','waiting','0.6.0-rc.2',?)",
             (runner, H.now()),
         )
         [row] = health._waiting(c, online)[2]
-        assert row["reason"] == "updating" and row["running"] == 1 and row["target"] == "0.4.48"
+        assert row["reason"] == "updating" and row["running"] == 1 and row["target"] == "0.6.0-rc.2"
         [turn] = row["turns"]
         assert turn["run"] == "a-dev" and turn["bot"] == "dev" and turn["task_title"] == ""  # a chat: no task
         since = turn["since"][11:16]
@@ -1441,7 +1433,7 @@ def test_work_a_computer_holds_while_it_waits_to_update_is_the_update_not_a_tico
     held = found["runner_outdated"]
     assert held["kind"] == maintenance_health.SETUP
     assert (
-        f"Team box is holding new work to update to Tico 0.4.48: it starts once dev's turn (running since {since} "
+        f"Team box is holding new work to update to Tico 0.6.0-rc.2: it starts once dev's turn (running since {since} "
         "UTC) ends; it holds 1 queued job(s) for ops."
     ) in held["detail"]
     # Nothing to update by hand, and nothing to watch: BotOps is told not to hold its own computer watching this one.
@@ -1525,7 +1517,7 @@ def test_the_update_hold_names_each_turn_by_bot_task_and_start_but_never_a_priva
             "VALUES(?,'0.3.46','mac','waiting','0.3.48',?)",
             (runner, H.now()),
         )
-        online = {r["id"] for r in health._online_runners(c)}
+        online = {r["id"] for r in runner_online.online_rows(c)}
         [row] = health._waiting(c, online)[2]
         assert row["reason"] == "updating" and row["running"] == 2
         botops, qa = row["turns"]  # oldest first
@@ -1734,10 +1726,11 @@ def test_batched_computer_load_and_overload_reads_answer_what_each_computer_read
 
 
 def _asks(api, owner, askers, start=0):
-    """One open task for `owner` per entry of `askers`, each asked by that bot, titled apart."""
+    """One open ❓ to `owner` per entry of `askers`, each on its own task of that bot's, titled apart."""
     with api.app.state.store.transaction() as c:
         for i, asker in enumerate(askers, start=start):
-            H.task_create(c, asker, f"Item {i} for {owner}", "x", owner, private=False)
+            made = H.task_create(c, asker, f"Item {i} for {owner}", "x", asker, private=False)
+            question_marks.ask(c, asker, made["id"], owner, f"Question {i}?")
 
 
 def test_a_plate_over_ten_warns_and_names_the_three_bots_asking_most(environment):
@@ -1833,7 +1826,7 @@ def test_work_its_tasks_snooze_holds_is_work_queueing_not_a_stuck_bot(environmen
             "UPDATE jobs SET state='queued', created_at=? WHERE message_id=?",
             (H.shift(H.now(), minutes=-30), notice["id"]),
         )
-        online = {r["id"] for r in health._online_runners(c)}
+        online = {r["id"] for r in runner_online.online_rows(c)}
         _, slow, stuck = health._waiting(c, online)
         assert stuck == [] and [(row["bot"], row["reason"], row.get("resting")) for row in slow] == [
             ("ops", "task_wait", True)

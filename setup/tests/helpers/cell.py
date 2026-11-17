@@ -6,7 +6,7 @@ import os
 import time
 from pathlib import Path
 import pytest
-from setup import cell
+from setup import cell, envfile
 from setup.cell import Result
 
 
@@ -22,11 +22,13 @@ def utc_in(seconds):
 
 
 class FakeSystem:
-    """Records every call; `docker compose up` makes a company's container running and healthy, as Docker would."""
+    """Records every call; `docker compose up` makes a company's container running and healthy, as Docker would, and
+    its Slack gateway's too when its .env's COMPOSE_PROFILES names slack."""
 
     def __init__(self):
         self.calls, self.chowns, self.t = [], [], 0.0
         self.ps = {}  # slug -> (State, Status)
+        self.slack = {}  # slug -> (State, Status) of its Slack gateway's container
         self.images = set()
         self.health = {}  # host -> status; default 200 while its container runs
         self.busy_ports, self.fail = set(), {}
@@ -61,13 +63,15 @@ class FakeSystem:
                 "".join(
                     json.dumps(
                         {
-                            "Labels": f"com.docker.compose.service=server,{cell.LABEL}={s}",
+                            "Labels": f"com.docker.compose.service={service},{cell.LABEL}={s}",
                             "State": state,
                             "Status": status,
                         }
                     )
                     + "\n"
-                    for s, (state, status) in self.ps.items()
+                    # The gateway's row after the server's: a reader keyed by slug alone would take the gateway's.
+                    for service, rows in (("server", self.ps), ("slack", self.slack))
+                    for s, (state, status) in rows.items()
                     if not want or s == want
                 ),
             )
@@ -78,12 +82,22 @@ class FakeSystem:
             slug = proj[len(cell.PROJECT_PREFIX) :]
             if proj == cell.EDGE_PROJECT:
                 return Result(0)
+            env = Path(argv[argv.index("--env-file") + 1]) if "--env-file" in argv else None
+            profiles = envfile.parse(env.read_text()).get("COMPOSE_PROFILES", "") if env and env.exists() else ""
             if "up" in argv:
                 self.ps[slug] = ("running", "Up 2 seconds (healthy)")
+                if "slack" in profiles.split(","):
+                    self.slack[slug] = ("running", "Up 2 seconds")  # its health check is off
+            elif "rm" in argv:
+                if "slack" in argv:
+                    self.slack.pop(slug, None)
             elif "stop" in argv:
                 self.ps[slug] = ("exited", "Exited (0) 1 second ago")
+                if "slack" in argv and slug in self.slack:
+                    self.slack[slug] = ("exited", "Exited (0) 1 second ago")
             elif "down" in argv:
                 self.ps.pop(slug, None)
+                self.slack.pop(slug, None)
         return Result(0)
 
     def http_status(self, host, path, timeout=3, port=cell.ROUTER_PORT):

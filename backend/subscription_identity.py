@@ -7,6 +7,7 @@ from fastapi import Request
 from . import hubdb as H, models as M
 from .repositories import metadata, save_metadata
 from .store import Problem
+from .api_contract import api_v2
 
 
 def connection_id(runner, profile):
@@ -21,18 +22,6 @@ def identity(c, runner, profile):
     return {'id': sid, 'display_name': label}
 
 
-def display_names(c):
-    """{connection_id: display_name} for every renamed subscription in one pass (Operations shared_logins), from the
-    subscription rows Operations' profiles already read in this snapshot."""
-    from .subscriptions import subscription_meta
-
-    return {
-        key: value['display_name']
-        for key, value in subscription_meta(c).items()
-        if key.startswith('subscription:') and value.get('display_name')
-    }
-
-
 def usage_label(c, sid):
     if sid.startswith('subscription:'):
         runner, profile = json.loads(sid.removeprefix('subscription:'))
@@ -45,7 +34,15 @@ def usage_label(c, sid):
 
 
 def install(app, store, auth, mutate):
-    @app.put('/api/v2/subscriptions/name')
+    @app.put(
+        '/api/v2/subscriptions/name',
+        **api_v2(
+            "Subscriptions",
+            "renameSubscription",
+            "Rename a subscription without changing its local login",
+            "SubscriptionIdentity",
+        ),
+    )
     def rename(request: Request, body: M.SubscriptionNameEdit):
         who = request.state.identity
 

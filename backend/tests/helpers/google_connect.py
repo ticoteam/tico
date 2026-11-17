@@ -1,15 +1,15 @@
 """Helpers that other tests share, moved out of test_google_connect.py so they import no test file."""
 
+import base64
 import io
 import json
 import urllib.error
 import urllib.parse
 import pytest
-from backend import google_connect
+from backend import google_connect, google_tokens
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.helpers.api import headers, post
-from connectors.mail import oauth
 
 
 CLIENT = "1234-tico.apps.googleusercontent.com"
@@ -75,40 +75,42 @@ class FakeGoogle:
                 uri, self.status, "Refused", {}, io.BytesIO(json.dumps({"error": self.error}).encode())
             )
         return dict(
-            self.answer or {"access_token": "ya29.fresh", "expires_in": 3599, "scope": oauth.G + "gmail.readonly"}
+            self.answer
+            or {"access_token": "ya29.fresh", "expires_in": 3599, "scope": google_connect.G + "gmail.readonly"}
         )
 
 
-def claimed_connect(app, machine):
-    _, query = start(app)
-    back(app, state=query["state"], code="c-1")
-    return post(app, "connectors/mail/google/claim", {"holds_mail": True}, machine["token"])["connect"]
+def id_token(email="cara@acme.example", verified=True):
+    """An ID token as Google's token endpoint returns it: only its claims are read (google_connect.signed_in_as)."""
+
+    def part(value):
+        return base64.urlsafe_b64encode(json.dumps(value).encode()).decode().rstrip("=")
+
+    return part({"alg": "RS256"}) + "." + part({"email": email, "email_verified": verified}) + ".sig"
 
 
-def exchanged(app, machine, refresh_token="1//grant", status="connected", kind="", scope=None):
-    """A connect claimed, exchanged at the server for a grant with `refresh_token` (granted `scope`, when given), and
-    answered by `machine`."""
-    claimed = claimed_connect(app, machine)
-    answer = {"access_token": "ya29.first", "expires_in": 3599, "refresh_token": refresh_token}
+def grant_answer(refresh_token="1//grant", scope=None, email="cara@acme.example", access_token="ya29.first"):
+    """Google's answer to the code exchange: the grant, with the ID token of the account that signed in."""
+    answer = {"access_token": access_token, "expires_in": 3599, "id_token": id_token(email)}
+    if refresh_token:
+        answer["refresh_token"] = refresh_token
     if scope is not None:
         answer["scope"] = scope
+    return answer
+
+
+def signed_in(api, token="cara-test", google=None, code="c-1", **answer):
+    """The person starts Connect Google and Google sends them back with a code, which the server trades with `google`
+    (a FakeGoogle answering `grant_answer(**answer)` when not given). Returns the FakeGoogle."""
+    google = google or FakeGoogle(grant_answer(**answer))
+    _, query = start(api, token)
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(google_connect, "post_token", FakeGoogle(answer))
-        post(app, f"connectors/mail/google/{claimed['id']}/exchange", {}, machine["token"])
-    post(
-        app,
-        f"connectors/mail/google/{claimed['id']}/result",
-        {"status": status, "can": ["read"]} if status == "connected" else {"status": status, "kind": kind},
-        machine["token"],
-    )
+        patch.setattr(google_connect, "post_token", google)
+        back(api, token, state=query["state"], code=code)
+    return google
 
 
-def refresh(app, token, **body):
-    body = {
-        "mailbox": "cara@acme.example",
-        "service": "gmail",
-        "refresh_token": "1//grant",
-        "scopes": [oauth.G + "gmail.readonly"],
-        **body,
-    }
-    return app.post("/api/v2/connectors/mail/google/token", json=body, headers=headers(token))
+def door(api, mailbox="cara@acme.example", service="gmail", scopes="read"):
+    """The token door's answer for `mailbox` ({access_token, expiry, scopes}), as the server's own callers get it."""
+    with api.app.state.store.read() as c:
+        return google_tokens.access(c, mailbox, service, scopes)

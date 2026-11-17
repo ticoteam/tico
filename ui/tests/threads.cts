@@ -2,7 +2,7 @@
 // Threads link and its Catch up count, the thread rail (Pinned, Threads, Find, Browse) beside one thread, the pin,
 // Catch up, New message, a thread's flat timeline (an older server's sub-threads drawn flat, each reply quoting what it
 // answers), a message shown as "Checking…" until the server answers, a held message, the bot page's Home and DM, a person's Home,
-// a teammate's DM button, a server without the rail (its empty pane: the picture and New thread), and a teammate who may see a bot
+// a teammate's DM button, an empty rail (the picture and New thread) and a failed rail read, and a teammate who may see a bot
 // but not read it getting no Home.
 // TICO_SCREENSHOT_DIR=<dir> also saves the screenshots.
 const {chromium} = require('playwright') as typeof import('playwright');
@@ -152,7 +152,7 @@ const homes: Record<string, string> = {'bot:ops': 'h-ops', 'human:bea': 'h-bea',
 // one without the rail (GET /v2/threads/rail answers 404).
 // What the rail holds for Ana at open: her pins and the chats Catch up holds (a script changes them before open()).
 let pinsAtOpen = ['t-plan'], unreadAtOpen = ['t11', 't4', 't-gdm'];
-let dmRows: Thr[] | null = null, callsOff = false, railOff = false, threadsOff: boolean | 'odd' = false, threadsGate: Gate[] | null = null;
+let dmRows: Thr[] | null = null, callsOff = false, railEmpty = false, threadsOff: boolean | 'odd' = false, threadsGate: Gate[] | null = null;
 // Start call as the server answers it: the call it makes (after a moment), or none.
 let callMade: {id: string; state: string; connector: string} | null = null, joinRefused = false, startWait = 150;
 // Ana's private chat with Ops, when a block sets it: what GET /v2/threads/dm?create=false answers; PATCH archives it.
@@ -237,7 +237,7 @@ async function open(browser: import('playwright').Browser, who: string, {phone =
       bot_dms: bob ? {} : {'bot:ops': 2}, next_cursor: null});
     if (p === '/api/v2/threads/rail') {
       seen.rails++;
-      if (railOff) return json({error: 'not_found'}, 404);
+      if (railEmpty) return json({pinned: [], threads: [], catch_up: 0, next_cursor: null, dms: {}});
       const pin = (t: Thr) => ({...t, me: {...t.me, pinned: pins.has(t.id)}});
       return json(bob ? {pinned: [], threads: [], catch_up: 0, next_cursor: null, dms: {}} : {pinned: railRows().filter(t => pins.has(t.id)).map(pin),
         threads: railRows().filter(t => !pins.has(t.id)).map(pin), catch_up: unreadAtOpen.length, catch_up_ids: unreadAtOpen, next_cursor: null,
@@ -733,6 +733,7 @@ let browser: import('playwright').Browser | null = null;
 
     // A migrated Home: one "Earlier messages" row and the manager's control; the notice in a DM opens the same history.
     await page.goto('https://tico-ui.test/#/thread/h-old');
+    await page.locator('#threads-shell').waitFor();
     await page.getByText('New plan.').waitFor();
     assert.equal(await page.locator('.th-earlier').count(), 1);
     assert.match((await page.locator('.th-earlier').textContent())!, /Earlier messages/);
@@ -921,15 +922,14 @@ let browser: import('playwright').Browser | null = null;
     await page.close();
   }
 
-  // ---- Ana at phone width: the Threads tab in the bottom bar, the list, one thread.
+  // ---- Ana at phone width: Threads in More, which carries its count; the list, one thread.
   {
     const {page, seen} = await open(browser, 'ana', {phone: true});
     await page.goto('https://tico-ui.test/#/tasks');
-    await page.locator('#mobile-threads:not([hidden])').waitFor();
-    assert.equal(await page.locator('#mobile-threads .nav-badge').textContent(), '3', 'the tab carries what Catch up has left');
-    assert.equal((await page.locator('#mobile-threads .mobile-nav-label').textContent())!.trim(), 'Threads');
-    // Threads takes Search's place in the bar, so search over everything is in the drawer.
-    assert.equal(await page.locator('#mobile-search').isVisible(), false);
+    await page.locator('#mobile-more [data-threads-badge]:not([hidden])').waitFor();
+    assert.equal(await page.locator('#mobile-more [data-threads-badge]').textContent(), '3', 'More carries what Catch up has left');
+    // Flow holds the bar's slot (flow-tab.cts), so Threads and search over everything are in the drawer.
+    assert.equal(await page.locator('#mobile-threads').isVisible(), false);
     await page.locator('#mobile-more').click();
     await page.locator('#search-open').waitFor();
     await page.waitForTimeout(300);     // the drawer slides in
@@ -940,8 +940,10 @@ let browser: import('playwright').Browser | null = null;
     assert.equal(await page.evaluate(() => document.body.classList.contains('drawer')), false, 'the drawer closes behind it');
     await page.keyboard.press('Escape');
     await page.locator('#search-modal[open]').waitFor({state: 'detached'});
-    // The tab opens the rail on its own; a thread takes the screen, and Back returns to the rail.
-    await page.locator('#mobile-threads').click();
+    // Threads in the drawer opens the rail on its own; a thread takes the screen, and Back returns to the rail.
+    await page.locator('#mobile-more').click();
+    await page.waitForFunction(() => document.body.classList.contains('drawer'));
+    await page.locator('#nav-threads').click();
     await page.waitForFunction(() => location.hash === '#/threads');
     await page.locator('#thread-rail .tr-row[data-thread="t-plan"]').waitFor();
     assert.equal(await page.locator('#thread-pane').isVisible(), false);
@@ -995,6 +997,7 @@ let browser: import('playwright').Browser | null = null;
     assert.ok(width <= 390, 'no sideways scroll: ' + width);
     await shot(page, 'thread-phone');
     await page.goto('https://tico-ui.test/#/thread/t-tree');
+    await page.locator('#threads-shell').waitFor();
     await page.getByText('Unread inline.').waitFor();
     await page.evaluate(() => document.querySelector<HTMLElement>('.th-msg[data-mid="p1"]')!.scrollIntoView());
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth) <= 390);
@@ -1011,6 +1014,7 @@ let browser: import('playwright').Browser | null = null;
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth) <= 390);
     await shot(page, 'person-empty-home-phone');
     await page.goto('https://tico-ui.test/#/thread/t-plan');
+    await page.locator('#threads-shell').waitFor();
     await page.locator('.th-notshown').waitFor();
     await page.evaluate(() => document.querySelector<HTMLElement>('.th-notshown')!.scrollIntoView({block: 'center'}));
     await shot(page, 'not-shown-phone');
@@ -1075,6 +1079,7 @@ let browser: import('playwright').Browser | null = null;
 
     // A group chat on the rail is named by who the server says is in it; a 1:1 DM is not on the rail.
     await page.goto('https://tico-ui.test/#/threads');
+    await page.locator('#threads-shell').waitFor();
     await page.locator('#thread-rail [data-thread="t-group"]').waitFor();
     assert.equal(await page.locator('#thread-rail [data-thread="t-group"] .tr-title').innerText(), 'Bea, Cy, Di +3');
     assert.equal(await page.locator('#thread-rail [data-thread="t-zed"], #thread-rail [data-thread="t-none"]').count(), 0);
@@ -1118,6 +1123,7 @@ let browser: import('playwright').Browser | null = null;
     // Calls off: nobody gets a control that cannot work, and no "Set up calls" note either.
     callsOff = true;
     await page.goto('https://tico-ui.test/#/thread/t-sub');
+    await page.locator('#threads-shell').waitFor();
     await page.locator('.thv-title').waitFor();
     await page.waitForLoadState('networkidle');
     assert.equal(await page.locator('.thv-call-note, [data-call]').count(), 0);
@@ -1125,6 +1131,7 @@ let browser: import('playwright').Browser | null = null;
     await page.close();
     const member = await open(browser, 'bob', {phone: true});
     await member.page.goto('https://tico-ui.test/#/thread/t-sub');
+    await member.page.locator('#threads-shell').waitFor();
     await member.page.locator('.thv-title').waitFor();
     await member.page.waitForLoadState('networkidle');
     assert.equal(await member.page.locator('.thv-call-note, [data-call]').count(), 0);
@@ -1142,7 +1149,7 @@ let browser: import('playwright').Browser | null = null;
     await rail.locator('.tr-row[data-thread="t0"]').waitFor();
     await page.waitForFunction(() => typeof LIVE !== 'undefined' && LIVE_TOPICS.includes('threads'));
     const rails = seen.rails;
-    const badges = () => page.evaluate(() => ['#nav-threads .nav-badge', '#mobile-threads .nav-badge', '#thread-rail [data-tr-catch] .tr-badge']
+    const badges = () => page.evaluate(() => ['#nav-threads .nav-badge', '#mobile-more [data-threads-badge]', '#thread-rail [data-tr-catch] .tr-badge']
       .map(q => { const b = document.querySelector<HTMLElement>(q); return b && !b.hidden ? b.textContent : ''; }));
     const row = (id: string) => page.evaluate(id => {
       const a = document.querySelector<HTMLElement>(`#thread-rail .tr-row[data-thread="${id}"]`);
@@ -1162,7 +1169,7 @@ let browser: import('playwright').Browser | null = null;
     // Three messages in one batch come as one event with `unread_count`: Thread 4 counts all three.
     sse.queue.push({kind: 'activity', thread_id: 't4', root_id: 't4', message_id: 'm-live-4', unread: true, unread_count: 3, actor: 'human:bea', counters: {last_seq: 12, last_unread_seq: 12}});
     await until(() => row('t4'), {list: 'threads', bold: true, n: '4'});
-    assert.deepEqual(await badges(), ['4', '4', '4'], 'the same count in the sidebar, on the phone tab and on Catch up');
+    assert.deepEqual(await badges(), ['4', '4', '4'], 'the same count in the sidebar, on More and on Catch up');
     await until(() => row('t1'), {list: 'threads', bold: true, n: ''});
     // A message in the open thread is read there: no count on its row.
     sse.queue.push({kind: 'activity', thread_id: 't-plan', root_id: 't-plan', message_id: 'm-live-3', unread: true, actor: 'human:bea', counters: {last_seq: 41, last_unread_seq: 41}});
@@ -1182,20 +1189,11 @@ let browser: import('playwright').Browser | null = null;
     sse.done = true;
     await page.close();
   }
-  // ---- A server without the rail (GET /v2/threads/rail 404): its threads and group chats by title, no pins or Catch up.
+  // ---- A rail with nothing pinned or opened (GET /v2/threads/rail, empty): the pane is the picture and New thread.
   {
-    railOff = true;
+    railEmpty = true;
     const {page, seen} = await open(browser, 'ana');
     await page.goto('https://tico-ui.test/#/threads');
-    await page.locator('#thread-rail [data-list="threads"] .tr-row[data-thread="t11"]').waitFor();
-    const rows = await page.locator('#thread-rail [data-list="threads"] .tr-row').evaluateAll(els => els.map(a => (a as HTMLElement).dataset.thread));
-    assert.ok(rows.includes('t0') && !rows.includes('t-dm') && !rows.includes('t-botdm'), 'threads, not 1:1 DMs: ' + rows);
-    assert.equal(await page.locator('#thread-rail [data-tr-catch]').isVisible(), false);
-    assert.equal(await page.locator('#thread-rail [data-tr-browse]').isVisible(), false);
-    assert.equal(await page.locator('#nav-threads .nav-badge').isVisible(), false);
-    // The DM counts still come from the list: Ops's from bot_dms, Bea's from her DM.
-    assert.equal(await page.locator('#tree [data-org="b:ops"] .tree-dm').textContent(), '2');
-    assert.equal(await page.locator('#tree [data-org="p:bea"] .tree-dm').textContent(), '1');
     await page.locator('.tr-empty [data-tr-new]').waitFor();    // nothing pinned, nothing opened before: New thread
     // The picture of a thread, its heading and its one sentence, then New thread, which opens New message.
     const empty = page.locator('.tr-empty');
@@ -1221,44 +1219,46 @@ let browser: import('playwright').Browser | null = null;
     assert.ok(await sideways(page) <= 844, 'no sideways scroll');
     assert.deepEqual(seen.errors, []);
     await page.close();
-    railOff = false;
+    railEmpty = false;
   }
-  // On a phone the pane is not drawn with no thread open: the rail is the screen, so there is no picture there. railOff
-  // is the case above (nothing pinned, nothing opened), where a desktop window would draw the picture.
+  // On a phone the pane is not drawn with no thread open: the rail is the screen, so there is no picture there.
   {
-    railOff = true;
     const {page, seen} = await open(browser, 'ana', {phone: true});
     await page.goto('https://tico-ui.test/#/threads');
+    await page.locator('#threads-shell').waitFor();
     await page.locator('#thread-rail [data-list="threads"] .tr-row[data-thread="t11"]').waitFor();
     assert.equal(await page.locator('#thread-pane').isVisible(), false);
     assert.equal(await page.locator('.tr-empty').count(), 0);
     assert.ok(await sideways(page) <= 390, 'no sideways scroll on the rail');
     assert.deepEqual(seen.errors, []);
     await page.close();
-    railOff = false;
   }
-  // ---- Threads is in the sidebar and the phone bar from the first paint, before its read lands; only a server without
-  // threads (its reads answer 404) takes it away.
+  // ---- Threads is in the sidebar (on a phone, the drawer) from the first paint, before its read lands. A failed read
+  // (GET /v2/threads/rail 404, or a reply that is not a list) keeps it there and breaks nothing. The phone bar's slot is
+  // Flow either way.
   {
     for (const phone of [false, true]) {
       threadsGate = [];
       const {page} = await open(browser, 'ana', {phone});
       await page.goto('https://tico-ui.test/#/tasks');
-      await page.locator(phone ? '#mobile-threads' : '#nav-threads').waitFor();
+      await page.locator('#nav-threads').waitFor({state: 'attached'});
+      assert.equal(await page.locator('#nav-threads').getAttribute('hidden'), null, 'there before the first threads read lands');
       assert.equal(await page.evaluate(() => THREADS.on), null, 'there before the first threads read lands');
-      if (phone) assert.equal(await page.locator('#mobile-search').isVisible(), false, 'Threads holds the bar\'s place, not Search');
+      if (phone) assert.equal(await page.locator('#mobile-flow').isVisible(), true, 'Flow holds the bar\'s place');
       const gate = threadsGate; threadsGate = null; gate.forEach(go => go());
       await page.waitForFunction(() => THREADS.on === true);
       await page.close();
     }
-    // A 404, and a list read that answers something other than a list.
     for (const [off, phone] of [[true, false], [true, true], ['odd', false], ['odd', true]] as const) {
       threadsOff = off;
-      const {page} = await open(browser, 'ana', {phone});
+      const {page, seen} = await open(browser, 'ana', {phone});
+      const read = page.waitForResponse(r => r.url().includes('/api/v2/threads/rail'));
       await page.goto('https://tico-ui.test/#/tasks');
-      await page.waitForFunction(() => THREADS.on === false);
-      assert.equal(await page.locator(phone ? '#mobile-threads' : '#nav-threads').isVisible(), false, 'a server without threads has no link');
-      if (phone) await page.locator('#mobile-search').waitFor();
+      await read;
+      await page.waitForTimeout(300);
+      assert.equal(await page.locator('#nav-threads').getAttribute('hidden'), null, 'a failed read keeps the link');
+      if (phone) assert.equal(await page.locator('#mobile-flow').isVisible(), true, 'Flow keeps the bar\'s place');
+      assert.deepEqual(seen.errors, [], 'a failed read breaks nothing');
       await page.close();
     }
     threadsOff = false;
@@ -1269,6 +1269,7 @@ let browser: import('playwright').Browser | null = null;
     pinsAtOpen = [];
     const {page, seen} = await open(browser, 'ana');
     await page.goto('https://tico-ui.test/#/threads');
+    await page.locator('#threads-shell').waitFor();
     const line = page.locator('.tr-pane [data-tr-unread-n]');
     await line.waitFor();
     assert.equal(await line.textContent(), '3 chats with new messages', 'what waits, in one line');

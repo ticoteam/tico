@@ -8,14 +8,10 @@ first while the team rule is off. Check health never writes to a person.
 """
 
 import calendar
-import dataclasses
-import importlib.util
 import json
-import sqlite3
 import time
 from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 import httpx
 import pytest
@@ -45,8 +41,7 @@ from backend.tests.helpers.onboarding import draft, environment, machine, signed
 from backend.tests.helpers.support import FakeHQ
 from backend.tests.helpers.maintenance_health import turn
 
-MIGRATION = Path(__file__).resolve().parents[1] / "migrations" / "0096_retire_health_monitor.py"
-HM_SLUG = "health-monitor"  # the retired Health Monitor's slug: migration 0096 archives its row
+HM_SLUG = "health-monitor"  # the retired Health Monitor's slug
 CANARY = "Acme Payroll Mac"  # a computer's label: local, never in a report
 SECRET_BOT = "acme-payroll-bot"
 
@@ -82,7 +77,7 @@ def built(environment):
     api = environment(seed={}, cards=BASE)
     runner = machine(api, label=CANARY)
     draft(api)
-    api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+    api.post("/api/v2/setup/complete", json={}, headers=signed_in())
     return api, runner
 
 
@@ -137,7 +132,7 @@ def botops_tasks(api):
         return [
             dict(r)
             for r in c.execute(
-                "SELECT id,title,body,owner_id,status FROM tasks WHERE title LIKE 'Health:%' ORDER BY created_at"
+                "SELECT id,title,owner_id,status FROM tasks WHERE title LIKE 'Health:%' ORDER BY created_at"
             )
         ]
 
@@ -328,6 +323,103 @@ def test_a_setup_finding_naming_a_bot_is_never_reported_to_the_tico_team(environ
         assert c.execute("SELECT count(*) FROM ok_grants WHERE subject LIKE 'support:%'").fetchone()[0] == 0
 
 
+def queued_for_helper(api, runner, last_seen_minutes_ago, bot="helper"):
+    """A computer last heard from that many minutes ago, with one request queued for its bot `bot`."""
+    store = api.app.state.store
+    with store.transaction() as c:
+        H.sync_registry(c, {bot: {"name": bot, "status": "active"}}, None)
+        c.execute(
+            "INSERT OR REPLACE INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES(?,?,1,?,'t')",
+            (bot, runner["runner_id"], H.now()),
+        )
+        c.execute(
+            "INSERT OR IGNORE INTO messages(id,sender_id,recipient_id,kind,body,created_at) "
+            "VALUES(?,'human:ana',?,'chat','hi',?)",
+            (f"m-{bot}", f"bot:{bot}", H.now()),
+        )
+        enqueue_stored(c, f"m-{bot}")
+        c.execute(
+            "UPDATE runner_states SET last_seen_at=? WHERE runner_id=?",
+            (H.shift(H.now(), minutes=-last_seen_minutes_ago), runner["runner_id"]),
+        )
+
+
+def set_last_seen(api, runner, minutes_ago):
+    """Moves a computer's last check-in to that many minutes ago."""
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "UPDATE runner_states SET last_seen_at=? WHERE runner_id=?",
+            (H.shift(H.now(), minutes=-minutes_ago), runner["runner_id"]),
+        )
+
+
+def test_a_silent_computer_with_queued_work_is_one_botops_task(environment):
+    # Health's "Bots waiting" and "Computers" checks say the same outage as computer_silent. Each filed its own task.
+    api, runner = built(environment)
+    queued_for_helper(api, runner, 15)
+    run(api)
+    run(api)  # a noisy check files on its second run
+    titles = [t["title"] for t in botops_tasks(api)]
+    assert [t for t in titles if "not checked in" in t] == [f"Health: {CANARY} has not checked in for 15 minutes"]
+    assert "Health: Bots waiting" not in titles and "Health: Computers" not in titles
+
+
+def test_an_offline_computer_that_is_not_silent_yet_still_files_bots_waiting(environment):
+    # Only a silent computer hands its outage to its own task; one offline for less than the silence limit does not.
+    api, runner = built(environment)
+    queued_for_helper(api, runner, 5)
+    run(api)
+    run(api)
+    titles = [t["title"] for t in botops_tasks(api)]
+    assert "Health: Bots waiting" in titles
+    assert not [t for t in titles if "not checked in" in t]
+
+
+def test_an_offline_computer_still_files_when_another_computer_is_silent(environment):
+    # A has been silent for 15 minutes with work queued: its outage is computer_silent's task. B is offline for 5 minutes, not
+    # silent yet, so its "Bots waiting" and "Computers" still file, naming B and not A. Neither is cleared for A's silence.
+    api, runner = built(environment)
+    other = machine(api, label="Second Mac")
+    queued_for_helper(api, runner, 15)
+    queued_for_helper(api, other, 5, bot="scout")
+    run(api)
+    run(api)
+    assert "scout" in finding(api, "page:waiting")["detail"] and "helper" not in finding(api, "page:waiting")["detail"]
+    assert "Second Mac" in finding(api, "page:computers")["detail"]
+    assert CANARY not in finding(api, "page:computers")["detail"]
+    tasks = botops_tasks(api)
+    titles = [t["title"] for t in tasks]
+    assert "Health: Bots waiting" in titles and "Health: Computers" in titles
+    assert [t for t in titles if "not checked in" in t] == [f"Health: {CANARY} has not checked in for 15 minutes"]
+    for task in tasks:
+        if task["title"] in ("Health: Bots waiting", "Health: Computers"):
+            assert said(api, task["id"], "Cleared at") == []
+
+
+def test_an_offline_computer_that_goes_silent_holds_its_checks_then_they_clear_when_it_returns(environment):
+    # Bots waiting and Computers filed for an offline computer. It then goes silent: computer_silent takes the outage, and the
+    # two checks are held, not cleared. When it checks in again they clear, with their cleared comments.
+    api, runner = built(environment)
+    queued_for_helper(api, runner, 5)
+    run(api)
+    run(api)
+    tasks = {
+        t["title"]: t["id"] for t in botops_tasks(api) if t["title"] in ("Health: Bots waiting", "Health: Computers")
+    }
+    assert set(tasks) == {"Health: Bots waiting", "Health: Computers"}
+    set_last_seen(api, runner, 15)
+    run(api)
+    run(api)
+    assert finding(api, "page:waiting")["present"] == 1 and finding(api, "page:computers")["present"] == 1
+    assert f"Health: {CANARY} has not checked in for 15 minutes" in [t["title"] for t in botops_tasks(api)]
+    for task_id in tasks.values():
+        assert said(api, task_id, "Cleared at") == []
+    set_last_seen(api, runner, 0)
+    run(api)
+    for task_id in tasks.values():
+        assert len(said(api, task_id, "Cleared at")) == 1
+
+
 def test_the_idle_load_is_taken_from_a_computer_only(environment):
     api, _ = built(environment)
     r = api.post("/api/v2/runners/idle-load", json={"sampled_at": H.now(), "busy": []}, headers=signed_in())
@@ -363,335 +455,6 @@ def run_step(api, when):
     ctx["now"] = when
     with store.read() as r:
         return check_health.run(r, ctx)
-
-
-def retire_migration():
-    spec = importlib.util.spec_from_file_location("retire_health_monitor", MIGRATION)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-@pytest.mark.parametrize("saved,seeded,expected", [(False, 1, 0), (True, 0, 1), (None, 0, 0)])
-def test_the_cutover_refreshes_the_saved_health_switch_and_leaves_an_inherited_one(api, saved, seeded, expected):
-    store, migration = api.app.state.store, retire_migration()
-    with store.transaction() as c:
-        # 0090's snapshot predates the person's latest choice in System routines.
-        c.execute(
-            "UPDATE maintenance_steps SET enabled=?, cursor_at='t0', last_ran_at='t0' WHERE key='check_health'",
-            (seeded,),
-        )
-        controls = {"task_roundup": {"on": False}}
-        if saved is not None:
-            controls["health_scan"] = {"on": saved}
-        c.execute(
-            "INSERT INTO registry_metadata(key,value) VALUES('system_routines',?) "
-            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            (json.dumps(controls),),
-        )
-        before = M.steps_of(c)
-        migration.up(c)
-        after = M.steps_of(c)
-    assert after["check_health"]["enabled"] == expected
-    assert after["check_health"]["cursor_at"] == after["check_health"]["last_ran_at"] == "t0"
-    assert {k: v for k, v in after.items() if k != "check_health"} == {
-        k: v for k, v in before.items() if k != "check_health"
-    }
-    if saved is None:
-        assert after == before, "no saved switch: keep the step's setting"
-    with store.transaction() as c:
-        migration.up(c)
-        assert M.steps_of(c) == after, "a replay does not re-stamp the setting"
-
-
-def test_the_cutover_retires_the_health_scan_mirror_and_its_inventory_entry(api):
-    from backend import automations, redesign_migration as RM, system_routines as SR
-
-    store, migration = api.app.state.store, retire_migration()
-    with store.transaction() as c:
-        flow = RM._mirror(
-            "Health scan",
-            "person:ana",
-            "job.health_scan",
-            {"on": True},
-            {"kind": "system_job", "id": "job:health_scan"},
-        )
-        aid = RM._save(c, RM.system_who(c), flow)
-        RM._mark(c, "system_job", "job:health_scan", "mig_old", aid, title="Health scan")
-        custom = automations._save(
-            c,
-            "human:ana",
-            "auto_custom_health",
-            {**flow, "name": "My health automation", "builtin": False, "readonly": False},
-            None,
-        )["id"]
-        rid = SR.save(c, SR.Run("health_scan").did("All well", quiet=True))
-        history = dict(c.execute("SELECT * FROM system_runs WHERE id=?", (rid,)).fetchone())
-    assert aid in {a["id"] for a in get(api, "automations")["automations"]}
-    assert "sys_" + rid in {r["id"] for r in get(api, "automations/runs?trigger=system")["runs"]}
-    with store.transaction() as c:
-        migration.up(c)
-        retired = dict(c.execute("SELECT * FROM automations WHERE id=?", (aid,)).fetchone())
-        assert retired["deleted_at"] and retired["enabled"] == 0
-        migration.up(c)
-        assert dict(c.execute("SELECT * FROM automations WHERE id=?", (aid,)).fetchone()) == retired
-    listed = {a["id"] for a in get(api, "automations")["automations"]}
-    assert aid not in listed and custom in listed, "only the retired built-in mirror leaves Automations"
-    assert "sys_" + rid not in {r["id"] for r in get(api, "automations/runs?trigger=system")["runs"]}
-    get(api, "automations/" + aid, expected=404)
-    with store.read() as c:
-        assert dict(c.execute("SELECT * FROM system_runs WHERE id=?", (rid,)).fetchone()) == history
-        (entry,) = [i for i in RM.inventory(c) if i["id"] == "job:health_scan"]
-    assert entry["now"] == "removed" and entry["automation"] is None and entry["state"] == ""
-
-
-LEGACY_SCHEMA = """
-CREATE TABLE bots(id TEXT PRIMARY KEY, slug TEXT, state TEXT);
-CREATE TABLE bot_config(bot TEXT PRIMARY KEY, revision INTEGER NOT NULL DEFAULT 1, definition_updated_at TEXT,
-                        definition_updated_by TEXT);
-CREATE TABLE bot_settings(bot_id TEXT PRIMARY KEY, extra TEXT, updated_at TEXT);
-CREATE TABLE bot_status(bot TEXT PRIMARY KEY, open_tasks INTEGER NOT NULL DEFAULT 0, needs_human INTEGER NOT NULL DEFAULT 0,
-                        updated_at TEXT);
-CREATE TABLE assignments(bot TEXT, runner_id TEXT, generation INTEGER, updated_at TEXT, updated_by TEXT);
-CREATE TABLE jobs(id TEXT PRIMARY KEY, bot_id TEXT, state TEXT);
-CREATE TABLE schedules(id TEXT PRIMARY KEY, bot TEXT, deleted_at TEXT, updated_at TEXT);
-CREATE TABLE schedule_config(schedule_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 1);
-CREATE TABLE tasks(id TEXT PRIMARY KEY, title TEXT, owner_id TEXT, status TEXT, closed_at TEXT, closed_by_id TEXT,
-                   updated_at TEXT, note TEXT, version INTEGER NOT NULL DEFAULT 1);
-CREATE TABLE history_events(id TEXT PRIMARY KEY, subject_type TEXT, subject_id TEXT, actor_id TEXT, kind TEXT, old TEXT,
-                            new TEXT, note TEXT, action_id TEXT, via TEXT, data TEXT, created_at TEXT);
-CREATE TABLE health_findings(key TEXT PRIMARY KEY, signature TEXT, present INTEGER NOT NULL DEFAULT 1,
-                             occurrences INTEGER NOT NULL DEFAULT 1);
-CREATE TABLE watcher_items(bot TEXT NOT NULL, key TEXT NOT NULL, task_id TEXT NOT NULL, created_at TEXT NOT NULL,
-                           PRIMARY KEY(bot, key));
-CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
-CREATE TABLE invariant_state(check_id TEXT PRIMARY KEY, firing INTEGER NOT NULL DEFAULT 0, count INTEGER NOT NULL DEFAULT 0,
-                             examples TEXT NOT NULL DEFAULT '[]', checked_at TEXT, started_firing_at TEXT, task_id TEXT);
-"""
-PUSH, RUNNER = MH.signature("push_stuck"), MH.signature("runner_errors")
-REG = "health-task:"
-
-
-def legacy_db(botops="active", health_monitor="active"):
-    """The tables the migration reads and writes, as they were. The Health Monitor is in `health_monitor`'s state (None: no
-    such bot), with its findings, its watcher links and its open tasks; the production checks have alerts open."""
-    conn = sqlite3.connect(":memory:")
-    conn.executescript(LEGACY_SCHEMA)
-    bots = [("assistant", "active"), ("botops", botops)] + ([(HM_SLUG, health_monitor)] if health_monitor else [])
-    conn.executemany("INSERT INTO bots(id,slug,state) VALUES(?,?,?)", [(b, b, s) for b, s in bots])
-    conn.execute(
-        "INSERT INTO bot_config(bot,revision,definition_updated_at,definition_updated_by) VALUES(?,3,'t0','ana')",
-        (HM_SLUG,),
-    )
-    conn.execute(
-        "INSERT INTO bot_settings(bot_id,extra,updated_at) VALUES(?,?,'t0')", (HM_SLUG, json.dumps({"model": "m1"}))
-    )
-    conn.executemany(
-        "INSERT INTO bot_status(bot,open_tasks,needs_human,updated_at) VALUES(?,?,0,'t0')",
-        [(HM_SLUG, 5), ("botops", 1)],
-    )
-    conn.execute("INSERT INTO assignments VALUES(?,'R1',1,'t','t')", (HM_SLUG,))
-    conn.executemany("INSERT INTO jobs VALUES(?,?,?)", [("j1", HM_SLUG, "queued"), ("j2", HM_SLUG, "completed")])
-    conn.executemany(
-        "INSERT INTO schedules(id,bot,deleted_at,updated_at) VALUES(?,?,?,'t0')",
-        [("s1", HM_SLUG, None), ("s2", HM_SLUG, "t0")],
-    )
-    conn.executemany(
-        "INSERT INTO health_findings(key,signature,present,occurrences) VALUES(?,?,?,?)",
-        [("push_stuck:A", PUSH, 1, 3), ("push_stuck:B", PUSH, 1, 2), ("runner_errors:R1", RUNNER, 0, 1)],
-    )
-    conn.executemany(
-        "INSERT INTO watcher_items(bot,key,task_id,created_at) VALUES(?,?,?,'t0')",
-        [
-            (HM_SLUG, "hm:push_stuck:A", "t1"),
-            (HM_SLUG, "hm:runner_errors:R1", "t2"),
-            (HM_SLUG, "hm:push_stuck:B", "t5"),
-        ],
-    )
-    conn.executemany(
-        "INSERT INTO tasks(id,title,owner_id,status,updated_at) VALUES(?,?,?,?,'t0')",
-        [
-            ("t1", "Pushes are stuck", "bot:health-monitor", "open"),  # its finding is push_stuck:A: moves
-            ("t2", "Runner errors", "health-monitor", "review"),  # its finding cleared: moves, registered empty
-            ("t5", "Pushes are stuck (B)", "bot:health-monitor", "open"),  # the same signature as t1: superseded
-            ("t6", "Watch a thing", "bot:health-monitor", "doing"),  # no finding: superseded
-            ("t3", "An old finding", "bot:health-monitor", "done"),  # not open: left alone
-            ("t4", "Ana's own task", "human:ana", "open"),  # not the Health Monitor's: left alone
-            ("t7", "Production check: Runs past their lease", "human:ana", "open"),
-            ("t8", "Production check: Tasks in progress with no run", "bot:assistant", "open"),
-            ("t9", "Production check: Write lock held too long", "bot:botops", "closed"),
-        ],
-    )
-    conn.executemany(
-        "INSERT INTO invariant_state(check_id,firing,count,examples,task_id) VALUES(?,?,?,'[]',?)",
-        [("lease_overdue", 1, 2, "t7"), ("task_stuck", 0, 0, "t8"), ("long_holds", 1, 1, "t9")],
-    )
-    return conn
-
-
-def statuses(conn):
-    return dict(conn.execute("SELECT id,status FROM tasks"))
-
-
-def owners(conn):
-    return dict(conn.execute("SELECT id,owner_id FROM tasks"))
-
-
-def test_the_archive_archives_the_bot_the_way_archive_bot_does():
-    conn = legacy_db()
-    retire_migration().up(conn)
-    assert conn.execute("SELECT state FROM bots WHERE id=?", (HM_SLUG,)).fetchone()[0] == "archived"
-    assert conn.execute("SELECT count(*) FROM assignments WHERE bot=?", (HM_SLUG,)).fetchone()[0] == 0
-    assert dict(conn.execute("SELECT id,state FROM jobs")) == {"j1": "canceled", "j2": "completed"}
-    assert conn.execute("SELECT revision,definition_updated_by FROM bot_config WHERE bot=?", (HM_SLUG,)).fetchone() == (
-        4,
-        "keeper",
-    )
-    assert json.loads(conn.execute("SELECT extra FROM bot_settings WHERE bot_id=?", (HM_SLUG,)).fetchone()[0]) == {
-        "model": "m1",
-        "status": "archived",
-    }
-    assert dict(conn.execute("SELECT schedule_id,enabled FROM schedule_config")) == {"s1": 0}
-    assert dict(conn.execute("SELECT id,deleted_at IS NOT NULL FROM schedules")) == {"s1": 1, "s2": 1}
-    assert conn.execute("SELECT deleted_at FROM schedules WHERE id='s2'").fetchone()[0] == "t0", "kept, not re-stamped"
-    assert dict(conn.execute("SELECT bot,open_tasks FROM bot_status")) == {HM_SLUG: 0, "botops": 4}
-
-
-def test_a_linked_open_task_moves_to_botops_and_the_rest_of_the_health_monitors_close():
-    conn = legacy_db()
-    retire_migration().up(conn)
-    assert {k: v for k, v in owners(conn).items() if k in ("t1", "t2", "t4", "t7", "t8")} == {
-        "t1": "bot:botops",
-        "t2": "bot:botops",
-        "t4": "human:ana",
-        "t7": "bot:botops",
-        "t8": "bot:botops",
-    }
-    assert statuses(conn) == {
-        "t1": "open",
-        "t2": "review",
-        "t3": "done",
-        "t4": "open",
-        "t5": "closed",
-        "t6": "closed",
-        "t7": "open",
-        "t8": "open",
-        "t9": "closed",
-    }
-    assert conn.execute("SELECT owner_id FROM tasks WHERE id='t3'").fetchone()[0] == "bot:health-monitor"
-
-
-def test_each_moved_task_is_registered_for_its_signature_so_the_step_adopts_it():
-    conn = legacy_db()
-    retire_migration().up(conn)
-    entries = {
-        row[0][len(REG) :]: json.loads(row[1]) for row in conn.execute("SELECT key,value FROM registry_metadata")
-    }
-    for entry in entries.values():
-        assert entry.pop("last_comment"), "the migration's day is the last comment: the next one comes a day on"
-    assert entries == {
-        PUSH: {"task": "t1", "keys": 2, "count": 5, "cleared": False, "approvals": {}},
-        RUNNER: {"task": "t2", "keys": 0, "count": 0, "cleared": False, "approvals": {}},
-        MH.signature("inv:lease_overdue"): {"task": "t7", "keys": 1, "count": 2, "cleared": False, "approvals": {}},
-        MH.signature("inv:task_stuck"): {"task": "t8", "keys": 1, "count": 0, "cleared": False, "approvals": {}},
-    }
-
-
-def test_the_invariant_alerts_lose_their_task_link_and_a_closed_one_is_left_alone():
-    conn = legacy_db()
-    retire_migration().up(conn)
-    assert dict(conn.execute("SELECT check_id,task_id FROM invariant_state")) == {
-        "lease_overdue": None,
-        "task_stuck": None,
-        "long_holds": None,
-    }
-    assert statuses(conn)["t9"] == "closed" and owners(conn)["t9"] == "bot:botops"
-
-
-def test_every_change_is_a_history_event_as_the_keeper():
-    migration = retire_migration()
-    conn = legacy_db()
-    migration.up(conn)
-    assert conn.execute(
-        "SELECT subject_type,subject_id,kind,old,new,actor_id,note FROM history_events WHERE subject_id='t1'"
-    ).fetchall() == [("task", "t1", "owner", "bot:health-monitor", "bot:botops", "keeper", migration.NOTE)]
-    (closed,) = conn.execute("SELECT kind,new,note FROM history_events WHERE subject_id='t6'").fetchall()
-    assert closed[0:2] == ("status", "closed") and closed[2].startswith("Superseded: its bot is retired")
-    assert conn.execute("SELECT count(*) FROM history_events").fetchone()[0] == 6, "t1, t2, t7, t8 move; t5, t6 close"
-
-
-def test_with_no_active_botops_every_open_task_closes_as_superseded():
-    conn = legacy_db(botops="paused")
-    retire_migration().up(conn)
-    assert statuses(conn) == {
-        "t1": "closed",
-        "t2": "closed",
-        "t3": "done",
-        "t4": "open",
-        "t5": "closed",
-        "t6": "closed",
-        "t7": "closed",
-        "t8": "closed",
-        "t9": "closed",
-    }
-    assert conn.execute("SELECT count(*) FROM registry_metadata").fetchone()[0] == 0
-    assert conn.execute("SELECT count(*) FROM invariant_state WHERE task_id IS NOT NULL").fetchone()[0] == 0
-    assert conn.execute("SELECT note FROM tasks WHERE id='t7'").fetchone()[0].startswith("Superseded: ")
-
-
-def test_running_the_migration_again_changes_nothing():
-    conn, migration = legacy_db(), retire_migration()
-    migration.up(conn)
-    queries = (
-        "SELECT id,owner_id,status FROM tasks ORDER BY id",
-        "SELECT count(*) FROM history_events",
-        "SELECT key,value FROM registry_metadata ORDER BY key",
-        "SELECT check_id,task_id FROM invariant_state ORDER BY check_id",
-        "SELECT id,state FROM bots ORDER BY id",
-        "SELECT bot,open_tasks FROM bot_status ORDER BY bot",
-    )
-    before = [conn.execute(q).fetchall() for q in queries]
-    migration.up(conn)
-    assert [conn.execute(q).fetchall() for q in queries] == before
-
-
-@pytest.mark.parametrize("health_monitor", [None, "archived"])
-def test_without_a_health_monitor_to_retire_its_tasks_stay_and_the_invariant_alerts_still_move(health_monitor):
-    conn = legacy_db(health_monitor=health_monitor)
-    retire_migration().up(conn)
-    owned = owners(conn)
-    assert owned["t1"] == "bot:health-monitor" and owned["t2"] == "health-monitor"
-    assert owned["t7"] == "bot:botops" and owned["t8"] == "bot:botops"
-    assert (
-        conn.execute("SELECT count(*) FROM history_events WHERE subject_id IN ('t1','t2','t5','t6')").fetchone()[0] == 0
-    )
-
-
-def test_reported_at_is_added_to_an_existing_health_reports_table_and_kept_on_a_rerun():
-    conn = sqlite3.connect(":memory:")
-    conn.execute(
-        "CREATE TABLE health_reports(signature TEXT PRIMARY KEY, created_at TEXT NOT NULL, "
-        "reported_occurrences INTEGER NOT NULL DEFAULT 1)"
-    )
-    conn.execute("INSERT INTO health_reports(signature,created_at) VALUES('hm-old','t0')")
-    migration = retire_migration()
-    migration.up(conn)
-    migration.up(conn)
-    assert "reported_at" in {row[1] for row in conn.execute('PRAGMA table_info("health_reports")')}
-    assert conn.execute("SELECT reported_at FROM health_reports").fetchall() == [("",)]
-
-
-def test_the_pending_column_is_added_once_and_a_file_with_no_table_is_skipped():
-    conn = legacy_db()
-    migration = retire_migration()
-    migration.up(conn)
-    migration.up(conn)  # a rerun finds the column and changes nothing
-    assert "pending" in {row[1] for row in conn.execute('PRAGMA table_info("health_findings")')}
-    rows = conn.execute("SELECT pending FROM health_findings").fetchall()
-    assert rows and {row[0] for row in rows} == {0}  # the findings that were there are filed, so 0
-    empty = sqlite3.connect(":memory:")
-    migration.up(empty)  # no health_findings yet: the module's CREATE makes it
-    assert empty.execute("SELECT count(*) FROM sqlite_master WHERE name='health_findings'").fetchone()[0] == 0
 
 
 def test_a_paused_bots_routines_are_not_a_finding(environment):
@@ -1375,7 +1138,8 @@ def _part_readers_write_nothing(api, runner, monkeypatch, hq=None, comments=None
             _, found, notes = check_health.gather(r, ctx)
         finally:
             r.execute("PRAGMA query_only=0")
-    assert notes == {}, notes
+    # No reader failed. The page's offline record is a success, not a failure note.
+    assert {key: value for key, value in notes.items() if key != "offline"} == {}, notes
     assert any(row["key"].startswith("event_stream:") for row in found)
 
 
@@ -1385,7 +1149,7 @@ def _part_app_settings(api, runner, monkeypatch, hq=None, comments=None, clock=N
     store, auth = api.app.state.store, api.app.state.auth
     seen = {}
 
-    def view(c, who, settings, auth_, github, config):
+    def view(c, who, settings, auth_, github, config, **_):
         seen["settings"] = settings
         return {"checks": []}
 
@@ -1594,8 +1358,8 @@ def _part_warning(api, runner, monkeypatch, hq=None, comments=None, clock=None):
     run(api)
     run(api)
     (task,) = botops_tasks(api)
-    assert task["title"] == "Health: Disk space" and "Free space" in task["body"]
     with api.app.state.store.read() as c:
+        assert task["title"] == "Health: Disk space" and "Free space" in H.task_words(c, task["id"])
         rows = c.execute(
             "SELECT key FROM health_findings WHERE present=1 AND pending=0 AND key LIKE 'page:%'"
         ).fetchall()
@@ -1619,7 +1383,7 @@ def _part_github(api, runner, monkeypatch, hq=None, comments=None, clock=None):
     health.note_github_token(store, "The App's key was refused", "Check the GitHub App's private key")
     seen = {}
 
-    def view(c, who, settings, auth_, github, config):
+    def view(c, who, settings, auth_, github, config, **_):
         seen["github"] = github
         return {"checks": [health._github(c, github, settings)]}
 
@@ -2080,9 +1844,11 @@ def test_a_busy_process_is_reported_by_its_tico_name_only(environment, readers, 
 
 
 def test_a_computer_on_a_release_the_server_cannot_work_with_is_bad(environment, monkeypatch):
-    monkeypatch.setenv("TICO_VERSION", "0.4.45")
+    """Below the runner floor (0.6.0-rc.1) a computer's bots are paused, so it is bad. At or above the floor but behind
+    the server it still works, so it is a warning."""
+    monkeypatch.setenv("TICO_VERSION", "0.6.0-rc.2")
     api, runner = built(environment)
-    for release, severity in [("0.0.9", "bad"), ("0.4.40", "warn")]:
+    for release, severity in [("0.0.9", "bad"), ("0.4.40", "bad"), ("0.6.0-rc.1", "warn")]:
         with api.app.state.store.transaction() as c:
             c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?", (H.now(), runner["runner_id"]))
             c.execute(

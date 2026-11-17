@@ -121,7 +121,7 @@ granted, how big a segment is), a person files a task titled **Deep research: <q
 `research` label, and sets it to run on a high model:
 
 ```sh
-tico task create --owner bot:librarian --title "Deep research: who sells window displays to small shops?" --label research --model claude-opus-5-5 --effort high --body "Scope: US, shops under 20 staff."
+tico task create --owner bot:librarian --title "Deep research: who sells window displays to small shops?" --label research --model claude-opus-5-5 --effort high --message "Scope: US, shops under 20 staff."
 ```
 
 The Librarian plans the sources, then works in rounds over several turns, about four hours at most. Each round it
@@ -261,12 +261,26 @@ market reads it, and the tables are readable in hub SQL like the other market ta
   id replaces it.
 
 The owner asks for the work with **Size the market** on the Market page (`POST /api/v2/market/spend/research {description}`), which files one
-Librarian task following `playbooks/size-the-market.md`; asking again while it is open returns the same task. A first market
-setup ends by pointing at the same playbook.
+Librarian task following `playbooks/size-the-market.md`; asking again with the same sentence while it is open returns the same
+task. A different sentence changes the market: it becomes the definition's description, and goes to the open task as the
+owner's comment (which wakes the Librarian), or files a new task when none is open. A first market setup ends by pointing at
+the same playbook.
+
+The spend read carries the open sizing task as `sizing` (`{id, version, turn, ask}`, or null when none is open, or when the
+reader may not open it): `turn` is `working` or `person`, and `ask` is the question when it waits on the reader
+(`{requirement_id, mark_id, kind, line}`). The Market card shows it as the server has it, so a reload shows the
+same: a spinner and the task while it works, or the question with a reply box when it waits on the reader. A bot's ❓ is answered by a reply in its chat, and an OK by
+`POST /api/v2/tasks/{id}/asks/{requirement_id}/answer` with the task's `version`. It follows the task live and reads again when
+it moves; when the sizes arrive the page is drawn again. The owner can change the sentence whether or not the market is sized:
+unsized, it is the form (its button reads Update once a task is open); sized, it is a line above the map whose pencil opens
+the form, prefilled, and Escape folds it back.
+
+On Strategy, Where we play adds a segment with an optional summary and parent (the tree goes four deep), and the owner
+renames one in place with `POST /api/v2/market/entities/{id} {name}`.
 
 | Route | Who | |
 |---|---|---|
-| `GET /api/v2/market/spend?dimension=&basis=&year=` | anyone who reads the market | definition, total, segments with sizes, estimates (with their evidence), players |
+| `GET /api/v2/market/spend?dimension=&basis=&year=` | anyone who reads the market | definition, total, segments with sizes, estimates (with their evidence), players; `sizing`, the open sizing task |
 | `PUT /api/v2/market/definition` | owner, Librarian | the definition; `root_name` makes the root |
 | `POST /api/v2/market/segments` | owner, Librarian | `{name, parent_id?, summary?}` |
 | `POST /api/v2/market/sizes` | owner, Librarian | an estimate; `accept: true` accepts it |
@@ -274,7 +288,7 @@ setup ends by pointing at the same playbook.
 | `POST /api/v2/market/sizes/{id}/params` | owner | `{params: {name: number}}` |
 | `POST /api/v2/market/figures` | owner, Librarian | a player's figure |
 | `GET`, `POST /api/v2/market/sources` | read: anyone; add: owner, Librarian | the catalog |
-| `POST /api/v2/market/spend/research` | owner | `{description}`; returns `{task_id}` |
+| `POST /api/v2/market/spend/research` | owner | `{description}`; returns `{task_id, sizing}` |
 | `GET /api/v2/market/value-chain` | anyone who reads the market | the five layers |
 
 CLI: `tico market define`, `segment add|tree`, `size add|accept|reject|params|list`, `figure add`, `sources`, `spend`,

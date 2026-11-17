@@ -1,5 +1,5 @@
 # pyright: strict
-"""The daily release hour (docs/pipelines-v3.md D13): a routine on the Release Owner.
+"""The daily release hour (docs/dev/pipelines-v3.md D13): a routine on the Release Owner.
 
 At each time the release schedule names (release_schedule_routes, company time), the routine does what Release now
 does, through the same call (`release_schedule_routes.request_now`): the Release Owner gets ONE Release task, or

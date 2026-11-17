@@ -1,135 +1,28 @@
-"""Upgrade safety: a database an older release made boots under this code, twice, keeping its rows."""
+"""Upgrade safety: what a start does with a file it did not make (a foreign one, an empty one), and the rows the journey
+test seeds into the previous release before it upgrades."""
 
-import gzip
-import shutil
 import sqlite3
 from pathlib import Path
 
 import pytest
 
-from backend import hubdb as H
 from backend.migrations import MigrationError
-from backend.tests.helpers.hubdb import with_legacy_run_tables
-from backend.tests.helpers.upgrade import FIXTURES, boot
+from backend.tests.helpers.upgrade import boot
 
 
-def state(path):
-    with sqlite3.connect(path) as c:
-        return (
-            c.execute("PRAGMA user_version").fetchone()[0],
-            c.execute("SELECT version FROM cloud_migrations ORDER BY version").fetchall(),
-            c.execute("SELECT type,name,sql FROM sqlite_master ORDER BY type,name").fetchall(),
-        )
-
-
-def old_release(tmp_path, tasks=False):
-    """hub.sqlite as v0.2.1 wrote it (scripts/make_upgrade_fixture.py): 3 bots, 3 tasks, 2 messages. Tico 0.6 does not
-    carry tasks over (it refuses a file that has some), so the tasks go unless `tasks`."""
-    path = tmp_path / "hub.sqlite"
-    with gzip.open(FIXTURES / "hub-v0.2.1.sqlite.gz") as source, open(path, "wb") as target:
-        shutil.copyfileobj(source, target)
-    if not tasks:
-        with sqlite3.connect(path) as c:
-            c.execute("DELETE FROM tasks")
-    return path
-
-
-def test_previous_release_database_boots_twice_and_keeps_rows(tmp_path):
-    # Below the bridge (test_migrations), so this is the legacy import path: adopt_legacy, as manage.migrate_legacy boots.
-    path = old_release(tmp_path)
-    boot(path, adopt_legacy=True)
-    first = state(path)
-    assert first[0] == len(H.MIGRATIONS)
-    boot(path, adopt_legacy=True)
-    assert state(path) == first
-    with sqlite3.connect(path) as c:
-        assert [r[0] for r in c.execute("SELECT slug FROM bots ORDER BY slug")] == ["cmo", "coo", "seo"]
-        assert c.execute("SELECT count(*) FROM bots").fetchone()[0] == 3
-        assert c.execute("SELECT count(*) FROM messages").fetchone()[0] == 2
-
-
-def test_an_old_release_database_with_tasks_is_refused_and_left_as_it_was(tmp_path):
-    path = old_release(tmp_path, tasks=True)
-    before = path.read_bytes()
-    with pytest.raises(MigrationError, match="does not carry tasks over"):
-        boot(path, adopt_legacy=True)
-    assert path.read_bytes() == before
-
-
-def test_goal_id_already_present_with_version_behind_still_boots(tmp_path):
-    path = old_release(tmp_path)
-    with sqlite3.connect(path) as c:
-        assert "goal_id" in {r[1] for r in c.execute("PRAGMA table_info(tasks)")}
-        c.execute("PRAGMA user_version=5")  # the goals migration (and everything after) not recorded
-    boot(path, adopt_legacy=True)
-    assert state(path)[0] == len(H.MIGRATIONS)
-
-
-@pytest.mark.parametrize("version", [38, 39])
-def test_purpose_migration_backfills_unlabelled_turns_and_keeps_caller_labels(tmp_path, version):
-    conn = H.connect(tmp_path / "purpose.sqlite")
-    try:
-        # A file may have the column before recording the version bump.
-        conn.execute(f"PRAGMA user_version={version}")
-        with_legacy_run_tables(conn)
-        conn.executemany(
-            "INSERT INTO turns(id,bot,started_at,trigger_kind,purpose) VALUES(?,?,'2026-01-01',?,?)",
-            [
-                ("builder", "pr-reviewer", "pr_checks", None),
-                ("reviewer", "pr-reviewer-sol", "status_or_relation", None),
-                ("unknown", "ops", None, None),
-                ("named", "pr-reviewer", "pr_checks", "prepare release"),
-            ],
-        )
-        H.migrate(conn)
-        expected = {
-            "builder": "handle PR checks",
-            "reviewer": "review PR",
-            "unknown": "unknown",
-            "named": "prepare release",
-        }
-        assert dict(conn.execute("SELECT id,purpose FROM attempts")) == expected
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == len(H.MIGRATIONS)
-        H.migrate(conn)
-        assert dict(conn.execute("SELECT id,purpose FROM attempts")) == expected
-    finally:
-        conn.close()
-
-
-def test_failed_migration_leaves_version_behind(tmp_path, monkeypatch):
-    path = tmp_path / "hub.sqlite"
-    monkeypatch.setattr(H, "MIGRATIONS", H.MIGRATIONS[:1] + ["CREATE TABLE half(x);\nSELECT * FROM missing;"])
-    with pytest.raises(sqlite3.OperationalError):
-        H.connect(path)
-    with sqlite3.connect(path) as c:
-        assert c.execute("PRAGMA user_version").fetchone()[0] == 1
-        assert not c.execute("SELECT 1 FROM sqlite_master WHERE name='half'").fetchone()
-
-
-def test_unknown_database_is_refused_but_an_empty_file_boots(tmp_path):
+def test_a_foreign_database_is_refused_unchanged_but_an_empty_file_boots(tmp_path):
     foreign = tmp_path / "foreign.sqlite"
     with sqlite3.connect(foreign) as c:
         c.execute("CREATE TABLE tasks(id TEXT, title TEXT)")
-    with pytest.raises(H.UnknownDatabase, match="not one this Tico made"):
+    before = foreign.read_bytes()
+    with pytest.raises(MigrationError, match="older than 0.6.0, or not by Tico"):
         boot(foreign)
-    with sqlite3.connect(foreign) as c:
-        assert c.execute("PRAGMA user_version").fetchone()[0] == 0
+    assert foreign.read_bytes() == before
     empty = tmp_path / "empty.sqlite"
     empty.touch()
     boot(empty)
-    assert state(empty)[0] == len(H.MIGRATIONS)
-
-
-def test_retired_routine_tables_are_copied_before_they_are_dropped(tmp_path):
-    path = old_release(tmp_path)
-    with sqlite3.connect(path) as c:
-        c.execute("CREATE TABLE routine_sources(id TEXT, body TEXT)")
-        c.execute("INSERT INTO routine_sources VALUES('r1','keep me')")
-        c.execute("DELETE FROM cloud_migrations WHERE version=28")
-    boot(path, adopt_legacy=True)
-    with sqlite3.connect(path) as c:
-        assert c.execute("SELECT body FROM routine_sources_retired").fetchall() == [("keep me",)]
-        assert not c.execute("SELECT 1 FROM sqlite_master WHERE name='routine_sources'").fetchone()
+    with sqlite3.connect(empty) as c:
+        assert c.execute("SELECT 1 FROM sqlite_master WHERE name='tasks'").fetchone()
 
 
 def test_the_journey_seeds_an_install_whose_starter_bot_has_its_own_id(tmp_path):

@@ -526,11 +526,38 @@ def _readable_ids(c, v, light):
     out, whole = set(), []
     for m in light:
         (out.add if m["plain"] and m["conversation_id"] not in legacy else whole.append)(m["id"])
-    for part in H.chunks(whole):
-        for r in c.execute(f"SELECT * FROM messages WHERE id IN ({','.join('?' * len(part))})", part):
-            if T.message_readable(c, v, dict(r), thread_checked=True):
-                out.add(r["id"])
+    rows = [
+        dict(r)
+        for part in H.chunks(whole)
+        for r in c.execute(f"SELECT * FROM messages WHERE id IN ({','.join('?' * len(part))})", part)
+    ]
+    _prime(c, rows)
+    out.update(r["id"] for r in rows if T.message_readable(c, v, r, thread_checked=True))
     return out
+
+
+def _prime(c, rows):
+    """Before the per-message check of these stored rows: seed the message lookups with them and the messages they reply
+    to, the tasks and pages their refs name, and each run they name (a bot's reply names its run) together, so a reader
+    with hundreds of bot replies waiting costs a fixed number of statements, not several per reply."""
+    if not rows:
+        return
+    from . import provenance_clock, task_privacy
+
+    runs, every = set(), [H._json(r.get("refs"), {}) or {} for r in rows]
+    for refs in every:
+        run = refs.get("run") if isinstance(refs, dict) else None
+        aid = (refs.get("turn_id") if isinstance(refs, dict) else None) or (
+            run.get("attempt_id") if isinstance(run, dict) else None
+        )
+        if isinstance(aid, str) and aid:
+            runs.add(aid)
+    H.prime_message_rows(c, rows)
+    task_privacy.prime_references(c, every)  # the tasks and pages their refs could name
+    # A run whose tasks were worked out since the last provenance change needs only its messages; the rest (after any
+    # new message, so most loads) get their whole provenance read together.
+    task_privacy.prime_attempts(c, [aid for aid in runs if not provenance_clock.known(c, ("attempt_tasks", aid))])
+    task_privacy.prime_attempt_messages(c, runs)
 
 
 def _readable_rows(c, v, rows):
@@ -555,10 +582,11 @@ def _bot_home(cv):
 
 def _flags(c, v):
     """({root id: [message ids]}, {root ids}, {root id: count}): the roots that mention the reader, with their open
-    mentions' and asks' messages (thread_attention._addressed's rule, ids only, the newest ATTENTION_SCAN); the roots of
-    writes held for their review; and the bots' Homes with a reply or mention for them past their mark (`_home_replies`).
-    Every message passes the thread and the per-message check; only one that can hide is read whole. A bot's reply in its
-    own Home is not an open item: it counts while unread (`_home_replies`), so reading it clears it."""
+    mentions' and asks' messages (Catch up's own rule, wider than Needs attention's open_mentions; ids only, the newest
+    ATTENTION_SCAN); the roots of writes held for their review; and the bots' Homes with a reply or mention for them
+    past their mark (`_home_replies`). Every message passes the thread and the per-message check; only one that can
+    hide is read whole. A bot's reply in its own Home is not an open item: it counts while unread (`_home_replies`), so
+    reading it clears it."""
     from . import thread_attention
 
     me = v.actor
@@ -667,7 +695,7 @@ def _readable_new(c, v, roots):
         out[g["root"]] = out.get(g["root"], 0) + sure
         if int(g["n"]) > sure:
             hidden.append(g)
-    budget = CATCH_UP_HIDDEN
+    budget, whole = CATCH_UP_HIDDEN, []
     for g in hidden:
         if budget <= 0:
             break
@@ -678,8 +706,11 @@ def _readable_new(c, v, roots):
             (v.actor, g["thread"], v.actor, v.actor, budget),
         ).fetchall():
             budget -= 1
-            if T.message_readable(c, v, dict(r), thread_checked=True):
-                out[g["root"]] += 1
+            whole.append((g["root"], dict(r)))
+    _prime(c, [r for _, r in whole])
+    for root, r in whole:
+        if T.message_readable(c, v, r, thread_checked=True):
+            out[root] += 1
     return out
 
 
@@ -734,7 +765,10 @@ def _walk(c, v, flags, after=None):
             ]
             T.prime_members(c, v, [r["id"] for r in found], roots=[r["id"] for r in found])
             readable = {r["id"] for r in found if T.thread_readable(c, v, r)}
-            counts = _readable_new(c, v, [i for i in readable if i not in history])
+            # A bot's Home counts only `_home_replies`, already checked: counting its messages again would spend the
+            # per-message checks (and CATCH_UP_HIDDEN) on a number that is never used.
+            bot_homes = {r["id"] for r in found if r and _is_bot_home(r, v)}
+            counts = _readable_new(c, v, [i for i in readable if i not in history and i not in bot_homes])
             for r in found:
                 scanned += 1
                 position = [int(r["activity"] or 0), r["id"]]
@@ -960,6 +994,7 @@ def _new_messages(c, v, root, attention_ids, unread, budget, *, force=False):
             r["id"]: dict(r)
             for r in c.execute(f"SELECT * FROM messages WHERE id IN ({','.join('?' * len(chunk))})", chunk)
         }
+        _prime(c, list(found.values()))
         marks = T.reactions(c, chunk)
         for mid in chunk:
             m = found.get(mid)

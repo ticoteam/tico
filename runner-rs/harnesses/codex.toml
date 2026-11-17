@@ -13,6 +13,11 @@ package = "@openai/codex"
 [version]
 args = ["--version"]
 pattern = '(\d+\.\d+\.\d+)'
+# The oldest release whose app-server has every method the runner calls (`skills/extraRoots/set` is new in 0.136).
+minimum = "0.136.0"
+# Releases the daily update skips, staying on the installed one: a version ("0.170.0") or a range (">=0.170.0 <0.171.0").
+# Say why beside each entry.
+broken = []
 
 [update]
 policy = "latest"
@@ -49,8 +54,6 @@ resume_after_interrupt = true
 # A message for the running turn goes in with turn/steer.
 steer = true
 goal_runs_across_turns = true
-# Bots on one ChatGPT login run together and share its usage allowance.
-one_turn_per_login = false
 compaction = true
 resume_command = "codex resume"
 model_list = "host"

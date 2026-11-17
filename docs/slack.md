@@ -16,6 +16,10 @@ How messages are routed and stored is in [slack-gateway.md](slack-gateway.md).
 5. In Tico, Tools > Slack, paste both tokens. They are stored encrypted in Tico's database
    and never shown again. Do not put them in `.env`.
 
+**A company Tico hosts on a cloud cell** has no `.env` of its own to edit, so skip step 1: the cell's operator turns
+the gateway on for that company with `python3 -m setup cell set-slack --company <slug> on` ([cell.md](cell.md#the-slack-gateway)),
+and it stays on through updates. Until then the Slack card says the tokens are saved and the service is not running.
+
 Within a minute the Slack card on Tools and on the Health page (Settings > General > Health > Details) say **Connected**. The first connection pins the workspace
 the tokens belong to; to pin it in advance, set `SLACK_TEAM_ID` in `.env`. To change workspace, disconnect and
 paste the new tokens. Invite Tico to a channel with `/invite @Tico`.
@@ -38,15 +42,13 @@ list in Tico's database, not a file:
 - **With `tico`.** `tico slack channel add '#customer_success' --reader support`, `tico slack channel list`,
   `tico slack channel remove '#customer_success' [--reader BOT]`.
 - **By asking BotOps.** "Let the support bot read #customer_success": BotOps adds it as the person who asked,
-  so a member is told who to ask. The MCP tools are `tico_slack_channel_add`, `_list`, `_remove` and `_import`.
+  so a member is told who to ask. The MCP tools are `tico_slack_channel_add`, `_list` and `_remove`.
 
-A reader gets what is new in the channel about once an hour, as a message in its own thread
-([slack-gateway.md](slack-gateway.md)). A bot's own `history` reads through `connectors/slack.py` follow the same
-list and its `tools:` entry. Channels shared outside the workspace are always refused, whatever the list says.
-
-**An older install** has `registry/slack-channels.yaml`. It is still read, and its channels show in the list marked as
-coming from the file, until an owner or an admin presses **Import** (or runs `tico slack channel import`). After that the
-file is ignored. A public install has no such file and needs none.
+A channel with readers is linked to a read-only thread: the channel's messages come in, nothing goes back to Slack,
+and each reader follows the thread and gets what is new about once an hour ([slack-gateway.md](slack-gateway.md)).
+The channel's name in Tools > Slack channels opens that thread. A channel already linked both ways keeps its link,
+and its readers follow that thread. A bot's own `history` reads through `connectors/slack.py` follow the same
+list and its `tools:` entry, checked by Tico and answered by the gateway. Channels shared outside the workspace are always refused, whatever the list says.
 
 ## Link a channel to a thread
 
@@ -68,6 +70,8 @@ A channel can be linked to a Tico thread, and the two carry each other's message
   suspended and one Needs-you item asks an owner to look. Nothing moves until the link is checked again
   (`POST /api/v2/slack/links/{id}/resume`). A message that arrives while the link is suspended is kept, and posted in order
   when the link resumes.
+- A link made for bots that read the channel (above) is read-only: none of the member checks, notes or posts back to
+  Slack apply, and a sender who is not on the roster is skipped. It ends with its last reader.
 - Unlinking (`DELETE /api/v2/slack/links/{id}`) stops both ways at once: the channel stops being one of the thread's
   readers, and anything not yet sent is not sent.
 - Slack senders are looked up once an hour, not once a message. A repeated edit event (Slack retries) is one revision,
@@ -105,19 +109,6 @@ at a time (`limit`, `cursor`; follow `next_cursor`).
 Kill switch: remove `slack` from `COMPOSE_PROFILES` and run `docker compose up -d --remove-orphans`.
 The server, its data and the saved tokens are untouched.
 
-## Task results
-
-When a bot or another human finishes or declines a task you requested, Tico DMs you:
-`Finished: <title>` (or `Declined: <title>`), `by <owner name>`, the first line of the completion
-note if there is one, and **Open task**, a link to the task in Tico. It uses your Tico DM even
-when you created the task in the app. Each task sends each result once, including if it is reopened.
-
-This is on by default for humans linked to Slack. On your human page, under **Profile → Notifications**,
-turn off **Task results in Slack**. You can also ask BotOps to turn it off for you, or use
-`POST /api/v2/humans/<id>` with `{"notify_slack_task_done": false}` (through the API or MCP's `tico_api`).
-Turning it on again uses `true`. Self-completed tasks and quiet updates do not send a DM;
-no linked Slack account or a disabled gateway means no Slack delivery. In-app notices continue.
-
 ## Bot messages
 
 A bot's message to you is also copied into your Tico DM in Slack, including the report a bot writes
@@ -127,5 +118,4 @@ bot's messages in Tico, or mute only some bots in the **Muted** row under it. Th
 `POST /api/v2/humans/<id>`.
 
 While you are talking to a bot in Slack, it still answers there: when your latest message in that
-DM came from Slack within the last day, the bot's messages in it go to Slack. Task results have
-their own switch above.
+DM came from Slack within the last day, the bot's messages in it go to Slack.

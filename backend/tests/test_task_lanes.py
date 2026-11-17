@@ -58,21 +58,6 @@ def test_a_bot_uses_all_places_and_next_place_goes_to_the_bot_with_fewest(api):
     assert claim(api, machine)["lane"] == "task:" + tasks[4]["id"]
 
 
-def test_a_runner_without_lanes_runs_one_turn_per_bot(api):
-    machine = task_bot(api, lanes=False)
-    new_task(api, "first"), new_task(api, "second")
-    assert claim(api, machine)["lane"] == "main"
-    assert claim(api, machine) is None
-
-
-def test_a_main_built_runner_advertising_task_lanes_v1_runs_serially(api):
-    """Its session key reads an unset `session` as the bot thread, so its lanes would share one thread."""
-    machine = task_bot(api, lanes=True, capability="task_lanes_v1")
-    new_task(api, "first"), new_task(api, "second")
-    assert claim(api, machine)["lane"] == "main"
-    assert claim(api, machine) is None
-
-
 def test_a_finished_lane_leaves_the_bot_running_and_stop_names_the_turn(api):
     machine = task_bot(api, lanes=True)
     new_task(api, "first"), new_task(api, "second")
@@ -144,7 +129,9 @@ def test_a_quota_reset_in_one_lane_holds_when_a_pre_limit_lane_finishes(api, mon
     monkeypatch.setattr(H, "now", lambda: H.shift(now, hours=3))
     with api.app.state.store.read() as c:
         assert H.status(c, "ops")["state"] == "limited"
-        assert cooling_off(c, "ops"), "a pre-limit lane finishing cannot discard the provider's reset"
+        assert cooling_off(c, api.app.state.store.settings, "ops"), (
+            "a pre-limit lane finishing cannot discard the provider's reset"
+        )
 
 
 @pytest.mark.parametrize("restore", [False, True])
@@ -164,10 +151,11 @@ def test_a_pre_limit_lane_start_or_restore_cannot_release_the_cooldown(api, monk
             c.execute("UPDATE jobs SET state='uncertain' WHERE id=?", (two["job_id"],))
     monkeypatch.setattr(H, "now", lambda: H.shift(before, seconds=1))
     post(api, f"attempts/{one['id']}/started", {"thread_id": one["lane"]}, machine["token"])
+    # The bot's own login meets the limit (a limit only its fallback met leaves the bot free to run on its own login).
     post(
         api,
         f"attempts/{one['id']}/complete",
-        {"outcome": "failed", "last_seq": 0, "limited": True, "fallback": "codex"},
+        {"outcome": "failed", "last_seq": 0, "limited": True},
         machine["token"],
     )
     monkeypatch.setattr(H, "now", lambda: H.shift(before, seconds=2))
@@ -176,7 +164,9 @@ def test_a_pre_limit_lane_start_or_restore_cannot_release_the_cooldown(api, monk
     else:
         post(api, f"attempts/{two['id']}/started", {"thread_id": two["lane"]}, machine["token"])
     with api.app.state.store.read() as c:
-        assert cooling_off(c, "ops"), "starting an already-leased lane must not lift another lane's limit"
+        assert cooling_off(c, api.app.state.store.settings, "ops"), (
+            "starting an already-leased lane must not lift another lane's limit"
+        )
     assert claim(api, machine) is None
     post(
         api,
@@ -185,7 +175,9 @@ def test_a_pre_limit_lane_start_or_restore_cannot_release_the_cooldown(api, monk
         machine["token"],
     )
     with api.app.state.store.read() as c:
-        assert cooling_off(c, "ops"), "the lane was leased before the limit even if it started afterwards"
+        assert cooling_off(c, api.app.state.store.settings, "ops"), (
+            "the lane was leased before the limit even if it started afterwards"
+        )
         assert c.execute("SELECT state FROM jobs WHERE id=?", (one["job_id"],)).fetchone()[0] == "queued"
     assert claim(api, machine) is None
     # The existing explicit recovery path remains usable, without discarding the waiting work.

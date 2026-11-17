@@ -3,7 +3,7 @@
 
 import pytest
 
-from backend.tests.helpers.sample_company import booted, environment, rows, signed_in  # noqa: F401
+from backend.tests.helpers.fresh_install import booted, environment, rows, signed_in  # noqa: F401
 
 RECORD = {"name": "Orders", "prefix": "OR", "stages": [{"name": "Take", "owner": "assignee", "requirements": []}]}
 

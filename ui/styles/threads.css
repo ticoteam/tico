@@ -3,8 +3,10 @@
 
 /* a thread's mark where it has no avatar (a Home or a DM shows a face) */
 .th-mark{width:18px;height:18px;font-size:17px}
-/* The bottom bar's Threads tab is shown only when the server has threads; the bar's flex rule would undo `hidden`. */
+/* The bottom bar's Threads tab (a bot's; a person's Threads is in More) is shown only when the server has threads; the
+   bar's flex rule would undo `hidden`. While it is there, More leaves its count to it. */
 .mobile-nav-item[hidden]{display:none}
+#mobile-nav:has(#mobile-threads:not([hidden])) [data-threads-badge]{display:none}
 
 /* one thread: a column with the timeline scrolling and the composer under it */
 #main.thread-layout{max-width:none}
@@ -42,6 +44,10 @@
 .th-msg:hover .th-cont-time,.th-msg:focus-within .th-cont-time{opacity:1}
 .th-main{flex:1;min-width:0}
 .th-head{display:flex;align-items:baseline;gap:var(--s2);min-width:0;font-size:var(--t-sm)}
+/* A bot's open ❓ (backend/question_marks.py): a small mark at the message's top right, nothing else. */
+.qmark{margin-left:auto;flex:none;color:var(--muted);font-size:var(--t-xs);font-weight:600;line-height:var(--lh-none);user-select:none}
+.qmark.mine{color:var(--ink)}
+.th-main>.qmark{float:right;margin:2px 0 0 var(--s2)}
 .th-who{display:inline-block;min-height:24px;line-height:24px;font-weight:600;color:var(--ink)}
 a.th-who:hover{text-decoration:underline}
 .th-head time{flex:none;color:var(--muted);font-size:var(--t-xs)}

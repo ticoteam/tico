@@ -1,5 +1,5 @@
 # pyright: strict
-"""Item metadata: Tico's saved copy of what a source said of one item (docs/pipelines-v3.md "Sources and items").
+"""Item metadata: Tico's saved copy of what a source said of one item (docs/dev/pipelines-v3.md "Sources and items").
 
 Requirements read saved metadata only; nothing here calls a source. One `item_metadata` row per item (source, item
 type, item key). A task reaches its items through its `task_links` rows that name one (`source`, `item_type`,

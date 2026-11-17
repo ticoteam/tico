@@ -3,8 +3,6 @@ what it leaves alone. The fake bot holds the words it must not touch (an owner, 
 status page, a `tico notice list`) next to the names it must change."""
 
 import json
-import runpy
-import sqlite3
 from pathlib import Path
 
 import yaml
@@ -253,7 +251,6 @@ def test_a_renamed_table_is_flagged_with_its_new_name_and_fixed_only_in_hub_sql(
 
 def test_the_shipped_map_is_the_applied_rename_data_and_the_cli_command_table():
     shipped = json.loads(MAP.read_text())
-    assert shipped == runpy.run_path(str(ROOT / "scripts/cleanup/export_names.py"))["build"]()
 
     # Every rename applied, where its name ends up (a rename of a rename counts once it lands), and nothing else.
     step = {(table, old): new for table, old, new, _wave in renames_data.COLUMNS}
@@ -276,17 +273,6 @@ def test_the_shipped_map_is_the_applied_rename_data_and_the_cli_command_table():
     }
     for old, new in shipped["columns"].items():
         assert list(shipped["table_columns"][old]["renames"]) == [new]
-
-    # kept_in is exactly the old schema's other tables with that name.
-    conn = sqlite3.connect(":memory:")
-    conn.executescript((ROOT / "backend/tests/fixtures/schema_pre_cleanup.sql").read_text())
-    tables = [row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")]
-    has = {t: {row[1] for row in conn.execute(f'PRAGMA table_info("{t}")')} for t in tables}
-    conn.close()
-    for old, entry in shipped["table_columns"].items():
-        moved = {t for names in entry["renames"].values() for t in names}
-        assert entry["kept_in"] == sorted(t for t in tables if old in has[t] and t not in moved)
-    assert "meetings" in shipped["table_columns"]["owner"]["kept_in"]
 
     # hubcli sorts RENAMED by length when it loads; the order of the rules does not matter to the matching.
     cli = [

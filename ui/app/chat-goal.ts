@@ -5,7 +5,7 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-// GET/POST /api/v2/conversations/{id}/goal. Old servers answer 404, which reads as "not supported".
+// GET/POST /api/v2/conversations/{id}/goal. A failed read reads as no goal.
 const goalPath = (conv: string) => `/v2/conversations/${encodeURIComponent(conv)}/goal`;
 const GOAL_CHIPS: Record<string, [string, string]> = {active: ['Working', 'in-progress'], paused: ['Paused', 'waiting'], met: ['Met', 'ok'], stopped: ['Stopped', 'fail']};
 const GOAL_MAX = 4000;
@@ -153,7 +153,7 @@ async function chatGoalRoom(state: ChatGoalState): Promise<boolean> {
     if (V2C !== state) return false;
     state.goalSupported = !!d?.supported;
     state.commands = Array.isArray(d?.commands) ? d.commands : null;
-    if (S.me?.cloud) v2ChatStream(state);
+    if (S.me) v2ChatStream(state);
     // The room is the bot's one canonical room, the same the first message would use; nothing extra is left behind.
     if (!state.goalSupported) { chatGoalRefused(state); return false; }
     return true;

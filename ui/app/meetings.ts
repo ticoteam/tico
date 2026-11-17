@@ -713,7 +713,7 @@ function meetPaint(state: MeetState, rec: MeetRec): void {
   const draft = state.noteDraft?.id === id ? state.noteDraft.value : null;
   const notes = mayEdit ? `<section class="mp-sec"><div class="mp-label">Notes</div><textarea id="meet-note" class="mp-notes" aria-label="Notes" placeholder="Write notes…">${esc(draft ?? rec.note ?? '')}</textarea></section>`
     : rec.note ? `<section class="mp-sec"><div class="mp-label">Notes</div><div class="mp-notes mp-notes-ro">${esc(rec.note)}</div></section>` : '';
-  const files = rec.attachments?.length ? `<div class="mp-files">${rec.attachments.map(f => S.me?.cloud && f.id
+  const files = rec.attachments?.length ? `<div class="mp-files">${rec.attachments.map(f => S.me && f.id
     ? `<a class="pill" href="${API}/v2/files/${encodeURIComponent(f.id)}" download>${esc(f.name)}</a>`
     : `<span class="pill">${esc(typeof f === 'string' ? f : f.name || 'Attachment')}</span>`).join('')}</div>` : '';
   const summary = rec.notes ? `<section class="mp-sec"><div class="mp-label">Summary</div><div class="md">${safeMd(rec.notes)}</div></section>` : '';
@@ -748,7 +748,7 @@ function meetPaint(state: MeetState, rec: MeetRec): void {
     if (wanted === !!rec.private) return;
     el.querySelectorAll<HTMLButtonElement>('[data-vis]').forEach(x => x.disabled = true);
     try {
-      const d = await post(`/meetings/${encodeURIComponent(id)}/edit`, {private: wanted, ...(S.me?.cloud ? {version: rec.version} : {})});
+      const d = await post(`/meetings/${encodeURIComponent(id)}/edit`, {private: wanted, ...(S.me ? {version: rec.version} : {})});
       toast(wanted ? 'Private' : 'Visible to the team');
       await meetLoad(state, false);
       if (MEET === state && state.selected === id) meetPaint(state, {...rec, ...(d || {})});
@@ -771,7 +771,7 @@ function meetNoteWire(state: MeetState, rec: MeetRec): void {
     if (state.noteSaving) { state.noteAgain = true; return; }
     state.noteSaving = true;
     try {
-      const d = await post(`/meetings/${encodeURIComponent(id)}/edit`, {note: value, ...(S.me?.cloud ? {version: rec.version} : {})});
+      const d = await post(`/meetings/${encodeURIComponent(id)}/edit`, {note: value, ...(S.me ? {version: rec.version} : {})});
       rec.note = value; if (d?.version !== undefined) rec.version = d.version;
       const row = state.list.find(r => r.id === id); if (row) row.note = value;
       if (state.noteDraft?.id === id && state.noteDraft.value.trim() === value) state.noteDraft = null;
@@ -811,7 +811,7 @@ function meetToolsWire(state: MeetState, rec: MeetRec): void {
     del.disabled = true;
     try {
       await post(`/meetings/${encodeURIComponent(id)}/delete`);
-      toast(S.me?.cloud ? 'Removed from the list; recoverable server history is retained.' : 'Deleted');
+      toast(S.me ? 'Removed from the list; recoverable server history is retained.' : 'Deleted');
       state.confirmDelete = ''; state.selected = ''; meetShow(state, false); await meetLoad(state, true);
     } catch (e) { toast(errorMessage(e, ''), true); del.disabled = false; del.innerHTML = meetIcon('delete', 'Delete'); }
   };
@@ -1256,7 +1256,7 @@ function meetRenameable(state: MeetState, rec: MeetRec, title: HTMLElement | nul
       const value = input.value.trim();
       if (save && value && value !== (rec.title || '')) {
         try {
-          const d = await post(`/meetings/${encodeURIComponent(id)}/edit`, {title: value, ...(S.me?.cloud ? {version: rec.version} : {})});
+          const d = await post(`/meetings/${encodeURIComponent(id)}/edit`, {title: value, ...(S.me ? {version: rec.version} : {})});
           rec.title = value; if (d?.version !== undefined) rec.version = d.version; toast('Renamed');
           const row = state.list.find(r => r.id === id); if (row) row.title = value;
         } catch (e) { toast(errorMessage(e, ''), true); }

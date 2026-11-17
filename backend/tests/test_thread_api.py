@@ -443,7 +443,7 @@ def post_as(api, thread_id, actor, text, **kw):
 
 def test_the_sidebar_ranks_attention_then_unread_then_recent_before_it_pages(api):
     mentioned = new_thread(api, title="Mentioned")
-    post_as(api, mentioned["id"], "human:ana", "Can you check this?", to_actor="human:ben")
+    post_as(api, mentioned["id"], "human:ana", "@ben can you check this?", to_actor="human:ben")
     unread = new_thread(api, title="Unread")
     say(api, unread["id"], "A plain update")  # a person's post is unread for Ben, and asks nothing of him
     recent = [new_thread(api, title=f"Recent {n}") for n in range(4)]

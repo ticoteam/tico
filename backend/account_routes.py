@@ -10,20 +10,26 @@ from . import invites, mcp_oauth, models as M, oidc, owner_link, personal_tokens
 from .auth import LOCAL_COOKIE, LOCAL_COOKIE_DAYS, LOCAL_SIGNIN_PATH, LOGOUT_PATH
 from .observability import browser_config, staff_display_name
 from .store import H, Problem, encode
+from .api_contract import api_v2
 
 
 def register(app, auth, mutate, onboarding, owner_only, recruiter, settings, store):
-    @app.get("/api/v2/catalog")
+    @app.get("/api/v2/templates")
     def catalog():
         """The bot templates this company may pick from, named for this company. Every signed-in
         identity reads it: runners and bots build repositories from the same cards."""
         with store.read() as c:
             return {"cards": onboarding.catalog(c)}
 
-    # The /api/v2/ceo-bot path is the Strategy Owner's old one: clients built before the rename still call it, so it
-    # stays a hidden alias of the route under it.
-    @app.get("/api/v2/ceo-bot", include_in_schema=False)
-    @app.get("/api/v2/strategy-bot")
+    @app.get(
+        "/api/v2/strategy-bot",
+        **api_v2(
+            "Goals",
+            "getStrategyBot",
+            "The Strategy Owner's name, whether its regular checks run, how much it does (its level, with each level's sentence and who changed it when), and how many items it put in each person's Needs you today against its cap of 5 (everyone's for the owner, admins and the Strategy Owner; your own for anyone else)",
+            "StrategyBotView",
+        ),
+    )
     def strategy_bot_settings(request: Request):
         """The Strategy Owner's name, level and regular checks (backend/strategy_bot.py). How many items it put in each
         person's Needs you today is the owner's, an admin's and the Strategy Owner's to read; anyone else sees only their
@@ -38,52 +44,43 @@ def register(app, auth, mutate, onboarding, owner_only, recruiter, settings, sto
             value["asked_today"] = {k: n for k, n in value["asked_today"].items() if k == who.actor}
         return value
 
-    @app.post("/api/v2/strategy-owner/turn-on")
-    def turn_on_goal_manager(request: Request, body: M.Empty):
-        who = request.state.identity
-        if who.role != "owner":
-            from . import strategy_bot
-
-            with store.read() as c:
-                raise Problem("forbidden", "Only the owner turns the " + strategy_bot.name(c) + " on", 403)
-        return mutate(request, body, lambda c: onboarding.turn_on_goal_manager(c, who))
-
-    @app.get("/api/v2/onboarding")
+    @app.get("/api/v2/setup")
+    @app.get("/api/v2/onboarding", deprecated=True)  # rc.1 runners (catalog_job reads the record)
     def onboarding_record(request: Request):
         who = request.state.identity
         onboarding.require_reader(who)
         with store.read() as c:
             return onboarding.view(c, who)
 
-    @app.put("/api/v2/onboarding")
+    @app.put("/api/v2/setup")
     def onboarding_save(request: Request, body: M.OnboardingDraft):
         who = request.state.identity
         return mutate(request, body, lambda c: onboarding.save(c, who, body))
 
-    @app.get("/api/v2/onboarding/departments")
+    @app.get("/api/v2/setup/groups")
     def onboarding_departments(request: Request):
         """The org builder's departments and cards, and whether this install may ask Tico HQ for suggestions."""
         return recruiter.departments(request.state.identity)
 
-    @app.post("/api/v2/onboarding/recruit")
+    @app.post("/api/v2/setup/recruit")
     def onboarding_recruit(request: Request, body: M.Recruit):
         """Suggested bots for one department. A sync handler, so the call to Tico HQ runs off the event loop; it
         writes nothing, so it is not a `mutate`."""
         return recruiter.recruit(request.state.identity, body)
 
-    @app.post("/api/v2/onboarding/complete")
+    @app.post("/api/v2/setup/complete")
     def onboarding_complete(request: Request, body: M.Empty):
         who = request.state.identity
         return mutate(request, body, lambda c: onboarding.complete(c, who))
 
-    @app.post("/api/v2/onboarding/company/preview")
+    @app.post("/api/v2/setup/company/preview")
     def onboarding_company_preview(request: Request, body: M.OnboardingCompanyFile):
         from . import company_import
 
         with store.read() as c:
             return company_import.preview(onboarding, c, request.state.identity, body.company_yaml)
 
-    @app.post("/api/v2/onboarding/company/import")
+    @app.post("/api/v2/setup/company/import")
     def onboarding_company_import(request: Request, body: M.OnboardingCompanyImport):
         from . import company_import
 
@@ -93,14 +90,14 @@ def register(app, auth, mutate, onboarding, owner_only, recruiter, settings, sto
             lambda c: company_import.apply(onboarding, c, request.state.identity, body.company_yaml, body.fingerprint),
         )
 
-    @app.post("/api/v2/onboarding/company/import-failure/dismiss")
+    @app.post("/api/v2/setup/company/import-failure/dismiss")
     def onboarding_company_import_failure_dismiss(request: Request, body: M.Empty):
         """The owner leaves a kept setup-file failure they won't fix by importing (Health and setup)."""
         from . import company_import
 
         return mutate(request, body, lambda c: company_import.dismiss(onboarding, c, request.state.identity))
 
-    @app.post("/api/v2/onboarding/company/people/{key}/invite")
+    @app.post("/api/v2/setup/company/people/{key}/invite")
     def onboarding_company_invite(request: Request, key: str, body: M.OnboardingInvite):
         """Invite one person the company file from setup names: they go on the roster with this email (the seats that
         waited with the owner now report to them), then Tico's own sign-in mail invites them (backend/invites.py).
@@ -125,13 +122,6 @@ def register(app, auth, mutate, onboarding, owner_only, recruiter, settings, sto
             if sent or row["id"] not in invites.sent(c):  # a repeat keeps the first send's time
                 invites.record(c, who.actor, row["id"])
             return onboarding.view(c, who)
-
-    @app.post("/api/v2/onboarding/sample")
-    def onboarding_sample(request: Request, body: M.Empty):
-        """Start as Tico's sample company (backend/sample_company.py): five bots with short starter tasks. The owner,
-        on a company not set up yet; it answers like `complete`."""
-        who = request.state.identity
-        return mutate(request, body, lambda c: onboarding.start_sample(c, who))
 
     @app.get(LOCAL_SIGNIN_PATH)
     def local_signin(token: str = "", next: str = "/"):
@@ -194,7 +184,7 @@ def register(app, auth, mutate, onboarding, owner_only, recruiter, settings, sto
         )
         return Response(encode(data), media_type="application/manifest+json")
 
-    @app.get("/api/v2/openapi.json")
+    @app.get("/api/v2/openapi.json", **api_v2("Session", "getOpenApi", "This document"))
     def contract():
         """The stable v2 contract for a frontend (backend/openapi_v2.py); signed-in callers only."""
         from .openapi_v2 import spec
@@ -214,7 +204,7 @@ def register(app, auth, mutate, onboarding, owner_only, recruiter, settings, sto
                 config["person_display_name"] = name
         return config
 
-    @app.get("/api/v2/me")
+    @app.get("/api/v2/me", **api_v2("Session", "getMe", "The signed-in caller", "Me"))
     def me(request: Request):
         from .mcp import caller_kind, tool_profile
 
@@ -241,18 +231,32 @@ def register(app, auth, mutate, onboarding, owner_only, recruiter, settings, sto
 
     # A person's own API tokens (backend/personal_tokens.py). Made only from a browser sign-in: a token is that
     # person everywhere else and may list and revoke its person's tokens, but it cannot mint one.
-    @app.get("/api/v2/me/tokens")
+    @app.get(
+        "/api/v2/me/tokens", **api_v2("Session", "listMyTokens", "The caller's personal API tokens (never the secret)")
+    )
     def my_tokens(request: Request):
         with store.read() as c:
             who = request.state.identity
             # can_create: the team chart offers Connect only to someone who may make a token (personal_tokens.create)
             return {"tokens": personal_tokens.listing(c, who), "can_create": personal_tokens.can_create(c, auth, who)}
 
-    @app.post("/api/v2/me/tokens")
+    @app.post(
+        "/api/v2/me/tokens",
+        **api_v2(
+            "Session",
+            "createMyToken",
+            "Mint a personal API token for server-to-server use (any person unless the owner limits it to admins; cookie sessions only)",
+        ),
+    )
     def create_my_token(request: Request, body: M.PersonalTokenCreate):
         return mutate(request, body, lambda c: personal_tokens.create(c, auth, request.state.identity, body))
 
-    @app.post("/api/v2/me/tokens/{token_id}/revoke")
+    @app.post(
+        "/api/v2/me/tokens/{token_id}/revoke",
+        **api_v2(
+            "Session", "revokeMyToken", "Revoke a personal API token: your own; the owner and admins revoke anyone's"
+        ),
+    )
     def revoke_my_token(request: Request, token_id: str, body: M.Empty):
         return mutate(request, body, lambda c: personal_tokens.revoke(c, auth, request.state.identity, token_id))
 

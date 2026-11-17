@@ -1,0 +1,4 @@
+{
+  "entries": [],
+  "note": "glob → tests, each with expires. Pins fix test-selection misses and expire after 60 days without a failure."
+}

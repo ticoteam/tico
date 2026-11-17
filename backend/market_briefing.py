@@ -44,18 +44,6 @@ EVENT = "market.briefing"
 PAGE = "market/briefings/"
 CATEGORY = "Market / Briefings"
 
-SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS market_briefings (id TEXT PRIMARY KEY, week TEXT NOT NULL UNIQUE, title TEXT NOT NULL, "
-    "body TEXT NOT NULL, items TEXT NOT NULL DEFAULT '[]', bets TEXT NOT NULL DEFAULT '[]', created_by TEXT, "
-    "created_at TEXT, updated_at TEXT, answers TEXT)",
-)
-
-
-def ensure(c):
-    for statement in SCHEMA:
-        c.execute(statement)
-    H.add_column(c, "market_briefings", "source", "TEXT")
-
 
 def this_week(at=None):
     """The ISO week of a day: 2026-W44."""
@@ -78,7 +66,7 @@ def _row(row, body=True):
 
 
 def _active(c):
-    """The published strategy's active bets, in their Strategy page order."""
+    """The live strategy's active bets, in their Strategy page order."""
     published = S.current(c)
     return [b for b in (published or {}).get("bets") or [] if b.get("status") == "active"]
 
@@ -148,7 +136,7 @@ def latest(c):
 
 # ----------------------------------------------------------------------------- writing
 def bets_touched(c, items):
-    """The ids of the active bets of the published strategy that cite one of the items' entities, or whose thesis
+    """The ids of the active bets of the live strategy that cite one of the items' entities, or whose thesis
     wrong-if watches one."""
     ids = {e for item in items for e in item["entity_ids"]}
     return [b["id"] for b in _active(c) if ids & _watching(b)]

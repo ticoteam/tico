@@ -59,7 +59,7 @@ def test_native_and_runner_gate_recheck_askers_inherited_read(api):
         restrict(c, "ops", see={"everyone": True}, read={"people": ["ben"]}, write={"everyone": True})
     with api.app.state.store.read() as c:
         task = H.task(c, tid)
-        assert "42 deals" in task["body"]  # Queued text must be gated even before any scrubber runs.
+        assert "42 deals" in H.task_words(c, tid)  # Queued text must be gated even before any scrubber runs.
         copied = counsel.page_copies(c)[tid]
         assert not counsel.page_copy_readable(c, copied, auth=api.app.state.auth)
         assert not counsel.page_copy_readable(c, copied)
@@ -163,7 +163,7 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
 
     org(api)
     counsel_on(api)
-    reader = post(api, "access/people", {"name": "Reader", "email": "reader@acme.example"})
+    reader = post(api, "access/humans", {"name": "Reader", "email": "reader@acme.example"})
     assert reader["person"] == "reader"
     api.app.state.store.settings.test_identities["reader-test"] = Identity(
         "human:reader", "human", "reader@acme.example"
@@ -489,27 +489,6 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
     remake = review_ask(api, "ops-test", [{"file": replacement}], on="ana", parent=tid, question="Is it ready?")
     review_answer(api, remake, "Approve")
     assert approved(api, "ana-test", file=replacement)["approved"] is True
-
-
-def test_migration_links_name_only_history_before_page_content_is_purged(api):
-    import importlib
-
-    _, attempt = turn(api)
-    tid = post(api, "tasks", {"owner": "ops", "title": "Legacy review", "body": "Review", "private": False})["id"]
-    fid = page(api, attempt, task=tid).json()["page"]["file_id"]
-    with api.app.state.store.transaction() as c:
-        legacy = H.history_event(c, "task", tid, "bot:ops", "file", new="weekly.html")
-        migration = importlib.import_module("backend.migrations.20261105050905_page_tombstones")
-        migration.up(c)
-        migration.up(c)
-        data = json.loads(c.execute("SELECT data FROM history_events WHERE id=?", (legacy,)).fetchone()[0])
-        assert data["page_files"] == [fid]
-    edit(api, fid, {"people": ["ben"]})
-    for deleted in (False, True):
-        if deleted:
-            assert api.delete("/api/v2/files/" + fid, headers=headers()).status_code == 200
-        result = get(api, "tasks/" + tid, token="cara-test")
-        assert "weekly.html" not in json.dumps(result) and fid not in json.dumps(result)
 
 
 def test_same_name_upload_never_adopts_deleted_page_bytes_retained_by_a_meeting(api):

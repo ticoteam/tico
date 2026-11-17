@@ -28,7 +28,7 @@ type Page = import('playwright').Page;
 type Browser = import('playwright').Browser;
 type Route = import('playwright').Route;
 type Kind = {kind: string; label: string; runtime: string; secret_label: string; help: string; connect?: boolean; owned?: boolean};
-type Machine = {id: string; label: string; owner_id: string; last_seen_at: string; version: string; platform: string; bots: string[];
+type Machine = {id: string; label: string; owner_id: string; last_seen_at: string; online: boolean; version: string; platform: string; bots: string[];
   accepts_member_bots: boolean; readiness: {runtimes: Record<string, {installed: boolean; authenticated: string}>};
   turn_counts: {running: number; starting: number; waiting: number; queued: number; waits: unknown[]}; turn_summary: string;
   release?: string; cloud_machine?: {state: string}; gateway_fallback?: boolean;
@@ -66,7 +66,7 @@ const PLAN_NAMES: Record<string, string> = {claude_token: 'Claude', codex_login:
 function fixtures(): Data {
   const now = new Date().toISOString();
   const ready = {installed: true, authenticated: 'ready'}, missing = {installed: true, authenticated: 'missing'};
-  const machine = (id: string, label: string, operator: string, bots: string[] = [], runtimes: Machine['readiness']['runtimes'] = {codex: ready, claude: ready}, extra: Partial<Machine> = {}): Machine => ({id, label, owner_id: operator, last_seen_at: now,
+  const machine = (id: string, label: string, operator: string, bots: string[] = [], runtimes: Machine['readiness']['runtimes'] = {codex: ready, claude: ready}, extra: Partial<Machine> = {}): Machine => ({id, label, owner_id: operator, last_seen_at: now, online: true,
     version: '0.5.14', platform: 'linux', bots, accepts_member_bots: true, readiness: {runtimes},
     turn_counts: {running: 0, starting: 0, waiting: 0, queued: 0, waits: []}, turn_summary: '0 running · 0 starting · 0 waiting', ...extra});
   return {
@@ -76,7 +76,7 @@ function fixtures(): Data {
           turn_counts: {running: 1, starting: 0, waiting: 0, queued: 55, waits: []}, turn_summary: '1 running · 0 starting · 55 queued · 0 waiting'}),
       machine('r2', 'Cloud · shared', 'ana', ['scout'], {claude: missing, codex: missing}),
       machine('r3', 'Cloud · Video Owner', 'ana', ['video'], {claude: missing, codex: missing},
-        {cloud_machine: {state: 'stopped'}, last_seen_at: new Date(Date.now() - 2 * 3600e3).toISOString()}),
+        {cloud_machine: {state: 'stopped'}, online: false, last_seen_at: new Date(Date.now() - 2 * 3600e3).toISOString()}),
       machine('r4', "Sam's Mac", 'sam', [], {claude: ready, codex: missing}, {version: '0.4.2',
         turn_counts: {running: 0, starting: 0, waiting: 3, queued: 0, waits: []},
         update: {state: 'needs_update', label: 'Needs update', release: '0.4.2', commit: 'c0ffee'.padEnd(40, '0'), outdated: true, server_release: '0.5.14', error: ''}}),
@@ -146,7 +146,7 @@ async function open(browser: Browser, {viewport = {width: 1440, height: 900}, th
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/operations') return json({machines: data.machines.map(m => ({...m, bot_connections: []})), services: [], agents: []});
     if (p === '/api/v2/models') return json({models: data.models, harnesses, enabled_providers: data.providers.enabled, default: data.providers.default});
-    if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
+    if (p === '/api/v2/settings/history') return json({changes: []});
     if (p === '/api/v2/providers' && method === 'GET') return json(data.providers);
     if (p === '/api/v2/providers' && method === 'PUT') {
       const body = req.postDataJSON() as Body; writes.push({p, method, body});
@@ -226,7 +226,7 @@ async function open(browser: Browser, {viewport = {width: 1440, height: 900}, th
       for (const s of data.subs) s.computers = data.assignments.filter(a => a.subscription_id === s.id).map(a => a.runner_id);
       return json({runner_id: body.runner_id, runtime: body.runtime, subscription_id: body.subscription, stopped: body.confirm ? 2 : 0, sessions_reset: body.confirm ? 5 : 0});
     }
-    const fallback = p.match(/^\/api\/v2\/runners\/([^/]+)\/gateway-fallback$/);
+    const fallback = p.match(/^\/api\/v2\/computers\/([^/]+)\/gateway-fallback$/);
     if (fallback && method === 'POST') {
       const body = req.postDataJSON() as Body & {on?: boolean}; writes.push({p, method, body});
       data.machines.find(m => m.id === fallback[1])!.gateway_fallback = Boolean(body.on);
@@ -855,7 +855,7 @@ async function plansRunOut(browser: Browser) {
   assert.equal(await box.isChecked(), false);
   await box.check();
   await page.waitForFunction(() => document.querySelector('[data-computer-row=r2] [data-subs-set-line]')?.textContent?.endsWith('on the Gateway'));
-  assert.deepEqual(writes.at(-1), {p: '/api/v2/runners/r2/gateway-fallback', method: 'POST', body: {on: true}});
+  assert.deepEqual(writes.at(-1), {p: '/api/v2/computers/r2/gateway-fallback', method: 'POST', body: {on: true}});
   assert.equal(await detail.locator('[data-gateway-fallback=r2]').isChecked(), true);
   assert.deepEqual(errors, []);
   await page.close();

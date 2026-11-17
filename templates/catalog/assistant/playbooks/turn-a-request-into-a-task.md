@@ -35,11 +35,11 @@ and add the answer to `knowledge/routing.md` in the same run so you never ask ag
 
 ## 3. Write it
 
-    tico task create --owner <owner> --title "..." --body "..."
+    tico task create --owner <owner> --title "..." --message "..."
 
-No `--due` unless they gave a calendar date. Keep "by Friday" in the body as they said it.
+No `--due` unless they gave a calendar date. Keep "by Friday" in the first message as they said it.
 
-The title is the ask in one line. The body has, in this order:
+The title is the ask in one line. The first message has, in this order:
 
 1. **What is wanted**, in the requester's own words. Quote them. Your paraphrase loses the thing
    they actually meant.

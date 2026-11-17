@@ -1,7 +1,8 @@
 """A usage limit belongs to a provider login, not to the bot that met it.
 
 A login is (computer, subscription profile or "" for the computer's own login, runtime). When a turn ends on that
-login's usage limit, a hold is saved here, in the database, so it outlives a restart of the runner or the server:
+login's usage limit, a hold is saved in the database (`holds`, kind `usage_limit` on the login: backend/holds.py), so it
+outlives a restart of the runner or the server:
 - until the reset the provider gave (Claude says it in words: "resets 2:40am (UTC)"), honored even when it is days
   away, as long as it is in the future and within LIMIT_RESET_MAX;
 - otherwise for BACKOFF[n] after the n-th limit in a row on that login (30, 50, then 120 minutes at most);
@@ -15,7 +16,12 @@ same way (`try_now`): one probe, and the cut-short window back if it meets the l
 
 A company subscription given to computers (backend/model_subscriptions.py) is one login wherever it runs: its login is
 `sub:<id>` (SUBSCRIPTION) on every computer it is given to, and its hold is keyed without a computer, so a limit met on
-one computer holds every computer using it until the reset.
+one computer holds every computer using it until the reset. The Tico AI Gateway is one login too (GATEWAY): the
+company's key, wherever a Tico model runs. Its cap, its rate limit, the company's credit and its outages hold it, for
+the Gateway's own wait (`gateway_until`), and every turn that would run on a Tico model waits on that hold.
+
+A hold here is the only record of a usage limit that decides anything: a bot's Rate limited status is the display of
+the hold that keeps its next turn waiting (execution.cooling_off), and no job or bot keeps a wait of its own.
 """
 
 import json
@@ -24,10 +30,16 @@ from datetime import timedelta, timezone
 
 from clients import gateway
 
+from . import holds
 from .prompt_cache import CACHE_WARM_S
 from .store import H
 
-PREFIX = "login-hold:"
+PREFIX = "login-hold:"  # a login's name as an outage source; its hold's holdable_id is the rest
+# The hold's fields kept in the row's own columns; the rest are its details.
+COLUMNS = {"until": "until_at", "streak": "streak", "probe_job": "probe_job_id", "probe_at": "probe_at"}
+OPEN_SQL = (  # holds_open, as holds.OPEN_SQL
+    "SELECT * FROM holds INDEXED BY holds_open WHERE kind='usage_limit' AND holdable_type='login' AND released_at IS NULL"
+)
 # Seconds held after the 1st, 2nd and later limits in a row with no reset given; the second comes back while the bot's
 # session is still cached (backend/prompt_cache.py).
 BACKOFF = (1800, CACHE_WARM_S, 7200)
@@ -83,12 +95,43 @@ def _iso(at):
 
 
 SUBSCRIPTION = "sub:"
+# The company's Tico AI Gateway key, as a login: one wherever a Tico model runs (models_preset.GATEWAY_RUNTIME).
+GATEWAY = "gateway"
+GATEWAY_RUNTIME = "pi"
 
 
 def key(runner_id, profile, runtime):
-    if str(profile or "").startswith(SUBSCRIPTION):
+    if str(profile or "").startswith(SUBSCRIPTION) or profile == GATEWAY:
         return f"{PREFIX}{profile}|{runtime}"  # one login on every computer it is given to
     return f"{PREFIX}{runner_id}|{profile or ''}|{runtime}"
+
+
+def gateway_notice(notice):
+    """Whether a limit notice is the Tico AI Gateway's (its cap, its rate limit, the company's credit, an outage): the
+    company key's wait, never a provider login's."""
+    return bool(
+        gateway.cap_reached(notice)
+        or gateway.out_of_credit(notice)
+        or gateway.rate_limited(notice)
+        or gateway.run_code(notice) in (gateway.RATE_LIMITED, gateway.UNAVAILABLE)
+    )
+
+
+def gateway_until(notice, hit, reported=None, last=True, floor=1800):
+    """How long the Gateway's notice holds it, from `hit`: a cap until the next UTC month (at least `floor`), whatever a
+    reported reset says; the company out of credit for its Retry-After (a minute); a rate limit for the reset the runner
+    reported, else an hour on the turn it ended (a refused key may have extended an address block) and a minute when
+    another model finished the turn. A reset already past (a runner's clock behind) counts as none reported."""
+    at = H.parse_ts(hit) if isinstance(hit, str) else hit
+    if at is None:
+        raise ValueError(f"unreadable limit time: {hit!r}")
+    if gateway.cap_reached(notice):
+        return _iso(max(at + timedelta(seconds=floor), gateway.month_after(at) + timedelta(seconds=1)))
+    said = believable(reported, at) if last else None
+    if said:
+        return _iso(said)
+    wait = gateway.RETRY_AFTER if last and not gateway.out_of_credit(notice) else gateway.GATEWAY_WAIT
+    return _iso(at + timedelta(seconds=wait))
 
 
 def subscription_login(subscription_id):
@@ -146,26 +189,46 @@ def _canonical(c, runner_id, profile, runtime, loads=None):
     return "" if report.get("shared_login") is True else profile
 
 
-def get(c, runner_id, profile, runtime, loads=None):
-    """The hold on the login, as a dict ({} for none). `loads`: the claim's set of every hold (claim_loads), when read."""
-    k = key(runner_id, profile, runtime)
-    if loads is not None:
-        row = (loads.holds[k],) if k in loads.holds else None
-    else:
-        from .read_cache import metadata
+def _login(runner_id, profile, runtime):
+    return key(runner_id, profile, runtime)[len(PREFIX) :]
 
-        row = metadata(c, k)
-    try:
-        value = json.loads(row[0]) if row else {}
-    except ValueError:
+
+def _hold(row):
+    """An open hold row as the login's hold: its details with its end, streak and probe ({} for none)."""
+    if not row:
         return {}
-    return value if isinstance(value, dict) else {}
+    try:
+        value = json.loads(row["details"] or "{}")
+    except ValueError:
+        value = {}
+    return {**(value if isinstance(value, dict) else {}), **{name: row[col] for name, col in COLUMNS.items()}}
+
+
+def get(c, runner_id, profile, runtime, loads=None):
+    """The hold on the login, as a dict ({} for none). `loads`: the claim's set of every open hold (claim_loads)."""
+    login = _login(runner_id, profile, runtime)
+    if loads is not None:
+        return _hold(loads.holds.get((holds.LOGIN_LIMIT, "login", login, "")))
+    return _hold(holds.get(c, holds.LOGIN_LIMIT, "login", login))
+
+
+def every(c):
+    """Every login's hold now, by login."""
+    return [_hold(row) for row in c.execute(OPEN_SQL + " ORDER BY holdable_id")]
 
 
 def _save(c, hold):
-    c.execute(
-        "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        (key(hold["runner_id"], hold["profile"], hold["runtime"]), json.dumps(hold)),
+    holds.put(
+        c,
+        holds.LOGIN_LIMIT,
+        "login",
+        _login(hold["runner_id"], hold["profile"], hold["runtime"]),
+        actor=H.KEEPER,
+        details={name: value for name, value in hold.items() if name not in COLUMNS},
+        streak=int(hold.get("streak") or 0),
+        until_at=hold.get("until"),
+        probe_at=hold.get("probe_at"),
+        probe_job_id=hold.get("probe_job"),
     )
 
 
@@ -228,16 +291,21 @@ def believable(reset, hit):
     return reset if timedelta(0) < reset - hit <= timedelta(seconds=LIMIT_RESET_MAX) else None
 
 
-def record(c, runner_id, profile, runtime, hit, reset=None, attempt_id=None, bot=None, error=""):
+def record(
+    c, runner_id, profile, runtime, hit, reset=None, attempt_id=None, bot=None, error="", until=None, named=False
+):
     """Save a hold on the login after a turn ended on its usage limit at `hit`, and return it. A hold still saved
     means no turn has worked on the login since, so this limit is the next in a row. A hold keeps every turn off the
     login, even when the bot's work went on to finish on a fallback: the next turn goes straight there. A capacity
-    notice holds for CAPACITY_WAIT and keeps the quota streak as it was: a busy provider says nothing of the plan."""
+    notice holds for CAPACITY_WAIT and keeps the quota streak as it was: a busy provider says nothing of the plan.
+    `until`: the end the caller worked out itself (the Gateway's waits, `gateway_until`), in place of a reset or the
+    backoff; `named` when that end is one the provider gave, as a reset is."""
     old = get(c, runner_id, profile, runtime)
-    busy = capacity(error)
+    busy = capacity(error) and until is None
     if busy:
         reset = H.shift(hit, seconds=CAPACITY_WAIT)
-    at = believable(reset, hit)
+    at = believable(reset, hit) if until is None else None
+    given = H.parse_ts(until) if until else None
     hit_at = H.parse_ts(hit)
     if hit_at is None:
         raise ValueError(f"unreadable limit time: {hit!r}")
@@ -252,12 +320,12 @@ def record(c, runner_id, profile, runtime, hit, reset=None, attempt_id=None, bot
         ended = H.parse_ts(end)
         if ended is None:
             raise ValueError(f"unreadable hold end: {end!r}")
-        until = max(at or hit_at, ended)
+        until = max(given or at or hit_at, ended)
         if busy and not old.get("capacity"):
             busy, at, error, until = False, old.get("reset"), old.get("error") or "", H.parse_ts(end)
     else:
         streak = int(old.get("streak") or 0) + (0 if busy else 1) if old else (0 if busy else 1)
-        until = at or hit_at + timedelta(seconds=BACKOFF[min(streak, len(BACKOFF)) - 1])
+        until = given or at or hit_at + timedelta(seconds=BACKOFF[min(streak, len(BACKOFF)) - 1])
     # A turn that started before the hold and ends on the limit late leaves another job's live probe in place: only
     # that probe's own result decides the login, so no second turn starts beside it, and the hold keeps the start the
     # probe was claimed after, so the probe's success still clears it.
@@ -275,7 +343,7 @@ def record(c, runner_id, profile, runtime, hit, reset=None, attempt_id=None, bot
         "since": since,
         "until": _iso(until),
         "streak": streak,
-        "reset": bool(at) and not busy,
+        "reset": bool(at) and not busy or bool(given) and named,
         "capacity": busy,
         "attempt_id": attempt_id,
         "bot": bot,
@@ -290,8 +358,10 @@ def record(c, runner_id, profile, runtime, hit, reset=None, attempt_id=None, bot
 
 
 def clear(c, runner_id, profile, runtime):
-    """A turn worked on the login: it is no longer held."""
-    c.execute("DELETE FROM registry_metadata WHERE key=?", (key(runner_id, profile, runtime),))
+    """A turn worked on the login: it is no longer held (kept as history)."""
+    holds.release(
+        c, holds.LOGIN_LIMIT, "login", _login(runner_id, profile, runtime), actor=H.KEEPER, how="probe_passed"
+    )
 
 
 def try_now(c, runner_id, profile, runtime, now=None):
@@ -364,20 +434,11 @@ def on_runner(c, runner_id):
     """Every saved hold on the computer's logins, oldest first, and on the subscriptions it is given."""
     from .model_subscriptions import given_to
 
-    out = []
-    keys = [key("", subscription_login(sid), runtime) for runtime, sid in given_to(c, runner_id)]
-    rows = c.execute(
-        "SELECT value FROM registry_metadata WHERE key LIKE ? ORDER BY key", (f"{PREFIX}{runner_id}|%",)
+    own = c.execute(  # "<runner>|..." up to "<runner>}": "}" sorts right after "|"
+        OPEN_SQL + " AND holdable_id>=? AND holdable_id<? ORDER BY holdable_id", (runner_id + "|", runner_id + "}")
     ).fetchall()
-    rows += [r for k in keys for r in c.execute("SELECT value FROM registry_metadata WHERE key=?", (k,))]
-    for (value,) in rows:
-        try:
-            hold = json.loads(value)
-        except ValueError:
-            continue
-        if isinstance(hold, dict):
-            out.append(hold)
-    return out
+    given = [get(c, "", subscription_login(sid), runtime) for runtime, sid in given_to(c, runner_id)]
+    return [_hold(row) for row in own] + [hold for hold in given if hold]
 
 
 def for_attempt(c, attempt_id):
@@ -386,17 +447,11 @@ def for_attempt(c, attempt_id):
     if not attempt_id:
         return {}
     found = {}
-    for (value,) in c.execute(
-        "SELECT value FROM registry_metadata WHERE key LIKE ? AND value LIKE ?", (PREFIX + "%", f'%"{attempt_id}"%')
-    ):
-        try:
-            hold = json.loads(value)
-        except ValueError:
-            continue
-        if isinstance(hold, dict) and hold.get("attempt_id") == attempt_id:
-            if hold.get("ended"):
-                return hold
-            found = found or hold
+    for row in c.execute(OPEN_SQL + " AND json_extract(details,'$.attempt_id')=? ORDER BY holdable_id", (attempt_id,)):
+        hold = _hold(row)
+        if hold.get("ended"):
+            return hold
+        found = found or hold
     return found
 
 
@@ -648,7 +703,20 @@ def label(src, at="", primary_until=""):
     return said
 
 
-def after_turn(c, runner_id, bot, profile, runtime, body, attempt_id, hit, hopped=None, subscriptions_only=False):
+def after_turn(
+    c,
+    runner_id,
+    bot,
+    profile,
+    runtime,
+    body,
+    attempt_id,
+    hit,
+    hopped=None,
+    subscriptions_only=False,
+    primary_gateway=False,
+    ended_gateway=False,
+):
     """Save or clear the logins' holds a finished turn shows, and return the hold that keeps the bot waiting, or {}.
     `profile` and `runtime` are the bot's own login. Every login the turn met a usage limit on is held, with the reset
     its own notice names, whatever the turn's outcome: an intermediate fallback that ran out stays held after a later
@@ -656,8 +724,11 @@ def after_turn(c, runner_id, bot, profile, runtime, body, attempt_id, hit, hoppe
     a lane leased before the limit says nothing about the login now. `hopped` is the bot's fallback (execution.fallback_mark)
     when it met the limit and could not start the turn (execution.hop_failed): the bot waits out its own hold rather than
     being sent there again, until it names another fallback. `subscriptions_only` (a check's turn) holds or clears only
-    the company subscriptions the turn signed in with: one is a login shared by every computer given it, while the
-    check keeps its own schedule (execution.complete) and the computer's own logins are left as they are."""
+    the company subscriptions and the Gateway the turn signed in with: each is a login shared by every computer, while
+    the check keeps its own schedule (execution.complete) and the computer's own logins are left as they are.
+    The Gateway is the login (GATEWAY) of a step whose notice is the Gateway's (`gateway_notice`), of the first step when
+    the claim handed the turn a Tico model (`primary_gateway`), and of the last step when a Tico model ended the turn
+    (`ended_gateway`, gateway_connection.ran_tico): a Gateway wait never holds the computer's own login."""
     # Sent away from its held login, no fallback ran it (none was ready, or it failed before it acknowledged the
     # turn): the turn ran nowhere, so no login met a limit; the hop its notes name only failed to start.
     unstarted = body.primary_held and body.limited and not body.fallback
@@ -675,29 +746,32 @@ def after_turn(c, runner_id, bot, profile, runtime, body, attempt_id, hit, hoppe
         # A step signed in with a company subscription met its limit (or worked) on that subscription, wherever it
         # runs; any other step on the computer's own login.
         given = handed(c, attempt_id, rt)
-        if subscriptions_only and not given:
-            continue
-        login = (
-            subscription_login(given["subscription_id"])
-            if given
-            else canonical(c, runner_id, profile if n == 0 else hop_profile, rt, subscription=False)
-        )
         last = n == len(steps) - 1
+        on_gateway = gateway_notice(notice) or (n == 0 and primary_gateway) or (last and ended_gateway)
+        if subscriptions_only and not given and not on_gateway:
+            continue
+        if on_gateway:
+            login, rt = GATEWAY, GATEWAY_RUNTIME
+        else:
+            login = (
+                subscription_login(given["subscription_id"])
+                if given
+                else canonical(c, runner_id, profile if n == 0 else hop_profile, rt, subscription=False)
+            )
         if limited:
             if n == 0 and body.primary_held:
                 continue  # never tried: its hold stands as it is
-            if gateway.out_of_credit(notice) or gateway.rate_limited(notice):
-                # The Tico AI Gateway paused the company's Tico models for want of credit, or the key met its minute's
-                # rate limit: the Gateway's wait, not a spent login, so the login is held only for its Retry-After (or a
-                # minute), never the backoff. A turn that ended here waits that minute too, even while its primary's own
-                # hold is longer. A reset already past (a runner's clock behind) counts as none reported. With none, a
-                # minute, except a rate limit the turn ended on: that keeps execution.reset_cooldown's safe hour.
-                reported = believable(body.limit_resets_at, hit) if last else None
-                unsaid = last and not gateway.out_of_credit(notice)
-                reset = reported or H.shift(hit, seconds=gateway.RETRY_AFTER if unsaid else gateway.GATEWAY_WAIT)
+            if gateway_notice(notice):
+                # The Tico AI Gateway's cap, rate limit or pause for want of credit: the company key's wait, never the
+                # backoff (gateway_until). A turn that ended here waits it too, even while its primary's own hold is
+                # longer.
+                until = gateway_until(notice, hit, body.limit_resets_at if last else None, last)
+                hold = record(
+                    c, runner_id, login, rt, hit, None, attempt_id, bot, error=notice or "", until=until, named=True
+                )
             else:
                 reset = reset_from_text(notice, hit) or (body.limit_resets_at if last else None)
-            hold = record(c, runner_id, login, rt, hit, reset, attempt_id, bot, error=notice or "")
+                hold = record(c, runner_id, login, rt, hit, reset, attempt_id, bot, error=notice or "")
             if last:
                 # The login the turn ended on: the one its bot waits for (for_attempt), when a turn held two.
                 hold = {**hold, "ended": True}
@@ -710,15 +784,16 @@ def after_turn(c, runner_id, bot, profile, runtime, body, attempt_id, hit, hoppe
                 clear(c, runner_id, login, rt)
     if subscriptions_only:
         return {}
+    own, runtime = (
+        (GATEWAY, GATEWAY_RUNTIME) if primary_gateway else (canonical(c, runner_id, profile, runtime), runtime)
+    )
     if unstarted:
         # The bot waits out this hold rather than being sent to that fallback again (fallback_choice).
-        own = canonical(c, runner_id, profile, runtime)
         hold = get(c, runner_id, own, runtime)
         if hold:
             _save(c, {**hold, "stuck": sorted({*hold.get("stuck", []), bot})})
             kept = get(c, runner_id, own, runtime)
     if hopped is not None:
-        own = canonical(c, runner_id, profile, runtime)
         hold = get(c, runner_id, own, runtime)
         if hold:
             _save(c, {**hold, "failed_fallback": {**(hold.get("failed_fallback") or {}), bot: hopped}})

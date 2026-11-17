@@ -66,7 +66,7 @@ Always:
 - `knowledge/measurement-method.md` holds the standing rules these skills use, with sources.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/tracking.md`, `knowledge/handoff.md`
    and the playbook. A resumed turn already has them.
 3. Set `tico bot status set` to one line naming the check or campaign in progress.
@@ -87,7 +87,7 @@ stop, and their end wakes you.
 
 ## Talking to {{app_name}}
 Read `tico goal list` for the funnel targets, the CRM read-only where connected (or `tico db` if the owner
-listed a database), and exports on tasks. Create requested fix tasks with `tico task create --owner <owner>`. A question is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task.
+listed a database), and exports on tasks. Create requested fix tasks with `tico task create --owner <owner>`. A question is `tico task ask <id> --to <person> "<question>"`, one open question per task.
 
 ## Quality standards
 - **One definition per number.** A conversion is one named event. A page view or a click is a diagnostic.

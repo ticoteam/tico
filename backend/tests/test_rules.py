@@ -5,7 +5,9 @@ an older install (or a kept row) has them; rules made today live in "What wakes"
 import json
 
 from backend import hubdb as H
+from backend import question_marks as Q
 from backend import rules as R
+from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import get, post  # noqa: F401
 from backend.tests.helpers.wake_rules import as_cause, claim, finish, jobs, news, parked_task, setup, skips
 from backend.tests.helpers.rules import plain_task
@@ -142,6 +144,7 @@ def test_an_ask_rule_writes_quietly_and_asks_the_tasks_person_once(api):
     setup(api)
     row = rule_row(api, then="ask")["rule"]
     with api.app.state.store.transaction() as c:
+        X.bot(c, H.RULES_OWNER)  # a rule's ❓ is the Rules Owner's (rules._rule_ask)
         task = H.task_create(c, "human:ana", "Plan the launch", "Plan it", "bot:cpo")
         c.execute("DELETE FROM jobs")
         first, again = news(c, H.task(c, task["id"])), news(c, H.task(c, task["id"]))
@@ -150,7 +153,8 @@ def test_an_ask_rule_writes_quietly_and_asks_the_tasks_person_once(api):
         assert jobs(c, "cpo") == 0
         asks = [w for w in H.task_waits(c, [task["id"]])[task["id"]] if w.ask]
         assert [(w.state, w.who) for w in asks] == [("person", "human:ana")]
-        assert row["id"] in asks[0].line
+        [mark] = Q.on_task(c, task["id"])
+        assert row["id"] in H.message(c, mark["message_id"])["body"]
 
 
 def test_an_action_rule_runs_as_tico_and_a_failed_action_wakes_the_bot(api):

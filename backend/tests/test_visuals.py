@@ -350,6 +350,7 @@ def test_the_visual_route_is_apart_from_the_sign_in_with_a_policy_that_blocks_sc
     assert "allow-same-origin" not in rule and "allow-forms" not in rule and "allow-top-navigation" not in rule
     assert "set-cookie" not in r.headers and r.headers["referrer-policy"] == "no-referrer"
     assert r.headers["cross-origin-resource-policy"] == "cross-origin"
+    assert "no-transform" in r.headers["cache-control"].split(", ")  # Cloudflare leaves the page's bytes alone
     assert b'<base target="_blank">' in r.content and V.REPORTER.encode() in r.content
     # The hash is the served script's own, taken from backend/visual-reporter.js, never typed in by hand.
     script = (pathlib.Path(V.__file__).with_name("visual-reporter.js")).read_text().strip()

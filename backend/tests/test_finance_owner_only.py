@@ -1,16 +1,12 @@
 """Finance is the owner's alone by default (backend/finance/core/view.py Defaults): a new book shows nothing to a
-manager, a member or a bot until the owner grants it or opens the defaults up; existing books move there
-(migrations/20261106210000_finance_owner_only_defaults.py). A teammate always sees their own budgets
+manager, a member or a bot until the owner grants it or opens the defaults up. A teammate always sees their own budgets
 (handlers.reads_budget: Finance's My budget, the bot reads, the warnings) and nothing more."""
-
-import importlib
 
 import pytest
 
 from backend.finance import reads, tab
 from backend.finance.core.errors import NOT_FOUND, FinanceError
 from backend.finance.context import load
-from backend.finance.store import access as SA
 from backend.store import Store
 from backend.tests.helpers.finance_ad_budgets import WARN_AT, platform_spend, rows_by_name, warn, warning_notes, world
 from backend.tests.helpers.finance_fixtures import (
@@ -23,8 +19,6 @@ from backend.tests.helpers.finance_fixtures import (
     owner_only_books,
     store,
 )
-
-MIGRATION = importlib.import_module("backend.migrations.20261106210000_finance_owner_only_defaults")
 
 
 def test_a_new_book_shows_nothing_to_anyone_but_the_owner(owner_only_books: Store):
@@ -59,19 +53,6 @@ def test_the_owner_opens_it_by_grant_or_by_default(owner_only_books: Store):
         ctx = load(c, AT)
         assert not ctx.view("human:cara").teams()
         assert ctx.view("human:fay").sees_anything()
-
-
-def test_existing_books_move_to_owner_only(books: Store):
-    with books.transaction() as c:
-        before = SA.view_version(c)
-        assert SA.defaults(c).member == "own_expenses"
-        MIGRATION.up(c)
-        d = SA.defaults(c)
-        assert (d.manager, d.member) == ("none", "none")
-        assert SA.view_version(c) == before + 1
-        MIGRATION.up(c)  # again: nothing to move, the version stays
-        assert SA.view_version(c) == before + 1
-        assert not load(c, AT).view("human:ben").sees_anything()
 
 
 def test_a_bot_always_sees_its_own_budget_and_nothing_else(owner_only_books: Store):

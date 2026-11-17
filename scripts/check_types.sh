@@ -3,7 +3,7 @@
 # basedpyright reads the .basedpyright/baseline.json generated from them), then the ratchet in
 # scripts/check_pyright_ratchet.py. The baseline and the legacy module list only shrink, and a module added since
 # the legacy list was written must be strict (migrations excepted). Takes about 30 seconds on a Mac; CI runs it in
-# the static job.
+# the types job.
 #   scripts/check_types.sh                                 check: fails on a new error and on a non-strict new
 #                                                          module; a baseline entry that no longer fires warns
 #   scripts/check_types.sh --writebaseline                 rewrite the baseline after fixes (review the diff)

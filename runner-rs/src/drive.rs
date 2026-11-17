@@ -90,17 +90,9 @@ pub struct Drive<'a> {
     pub bot: &'a str,
     /// The provider thread's session key (execute::session_key), for commands a turn leaves running.
     pub session: &'a str,
-    /// The shared login this stretch holds, when its server can take a turn back that gave it up at the cap
-    /// (crate::login_turns::HOLD_CAP).
-    pub login: Option<crate::login_turns::Cap>,
     /// A new thread this stretch started, kept only once its host says the session is up (`thread_confirmed`).
     pub fresh: Option<&'a crate::execute::Fresh>,
 }
-
-/// What a turn holding a shared login is told when another turn has waited out the cap for it.
-const YIELD_ASK: &str = "Another bot's turn is waiting for the ChatGPT login this turn runs on. Stop at a safe point \
-now: let the command in progress finish, commit and push your work in progress, note on the task where you stopped \
-and what comes next, then end this turn. It continues right after the other turn.";
 
 impl Runner {
     /// Writes the rows a drain gathered, in one transaction and in arrival order, then wakes the outbox poster. A
@@ -186,8 +178,6 @@ impl Runner {
         let mut tried: HashSet<String> = HashSet::new();
         let mut pausing: Option<String> = None;
         let (mut pause_ready, mut pause_at, mut clearing) = (false, Instant::now(), false);
-        // By when this turn, asked to give the shared login up (YIELD_ASK), must have ended; past it, it is interrupted.
-        let mut yielding: Option<Instant> = None;
         // The hub is asked for this turn's inputs and goal on a notice for its bot, while the event stream is down
         // (every step, as before), or at the slower recovery check (events.rs TURN_RECOVERY_S). `asked` is the notice
         // count at the last ask, None before the first.
@@ -243,22 +233,6 @@ impl Runner {
             }
             if let Some(line) = self.drain.due(aid, Instant::now()) {
                 let _ = self.state.append(aid, "status", &json!({"yielded": line}));
-                let _ = host.interrupt(thread, &turn).await;
-                return Ok(Drove {
-                    outcome: "interrupted".into(),
-                    reply: answer(&earlier, &reply),
-                    tokens: spent(&earlier_tokens, &tokens),
-                    limited: false,
-                    acted,
-                    capacity: false,
-                    continues: false,
-                    retryable: false,
-                    turn,
-                    yielded: true,
-                });
-            }
-            if yielding.is_some_and(|by| Instant::now() >= by) {
-                // No safe point within the grace: the work so far stays in the worktree and on the task.
                 let _ = host.interrupt(thread, &turn).await;
                 return Ok(Drove {
                     outcome: "interrupted".into(),
@@ -497,10 +471,8 @@ impl Runner {
                             &json!({"interruption_complete": true}),
                         )?;
                     }
-                    // A turn that gave the login up ends here, between a native goal's turns too; a goal that runs
-                    // across turns is not continued once the lease is lost.
-                    complete = yielding.is_some()
-                        || salvage.is_some()
+                    // A goal that runs across turns is not continued once the lease is lost.
+                    complete = salvage.is_some()
                         || !(goal_running && across_turns && outcome == "completed");
                 } else if kind == "turn_failed"
                     || (kind == "error" && truthy(event.get("host_restart")))
@@ -567,7 +539,6 @@ impl Runner {
                 && outcome == "completed"
                 && !carried.is_empty()
                 && !goal.controlled
-                && yielding.is_none()
                 && salvage.is_none()
             {
                 // Not on a failed or stopped turn: those settle the attempt, inputs included.
@@ -611,25 +582,6 @@ impl Runner {
                             goal_running = false;
                             complete = true;
                             outcome = "completed".into();
-                        }
-                    }
-                    if let Some(held) = d.login.as_ref().filter(|h| {
-                        !complete
-                            && yielding.is_none()
-                            && pausing.is_none()
-                            && !clearing
-                            && h.due(Instant::now())
-                    }) {
-                        yielding = Some(Instant::now() + held.grace());
-                        let note = held.yielded();
-                        self.state
-                            .append(aid, "status", &json!({"yielding": note}))?;
-                        d.wake.notify_one();
-                        if !host.supports_steer()
-                            || host.steer(thread, &turn, YIELD_ASK).await.is_err()
-                        {
-                            // Nothing to ask: the turn is interrupted at once and continues after the waiter.
-                            yielding = Some(Instant::now());
                         }
                     }
                     if !complete && ask && host.supports_steer() {
@@ -688,7 +640,6 @@ impl Runner {
                 format!("{text}\n\n{p}")
             };
         }
-        let yielded = yielding.is_some() && outcome != "failed";
         Ok(Drove {
             outcome,
             reply: text,
@@ -699,7 +650,7 @@ impl Runner {
             continues,
             retryable,
             turn,
-            yielded,
+            yielded: false,
         })
     }
 }
@@ -916,7 +867,6 @@ mod tests {
             runtime,
             bot: "acme",
             session: thread,
-            login: None,
             fresh: None,
         };
         let mut segment = Segment {
@@ -1075,7 +1025,6 @@ mod tests {
             runtime: "claude",
             bot: "acme",
             session: "th",
-            login: None,
             fresh: None,
         };
         let mut segment = Segment {
@@ -1913,7 +1862,6 @@ mod tests {
                 runtime: "claude",
                 bot: "acme",
                 session: "th-1",
-                login: None,
                 fresh: None,
             };
             let mut segment = Segment {

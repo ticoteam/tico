@@ -32,7 +32,7 @@ API key. One signed-in model is enough for the first result; Health lists the ot
 
 1. In **Finish setup**, choose an AI provider, name your team and pick **Marketing** with **Content Owner** (`content`) checked.
    With no provider yet, write one bet and one line under **What we won't do**; any short sentence works.
-   Ten built-in bots are created: Assistant, BotOps, Librarian, Strategy Owner, General Manager, Finance Owner, Rules Owner, Design Owner, Updates Owner and Automations Owner.
+   Eleven built-in bots are created: Assistant, BotOps, Librarian, Strategy Owner, General Manager, Finance Owner, Rules Owner, Design Owner, Updates Owner, Automations Owner and Tools Owner.
 2. Use **Add computer** to join this computer, run the command shown, then **Create my team**.
 3. Open **Settings > Computers** and **Sign in** beside Codex or Claude Code; finish the provider's browser flow.
    Other harnesses and API credentials are covered in [Harnesses](docs/harnesses.md). Choose the bot's model in **Settings > Bots**.
@@ -178,15 +178,21 @@ in Settings: [`docs/github-app.md`](docs/github-app.md).
 
 ## Skills in your own Claude Code
 
-The dev bots' and humans' own Claude Code sessions use the same team skill, from this repo:
-`skills/create-pr` (open a draft PR the way the team does). This repo is also a Claude Code plugin
-marketplace (`.claude-plugin/marketplace.json`) with one plugin, `tico`, that carries it. Install
-it once per computer:
+The dev bots' and humans' own Claude Code sessions use the same team skills, from this repo:
+
+- `skills/create-pr`: open a draft PR the way the team does.
+- `skills/ci-speed`: find the CI jobs that hold up a merge, speed them up, and prove the gain on
+  the real runners.
+- `skills/ci-security`: pin actions, keep untrusted values out of shell, and trim workflow
+  permissions.
+
+This repo is also a Claude Code plugin marketplace (`.claude-plugin/marketplace.json`) with one
+plugin, `tico`, that carries them. Install it once per computer:
 
     claude plugin marketplace add ticoteam/tico
     claude plugin install tico@tico
 
-Then `/tico:create-pr` works in any session, and Claude also reaches for it on its own. Bots keep
+Then `/tico:create-pr`, `/tico:ci-speed` and `/tico:ci-security` work in any session, and Claude also reaches for it on its own. Bots keep
 reading the same file from `$HUB_DIR/skills/`, so there is one copy to change.
 
 ## Hosted and self-hosted servers
@@ -228,8 +234,8 @@ named team must also carry a permanent id, or the process refuses to start.
 | `TICO_CREDENTIAL_ADMINS` | Comma-separated emails allowed to write shared credentials. The owner and the Admins when empty | `you@example.com` |
 | `TICO_UNSOLICITED_PER_DAY` | How many messages a bot may start to one human in a day before it must file a task instead. Default 10; lower it to tighten | `3` |
 | `TICO_STYLE_LINT` | What a writing problem in a bot's question to a person or in its update does: `warn` (the default: written, with a warning), `refuse`, or `off` | `refuse` |
-| `TICO_BLOCK_EXTERNAL_INVITES` | Set to `1` to limit bots to inviting humans on the team roster to calendar events (default: any address). Set it on computers too for `mail calendar add` | `1` |
-| `TICO_PROCESSING_OPERATORS` | Humans whose computers may run the Close transcript importer and tool publishers | `dana` |
+| `TICO_BLOCK_EXTERNAL_INVITES` | Set to `1` to limit bots to inviting humans on the team roster to calendar events (default: any address) | `1` |
+| `TICO_PROCESSING_OPERATORS` | Humans whose computers may run the Close transcript importer and meeting importers | `dana` |
 | `TICO_SCHEDULER` | `1` runs the routine scheduler and the other timed loops (webhook pulls from Tico Gateway, sleep when idle) in this process | `1` |
 | `TICO_CREDENTIAL_KMS_KEY` | Optional AWS KMS key for the credential vault. Unset (the default), the vault works with a key in `/data/credential.key`: back that file up with the database ([docs/credential-vault.md](docs/credential-vault.md)) | `alias/tico-acme` |
 | `TICO_EXPECTED_AWS_ACCOUNT` and `TICO_EXPECTED_AWS_ROLE` | Optional: the Docker server, Slack gateway and `restore` refuse to start unless STS GetCallerIdentity reports this 12-digit account and, when set, this role (a name or role ARN). Unset, nothing is checked. See [docs/install.md](docs/install.md#check-the-aws-identity) | `123456789012`, `tico-server` |
@@ -322,8 +328,8 @@ python -m pytest -q          # parallel by default (pytest-xdist); add -n 0 to d
 ```
 
 Browser checks need `npm ci` and a Playwright browser (`npx playwright install chromium`), then
-`npm run test:ui` (the core scripts in `ui/tests/`, three at a time; `--all` runs every script, `node scripts/ui-tests.cts <name>` runs one). A script still running after its time limit (`TICO_UI_SCRIPT_TIMEOUT`, 120 seconds times the load slowdown) is stopped with every process it started, and its failure names the browser call it was waiting on; if any of them could not be stopped, the failure says "cleanup incomplete" and why. The UI's TypeScript files are compiled by
-`npm run build:ui` (into `build/ui/`; ui/README.md), and the UI has no runtime network dependency: `marked` and the
+`npm run test:ui` (the core scripts in `ui/tests/`, three at a time; `--all` runs every script, `node scripts/ui-tests.cts <name>` runs one). A script still running after its time limit (`TICO_UI_SCRIPT_TIMEOUT`, 120 seconds times the load slowdown) is stopped with every process it started, and its failure names the browser call it was waiting on; if any of them could not be stopped, the failure says "cleanup incomplete" and why. The UI is built by
+`npm run build:ui` (into `build/ui/`, which the server serves; ui/README.md), and the UI has no runtime network dependency: `marked` and the
 icon font are vendored in `ui/vendor/` with their licenses.
 
 The live checkout on an owner's Mac is what the runner executes: the launchd jobs run
@@ -378,4 +384,4 @@ Open **Settings > Tasks** (under **Task tags**) or use `tico tag list|show|creat
 
 Every task sits in a pipeline, at one stage, and always shows whose turn it is. A new team has one pipeline, General,
 with one stage, To do. A task is open, done or closed; a person is asked through an ask on the task, in Needs you.
-See [Tasks](docs/tasks.md) for the UI, CLI, MCP and API, and [the spec](docs/pipelines-v3.md) for the whole design.
+See [Tasks](docs/tasks.md) for the UI, CLI, MCP and API, and [the spec](docs/dev/pipelines-v3.md) for the whole design.

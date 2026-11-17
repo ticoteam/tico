@@ -13,9 +13,8 @@ let REFRESH_STARTED = 0;
 const REFRESH_SHOWN = {status: 0, roster: 0, seats: 0};
 async function refresh(force = false): Promise<void> {
   const mine = ++REFRESH_STARTED;
-  // Every read at once: hub.db status and needs-you (docs/history/hub-v2.md) and the campus's computers (only while it
-  // is open) do not wait for the roster.
-  const v2 = v2Refresh(), computers = overviewLoadComputers();
+  // Every read at once: hub.db status and needs-you (docs/history/hub-v2.md) do not wait for the roster.
+  const v2 = v2Refresh();
   try {
     // BotOps and other sessions can change the chart. Publish a complete roster together so groups and members agree.
     const seatsDue = force || S.seats === undefined || ++SEATS_POLLS % 5 === 0 || Date.now() - SEATS_AT > 600e3;
@@ -37,14 +36,12 @@ async function refresh(force = false): Promise<void> {
         S.emps = namedRoster(emps.value);
         // /humans carries recruiting seats too: they never replace seats a later refresh already showed.
         setPeople(mine > REFRESH_SHOWN.seats ? people.value : {...people.value, seats: undefined});
-        S.overviewRosterFresh = true;
-      } else S.overviewRosterFresh = false;
+      }
     }
     if (seatsDue && seats.status === 'fulfilled' && mine > REFRESH_SHOWN.seats) { REFRESH_SHOWN.seats = mine; S.seats = seats.value?.seats || []; SEATS_AT = Date.now(); }   // Recruiting seats (backend/lifecycle.py)
-  } catch (e) { S.overviewRosterFresh = false; }
-  await Promise.all([v2, computers]);
-  overviewRefresh();
-  if (S.me?.cloud) void updUnreadRefresh();
+  } catch { /* a failed read publishes nothing */ }
+  await v2;
+  if (S.me) void updUnreadRefresh();
   renderTree(); renderHeartbeat(); pausedRender(); botAvatarsSync(); goalsFollowRoster(); pageChatFollowRoster(); document.dispatchEvent(new CustomEvent('tico:roster'));
   tipRefresh();
   botAlertDraw();
@@ -102,7 +99,7 @@ function liveTasksApply(events: LiveTaskEvent[]): void {
   if (BOT) botTasksLive(BOT.slug, events);
   // And a person's page (person-page.ts).
   if (typeof PERSON_TASKS !== 'undefined' && PERSON_TASKS) personTasksLive(events);
-  // And My dashboard's My tasks (dashboard.ts).
+  // And Company's My tasks (dashboard.ts).
   dashTasksLive(events);
   const open = TASK_CHAT;   // read again: a stop above may have cleared it
   if (open && events.some(d => d.bulk || String(d.id) === String(open.id))) taskChatLive(open);
@@ -110,7 +107,7 @@ function liveTasksApply(events: LiveTaskEvent[]): void {
 /** A bot's live status line: the bot, and its status (absent when the bot has none). */
 interface LiveBotEvent { bot: string; status?: V2BotState; }
 function liveWire(): void {
-  if (!S.me?.cloud || !liveAvailable()) return;
+  if (!S.me) return;
   let tasks: LiveTaskEvent[] = [];
   liveOn('tasks', (d: LiveTaskEvent) => { tasks.push(d); liveSoon('tasks', () => { const batch = tasks; tasks = []; liveTasksApply(batch); }, 200); });
   liveOn('bots', (d: LiveBotEvent) => {
@@ -120,7 +117,6 @@ function liveWire(): void {
       renderTree(); renderHeartbeat(); pausedRender(); botAvatarsSync(); goalsFollowRoster(); pageChatFollowRoster(); document.dispatchEvent(new CustomEvent('tico:roster'));
       tipRefresh();
       botAlertDraw();
-      overviewRefresh();                // the campus desks too, not only at the next refresh (no read: the model is local)
     }, 200);
   });
   // Needs you comes as the ids that changed; the list is mended from them (v2NeedsChanged), then `needs-list` says so.
@@ -131,12 +127,12 @@ function liveWire(): void {
     liveEmit('needs-list', S.v2.needs || []);
     liveSoon('needs', () => {
       renderTree();
-      if (OVERVIEW_PAGE) overviewNeedsDraw();
       tasksNeedsLive();
       if (BOT) botNeedsChanged(BOT.slug);
+      if (typeof DEC !== 'undefined' && DEC) decideRefresh(DEC, S.v2.needs || []);   // open Flow: a pinged bot's ❓ comes on screen
     }, 200);
   }).catch(() => {}));
-  // My dashboard puts each change in its cards (ui/app/dashboard.ts); it reads nothing for them.
+  // Company puts each change in its cards (ui/app/dashboard.ts); it reads nothing for them.
   liveOn('needs-list', dashNeedsLive);
   liveOn('threads', dashThreadsLive);
   // Away longer than the server keeps: read everything once.

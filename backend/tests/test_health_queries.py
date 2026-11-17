@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from backend import health, queue_refusals as Q
 from backend.store import H, encode
 from backend.tests.helpers.api import post, runner
-from backend.tests.helpers.run_backoff import at, setup
+from backend.tests.helpers.run_failures import at, failing, setup
 from backend.tests.helpers.status_reads import busy
 from backend.tests.helpers.health_queries import counted
 
@@ -103,15 +103,11 @@ def test_health_takes_the_same_statements_however_many_refused_queues_it_shows(a
     busy(api, machine, 0, 40)
     store = api.app.state.store
     with store.transaction() as c:
-        # Every bot is held for its failed runs until its next try (backend/run_backoff.py), so the claim passes
+        # Every bot is held for its failed runs until its next try (backend/run_failures.py), so the claim passes
         # over its queue: a refusal v3 keeps (the claim no longer judges a task's waits; the engine wakes only the
         # bot whose turn it is).
         for k in range(40):
-            c.execute(
-                "INSERT OR REPLACE INTO run_backoff(bot,fails,wait_until,error_class,last_failed_at,held_at) "
-                "VALUES(?,?,?,?,?,?)",
-                (f"busy-{k}", 3, "2026-10-26T00:00:00.000000Z", "crash", *["2026-10-24T12:10:00.000000Z"] * 2),
-            )
+            failing(c, f"busy-{k}", 3, held_at="2026-10-24T12:10:00.000000Z", probe_at="2026-10-26T00:00:00.000000Z")
     at(monkeypatch, api, "2026-10-24T12:40:00.000000Z")
     with store.read() as c:
         values = {f"busy-{k}": Q.current(c, store.settings, f"busy-{k}") for k in range(40)}

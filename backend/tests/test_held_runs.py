@@ -40,8 +40,8 @@ TITLE = "Review ops's stopped runs held for a check"
 def reviews(api):
     with api.app.state.store.read() as c:
         return [
-            dict(r)
-            for r in c.execute("SELECT id,status,body,created_at FROM tasks WHERE title=? ORDER BY rowid", (TITLE,))
+            {**dict(r), "body": H.task_words(c, r["id"])}  # what Tico gave BotOps: its instructions
+            for r in c.execute("SELECT id,status,created_at FROM tasks WHERE title=? ORDER BY rowid", (TITLE,))
         ]
 
 
@@ -99,7 +99,7 @@ def test_a_review_closed_soon_after_it_was_filed_reopens_on_the_next_sweep(api):
 
 def held_again(api, machine):
     """A second run of ops, on a task, stops partway after a shell call and is held."""
-    post(api, 'tasks', {'owner': 'ops', 'title': 'Ship the export', 'body': 'Build it and open the PR.'})
+    post(api, 'tasks', {'owner': 'ops', 'title': 'Ship the export', 'message': 'Build it and open the PR.'})
     ready(api, machine, ['ops'])
     attempt = claim(api, machine)
     stop_partway(api, machine, attempt, 'held-again')
@@ -124,7 +124,7 @@ def test_a_run_held_while_a_review_is_open_is_named_on_that_review_once(api):
     assert len(reviews(api)) == 1  # still the one open review
     [comment] = naming(api, review['id'], second['job_id'])
     assert comment['sender_id'] == H.KEEPER and 'used Bash' in comment['body']
-    assert first['job_id'] not in comment['body']  # the first run is already in the body
+    assert first['job_id'] not in comment['body']  # the first run is already in the review's instructions
     sweep(api)
     sweep(api)
     assert len(naming(api, review['id'], second['job_id'])) == 1  # named once, not on every sweep
@@ -163,7 +163,7 @@ def test_a_bot_renamed_while_its_review_is_open_gets_no_second_review(api):
 
 
 def test_the_next_bot_to_take_a_renamed_bots_slug_gets_a_review_of_its_own(api):
-    """The two bots' reviews share a title, and the id in the body tells them apart."""
+    """The two bots' reviews share a title, and the id in their instructions tells them apart."""
     machine, message, first = held(api)
     execution, maintainer = api.app.state.execution, H.bot_actor(H.FLEET_MAINTAINER)
     with api.app.state.store.transaction() as c:
@@ -177,9 +177,9 @@ def test_the_next_bot_to_take_a_renamed_bots_slug_gets_a_review_of_its_own(api):
         c.execute("INSERT INTO bots(id, slug, display_name, state) VALUES('b-new', 'acme-ops', 'New', 'active')")
         execution._hand_to_maintainer(c, {**job, 'id': 'job-new', 'bot_id': 'b-new'}, msg, None, ['Bash'])
         rows = [
-            dict(r)
+            {**dict(r), "body": H.task_words(c, r["id"])}
             for r in c.execute(
-                "SELECT id,title,body FROM tasks WHERE owner_id=? AND title LIKE '%acme-ops%' ORDER BY rowid",
+                "SELECT id,title FROM tasks WHERE owner_id=? AND title LIKE '%acme-ops%' ORDER BY rowid",
                 (maintainer,),
             )
         ]
@@ -210,10 +210,8 @@ def test_a_held_private_run_has_an_open_operator_review_when_botops_cannot_read_
     assert sweep(api) == []
     with api.app.state.store.read() as c:
         reviews = [
-            dict(r)
-            for r in c.execute(
-                "SELECT id,status,body FROM tasks WHERE title=? AND owner_id=?", (title, 'human:' + operator)
-            )
+            {**dict(r), "body": H.task_words(c, r["id"])}
+            for r in c.execute("SELECT id,status FROM tasks WHERE title=? AND owner_id=?", (title, 'human:' + operator))
         ]
         botops_reviews = c.execute(
             "SELECT count(*) FROM tasks WHERE title=? AND status IN ('open','doing','waiting','review','ready')",

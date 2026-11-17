@@ -69,11 +69,11 @@ def test_new_definition_and_new_wording_cards_carry_now_and_proposed(api):
 def test_add_measure_with_the_persons_target_uses_it_and_blank_adds_it_with_none(api):
     goal, _ = goal_with_kpi(api)
     with_target = propose(api, "goal_kpi", {"kpi": {"name": "Weekly demos"}}, goal["id"])
-    post(api, f"goal-proposals/{with_target['id']}/decide", {"decision": "confirm", "target": IMPROVE})
+    post(api, f"proposals/{with_target['id']}/decide", {"decision": "confirm", "target": IMPROVE})
     link = links(api, goal["id"])["Weekly demos"]
     assert (link["kind"], link["target"], link["deadline"]) == ("improve", 25, "2099-12-31")
     blank = propose(api, "goal_kpi", {"kpi": {"name": "Trials started"}}, goal["id"])
-    post(api, f"goal-proposals/{blank['id']}/decide", {"decision": "confirm"})
+    post(api, f"proposals/{blank['id']}/decide", {"decision": "confirm"})
     assert links(api, goal["id"])["Trials started"]["kind"] == "none"
 
 
@@ -81,31 +81,31 @@ def test_a_target_is_checked_as_a_links_target_and_refused_on_any_other_kind_or_
     goal, kpi = goal_with_kpi(api)
     add = propose(api, "goal_kpi", {"kpi": {"name": "Weekly demos", "direction": "down"}}, goal["id"])
     # The measure should go down: a target above its baseline is wrong, as it is on a link; nothing is made.
-    wrong = post(api, f"goal-proposals/{add['id']}/decide", {"decision": "confirm", "target": IMPROVE}, expected=422)
+    wrong = post(api, f"proposals/{add['id']}/decide", {"decision": "confirm", "target": IMPROVE}, expected=422)
     assert "wrong side" in str(wrong)
     post(
         api,
-        f"goal-proposals/{add['id']}/decide",
+        f"proposals/{add['id']}/decide",
         {"decision": "confirm", "target": {"kind": "improve", "target": 5}},
         expected=422,
     )  # no deadline
     assert "Weekly demos" not in links(api, goal["id"])
     post(
         api,
-        f"goal-proposals/{add['id']}/decide",
+        f"proposals/{add['id']}/decide",
         {"decision": "reject", "target": {"kind": "maintain", "max": 3}},
         expected=422,
     )
     target = propose(api, "kpi_target", {"kind": "maintain", "min": 50}, goal["id"], kpi["id"])
     post(
         api,
-        f"goal-proposals/{target['id']}/decide",
+        f"proposals/{target['id']}/decide",
         {"decision": "confirm", "target": {"kind": "maintain", "min": 60}},
         expected=422,
     )
     # Still pending, both: a refused decision decides nothing.
     assert {p["id"] for p in get(api, "goals/tree")["proposals"]} >= {add["id"], target["id"]}
-    post(api, f"goal-proposals/{add['id']}/decide", {"decision": "confirm", "target": {"kind": "maintain", "max": 3}})
+    post(api, f"proposals/{add['id']}/decide", {"decision": "confirm", "target": {"kind": "maintain", "max": 3}})
     assert links(api, goal["id"])["Weekly demos"]["max"] == 3
 
 
@@ -113,7 +113,7 @@ def test_a_flag_confirmed_changes_nothing_else(api):
     goal, _ = goal_with_kpi(api)
     flag = propose(api, "flag", {"issue": "duplicate", "note": "Same words as Keep customers"}, goal["id"])
     before = get(api, f"goals/{goal['id']}")["goal"]
-    done = post(api, f"goal-proposals/{flag['id']}/decide", {"decision": "confirm"})["proposal"]
+    done = post(api, f"proposals/{flag['id']}/decide", {"decision": "confirm"})["proposal"]
     after = get(api, f"goals/{goal['id']}")["goal"]
     assert done["status"] == "confirmed"
     assert (after["title"], after["body"], after["status"], links(api, goal["id"])) == (
@@ -154,12 +154,12 @@ def test_the_strategy_bots_task_uses_the_cards_words_and_an_old_one_is_reworded_
     for task in tasks.values():
         assert "Confirm or reject" not in task["title"] + task["body"] and "existing KPI" not in task["body"]
         assert task["body"].endswith("Decide it under Needs you on the Goals page.")
-    # A task filed before, in the old words, takes the card's words on the next pass, once.
+    # A task filed before, in the old words, takes the card's words on the next pass, once: its title (what it said
+    # on its chat stays as said).
     ref, task = next(iter(tasks.items()))
     with api.app.state.store.transaction() as c:
         c.execute(
-            "UPDATE tasks SET title=?, body=? WHERE id=?",
-            ("Confirm or reject a new KPI for Raise activation", "Confirm or reject it.", task["id"]),
+            "UPDATE tasks SET title=? WHERE id=?", ("Confirm or reject a new KPI for Raise activation", task["id"])
         )
     sync(api)
     again = next(a for a in asks(api) if a["ref"] == ref)
@@ -174,13 +174,13 @@ def test_a_persons_target_replaces_the_one_proposed_and_none_clears_it(api):
     goal, kpi = goal_with_kpi(api)
     proposed = {"kind": "improve", "baseline": 10, "target": 40, "deadline": "2099-06-30"}
     new = propose(api, "goal_kpi", {"kpi": {"name": "Weekly demos"}, "target": proposed}, goal["id"])
-    post(api, f"goal-proposals/{new['id']}/decide", {"decision": "confirm", "target": IMPROVE})
+    post(api, f"proposals/{new['id']}/decide", {"decision": "confirm", "target": IMPROVE})
     link = links(api, goal["id"])["Weekly demos"]
     assert (link["target"], link["deadline"]) == (25, "2099-12-31")
     # Reusing a measure, the person's "no target" clears the one the Strategy Owner proposed.
     other = post(api, "goals", {"title": "Keep customers", "owner": "ana"})["goal"]
     reuse = propose(api, "goal_kpi", {"kpi_id": kpi["id"], "target": IMPROVE}, other["id"])
-    post(api, f"goal-proposals/{reuse['id']}/decide", {"decision": "confirm", "target": {"kind": "none"}})
+    post(api, f"proposals/{reuse['id']}/decide", {"decision": "confirm", "target": {"kind": "none"}})
     assert links(api, other["id"])["Activation"]["kind"] == "none"
 
 
@@ -193,7 +193,7 @@ def test_an_empty_body_in_new_wording_shows_the_description_it_clears(api):
         {"label": "Title", "now": "Raise activation", "proposed": "Raise activation to 70%"},
         {"label": "Description", "now": "Half of sign-ups finish setup", "proposed": ""},
     ]
-    post(api, f"goal-proposals/{wording['id']}/decide", {"decision": "confirm"})
+    post(api, f"proposals/{wording['id']}/decide", {"decision": "confirm"})
     assert get(api, f"goals/{goal['id']}")["goal"]["body"] == ""  # what the card said yes does
 
 
@@ -281,10 +281,10 @@ def test_a_hidden_bots_measure_suggested_for_her_goal_stays_hidden_however_it_is
     hers = post(api, "goals", {"title": "Keep customers", "owner": "cara"}, token="cara-test")["goal"]
     reuse = propose(api, "goal_kpi", {"kpi_id": secret["id"], "target": {"kind": "maintain", "max": 3}}, hers["id"])
     # She may not add a measure she may not read, as she may not link it by hand.
-    post(api, f"goal-proposals/{reuse['id']}/decide", {"decision": "confirm"}, token="cara-test", expected=403)
+    post(api, f"proposals/{reuse['id']}/decide", {"decision": "confirm"}, token="cara-test", expected=403)
     post(api, f"goals/{hers['id']}/kpis", {"kpi_id": secret["id"], "kind": "none"}, token="cara-test", expected=404)
     # Nor may the owner, who reads it: everyone reads her goal, its KPI lines and its colour's reason with them.
-    post(api, f"goal-proposals/{reuse['id']}/decide", {"decision": "confirm"}, expected=403)
+    post(api, f"proposals/{reuse['id']}/decide", {"decision": "confirm"}, expected=403)
     post(api, f"goals/{hers['id']}/kpis", {"kpi_id": secret["id"], "kind": "maintain", "max": 3}, expected=403)
     post(api, "kpis", {"name": "Inbox depth", "owner": "inbox", "goal_id": hers["id"]}, expected=403)
     anas = post(api, "goals", {"title": "Sign faster", "owner": "ana"})["goal"]
@@ -315,7 +315,7 @@ def test_a_hidden_bots_measure_suggested_for_her_goal_stays_hidden_however_it_is
     [mine] = [g for g in get(api, "goals/tree", "cara-test")["goals"] if g["id"] == hers["id"]]
     assert mine["kpis"] == [] and get(api, f"goals/{hers['id']}", "cara-test")["goal"]["kpis"] == []
     # She may still say no to one waiting.
-    post(api, f"goal-proposals/{reuse['id']}/decide", {"decision": "reject"}, token="cara-test")
+    post(api, f"proposals/{reuse['id']}/decide", {"decision": "reject"}, token="cara-test")
 
 
 def test_a_bots_measure_goes_on_its_own_goal_and_not_with_a_goal_handed_to_a_person(api):
@@ -329,9 +329,9 @@ def test_a_target_suggestion_does_not_link_a_hidden_bots_measure_to_her_goal(api
     _, secret = inbox_measure(api)
     hers = post(api, "goals", {"title": "Keep customers", "owner": "cara"}, token="cara-test")["goal"]
     target = propose(api, "kpi_target", {"kind": "maintain", "max": 3}, hers["id"], secret["id"])
-    post(api, f"goal-proposals/{target['id']}/decide", {"decision": "confirm"}, expected=403)
+    post(api, f"proposals/{target['id']}/decide", {"decision": "confirm"}, expected=403)
     assert "NDAs waiting" not in links(api, hers["id"])
-    post(api, f"goal-proposals/{target['id']}/decide", {"decision": "reject"})
+    post(api, f"proposals/{target['id']}/decide", {"decision": "reject"})
 
 
 def old_link(api, goal_id, kpi_id, **target):

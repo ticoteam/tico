@@ -88,17 +88,14 @@ async function shows(browser: Browser) {
   await add(page, {id: 'h3', sender_id: 'human:ana', body: '', created_at: at(11), refs: {attachments: [{id: 'f1', name: 'shot.png', content_type: 'image/png'}]}});
   await page.waitForFunction(() => document.querySelectorAll('nav.pidx .pidx-t').length === 4);
   assert.match(String(await ticks(page).last().getAttribute('aria-label')), /^Photo, (Today|Yesterday), \d/);
-  // A long message stops at ten lines with Show more; one that only looks long (600 short characters) shows in full.
+  // A long message shows in full: nothing is cut below its last line, and there is no Show more.
   await add(page, {id: 'long', sender_id: 'bot:assistant', body: 'The two items are the release notes and the budget review. '.repeat(40), created_at: at(12)});
-  await add(page, {id: 'wide', sender_id: 'bot:assistant', body: 'Short. '.repeat(90), created_at: at(13)});
-  const long = page.locator('[data-message="long"]'), more = long.getByRole('button', {name: 'Show more'});
-  await more.waitFor();
-  const lines = async () => long.locator('.bubble > .md').evaluate(el => Math.round(el.clientHeight / parseFloat(getComputedStyle(el).lineHeight)));
-  assert.equal(await lines(), 10, 'ten lines');
-  await more.click();
-  assert.ok(await lines() > 10, 'Show more shows it all');
-  assert.equal(await long.getByRole('button', {name: 'Show less'}).getAttribute('aria-expanded'), 'true');
-  assert.equal(await page.locator('[data-message="wide"] .msg-more').isVisible(), false, 'a message that fits has no Show more');
+  const long = page.locator('[data-message="long"]'), body = long.locator('.bubble > .md');
+  await body.waitFor();
+  const lines = await body.evaluate(el => Math.round(el.clientHeight / parseFloat(getComputedStyle(el).lineHeight)));
+  assert.ok(lines > 10, 'a long message runs past ten lines');
+  assert.equal(await body.evaluate(el => el.scrollHeight <= el.clientHeight + 2), true, 'nothing of a long message is cut off');
+  assert.equal(await long.getByRole('button', {name: 'Show more'}).count(), 0, 'a long message has no Show more');
   assert.deepEqual(errors, []);
   await page.close();
   console.log('chat index shows from three of yours: ok');

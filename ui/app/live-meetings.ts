@@ -228,8 +228,8 @@ function livePaintDetail(state: LiveMeetState, detail: LiveDetail): void {
   const peopleCandidates = (S.people || []).filter(person => !person.hidden
     && `human:${person.id}` !== detail.owner_actor
     && !people.some(member => member.actor === `human:${person.id}`));
-  // A candidate's `id` is what the meeting's bots name; a server from before ids sent only `slug`, which held it.
-  const candidates = state.candidates.map(bot => ({...bot, id: bot.id ?? bot.slug})).filter(bot => !(detail.bots || []).some(attached => attached.bot === bot.id));
+  // A candidate's `id` is what the meeting's bots name.
+  const candidates = state.candidates.filter(bot => !(detail.bots || []).some(attached => attached.bot === bot.id));
   const chunks: LiveChunk[] = detail.chunks || [], chat: LiveChat[] = detail.chat || [], notices: LiveNotice[] = detail.notices || [], router: LiveRouter = detail.router || {windows: [], turns: []};
   // A teammate is named by the server (`name`); a bot the viewer's roster lacks would otherwise show its id.
   const teammates = (detail.bots || []).map(attached => `<span class="live-teammate">${esc(attached.name)}${active && (controls || attached.joined_by === actor) ?
@@ -353,7 +353,7 @@ async function liveLoadDetail(state: LiveMeetState, id: string): Promise<void> {
 }
 
 function liveSubscribe(state: LiveMeetState, id: string, after: number): void {
-  if (state.sources.has(id) || !window.EventSource) return;
+  if (state.sources.has(id)) return;
   const source = new EventSource(API + LIVE_API + '/' + encodeURIComponent(id) + '/events?after=' + encodeURIComponent(state.cursor[id] ?? after));
   state.sources.set(id, source);
   const types = ['meeting.state', 'meeting.access', 'meeting.joined', 'meeting.chunk', 'meeting.chunk_corrected', 'meeting.chat',

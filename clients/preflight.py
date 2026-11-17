@@ -11,7 +11,6 @@ Usage:
   preflight.py --all
 """
 
-import os
 import re
 import shutil
 import stat
@@ -40,6 +39,8 @@ STALE = [
         re.compile(r"\bChief\b(?!\s+(?:Executive|Technical|Product|Marketing|Financial|Operating))"),
         "'Chief' as an actor",
     ),
+    # The bot mail CLI is retired: mail and calendar go through the server.
+    (re.compile(r"\bmail\.sh\b"), "`mail.sh` (retired: use `tico email` and `tico calendar`)"),
 ]
 STALE_MAX = 20  # keep a messy repo from burying the rest of the report
 
@@ -266,9 +267,6 @@ def check_access(r, slug, m):
 
 
 # ----------------------------------------------------------------------------- mail
-_mail_tests = None  # the unit suite runs once per preflight process
-
-
 def gmail_identities(m):
     """Every gmail identity this employee declares, from its tools: block (older: access:)."""
     out = []
@@ -280,51 +278,12 @@ def gmail_identities(m):
     return out
 
 
-def mail_suite():
-    """connectors/mail's own tests. Offline, about half a second, cached for this process."""
-    global _mail_tests
-    if _mail_tests is None:
-        p = subprocess.run(
-            [sys.executable, "-m", "unittest", "discover", "-s", "connectors/mail/tests"],
-            cwd=str(REG.HUB_DIR),
-            capture_output=True,
-            text=True,
-        )
-        tail = (p.stderr or p.stdout or "").strip().splitlines()
-        _mail_tests = (p.returncode == 0, tail[-1] if tail else "no output")
-    return _mail_tests
-
-
 def check_mail(r, slug, m):
-    """An employee that declares gmail only goes active if the mail tool actually works."""
+    """An employee that declares gmail reads and acts on its mailboxes through the server (`tico email`), at the level
+    its Tools grant; nothing on this computer holds a Google key."""
     boxes = gmail_identities(m)
-    if not boxes:
-        return
-    ok, summary = mail_suite()
-    (r.ok if ok else r.fail)(
-        f"mail: connectors/mail tests {summary}"
-        + ("" if ok else "  (cd hub && python3 -m unittest discover -s connectors/mail/tests)")
-    )
-    who = subprocess.run(
-        [str(REG.HUB_DIR / "scripts" / "mail.sh"), "whoami", "--as", slug], capture_output=True, text=True
-    )
-    if who.returncode == 0:
-        r.ok(f"mail: whoami --as {slug} resolves {', '.join(boxes)}")
-    else:
-        r.fail(f"mail: whoami --as {slug} failed: {(who.stderr or who.stdout).strip().splitlines()[0][:120]}")
-    key = Path(os.environ.get("GOOGLE_SA_KEY") or (SECRETS / "google-sa.json")).expanduser()
-    if not key.exists():
-        r.warn(f"mail: no Google key at {key} yet, so doctor was not run (docs/mail-service.md, 'What the owner does')")
-        return
-    for box in boxes:
-        doc = subprocess.run(
-            [str(REG.HUB_DIR / "scripts" / "mail.sh"), "doctor", "--mailbox", box], capture_output=True, text=True
-        )
-        if doc.returncode == 0:
-            r.ok(f"mail: doctor --mailbox {box}")
-        else:
-            bad = [l for l in (doc.stdout or "").splitlines() if l.startswith("FAIL")]
-            r.fail(f"mail: doctor --mailbox {box} failed: " + (bad[0] if bad else (doc.stderr or "").strip()[:120]))
+    if boxes:
+        r.ok(f"mail: {', '.join(boxes)} through `tico email` (`tico email mailboxes` shows {slug}'s access)")
 
 
 def check_stale(r, d):

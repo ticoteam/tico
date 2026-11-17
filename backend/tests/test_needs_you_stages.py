@@ -22,6 +22,14 @@ def test_a_page_counts_each_stages_items_over_the_whole_list(api):
         for n in range(3)
     ]
     post(api, f"tasks/{made[0]['id']}/move", {"to": "build", "why": "The spec is in the PR"})
+    # Each asks Ana's OK: Needs you holds only what is asked of her.
+    from backend import hubdb as H
+    from backend import task_engine as E
+
+    with api.app.state.store.transaction() as c:
+        for row in made:
+            version = H.task(c, row["id"])["version"]
+            E.add_requirement(c, row["id"], "human:ana", "ok", "human:ana", "Ready?", seen_version=version)
     page = get(api, "needs-you?limit=1")
     assert len(page["items"]) == 1 and page["next"]
     assert page["stages"] == {"spec": 2, "build": 1}

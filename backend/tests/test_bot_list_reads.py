@@ -24,6 +24,7 @@ from backend import task_privacy as privacy
 from backend.chat_goals import readable_active
 from backend.harnesses import resolve_harness
 from backend.settings_admin import SettingsAdmin, compact_at as compact_at_of
+from backend import runner_online
 from backend.store import H, P, encode, repo_url
 from backend.tests.helpers import api as T
 from backend.tests.helpers.api_app import api_client
@@ -153,20 +154,13 @@ def per_bot_view(c, settings, auth, bot, level, access, registry_roster, registr
     row["status"] = privacy.status(c, who, H.status(c, bot["slug"]))
     row["assignment"] = dict(assignment) if assignment else None
     row["online"] = bool(
-        assignment
-        and not assignment["revoked_at"]
-        and assignment["last_seen_at"]
-        and assignment["last_seen_at"] > H.shift(H.now(), seconds=-60)
+        assignment and not assignment["revoked_at"] and runner_online.is_online(assignment["last_seen_at"])
     )
     row["queued"] = privacy.job_count(c, who, bot["slug"])
     row["notes"] = len(H.notes_waiting(c, bot["slug"], limit=500))
     external = agents.presence(c, bot["slug"])
     row["agent"] = external["agent"] if external else None
-    from backend import app_delivery
-
-    row["app_delivery"] = app_delivery.view(c, declared) if config and external else None
-    row["app_delivery_app"] = app_delivery.HARNESS_APP.get(row.get("harness"))
-    if external and not (row["app_delivery"] or {}).get("active"):
+    if external:
         row["online"] = external["online"]
     return row
 
@@ -338,6 +332,8 @@ def list_statements(api, monkeypatch, token="ana-test"):
     """The bot list as `token` gets it, and the statements it took. Each request starts from cold roster and row caches."""
     import contextlib
 
+    from backend.tests.helpers.statement_scope import measuring, recorder
+
     store, seen = api.app.state.store, []
     store.roster_rows = {}
     store.row_cache = type(store.row_cache)()
@@ -348,7 +344,7 @@ def list_statements(api, monkeypatch, token="ana-test"):
                 @contextlib.contextmanager
                 def borrowed():
                     with opened() as c:
-                        c.set_trace_callback(seen.append)
+                        c.set_trace_callback(recorder(seen))
                         try:
                             yield c
                         finally:
@@ -357,7 +353,8 @@ def list_statements(api, monkeypatch, token="ana-test"):
                 return borrowed()
 
             patched.setattr(store, name, traced)
-        response = api.get("/api/v2/bots", headers=T.headers(token))
+        with measuring(seen):
+            response = api.get("/api/v2/bots", headers=T.headers(token))
     assert response.status_code == 200, response.text
     return response.json(), len(seen)
 
@@ -408,7 +405,7 @@ def test_status_task_read_seeks_each_bots_tasks_on_a_big_task_table(api):
         plan = [
             row[3]
             for row in c.execute(
-                "EXPLAIN QUERY PLAN " + status_tasks_sql(f" IN ({marks})"), [*("bot:" + b for b in bots)] * 4
+                "EXPLAIN QUERY PLAN " + status_tasks_sql(f" IN ({marks})"), [*("bot:" + b for b in bots)] * 5
             )
         ]
     assert any(line.startswith("SEARCH tasks USING") and "tasks_owner_status_cover" in line for line in plan), plan
@@ -449,7 +446,7 @@ def test_status_private_tasks_are_read_from_an_index_holding_their_status(api):
         plan = [
             row[3]
             for row in c.execute(
-                "EXPLAIN QUERY PLAN " + status_tasks_sql(f" IN ({marks})"), [*("bot:" + b for b in bots)] * 4
+                "EXPLAIN QUERY PLAN " + status_tasks_sql(f" IN ({marks})"), [*("bot:" + b for b in bots)] * 5
             )
         ]
     assert any("COVERING INDEX tasks_private_status" in line for line in plan), plan

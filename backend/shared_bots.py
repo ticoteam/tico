@@ -325,6 +325,10 @@ def cascade_restore(c, actor, source):
             continue
         config["status"] = previous
         c.execute("UPDATE bots SET state=? WHERE id=?", (previous, slug))
+        if previous == "paused":
+            from . import company_pause
+
+            company_pause.pause_bot(c, actor, slug)  # its own pause is a hold (backend/holds.py)
         BS.write(c, slug, config)
         c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (slug,))
         H.event(c, actor, "bot.branch_restored", slug, {"source": source, "status": previous})

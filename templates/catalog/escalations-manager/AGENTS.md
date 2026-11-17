@@ -56,7 +56,7 @@ Always:
 - `skills/write-a-customer-update/SKILL.md`: read before you draft any update to a customer.
 
 ## Starting a run
-1. Read the task with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/escalation-rules.md` and
    `knowledge/register.md`. A resumed turn already has them.
 3. Check for new escalations: `tico task list` for tasks labelled or titled as escalations.
@@ -78,7 +78,7 @@ stop, and their end wakes you.
 Read with `tico task show`, `tico task list`, `tico meeting search "<customer>"`, and the linked issue with
 read-only `gh issue view` where GitHub is connected. A bug for engineering is `tico task create --owner
 <engineer or bot>` with the report attached, after the case owner agrees. Tell a case owner their update
-is due with `tico message send <person> "<case, due time, link>"`. One question per task with `tico task ask <id> --to <person> "<question>" --version N`.
+is due with `tico message send <person> "<case, due time, link>"`. One question per task with `tico task ask <id> --to <person> "<question>"`.
 
 ## Quality standards
 - **Answer first.** The digest opens with the count by severity and the updates due today.

@@ -7,39 +7,6 @@ import uuid
 from collections.abc import Mapping
 
 ROW_TABLES = ("locations", "items", "projects")
-TABLES = """
-CREATE TABLE IF NOT EXISTS locations (
-  id TEXT PRIMARY KEY, name TEXT NOT NULL,
-  kind TEXT NOT NULL DEFAULT 'other' CHECK (kind IN ('store','office','warehouse','plant','customer_site','vehicle',
-                                                       'other')),
-  parent_id TEXT REFERENCES locations(id), address TEXT NOT NULL DEFAULT '{}', archived_at TEXT,
-  created_at TEXT NOT NULL, created_by_id TEXT NOT NULL, updated_at TEXT, updated_by_id TEXT);
-
-CREATE TABLE IF NOT EXISTS items (
-  id TEXT PRIMARY KEY, name TEXT NOT NULL, sku TEXT NOT NULL DEFAULT '',
-  kind TEXT NOT NULL CHECK (kind IN ('service','inventory','non_inventory','bundle','category',
-    'raw_material','assembly')),
-  unit TEXT NOT NULL DEFAULT '', price BIGINT, currency TEXT NOT NULL DEFAULT '',
-  income_account_id TEXT REFERENCES fin_accounts(id), expense_account_id TEXT REFERENCES fin_accounts(id),
-  asset_account_id TEXT REFERENCES fin_accounts(id), archived_at TEXT,
-  created_at TEXT NOT NULL, created_by_id TEXT NOT NULL, updated_at TEXT, updated_by_id TEXT);
-
-CREATE TABLE IF NOT EXISTS projects (
-  id TEXT PRIMARY KEY, name TEXT NOT NULL, customer_id TEXT REFERENCES entities(id),
-  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','closed')), archived_at TEXT,
-  created_at TEXT NOT NULL, created_by_id TEXT NOT NULL, updated_at TEXT, updated_by_id TEXT);
-
-CREATE TABLE IF NOT EXISTS record_aliases (
-  table_name TEXT NOT NULL CHECK (table_name IN ('locations','items','projects')), alias_id TEXT NOT NULL,
-  record_id TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (table_name, alias_id));
-"""
-
-
-def create(c: sqlite3.Connection) -> None:
-    """The locations, items and projects tables. Idempotent; runs on the caller's transaction."""
-    for statement in TABLES.split(";"):
-        if statement.strip():
-            c.execute(statement)
 
 
 def insert(c: sqlite3.Connection, table: str, row: Mapping[str, object]) -> str:

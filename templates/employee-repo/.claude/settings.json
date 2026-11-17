@@ -1,6 +1,22 @@
 {
   "permissions": {
-    "allow": ["Read", "Edit", "Write", "Bash(git *)", "Bash(gh issue *)"],
-    "deny": ["Bash(gh repo delete *)", "Bash(git push --force*)"]
+    "deny": [
+      "Bash(git push --force)",
+      "Bash(git push --force *)",
+      "Bash(git push -f*)",
+      "Bash(git push * --force)",
+      "Bash(git push * --force *)",
+      "Bash(git push * -f*)",
+      "Bash(gh repo delete *)",
+      "Bash(gh repo edit *--visibility*)",
+      "Bash(gh release delete *)",
+      "Bash(gh run delete *)",
+      "Bash(gh cache delete *)",
+      "Bash(gh issue delete *)",
+      "Bash(gh secret *)",
+      "Bash(gh variable *)",
+      "Bash(gh workflow enable *)",
+      "Bash(gh workflow disable *)"
+    ]
   }
 }

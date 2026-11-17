@@ -4,7 +4,7 @@ description: Make one of three calls on a strategy bet (on track, watch or looks
 ---
 # Report a call on a bet
 
-When to use: once per check-in, after the bet has been read as published and its progress has been checked against the plan.
+When to use: once per check-in, after the bet has been read as written and its progress has been checked against the plan.
 
 Steps:
 1. Pick exactly one call:
@@ -12,7 +12,7 @@ Steps:
    - **Watch**: a milestone or reading is behind, with a named cause and a date to look again.
    - **Looks wrong**: the wrong-if has tripped, or the evidence points against what the bet rules out or claims.
 2. Write the call as its first line: the call, the bet's name, and the one reading or milestone that decided it.
-3. Give the reason in two sentences at most. Quote the wrong-if as published, then the reading or dated source against it.
+3. Give the reason in two sentences at most. Quote the wrong-if as written, then the reading or dated source against it.
 4. For watch, name the cause and the date the call will be checked again.
 5. For looks wrong, quote the evidence with its date and source, and state what the owner has to decide: keep, rewrite or
    retire. Do not recommend a wording for the strategy. Route the decision as `playbooks/weekly-check-in.md` step 6 says.

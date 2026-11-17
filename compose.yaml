@@ -111,7 +111,6 @@ services:
       # The recommended setup's choices (scripts/install.sh --recommended), read on the server's first start.
       TICO_GATEWAY_INVITE:
       TICO_INSTALL_PRESET:
-      TICO_SAMPLE_COMPANY:
       TICO_COMPANY_FILE_B64:
       # A starter plan too big for the env (Tico's hosted servers): the file setup copied to ./company-file, mounted below.
       TICO_COMPANY_FILE:
@@ -242,8 +241,6 @@ services:
       TICO_SLACK_ROUTE_THRESHOLD:
       TICO_SLACK_ASK_THRESHOLD:
       TICO_SLACK_MAX_RECIPIENTS:
-      TICO_SLACK_DIGEST_MINUTES:
-      TICO_SLACK_DIGEST_CAP:
       TICO_SLACK_UNFURL_HOSTS:
       TICO_SLACK_OPEN_LABEL:
       TICO_SLACK_OPEN_URL:

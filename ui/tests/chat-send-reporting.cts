@@ -31,9 +31,10 @@ declare const window: Window & typeof globalThis & {
 const scrubbed = scrubSentry({message:'PRIVATE', request:{url:'PRIVATE'}, breadcrumbs:[{message:'PRIVATE'}],
   exception:{values:[{value:'PRIVATE',stacktrace:{frames:[
     {filename:'https://private.test/tico/ui/app/pill.js?token=PRIVATE',lineno:42,function:'PRIVATE'},
-    {filename:'https://private.test/tico/ui/app.bundle.js',lineno:7},
+    {filename:'https://private.test/tico/ui/app.bundle.0123456789abcdef.js',lineno:7},
+    {filename:'https://private.test/tico/ui/app.bundle.task.0123456789abcdef.js?v=PRIVATE',lineno:8},
     {filename:'https://private.test/customer-PRIVATE.js',lineno:1}]}}]}}, 'tico:' + 'a'.repeat(64),'test','test-503');
-assert.deepEqual(scrubbed.exception.values[0]!.stacktrace.frames,[{filename:'app/pill.js',lineno:42},{filename:'app.bundle.js',lineno:7}]);
+assert.deepEqual(scrubbed.exception.values[0]!.stacktrace.frames,[{filename:'app/pill.js',lineno:42},{filename:'app.bundle.0123456789abcdef.js',lineno:7},{filename:'app.bundle.task.0123456789abcdef.js',lineno:8}]);
 assert.doesNotMatch(JSON.stringify(scrubbed),/PRIVATE|private\.test|request|breadcrumbs/);
 
 (async () => {
