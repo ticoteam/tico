@@ -323,9 +323,10 @@ def test_install_retry_is_bounded_and_warm_browser_or_python_never_downloads_apt
     (venv / "python").chmod(0o755)
     for name in ("sudo", "npm", "npx"):
         stub(name, f'echo "{name} $*" >> "$CALL_LOG"')
+    stub("dpkg-query", "")  # the snapshot's before/after package lists; empty under the stubs
     cache = tmp_path / "playwright-system"
     cache.mkdir()
-    (cache / "complete").touch()
+    (cache / "installed.tar").touch()
     for suite in ("python", "browser", "types"):
         log.write_text("")
         result = subprocess.run(
@@ -333,7 +334,7 @@ def test_install_retry_is_bounded_and_warm_browser_or_python_never_downloads_apt
         )
         assert result.returncode == 0, result.stderr.decode()
         calls = log.read_text()
-        assert "update" not in calls and "--download-only" not in calls and "--with-deps" not in calls
+        assert "apt-get" not in calls and "--with-deps" not in calls  # a restored snapshot never contacts apt
         if suite == "types":
             assert calls == ""  # the venv alone: no npm, no UI build, no system packages
         elif suite == "python":
@@ -342,12 +343,27 @@ def test_install_retry_is_bounded_and_warm_browser_or_python_never_downloads_apt
                 "npm run --silent build:ui",
             ]
         else:
-            assert "--no-download install" in calls and "playwright install chromium webkit" in calls
-            # dpkg runs beside pip and npm, and finishes before the browsers install.
             lines = calls.splitlines()
-            assert "--force-unsafe-io" in calls
-            dpkg = next(i for i, line in enumerate(lines) if "--no-download install" in line)
-            assert dpkg < next(i for i, line in enumerate(lines) if "playwright install" in line)
+            unpack = lines.index(f"sudo tar -xpf {cache}/installed.tar -C /")
+            # The snapshot unpacks beside pip and npm, and is in place before the browsers install.
+            assert lines[unpack + 1] == "sudo ldconfig"
+            assert unpack < next(i for i, line in enumerate(lines) if "playwright install chromium webkit" in line)
+    # A cold cache: apt installs the packages (dpkg without fsync), and the snapshot is made from what changed and
+    # moved into the cache folder the job saves.
+    (cache / "installed.tar").unlink()
+    log.write_text("")
+    result = subprocess.run(
+        ["bash", str(ROOT / "scripts/ci_install.sh"), "--once", "browser"], env=env, capture_output=True
+    )
+    assert result.returncode == 0, result.stderr.decode()
+    lines = log.read_text().splitlines()
+    update = next(i for i, line in enumerate(lines) if line.startswith("sudo apt-get") and line.endswith(" update"))
+    install = next(i for i, line in enumerate(lines) if "--force-unsafe-io install -y --no-install-recommends" in line)
+    assert install > update and lines[install].endswith("liba libb")
+    pack = next(i for i, line in enumerate(lines) if line.startswith("sudo tar --no-recursion -cf "))
+    work = tmp_path / "playwright-system-work"
+    assert lines[pack + 1] == f"sudo mv {work}/installed.tar {cache}/installed.tar"
+    assert install < pack < next(i for i, line in enumerate(lines) if "playwright install chromium webkit" in line)
 
 
 def test_cached_system_packages_match_the_locked_browser_version():
