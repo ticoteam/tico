@@ -408,7 +408,7 @@ function machineUsageHTML(runtime: string, state: MachineUsageState | null | und
 // when the computer last reported).
 function machineSignInHTML(machine: DeviceMachine, online: boolean, name: string, auth: string | undefined, value: {account?: MachineAccount | null; detail?: string}) {
   const checked = machine.last_seen_at ? ` · last checked ${agoSaid(machine.last_seen_at)}` : '';
-  if (auth !== 'ready' && machineKeyCleared(machine, name)) return '<span class="pill fail" title="Its key was cleared from Tico: the company\'s shared key does not sign it back in by itself">No key</span>';
+  if (auth !== 'ready' && machineKeyCleared(machine, name)) return '<span class="pill fail" title="Its key was taken off this computer in Tico: give it one in Settings > Models, or sign it in">No key</span>';
   if (auth !== 'ready' && machineSignedOut(machine, name)) return '<span class="pill fail" title="Signed out from Tico: the company\'s shared key does not sign it back in by itself">Signed out</span>';
   if (auth === 'ready') return `${machineAccountHTML(value.account, name, value.detail)}${online ? '' : ` <span class="muted">${esc(checked.slice(3))}</span>`}`;
   if (auth === 'rejected') return `<span class="pill fail" title="${esc(value.detail || '')}">Login expired or rejected</span>`;
@@ -419,26 +419,20 @@ function machineSignInHTML(machine: DeviceMachine, online: boolean, name: string
 }
 // A login someone signed out from Tico (backend/model_login.py model_login_cleared); '' is the computer's own login.
 const machineSignedOut = (machine: DeviceMachine, runtime: string, profile = '') => (machine.signed_out?.[runtime] || []).includes(profile);
-// Of those, the computer's own login whose key a person cleared (Clear key, not Sign out): it reads "No key · Add key".
+// Of those, the computer's own login whose key was taken off or deleted (not Sign out): it reads "No key".
 const machineKeyCleared = (machine: DeviceMachine, runtime: string) => machineSignedOut(machine, runtime) && (machine.key_cleared || []).includes(runtime);
-// Sign out / Switch account (or Use the shared key, or Switch to subscription for the computer's login on an API key)
-// for one login, from the shared sign-in module (ui/model-login.ts).
+// Sign out / Switch account (or Use the shared key) for one login, from the shared sign-in module (ui/model-login.ts).
 const machineLoginActions = (machine: DeviceMachine, online: boolean, runtime: string, profile: string, signedIn: boolean) => window.TicoModelLogin?.actionsHTML({
   runnerId: machine.id, runtime, machine: machine.label, profile, signedIn, signedOut: machineSignedOut(machine, runtime, profile), online,
-  platform: machine.platform || '', onKey: !profile && machine.readiness?.runtimes?.[runtime]?.account?.kind === 'api_key'}) || '';
-// The key a login runs on (its readiness `key`: {name, source}), by its stored preview only: this computer's own key or
-// the company's shared one (backend/computer_keys.py), or one set on the computer itself.
+  platform: machine.platform || ''}) || '';
+// The key a login runs on (its readiness `key`: {name, source}), by its stored preview only: one given to this computer
+// alone or to several in Settings > Models (backend/model_subscriptions.py key_listing), or one set on the computer.
 function machineKeyHTML(machine: DeviceMachine, runtime: string, key: MachineKey | null | undefined) {
   if (!key) return '';
   const stored = key.source === 'computer' ? machine.keys?.[runtime] : key.source === 'shared' ? machine.shared_keys?.[runtime] : null;
   const whose = ({computer: 'this computer\'s key', shared: 'the company\'s shared key', terminal: 'a key set on the computer'} as Record<string, string>)[key.source] || 'a key';
   return ` <span class="muted machine-key" data-machine-key="${esc(key.source)}">· ${esc(whose)}${stored?.preview ? ` <code>${esc(stored.preview)}</code>` : ''}</span>`;
 }
-// Replace key / Clear key, or Add key, from the shared sign-in module (ui/model-login.ts).
-const machineKeyActions = (machine: DeviceMachine, online: boolean, runtime: string, key: MachineKey | null | undefined, signedIn: boolean) => (window.TicoModelLogin?.keyActionsHTML({
-  runnerId: machine.id, runtime, machine: machine.label, key, signedIn, online}) || '')
-  + (signedIn && key ? window.TicoModelLogin?.toSubscriptionHTML({runnerId: machine.id, runtime, machine: machine.label, online,
-    platform: machine.platform || ''}) || '' : '');
 // The row's sign that the screen is on: a link to it for whoever may open it.
 function machineScreenHTML(machine: DeviceMachine) {
   if (!machine.screen || machine.screen === 'off' || machine.revoked_at) return '';

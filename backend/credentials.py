@@ -45,7 +45,7 @@ BOTS = 'bots'
 # A grant to every computer, present and future: a model API key or token that signs each computer's model CLI in
 # (runner-rs/src/signin.rs `team_model_keys`). Never a bot's: a bot still gets only what is granted to it.
 COMPUTERS = 'computers'
-# A model key for computers is a subscription now (backend/computer_keys.py), given in Settings > Models.
+# A model key for computers is a subscription now (backend/model_subscriptions.py), given in Settings > Models.
 MODELS_FOR_COMPUTERS = 'Give model keys to computers in Settings > Models'
 FILE_MIGRATION = 'credential-file-migration-v1'
 # 0.2.30 reserved every HUB_ name, so a team's own HUB_ keys (HUB_BUCKET) were left out of v1. v2 adds only those.
@@ -1292,7 +1292,7 @@ def install_credentials(app, store, delegate=None, propose=None):
         from .tools_delegation import DELEGATE_VIAS
 
         if body.subject == COMPUTERS:
-            # A model key for computers is a subscription now (backend/computer_keys.py), given in Settings > Models.
+            # A model key for computers is a subscription now (backend/model_subscriptions.py), given in Settings > Models.
             raise Problem('subject', MODELS_FOR_COMPUTERS, 422)
         if who.via in DELEGATE_VIAS and not who.confirmed and propose:
             # BotOps giving a bot a stored credential for a credential administrator who asked in chat runs at once, as
@@ -1365,7 +1365,7 @@ def install_credentials(app, store, delegate=None, propose=None):
 
             api_tools.refuse_finance_key(c, [cid])  # a Finance source still reads it (409 key_in_use)
             row = vault.row(c, cid)
-            from .computer_keys import before_delete
+            from .model_subscriptions import before_delete
 
             before_delete(c, who, cid)
             grants = c.execute('DELETE FROM credential_grants WHERE credential_id=?', (cid,)).rowcount
@@ -1556,26 +1556,26 @@ def install_credentials(app, store, delegate=None, propose=None):
 
     @app.get('/api/v2/runner-model-credentials')
     def model_credentials(request: Request, runtime: str, login: str = ''):
-        """The model key or token this computer signs `runtime` in with: the key subscription it is given (its own,
-        stored from Settings > Computers, or a shared one). Only those, named for this runtime: never one granted to a
-        bot, never a subscription saved in Settings > Models. Runners of v0.6.0-rc.1 on poll it, so the reply keeps
-        its shape (backend/computer_keys.py keys_for)."""
+        """The model key or token this computer signs `runtime` in with: the key subscription it is given that is kept
+        in the vault (its own, added from Settings > Computers before D11-4, or a shared one). Only those, named for
+        this runtime: never one granted to a bot, never a subscription sealed in Settings > Models. Runners of
+        v0.6.0-rc.1 on poll it, so the reply keeps its shape, and `login` (a key job's id) is still taken and answered
+        with nothing (backend/model_subscriptions.py keys_for)."""
         who = request.state.identity
         names = providers.MODEL_KEYS.get(runtime)
         if who.role != 'runner':
             raise Problem('forbidden', 'Only a registered computer may ask for this', 403)
         if not names:
             raise Problem('runtime', 'That runtime has no key or token to sign in with', 422)
-        from .computer_keys import keys_for
+        from .model_subscriptions import keys_for
 
         def chosen(c):
             if not c.execute('SELECT 1 FROM runners WHERE id=? AND revoked_at IS NULL', (who.runner_id,)).fetchone():
                 raise Problem('forbidden', 'Only a registered computer may ask for this', 403)
-            # Which key, in the one order (backend/computer_keys.py): a key staged for its `use_key` job, else the
-            # key it is given; none once a person cleared it or signed it out (model_login).
+            # The key it is given; none once a person cleared it or signed it out (model_login).
             return keys_for(c, vault, who.runner_id, runtime, login)
 
-        # Most computers poll with no key to send (signed out, switching, subscription): answer those from a read,
+        # Most computers poll with no key to send (signed out, or on a subscription): answer those from a read,
         # so the poll never queues for the write lock. Sending a key records it, so that runs in one write transaction.
         with store.read_transaction() as c:
             reply, sent = chosen(c)

@@ -120,7 +120,6 @@ backend/company_page/settings.py
 backend/company_page/stats.py
 backend/company_server.py
 backend/company_storage.py
-backend/computer_keys.py
 backend/computers.py
 backend/computers_routes.py
 backend/config.py

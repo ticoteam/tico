@@ -3200,7 +3200,7 @@ class LoginStart(Contract):
     profile: Annotated[str, Field(pattern=r"^(?:[a-z0-9]+(?:-[a-z0-9]+)*)?$", max_length=80)] = ""
     # Sign in to another account in place: the old login keeps working until the new one has finished.
     switch: bool = False
-    # Switch type: "subscription" moves the computer's own login off its API key, once the sign-in has worked.
+    # Switch to subscription, from a page drawn before D11-5: refused with where keys are changed now.
     to: Literal["", "subscription"] = ""
 
 
@@ -3215,32 +3215,11 @@ class RemovalStart(Contract):
 
 
 class SharedKeyUse(Contract):
-    """Use the shared key again on a signed-out login; with `credential`, Add connection > API key > "Use a shared
-    key": that shared key, attached to this computer (a credential administrator's change)."""
+    """Use the shared key again on a signed-out login. `credential` (attaching a shared key from Add connection) is
+    refused: keys are given to computers in Settings > Models now (backend/model_login.py MOVED)."""
 
     runtime: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]*$", max_length=40)]
     credential: str = Field(default="", max_length=100)
-
-
-class KeyClear(Contract):
-    """Clear key on a computer; "all" clears the company's shared key on every computer it serves."""
-
-    runtime: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]*$", max_length=40)]
-    scope: Literal["this", "all"] = "this"
-
-
-class KeyReplace(Contract):
-    """Replace key (or Add key) on a computer. The key is sealed in the vault; nothing sends it back (backend/computer_keys.py)."""
-
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=False)
-    runtime: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]*$", max_length=40)]
-    secret: SecretStr = Field(max_length=4000)
-    env: str = Field(default="", max_length=100, pattern=r"^$|^[A-Z_][A-Z0-9_]*$")
-    scope: Literal["this", "all"] = "this"
-    # Add connection > API key > "Shared with: [computers]": the other computers it serves (this one always does).
-    share: list[Annotated[str, Field(max_length=100)]] = Field(default_factory=list, max_length=200)
-    # Switch to API key: the computer's own login moves off its subscription onto this key once the key works there.
-    switch: bool = False
 
 
 class LoginCode(Contract):

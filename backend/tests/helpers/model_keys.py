@@ -1,4 +1,5 @@
-"""Helpers that other tests share, moved out of test_computer_keys.py so they import no test file."""
+"""Model keys given to computers, as tests seed them: computers that report which key they sign in with, and keys
+kept for computers before they became subscriptions, moved as an upgrade moves them (the two key migrations)."""
 
 import importlib
 import uuid
@@ -9,10 +10,32 @@ from backend.tests.helpers.onboarding import signed_in
 
 
 CAPABLE = ["model_sign_out_v1", "model_keys_v1"]
-
-
 SHARED = "sk-team-key-0123456789"
 MOVE = importlib.import_module("backend.migrations.20261117061243_computer_keys_to_subscriptions")
+DROP = importlib.import_module("backend.migrations.20261117085930_drop_computer_keys")
+# The two tables the drop migration removes, as v0.6.0-rc.1 made them (backend/migrations/baseline.sql).
+LEGACY = (
+    "CREATE TABLE IF NOT EXISTS computer_keys(credential_id TEXT PRIMARY KEY REFERENCES credentials(id), "
+    "runner_id TEXT NOT NULL REFERENCES runners(id), runtime TEXT NOT NULL, state TEXT NOT NULL, login_id TEXT, "
+    "created_at TEXT NOT NULL, created_by TEXT NOT NULL)",
+    "CREATE INDEX IF NOT EXISTS computer_keys_by_runner ON computer_keys(runner_id,runtime,state)",
+    "CREATE TABLE IF NOT EXISTS model_login_key_off(runner_id TEXT NOT NULL REFERENCES runners(id), "
+    "runtime TEXT NOT NULL, profile TEXT NOT NULL DEFAULT '', set_at TEXT NOT NULL, set_by TEXT NOT NULL, "
+    "PRIMARY KEY(runner_id,runtime,profile))",
+)
+
+
+def legacy(c):
+    """Put back the tables a database had before the drop migration, to seed what an older install held."""
+    for statement in LEGACY:
+        c.execute(statement)
+
+
+def upgrade(c):
+    """Run both key migrations, as a database that held computer keys is upgraded."""
+    legacy(c)
+    MOVE.up(c)
+    DROP.up(c)
 
 
 def shared_before(api, *cids, subject="computers"):
@@ -26,7 +49,7 @@ def shared_before(api, *cids, subject="computers"):
                 "INSERT INTO credential_grants(id,credential_id,subject,granted_by,created_at) VALUES(?,?,?,?,?)",
                 (uuid.uuid4().hex, cid, subject, "human:owner", datetime.now(timezone.utc).isoformat()),
             )
-        MOVE.up(c)
+        upgrade(c)
     return cids[0]
 
 
@@ -70,12 +93,7 @@ def report(api, machine, lid, state, message=""):
         headers={"Authorization": "Bearer " + machine["token"], "Idempotency-Key": uuid.uuid4().hex},
     )
     assert r.status_code == 200, r.text
-
-
-def pending(api, machine):
-    r = api.get("/api/v2/runner-logins", headers={"Authorization": "Bearer " + machine["token"]})
-    assert r.status_code == 200, r.text
-    return r.json()["logins"]
+    return r.json()
 
 
 def fetch(api, machine, login="", runtime="codex"):
@@ -87,8 +105,8 @@ def fetch(api, machine, login="", runtime="codex"):
     return r.json()
 
 
-def listed(api, machine):
-    return next(m for m in call(api, "GET", "operations")["computers"] if m["id"] == machine["runner_id"])
+def listed(api, machine, who=None):
+    return next(m for m in call(api, "GET", "operations", who=who)["computers"] if m["id"] == machine["runner_id"])
 
 
 def setup(environment):

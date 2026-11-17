@@ -1,4 +1,4 @@
-"""Computer routes: enrollment, heartbeat, runner logins and harness actions, computer keys, revoke."""
+"""Computer routes: enrollment, heartbeat, runner logins and harness actions, revoke."""
 
 import json
 from fastapi import Request
@@ -246,85 +246,27 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
             ),
         )
 
-    # A signed-out computer login takes the company's shared key again.
+    # A signed-out computer login takes the key it is given again. Attaching a shared key (`credential`) is refused:
+    # keys are given to computers in Settings > Models now.
     @app.post("/api/v2/computers/{rid}/shared-key")
     def use_shared_key(request: Request, rid: str, body: M.SharedKeyUse):
         if body.credential:
-            return mutate(
-                request,
-                body,
-                lambda c: model_login.attach_shared_key(
-                    c, request.state.identity, rid, body.runtime, body.credential, auth=auth, vault=app.state.vault
-                ),
-            )
+            raise Problem("moved", model_login.MOVED, 410)
         return mutate(
             request,
             body,
-            lambda c: model_login.use_shared_key(
-                c, request.state.identity, rid, body.runtime, auth=auth, vault=app.state.vault
-            ),
+            lambda c: model_login.use_shared_key(c, request.state.identity, rid, body.runtime, auth=auth),
         )
 
-    # Clear key / Replace key (backend/computer_keys.py). What signs it in, and for the company's shared key every
-    # computer it serves: the "this computer only / all of them" ask. Previews only.
-    @app.get("/api/v2/computers/{rid}/keys")
-    def computer_key_info(request: Request, rid: str, runtime: str):
-        with store.read() as c:
-            return model_login.key_info(c, request.state.identity, rid, runtime, auth=auth, vault=app.state.vault)
+    # Add, Replace and Clear key, and Switch to API key, from Settings > Computers. No v0.6.0-rc.1 runner or CLI
+    # calls these; a page drawn before D11-5 calls one once, and is told where keys are changed now. The body (a
+    # pasted key included) is never read.
+    def moved(request: Request, rid: str):
+        raise Problem("moved", model_login.MOVED, 410)
 
-    @app.post("/api/v2/computers/{rid}/keys/clear")
-    def clear_computer_key(request: Request, rid: str, body: M.KeyClear):
-        return mutate(
-            request,
-            body,
-            lambda c: model_login.clear_key(c, request.state.identity, rid, body.runtime, body.scope, auth=auth),
-        )
-
-    # The key goes to the vault, never into the login relay; the vault's own write path keeps it out of the request
-    # receipt (a keyed fingerprint, as for Credentials).
-    @app.post("/api/v2/computers/{rid}/keys")
-    def replace_computer_key(request: Request, rid: str, body: M.KeyReplace):
-        who = request.state.identity
-        vault = app.state.vault
-        if body.share and body.switch:
-            raise Problem(
-                "switch",
-                "Switch to API key gives this computer a key of its own; share a key from Add connection instead",
-                422,
-            )
-        return vault.change(
-            who,
-            request.url.path,
-            request.headers.get("idempotency-key"),
-            body,
-            lambda c, w: None,
-            lambda c: (
-                model_login.share_key(
-                    c,
-                    who,
-                    rid,
-                    body.runtime,
-                    body.secret.get_secret_value(),
-                    body.env,
-                    body.share,
-                    auth=auth,
-                    vault=vault,
-                )
-                if body.share
-                else model_login.replace_key(
-                    c,
-                    who,
-                    rid,
-                    body.runtime,
-                    body.secret.get_secret_value(),
-                    body.env,
-                    body.scope,
-                    auth=auth,
-                    vault=vault,
-                    switch=body.switch,
-                )
-            ),
-        )
+    app.get("/api/v2/computers/{rid}/keys", include_in_schema=False)(moved)
+    app.post("/api/v2/computers/{rid}/keys", include_in_schema=False)(moved)
+    app.post("/api/v2/computers/{rid}/keys/clear", include_in_schema=False)(moved)
 
     @app.get("/api/v2/computers/{rid}/logins/{lid}")
     def read_login(request: Request, rid: str, lid: str):

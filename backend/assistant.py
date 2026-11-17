@@ -256,7 +256,7 @@ NEVER = [
         (None, r"/api/v2/bots/[^/]+/agent-credential(/revoke)?"),
         (None, r"/api/v2/github/app/replace-lost-key"),
         (None, r"/api/v2/triggers/[^/]+/signing"),
-        # A computer's sign-in and its keys: its logins, logouts, shared key and keys (`model_login`, `computer_keys`), and a
+        # A computer's sign-in: its logins, logouts and shared key (`model_login`; `keys` only refuses now, D11-5), and a
         # model subscription's connect. Its enrollment and pairing codes are the person's own tap too.
         (None, r"/api/v2/computers/[^/]+/(shared-key|logins(/.*)?|logouts(/.*)?|keys(/.*)?)"),
         (None, r"/api/v2/runner-logins/[^/]+/(report|subscription)"),

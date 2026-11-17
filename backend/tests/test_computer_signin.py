@@ -2,7 +2,7 @@
 
 from backend.tests.helpers.getting_started import add_bot, heartbeat  # noqa: F401
 from backend.tests.helpers.onboarding import environment, signed_in
-from backend.tests.helpers.computer_keys import shared_before
+from backend.tests.helpers.model_keys import shared_before
 from backend.tests.helpers.computer_signin import computer_asks, grant, new_computer, store, vault
 
 
