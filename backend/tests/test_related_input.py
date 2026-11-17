@@ -335,3 +335,11 @@ def test_the_migration_adds_the_kind_and_keeps_every_row():
     assert [r[0] for r in conn.execute("SELECT id FROM requirements ORDER BY id")] == ["r1", "r2"]
     assert conn.execute("SELECT 1 FROM sqlite_master WHERE name='requirements_stage'").fetchone()
     assert conn.execute("SELECT COUNT(*) FROM related_inputs").fetchone()[0] == 0
+
+
+def test_a_stage_whose_time_runs_out_with_nobody_picked_moves_on(features, jev, time_machine):
+    row = _related(features)
+    time_machine.move_to(START + timedelta(hours=4, minutes=1), tick=False)
+    _beat(features)
+    assert _asked(features, row) == []
+    assert _stage(features, row) == "features-ok-spec"

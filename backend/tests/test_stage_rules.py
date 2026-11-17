@@ -363,3 +363,19 @@ def test_a_start_never_sweeps_open_snoozes_with_the_depends_on_question(company,
     with company.read() as c:
         assert E.task(c, row["id"]).get("snooze")
     assert jev.calls == []
+
+
+def test_a_timer_never_asks_the_decision_model(c):
+    with pytest.raises(Problem) as refused:
+        SR.add(
+            c,
+            ANA,
+            {
+                "name": "Timer asks",
+                "event": "timer",
+                "timer": {"kind": "quiet", "hours": 6},
+                "jev": "Is it done?",
+                "then": "tell_owner",
+            },
+        )
+    assert refused.value.detail == "A timer never asks the Decision model: use fixed conditions"
