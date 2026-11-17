@@ -150,6 +150,9 @@ AUDIENCE = {
     # The Tools page's owner bot proposes key grants in its own chat (backend/key_grants.py refuses any other caller); a
     # person grants on the card. Never the Assistant.
     "tico_tools_propose_grant": ("bot", "botops"),
+    # Access requests' weekly numbers are the Tools Owner's review (backend/access_requests.py); the Assistant's listing
+    # stays small.
+    "tico_access_stats": PEOPLE + BOTS,
     # Org changes: the Strategy Owner's owner chat makes one the person asked for, citing their words (`on_behalf_of`).
     **{name: REQUESTER + ("assistant",) for name in ("tico_group_update", "tico_group_delete", "tico_org_reports_to")},
     # Maintenance: the owner or an admin changes it; the team reads it (backend/maintenance.py may_change).
@@ -466,6 +469,8 @@ DEVELOPER_TOOLS = frozenset(
         "tico_task_label",
         "tico_task_snooze",
         "tico_task_queue",
+        # Access to a tool or a repository a code bot needs (backend/access_requests.py), never a task to a person.
+        "tico_access_request",
         "tico_task_release",
         "tico_task_worktree_add",
         "tico_task_worktree_attach",
@@ -537,9 +542,15 @@ def listing(local=False, kind=None, profile=None):
     """`tools/list` payload: the public fields of every tool this server may offer this kind of caller (all of them
     when the kind is not known), never an UNLISTED one, and with a profile only its list (PROFILES). Sorted by
     name, so the order never depends on where a tool is defined (and `tico_<noun>_<verb>` names keep a noun's tools
-    together)."""
+    together). Only the Assistant's listing is compacted (_advertised): every other caller gets the full schema, which
+    a caller checks (backend/tests/test_mcp.py)."""
+    compact = kind == "assistant"
     return [
-        {"name": t["name"], "description": t["description"], "inputSchema": _advertised(t["inputSchema"])}
+        {
+            "name": t["name"],
+            "description": t["description"],
+            "inputSchema": _advertised(t["inputSchema"]) if compact else t["inputSchema"],
+        }
         for t in sorted(TOOLS, key=lambda t: t["name"])
         if t["name"] not in UNLISTED
         and (local or not t.get("local"))
@@ -550,8 +561,9 @@ def listing(local=False, kind=None, profile=None):
 
 def _advertised(schema):
     """A copy of a tool's input schema without `additionalProperties: false`, which is about 8.5 KB of the Assistant's
-    listing. Only the listing drops it: TOOLS keeps the full schema, and `_mcp.argument_error` still refuses an unknown
-    argument on every call, so a client that sends one is refused as before."""
+    listing. Only the Assistant's listing drops it (listing, kind "assistant"): TOOLS keeps the full schema, and
+    `_mcp.argument_error` still refuses an unknown argument on every call, so a client that sends one is refused as
+    before."""
     if isinstance(schema, dict):
         return {k: _advertised(v) for k, v in schema.items() if not (k == "additionalProperties" and v is False)}
     if isinstance(schema, list):

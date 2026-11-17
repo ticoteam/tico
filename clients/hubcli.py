@@ -454,6 +454,7 @@ def parser():
     from clients.commands import assistant as assistant_commands
     from clients.commands import automations as automations_commands
     from clients.commands import browser as browser_commands, logins
+    from clients.commands import tools as tools_commands
     from clients.commands import tools_admin
 
     sub.add_parser("whoami", help="who you are, to which company, and through which profile").set_defaults(fn="whoami")
@@ -946,6 +947,7 @@ def parser():
     cli_spec.add(sub, strategy_commands.BRAND)
     cli_spec.add(sub, browser_commands.CLI)  # tico browser: clients/commands/browser.py
     cli_spec.add(sub, logins.CLI)  # tico login: clients/commands/logins.py
+    cli_spec.add(sub, tools_commands.ACCESS)  # tico access: clients/commands/tools.py
     cli_spec.add(sub, strategy_commands.CLI)  # tico growth: clients/commands/strategy.py
 
     cli_spec.add(sub, strategy_commands.LENS)  # tico lens: clients/commands/strategy.py

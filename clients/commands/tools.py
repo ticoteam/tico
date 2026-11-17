@@ -8,6 +8,7 @@ import re
 from urllib.parse import quote
 from clients.tico import APIError
 
+from clients.cli_spec import Arg, Command, Group
 from clients.commands._registry import tool
 from clients.commands._schemas import _key, _s
 from clients.commands._shared import _CHANNEL
@@ -295,6 +296,52 @@ def credential_request(api, args):
     if _as_person(api) is not api:
         body["on_behalf_of"] = "turn"
     return api.post("credential-requests", body, key=_key(args))
+
+
+@tool(
+    "tico_access_request",
+    "Ask for a level on a tool in Tools or a GitHub repository that already exists, for yourself (BotOps, the Tools "
+    "Owner and people: `for_bot`). Read where Tico can hold it to reads is granted at once; anything else is one card "
+    "to each person who can grant it, and the first to act decides. Asking again adds nothing and notifies nobody. You "
+    "are woken on your task when it is granted, however it was given: work on something else or end your turn. Use "
+    "this for every access need instead of filing a task. A key that is not stored yet is tico_credential_request.",
+    {
+        "resource": _s(
+            "The tool (its name or id, `tool:<name>`) or the repository (`owner/name`, its short name, `repo:<name>`). "
+            "When several tools give the same variable, name the one you need"
+        ),
+        "level": _s("read (the default) or read_write", enum=["read", "read_write"]),
+        "for_bot": _s("The bot that needs it; you, when you leave it out"),
+        "why": _s("One line for the person: what it is for"),
+        "task": _s("The task that waits on it (its full id); the task your turn is on when you leave it out"),
+    },
+    required=("resource",),
+    writes=True,
+)
+def access_request(api, args):
+    body = {k: args[k] for k in ("resource", "level", "for_bot", "why", "task") if args.get(k)}
+    return api.post("access-requests", body, key=_key(args))
+
+
+@tool(
+    "tico_access_stats",
+    "Access requests in numbers: asked, reached a person, share granted at once, open, median minutes to grant.",
+    {"days": {"type": "integer", "minimum": 1, "maximum": 90, "description": "How many days back; 7 by default"}},
+)
+def access_stats(api, args):
+    return api.get("access-requests/stats" + (f"?days={int(args['days'])}" if args.get("days") else ""))
+
+
+ACCESS = (
+    Group("access", "ask for a level on a tool or a repository; the numbers on asking"),
+    Command(
+        "access request",
+        "ask for Read or Read and write on a tool or a repository",
+        args=(Arg("for_bot", flag="--for", metavar="BOT"),),
+        example="tico access request acme/web --level read --why 'review the release notes'",
+    ),
+    Command("access stats", "the last days' access requests in numbers", example="tico access stats --days 7"),
+)
 
 
 @tool(

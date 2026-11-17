@@ -174,6 +174,7 @@ EMPTY = (
     "credential_uses",
     "credential_requests",
     "credential_imports",
+    "access_requests",  # an open one posts cards and grants: a copy starts with none
     "directory_credentials",
     "company_storage",
     "tico_storage",

@@ -5596,6 +5596,9 @@ def create_app(settings=None):
     from . import api_tools
 
     api_tools.install(app, store, auth, settings)  # Tools: API tools, their keys and levels, and the tool index
+    from . import access_requests
+
+    access_requests.install(app, store, auth, mutate)  # a bot asks for a level on a tool or a repository
     from . import website_tools
 
     website_tools.install(app, store, auth, settings)  # Tools: website tools and their accounts

@@ -216,6 +216,7 @@ let browser: import('playwright').Browser | null = null;
     await page.waitForFunction(() => window.copied === 'It needs the new tax table.');
     // React: six common emoji in the picker; a pick reacts.
     await row(page, 'm2').locator('[data-th-pick]').click();
+    await page.locator('.thv-emoji button').nth(5).waitFor();  // the picker is a page part: it loads on the first click
     assert.ok(await page.locator('.thv-emoji button').count() >= 6);
     await page.locator('.thv-emoji button[data-k="🎉"]').click();
     await row(page, 'm2').locator('.th-react.me').waitFor();

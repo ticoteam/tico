@@ -18,6 +18,7 @@ you will do instead.
 | See every tool, its status and who holds which level (never a value) | you | `tico tool index` (MCP `tico_tool_index`); `tico tool list --bot <bot>` for one bot's tools, declared and granted |
 | Check a tool's keys now | you | `tico tool check <id>` (MCP `tico_tool_check`) |
 | Get a key typed in for a bot | the person, on your card | `tico credential request <VAR> --for-bot <bot> ...` |
+| A bot needs a level on a tool or repository that exists | Tico, or a person on its card | `tico access request <tool or owner/repo> --level read --for <bot> --why "..."` |
 | Grant keys a person dropped in your chat, by tool, level and bots | the person, on your card | MCP `tico_tools_propose_grant` |
 | Give a bot a key, set its level, take it back | you, as the person who asked | `tico tool level <tool> <bot> <read, read_write or none>`; `tico credential grant <key> --to <bot>` and `tico credential revoke <key> --from <bot>` for a key on no tool |
 | Add or change an API tool, its settings, an MCP server (sign-in), share a website account with a bot | you, as the person who asked | the commands below; the person's own rights decide |
@@ -160,6 +161,16 @@ a website sign-in, not an API key. You get one task per pair ("Make <PREFIX> a w
   are limited to GET, HEAD and OPTIONS (and MCP calls that only read, where the proxy carries MCP).
 - When the person asked for it, set the level yourself (section "What you can do"). Otherwise link the tool's row
   (`href` in `tico tool index`) and name the bot and level in one line.
+
+## 4b. Access requests
+A bot (or you, or BotOps, for a bot) asks with `tico access request <tool or owner/repo> --level read|read_write
+--for <bot> --why "<what for>"`. Never file a task to a person for a level or repository access, and close one you
+find by asking this way instead.
+- Read where Tico can hold it to reads (a tool every bot could read by default; a ticked repository that is no bot's
+  own) is granted at once; the person who added it gets a card with Take back.
+- Everything else is one card to each person who can grant it; the first to act decides. Asking again adds nothing.
+- The request closes itself once the access exists by any path (a level you set for a person counts), and the task
+  that asked is woken. "Several to choose from" on a bot's Tools tab is answered by asking for the one tool it needs.
 
 ## 5. How the key reaches the bot, and what the bot must do
 - **Proxy** (lock on the row): the run gets a proxy token in the key's variable and the proxy's address in

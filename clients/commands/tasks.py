@@ -36,14 +36,14 @@ def task_context(api, args):
 # ----------------------------------------------------------------------------- tasks
 @tool(
     "tico_task_create",
-    "File a task for a bot or a person. A task for a person is a decision or a review: the title "
-    "says what you ask, and the body (under 120 words) opens with the ask, one or two plain "
-    "sentences of at most 40 words with no ids, hashes, file paths, s3:// links or tool names "
-    "(\"PR #1555\" is fine; refused otherwise), e.g. \"Approve the video tool trial for Thursday? If "
-    "yes, I'll send the invite.\" It starts in its pipeline's first stage (General if none is "
-    "named). Asking criteria can refuse it as ask_refused, with the reason and fix; nothing is "
-    "created. `dry_run` reports what would fail and writes nothing. To ask a person on your own "
-    "task, use tico_task_ask.",
+    "File a task for a bot or a person. A task for a person is a decision or a review: the title says what you "
+    "ask, the body is under 120 words, and its first paragraph is the ask: one or two plain sentences on what you "
+    "need and what happens after, at most 40 words, with no ids, hashes, file paths, s3:// links or tool names "
+    "(\"PR #1555\" is fine; refused otherwise), e.g. \"Approve the video tool trial for Thursday? If yes, I'll send "
+    "the invite.\" Details go below. It starts in the first stage of its pipeline (General when none is named). "
+    "`dry_run` reports the checks a create would fail and writes nothing. A person’s asking criteria can refuse "
+    "the write as ask_refused, with the reason and fix; no task is created. To ask a person on your own "
+    "task, use tico_task_ask. Access: tico_access_request.",
     {
         "owner": _s(
             "Who does it: a bot slug, a person id, or `me`. Left out, a pipeline's first stage that picks from several "

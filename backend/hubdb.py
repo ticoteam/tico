@@ -1877,12 +1877,14 @@ def check_message_refs(refs, *, make_page=False):
         from .store import Problem
 
         raise Problem("forbidden", "Use the task’s Make page control", 403)
-    if refs and ("key_grant" in refs or refs.get("card") == "key_grant"):
+    if refs and any(card in refs or refs.get("card") == card for card in ("key_grant", "access_request")):
         from . import key_grants
         from .store import Problem
 
-        if not key_grants.MINTING.get():  # only the Tools owner's proposal route builds a key grant card
-            raise Problem("forbidden", "A key grant card is built from the Tools owner's proposal", 403)
+        # Only the Tools owner's proposal route builds a key grant card, and only an access request its card
+        # (backend/access_requests.py).
+        if not key_grants.MINTING.get():
+            raise Problem("forbidden", "A key grant or access request card is built by the server alone", 403)
 
 
 def say(
