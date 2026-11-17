@@ -380,12 +380,6 @@ class Settings:
     slack_route_threshold: float = 0.6
     slack_ask_threshold: float = 0.5
     slack_max_recipients: int = 3
-    # Channels read like an employee reads them: every message in a channel Tico is in is stored;
-    # the readers a channel names in the list in Settings > Tools > Slack get what is unread every
-    # `slack_digest_minutes` (0 pauses delivery, storage goes on), at most `slack_digest_cap`
-    # messages per channel per pass.
-    slack_digest_minutes: int = 60
-    slack_digest_cap: int = 200
     # Link previews (backend/slack_unfurl.py): task links on these hosts, besides the server's own, get a preview in
     # Slack, whose button opens `slack_open_url` ("{id}" is the task id; default the task in the web app).
     slack_unfurl_hosts: tuple = ()
@@ -692,8 +686,6 @@ class Settings:
             slack_route_threshold=float(os.environ.get("TICO_SLACK_ROUTE_THRESHOLD", "0.6") or "0.6"),
             slack_ask_threshold=float(os.environ.get("TICO_SLACK_ASK_THRESHOLD", "0.5") or "0.5"),
             slack_max_recipients=max(1, int(os.environ.get("TICO_SLACK_MAX_RECIPIENTS", "3") or "3")),
-            slack_digest_minutes=max(0, int(os.environ.get("TICO_SLACK_DIGEST_MINUTES", "60") or "60")),
-            slack_digest_cap=max(1, int(os.environ.get("TICO_SLACK_DIGEST_CAP", "200") or "200")),
             slack_unfurl_hosts=tuple(
                 h.strip() for h in os.environ.get("TICO_SLACK_UNFURL_HOSTS", "").split(",") if h.strip()
             ),

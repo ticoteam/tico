@@ -302,7 +302,7 @@ def set_audience(world, audience):
 
 
 # ----------------------------------------------------------------------------- inbound
-def test_a_channel_message_goes_through_the_gateway_as_the_mapped_person_and_never_the_readers_pass(world):
+def test_a_channel_message_goes_through_the_gateway_as_the_mapped_person_and_is_not_stored(world):
     activate_marketing(world)
     envelope = {
         "type": "event_callback",
@@ -624,7 +624,7 @@ def test_an_app_mention_in_a_linked_channel_is_carried_once_and_its_message_form
     }
     assert world.gw.receive(mention) == "posted"
     assert all_rows(world, "SELECT event_id FROM slack_events") == [], (
-        "a linked channel's mention never reaches the readers' pass"
+        "a two-way linked channel's mention is not stored for the gateway"
     )
     # The mention also wakes Tico: core's notice ('human:ana in this thread: ...') is written beside the message.
     [carried] = all_rows(world, "SELECT body FROM messages WHERE kind='say'")
@@ -908,17 +908,123 @@ def test_a_restricted_message_waits_for_a_fresh_member_check_and_is_not_sent_on_
     assert len(world.slack.posts) == 1
 
 
-# ----------------------------------------------------------------------------- audit 40: listed readers of a private channel
-def test_a_private_channels_listed_reader_joins_its_members_thread_and_gets_the_digest(world):
+# ----------------------------------------------------------------------------- read-only links: the channels bots read
+def read_marketing(world, readers=("legal",)):
+    """#marketing on the list with readers, as an owner adds it: a read-only link the gateway then activates."""
     with world.hub.transaction() as c:
-        SC.add(c, world.hub.settings, OWNER, "#secret", readers=["legal"])
-    link_id = request(world, "#secret", thread=MEMBERS)
+        entry = SC.add(c, world.hub.settings, OWNER, "#marketing", readers=list(readers))
+    link_id = entry["link"]["id"]
     assert gate(world, link_id) == "active"
-    assert one(world, "SELECT actor FROM thread_members WHERE thread_id=? AND actor='bot:legal'", MEMBERS)
-    assert (
-        one(world, "SELECT notify FROM thread_followers WHERE thread_id=? AND actor='bot:legal'", MEMBERS)["notify"]
-        == "digest"
+    return link_id
+
+
+def test_a_read_only_link_carries_the_channel_in_and_never_writes_back_to_slack(world):
+    """The channel's members are not checked: one who is not on the roster suspends nothing and their message is
+    skipped. A held message tells nobody in Slack, and what is said in the thread does not go out."""
+    world.slack.members[MARKETING].append("U3")  # not admitted: a two-way link would be refused
+    link_id = read_marketing(world)
+    row = link_row(world, link_id)
+    assert row["read_only"] == 1 and row["audience"] == "members" and ST.view(row)["read_only"] is True
+    thread = row["thread_id"]
+    assert outside_members(world, thread) == [] and all_rows(world, "SELECT * FROM slack_link_members") == []
+    members = {r["actor"] for r in all_rows(world, "SELECT actor FROM thread_members WHERE thread_id=?", thread)}
+    assert members == {"human:ben", "bot:legal"}, "the readers and the admin who listed it"
+    follows = {
+        r["actor"]: (r["following"], r["notify"])
+        for r in all_rows(world, "SELECT actor,following,notify FROM thread_followers WHERE thread_id=?", thread)
+    }
+    assert follows == {"human:ben": (0, "live"), "bot:legal": (1, "digest")}
+
+    assert world.bridge.receive(chan_event(ts(1), "Kickoff is at 10")) == "posted"
+    assert one(world, "SELECT sender_id, conversation_id FROM messages WHERE body='Kickoff is at 10'") == {
+        "sender_id": "human:ana",
+        "conversation_id": thread,
+    }
+    assert world.bridge.receive(chan_event(ts(2), "From outside", user="U3")) == "skipped"
+    assert all_rows(world, "SELECT id FROM messages WHERE body='From outside'") == []
+    assert world.bridge.receive(chan_event(ts(3), "BLOCKME: the plan")) == "held"
+    assert world.slack.ephemeral == [], "a read-only link says nothing in Slack"
+
+    with world.hub.transaction() as c:
+        TH.post(c, OWNER, thread, "Noted in Tico", kind="say", refs={}, via="assistant")
+    assert world.bridge.outbound() == [] and world.slack.posts == []
+    world.clock.advance(ST.CHECK_SECONDS + 1)
+    world.bridge.check_links()
+    assert link_row(world, link_id)["state"] == "active", "an unmapped member suspends nothing"
+
+
+def test_a_read_only_links_readers_wake_once_on_the_hourly_bot_digest(world):
+    from backend import thread_bot_digest
+
+    read_marketing(world)
+    for n in range(3):
+        world.bridge.receive(chan_event(ts(n + 1), f"Update {n}"))
+    assert thread_bot_digest.sweep(world.hub) == 1
+    notice = one(world, "SELECT recipient_id, body FROM messages WHERE kind='notice' AND sender_id='keeper'")
+    assert notice["recipient_id"] == "bot:legal" and ": 3" in notice["body"]
+
+
+def test_a_two_way_link_for_a_channel_bots_read_is_refused_while_the_read_only_link_is_on(world):
+    read_marketing(world)
+    link_id = request(world, "#marketing")
+    assert gate(world, link_id) == "refused"
+    assert "already linked" in link_row(world, link_id)["reason"]
+
+
+def test_send_anyway_carries_a_held_message_of_a_read_only_link_in_as_its_person(world):
+    from backend import org_rule_check as OR
+
+    link_id = read_marketing(world)
+    rule_world(world)
+    assert world.bridge.receive(chan_event(ts(1), "The favorite color is teal")) == "held"
+    hold = one(world, "SELECT id, nonce FROM org_rule_holds")
+    with world.hub.transaction() as c:
+        OR.send(c, OWNER, hold["id"], hold["nonce"], auth=Auth(world.hub))
+    carried = one(world, "SELECT sender_id, conversation_id FROM messages WHERE body='The favorite color is teal'")
+    assert carried == {"sender_id": "human:ana", "conversation_id": link_row(world, link_id)["thread_id"]}
+    assert world.slack.ephemeral == []
+
+
+def test_the_list_adds_and_takes_off_readers_and_the_last_one_ends_the_read_only_link(world):
+    link_id = read_marketing(world, readers=("legal", "assistant"))
+    thread = link_row(world, link_id)["thread_id"]
+    with world.hub.transaction() as c:
+        left = SC.remove(c, world.hub.settings, OWNER, "#marketing", reader="assistant")
+    assert left["readers"] == ["legal"] and link_row(world, link_id)["state"] == "active"
+    assert all_rows(world, "SELECT 1 FROM thread_members WHERE thread_id=? AND actor='bot:assistant'", thread) == []
+    with world.hub.transaction() as c:
+        last = SC.remove(c, world.hub.settings, OWNER, "#marketing", reader="legal")
+    assert last["readers"] == [] and last["link"] is None
+    assert link_row(world, link_id)["state"] == "unlinked"
+    # Listed again with a reader, the channel gets a new read-only link; a refused one is asked again.
+    with world.hub.transaction() as c:
+        again = SC.add(c, world.hub.settings, OWNER, "#marketing", readers=["legal"])
+    assert again["link"]["id"] != link_id and again["link"]["state"] == "requested"
+    world.slack.channels[MARKETING]["is_ext_shared"] = True
+    assert gate(world, again["link"]["id"]) == "refused"
+    with world.hub.transaction() as c:
+        asked = SC.add(c, world.hub.settings, OWNER, "#marketing", readers=["assistant"])
+    assert asked["link"]["id"] == again["link"]["id"] and asked["link"]["state"] == "requested"
+    assert asked["readers"] == ["legal", "assistant"]
+    # Taken off the list, the read-only link ends with it.
+    with world.hub.transaction() as c:
+        SC.remove(c, world.hub.settings, OWNER, "#marketing")
+    assert link_row(world, again["link"]["id"])["state"] == "unlinked"
+
+
+def test_a_reader_of_a_two_way_linked_channel_follows_its_thread_and_the_channel_keeps_its_link(world):
+    link_id = activate_marketing(world)
+    with world.hub.transaction() as c:
+        entry = SC.add(c, world.hub.settings, OWNER, "#marketing", readers=["legal"], name="marketing")
+    assert entry["link"]["id"] == link_id and entry["readers"] == ["legal"]
+    follow = one(
+        world, "SELECT following, notify FROM thread_followers WHERE thread_id=? AND actor='bot:legal'", COMPANY
     )
+    assert (follow["following"], follow["notify"]) == (1, "digest")
+    with world.hub.transaction() as c:
+        assert SC.remove(c, world.hub.settings, OWNER, "#marketing", reader="legal")["readers"] == []
+        SC.remove(c, world.hub.settings, OWNER, "#marketing")
+    assert link_row(world, link_id)["state"] == "active", "a two-way link is the thread's, not the list's"
 
 
 # ----------------------------------------------------------------------------- audit 23 (Slack): a terminal refusal surfaces once

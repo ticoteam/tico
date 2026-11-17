@@ -5,8 +5,8 @@
 A DM to Tico, or an `@Tico` in a channel Tico has been invited to, wakes the bot the
 message is for. The reply comes back in the same thread or DM under that bot's name, with
 `(sent from <bot>)` as its last line. Everything else said in a channel Tico is in is
-stored, and the channel's readers get what they have not seen within the hour, the way a
-bot subscribed to the channel catches up on it. One Slack app, one process on the server,
+stored, and a channel bots read comes into its Tico thread, where its readers catch up
+within the hour. One Slack app, one process on the server,
 and the decision model deciding who a DM or a mention is for. The code is
 `backend/slack_gateway.py`.
 
@@ -17,8 +17,8 @@ and the decision model deciding who a DM or a mention is for. The code is
 | A DM to Tico | Routed; the reply lands at the bottom of the DM, or in the reply thread the human wrote in. A DM is one Tico conversation per bot for its life, however the human types: a follow-up at the bottom of the DM continues it. |
 | `@Tico` in a channel Tico is in | Routed; the reply goes under the message. Mentioning Tico again in that thread continues the same conversation. |
 | A reply in a thread a bot already talks in, no mention | Routed at once, like a mention: the decision model sees the thread's routing and the reply usually continues it. |
-| Any other message in a channel Tico is in, bots' posts included | Stored (Channels, below). The channel's readers get it on the hourly pass; nobody is woken now. A bot still reads a channel with `connectors/slack.py history` during its own run, which the gateway answers (Bots on computers, below). |
-| An edit or a deletion in a channel | Applied to the stored message; a reader that had already seen it is told. |
+| Any other message in a channel Tico is in, bots' posts included | Stored (Channels, below). In a channel bots read it also goes into the channel's thread, and its readers hear of it in the hourly bot digest; nobody is woken now. A bot still reads a channel with `connectors/slack.py history` during its own run, which the gateway answers (Bots on computers, below). |
+| An edit or a deletion in a channel | Applied to the stored message, and to the thread's copy. |
 | A join, a reaction | Ignored. |
 | A file shared with a DM, a mention or a channel message | A `[file F...] name` line per file is added to the message; the bot opens it with `connectors/slack.py file --id F...`, which the gateway downloads (the app needs `files:read`). |
 | A Slack Connect or externally shared channel | Refused; nothing is written. |
@@ -123,56 +123,38 @@ same thread; each reply lands in the thread under its own name.
 
 ## Channels, read like a bot reads them
 
-A bot in a channel is meant to have the channel's full context, the way a human subscribed to
-it does, and not in realtime: `@Tico` for a faster response, otherwise within the hour, if
-there are changes. The store is the record of what is read:
+A bot that reads a channel has the channel's full context, the way a person subscribed to it does, and not in
+realtime: `@Tico` for a faster response, otherwise within the hour, if there are changes.
 
 - **Stored.** Every message in a channel Tico is in (`message.channels`, `message.groups`) is
   written to `slack_events` as it arrives, before the envelope is acknowledged, unique on
-  `(channel, ts)`: humans' messages, bots' and apps' posts (an alert feed is all bots), Tico's
-  own mirrored replies, with the author's kind and name. An edit (`message_changed`) replaces
-  the stored text and marks the row edited; a deletion marks it deleted. Nothing is ever
-  pruned; the history builds up in the database.
-- **Read.** `slack_reads` holds one cursor per channel and reader: the newest `ts` that
-  reader has been handed, and when. It moves only in the transaction that writes the digest.
-  A message the fast lane already routed to a bot counts as read by it. A reader named for a
-  channel for the first time starts at now: the channel's past is context, not unread.
-- **Unread.** For a reader, the stored rows in the channel past its cursor, not deleted, plus
-  rows it has seen that were edited or removed since its last pass. That is the whole query;
-  Slack is never asked what is new.
-- **Gaps.** Socket Mode replays nothing, so each pass first pulls `conversations.history` per
-  readable channel from the newest stored message and `conversations.replies` for the threads
-  the gateway talks in or whose root is on that page, into the same table. What history finds
-  is stored, never routed: an old mention found this way wakes nobody late. A channel Tico is
-  not a member of is reported once and skipped until the next start. This also means the
-  readers work before `message.channels` is subscribed, an hour behind.
-
-**The hourly pass** (`TICO_SLACK_DIGEST_MINUTES`, default 60; `0` pauses delivery while storage
-goes on), for each reader that is an active bot, in one transaction:
-
-1. Per channel it reads, the unread rows, grouped by thread in order. A thread whose root was
-   seen before is shown with its root and the last three earlier replies marked `(earlier)`,
-   then the new ones; a message edited after delivery comes again marked `(edited)`, one
-   removed after delivery as `(message removed)`. Names are the roster names Slack reports,
-   permalinks link the threads, the channel's note (Settings > Tools > Slack) heads the section.
-2. A channel with more than `TICO_SLACK_DIGEST_CAP` (200) unread is skimmed: the oldest 200,
-   a line saying how many more, and the cursor still moves to the end, so a storm is not
-   replayed next hour.
-3. One message into the reader's `Slack channels` conversation (a `direct` conversation between
-   the owner and the bot, opened once), written by the owner because nobody said it; it
-   carries the channels, the count and the event ids in `refs.slack.digest`, and queues one
-   run for the bot. A reader with several channels gets one message covering all of them, so
-   an engineering bot's twenty alert channels are one run an hour, not twenty.
-4. Nothing unread in any of its channels, nothing written, no run.
-5. A channel with `digest_hours: N` reaches its readers at most once in N hours; until then its
-   messages wait unread and the cursor stays. A high-volume channel is best read daily: otherwise every message would cost a short run.
+  `(channel, ts)`: humans' messages, bots' and apps' posts, Tico's own mirrored replies, with
+  the author's kind and name. An edit (`message_changed`) replaces the stored text and marks the
+  row edited; a deletion marks it deleted. Message automations on the channel hear these rows,
+  and bots' `history` reads are answered from Slack.
+- **Read-only thread.** A channel bots read is linked to a Tico thread that only takes Slack in
+  (`slack_thread_links.read_only`, see [threads.md](threads.md)): a members thread named for the
+  channel, owned by the person who listed it, with the readers as members. Each message goes in as
+  its roster author through screening and the org rule check, like a two-way link's, and nothing
+  goes back to Slack: no copies of the thread, and no private note when a message is held. The
+  channel's members are not mapped, so someone who is not on the roster suspends nothing; their
+  messages are skipped. Slack Connect is still refused.
+- **Readers.** Each reader follows the thread at `digest`. The hourly bot digest
+  (`thread_bot_digest`) wakes an active reader once with every thread it follows that has news,
+  so an engineering bot's twenty alert channels are one run an hour, not twenty. A paused bot
+  waits until it is back.
 
 Readers are named per channel in the Slack channel list, which lives in the database and is managed
 in the app (Tools > Slack channels, `tico slack channel add '#name' --reader cto`, or BotOps
-as the person who asked). Only an owner or an admin changes it, like turning posting off. A channel may be listed
-by name alone: the gateway asks Slack for its id. Reading grants no posting right: a reader that wants to say
-something in the channel is bound by `post:` and the solicited-reply rule exactly as before,
-and its digest says so.
+as the person who asked). Only an owner or an admin changes it, like turning posting off. Adding a reader to a
+channel with no link makes the read-only link; a channel already linked both ways keeps its link, and the reader
+follows that thread. Taking the last reader off, or the channel off the list, ends a read-only link. A channel may be
+listed by name alone: the gateway asks Slack for its id. Reading grants no posting right: a reader that wants to say
+something in the channel is bound by `post:` and the solicited-reply rule exactly as before.
+
+The gateway used to read these channels itself, once an hour, into a digest message per reader. The upgrade
+moves each channel's readers to a read-only link and follows (`20261117104315_slack_readers_to_links`); the old
+digests stay readable on the bot's Messaging page link (`GET /api/v2/messaging/bots/{bot}/slack-digests/{id}`).
 
 ## Replies back to Slack
 
@@ -251,12 +233,11 @@ the preview is sent again with the same link as text.
 
 | Table | One row per | States |
 |---|---|---|
-| `slack_events` | Slack message, unique on `event_id` and on `(channel, ts)`; `author`, `author_name`, `edited`, `deleted` | `received`, `denied`, `recorded`, `routed`, `failed`; `stored` for a channel message the readers get |
+| `slack_events` | Slack message, unique on `event_id` and on `(channel, ts)`; `author`, `author_name`, `edited`, `deleted` | `received`, `denied`, `recorded`, `routed`, `failed`; `stored` for a channel message nobody was woken for |
 | `slack_threads` | Slack thread and bot: the Tico conversation it continues | |
 | `slack_posts` | bot reply to mirror | `ready`, `sending`, `sent`, `rate_limited`, `failed`, `uncertain` |
 | `slack_requests` | bot's history read or file download waiting on the gateway; deleted once read, or after 10 minutes | `pending`, `running`, `done`, `failed` |
-| `slack_reads` | channel and reader: the cursor (`last_ts`, `last_run`, `digests`) | |
-| `slack_digests` | digest written: the reader, its conversation and message, the channels, the event ids it covered | |
+| `slack_digests` | digest the old hourly pass wrote (read-only; nothing writes it) | |
 
 Only `slack_posts` is in `tico sql`'s safe-column list (`backend/sql.py`, `docs/hub-sql.md`); the other Slack tables are not readable there.
 
@@ -268,8 +249,7 @@ Settings: `TICO_SLACK_GATEWAY_ENABLED` (the kill switch), `SLACK_TEAM_ID`
 (the one workspace whose events are accepted), `SLACK_APP_ID` (optional; the app `bots.info`
 must name), `TICO_SLACK_SECRET_ARN` (the JSON credential `{"bot_token","app_token","team_id","app_id"}`;
 unset, the tokens come from Tools > Slack), and the
-three thresholds above, `TICO_SLACK_DIGEST_MINUTES` and `TICO_SLACK_DIGEST_CAP` (Channels,
-above), and `TICO_SLACK_UNFURL_HOSTS`, `TICO_SLACK_OPEN_LABEL` and `TICO_SLACK_OPEN_URL` (Link previews,
+three thresholds above, and `TICO_SLACK_UNFURL_HOSTS`, `TICO_SLACK_OPEN_LABEL` and `TICO_SLACK_OPEN_URL` (Link previews,
 above). Only the gateway process reads it; the API never holds a Slack token. Change them in `.env` and run `docker compose up -d`, which restarts only the gateway.
 
 Start-up verifies `auth.test` (the workspace) and `bots.info` (the app) and refuses to run on a
@@ -277,9 +257,8 @@ mismatch; it lists any missing scope in the log. `python -m backend.slack_gatewa
 only that verification and prints it. A post that was mid-flight at the last stop is marked
 `uncertain` on start, never resent.
 
-Kill switch: `TICO_SLACK_GATEWAY_ENABLED=0` (through `configure`) stops ingress, egress and
-the readers' pass; the tables stay for audit. `TICO_SLACK_DIGEST_MINUTES=0` pauses only the
-readers' pass. Rollback beyond that is removing the `app_mention`, `message.im`,
+Kill switch: `TICO_SLACK_GATEWAY_ENABLED=0` (through `configure`) stops ingress and egress,
+read channels included; the tables stay for audit. Rollback beyond that is removing the `app_mention`, `message.im`,
 `message.channels`, `message.groups` and `link_shared` subscriptions from the app manifest; nothing in
 Tico needs undoing.
 
@@ -312,15 +291,15 @@ FROM slack_events WHERE state NOT IN ('routed', 'recorded', 'denied') ORDER BY r
 SELECT message_id, bot, channel, thread_ts, state, attempts, next_attempt_at, slack_ts, error
 FROM slack_posts WHERE state NOT IN ('sent') ORDER BY created_at;
 
--- what each reader has seen of each channel, and the last digest it got
-SELECT r.channel, r.reader, r.last_ts, r.last_run_at, r.digests,
-       (SELECT COUNT(*) FROM slack_events e WHERE e.channel=r.channel AND e.ts>r.last_ts AND e.deleted_at IS NULL) AS unread
-FROM slack_reads r ORDER BY r.reader, r.channel;
+-- each read channel's link and readers
+SELECT l.channel_ref, l.channel_id, l.state, l.reason, f.actor
+FROM slack_thread_links l LEFT JOIN thread_followers f
+  ON f.thread_id=l.thread_id AND f.following=1 AND f.notify='digest' AND f.actor LIKE 'bot:%'
+WHERE l.read_only=1 AND l.state<>'unlinked' ORDER BY l.channel_ref, f.actor;
 ```
 
-A reader that should start further back than now: set its `last_ts` to the `ts` to start
-after (the next pass delivers everything past it, capped). A reader taken off a channel
-keeps its cursor rows; nothing is delivered to it.
+A read-only link that stays `requested` or is `refused` names why in `reason`; invite Tico to the channel, then
+add a reader again (or Resume) to ask once more.
 
 For an `uncertain` post, open the exact thread in Slack. If the reply is there, record its
 timestamp and close the row:
@@ -347,11 +326,11 @@ reaches Legal in the same conversation), an explicit address, a message for two 
 four-way tie capped at three, the low-confidence fallback, a message with no question that wakes nobody,
 a refused recipient, at-most-once posting with the `uncertain`, `rate_limited` and `failed`
 states, restart recovery, the customize fallback, a DM, and the kill switch. For the channels:
-a stored message reaching every reader once and the cursors moving with it, the fast lane and
-the pass never handing a reader the same message twice, a thread delivered with its earlier
-lines as context, edits and deletions before and after delivery, the cap and the cursor moving
-past what it skipped, a reply in a bot's thread routed at once, the channel copy of a mention
-routed once, history filling a gap without routing and an unreadable channel skipped, a refused
-delivery leaving the cursors where they were, and the pause. Nothing live is called.
+a read channel's message stored and carried into its thread, its active readers woken once by
+the hourly bot digest (a paused one waits), nothing posted back, a reply in a bot's thread routed
+at once, the channel copy of a mention routed once, and message automations hearing a read
+channel but not a two-way linked one. `backend/tests/test_slack_threads.py` covers the read-only
+link itself and `backend/tests/test_slack_channels.py` the list, its readers and the upgrade.
+Nothing live is called.
 `backend/tests/test_slack_bots.py` covers the bots' routes: every gate, the 503s, history and files through the
 request thread, a post in the outbox and its Slack Connect cancel, a DM, and Send anyway on a held post.

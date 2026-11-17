@@ -43,8 +43,8 @@ def listed(api, name):
     """A channel on the team's Slack list (Settings > Tools > Slack)."""
     with api.app.state.store.transaction() as c:
         c.execute(
-            "INSERT INTO slack_channels(key,name,readers,created_at,updated_at) VALUES(?,?,?,?,?)",
-            ("#" + name, name, "[]", "2026-10-28T00:00:00Z", "2026-10-28T00:00:00Z"),
+            "INSERT INTO slack_channels(key,name,created_at,updated_at) VALUES(?,?,?,?)",
+            ("#" + name, name, "2026-10-28T00:00:00Z", "2026-10-28T00:00:00Z"),
         )
 
 

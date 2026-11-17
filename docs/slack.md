@@ -44,8 +44,10 @@ list in Tico's database, not a file:
 - **By asking BotOps.** "Let the support bot read #customer_success": BotOps adds it as the person who asked,
   so a member is told who to ask. The MCP tools are `tico_slack_channel_add`, `_list` and `_remove`.
 
-A reader gets what is new in the channel about once an hour, as a message in its own thread
-([slack-gateway.md](slack-gateway.md)). A bot's own `history` reads through `connectors/slack.py` follow the same
+A channel with readers is linked to a read-only thread: the channel's messages come in, nothing goes back to Slack,
+and each reader follows the thread and gets what is new about once an hour ([slack-gateway.md](slack-gateway.md)).
+The channel's name in Tools > Slack channels opens that thread. A channel already linked both ways keeps its link,
+and its readers follow that thread. A bot's own `history` reads through `connectors/slack.py` follow the same
 list and its `tools:` entry, checked by Tico and answered by the gateway. Channels shared outside the workspace are always refused, whatever the list says.
 
 ## Link a channel to a thread
@@ -68,6 +70,8 @@ A channel can be linked to a Tico thread, and the two carry each other's message
   suspended and one Needs-you item asks an owner to look. Nothing moves until the link is checked again
   (`POST /api/v2/slack/links/{id}/resume`). A message that arrives while the link is suspended is kept, and posted in order
   when the link resumes.
+- A link made for bots that read the channel (above) is read-only: none of the member checks, notes or posts back to
+  Slack apply, and a sender who is not on the roster is skipped. It ends with its last reader.
 - Unlinking (`DELETE /api/v2/slack/links/{id}`) stops both ways at once: the channel stops being one of the thread's
   readers, and anything not yet sent is not sent.
 - Slack senders are looked up once an hour, not once a message. A repeated edit event (Slack retries) is one revision,

@@ -1,11 +1,14 @@
 /* Tools > Slack channels: which channels bots may read and post in (docs/slack.md). An owner or an admin adds one,
-   names the bots that read it, and says whether bots may post there. Bots' Slack reads follow this list. */
+   names the bots that read it, and says whether bots may post there. Bots' Slack reads follow this list. A channel's
+   readers are the bots that follow its thread at digest: the channel name opens that thread. */
 'use strict';
 
 // The state /v2/slack/channels answers with. get() and post() are untyped JS, so these shapes are declared, not checked.
 interface SlackBot { id: string; name: string; }
+interface SlackChannelLink { thread_id: string; state: string; reason?: string | null; }
 interface SlackChannelRow {
-  channel: string; id?: string | null; name?: string | null; readers: string[]; post?: boolean; note?: string | null;
+  channel: string; id?: string | null; name?: string | null; readers: string[]; link?: SlackChannelLink | null;
+  post?: boolean; note?: string | null;
 }
 interface SlackChannelsState { bots?: SlackBot[]; channels?: SlackChannelRow[]; }
 interface Window {
@@ -26,8 +29,14 @@ window.mountSlackChannels = async function (host) {
   const botName = (id: string) => bots.find(b => b.id === id)?.name || id;
   const options = (row: SlackChannelRow) => bots.filter(b => !row.readers.includes(b.id))
     .map(b => `<option value="${text(b.id)}">${text(b.name)}</option>`).join('');
+  const LINK_STATE: Record<string, string> = {requested: 'Waiting', suspended: 'Suspended', refused: 'Refused'};
+  const channelCell = (row: SlackChannelRow) => {
+    const link = row.link, name = link ? `<a href="${text(threadHref(link.thread_id))}">${text(row.channel)}</a>` : text(row.channel);
+    const mark = link && LINK_STATE[link.state] ? `<div class="muted" title="${text(link.reason)}">${LINK_STATE[link.state]}</div>` : '';
+    return `<strong>${name}</strong>${row.id && row.name ? `<div class="muted">${text(row.id)}</div>` : ''}${mark}`;
+  };
   const rows = (state.channels || []).map(row => `<tr data-channel="${text(row.channel)}">
-      <td><strong>${text(row.channel)}</strong>${row.id && row.name ? `<div class="muted">${text(row.id)}</div>` : ''}</td>
+      <td>${channelCell(row)}</td>
       <td>${row.readers.map(id => `<span class="fchip">${text(botName(id))} <button type="button" class="linkish" data-slack-unread="${text(id)}" aria-label="Stop ${text(botName(id))} reading">×</button></span>`).join(' ') || '<span class="muted">None</span>'}
         ${options(row) ? `<select data-slack-reader aria-label="Add a reader"><option value="">Add reader</option>${options(row)}</select>` : ''}</td>
       <td><label><input type="checkbox" data-slack-post${row.post ? ' checked' : ''}> Bots post</label></td>

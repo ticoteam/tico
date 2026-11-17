@@ -128,7 +128,7 @@ tasks. It never runs a bot. It runs from the Docker image ([install.md](install.
 on the same host, the Slack gateway (`backend/slack_gateway.py`, its own unit) turns a DM to
 Tico or an `@Tico` in a channel into a message for the bot the decision model routes it to, posts the
 reply back under that bot's name, and stores everything else said in the channels Tico is
-in so that each channel's readers see it within the hour (`docs/slack-gateway.md`).
+in; a channel bots read comes into a read-only thread they catch up on within the hour (`docs/slack-gateway.md`).
 Pages: **Tasks** (where the app opens), **Meetings** (imported transcripts, source sync status, Import, and each meeting's
 action items), **Docs**,
 **Tools**, **Changelog**, the **Team** tree, and under your email **Settings**

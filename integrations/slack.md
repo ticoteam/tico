@@ -33,9 +33,9 @@ tracking, deploys). DMs and
 group DMs people send the bot. A DM to Tico, or an `@Tico` in a channel it is in, wakes the
 employee the decision model routes it to and the reply comes back in that thread under the employee's name
 ([Tico in Slack: the gateway](../docs/slack-gateway.md)). A plain channel message wakes nobody
-at once: it is stored, and the channel's readers (Settings > Tools > Slack) get what they have not seen,
-grouped by thread, on the gateway's hourly pass, the way an employee subscribed to the channel
-catches up on it. A bot whose `channels:` list names a channel reads it with `history` during a turn.
+at once: it is stored, and in a channel bots read (Settings > Tools > Slack) it goes into the channel's
+read-only thread, which each reader follows and catches up on about once an hour, the way an employee
+subscribed to the channel does. A bot whose `channels:` list names a channel reads it with `history` during a turn.
 A channel can also be linked to a Tico thread, both ways ([Slack](../docs/slack.md#link-a-channel-to-a-thread)).
 
 ## How a bot uses it
