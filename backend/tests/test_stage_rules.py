@@ -189,7 +189,7 @@ def test_an_edit_on_a_stale_revision_and_a_bad_rule_are_refused(c):
         SR.add(c, ANA, {"name": "Quiet", "event": "timer", "timer": {"kind": "quiet", "hours": 6}, "then": "block"})
     with pytest.raises(Problem):
         SR.add(c, ANA, {"name": "Odd", "event": "bot_snoozes", "cond": {"moon": "full"}, "then": "block"})
-    assert SR.cost(SR.get(c, SR.REAL_WAIT)) == "one Jev call per event"
+    assert SR.cost(SR.get(c, SR.REAL_WAIT)) == "one Decision model call per event"
 
 
 def test_the_snooze_route_refuses_a_blocked_bot_and_writes_the_rule_on_the_history(api, monkeypatch):

@@ -870,7 +870,7 @@ STABLE = [
         "post",
         "Tasks",
         "attachTaskPage",
-        "Attach a page to a page requirement: Jev checks it, then a named person OKs that version; carries page",
+        "Attach a page to a page requirement: the Decision model checks it, then a named person OKs that version; carries page",
         "TaskResult",
     ),
     (

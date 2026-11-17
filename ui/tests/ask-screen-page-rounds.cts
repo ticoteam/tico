@@ -79,7 +79,7 @@ async function open(page: Page, errors: string[]) {
     if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
     if (p === '/api/v2/needs-you') return json({actor: 'human:ana', count: 2, version: '1', next: null, items: [
       need('t-a', 'Decision view: a page that comes back', 'pa', 3, 10,
-        'New commits since Ana\'s OK. Version 3, after the send back: "' + NOTE + '". Jev is unsure: p 0.73, between 0.2 and 0.75. '
+        'New commits since Ana\'s OK. Version 3, after the send back: "' + NOTE + '". Decision model is unsure: p 0.73, between 0.2 and 0.75. '
         + 'OK Ana (version 3) ' + CONFLICT),
       need('t-b', 'Paste images', 'pb', 1, 11, 'OK Ana (version 1)')]});
     if (p === `/api/v2/oks/${RID}`) return json({error: 'not_found'}, 404);

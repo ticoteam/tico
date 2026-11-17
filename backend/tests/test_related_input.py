@@ -138,7 +138,7 @@ def test_jev_scores_the_bots_and_the_top_two_over_the_bar_are_asked_once(feature
     row = _related(features)
     with features.read() as c:
         (wait,) = W.of(c, E.task(c, row["id"]))
-        assert (wait.state, wait.line) == (W.JEV, "Jev is picking related bots")
+        assert (wait.state, wait.line) == (W.JEV, "Decision model is picking related bots")
     _beat(features)
     (state, questions, label) = jev.calls[0]
     assert label == "related-bots@1" and len(jev.calls) == 1
@@ -159,7 +159,7 @@ def test_jev_scores_the_bots_and_the_top_two_over_the_bar_are_asked_once(feature
         assert "comment on the task once from your area" in wake and f"tico task comment {row['id']}" in wake
         (wait,) = W.of(c, E.task(c, row["id"]))
         assert (wait.state, wait.line) == (W.JEV, "Waiting on comments from billing and mail")
-    assert _events(features, row) == [("picked", "Related input: Jev picked billing (0.95), mail (0.86)")]
+    assert _events(features, row) == [("picked", "Related input: Decision model picked billing (0.95), mail (0.86)")]
     with features.transaction() as c:
         # A pick has no turn on the task, yet its one wake may start its run; the rules that hold at all times hold.
         message = c.execute(
@@ -244,7 +244,10 @@ def test_a_jev_that_fails_is_tried_again_then_the_stage_is_met(features, jev, ti
     assert len(jev.calls) == RI.TRIES
     assert _asked(features, row) == []
     assert _stage(features, row) == "features-ok-spec"
-    assert _events(features, row)[-1] == ("done", "Related input: Jev couldn't pick related bots, so nobody was asked")
+    assert _events(features, row)[-1] == (
+        "done",
+        "Related input: Decision model couldn't pick related bots, so nobody was asked",
+    )
 
 
 def test_a_private_task_asks_only_the_bots_who_can_read_it(features, jev):
