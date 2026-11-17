@@ -388,6 +388,9 @@ KEEP = (
             "blob_media",
             "blobs",
             "bot_agent_instructions",
+            # Run-budget holds before migration 20261117061834_holds_runaway moves them into `holds`: a copy is pruned
+            # before its first start runs that migration, so an unlisted table here would be emptied and its holds lost.
+            "bot_budget",
             "bot_config",
             "bot_settings",
             "bot_control",

@@ -26,14 +26,14 @@ CREATE INDEX IF NOT EXISTS holds_bot ON holds(bot_id) WHERE released_at IS NULL;
 CREATE INDEX IF NOT EXISTS holds_released ON holds(holdable_type, holdable_id, kind, released_at)
   WHERE released_at IS NOT NULL;
 -- Every bot_budget row moves: its open hold, and its last release (the run budget's count starts from it). A row that
--- is held again after a release keeps both. The older table is made empty first when it is gone, so running this again
--- changes nothing.
+-- is held again after a release keeps both. Ids name the row's kind before the bot, so no two bots' rows share one.
+-- The older table is made empty first when it is gone, so running this again changes nothing.
 CREATE TABLE IF NOT EXISTS bot_budget(bot TEXT PRIMARY KEY, held_at TEXT, window TEXT, runs INTEGER, budget INTEGER,
   task_id TEXT, released_at TEXT, released_by TEXT);
 -- bot_id names the held bot on every hold, a bot's own too (none for a bot that is gone).
 INSERT OR IGNORE INTO holds(id, kind, holdable_type, holdable_id, bot_id, reason, details, upkeep_task_id,
   created_by_id, created_at, updated_at)
-SELECT 'bot_budget-' || bb.bot, 'runaway', 'bot', bb.bot, b.id,
+SELECT 'bot_budget:open:' || bb.bot, 'runaway', 'bot', bb.bot, b.id,
   'Tico stopped ' || coalesce(nullif(b.display_name, ''), bb.bot) || ': ' || coalesce(bb.runs, 0) ||
   ' runs in the last ' || coalesce(bb.window, 'hour') ||
   '. This looks like a runaway loop, not normal work. Check its last runs, then release it or raise its budget.',
@@ -45,7 +45,7 @@ WHERE bb.held_at IS NOT NULL;
 -- keeps none. When that release's hold began is not kept: it is dated at the release.
 INSERT OR IGNORE INTO holds(id, kind, holdable_type, holdable_id, bot_id, details, created_by_id, created_at,
   updated_at, released_at, released_by_id, released_how)
-SELECT 'bot_budget-' || bb.bot || '-released', 'runaway', 'bot', bb.bot, b.id,
+SELECT 'bot_budget:released:' || bb.bot, 'runaway', 'bot', bb.bot, b.id,
   CASE WHEN bb.held_at IS NULL THEN
     json_object('window', coalesce(bb.window, 'hour'), 'runs', bb.runs, 'budget', bb.budget)
     ELSE '{}' END,

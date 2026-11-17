@@ -51,7 +51,7 @@ def test_every_bot_budget_row_moves_open_and_released_and_running_it_again_chang
 
         by_id = {row.pop("id"): row for row in moved}
         common = {"kind": "runaway", "holdable_type": "bot", "created_by_id": "keeper"}
-        assert by_id["bot_budget-ops"] == {
+        assert by_id["bot_budget:open:ops"] == {
             **common,
             "holdable_id": "ops",
             "bot_id": "ops",
@@ -64,7 +64,7 @@ def test_every_bot_budget_row_moves_open_and_released_and_running_it_again_chang
             "released_by_id": None,
             "released_how": None,
         }
-        assert by_id["bot_budget-cpo-released"] == {
+        assert by_id["bot_budget:released:cpo"] == {
             **common,
             "holdable_id": "cpo",
             "bot_id": "cpo",
@@ -76,14 +76,14 @@ def test_every_bot_budget_row_moves_open_and_released_and_running_it_again_chang
             "released_by_id": "human:ana",
             "released_how": "person",
         }
-        assert by_id["bot_budget-finance-released"]["details"] == "{}"  # its numbers are the hold open now
-        assert by_id["bot_budget-finance-released"]["released_how"] == "botops"
-        assert by_id["bot_budget-finance"]["released_at"] is None
+        assert by_id["bot_budget:released:finance"]["details"] == "{}"  # its numbers are the hold open now
+        assert by_id["bot_budget:released:finance"]["released_how"] == "botops"
+        assert by_id["bot_budget:open:finance"]["released_at"] is None
         assert set(by_id) == {
-            "bot_budget-ops",
-            "bot_budget-cpo-released",
-            "bot_budget-finance",
-            "bot_budget-finance-released",
+            "bot_budget:open:ops",
+            "bot_budget:released:cpo",
+            "bot_budget:open:finance",
+            "bot_budget:released:finance",
         }
 
         # The run budget reads the moved holds as it read the rows.
@@ -93,6 +93,21 @@ def test_every_bot_budget_row_moves_open_and_released_and_running_it_again_chang
         assert {f["key"] for f in maintenance_health._stop_checks(c)} >= {"turn_budget:ops", "turn_budget:finance"}
         said = [item["why"] for item in general_manager._held(c)]
         assert any("ops is held by its turn budget" in why and "300 runs in the last hour" in why for why in said)
+
+
+def test_a_bot_named_like_another_bots_released_row_keeps_every_row(api):
+    with api.app.state.store.transaction() as c:
+        c.execute(OLD)
+        c.executemany(
+            "INSERT INTO bot_budget(bot,held_at,window,runs,budget,released_at,released_by) VALUES(?,?,?,?,?,?,?)",
+            [
+                ("ops", HELD, "hour", 300, 300, EARLIER, "human:ana"),  # held, and released before
+                ("ops-released", HELD, "day", 2600, 2500, None, None),  # its open hold's id once matched ops's release
+            ],
+        )
+        _migrate(c)
+        carried = {(r["holdable_id"], r["released_at"] is None) for r in _rows(c)}
+        assert carried == {("ops", True), ("ops", False), ("ops-released", True)}
 
 
 def test_put_keeps_one_open_hold_and_release_keeps_it_as_history(api):
