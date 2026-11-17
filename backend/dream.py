@@ -249,7 +249,7 @@ def _asked(c, ask):
 
     mark = question_marks.get(c, ask.requirement_id.removeprefix(question_marks.PREFIX))
     said = mark and c.execute("SELECT body FROM messages WHERE id=?", (mark["message_id"],)).fetchone()
-    return (said[0] if said else "") or ask.line
+    return (said["body"] if said else "") or ask.line
 
 
 def view(c, who, row):
