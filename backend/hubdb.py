@@ -6063,10 +6063,16 @@ def status_set(conn, actor, bot_slug, state=None, focus=None, task_id=None, reas
             (new_id(), slug, old["state"], old["focus"], old["task_id"], old["changed_at"], ts, reason, actor),
         )
     live = state
-    if state == "active":
-        conn.execute("UPDATE bots SET state='active' WHERE id=?", (slug,))
-        live = "idle"
-    elif state in ("paused", "quarantined"):
+    if state in ("active", "paused"):
+        from . import company_pause  # a bot's own pause is a hold (backend/holds.py), kept with bots.state
+
+        if state == "paused":
+            company_pause.pause_bot(conn, actor, slug, reason or "")
+        else:
+            company_pause.resume_bot(conn, actor, slug)
+            conn.execute("UPDATE bots SET state='active' WHERE id=?", (slug,))
+            live = "idle"
+    elif state == "quarantined":
         conn.execute("UPDATE bots SET state=? WHERE id=?", (state, slug))
     row = {
         "bot": slug,

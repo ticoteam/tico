@@ -524,6 +524,7 @@ def prime_bots(conn: "sqlite3.Connection", actors: Collection[str | None]) -> No
     }
     RC.prime(conn, cast("Any", run_backoff).GET_SQL, {(b,): backoffs.get(b) for b in bots})
     holds.prime(conn, holds.RUNAWAY, "bot", bots)
+    holds.prime(conn, holds.PAUSED, "bot", bots)
     cast("Any", reconnects).prime_open(conn, bots, "login:")
 
 

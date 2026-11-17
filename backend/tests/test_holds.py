@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from backend import claim_holds, execution, holds, login_holds, start_holds, task_wakes, views
+from backend import claim_holds, company_pause, execution, holds, login_holds, start_holds, task_wakes, views
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, post, ready, runner
 
@@ -97,11 +97,16 @@ class Case:
 
 
 CASES = [
-    Case(holds.PAUSED, _bot_state("paused"), card=task_wakes.STATE_CAUSES["paused"], label="bot paused"),
+    Case(
+        holds.PAUSED,
+        lambda api, c, rig: company_pause.pause_bot(c, "human:ana", "ops"),
+        card=task_wakes.STATE_CAUSES["paused"],
+        label="bot paused",
+    ),
     Case(holds.QUARANTINED, _bot_state("quarantined"), card="is quarantined", label="bot quarantined"),
     Case(
         holds.COMPANY_PAUSED,
-        lambda api, c, rig: _metadata(c, "company_pause", {"paused_by": "human:ana", "paused_at": NOW}),
+        lambda api, c, rig: holds.put(c, holds.PAUSED, "company", "", actor="human:ana"),
         health="company_paused",
         card=task_wakes.COMPANY_PAUSED,
         label="all bots are paused",

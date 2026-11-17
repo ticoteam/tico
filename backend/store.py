@@ -1278,6 +1278,10 @@ class Store:
             c.execute("INSERT INTO registry_metadata VALUES('people',?)", (encode(people),))
             for slug, state in previous_states.items():
                 c.execute("UPDATE bots SET state=? WHERE slug=?", (state, slug))
+            from . import company_pause
+
+            for (bot,) in c.execute("SELECT id FROM bots WHERE state='paused'").fetchall():
+                company_pause.pause_bot(c, H.KEEPER, bot)  # a registry's paused bot: its own pause is a hold
             for slug, entry in entries.items():
                 team = P.team_of(slug, entries, people)
                 operator = seed_operator(slug, team, people, owner)

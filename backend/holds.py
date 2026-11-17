@@ -6,9 +6,9 @@ kind at a time, written by `put` and ended by `release`:
 
 | kind              | scope   | stored in                                              | ends                               |
 |-------------------|---------|--------------------------------------------------------|------------------------------------|
-| `paused`          | bot     | `bots.state='paused'`                                  | a person resumes it                |
+| `paused`          | bot     | `holds`, kind `paused` on the bot (company_pause)      | a person resumes it                |
 | `quarantined`     | bot     | `bots.state='quarantined'`                             | the cooldown, or a person          |
-| `company_paused`  | company | company_pause.KEY                                      | the owner or an admin resumes      |
+| `company_paused`  | company | `holds`, kind `paused` on the company (company_pause)  | the owner or an admin resumes      |
 | `cloud_locked`    | company | Tico Cloud access (cloud_access)                       | Tico HQ unlocks the company        |
 | `run_hold`        | bot     | `run_backoff.held_at` (failed runs)                    | a try completes, or a release      |
 | `budget`          | bot     | `holds`, kind `runaway` (runaway runs)                 | a release, or a raised budget      |
@@ -420,7 +420,7 @@ def _backoff(a: _Ask) -> bool:
 
 
 CHECKS: dict[str, Callable[[_Ask], bool]] = {
-    PAUSED: lambda a: a.state() == "paused",
+    PAUSED: lambda a: get(a.c, PAUSED, "bot", a.bot) is not None,  # a kind the table stores too
     QUARANTINED: lambda a: a.state() == "quarantined",
     COMPANY_PAUSED: _company_paused,
     CLOUD_LOCKED: _cloud_locked,
