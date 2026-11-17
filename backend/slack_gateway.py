@@ -2565,7 +2565,7 @@ def main(argv=None, make_slack=None):
             if not wait:
                 LOG.error("No Slack tokens: paste them in Tools > Slack or set TICO_SLACK_SECRET_ARN")
                 return 1
-            LOG.info("No Slack tokens yet; paste them in Settings > Slack")
+            LOG.info("No Slack tokens yet; paste them in Tools > Slack")
             if _sleep(stopping, 15):
                 continue
             return 0
