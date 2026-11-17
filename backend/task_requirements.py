@@ -383,17 +383,18 @@ def _previous_page(conn: "sqlite3.Connection", sql: str, visit_id: str, requirem
 
 def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
     """A document approval meets the check only when every submitted page version does."""
-    from . import page_links as L
     from . import task_pages as P
 
-    if not document_of(requirement):
+    document = document_of(requirement)
+    if not document:
         return _one_page(conn, task, requirement, answer)
+    linked = P.live_documents(conn, task["id"], document)
     pages = P.current_pages(conn, task["visit"]["id"], requirement["id"])
-    if not pages:
-        return _one_page(conn, task, requirement, answer)
-    linked = set(L.pages_for(conn, "task:" + task["id"], document_of(requirement)))
-    pages = [p for p in pages if p["file_id"] in linked]
-    if not pages or linked - {str(p["file_id"]) for p in pages}:
+    if linked and not pages:
+        page, _ = page_for(conn, task, requirement)
+        if page:
+            pages = P.current_pages(conn, str(page["visit_id"]), requirement["id"])
+    if not pages or linked.keys() != {str(p["file_id"]) for p in pages}:
         return Standing(requirement, NOT_MET, task.get("owner_id"), "No page attached")
     results = [_one_page(conn, task, requirement, answer, page) for page in pages]
     # Work owed to the writer or decision model comes before asking a person to decide the complete set.

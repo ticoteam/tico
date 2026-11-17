@@ -368,6 +368,8 @@ class Pages:
         replaces = str(fields.get("replaces") or "").strip()
         task = str(fields.get("task") or "").strip()
         spec = str(fields.get("spec") or "").lower() in ("1", "true", "yes")
+        role = str(fields.get("as") or ("Spec" if spec else ""))
+        task_role = page_links.role_name(role) if role else ""
         if spec:
             # A spec is a page on a task in a Product pipeline; its styles are inlined so the stored page reads the same anywhere.
             with self.store.read() as c:
@@ -379,14 +381,8 @@ class Pages:
         # The original's digest stands for the version, so publishing the same page again is no new version.
         fields = {**fields, "name": name, "etag": hashlib.sha256(data).hexdigest()}
 
-        def extra(c, row, changed):
+        def extra(c, row, changed, editor, linked_task):
             now = H.now()
-            editor = who
-            if who.role == "runner":
-                from .auth import Identity
-
-                writer_bot = self.files.writer_bot(c, who, str(fields.get("bot") or ""))
-                editor = Identity("bot:" + writer_bot, "bot")
             c.execute(
                 "INSERT INTO pages(file_id,cadence,as_of,created_at,updated_at,spec) VALUES(?,?,?,?,?,?) "
                 "ON CONFLICT(file_id) DO UPDATE SET cadence=COALESCE(?,cadence),as_of=?,updated_at=?,"
@@ -420,22 +416,11 @@ class Pages:
                 audit_log.write(
                     c, who.actor, "page:" + row["id"] + ":import", None, {**imported, "version": row["current_version"]}
                 )
-            if task:
-                linked_task = self.auth.resolve_task(c, editor, task)
-                self.auth.task(c, editor, linked_task)
-                role = page_links.role_name(str(fields.get("as") or ("Spec" if spec else "related")))
-                page_links.link(c, row["id"], "task:" + linked_task, role, actor)
+            if linked_task:
+                page_links.link(c, row["id"], "task:" + linked_task, task_role or "related", actor)
             from . import task_pages
 
-            # Each task evaluates this version independently, including edits made directly by page id.
-            for document_link in c.execute(
-                "SELECT target,role FROM page_links WHERE page_id=? AND target LIKE 'task:%' "
-                "AND role NOT IN ('writer','related')",
-                (row["id"],),
-            ).fetchall():
-                task_pages.submit(
-                    c, document_link["target"][5:], document_link["role"], row["id"], row["current_version"], actor
-                )
+            task_pages.submit_linked(c, row["id"], row["current_version"], actor)
             if audience_set:
                 self.set_audience(c, editor, row, checked_audience(c, audience))
             if replaces:
@@ -457,15 +442,15 @@ class Pages:
                 H._writer(c, editor.actor, task_id=old["task_id"])
                 c.execute("UPDATE pages SET replaced_by_id=?,updated_at=? WHERE file_id=?", (row["id"], now, old["id"]))
                 self.files.activity(c, old["id"], editor.actor, "modified", now=now, detail={"replaced_by": row["id"]})
-            if task and row["task_id"] == task:
+            if linked_task and row["task_id"] == linked_task:
                 if (
                     who.via == "assistant"
                     and not c.execute(
-                        "SELECT 1 FROM pins WHERE place=? AND item=?", ("task:" + task, "page:" + row["id"])
+                        "SELECT 1 FROM pins WHERE place=? AND item=?", ("task:" + linked_task, "page:" + row["id"])
                     ).fetchone()
                 ):
-                    self.require_pin_space(c, task)
-                self.pin_to_task(c, row, task, actor=who.actor if who.via == "assistant" else None)
+                    self.require_pin_space(c, linked_task)
+                self.pin_to_task(c, row, linked_task, actor=who.actor if who.via == "assistant" else None)
             shown = self.view(
                 c,
                 editor,
@@ -483,6 +468,7 @@ class Pages:
             cleaned,
             extra=extra,
             page_publish=True,
+            task_role=task_role,
             extra_body={
                 "cadence": cadence or "",
                 "as_of": as_of or "",
@@ -530,9 +516,13 @@ class Pages:
                     if not other or not self.files.visible(c, who, other, {}):
                         raise Problem("not_found", "Page not found", 404)
             if remove:
-                page_links.unlink(c, fid, selected, chosen_role, who.actor)
+                changed = page_links.unlink(c, fid, selected, chosen_role, who.actor)
             else:
-                page_links.link(c, fid, selected, chosen_role, who.actor)
+                changed = page_links.link(c, fid, selected, chosen_role, who.actor)
+            if changed and kind == "task" and chosen_role not in ("related", "writer"):
+                from . import task_pages
+
+                task_pages.submit(c, ident, chosen_role, fid, None, who.actor)
             H.event(
                 c, who.actor, "page.unlink" if remove else "page.link", fid, {"target": selected, "role": chosen_role}
             )
@@ -629,6 +619,10 @@ class Pages:
                     detail={"page": sorted(fields), **({"restored": True} if fields.get("archived") == 0 else {})},
                 )
                 H.event(c, who.actor, "page.edit", fid, {"fields": sorted(fields)})
+                if "archived" in fields and fields["archived"] != r["page_archived"]:
+                    from . import task_pages
+
+                    task_pages.submit_linked(c, fid, None, who.actor)
             r = self.rows(c, [fid])[fid]
             return {"page": self.view(c, who, r, self.page_of(r), {}, include_audience=True)}
 

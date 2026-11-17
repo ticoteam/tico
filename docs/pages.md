@@ -22,8 +22,9 @@ have a Spec, a QA report and any number of other pages.
   it is linked elsewhere.
 - **Who may link or unlink:** anyone who may write the page. A task link also needs read access to that task, and a
   document role needs comment access to it. The last writer cannot be unlinked.
-- **Approvals.** A stage's OK covers all pages linked with the required document role at their submitted versions,
-  for that task only. A later version shows as changed since OK. Approval requests covering multiple pages include
+- **Approvals.** A stage's OK covers every live page linked with the required document role at its submitted version,
+  for that task only. Linking a live page adds it to the open approval. Unlinking or archiving removes it. A later
+  version shows as changed since OK. Approval requests covering multiple pages include
   `approval.pages` (each with `file_id` and `version`) and `approval.page_version` (sorted `file@version` entries
   separated by commas). Send that key as `page_version` when answering. Single-page requests keep their existing shape.
 

@@ -1284,22 +1284,9 @@ class Files:
             raise Problem("privacy", "This bot can no longer read the task for this turn", 403)
         return row["conversation_id"], H.message_task_id(message, conversation)
 
-    def target(self, c, who, bot, fields):
-        """(scope, task id, conversation id, attempt id) for a write. Never chosen by a parameter alone:
-        a task must be one this bot may see, and bot-wide is refused from inside a chat."""
-        attempt = (
-            who.attempt_id
-            if who.via == "assistant" or who.role == "bot" and not who.agent
-            else str(fields.get("attempt") or "")
-        )
-        if who.via == "assistant":
-            from .assistant import make_page_task
-
-            task = str(fields.get("task") or "").strip()
-            message = make_page_task(c, self.auth, who, task)
-            if fields.get("scope") not in (None, "", "task"):
-                raise Problem("validation", "Make page is filed on its task", 422)
-            return "task:" + task, task, message["conversation_id"], attempt
+    def write_turn(self, c, who, bot, fields):
+        """Validate the publishing turn before using its provenance, even when the file already exists."""
+        attempt = who.attempt_id if who.role == "bot" and not who.agent else str(fields.get("attempt") or "")
         if attempt:
             request = c.execute(
                 "SELECT m.refs FROM attempts a JOIN jobs j ON j.id=a.job_id "
@@ -1310,6 +1297,20 @@ class Files:
                 raise Problem("forbidden", "Make page publishes as the person who asked", 403)
         conversation, turn_task = self.turn_context(c, who, bot, attempt)
         H._writer(c, self.actor_of(who, bot), task_id=turn_task, attempt_id=attempt)
+        return conversation, turn_task, attempt
+
+    def target(self, c, who, bot, fields):
+        """(scope, task id, conversation id, attempt id) for a write. Never chosen by a parameter alone:
+        a task must be one this bot may see, and bot-wide is refused from inside a chat."""
+        if who.via == "assistant":
+            from .assistant import make_page_task
+
+            task = str(fields.get("task") or "").strip()
+            message = make_page_task(c, self.auth, who, task)
+            if fields.get("scope") not in (None, "", "task"):
+                raise Problem("validation", "Make page is filed on its task", 422)
+            return "task:" + task, task, message["conversation_id"], who.attempt_id
+        conversation, turn_task, attempt = self.write_turn(c, who, bot, fields)
         task = str(fields.get("task") or "").strip()
         wanted = str(fields.get("scope") or "").strip()
         if wanted not in ("", "task", "bot"):
@@ -1581,16 +1582,15 @@ class Files:
         return fid
 
     def attach_task(self, c, who, task_id, item, digest, bot, *, file=None, series=True):
-        """A visible file with the same task and display name continues its series, unless it is one of the task's
-        documents: those get versions only by name, through `file` (backend/task_documents.py), which cleans them. With
-        `series` off and no `file`, a new one starts."""
+        """A visible ordinary file with the same task and display name continues its series. A document is
+        passed as `file` after cleaning its bytes. With `series` off and no `file`, a new one starts."""
         row = file
         if row is None and series:
             rows = c.execute(
                 "SELECT f.* FROM bot_files f JOIN bot_file_versions v "
                 "ON v.file_id=f.id AND v.version=f.current_version "
                 "WHERE f.task_id=? AND f.archived=0 AND v.name=? "
-                "AND NOT EXISTS (SELECT 1 FROM page_links pl WHERE pl.page_id=f.id AND pl.role NOT IN ('writer','related')) "
+                "AND NOT EXISTS (SELECT 1 FROM pages p WHERE p.file_id=f.id) "
                 "ORDER BY f.last_activity_at DESC",
                 (task_id, item["name"]),
             ).fetchall()
@@ -1817,45 +1817,76 @@ class Files:
             return fields, data
         return dict(query), raw
 
-    def publish(self, request, who, fields, data, *, imported=False, extra=None, extra_body=None, page_publish=False):
-        """Bytes into the blob store, then one idempotent transaction that lists them. `extra(c, row, changed)` adds
-        to the same write (a page's row, backend/pages.py) and its answer; `extra_body` is what it adds to the
-        request a retry must repeat."""
+    def page_task(self, c, who, task, role):
+        if not task:
+            if role:
+                raise Problem("validation", "as requires a task", 422)
+            return ""
+        task_id = self.auth.resolve_task(c, who, task)
+        if role:
+            from .task_reads import comment_rights
+
+            comment_rights(c, self.auth, who, task_id)
+        else:
+            self.auth.task(c, who, task_id)
+        return task_id
+
+    def page_for_role(self, c, who, task, role):
+        candidates = c.execute(
+            "SELECT f.* FROM page_links l JOIN pages p ON p.file_id=l.page_id "
+            "JOIN bot_files f ON f.id=p.file_id WHERE l.target=? AND l.role=? AND f.state<>'deleted'",
+            ("task:" + task, role),
+        ).fetchall()
+        visible = [r for r in candidates if self.visible(c, who, r, {})]
+        if len(visible) > 1:
+            raise Problem(
+                "ambiguous", "Choose which page to update", 409, extra={"pages": sorted(r["id"] for r in visible)}
+            )
+        return visible[0] if visible else None
+
+    def require_page_writer(self, c, who, row):
+        from . import page_links
+
+        if not row or row["state"] == "deleted" or not self.visible(c, who, row, {}):
+            raise Problem("not_found", "Page not found", 404)
+        if not page_links.may_write(c, self.auth, who, row):
+            raise Problem("forbidden", "Only page writers may write a version", 403)
+
+    def publish(
+        self,
+        request,
+        who,
+        fields,
+        data,
+        *,
+        imported=False,
+        extra=None,
+        extra_body=None,
+        page_publish=False,
+        task_role="",
+    ):
+        """Bytes into the blob store, then one idempotent transaction that lists them. `extra` adds a page's row,
+        links and response to the same write. `extra_body` is what a retry must repeat."""
         fields = {k: (v if isinstance(v, (str, int, bool)) else "") for k, v in fields.items()}
         failed = str(fields.get("sync") or "") == "failed"
         staged = isinstance(data, Staged)
         size = data.size if staged else len(data)
+        human_page = page_publish and who.role in ("human", "owner") and who.via != "assistant"
+        requested_task = str(fields.get("task") or "").strip()
         with self.store.read() as c:
-            if page_publish and who.role in ("human", "owner") and who.via != "assistant":
+            if human_page:
                 from . import assistant
 
-                from . import page_links
-
+                linked_task = self.page_task(c, who, requested_task, task_role)
                 existing = None
                 if fields.get("page"):
                     existing = c.execute(
-                        "SELECT f.* FROM pages p JOIN bot_files f ON f.id=p.file_id "
-                        "WHERE p.file_id=? AND f.state<>'deleted'",
+                        "SELECT f.* FROM pages p JOIN bot_files f ON f.id=p.file_id WHERE p.file_id=?",
                         (str(fields["page"]),),
                     ).fetchone()
-                elif fields.get("as") and fields.get("task"):
-                    tid = self.auth.resolve_task(c, who, str(fields["task"]))
-                    self.auth.task(c, who, tid)
-                    candidates = c.execute(
-                        "SELECT f.* FROM page_links l JOIN pages p ON p.file_id=l.page_id "
-                        "JOIN bot_files f ON f.id=p.file_id WHERE l.target=? AND l.role=? AND f.state<>'deleted'",
-                        ("task:" + tid, page_links.role_name(str(fields["as"]))),
-                    ).fetchall()
-                    candidates = [r for r in candidates if self.visible(c, who, r, {})]
-                    if len(candidates) == 1:
-                        existing = candidates[0]
-                    elif len(candidates) > 1:
-                        raise Problem(
-                            "ambiguous",
-                            "Choose which page to update",
-                            409,
-                            extra={"pages": sorted(r["id"] for r in candidates)},
-                        )
+                    self.require_page_writer(c, who, existing)
+                elif task_role:
+                    existing = self.page_for_role(c, who, linked_task, task_role)
                 if existing is not None:
                     bot = existing["bot_id"]
                 else:
@@ -1910,7 +1941,7 @@ class Files:
 
         def work(c):
             existing_page = None
-            page_who = who
+            page_who, linked_task = who, ""
             if page_publish and who.role == "runner":
                 run = str(fields.get("attempt") or "")
                 if not run:
@@ -1918,80 +1949,65 @@ class Files:
                 self.turn_context(c, who, bot, run)
                 page_who = Identity("bot:" + bot, "bot", runner_id=who.runner_id, attempt_id=run)
             if page_publish:
-                from . import page_links
-
-                task_id = str(fields.get("task") or "")
-                if task_id:
-                    task_id = self.auth.resolve_task(c, page_who, task_id)
-                    self.auth.task(c, page_who, task_id)
-                    fields["task"] = task_id
-                role = page_links.role_name(str(fields.get("as") or "")) if fields.get("as") else ""
-                if role and not task_id:
-                    raise Problem("validation", "as requires a task", 422)
-                if role:
-                    from .task_reads import comment_rights
-
-                    comment_rights(c, self.auth, page_who, task_id)
+                linked_task = self.page_task(c, page_who, requested_task, task_role)
                 fid = str(fields.get("page") or "")
-                if not fid and role:
-                    candidates = c.execute(
-                        "SELECT f.* FROM page_links l JOIN pages p ON p.file_id=l.page_id "
-                        "JOIN bot_files f ON f.id=p.file_id WHERE l.target=? AND l.role=? AND f.state<>'deleted'",
-                        ("task:" + task_id, role),
-                    ).fetchall()
-                    candidates = [r for r in candidates if self.visible(c, page_who, r, {})]
-                    if len(candidates) > 1:
-                        raise Problem(
-                            "ambiguous",
-                            "Choose which page to update",
-                            409,
-                            extra={"pages": sorted(r["id"] for r in candidates)},
-                        )
-                    if candidates:
-                        fid = candidates[0]["id"]
                 if fid:
                     existing_page = c.execute(
                         "SELECT f.* FROM pages p JOIN bot_files f ON f.id=p.file_id WHERE p.file_id=?", (fid,)
                     ).fetchone()
-                    if (
-                        not existing_page
-                        or existing_page["state"] == "deleted"
-                        or not self.visible(c, page_who, existing_page, {})
-                    ):
-                        raise Problem("not_found", "Page not found", 404)
-                    if not page_links.may_write(c, self.auth, page_who, existing_page):
-                        raise Problem("forbidden", "Only page writers may write a version", 403)
+                    self.require_page_writer(c, page_who, existing_page)
+                elif task_role:
+                    existing_page = self.page_for_role(c, page_who, linked_task, task_role)
+                    if existing_page is not None:
+                        self.require_page_writer(c, page_who, existing_page)
             if existing_page is not None:
                 # Preserve the original file's privacy scope even when this version is written through another task.
-                attempt = who.attempt_id or str(fields.get("attempt") or "")
-                if who.role == "runner":
-                    self.turn_context(c, who, bot, attempt)
                 scope, task, conversation = (
                     existing_page["scope"],
                     existing_page["task_id"],
                     existing_page["conversation_id"],
                 )
-            elif page_publish and who.role in ("human", "owner") and who.via != "assistant":
-                task = str(fields.get("task") or "") or None
+                attempt = who.attempt_id
+                if who.role in ("bot", "runner"):
+                    turn_conversation, _, attempt = self.write_turn(c, who, bot, fields)
+                    if (
+                        attempt
+                        and privacy.private_meetings(c, privacy.meeting_sources(c).attempt(attempt))
+                        and (not turn_conversation or scope != "conversation:" + turn_conversation)
+                    ):
+                        raise Problem("privacy", "Private meeting files stay in their meeting conversation", 403)
+            elif human_page:
+                task = linked_task or None
                 scope, conversation, attempt = ("task:" + task if task else "bot"), None, ""
             else:
-                scope, task, conversation, attempt = self.target(c, who, bot, fields)
-            existing = existing_page if existing_page is not None else self.find(c, bot, scope, identity)
-            if existing and who.via == "assistant" and not self.visible(c, who, existing, {}):
-                raise Problem("not_found", "Page not found", 404)
+                scope, task, conversation, attempt = self.target(
+                    c, who, bot, {**fields, "task": linked_task} if page_publish else fields
+                )
+            file_identity = identity
+            if page_publish and task_role and existing_page is None:
+                # A role without a readable page starts its own series, even when the filename is already in use.
+                file_identity = "document:" + new_id()
+            existing = existing_page if existing_page is not None else self.find(c, bot, scope, file_identity)
+            if existing and page_publish and existing_page is None:
+                if c.execute("SELECT 1 FROM pages WHERE file_id=?", (existing["id"],)).fetchone():
+                    self.require_page_writer(c, page_who, existing)
+                elif who.via == "assistant" and not self.visible(c, who, existing, {}):
+                    raise Problem("not_found", "Page not found", 404)
             stored_task = existing["task_id"] if existing else None
             H._writer(c, self.actor_of(who, bot), task_id=stored_task, attempt_id=attempt)
             with H.refusal_task(task or stored_task):
-                return write_file(c, scope, task, conversation, attempt, existing_page)
+                return write_file(
+                    c, scope, task, conversation, attempt, existing_page, file_identity, page_who, linked_task
+                )
 
-        def write_file(c, scope, task, conversation, attempt, existing_page):
+        def write_file(c, scope, task, conversation, attempt, existing_page, file_identity, page_who, linked_task):
             actor = self.actor_of(who, bot)
             if failed:
                 row, created = self.open_row(
                     c,
                     bot=bot,
                     scope=scope,
-                    identity=identity,
+                    identity=file_identity,
                     title=str(fields.get("title") or name),
                     kind=BF.kind_of(name),
                     mime=mime,
@@ -2011,7 +2027,7 @@ class Files:
                 task=task,
                 conversation=conversation,
                 attempt=attempt,
-                identity=identity,
+                identity=file_identity,
                 title=str(fields.get("title") or ""),
                 name=name,
                 mime=mime,
@@ -2043,7 +2059,7 @@ class Files:
                 file_library.retitle(c, row["id"], row["title"])
             result = {"file": self.brief(c, row), "created": created, "changed": changed, "synced": True}
             if extra:
-                result.update(extra(c, row, changed) or {})
+                result.update(extra(c, row, changed, page_who, linked_task) or {})
             return result
 
         return self.write(request, who, body, work)
@@ -2204,6 +2220,8 @@ class Files:
             raise Problem("forbidden", "Only the owner or a bot administrator manages a bot's files", 403)
 
     def edit(self, request, fid, body):
+        from . import task_pages
+
         who = request.state.identity
 
         def work(c):
@@ -2226,6 +2244,7 @@ class Files:
                 c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), stored["task_id"]))
                 self.activity(c, fid, who.actor, "archived", task=stored["task_id"])
                 removed_event(c, stored["task_id"], who.actor, fid, stored["title"])
+                task_pages.submit_linked(c, fid, None, who.actor)
                 H.event(c, who.actor, "task.file_archived", stored["task_id"], {"file": fid})
                 return {"file": {"id": fid, "archived": True}}
             if not is_file_id(fid) and not stored:
@@ -2267,6 +2286,7 @@ class Files:
                             (task["task_id"], published["id"]),
                         )
                         self.activity(c, published["id"], who.actor, "archived", task=task["task_id"])
+                        task_pages.submit_linked(c, published["id"], None, who.actor)
                     H.event(c, who.actor, "task.file_archived", task["task_id"], {"file": fid})
                 return {"file": {"id": fid, "archived": True}}
             row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
@@ -2307,6 +2327,8 @@ class Files:
             c.execute(
                 "UPDATE bot_files SET " + ",".join(k + "=?" for k in fields) + " WHERE id=?", (*fields.values(), fid)
             )
+            if "archived" in fields and not row["archived"]:
+                task_pages.submit_linked(c, fid, None, actor)
             if "title" in fields:
                 file_library.retitle(c, fid, fields["title"])
             if body.promote:
