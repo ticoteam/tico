@@ -705,7 +705,7 @@ made or revoked is an `events` row (`token.create`, `token.revoke`).
 | `scripts/` | `tico` (the teamwork CLI bots and people use), `tico-computer` (operate this computer), `hub` (`tico`'s old name), setup, publishing and maintenance |
 | `docs/` | team knowledge |
 | `policies/` | rules every bot follows: approvals, access, handoffs, writing, shared rules |
-| `registry/` | bootstrap data: humans, sign-in access, mail rules, Slack channels; `employees.yaml` seeds a new database only |
+| `registry/` | bootstrap data: humans, sign-in access, mail rules; `employees.yaml` seeds a new database only |
 | `templates/` | the bot repository contract and prompt templates |
 | `skills/` | shared runtime skills for bots |
 

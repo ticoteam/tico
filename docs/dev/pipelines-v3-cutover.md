@@ -126,7 +126,7 @@ caller does these, and none may be skipped:
 | done | the task that filed it is told (`linked_done` may now be met) |
 | closed | close its open sub-tasks (`cascade`); stop work still running on it (`stop_ended_work`) |
 | reassign, before | the checks today's owner change runs: may this owner take tasks, same department for a task manager, `strategy_acts.gate` |
-| reassign, after | `task.assigned` to the same three; `reconnects.moved`; the new owner's private default (and every task under it); drop temporary delegations; demote the old owner's sessions; move the worktree link; `task_run_models.moved`; `task_followers.owner_moved`; clear the task goal; rank at the end of the new owner's queue; `reconnects.access_changed` |
+| reassign, after | `task.assigned` to the same three; `reconnects.moved`; the new owner's private default (and every task under it); drop temporary delegations; demote the old owner's sessions; move the worktree link; `task_run_models.moved`; `task_followers.owner_moved`; clear the task goal; the task keeps its rank (its place in the stage; one with none goes to the end of the new owner's queue); `reconnects.access_changed` |
 
 Done does not finish sub-tasks. No chat, email or push goes to a person about a task: a person learns from Needs you.
 

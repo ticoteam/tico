@@ -45,7 +45,6 @@ def test_an_owner_or_admin_lists_a_channel_and_a_member_may_read_the_list_but_no
     for path, body in (
         ("slack/channels", {"channel": "#customer_success", "readers": ["ops"]}),
         ("slack/channels/remove", {"channel": "#customer_success"}),
-        ("slack/channels/import", {}),
     ):
         post(api, path, body, "cara-test", expected=403)
     post(api, "slack/channels", {"channel": "#customer_success", "readers": ["not-a-bot"]}, "ana-test", expected=422)
@@ -94,16 +93,14 @@ def test_botops_and_the_mcp_tools_change_the_list_as_the_person_who_asked(api, b
 
 
 # ------------------------------------------------------------------ the gateway and the connector read the list
-def test_the_gateway_follows_the_list_in_the_database_and_not_the_file(readers, monkeypatch):
+def test_the_gateway_follows_the_list_in_the_database(readers, monkeypatch):
     gw, hub = readers, readers.store
     ana = Identity("human:ana", "owner", "ana@acme.example")
     monkeypatch.setitem(CHANNELS, "C0NEW", {"id": "C0NEW", "name": "newchan"})
     gw.slack.conversations_list = lambda: list(CHANNELS.values())
     with hub.transaction() as c:
-        SC.import_file(c, hub.settings, ana)
         SC.remove(c, hub.settings, ana, "#marketing", reader="cmo")
         SC.add(c, hub.settings, ana, "#newchan", readers=["cto"])  # the name only: Slack gives the id
-    (hub.settings.registry_dir / "slack-channels.yaml").unlink()
     gw.clock.advance(3600)
     gw.tick()  # a new reader starts at now
     with hub.read() as c:

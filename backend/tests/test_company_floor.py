@@ -135,6 +135,28 @@ def test_a_private_pipeline_a_reader_cannot_read_is_not_there(api):
     assert find(theirs, "product")["stages"][0]["count"] == 1
 
 
+def test_a_stage_that_hands_off_names_the_pipeline_it_files_into_when_the_reader_sees_it(api):
+    made = post(api, "factories", {"name": "Growth"})["factory"]
+    pipeline(api, "deals", made["id"], private=True, manager="human:ben")
+    task(api, "Quiet deal", "ben", "deals", token="ben-test", private=True)
+    handoff = {"owner": "assignee", "requirements": [{"kind": "linked_done"}], "on_enter": {"file_into": "deals"}}
+    record = {
+        "name": "Leads",
+        "goal": "Qualify",
+        "factory_id": made["id"],
+        "stages": [
+            {"id": "leads-new", "name": "New", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},
+            {"id": "leads-qualified", "name": "Qualified", **handoff},
+        ],
+    }
+    post(api, "pipelines/leads", record)
+    task(api, "Acme", "cara", "leads")
+    assert [s["into"] for s in find(floor(api), "leads")["stages"]] == [None, "deals"]
+    assert [s["into"] for s in find(floor(api), "deals")["stages"]] == [None, None]
+    # Cara reads none of the private pipeline's tasks: it is not on her Floor, so nothing hands off to it there.
+    assert [s["into"] for s in find(floor(api, "cara-test"), "leads")["stages"]] == [None, None]
+
+
 def test_a_person_the_reader_may_not_see_holds_tasks_counted_but_not_named(acme):
     api, _ = acme
     legal = {"teams": ["legal"]}

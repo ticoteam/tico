@@ -577,11 +577,6 @@ def channel_event_from(payload, bot_user_id):
     return {**head, **row}, None
 
 
-def registry_channels(registry_dir):
-    """The channels the old `registry/slack-channels.yaml` lists, by id (the list now lives in the database)."""
-    return SC.file_channels(registry_dir)
-
-
 def channel_link(team_url, channel):
     return f"{(team_url or 'https://slack.com/').rstrip('/')}/archives/{channel}"
 
@@ -2555,10 +2550,7 @@ def main(argv=None, make_slack=None):
         if not (credentials["bot_token"] and credentials["app_token"]):
             store = store or Store(settings)
             store.initialize()
-            # Under KMS the API sealed the tokens with the vault's key (backend/slack_app.py); open them with the same.
-            from .credentials import Vault
-
-            stored = slack_app.load(store, settings, Vault(store) if settings.credential_kms_key else None)
+            stored = slack_app.load(store)  # sealed in the vault by Tools > Slack (backend/slack_app.py)
             if stored:
                 credentials = stored
         if not credentials["bot_token"] or not credentials["app_token"]:

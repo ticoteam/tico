@@ -1094,7 +1094,6 @@ database stores. A database restored without them cannot open those secrets:
 |---|---|---|
 | `credential.key` | every saved credential ([Credentials](credential-vault.md)) | no `TICO_CREDENTIAL_KMS_KEY` |
 | `github-app.key` | the GitHub App's private key, client secret and webhook secret, and the directory sync credentials | no `TICO_CREDENTIAL_KMS_KEY` (or GitHub connected, or directory sync saved, before it was set) |
-| `slack.key` | the Slack tokens pasted in Settings > Slack | no `TICO_CREDENTIAL_KMS_KEY` (or Slack tokens saved before it was set) |
 
 The backup loop copies each to the same place as the rest (the bucket and prefix in `TICO_BACKUP_URL`, else the
 `tico-backups` volume), as `credential-key/<file>`, when it first appears and whenever it changes. A different copy already there (the key that
@@ -1150,9 +1149,10 @@ docker compose run --rm --no-deps server restore    # database, attachments and 
 docker compose up -d
 ```
 
-**The key files are backed up with the database.** `restore` puts `credential.key`, `github-app.key` and `slack.key` back
-in `/data` (mode 0600) when the backup has them, and says which it does not have. A key already on the volume is left
-alone (with `--force` it is kept beside the restored one as `<file>.before-restore.<time>`). If the database was restored
+**The key files are backed up with the database.** `restore` puts `credential.key`, `github-app.key` (and an older backup's
+`slack.key`, which the first start reads once to move the Slack tokens into the vault) back in `/data` (mode 0600)
+when the backup has them, and says which it does not have. A key already on the volume is left alone
+(with `--force` it is kept beside the restored one as `<file>.before-restore.<time>`). If the database was restored
 by itself on first start, or from a backup made before a file was copied, run `restore` again or copy the object
 `credential-key/<file>` from the backup location to `/data/<file>` by hand (32 bytes, mode 0600, owned by the server's
 user), then restart. Health's **Stored secrets** check names any secret a missing or wrong key file cannot open, and the
@@ -1162,21 +1162,21 @@ credentials again: Tico asks you to confirm replacing the lost key, then drops t
 credentials sealed with it (recorded as `github.lost_key_replaced`), and you enter them again (in the API: `POST
 /api/v2/github/app/replace-lost-key`, or `replace_lost_key` on `PUT /api/v2/directory`; never through a proposal card). With
 `TICO_CREDENTIAL_KMS_KEY` set, credentials, the GitHub App and Slack use the KMS-wrapped key in the database, and only a
-`github-app.key` or `slack.key` from before KMS was set needs keeping.
+`github-app.key` from before KMS was set needs keeping.
 
 **Setting `TICO_CREDENTIAL_KMS_KEY` after GitHub, directory sync or Slack were connected** needs nothing else: a secret
-sealed with `github-app.key` or `slack.key` before then still opens with that file, and the first time the server reads
-it (a GitHub token, a webhook, a directory sync, the Slack gateway starting) it is re-sealed with the KMS-wrapped key, once,
+sealed with `github-app.key` before then still opens with that file, and the first time the server reads
+it (a GitHub token, a webhook, a directory sync) it is re-sealed with the KMS-wrapped key, once,
 and the server log says which (`Re-sealed github_app app ...`, never a secret). Until every one has been re-sealed,
-Health's **Stored secrets** says how many still need each file ("2 secrets still need github-app.key and 1 still needs
-slack.key"): keep the files until that line clears, and keep them in the backup after that too, since a backup from
+Health's **Stored secrets** says how many still need each file ("2 secrets still need
+github-app.key"): keep the files until that line clears, and keep them in the backup after that too, since a backup from
 before KMS still needs them. Reading never makes a new one. If a file is gone, **Stored secrets** warns and names what
 it sealed; enter those again.
 
 **Hand-run and scheduled bundle backups carry the key files too.** The bundle that `python -m backend.manage backup`
 uploads, and the scheduled AWS backup (`backups/<tier>/...`, the same bundle code), holds the database at its key, its
-manifest and the attachments, and also each of `credential.key`, `github-app.key` and
-`slack.key` present beside the database, as `<key>.keys/<file>`, each read back after upload; a key file that is not 32
+manifest and the attachments, and also each of `credential.key` and `github-app.key`
+present beside the database, as `<key>.keys/<file>`, each read back after upload; a key file that is not 32
 bytes stops the backup before its manifest is published. `python -m backend.backup --bucket ... --key ... --database
 <new path> ...` restores them beside the new database (mode 0600) after checking each against the manifest, and refuses,
 before restoring anything, when a different key of that name is already in the target directory. A bundle made before
@@ -1194,7 +1194,7 @@ no other reader; turn on versioning, and never share it with the attachment buck
 **`manage.py restore` is in place, on the same machine.** `python -m backend.manage restore <snapshot> <new database>`
 restores a local snapshot file next to the key files already on this computer; it does not read or move key files. To
 restore on another machine, use the bundle restore (`python -m backend.backup`, which brings the key files back) or
-`docker compose run --rm server restore`, or copy `credential.key`, `github-app.key` and `slack.key` across yourself
+`docker compose run --rm server restore`, or copy `credential.key` and `github-app.key` across yourself
 (32 bytes each, mode 0600, owned by the server's user).
 
 **Restore an existing install.** `restore` refuses a volume that already holds data. Stop the server and add `--force`
@@ -1225,7 +1225,7 @@ first; two servers writing to one bucket corrupt the replica. A fresh volume tha
 database by itself on first start, but run `restore` so attachments, the key files and any error are visible. This
 needs the bucket, so with the default local-only backups you can only rebuild on the same computer; that is the reason
 to set `TICO_BACKUP_URL`. Moving the volume by hand instead (a `docker cp` or a disk copy) needs every file in `/data`,
-not only `hub.sqlite`: `credential.key`, `github-app.key` and `slack.key` with it, or the secrets they seal are lost.
+not only `hub.sqlite`: `credential.key` and `github-app.key` with it, or the secrets they seal are lost.
 
 Runners hold no team data that is not in a git remote, but back up their volume if bots keep local work.
 

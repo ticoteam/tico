@@ -243,11 +243,11 @@ def test_no_fallback_ready_for_claim_persists_one_hold_until_named_reset(api, mo
 
 
 def test_missing_fallback_setup_is_not_a_capacity_or_quota_error():
-    from backend import run_backoff
+    from backend import run_failures
     from datetime import datetime, timezone
 
     error = 'No fallback configured on this computer; finish fallback setup before retrying.'
-    assert not run_backoff.is_limit(error)
+    assert not run_failures.is_limit(error)
     assert not login_holds.capacity(error)
     assert login_holds.reset_from_text(error, datetime(2026, 10, 26, 11, tzinfo=timezone.utc)) is None
 

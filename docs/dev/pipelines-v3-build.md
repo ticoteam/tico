@@ -360,7 +360,7 @@ through `hubdb._wake`, whose holds belong to the old engine.
 `cannot_run` reads saved state only, and asks no computer. Its causes, first that applies: the bot was removed; its
 state is not active ("is paused", "is quarantined", "has not started yet"); "The company is paused"; "Tico Cloud is
 locked"; "Tico Cloud is out of credit" (a bot on Tico's model only); "has no computer" (no assignment, or a revoked
-computer; a computer that is offline is not a cause); "keeps failing its runs" (held by `run_backoff`). The three whole
+computer; a computer that is offline is not a cause); "keeps failing its runs" (held by `run_failures`). The three whole
 sentences stop every bot they touch and are one Needs-you row for the company owner. Still to add: a login to
 reconnect, and over a limit.
 

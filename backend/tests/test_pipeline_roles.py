@@ -18,9 +18,8 @@ from backend.tests.helpers.fresh_install import (  # noqa: F401
 
 TM = "general-manager"
 ASSIGNEE = "assignee"
-# The stages the task's feature owner holds, from Pitch to Validate.
+# The stages the task's feature owner holds, from Spec to Validate.
 OWNER_STAGES = (
-    "product-ideas",
     "product-spec",
     "product-related",
     "product-ok-spec",

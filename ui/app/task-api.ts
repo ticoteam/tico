@@ -328,9 +328,10 @@ const taskAsk = (id: string, b: TaskAskNew, version: number | null): Promise<Tas
 const taskWithdrawAsk = (id: string, rid: string, why?: string): Promise<TaskMoved> =>
   writeRequest('DELETE', `/v2/tasks/${encodeURIComponent(id)}/asks/${encodeURIComponent(rid)}`, why ? {why} : {});
 /** ok, no (send back, with a note), again (look again), or the answer to a question. On a page, `pageVersion` is the
-    page the person was shown (`<file id>@<version>`): refused when another is attached now. */
-const taskAnswer = (id: string, rid: string, value: string, version: number | null, note?: string, pageVersion?: string): Promise<TaskMoved> =>
-  post(`${askPath(id, rid)}/answer`, withVersion(version, {value, ...(note ? {note} : {}), ...(pageVersion ? {page_version: pageVersion} : {})}), newRequestId());
+    page the person was shown (`<file id>@<version>`): refused when another is attached now. With `visitId` it is a
+    document approval's whole key: a stale one is refused with the version submitted now (decide.ts). */
+const taskAnswer = (id: string, rid: string, value: string, version: number | null, note?: string, pageVersion?: string, visitId?: string): Promise<TaskMoved> =>
+  post(`${askPath(id, rid)}/answer`, withVersion(version, {value, ...(note ? {note} : {}), ...(pageVersion ? {page_version: pageVersion} : {}), ...(visitId ? {visit_id: visitId} : {})}), newRequestId());
 const answerUndo = (answerId: string): Promise<TaskMoved> => post(`/v2/answers/${encodeURIComponent(answerId)}/undo`, {}, newRequestId());
 
 // ---- an OK bound to what was shown

@@ -1,8 +1,8 @@
 import type {Page, Route} from 'playwright';
 // Offline browser check of the ask screen on a 390 px phone (task #454, spec "Review on a phone"), against a fake of the
 // new routes. An ask is answered in its task's chat (decide.ts decideChatMount):
-// - two tabs, Chat and the document's; an OK opens on its document, a question on Chat; the chat and its row take the
-//   rest, the row at the bottom;
+// - an OK has tabs, Chat and what it shows, and opens on what it shows; a question on a task with no documents has
+//   none; the chat and its row take the rest, the row at the bottom;
 // - Approve and Snooze stay fully visible, at least 44 px tall and tappable while ↶ shows: it sits in the top bar;
 // - ‹ › show on the phone, 8 px clear of ✕: next opens the next item and previous comes back;
 // - a second tap on the same spot within 400 ms of the next item coming in approves nothing;
@@ -204,18 +204,18 @@ const box = async (page: Page, sel: string): Promise<Box | null> => page.locator
     await at(3);
     await dialog.locator('.dc-thing .dc-bg').waitFor({state: 'attached'});   // its task: one line under it (#3786)
     await page.waitForTimeout(100);
-    check(await dialog.locator('[data-dc="tab"][data-dc-tab="chat"]').getAttribute('aria-selected') === 'true', 'a question opens on Chat');
+    check(await dialog.locator('[data-dc="tab"]').count() === 0, 'a question on a task with no documents: no tabs, just its chat');
     const head = (await box(page, '#need-card .dc-head'))!, q = (await box(page, '#need-card .dc-msg-ask .dc-q'))!;
     const composer = (await box(page, '#need-card .dc-chat .thv-composer .p-pill'))!;
     check(q.y >= head.y + head.height && q.y + q.height <= composer.y, `the question is on screen in the chat, above the box (${q.y}..${q.y + q.height}, box at ${composer.y})`);
     // No forward action: the box is full width, and Snooze and ⋯ are two icons at the right end of the tabs row, ⋯ last.
     check(composer.width >= VIEW.width - 40, `the box is full width (${composer.width})`);
     const tabs = (await box(page, '#need-card .dc-tabs'))!, sz = (await box(page, snooze))!, more = (await box(page, '#need-card [data-dc="ask-more"]'))!;
-    const list = (await box(page, '#need-card .dc-tabs [role="tablist"]'))!, title = (await box(page, '#need-card .dc-tabs-t'))!;
+    const title = (await box(page, '#need-card .dc-tabs-t'))!;
     check([sz, more].every(b => b.y >= tabs.y - 1 && b.y + b.height <= tabs.y + tabs.height + 1 && b.width >= 44 && b.height >= 44),
       `Snooze and ⋯ are 44 px icons in the tabs row (${JSON.stringify([tabs, sz, more])})`);
-    check(sz.x >= list.x + list.width && more.x >= sz.x + sz.width - 1 && more.x + more.width <= VIEW.width, 'Snooze then ⋯ at the right end, after the tabs');
-    check(title.x + title.width <= list.x + 1 && title.width > 40, `the title gives way, cut before the tabs (${JSON.stringify(title)})`);
+    check(more.x >= sz.x + sz.width - 1 && more.x + more.width <= VIEW.width, 'Snooze then ⋯ at the right end');
+    check(title.x + title.width <= sz.x + 1 && title.width > 40, `the title gives way, cut before Snooze (${JSON.stringify(title)})`);
     check(await dialog.locator('.dc-tabs-t').evaluate(e => getComputedStyle(e).textOverflow === 'ellipsis'), 'the title is cut with an ellipsis');
     if (shots) await page.screenshot({path: path.join(shots, 'ask-phone-390-question.png')});
     await page.close();

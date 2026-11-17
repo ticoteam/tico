@@ -22,6 +22,7 @@ from . import models as M
 from . import people as P
 from .store import H, Problem
 from .views import human_only, roster
+from .api_contract import api_v2
 
 SECTIONS = ("doc", "task", "feature")
 PUSHABLE = SECTIONS
@@ -434,7 +435,14 @@ def install_meeting_items(app, store, mutate, task_create, auth):
                 result['item'] = view(one(c, rid, iid))
             return redact(c, request.state.identity, auth, result)
 
-    @app.get("/api/v2/meetings/{rid}/items")
+    @app.get(
+        "/api/v2/meetings/{rid}/items",
+        **api_v2(
+            "Meetings",
+            "listMeetingItems",
+            "Pending and sent items grouped by section; can_send for every reader of a live meeting, audience for a private meeting. Task references are redacted per viewer",
+        ),
+    )
     @app.get("/api/meetings/{rid}/items")
     def items(request: Request, rid: str):
         who = request.state.identity
@@ -442,7 +450,14 @@ def install_meeting_items(app, store, mutate, task_create, auth):
         with store.read() as c:
             return listing(c, who, rid, auth)
 
-    @app.post("/api/v2/meetings/{rid}/items")
+    @app.post(
+        "/api/v2/meetings/{rid}/items",
+        **api_v2(
+            "Meetings",
+            "addMeetingItem",
+            "Add a pending item, or upload an already sent item with status=pushed and a result_ref for a task you requested",
+        ),
+    )
     @app.post("/api/meetings/{rid}/items")
     def create(request: Request, rid: str, body: ItemCreate):
         who = request.state.identity
@@ -475,7 +490,15 @@ def install_meeting_items(app, store, mutate, task_create, auth):
 
         return reply(request, body, work, rid)
 
-    @app.post("/api/v2/meetings/{rid}/items/{iid}/link")
+    @app.post(
+        "/api/v2/meetings/{rid}/items/{iid}/link",
+        **api_v2(
+            "Meetings",
+            "acceptMeetingTaskProposal",
+            "Accept a readable task proposal without creating a task; the meeting must be shared",
+            "MeetingTaskProposalAccepted",
+        ),
+    )
     @app.post("/api/meetings/{rid}/items/{iid}/link")
     def accept_link(request: Request, rid: str, iid: str, body: M.Empty):
         who = request.state.identity
@@ -500,7 +523,14 @@ def install_meeting_items(app, store, mutate, task_create, auth):
 
         return reply(request, body, work, rid)
 
-    @app.post("/api/v2/meetings/{rid}/items/{iid}")
+    @app.post(
+        "/api/v2/meetings/{rid}/items/{iid}",
+        **api_v2(
+            "Meetings",
+            "editMeetingItem",
+            "Edit at the expected version; stale writes return 409 with the current item. Detail merges keys, null or empty clears a key. Sent items refuse text and detail edits",
+        ),
+    )
     @app.post("/api/meetings/{rid}/items/{iid}")
     def change(request: Request, rid: str, iid: str, body: ItemEdit):
         who = request.state.identity
@@ -512,7 +542,14 @@ def install_meeting_items(app, store, mutate, task_create, auth):
 
         return reply(request, body, work, rid)
 
-    @app.post("/api/v2/meetings/{rid}/items/{iid}/push")
+    @app.post(
+        "/api/v2/meetings/{rid}/items/{iid}/push",
+        **api_v2(
+            "Meetings",
+            "sendMeetingItem",
+            "Apply final fields at the expected version and send in one transaction, or reconcile an already created task you requested with result_ref. An already sent item returns its existing task with pushed=false even at a stale version; other stale sends return 409 with the current item. Private meetings require every new task reader inside the meeting audience",
+        ),
+    )
     @app.post("/api/meetings/{rid}/items/{iid}/push")
     def push(request: Request, rid: str, iid: str, body: ItemPush):
         who = request.state.identity

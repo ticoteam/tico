@@ -1,6 +1,6 @@
 """The ways Tico stops a bot that is failing or running away, or one of its queued runs, and what every page says.
 
-- `run_backoff`: a bot whose runs keep failing within a minute waits between runs, then is held after five in a row;
+- `run_failures`: a bot whose runs keep failing within a minute waits between runs, then is held after five in a row;
   Tico tries one run of a held bot on its own at growing intervals and releases it when one completes.
 - `turn_budgets`: a bot that starts more runs in an hour or a day than its budget is held.
 - `claim_holds`: one queued run whose claim raised while preparing it is held by itself; the bot's other runs go on.
@@ -14,7 +14,7 @@ one place, backend/holds.py. This module files and closes the Needs-you item eac
 
 import logging
 
-from . import run_backoff, turn_budgets
+from . import run_failures, turn_budgets
 from .store import H
 
 log = logging.getLogger(__name__)
@@ -66,7 +66,7 @@ def release(c, actor, bot):
     from . import claim_holds
 
     return {
-        "run_hold": run_backoff.release(c, actor, bot),
+        "run_hold": run_failures.release(c, actor, bot),
         "budget": turn_budgets.release(c, actor, bot),
         "claim": claim_holds.release(c, actor, bot),
     }

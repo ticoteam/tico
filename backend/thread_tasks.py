@@ -17,6 +17,7 @@ from . import models as M
 from . import threads
 from .names import lookup
 from .store import Problem
+from .api_contract import api_v2
 
 BODY_MAX = 60_000
 
@@ -53,7 +54,15 @@ def task_body(c, message, row, base_url=""):
 
 
 def install(app, store, auth, create_task, public_url=""):
-    @app.post("/api/v2/threads/messages/{message_id}/task")
+    @app.post(
+        "/api/v2/threads/messages/{message_id}/task",
+        **api_v2(
+            "Threads",
+            "makeTaskFromMessage",
+            "A task from a message I read: the server copies its text and a link back, and the task is private unless the thread is company-wide",
+            "TaskResult",
+        ),
+    )
     def message_task(request: Request, message_id: str, body: MessageTask):
         """A task from a message the viewer reads: its text and a link back to the message, private unless the thread is company-wide."""
         with store.read() as c:

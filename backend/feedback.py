@@ -31,6 +31,7 @@ from . import org_rules as O
 from . import threads
 from .models import Contract
 from .store import Problem
+from .api_contract import api_v2
 
 SUBJECTS = ("message", "task", "ask")
 SUBJECTS_SAID = "subject_type is message, task or ask"
@@ -585,7 +586,15 @@ def draft(write, given):
 
 # ----------------------------------------------------------------------------- routes
 def install(app, store, auth, mutate):
-    @app.post("/api/v2/feedback")
+    @app.post(
+        "/api/v2/feedback",
+        **api_v2(
+            "Feedback",
+            "giveFeedback",
+            "Rate a message, task or approval a bot or another person made; rating again replaces it. tell_bot (a 👎 on a bot's work only) leaves the bot a note",
+            "Feedback",
+        ),
+    )
     def feedback_give(request: Request, body: FeedbackGive):
         """Rate a message or task a bot or another person made: 👍 or 👎 with an optional reason. Rating again replaces
         it. `tell_bot` (a 👎 on a bot's work only) leaves the bot a note for its next run in that conversation."""
@@ -593,7 +602,15 @@ def install(app, store, auth, mutate):
         return mutate(request, body, lambda c: give(c, auth, who, body.model_dump()))
 
     # Declared before /api/v2/feedback/{feedback_id} routes so these words are never read as an id.
-    @app.get("/api/v2/feedback/list")
+    @app.get(
+        "/api/v2/feedback/list",
+        **api_v2(
+            "Feedback",
+            "listFeedback",
+            "Feedback newest first, paged and byte-capped, by bot, rating and since, on subjects the caller reads",
+            "FeedbackPage",
+        ),
+    )
     def feedback_list(
         request: Request,
         bot_id: str | None = None,
@@ -607,25 +624,57 @@ def install(app, store, auth, mutate):
         with store.read() as c:
             return listing(c, auth, request.state.identity, args)
 
-    @app.get("/api/v2/feedback/recent-reasons")
+    @app.get(
+        "/api/v2/feedback/recent-reasons",
+        **api_v2(
+            "Feedback",
+            "listRecentFeedbackReasons",
+            "The caller's five latest distinct reasons, each with how often they used it",
+            "FeedbackReasons",
+        ),
+    )
     def feedback_recent_reasons(request: Request):
         """The caller's five latest distinct reasons, each with how often they used it."""
         with store.read() as c:
             return recent_reasons(c, request.state.identity)
 
-    @app.get("/api/v2/feedback")
+    @app.get(
+        "/api/v2/feedback",
+        **api_v2(
+            "Feedback",
+            "listFeedbackMarkers",
+            "On these subjects the caller reads (subject_ids, comma-separated, at most 200): the caller's own feedback and everyone's up/down counts",
+            "FeedbackMarkers",
+        ),
+    )
     def feedback_markers(request: Request, subject_type: str, subject_ids: str = ""):
         """My feedback on these subjects (comma-separated ids, at most 200) that I read, and everyone's counts."""
         with store.read() as c:
             return markers(c, auth, request.state.identity, subject_type, subject_ids)
 
-    @app.delete("/api/v2/feedback/{feedback_id}")
+    @app.delete(
+        "/api/v2/feedback/{feedback_id}",
+        **api_v2(
+            "Feedback",
+            "removeFeedback",
+            "Remove my feedback; a note it left that no run carried yet is taken back",
+            "FeedbackRemoved",
+        ),
+    )
     def feedback_remove(request: Request, feedback_id: str):
         """Remove my feedback; a note it left that no run carried yet is taken back."""
         who = request.state.identity
         return mutate(request, Nothing(), lambda c: remove(c, auth, who, feedback_id))
 
-    @app.post("/api/v2/feedback/{feedback_id}/rule-draft")
+    @app.post(
+        "/api/v2/feedback/{feedback_id}/rule-draft",
+        **api_v2(
+            "Feedback",
+            "draftFeedbackRule",
+            "A one-sentence rule drafted from my 👎; stores nothing. With no model the reason comes back, drafted false",
+            "FeedbackRuleDraft",
+        ),
+    )
     def feedback_rule_draft(request: Request, feedback_id: str):
         """A one-sentence rule drafted from my 👎's reason and the rated work. Stores nothing; with no model (or Decide
         at its spend cap) the reason itself comes back, `drafted` false."""
@@ -637,7 +686,15 @@ def install(app, store, auth, mutate):
         text = draft(write, given) if write is not None else None
         return {"text": text or given["reason"], "drafted": text is not None}
 
-    @app.post("/api/v2/feedback/{feedback_id}/rule")
+    @app.post(
+        "/api/v2/feedback/{feedback_id}/rule",
+        **api_v2(
+            "Feedback",
+            "makeFeedbackRule",
+            "Make my 👎 an internal org rule for the bot or all bots: active when I manage its Who, else suggested",
+            "FeedbackRuleMade",
+        ),
+    )
     def feedback_rule(request: Request, feedback_id: str, body: FeedbackRule):
         """Make my 👎 an internal org rule for the bot (or all bots): active when I manage its Who, else suggested."""
         who = request.state.identity

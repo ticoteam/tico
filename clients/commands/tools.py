@@ -206,8 +206,7 @@ def _bot_of(api, args):
 @tool(
     "tico_slack_channel_list",
     "The Slack channels bots may read and post in: each one's name and id, which bots read it, "
-    "whether bots may post there, and its note. Also whether an old registry/slack-channels.yaml "
-    "is still waiting to be imported.",
+    "whether bots may post there, and its note.",
     {},
 )
 def slack_channel_list(api, args):
@@ -260,17 +259,6 @@ def slack_channel_add(api, args):
 def slack_channel_remove(api, args):
     body = {k: args[k] for k in ("channel", "reader") if args.get(k)}
     return _as_person(api).post("slack/channels/remove", body, key=_key(args))
-
-
-@tool(
-    "tico_slack_channel_import",
-    "Store the channels an old registry/slack-channels.yaml lists in the team's list, once, as the "
-    "person who asked you (an owner or an admin). The file is ignored afterwards.",
-    {},
-    writes=True,
-)
-def slack_channel_import(api, args):
-    return _as_person(api).post("slack/channels/import", {}, key=_key(args))
 
 
 @tool(
@@ -536,6 +524,72 @@ def credential_import(api, args):
             else "Its computer has not answered yet; run the same command again to keep waiting."
         ),
     }
+
+
+# `tico slack channel ...` and `tico credential ...` (clients/cli_spec.py). `credential set` is still built in
+# clients/hubcli.py: it reads the value from this computer's standard input.
+SLACK = (
+    Group("slack", "the Slack channels bots may read and post in"),
+    Group("slack channel", "list, add or remove a channel"),
+    Command(
+        "slack channel list",
+        "the listed channels, their readers, and whether bots may post",
+        example="tico slack channel list",
+    ),
+    Command(
+        "slack channel add",
+        "list a channel, or add readers to one already listed (an owner or an admin)",
+        args=(
+            Arg("readers", flag="--reader", metavar="BOT"),
+            Arg("post", flag="--post", action="store_const", const=True),
+            Arg("post", flag="--no-post", action="store_const", const=False),
+        ),
+        example="tico slack channel add '#launches' --reader growth --no-post",
+    ),
+    Command(
+        "slack channel remove",
+        "take a channel off the list, or one reader off it",
+        example="tico slack channel remove '#launches' --reader growth",
+    ),
+)
+CREDENTIAL = (
+    Group("credential", "ask for a credential in the chat, store one, list them"),
+    Command(
+        "credential request",
+        "open a card in the chat for the person to type the credential into",
+        args=(Arg("for_bot", flag="--for-bot"),),
+        example="tico credential request JIRA_BASIC_AUTH --label 'your Jira login'",
+    ),
+)
+# After the hand-built `credential set`, so `tico credential` lists its leaves in the order it always has.
+CREDENTIAL_AFTER_SET = (
+    Command(
+        "credential list", "names, variables and which bots have each; never a value", example="tico credential list"
+    ),
+    Command(
+        "credential grant",
+        "give a bot a stored credential",
+        args=(Arg("to_bot", flag="--to", metavar="BOT"),),
+        example="tico credential grant JIRA_BASIC_AUTH --to support",
+    ),
+    Command(
+        "credential revoke",
+        "take a stored credential away from a bot",
+        args=(Arg("from_bot", flag="--from", metavar="BOT"),),
+        example="tico credential revoke JIRA_BASIC_AUTH --from support",
+    ),
+    Command(
+        "credential delete",
+        "erase a Credential and all its grants (credential administrators)",
+        example="tico credential delete JIRA_BASIC_AUTH",
+    ),
+    Command(
+        "credential import",
+        "move one variable from a bot's own secrets file into Credentials, granted to that bot",
+        args=(Arg("env", metavar="VAR"), Arg("from_bot", flag="--from-bot", metavar="BOT")),
+        example="tico credential import JIRA_BASIC_AUTH --from-bot support",
+    ),
+)
 
 
 @tool("tico_repo_list", "List the team’s repositories and new bot default.", {})

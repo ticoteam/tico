@@ -801,7 +801,14 @@ def parser():
     )
     s.add_argument("id")
     s.add_argument("file", help="a local file, or page:<file id>[@<version>] with --req")
-    s.add_argument("--req", help='the page requirement it is for, e.g. "Spec page"')
+    s.add_argument(
+        "--doc",
+        metavar="NAME",
+        help="an .html file as the next version of the task's document NAME (a tab beside the task's chat): Spec, "
+        "QA report, Release report and Invoice are the names a stage approves, and writing one in that stage "
+        "submits it for approval; say what changed with --note",
+    )
+    s.add_argument("--req", help='the page requirement it is for, e.g. "Code review"')
     s.add_argument("--version", type=int, help=version_help)
     s.add_argument("--name", help="the name people see; defaults to the file's own")
     s.add_argument("--poster", help="a PNG or JPEG preview")
@@ -955,44 +962,21 @@ def parser():
     s.add_argument("--out", help="with --fixture: the parent folder (default: the current one)")
     s.set_defaults(fn="run export")
 
-    team = sub.add_parser("team", help="team chart and icon").add_subparsers(dest="sub")
+    # `tico team` (clients/commands/admin.py): every leaf but icon, which sends a file's bytes from this computer.
+    cli_spec.add(sub, admin_commands.TEAM)
+    team = _group_subparsers(sub, "team")
     s = team.add_parser("icon", help="set the public team logo (owner; PNG/JPEG/WebP up to 1 MB)")
     s.add_argument("file")
     s.set_defaults(fn="team icon")
-    s = team.add_parser("show", help="the team chart: humans, Slack, what they own, the bots with reports_to and group")
-    s.add_argument("--person", help="that human and everyone under them")
-    s.add_argument("--team", help="a group id, like engineering or sales: that group and the groups in it")
-    s.set_defaults(fn="team show")
-    s = team.add_parser(
-        "budget", help="read or set the team's default runs per hour and per day for bots (owner and admins)"
-    )
-    for window in ("hour", "day"):
-        s.add_argument(
-            "--" + window,
-            type=int,
-            help=f"runs allowed per {window} for bots with no budget of their own; 0 for no limit",
-        )
-    s.set_defaults(fn="team budget")
+    cli_spec.add(sub, admin_commands.TEAM_AFTER_ICON, parents={("team",): team})
     cli_spec.add(sub, admin_commands.SEAT)  # tico seat: clients/commands/admin.py
     cli_spec.add(sub, org_commands.ORG)  # tico org: clients/commands/org.py
     cli_spec.add(sub, computers.HEALTH)  # tico health: clients/commands/computers.py
-    changelog = sub.add_parser("changelog", help="shipped product changes and your own read state").add_subparsers(
-        dest="sub"
-    )
-    s = changelog.add_parser("list", help="what changed; --unread catches up since your last look")
-    s.add_argument("--kind", choices=["product", "activity", "all"], default="product")
-    s.add_argument("--unread", action="store_true")
-    s.add_argument("--q", help="search change titles and bullets")
-    s.add_argument("--offset", type=int)
-    s.add_argument("--limit", type=int)
-    s.set_defaults(fn="changelog list")
-    s = changelog.add_parser("mark-read", help="acknowledge only the changes you have reviewed")
-    s.add_argument("ids", nargs="+")
-    s.set_defaults(fn="changelog mark-read")
+    cli_spec.add(sub, assistant_commands.CHANGELOG)  # tico changelog: clients/commands/assistant.py
 
-    upd = sub.add_parser("update", help="create, read and reply to the bots' daily and weekly updates").add_subparsers(
-        dest="sub"
-    )
+    # `tico update` (clients/commands/assistant.py): every leaf but create, whose tool reads --slides-file here.
+    cli_spec.add(sub, assistant_commands.UPDATE)
+    upd = _group_subparsers(sub, "update")
     s = upd.add_parser(
         "create",
         help="post your update when Tico asks for it: three plain-English bullets "
@@ -1015,37 +999,7 @@ def parser():
     )
     s.add_argument("--skip", action="store_true", help="nothing real to report since your last update: post nothing")
     s.set_defaults(fn="update create")
-    s = upd.add_parser("redo", help="ask the bots again for a past day's update in the current shape (owner)")
-    s.add_argument("--day", required=True)
-    s.add_argument("--kind", choices=("daily", "weekly"))
-    s.add_argument("--bot", dest="bots", action="append", help="only this bot (repeatable)")
-    s.add_argument("--with-managers", dest="managers", action="store_true", help="also the bots above them")
-    s.set_defaults(fn="update redo")
-    s = upd.add_parser("list", help="updates from bots and people, newest first")
-    s.add_argument("--kind", choices=("daily", "weekly"))
-    s.add_argument("--bot", help="one author: a bot slug or human:<id>")
-    s.add_argument("--scope", choices=("all", "direct"), help="direct: only your direct reports")
-    s.add_argument("--unread", action="store_true")
-    s.add_argument("--limit", type=int)
-    s.add_argument("--before", help="older than this: a page's next_before")
-    s.set_defaults(fn="update list")
-    s = upd.add_parser("show")
-    s.add_argument("update")
-    s.set_defaults(fn="update show")
-    s = upd.add_parser("mark-read", help="mark updates read (--unread to mark them unread)")
-    s.add_argument("ids", nargs="*")
-    s.add_argument("--all", action="store_true")
-    s.add_argument("--unread", dest="read", action="store_false")
-    s.set_defaults(fn="update mark-read")
-    s = upd.add_parser("reply")
-    s.add_argument("update")
-    s.add_argument("text")
-    s.set_defaults(fn="update reply")
-    s = upd.add_parser("settings", help="turn a bot's daily or weekly update on or off")
-    s.add_argument("bot")
-    s.add_argument("--daily", choices=("on", "off"))
-    s.add_argument("--weekly", choices=("on", "off"))
-    s.set_defaults(fn="update settings")
+    cli_spec.add(sub, assistant_commands.UPDATE_AFTER_CREATE, parents={("update",): upd})
     grok = sub.add_parser("grokbot", help="your Grok Bots in Tico (docs/external-agent-sync.md)").add_subparsers(
         dest="sub"
     )
@@ -1351,33 +1305,7 @@ def parser():
     s.add_argument("code")
     s.set_defaults(fn="agent pair decline")
     cli_spec.add(sub, org_commands.HUMAN)  # tico human: clients/commands/org.py
-    groups = sub.add_parser("group", help="the groups: sub-teams that nest, holding humans and bots").add_subparsers(
-        dest="sub"
-    )
-    groups.add_parser("list", help="the groups with their humans and bots").set_defaults(fn="group list")
-
-    s = groups.add_parser(
-        "update", help="create (no group given), rename, move, lead or fill a group (an owner or an admin)"
-    )
-    s.add_argument("group", nargs="?", help="the group's id; leave out to create one from --name")
-    s.add_argument("--name")
-    s.add_argument("--parent", help="the group it is in; an empty one is the top")
-    s.add_argument("--add-human", dest="add_humans", action="append", metavar="HUMAN", help="put a human in it")
-    s.add_argument("--add-bot", dest="add_bots", action="append", metavar="BOT", help="put a bot in it")
-    s.add_argument("--remove-human", dest="remove_humans", action="append", metavar="HUMAN")
-    s.add_argument("--remove-bot", dest="remove_bots", action="append", metavar="BOT")
-    s.add_argument("--lead", help="bot:<slug> or person:<id>; an empty one clears it")
-    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
-    s.set_defaults(fn="group update")
-    s = groups.add_parser("delete", help="delete a group; its teammates and groups move up to its parent")
-    s.add_argument("group")
-    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
-    s.set_defaults(fn="group delete")
-    s = groups.add_parser("access", help="show or set who may see, read and write to a group")
-    s.add_argument("group")
-    for level in ("see", "read", "write"):
-        s.add_argument("--" + level, help="everyone, or a comma list: human ids, group:<id>, bot:<slug>")
-    s.set_defaults(fn="group access")
+    cli_spec.add(sub, admin_commands.GROUP)  # tico group: clients/commands/admin.py
     setup = sub.add_parser("setup", help="Finish setup, the welcome wizard (the owner)").add_subparsers(dest="sub")
     setup.add_parser(
         "show", help="where it stands: the wizard, the people the company file names, the checklist"
@@ -1399,17 +1327,9 @@ def parser():
     s.add_argument("--on-behalf-of", help="the open task a person asked you for, when something else started this run")
     s.set_defaults(fn="api")
     cli_spec.add(sub, computers.COMPUTER)  # tico computer: clients/commands/computers.py
-    cred = sub.add_parser("credential", help="ask for a credential in the chat, store one, list them").add_subparsers(
-        dest="sub"
-    )
-    s = cred.add_parser("request", help="open a card in the chat for the person to type the credential into")
-    s.add_argument("env", help="the variable's name, like JIRA_BASIC_AUTH")
-    s.add_argument("--for-bot", dest="for_bot")
-    s.add_argument("--label", help="what it is: 'your Jira login'")
-    s.add_argument("--format", help="its shape: you@company.com:API token")
-    s.add_argument("--help-url", dest="help_url", help="an https page where they make one")
-    s.add_argument("--kind", choices=["api_key", "token", "password", "connection"])
-    s.set_defaults(fn="credential request")
+    # `tico credential` (clients/commands/tools.py): every leaf but set, which reads the value from standard input.
+    cli_spec.add(sub, tools_commands.CREDENTIAL)
+    cred = _group_subparsers(sub, "credential")
     s = cred.add_parser("set", help="store a credential a person gave you, for one bot; the value is read from stdin")
     s.add_argument("env")
     s.add_argument("--for-bot", dest="for_bot", required=True)
@@ -1418,61 +1338,9 @@ def parser():
     s.add_argument("--username")
     s.add_argument("--no-redact", dest="no_redact", action="store_true", help="leave the pasted words in the chat")
     s.set_defaults(fn="credential set")
-    cred.add_parser("list", help="names, variables and which bots have each; never a value").set_defaults(
-        fn="credential list"
-    )
-    s = cred.add_parser("grant", help="give a bot a stored credential")
-    s.add_argument("credential", help="its name in Credentials (or its variable's name)")
-    s.add_argument("--to", dest="to_bot", required=True, metavar="BOT")
-    s.set_defaults(fn="credential grant")
-    s = cred.add_parser("revoke", help="take a stored credential away from a bot")
-    s.add_argument("credential")
-    s.add_argument("--from", dest="from_bot", required=True, metavar="BOT")
-    s.set_defaults(fn="credential revoke")
-    s = cred.add_parser("delete", help="erase a Credential and all its grants (credential administrators)")
-    s.add_argument("credential")
-    s.set_defaults(fn="credential delete")
-    s = cred.add_parser(
-        "import", help="move one variable from a bot's own secrets file into Credentials, granted to that bot"
-    )
-    s.add_argument("env", metavar="VAR", help="the variable's name, like JIRA_BASIC_AUTH")
-    s.add_argument("--from-bot", dest="from_bot", required=True, metavar="BOT")
-    s.add_argument("--name", help="what to call it in Credentials; the variable's name by default")
-    s.add_argument("--kind", choices=["api_key", "token", "password", "connection"])
-    s.add_argument("--wait", type=int, help="seconds to wait for the computer to answer (30; at most 60)")
-    s.set_defaults(fn="credential import")
+    cli_spec.add(sub, tools_commands.CREDENTIAL_AFTER_SET, parents={("credential",): cred})
     cli_spec.add(sub, tools_admin.CREDENTIAL_CLI, parents={("credential",): cred})  # clients/commands/tools_admin.py
-    slack = sub.add_parser("slack", help="the Slack channels bots may read and post in").add_subparsers(dest="sub")
-    chan = slack.add_parser("channel", help="list, add or remove a channel").add_subparsers(dest="subsub")
-    chan.add_parser("list", help="the listed channels, their readers, and whether bots may post").set_defaults(
-        fn="slack channel list"
-    )
-    s = chan.add_parser("add", help="list a channel, or add readers to one already listed (an owner or an admin)")
-    s.add_argument("channel", help="#name or id (C0123456789)")
-    s.add_argument(
-        "--reader", dest="readers", action="append", metavar="BOT", help="a bot that reads it; repeat for several"
-    )
-    s.add_argument(
-        "--post",
-        dest="post",
-        action="store_true",
-        default=None,
-        help="bots may post there (the default for a new channel)",
-    )
-    s.add_argument("--no-post", dest="post", action="store_false", help="bots may only read it")
-    s.add_argument("--note", help="what the channel is for")
-    s.add_argument(
-        "--digest-hours", dest="digest_hours", type=float, help="readers get it at most once in this many hours"
-    )
-    s.add_argument("--name", help="its name, when you give the id")
-    s.set_defaults(fn="slack channel add")
-    s = chan.add_parser("remove", help="take a channel off the list, or one reader off it")
-    s.add_argument("channel")
-    s.add_argument("--reader", help="only this bot stops reading it")
-    s.set_defaults(fn="slack channel remove")
-    chan.add_parser("import", help="store the channels of the old registry/slack-channels.yaml").set_defaults(
-        fn="slack channel import"
-    )
+    cli_spec.add(sub, tools_commands.SLACK)  # tico slack: clients/commands/tools.py
     cli_spec.add(sub, computers.SUPPORT)  # tico support: clients/commands/computers.py
     cli_spec.add(sub, finance.CLI)  # tico finance: clients/commands/finance.py
     # Contacts (backend/entities/routes.py): every reader sees what the read rule lets it see; writes name their actor.
@@ -1497,22 +1365,7 @@ def parser():
     s.add_argument("--sensitive", action="store_true", help="only Finance's owner and the system read it")
     s.add_argument("--owner", help="tico (the default) or connection:<id>")
     s.set_defaults(fn="contacts attribute add")
-    manager = sub.add_parser(
-        "general-manager", help="the General Manager's hourly department check (docs/general-manager.md)"
-    ).add_subparsers(dest="sub")
-    manager.add_parser(
-        "status", help="bot, report switch and schedule, last run, each department's last check"
-    ).set_defaults(fn="general-manager status")
-    manager.add_parser("on", help="switch the hourly report on").set_defaults(fn="general-manager on")
-    manager.add_parser("off", help="switch the hourly report off").set_defaults(fn="general-manager off")
-    manager.add_parser("run", help="run the department check now").set_defaults(fn="general-manager run")
-    s = manager.add_parser("schedule", help="pick when the report runs")
-    s.add_argument("preset", choices=["business", "hourly", "4h", "daily"])
-    s.add_argument("--at", help="HH:MM for the daily preset")
-    s.set_defaults(fn="general-manager schedule")
-    s = manager.add_parser("bot", help="turn the General Manager bot itself on or off")
-    s.add_argument("state", choices=["on", "off"])
-    s.set_defaults(fn="general-manager bot")
+    cli_spec.add(sub, task_work_commands.GENERAL_MANAGER)  # tico general-manager: clients/commands/task_work.py
     cli_spec.add(sub, computers.MAINTENANCE)  # tico maintenance: clients/commands/computers.py
     roadmap = sub.add_parser(
         "roadmap", help="public roadmaps: ranking and company settings (docs/roadmaps.md)"

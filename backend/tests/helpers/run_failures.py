@@ -1,6 +1,6 @@
-"""Helpers that other tests share, moved out of test_run_backoff.py so they import no test file."""
+"""Helpers that other tests share, moved out of test_run_failures.py so they import no test file."""
 
-from backend import run_backoff
+from backend import holds, run_failures
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, post, ready, runner
 
@@ -55,7 +55,29 @@ def hold_bot(api, machine, monkeypatch):
         at(monkeypatch, api, now)
         ready(api, machine, ["ops"])
         fail(api, machine, claim(api, machine), TOO_BIG)
-        now = H.shift(now, seconds=run_backoff.wait_for(fails) + 1)
+        now = H.shift(now, seconds=holds.wait(holds.FAILING, fails) + 1)
     with api.app.state.store.read() as c:
-        assert run_backoff.get(c, "ops")["held_at"]
-        return run_backoff.get(c, "ops")["held_at"]
+        assert run_failures.get(c, "ops")["details"]["held_at"]
+        return run_failures.get(c, "ops")["details"]["held_at"]
+
+
+def failing(c, bot, fails, *, until_at=None, held_at=None, probe_at=None, error_class="other", error=None, failed=None):
+    """The bot's failed-runs hold as Tico writes it: a wait until `until_at`, or held since `held_at`."""
+    details = {"error_class": error_class, "error": error, "last_failed_at": failed or held_at, "held_at": held_at}
+    return holds.put(
+        c,
+        holds.FAILING,
+        "bot",
+        bot,
+        actor=H.KEEPER,
+        reason=f"Tico stopped {bot}: its last {fails} runs failed within a minute." if held_at else "",
+        details=details,
+        streak=fails,
+        until_at=None if held_at else (until_at or "2000-01-01T00:00:00.000000Z"),
+        probe_at=probe_at if held_at else None,
+    )
+
+
+def wait_over(c):
+    """Every failed run's wait is over (the count stays)."""
+    c.execute("UPDATE holds SET until_at='2000-01-01T00:00:00.000000Z' WHERE kind='failing' AND until_at IS NOT NULL")

@@ -11,6 +11,7 @@ from . import org_rule_check
 import re
 from . import updates
 from . import views
+from .api_contract import ASK_REFUSED, api_v2
 
 
 def register(
@@ -64,7 +65,7 @@ def register(
         elif row["bot"] not in update_visible(c, who):
             raise Problem("not_found", "Update not found", 404)
 
-    @app.get("/api/v2/updates")
+    @app.get("/api/v2/updates", **api_v2("Updates", "listUpdates", "Daily and weekly updates", "UpdateList"))
     def updates_list(
         request: Request,
         kind: str | None = None,
@@ -98,7 +99,9 @@ def register(
                 meetings=updates.meeting_reader(who),
             )
 
-    @app.get("/api/v2/updates/unread")
+    @app.get(
+        "/api/v2/updates/unread", **api_v2("Updates", "countUnreadUpdates", "How many updates are unread", "Unread")
+    )
     def updates_unread(request: Request, mine: bool = False, scope: str | None = None):
         who = request.state.identity
         auth.domain(who)
@@ -137,7 +140,7 @@ def register(
                 meetings=updates.meeting_reader(who),
             )
 
-    @app.get("/api/v2/updates/{uid}")
+    @app.get("/api/v2/updates/{uid}", **api_v2("Updates", "getUpdate", "One update and the replies to it"))
     def update_show(request: Request, uid: str):
         who = request.state.identity
         auth.domain(who)
@@ -270,7 +273,12 @@ def register(
             c, bot, M.UpdatePost.model_validate(replay["body"]), org_rule_check.decided(gate), replayed=True
         )
 
-    @app.post("/api/v2/updates/redo")
+    @app.post(
+        "/api/v2/updates/redo",
+        **api_v2(
+            "Updates", "redoUpdates", "Ask the bots again for a past day's update in the current shape: the owner"
+        ),
+    )
     def update_redo(request: Request, body: M.UpdateRedo):
         """Ask the bots again for a past day's update in the current shape (a week in review as slides)."""
         who = request.state.identity
@@ -286,7 +294,7 @@ def register(
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/updates/read")
+    @app.post("/api/v2/updates/read", **api_v2("Updates", "markUpdatesRead", "Mark updates read or unread"))
     def updates_read(request: Request, body: M.UpdateRead):
         who = request.state.identity
 
@@ -307,7 +315,12 @@ def register(
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/updates/archive")
+    @app.post(
+        "/api/v2/updates/archive",
+        **api_v2(
+            "Updates", "archiveUpdates", "Archive or restore updates for the signed-in person", "UpdateArchiveResult"
+        ),
+    )
     def updates_archive(request: Request, body: M.UpdateArchive):
         who = request.state.identity
         auth.domain(who)
@@ -328,7 +341,9 @@ def register(
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/updates/{uid}/reply")
+    @app.post(
+        "/api/v2/updates/{uid}/reply", **api_v2("Updates", "replyToUpdate", "Reply to an update (goes to the bot)")
+    )
     def update_reply(request: Request, uid: str, body: M.UpdateReply):
         who = request.state.identity
 
@@ -349,7 +364,10 @@ def register(
 
         return mutate(request, body, work)
 
-    @app.get("/api/v2/bots/{bot}/updates")
+    @app.get(
+        "/api/v2/bots/{bot}/updates",
+        **api_v2("Updates", "getBotUpdateSettings", "A bot's daily and weekly update settings"),
+    )
     def update_settings_show(request: Request, bot: str):
         auth.domain(request.state.identity)
         with store.read() as c:
@@ -382,7 +400,16 @@ def register(
             raise Problem("recipient", "This conversation has no other recipient", 422)
         return target
 
-    @app.post("/api/v2/conversations/{cid}/messages")
+    @app.post(
+        "/api/v2/conversations/{cid}/messages",
+        **api_v2(
+            "Conversations",
+            "replyInConversation",
+            "Send a message in a conversation",
+            "MessageResult",
+            responses={"422": ASK_REFUSED},
+        ),
+    )
     def reply(request: Request, cid: str, body: M.ChatCreate):
         who = request.state.identity
         with store.read() as c:

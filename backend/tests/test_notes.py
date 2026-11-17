@@ -7,6 +7,7 @@ reads them all in one prompt, each with the time it was sent.
 
 from backend import hubdb as H
 from backend.tests.helpers.api import assign, get, post, ready, runner  # noqa: F401
+from backend.tests.helpers.run_failures import wait_over
 
 
 def claim(api, r, next_run=True):
@@ -110,7 +111,7 @@ def test_a_completed_run_settles_its_notes_and_a_failed_one_does_not(api):
         assert [x["id"] for x in H.notes_waiting(c, "ops")] == [n["id"]]
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='canceled' WHERE state='uncertain'")
-        c.execute("UPDATE run_backoff SET wait_until=NULL")
+        wait_over(c)
     post(api, "chat/ops", {"text": "Second"})
     second = claim(api, r)
     post(api, f"attempts/{second['id']}/started", {"thread_id": "t2"}, token=r["token"])

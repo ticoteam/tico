@@ -44,7 +44,7 @@ from . import (
     model_subscriptions,
     quarantine_stops,
     reconnects,
-    run_backoff,
+    run_failures,
     runner_states,
     runner_wire,
     runs,
@@ -4972,7 +4972,7 @@ class Execution:
         with shared_check():
             if turn_budgets.enforce(c, self.store.settings, row, msg):
                 return {"attempt": None}  # the bot is over its run budget: held now, its queue kept
-            if run_backoff.probe(c, row["bot_id"]):
+            if run_failures.probe(c, row["bot_id"], row["id"]):
                 return {"attempt": None}  # held for failed runs and its next try is not due, or another took it
         if finance_run_hold(c, row["bot_id"], row["id"]):
             return {"attempt": None}  # a Finance budget at its cutoff refuses the run (usage_limits holds the bot)
@@ -5128,7 +5128,7 @@ class Execution:
         here = readiness_document(runner["readiness"])
         # The computer's subscription for this runtime signs the turn in, so a missing or
         # refused sign-in here does not move it to the Gateway (backend/model_subscriptions.py).
-        subscribed = model_subscriptions.for_claim(c, runner, config)
+        subscribed = model_subscriptions.for_claim(c, runner, config, bot=row["bot_id"])
         # A computer given a person's plans moves to the next one here, between turns (its sessions start fresh).
         model_subscriptions.settle(c, self.store.settings, runner["id"], subscribed)
         here = model_subscriptions.covered(here, [x["runtime"] for x in subscribed])
@@ -5154,8 +5154,8 @@ class Execution:
         if held:
             config = {**config, "primary_held": held.get("until") or H.now()}
         # The thread's last run failed on a prompt too large to send: this one compacts its session before it runs, once
-        # (backend/run_backoff.py). An older runner ignores it, fails the same way, and the next run starts anew.
-        if run_backoff.take_compact(c, row["bot_id"], conv["id"], aid):
+        # (backend/run_failures.py). An older runner ignores it, fails the same way, and the next run starts anew.
+        if run_failures.take_compact(c, row["bot_id"], conv["id"], aid):
             config = {**config, "compact_first": True}
         # A stateless bot (the Rules Owner): its runner starts each task fresh, reads and keeps no memory (hubdb.stateless).
         if H.stateless(followed):
@@ -7009,7 +7009,7 @@ class Execution:
         quota_acted = False
         notice_only = False
         if body.outcome in ('failed', 'interrupted') and not row['stop_requested_at']:
-            failure = run_backoff.classify(c, aid, body)
+            failure = run_failures.classify(c, aid, body)
             errors = limit_errors(c, aid)
             notice_only = only_a_notice(c, aid, row, body)
             if notice_only and body.continues and errors and all(login_holds.capacity(e) for e in errors):
@@ -7078,7 +7078,7 @@ class Execution:
         # A quarantine's Stop is no choice to drop the work: what it held back waits for review, not canceled.
         held_back = bool(benched) and not quarantine_stops.requeues(c, row)
         # A provider limit inside any error is the usage limit's, whatever the runner flagged; a prompt too large to
-        # send starts the next run in a fresh session (backend/run_backoff.py).
+        # send starts the next run in a fresh session (backend/run_failures.py).
         if body.outcome == "failed" and not stopped:
             H.hook(
                 c,
@@ -7964,22 +7964,22 @@ class Execution:
         }
 
     def account_failure(self, c, row, body, aid, conv, failure, counts):
-        """What a finished run means for the bot's next ones (backend/run_backoff.py): a run that completed starts the
+        """What a finished run means for the bot's next ones (backend/run_failures.py): a run that completed starts the
         count over; a failure within a minute of starting makes the bot wait, and holds it after five in a row; a
         prompt too large to send makes the next run compact its session first, and only a second one in a row starts a fresh
         session. A Stop, a usage limit, a busy model, a
         yield and a Gateway outage (`counts` False) are none of that."""
-        too_long = body.outcome == "failed" and counts and failure == run_backoff.PROMPT_TOO_LONG
+        too_long = body.outcome == "failed" and counts and failure == run_failures.PROMPT_TOO_LONG
         if not too_long:
-            run_backoff.compact_settle(c, aid, body.outcome == "completed")
+            run_failures.compact_settle(c, aid, body.outcome == "completed")
         if body.outcome == "completed":
-            run_backoff.reset(c, row["bot_id"])
+            run_failures.reset(c, row["bot_id"])
             return
         if body.outcome != "failed" or not counts:
             return
         if too_long:
-            run_backoff.too_long(c, self.store.settings, row, conv["id"], aid)
-        run_backoff.failed(c, self.store.settings, row, body, aid)
+            run_failures.too_long(c, self.store.settings, row, conv["id"], aid)
+        run_failures.failed(c, self.store.settings, row, body, aid)
 
     def retry(self, c, who, job_id, body):
         row = c.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()

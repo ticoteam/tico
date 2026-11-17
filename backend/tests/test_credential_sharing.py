@@ -144,18 +144,19 @@ def test_botops_grants_a_bot_at_once_for_an_admin_and_refuses_a_member_without_a
         act(api, ana, "POST", f"credentials/{row['id']}/grants", {"subject": "bot:ops"}).json()["id"]
         == done.json()["id"]
     )
-    # A grant to a person (or to every computer) is the administrator's own tap: a card, and no grant until it.
-    for subject in ("human:cara", "computers"):
-        card = act(api, ana, "POST", f"credentials/{row['id']}/grants", {"subject": subject}).json()
-        assert card["needs_confirm"] and card["action"]["owner"] == "human:ana"
-        with api.app.state.store.read() as c:
-            assert c.execute("SELECT count(*) FROM credential_grants WHERE subject=?", (subject,)).fetchone()[0] == 0
-        if subject == "human:cara":
-            post(api, f"assistant/actions/{card['action']['id']}/confirm", {}, token=ana["token"], expected=403)
-            assert (
-                post(api, f"assistant/actions/{card['action']['id']}/confirm", {}, token="ana-test")["action"]["status"]
-                == "done"
-            )
+    # A grant to a person is the administrator's own tap: a card, and no grant until it.
+    card = act(api, ana, "POST", f"credentials/{row['id']}/grants", {"subject": "human:cara"}).json()
+    assert card["needs_confirm"] and card["action"]["owner"] == "human:ana"
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM credential_grants WHERE subject='human:cara'").fetchone()[0] == 0
+    post(api, f"assistant/actions/{card['action']['id']}/confirm", {}, token=ana["token"], expected=403)
+    assert (
+        post(api, f"assistant/actions/{card['action']['id']}/confirm", {}, token="ana-test")["action"]["status"]
+        == "done"
+    )
+    # Computers get model keys in Settings > Models, not from a grant: refused, and no card is left behind.
+    refused = act(api, ana, "POST", f"credentials/{row['id']}/grants", {"subject": "computers"})
+    assert refused.status_code == 422 and "Settings > Models" in refused.json()["error"]["detail"]
     with api.app.state.store.read() as c:
         assert (
             c.execute(

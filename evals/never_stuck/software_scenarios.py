@@ -78,7 +78,7 @@ def idea_to_done(r: SoftRig) -> None:
     r.check()
     person = r.person_on(p)
     expect(person.startswith("human:"), f"the spec's OK is {person}'s")
-    r.says(p, f"version {spec.version}")
+    r.says(p, "Spec")  # the approval's row is its document; the version is its key
     r.ok_page(p, person)
 
     # 2. In development files one Engineering task, linked, with the spec at the version that was OK'd.
@@ -715,7 +715,7 @@ def jev_fails_three_times(r: SoftRig) -> None:
         r.w.shift(gap + 1)
         r.jev()
         r.check()
-    r.says(p, "OK ")
+    r.says(p, "Spec")
     expect(r.fake_jev.counts[FAIL] == 3, f"Jev was called {r.fake_jev.counts[FAIL]} times, not 3")
     person = r.person_on(p)
     r.ok_page(p, person)
@@ -729,7 +729,7 @@ def jev_unsure(r: SoftRig) -> None:
     r.attach(p, r.page(PM, "Spec: audit trail", verdict=UNSURE), PM)
     r.jev()
     r.check()
-    r.says(p, "OK ")
+    r.says(p, "Spec")
     r.ok_page(p)
     r.at(p, "In development")
 

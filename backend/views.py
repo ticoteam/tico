@@ -44,6 +44,7 @@ from . import task_privacy as privacy
 from .usage_records import ran_on
 from . import task_relations as TR
 from . import bot_settings as BS
+from .api_contract import api_v2
 
 
 MIN_RUNNER_VERSION = (0, 2, 0)
@@ -2007,46 +2008,13 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
             readable_earlier(c, auth, who, item["ask"])
             # What the task waits on says only "a person's OK" for a bound OK (waiting_on); its own line is this
             # person's to read when they are one of its parties, as their read of the task gives it.
-            if item["ask"] and item["ask"]["kind"] == "ok":
+            if item["ask"] and item["ask"]["kind"] in ("ok", "page"):
+                # An approval's row is the document's name (or the OK's line): which version, who wrote it and what
+                # changed is its version line, and the task's title is beside it already.
                 item["line"] = item["ask"]["line"]
-                item["missing"] = [item["ask"]["line"]]
-            elif item["ask"] and item["ask"]["kind"] == "page":
-                item["line"] = page_ask_line(item["ask"]["line"], (item.get("task") or {}).get("title"), item["line"])
+                if item["ask"]["kind"] == "ok":
+                    item["missing"] = [item["ask"]["line"]]
     return sorted(items, key=needs_key)
-
-
-# The stage's own words for a page OK that names the person asked ("OK Chris (version 3)", task_requirements._page):
-# the list says who it is for already, so they go; what comes before or after them (Jev's reason, a send back, a merge
-# conflict) stays. Only the last such phrase is the stage's: one inside Jev's reason is kept, and a name may hold
-# brackets ("OK Chris (Owner) (version 3)").
-_PAGE_OK_VERSION = re.compile(r"\(version \d+\)\.?")
-_PAGE_WORD = re.compile(r"\s+page$", re.IGNORECASE)
-
-
-def page_ask_line(name, title, waiting):
-    """A page OK in Needs you, in plain words: what it is, which task, and the decision, "Spec for Share Assistant
-    chat, ready for your OK", then anything the stage said about it. The requirement's name alone ("Spec page") said
-    neither the task nor what was asked (#330)."""
-    name = (name or "").strip() or "Page"
-    what = _PAGE_WORD.sub("", name) or name
-    title = (title or "").strip()
-    head = f"{what} for {title}, ready for your OK" if title else f"{name}, ready for your OK"
-    said = _without_page_ok(waiting or "")
-    return f"{head}. {said}" if said else head
-
-
-def _without_page_ok(waiting):
-    """`waiting` without its last "OK <name> (version N)" phrase, the one the stage wrote."""
-    versions = list(_PAGE_OK_VERSION.finditer(waiting))
-    if not versions:
-        return waiting.strip()
-    end = versions[-1]
-    start = waiting.rfind("OK ", 0, end.start())
-    while start > 0 and not waiting[start - 1].isspace():
-        start = waiting.rfind("OK ", 0, start)
-    if start < 0:
-        return waiting.strip()
-    return " ".join((waiting[:start] + " " + waiting[end.end() :]).split())
 
 
 def needs_key(x):
@@ -3157,7 +3125,15 @@ def install_views(app, store, auth, mutate, task_view):
             return "\n".join(lines) + "\n"
 
     @app.get("/api/changelog")
-    @app.get("/api/v2/changelog")
+    @app.get(
+        "/api/v2/changelog",
+        **api_v2(
+            "Changelog",
+            "listChangelog",
+            "Product updates and agent activity, with your read state; kind=product|activity|all (default all), unread=true, q search, and limit/offset paging. unread_count counts all unread product entries, independently of filters; reading does not acknowledge them.",
+            "ChangelogList",
+        ),
+    )
     def changelog(
         request: Request,
         kind: Literal["product", "activity", "all"] = "all",
@@ -3235,7 +3211,15 @@ def install_views(app, store, auth, mutate, task_view):
             }
 
     @app.post("/api/changelog/read")
-    @app.post("/api/v2/changelog/read")
+    @app.post(
+        "/api/v2/changelog/read",
+        **api_v2(
+            "Changelog",
+            "markChangelogRead",
+            "Acknowledge only supplied product entry ids for the signed-in person. Other people's read state and unseen entries stay unchanged.",
+            "ChangelogReadResult",
+        ),
+    )
     def read_changelog(request: Request, body: M.ChangelogRead):
         who = request.state.identity
         human_only(who)
@@ -3267,7 +3251,15 @@ def install_views(app, store, auth, mutate, task_view):
 
         return mutate(request, body, work)
 
-    @app.get("/api/v2/bots/{bot}/instructions")
+    @app.get(
+        "/api/v2/bots/{bot}/instructions",
+        **api_v2(
+            "Bots",
+            "getBotInstructions",
+            "Latest Instructions snapshot published by the Computer; requires Read, published is false until content arrives",
+            "BotInstructions",
+        ),
+    )
     def bot_instructions(request: Request, bot: str):
         who = request.state.identity
         with store.read() as c:
@@ -3370,7 +3362,7 @@ def install_views(app, store, auth, mutate, task_view):
                 "turns": turns,
             }
 
-    @app.get("/api/v2/me/recent")
+    @app.get("/api/v2/me/recent", **api_v2("Bots", "listRecentBots", "Bots the caller worked with lately", "Recent"))
     def my_recent(request: Request, days: int = 7, limit: int = 10):
         """The bots I have been working with lately, most recent first, each with
         its live status, the last thing I said and the last thing it said, the conversation to read
@@ -3387,7 +3379,15 @@ def install_views(app, store, auth, mutate, task_view):
                 "bots": recent_bots(c, auth, who, since, limit, needs_items(c, auth, who, task_view)),
             }
 
-    @app.get("/api/v2/needs-you")
+    @app.get(
+        "/api/v2/needs-you",
+        **api_v2(
+            "Needs you",
+            "getNeedsYou",
+            "What waits on the caller (kind task, ask, paused or mention, oldest first), with its `version` and `count`; count=true for the number alone, version=<held> answers `unchanged` without items while it holds, ids=<comma list> only those items and their `positions`, limit=<n> (at most 200) a page with `next` to pass as cursor=<next> for the one after it (a cursor from an older version starts again from the top, with `restart`); without limit or cursor, the whole list",
+            "NeedsYou",
+        ),
+    )
     async def needs(
         request: Request,
         count: bool = False,
@@ -3450,7 +3450,15 @@ def install_views(app, store, auth, mutate, task_view):
                     out["restart"] = True
             return out
 
-    @app.get("/api/v2/needs-you/summary")
+    @app.get(
+        "/api/v2/needs-you/summary",
+        **api_v2(
+            "Needs you",
+            "getNeedsYouSummary",
+            "The Needs you count split by kind and by the bot that put each item there, with this week's and older counts; the same query as the board, so the numbers match it (`limit` caps the list of bots)",
+            "NeedsSummary",
+        ),
+    )
     async def needs_summary_route(request: Request, limit: int = NEEDS_SUMMARY_ITEMS):
         """What the Needs you list holds: the total, per kind and per bot, with each bot's newest `limit` items (at
         most 10). `tico needs-you show` over MCP. A person only: the list is theirs."""
@@ -3480,7 +3488,15 @@ def install_views(app, store, auth, mutate, task_view):
 
         return mutate(request, body, work)
 
-    @app.get("/api/v2/conversations/{cid}/snapshot")
+    @app.get(
+        "/api/v2/conversations/{cid}/snapshot",
+        **api_v2(
+            "Conversations",
+            "getConversationSnapshot",
+            "The newest messages and the bot's current run (its newest 40 reply pieces), in one read; limit= and max_bytes= as for the messages",
+            "Snapshot",
+        ),
+    )
     def snapshot(request: Request, cid: str, limit: int | None = None, max_bytes: int | None = None):
         with store.read() as c:
             auth.conversation(c, request.state.identity, cid)

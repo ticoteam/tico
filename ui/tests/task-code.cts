@@ -493,7 +493,7 @@ async function phone(browser: Browser) {
   const modal = page.locator('#task-modal'), rail = modal.locator('[data-task-rail]');
   // A phone shows the same tabs: Subtasks are on Details, under the facts; the chat is its own tab.
   await rail.locator('.task-subs .sub-row').first().waitFor({state: 'attached'});
-  await modal.getByRole('tab', {name: /^Details/}).click();
+  await modal.getByRole('button', {name: /^Details/}).click();
   await rail.locator('.task-subs .sub-row').first().waitFor();
   const main = (await modal.locator('[data-task-props]').boundingBox())!, side = (await rail.boundingBox())!;
   assert.ok(side.y >= main.y + main.height - 1, 'details, then the rail');

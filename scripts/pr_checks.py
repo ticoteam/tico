@@ -31,9 +31,12 @@ UI_MAP = {
 UI_ALSO = {
     # A 1,000-task board in a flood of live changes: how the board draws, and how live task and Needs you changes reach it.
     "ui/app/tasks-page.js": ["board-flood"],
-    "ui/app/task-pipelines.js": ["board-flood", "pipeline-move"],
+    "ui/app/task-pipelines.js": ["board-flood", "pipeline-move", "stage-column-menu"],
     # Move to… and picking many on a board (the picker is task-props.ts's).
-    "ui/app/task-props.js": ["pipeline-move"],
+    "ui/app/task-props.js": ["pipeline-move", "stage-column-menu"],
+    # A stage's ⋯ on a board: Move all to…, Close all, Assign all to…, Snooze all….
+    "ui/app/task-pick.js": ["pipeline-move", "stage-column-menu"],
+    "ui/app/stage-menu.js": ["stage-column-menu"],
     "ui/app/refresh.js": ["board-flood"],
     "ui/app/live.js": ["board-flood"],
 }

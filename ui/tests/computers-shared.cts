@@ -148,9 +148,10 @@ function start(): Promise<Server> {
     await keyDialog.locator('[data-status][data-state=done]').waitFor({timeout: 20000});
     assert.match(await keyDialog.locator('[data-status]').innerText(), /Claude Code on Lab box, Spare box, Team box uses the shared key sk-…789/);
     await keyDialog.locator('[data-close]').last().click();
-    // Team box keeps its own key, which comes before a shared one: clear it there for this computer, then it runs
-    // on the shared key too.
-    await openDetail(team);
+    // Sharing puts Team box on the shared key at once (one key per tool on a computer; its own key stays saved in
+    // Settings > Models). Clear it there for this computer only, then Use the shared key brings back that same key: the
+    // fetch the server holds below.
+    await lineShows(team, '[data-shared]', 'Shared', true);
     await line.locator('[data-model-key-clear]').click();
     await keyDialog.locator('[data-key-go]:not([disabled])').click();
     await keyDialog.locator('[data-status][data-state=signed_out]').waitFor({timeout: 20000}).catch(() => {});

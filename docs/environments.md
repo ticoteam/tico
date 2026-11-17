@@ -366,7 +366,7 @@ Litestream backup, `litestream restore -o <file>` first and pass that file. The 
 - keeps tasks, docs, people and bots, the last `--days` of messages and events (0 keeps all), and the finished runs
   in that window with their steps, so run details and replay work. Unfinished jobs and runs are removed;
 - has no way in: bot tokens cleared, external agents and computers revoked, run tokens and leases ended;
-- never has the key files beside it (`credential.key`, `github-app.key`, `slack.key`), so nothing in it can be decrypted;
+- never has the key files beside it (`credential.key`, `github-app.key`), so nothing in it can be decrypted;
 - is mode 0600, with `server.env`, a fresh `local-owner.token` and empty `registry/` and `blobs/` beside it. Attachments
   are not copied.
 

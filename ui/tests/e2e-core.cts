@@ -24,7 +24,7 @@ const tasks = (() => {
 
   async function detail(page: Page) {
     // The rows are on the Details tab.
-    await page.evaluate(() => document.querySelector<HTMLElement>('#task-modal [data-task-tab="details"]')?.click());
+    await page.evaluate(() => document.querySelector<HTMLElement>('#task-modal [data-task-tab="details"][aria-pressed="false"]')?.click());
     return page.evaluate(() => {
       const m = document.querySelector('#task-modal') as HTMLDialogElement | null;
       const row = (label: string) => [...(m?.querySelectorAll<HTMLElement>('.prop') || [])]
@@ -313,7 +313,7 @@ const newBot = (() => {
     await page.waitForFunction(text => (document.querySelector('#task-modal') as HTMLDialogElement | null)?.open
       && document.querySelector<HTMLElement>('#task-modal .tmodal-title')?.textContent!.trim() === text, TITLE, {timeout: t(20000)});
     const owner = await page.evaluate(() => {
-      document.querySelector<HTMLElement>('#task-modal [data-task-tab="details"]')?.click();
+      document.querySelector<HTMLElement>('#task-modal [data-task-tab="details"][aria-pressed="false"]')?.click();
       return [...document.querySelectorAll<HTMLElement>('#task-modal .prop')]
       .find(r => r.querySelector<HTMLElement>('.prop-k')?.textContent!.trim() === 'Owner')?.innerText || '';
     });

@@ -552,6 +552,8 @@ KEEP = (
             "stage_pick_turns",
             # Keep-warm's old per-stage setting (removed): unread, left until every install ran the migration that made it.
             "stage_keep_warm",
+            # Failed-run holds before migration 20261117072000_holds_failing moves them into `holds`: a copy is pruned
+            # before its first start runs that migration, so an unlisted table here would be emptied and its holds lost.
             "run_backoff",
             "runners",
             "runner_states",
@@ -572,6 +574,7 @@ KEEP = (
             "task_check_models",
             "task_delegations",
             "history_events",
+            "task_documents",
             "task_file_reviews",
             "task_links",
             "task_relations",
@@ -758,7 +761,7 @@ def check_destination(source, dest, force):
     holding key files, or a folder git would track."""
     if dest == source or (dest.exists() and os.path.samefile(dest, source)):
         raise SystemExit("devcopy: the destination is the source database")
-    for name in backup.KEY_FILES:
+    for name in backup.KEY_FILES + backup.OLD_KEY_FILES:
         if (dest.parent / name).exists():
             raise SystemExit(f"devcopy: {dest.parent} holds {name}; put the copy in a folder of its own")
     if not ignored_by_git(dest.parent):

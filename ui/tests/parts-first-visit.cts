@@ -78,7 +78,7 @@ const SHELL = ['#/home', '#/tasks'];
       // with neither page's code: opening the ask screen's code downloads that part alone.
       assert.deepEqual(await open.page.evaluate(async () => { await uiPartLoad('decide'); return decideTabPages().map(p => p.page).filter(p => p !== 'Finance'); }),
         ['Rules', 'Settings'], "the ask screen knows Rules' and Settings' tabs");
-      assert.deepEqual([...new Set(open.parts)].sort(), ['browser-view', 'decide'], "the ask screen's code downloads its own part and the browser view only");
+      assert.deepEqual([...new Set(open.parts)].sort(), ['browser-view', 'decide', 'task-docs'], "the ask screen's code downloads its own part, the browser view and a task's documents only");
       await must(hub, 'dana', 'POST', 'humans/dana', {notify_browser: false});
       await open.close();
     }

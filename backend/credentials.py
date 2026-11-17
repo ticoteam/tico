@@ -32,9 +32,12 @@ LOGIN = 'login'
 # An MCP tool's OAuth sign-in (backend/mcp_connect.py): its tokens are sealed here, never revealed or edited, and reach a
 # run only as a proxy token.
 OAUTH = 'oauth'
+# A secret the server itself uses (the Slack app's tokens, backend/slack_app.py): sealed here, never listed, granted,
+# revealed or handed to a run (`Vault.row` answers 404 for one).
+SERVICE = 'service'
 # The credentials a run or a watcher may be handed: never a website account, and a sign-in only through the proxy.
 RUN_ROWS = (
-    "SELECT * FROM credentials WHERE kind!='login' AND (kind!='oauth' OR tool_id IN "
+    "SELECT * FROM credentials WHERE kind NOT IN ('login','service') AND (kind!='oauth' OR tool_id IN "
     "(SELECT id FROM tools WHERE delivery='proxy')) ORDER BY id"
 )
 # A shared website account available to current and future bots, without releasing its value to their turns.
@@ -42,6 +45,8 @@ BOTS = 'bots'
 # A grant to every computer, present and future: a model API key or token that signs each computer's model CLI in
 # (runner-rs/src/signin.rs `team_model_keys`). Never a bot's: a bot still gets only what is granted to it.
 COMPUTERS = 'computers'
+# A model key for computers is a subscription now (backend/computer_keys.py), given in Settings > Models.
+MODELS_FOR_COMPUTERS = 'Give model keys to computers in Settings > Models'
 FILE_MIGRATION = 'credential-file-migration-v1'
 # 0.2.30 reserved every HUB_ name, so a team's own HUB_ keys (HUB_BUCKET) were left out of v1. v2 adds only those.
 HUB_MIGRATION = 'credential-file-migration-v2-hub'
@@ -143,7 +148,8 @@ def explicitly_granted(c, subject):
         for r in c.execute(
             'SELECT g.credential_id FROM credential_grants g '
             'LEFT JOIN credential_grants p ON p.id=g.parent_id '
-            "LEFT JOIN bot_config bc ON g.subject='bot:'||bc.bot "
+            # By the bot's key, so each grant seeks its bot rather than scanning bot_config.
+            "LEFT JOIN bot_config bc ON substr(g.subject,1,4)='bot:' AND bc.bot=substr(g.subject,5) "
             'WHERE g.subject=? AND g.revoked_at IS NULL '
             "AND (g.parent_id IS NULL OR (p.revoked_at IS NULL AND p.id IS NOT NULL "
             "AND p.subject='human:'||bc.owner_id))",
@@ -171,7 +177,8 @@ def prime_granted(c, subjects):
         for subject, credential in c.execute(
             'SELECT g.subject,g.credential_id FROM credential_grants g '
             'LEFT JOIN credential_grants p ON p.id=g.parent_id '
-            "LEFT JOIN bot_config bc ON g.subject='bot:'||bc.bot "
+            # By the bot's key, so each grant seeks its bot rather than scanning bot_config.
+            "LEFT JOIN bot_config bc ON substr(g.subject,1,4)='bot:' AND bc.bot=substr(g.subject,5) "
             f"WHERE g.subject IN ({','.join('?' * len(part))}) AND g.revoked_at IS NULL "
             "AND (g.parent_id IS NULL OR (p.revoked_at IS NULL AND p.id IS NOT NULL "
             "AND p.subject='human:'||bc.owner_id))",
@@ -292,9 +299,18 @@ SEALED = 'sealed:v1:'  # the prefix of a value `CredentialCipher.seal` made
 _key_file_lock = threading.Lock()
 
 
+def _kind(row):
+    """A row's kind, or None for a table that has none (granola_connections)."""
+    try:
+        return row['kind']
+    except (IndexError, KeyError):
+        return None
+
+
 def legacy_key(path):
-    """A key file an install sealed secrets with before TICO_CREDENTIAL_KMS_KEY was set (github-app.key, slack.key):
-    its 32 bytes, or None when it is absent or not a key. Read only: a read never makes a key file."""
+    """A key file an install sealed secrets with before TICO_CREDENTIAL_KMS_KEY was set (github-app.key, and slack.key
+    for the move of an older server's row, backend/slack_app.py `_move_old`): its 32 bytes, or None when it is
+    absent or not a key. Read only: a read never makes a key file."""
     try:
         data = Path(path).read_bytes()
     except OSError:
@@ -504,6 +520,19 @@ class CredentialCipher:
             raise Problem('vault_unavailable', 'A stored secret could not be decrypted', 503) from None
 
     def decrypt(self, c, row):
+        """A credential's sealed value. Never a service row's (404, as if it were absent): those open only through
+        `open_service`, so no caller that picks a credential by id can reach the server's own secrets."""
+        if _kind(row) == SERVICE:
+            raise Problem('not_found', 'Credential not found', 404)
+        return self._open(c, row)
+
+    def open_service(self, c, row):
+        """A service row's sealed value (the Slack app's tokens, backend/slack_app.py), and nothing else's."""
+        if _kind(row) != SERVICE:
+            raise Problem('not_found', 'Credential not found', 404)
+        return self._open(c, row)
+
+    def _open(self, c, row):
         try:
             return (
                 AESGCM(self.key(c))
@@ -564,7 +593,7 @@ class Vault:
 
     @staticmethod
     def row(c, cid):
-        row = c.execute('SELECT * FROM credentials WHERE id=?', (cid,)).fetchone()
+        row = c.execute('SELECT * FROM credentials WHERE id=? AND kind!=?', (cid, SERVICE)).fetchone()
         if not row:
             raise Problem('not_found', 'Credential not found', 404)
         return row
@@ -714,19 +743,7 @@ class Vault:
         if subject == BOTS:
             exists = row['kind'] == LOGIN
         elif subject == COMPUTERS:
-            if (
-                row['env'] not in providers.MODEL_KEY_NAMES
-                or row['kind'] not in ('api_key', 'token')
-                or row['ciphertext'] is None
-            ):
-                raise Problem(
-                    'subject',
-                    'Only a stored model API key or token, named '
-                    + ', '.join(sorted(providers.MODEL_KEY_NAMES))
-                    + ', can be given to every computer',
-                    422,
-                )
-            exists = True
+            raise Problem('subject', MODELS_FOR_COMPUTERS, 422)
         elif subject.startswith('human:'):
             exists = c.execute('SELECT 1 FROM humans WHERE id=?', (H.actor_id(subject),)).fetchone()
         elif subject.startswith('bot:'):
@@ -1119,7 +1136,9 @@ def install_credentials(app, store, delegate=None, propose=None):
                 ids = granted(c, who.actor)
                 mine = [
                     {k: v for k, v in vault.brief(row).items() if k != 'preview'} | {'can_reveal': False, 'grants': []}
-                    for row in c.execute("SELECT * FROM credentials WHERE kind!='login' ORDER BY lower(name),id")
+                    for row in c.execute(
+                        "SELECT * FROM credentials WHERE kind NOT IN ('login','service') ORDER BY lower(name),id"
+                    )
                     if row['id'] in ids
                 ]
                 return {
@@ -1141,7 +1160,9 @@ def install_credentials(app, store, delegate=None, propose=None):
 
             hidden = api_tools.hidden_keys(c, who, vault.admins)  # keys of tools this person may not see
             # A website account is listed on its website tool (backend/website_tools.py), never here.
-            for row in c.execute("SELECT * FROM credentials WHERE kind!='login' ORDER BY lower(name),id"):
+            for row in c.execute(
+                "SELECT * FROM credentials WHERE kind NOT IN ('login','service') ORDER BY lower(name),id"
+            ):
                 if row['id'] in hidden:
                     continue
                 # A credential this person added is listed for sharing (its grants too), never revealed unless granted.
@@ -1226,6 +1247,9 @@ def install_credentials(app, store, delegate=None, propose=None):
         who = acting(request, body)
         from .tools_delegation import DELEGATE_VIAS
 
+        if body.subject == COMPUTERS:
+            # A model key for computers is a subscription now (backend/computer_keys.py), given in Settings > Models.
+            raise Problem('subject', MODELS_FOR_COMPUTERS, 422)
         if who.via in DELEGATE_VIAS and not who.confirmed and propose:
             # BotOps giving a bot a stored credential for a credential administrator who asked in chat runs at once, as
             # them: their own rights allow it, and a bot only ever gets what is explicitly granted to it. Anyone else is
@@ -1251,9 +1275,7 @@ def install_credentials(app, store, delegate=None, propose=None):
                         'POST',
                         request.url.path,
                         {'subject': body.subject},
-                        f"Give every computer the stored credential {name}, to sign its model in"
-                        if body.subject == COMPUTERS
-                        else f"Give {body.subject} the stored credential {name}",
+                        f"Give {body.subject} the stored credential {name}",
                     )
         return vault.change(
             who,
@@ -1317,7 +1339,7 @@ def install_credentials(app, store, delegate=None, propose=None):
             return vault.reveal(c, request.state.identity, cid)
 
     @app.get('/api/v2/credential-runtime')
-    def runtime(request: Request, subscription_runtime: Literal["claude", "codex"] | None = None):
+    def runtime(request: Request, subscription_runtime: Literal["claude", "codex", "cursor", "musecode"] | None = None):
         who = request.state.identity
         if who.role != 'bot':
             raise Problem('forbidden', 'An active bot run is required', 403)
@@ -1490,8 +1512,10 @@ def install_credentials(app, store, delegate=None, propose=None):
 
     @app.get('/api/v2/runner-model-credentials')
     def model_credentials(request: Request, runtime: str, login: str = ''):
-        """The model key or token this computer signs `runtime` in with: its own, stored from Settings > Computers, or
-        the one the company gave every computer. Only those, named for this runtime: never one granted to a bot."""
+        """The model key or token this computer signs `runtime` in with: the key subscription it is given (its own,
+        stored from Settings > Computers, or a shared one). Only those, named for this runtime: never one granted to a
+        bot, never a subscription saved in Settings > Models. Runners of v0.6.0-rc.1 on poll it, so the reply keeps
+        its shape (backend/computer_keys.py keys_for)."""
         who = request.state.identity
         names = providers.MODEL_KEYS.get(runtime)
         if who.role != 'runner':
@@ -1503,8 +1527,8 @@ def install_credentials(app, store, delegate=None, propose=None):
         def chosen(c):
             if not c.execute('SELECT 1 FROM runners WHERE id=? AND revoked_at IS NULL', (who.runner_id,)).fetchone():
                 raise Problem('forbidden', 'Only a registered computer may ask for this', 403)
-            # Which key, in the one order (backend/computer_keys.py): a key staged for its `use_key` job, its own,
-            # else the shared one; none once a person cleared it or signed it out (model_login).
+            # Which key, in the one order (backend/computer_keys.py): a key staged for its `use_key` job, else the
+            # key it is given; none once a person cleared it or signed it out (model_login).
             return keys_for(c, vault, who.runner_id, runtime, login)
 
         # Most computers poll with no key to send (signed out, switching, subscription): answer those from a read,

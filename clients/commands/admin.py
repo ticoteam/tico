@@ -729,3 +729,48 @@ ALERTS = (
         example="tico alerts company --monthly-cap 50",
     ),
 )
+
+# `tico group ...` and `tico team show|budget` (clients/cli_spec.py). `team icon` is still built in clients/hubcli.py:
+# it sends the bytes of a file on this computer.
+GROUP = (
+    Group("group", "the groups: sub-teams that nest, holding humans and bots"),
+    Command("group list", "the groups with their humans and bots", example="tico group list"),
+    Command(
+        "group update",
+        "create (no group given), rename, move, lead or fill a group (an owner or an admin)",
+        args=(
+            Arg("group", positional=True, nargs="?"),
+            Arg("add_humans", flag="--add-human", metavar="HUMAN"),
+            Arg("add_bots", flag="--add-bot", metavar="BOT"),
+            Arg("remove_humans", flag="--remove-human", metavar="HUMAN"),
+            Arg("remove_bots", flag="--remove-bot", metavar="BOT"),
+            Arg("on_behalf_of", metavar="MESSAGE_ID"),
+        ),
+        example="tico group update engineering --add-bot builder",
+    ),
+    Command(
+        "group delete",
+        "delete a group; its teammates and groups move up to its parent",
+        args=(Arg("on_behalf_of", metavar="MESSAGE_ID"),),
+        example="tico group delete engineering",
+    ),
+    Command(
+        "group access",
+        "show or set who may see, read and write to a group",
+        example="tico group access engineering --read everyone",
+    ),
+)
+TEAM = (Group("team", "team chart and icon"),)
+# After the hand-built `team icon`, so `tico team` lists its leaves in the order it always has.
+TEAM_AFTER_ICON = (
+    Command(
+        "team show",
+        "the team chart: humans, Slack, what they own, the bots with reports_to and group",
+        example="tico team show --team engineering",
+    ),
+    Command(
+        "team budget",
+        "read or set the team's default runs per hour and per day for bots (owner and admins)",
+        example="tico team budget --hour 20 --day 200",
+    ),
+)

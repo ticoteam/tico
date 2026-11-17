@@ -382,17 +382,35 @@ def task_done(api, args):
     return s3links.annotate(_asked(api, args).post(f"tasks/{args['id']}/done", body, key=_key(args)), links)
 
 
+def _from_stage(args, what):
+    """`{"from": {pipeline, stage}}` when the tool names a stage's open tasks (from_pipeline + from_stage) in place of
+    one task's id; None when it names one task. `what` says the write ("Moving") in a refusal."""
+    if not (args.get("from_pipeline") or args.get("from_stage")):
+        if not args.get("id"):
+            raise ValueError("Say which task: id (or from_pipeline and from_stage for a whole stage)")
+        return None
+    if not (args.get("from_pipeline") and args.get("from_stage")):
+        raise ValueError(f"{what} a stage's tasks needs from_pipeline and from_stage")
+    if args.get("id"):
+        raise ValueError("Give id, or from_pipeline and from_stage, not both")
+    return {"from": {"pipeline": args["from_pipeline"], "stage": args["from_stage"]}}
+
+
+# A stage's open tasks in place of one task (the board's ⋯ on a column): its pipeline and the stage.
+FROM_STAGE = {"from_pipeline": _s("Its pipeline"), "from_stage": _s("A stage")}
+
+
 @tool(
     "tico_task_move",
     "Move a task: `next`, back to a stage, `done`, `closed` or `reopen`. A bot gives a why for all but `next`; reopen "
     "needs one from everyone; a bot never reopens what a person closed. `to_pipeline` moves it to another pipeline, "
-    "number and history kept. `from_pipeline` + `from_stage` instead of `id`: all that stage's open tasks.",
+    "number and history kept. `from_pipeline` + `from_stage` instead of `id`: all that stage's open tasks, each moved "
+    "as one move is (`to` alone keeps them in their pipeline: `closed` closes them all).",
     {
         "id": TASK_ID,
         "to": _s("next, done, closed, reopen, or a stage's name or id"),
         "to_pipeline": _s("Another pipeline's name or id"),
-        "from_pipeline": _s("Its pipeline"),
-        "from_stage": _s("A stage"),
+        **FROM_STAGE,
         "why": WHY,
         "version": VERSION,
         "on_behalf_of": ASKED,
@@ -400,22 +418,17 @@ def task_done(api, args):
     writes=True,
 )
 def task_move(api, args):
-    if args.get("from_pipeline") or args.get("from_stage"):
-        if not (args.get("from_pipeline") and args.get("from_stage") and args.get("to_pipeline")):
-            raise ValueError("Moving a stage's tasks needs from_pipeline, from_stage and to_pipeline")
-        if args.get("id"):
-            raise ValueError("Give id, or from_pipeline and from_stage, not both")
+    stage = _from_stage(args, "Moving")
+    if not args.get("to") and not args.get("to_pipeline"):
+        raise ValueError("Say where it goes: to, or to_pipeline")
+    if stage:
         body = {
-            "from": {"pipeline": args["from_pipeline"], "stage": args["from_stage"]},
-            "to_pipeline": args["to_pipeline"],
+            **stage,
+            **({"to_pipeline": args["to_pipeline"]} if args.get("to_pipeline") else {}),
             **({"to": args["to"]} if args.get("to") else {}),
             **_why(args),
         }
         return _asked(api, args).post("tasks/move", body, key=_key(args))
-    if not args.get("id"):
-        raise ValueError("Say which task: id (or from_pipeline and from_stage for a whole stage)")
-    if not args.get("to") and not args.get("to_pipeline"):
-        raise ValueError("Say where it goes: to, or to_pipeline")
     body = {
         **({"to": args["to"]} if args.get("to") else {}),
         **({"to_pipeline": args["to_pipeline"]} if args.get("to_pipeline") else {}),
@@ -455,9 +468,11 @@ def task_close(api, args):
 @tool(
     "tico_task_reassign",
     "Give the task to another bot or person for this stage. It raises the version and starts the tries again; the "
-    "old owner's queued wakes for it are dropped.",
+    "old owner's queued wakes for it are dropped. `from_pipeline` + `from_stage` instead of `id`: all that stage's "
+    "open tasks (a person's change, or one made for a person with on_behalf_of).",
     {
         "id": TASK_ID,
+        **FROM_STAGE,
         "owner": _s("The new owner: a bot slug, a person id, or `me`"),
         "why": WHY,
         "version": VERSION,
@@ -467,10 +482,14 @@ def task_close(api, args):
         },
         "on_behalf_of": ASKED,
     },
-    required=("id", "owner"),
+    required=("owner",),
     writes=True,
 )
 def task_reassign(api, args):
+    stage = _from_stage(args, "Reassigning")
+    if stage:
+        body = {**stage, "owner": _target(api, args["owner"]), **_why(args)}
+        return _asked(api, args).post("tasks/owner", body, key=_key(args))
     version = _seen(args)
     body = {"owner": _target(api, args["owner"]), "version": version, **_why(args)}
     if args.get("set_anyway"):
@@ -483,17 +502,22 @@ def task_reassign(api, args):
     "Set a task aside in its stage, with why: no wakes, no Late, and it leaves Needs you until its date or until "
     "someone unsnoozes it; its owner is then woken once. Give a date wherever there is one (\"vendor replies by Nov "
     "14\"); with none it is On ice and the manager bot is told. A bot's fourth snooze in one stage goes to the manager "
-    "bot instead. Any move ends a snooze.",
+    "bot instead. Any move ends a snooze. `from_pipeline` + `from_stage` instead of `id`: all that stage's open tasks "
+    "(a person's change only).",
     {
         "id": TASK_ID,
+        **FROM_STAGE,
         "until": _s("An ISO-8601 date (the start of that day, Pacific) or date-time with a zone"),
         "why": WHY,
         "version": VERSION,
     },
-    required=("id",),
     writes=True,
 )
 def task_snooze(api, args):
+    stage = _from_stage(args, "Snoozing")
+    if stage:
+        body = {**stage, **_why(args, "until"), **_why(args)}
+        return api.post("tasks/snooze", body, key=_key(args))
     body = {"version": _seen(args), **_why(args, "until"), **_why(args)}
     return api.post(f"tasks/{args['id']}/snooze", body, key=_key(args))
 
@@ -1101,6 +1125,22 @@ def _place(text):
     return pipeline.strip(), stage.strip() or None
 
 
+def _from_place(fields, from_place, shift):
+    """--from "Pipeline/Stage" in place of a task: the tool's from_pipeline and from_stage. With it the first positional
+    is the next one's (`shift`: `tico task move --from Dev/Ideas closed`, `tico task reassign --from Dev/Ideas ana`)."""
+    from clients.tico import APIError
+
+    if not from_place:
+        return
+    fields["from_pipeline"], fields["from_stage"] = _place(from_place)
+    if not fields["from_stage"]:
+        raise APIError("validation", '--from names a stage: "Pipeline/Stage"', 422)
+    if shift and fields.get("id") and not fields.get(shift):
+        fields[shift] = fields.pop("id")
+    if fields.get("id"):
+        raise APIError("validation", "Give a task, or --from, not both", 422)
+
+
 def _move(client, fields, to_place=None, from_place=None):
     """`tico task move` with --to "Pipeline/Stage" (another pipeline) or --from "Pipeline/Stage" (a stage's open
     tasks): the tool's to_pipeline, to, from_pipeline and from_stage."""
@@ -1112,17 +1152,31 @@ def _move(client, fields, to_place=None, from_place=None):
         fields["to_pipeline"], to = _place(to_place)
         if to:
             fields["to"] = to
-    if from_place:
-        if not to_place:
-            raise APIError("validation", '--from moves to another pipeline: add --to "Pipeline/Stage"', 422)
-        if fields.get("id"):
-            raise APIError("validation", "Give a task, or --from, not both", 422)
-        fields["from_pipeline"], fields["from_stage"] = _place(from_place)
-        if not fields["from_stage"]:
-            raise APIError("validation", '--from names a stage: "Pipeline/Stage"', 422)
-    elif not fields.get("id"):
+    _from_place(fields, from_place, None if to_place else "to")
+    if not from_place and not fields.get("id"):
         raise APIError("validation", 'Say which task, or --from "Pipeline/Stage"', 422)
+    if from_place and not fields.get("to") and not fields.get("to_pipeline"):
+        raise APIError("validation", 'Say where they go: a stage, done or closed, or --to "Pipeline/Stage"', 422)
     return _call(client, "tico_task_move", {k: v for k, v in fields.items() if v is not None}, unwrapped=True)
+
+
+def _from_stage_via(name, shift):
+    """A task write that also takes --from "Pipeline/Stage": every open task there in place of one."""
+
+    def run(client, fields, from_place=None):
+        _from_place(fields, from_place, shift)
+        return _call(client, name, {k: v for k, v in fields.items() if v is not None}, unwrapped=True)
+
+    return run
+
+
+FROM_ARG = Arg(
+    "from_place",
+    "--from",
+    local=True,
+    metavar="PIPELINE/STAGE",
+    help="every open task in this stage, in place of an id",
+)
 
 
 def _show(client, fields, **_local):
@@ -1315,10 +1369,11 @@ TASK = (
     ),
     Command(
         "task snooze",
-        "snooze a task until a time, with why",
-        args=(Arg("why", "-m"), Arg("why", "--why")),
+        "snooze a task until a time, with why; --from \"Pipeline/Stage\" snoozes every open task there",
+        args=(Arg("id", positional=True, nargs="?"), FROM_ARG, Arg("why", "-m"), Arg("why", "--why")),
+        omit=("from_pipeline", "from_stage"),
         example="tico task snooze T1 --until 2026-12-01 -m 'waiting on the vendor'",
-        run=_via("tico_task_snooze"),
+        run=_from_stage_via("tico_task_snooze", None),
     ),
     Command(
         "task unsnooze",
@@ -1355,7 +1410,7 @@ TASK = (
     Command(
         "task move",
         "move a task: next (with -m, past what is not met), back to a stage, done, closed or reopen; "
-        '--to "Pipeline/Stage" moves it to another pipeline, --from "Pipeline/Stage" moves every open task there',
+        '--to "Pipeline/Stage" moves it to another pipeline, --from "Pipeline/Stage" moves (or closes) every open task there',
         args=(
             Arg("id", positional=True, nargs="?"),
             Arg("to", positional=True, nargs="?"),
@@ -1366,13 +1421,7 @@ TASK = (
                 metavar="PIPELINE/STAGE",
                 help="another pipeline, and its stage after a / (its first when left out): the task keeps its label",
             ),
-            Arg(
-                "from_place",
-                "--from",
-                local=True,
-                metavar="PIPELINE/STAGE",
-                help="every open task in this stage, in place of an id",
-            ),
+            FROM_ARG,
             Arg("why", "-m"),
             Arg("why", "--why"),
         ),
@@ -1389,10 +1438,17 @@ TASK = (
     ),
     Command(
         "task reassign",
-        "give the task to another bot or person for this stage",
-        args=(Arg("why", "-m"), Arg("why", "--why")),
+        "give the task to another bot or person for this stage; --from \"Pipeline/Stage\" gives every open task there",
+        args=(
+            Arg("id", positional=True, nargs="?"),
+            Arg("owner", positional=True, nargs="?"),
+            FROM_ARG,
+            Arg("why", "-m"),
+            Arg("why", "--why"),
+        ),
+        omit=("from_pipeline", "from_stage"),
         example="tico task reassign T1 bot:ana -m 'Ana has the data'",
-        run=_via("tico_task_reassign"),
+        run=_from_stage_via("tico_task_reassign", "owner"),
     ),
     Command(
         "task answer",

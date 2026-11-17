@@ -50,7 +50,14 @@ def test_owners_and_admins_save_the_company_subscriptions_and_nobody_reads_a_val
     assert add(api, "codex_login", codex_file(), name="ChatGPT", token="ben-test")["preview"] == "ana@acme.example"
     body = get(api, "model-subscriptions", "cara-test")  # a member reads, no values
     assert [s["name"] for s in body["subscriptions"]] == ["ChatGPT", "Company Max"]
-    assert [k["kind"] for k in body["kinds"]] == ["claude_token", "codex_login", "anthropic_key", "openai_key"]
+    assert [k["kind"] for k in body["kinds"]] == [
+        "claude_token",
+        "codex_login",
+        "anthropic_key",
+        "openai_key",
+        "cursor_key",
+        "meta_key",
+    ]
     assert TOKEN not in json.dumps(body) and "r-1" not in json.dumps(body)
     with api.app.state.store.read() as c:
         assert TOKEN not in c.execute("SELECT sealed FROM model_subscriptions WHERE id=?", (saved["id"],)).fetchone()[0]

@@ -22,6 +22,7 @@ interface DecAboutTask {
   links?: {url: string; title?: string | null; kind?: string | null}[] | null;
   tags?: {owner?: string | null}[] | null;
   conversation_id?: string | null;   // its thread: Flow's chat on an ask (decide.ts decideChatMount)
+  documents?: TaskDoc[] | null;      // its documents: a phone's tabs on an ask (decide.ts decideTabsOf)
 }
 /** One task's read for this screen, by task id: loading (a skeleton), ready, or failed with its words. */
 interface DecAbout {
@@ -41,17 +42,22 @@ const DEC_SENDING = new Set<string>();
 let DEC_RESUME = '';                             // the item Go to left from: ▶ picks up there
 
 // ---- reading
-/** The task behind an item, read once while the screen is open; on arrival the item on screen draws again. */
-function decideAboutLoad(taskId: string) {
-  if (!taskId || DEC_ABOUT.has(taskId)) return;
-  const v: DecAbout = {state: 'loading', task: null, error: ''};
+/** The task behind an item, read once while the screen is open; on arrival the item on screen draws again. `fresh`
+    reads it again and keeps the task read before until the new one arrives, so its tabs stay where they are. */
+function decideAboutLoad(taskId: string, fresh = false) {
+  const was = taskId ? DEC_ABOUT.get(taskId) : undefined;
+  if (!taskId || (was && !fresh)) return;
+  const v: DecAbout = was?.task ? {state: 'ready', task: was.task, error: ''} : {state: 'loading', task: null, error: ''};
   DEC_ABOUT.set(taskId, v);
   void (async () => {
     try {
       const r = await get<{task?: DecAboutTask | null}>(`/v2/tasks/${encodeURIComponent(taskId)}`);
       v.task = r?.task || null; v.state = v.task ? 'ready' : 'failed';
       if (!v.task) v.error = 'This task could not be read.';
-    } catch (e) { v.state = 'failed'; v.error = errorMessage(e, 'This task could not be read.'); }
+    } catch (e) {
+      // A read again that fails keeps the task read before.
+      if (!v.task) { v.state = 'failed'; v.error = errorMessage(e, 'This task could not be read.'); }
+    }
     if (DEC_ABOUT.get(taskId) !== v) return;
     const st = DEC, it = st ? decideCurrent(st) : null;
     if (!st || !it || decideTaskId(it) !== taskId) return;

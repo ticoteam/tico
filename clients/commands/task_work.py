@@ -13,6 +13,7 @@ from pathlib import Path
 from clients import s3links
 from clients.cli_spec import Arg, Command, Group
 
+from clients.bot_files import DOCUMENTS
 from clients.commands._registry import tool
 from clients.commands._schemas import DEFER_FOR, TASK_ID, _delivery, _key, _s
 from clients.commands._shared import ASKED, VERSION, VISUALS, _seen, _uploaded, _visuals, text_file
@@ -614,9 +615,19 @@ def task_follow(api, args):
     "With req and page instead, attach a page to the stage's page requirement: Jev checks it, then the person it "
     "names OKs that version. Attaching again replaces it. With a new version after a send back, say what changed "
     "(changed: up to 5 one-line bullets) and what you did with each of their points (answered: "
-    "\"<point>: done|not done, <why>\"); never quote their note back to them.",
+    "\"<point>: done|not done, <why>\"); never quote their note back to them. "
+    "With document instead, the HTML in text or the .html file at path is that document's next version: one per name "
+    "per task, shown as a tab beside the task's chat; put what changed in note. Spec, QA report (the proof), Release "
+    "report and Invoice are the names a stage approves; name any other document as you like.",
     {
         "id": _s("Task id"),
+        "document": {
+            "type": "string",
+            "maxLength": 40,
+            "description": "The task's document this HTML is the next version of: "
+            + ", ".join(DOCUMENTS)
+            + " or your own name",
+        },
         "req": _s("The page requirement's name or id, e.g. Spec page"),
         "page": _s("page:<file id> for its newest version, or page:<file id>@<version>"),
         "version": VERSION,
@@ -643,6 +654,8 @@ def task_follow(api, args):
     writes=True,
 )
 def task_attach(api, args):
+    if args.get("document"):
+        return _document(api, args)
     if args.get("req") or args.get("page"):
         if not (args.get("req") and args.get("page")):
             raise ValueError("A page requirement takes both req and page, e.g. req: Spec page, page: page:file-…")
@@ -676,6 +689,30 @@ def task_attach(api, args):
     for field in ("text", "content_base64", "note"):
         if args.get(field) is not None:
             body[field] = args[field]
+    return api.post(f"tasks/{args['id']}/files", body, key=_key(args))
+
+
+def _document(api, args):
+    """A task document's next version: `text`, or the .html file at `path` with the images beside it embedded (as
+    `tico page publish` sends one: the server drops anything that would load from elsewhere)."""
+    body = {"document": args["document"]}
+    if args.get("path"):
+        from clients import bot_files as BF, visual_embed
+
+        root = BF.checkout_root()
+        try:
+            name, _, data, _ = BF.read_local(root, args["path"])
+            if not visual_embed.is_page(name):
+                raise ValueError("A document is an .html file")
+            body["text"] = visual_embed.embed(root, args["path"])[0].decode("utf-8", errors="replace")
+        except BF.Refused as exc:
+            raise ValueError(str(exc)) from None
+    elif args.get("text") is not None:
+        body["text"] = args["text"]
+    else:
+        raise ValueError("Send the document's HTML as text, or path to an .html file")
+    if args.get("note"):
+        body["note"] = args["note"]
     return api.post(f"tasks/{args['id']}/files", body, key=_key(args))
 
 
@@ -927,5 +964,57 @@ FEEDBACK = (
         "feedback rule",
         "your 👎 as an org rule: active if you manage the bot, else suggested",
         example="tico feedback rule f1 'Reply within a day' --all-bots",
+    ),
+)
+
+
+def _no_key(fields):
+    """The arguments without an operation id: `general-manager status` never sent one."""
+    return {k: v for k, v in fields.items() if k != "operation_id"}
+
+
+# `tico general-manager ...` (clients/cli_spec.py): on, off, schedule and bot are paths of tico_general_manager_set.
+_SET_OTHERS = ("on", "preset", "at", "bot")
+GENERAL_MANAGER = (
+    Group("general-manager", "the General Manager's hourly department check (docs/general-manager.md)"),
+    Command(
+        "general-manager status",
+        "bot, report switch and schedule, last run, each department's last check",
+        tool="tico_general_manager",
+        convert=_no_key,
+        example="tico general-manager status",
+    ),
+    Command(
+        "general-manager on",
+        "switch the hourly report on",
+        tool="tico_general_manager_set",
+        fixed=(("on", True),),
+        omit=tuple(k for k in _SET_OTHERS if k != "on"),
+        example="tico general-manager on",
+    ),
+    Command(
+        "general-manager off",
+        "switch the hourly report off",
+        tool="tico_general_manager_set",
+        fixed=(("on", False),),
+        omit=tuple(k for k in _SET_OTHERS if k != "on"),
+        example="tico general-manager off",
+    ),
+    Command("general-manager run", "run the department check now", example="tico general-manager run"),
+    Command(
+        "general-manager schedule",
+        "pick when the report runs",
+        tool="tico_general_manager_set",
+        args=(Arg("preset", positional=True),),
+        omit=("on", "bot"),
+        example="tico general-manager schedule daily --at 08:00",
+    ),
+    Command(
+        "general-manager bot",
+        "turn the General Manager bot itself on or off",
+        tool="tico_general_manager_set",
+        args=(Arg("bot", positional=True),),
+        omit=("on", "preset", "at"),
+        example="tico general-manager bot off",
     ),
 )

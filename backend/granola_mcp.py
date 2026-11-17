@@ -25,6 +25,7 @@ from . import mcp_client, oauth_refresh
 from .auth import Identity, validate_identity
 from .imports import MeetingImport, segments_of
 from .store import H, Problem, encode
+from .api_contract import api_v2
 
 MCP = "https://mcp.granola.ai/mcp"
 AUTH = "https://mcp-auth.granola.ai"
@@ -1506,6 +1507,10 @@ class GranolaMCP:
         await asyncio.gather(*list(self.jobs.values()), *list(self.revocations), return_exceptions=True)
 
 
+# What the Idempotency-Key header does on a Granola write: nothing.
+GRANOLA_KEY = "Optional. Sync uses a two-minute debounce; connecting starts a new device sign-in."
+
+
 def install_granola(app):
     service = app.state.granola = GranolaMCP(app)
 
@@ -1521,23 +1526,55 @@ def install_granola(app):
         except GranolaError as exc:
             raise Problem("granola_unavailable", "Granola: " + exc.code, 503) from None
 
-    @app.get("/api/v2/meetings/granola")
+    @app.get(
+        "/api/v2/meetings/granola", **api_v2("Meetings", "getGranolaStatus", "Your Granola connection", "GranolaStatus")
+    )
     def status(request: Request):
         return service.status(person(request))
 
-    @app.post("/api/v2/meetings/granola/connect")
+    @app.post(
+        "/api/v2/meetings/granola/connect",
+        **api_v2(
+            "Meetings",
+            "connectGranola",
+            "Start personal Granola browser sign-in",
+            "GranolaDevice",
+            idempotency=GRANOLA_KEY,
+        ),
+    )
     async def connect(request: Request):
         return await safe(service.connect(person(request)))
 
-    @app.get("/api/v2/meetings/granola/connect/status")
+    @app.get(
+        "/api/v2/meetings/granola/connect/status",
+        **api_v2("Meetings", "pollGranolaSignIn", "Poll personal sign-in at the provider interval", "GranolaSignIn"),
+    )
     async def poll(request: Request):
         return await safe(service.poll(person(request)))
 
-    @app.delete("/api/v2/meetings/granola/connect")
+    @app.delete(
+        "/api/v2/meetings/granola/connect",
+        **api_v2(
+            "Meetings",
+            "disconnectGranola",
+            "Delete your encrypted Granola tokens",
+            "GranolaDisconnect",
+            idempotency=GRANOLA_KEY,
+        ),
+    )
     async def disconnect(request: Request):
         return await safe(service.disconnect(person(request)))
 
-    @app.post("/api/v2/meetings/granola/sync")
+    @app.post(
+        "/api/v2/meetings/granola/sync",
+        **api_v2(
+            "Meetings",
+            "syncGranola",
+            "Start a background sync; reuse the last two minutes",
+            "GranolaSync",
+            idempotency=GRANOLA_KEY,
+        ),
+    )
     async def sync(request: Request, now: bool = False):
         """`now`: the person pressed Sync now, so a backoff yields after five minutes since the last attempt."""
         return await service.trigger(person(request), now=now)

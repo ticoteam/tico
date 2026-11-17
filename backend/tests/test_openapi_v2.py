@@ -52,8 +52,8 @@ def test_served_to_the_signed_in_only_and_limited_to_the_stable_resources(api):
                 assert "Idempotency-Key" in [p["name"] for p in ops[method]["parameters"]], (method, path)
 
 
-def test_a_route_declares_its_place_in_the_contract_once(monkeypatch):
-    """api_v2(...) on a decorator puts the route in the document; the same operation in STABLE too, or a tag the
+def test_a_route_declares_its_place_in_the_contract_once():
+    """api_v2(...) on a decorator puts the route in the document; an operationId or method declared twice, or a tag the
     document does not describe, is refused rather than published twice or untagged."""
     from fastapi import FastAPI
 
@@ -65,8 +65,9 @@ def test_a_route_declares_its_place_in_the_contract_once(monkeypatch):
     def thing(tid: str):
         return {"id": tid}
 
-    monkeypatch.setattr(openapi_v2, "STABLE", [])
-    assert openapi_v2.operations(app) == [("/api/v2/things/{tid}", "get", "Tasks", "getThing", "One thing", "Task")]
+    assert openapi_v2.operations(app) == [
+        ("/api/v2/things/{tid}", "get", "Tasks", "getThing", "One thing", {"answer": "Task"})
+    ]
     assert openapi_v2.stable_path(app).fullmatch("/api/v2/things/t1")
     assert not openapi_v2.stable_path(app).fullmatch("/api/v2/things")
     op = openapi_v2.spec(app)["paths"]["/api/v2/things/{tid}"]["get"]
@@ -74,28 +75,96 @@ def test_a_route_declares_its_place_in_the_contract_once(monkeypatch):
     assert "x-tico-v2" not in op and op["responses"]["200"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/Task"
     }
-    monkeypatch.setattr(openapi_v2, "STABLE", [("/api/v2/things/{tid}", "get", "Tasks", "getThing", "One", None)])
-    with pytest.raises(RuntimeError, match="both in STABLE and on its route"):
-        openapi_v2.operations(app)
 
-    @app.get("/api/v2/other", **api_v2("No such tag", "getOther", "Other"))
-    def other():
+    @app.get("/api/v2/things/{tid}/copy", **api_v2("Tasks", "getThing", "Same name"))
+    def copy(tid: str):
         return {}
 
-    monkeypatch.setattr(openapi_v2, "STABLE", [])
-    with pytest.raises(RuntimeError, match="not in TAGS"):
+    with pytest.raises(RuntimeError, match="declared twice"):
         openapi_v2.operations(app)
+
+    other = FastAPI()
+
+    @other.get("/api/v2/other", **api_v2("No such tag", "getOther", "Other"))
+    def untagged():
+        return {}
+
+    with pytest.raises(RuntimeError, match="not in TAGS"):
+        openapi_v2.operations(other)
+
+
+# PUTs whose handlers never pass through Store.mutate, so they accept a write without the key (api_v2's KEYLESS).
+PUT_WITHOUT_KEY = {
+    "/api/v2/bots/{bot}/github-repos",
+    "/api/v2/bots/{bot}/repositories",
+    "/api/v2/finance/bills-address",
+    "/api/v2/hooks/wake-url",
+    "/api/v2/inbound/inboxes/{ident}/audience",
+    "/api/v2/postal/addresses/{address_id}/grants/{grantee_type}/{grantee_id}",
+    "/api/v2/postal/settings",
+    "/api/v2/repositories/settings",
+    "/api/v2/repositories/{owner}/{repo}",
+}
 
 
 def test_a_put_that_needs_an_idempotency_key_says_so():
     """PUT goes through the same keyed write as POST; a client built from the operation alone must send the key."""
+    from backend.api_contract import KEYLESS
+
     paths = openapi_v2.generate()["paths"]
     puts = {path: ops["put"] for path, ops in paths.items() if path.startswith("/api/v2/") and "put" in ops}
-    assert puts and set(openapi_v2.PUT_WITHOUT_KEY) <= set(puts)
+    assert puts and PUT_WITHOUT_KEY <= set(puts)
     for path, op in puts.items():
         key = [p for p in op.get("parameters", []) if (p["name"], p["in"]) == ("Idempotency-Key", "header")]
         assert len(key) == 1, path
-        assert key[0]["required"] is (path not in openapi_v2.PUT_WITHOUT_KEY), path
+        assert key[0]["required"] is (path not in PUT_WITHOUT_KEY), path
+        assert (key[0]["description"] == KEYLESS) is (path in PUT_WITHOUT_KEY), path
+
+
+def test_a_route_says_what_fastapi_cannot_see():
+    """What api_v2 says beside the answer (a body read by hand, a description, a parameter's note, more or fewer
+    responses, sign-in, the key) lands on the operation, and the route's own declaration is never changed."""
+    from fastapi import FastAPI
+
+    from backend.api_contract import ERROR, api_v2
+
+    app = FastAPI()
+    body = {"required": True, "content": {"text/plain": {"schema": {"type": "string"}}}}
+    gone = {**ERROR, "description": "not_found"}
+
+    @app.post(
+        "/api/v2/things",
+        **api_v2(
+            "Tasks",
+            "makeThing",
+            "Make a thing",
+            {"description": "Bytes", "content": {"application/octet-stream": {"schema": {"type": "string"}}}},
+            description="Reads its body by hand.",
+            parameters={"q": "What to look for"},
+            request_body=body,
+            responses={"404": gone},
+            idempotency="Not needed.",
+        ),
+    )
+    def make(q: str = ""):
+        return {}
+
+    @app.get("/open", **api_v2("Health", "getOpen", "Open to all", security=[], responses={"200": None}))
+    def open_route():
+        return {}
+
+    document = openapi_v2.spec(app)
+    op = document["paths"]["/api/v2/things"]["post"]
+    assert op["description"] == "Reads its body by hand." and op["requestBody"] == body
+    assert op["responses"]["200"]["description"] == "Bytes" and op["responses"]["404"] == gone
+    assert {"401", "422"} <= set(op["responses"])
+    q, key = op["parameters"]
+    assert q["description"] == "What to look for"
+    assert (key["name"], key["required"], key["description"]) == ("Idempotency-Key", False, "Not needed.")
+    opened = document["paths"]["/open"]["get"]
+    assert opened["security"] == [] and opened["responses"] == {}
+    op["responses"]["404"]["description"] = "changed"
+    assert gone["description"] == "not_found"
 
 
 def test_every_declared_schema_is_valid_json_schema():

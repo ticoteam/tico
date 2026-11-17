@@ -258,7 +258,11 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
                 ),
             )
         return mutate(
-            request, body, lambda c: model_login.use_shared_key(c, request.state.identity, rid, body.runtime, auth=auth)
+            request,
+            body,
+            lambda c: model_login.use_shared_key(
+                c, request.state.identity, rid, body.runtime, auth=auth, vault=app.state.vault
+            ),
         )
 
     # Clear key / Replace key (backend/computer_keys.py). What signs it in, and for the company's shared key every

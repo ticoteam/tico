@@ -231,8 +231,10 @@ def test_a_conflict_while_the_stage_waits_on_a_persons_ok_waits_for_the_ok_then_
     assert not E.advance(c, eng)
     [ask] = [n for n in W.needs(c, X.ANA) if n["task_id"] == eng]
     assert ask["kind"] == "ask" and ask["requirement_id"] == rid
-    assert ask["line"].endswith("OK Ana (version 1). The PR has a merge conflict: builder fixes it after your OK.")
-    assert "New commits since the reviews (now at bbb)" in ask["line"]
+    # The row is the document's name and what the person's OK hands on; why they are asked again is a notice beside it.
+    assert ask["line"] == "QA report. The PR has a merge conflict: builder fixes it after your OK."
+    notices = [n for s in R.standings(c, E.task(c, eng)) for n in s.notices]
+    assert any("New commits since the reviews (now at bbb)" in n for n in notices)
 
     # Ana OKs: the conflict is the Builder's now, one wake, and the page stays OK'd.
     A.answer(c, eng, rid, X.ANA, "ok")
