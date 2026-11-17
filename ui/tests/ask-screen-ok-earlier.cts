@@ -4,7 +4,8 @@ import type {Route} from 'playwright';
 // - It shows the task's page from the earlier stage (the QA page, at its version), not the task's title and text;
 // - the ask, as the asker's last message in the task's chat, says who asked, when, that stage, the page's version and
 //   the task (#72 ↗), on desktop and phone, where the OK opens on its Proof tab; under the question the verdict, as up to
-//   3 short check rows (the ask's brief details), and on a phone Proof, which opens the Proof tab;
+//   3 short check rows (what Jev passed on that page, never the ask's brief), and on a phone Proof, which opens the
+//   Proof tab;
 // - Approve stays on and answers the OK alone (no page version: it is not a page's OK);
 // - an OK the server gave no earlier page (none, or one the reader may not open) shows the task's title and text.
 // TICO_UI_SHOTS=<dir> saves ok-release-page-desktop.png and ok-release-page-phone.png.
@@ -27,7 +28,7 @@ const need = (task: string, title: string, number: number, hour: number, earlier
   task: brief(task, title, number),
   ask: {requirement_id: RID, kind: 'ok', line: 'OK the release', who: 'human:chris', asked_by: null, choices: null, may: ['ok', 'no'],
     met: false, shows: [], standing: 'waiting', answer: null, ...(earlier ? {earlier} : {}),
-    brief: {why: 'QA passed on the release candidate.', details: ['Checks pass at 9f3c2a1', 'Cart kept when the tab closes', 'No console errors', 'Phone layout holds'], recommend: null}}});
+    brief: {why: 'QA passed on the release candidate.', details: ['Not a check row'], recommend: null}}});
 const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager_id: null, owner_id: 'human:chris', private: false,
   factory_id: null, preset: null, settings_version: 1, retired_at: null,
   stages: ['product-qa:QA', 'product-ok-release:OK release'].map(s => ({id: s.split(':')[0], name: s.split(':')[1], purpose: '', owner: null,
@@ -40,7 +41,8 @@ const QA = '<h1>QA: saved carts</h1><p>Before and after: the cart is kept when t
   const errors: string[] = [];
   const shots = process.env.TICO_UI_SHOTS;
   const needs = [
-    need('t-72', 'Saved carts', 72, 10, {file_id: 'pq', version: 2, ref: 'page:pq@2', stage_id: 'product-qa', stage: 'QA', source: ['page:pq@2']}),
+    need('t-72', 'Saved carts', 72, 10, {file_id: 'pq', version: 2, ref: 'page:pq@2', stage_id: 'product-qa', stage: 'QA', source: ['page:pq@2'],
+      checks: ['Checks pass at 9f3c2a1', 'Cart kept when the tab closes', 'No console errors', 'Phone layout holds']}),
     need('t-73', 'Dark mode toggle', 73, 11, {removed: true, label: "A page you can't open"}),
   ];
   const writes: {p: string; body: Record<string, unknown>}[] = [];

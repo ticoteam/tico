@@ -177,14 +177,27 @@ def test_a_comment_that_fails_halfway_leaves_nothing_of_itself_and_the_batch_goe
     assert c.execute("SELECT COUNT(*) FROM events").fetchone()[0] == before
 
 
-def test_the_respond_tool_lists_the_decisions_the_server_takes():
-    """Three copies of one list: the tool's schema (what bots and the CLI see), the server's check (DECISIONS) and the
-    request model. approve and decline were in the schema and the server answered them with a 422."""
+def test_the_cli_and_the_mcp_tool_offer_the_decisions_the_server_takes():
+    """`tico needs-you respond --decision` and tico_needs_you_respond send what models.BatchRespond accepts: an MCP
+    agent that said approve or decline was refused on every item."""
+    import argparse
     from typing import get_args
 
-    from backend.models import BatchRespond
-    from clients.commands._mcp import BY_NAME
+    from backend import models as M
+    from clients import hubcli, hubtools
 
-    schema = BY_NAME["tico_needs_you_respond"]["inputSchema"]["properties"]["decision"]
-    literal = next(a for a in get_args(BatchRespond.model_fields["decision"].annotation) if get_args(a))
-    assert schema["enum"] == list(B.DECISIONS) == list(get_args(literal))
+    (literal,) = [arg for arg in get_args(M.BatchRespond.model_fields["decision"].annotation) if get_args(arg)]
+    taken = set(get_args(literal))
+    assert taken == set(B.DECISIONS)
+    schema = hubtools.BY_NAME["tico_needs_you_respond"]["inputSchema"]["properties"]["decision"]
+    assert set(schema["enum"]) == taken
+
+    def sub(parser, *names):
+        for name in names:
+            action = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction))
+            parser = action.choices[name]
+        return parser
+
+    respond = sub(hubcli.parser(), "needs-you", "respond")
+    (decision,) = [a for a in respond._actions if a.dest == "decision"]
+    assert set(decision.choices) == taken

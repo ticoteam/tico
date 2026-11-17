@@ -116,7 +116,7 @@ def test_a_computer_silent_with_work_queued_goes_to_its_owner(environment):
     assert (
         machine_issue(api, riley)["title"] == "Owner Mac is offline" and not machine_issue(api, riley)["needs_person"]
     )
-    # Past ten minutes with work queued it is an outage: said on Health and Overview, nobody interrupted yet.
+    # Past ten minutes with work queued it is an outage: said on Health, nobody interrupted yet.
     heartbeat(api, runner, seconds_ago=700, runtimes=SIGNED_IN)
     issue = machine_issue(api, riley)
     assert (
@@ -847,7 +847,7 @@ def _parked(api, slug, days_ago, created_by="", operator="morgan"):
 
 def test_a_bot_left_in_setup_warns_once_its_held_work_is_old_is_stuck_for_a_day_and_is_nudged_once(environment):
     """One install: held work an hour old warns (a parked bot holds work on purpose, so it is not "slow"); a bot parked
-    over a day is on Overview's stuck list and only someone who may manage it gets the finish; and a bot left in setup
+    over a day is on Health's stuck list and only someone who may manage it gets the finish; and a bot left in setup
     is nudged once to whoever its setup reminder goes to, and to nobody while that reminder is open."""
     from backend import setup_stuck
 

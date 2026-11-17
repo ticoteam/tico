@@ -328,20 +328,6 @@ const taskScreenLinkHTML = (owner: string | null | undefined) => {
   return id ? `<a class="ghost peek-btn" href="${screenHref(id)}" aria-label="Screen" title="Screen">${TL_ICON.screen}</a>` : '';
 };
 
-// app/overview.ts
-// Read by ui/app/refresh.ts on every live change.
-let OVERVIEW_PAGE: OverviewPageState | null = null;
-async function overviewLoadComputers() {
-  const state = OVERVIEW_PAGE;
-  if (!state || state.loadingComputers) return;
-  state.loadingComputers = true;
-  try {
-    const result = await get<OverviewComputersAnswer>('/v2/computers');
-    if (OVERVIEW_PAGE === state && Array.isArray(result.computers)) state.computers = result.computers.map(c => ({id: c.id, label: c.label, revoked_at: c.revoked_at}));
-  } catch {} // Readable bot assignments still provide their buildings when inventory is unavailable.
-  finally { state.loadingComputers = false; }
-}
-
 // app/finance.ts
 const FIN_ROUTE = '#/finance';
 

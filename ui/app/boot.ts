@@ -108,7 +108,6 @@ const BOOT_ROSTER_WAIT_MS = 10000;
   void Promise.all([status, counts]).then(() => {
     renderTree(); renderHeartbeat(); pausedRender(); botAvatarsSync();
     botAlertDraw();
-    overviewRefresh();                 // a campus opened before the first status answer shows it now, not at the next poll
     if (TASKS_ST && isTasksRoute(S.route)) tasksRender(TASKS_ST);
   });
   if (S.me) void updUnreadRefresh();

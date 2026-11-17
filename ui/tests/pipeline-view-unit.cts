@@ -6,8 +6,8 @@
 //   (`on_person`) are said in the count's tooltip and name ("5 of 20 slots used. 15 more wait on a person and hold no
 //   slot."), and on a phone in one muted line above the open stage's cards; no person pill;
 // - a refused move reads as the engine said it: a push past asks why, anything else is the engine's line;
-// - Company › Factories orders a factory's pipelines by where they file, joins them with an arrow, and puts pipelines in
-//   no factory under Other with no count;
+// - Strategy › Org's Factories section orders a factory's pipelines by where they file, and puts pipelines in no factory
+//   in one group after them;
 // - the editor names what someone else changed when its save is refused as out of date;
 // - the editor offers every kind, a page's and In a release's settings, and a stage's On entering list (its Limit and
 //   actions, the owner change among them, as rows; + Rule and + Action), and saves them as the record stores them; an answer's name follows its title until edited, and its type keeps only its own fields;
@@ -54,7 +54,7 @@ const ctx = vm.createContext({
   srMarkHTML: (cls: string, icon: string) => `<span class="sr-m ${cls}">${icon}</span>`,   // stage-rules.ts: one mark for a rule, one for an action
   needsStageCount: () => 0,   // nothing waits on the person here: no stage's ▶ (stage-review.cts draws them)
 });
-for (const file of ['task-api.ts', 'task-row.ts', 'pipeline-api.ts', 'task-pipelines.ts', 'overview-factories.ts', 'pipeline-editor.ts', 'task-requirements.ts']) {
+for (const file of ['task-api.ts', 'task-row.ts', 'pipeline-api.ts', 'task-pipelines.ts', 'org-factories.ts', 'pipeline-editor.ts', 'task-requirements.ts']) {
   vm.runInContext(transformSync(fs.readFileSync(path.join(APP, file), 'utf8'), {loader: 'ts', target: 'es2022'}).code, ctx, {filename: file});
 }
 const plain = <T,>(x: T): T => JSON.parse(JSON.stringify(x));   // out of the vm's realm, for deepEqual
@@ -196,7 +196,7 @@ if (!view) throw new Error('the view sets its hook on the page');
   assert.equal(other.text, 'Refund flow: Not moved.');
 }
 
-// ---- Company › Factories (read through factoriesRead, so this part waits)
+// ---- Strategy › Org's Factories section (read through factoriesRead, so this part waits)
 const factories = (async () => {
   const recs = [
     rec({id: 'eng', name: 'Engineering', factory_id: 'f-product', stages: [stage('b', 'Build')]}),
@@ -208,19 +208,12 @@ const factories = (async () => {
     pipelines: [{id: 'product', name: 'Product', factory_id: 'f-product', open: 17, files_into: ['eng'], mark: 'needs_person'},
       {id: 'eng', name: 'Engineering', factory_id: 'f-product', open: 9, files_into: [], mark: null},
       {id: 'general', name: 'General', factory_id: null, open: 31, files_into: [], mark: 'cant_run'}]};
-  // The server's answer, read as factoriesRead reads it: its marks become the task mark's names.
   ctx.get = async () => map;
   const read = await ctx.factoriesRead('7d');
-  assert.deepEqual(plain(read.pipelines.map((p: {mark: string | null}) => p.mark)), ['person', null, 'cant']);
-  const groups = plain(ctx.ofGroups(read, recs));
-  assert.deepEqual(groups.map((g: {name: string; done: number | null; pipelines: {id: string}[]}) => [g.name, g.done, g.pipelines.map(p => p.id)]),
-    [['Product', 4, ['product', 'eng']], ['Other', null, ['general']]], 'a pipeline comes before the one it files into; retired ones go');
-  const html = ctx.ofGroupHTML(groups[0]);
-  assert.match(html, /<span class="of-done tnum">4 done<\/span>/);
-  assert.match(html, /Product<\/span><span class="of-box-n tnum">17<\/span><span class="tk-mark tk-mark-person"[^>]*>!<\/span><\/a><span class="of-arrow"[^>]*>→<\/span><a class="of-box" href="#\/tasks\?pipeline=eng"/);
-  const other = ctx.ofGroupHTML(groups[1]);
-  assert.doesNotMatch(other, /done/, 'Other has no count');
-  assert.match(other, /tk-mark-cant/);
+  assert.deepEqual(plain(read.pipelines.map((p: {files_into: string[]}) => p.files_into)), [['eng'], [], []]);
+  const groups = plain(ctx.orgFacGroups(read, recs));
+  assert.deepEqual(groups.map((g: {id: string; pipelines: {id: string}[]}) => [g.id, g.pipelines.map(p => p.id)]),
+    [['f-product', ['product', 'eng']], ['', ['general']]], 'a pipeline comes before the one it files into; retired ones go');
 })();
 
 // ---- the editor's out-of-date save

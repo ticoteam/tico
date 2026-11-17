@@ -69,7 +69,7 @@ async function scenario(browser: Browser, {name, viewport, theme}: {name: string
     if (p === '/api/issues') return json([]);
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [], schedules: []});
     if (p === '/api/v2/status') return json({bots: []});
-    if (p === '/api/v2/needs-you') return json({items: [], went_away: null});
+    if (p === '/api/v2/needs-you') return json({items: []});
     if (p === '/api/v2/goals') return json({goals: [], chain: [], reports: [], company: []});
     if (p === '/api/v2/updates') return json({updates: [], missed: [], unread: 0, next_before: null, today: {}});
     if (p === '/api/v2/tasks') return json({tasks: []});

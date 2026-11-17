@@ -1,15 +1,13 @@
-/* ui/app/dashboard.ts — Company › Mine (My dashboard, #/home, the landing page), Company › Dashboard
-   and team pages (#/team/<group>): a grid of pinned built-in cards and pages (backend/cards.py). My dashboard is the
-   place person:me, the reader's own. Each card shows its reader only what they may already see; a person who arranges the
-   place drags, sizes, adds and removes pins. The bot sidebar draws its card and page widgets with the same pieces.
+/* ui/app/dashboard.ts — Company (#/home, the landing page) and team pages (#/team/<group>): a grid of pinned built-in
+   cards and pages (backend/cards.py). Company is the place person:me, the reader's own, with the Floor
+   (ui/app/company-floor.ts) as its first card. Each card shows its reader only what they may already see; a person who
+   arranges the place drags, sizes, adds and removes pins. The bot sidebar draws its card and page widgets with the same
+   pieces.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-const OVERVIEW_CAMPUS = OVERVIEW + '/campus';
-const OVERVIEW_GRAPH = OVERVIEW + '/graph';           // ui/app/overview-graph.ts
-const OVERVIEW_FACTORIES = OVERVIEW + '/factories';   // ui/app/overview-factories.ts
-const OVERVIEW_FLOOR = OVERVIEW + '/floor';           // ui/app/company-floor.ts; one factory at OVERVIEW_FLOOR/<id>
-const OVERVIEW_COMPANY = OVERVIEW + '/company-page';   // ui/app/company-page.ts
+const OVERVIEW_FLOOR = OVERVIEW + '/floor';           // one factory's floor at OVERVIEW_FLOOR/<id> (ui/app/company-floor.ts)
+const OVERVIEW_COMPANY = OVERVIEW + '/company-page';   // Share, in Company's ⋯ (ui/app/company-page.ts)
 const TEAM_PAGE = '#/team/';
 const DASH_SIZES = [['small', 'Small'], ['medium', 'Medium'], ['large', 'Large']];
 // {place, month, key, view, choices, root, menu, editing}: the place on screen. A write's answer is drawn only while it is
@@ -121,17 +119,8 @@ const dashApi = (place: string) => '/v2/places/' + encodeURIComponent(place);
 // The place as it reads: the Growth page's for the month picked there.
 const dashReadUrl = (state: DashState) => dashApi(state.place) + (state.month ? '?month=' + encodeURIComponent(state.month) : '');
 const dashKey = (state: DashState) => state.place + (state.month ? '?month=' + state.month : '');
-// Company's views, one tab each. The shared header (ui/app/page-head.ts) keeps five on the row and lists the rest (Factories,
-// and Share, which is rarely used) in ⋯; the one open takes the fifth place.
-const dashTabs = (on: string): PageTab[] =>
-  [['mine', HOME, 'Mine'], ['dashboard', OVERVIEW, 'Dashboard'], ['floor', OVERVIEW_FLOOR, 'Floor'], ['campus', OVERVIEW_CAMPUS, 'Campus'], ['graph', OVERVIEW_GRAPH, 'Graph'], ['factories', OVERVIEW_FACTORIES, 'Factories'], ...(cpAllowed() ? [['company', OVERVIEW_COMPANY, 'Share']] : [])]
-    .map(([id, href, label]) => ({label: label!, href: href!, cur: on === id}));
-// The one page header of every Company view (style guide "Top bars: one line"): Company, its tabs, then the view's own
-// tools, its filled button or quiet +, and ⋯ last. `.dash-tabs` stays on the tab row as a hook for tests and the
-// read-only view's checks.
-type DashHeadParts = Pick<PageHeadOptions, 'tools' | 'primary' | 'add' | 'more' | 'hook'>;
-const dashCompanyHead = (on: string, parts: DashHeadParts = {}) => pageHead({title: 'Company', pad: true, tabs: dashTabs(on), tabsHook: 'dash-tabs',
-  tabsAttrs: 'aria-label="Company"', ...parts, more: parts.more || PAGE_HEAD_COPY});
+// Share (the Company page, ui/app/company-page.ts) is in Company's ⋯ for owners and admins.
+const dashShareItem = () => cpAllowed() ? `<a href="${OVERVIEW_COMPANY}" data-dash-share>Share</a>` : '';
 const dashNum = (n: unknown) => n == null ? '–' : Number(n).toLocaleString(undefined, {maximumFractionDigits: 2});
 const dashMoney = (n: unknown) => n == null ? '–' : '$' + Number(n).toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0});
 const dashBot = (slug: string | null | undefined) => typeof botDisplayName === 'function' ? botDisplayName(slug) : slug;
@@ -223,6 +212,8 @@ const DASH_BODY: Record<string, DashBody> = {
   automation_runs: d => `${d.failed || d.running ? `<p class="muted dash-sub">${[d.failed ? `<span class="dash-bad">${d.failed} failed</span>` : '', d.running ? `${d.running} running` : ''].filter(Boolean).join(' · ')}</p>` : ''}
     ${d.runs.length ? `<ul class="dash-list">${d.runs.map(r => `<li><span class="dash-dot ${r.status === 'failed' ? 'bad' : r.status === 'succeeded' || r.status === 'done' ? 'ok' : ''}" aria-hidden="true"></span>${esc(r.name)} <span class="muted">${agoSpan(r.started_at)}</span></li>`).join('')}</ul>` : ''}`,
   latest_pages: d => d.pages.length ? `<ul class="dash-list dash-pages">${d.pages.map(dashPageRow).join('')}</ul>` : '<p class="muted dash-none">No pages yet</p>',
+  // The Floor draws itself in this host once the card is on the page (dashDraw, floorMount in ui/app/company-floor.ts).
+  floor: () => '<div class="cf-host"></div>',
 };
 // What a built-in card shows (its template's fields).
 const dashData = (card: DashCard) => card.data as DashCardData;
@@ -261,11 +252,10 @@ function dashAudienceWords(aud: import('../types/api').PlaceAudience | undefined
 // ---- the page
 // A place seen before is drawn at once from what it showed last (S.lastRead.places), then read again; the grid is drawn
 // again only when the answer differs, so its page widgets are not reloaded for nothing.
-// Startup asks for My dashboard (or the company's) beside the roster when it is the page the app opens on, a round
+// Startup asks for Company (person:me) beside the roster when it is the page the app opens on, a round
 // trip sooner (boot.js); pageDashboard's read then takes that answer (api.js getPrefetch).
 function dashPrefetch() {
-  const place = location.hash === HOME ? 'person:me' : location.hash === OVERVIEW ? 'dashboard' : '';
-  if (place) getPrefetch(dashApi(place));
+  if (location.hash === HOME) getPrefetch(dashApi('person:me'));
 }
 async function pageDashboard(place: string, {month = ''}: {month?: string} = {}) {
   const team = place.startsWith('team:'), own = DASH_PLACES[place];
@@ -275,8 +265,7 @@ async function pageDashboard(place: string, {month = ''}: {month?: string} = {})
   // Every place draws the shared header; its tools and ⋯ follow the reader's rights and edit mode (dashHeadDraw). A place
   // with a head of its own (Growth) draws its header itself and adds its tools and ⋯ items to the arranging ones.
   const head = own ? own.head(state)
-    : team ? pageHead({title: '', pad: true, hook: 'dash-head', more: PAGE_HEAD_COPY})
-      : dashCompanyHead(place === 'person:me' ? 'mine' : 'dashboard', {hook: 'dash-head'});
+    : pageHead({title: team ? '' : 'Company', pad: true, hook: 'dash-head', more: (team ? '' : dashShareItem()) + PAGE_HEAD_COPY});
   main.innerHTML = `<div class="dash" id="dash-root">${head}
     <div class="dash-grid" id="dash-grid">${kept ? '' : skelRows(4, {card: true})}</div>
     ${team ? '<section class="card home-card dash-home" id="dash-home"><header><h2>Home</h2><div class="home-card-acts" id="dash-home-acts"></div></header><div id="dash-home-thread"></div></section>' : ''}
@@ -338,13 +327,13 @@ function dashAccessEdit(state: DashState) {
     if (view && DASH === state) { state.view = view; dashDraw(state); }
   });
 }
-// My dashboard follows what its cards show from the live events themselves (Nov 3: nothing is read because an event
+// Company follows what its cards show from the live events themselves (Nov 3: nothing is read because an event
 // came): My tasks from the reader's task events, Needs you from the list the app holds, Unread threads from read and
 // activity events on its rows. What no event can settle (a count over tasks not shown, Done this week, a thread not
 // listed) waits for the safety read: every 2 minutes while on screen, or every 5 with the live stream up. It is drawn
 // again only when the answer differs, and not while a menu or dialog is open or a card is being moved.
 const DASH_POLL_MS = 120e3, DASH_LIVE_POLL_MS = 300e3;
-// Each of My dashboard's cards of a template, with its pin's place on the grid: `patch` gives its new data, or null for
+// Each of Company's cards of a template, with its pin's place on the grid: `patch` gives its new data, or null for
 // no change; a changed card's body alone is drawn again.
 function dashCardsPatch(template: string, patch: (d: DashCardData, card: DashCard) => DashCardData | null): void {
   const state = DASH, v = state?.view;
@@ -501,7 +490,8 @@ function dashHeadDraw(state: DashState, head: HTMLElement) {
   const parts: [PageHeadPart, string][] = [
     ['tools', (own?.tools?.(state) || '') + flow + audience + adds],
     ['primary', on ? '<button type="button" class="primary ph-go" data-dash-mode="done">Done</button>' : ''],
-    ['more', (own?.more?.(state) || '') + (edit && !on ? '<button type="button" data-dash-mode="edit">Edit</button>' : '') + PAGE_HEAD_COPY],
+    ['more', (own?.more?.(state) || '') + (state.place === 'person:me' ? dashShareItem() : '')
+      + (edit && !on ? '<button type="button" data-dash-mode="edit">Edit</button>' : '') + PAGE_HEAD_COPY],
   ];
   const drawn = DASH_HEAD_PARTS.get(head) || {};
   for (const [part, html] of parts) {
@@ -557,6 +547,8 @@ function dashDraw(state: DashState) {
     else body.append(dashPageEl(pin.page, pin.size));
     grid.append(el);
   });
+  const floor = grid.querySelector<HTMLElement>('.cf-host');
+  if (floor) floorMount(floor);
   DASH_PLACES[state.place]?.drawn?.(state);
 }
 // A place nobody saved shows its default cards without ids; the first change saves them, then finds the pin again.
@@ -692,14 +684,14 @@ function dashWire(state: DashState) {
 }
 
 // ---- forms: a card's settings, a page to pin
-// The cards a place offers: the Growth page's own templates only there (?place=growth).
+// The cards a place offers: the general ones and the place's own (?place=growth, ?place=person:me for the Floor).
 // Bumped when what the card form offers changes (a Growth channel added or retired): the next form reads it again.
 let DASH_CHOICES_AT = 0;
 const dashChoicesStale = () => { DASH_CHOICES_AT += 1; };
 async function dashChoices(state: DashState, team: string | undefined = ''): Promise<DashChoices> {
   const query = new URLSearchParams();
   if (team) query.set('team', team);
-  if (DASH_PLACES[state.place]) query.set('place', state.place);
+  query.set('place', state.place);   // a place's own templates: the Growth page's, Company's Floor
   const text = query.toString(), key = 'c:' + text;
   if (!state.choicesBy || state.choicesAt !== DASH_CHOICES_AT) state.choicesBy = {}, state.choicesAt = DASH_CHOICES_AT;
   return state.choicesBy[key] ||= get<DashChoices>('/v2/cards/choices' + (text ? '?' + text : ''));
@@ -759,8 +751,8 @@ function dashDialog(state: DashState, title: string, inner: string, submit: (for
   if (!dlg.open) dlg.showModal();
   return form;
 }
-// A new card's size: a Number is a tile, the Funnel and Channels want the row; the rest a half.
-const DASH_SIZE: Record<string, string> = {growth_number: 'small', growth_funnel: 'large', growth_channels: 'large'};
+// A new card's size: a Number is a tile, the Funnel, Channels and the Floor want the row; the rest a half.
+const DASH_SIZE: Record<string, string> = {growth_number: 'small', growth_funnel: 'large', growth_channels: 'large', floor: 'large'};
 const dashSizeOf = (template: string) => DASH_SIZE[template] || 'medium';
 // at < 0: a new card for this place; else the card pinned at that position.
 async function dashCardForm(state: DashState, at: number) {
@@ -771,9 +763,11 @@ async function dashCardForm(state: DashState, at: number) {
   const team = state.view.kind === 'team' ? state.view.group : '';
   const settings = card ? card.settings : {team};
   // A new card starts on the place's own first template (a Number on the Growth page), else the first offered.
-  // needs_attention (My dashboard's default) and needs_you are both "Needs you", the same list; a new card offers the one
+  // needs_attention (Company's default) and needs_you are both "Needs you", the same list; a new card offers the one
   // that also takes a team, so the list never names one card twice.
-  const offered = choices.templates.filter(t => !(t.id === 'needs_attention' && choices.templates.some(x => x.id === 'needs_you')));
+  // The Floor goes on a page once.
+  const offered = choices.templates.filter(t => !(t.id === 'needs_attention' && choices.templates.some(x => x.id === 'needs_you'))
+    && !(t.id === 'floor' && state.view?.pins.some(p => p.card?.template === 'floor')));
   const first = DASH_PLACES[state.place]?.first, template = card ? card.template : (offered.find(t => t.id === first) || offered[0] || choices.templates[0]).id;
   const form = dashDialog(state, card ? dashHeading(card) : 'Add card', `
     ${card ? '' : `<label>Card<select name="template">${dashOptions(offered.map(t => [t.id, t.name]), template)}</select></label>`}

@@ -20,6 +20,7 @@ engine's modules reach back to hubdb and the store.
 
 import functools
 import json
+import re
 from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING, Any, Concatenate, NoReturn, ParamSpec, TypeVar, cast
 
@@ -749,6 +750,16 @@ def _page_of(conn: "sqlite3.Connection", visit_id: str, requirement: Row) -> Row
     return {"file_id": found["file_id"], "version": int(found["version"]), "ref": ref}
 
 
+def _page_checks(conn: "sqlite3.Connection", ref: object) -> list[str]:
+    """The check rows (page_verdicts.checks_of) of a `page:<id>[@<version>]` ref, [] for any other ref."""
+    from . import page_verdicts
+
+    found = re.fullmatch(r"page:([A-Za-z0-9_-]+)(?:@([0-9]{1,9}))?", str(ref or ""))
+    if not found:
+        return []
+    return page_verdicts.checks_of(conn, found.group(1), int(found.group(2)) if found.group(2) else None)
+
+
 def earlier_page(conn: "sqlite3.Connection", task_id: str, visit_id: str, requirement: Row) -> Row | None:
     """What a stage's OK that names nothing to show shows instead (#3784): the page that counted last on an earlier
     visit of its task (the QA page at OK release), {file_id, version, ref, stage_id, stage, source}, or None. Only for
@@ -766,6 +777,7 @@ def earlier_page(conn: "sqlite3.Connection", task_id: str, visit_id: str, requir
     ref = f"page:{found['file_id']}@{int(found['version'])}"
     stage_id = str(found["stage_id"])
     stage = str((E.stage(conn, stage_id) or {}).get("name") or stage_id)
+    checks = _page_checks(conn, ref)
     return {
         "file_id": found["file_id"],
         "version": int(found["version"]),
@@ -773,6 +785,7 @@ def earlier_page(conn: "sqlite3.Connection", task_id: str, visit_id: str, requir
         "stage_id": stage_id,
         "stage": stage,
         "source": [ref],
+        **({"checks": checks} if checks else {}),
     }
 
 
@@ -1054,6 +1067,8 @@ def _leave_entry(
     shows: list[Any] = [page["ref"]] if page else [] if private else asked["shows"]
     # An OK that names nothing to show: the task's page from an earlier stage, for its parties alone.
     earlier = None if private else earlier_page(conn, task_id, row["visit"]["id"], requirement)
+    # An OK that shows a page first (Validate's): what Jev passed on that page, as its check rows.
+    checks = _page_checks(conn, shows[0]) if requirement["kind"] == "ok" and not page and shows else []
     return {
         "requirement_id": requirement["id"],
         "kind": requirement["kind"],
@@ -1072,6 +1087,7 @@ def _leave_entry(
         **({"source": shows} if shows else {}),
         **({"page": page} if page else {}),
         **({"earlier": earlier} if earlier else {}),
+        **({"checks": checks} if checks else {}),
         "answer": _answer_view(conn, task_id, answer, private) if answer else None,
         "may": _may(conn, row, standing, answer, str(viewer), holder, works) if viewer else [],
     }

@@ -157,6 +157,23 @@ def test_needs_you_rows_lead_with_the_task_and_carry_the_ask(api):
     ]
 
 
+def test_only_an_ok_or_a_pages_ok_reads_as_an_ok_and_an_ask_of_a_kind_it_does_not_know_is_answered():
+    """A Needs you row says ok only for what can be OK'd (ui/app/tasks.ts decideKind sorts the same): an ask of a
+    kind it does not know is answered, never approved."""
+    from backend.cards import needs_act
+
+    def ask(kind):
+        return {"kind": "ask", "ask": {"kind": kind} if kind else {"removed": True}}
+
+    assert [needs_act(ask(k)) for k in ("ok", "page", "answer", "mark", None)] == [
+        "ok",
+        "ok",
+        "answer",
+        "answer",
+        "answer",
+    ]
+
+
 def test_a_page_pinned_by_a_person_widens_to_the_places_audience_and_is_in_its_activity(api):
     fid = page(api, "inbox", "Mail volume")
     get(api, f"files/{fid}/activity", "cara-test", expected=404)

@@ -8,7 +8,7 @@ const path: typeof import('node:path') = require('node:path');
 
 // One read refresh() started: its path, whether it asked fresh, and how to answer it.
 interface Read {path: string; fresh: boolean; resolve(value: unknown): void; reject(error: unknown): void}
-interface Shown {status?: unknown; emps?: unknown; people?: unknown; seats?: unknown; statusPending?: boolean; overviewRosterFresh?: boolean}
+interface Shown {status?: unknown; emps?: unknown; people?: unknown; seats?: unknown; statusPending?: boolean}
 
 const source = fs.readFileSync(path.join(__dirname, '../../build/ui/app/refresh.js'), 'utf8');
 // Only the refresh loop: the rest of the file wires live events and window listeners as it loads.
@@ -23,9 +23,9 @@ function app() {
     S, BOT: null, TASKS_ST: null, PERSON_TASKS: null, Promise, Date,
     document: {querySelectorAll: () => [], dispatchEvent: nothing}, CustomEvent: class {}, $: () => null,
     get: (p: string, options: {fresh?: boolean}) => new Promise((resolve, reject) => reads.push({path: p, fresh: !!options?.fresh, resolve, reject})),
-    v2Refresh: async () => {}, overviewLoadComputers: async () => {},
+    v2Refresh: async () => {},
     namedRoster: (emps: unknown) => emps, setPeople: (v: {people: unknown; seats?: unknown}) => { S.people = v.people; if (Array.isArray(v.seats)) S.seats = v.seats; },   // as sidebar.ts does
-    cloudAccessFromStatus: nothing, overviewRefresh: nothing, renderTree: nothing, renderHeartbeat: nothing, pausedRender: nothing,
+    cloudAccessFromStatus: nothing, renderTree: nothing, renderHeartbeat: nothing, pausedRender: nothing,
     botAvatarsSync: nothing, goalsFollowRoster: nothing, pageChatFollowRoster: nothing, tipRefresh: nothing, botAlertDraw: nothing, isTasksRoute: () => false,
   });
   vm.runInContext(`${source.slice(start, end)};globalThis.refresh = refresh;`, context);
@@ -59,7 +59,6 @@ const roster = (S: Shown) => ({status: (S.status as {name: string} | null)?.name
     assert.deepEqual(roster(S), {status: 'new', emps: 'new', people: 'new', seats: 'new'});
     await poll.answer('old');
     assert.deepEqual(roster(S), {status: 'new', emps: 'new', people: 'new', seats: 'new'}, 'the older poll does not put back the old roster or status');
-    assert.equal(S.overviewRosterFresh, true);
   }
   {
     // AC-2: answers in start order: the later refresh is shown, as before.
@@ -83,21 +82,18 @@ const roster = (S: Shown) => ({status: (S.status as {name: string} | null)?.name
     assert.deepEqual(roster(S), {status: 'poll', emps: 'poll', people: 'poll', seats: 'forced'});
   }
   {
-    // A newer refresh whose roster read failed does not hide an older one's good answer, nor mark the newer roster stale.
+    // A newer refresh whose roster read failed does not hide an older one's good answer.
     const {S, begin} = app();
     await (begin(false)).answer('boot');
     const older = begin(true), newer = begin(true);
     await newer.answer('newer', ['/employees']);
-    assert.equal(S.overviewRosterFresh, false);
     await older.answer('older');
     assert.deepEqual(roster(S), {status: 'newer', emps: 'older', people: 'older', seats: 'newer'});
-    assert.equal(S.overviewRosterFresh, true);
-    // And an older roster that fails after a newer one was shown leaves it shown and fresh.
+    // And an older roster that fails after a newer one was shown leaves it shown.
     const late = begin(true), latest = begin(true);
     await latest.answer('latest');
     await late.answer('late', ['/humans']);
     assert.equal(roster(S).emps, 'latest');
-    assert.equal(S.overviewRosterFresh, true);
   }
   {
     // AC-5: one refresh alone shows everything it read; a forced one asks fresh.

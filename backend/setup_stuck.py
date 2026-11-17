@@ -1,8 +1,8 @@
-"""Bots left in setup: shown on Company › Campus, and their person told once.
+"""Bots left in setup: shown on Settings > Health, and their person told once.
 
 A starter bot is parked (`needs_setup`) until someone finishes its setup, and a parked bot claims no work, so
 its routines' jobs and its tasks pile up where nobody looks. After a day it is listed with the stuck bots
-(backend/health.py `stuck`, which Overview and Health show) with how long, and a person who may manage it gets
+(backend/health.py `stuck`, which Health shows) with how long, and a person who may manage it gets
 "Finish with defaults": the same setup-done call the bot itself makes (`POST /api/v2/bots/{bot}/onboarded`),
 which also turns its template's first routine on, as starting setup would have. Nothing finishes setup on its own;
 setup answers are a person's to give or to skip.
@@ -82,7 +82,7 @@ def nudge(c, at=None):
         waiting = f", with {row['queued']} job{'s' if row['queued'] != 1 else ''} waiting" if row["queued"] else ""
         text = (
             f"{row['name']} has been waiting in setup for {held_for(row['since'], at)}{waiting}, so it runs nothing. "
-            "Finish its setup on its page, or choose Finish with defaults on Company › Campus."
+            "Finish its setup on its page, or choose Finish with defaults on Settings > Health."
         )
         for actor in people:
             H.say(c, H.KEEPER, actor, text, kind="notice")
