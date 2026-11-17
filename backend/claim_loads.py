@@ -87,8 +87,10 @@ def read(c, settings, runners, bots):
 
 
 def open_holds(c):
-    """Every open hold of every kind (backend/holds.py), by (kind, holdable_type, holdable_id, bot_id or '')."""
+    """Every open hold of every kind (backend/holds.py), by (kind, holdable_type, holdable_id, bot_id or ''). Read
+    through holds_bot, the partial index of open holds only: the table keeps every released hold as history, and stale
+    stats can plan a scan of all of it (test_holds_usage_limit_plan)."""
     return {
         (row["kind"], row["holdable_type"], row["holdable_id"], row["bot_id"] or ""): dict(row)
-        for row in c.execute("SELECT * FROM holds WHERE released_at IS NULL")
+        for row in c.execute("SELECT * FROM holds INDEXED BY holds_bot WHERE released_at IS NULL")
     }

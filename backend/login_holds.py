@@ -37,7 +37,9 @@ from .store import H
 PREFIX = "login-hold:"  # a login's name as an outage source; its hold's holdable_id is the rest
 # The hold's fields kept in the row's own columns; the rest are its details.
 COLUMNS = {"until": "until_at", "streak": "streak", "probe_job": "probe_job_id", "probe_at": "probe_at"}
-OPEN_SQL = "SELECT * FROM holds WHERE kind='usage_limit' AND holdable_type='login' AND released_at IS NULL"
+OPEN_SQL = (  # holds_open, as holds.OPEN_SQL
+    "SELECT * FROM holds INDEXED BY holds_open WHERE kind='usage_limit' AND holdable_type='login' AND released_at IS NULL"
+)
 # Seconds held after the 1st, 2nd and later limits in a row with no reset given; the second comes back while the bot's
 # session is still cached (backend/prompt_cache.py).
 BACKOFF = (1800, CACHE_WARM_S, 7200)

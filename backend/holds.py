@@ -88,9 +88,11 @@ STATE_SQL = "SELECT state FROM bots WHERE id=?"
 # A kind the `holds` table stores (its CHECK allows every kind; each moves into it in its own change).
 RUNAWAY = "runaway"  # a bot over its run budget (turn_budgets): BUDGET to the pages and the claim
 LOGIN_LIMIT = "usage_limit"  # a login over its provider's usage limit (login_holds): USAGE_LIMIT to the pages
+# Pinned to the partial indexes of open holds: released holds stay as history, and stats taken while the table was small
+# plan a scan of all of it (test_holds_usage_limit_plan).
 OPEN_SQL = (
-    "SELECT * FROM holds WHERE kind=? AND holdable_type=? AND holdable_id=? AND coalesce(bot_id,'')=? "
-    "AND released_at IS NULL"
+    "SELECT * FROM holds INDEXED BY holds_open WHERE kind=? AND holdable_type=? AND holdable_id=? "
+    "AND coalesce(bot_id,'')=? AND released_at IS NULL"
 )
 
 
@@ -184,8 +186,8 @@ def release(
     expired, probe_passed, moot, superseded). Answers the row it ended, or None when none was open."""
     now = str(H.now())
     found = c.execute(
-        "UPDATE holds SET released_at=?,released_by_id=?,released_how=?,updated_at=? WHERE kind=? AND holdable_type=? "
-        "AND holdable_id=? AND coalesce(bot_id,'')=? AND released_at IS NULL RETURNING *",
+        "UPDATE holds INDEXED BY holds_open SET released_at=?,released_by_id=?,released_how=?,updated_at=? WHERE kind=? "
+        "AND holdable_type=? AND holdable_id=? AND coalesce(bot_id,'')=? AND released_at IS NULL RETURNING *",
         (now, actor, how, now, kind, holdable_type, holdable_id, _held_bot(holdable_type, holdable_id, bot_id) or ""),
     ).fetchall()
     return dict(found[0]) if found else None
@@ -373,7 +375,9 @@ def _budget(a: _Ask) -> bool:
 
 
 # Any login hold at all (LOGIN_LIMIT): without one no login keeps a bot waiting. One read per snapshot.
-ANY_LOGIN_HOLD_SQL = "SELECT 1 FROM holds WHERE kind='usage_limit' AND released_at IS NULL LIMIT 1"
+ANY_LOGIN_HOLD_SQL = (
+    "SELECT 1 FROM holds INDEXED BY holds_open WHERE kind='usage_limit' AND released_at IS NULL LIMIT 1"
+)
 
 
 def _usage_limit(a: _Ask) -> bool:
