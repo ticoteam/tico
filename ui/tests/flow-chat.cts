@@ -218,6 +218,7 @@ const msg = (id: string, from: string, body: string, at: string) => ({id, seq: N
 
     // Close: the words are the reason on the close, which moves the task to closed at its version.
     await showOn(okOn(5));
+    await dialog.locator('[data-dc="tab"][data-dc-tab="chat"]').click();   // an OK opens on its Task tab on a phone
     await composer.fill('Covered in the boards spec');
     await wordsRow();
     await page.waitForTimeout(450);   // a phone's new item takes no taps for 400 ms (decideCalm)
