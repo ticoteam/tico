@@ -430,9 +430,11 @@ def test_a_sign_in_nobody_finishes_expires_and_an_exchange_that_never_ended_fail
 def test_the_computer_no_longer_finishes_sign_ins(app):
     signed_in(app)
     machine = runner(app)
-    for path in ("token", "gc_x/exchange"):
-        r = app.post("/api/v2/connectors/mail/google/" + path, json={}, headers=headers(machine["token"]))
-        assert r.status_code in (404, 405), (path, r.status_code)
+    r = app.post("/api/v2/connectors/mail/google/gc_x/exchange", json={}, headers=headers(machine["token"]))
+    assert r.status_code == 405, r.text
+    # A token ask is refused with where mail went (backend/connectors_floor.py).
+    r = app.post("/api/v2/connectors/mail/google/token", json={}, headers=headers(machine["token"]))
+    assert r.status_code == 403 and "tico email" in r.json()["error"]["code"], r.text
     # An rc.1 computer still polls for a sign-in to finish: it is handed none (backend/connectors_floor.py).
     claimed = app.post("/api/v2/connectors/mail/google/claim", json={}, headers=headers(machine["token"]))
     assert claimed.json() == {"connect": None}

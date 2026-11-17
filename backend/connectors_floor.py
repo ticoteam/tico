@@ -12,8 +12,13 @@ the update removes the job (runner_support/release_update.py).
 
 A result or report is accepted and dropped. The migration that retired the computer side
 (20261117062123_drop_mail_copies) already settled every lease a computer held. The routes a computer reaches only
-after claiming work (send preflight and dispatch, the Workspace token, the Google sign-in exchange) stay gone: a claim
-here hands out nothing.
+after claiming work (send preflight and dispatch, the Google sign-in exchange) stay gone: a claim here hands out
+nothing.
+
+A bot that still runs that release's local mail CLI asks for a Google token (connectors/mail/oauth.py
+`server_token` and `server_workspace_token`). No computer gets one any more, so those routes refuse with what to use
+instead. That release's `_broker_call` shows a person only the refusal's code ("Tico's server would not give access
+to <mailbox>: <code>"), so the code carries the sentence too.
 """
 
 from collections.abc import Callable
@@ -47,6 +52,8 @@ REPORTS = (
     "/api/v2/connectors/mail/messages",
     "/api/v2/connectors/health",
 )
+TOKENS = ("/api/v2/connectors/mail/workspace/token", "/api/v2/connectors/mail/google/token")
+MOVED = "Mail and calendar moved to the server: use `tico email …` / `tico calendar …`."
 
 
 def install(app: FastAPI, store: Any, execution: Any) -> None:
@@ -70,9 +77,15 @@ def install(app: FastAPI, store: Any, execution: Any) -> None:
     def accepted_item(item_id: str, request: Request) -> Json:
         return accepted(request)
 
+    def moved(request: Request) -> Json:
+        """Whoever asks (the CLI uses the runner's registration) is told where mail went; there is nothing to hide."""
+        raise Problem(MOVED, MOVED, 403)
+
     for path, shape in GETS.items():
         app.get(path, include_in_schema=False)(answer(shape))
     for path, shape in CLAIMS.items():
         app.post(path, include_in_schema=False)(answer(shape))
     for path in REPORTS:
         app.post(path, include_in_schema=False)(accepted_item if "{item_id}" in path else accepted)
+    for path in TOKENS:
+        app.post(path, include_in_schema=False)(moved)

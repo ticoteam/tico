@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+from backend import connectors_floor
+
 from backend.tests.helpers.api import get, headers, post, runner  # noqa: F401
 from backend.tests.helpers.sql import column, query
 
@@ -44,10 +46,14 @@ REPORTS = (
     ("connectors/mail/messages", {"mailbox": BOX, "messages": [], "deleted": [], "synced_at": "2026-11-17T00:00:00Z"}),
 )
 # Reached only with work a claim handed out, which none now does.
-GONE = (
-    "connectors/email/sends/preflight",
-    "connectors/email/sends/es-1/dispatch",
-    "connectors/mail/workspace/token",
+GONE = ("connectors/email/sends/preflight", "connectors/email/sends/es-1/dispatch")
+# The rc.1 local mail CLI's token asks (connectors/mail/oauth.py server_workspace_token and server_token).
+TOKENS = (
+    ("connectors/mail/workspace/token", {"mailbox": BOX, "service": "gmail"}),
+    (
+        "connectors/mail/google/token",
+        {"mailbox": BOX, "service": "gmail", "refresh_token": "rt-1", "scopes": ["gmail.modify"]},
+    ),
 )
 
 
@@ -81,6 +87,16 @@ def test_a_0_6_computers_connectors_job_is_told_there_is_nothing_to_do(api):
     # A person or a bot is not a computer: refused, as the old routes refused them.
     get(api, "connectors/mail/targets", "ana-test", expected=403)
     post(api, "connectors/email/sends/claim", {"mailbox": BOX}, "ana-test", expected=403)
+
+
+def test_a_0_6_bots_local_mail_cli_is_told_where_mail_went(api):
+    machine = runner(api)
+    for path, body in TOKENS:
+        error = post(api, path, body, machine["token"], expected=403)["error"]
+        assert error["code"] == error["detail"] == connectors_floor.MOVED and not error["retryable"], path
+        # What rc.1's _broker_call prints for a refusal it has no special case for: the code, after the mailbox.
+        shown = "Tico's server would not give access to " + BOX + ": " + error["code"]
+        assert shown.endswith("moved to the server: use `tico email …` / `tico calendar …`."), shown
 
 
 def test_no_code_imports_the_retired_mail_cli():
