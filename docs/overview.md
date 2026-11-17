@@ -2,9 +2,10 @@
 
 Open Company from the desktop sidebar or the mobile More menu (it was called Overview; ⌘K still finds it by that name).
 It is where Tico opens. Strategy, Finance (for those who see it) and Growth sit under it in the sidebar; its chevron
-folds them, kept per browser. Company has four tabs: **Mine**, your own My dashboard and the landing page (`#/home`);
-**Dashboard**, the company's Dashboard (`#/overview`); **Campus** (`#/overview/campus`); and **Graph**
-(`#/overview/graph`). Owners and admins also see **Share** ([Company page](company-page.md)).
+folds them, kept per browser. Company's tabs: **Mine**, your own My dashboard and the landing page (`#/home`);
+**Dashboard**, the company's Dashboard (`#/overview`); **Floor** (`#/overview/floor`); **Campus** (`#/overview/campus`);
+**Graph** (`#/overview/graph`); and **Factories** (`#/overview/factories`). Owners and admins also see **Share**
+([Company page](company-page.md)). Five fit on the row; the rest wait in ⋯.
 
 ## My dashboard
 
@@ -82,6 +83,30 @@ list|add|update|remove` and `tico pin add|update|remove`, the `tico_card_*` and 
 `GET /api/v2/cards/choices`. `GET /api/v2/places/growth?month=YYYY-MM` reads the Growth page for one month and answers
 `month` and `months` for its picker; `GET /api/v2/cards/choices?place=growth` adds the growth templates, the metrics and
 the live channels. Tests: `backend/tests/test_cards.py`, `backend/tests/test_growth_cards.py`, `ui/tests/dashboard.cts`.
+
+## Floor
+
+**Floor** draws the work as it stands. Each factory you can see is a hall, with its name set large and faint and a dim
+org chart: its manager (the factory's own, else the one most of its pipelines have) over the teammates holding its
+work. Each live pipeline is a line, and each work stage a small stack of boxes standing on it, as tall as the stage is
+full: relative, not one box a task, and never taller than eight (1, 3, 10 and 50 tasks stand at 1, 3, 6 and 8 boxes).
+A stage with nothing in it keeps its spot as an outline. Nothing is written on the floor but each line's two rates: tasks
+in at its start and tasks that reached Done at its end, as `3/day`; either flips every rate between a day and a week,
+and the browser keeps the choice. Flow's mark stands over a stack that holds something waiting on you, and opens Flow on
+that stage.
+
+Point at a stack for its card: who holds the work, the stage and how many are in it, how many wait on you, and its
+oldest tasks with how long each has been there (a row opens the task). A click or Enter pins the card and Escape closes
+it; on a phone a tap opens it as a sheet. Pointing at a teammate in a hall's org chart lights their stacks. A hall's
+name opens that factory (`#/overview/floor/<factory id>`): each stage there shows one deck per teammate holding tasks in
+it, their face on top, the twelve most loaded and then one deck for the rest; the stage's name is under the line with
+one Flow mark beside it, and the manager and teammates are listed by name.
+
+A factory or pipeline you may not see is not drawn: a private pipeline shows only to its manager, its owner, the
+company's person and whoever reads one of its tasks, and every count is of tasks you may read. Retired pipelines are
+left out. Data: `GET /api/v2/company/floor` (`backend/company_floor.py`), read again when a task moves or your Needs you
+changes; each changed line is redrawn in place. Tests: `backend/tests/test_company_floor.py`,
+`ui/tests/company-floor.cts`.
 
 ## Campus
 

@@ -294,7 +294,7 @@
 <li><b>An @mention in text is the same link.</b><span>It is the name, so it behaves like the name.</span></li>
 <li><b>Inside a row that opens something, the row wins.</b><span>A task row opens the task; the owner's face in it is not a second target.</span></li>
 <li><b>The org chart is the one exception: a card opens a sheet for moving it, with a link to the page.</b><span>The chart is where a team is arranged.</span></li>
-<li><b>No hover cards.</b><span>They cover the page, fail on touch, and repeat the page one click away.</span></li>
+<li><b>No hover cards, except one a click pins and a tap opens as a sheet.</b><span>A card that only hover shows covers the page, fails on touch, and repeats the page one click away. Where a drawing has nothing written on it (Company › Floor's stacks), hovering shows the card, a click or Enter pins the same card, and a tap opens it as a sheet.</span></li>
 </ul>
 <div class="rv-row"><a class="rv-name" href="#sg-opens"><span class="av av-initials" style="width:22px;height:22px;--hue:200;font-size:9px" aria-hidden="true">AD</span><b>Ada</b></a><a class="rv-name" href="#sg-opens"><span class="av av-initials" style="width:22px;height:22px;--hue:140;font-size:9px" aria-hidden="true">NR</span><b>Noor</b></a><span class="md">Ask <a href="#sg-opens">@Jo</a> about the billing step.</span></div>
 </div>
@@ -993,6 +993,53 @@
           <a class="of-box" href="#sg-factories"><span class="of-box-name">Growth ideas</span><span class="of-box-n tnum">12</span></a>
         </div>
       </section>
+    </div>
+  </div>
+</section>
+
+<!-- FLOOR -->
+<section class="rv-sec" id="sg-floor">
+  <header><h2>Floor</h2><p>Company › Floor. A hall per factory, a line per pipeline, a stack per stage; one factory draws a deck per teammate.</p></header>
+  <dl class="rv-use rv-use-sec">
+    <dt>Use</dt><dd>Company › Floor: how full each stage is, at a glance, and who holds it.</dd>
+    <dt>Markup</dt><dd><code>.cf-slot &gt; .cf-stack &gt; .cf-box</code>, <code>.cf-stage &gt; .cf-decks &gt; .cf-deck</code> (<code>.cf-cap</code>, <code>.cf-ply</code>), <code>.cf-card</code></dd>
+    <dt><span class="nav-icon" role="img" aria-label="Do">check</span></dt><dd>Heights relative and capped at eight; an empty stage keeps its spot.</dd>
+    <dt><span class="nav-icon" role="img" aria-label="Don't">close</span></dt><dd>Write counts, names or waits on the company floor, or colour a stack by state.</dd>
+  </dl>
+  <div class="rv-states">
+    <div class="rv-full">
+      <h3>Stack</h3>
+      <p class="rv-note">One box per step of fullness, not per task: 1, 3, 10 and 50 tasks stand at 1, 3, 6 and 8 boxes, and 400 at 8. An empty stage is an outlined spot. Flow's mark stands over a stack holding something that waits on the reader. A stack is a button: hover shows its card, a click or Enter pins it.</p>
+      <div class="rv-row" style="align-items:flex-end;gap:16px">
+        <div class="cf-slot"><button type="button" class="cf-stack" aria-label="Pitch, 1"><i class="cf-box"></i></button></div>
+        <div class="cf-slot"><button type="button" class="cf-stack" aria-label="Spec, 3"><i class="cf-box"></i><i class="cf-box"></i><i class="cf-box"></i></button></div>
+        <div class="cf-slot"><button type="button" class="cf-stack" aria-label="Build, 10"><i class="cf-box"></i><i class="cf-box"></i><i class="cf-box"></i><i class="cf-box"></i><i class="cf-box"></i><i class="cf-box"></i></button></div>
+        <div class="cf-slot"><button type="button" class="cf-stack" aria-label="QA, 50"><i class="cf-box"></i><i class="cf-box"></i><i class="cf-box"></i><i class="cf-box"></i><i class="cf-box"></i><i class="cf-box"></i><i class="cf-box"></i><i class="cf-box"></i></button></div>
+        <div class="cf-slot"><button type="button" class="cf-stack" aria-label="Release, 0"><i class="cf-box cf-none"></i></button></div>
+      </div>
+    </div>
+    <div class="rv-full">
+      <h3>Deck</h3>
+      <p class="rv-note">One factory: a deck per teammate holding tasks in the stage, the teammate's face on top of its plies, as high as their share. Past twelve, the rest share one deck with their count.</p>
+      <div class="rv-row" style="align-items:flex-end;gap:8px">
+        <button type="button" class="cf-deck" aria-label="Ada, Spec, 4"><span class="cf-cap"><span class="av av-initials" style="width:22px;height:22px;--hue:200;font-size:9px" aria-hidden="true">AD</span></span><i class="cf-ply"></i><i class="cf-ply"></i><i class="cf-ply"></i></button>
+        <button type="button" class="cf-deck" aria-label="Noor, Spec, 2"><span class="cf-cap"><span class="av av-initials" style="width:22px;height:22px;--hue:140;font-size:9px" aria-hidden="true">NR</span></span><i class="cf-ply"></i></button>
+        <button type="button" class="cf-deck" aria-label="Jo, Spec, 1"><span class="cf-cap"><span class="av av-initials" style="width:22px;height:22px;--hue:30;font-size:9px" aria-hidden="true">JO</span></span></button>
+        <button type="button" class="cf-deck" aria-label="3 more, Spec, 3"><span class="cf-cap"><span class="cf-rest tnum">+3</span></span><i class="cf-ply"></i></button>
+      </div>
+    </div>
+    <div class="rv-full">
+      <h3>Card</h3>
+      <p class="rv-note">Who holds the work, the stage and its count, how many wait on you, then the oldest rows; a row opens its task. Beside its stack on a computer, a sheet on a phone. A dialog with the stage's name.</p>
+      <div class="cf-card cf-open" role="dialog" aria-label="Spec, Features, sample" style="position:static;opacity:1">
+        <div class="cf-card-head"><div class="cf-card-who"><span class="av av-initials" style="width:32px;height:32px;--hue:200;font-size:13px" aria-hidden="true">AD</span><b class="cf-card-name">Ada</b></div>
+          <div class="cf-card-line"><span class="cf-card-stage">Spec · 4</span><span class="cf-card-wait">2 waiting on you</span></div></div>
+        <div class="cf-rows">
+          <button type="button" class="cf-row"><span class="cf-row-id tnum">#212</span><span class="cf-row-t">Per-person ask snooze</span><span class="cf-row-age tnum">2d</span></button>
+          <button type="button" class="cf-row"><span class="cf-row-id tnum">#209</span><span class="cf-row-t">Bot inboxes: Outbox rules</span><span class="cf-row-age tnum">1d</span></button>
+          <span class="cf-row-more">2 more</span>
+        </div>
+      </div>
     </div>
   </div>
 </section>
