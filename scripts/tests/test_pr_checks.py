@@ -2932,6 +2932,14 @@ def test_a_light_pull_request_plan_runs_at_most_four_python_vms_and_lists_what_i
     assert sorted(left + kept) == sorted(files) and "tier" not in plan["narrow"]
     text = summary.read_text()
     assert all(f"`{name}`" in text for name in left) and f"`{far}`" in text and "merge queue group" in text
+    # Each left file says why it did not run: past the depth, or within reach but over the time budget.
+    dropped = {entry["file"]: entry for entry in plan["narrow"]["dropped"]}
+    assert set(dropped) == {*left, far}
+    assert dropped[far] == {"file": far, "reason": "depth", "level": None, "seconds": None}
+    assert all(dropped[name]["reason"] == "budget" and dropped[name]["level"] == 1 for name in left)
+    assert all(dropped[name]["seconds"] == 600 for name in left)
+    assert f"- `{far}`: reached only past level 1 (untimed)" in text
+    assert f"`{left[0]}`: level 1, over the time budget (600 s)" in text
     # Without --light, or for main, nothing is narrowed: the full selection runs.
     narrowed.clear()
     for event, light in (("pull_request", False), ("push", True)):
