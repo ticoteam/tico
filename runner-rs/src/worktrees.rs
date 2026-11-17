@@ -1,10 +1,9 @@
 //! Computer-owned task worktrees: the heartbeat's report of each worktree the server
 //! tracks here, an attached checkout's local proof (`tasks/.checkout-state/<sha256(link)>.json`, the Python
 //! marker format), and the cleanup and restore actions a heartbeat reply asks for. Never removes a tree before
-//! preserving its history. Adding and setting up a worktree inside a turn stay in the tico CLI (`hub worktree
-//! add`), which takes the same task lock (`tasks/.locks/<sha[:2]>`) and writes the same markers; a worktree
-//! the server reserved for a waiting task (backend/worktree_waits.py) is checked out and set up here, while
-//! its bot is idle (`prepare`).
+//! preserving its history. A worktree the server reserved for a waiting task (backend/worktree_waits.py) is
+//! checked out and set up here, while its bot is idle (`prepare`); one a turn adds, attaches or sets up
+//! (`tico task worktree`, which runs `tico-runner worktree`) goes through the same code in `cli`.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::os::unix::fs::OpenOptionsExt;
@@ -21,6 +20,8 @@ use crate::gitrun::{self, Fault, Out};
 use crate::regular_file::{self, CONTENT, SMALL};
 use crate::repositories::{self, GB};
 use crate::util::text_of;
+
+pub mod cli;
 
 /// A failure: a message for a person (with git's own words for network commands), a cleanup to retry
 /// later, or an operating-system error named by kind.
