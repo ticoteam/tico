@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 
 REPEATS = ("once", "weekly", "monthly", "quarterly", "yearly")
 MONTHS = {"monthly": 1, "quarterly": 3, "yearly": 12}  # the months between two occurrences of each repeat
-OPEN_DAYS = 14  # how many days before the due day the run starts, unless the trigger says otherwise
+DEFAULT_OPEN_DAYS = 14  # how many days before the due day the run starts, unless the trigger says otherwise
 MAX_OPEN_DAYS = 366
 MAX_CATCH_UP = 50  # runs one pass of the scheduler starts for one routine, after a long outage
 
@@ -71,7 +71,7 @@ def first_due(trigger):
 
 
 def open_days_of(trigger):
-    return int(trigger.get("open_days", OPEN_DAYS))
+    return int(trigger.get("open_days", DEFAULT_OPEN_DAYS))
 
 
 def start(trigger, at):
