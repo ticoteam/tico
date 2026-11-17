@@ -9046,7 +9046,7 @@ STABLE.extend(
             'Cards and pins',
             'getPlace',
             'A place\'s pins in order (dashboard, growth, '
-            'team:<group>, bot:<id>, task:<id>, person:me for My dashboard), each card with what it shows the caller; unreadable '
+            'team:<group>, bot:<id>, task:<id>, person:me for Company), each card with what it shows the caller; unreadable '
             'pages are left out. growth takes `month` (YYYY-MM) and answers `month` and `months`, the picker\'s choices',
             'Place',
         ),
@@ -9055,7 +9055,7 @@ STABLE.extend(
             'put',
             'Cards and pins',
             'savePlace',
-            'Save a Dashboard, team page or My dashboard (its '
+            'Save a Dashboard, team page or Company page (its '
             'default cards become pins); a team page\'s audience sets its group\'s Read',
             'Place',
         ),
