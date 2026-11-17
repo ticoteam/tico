@@ -209,7 +209,9 @@ function pageFullDraw(state: PageFullState) {
   const root = $('#pg-view');
   if (!root || !state.page || !state.pinned) return;
   const pinned = state.pinned.map(x => `<a href="${esc(pagePlaceHref(x.place))}">${esc(x.label)}</a>`).join(' · ');
-  root.innerHTML = `<header class="pg-head"></header><div class="pg-links"></div><div class="pg-body"></div>${pinned ? `<p class="pg-pinned">Pinned to ${pinned}</p>` : ''}`;
+  // The link row exists only for a page with links or a writer: a page with neither keeps its header and body as they were.
+  const row = state.page.may_write || state.page.links?.length ? '<div class="pg-links"></div>' : '';
+  root.innerHTML = `<header class="pg-head"></header>${row}<div class="pg-body"></div>${pinned ? `<p class="pg-pinned">Pinned to ${pinned}</p>` : ''}`;
   root.onkeydown = pageMenuKeys;
   pageFullHead(state);
   const links = root.querySelector<HTMLElement>('.pg-links');
