@@ -159,7 +159,7 @@ def _python(source):
                 name = func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else ""
                 if name in SQL_CALLS and child is not func:
                     is_sql = True
-            if isinstance(parent, (ast.Assign, ast.AnnAssign, ast.NamedExpr)) and child is parent.value:
+            if isinstance(parent, (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.NamedExpr)) and child is parent.value:
                 targets = parent.targets if isinstance(parent, ast.Assign) else [parent.target]
                 if any(
                     isinstance(t, ast.Name) and t.id.endswith("_SQL") for target in targets for t in ast.walk(target)
@@ -180,14 +180,15 @@ def _python_side(parsed, source, numbers):
     for tok in tokens:
         if not any(tok.start[0] <= number <= tok.end[0] for number in numbers):
             continue
-        if tok.type == tokenize.COMMENT or tok.type in LAYOUT:
+        if tok.type == tokenize.COMMENT or (tok.type in LAYOUT and tok.type != tokenize.NEWLINE):
             continue
         if any(_contains(node, tok) for node in sql_nodes):
             sql.append((tok.type, tok.string))
-        if tok.type == tokenize.STRING and any(_contains(node, tok) for node in strings):
-            continue
         line = lines[tok.start[0] - 1] if tok.start[0] <= len(lines) else ""
         indent = line[: len(line) - len(line.lstrip())]
+        # Statement ends stay in the skeleton, so moving a literal into or out of a statement is code.
+        if tok.type == tokenize.STRING and any(_contains(node, tok) for node in strings):
+            continue
         skeleton.append((indent, tok.type, tok.string))
     return skeleton, sql
 

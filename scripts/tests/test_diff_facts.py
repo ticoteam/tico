@@ -203,3 +203,16 @@ def test_cli_honors_head_and_handles_quoted_paths(repo, monkeypatch):
     facts = json.loads(result.stdout)
     assert facts["base"] == base and facts["head"] == head and facts["tier"] == "low"
     assert facts["files"][0]["path"] == path
+
+
+def test_moving_a_literal_into_a_statement_is_code(repo, monkeypatch):
+    facts = change(repo, monkeypatch, "app.py", 'def f():\n    return\n    "ok"\n', 'def f():\n    return "ok"\n')
+    assert facts["tier"] == "normal"
+    assert not any(h["copy_only"] for h in facts["files"][0]["hunks"])
+
+
+def test_augmented_sql_assignment_is_sql(repo, monkeypatch):
+    before = 'QUERY_SQL = "SELECT 1 FROM t"\nQUERY_SQL += " WHERE active=1"\n'
+    facts = change(repo, monkeypatch, "app.py", before, before.replace("active=1", "active=0"))
+    hunk = facts["files"][0]["hunks"][0]
+    assert facts["tier"] == "normal" and hunk["sql"] and not hunk["copy_only"]
