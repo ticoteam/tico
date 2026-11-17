@@ -175,15 +175,18 @@ const needsYou = (() => {
     const ask = async (title: string, body: Record<string, unknown>, what: string) => {
       const id = (await must<{task: {id: string}}>(hub, 'engineering-manager', 'POST', 'tasks', {title, body: 'For the beta.', owner: 'engineering-manager'},
         'the bot files its task')).task.id;
+      // An OK approves what it shows: the bot files the page it asks about on the task, and the ask shows it.
+      const shown = (await must<{page: {file_id: string}}>(hub, 'engineering-manager', 'POST', 'pages', {name: 'beta-budget.html',
+        title: 'Beta budget', task: id, text: '<h1>Beta budget</h1><p>$40 a day for builder-claude.</p>'}, 'the bot files its page')).page.file_id;
       const rid = (await must<{requirement_id: string}>(hub, 'engineering-manager', 'POST', `tasks/${id}/asks`,
-        {to: 'dana', version: (await read(id)).version, ...body}, what)).requirement_id;
+        {to: 'dana', version: (await read(id)).version, show: [`page:${shown}`], ...body}, what)).requirement_id;
       assert.ok(rid, `${where}: ${what} is recorded`);
       return async () => (await read(id)).to_leave?.find(r => r.requirement_id === rid);
     };
     const ok = await ask('Set the beta budget', {line: OK, kind: 'ok'}, 'the bot asks for an OK');
 
     const page = await open(browser, hub, 'dana', {phone, hash: '#/tasks'});
-    // This OK binds no content (no grant), so its card's preview read is a 404 and the card shows the ask's own line.
+    // This OK has no grant, so its card's preview read is a 404 and the card shows the page the ask shows.
     expectFailure(page, 404, '^/api/v2/oks/[^/]+$', 'GET');
     // An OK row leads with its task's title, the ask is its tooltip.
     const okRow = page.locator('#task-body [data-need]', {hasText: 'Set the beta budget'}).first();

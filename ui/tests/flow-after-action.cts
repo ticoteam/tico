@@ -104,7 +104,8 @@ const BOUND = new Set([3, 4, 13, 14]);
       needs = items; away.clear();
       await page.evaluate('v2Refresh()');
       await page.evaluate('decideFlow(document.body)');
-      await side.locator(`[data-key="${items[0]!.id}"]`).waitFor();
+      // A ❓'s actions are its chat's composer, so its own row there is empty (hidden): attached is enough.
+      await side.locator(`[data-key="${items[0]!.id}"]`).waitFor({state: 'attached'});
       await dialog.locator('.dc-start').waitFor({state: 'detached'});
       await page.waitForTimeout(450);   // a phone's new item takes no taps for 400 ms (decideCalm)
       paneTop = await dialog.locator('.dc-main').evaluate(e => e.getBoundingClientRect().top);

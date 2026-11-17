@@ -138,7 +138,7 @@ const Q = ['OK the signup plan?', 'Ship on Monday?'];
       assert.equal(await page.locator('#mobile-flow .nav-badge, #mobile-flow .tnum').count(), 0, 'still no number');
       await shot(page, 'phone-something-waiting');
       await page.locator('#mobile-flow').tap();
-      await dialog(page).locator('.dc-q', {hasText: Q[0]!}).waitFor();
+      await dialog(page).locator('.dc-q', {hasText: Q[0]!}).waitFor({state: 'attached'});   // an OK opens on its Task tab
       assert.equal(await page.evaluate(() => decideLive(DEC).length), 2, 'it walks everything');
       await page.keyboard.press('Escape');
       await dialog(page).waitFor({state: 'hidden'});
@@ -159,14 +159,14 @@ const Q = ['OK the signup plan?', 'Ship on Monday?'];
       assert.ok(Math.abs((at.y + at.height / 2) - (link.y + link.height / 2)) <= 1, 'the mark sits on the Tasks row');
       await shot(page, 'desktop-sidebar');
       await mark.click();
-      await dialog(page).locator('.dc-q', {hasText: Q[0]!}).waitFor();
+      await dialog(page).locator('.dc-q', {hasText: Q[0]!}).waitFor({state: 'attached'});   // an OK opens on its Task tab
       assert.equal(await page.evaluate(() => location.hash), '#/updates', 'the mark does not follow the Tasks link');
       await page.keyboard.press('Escape');
       await dialog(page).waitFor({state: 'hidden'});
       // From the keyboard too, and focus comes back to it.
       await mark.focus();
       await page.keyboard.press('Enter');
-      await dialog(page).locator('.dc-q', {hasText: Q[0]!}).waitFor();
+      await dialog(page).locator('.dc-q', {hasText: Q[0]!}).waitFor({state: 'attached'});   // an OK opens on its Task tab
       await page.keyboard.press('Escape');
       await dialog(page).waitFor({state: 'hidden'});
       assert.equal(await focused(page, '#side .nav-flow'), true);

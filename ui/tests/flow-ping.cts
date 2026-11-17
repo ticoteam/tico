@@ -87,7 +87,7 @@ const ask = (n: number, bot: string, line: string): Item => {
     // ---- 2. The pinged bot's OK comes in and comes on screen by itself.
     needs = [ask(2, 'bot:pm', 'Price per seat or per company?')];
     await page.evaluate('v2Refresh()');
-    await dialog.locator('.dc-q', {hasText: 'Price per seat or per company?'}).waitFor();
+    await dialog.locator('.dc-q', {hasText: 'Price per seat or per company?'}).waitFor({state: 'attached'});   // on its Task tab
     await approve.click();
     await dialog.getByText('All done').waitFor();
     await dialog.locator('[data-dc="close"]').first().click();
@@ -97,7 +97,7 @@ const ask = (n: number, bot: string, line: string): Item => {
     await page.evaluate('v2Refresh()');
     await page.locator('[data-need="r4"]').waitFor();
     await page.evaluate("decideBotsFlow(document.body, ['bot:pm'], 'PM', {scope: 'bot', id: 'pm'})");
-    await dialog.locator('.dc-q', {hasText: 'Drop the free plan?'}).waitFor();
+    await dialog.locator('.dc-q', {hasText: 'Drop the free plan?'}).waitFor({state: 'attached'});
     assert.equal(await dialog.getByText('Move the backup to Sunday?').count(), 0, 'another bot’s item stays out');
     assert.ok((await dialog.locator('.dc-head').innerText()).includes('PM'), 'the crumb names the bot');
     await shot('narrowed');

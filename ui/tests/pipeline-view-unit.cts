@@ -250,14 +250,14 @@ const factories = (async () => {
   assert.match(release, /data-pe-rs="prereleases"[^>]* checked> Pre-releases count/, 'omission renders the enabled default');
   // An approval names its document and its approver (any person, or one), and has no page switches.
   const approval = {kind: 'page', source: null, condition: null, settings: {document: 'QA report'}, can_push_past: true, who_oks: 'people_only',
-    person_id: null, line: 'QA report', choices: null};
+    person_id: null, line: 'QA report'};
   const approves = ctx.peReqEdHTML(state, approval, 0, 1, 'ed-a') as string;
   assert.match(approves, /<span>Document<\/span><select data-pe-rf="document"[^>]*>.*<option value="QA report" selected>QA report<\/option>/);
   assert.match(approves, /<span>Approver<\/span><select data-pe-rf="approver"[^>]*><option value="">Any person<\/option>/);
   assert.doesNotMatch(approves, /data-pe-rs="at_head"|data-pe-rf="line"/, 'no page switches, no title: the document is its name');
   assert.equal(ctx.peReqText(approval), 'Approve QA report');
   assert.deepEqual(plain(ctx.peReqNew(state, 'approval')), {kind: 'page', source: null, condition: null, settings: {document: 'Spec'},
-    can_push_past: true, who_oks: 'people_only', person_id: null, line: 'Spec', choices: null});
+    can_push_past: true, who_oks: 'people_only', person_id: null, line: 'Spec'});
   assert.match(release, /data-pe-rf="can_push_past"[^>]*disabled/, 'In a release is never pushed past');
 
   const field = (kind: 'HTMLInputElement' | 'HTMLSelectElement', data: Record<string, string>, value = '', checked = false) =>

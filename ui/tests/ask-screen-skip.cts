@@ -72,7 +72,7 @@ const Q = ['Write the plan note', 'OK the region plan', 'Book the venue'];
       const dialog = page.locator('#need-card');
       // Question `q` is on screen, as item `n` of `of`.
       const at = async (q: number, of: number, n = q) => {
-        await dialog.locator('.dc-q', {hasText: Q[q - 1]!}).waitFor();
+        await dialog.locator('.dc-q', {hasText: Q[q - 1]!}).waitFor({state: 'attached'});   // a phone opens an OK on its Task tab
         assert.equal(await dialog.locator('[data-dc="prev"]').isDisabled(), n === 1, `${label}: ‹ at ${n} of ${of}`);
         assert.equal(await dialog.locator('[data-dc="next"]').isDisabled(), n === of, `${label}: › at ${n} of ${of}`);
       };

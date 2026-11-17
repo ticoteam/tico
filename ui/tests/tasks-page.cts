@@ -265,6 +265,8 @@ async function open(browser: Browser, {viewport = {width: 1440, height: 900}, th
     if (onePipeline && method === 'GET') return json({pipeline: PIPELINES.find(x => x.id === onePipeline[1]) || {}});
     if (p === '/api/v2/needs-you') return json({actor: 'human:ana', count: needs.length, items: needs, version: String(needs.length), next: null});
     if (p === '/api/v2/tasks/labels') return json({labels: [], tags: []});
+    // A stage's OK: no grant, so Approve answers ok (decide.ts decideOkLoad).
+    if (p.startsWith('/api/v2/oks/')) return json({error: 'not_found', detail: 'Not found'}, 404);
     if (p === '/api/v2/tasks' && method === 'GET') {
       reads.push(url);
       const q = url.searchParams, status = q.get('status'), snoozed = q.get('snoozed') || 'hide', ids = q.get('ids')?.split(',');
