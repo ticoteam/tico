@@ -26,7 +26,7 @@ It includes third-party software, kept under its own license:
       Includes pako, MIT License. License text: ui/vendor/LICENSE-jszip.md
 
   ui/vendor/livekit-client.umd.min.js
-      LiveKit JavaScript SDK 2.24.1, Apache License 2.0.
+      LiveKit JavaScript SDK 2.5.7, Apache License 2.0.
       License text: ui/vendor/LICENSE-livekit-client
 
   ui/vendor/novnc/

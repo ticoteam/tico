@@ -361,7 +361,7 @@ services:
   livekit:
     <<: *hardening
     profiles: [meet]
-    image: ${TICO_MEET_IMAGE:-livekit/livekit-server:v1.13.11@sha256:25cd902de7cacbd5f1f779f6a6ac1eae20ba8f56b0935934ce6b0ab80d1e3d20}
+    image: ${TICO_MEET_IMAGE:-livekit/livekit-server:v1.8.4@sha256:621fd87bd64a0c83e1f2418ee0323eb920d00acdd73e5f79b303c64f6cc532af}
     read_only: true
     tmpfs: [/tmp]
     networks:
