@@ -96,7 +96,7 @@ def test_claim_hands_out_the_real_notice_behind_an_obsolete_one_that_health_says
 
 
 def test_health_and_the_claim_agree_on_a_person_caused_notice_on_a_done_task(api):
-    """Nothing wakes a bot about a Done task (docs/pipelines-v3.md, check rule 7), a person-caused Tico notice
+    """Nothing wakes a bot about a Done task (docs/dev/pipelines-v3.md, check rule 7), a person-caused Tico notice
     included: task_wakes.may_start holds it, so it is obsolete as any notice on a finished task is
     (obsolete_notices_sql). Health counts both queued notices as handed out, as it does every obsolete one, and the
     claim cancels both before it chooses: nothing is left queued that the claim would not hand out. The person's own

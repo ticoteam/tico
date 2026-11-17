@@ -8,7 +8,7 @@ applied inside it.
 - Warn: the write goes, with the warning line on what the recipient reads (`warn_on`), and the answer carries it.
 - Hold: nothing is written but the hold; the answer names the rule. Send anyway is the hold's own route
   (`org_rule_check.send`): only whoever may send a hold today, and it replays the same write (`TaskRules.replay`).
-- An ask a rule covers (docs/pipelines-v3.md, "How a rule stops the next one"): a bot's ask is refused with the rule's
+- An ask a rule covers (docs/dev/pipelines-v3.md, "How a rule stops the next one"): a bot's ask is refused with the rule's
   words, under `COVERS`, an engine-style refusal that never counts toward quarantine. With the judge out the ask goes;
   a cause here (`LOCAL`: every call slot busy, the day's calls spent, too long to check) refuses it to try again.
 - The check cannot run (an error here, not the judge being out): nothing is written (fail closed).
@@ -88,7 +88,7 @@ def covering(verdict: Row | None) -> list[Row]:
 
 
 # A check that could not run for a cause here, not the judge being out: nothing about the judge's health, so it never
-# fails open (docs/pipelines-v3.md's "if it can't be reached, the ask goes" is the judge being out).
+# fails open (docs/dev/pipelines-v3.md's "if it can't be reached, the ask goes" is the judge being out).
 # - `busy`: every call slot is in use. Nothing is written; the writer tries again (503, retryable).
 # - `day_cap`: the day's rule-check calls are spent; `too_large`: the text is past what one call can read. These take
 #   the hold path a too-long output already takes: held when a Block or Escalate rule matches, delivered with a line

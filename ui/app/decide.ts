@@ -1,4 +1,4 @@
-/* ui/app/decide.ts — Flow, the ask screen (docs/pipelines-v3.md, S3): one item of Needs you at a time, over the page. A
+/* ui/app/decide.ts — Flow, the ask screen (docs/dev/pipelines-v3.md, S3): one item of Needs you at a time, over the page. A
    modal on a wide screen, the whole screen on a phone. The top bar is where you are (All mine / a pipeline / a stage, a
    menu), Flow's mark, the mic, the undo notice (what was just done), the next ask Tico is still thinking about, then ‹ › ✕ (‹ › on a wide screen
    only; Skip, in the answer row, steps on at every width). The thing asked about is on the left, shown in full (the page, the email, what an OK is for); the
@@ -1666,7 +1666,8 @@ function decideAskBubbleHTML(st: DecState, it: NeedsEntry): string {
   // Proof tab on a phone. A long review is the asker's message above it.
   if (decideCheckedOk(it) || earlier) {
     const long = it.line.length > DEC_ASK_SHORT || /\n/.test(it.line), q = long ? decidePageQuestion(it) : it.line;
-    const checks = (it.ask?.brief?.details || []).map(d => String(d).trim()).filter(d => d && d.length <= DEC_ASK_SHORT).slice(0, 3);
+    // The rows are what Jev passed on the page the OK shows (backend/page_verdicts.py checks_of), never the ask's words.
+    const checks = ((earlier ? it.ask?.earlier?.checks : it.ask?.checks) || []).map(d => String(d).trim()).filter(d => d && d.length <= DEC_ASK_SHORT).slice(0, 3);
     const verdict = checks.length ? `<ul class="dc-checks">${checks.map(c => `<li>${esc(c)}</li>`).join('')}</ul>` : one(it.ask?.brief?.why || '');
     const proof = '<button type="button" class="linkish dc-proof-link" data-dc="tab" data-dc-tab="task">Proof</button>';
     return (long ? decideSaidMsgHTML(who, it.since || '', it.line) : '')

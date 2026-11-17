@@ -245,16 +245,20 @@ def test_settled_gates_read_exactly_the_rows_the_privacy_functions_allow(api):
             finally:
                 conn.close()
             hidden = auth.unreadable_bots(c, who)
-            messages = {
+            # A message the caller's rule reads, notices to a bot included: the jobs and runs it starts follow it.
+            readable = {
                 r["id"]
                 for r in c.execute("SELECT id,conversation_id,refs,in_reply_to FROM messages WHERE deleted_at IS NULL")
                 if r["conversation_id"] in rooms
                 and index.message(r["id"], r["conversation_id"], r["refs"], r["in_reply_to"])
             }
+            # A person's timeline is the messages with a seq (task_privacy.page); a bot reads every readable one.
+            seqs = {r[0] for r in c.execute("SELECT id FROM messages WHERE seq IS NOT NULL")}
+            messages = readable if who.role == "bot" else readable & seqs
             jobs = {
                 r[0]
                 for r in c.execute("SELECT id,bot_id,message_id FROM jobs")
-                if r[1] not in hidden and r[2] in messages
+                if r[1] not in hidden and r[2] in readable
             }
             # A run with no job (job_id NULL) is seen by its bot and its message and task, as the hub SQL attempts gate says.
             attempts = {
@@ -263,7 +267,7 @@ def test_settled_gates_read_exactly_the_rows_the_privacy_functions_allow(api):
                 if (
                     r[1] is None
                     and r[2] not in hidden
-                    and (r[3] is None or r[3] in messages)
+                    and (r[3] is None or r[3] in readable)
                     or r[1] is not None
                     and r[1] in jobs
                 )

@@ -115,7 +115,7 @@ function lastStopOpen(slug: string) {
 }
 // Beside the bot's name only when something is wrong (#514): crashed, quarantined, rate limited,
 // blocked, a failed last run, or an agent that is offline while work waits for it. Idle says nothing.
-// The top line while the bot can't run (docs/pipelines-v3.md S14): a red dot, the server's cause as it is, and the one
+// The top line while the bot can't run (docs/dev/pipelines-v3.md S14): a red dot, the server's cause as it is, and the one
 // fix a person makes. GET /v2/bots/{bot} `cant_run` (backend/org_routes.py), read with the page and again as the status
 // moves, at most every 15 seconds.
 type BotCantRun = NonNullable<import('../types/api').BotDetail['cant_run']>;
@@ -722,7 +722,8 @@ function botThreadShow(kind: string | undefined, picking = false) {
   const actor = 'bot:' + BOT.slug;
   // The thread's actions (call, Members, menu) sit in the page's top line beside the tabs, never a row of their own.
   // Both keep the bot chat's goal (chat-goal.js): the target in the composer, the pinned goal above the thread.
-  const acts = {header: 'compact', actsHost: $('#bot-top-acts'), goals: BOT.slug, menu: false};
+  // A helper's page has no composer (state.ts ASSISTANT_HELPERS): the server lets its owner write to its Home, so the page says no itself.
+  const acts = {header: 'compact', actsHost: $('#bot-top-acts'), goals: BOT.slug, menu: false, canPost: !isAssistantHelper(BOT.slug)};
   const view = threadMount(host, kind === 'home' ? {home: actor, ...acts} : {dm: actor, ...acts});
   BOT.thread = {kind, view};
   BOT_TALK_LAST.set(BOT.slug, kind);

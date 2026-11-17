@@ -19,16 +19,12 @@ class Loads:
     """The company's values read once (`record`, `plain`, `access`, `given`), and each bot's rows keyed by the bot.
     `runners` is {id: runners row}; `holds` is every login hold ({key: stored value}), so a missing key is no hold."""
 
-    def __init__(
-        self, record, plain, access, given, runners, status, waits, limits, backoff, held, holds, company=None
-    ):
+    def __init__(self, record, plain, access, given, runners, limits, backoff, held, holds, company=None):
         self.record = record  # providers.load(c, settings): the company's choice, the environment's seed included
         self.plain = plain  # providers.load(c): the same without the seed (for_claim reads it so); None if unread
         self.access = access  # cloud_access.access(c)
         self.given = given  # model_subscriptions._given(c): {(runner_id, runtime): subscription}
         self.runners = runners
-        self.status = status  # {bot: bot_status row as a dict, {} when none}
-        self.waits = waits  # {bot: the Gateway's wait, a dict}
         self.limits = limits  # {bot: own usage limits, as usage_limits.own returns them}
         self.backoff = backoff  # {bot: run_backoff row as a dict, {} when none}
         self.held = held  # {bot: turns it holds on every computer}
@@ -51,21 +47,6 @@ class Loads:
 
             self.plain = providers.load(c)
         return self.plain
-
-    def status_of(self, c, bot):
-        if bot in self.status:
-            return self.status[bot]
-        from .hubdb import status
-
-        return status(c, bot) or {}
-
-    def wait_of(self, c, bot):
-        if bot in self.waits:
-            return self.waits[bot]
-        from .repositories import metadata
-        from .execution import GATEWAY_WAIT
-
-        return metadata(c, GATEWAY_WAIT + bot)
 
     def limit_of(self, c, bot):
         if bot in self.limits:
@@ -98,25 +79,12 @@ def read(c, settings, runners, bots):
     once, then each bot's rows in chunks of 500 bots (one statement while there are fewer)."""
     from . import providers, cloud_access, usage_limits, run_backoff, start_places
     from . import model_subscriptions, company_pause
-    from .hubdb import chunks
-    from .execution import GATEWAY_WAIT
 
     bots = list(dict.fromkeys(bots))
     record = providers.load(c, settings)
     given = model_subscriptions._given(c)
     plain = providers.load(c) if given else None
     access = cloud_access.access(c)
-    status = {bot: {} for bot in bots}
-    waits = {bot: {} for bot in bots}
-    for part in chunks(bots):
-        marks = ",".join("?" * len(part))
-        for row in c.execute(f"SELECT * FROM bot_status WHERE bot IN ({marks})", part):
-            status[row["bot"]] = dict(row)
-        for row in c.execute(
-            "SELECT key,value FROM registry_metadata WHERE key IN (" + ",".join("?" * len(part)) + ")",
-            [GATEWAY_WAIT + bot for bot in part],
-        ):
-            waits[row["key"][len(GATEWAY_WAIT) :]] = _dict(row["value"])
     holds = {
         row["key"]: row["value"]
         for row in c.execute(
@@ -130,8 +98,6 @@ def read(c, settings, runners, bots):
         access,
         given,
         dict(runners),
-        status,
-        waits,
         usage_limits.own_many(c, bots),
         run_backoff.get_many(c, bots),
         start_places.held_counts(c, bots),

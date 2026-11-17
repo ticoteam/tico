@@ -64,6 +64,8 @@ def build(api, comments=0, people_comments=0, events=0, children=0, bots=0):
 def page_statements(api, monkeypatch, tid, token):
     """The task page as `token` gets it, and how many statements it ran. Each request starts from cold roster and row
     caches."""
+    from backend.tests.helpers.statement_scope import measuring, recorder
+
     store, seen = api.app.state.store, []
     store.roster_rows = {}
     store.row_cache = type(store.row_cache)()
@@ -72,7 +74,7 @@ def page_statements(api, monkeypatch, tid, token):
         @contextlib.contextmanager
         def borrowed(*args, **kwargs):
             with opened(*args, **kwargs) as c:
-                c.set_trace_callback(seen.append)
+                c.set_trace_callback(recorder(seen))
                 try:
                     yield c
                 finally:
@@ -83,7 +85,8 @@ def page_statements(api, monkeypatch, tid, token):
     with monkeypatch.context() as patched:
         for name in ("read", "read_transaction", "transaction"):
             patched.setattr(store, name, traced(getattr(store, name)))
-        response = api.get(f"/api/v2/tasks/{tid}", headers=T.headers(token))
+        with measuring(seen):
+            response = api.get(f"/api/v2/tasks/{tid}", headers=T.headers(token))
     assert response.status_code == 200, response.text
     return response.json(), len(seen)
 

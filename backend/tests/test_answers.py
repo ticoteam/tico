@@ -1,4 +1,4 @@
-"""Answers to what a task needs (backend/answers.py, docs/pipelines-v3.md "Asks" and "What your answer does").
+"""Answers to what a task needs (backend/answers.py, docs/dev/pipelines-v3.md "Asks" and "What your answer does").
 
 Synthetic rows only (backend/tests/helpers/engine.py): a General pipeline, a two-stage Build pipeline, the fictional
 company's two people and three bots.
@@ -326,7 +326,7 @@ def test_a_bot_that_cannot_run_still_gets_the_wake(c, general):
 
 
 def test_a_bot_answers_an_ask_only_when_the_requirement_names_it(c, general):
-    """An OK added to one task is asked of a person (docs/pipelines-v3.md, "A requirement on one task"); a bot is
+    """An OK added to one task is asked of a person (docs/dev/pipelines-v3.md, "A requirement on one task"); a bot is
     asked for an answer."""
     row = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
     with _refused("task_requirement"):

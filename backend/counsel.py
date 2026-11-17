@@ -1,5 +1,5 @@
 """The Rules Owner: the built-in helper that reads a document someone adds to Rules and suggests the obligations that bind us,
-and answers "can I...?" from the rules in force (docs/rules-plan.md §2, §5).
+and answers "can I...?" from the rules in force (docs/dev/rules-plan.md §2, §5).
 
 - Adding a document (`POST /api/v2/rules/read`) reads it first, outside any write: a file's text (a PDF is read as a
   link's PDF is: clients/doc_fetch.py `pdf_to_text`), or a public link fetched with clients/doc_fetch.py with no

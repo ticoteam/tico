@@ -1,5 +1,5 @@
 # pyright: strict
-"""Who fills each role the software presets name: Product, and Product and Engineering before 0.6 (docs/pipelines-v3.md
+"""Who fills each role the software presets name: Product, and Product and Engineering before 0.6 (docs/dev/pipelines-v3.md
 "Default pipelines").
 
 The presets name roles, not bots: `pipeline_settings.preset` fills a pipeline's manager, its stage owners and the

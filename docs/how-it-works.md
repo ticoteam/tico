@@ -417,7 +417,9 @@ turn; a subscription profile that shares the computer's own sign-in counts as th
 after a hold began can end it by working, so a run that started earlier and finishes later does not. When it ends, one queued run goes first; the others on the login wait for
 its result, so a login sees one try per window however many runs wait. **Settings → General → Health → Details** says whose login it is
 and when it resumes. When the provider gave no known reset time, a person's message written after the limit
-lets it try once at once. A known reset keeps new messages queued until then. **Try now** explicitly ends a hold (and also works while
+lets it try once at once. A known reset keeps new messages queued until then. The hold is the only record of the
+limit that decides anything: the bot shows *limited* exactly while a hold keeps its next run waiting (its own login's,
+with no fallback ready, or the Gateway's for a Tico model), and the scheduler clears that the moment none does. **Try now** explicitly ends a hold (and also works while
 only the bot's own login is held and its work goes on on a fallback); a run that
 hits the limit again goes back to the hold. **Try now**, beside the warning on the bot's page and in its Chat line for anyone who
 manages the bot (`POST /api/v2/bots/{bot}/limit/retry`, BotOps as the person who asked), ends the
@@ -727,7 +729,7 @@ options, and their missing repositories do not count as readiness or Health fail
 Every task is in one pipeline, at one stage, with one owner whose turn it is. A new company has one pipeline,
 General, with one stage, To do, managed by the General Manager. A task's status is `open`, `done` or `closed`; only
 the task engine moves it. See [Pipelines and stages](tasks.md#pipelines-and-stages) and
-[Pipelines](pipelines-v3.md).
+[Pipelines](dev/pipelines-v3.md).
 
 ## On computers
 

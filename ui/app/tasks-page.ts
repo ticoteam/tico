@@ -1,4 +1,4 @@
-/* ui/app/tasks-page.ts — the Tasks page (docs/pipelines-v3.md S2, S7): the header, You, a pipeline, the archive, search
+/* ui/app/tasks-page.ts — the Tasks page (docs/dev/pipelines-v3.md S2, S7): the header, You, a pipeline, the archive, search
    and filter, and New task (S6).
    The header, left to right: "Tasks", the view button ("You 7 ▾" or a pipeline's name), the pencil on a pipeline,
    then search, filter, list or columns on a pipeline, archive, Flow (decide.ts) and +.
@@ -554,7 +554,7 @@ const tasksGroupHTML = (name: string, rows: string[]) => !rows.length ? ''
 const tasksNone = (state: TasksPageState) => `<p class="empty muted">${state.q || taskFiltersOn(state.filters) ? 'No matches' : 'Nothing here'}</p>`;
 /** Which group of You an item is in: Answer (questions, mentions, stuck tasks), Review (OKs of a page or a draft) or Do. */
 function needsGroup(it: NeedsEntry): 'answer' | 'review' | 'do' {
-  if (it.kind === 'ask') return it.ask?.kind === 'answer' ? 'answer' : 'review';
+  if (it.kind === 'ask') return it.ask?.kind === 'ok' || it.ask?.kind === 'page' ? 'review' : 'answer';
   if (it.kind === 'mention') return 'answer';
   if (it.kind === 'task' && it.task?.turn?.state === 'paused') return 'answer';
   return 'do';

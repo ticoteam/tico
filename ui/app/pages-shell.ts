@@ -178,7 +178,7 @@ const SETTINGS_TABS = ['general', 'people', 'bots', 'devices', 'models', 'tasks'
 // controls because changing who can use a bot must never silently move its runtime (or vice versa).
 // Teams come from the team's data; a name reads as its words (`success-owner` is Customer Success).
 const teamLabel = (t?: string) => (S.orgGroups || []).find(g => g.id === t)?.name || String(t || '').replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-let SETTINGS_DATA: SettingsData = {people: [], machines: [], services: [], models: [], issues: [], history: {changes: [], transitions: []}};
+let SETTINGS_DATA: SettingsData = {people: [], machines: [], services: [], models: [], issues: [], history: {changes: []}};
 // Presence is judged when a response arrives, never by aging a cached heartbeat on a later paint.
 const SETTINGS_PRESENCE: SettingsPresence = {interval: 25000, timeout: 10000, at: 0, checking: false, failed: false, timer: null, pending: null, request: 0, applied: 0};
 const harnessCaps = (id: string | undefined): HarnessCaps => harnessRow(id)?.capabilities || {};

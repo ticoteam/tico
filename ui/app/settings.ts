@@ -11,7 +11,7 @@ type SettingsModel = {id: string; provider: string; label: string; deprecated?: 
   efforts?: string[]; default_effort?: string; description?: string; context_tokens?: number | null; compact_default?: number};
 type SettingsService = {name?: string; service?: string; last_error?: string | null; last_succeeded_at?: string | null};
 type SettingsIssue = {kind?: string; title: string; detail: string; action?: string; bot?: string; restart?: unknown; machine?: unknown};
-type SettingsHistory = {changes: SettingsChange[]; transitions: SettingsTransition[]; transitions_truncated?: boolean; next_before?: string | null};
+type SettingsHistory = {changes: SettingsChange[]; next_before?: string | null};
 // clients/harness_manifests.py: the sign-in commands are strings (empty when there is no sign-in), the rest flags.
 type HarnessCaps = {account?: string; api_keys?: string; api_key_login?: boolean; api_key_check?: boolean; browser_sign_in?: boolean; compaction?: boolean; own_compaction?: boolean; container_login?: string; resume_command?: string; sign_out?: boolean; switch_unavailable_on?: string[]; terminal_login?: string; weekly_usage?: string};
 // GET /v2/operations `agents`: an external agent (a Hermes or OpenClaw profile) and what it last reported (settings-devices.ts).
@@ -637,7 +637,7 @@ async function loadSettings() {
       }) : Promise.resolve({machines: [], services: []}),
       S.me ? get('/v2/models') : Promise.resolve({models: []}),
       get('/employees'),
-      S.me?.role === 'owner' ? get('/v2/settings/history') : Promise.resolve({changes: [], transitions: []}),
+      S.me?.role === 'owner' ? get('/v2/settings/history') : Promise.resolve({changes: []}),
       S.me ? get('/v2/usage/limits').catch(() => null) : Promise.resolve(null),
       loadHarnessRows(),
       // The Computers table's pickers: the company's subscriptions, and whether the Gateway runs a tool without one.

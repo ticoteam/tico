@@ -378,4 +378,4 @@ Open **Settings > Tasks** (under **Task tags**) or use `tico tag list|show|creat
 
 Every task sits in a pipeline, at one stage, and always shows whose turn it is. A new team has one pipeline, General,
 with one stage, To do. A task is open, done or closed; a person is asked through an ask on the task, in Needs you.
-See [Tasks](docs/tasks.md) for the UI, CLI, MCP and API, and [the spec](docs/pipelines-v3.md) for the whole design.
+See [Tasks](docs/tasks.md) for the UI, CLI, MCP and API, and [the spec](docs/dev/pipelines-v3.md) for the whole design.

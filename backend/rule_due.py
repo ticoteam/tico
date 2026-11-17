@@ -1,4 +1,4 @@
-"""Due dates on rules (docs/rules-plan.md §1, §4): a date, a repeat, an owner and a status for each rule that has one.
+"""Due dates on rules (docs/dev/rules-plan.md §1, §4): a date, a repeat, an owner and a status for each rule that has one.
 
 - A due date is its own row (`rule_due_dates`), so one rule can have several (quarterly returns and an annual report).
   Its occurrences are worked out from the first date and the repeat; nothing stores them. `rule_due_status` holds each
@@ -29,7 +29,7 @@ STATUSES = ("overdue", "due_soon", "upcoming", "satisfied")
 WINDOW_DAYS = 30  # "due soon" without a routine window
 MAX_OCCURRENCES = 5000  # a backstop: a weekly date from decades ago still walks in a few hundred steps
 HISTORY = 5  # the last status rows a list shows for a due date
-OPEN_DAYS = 20  # the open occurrences a detail names (the count is always exact)
+DETAIL_OPEN_DAYS = 20  # the open occurrences a detail lists as open_days (the count is always exact)
 DETAIL_MARKS = 100  # the satisfied occurrences a detail shows, per row of its chain
 CHAIN_MAX = 50  # the rows of one due date's chain (its edits) a detail walks
 
@@ -113,7 +113,7 @@ def state(row, satisfied, today, window=WINDOW_DAYS):
         "due_on": current.isoformat(),
         "status": status,
         "open": len(opened),
-        "open_days": [day.isoformat() for day in opened[:OPEN_DAYS]],
+        "open_days": [day.isoformat() for day in opened[:DETAIL_OPEN_DAYS]],
     }
 
 
@@ -388,7 +388,7 @@ def on_task_status(c, actor, task, old, new):
 
 
 def _completes(task, actor):
-    """Completed (docs/rules-plan.md §1): marked done by its owner, or closed by a person. A mover's or manager's done
+    """Completed (docs/dev/rules-plan.md §1): marked done by its owner, or closed by a person. A mover's or manager's done
     and a close by Tico (cleanup, a task closed with the one above it) never are."""
     if not actor or actor == H.KEEPER:
         return False

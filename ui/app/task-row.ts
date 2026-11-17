@@ -1,4 +1,4 @@
-/* ui/app/task-row.ts — a task row in every look (docs/pipelines-v3.md, S1), the mark, the Late tag, the one line, and
+/* ui/app/task-row.ts — a task row in every look (docs/dev/pipelines-v3.md, S1), the mark, the Late tag, the one line, and
    the search and filter every task list shares.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them.
    A row is its title: mark, title, Late, anything after it, avatar, age. The words are on the task (taskLine), shown when

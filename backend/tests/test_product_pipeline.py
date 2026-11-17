@@ -1,4 +1,4 @@
-"""Product, one pipeline from pitch to production (docs/pipelines-v3.md "Product"; pipeline_settings.PRODUCT): what a
+"""Product, one pipeline from pitch to production (docs/dev/pipelines-v3.md "Product"; pipeline_settings.PRODUCT): what a
 company that builds software gets in place of the Product and Engineering pair, its person gates (any person, never a
 bot), the 280-character pitch, the stages its feature owner holds, Validate's send back to Build, and adding it by hand
 beside the pair a company set up before 0.6 keeps (`add_preset`, POST /api/v2/pipelines/{id}/from-preset).

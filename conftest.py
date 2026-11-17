@@ -234,6 +234,18 @@ def no_cached_google_tokens():
     google_tokens.forget()
 
 
+@pytest.fixture(autouse=True)
+def no_cached_calendar_reads():
+    """The calendar read cache is process-wide too (backend/connectors.py `_LIVE`): one calendar's live read is reused for a
+    minute, and tests reuse addresses, so one test's read would answer the next test's. Empty at the start and the end of
+    each test. The import stays in the body, as no_cached_google_tokens' does."""
+    from backend import connectors
+
+    connectors.forget_live()
+    yield
+    connectors.forget_live()
+
+
 def pytest_runtest_logreport(report):
     """Under xdist the workers' teardown reports reach the controller here, so the check's cost is summed over them."""
     if report.when == "teardown":

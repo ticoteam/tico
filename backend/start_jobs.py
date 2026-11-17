@@ -77,15 +77,6 @@ def run(store, onboarding, telemetry, vault=None):
             task_depends.on_release(c, releases.version(), settings.release_repo)
     except Exception as exc:  # noqa: BLE001 - one failed job must not prevent the remaining jobs
         telemetry.capture("depends_released", exc)
-    # Once, at the release that brought Validate's proof gate: a bot's bare ask of a person on a task already in
-    # Validate is withdrawn, and a task whose passed page was all else it waited for is Done (validate_gate.sweep).
-    try:
-        from . import validate_gate
-
-        with _transaction(store) as c:
-            validate_gate.sweep(c)
-    except Exception as exc:  # noqa: BLE001 - one failed job must not prevent the remaining jobs
-        telemetry.capture("validate_sweep", exc)
     # Once: a stored key that is a tool's setting (a host, a region, a profile) becomes that setting, on a tool each of
     # its holders still gets it from (backend/tool_settings.py move_once). It reads values, so it needs the vault.
     if vault is not None:
@@ -103,3 +94,11 @@ def run(store, onboarding, telemetry, vault=None):
             tool_settings.repair_ids_once(store, vault)
         except Exception as exc:  # noqa: BLE001 - one failed job must not prevent the remaining jobs
             telemetry.capture("tool_settings_ids", exc)
+        # Once, after the two above: each vendor account's tools become one tool with its template, every bot's run
+        # environment kept as it was; login pairs go to the Tools Owner (backend/tool_templates.py group_once).
+        try:
+            from . import tool_templates
+
+            tool_templates.group_once(store, vault)
+        except Exception as exc:  # noqa: BLE001 - one failed job must not prevent the remaining jobs
+            telemetry.capture("tool_templates_group", exc)

@@ -1,5 +1,5 @@
 # pyright: strict
-"""Private pipelines (docs/pipelines-v3.md "Private pipelines"): every task in one is a private task.
+"""Private pipelines (docs/dev/pipelines-v3.md "Private pipelines"): every task in one is a private task.
 
 No new access system. A task that enters a private pipeline (`hubdb.task_create`, which stage effects file through, and
 `task_engine.restore`) is made private whatever was asked, and its reader list gets the pipeline's manager and the

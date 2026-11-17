@@ -60,6 +60,7 @@ import logging
 import os
 import re
 import sqlite3
+import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -126,10 +127,6 @@ from .hubdb_text import (
     lint_plain,  # noqa: F401
     person_ask_of_body,
     person_ask_refusal,
-    LINT_LISTED_PICKS,  # noqa: F401
-    lint_question,  # noqa: F401
-    QUESTION_EXAMPLE,  # noqa: F401
-    question_refusal,
     lint_approval,  # noqa: F401
     URL_SPECIAL,  # noqa: F401
     url_authority,  # noqa: F401
@@ -382,17 +379,6 @@ def sourced_text(text, sources=(), refs=None):
     return text, refs
 
 
-def answer_question(conn, target):
-    """The stored question behind a structured answer target: a comment ask, or a file version's."""
-    if target.get("comment"):
-        return message(conn, target["comment"])
-    row = conn.execute(
-        "SELECT ask_message_id FROM task_file_reviews WHERE file_id=? AND version=?",
-        (target.get("file"), target.get("version")),
-    ).fetchone()
-    return message(conn, row[0]) if row and row[0] else None
-
-
 def answer_text(question, answers, *, text=None, other=None, passed=None, refs=None, file_subject=False):
     """Pair answer prose with sources resolved from the stored question, never from the submitted picks.
 
@@ -532,6 +518,21 @@ def leave_wal_for_litestream(conn):
     return conn
 
 
+def wal_mode(conn, wait=30.0):
+    """Switch the file to WAL. Two connections switching a new file at once is the one place SQLite answers "database is
+    locked" without waiting for the other (its busy handler is not asked, to avoid a deadlock), so the loser tries again
+    until `wait` seconds have passed; the switch itself takes milliseconds."""
+    deadline = time.monotonic() + wait
+    while True:
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            return
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc) or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.01)
+
+
 def connect(path=None):
     """Open (and if need be create) hub.db. WAL, foreign keys on, migrations applied.
 
@@ -550,7 +551,11 @@ def connect(path=None):
     conn.row_factory = sqlite3.Row
     if fresh:
         conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
-    conn.execute("PRAGMA journal_mode=WAL")
+    try:
+        wal_mode(conn)
+    except Exception:
+        conn.close()
+        raise
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA busy_timeout=30000")
     conn.execute(f"PRAGMA synchronous={synchronous('NORMAL')}")
@@ -863,16 +868,6 @@ def require_person_ask(conn, actor, person, text, where):
     but never counts toward a quarantine (_escalate): it is corrected by rewriting, not a sign the bot reaches
     where it should not."""
     detail = person_ask_refusal(person, text, where)
-    if detail:
-        refuse(conn, actor, "lint", detail)
-
-
-def require_plain_question(conn, actor, person, questions, *, written=False):
-    """Refuse a bot's question to a person that breaks the asking rules (question_refusal). Like require_person_ask,
-    a `lint` refusal is fixed by rewriting and never counts toward a quarantine."""
-    if not is_bot(actor) or not is_human(person):
-        return
-    detail = question_refusal(person, questions, written=written)
     if detail:
         refuse(conn, actor, "lint", detail)
 
@@ -2236,12 +2231,6 @@ def feed(conn, target, body, conv, refs=None):
     """
     resolved = _reach(conn, KEEPER, target)
     return _write_message(conn, KEEPER, resolved, body, conv, "say", {"wake": "feed", **(refs or {})}, None, None)
-
-
-def has_pick_options(msg):
-    """Questions offering only free text keep the ordinary answer protocol."""
-    refs = _json(msg.get("refs"), {}) or {}
-    return any(q.get("options") for q in refs.get("questions", []))
 
 
 def notice(conn, actor, to_actor, body, refs=None, expires_days=NOTICE_DAYS):
@@ -4324,7 +4313,7 @@ PR_IN_TEXT = re.compile(r"https://github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)", r
 def review_finding_route(conn, actor, task_id, target):
     """A bot never gives a person a General task about a pull request that an open pipeline task owns: a finding on a
     task's own pull request goes back to whoever builds that task (its feature owner, or a Builder on Engineering of the
-    pair Product replaced) through its review (docs/pipelines-v3.md, "Product"),
+    pair Product replaced) through its review (docs/dev/pipelines-v3.md, "Product"),
     and what only a person decides there (the spec, the OK) is asked on that task. The pull request is one the task
     links, or one its title or body names by URL. Refused as `review_route`, naming the task it belongs on."""
     if not is_bot(actor) or not is_human(target):

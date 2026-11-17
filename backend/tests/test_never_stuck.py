@@ -1,4 +1,4 @@
-"""The never-stuck check (backend/never_stuck.py, docs/pipelines-v3.md "The never-stuck check").
+"""The never-stuck check (backend/never_stuck.py, docs/dev/pipelines-v3.md "The never-stuck check").
 
 Synthetic rows only (backend/tests/helpers/engine.py): the fictional company's person, three bots on one computer, a
 General pipeline whose stage expects a bot to take a day, and a clock the test moves.

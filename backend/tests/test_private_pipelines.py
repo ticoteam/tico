@@ -1,4 +1,4 @@
-"""Private pipelines (backend/private_pipelines.py, docs/pipelines-v3.md "Private pipelines") and the Legal and Finance
+"""Private pipelines (backend/private_pipelines.py, docs/dev/pipelines-v3.md "Private pipelines") and the Legal and Finance
 presets that use them.
 
 Every task in a private pipeline is private, whatever was asked, and its reader list gets the pipeline's manager and

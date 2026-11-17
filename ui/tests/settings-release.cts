@@ -1,6 +1,6 @@
 import type * as PageSupport from './support/page.cts';
 import type * as Routes from './support/routes.cts';
-// Release now on the Release Owner's Settings card (docs/pipelines-v3.md D13). Guards: the button is there with no
+// Release now on the Release Owner's Settings card (docs/dev/pipelines-v3.md D13). Guards: the button is there with no
 // task pending (the count never decides it); the note goes with the press; already_open says so and links the open
 // Release task only when the answer carries its id. Fixtures only.
 const {chromium}: typeof import('playwright') = require('playwright');

@@ -23,12 +23,12 @@ aliases: [gmail, google-calendar]
 
 ## What it is
 
-One CLI, `mail`, in the hub at `connectors/mail/`, run as `$HUB_DIR/scripts/mail.sh`. One Google
+One CLI, `mail`, in the Tico repository at `connectors/mail/`, run as `$HUB_DIR/scripts/mail.sh`. One Google
 service account acts as every mailbox. Gmail authority comes from the `tools:` block in
 `bot.yaml` (`policies/access.md`), never from a prompt. Company calendar access is the
 standing fleet-wide exception: every bot may read and create events on every roster address with
 the Hub tools or the audited `mail calendar` commands, even when its Gmail access is read-only or
-absent. The Hub queues and audits provider actions; the connector on the runner computer performs them
+absent. Tico's server queues and audits provider actions; the connector on the runner computer performs them
 without exposing the Google credential. Every read of a body and every label, archive, star,
 draft, send and calendar change is written to an audit log with the bot's slug. A direct API call
 skips the checks and is a policy violation, not a shortcut (and would not work: the key is not in

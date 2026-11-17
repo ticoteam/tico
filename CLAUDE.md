@@ -86,7 +86,7 @@ marks the PR ready after a pass. A Tico bot never runs that script: it marks its
 green `checks` on that run (not skipped), and once it is reviewed, enqueue it with
 `gh pr merge <N> --merge`: the merge queue tests the PR merged onto current main before it lands. Enqueue once. No bot
 enqueues: Tico queues a bot's PR at the checked head when its task reaches Merge, and a queue removal goes to the
-Release Owner (docs/pipelines-v3.md).
+Release Owner (docs/dev/pipelines-v3.md).
 After a queue failure, fix it and get green PR checks before enqueuing again.
 Don't rebase or merge main to be current; rebase only when GitHub reports a conflict. If the queue removes the PR,
 read why before you push again. Never use `--admin` or the REST merge endpoint: both skip the queue.

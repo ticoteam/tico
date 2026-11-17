@@ -238,6 +238,32 @@ const NOISE_ISSUES = [
     await settle();
     await page.locator('#heartbeat').waitFor({state: 'hidden'});
 
+    // A refresh overtaken by a newer one (a poll, a boot read) must not resolve with the dot from before it. The newer read
+    // is held until the older one has landed, so the older call returns while the newer one is still in flight: it has
+    // to wait for the newer read, or the dot it reads is the old state. Both reads sit in the page; no sleeps.
+    health = {...NOISE_HEALTH, computers: []};
+    const overlapped = await page.evaluate(async () => {
+      const w = window as unknown as {v2Get: (path: string, opts?: unknown) => Promise<unknown>};
+      const real = w.v2Get;
+      let open = () => {};
+      const gate = new Promise<void>(resolve => { open = () => resolve(); });
+      let reads = 0;
+      w.v2Get = (path, opts) => {
+        if (path !== '/v2/health') return real(path, opts);
+        return ++reads === 1 ? real(path, opts).finally(open) : gate.then(() => real(path, opts));
+      };
+      try {
+        const older = hlRefresh();
+        void hlRefresh();
+        await older;
+        return document.querySelector('#account .account-dot')?.getAttribute('data-level') ?? null;
+      } finally { w.v2Get = real; }
+    });
+    assert.equal(overlapped, 'bad', 'an overlapped refresh resolves with the newest state');
+    health = NOISE_HEALTH;
+    await settle();
+    await page.locator('#heartbeat').waitFor({state: 'hidden'});
+
     // The Review for stopped runs is on Builder's page, moved out of the menu: one control, and the menu has none.
     await page.evaluate(() => setAccountMenu(false));
     await page.evaluate(() => { location.hash = '#/bot/builder/more'; });

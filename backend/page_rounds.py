@@ -104,12 +104,10 @@ def parts_of(saying: Row) -> list[str]:
 
 def last_sent_back(conn: "sqlite3.Connection", task_id: str, requirement_id: str) -> str | None:
     """The newest send-back note on this page requirement of the task, any visit, not undone."""
-    found = conn.execute(
-        "SELECT a.notes FROM answers a JOIN visits v ON v.id = a.visit_id WHERE v.task_id=? AND a.requirement_id=? "
-        "AND a.answer='no' AND a.undone_at IS NULL ORDER BY a.created_at DESC, a.id DESC LIMIT 1",
-        (task_id, requirement_id),
-    ).fetchone()
-    return str(found[0]) if found and found[0] else None
+    from . import task_requirements
+
+    found = task_requirements.last_sent_back(conn, requirement_id, task_id=task_id)
+    return str(found["notes"]) if found and found["notes"] else None
 
 
 def _rows(conn: "sqlite3.Connection", sql: str, args: tuple[Any, ...]) -> list[Row]:

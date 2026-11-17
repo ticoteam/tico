@@ -98,14 +98,6 @@
                 }
             },
             {
-                "code": "reportOptionalMemberAccess",
-                "range": {
-                    "startColumn": 46,
-                    "endColumn": 49,
-                    "lineCount": 1
-                }
-            },
-            {
                 "code": "reportPossiblyUnboundVariable",
                 "range": {
                     "startColumn": 24,

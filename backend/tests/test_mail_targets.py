@@ -44,7 +44,7 @@ def test_targets_are_the_message_bots_declared_mailboxes_not_every_person(api):
 
 def test_org_read_in_bot_yaml_reads_no_reports_mail(api):
     """Ana has reports on the roster. `org_read: true` in a gmail entry once read their mail; now only a grant does
-    (the upgrade turned each org_read into Read grants, backend/mailbox_access.py backfill)."""
+    (the migration to mailboxes, 0092, turned each org_read into Read grants)."""
     seed_org(api)
     for setting in ({}, {"org_read": False}, {"org_read": "true"}, {"org_read": True}):
         declare(api, DECLARED, **setting)

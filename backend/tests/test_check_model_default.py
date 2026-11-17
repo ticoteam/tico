@@ -255,7 +255,7 @@ def test_a_review_for_a_bot_set_to_review_on_the_check_model_runs_there_and_says
             r[0]
             for r in c.execute("SELECT body FROM messages WHERE recipient_id='bot:ops' AND body LIKE '%Review PR 701%'")
         ]
-    # The parent's owner is woken once with how what it filed ended (docs/pipelines-v3.md); v3 has no verdict fields.
+    # The parent's owner is woken once with how what it filed ended (docs/dev/pipelines-v3.md); v3 has no verdict fields.
     assert len(notices) == 1 and "Review PR 701: Done" in notices[0], notices
     review_model("own")
     after = post(

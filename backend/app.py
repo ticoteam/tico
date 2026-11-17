@@ -2358,8 +2358,6 @@ def create_app(settings=None):
                     row = {**row, "goals": body.goals}
                 if body.notes is not None:
                     row = {**row, "notes": body.notes}
-                if body.notify_slack_task_done is not None:
-                    row = {**row, "notify_slack_task_done": body.notify_slack_task_done}
                 if login is not None:
                     row = {**row, "github": login}
                 if body.notify_slack_bot_messages is not None:
@@ -2398,7 +2396,6 @@ def create_app(settings=None):
                         "about": body.about is not None,
                         "goals": body.goals is not None,
                         "notes": body.notes is not None,
-                        "notify_slack_task_done": body.notify_slack_task_done,
                         "github": body.github is not None,
                         "notify_slack_bot_messages": body.notify_slack_bot_messages,
                         "update_draft": body.update_draft,
@@ -5326,7 +5323,6 @@ def create_app(settings=None):
             "bulk": task_update,
             "comment": comment,
             "comment_edit": comment_edit,
-            "task_answer": lambda c, bot, replay: rule_task_audience(c, task_row(c, bot, replay), bot.actor),
             "reply": reply_audience,
         }
 
@@ -5544,9 +5540,10 @@ def create_app(settings=None):
     from . import website_tools
 
     website_tools.install(app, store, auth, settings)  # Tools: website tools and their accounts
-    from . import tool_settings
+    from . import tool_settings, tool_templates
 
     tool_settings.install(app, store)  # Tools: an API tool's Settings, its non-secret values
+    tool_templates.install(app, store)  # Tools: multi-secret templates, paste to classify, ungroup
     from . import tool_proxy
 
     tool_proxy.install(app, store)

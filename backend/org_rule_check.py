@@ -1,4 +1,4 @@
-"""Org rule checks (docs/rules-plan.md §3): a bot's output is checked against the org rules that apply to it before it
+"""Org rule checks (docs/dev/rules-plan.md §3): a bot's output is checked against the org rules that apply to it before it
 is delivered (`questions/rule-check.json`, asked through the server's Decide engine, on Decide's one monthly budget).
 
 Like ask ingest (backend/ask_ingest.py): one call per output, outside the write's transaction (`preflight`); plain
@@ -121,7 +121,6 @@ OPERATIONS = {
     "mail": "an email",
     "letter": "a letter",
     "update": "an update",
-    "task_question": "a question put to a person",
     "slack_message": "a Slack message",
     "slack_dm": "a Slack message to a bot",
     "threads": "a thread message",
@@ -1499,10 +1498,7 @@ def _write_hold(
     judged = judged if isinstance(judged, str) or judged is None else json.dumps(judged, sort_keys=True, default=str)
     judged = judged if judged and judged != text else None
     body = (replay or {}).get("body") or {}
-    if operation == "task_answer":
-        asked = H.answer_question(c, body.get("target") or {})
-        text, text_refs = H.answer_text(asked, body.get("answers") or {}, text=text)
-    elif operation in ("answer", "reply"):
+    if operation in ("answer", "reply"):
         text, text_refs = H.answer_text(
             H.message(c, replay["message"]), replay.get("text") or body.get("text") or "", text=text
         )

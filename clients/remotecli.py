@@ -855,7 +855,7 @@ def run(args, who=None):
             "unlink",
             "after",
         ):
-            # The engine's commands (docs/pipelines-v3.md S16): each sends the version the bot passed, never one read now.
+            # The engine's commands (docs/dev/pipelines-v3.md S16): each sends the version the bot passed, never one read now.
             return unwrap(via_tool(client, args))
         if sub == "cap":  # `task cap set`: no --per-day removes the cap, so null is sent, never left out
             return via_tool(client, args, per_day=args.per_day)
@@ -1867,7 +1867,7 @@ def main(args, who=None, fields=None):
             and isinstance(result, dict)
             and "text" in result
         ):
-            print(result["text"])  # the lines a bot reads (docs/pipelines-v3.md S16); --json prints the task
+            print(result["text"])  # the lines a bot reads (docs/dev/pipelines-v3.md S16); --json prints the task
         elif args.fn == "bot go-live" and isinstance(result, dict) and result.get("state") == "waiting_for_repository":
             # Not an error and nothing to retry: Tico finishes it when the computer reports the repository.
             print(

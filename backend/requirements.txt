@@ -33,7 +33,7 @@ cryptography==50.0.2
     # via
     #   -r requirements.in
     #   pyjwt
-dnspython==2.9.0
+dnspython==2.9.2
     # via
     #   -r requirements.in
     #   pymongo

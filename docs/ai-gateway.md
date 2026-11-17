@@ -235,7 +235,8 @@ same warnings to the owner, with **Open Models**.
 
 ## When the Gateway refuses a bot's run
 
-The bot's status says why, in plain words, and the run waits or is saved for later. The same holds when a Tico model ran as the bot's own fallback:
+The bot's status says why, in plain words, and the run waits or is saved for later. The same holds when a Tico model ran as the bot's own fallback.
+The Gateway is one login for the whole company, as a provider login is for its computer ([How it works](how-it-works.md)): its cap, a rate limit, a pause for want of credit or an outage holds every Tico run, not only the bot that met it. A bot whose own model is not a Tico model runs on it meanwhile, and when the wait ends one run tries the Gateway before the rest:
 
 | The bot's status says | What happens to the run |
 |---|---|

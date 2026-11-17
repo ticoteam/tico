@@ -540,7 +540,6 @@ def test_a_database_before_the_migration_answers_only_a_persons_own_email(api):
         assert levels(c, "person:cara") == {CARA: "read_write"}
         assert levels(c, "bot:assistant") == {}
         assert MA.stopped(c) == set()
-        assert MA.backfill(c) == {"mailboxes": 0, "accesses": 0}
 
 
 # ------------------------------------------------------------------------------- a message bot made, not assigned

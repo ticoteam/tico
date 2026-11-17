@@ -107,7 +107,7 @@ interface Call { bot: string | null; what: string; body: unknown }
       if (p === '/api/v2/models') return json({...catalog, enabled_providers: ['anthropic']});
       if (p === '/api/v2/providers') return json({enabled: ['anthropic'], default: catalog.default, revision: 1, providers: [{id: 'anthropic', label: 'Anthropic'}]});
       if (p === '/api/v2/usage/limits') return json({bots: {}});
-      if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
+      if (p === '/api/v2/settings/history') return json({changes: []});
       if (p === '/api/v2/settings/transitions/tr-1') return json({id: 'tr-1', bot: 'writer', kind: 'machine', state: 'applied'});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));

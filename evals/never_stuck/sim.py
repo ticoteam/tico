@@ -39,7 +39,7 @@ REASSIGN, CLOSE, BACK = "reassign", "close", "move back"
 SILENT = "stay silent"
 LEASE_S = 90  # a run's lease, renewed while its computer checks in
 RUN_CAP_S = 3600  # a run is cut off at 60 minutes
-MAX_RUNS = 7  # bot runs one task may use without a change before a person is asked (docs/pipelines-v3.md)
+MAX_RUNS = 7  # bot runs one task may use without a change before a person is asked (docs/dev/pipelines-v3.md)
 
 
 # Engine bugs the rig has found and that are still open, by name (see README.md), each with a test that tells its
@@ -134,7 +134,7 @@ def wake_kind(c: sqlite3.Connection, job_id: str) -> str:
 
 
 def fingerprint(c: sqlite3.Connection) -> dict[str, tuple[Any, ...]]:
-    """For each task on the engine, what counts as a change (docs/pipelines-v3.md, C4, as R1 settles it): its visit,
+    """For each task on the engine, what counts as a change (docs/dev/pipelines-v3.md, C4, as R1 settles it): its visit,
     status and owner (a move, a reassign), the answers, added requirements and who each is asked of (a person giving an
     ask to someone else is a person acting, so a change) and filed tasks of its open visit. Not a
     snooze or its end (setting a task aside earns no runs), and not the task's version (a field edit raises it). Read
