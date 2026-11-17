@@ -9,6 +9,7 @@ import pytest
 from backend.store import H
 from backend.tests.helpers.api import get, headers, post
 from backend.tests.helpers.company import with_strategy_bot
+from backend.tests.helpers.engine import old_question
 from backend.tests.helpers.org_rules import rule
 from backend.tests.helpers.strategy_bot_level import level
 from backend.tests.helpers.org_rule_check import (  # noqa: F401 - fixtures
@@ -105,7 +106,9 @@ def test_withdrawing_an_ask_with_a_forbidden_why_is_held(ruled):
         f"tasks/{task['id']}/asks",
         {
             "to": "ana",
-            "line": "Which launch day suits you?",
+            "line": "OK the launch note?",
+            "kind": "ok",
+            "show": [NOTE],
             "version": 1,
             "why": "It sets what goes out on launch day.",
         },
@@ -219,10 +222,21 @@ def all_slots_busy(monkeypatch):
     monkeypatch.setattr(K, "_ask", lambda *a, **k: (None, "busy"))
 
 
+NOTE = "https://example.com/launch-note"  # what a bot's OK shows: a bot's OK names what it approves
+
+
 def bots_ask(api, task, line="May I say our favorite color is red?", expected=200):
+    """bot:ops asks Ana to OK what it shows (a question is a ❓ message now, checked on its own route)."""
     r = api.post(
         f"/api/v2/tasks/{task['id']}/asks",
-        json={"to": "ana", "line": line, "version": task["version"], "why": "It sets what goes out on launch day."},
+        json={
+            "to": "ana",
+            "line": line,
+            "kind": "ok",
+            "show": [NOTE],
+            "version": task["version"],
+            "why": "It sets what goes out on launch day.",
+        },
         headers=headers("ops-test"),
     )
     assert r.status_code == expected, r.text
@@ -244,8 +258,10 @@ def test_a_bots_ask_whose_short_title_alone_breaks_a_rule_is_refused(ruled):
         f"/api/v2/tasks/{task['id']}/asks",
         json={
             "to": "ana",
-            "line": "Which line should the launch post lead with?",
+            "line": "OK the launch post's lead line?",
             "title": "Our favorite color is red: say it?",
+            "kind": "ok",
+            "show": [NOTE],
             "version": task["version"],
             "why": "It sets what goes out on launch day.",
         },
@@ -270,7 +286,7 @@ def test_a_bots_ask_the_check_cannot_judge_here_is_refused_to_try_again(ruled, m
         from clients import judge as J
 
         monkeypatch.setattr(J, "MAX_STATE_CHARS", 200)
-    got = bots_ask(api, task, "Which launch day suits you, Monday or Tuesday or later this month?", 503)
+    got = bots_ask(api, task, "OK the launch day plan for Monday or Tuesday or later this month?", 503)
     assert problem(got) == ("task_rule_unchecked", True), got
     assert asks_on(api, task) == before and row(api, task["id"])["version"] == task["version"]
     assert sql(api, "SELECT state FROM bots WHERE slug='ops'")[0]["state"] == "active"
@@ -284,7 +300,7 @@ def test_a_bot_spending_the_days_calls_cannot_then_ask_unchecked(ruled, monkeypa
 
     monkeypatch.setattr(K.B, "daily_cap", lambda settings, who: 1)
     task = task_for_ops(api)
-    bots_ask(api, task, "Which launch day suits you?")  # the day's one call
+    bots_ask(api, task, "OK the launch day plan?")  # the day's one call
     assert len(judge.calls) == 1
     task = task_for_ops(api, "Write the second note")
     bots_ask(api, task, "May I say our favorite color is red?", 503)
@@ -486,13 +502,8 @@ def test_a_rule_scoped_to_the_tasks_thread_holds_a_write_on_the_task(ruled):
 def test_an_answer_reaches_whoever_asked_and_a_rule_with_them_holds_it(ruled):
     api, _ = ruled
     task = task_for_ops(api)
-    asked = ops(
-        api,
-        f"tasks/{task['id']}/asks",
-        {"to": "ben", "line": "Which color do we use?", "version": 1, "why": "It sets what goes out on launch day."},
-    )
-    with api.app.state.store.transaction() as c:  # asked by another bot on the task than its owner
-        c.execute("UPDATE requirements SET added_by_id='bot:finance' WHERE id=?", (asked["requirement_id"],))
+    with api.app.state.store.transaction() as c:  # an older question, asked by another bot on the task than its owner
+        asked = old_question(c, task["id"], "bot:finance", "ben", "Which color do we use?")
     rule(api, {"kind": "internal", "text": COLOR, "who": {"everyone": True}, "with": {"bots": ["finance"]}})
     r = api.post(
         f"/api/v2/tasks/{task['id']}/asks/{asked['requirement_id']}/answer",
@@ -506,11 +517,8 @@ def test_an_answer_reaches_whoever_asked_and_a_rule_with_them_holds_it(ruled):
 def test_a_warned_answer_with_no_note_carries_the_line_without_editing_the_task(ruled):
     api, _ = ruled
     task = task_for_ops(api)
-    asked = ops(
-        api,
-        f"tasks/{task['id']}/asks",
-        {"to": "cara", "line": "Which color do we use?", "version": 1, "why": "It sets what goes out on launch day."},
-    )
+    with api.app.state.store.transaction() as c:  # an older question: its typed answer is the warned text
+        asked = old_question(c, task["id"], "bot:ops", "cara", "Which color do we use?")
     rule(api, {"kind": "internal", "text": COLOR, "who": {"everyone": True}, "if_broken": "warn"})
     before = row(api, task["id"])
     r = api.post(
@@ -536,7 +544,8 @@ def test_the_strategy_bots_merged_ask_a_rule_covers_is_refused_and_files_nothing
     tasks = []
     for title in ("Ship the pricing page", "Plan the launch"):
         task = task_for_ops(api, title)
-        bots_ask(api, task, "Which pricing page goes live first?")
+        with api.app.state.store.transaction() as c:  # the older questions a merge stands for
+            old_question(c, task["id"], "bot:ops", "ana", "Which pricing page goes live first?")
         tasks.append(task["id"])
     before = sql(api, "SELECT count(*) AS n FROM tasks")[0]["n"]
     r = api.post(
@@ -584,10 +593,10 @@ def test_a_warned_strategy_bot_decision_carries_the_line_on_what_it_writes(ruled
 
 
 def batch_with_an_ask(api):
-    """Ana's batch holding one question bot:finance asked her on its task."""
+    """Ana's batch holding one (older) question bot:finance asked her on its task: its answer is typed."""
     with api.app.state.store.transaction() as c:
         made = H.task_create(c, "human:ana", "Run the LinkedIn ads", "Q4.", "bot:finance", lint=False)
-        asked = H.task_ask(c, "bot:finance", made["id"], "human:ana", "Which color?", seen_version=made["version"])
+        asked = old_question(c, made["id"], "bot:finance", "ana", "Which color?")
     return made["id"], asked["requirement_id"], post(api, "batch", {})["id"]
 
 

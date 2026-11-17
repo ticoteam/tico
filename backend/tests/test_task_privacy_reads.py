@@ -698,9 +698,10 @@ def test_needs_you_reads_a_fixed_number_of_statements_and_hides_private_items(ap
         with store.transaction() as c:
             for n in range(size):
                 step = H.task_create(c, "bot:ops", f"Step {size}-{n}", "Do it.", "bot:ops", lint=False)
-                H.task_ask(c, "bot:ops", step["id"], "human:ben", f"Which step for {n}?", seen_version=step["version"])
+                shows = [f"https://example.com/step-{n}"]
+                H.task_ask(c, "bot:ops", step["id"], "human:ben", f"OK step {n}?", kind="ok", shows=shows)
                 work = H.task_create(c, "human:ana", f"Release {size}-{n}", "Checklist", "human:ana", lint=False)
-                H.task_ask(c, "human:ana", work["id"], "human:ben", f"Which region for {n}?")
+                H.task_ask(c, "human:ana", work["id"], "human:ben", f"OK the region for {n}?", kind="ok")
 
     counts, total = {}, 0
     for size in (3, 30):

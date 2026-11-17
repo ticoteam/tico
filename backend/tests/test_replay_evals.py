@@ -289,8 +289,9 @@ class Server:
 
 
 def test_replay_answers_the_bots_asks_the_way_the_server_asks_them(api):
-    """On the real server: the bot asks Ana on the task. The simulated person answers the ask with the choice the
-    case's words name, and the server counts it as answered."""
+    """On the real server: the bot asks Ana's OK on the task (a question is a ❓ now, which the replay does not read).
+    The simulated person answers the ask as the case's words say (an OK unless they say no), and the server counts it
+    as answered."""
     machine = runner(api)
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
@@ -306,11 +307,9 @@ def test_replay_answers_the_bots_asks_the_way_the_server_asks_them(api):
         headers=headers(attempt["token"]),
         json={
             "to": "ana",
-            "line": "Which week?",
-            "choices": ["This week", "Last week"],
-            "why": "It decides what ships next.",
-            "details": ["The newest numbers.", "The full week."],
-            "recommend": "This week",
+            "line": "OK this week's summary?",
+            "kind": "ok",
+            "show": ["https://example.com/weekly-summary"],
             "version": version,
         },
     )
@@ -327,4 +326,4 @@ def test_replay_answers_the_bots_asks_the_way_the_server_asks_them(api):
         for r in api.get(f"/api/v2/tasks/{tid}", headers=headers()).json()["task"]["to_leave"]
         if r["requirement_id"] == rid
     ]
-    assert answered and answered[0]["met"] and "This week" in str(answered[0]["answer"])
+    assert answered and answered[0]["met"] and answered[0]["answer"]["value"] == "ok"

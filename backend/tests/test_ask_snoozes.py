@@ -27,10 +27,10 @@ def at(**shift):
 
 
 def ask_ben(api, line="OK the launch note?"):
-    """Ana asks Ben on a task of hers; (task, the ask's Needs-you id in Ben's list)."""
+    """Ana asks Ben for an OK on a task of hers; (task, the ask's Needs-you id in Ben's list)."""
     with api.app.state.store.transaction() as c:
         task = H.task_create(c, ANA, "Write the launch note", "Due Friday.", ANA, lint=False)
-        asked = H.task_ask(c, ANA, task["id"], BEN, line, seen_version=H.task(c, task["id"])["version"])
+        asked = H.task_ask(c, ANA, task["id"], BEN, line, kind="ok", seen_version=H.task(c, task["id"])["version"])
     items = get(api, "needs-you", token="ben-test")["items"]
     return task, next(i["id"] for i in items if i.get("requirement_id") == asked["requirement_id"])
 
@@ -75,7 +75,16 @@ def test_the_task_and_its_bot_are_untouched(api):
     with api.app.state.store.transaction() as c:
         X.bot(c, "builder")
         task = H.task_create(c, ANA, "Write the launch note", "", "bot:builder", lint=False)
-        asked = H.task_ask(c, "bot:builder", task["id"], BEN, "OK the headline?", seen_version=task["version"])
+        asked = H.task_ask(
+            c,
+            "bot:builder",
+            task["id"],
+            BEN,
+            "OK the headline?",
+            kind="ok",
+            shows=["https://example.com/launch-note"],
+            seen_version=task["version"],
+        )
         before = E.task(c, task["id"])
         mark = events.mark(c)
         wakes = c.execute("SELECT count(*) FROM task_wakes").fetchone()[0] if _has(c, "task_wakes") else None
@@ -218,7 +227,16 @@ def test_never_stuck_counts_a_snoozed_ask_as_listed(store):
         X.bot(c, "builder")
         X.pipeline(c, manager=None)
         task = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
-        E.add_requirement(c, task["id"], "bot:builder", "ok", BEN, "OK the headline", seen_version=task["version"])
+        E.add_requirement(
+            c,
+            task["id"],
+            "bot:builder",
+            "ok",
+            BEN,
+            "OK the headline",
+            shows=["https://example.com/launch-note"],
+            seen_version=task["version"],
+        )
         (item,) = [i for i in W.needs(c, BEN) if i["kind"] == "ask"]
         visit_id, requirement_id = W.ask_id(item).split(":")
         snooze_row(c, BEN, item, at(days=1))
@@ -291,14 +309,13 @@ def test_a_changed_question_ends_the_snooze(api):
 
 
 def test_a_snooze_ends_when_the_bot_that_asked_writes_on_the_task(api):
-    """Flow snoozes a bot's question once the person replies in the task's chat: it is the bot's turn to read the reply.
-    Their own words leave it snoozed; the asking bot's next message on the task brings it back."""
+    """Flow snoozes a bot's question (a stored one: a ❓ clears on the reply) once the person replies in the task's
+    chat: it is the bot's turn to read the reply. Their own words leave it snoozed; the asking bot's next message on the
+    task brings it back."""
     with api.app.state.store.transaction() as c:
         X.bot(c, "writer")
         task = H.task_create(c, "bot:writer", "Draft the launch note", "Due Friday.", "bot:writer", lint=False)
-        asked = H.task_ask(
-            c, "bot:writer", task["id"], BEN, "Which launch date?", seen_version=H.task(c, task["id"])["version"]
-        )
+        asked = X.old_question(c, task["id"], "bot:writer", BEN, "Which launch date?")
     item = next(
         i["id"]
         for i in get(api, "needs-you", token="ben-test")["items"]

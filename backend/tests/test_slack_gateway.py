@@ -181,23 +181,16 @@ def routed_reply(gateway, hub, text="Done."):
 
 
 def test_a_slack_reply_answers_no_ask_and_the_bot_hears_it_once(gateway, hub):
-    """An ask is answered in Tico: Ana's Slack follow-up to the bot's question reaches the bot once, as her message, and
-    the ask stays open in her Needs you."""
-    from backend import waiting_on
+    """A ❓ is answered on its task's chat: Ana's Slack follow-up to the bot's question reaches the bot once, as her
+    message, and the ❓ stays open in her Needs you."""
+    from backend import question_marks, waiting_on
 
     send(gateway, "<@U0BUS6WA4SY> Legal?", answers(legal=0.9))
     thread = rows(hub, "SELECT * FROM slack_threads")[0]
     event = {"channel": thread["channel"], "thread_ts": thread["thread_ts"]}
     with hub.transaction() as c:
         review = H.task_create(c, "human:ana", "Review the contract", "Read it.", "bot:legal", lint=False)
-        asked = H.task_ask(
-            c,
-            "bot:legal",
-            review["id"],
-            "human:ana",
-            "Which state's law applies?",
-            seen_version=H.task(c, review["id"])["version"],
-        )
+        asked = question_marks.ask(c, "bot:legal", review["id"], "human:ana", "Which state's law applies?")
         H.say(c, "bot:legal", "human:ana", "Which state's law applies?", conversation_id=thread["conversation_id"])
         mark = c.execute("SELECT max(rowid) FROM messages").fetchone()[0]
         G.say_to_bot(c, "human:ana", "legal", event, "Delaware.", {}, H.now())
@@ -211,8 +204,8 @@ def test_a_slack_reply_answers_no_ask_and_the_bot_hears_it_once(gateway, hub):
             (mark,),
         ).fetchone()[0]
         assert woke == 1, woke
-        asks = [n["requirement_id"] for n in waiting_on.needs(c, "human:ana") if n["kind"] == "ask"]
-        assert asks == [asked["requirement_id"]]
+        asks = [n["id"] for n in waiting_on.needs(c, "human:ana") if n["kind"] == "question"]
+        assert asks == [question_marks.wait_id(asked)]
 
 
 class BothJudges:

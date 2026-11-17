@@ -218,15 +218,9 @@ def test_another_bots_turn_in_the_task_room_leaves_the_owners_task_goal_alone(ap
         },
         machine['token'],
     )
-    with api.app.state.store.transaction() as c:  # the owner asks another bot on the task: its turn, in the task's room
-        H.task_ask(
-            c,
-            'bot:ops',
-            task['id'],
-            'bot:product-design',
-            'Is the summary right?',
-            seen_version=H.task(c, task['id'])['version'],
-        )
+    # The owner @mentions another bot on the task: its turn, in the task's room.
+    with api.app.state.store.transaction() as c:
+        H.task_comment(c, 'bot:ops', task['id'], '@product-design is the summary right?')
     other = claim(api, machine)
     assert other['bot'] == 'product-design' and other['task']['id'] == task['id'] and other['chat_goal'] is None
     goal = get(api, f"conversations/{task['conversation_id']}/goal")['goal']

@@ -53,12 +53,17 @@ def model(monkeypatch, *answers):
     return found
 
 
-def ask_ben(api, line="OK the launch note?", **more):
-    """Ana asks Ben on a task of hers, titled after the ask; the ask's Needs-you id, as Ben's list gives it."""
+def ask_ben(api, line="OK the launch note?", kind="answer", choices=None, **more):
+    """Ana asks Ben on a task of hers, titled after the ask; the ask's Needs-you id, as Ben's list gives it. An OK
+    (`kind` "ok"), or a question as stored before a question was a ❓ (old_question): Flow's opinions read those."""
     with api.app.state.store.transaction() as c:
         title = "Write " + line.removeprefix("OK ").rstrip("?")
         task = H.task_create(c, ANA, title, "Due Friday. It must match PO 1182.", ANA, lint=False)
-        asked = H.task_ask(c, ANA, task["id"], BEN, line, seen_version=H.task(c, task["id"])["version"], **more)
+        if kind == "answer":
+            asked = X.old_question(c, task["id"], ANA, BEN, line, choices=choices, **more)
+        else:
+            version = H.task(c, task["id"])["version"]
+            asked = H.task_ask(c, ANA, task["id"], BEN, line, kind=kind, choices=choices, seen_version=version, **more)
     items = get(api, "needs-you", token="ben-test")["items"]
     return task, next(i["id"] for i in items if i.get("requirement_id") == asked["requirement_id"])
 

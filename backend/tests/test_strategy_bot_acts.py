@@ -144,7 +144,7 @@ def test_undo_leaves_a_task_alone_when_anything_happened_to_it_since(c):
         [{"do": "create", "owner": "ops", "title": title} for title in ("Call the vendor", "Plan Q3", "Fix signup")],
     )
     asked, snoozed, parent = (x["task_id"] for x in made["done"])
-    H.task_ask(c, OWNER, asked, OWNER, "Which vendor do you mean?")
+    H.task_ask(c, OWNER, asked, "human:ben", "OK the vendor call", kind="ok")  # a person's OK needs no shows
     H.task_snooze(c, OWNER, snoozed, "After the board meeting")
     sub = H.task_create(c, OWNER, "Write the signup test", "Work it.", "bot:ops", parent_id=parent, lint=False)["id"]
     given = _filed(c, "ops", "Reconcile the vendor invoices")
@@ -239,9 +239,9 @@ def proposals(api):
         return [
             {**dict(r), "words": H.task_words(c, r["id"])}
             for r in c.execute(
-                # Its question to the owner, on its own task (backend/person_asks.py).
-                "SELECT * FROM tasks t WHERE requester_id=? AND title LIKE 'Decide %' AND EXISTS (SELECT 1 FROM visits v "
-                "JOIN requirements r ON r.visit_id=v.id WHERE v.task_id=t.id AND r.person_id=?) ORDER BY created_at",
+                # Its question to the owner, a ❓ on its own task (backend/person_asks.py).
+                "SELECT * FROM tasks t WHERE requester_id=? AND title LIKE 'Decide %' AND EXISTS (SELECT 1 FROM "
+                "question_marks q WHERE q.task_id=t.id AND q.person_id=?) ORDER BY created_at",
                 (STRATEGY_BOT, OWNER),
             )
         ]

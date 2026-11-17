@@ -4,7 +4,7 @@ reaches its person, and a paused thread is listed only to the people who can man
 engine's list plus a person's @s (docs/dev/pipelines-v3-cutover.md, "Needs you"): those @s page and stay cheap there."""
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
-from backend import threads
+from backend import question_marks, threads
 from backend.auth import Identity
 from backend import hubdb as H
 from backend.tests.old_asks import old_ask
@@ -269,17 +269,10 @@ def test_a_dm_with_only_a_bot_is_counted_on_the_bot_not_listed(api):
     assert get(api, "threads", token="ana-test")["bot_dms"] == {"bot:finance": 1}
     with api.app.state.store.transaction() as c:
         work = H.task_create(c, "human:ana", "Close Q3", "Book what Q3 needs.", "bot:finance", lint=False)
-        H.task_ask(
-            c,
-            "bot:finance",
-            work["id"],
-            "human:ana",
-            "Book the Q3 accrual?",
-            seen_version=H.task(c, work["id"])["version"],
-        )
-    # Its question is an ask on a task in Needs you (answered there, which a plain reply is not), so the DM stays out of
-    # Inbox.
-    assert len(needs_you(api, "ask")) == 1
+        question_marks.ask(c, "bot:finance", work["id"], "human:ana", "Book the Q3 accrual?")
+    # Its question is a ❓ on the task's chat in Needs you (cleared by a reply there, which a reply in the DM is not), so
+    # the DM stays out of Inbox.
+    assert len(needs_you(api, "question")) == 1
     assert get(api, "threads", token="ana-test")["attention"] == []
     with api.app.state.store.transaction() as c:
         threads.mark_all_read(c, ana_viewer(api), dm)

@@ -21,8 +21,9 @@ def c(company, monkeypatch):
 
 
 def _asked(c, bot, title):
+    """A bot's task with its older question to Ana (a kind-answer row, which merge reads and answers)."""
     task = H.task_create(c, ANA, title, "Plan it.", bot, lint=False)
-    asked = H.task_ask(c, bot, task["id"], ANA, "Which region goes first?", seen_version=task["version"])
+    asked = X.old_question(c, task["id"], bot, ANA, "Which region goes first?")
     return task["id"], asked["requirement_id"]
 
 

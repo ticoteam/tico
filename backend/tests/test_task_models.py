@@ -634,7 +634,17 @@ def test_a_cheaper_task_model_on_a_bot_that_sends_warns_in_plain_words_and_still
     set_task_model(api, None)
     with api.app.state.store.transaction() as c:
         asked = H.task_create(c, "bot:ops", "Send the launch note", "To the list.", "bot:ops", lint=False)
-        H.task_ask(c, "bot:ops", asked["id"], "human:ana", "OK to send it?", kind="ok", seen_version=asked["version"])
+        shows = ["https://example.com/launch-note"]
+        H.task_ask(
+            c,
+            "bot:ops",
+            asked["id"],
+            "human:ana",
+            "OK to send it?",
+            kind="ok",
+            shows=shows,
+            seen_version=asked["version"],
+        )
     saved = set_task_model(api, HAIKU)
     assert saved["task_model"]["model"] == "claude-haiku-5-5", "it still saves"
     assert saved["warning"] == (

@@ -40,6 +40,14 @@ def _h() -> Any:
     return H
 
 
+def old_question(c: sqlite3.Connection, task: str, by: str, person: str, line: str) -> dict[str, Any]:
+    """A question row as the engine wrote one before a question was a message marked ❓ (backend/question_marks.py):
+    nothing writes one now, and a company's older rows are read, answered and laddered as before."""
+    from backend.tests.helpers.engine import old_question as write
+
+    return write(c, task, by, person, line)
+
+
 # ----------------------------------------------------------------------------- the scenario's hands
 class Rig:
     """What a scenario does to its world: make tasks, act as a person or a bot, run a bot's wakes, move the clock, and
@@ -591,16 +599,11 @@ def s07(r: Rig) -> None:
 @scenario(8, "A person answers while the bot is paused")
 def s08(r: Rig) -> None:
     from backend import answers as A
-    from backend import task_engine as E
 
     task = r.task(ANA, "Choose a venue", assignee=BUILDER)
     r.ran(task, BUILDER)
-    version = r.row(task)["version"]
-    out = r.ok(
-        BUILDER,
-        lambda c: E.add_requirement(c, task, BUILDER, "answer", BEN, "Which city?", seen_version=version),
-        "the bot asks Ben",
-    )
+    # A question row as the engine wrote one before questions were ❓ messages: its answer is what is delivered.
+    out = r.ok(BUILDER, lambda c: old_question(c, task, BUILDER, BEN, "Which city?"), "the bot asks Ben")
     rid = out["requirement_id"]
     r.raw(lambda c: c.execute("UPDATE bots SET state='paused' WHERE id='builder'"))
     r.ok(BEN, lambda c: A.answer(c, task, rid, BEN, "Lisbon"), "Ben answers")
@@ -1033,12 +1036,8 @@ def s39(r: Rig) -> None:
 
     task = r.task(ANA, "Fix the invoice", assignee=BUILDER)
     r.ran(task, BUILDER)
-    seen = r.row(task)["version"]
-    out = r.ok(
-        BUILDER,
-        lambda c: E.add_requirement(c, task, BUILDER, "answer", BEN, "Which client?", seen_version=seen),
-        "the bot asks",
-    )
+    # A question row as the engine wrote one before questions were ❓ messages: its answer queues the bot's wake.
+    out = r.ok(BUILDER, lambda c: old_question(c, task, BUILDER, BEN, "Which client?"), "the bot asks")
     runs = r.start(task, BUILDER) or r.raw(lambda c: [])
     r.later(minutes=3)
     runs = r.start(task, BUILDER)
@@ -1068,7 +1067,16 @@ def s41(r: Rig) -> None:
     version = r.row(task)["version"]
     r.ok(
         WRITER,
-        lambda c: E.add_requirement(c, task, WRITER, "ok", BEN, "OK to use Inter?", seen_version=version),
+        lambda c: E.add_requirement(
+            c,
+            task,
+            WRITER,
+            "ok",
+            BEN,
+            "OK to use Inter?",
+            shows=["https://example.com/font-sample"],
+            seen_version=version,
+        ),
         "the ask",
     )
     expect(any(n["kind"] == "ask" and n["task_id"] == task for n in r.needs(BEN)), "the ask is not in Ben's list")
@@ -1107,34 +1115,33 @@ def s45(r: Rig) -> None:
 
 @scenario(46, "A bot adds a second question to a task")
 def s46(r: Rig) -> None:
-    from backend import task_engine as E
+    from backend import question_marks as Q
 
     task = r.task(ANA, "Plan the menu", assignee=BUILDER)
     for line in ("Vegetarian?", "How many guests?"):
-        version = r.row(task)["version"]
-        r.ok(
-            BUILDER,
-            lambda c, line=line, version=version: E.add_requirement(
-                c, task, BUILDER, "answer", BEN, line, seen_version=version
-            ),
-            line,
-        )
+        # The bot's question is its message on the task's chat marked ❓ (the bot's reach is not this case's point).
+        r.ok(BUILDER, lambda c, line=line: Q.ask(c, BUILDER, task, BEN, line, checked=False), line)
     asks = [n for n in r.needs(BEN) if n.get("task_id") == task]
-    expect(len(asks) == 1 and "How many guests?" in str(asks[0]["line"]), f"Ben's list: {asks}")
+    expect(len(asks) == 1 and asks[0]["kind"] == "question", f"Ben's list: {asks}")
+    expect("How many guests?" in str(asks[0]["line"]), f"Ben's list: {asks}")
     open_ = r.w.read(
         lambda c: c.execute(
-            "SELECT COUNT(*) FROM requirements WHERE added_by_id=? AND withdrawn_at IS NULL AND visit_id IS NOT NULL",
-            (BUILDER,),
+            "SELECT COUNT(*) FROM question_marks WHERE bot_id=? AND task_id=? AND cleared_at IS NULL", (BUILDER, task)
         ).fetchone()[0]
     )
-    expect(open_ == 1, f"{open_} open asks from one bot")
+    expect(open_ == 1, f"{open_} open questions from one bot")
 
 
 def _ask(r: Rig, task: str, line: str = "OK to send?") -> str:
     from backend import task_engine as E
 
     version = r.row(task)["version"]
-    out = r.ok(WRITER, lambda c: E.add_requirement(c, task, WRITER, "ok", BEN, line, seen_version=version), "the ask")
+    shows = ["https://example.com/mailing"]
+    out = r.ok(
+        WRITER,
+        lambda c: E.add_requirement(c, task, WRITER, "ok", BEN, line, shows=shows, seen_version=version),
+        "the ask",
+    )
     return str(out["requirement_id"])
 
 
@@ -1190,12 +1197,8 @@ def c_runs_outside_ladder(r: Rig) -> None:
 
     task = r.task(ANA, "Approve the copy", assignee=WRITER)
     r.ran(task, WRITER)
-    version = r.row(task)["version"]
-    r.ok(
-        WRITER,
-        lambda c: E.add_requirement(c, task, WRITER, "answer", REVIEWER, "Is the copy right?", seen_version=version),
-        "ask the reviewer",
-    )
+    # An ask of a bot, as older companies have (nothing writes one now): the reviewer is on the same count.
+    r.ok(WRITER, lambda c: old_question(c, task, WRITER, REVIEWER, "Is the copy right?"), "ask the reviewer")
     r.ran(task, REVIEWER)  # the reviewer's ask wake: it stops without answering
     version = r.row(task)["version"]
     r.ok(

@@ -392,16 +392,13 @@ def test_a_requirement_added_to_one_task_holds_it_until_answered_withdrawn_or_th
     E.fill_open_slots(c)
     row = E.task(c, row["id"])
     seen = row["version"]
+    plan = ["https://example.com/retry-plan"]  # what the bot's OK shows
     with _refused("task_changed"):
-        E.add_requirement(c, row["id"], "bot:builder", "answer", ANA, "Retry how many times?")
+        E.add_requirement(c, row["id"], "bot:builder", "ok", ANA, "OK the retry plan", shows=plan)
     with _refused("task_requirement"):
         E.add_requirement(c, row["id"], "bot:builder", "owner_done", ANA, "Is it done?", seen_version=seen)
-    first = E.add_requirement(
-        c, row["id"], "bot:builder", "answer", ANA, "Retry how many times?", choices=["3", "5"], seen_version=seen
-    )
-    second = E.add_requirement(
-        c, row["id"], "bot:builder", "answer", ANA, "Retry 3 or 5 times?", choices=["3", "5"], seen_version=seen
-    )
+    first = E.add_requirement(c, row["id"], "bot:builder", "ok", ANA, "OK 3 retries", shows=plan, seen_version=seen)
+    second = E.add_requirement(c, row["id"], "bot:builder", "ok", ANA, "OK 5 retries", shows=plan, seen_version=seen)
     open_ones = R.on_visit(c, row["visit"]["id"])
     assert [r["id"] for r in open_ones] == [second["requirement_id"]]  # a bot's second replaces its first
     assert first["version"] == row["version"]  # asking is not a move
@@ -409,7 +406,7 @@ def test_a_requirement_added_to_one_task_holds_it_until_answered_withdrawn_or_th
     assert len(R.on_visit(c, row["visit"]["id"])) == 2  # a person has no such limit
     X.say_done(c, row)
     assert E.advance(c, row["id"]) is None  # the stage's own requirement is met: the task still waits
-    X.answer(c, row, second["requirement_id"], "5", ANA)
+    X.answer(c, row, second["requirement_id"], "ok", ANA)
     assert E.advance(c, row["id"]) is None
     moved = E.withdraw_requirement(c, mine["requirement_id"], ANA)
     assert moved["stage"]["name"] == "Review"

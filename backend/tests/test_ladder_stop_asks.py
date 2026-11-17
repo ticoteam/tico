@@ -1,5 +1,6 @@
 """When the never-stuck ladder stops and the Quiet bot tasks rule cannot reach a manager, a person who can read the
-task gets Tico's question on it, in their Needs you (backend/never_stuck.py `_to_person`). Each case is one the review
+task gets a ❓ on it from the bot that stalled (or BotOps for it), in their Needs you (backend/never_stuck.py
+`ask_person`). Each case is one the review
 of the change that took stopped tasks out of Needs you reproduced: nobody heard of the task before.
 
 Synthetic rows only (backend/tests/helpers/engine.py), on a fake clock, through completed runs and real passes.
@@ -42,12 +43,13 @@ def _stop(c, time_machine, task_id, bot):
 
 
 def _asked(c, person, task_id):
-    return [n for n in W.needs(c, person) if n["kind"] == "ask" and n["task_id"] == task_id]
+    """The ❓ on the task in the person's Needs you."""
+    return [n for n in W.needs(c, person) if n["kind"] == "question" and n["task_id"] == task_id]
 
 
 def _author(c, item):
-    """Who wrote the question: a bot, never Tico (only bots write questions)."""
-    return c.execute("SELECT added_by_id FROM requirements WHERE id=?", (item["requirement_id"],)).fetchone()[0]
+    """Who wrote the question: a bot, never Tico (only bots mark a ❓)."""
+    return c.execute("SELECT bot_id FROM question_marks WHERE id=?", (item["mark_id"],)).fetchone()[0]
 
 
 @pytest.mark.parametrize("case", ["no_manager", "manager_owns_task", "private_manager_cannot_read"])
@@ -77,7 +79,7 @@ def test_a_stopped_task_whose_visit_was_already_late_asks_a_person(c, time_machi
 def test_a_persons_task_whose_bot_never_answered_asks_her_again(c, time_machine):
     X.pipeline(c, manager="bot:manager")
     row = X.new_task(c, ANA, "Write the launch note", assignee=ANA)
-    E.add_requirement(c, row["id"], ANA, "answer", "bot:reviewer", "Please review", seen_version=row["version"])
+    X.old_question(c, row["id"], ANA, "bot:reviewer", "Please review")  # an older ask of a bot, which it never answers
     _stop(c, time_machine, row["id"], "bot:reviewer")
     [ask] = _asked(c, ANA, row["id"])
     assert (
@@ -86,13 +88,11 @@ def test_a_persons_task_whose_bot_never_answered_asks_her_again(c, time_machine)
 
 
 def test_an_answer_starts_the_ladder_again(c, time_machine):
-    from backend import answers as A
-
     X.pipeline(c)
     task_id = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")["id"]
     _stop(c, time_machine, task_id, "bot:builder")
-    [ask] = _asked(c, ANA, task_id)
-    A.answer(c, task_id, ask["requirement_id"], ANA, "Try once more, smaller")
+    assert _asked(c, ANA, task_id)
+    H.task_comment(c, ANA, task_id, "Try once more, smaller")  # her reply on the task's chat clears the ❓
     assert E.task(c, task_id)["visit"]["level"] == "owner" and not _asked(c, ANA, task_id)
 
 

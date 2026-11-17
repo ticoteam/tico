@@ -375,7 +375,17 @@ def test_a_bots_open_asks_count_in_its_needs_human_only_on_tasks_the_reader_may_
         secret = H.task_create(c, "human:ana", "Acme acquisition", "Look into it.", "bot:ops", private=True)
         for task in (shared, secret):
             version = H.task(c, task["id"])["version"]
-            H.task_ask(c, "bot:ops", task["id"], "human:ana", "Spend $5 on the test?", kind="ok", seen_version=version)
+            shows = ["https://example.com/test-budget"]
+            H.task_ask(
+                c,
+                "bot:ops",
+                task["id"],
+                "human:ana",
+                "Spend $5 on the test?",
+                kind="ok",
+                shows=shows,
+                seen_version=version,
+            )
         assert H.status_counts(c, "bot:ops")[1] == 2
     with store.read_transaction() as c:
         seen = {

@@ -287,9 +287,7 @@ def test_write_without_read_shows_only_your_own_threads_and_tasks(world):
     assert [t["from_person"] for t in get(api, "tasks", "dee-test")["tasks"] if t["id"] == child["id"]] == [None]
     # Needs you carries the brief task, with no person origin: nothing in Dee's item names Cara.
     with api.app.state.store.transaction() as c:
-        E.add_requirement(
-            c, child["id"], "human:dee", "answer", "human:dee", "Which pen?", seen_version=child["version"]
-        )
+        E.add_requirement(c, child["id"], "human:dee", "ok", "human:dee", "OK the pen", seen_version=child["version"])
     needs = [i for i in get(api, "needs-you", "dee-test")["items"] if i.get("task_id") == child["id"]]
     assert needs and "human:cara" not in str(needs)
     assert get(api, "tasks/" + child["id"], "cara-test")["task"]["from_person"] == "human:cara"

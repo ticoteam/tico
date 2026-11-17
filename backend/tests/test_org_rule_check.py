@@ -2301,7 +2301,8 @@ def test_a_rule_checks_judge_call_names_the_rules_it_asked(ruled):
 
 def test_a_bots_ask_a_rule_covers_is_refused_with_the_rules_words(ruled):
     """docs/dev/pipelines-v3.md, "How a rule stops the next one": the rule check that reads what bots send also reads their
-    asks; an ask a rule covers is refused back to the bot with the rule's words (tick list 49)."""
+    asks (here an OK of what it shows); an ask a rule covers is refused back to the bot with the rule's words (tick
+    list 49)."""
     api, judge = ruled
     color_rule(api)
     task = task_for_ops(api)
@@ -2310,6 +2311,8 @@ def test_a_bots_ask_a_rule_covers_is_refused_with_the_rules_words(ruled):
         json={
             "to": "ana",
             "line": "May I say our favorite color is blue?",
+            "kind": "ok",
+            "show": ["https://example.com/launch-note"],
             "version": task["version"],
             "why": "It sets what goes out on launch day.",
         },
@@ -2327,6 +2330,8 @@ def test_a_bots_ask_a_rule_covers_is_refused_with_the_rules_words(ruled):
         json={
             "to": "ana",
             "line": "May I say our favorite color is green?",
+            "kind": "ok",
+            "show": ["https://example.com/launch-note"],
             "version": task["version"],
             "why": "It sets what goes out on launch day.",
         },
