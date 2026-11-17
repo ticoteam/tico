@@ -1,5 +1,8 @@
 """Access routes: limits, rules, allow list, owner transfer, owner email."""
 
+from . import invites
+from .store import P
+
 from . import access as Access
 from .store import H
 from . import models as M
@@ -188,3 +191,139 @@ def register(app, admin_only, auth, mutate, onboarding, owner_only, recruiter, s
     account_routes.register(app, auth, mutate, onboarding, owner_only, recruiter, settings, store)
 
     org_routes.register(app, auth, settings, settings_admin, store)
+
+
+def register_people(admin_only, app, auth, delegated_identity, mutate, propose_card, risky, settings, store):
+    @app.post("/api/v2/access/humans")
+    def access_person_add(request: Request, body: M.AccessPersonAdd):
+        """Add a person to the roster and the sign-in allow list. An owner or admin may add anyone; a member only
+        a coworker in the company's email domain (and only if `add_people` is on for them). BotOps adds a coworker in the
+        Team's domain at once; an owner or admin may also add someone outside it."""
+        caller = request.state.identity
+        auth.domain(caller)
+
+        def work(c):
+            who = delegated_identity(c, caller, body.on_behalf_of) if body.on_behalf_of else caller
+            if who.role not in ("owner", "human"):
+                raise Problem("forbidden", "Only people add people", 403)
+            email = Access._valid_email(body.email)
+            roster = views.roster(c)
+            domains_ = Access.company_domains(c, settings, auth.owner_email)
+            Access.check_may_add(
+                c, settings, P.person(H.actor_id(who.actor), roster), auth.company_role(who), email, domains_
+            )
+            _, row = Access.add_person(
+                c,
+                who.actor,
+                roster,
+                name=body.name,
+                email=email,
+                title=body.title,
+                team=body.team,
+                reports_to=body.reports_to,
+            )
+            return {"person": row["id"], "email": email, "name": row["name"]}
+
+        result = mutate(request, body, work)
+        with store.read() as c:
+            auth.sync_access(c)
+        return result
+
+    @app.post("/api/v2/access/humans/{pid}/invite")
+    def access_person_invite(request: Request, pid: str, body: M.Empty):
+        """Owners and admins send someone on the roster an invite from Tico's own sign-in mail (backend/invites.py),
+        never the company's mailbox; a refusal says why, so the owner can tell the person themselves."""
+        who = request.state.identity
+        admin_only(who, "sends invites")
+        invites.request_key(request)
+        with store.read() as c:
+            person = P.person(pid, views.roster(c))
+        if not person or person.get("hidden"):
+            raise Problem("not_found", "Person not found", 404)
+        invites.once(store, auth, settings, who, request, body, person)
+        at = invites.record_send(store, who, request, pid)  # a repeat answers the time its own send recorded
+        return {"person": pid, "invited_at": at}
+
+    @app.post("/api/v2/access/humans/{pid}/password")
+    def access_person_password(request: Request, pid: str, body: M.Empty):
+        """Owners and admins make someone on the roster a Tico account with a generated password (backend/invites.py
+        `make_password`), answered once. Not `mutate`: its request cache would keep the password. Nothing else keeps
+        it either; the event says only that an account was made."""
+        who = request.state.identity
+        admin_only(who, "makes accounts")
+        invites.request_key(request)
+        with store.read() as c:
+            person = P.person(pid, views.roster(c))
+        if not person or person.get("hidden"):
+            raise Problem("not_found", "Person not found", 404)
+        if pid == H.actor_id(who.actor):
+            raise Problem("password_self", "You already sign in here", 422)
+        password = invites.make_password(store, auth, settings, who, request, body, person)
+        with store.transaction() as c:
+            H.event(c, who.actor, "person.account_created", pid, {})
+        return {"person": pid, "email": person["email"], "password": password}
+
+    @app.post("/api/v2/access/humans/{pid}")
+    @app.post("/api/v2/access/people/{pid}", deprecated=True)  # rc.1 playbooks and mail setup text
+    def access_person_edit(request: Request, pid: str, body: M.AccessPersonEdit):
+        """Owners and admins edit a person, including what a member may do (create bots, add people). Only an
+        owner makes or removes an admin. Through BotOps, a role or add_people change is a Confirm card."""
+        caller = request.state.identity
+        auth.domain(caller)
+
+        def work(c):
+            who = delegated_identity(c, caller, body.on_behalf_of) if body.on_behalf_of else caller
+            admin_only(who, "edits people here")
+            if body.left:
+                raise Problem("forbidden", "Mark someone as left from their profile, which also ends their tokens", 422)
+            roles = body.role is not None or body.bot_admin is not None
+            if roles and who.role != "owner":
+                raise Problem("forbidden", "Only an owner makes or removes admins", 403)
+            if body.sign_in is not None:
+                if pid == H.actor_id(who.actor):
+                    raise Problem("forbidden", "You cannot turn off your own sign-in", 403)
+                target = H.human(c, pid) or {}
+                if who.role != "owner" and str(target.get("email") or "").lower() in auth.bot_admins:
+                    raise Problem("forbidden", "Only an owner turns an admin's sign-in on or off", 403)
+            # A role, add_people, sign-in or a message bot (it opens a mailbox) is authority; an email rewrites who is an Admin, and a team is an access
+            # audience: each needs the requester's own click through BotOps.
+            if (
+                roles
+                or any(
+                    getattr(body, k) is not None
+                    for k in ("add_people", "sign_in", "email", "team", "inbox_bot", "mailbox")
+                )
+            ) and risky(who):
+                changes = body.model_dump(exclude_none=True, exclude={"on_behalf_of"})
+                return propose_card(
+                    c,
+                    who,
+                    "POST",
+                    "/api/v2/access/humans/" + pid,
+                    changes,
+                    "Change " + ", ".join(changes) + " for " + ((H.human(c, pid) or {}).get("name") or pid),
+                )
+            roster, lists = views.roster(c), Access.load_access(c, settings)
+            row, admins, changed = Access.edit_person(c, who.actor, roster, pid, body, lists, auth.owner_email)
+            if changed.get("sign_in") is False:
+                c.execute("DELETE FROM oidc_sessions WHERE human=?", (pid,))  # open browsers are signed out now
+            if changed.get("team"):
+                from . import groups
+
+                groups.leads_follow(c, "person:" + pid)  # a lead who left its group leads it no more
+            if admins != lists["admins"]:
+                Access.save_access(
+                    c,
+                    who.actor,
+                    {"expected_revision": lists["revision"]},
+                    H.now(),
+                    bot_admins=admins,
+                    settings=settings,
+                )
+            H.event(c, who.actor, "person.access_edited", pid, changed)
+            return {"person": row["id"]}
+
+        result = mutate(request, body, work)
+        with store.read() as c:
+            auth.sync_access(c)
+        return result
