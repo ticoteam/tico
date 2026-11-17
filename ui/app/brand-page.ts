@@ -245,8 +245,11 @@ function brandStripBody(d: BrandDoc | null | undefined): BrandBody | null | unde
   const body = d?.published?.body || (grDocMay(d) ? d?.draft?.body : null);
   return body && Object.values(body).some(v => v && (typeof v !== 'object' || Object.keys(v).length)) ? body : null;
 }
-// With no brand yet, the owner's way in (the Strategy page's setup row); others see nothing.
-const brandSetupHtml = (d: BrandDoc | null | undefined) => d && grDocMay(d) && !brandStripBody(d) ? `<a class="ghost gr-btn" href="${BRAND_ROUTE}/edit">Set up brand</a>${needsMarkHTML(12, 'strategy')}` : '';
+// With no brand yet, the owner's way in: a card like the Strategy page's sections, its setup mark beside the title as the
+// tabs carry it, and Set up where they put Write. Others see nothing.
+const brandSetupHtml = (d: BrandDoc | null | undefined) => d && grDocMay(d) && !brandStripBody(d)
+  ? `<section class="card strat-card strat-sec" data-brand-setup><div class="strat-sec-head"><h2 class="strat-k">Brand</h2>${needsMarkHTML(12, 'strategy')}<button class="ghost strat-mini" type="button" data-brand-setup-go>Set up</button></div><p class="muted strat-empty">Not set up</p></section>`
+  : '';
 function brandStripHtml(d: BrandDoc | null | undefined) {
   const body = brandStripBody(d);
   if (!body) return '';

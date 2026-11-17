@@ -464,7 +464,7 @@ function strategyWhereHtml(owner: boolean) {
   const head = '<div class="strat-card-head"><h2 class="strat-k">Where we play</h2></div>';
   if (spend === undefined) return head + stratSk();
   const add = owner ? strategySegAddHtml(segs) : '';
-  if (!spend || !segs.length) return `${head}<p class="strat-none-s">No market map yet.</p>${add}`;
+  if (!spend || !segs.length) return `${head}<p class="strat-none-s">No market map yet</p>${add}`;
   const {drawn: sized}: {drawn: StratGroup[]} = mktTree(spend);
   const W = 200, H = 100, shown = new Set<string>();
   const pos = (r: StratRect) => `left:${(r.x / W * 100).toFixed(3)}%;top:${(r.y / H * 100).toFixed(3)}%;width:${(r.w / W * 100).toFixed(3)}%;height:${(r.h / H * 100).toFixed(3)}%`;
@@ -515,7 +515,7 @@ function strategyRivalsHtml(owner: boolean) {
   const chips = (list || []).map(c => `<li class="strat-chip" data-rival="${esc(c.id)}">${/^https?:\/\//i.test(c.url || '')
     ? `<a href="${esc(c.url)}" target="_blank" rel="noopener noreferrer">${esc(c.name)}</a>` : `<span>${esc(c.name)}</span>`}${owner
     ? `<button type="button" class="strat-x tap-mark" data-rival-x aria-label="Remove ${esc(c.name)}">${STRAT_X}</button>` : ''}</li>`).join('');
-  return `${head}${chips ? `<ul class="strat-chips">${chips}</ul>` : '<p class="strat-none-s">None yet.</p>'}${owner ? strategyAddRowHtml('rival', 'Add a competitor or its site') : ''}`;
+  return `${head}${chips ? `<ul class="strat-chips">${chips}</ul>` : '<p class="strat-none-s">None yet</p>'}${owner ? strategyAddRowHtml('rival', 'Add a competitor or its site') : ''}`;
 }
 // What Listening found: the posts routed to someone who reads them (GET /v2/listening/stats), and the posts setup filed
 // as market insights ("Listening: <tag>", backend/company_import.py). Hot first, then the newest.
@@ -578,6 +578,10 @@ function strategyPaintMarket(key: string) {
   if (!el) return;
   patchHTML(el, key === 'spend' ? strategyWhereHtml(owner) : key === 'rivals' ? strategyRivalsHtml(owner) : strategyNewsHtml());
 }
+// The Brand card's Set up opens the brand's editor; the card is drawn when the brand read lands, after the page binds.
+document.addEventListener('click', ev => {
+  if (eventElement(ev)?.closest('[data-brand-setup-go]')) location.hash = BRAND_ROUTE + '/edit';
+});
 // The brand draft was saved (brand-page.ts): the setup row stops asking now (the Strategy tab's mark goes with the
 // `setup` event, ui/app/setup-gaps.ts), and the brand this page paints from is the saved one, so a return to Strategy
 // does not show the row it had before.
@@ -629,10 +633,9 @@ const STRAT_FRAME = `<div id="strat-pub"></div>
   <div class="strat-memo" id="strat-doc">
     <section class="card strat-card strat-top strat-summary" id="strat-top"></section>
     <div class="strat-row"><section class="card strat-card strat-where" id="strat-where"></section><section class="card strat-card strat-bets-card" id="strat-sec-bets" aria-labelledby="strat-bets-h"></section></div>
-    <div class="strat-setup" id="strat-setup"></div>
     <div class="strat-brand" id="strat-brand"></div>
     <div class="strat-row"><section class="card strat-card" id="strat-rivals"></section><section class="card strat-card" id="strat-news"></section></div>
-    <div class="strat-secs" id="strat-secs"></div>
+    <div class="strat-grid"><div class="strat-setup" id="strat-setup"></div><div class="strat-secs" id="strat-secs"></div></div>
     <div class="strat-add-sec" id="strat-add-sec"></div>
   </div>`;
 
@@ -643,7 +646,7 @@ function strategyRender() {
   // ⋯ is drawn again only when what it holds changes, so an open menu is left alone by a redraw.
   const head = $('.rd-strat-head'), more = strategyMoreHtml(data);
   if (head && head.dataset.stratMore !== more) { head.dataset.stratMore = more; pageHeadSet(head, 'more', more); }
-  if (!view.owner && !data.current) { body.innerHTML = '<p class="strat-none">No strategy yet.</p>'; strategyBind(); return; }
+  if (!view.owner && !data.current) { body.innerHTML = '<p class="strat-none">No strategy yet</p>'; strategyBind(); return; }
   if (!$('#strat-doc')) body.innerHTML = STRAT_FRAME;
   const v = view.version || {};
   // Words typed and not yet saved survive a redraw (their save is on its way).

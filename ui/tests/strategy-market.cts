@@ -212,15 +212,19 @@ async function onePage(page: Page, tag: string) {
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
     }
-    // Saving the brand (the Set up brand button) clears the row's mark as soon as it is saved and the Strategy tab's on the
-    // `setup` event the save rings (backend/events.py), and a return to Strategy paints the saved brand: no row, no mark.
+    // Saving the brand (the Brand card's Set up) clears the card's mark as soon as it is saved and the Strategy tab's on the
+    // `setup` event the save rings (backend/events.py), and a return to Strategy paints the saved brand: no card, no mark.
     {
       const tag = 'brand', mark = '.needs-mark[aria-label="Needs you"]';
       const {page, errors, writes} = await openStrategy(browser, {viewport: DESKTOP, hash: '#/strategy'});
       await page.locator('#strat-setup .needs-mark').waitFor();
       await page.locator(`.strat-tabs [data-strat-tab="strategy"] ${mark}`).waitFor();
       assert.equal(await page.locator(`.strat-tabs [data-strat-tab="strategy"] ${mark}`).count(), 1, tag + ': Strategy is marked before the save');
-      await page.locator('#strat-setup a').click();
+      // The Brand card sits in the sections' grid, as tall as the cards beside it.
+      const [brand, first] = await page.evaluate(() => [document.querySelector('#strat-setup .strat-sec'), document.querySelector('#strat-secs .strat-sec')]
+        .map(el => { const r = el!.getBoundingClientRect(); return {top: Math.round(r.top), height: Math.round(r.height)}; }));
+      assert.deepEqual(brand, first, tag + ': the Brand card is a card of the grid, in line with the next');
+      await page.locator('#strat-setup [data-brand-setup-go]').click();
       await page.locator('form[data-sec="positioning"] input[name="positioning"]').fill('Plain tools for small teams');
       const saved = page.waitForResponse(r => r.url().endsWith('/api/v2/brand/draft'));
       await page.locator('form[data-sec="positioning"] [type="submit"]').click();
@@ -237,7 +241,7 @@ async function onePage(page: Page, tag: string) {
       await read;
       await page.locator('#strat-brand .br-strip').waitFor();
       assert.equal(await page.locator('#strat-setup .needs-mark').count(), 0, tag + ': back on Strategy, no setup mark');
-      assert.equal(await page.locator('#strat-setup a').count(), 0, tag + ': back on Strategy, no setup button');
+      assert.equal(await page.locator('#strat-setup .strat-sec').count(), 0, tag + ': back on Strategy, no Brand setup card');
       assert.equal(await page.locator(`.strat-tabs [data-strat-tab="strategy"] ${mark}`).count(), 0, tag + ': back on Strategy, its tab is unmarked');
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
@@ -280,8 +284,8 @@ async function onePage(page: Page, tag: string) {
       }
       await page.close();
     }
-    // The Strategy tab with the brand still empty: the Set up brand button with its mark, desktop in light and a phone in
-    // dark, the whole page and a close-up of the row.
+    // The Strategy tab with the brand still empty: the Brand card with its mark, desktop in light and a phone in dark, the
+    // whole page and a close-up of the card.
     if (process.env.TICO_UI_SHOTS) {
       fs.mkdirSync(process.env.TICO_UI_SHOTS, {recursive: true});
       for (const [name, width, theme] of [['desktop', 1280, 'light'], ['phone', 400, 'dark']] as [string, number, string][]) {
@@ -290,7 +294,7 @@ async function onePage(page: Page, tag: string) {
         await page.evaluate(t => { document.documentElement.dataset.theme = t; }, theme);
         await page.waitForTimeout(300);
         await page.screenshot({path: path.join(process.env.TICO_UI_SHOTS, `strategy-setup-${name}-${theme}.png`), fullPage: true});
-        await page.locator('#strat-setup').screenshot({path: path.join(process.env.TICO_UI_SHOTS, `strategy-setup-row-${name}-${theme}.png`)});
+        await page.locator('#strat-setup .strat-sec').screenshot({path: path.join(process.env.TICO_UI_SHOTS, `strategy-setup-row-${name}-${theme}.png`)});
         await page.close();
       }
     }

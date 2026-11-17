@@ -3,7 +3,8 @@
 
    GET /v2/setup/gaps (backend/setup_gaps.py) says which areas (Market, Strategy, Goals, Org, Tools, Budget) still wait on
    the person and the bot that asks for each. The Strategy tabs carry Flow's mark for theirs (redesign.ts
-   strategyTabNeeds), and a page draws a holder for its own area (`data-setup-mark="<area>"`). A write that may open or
+   strategyTabNeeds), a page draws a holder for its own area (`data-setup-mark="<area>"`), and an empty page a holder
+   for the area's one action (`data-setup-act`, a button that does what the mark's tap does). A write that may open or
    close a gap rings the `setup` topic (backend/events.py), which reads the gaps again, so a mark goes the moment its
    area is filled, by whoever fills it. A tap on a mark opens Flow on that area's bot and pings it with the area: the
    bot asks one ❓ at a time and fills the area in (skills/setup-in-flow). */
@@ -12,6 +13,7 @@
 interface SetupGap {area: string; needs: boolean; bot: {id: string; slug: string; name: string} | null; href: string}
 const SETUP_GAPS: {list: SetupGap[]; live: boolean} = {list: [], live: false};
 const SETUP_STRAT_TABS = ['market', 'strategy', 'org', 'goals', 'budget'];
+const SETUP_ACTS: Record<string, string> = {market: 'Map the market'};
 
 async function setupGapsRead(): Promise<void> {
   try {
@@ -29,6 +31,10 @@ function setupGapsPaint(): void {
   document.querySelectorAll<HTMLElement>('[data-setup-mark]').forEach(el => {
     const area = el.dataset.setupMark || '';
     el.innerHTML = open.has(area) ? needsMarkHTML(Number(el.dataset.size) || 12, area) : '';
+  });
+  document.querySelectorAll<HTMLElement>('[data-setup-act]').forEach(el => {
+    const area = el.dataset.setupAct || '', label = SETUP_ACTS[area];
+    el.innerHTML = open.has(area) && label ? `<button class="primary" type="button" data-setup-area="${area}">${label}</button>` : '';
   });
 }
 

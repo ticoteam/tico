@@ -365,7 +365,9 @@
   "calls": [
    "setupGapsWatch"
   ],
-  "idle": [],
+  "idle": [
+   "setupGapsPaint"
+  ],
   "events": [
    "[data-setup-area]"
   ]
@@ -596,6 +598,9 @@
    "rulesStop",
    "strategyStop",
    "goalsFollowRoster"
+  ],
+  "events": [
+   "[data-brand-setup-go]"
   ]
  },
  "finance": {

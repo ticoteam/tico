@@ -141,6 +141,8 @@ marketStyle.textContent = `.market-shell.market-shell-blank{display:flex;align-i
 .market-research{flex:none;padding:3px 10px;border-radius:6px;background:none;border:1px solid var(--line);color:var(--ink);font-size:12.5px;cursor:pointer}
 .market-research:hover{background:var(--surface2)}
 .market-research:focus-visible{outline:var(--focus-ring);outline-offset:1px}
+.market-empty{display:grid;justify-items:center;gap:12px}
+.market-empty>span:empty{display:none}
 .market-none{margin:0;color:var(--muted);font-size:14px}
 .market-blank{margin:0;color:var(--muted)}
 @media (max-width:600px){.market-shell.market-shell-blank{align-items:flex-start;padding:28px 16px}.market-start-actions .primary{flex:1}}`;
@@ -318,7 +320,7 @@ async function mountMarket(shell: HTMLElement): Promise<MarketMounted> {
     if (onBrief) {
       const overview = pages.find(row => row.id === 'market/overview');
       if (overview) { await showDoc(overview); return; }
-      read.innerHTML = '<p class="market-blank">Nothing here yet.</p>';
+      read.innerHTML = '<p class="market-blank">Nothing here yet</p>';
       await loadGraph(marketSelfId(), true);
       return;
     }
@@ -411,7 +413,8 @@ function marketBlankHtml(row: MarketResearchRow | null, setup: MarketSetupState 
       <span class="market-spin" aria-hidden="true"></span>
       <div><strong>Researching your market.</strong>
         <p>This usually takes 5–10 minutes.${row.task ? ` <a href="#/task/${esc(row.task)}">View task</a>` : ''}</p></div></div>`;
-  if (S.me?.role !== 'owner' || !setup) return '<p class="market-none">Nothing here yet.</p>';
+  // No setup of its own: the market's setup gap gives the one action, as a tap on its mark (ui/app/setup-gaps.ts).
+  if (S.me?.role !== 'owner' || !setup) return '<div class="market-empty"><p class="market-none">Nothing here yet</p><span data-setup-act="market"></span></div>';
   if (!setup.skipped) return marketQuestionHtml(setup);
   const answered = MARKET_QUESTIONS.filter(([key]) => setup.answers[key]).length;
   return `<div class="market-start" data-market-resume>
@@ -451,6 +454,7 @@ async function mountBlank(shell: HTMLElement): Promise<MarketMounted> {
     const row = marketResearchGet();
     shell.className = 'market-shell market-shell-blank';
     shell.innerHTML = marketBlankHtml(row, setup);
+    setupGapsPaint();
     watch(!!row);
     if (!row) shell.querySelector<HTMLElement>('#market-answer')?.focus();
   };

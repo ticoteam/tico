@@ -216,7 +216,7 @@ async function mountMarketPage(shell: HTMLElement) {
   ].filter(Boolean);
   const tiles = rdqTilesHtml(offering, revenue);
   // One title: the Strategy header's. Open map and the market's Definition (which names the market) are in its ⋯.
-  shell.innerHTML = `<div class="mkt-pg">${tiles}${sections.join('') || (tiles ? '' : '<p class="market-none">Nothing here yet.</p>')}</div>`;
+  shell.innerHTML = `<div class="mkt-pg">${tiles}${sections.join('') || (tiles ? '' : '<p class="market-none">Nothing here yet</p>')}</div>`;
   const moneyEl = shell.querySelector<HTMLElement>('#mkt-money');
   const money = sized && moneyEl ? mktSpend(moneyEl, {offering, buyer}) : null;
   // The header beside this shell, only while it is still in the page: a slow read that lands after the person left

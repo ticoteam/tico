@@ -1,7 +1,7 @@
 // Setup in Flow (ui/app/setup-gaps.ts) on the Strategy fake (support/strategy-fake.cts): the Strategy tabs carry Flow's
 // mark for each setup area GET /v2/setup/gaps says waits on the owner (Market while the market is empty, Strategy while
 // the brand is). A tap on a mark stays on the page, pings that area's bot (POST /v2/flow/ping, scope setup, the area)
-// and opens Flow on that bot alone, where its ❓ lands as its chat. The `setup` event a filling write rings reads the
+// and opens Flow on that bot alone, where its ❓ lands as its chat; an empty Market's one button does the same. The `setup` event a filling write rings reads the
 // gaps again, and the mark goes. A member is shown none. A computer, then a phone; screenshots (TICO_UI_SHOTS) of each
 // in light and dark.
 import type {Page} from 'playwright';
@@ -36,11 +36,24 @@ const themed = async (page: Page, name: string) => {
         assert.ok(!(await sideways(page)), tag + ': nothing scrolls sideways');
         await themed(page, `setup-marks-${name}`);
 
-        // A tap on Market's mark: still on Strategy, Librarian pinged for Market, Flow on Librarian with its ❓.
+        // The empty Market's one action does what the mark's tap does.
+        await page.evaluate(() => { location.hash = '#/strategy/market'; });
+        const map = page.locator('#market-shell [data-setup-act="market"] button[data-setup-area="market"]');
+        await map.waitFor();
+        assert.ok(!(await sideways(page)), tag + ': the empty Market does not scroll sideways');
+        await themed(page, `setup-market-${name}`);
+
+        // A tap on Market's mark (on a phone, Market's button): the page stays, Librarian pinged for Market, Flow on
+        // Librarian with its ❓.
+        const hash = name === 'phone' ? '#/strategy/market' : '#/strategy';
+        if (name !== 'phone') {
+          await page.evaluate(() => { location.hash = '#/strategy'; });
+          await page.locator('#strat-body').waitFor();
+        }
         const pinged = page.waitForResponse(r => r.url().endsWith('/api/v2/flow/ping'));
-        await page.locator(tabMark('market')).click();
+        await (name === 'phone' ? map : page.locator(tabMark('market'))).click();
         await page.waitForFunction(() => document.querySelector('#need-card[open]'));
-        assert.equal(await page.evaluate(() => location.hash), '#/strategy', tag + ': the tap does not follow the tab');
+        assert.equal(await page.evaluate(() => location.hash), hash, tag + ': the tap stays on the page');
         await pinged;
         assert.deepEqual(writes.filter(w => w.path === '/api/v2/flow/ping').map(w => w.body), [{scope: 'setup', id: 'market'}], tag + ': one ping, for Market');
         await page.evaluate(() => liveEmit('needs', {version: 'v-setup'}));
@@ -61,6 +74,7 @@ const themed = async (page: Page, name: string) => {
         await page.locator('.strat-tabs [data-strat-tab="market"][aria-current="page"]').waitFor();
         await page.locator('#market-shell').waitFor();
         assert.equal(await page.locator(tabMark('market')).count(), 0, tag + ': and stays gone on the next tab');
+        assert.equal(await page.locator('#market-shell [data-setup-act] button').count(), 0, tag + ': and Market\'s button with it');
         await themed(page, `setup-closed-${name}`);
         assert.deepEqual(errors, [], tag + ': no page errors');
       } finally { await page.close(); }
