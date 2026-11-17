@@ -830,15 +830,13 @@ TOOL_CLI = (
         "start an MCP tool's OAuth sign-in: the address a person opens",
         example="tico tool sign-in linear",
     ),
-    Command(
-        "tool forget", "delete a learning from a tool (the owner)", example="tico tool forget posthog <learning id>"
-    ),
+    Command("tool forget", "delete a learning from a tool (the owner)", example="tico tool forget posthog l1"),
     Command(
         "tool propose-grant",
         "the Tools Owner: propose where keys dropped in its chat go; the person grants on the card",
         tool="tico_tools_propose_grant",
         args=(Arg("rows", "--rows", type=_json, metavar="JSON", action="store"),),
-        example='tico tool propose-grant <thread id> --rows \'[{"key": "LINEAR_API_KEY", "tool": "linear", '
+        example='tico tool propose-grant t1 --rows \'[{"key": "LINEAR_API_KEY", "tool": "linear", '
         '"level": "read", "bots": ["ops"]}]\'',
     ),
     Command("tool templates", "the known auth templates", example="tico tool templates"),
@@ -905,7 +903,7 @@ CREDENTIAL_CLI = (
         exclusive=(("from_env", "from_file"),),
         example="tico credential update LINEAR_API_KEY --from-file ./new-key",
     ),
-    Command("credential cancel", "withdraw a key card nobody filled in", example="tico credential cancel <card id>"),
+    Command("credential cancel", "withdraw a key card nobody filled in", example="tico credential cancel c1"),
     Group("credential login", "a website tool's accounts; passwords are read from this computer"),
     Command(
         "credential login add",
@@ -923,16 +921,14 @@ CREDENTIAL_CLI = (
         "change an account's username, password or 2FA key",
         args=(*_from_args("password_"), *_from_args("totp_")),
         exclusive=(("password_from_env", "password_from_file"), ("totp_from_env", "totp_from_file", "totp_off")),
-        example="tico credential login edit slack <account id> --password-from-file ./password",
+        example="tico credential login edit slack a1 --password-from-file ./password",
     ),
-    Command(
-        "credential login delete", "delete a website account", example="tico credential login delete slack <account id>"
-    ),
+    Command("credential login delete", "delete a website account", example="tico credential login delete slack a1"),
     Command(
         "credential login share",
         "let a bot, person or group use a shared account, or stop",
         args=(Arg("on", positional=True, choices=("on", "off"), action="store"),),
         convert=lambda fields: {**fields, "on": _on_off(fields["on"])},
-        example="tico credential login share slack <account id> bot:ops on",
+        example="tico credential login share slack a1 bot:ops on",
     ),
 )
