@@ -602,13 +602,16 @@ def _get(url, headers, timeout, opener):
 
 
 def _get_bytes(url, headers, timeout, opener, limit):
-    """(status, bytes, code) for a GET of a binary answer, at most `limit` bytes."""
+    """(status, bytes, code) for a GET of a binary answer, at most `limit` bytes. An error answer keeps no body (the
+    transport returns its error body, which is not a video), and a video over `limit` is (200, b"", "too_large")."""
     status, answer, code = _exchange(
         "GET", url, None, "video/mp4", limit, headers=headers, timeout=timeout, opener=opener
     )
     if code == "too_large":
         return 200, b"", code
-    return status, answer, code
+    if code:
+        return status, b"", code
+    return status, answer, ""
 
 
 def _exchange(
