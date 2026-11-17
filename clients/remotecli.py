@@ -529,15 +529,7 @@ def run(args, who=None):
             return hubtools.BY_NAME["tico_run_export"]["fn"](client, {"run": args.run})
         found = hubtools.run_export_full(client, args.run)
         return {"written": hubtools.write_fixture(found, Path(args.out or "."))}
-    if fn in ("task child create", "task tree", "task model", "task meetings", "task context"):
-        return via_tool(client, args)
-    if fn in (
-        "task requesters",
-        "task requester-save",
-        "task requester-remove",
-        "task comment-moderate",
-        "roadmap tasks",
-    ):
+    if fn == "roadmap tasks":
         return via_tool(client, args)
     if fn == "roadmap settings":
         # Any flag is a partial update of those settings; none reads them. An empty value clears a list.
@@ -761,45 +753,12 @@ def run(args, who=None):
             ):
                 fields[field] = getattr(args, field, None)
             return unwrap(hubtools.task_create(client, {k: v for k, v in fields.items() if v is not None}))
-        if sub == "show":
-            from clients import hubtools
-
-            ids = args.id if isinstance(args.id, list) else [args.id]
-            if len(ids) > 1:  # one read for several (tico_task_show_many), not one GET each
-                return hubtools.BY_NAME["tico_task_show_many"]["fn"](client, {"ids": ids})
-            return hubtools.task_show(client, {"id": ids[0]})
-        if sub == "run":
-            return unwrap(call_tool("tico_task_run", {"id": args.id}))
-        if sub in ("list", "readers", "followers", "follow", "unfollow", "caps"):
-            return via_tool(client, args)
-        if sub in (
-            "done",
-            "move",
-            "close",
-            "reassign",
-            "ask",
-            "answer",
-            "thumbs",
-            "file",
-            "snooze",
-            "unsnooze",
-            "update",
-            "queue",
-            "release",
-            "unlink",
-            "after",
-        ):
+        if sub in ("ask", "thumbs"):
             # The engine's commands (docs/dev/pipelines-v3.md S16): each sends the version the bot passed, never one read now.
             return unwrap(via_tool(client, args))
-        if sub == "cap":  # `task cap set`: no --per-day removes the cap, so null is sent, never left out
-            return via_tool(client, args, per_day=args.per_day)
         if sub == "give":  # `--to <person>`, or the person as a third word
             args.to = args.to or args.to_person
             del args.to_person
-            return unwrap(via_tool(client, args))
-        if sub == "label":
-            split = lambda values: [x.strip() for one in values or [] for x in one.split(",") if x.strip()]
-            args.add, args.remove = split(args.add), split(args.remove)
             return unwrap(via_tool(client, args))
         if sub == "comment":
             from clients.task_review import attachment
@@ -822,28 +781,6 @@ def run(args, who=None):
             if asked:
                 fields["on_behalf_of"] = asked
             return call_tool("tico_task_comment", fields)  # a CommentResult, never a bare task
-        if sub == "comment-edit":
-            fields = {"id": args.id, "comment_id": args.comment_id, "text": args.text}
-            if getattr(args, "ok", None):
-                fields["ok"] = args.ok
-            return call_tool("tico_task_comment_edit", fields)
-        if sub == "comment-delete":
-            return call_tool("tico_task_comment_delete", {"id": args.id, "comment_id": args.comment_id})
-        if sub == "delete":
-            return unwrap(call_tool("tico_task_delete", {"id": args.id}))
-        if sub == "deleted":
-            return call_tool("tico_task_deleted", {})
-        if sub == "restore":
-            return unwrap(call_tool("tico_task_restore", {"id": args.id}))
-        if sub == "link":
-            fields = {"id": args.id, "url": args.url, "title": args.title}
-            if args.session:
-                fields["kind"] = "session"
-            if args.wake_once is not None:
-                fields["wake_once"] = args.wake_once
-            if asked:
-                fields["on_behalf_of"] = asked
-            return unwrap(call_tool("tico_task_link", fields))
         if sub in ("relate", "unrelate"):
             return via_tool(client, args)  # the tool says what to do instead of blocks and blocked_by
         if sub == "attach":
