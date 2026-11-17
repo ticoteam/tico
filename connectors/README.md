@@ -8,8 +8,8 @@ curl, not with a vendor SDK, not from an employee's own `software/`. The policy 
 log, and the retry handling live in here; a direct call skips all three and is a policy violation,
 not a shortcut.
 
-- `slack.py` - read and post to Slack, and DM the team. Token: `SLACK_BOT_TOKEN` from
-  `secrets/_shared.env`.
+- `slack.py` - read and post to Slack, and DM the team. Token: `SLACK_BOT_TOKEN`, from the
+  Tools credential granted to the bot.
 - `slack-app-manifest.yaml` - the Slack app definition the owner installs, with exactly the scopes
   `slack.py` and the server's Slack gateway use, Socket Mode on, and the events the gateway
   subscribes to (`app_mention`, `message.im`, `message.channels`, `message.groups`, `link_shared`). The gateway itself is `backend/slack_gateway.py`
@@ -60,13 +60,10 @@ all, and which mailbox it may act as, is the `access:` block in its own `employe
    because nothing calls us. For the gateway, also mint an **App-Level Token** with
    `connections:write` under **Basic Information** (starts with `xapp-`); it opens the Socket
    Mode connection.
-5. Put the bot token in the shared env file, which every run inherits, and both tokens in the
-   server's `tico/slack` secret (`docs/slack-gateway.md`, Running it):
-
-       echo 'SLACK_BOT_TOKEN=xoxb-...' >> ~/tico-work/secrets/_shared.env
-
-6. Lock the file down: `chmod 600 ~/tico-work/secrets/_shared.env`. Never paste the token into
-   an Issue, a commit, a Slack message, or a bot prompt.
+5. Save the bot token in **Tools > Credentials** with **Bot variable name** `SLACK_BOT_TOKEN`, and
+   grant it to the bots that use Slack. Put both tokens in the server's `tico/slack` secret too
+   (`docs/slack-gateway.md`, Running it).
+6. Never paste the token into an Issue, a commit, a Slack message, or a bot prompt.
 7. Invite the bot to every channel the bots read. Public channels can be joined by the bot itself
    (`connectors/slack.py join --channel <id>`); **private channels must be invited by a human**:
    in each channel type `/invite @Tico`. Today that is `#release_notes`, `#sales`,
