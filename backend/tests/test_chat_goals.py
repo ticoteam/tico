@@ -5,6 +5,7 @@ import pytest
 from backend.store import H, encode
 from backend.tests.helpers.api import assign, claim, get, post, ready, runner, restrict  # noqa: F401
 from backend import bot_settings as BS
+from backend.tests.helpers import engine as X
 from backend.tests.helpers.chat_goals import action, goal_event, setup, task_goal_world
 
 
@@ -218,9 +219,9 @@ def test_another_bots_turn_in_the_task_room_leaves_the_owners_task_goal_alone(ap
         },
         machine['token'],
     )
-    # The owner @mentions another bot on the task: its turn, in the task's room.
+    # The owner's older ask of another bot on the task (X.old_question): its turn, in the task's room.
     with api.app.state.store.transaction() as c:
-        H.task_comment(c, 'bot:ops', task['id'], '@product-design is the summary right?')
+        X.old_question(c, task['id'], 'bot:ops', 'bot:product-design', 'Is the summary right?')
     other = claim(api, machine)
     assert other['bot'] == 'product-design' and other['task']['id'] == task['id'] and other['chat_goal'] is None
     goal = get(api, f"conversations/{task['conversation_id']}/goal")['goal']

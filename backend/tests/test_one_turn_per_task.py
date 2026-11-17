@@ -44,11 +44,11 @@ def test_wakes_on_a_task_with_a_live_turn_join_it_and_only_the_other_side_starts
     post(api, f"tasks/{task['id']}/comments", said, token=active["token"], expected=409)
     assert queued(api) == [] and claim(api, machine) is None
     # A person's comment and Tico's own notice wake the owner; while its turn runs, each waits for that turn.
-    person = post(api, f"tasks/{task['id']}/comments", {"text": "One installer only."})["comment"]
+    person = post(api, f"tasks/{task['id']}/comments", {"text": "@finance One installer only."})["comment"]
     with api.app.state.store.transaction() as c:
         notice = H._wake(c, H.task(c, task["id"]), "bot:ops", "A related task moved.", {"wake": "update"})
     assert queued(api) == [person["id"], notice["id"]]
-    # The person's words also reach the requester bot, which follows the task: that is the other side's own run (a
+    # The person's words also reach the requester bot they name: that is the other side's own run (a
     # person's message always gets an answer). The owner's turn still starts nothing new.
     other_side = claim(api, machine)
     assert other_side["bot"] == "finance" and "One installer only." in other_side["message"]["body"]
