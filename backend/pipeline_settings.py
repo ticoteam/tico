@@ -189,7 +189,11 @@ LEGACY_REVIEW_RUBRIC = (
 # is fine but "not failed", said both in the checks part and in the does-not-meet sentence: with the running clause
 # alone a page reporting a red check scored 0.85 to 0.88; said once, either the red pages stayed unsure (about 0.55) or
 # a good page with CI running fell to 0.55 to 0.75. Said twice, red pages 0.03 to 0.13, good pages 0.73 to 0.93.
-QA_RUBRIC = (
+# Task #389 added three things to the four: a verdict to read first, how the change works, and risk and rollback (Nov 14:
+# five QA pages had none of them; Chris, Nov 13: "should look really, really clear", with architecture diagrams). The
+# four calibrated parts read as they did; the three are CHECKS["qa"] strip, how and rollback. The line before it is
+# _QA_RUBRIC_FOUR, in EARLIER, so a company's unedited line follows this one and is asked the same parts meanwhile.
+_QA_RUBRIC_FOUR = (
     "A QA page a person approves before the change ships. Shows four things: what changed (the work's title and spec "
     "say what was asked, so naming the work or its PR is enough); proof it works: screenshots of the running app, or "
     "output from how it was checked (test counts, command output, a log line, numbers before and after; a line that "
@@ -201,6 +205,21 @@ QA_RUBRIC = (
     "to keep the change, a spec question), lists what was not checked, or says commits were made after the reviews "
     "and a reviewer has not read them yet: the person and Tico handle those. A page may tell only what changed since "
     "the reviews when it names the work or its PR."
+)
+QA_RUBRIC = (
+    "A QA page a person approves before the change ships. Shows seven things: a verdict to read first (criteria passed, "
+    "the checks, open findings, the risk); what changed (the work's title and spec say what was asked, so naming the "
+    "work or its PR is enough); proof it works: screenshots of the running app, or output from how it was checked (test "
+    "counts, command output, a log line, numbers before and after; a line that only says it passed is not proof); how "
+    "it works: a diagram of the parts it touches with the changed ones marked, and the files changed (one file may be "
+    "named instead); the risk and the rollback: how to undo it and whether stored data changes; the checks at the newest "
+    "commit: passing, or still running or re-running when the page was written (fine, Tico waits for them), but not "
+    "failed; and what Reviewer 1 and Reviewer 2 each found on the commit they reviewed, or that they found nothing to "
+    "fix. Only these seven count. A page that leaves any of them out, such as one reviewer's findings or the rollback, "
+    "or that reports a check failed at the newest commit, does not meet it. A page with all seven meets it even when it "
+    "reports a target missed, asks the person to decide something (whether to keep the change, a spec question), lists "
+    "what was not checked, or says commits were made after the reviews and a reviewer has not read them yet: the person "
+    "and Tico handle those. A page may tell only what changed since the reviews when it names the work or its PR."
 )
 # A spec with no acceptance criteria passed the old line at p 0.72 to 0.81 (rc.4 eval, Nov 11); the scope's in and out
 # and checkable criteria are what a builder builds from. "Only these three count" (rc.5, Nov 11): good specs of the
@@ -542,7 +561,8 @@ EARLIER: dict[str, tuple[str, ...]] = {
     "product-qa/page/line": ("QA page",),
     "product-ok-release/purpose": ("Any person OKs the release. Then it merges.",),
     "engineering-qa/page/line": ("Review page", "QA page"),
-    "engineering-qa/page/rubric": _FIXES_2_RUBRICS,
+    "engineering-qa/page/rubric": (*_FIXES_2_RUBRICS, _QA_RUBRIC_FOUR),
+    "product-qa/page/rubric": (_QA_RUBRIC_FOUR,),
     "engineering-merge/purpose": (
         "The PRs are in the merge queue. If GitHub takes one out, queue it again, fix it on its branch, or send the "
         "task back to Fixes 2.",

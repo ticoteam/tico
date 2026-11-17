@@ -398,7 +398,7 @@ function dashTasksPut(events: LiveTaskEvent[]): void {
 const dashAct = (it: NeedsEntry) => ({ok: 'ok', other: 'ok', yours: 'done', stuck: 'fix', fix: 'fix', mention: 'reply'} as Record<string, string>)[decideKind(it)] || '';
 function dashNeedsLive(): void {
   const items = S.v2?.needs || [], count = S.v2?.needsCount ?? items.length;
-  const brief = (n: number): DashNeedsItem[] => items.slice(0, n).map(it => ({title: (it.kind !== 'paused' && it.task?.title) || it.line || '', line: it.line || '', act: dashAct(it),
+  const brief = (n: number): DashNeedsItem[] => items.slice(0, n).map(it => ({title: it.about || (it.kind !== 'paused' && it.task?.title) || it.line || '', line: it.line || '', act: dashAct(it),
     task_id: (it.task_id as string | undefined) || (it.kind === 'task' || it.kind === 'ask' ? String(it.id) : null)}));
   for (const [template, n] of [['needs_attention', 5], ['needs_you', 3]] as const)
     dashCardsPatch(template, (d, card) => {

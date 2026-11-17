@@ -30,11 +30,19 @@ and the proof, without running anything.
 Follow `.claude/skills/build-the-page/SKILL.md` with its `templates/qa.html`, in `reports/<task id>-qa.html`, at the head
 commit:
 
+- The title: "QA: " and the task's title, word for word, so the review screen names it once.
 - The opening: what changed for the person who asked and the result ("Passed: 5 of 5 checks"), then what was not
   checked, plainly, then **Decide:** "Approve = ship it, or send it back with what is wrong."
-- Plan and results: the table, one row per check, each with its proof's letter or arrow.
+- The verdict strip, under the opening: four tiles (criteria passed of those due before release, checks at the head,
+  open review findings, risk in five words or fewer) and "Approve = ship to production."
+- Plan and results: the table, one row per check in the spec's order, each with how it was checked (its proof's letter
+  or arrow) and pass, fail or after launch.
 - Proof: the screenshots and the output, lettered to match the table. A change with no screen has no pictures; say "No
-  screens changed" in the opening.
+  screens changed" in the opening. Output over 10 lines (a test run, the CI job list) goes in a `<details>`.
+- How it works: the parts the change touches as boxes, the changed ones highlighted (`class="box changed"`), and the
+  files changed with their lines and a total (`git diff --stat <merge base>..<head>`). A one-file change names its file
+  instead of a diagram.
+- Risk and rollback: what could go wrong and for whom; how to undo it, and whether stored data changes.
 - Findings: what failed and was fixed in this round, and the follow-ups filed, each with what was done, what happened,
   what was expected and `file:line`. Or "None."
 - In the details: where it ran (the demo or preview, the pull request link and the full head commit, the checks at that
@@ -46,7 +54,7 @@ asks its reader to test.
 
     python3 .claude/skills/build-the-page/page.py build reports/<task id>-qa-draft.html --out reports/<task id>-qa.html
     python3 .claude/skills/build-the-page/page.py check reports/<task id>-qa.html --kind qa
-    tico page publish reports/<task id>-qa.html --task <id> --as "QA report" --title "QA: <the change>"
+    tico page publish reports/<task id>-qa.html --task <id> --as "QA report" --title "QA: <the task's title>"
     python3 .claude/skills/build-the-page/page.py render <file id> --kind qa
 
 `tico page publish` prints the file id. Look at both pictures `render` names: a page that does not draw, or has a broken

@@ -480,7 +480,8 @@ def test_each_shipped_check_is_asked_as_its_parts_now_and_as_it_read_before():
     assert P.check_of(PS.EARLIER["product-spec/page/rubric"][0]) == "spec", "an unedited older line is the same check"
     assert P.check_of("  " + PS.SPEC_RUBRIC.replace(" ", "\n", 3)) == "spec", "spacing does not matter"
     assert P.check_of(REQ["rubric"]) is None, "a company's own rubric is asked whole"
-    assert [len(P.CHECKS[c]) for c in ("spec", "review", "qa", "validate")] == [4, 3, 5, 3]
+    assert [len(P.CHECKS[c]) for c in ("spec", "review", "qa", "validate")] == [4, 3, 8, 3]
+    assert P.check_of(PS._QA_RUBRIC_FOUR) == "qa", "the four-part QA line before task #389 is asked the same parts"
     assert set(P.BARS) == set(P.CHECKS), "every check has its bar, in one place"
     req = {"id": "r", "name": "Checked in production", "rubric": PS.VALIDATE_RUBRIC}
     result = P.judge_once(None, req, ATTACHMENT, engine=_parts_engine({"version": 0.35}))

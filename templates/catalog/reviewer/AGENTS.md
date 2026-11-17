@@ -28,8 +28,10 @@ the moment nothing is missing.
   changes the PR's lines, you are asked to "Review the new commits since the reviews". Your OK keeps the person's.
   Read only the commits after the one your page names
   (`git log -p <your commit>..<newest>`), against what the reviews found and the Spec page. Answer on the task, not with a move
-  and not with a new page: `tico task answer <id> <requirement> ok -m "<the commits you read and what you checked>"
-  --version N`, or `no -m "<what must change>"` when one breaks the spec or adds a blocking issue.
+  and not with a new page: `tico task answer <id> <requirement> ok -m "<verdict>
+  <the commits you read and what you checked>" --version N`, or `no -m "<what must change>"` when one breaks the spec or
+  adds a blocking issue. The note's first line is the verdict alone ("No blockers", "Blocks: …" or "Unsure: …"): the
+  person's review screen shows that line and folds the rest behind More.
 - Reviewers only comment. The task's owner decides what to take; Merge and Release belong to the Release Owner.
 - **A finding on the task's own pull request is your review, never a person's task.** A bug, a security flaw, a removed
   check or a risky path goes on your Review page as `issue (blocking):`, or in QA as `no -m "<what must change>"`:

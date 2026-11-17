@@ -128,6 +128,16 @@ def name_of(requirement: Row) -> str:
 ENDS = (".", "!", "?", "…")
 
 
+def verdict_and_rest(notes: object) -> tuple[str, str]:
+    """A reviewer's notes as (its first line, everything after it), each on one line: the first is its verdict ("No
+    blockers", "Blocks: …", "Unsure: …") when it wrote one, as the reviewer's skill asks (task #389)."""
+    lines = [line.strip() for line in str(notes or "").strip().splitlines()]
+    lines = [line for line in lines if line]
+    if not lines:
+        return "", ""
+    return lines[0], " ".join(" ".join(lines[1:]).split())
+
+
 def sentence(text: str) -> str:
     """`text` as one sentence: a period added only when it has no end mark of its own, inside a closing quote or
     bracket too, so a person's note that ends with one is never followed by a second ("criterion.." was)."""
@@ -954,9 +964,13 @@ def _new_commits(
     new = _new_heads(conn, task)
     if not new:
         if last and last["answer"] == "ok" and _heads_of(last["heads"]) == here:
-            said = " ".join(str(last.get("notes") or "").split())
             read = f"{_name(conn, last['by_id'])} reviewed the commits since the reviews"
-            return None, sentence(f"{read}: {said}" if said else read) + " "
+            verdict, rest = verdict_and_rest(last.get("notes"))
+            if not verdict:
+                return None, sentence(read) + " "
+            # The verdict on a line of its own, the rest after a line break: the review screen shows the first and
+            # folds the rest behind More (task #389).
+            return None, sentence(f"{read}: {verdict}") + (f"\n{rest}" if rest else "") + " "
         return None, ""
     if last and last["answer"] == "no" and _heads_of(last["heads"]) == here:
         said = " ".join(str(last.get("notes") or "").split())
@@ -967,7 +981,8 @@ def _new_commits(
     if reviewer and rounds < DELTA_ROUNDS:
         line = (
             f"{REVIEW_NEW} since the reviews ({_where(conn, task, new)}): read only them, against what the reviews "
-            "found and the spec. OK them or send them back, and say what you read"
+            "found and the spec. OK them or send them back. Your note's first line is the verdict (No blockers, "
+            "Blocks: …, or Unsure: …); what you read goes on the lines after it"
         )
         return Standing(requirement, WAITING, reviewer, sentence(line), since=asked), ""
     return None, f"New commits since the reviews ({_where(conn, task, new)}): {NOT_REVIEWED} "

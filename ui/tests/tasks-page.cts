@@ -459,6 +459,17 @@ async function youOwnTasks(browser: Browser) {
     assert.deepEqual(errors, []);
     await page.close();
   }
+  // Task #389: an OK filed by a bot is titled by its kind alone ("Send an email"); its row says what it is about.
+  {
+    const tasks = [...fixtures(), task('t-8', 'Send an email', 'todo', {owner_id: 'bot:ops', turn: turn('person', 'human:ana', 'Waiting on Ana', {ask: true, requirement_id: 'r8'})})];
+    const needs = [...needsOf(tasks), {kind: 'ask', id: 'r8', task_id: 't-8', requirement_id: 'r8', line: 'Send this email?', since: at(30),
+      task: brief(tasks.find(t => t.id === 't-8')!), ask: ask('r8', 'Send this email?'), about: 'Send email: November product update'} as Need];
+    const {page, errors} = await open(browser, {tasks, needs});
+    assert.ok((await rowTitles(page)).includes('Send email: November product update'), 'the OK says what it is about');
+    assert.ok(!(await rowTitles(page)).includes('Send an email'), 'not the kind alone');
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
   console.log("You: a person's own open tasks after Needs you, not in it; live; search: ok");
 }
 
