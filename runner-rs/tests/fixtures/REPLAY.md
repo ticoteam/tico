@@ -12,6 +12,7 @@ Every runner bug fix in a host adds the session that showed it here.
 - `input.json`: what the runner was asked to do.
   - `harness`, `cli` (the CLI's `--version`, which the fake repeats), `about`.
   - `source`: `real` (true for a recording of the installed CLI), `recorded` (date), `how`.
+    `edited`, when present, says which runner frames were changed by hand after the recording, and why.
   - `turns`: each `{"prompt", "actions"}`. An action is `{"steer": "<text>"}` or `{"interrupt": true}` with
     `after_events`, the number of events of that turn the host had made when it was fired.
 - `transcript.ndjson`: what crossed the process boundary, in order, one entry per line.
@@ -25,8 +26,8 @@ Every runner bug fix in a host adds the session that showed it here.
   result sits among its turn's events as `{"act": "steer" | "interrupt", "ok": bool}`. Claude events carry no
   `thread_id` or `turn_id` (the runner's own uuids); a Codex id the runner made up reads `<runner>`.
 
-An `out` frame is compared whole, except what the runner chooses afresh each run: a Claude message's `uuid`, and the
-`cwd` and `config` of Codex's `thread/start` and `thread/resume`.
+An `out` frame is compared whole, except what the runner chooses afresh each run: a Claude message's `uuid`, a Claude
+control request's `request_id`, and the `cwd` and `config` of Codex's `thread/start` and `thread/resume`.
 
 ## Recording
 
