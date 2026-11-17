@@ -13,7 +13,7 @@ Slack token, reads and posts for it (backend/slack_bots.py). With the gateway of
 
 Tico checks every call, not this script: the bot's `tools:` entry for slack (`read` to read, `post` to post or DM, an
 optional `channels:` list and `dms: false`), onboarding, the Slack channel list (Settings > Tools > Slack: readers and
-posting), Slack Connect channels (refused), 4,000 characters at most, a DM only to a person at the company who may sign
+posting), Slack Connect channels (refused), 3,800 characters at most, a DM only to a person at the company who may sign
 in, the org's rules on what is sent, and screening on what is read. A post or DM shows in Tico too: a post in the bot's
 room, a DM in its chat with the person.
 
@@ -53,6 +53,16 @@ class Refused(Failure):
 # ---------------------------------------------------------------- Tico
 
 
+def tico():
+    """clients/tico.py from this checkout. A run outside the checkout does not have it on sys.path, so it is added
+    first: every use of the client goes through here."""
+    if str(HUB) not in sys.path:
+        sys.path.insert(0, str(HUB))
+    import clients.tico
+
+    return clients.tico
+
+
 def client(timeout=30):
     url, token = os.environ.get("HUB_API_URL"), os.environ.get("HUB_TOKEN")
     if not url or not token:
@@ -60,11 +70,7 @@ def client(timeout=30):
             "This run has no Tico credential (HUB_API_URL and HUB_TOKEN).",
             "Bots reach Slack through Tico: run this inside a bot's turn.",
         )
-    if str(HUB) not in sys.path:
-        sys.path.insert(0, str(HUB))
-    from clients.tico import Client
-
-    return Client(url, token, timeout=timeout, retries=1)
+    return tico().Client(url, token, timeout=timeout, retries=1)
 
 
 def failed(code, detail, status):
@@ -74,20 +80,16 @@ def failed(code, detail, status):
 
 def hub(method, path, body=None, query=None, timeout=30):
     """One call to Tico as this run; Tico's refusal becomes Refused (exit 2), anything else Failure (exit 1)."""
-    from clients.tico import APIError
-
-    api = client(timeout)
+    api, T = client(timeout), tico()
     try:
         return api.call(method, path, body, query=query)
-    except APIError as e:
+    except T.APIError as e:
         raise failed(e.code, e.detail, e.status)
 
 
 def hub_file(fid):
     """(bytes, file id, name, mimetype, screening line) of a shared Slack file, from Tico."""
-    from clients.tico import http_failure
-
-    api = client(150)
+    api, T = client(150), tico()
     request = urllib.request.Request(
         api.url + "/api/v2/slack/files/" + urllib.parse.quote(fid, safe=""),
         headers={"Authorization": "Bearer " + api.bearer(), "User-Agent": "tico-slack-connector/2"},
@@ -97,7 +99,7 @@ def hub_file(fid):
             raw, headers = response.read(MAX_FILE_BYTES + 1), response.headers
     except urllib.error.HTTPError as exc:
         with exc:
-            e = http_failure(exc, "")
+            e = T.http_failure(exc, "")
         raise failed(e.code, e.detail, e.status)
     except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
         raise Failure(f"Tico could not be reached: {type(exc).__name__}", "Try again shortly.")

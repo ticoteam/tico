@@ -69,7 +69,7 @@ Tico checks each of these, not the connector:
   file goes to a private folder of the bot's own user under the temp folder, never into the repository.
 - Posting needs `post` in `can`, a bot past onboarding, and the channel on the Slack channel list
   (Settings > Tools > Slack) with posting on, as it is unless an owner or admin turned it off. Slack Connect
-  channels are refused: posting there is an outbound send. Text over 4,000 characters is refused. The org's rules
+  channels are refused: posting there is an outbound send. Text over 3,800 characters is refused (what Slack gets whole, with the bot's footer). The org's rules
   check the text; a held post is sent only when a person chooses Send anyway.
 - A post shows in the bot's room in Tico too, and in Slack with `(sent from <bot>)`.
 - A DM goes to one person on the company's roster who may sign in to Tico and has a Slack account Tico knows. It

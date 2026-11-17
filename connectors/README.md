@@ -110,7 +110,7 @@ to the bot it is for, which wakes and answers in the same thread (`docs/slack-ga
 
 **What a bot may do.** DM one person on the company's roster who may sign in to Tico and has a Slack account Tico
 knows. The DM is the bot's message to that person in Tico, which the gateway copies into their Slack DM unless they
-keep bot messages in Tico. It needs `post` in the bot's Slack tools entry and is at most 4,000 characters.
+keep bot messages in Tico. It needs `post` in the bot's Slack tools entry and is at most 3,800 characters.
 
 ```bash
 $HUB/connectors/slack.py dm --to cara@acme.example --text 'Pricing doc is live.'

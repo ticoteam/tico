@@ -266,6 +266,17 @@ class SlackAPI:
             (data.get("response_metadata") or {}).get("next_cursor") or ""
         ).strip()
 
+    def replies_page(self, channel, thread_ts, cursor=""):
+        """One page of a thread (the root first on the first page) and the cursor for the next ("" at the end): a bot's
+        history read with threads (backend/slack_requests.py), which pages to the end."""
+        data = self.call(
+            "conversations.replies",
+            {"channel": channel, "ts": thread_ts, "limit": HISTORY_PAGE, "cursor": cursor or None},
+        )
+        return list(data.get("messages") or []), str(
+            (data.get("response_metadata") or {}).get("next_cursor") or ""
+        ).strip()
+
     def history_range(self, channel, oldest, latest, cursor=""):
         """One page of a channel's top-level messages from `oldest` to `latest` (both kept), and the next cursor: a bot's
         history read (backend/slack_requests.py)."""
@@ -661,7 +672,6 @@ class Gateway:
         self._names = {}  # Slack user id -> what a digest calls them
         self._name_misses = {}  # Slack user id -> when to ask Slack again after a failed lookup
         self._unreadable = set()  # channels history refused (not a member, no scope)
-        self._shared = {}  # channel id -> (why a bot may not post there, or "", until when that answer holds)
         self.next_digest = self.clock()  # the first pass sets the readers' cursors
         self.pin_workspace = False  # tokens the owner pasted into Tico define the workspace
         self.heartbeat = None  # called every loop turn; the process uses it for health
@@ -1915,7 +1925,9 @@ class Gateway:
         name = bot.get("display_name") or bot.get("slug") or post["bot"]
         config = entries(c).get(post["bot"]) or {}
         text = str(post["text"] or "").strip()
-        if len(text) > POST_CHARS:
+        # A mirrored reply is cut here, with its link to Tico. A bot's own post never is: the route refuses one longer
+        # than POST_CHARS (backend/slack_bots.py), and an org rule warning added after that check is kept whole.
+        if len(text) > POST_CHARS and "slack_post" not in (message.get("refs") or {}):
             text = text[:POST_CHARS].rstrip() + " …"
         # A reply about a task names it and links to it, so the DM makes sense on its own.
         task = H.task(c, about) if about else None
@@ -1954,26 +1966,24 @@ class Gateway:
 
     def outside_workspace(self, post):
         """Why a bot's own post (backend/slack_bots.py) may not go to its channel, "" when it may, None when Slack could
-        not be asked. A channel shared outside the workspace (Slack Connect) is refused whatever the channel list says;
-        Slack is asked once per channel every ten minutes. Other posts (replies, automations) are not asked about."""
+        not be asked now (unreachable, or rate limited: the next pass asks again). A channel shared outside the
+        workspace (Slack Connect) is refused whatever the channel list says. Slack is asked on every post, never from a
+        cache, since sharing can start at any time. Other posts (replies, automations) are not asked about."""
         if str(post["channel"] or "").startswith("D"):
             return ""
         with self.store.read() as c:
             refs = (H.message(c, post["message_id"]) or {}).get("refs") or {}
         if "slack_post" not in refs:
             return ""
-        now = time.monotonic()
-        kept = self._shared.get(post["channel"])
-        if kept is None or kept[1] < now:
-            try:
-                outside = is_external(self.slack.conversations_info(post["channel"]))
-                why = "Slack Connect channel: bots never post outside the workspace" if outside else ""
-            except SlackError as exc:
-                why = f"Slack could not say whether the channel is shared outside the workspace ({exc.code})"
-            except SlackUnreachable:
+        try:
+            outside = is_external(self.slack.conversations_info(post["channel"]))
+        except SlackError as exc:
+            if exc.code == "ratelimited":
                 return None
-            kept = self._shared[post["channel"]] = (why, now + 600)
-        return kept[0]
+            return f"Slack could not say whether the channel is shared outside the workspace ({exc.code})"
+        except SlackUnreachable:
+            return None
+        return "Slack Connect channel: bots never post outside the workspace" if outside else ""
 
     def deliver(self):
         """Post what is ready, one attempt each. A crash between send and record is uncertain."""

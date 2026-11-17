@@ -202,15 +202,19 @@ grant no bot any posting right there; a bot's own posts go through `connectors/s
 ## Bots on computers
 
 A bot never holds the Slack token. `connectors/slack.py` on its computer asks Tico (`backend/slack_bots.py`), which
-checks the bot's `service: slack` entry, onboarding, the channel list, the 4,000-character limit, the recipient, the
+checks the bot's `service: slack` entry, onboarding, the channel list, the 3,800-character limit (what the gateway sends whole), the recipient, the
 org's rules and screening, and then has the gateway act:
 
 - `GET /api/v2/slack/history` and `GET /api/v2/slack/files/{id}` write a row to `slack_requests`. The gateway's
-  request thread (beside its tick, so a slow decision model never holds a read) claims it, asks Slack, and writes the
-  answer back; the API reads it and deletes the row. A file's bytes go to `slack-files/` beside the database (the
+  request thread (beside its tick, so a slow decision model never holds a read) claims it and hands it to one of four
+  workers, which asks Slack and writes the answer back; the API reads it and deletes the row. The API waits without
+  holding a thread, at most 16 waits per server (503 `slack_busy` past that). Before each Slack call a worker checks
+  that the API still waits (the row is there and its deadline, 60 s for history and 150 s for a file, has not passed),
+  so a read the API gave up on stops at once. A ref like `<#C...|name>` is authorized on its id alone. A file's bytes go to `slack-files/` beside the database (the
   shared `tico-data` volume), never into it, and are deleted once streamed.
 - `POST /api/v2/slack/posts` writes the post as a message in the bot's room plus a `slack_posts` row, which `deliver`
-  sends with the bot's name and `(sent from <bot>)`. `deliver` cancels it in a Slack Connect channel.
+  sends with the bot's name and `(sent from <bot>)`. `deliver` asks Slack about the channel on every post
+  (never from a cache) and cancels it in a Slack Connect channel; a rate-limited check leaves it for the next pass.
 - `POST /api/v2/slack/dms` is the bot's message to the person in Tico, which `originate` copies into their Slack DM.
 
 With the gateway not connected, or not claiming a request within 8 seconds, each route answers 503 and says what to

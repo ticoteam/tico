@@ -62,7 +62,12 @@ class FakeAPI:
                 ],
             ]
         }
-        self.threads = {(GENERAL, "1700000002.000100"): [{"ts": "1700000004.000100", "user": "U2", "text": "Agreed"}]}
+        # Each thread is its pages as Slack sends them: the root first on the first page.
+        self.threads = {
+            (GENERAL, "1700000002.000100"): [
+                [{"ts": "1700000002.000100", "user": "U1"}, {"ts": "1700000004.000100", "user": "U2", "text": "Agreed"}]
+            ]
+        }
         self.files = {
             "F0FILE0001": {
                 "id": "F0FILE0001",
@@ -113,7 +118,14 @@ class FakeAPI:
         return pages[n], str(n + 1) if n + 1 < len(pages) else ""
 
     def replies(self, channel, ts):
-        return self.threads.get((channel, ts), [])
+        """What SlackAPI.replies returns: the first page only, the root left out."""
+        return [r for r in (self.threads.get((channel, ts)) or [[]])[0] if r["ts"] != ts]
+
+    def replies_page(self, channel, ts, cursor=""):
+        self.calls.append(("replies", channel, ts, cursor))
+        pages = self.threads.get((channel, ts)) or [[]]
+        n = int(cursor or 0)
+        return pages[n], str(n + 1) if n + 1 < len(pages) else ""
 
     def files_info(self, fid):
         return self.files[fid]
@@ -220,6 +232,104 @@ def test_history_is_refused_outside_the_bots_channels_and_for_slack_connect(slac
     assert missing["code"] == "not_found" and "invite @Tico" in missing["detail"]
 
 
+def test_a_channel_is_authorized_on_its_id_never_on_the_name_beside_it(slack):
+    """Codex P1-1: `<#C...|general>` names #quiet's id beside an allowed name. The id decides: refused, and nothing is
+    asked of Slack. A name is sent to the gateway as the listed channel's id."""
+    for ref in (f"<#{QUIET_ID}|general>", f"<#{QUIET_ID}>", QUIET_ID):
+        refused = call(slack, "GET", "slack/history", 403, params={"channel": ref, "oldest": 0}).json()
+        assert refused["code"] == "slack_scope", ref
+    assert not [c for c in slack.fake.calls if QUIET_ID in c]
+    assert call(slack, "GET", "slack/history", params={"channel": f"<#{GENERAL}|whatever>", "oldest": 0}).json()["ok"]
+    call(slack, "GET", "slack/history", params={"channel": "#general", "oldest": 0})
+    assert {c[1] for c in slack.fake.calls if c[0] == "history"} == {GENERAL}
+
+
+def test_every_reply_of_a_long_thread_is_read(slack):
+    """Codex P2-3: a thread over one page (200) keeps its later replies."""
+    ts = "1700000002.000100"
+    slack.fake.threads[(GENERAL, ts)] = [
+        [
+            {"ts": ts, "user": "U1"},
+            *({"ts": f"17000001{i:02d}.000100", "user": "U2", "text": f"r{i}"} for i in range(3)),
+        ],
+        [{"ts": f"17000002{i:02d}.000100", "user": "U2", "text": f"s{i}"} for i in range(2)],
+    ]
+    got = call(slack, "GET", "slack/history", params={"channel": "#general", "oldest": 0, "threads": "true"}).json()
+    thread = next(m for m in got["messages"] if m["ts"] == ts)
+    assert [r["text"] for r in thread["replies"]] == ["r0", "r1", "r2", "s0", "s1"]
+
+
+def test_slack_api_pages_a_thread(monkeypatch):
+    from backend import slack_gateway as G
+
+    api = G.SlackAPI("xoxb-test", "xapp-test")
+    asked = []
+
+    def answer(method, params=None, post=False):
+        asked.append((method, params))
+        return {"messages": [{"ts": "1"}], "response_metadata": {"next_cursor": " next "}}
+
+    monkeypatch.setattr(api, "call", answer)
+    assert api.replies_page("C1", "1", "") == ([{"ts": "1"}], "next")
+    assert asked == [("conversations.replies", {"channel": "C1", "ts": "1", "limit": G.HISTORY_PAGE, "cursor": None})]
+
+
+def test_a_read_the_api_stopped_waiting_for_stops_at_once(slack, monkeypatch):
+    """Codex P2-1: the gateway checks before each Slack call that the API still waits. A read whose row is gone stops
+    after the page in hand, and one past its deadline asks Slack nothing."""
+    pause_gateway(slack)
+    params = {"channel": GENERAL, "oldest": "0", "latest": "1800000000", "threads": True}
+    rid = SR._submit(slack.store, "history", "ops", {**params, "deadline": time.time() + 60})
+    first_page = slack.fake.history_range
+
+    def page_then_give_up(channel, oldest, latest, cursor=""):
+        with slack.store.transaction() as c:  # the API's wait ends (its timeout deletes the row)
+            c.execute("DELETE FROM slack_requests WHERE id=?", (rid,))
+        return first_page(channel, oldest, latest, cursor)
+
+    monkeypatch.setattr(slack.fake, "history_range", page_then_give_up)
+    assert SR.serve(slack.gw) == 1
+    assert [c[0] for c in slack.fake.calls if c[0] in ("history", "replies")] == ["history"]
+    monkeypatch.undo()
+    slack.fake.calls.clear()
+    late = SR._submit(slack.store, "history", "ops", {**params, "deadline": time.time() - 1})
+    assert SR.serve(slack.gw) == 1
+    assert slack.fake.calls == []
+    with slack.store.read() as c:  # left for the API to delete (or the sweep): no answer is written
+        assert c.execute("SELECT state,result FROM slack_requests WHERE id=?", (late,)).fetchone()[:] == (
+            "running",
+            None,
+        )
+
+
+def test_one_slow_read_does_not_hold_up_another(slack, monkeypatch):
+    """Codex P2-1: the gateway answers on several workers, so a file read is answered while a slow history read is
+    still at Slack, and the gateway is not mistaken for off."""
+    monkeypatch.setattr(SR, "CLAIM_SECONDS", 2)
+    entered, release = threading.Event(), threading.Event()
+    first_page = slack.fake.history_range
+
+    def slow(channel, oldest, latest, cursor=""):
+        entered.set()
+        release.wait(10)
+        return first_page(channel, oldest, latest, cursor)
+
+    monkeypatch.setattr(slack.fake, "history_range", slow)
+    done = []
+    reading = threading.Thread(
+        target=lambda: done.append(call(slack, "GET", "slack/history", params={"channel": "#general", "oldest": 0}))
+    )
+    reading.start()
+    try:
+        assert entered.wait(5)
+        assert call(slack, "GET", "slack/files/F0FILE0001").content == b"hello world"
+        assert reading.is_alive(), "the history read is still at Slack"
+    finally:
+        release.set()
+        reading.join(10)
+    assert done and done[0].json()["ok"]
+
+
 def test_a_bot_without_read_or_without_slack_is_refused_and_a_person_cannot_use_the_routes(slack):
     entry(slack, can=["post"])
     assert call(slack, "GET", "slack/history", 403, params={"channel": "#general", "oldest": 0}).json()["code"] == (
@@ -296,7 +406,8 @@ def test_post_gates_list_posting_off_unknown_id_length_and_post_verb(slack):
     assert "off" in refused({"channel": "#quiet", "text": "hi"}, 403)["detail"]
     assert refused({"channel": "#later", "text": "hi"}, 409)["code"] == "slack_channel"
     assert refused({"channel": "#general", "text": "   "}, 422)["code"] == "slack_text"
-    assert "4000" in refused({"channel": "#general", "text": "x" * 4001}, 422)["detail"]
+    # Exactly what the gateway sends whole: one character more is refused, never cut on the way (Codex P2-4).
+    assert "3800" in refused({"channel": "#general", "text": "x" * 3801}, 422)["detail"]
     refused({"channel": "#general", "text": "hi", "thread_ts": "soon"}, 422)
     entry(slack, can=["read"])
     assert refused({"channel": "#general", "text": "hi"}, 403)["code"] == "slack_access"
@@ -479,10 +590,45 @@ def test_the_gateway_cancels_a_bots_post_to_a_slack_connect_channel_and_sends_th
     assert "Slack Connect" in states[outside["message_id"]]["error"]
     assert states[inside["message_id"]]["state"] == "sent"
     assert [p["channel"] for p in gateway.slack.posts] == [MARKETING]
-    # Slack is asked once per channel, then the answer is kept.
-    asked = [call for call in gateway.slack.calls if call == ("conversations.info", MARKETING)]
-    assert gateway.outside_workspace({"channel": MARKETING, "message_id": inside["message_id"]}) == ""
-    assert [call for call in gateway.slack.calls if call == ("conversations.info", MARKETING)] == asked
+
+
+def test_slack_connect_is_asked_on_every_post_so_a_channel_shared_since_is_refused(gateway, monkeypatch):
+    """Codex P2-2: a channel that starts being shared outside the workspace is refused at the very next post, and a
+    rate-limited check leaves the post for the next pass instead of canceling it."""
+    from backend import slack_gateway as G
+
+    store = gateway.store
+    with store.transaction() as c:
+        first = SB.queue_post(c, "cmo", {"id": MARKETING, "name": "marketing"}, "", "Before")
+    gateway.deliver()
+    monkeypatch.setitem(CHANNELS, MARKETING, {**CHANNELS[MARKETING], "is_ext_shared": True})
+    with store.transaction() as c:
+        second = SB.queue_post(c, "cmo", {"id": MARKETING, "name": "marketing"}, "", "After")
+    gateway.deliver()
+    states = {r["message_id"]: r["state"] for r in rows(store, "SELECT message_id,state FROM slack_posts")}
+    assert (states[first["message_id"]], states[second["message_id"]]) == ("sent", "canceled")
+    assert [p["text"].split("\n")[0] for p in gateway.slack.posts] == ["Before"]
+
+    def limited(channel):
+        raise G.SlackError("conversations.info", "ratelimited", retry_after=30)
+
+    monkeypatch.setattr(gateway.slack, "conversations_info", limited)
+    with store.transaction() as c:
+        third = SB.queue_post(c, "cmo", {"id": "C0SOMEWHERE", "name": "somewhere"}, "", "Later")
+    gateway.deliver()
+    assert rows(store, "SELECT state FROM slack_posts WHERE message_id=?", third["message_id"])[0]["state"] == "ready"
+
+
+def test_a_bots_post_reaches_slack_whole(gateway):
+    """Codex P2-4: a bot's post is never cut by the renderer (an org rule warning can make it longer than the route's
+    limit); a mirrored reply still is, with its link to Tico."""
+    from backend import slack_gateway as G
+
+    text = "Warning line\n" + "y" * G.POST_CHARS
+    with gateway.store.transaction() as c:
+        SB.queue_post(c, "cmo", {"id": MARKETING, "name": "marketing"}, "", text)
+    gateway.deliver()
+    assert gateway.slack.posts[-1]["text"].startswith(text + "\n\n(sent from")
 
 
 def test_the_gateway_skips_a_post_when_slack_cannot_be_asked_and_gives_a_reason_when_it_refuses(gateway, monkeypatch):

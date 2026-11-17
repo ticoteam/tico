@@ -371,5 +371,24 @@ class Workspace(unittest.TestCase):
                     self.assertEqual(browser.load_manifest(bot), {"tools": ["own"]})
 
 
+class Standalone(unittest.TestCase):
+    """The script as a bot's turn runs it: from another folder, with nothing of the checkout on sys.path (these tests
+    put it there themselves, which hid a missing import path)."""
+
+    def test_it_reaches_tico_from_outside_the_checkout(self):
+        import subprocess
+
+        script = str(Path(__file__).resolve().parent / "slack.py")
+        env = {"PATH": os.environ.get("PATH", ""), "HUB_API_URL": "http://127.0.0.1:9", "HUB_TOKEN": "t"}
+        with tempfile.TemporaryDirectory() as elsewhere:
+            for argv in (["channels"], ["file", "--id", "F0FILE0001"]):
+                out = subprocess.run(
+                    [sys.executable, "-I", script, *argv], cwd=elsewhere, env=env, capture_output=True, text=True
+                )
+                self.assertNotIn("ModuleNotFoundError", out.stderr, argv)
+                self.assertNotIn("Traceback", out.stderr, argv)
+                self.assertEqual(out.returncode, 1, (argv, out.stdout, out.stderr))  # Tico unreachable: a failure
+
+
 if __name__ == "__main__":
     unittest.main()

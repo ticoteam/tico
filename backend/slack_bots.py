@@ -13,8 +13,8 @@ gateway: with it off, every route here answers 503 and says what to start.
     GET  /api/v2/slack/files/{id}    a file someone shared, downloaded by the gateway
 
 Every gate is here, not on the computer: the bot's `service: slack` entry (`read`, `post`, its `channels` and `dms`
-scope), onboarding, the channel list (Settings > Tools > Slack: readers, posting on, an id), the 4,000-character limit,
-a recipient on the roster who may sign in, the org rule check on what is posted, and screening on what is read. The
+scope), onboarding, the channel list (Settings > Tools > Slack: readers, posting on, an id), the length limit
+(slack_gateway.POST_CHARS), a recipient on the roster who may sign in, the org rule check on what is posted, and screening on what is read. The
 gateway refuses a channel shared outside the workspace (Slack Connect) for both, since only Slack can say.
 `connectors/slack.py` is a thin client of these routes.
 
@@ -74,10 +74,9 @@ def _mod(name: str) -> Any:
     return found
 
 
-MAX_POST_CHARS = 4000
 HISTORY_WAIT, FILE_WAIT = 60.0, 150.0
 # Waits on the gateway in flight per server. A wait holds no thread, only a row and a poll, but the gateway answers the
-# rows one after another on its own thread, so past this many more would only queue: 503 `slack_busy` instead.
+# rows on a few workers (slack_requests.WORKERS), so past this many more would only queue: 503 `slack_busy` instead.
 MAX_WAITS, BUSY_RETRY_SECONDS = 16, 5
 BUSY = "Tico is already waiting on Slack for many bots; try again in a few seconds."
 TS_RE = r"^\d{6,12}\.\d{1,6}$"
@@ -157,10 +156,17 @@ def readable(c: Any, settings: Any, bot: str, entry: dict[str, Any]) -> set[str]
     return allowed
 
 
-def may_read(c: Any, bot: str, allowed: set[str], ref: str) -> str:
-    """The channel ref the gateway looks up (an id, else a name), refused outside the bot's channels."""
+def may_read(c: Any, settings: Any, bot: str, allowed: set[str], ref: str) -> str:
+    """The channel the gateway reads: its id when Tico knows it, else a name for the gateway to look up. Refused outside
+    the bot's channels. A ref with an id is authorized on that id alone: the name beside it in `<#C...|name>` is the
+    caller's word, never Slack's, so it grants nothing."""
     cid, name = SC.parse_ref(ref)
-    if not ({cid.lower(), name} - {""}) & allowed:
+    if cid:
+        target = cid if cid.lower() in allowed else ""
+    else:
+        listed = next((r for r in SC.listing(c, settings) if r["name"] == name and r["id"]), None)
+        target = (str(listed["id"]) if listed else name) if name in allowed else ""
+    if not target:
         names = ", ".join(sorted("#" + a for a in allowed if not SC.ID_RE.match(a.upper()))) or "none"
         raise Problem(
             "slack_scope",
@@ -168,7 +174,7 @@ def may_read(c: Any, bot: str, allowed: set[str], ref: str) -> str:
             "reader (Settings > Tools > Slack, or ask BotOps).",
             403,
         )
-    return cid or name
+    return target
 
 
 def postable(c: Any, settings: Any, ref: str) -> dict[str, Any]:
@@ -207,13 +213,16 @@ def not_onboarding(c: Any, bot: str) -> None:
 
 
 def check_text(text: str) -> str:
+    """The text of a post or a DM: not empty, and no longer than the gateway sends whole (POST_CHARS), so a post never
+    loses text on the way to Slack."""
     text = str(text or "").strip()
+    limit = int(_mod("slack_gateway").POST_CHARS)
     if not text:
         raise Problem("slack_text", "Nothing to send: the text is empty.", 422)
-    if len(text) > MAX_POST_CHARS:
+    if len(text) > limit:
         raise Problem(
             "slack_text",
-            f"The text is {len(text)} characters; Slack posts from bots stop at {MAX_POST_CHARS}. Shorten it, or put "
+            f"The text is {len(text)} characters; Slack posts from bots stop at {limit}. Shorten it, or put "
             "the detail on the task and link it.",
             422,
         )
@@ -381,7 +390,7 @@ def install(
             with store.read() as c:
                 entry = slack_entry(c, settings, bot)
                 need(c, bot, entry, "read")
-                ref = may_read(c, bot, readable(c, settings, bot, entry), channel)
+                ref = may_read(c, settings, bot, readable(c, settings, bot, entry), channel)
                 gateway_up(c)
             return bot, {"channel": ref, "oldest": f"{oldest:.6f}", "latest": f"{end:.6f}", "threads": threads}
 
