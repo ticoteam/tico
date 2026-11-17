@@ -1106,11 +1106,22 @@ def _ref_strings(refs):
     return out
 
 
-def restricted_for(conv, refs, in_reply_to, attachments=False, c=None):
-    """1 when the message needs the per-message check: a reply to anything but a plain message (`_plain_parent`), files,
-    a task or meeting thread, or refs that are not plainly harmless (an unknown key or shape, a string that names a
-    task, or with `c`, any task's id), the same nested walk the per-message check makes (task_privacy.message_tasks)."""
-    if attachments or (in_reply_to and not _plain_parent(c, in_reply_to)):
+def restricted_for(conv, refs, in_reply_to, attachments=False, c=None, stored=None):
+    """1 when the message needs the per-message check: files; in a task's own thread, any provenance beyond that task
+    (task_privacy.reads_as_thread, on `stored`, the refs as the row keeps them); elsewhere a reply to anything but a
+    plain message (`_plain_parent`), a task or meeting thread, or refs that are not plainly harmless (an unknown key or
+    shape, a string that names a task, or with `c`, any task's id), the same nested walk the per-message check makes
+    (task_privacy.message_tasks)."""
+    if attachments:
+        return 1
+    if conv and conv.get("task_id") and audience_of(conv) != "meeting" and c is not None:
+        # A task's own thread is read only by those who read its task (readable_sql's fence), so a message whose
+        # whole provenance is that task reads as its thread (task_privacy.reads_as_thread).
+        from . import task_privacy
+
+        message = {"refs": refs if stored is None else stored, "in_reply_to": in_reply_to}
+        return 0 if task_privacy.reads_as_thread(c, conv, message) else 1
+    if in_reply_to and not _plain_parent(c, in_reply_to):
         return 1
     if conv and (audience_of(conv) in ("task", "meeting") or conv.get("task_id")):
         return 1
@@ -1140,7 +1151,9 @@ def stamp(c, row, conv, refs):
     origin = (POSTING.get() or {}).get("origin") or {}
     row["origin_id"] = str(origin.get("origin_id") or "") or mint_origin(c)
     row["revision"] = int(origin.get("revision") or 0)
-    row["restricted"] = restricted_for(conv, refs, row.get("in_reply_to"), (POSTING.get() or {}).get("attachments"), c)
+    attachments = bool((POSTING.get() or {}).get("attachments"))
+    stored = row.get("refs")  # as kept, parsed by reads_as_thread as the per-message check parses it
+    row["restricted"] = restricted_for(conv, refs, row.get("in_reply_to"), attachments, c, stored=stored)
     row["legacy_audience"] = None
     return row
 
@@ -4327,6 +4340,26 @@ def _audited(message_or_text, revision):
     return {"revision": int(revision or 0), "length": len(str(text or ""))}
 
 
+def _restamp(c, message, thread, attempt=None):
+    """An edit re-runs the task-thread rule (reads_as_thread) and can only raise the flag: new words may come from a run
+    that has since read another task, or from `attempt`, the run making the edit, so the message is checked as stored
+    and as if that run had written it. A message already restricted, or outside a task's thread, is left as it is."""
+    if not thread or not thread.get("task_id"):
+        return
+    row = c.execute("SELECT restricted, refs, in_reply_to FROM messages WHERE id=?", (message["id"],)).fetchone()
+    if not row or row[0] != 0:
+        return
+    from . import task_privacy
+
+    stored = {"refs": row[1], "in_reply_to": row[2]}
+    ok = task_privacy.reads_as_thread(c, thread, stored)
+    if ok and attempt:
+        refs = _refs_of(stored)  # a dict here: reads_as_thread refuses refs that are not one
+        ok = task_privacy.reads_as_thread(c, thread, {**stored, "refs": {**refs, "turn_id": attempt}})
+    if not ok:
+        c.execute("UPDATE messages SET restricted=1 WHERE id=?", (message["id"],))
+
+
 def edit_message(c, principal, message_id, body):
     actor, v = _actor_of(principal)
     message = _own_say(c, actor, v, message_id)
@@ -4348,6 +4381,8 @@ def edit_message(c, principal, message_id, body):
     if private:
         task_privacy.private_thread_destination(c, v.who, thread)
         c.execute("UPDATE messages SET restricted=1 WHERE id=?", (message_id,))
+    else:
+        _restamp(c, message, thread, v.who.attempt_id if v is not None else None)
     H.path_mentioned(c, actor, "message", text, thread.get("task_id"))
     revision, _, warnings = _revise(c, message, actor, body=text)
     _event(
@@ -4401,6 +4436,7 @@ def apply_revision(c, origin, *, body=None, deleted=False):
             str(body or ""),
             "slack",
         )
+        _restamp(c, row, thread_row(c, row["conversation_id"]))
     row["refs"] = _refs_of(row)  # the table's JSON text, as H.message_view decodes it
     if c.execute("SELECT 1 FROM message_revisions WHERE origin_id=? AND revision=?", (oid, revision)).fetchone():
         return None

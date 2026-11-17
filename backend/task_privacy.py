@@ -559,6 +559,64 @@ def message_readable(c, actor, message, current=False):
         return False
 
 
+def reads_as_thread(c, conv, message):
+    """Whether `message` (as stored or about to be: conversation_id, refs, in_reply_to) in task thread `conv` gives
+    every reader the same answer from message_readable as the thread does, so its restricted flag may be 0 and the
+    fast paths (threads.readable_sql: a task thread is read only by those who read its task) count it in SQL.
+    True only when each part of message_readable reduces to the thread: its tasks (refs, answers, inputs, parents and
+    its run, message_tasks) are exactly the thread's task, no page is named by it, its reply chain or its run's
+    messages, no meeting is in its provenance, and it carries no other message. Anything it cannot authorize is False.
+    The walks start with an empty `seen` so a message not yet written is never cached under its content."""
+    from . import files
+
+    tid = (conv or {}).get("task_id")
+    if not tid or (conv or {}).get("audience") == "meeting":
+        return False
+    message = {**dict(message), "conversation_id": conv["id"]}
+    refs = H._json(message.get("refs"), {}) or {}
+    if not isinstance(refs, dict) or refs.get("carries"):
+        return False
+    try:
+        if _message_tasks(c, message, set(), include_run=True, current=True) != {tid}:
+            return False
+        if meeting_sources(c).message(message, seen=set()):
+            return False
+        chain = [refs, *(H._json(row.get("refs"), {}) or {} for row in _chain(c, message))]
+        run = refs.get("run")
+        aid = refs.get("turn_id") or (run.get("attempt_id") if isinstance(run, dict) else None)
+        if isinstance(aid, str) and aid:
+            rows = c.execute(
+                "SELECT m.* FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id "
+                "WHERE a.id=? UNION SELECT m.* FROM attempt_inputs i JOIN messages m ON m.id=i.message_id "
+                "WHERE i.attempt_id=?",
+                (aid, aid),
+            ).fetchall()
+            for row in map(dict, rows):
+                chain.append(H._json(row.get("refs"), {}) or {})
+                chain.extend(H._json(p.get("refs"), {}) or {} for p in _chain(c, row))
+    except Problem:
+        return False
+    if any(not isinstance(r, dict) for r in chain):
+        return False
+    return not files.page_references([[r.get(key) for key in PAGE_MESSAGE_KEYS] for r in chain], c)
+
+
+def _chain(c, message):
+    """The stored messages on `message`'s in_reply_to chain, nearest first, as reply_pages_readable walks it. A chain
+    at REPLY_CHAIN_LIMIT is refused, as reply_pages_readable refuses it."""
+    out, seen, mid = [], set(), message.get("in_reply_to")
+    while mid and mid not in seen:
+        if len(seen) + 1 >= REPLY_CHAIN_LIMIT:
+            raise Problem("privacy", "Message provenance is too deep to authorize", 403)
+        seen.add(mid)
+        parent = H.message(c, mid, include_deleted=True)
+        if not parent:
+            break
+        out.append(parent)
+        mid = parent.get("in_reply_to")
+    return out
+
+
 def readable_messages(c, actor, messages):
     """The messages message_readable passes, each checked against its row as stored, read together in this snapshot
     rather than one query per message. A message not stored is checked as given, as message_readable does."""
