@@ -217,10 +217,12 @@ function pvStageItemsHTML(state: PvState, stageId: string, tasks: TaskAny[], eac
 
 /** A stage's ⋯ at its header's right: what can be done to every task it shows (stage-menu.ts). None on a stage that
  * shows no task, unless the viewer may change the pipeline (Edit stage); none in a read-only view. */
+/** The stage whose ⋯ menu is open: a live draw while it is open draws its ⋯ still expanded. */
+let PV_COL_OPEN = '';
 function pvColMenuHTML(state: PvState, stage: PipelineStageRec): string {
   const id = stage.id ?? '';
   if (!id || S.me?.read_only_view || (!state.rec.may_change && !pvInStage(state, id).length)) return '';
-  return `<button type="button" class="pv-col-more" data-pv-col-menu="${esc(id)}" aria-haspopup="menu" aria-expanded="false"`
+  return `<button type="button" class="pv-col-more" data-pv-col-menu="${esc(id)}" aria-haspopup="menu" aria-expanded="${PV_COL_OPEN === id}"`
     + ` aria-label="${esc(`More, ${stage.name}`)}" title="More"><span class="nav-icon" aria-hidden="true">more_horiz</span></button>`;
 }
 

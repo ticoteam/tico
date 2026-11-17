@@ -99,7 +99,8 @@ const shot = async (page: Page, name: string) => {
       await page.locator('.prop-pop:popover-open').waitFor();
       assert.deepEqual((await menuItems(page)).map(t => t.replace(/^\w+ /, '')), ['Move all to…', 'Close all', 'Assign all to…', 'Snooze all…', 'Edit stage']);
       assert.equal(await more.getAttribute('aria-expanded'), 'true');
-      assert.equal(await page.evaluate(() => document.activeElement?.textContent?.trim()), 'swap_horizMove all to…');
+      // The first item has the focus (propMenu moves it there once the menu is shown).
+      await page.waitForFunction(() => document.activeElement?.textContent?.trim() === 'swap_horizMove all to…');
       await shot(page, `menu-desktop-${theme}`);
 
       // 2. Move all to…: this pipeline's stages by name, Done, then the other pipeline's; the count asks first; one write.

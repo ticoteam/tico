@@ -41,8 +41,11 @@ function pvColMenu(state: PvState, stageId: string, anchor: HTMLElement): void {
   }
   if (state.rec.may_change) items.push({text: 'Edit stage', icon: 'edit', sep: items.length > 0, run: () => void openPipelineEditor(state.rec.id, stageId)});
   if (!items.length) return;
-  propMenu(pvMenuHost(), anchor, {label: stage.name, onPick: it => it.run(),
+  const pop = propMenu(pvMenuHost(), anchor, {label: stage.name, onPick: it => it.run(),
     items: items.map(it => ({...it, html: `<span class="nav-icon" aria-hidden="true">${it.icon ?? ''}</span><span>${esc(it.text)}</span>`}))});
+  if (!pop) return;
+  PV_COL_OPEN = stageId;
+  pop.addEventListener('menuclosed', () => { if (PV_COL_OPEN === stageId) PV_COL_OPEN = ''; }, {once: true});
 }
 
 /** Move all to…: Move to…'s picker with this pipeline first and Done, then "Move 22 tasks to Build?" with an optional
@@ -56,7 +59,7 @@ function pvColMove(state: PvState, stage: PipelineStageRec, ids: string[], ancho
       void pvColWrite(state, ['Moved', 'move'], () => post('/v2/tasks/move', body, newRequestId()) as Promise<TasksMoved>,
         out => ({done: out.moved, unseen: out.moved_unseen ?? 0, skipped: out.skipped}),
         // Gone from the board at once when they left it (another pipeline, or Done); the live read shows the rest.
-        moved => { if (!inside || st.id === 'done') state.tasks = state.tasks.filter(t => !moved.has(t.id)); });
+        moved => { if (!inside || st.id === 'done') state.tasks = state.tasks.filter(t => !moved.has(t.id)); return false; });
     }});
 }
 
@@ -98,7 +101,7 @@ function pvColSnooze(state: PvState, ids: string[], anchor: HTMLElement): void {
     says what changed (Close all's, with Undo), only "2 didn't close: in a bot's running turn.". `after(done)` changes
     the board at once, and is true when it showed that toast; the page's read follows. */
 async function pvColWrite<T>(state: PvState, [did, verb]: [string, string], send: () => Promise<T>,
-  read: (out: T) => {done: string[]; unseen: number; skipped: TasksMoved['skipped']}, after?: (done: Set<string>) => boolean | void): Promise<void> {
+  read: (out: T) => {done: string[]; unseen: number; skipped: TasksMoved['skipped']}, after?: (done: Set<string>) => boolean): Promise<void> {
   try {
     const out = read(await send());
     if (PV !== state) return;
