@@ -288,7 +288,10 @@ def test_jevs_unsure_wakes_the_manager_with_the_line_not_the_bot(store, seeded, 
 
     assert woken(WRITER) == []
     (asked,) = woken("bot:manager")
-    assert 'Jev is unsure of "Spec page": you decide it, as the pipeline\'s manager' in asked and R.DECIDE in asked
+    assert (
+        'The decision model is unsure of "Spec page": you decide it, as the pipeline\'s manager' in asked
+        and R.DECIDE in asked
+    )
     assert "Says what done looks like" not in asked, "the line, never the whole check"
 
 
@@ -1230,7 +1233,7 @@ def test_three_failed_calls_give_the_page_to_the_pipelines_manager(store, seeded
                 (row["id"] + ":%:jev:%",),
             )
         ]
-    assert 'Jev could not check "Spec page": you decide it, as the pipeline\'s manager.' in woken
+    assert 'The decision model could not check "Spec page": you decide it, as the pipeline\'s manager.' in woken
 
 
 def test_a_failed_call_waits_before_the_next_try(store, seeded, monkeypatch):

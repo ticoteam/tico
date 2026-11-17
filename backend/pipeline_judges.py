@@ -1,5 +1,5 @@
 # pyright: strict
-"""How Jev judges a piece of evidence against a requirement: one attachment, one rubric, one model.
+"""How Decide judges a piece of evidence against a requirement: one attachment, one rubric, one model.
 
 `judge_once` is the seam. A check Tico ships (the Spec, Review, QA and Checked in production pages: `CHECKS`) is asked as
 its named parts, each a yes/no question (a probability) in the same one call; the check's bar (`BARS`) reads each part as
@@ -12,8 +12,8 @@ did not give an answer (an error, a timeout, an answer that cannot be read, no m
 verdict at all: it is `failed`, with what went wrong as its reason, and the caller retries it (page_verdicts). Nothing
 unsure or failed passes work.
 
-The judge model is Jev alone: Decide Low (`tico-decide-low`), by Chris's decision on Nov 9. No pipeline picks another
-model. Jev goes through judge.server_engine, so its spend counts against the team's Decide cap.
+Pipeline judges use Decide Low (`tico-decide-low`) through judge.server_engine, so their spend counts against the
+team's Decide cap. The gateway chooses the current model.
 
 A page requirement's verdicts call it (backend/page_verdicts.py, through `judge_many`), and the eval
 (evals/pipeline_judge). The model is never asked while a write transaction is open.
@@ -56,7 +56,7 @@ if TYPE_CHECKING:
 
 LOG = logging.getLogger("tico.pipeline_judges")
 
-# The judge model: the name -> the Gateway's model id. Jev is the only judge.
+# The pipeline's historical judge identifier maps to the Gateway's Decide Low tier.
 MODELS: dict[str, str] = {"jev": "tico-decide-low"}
 DEFAULT_MODEL = "jev"
 QUESTION_SET = "pipeline-requirement"
@@ -301,7 +301,7 @@ _installed_store: Any = None
 
 
 def judge_model_of(conn: sqlite3.Connection, pipeline_id: str | None) -> str:
-    """The judge model a pipeline is judged by: Jev, for every pipeline."""
+    """The pipeline judge's identifier. The Gateway chooses the underlying Decide Low model."""
     return DEFAULT_MODEL
 
 
@@ -515,7 +515,7 @@ def _read(result: dict[str, Any], qid: str | list[str], model: str, cost: object
 
 
 def live_engine(store: "Store") -> "Callable[[str, dict[str, Any], dict[str, Any], str], dict[str, Any]]":
-    """The engine the server asks: Jev, through judge.server_engine."""
+    """The decision engine the server asks through judge.server_engine."""
 
     ask = raw_engine(store)
 

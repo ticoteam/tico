@@ -3,21 +3,29 @@ as it does in production: the state is built by the server's own `_state`, and t
 (`text_of_bytes`, the one the server's read uses), from the case's text as the bytes Tico would hold. This file supplies only
 the model call, through the same Gateway clients the server uses.
 
-The only judge model is Jev, Decide Low (clients/judge.py `gateway`, the Gateway's Low model), the route the server uses.
-It needs TICO_GATEWAY_KEY; the URL is the server's own (backend/config.py `_gateway_url`). Nothing calls Anthropic
-directly. Costs are the Gateway's `cost_usd` when it gives one, else tokens at PRICES. PRICES is an estimate from the
-Gateway lineup (docs/ai-gateway.md)."""
+The baseline uses a pinned Decide Low version via the Tico Gateway. The comparison can ask a dated OpenRouter
+Decisions model on an explicitly pinned endpoint before HQ deploys a new version. Only committed labeled cases are sent.
+"""
 
 import hashlib
 import json
+import math
 import os
+import re
 import sqlite3
+import time
 from contextlib import closing
+
+import httpx
 
 from backend import pipeline_judges as P
 from clients import judge as J
 
 MODELS = tuple(P.MODELS)
+JEV_PIN = "tico-decide-low-1.1"
+LOW_PIN = re.compile(r"tico-decide-low-[0-9]+\.[0-9]+")
+ROUTER_PIN = re.compile(r"[a-z0-9][a-z0-9.-]*/[a-z0-9][a-z0-9._-]*-20[0-9]{6}")
+ROUTER_DECISIONS = "https://openrouter.ai/api/alpha/decisions"
 PRICES = {"jev": (0.06, 0.0)}
 QUESTION_SET = P.QUESTION_SET
 QUESTIONS = P._questions()  # the server's question set, not a copy
@@ -131,13 +139,8 @@ def state_for(case):
     return P._state(*_job(case))
 
 
-def _decide(name, key, url):
-    """Ask Jev on the Gateway, as the server does; its answer carries the Gateway's usage."""
-    ask = J.gateway(key, url, model=J.GATEWAY_MODEL, timeout=J.GATEWAY_TIMEOUT)
-
+def pipeline_engine(ask, name):
     def engine(model, state, questions, label):
-        # Read as the server's live engine reads it (pipeline_judges._read): every asked question, so a check asked in
-        # parts gives its parts, and an answer missing one is a failed call (JudgeError "shape").
         result = ask(state, questions, label)
         return {
             **P._read(result, list(questions), model, cost_usd(name, result.get("usage"))),
@@ -147,18 +150,83 @@ def _decide(name, key, url):
     return engine
 
 
-def build_engine(name, env=None):
-    """The model call for `name` (the server's ENGINE shape), or None when the environment has no Gateway key."""
-    if name not in MODELS:
-        raise ValueError(f"unknown model {name!r}; choose from {', '.join(MODELS)}")
-    env = os.environ if env is None else env
-    key = (env.get("TICO_GATEWAY_KEY") or "").strip()
-    if not key:
-        return None
+def _decide(name, key, url):
+    """Ask a pinned Gateway model through the same client as the server."""
+    model = JEV_PIN if name == "jev" else name
+    return pipeline_engine(J.gateway(key, url, model=model, timeout=J.GATEWAY_TIMEOUT), name)
+
+
+def gateway_settings(env):
     from backend.config import _gateway_url
 
-    url = _gateway_url()
-    return _decide(name, key, url)
+    return (env.get("TICO_GATEWAY_KEY") or "").strip(), (env.get("TICO_GATEWAY_URL") or "").strip() or _gateway_url()
+
+
+def build_engine(name, env=None):
+    """The model call for `name` (the server's ENGINE shape), or None when there is no Gateway key."""
+    if name not in MODELS and LOW_PIN.fullmatch(name) is None:
+        raise ValueError(f"unknown model {name!r}; choose {', '.join(MODELS)} or a pinned Decide Low version")
+    key, url = gateway_settings(os.environ if env is None else env)
+    return _decide(name, key, url) if key else None
+
+
+def openrouter(key, model, endpoint):
+    """Ask a pinned native Decisions endpoint. Only the typed answers and usage are read."""
+    if not ROUTER_PIN.fullmatch(model) or not endpoint.strip() or not key:
+        raise ValueError("the evaluation needs an OpenRouter key, dated model ID and paid endpoint slug")
+
+    def ask(state, questions, label=None):
+        J.validate(state, questions, label)
+        body = {
+            "model": model,
+            "state": state,
+            "questions": J.clean(questions),
+            "provider": {"only": [endpoint], "allow_fallbacks": False},
+        }
+        started = time.monotonic()
+        try:
+            response = httpx.post(
+                ROUTER_DECISIONS,
+                json=body,
+                timeout=J.GATEWAY_TIMEOUT,
+                headers={"Authorization": "Bearer " + key, "Accept": "application/json"},
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except (httpx.HTTPError, ValueError):
+            raise J.JudgeError("unavailable", "OpenRouter Decisions call failed") from None
+        if (
+            not isinstance(payload, dict)
+            or payload.get("model") != model
+            or not isinstance(payload.get("answers"), dict)
+        ):
+            raise J.JudgeError("shape", "OpenRouter did not answer with the pinned model and typed answers")
+        answers = {}
+        for qid, question in questions.items():
+            answer = payload["answers"].get(qid)
+            kind = question["type"]
+            if not isinstance(answer, dict) or answer.get("type") != kind:
+                raise J.JudgeError("shape", "OpenRouter omitted or refused a question")
+            answers[qid] = answer
+        usage = payload.get("usage")
+        cost = usage.get("cost") if isinstance(usage, dict) else None
+        if (
+            isinstance(cost, bool)
+            or not isinstance(cost, (int, float))
+            or not math.isfinite(cost)
+            or cost <= 0
+            or usage.get("is_byok")
+        ):
+            raise J.JudgeError("shape", "OpenRouter did not report the paid call cost")
+        return {
+            "answers": J.check_answers(answers, questions),
+            "model": model,
+            "provider": "OpenRouter",
+            "usage": {"cost_usd": cost},
+            "ms": round((time.monotonic() - started) * 1000),
+        }
+
+    return ask
 
 
 def judge_once(engine, case):
