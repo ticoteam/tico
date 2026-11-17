@@ -230,6 +230,7 @@ def _asked(c, versions):
     its preview, by a giver who may still give it, approves; a send back asks for changes. A plain answer on an ask
     that only shows a file, an OK withdrawn or on a task closed or moved back, or one for other bytes gives none."""
     from . import task_asks
+    from . import task_requirements as R
 
     out = []
     for fid, number, digest in versions:
@@ -246,7 +247,7 @@ def _asked(c, versions):
                     continue
                 actor, at, verdict = row["ok_by_id"], row["ok_at"], "approve"
             elif state == task_asks.SENT_BACK and requirement and visit:
-                answer = task_asks._newest_answer(c, visit["id"], requirement["id"]) or {}
+                answer = R.last_sent_back(c, requirement["id"], visit_id=visit["id"]) or {}
                 actor, at, verdict = answer.get("by_id"), answer.get("created_at"), "changes"
             else:
                 continue

@@ -1463,9 +1463,10 @@ Tasks header (a pipeline's items on a pipeline, all of Needs you elsewhere) and 
   answer and withdraws its question, or asks again; a person's or a stage's question takes the words as its answer.
   A page's OK always asks its question ("OK the spec?"), then one line of what changed (else Jev's take) and your
   points; your note on the version before is your own message above the ask, never inside it. A Validate or QA OK
-  shows its question, then the verdict as up to 3 short check rows (the ask's brief), else one line, and Proof, which
-  opens the Proof tab on a phone; a long review is the asker's message above it. A task's chat is named for the task
-  as it is now, so its box reads "Message <task title>".
+  shows its question, then the verdict as up to 3 short check rows (what the decision model passed on the page it
+  shows, one line per part of its check), else one line, and Proof, which opens the Proof tab on a phone; a long
+  review is the asker's message above it. A task's chat is named for the task as it is now, so its box reads
+  "Message <task title>".
   An action's OK holds a small receipt in the ask (the amount large, then To, From, When and the document), and its
   forward button says what it does: "Pay $1,240.00", "Send email"; a Validate or QA OK's says "OK".
   On a phone one row holds the task's title and two tabs: Chat, where each item opens (nothing is remembered from the

@@ -400,10 +400,11 @@ def needs_list(ctx):
 
 
 def needs_act(it):
-    """What a Needs you row asks of the reader, as ui/app/decide.ts decideKind sorts it: done, ok, answer, reply, fix."""
+    """What a Needs you row asks of the reader, as ui/app/tasks.ts decideKind sorts it: done, ok, answer, reply, fix.
+    Only an OK or a page's OK is ok; an ask of any other kind is answered."""
     kind, task = it.get("kind"), it.get("task") or {}
     if kind == "ask":
-        return "answer" if (it.get("ask") or {}).get("kind") == "answer" else "ok"
+        return "ok" if (it.get("ask") or {}).get("kind") in ("ok", "page") else "answer"
     if kind == "paused":
         return "fix"
     if kind == "mention":

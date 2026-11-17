@@ -2924,9 +2924,14 @@ SCHEMAS = {
                     "source": items({"type": "string"}),
                     "removed": "b",
                     "label": "s",
+                    # What Jev passed on that page, one short line per part of its check (page_verdicts.checks_of).
+                    "checks": items({"type": "string"}),
                 },
                 required=[],
             ),
+            # An OK that shows a page first (Validate's): what Jev passed on that page, one short line per part of its
+            # check (page_verdicts.checks_of). Absent until Jev passed it.
+            "checks": items({"type": "string"}),
             "answer": {"oneOf": [obj({"id": "s", "value": "s", "note": "n", "by": "s", "at": "s"}), {"type": "null"}]},
             # A stage's answer: how it is named and what it takes. Absent on every other requirement.
             "typed": obj(
@@ -10027,11 +10032,12 @@ SCHEMAS['BotDreamView'] = obj(
                             'oneOf': [
                                 obj(
                                     {
-                                        'message_id': 's',
+                                        'task_id': 's',
+                                        'requirement_id': 's',
                                         'text': 's',
                                         'mine': {
                                             'type': 'boolean',
-                                            'description': 'The question is put to the caller, who answers it at POST /api/v2/tasks/{tid}/answers with target {task}',
+                                            'description': 'The question is put to the caller, who answers it at POST /api/v2/tasks/{tid}/asks/{rid}/answer',
                                         },
                                     }
                                 ),

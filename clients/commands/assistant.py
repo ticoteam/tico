@@ -569,8 +569,8 @@ def batch_next(api, args):
         ),
         "text": _s("The person's own words"),
         "decision": _s(
-            "With decide: approve | decline | done | close | answer",
-            enum=["approve", "decline", "done", "close", "answer"],
+            "With decide: ok | send_back | done | close | answer",
+            enum=["ok", "send_back", "done", "close", "answer"],
         ),
         "item": {"type": "integer", "description": "Another item's number"},
         "until": _s("With later: an ISO date-time"),
