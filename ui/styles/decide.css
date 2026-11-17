@@ -34,8 +34,9 @@
 .dc-wave i:nth-child(4){animation-delay:-.15s;animation-duration:.8s}
 .dc-wave i:nth-child(5){animation-delay:-.75s;animation-duration:1.2s}
 @keyframes dc-wv{0%,100%{transform:scaleY(.22)}20%{transform:scaleY(.95)}45%{transform:scaleY(.4)}70%{transform:scaleY(.75)}}
-/* The slot over the undo notice: the voice notice while the mic is on; its wrapper is the callout on a phone */
-.dc-sayw{display:contents}
+/* The slot over the undo notice: the voice notice while the mic is on; its wrapper is the callout on a phone. A box of
+   its own (never display:contents), so the notice it holds (position:absolute) fills this slot, not the whole screen. */
+.dc-sayw{flex:1;align-self:stretch;display:flex;min-width:0;margin:6px 0}
 .dc-say{flex:1;display:flex;align-items:center;gap:6px;min-width:0;margin:0;padding:0;border:0;background:none;color:inherit;font:inherit;font-size:var(--t-base);text-align:left;overflow-wrap:anywhere}
 /* The next ask Tico is still thinking about, faint, before ‹ ›; none on a phone. */
 .dc-up{flex:0 1 auto;max-width:28%;min-width:0;color:var(--muted);opacity:.7;font-size:var(--t-sm);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -174,8 +175,8 @@
 .dc-snzl li{display:flex;align-items:center;gap:8px;min-height:40px;border-bottom:1px solid var(--line)}
 .dc-snzl-t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dc-snzl .dc-icon{flex:none;color:var(--muted)}
-/* What was just done, with ↩ to take it back: in the top bar left of ‹ ›, laid over the bar's own end (the faint
-   next-up line) so nothing moves, never over the page or the buttons (decide.ts decideBar). */
+/* What was just done, with ↩ to take it back: in the top bar's slot (.dc-sayw) left of ‹ ›, laid over it so nothing
+   moves, never over the page or the buttons (decide.ts decideBar). */
 .dc-nav{position:relative}
 .dc-sayw{position:relative}
 /* What was just done, in the top bar's slot for 5 s: "✓ Approved with comments · Undo" */

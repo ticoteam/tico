@@ -1822,7 +1822,12 @@ async function decideApprove(st: DecState, it: NeedsEntry) {
       if (!left && take) decideChatGone(take);
     }
     if (DEC !== st) return;
-    decideBar(said && !left ? 'Approved with comments' : 'Approved', decideUndoAnswer(r));
+    // Undone, an approval whose comment did not go is not approved any more: Approve comes back, without the why.
+    const undo = decideUndoAnswer(r);
+    decideBar(said && !left ? 'Approved with comments' : 'Approved', undo && left ? async () => {
+      await undo(); DEC_APPROVED.delete(it.id);
+      if (DEC === st && st.at === it.id) { st.error = ''; decidePaintSide(st); }
+    } : undo);
     if (left) {
       DEC_APPROVED.add(it.id);
       st.busy = false; st.error = `Approved. Your comment did not go: ${left} The arrow sends it again.`;
