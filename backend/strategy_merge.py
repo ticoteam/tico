@@ -1,17 +1,14 @@
 """The Strategy Owner's merged asks (docs/goals-and-kpis.md, "Your Strategy Owner"; spec: Head of Product, Strategy Owner,
-test 13).
+test 13), from before a bot's question to a person was a message marked ❓ (backend/question_marks.py).
 
-At level 2 and 3, when several bots ask a person the same question, the Strategy Owner files one item for all of them: a
-task for the person in General, with one question on it (an answer from them, `H.task_ask`), that names every
-original. An original is a bot's open question to the person on its own task (a requirement of kind `answer` that
-names them; never an OK, which is the person's own click on what it lets go). The originals stay as they were for the
-bots that asked, but leave the person's Needs you (`hidden`) while the merged item is open. The Strategy Owner decides
-what counts as the same question; the server checks only that each original is still asked of that person now.
+A merged item was a task for the person in General, with one question on it, that named every original: a bot's open
+question to the person on its own task (a requirement of kind `answer`). The originals left the person's Needs you
+(`hidden`) while the merged item was open. Questions are ❓ now, never requirements, so nothing new is merged: `merge`
+refuses (`RETIRED`).
 
-The person answers the merged item once, and `on_answer` passes the answer to every original that is still asked: as
-their answer to it (`H.task_answer`, as them), which wakes the bot that asked. Then the merged item is done.
-
-Nothing is dropped: an original whose answer can't be passed on, or every original of a merged item that ends without an
+A merged item from before still works: the person answers it once, and `on_answer` passes the answer to every original
+that is still asked, as their answer to it (`H.task_answer`, as them), which wakes the bot that asked. Then the merged
+item is done. An original whose answer can't be passed on, or every original of a merged item that ends without an
 answer, is back in the person's Needs you as it was. A merged item counts in what the Strategy Owner asked today
 (backend/strategy_bot.py `asked_today`)."""
 
@@ -19,7 +16,9 @@ from . import strategy_bot
 from . import hubdb as H
 
 STRATEGY_BOT = "bot:" + strategy_bot.SLUG
-MIN_ORIGINALS, MAX_ORIGINALS = 2, 10
+RETIRED = (
+    "Nothing to merge: a bot's question to a person is a ❓ message on its own task now, and their reply clears it"
+)
 
 
 def _name(c, actor):
@@ -107,61 +106,11 @@ def originals(c, merged_into):
 
 
 def merge(c, actor, person, title, question, task_ids):
-    """File one item for `person` standing for the bots' questions to them on the tasks in `task_ids`. Only the
-    Strategy Owner, only at level 2 or 3, and only within its 5 a day for that person."""
-    from . import strategy_suggest
-
+    """Refused: a bot's question to a person is a ❓ now (`RETIRED`), so no bot's question waits as a requirement to
+    merge. Only the Strategy Owner was ever let."""
     if actor != STRATEGY_BOT:
         raise H.Refused("identity", f"Only the {strategy_bot.name(c)} merges the asks waiting on a person")
-    if not strategy_suggest.suggests(c):
-        raise H.Refused(
-            "state",
-            f"The {strategy_bot.name(c)} merges asks at level 2 or 3; it is at level {strategy_bot.level(c)} here",
-        )
-    if not H.is_human(person) or not H.human(c, H.actor_id(person)):
-        raise H.Refused("reach", "merge asks waiting on a person on the roster")
-    ids = list(dict.fromkeys(str(t or "").strip() for t in task_ids or [] if str(t or "").strip()))
-    if not MIN_ORIGINALS <= len(ids) <= MAX_ORIGINALS:
-        raise H.Refused("lint", f"merge {MIN_ORIGINALS} to {MAX_ORIGINALS} different tasks")
-    title, question = " ".join(str(title or "").split())[:300], str(question or "").strip()[:4000]
-    if not title or not question:
-        raise H.Refused("lint", "say the one question the person answers for all of them: a title and the question")
-    taken = hidden(c, person)
-    found = []
-    for task_id in ids:
-        row = H.task(c, task_id)
-        if not row or not H.task_private_readable(c, STRATEGY_BOT, row) or not H.task_private_readable(c, person, row):
-            raise H.Refused("not-found", f"no task {task_id} you may read")
-        asks = [(r, a) for r, a in _asks(c, person, task_id) if a != STRATEGY_BOT and r["id"] not in taken]
-        if not asks:
-            raise H.Refused("state", f'"{row["title"]}" has no question from a bot to {_name(c, person)} now')
-        found.append((row, *asks[0]))
-    who = "\n".join(f'- {_name(c, asker)}: "{row["title"]}"' for row, _, asker in found)
-    body = (
-        f"{question}\n\n{len(found)} bots asked you this; it is one item instead of {len(found)}:\n{who}\n"
-        f"Answer it once and the {strategy_bot.name(c)} passes your answer to each of them."
-    )
-    item = H.task_create(c, STRATEGY_BOT, title, body, person, lane="company", lint=False)
-    H.task_ask(c, STRATEGY_BOT, item["id"], person, question, seen_version=item["version"])
-    at = H.now()
-    for row, requirement, asker in found:
-        c.execute(
-            "INSERT INTO strategy_merges (merged_into, original, person, asker, how, ask_id, created_at) "
-            "VALUES (?,?,?,?,?,?,?)",
-            (item["id"], row["id"], person, asker, "asked", requirement["id"], at),
-        )
-        H.task_comment(
-            c,
-            STRATEGY_BOT,
-            row["id"],
-            f'Merged with {len(found) - 1} similar ask(s) into one item for {_name(c, person)}: "{title}". '
-            "Their answer comes back to this task; nothing to do until then.",
-            wake=False,
-        )
-    H.event(
-        c, actor, "strategy_bot.merged", item["id"], {"person": person, "originals": [r["id"] for r, _, _ in found]}
-    )
-    return {"task": H.task(c, item["id"]), "originals": originals(c, item["id"])}
+    raise H.Refused("state", RETIRED)
 
 
 def _settle(c, merged_into, original, state, note):

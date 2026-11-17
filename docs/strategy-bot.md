@@ -125,7 +125,7 @@ chose a level, since it starts here, unless a person already started or paused t
 - **Offers level 3 once you trust it.** After 10 recoveries in a row approved with its pick unchanged, the Monday note
   offers level 3, at most once a month. It never raises its own level; only you do, in Settings.
 
-More on recoveries and merged asks: [Goals and KPIs](goals-and-kpis.md#recoveries-and-merged-asks).
+More on recoveries: [Goals and KPIs](goals-and-kpis.md#recoveries).
 
 ### At most 5 items a day
 

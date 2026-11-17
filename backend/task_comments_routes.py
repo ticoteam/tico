@@ -4,6 +4,7 @@ from .store import H
 from . import models as M
 from .store import Problem
 from fastapi import Request
+from . import ask_shape
 from . import bot_to_bot
 from . import counsel
 from . import delivery
@@ -286,6 +287,12 @@ def register(
             raise Problem("forbidden", "Only a bot marks a message ❓", 403)
         with store.read() as c:
             to = auth.target(c, who, body.to)  # who it asks: checked by the rules for them too, as a recipient
+        if shape := ask_shape.line_refusal(body.text):  # in plain code, before the rule check's call
+            mutate(
+                request,
+                body,
+                lambda c: H.refuse(c, who.actor, "task_ask_shape", shape, task=auth.resolve_task(c, who, tid)),
+            )
         rc = rule_check(
             who,
             "question",

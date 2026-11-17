@@ -809,10 +809,11 @@ def _next_day(day):
 
 
 # Theirs then: a task they owned, or one a bot asked them on (backend/person_asks.py: a bot's task for a person is its
-# own, with its question to them).
+# own, with its ❓ or OK to them).
 _ACTIVE_AT = (
     "(owner_id=? OR id IN (SELECT v.task_id FROM visits v JOIN requirements r ON r.visit_id=v.id "
-    "WHERE r.person_id=? AND r.created_at<?)) AND created_at<? AND (done_at IS NULL OR done_at>?) AND (closed_at IS NULL OR closed_at>?) "
+    "WHERE r.person_id=? AND r.created_at<?) OR id IN (SELECT task_id FROM question_marks WHERE person_id=? "
+    "AND created_at<?)) AND created_at<? AND (done_at IS NULL OR done_at>?) AND (closed_at IS NULL OR closed_at>?) "
     "AND NOT EXISTS (SELECT 1 FROM snoozes sz WHERE sz.task_id=tasks.id AND sz.ended_at IS NULL "
     "AND (sz.until_at IS NULL OR sz.until_at>?))"
 )
@@ -858,9 +859,10 @@ def replay_items(c, person, start, end, assistant_bot=None):
         for r in c.execute(
             "SELECT t.id,t.title,t.requester_id AS asker,t.created_at AS at "
             "FROM tasks t "
-            # Theirs then, or the asking bot's own task with its question to them (backend/person_asks.py).
+            # Theirs then, or the asking bot's own task with its ❓ or OK to them (backend/person_asks.py).
             f"WHERE ({_OWNER_THEN}=? OR t.id IN (SELECT v.task_id FROM visits v JOIN requirements r ON "
-            "r.visit_id=v.id WHERE r.person_id=? AND r.added_by_id=t.requester_id)) AND t.created_at>=? AND t.created_at<? "
+            "r.visit_id=v.id WHERE r.person_id=? AND r.added_by_id=t.requester_id) OR t.id IN (SELECT q.task_id "
+            "FROM question_marks q WHERE q.person_id=? AND q.bot_id=t.requester_id)) AND t.created_at>=? AND t.created_at<? "
             "AND t.requester_id LIKE 'bot:%' AND t.requester_id<>? AND NOT EXISTS "
             "(SELECT 1 FROM ask_ingest_items i WHERE i.ref=t.id AND i.person=? AND i.kind='task' "
             f"AND julianday(i.created_at)<=COALESCE({_FIRST_OWNER_CHANGE}, 1e9)) "
@@ -873,7 +875,24 @@ def replay_items(c, person, start, end, assistant_bot=None):
             "AND h.created_at>=? AND h.created_at<? AND NOT EXISTS "
             "(SELECT 1 FROM ask_ingest_items i WHERE i.person=? AND i.kind='task' AND i.ref=t.id "
             "AND i.asker=h.actor_id AND abs(julianday(i.created_at)-julianday(h.created_at))<=1.0/86400)",
-            (person, person, start, end, skip, person, person, start, end, skip, person, skip, start, end, person),
+            (
+                person,
+                person,
+                person,
+                start,
+                end,
+                skip,
+                person,
+                person,
+                start,
+                end,
+                skip,
+                person,
+                skip,
+                start,
+                end,
+                person,
+            ),
         )
     ]
     return sorted(out, key=lambda it: it["created_at"])
@@ -883,7 +902,8 @@ def load_at(c, person, at, leave_out=""):
     """Roughly how full the person's plate was just before `at`: their tasks open then, snoozed ones left out, and the
     replayed item itself (put on them after it was created, it may already be theirs)."""
     return c.execute(
-        f"SELECT COUNT(*) FROM tasks WHERE {_ACTIVE_AT} AND id<>?", (person, person, at, at, at, at, at, leave_out)
+        f"SELECT COUNT(*) FROM tasks WHERE {_ACTIVE_AT} AND id<>?",
+        (person, person, at, person, at, at, at, at, at, leave_out),
     ).fetchone()[0]
 
 
@@ -893,7 +913,7 @@ def open_items_at(c, person, at, leave_out="", asker=""):
     out = {}
     for r in c.execute(
         f"SELECT id,title FROM tasks WHERE {_ACTIVE_AT} AND id<>? ORDER BY created_at DESC",
-        (person, person, at, at, at, at, at, leave_out),
+        (person, person, at, person, at, at, at, at, at, leave_out),
     ):
         if len(out) >= MAX_ITEMS:
             break
