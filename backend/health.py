@@ -684,37 +684,6 @@ def repository_fix(c, bot, label, github_owner=""):
     return repository, f"Run `{command}` on {label}, or ask BotOps"
 
 
-def _member_bots_beside_shared_keys(c):
-    """Computers whose `_shared.env` holds keys every bot there receives, and that also host bots members
-    created: a member's bot instructions could ask a run for them."""
-    runners = [
-        r
-        for r in c.execute("SELECT id,label,readiness FROM runners_with_state WHERE revoked_at IS NULL ORDER BY label")
-        if readiness_document(r["readiness"]).get("shared_env")
-    ]
-    out, members = [], {}
-    if runners:
-        marks = ",".join("?" * len(runners))
-        for row in c.execute(
-            "SELECT a.runner_id,a.bot FROM assignments a JOIN bot_config bc ON bc.bot=a.bot "
-            f"WHERE a.runner_id IN ({marks}) AND bc.created_by LIKE 'human:%'",
-            [r["id"] for r in runners],
-        ):
-            if _made_by_member(c, row["bot"]):
-                members.setdefault(row["runner_id"], []).append(row["bot"])
-    for runner in runners:
-        found = members.get(runner["id"])
-        if found:
-            out.append((runner["label"], found))
-    return out
-
-
-def _made_by_member(c, bot):
-    from .auth import Auth
-
-    return Auth.member_bot_row(c, bot)
-
-
 def _rejected(computers):
     """Online computers whose wanted harness refused its key or login: (computer, runtime, when, why, credential source)."""
     return [
@@ -3952,21 +3921,6 @@ def view(c, who, settings, auth, github, config, filing=False):
     if full and (browser := browser_commands.health_problem(c)):
         checks.append(
             _check("browser_host", "Browser host", "warn", browser, [_fix("Open Computers", "#/settings", "devices")])
-        )
-    beside = _member_bots_beside_shared_keys(c) if full else []
-    if beside:
-        checks.append(
-            _check(
-                "member_bots",
-                "Members' bots",
-                "warn",
-                "Bots members created run on a computer that holds keys every bot there receives "
-                "(secrets/_shared.env): "
-                + "; ".join(f"{label}: {', '.join(_bot_name(c, b) for b in bots[:3])}" for label, bots in beside[:3])
-                + ". A member's bot instructions could ask a run for them. Move those bots to a computer "
-                "with no shared keys and open only that one to members' bots (Settings > Computers).",
-                [_fix("Open Computers", "#/settings", "devices")],
-            )
         )
     exposed = _mail_key_exposed(c) if full else []
     if exposed:

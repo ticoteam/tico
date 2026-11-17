@@ -3637,8 +3637,6 @@ class Execution:
             readiness.pop('harnesses', None)
         if not readiness.get('mail_key'):
             readiness.pop('mail_key', None)
-        if not readiness.get('shared_env'):
-            readiness.pop('shared_env', None)
         # The platform named at enrollment stands: backend/sql.py decides on it (a heartbeat
         # from a stolen credential must not turn a shared server into a personal Mac).
         # Most beats repeat the last report: then only the contact times move (readiness_at too: the page tells a
