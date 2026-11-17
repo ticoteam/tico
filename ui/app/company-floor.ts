@@ -20,7 +20,7 @@ type FloorPipe = FloorFactory['pipelines'][number];
 type FloorStage = FloorPipe['stages'][number];
 type FloorUnit = 'day' | 'week';
 /** What a card is about: a stage, or one teammate's deck in it (`actor`; '' for the whole stage, CF_REST for the deck
- *  of everyone past the most loaded and of tasks nobody holds). */
+ *  of everyone past the most loaded and of tasks nobody holds, whose card is the whole stage's). */
 interface FloorPick { pipeline: string; stage: string; actor: string }
 interface FloorState {
   factory: string;            // '' for the whole company
@@ -276,16 +276,15 @@ const cfPickOf = (el: HTMLElement): FloorPick => ({pipeline: el.dataset['cfPipel
 
 /** How many tasks a card is about, and how many of them wait on the reader. */
 function cfPickCounts(pick: FloorPick, s: FloorStage): {count: number; wait: number} {
-  if (pick.actor === CF_REST) return {count: s.count - s.owners.reduce((n, o) => n + o.count, 0), wait: 0};
-  if (!pick.actor) return {count: s.count, wait: s.needs_you};
+  // The overflow deck has no one to filter by: its card is the whole stage's, so its count and rows agree.
+  if (!pick.actor || pick.actor === CF_REST) return {count: s.count, wait: s.needs_you};
   const own = s.owners.find(o => o.actor === pick.actor);
   return {count: own?.count ?? 0, wait: own?.needs_you ?? 0};
 }
 function cfCardHead(pick: FloorPick, p: FloorPipe, s: FloorStage): string {
   const {count, wait} = cfPickCounts(pick, s);
   let who: string;
-  if (pick.actor === CF_REST) who = `<b class="cf-card-name tnum">+${count}</b>`;
-  else if (pick.actor) who = `${cfFace(pick.actor, 32)}<b class="cf-card-name">${esc(actorName(pick.actor))}</b>`;
+  if (pick.actor && pick.actor !== CF_REST) who = `${cfFace(pick.actor, 32)}<b class="cf-card-name">${esc(actorName(pick.actor))}</b>`;
   else if (s.owners.length) {
     const faces = s.owners.slice(0, 3).map(o => cfFace(o.actor, 24)).join('');
     const names = s.owners.slice(0, 2).map(o => actorName(o.actor)).join(', ');
@@ -378,7 +377,7 @@ function cfCardFollow(st: FloorState): void {
 async function cfRowsLoad(st: FloorState, pick: FloorPick): Promise<void> {
   const key = cfKey(pick), held = st.rows.get(key);
   if (held && Date.now() - held.at < CF_ROWS_FRESH_MS) return;
-  // Snoozed tasks too, as the counts include them. The overflow deck has no owner to filter by: it lists the stage's.
+  // Snoozed tasks too, as the counts include them.
   try {
     const page = await taskBriefsPage({pipeline: pick.pipeline, stages: [pick.stage], status: 'open', snoozed: 'all', limit: CF_ROWS,
       ...(pick.actor && pick.actor !== CF_REST ? {owners: [pick.actor]} : {})});

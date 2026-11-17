@@ -241,12 +241,13 @@ const levels = (page: Page, sel: string) => page.locator(sel).evaluateAll(els =>
       await page.locator('.cf-stage').first().waitFor();
       assert.equal(await page.locator('.cf-stage[data-cf-stage-id="triage"] .cf-deck').count(), 13);
       assert.equal(await page.locator('.cf-stage[data-cf-stage-id="triage"] .cf-deck[data-cf-actor="+"]').count(), 1);
-      // The overflow deck's card lists the stage's tasks: no owner to filter by, snoozed ones too.
+      // The overflow deck opens the whole stage's card: its count and rows agree, snoozed ones too.
       hub.reads.length = 0;
       await page.locator('.cf-stage[data-cf-stage-id="triage"] .cf-deck[data-cf-actor="+"]').click();
       const card = page.locator('#cf-card');
       await card.locator('.cf-row').first().waitFor();
-      assert.equal(await card.locator('.cf-card-name').innerText(), '+3');
+      assert.match(await card.locator('.cf-card-stage').innerText(), / · \d+$/);
+      assert.ok(await card.locator('.cf-card-faces').count());
       assert.equal(await card.locator('.cf-row').count(), 5);
       const read = hub.reads.find(u => u.pathname === '/api/v2/tasks')!;
       assert.equal(read.searchParams.get('pipeline'), 'fixes');
