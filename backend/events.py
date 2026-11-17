@@ -1898,7 +1898,7 @@ def prime_bot_rows(c, slugs):
     one query per table (per 500 bots), so a loop over bots reads none of them again; spend limits are one read of
     every budget node (usage_limits.nodes). Outside a snapshot nothing is kept."""
     from .read_cache import cache, prime
-    from . import browser_exit, run_backoff, turn_budgets
+    from . import browser_exit, holds, run_backoff
 
     if cache(c) is None:
         return
@@ -1908,11 +1908,11 @@ def prime_bot_rows(c, slugs):
             ("bot_status", "bot", "SELECT * FROM bot_status WHERE bot=?"),
             ("bots", "id", "SELECT * FROM bots WHERE id=?"),
             ("run_backoff", "bot", run_backoff.GET_SQL),
-            ("bot_budget", "bot", turn_budgets.GET_SQL),
             ("bot_browser_exits", "bot", browser_exit.BOT_EXIT_SQL),
         ):
             found = {row[column]: row for row in c.execute(f"SELECT * FROM {table} WHERE {column} IN ({marks})", part)}
             prime(c, statement, {(s,): found.get(s) for s in part})
+        holds.prime(c, holds.RUNAWAY, "bot", part)
 
 
 def prime_status_lines(c, slugs):

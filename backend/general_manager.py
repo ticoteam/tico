@@ -202,8 +202,9 @@ def _held(c):
             "held after five fast failures in a row",
         ),
         (
-            "SELECT bot, held_at, runs || ' runs in the last ' || coalesce(window,'hour') AS reason "
-            "FROM bot_budget WHERE held_at IS NOT NULL",
+            "SELECT holdable_id AS bot, created_at AS held_at, json_extract(details,'$.runs') || ' runs in the last ' "
+            "|| coalesce(json_extract(details,'$.window'),'hour') AS reason "
+            "FROM holds WHERE kind='runaway' AND holdable_type='bot' AND released_at IS NULL",
             "held by its turn budget, a likely runaway loop",
         ),
     ):

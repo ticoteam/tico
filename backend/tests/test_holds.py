@@ -34,7 +34,15 @@ def _run_hold(api, c, rig):
 
 
 def _budget(api, c, rig):
-    c.execute("INSERT INTO bot_budget(bot,held_at,window,runs,budget) VALUES('ops',?, 'hour', 300, 300)", (NOW,))
+    holds.put(
+        c,
+        holds.RUNAWAY,
+        "bot",
+        "ops",
+        actor=H.KEEPER,
+        reason="Tico stopped ops: 300 runs in the last hour. This looks like a runaway loop, not normal work.",
+        details={"window": "hour", "runs": 300, "budget": 300},
+    )
 
 
 def _usage_limit(api, c, rig):
