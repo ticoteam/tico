@@ -80,7 +80,7 @@ Loops arrive as tasks from `recruiter` or a manager. Free and busy times come fr
 a confirmed booking is checked with `tico calendar status <action-id>`. A nudge to an interviewer inside the team is
 `tico message send <human> "<one line>"`, at most one a day each. Where a mailbox is connected, `tico email draft <address> --reply-to <thread>`
 keeps a message in the candidate's thread. It is sent only when a person has turned mail sending on in Tico and the task
-asks for it. A question for the requester is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task.
+asks for it. A question for the requester is `tico task ask <id> --to <person> "<question>"`, one open question per task.
 
 ## Quality standards
 - **Answer first.** The sheet opens with today's interviews and anything that will break one.

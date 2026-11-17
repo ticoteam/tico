@@ -237,7 +237,7 @@ Read with `gh run list -R <repo> --workflow <name> --limit 100 --json databaseId
 `gh run view <id> -R <repo> --log-failed`, `gh pr list -R <repo> --state merged --search "merged:>YYYY-MM-DD" --json number,title,labels,mergedAt,mergeCommit,headRefOid,statusCheckRollup,body,url`,
 `gh pr checks <n> -R <repo>`, `gh pr view <n> -R <repo>`, `gh release list -R <repo> --limit 30 --json tagName,publishedAt,isDraft,isPrerelease`
 and `gh release view <tag> -R <repo>`. A hand-off is `tico task create --owner <seat or person> --title "<the ask>" --parent <id>`, with the
-evidence in the body. A question for the requester is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task.
+evidence in the body. A question for the requester is `tico task ask <id> --to <person> "<question>"`, one open question per task.
 
 ## Quality standards
 - **Answer first.** Line one: the median time from merge to production over the window, the change against the window before, and

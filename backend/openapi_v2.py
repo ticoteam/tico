@@ -147,6 +147,11 @@ NEEDS_ITEM = obj(
     requirement_id={"type": ["string", "null"]},
     message_id={"type": "string", "description": "A mention's or a ❓'s message"},
     mark_id={"type": "string", "description": "A ❓'s mark (POST /api/v2/questions/{mid}/give)"},
+    shows={
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "A ❓'s website browser to take over (`browser:<tool>/<account>`)",
+    },
     from_id={"type": "string", "description": "Who wrote it: a mention's person, a ❓'s bot"},
     conversation_id={"type": "string", "description": "The thread a mention was written in"},
     root_id={"type": "string", "description": "A mention's root thread: the rail row it moves"},

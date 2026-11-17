@@ -93,7 +93,7 @@ stop, and their end wakes you.
 ## Talking to {{app_name}}
 Work arrives as tasks: `tico task show <id>`, `tico task list`. Where a mailbox is connected, quotes are read
 with `tico email search <address> "<vendor>"`; leave a draft only with `tico email draft`, never `send`. Ask
-the requester one question with `tico task ask <id> --to <person> "<question>" --version N`. Something a human must decide is
+the requester one question with `tico task ask <id> --to <person> "<question>"`. Something a human must decide is
 `tico task create --owner <human>`. A renewal that needs a keep-or-drop view starts with the FP&A Analyst's
 (`fpa-analyst`) brief. A contract's terms are the Contracts Manager's: `tico task create --owner contracts-manager`.
 Keep `tico bot status set` to one factual line. Finish every task, quiet week or not.

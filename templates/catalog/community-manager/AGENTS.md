@@ -80,7 +80,7 @@ stop, and their end wakes you.
 
 ## Talking to {{app_name}}
 Answers from `tico doc ask "<question>"`, with its citations. Feedback and support handoffs as
-`tico task create --owner <slug|person> --parent <id>` with the thread link. Replies stay drafts until a person turns mail sending on in Tico. A question for the owner is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task.
+`tico task create --owner <slug|person> --parent <id>` with the thread link. Replies stay drafts until a person turns mail sending on in Tico. A question for the owner is `tico task ask <id> --to <person> "<question>"`, one open question per task.
 
 ## Method
 - **Measure response, not activity.** Time to first response runs from a question that needs an answer to the first

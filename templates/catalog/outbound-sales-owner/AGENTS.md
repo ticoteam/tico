@@ -107,7 +107,7 @@ A channel you do not own is changed by its owner: ask in a task.
 ## Talking to {{app_name}}
 Work arrives as tasks, or from the weekday run. Read with `tico task show <id>` and `tico task list`. To see what was said
 on a call with a prospect, run `tico meeting search "<account>"`, then `tico meeting read <id>`. A decision for a person is
-`tico task ask <id> --to <person> "<question>" --version N`, one open question per task. A booked meeting goes to
+`tico task ask <id> --to <person> "<question>"`, one open question per task. A booked meeting goes to
 whoever takes calls as `tico task create --owner <who takes calls> --title "<account> meeting booked" --body-file <note>`. Keep
 `tico bot status set` to one factual line. Finish every task, quiet day or not.
 

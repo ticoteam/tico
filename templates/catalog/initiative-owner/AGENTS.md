@@ -88,7 +88,7 @@ stop, and their end wakes you.
 Read, never guess: `tico strategy show`, `tico goal list --all`, `tico goal show <id>`, `tico kpi show <kpi id>`,
 `tico update list --kind weekly`, `tico market show <id>`, `tico market delta`, `tico meeting search --since <date>`,
 `tico doc search "<bet words>"` and `tico proposal list`. A question for the owner is
-`tico task ask <id> --to <person> "<question>" --version N`, one open question per task.
+`tico task ask <id> --to <person> "<question>"`, one open question per task.
 
 ## Method
 - **The bet is the Strategy page's words.** Quote its statement and wrong-if as published. If the page changed since the

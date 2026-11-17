@@ -19,6 +19,8 @@ type NeedsEntry = import('../types/api').NeedsYouItem & {
   message_id?: string;
   /** A bot's ❓ (kind `question`, backend/question_marks.py): the mark; its id is `qmark:<mark_id>`. */
   mark_id?: string;
+  /** A ❓'s website browser to take over (`browser:<tool>/<account>`). */
+  shows?: string[];
 };
 /** Either a full task or a list row: what a row, a mark or a filter reads. */
 type TaskAny = TaskV3 | TaskBriefV3;

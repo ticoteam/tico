@@ -99,7 +99,7 @@ stop, and their end wakes you.
 ## Talking to {{app_name}}
 Work arrives as tasks. Pipeline: a CRM read, or the deal owner's latest review. Partner calls:
 `tico meeting search "<partner>"`. Agreements in the team docs: `tico doc search "<partner>
-agreement"`. One question per task with `tico task ask <id> --to <person> "<question>" --version N`. Keep `tico bot status set` to one factual line. A bot that cannot run is a task to `botops`.
+agreement"`. One question per task with `tico task ask <id> --to <person> "<question>"`. Keep `tico bot status set` to one factual line. A bot that cannot run is a task to `botops`.
 
 ## Quality standards
 - **Answer first.** The review opens with registrations waiting and how long each has waited.

@@ -293,8 +293,8 @@ def _ask(conn, item, manager=strategy_bot.NAME):
     closes = "This closes by itself once "
     if item["kind"] == "vision":
         body = (
-            f"The {manager} asks {H.actor_name(conn, item['owner'])} what this team is for, as a question with no "
-            f"choices: they write the vision (one or two sentences: where the team is going, and what it sells to "
+            f"The {manager} asks {H.actor_name(conn, item['owner'])} what this team is for, in the task's chat: "
+            f"they write the vision (one or two sentences: where the team is going, and what it sells to "
             f"whom). A reply that is a vision is saved as the team's vision in their words (`tico strategy vision`) "
             f"and this closes; a reply that is a question is answered here and the question stays open. {closes}a "
             f"vision is saved."
@@ -384,8 +384,10 @@ VISION_REASKED = "Asked as a question by the {manager} now, on its own task: the
 
 
 def _vision_question(conn, item, title, body):
-    """The vision ask: a task the Strategy Owner holds, with its question to the person (a typed answer, no choices),
-    so their list has the question and Write to the Strategy Owner, not a to-do."""
+    """The vision ask: a task the Strategy Owner holds, with its ❓ to the person on the task's chat (backend/
+    question_marks.py), so their list has the question and their reply goes to the Strategy Owner, not a to-do."""
+    from . import question_marks
+
     made = H.task_create(
         conn,
         G.AUTO_ACTOR,
@@ -395,16 +397,8 @@ def _vision_question(conn, item, title, body):
         lint=False,
         lane="company",
     )
-    H.task_ask(
-        conn,
-        G.AUTO_ACTOR,
-        made["id"],
-        item["owner"],
-        VISION_LINE,
-        seen_version=made["version"],
-        brief={"why": VISION_WHY, "details": None, "recommend": None},
-    )
-    return made
+    question_marks.ask(conn, G.AUTO_ACTOR, made["id"], item["owner"], f"{VISION_LINE}\n\n{VISION_WHY}", checked=False)
+    return H.task(conn, made["id"]) or made
 
 
 # Why each ask matters to the person, the line the ask checks want under its question (backend/ask_shape.py).

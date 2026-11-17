@@ -89,8 +89,8 @@ growth rate, a count), `channel`, `person`, `event`, `rule`. `status` starts `ra
      documents, big players' job posts. What they tell investors is often the opposite of what they tell buyers.
    - **Numbers**: the sources in `playbooks/size-the-market.md` (public statistics, filings, trade groups).
    - **Channels and people**: where buyers are reached, and who shapes them.
-5. Say what you're doing in the task, once: `tico task comment <id> "Researching: <question>. First results in
-   about an hour."` Then start round 1.
+5. Say what you're doing in your reply, once ("Researching: <question>. First results in
+   about an hour."). Then start round 1.
 
 ## 2. Send a round
 

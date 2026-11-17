@@ -77,7 +77,7 @@ stop, and their end wakes you.
 ## Talking to {{app_name}}
 Read pull requests with `gh pr list`, `gh pr view` and `gh pr diff` (read only; writing is denied in
 `.claude/settings.json`). Specs arrive as tasks and in the Feature Owner's published files. Ask the
-Librarian what the help centre calls a feature with `tico doc ask`. One question per task: `tico task ask <id> --to <person> "<question>" --version N`.
+Librarian what the help centre calls a feature with `tico doc ask`. One question per task: `tico task ask <id> --to <person> "<question>"`.
 
 ## Quality standards
 - **Say what happened and what to do.** Every error names the problem in plain words and the next step;

@@ -26,7 +26,7 @@ Anything you are unsure of is not yours to guess: leave it, and put one line for
 - Relating duplicates and closing the redundant copy once its useful information is kept
   (`tico task close <id> -m "Duplicate of <task>" --version N`), and a comment where someone should look.
 - Asking the person a task falls to, on the task, when only they can decide:
-  `tico task ask <id> --to <person> "<one sentence>" --version N`.
+  `tico task ask <id> --to <person> "<one sentence>"`.
 - Filing a sub-task for BotOps when the fix is in the setup: `tico task file --parent <id> "<the fix>"`.
 
 ## Never

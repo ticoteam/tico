@@ -15,6 +15,13 @@ from . import visuals
 from .api_contract import ASK_REFUSED, api_v2
 
 
+# What a bot is told when it comments on its own task during its turn (decision (c): a bot talks one way).
+OWN_TURN = (
+    "Your reply at the end of this turn is posted on this task: say it there. "
+    'To ask a person, mark a ❓: tico task ask <id> --to <person> "<question>".'
+)
+
+
 def register(
     app,
     auth,
@@ -194,6 +201,14 @@ def register(
             **org_rule_check.answer(rule),
         }
 
+    def own_turn(c, who, tid):
+        """Refuse a bot's comment on its own open task from a turn on that task: what it says goes in its reply."""
+        task_id = auth.resolve_task(c, who, tid)
+        row = H.task(c, task_id)
+        found = c.execute("SELECT task_id FROM attempts WHERE id=?", (who.attempt_id,)).fetchone()
+        if row and found and found[0] == task_id and row["owner_id"] == who.actor and row["status"] == "open":
+            raise Problem("own_turn", OWN_TURN, 409)
+
     @org_rule_check.replayer("comment")
     def rule_replay_comment(c, bot, hold, replay, ingest, gate=None):
         return comment_write(
@@ -224,9 +239,13 @@ def register(
         running turn, queue right after it, defer to its next turn on the task (at the latest `defer_for`, 24h), or
         goal: the task session's goal becomes the text (chat_goals.set_goal). Omitted, it steers (D13), or defers with no
         deadline for a reader who may not direct the task's bots. It reaches the task's followers and whom it addresses
-        (threads.plan). A question to a person is an ask on the task (`POST /api/v2/tasks/{tid}/asks`), never a
-        comment."""
+        (threads.plan). A question to a person is a ❓ (`POST /api/v2/tasks/{tid}/questions`). A bot does not comment
+        on its own open task during its turn there: its reply at the end of the turn is posted on the task (`OWN_TURN`);
+        a comment that carries files still goes."""
         who = request.state.identity
+        if who.role == "bot" and who.attempt_id and not body.attachments:
+            with store.read() as c:
+                own_turn(c, who, tid)
         counsel.no_attachments(who, body.attachments)  # before the rule check holds anything (visuals.attach too)
         if body.delivery and body.needs_action and body.delivery != "steer":
             raise Problem("delivery", "needs_action is steer: send it without a delivery, or with steer", 422)

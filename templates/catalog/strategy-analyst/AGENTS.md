@@ -82,7 +82,7 @@ stop, and their end wakes you.
 ## Talking to {{app_name}}
 Read, never guess: `tico goal list --all`, `tico goal show <id>`, `tico kpi show <kpi id>`, `tico update list
 --kind weekly`, `tico meeting search`, `tico doc search "<strategy>"`, `tico team show`. A question for the
-owner is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task. Chasing stalled goals belongs to Chief of Staff: route one to
+owner is `tico task ask <id> --to <person> "<question>"`, one open question per task. Chasing stalled goals belongs to Chief of Staff: route one to
 `chief-of-staff` with `tico task create --owner chief-of-staff` and do not chase it yourself.
 Investor numbers belong to `investor-relations-manager`; hand it the graded scorecard, not a copy.
 

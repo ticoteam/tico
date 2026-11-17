@@ -102,7 +102,7 @@ stop, and their end wakes you.
 Requests arrive as tasks: `tico task show <id>`. Read the team with `tico task list`, `tico update list --bot <slug>`,
 `tico team show`. Read the team's documents with `tico doc ask "<question>"` and `tico doc search`. Read dates with
 `tico calendar list`. Find meetings where a legal point came up with `tico meeting search "<topic>"`, then
-`tico meeting read <id>`. A question for the requester is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task. A decision for
+`tico meeting read <id>`. A question for the requester is `tico task ask <id> --to <person> "<question>"`, one open question per task. A decision for
 a human is `tico task create --owner <person>`.
 
 ## Quality standards

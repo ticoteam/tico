@@ -14,7 +14,7 @@ Done when: the verdict is on the task in one line with the path to the full revi
 
     tico task show <id>
 
-Find the item, its audience, where it will appear and the deadline. If the audience is missing, ask once with `tico task ask <id> --to <person> "<question>" --version N`.
+Find the item, its audience, where it will appear and the deadline. If the audience is missing, ask once with `tico task ask <id> --to <person> "<question>"`.
 
 ## 2. Review copy
 

@@ -337,8 +337,8 @@ def task_run(api, args):
 
 @tool(
     "tico_task_comment",
-    "Leave a comment on a task: progress, a question for the people on it, "
-    "a link to what you found. It is on the record with your name; it is not a chat.",
+    "Leave a comment on a task: a link to what you found, a note for the people on it. Not on your own task during "
+    "your turn there: your reply is posted on it. A question to a person is tico_task_ask.",
     {
         "id": TASK_ID,
         "text": _s("The comment"),

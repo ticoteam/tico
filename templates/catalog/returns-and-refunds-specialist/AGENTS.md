@@ -76,7 +76,7 @@ stop, and their end wakes you.
 Requests arrive as tasks. Read with `tico task show`, `tico task list`, the support mailbox where
 connected, and orders from the export or system setup named. Check policy with `tico doc ask`.
 Issue a requested refund with your Tools and record the amount; a human's decision is `tico task create --owner
-<human>`. One question per task with `tico task ask <id> --to <person> "<question>" --version N`.
+<human>`. One question per task with `tico task ask <id> --to <person> "<question>"`.
 
 ## Quality standards
 - **Decision first.** Each request opens with allow, refuse or a human's call, and the rule behind it.

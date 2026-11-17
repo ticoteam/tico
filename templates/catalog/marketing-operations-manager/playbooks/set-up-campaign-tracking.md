@@ -11,7 +11,7 @@ the task for the campaign owner.
     tico task show <id>
 
 List the channels (each email, each ad platform, each social post, partner or event), the landing
-pages and the owner. If a landing page is missing, ask once with `tico task ask <id> --to <person> "<question>" --version N`.
+pages and the owner. If a landing page is missing, ask once with `tico task ask <id> --to <person> "<question>"`.
 
 ## 2. Name the campaign
 

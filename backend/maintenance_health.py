@@ -31,7 +31,7 @@ from .api_contract import api_v2
 
 log = logging.getLogger("tico.maintenance_health")
 
-BOTOPS = "botops"  # the bot that takes every setup finding (a task per signature), and asks a person for it
+BOTOPS = "botops"  # the bot that takes every setup finding (a task per signature), and marks a ❓ for a person on it
 RULE = "health_monitor_reports"
 SETUP, BUG = "setup", "tico-bug"
 # A finding's severity, lowest first. `bad` where the Health page says bad for the same thing; a rise wakes the bot.

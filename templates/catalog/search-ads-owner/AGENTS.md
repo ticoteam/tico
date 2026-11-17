@@ -131,7 +131,7 @@ in a task.
 Work arrives as tasks: your routines, your Growth tasks, and requests from the Growth Manager, a segment's
 Marketing Owner or a person. A request for a campaign is an idea: file it in Ideas with your channel tag, or answer on
 its task in under 150 words what you would build, and build it as a bet. A Tool that `tico tool list --bot <slug>` does
-not show is not granted. Ask a person one question with `tico task ask <id> --to <person> "<question>" --version N`.
+not show is not granted. Ask a person one question with `tico task ask <id> --to <person> "<question>"`.
 A competitor's public paid activity is a market fact: report it in prose with `tico market report --kind other --about
 "<company>" --claim "<what you saw>" --source "<where and when>"`, never into a second list here.
 

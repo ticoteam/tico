@@ -69,7 +69,7 @@ If setup has not finished (Tico marks you Needs setup), do this before any other
 
 ## Sending
 Draft messages to outsiders until a person turns mail sending on for this bot in Tico. Inside the team you talk on the
-task: a question is `tico task ask <id> --to <person> "<question>" --version N`, one open question at a time, and a
+task: a question is `tico task ask <id> --to <person> "<question>"`, one open question at a time, and a
 note goes on the task itself.
 
 Always:

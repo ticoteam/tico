@@ -780,7 +780,7 @@ function decidePaintBody(st: DecState) {
   }
   // A website's browser the ask shows (`browser:<tool>/<account>`): the live view; an OK's comes in its shows.
   // (On a phone it is in the Task tab; the bottom row's Open browser opens it: decidePaintSide.)
-  if (kind !== 'ok') html += (it.ask?.shows || []).filter(r => r.startsWith('browser:')).map(r => decideBrowserSlot(r.slice(8))).join('');
+  if (kind !== 'ok') html += (it.ask?.shows || it.shows || []).filter(r => r.startsWith('browser:')).map(r => decideBrowserSlot(r.slice(8))).join('');
   // A question: on a phone the question and its answer come first, the background under them (decide.css).
   host.parentElement?.classList.toggle('dc-qmain', kind === 'question');
   if (host.dataset.html === html && host.dataset.key === it.id) { decideOkDocMount(host, it); return; }
@@ -817,11 +817,13 @@ function decideApprovalLineHTML(it: NeedsEntry): string {
 /** An OK whose view, as read, shows nothing: no grant's content, no page, no diff. Its task's text stands in. */
 const decideOkBare = (v: AskOkView): boolean => (v.state === 'ready' || v.state === 'none') && !v.html && !v.pages.length && !v.missing;
 const decideBrowserSlot = (ref: string) => ref.includes('/') ? `<div class="dc-browser" data-dc-browser="${esc(ref)}"></div>` : '';
-/** The live view of the browser an ask shows. Its Done answers the ask "Done" when that is one of its choices (a bot's
-    "sign in for me"), else it only closes the view, which leaves an Open browser button. */
+/** The live view of the browser an ask shows. Its Done replies "Done" to a bot's ❓ that shows it (a bot's "sign in for
+    me", backend/browser_commands.py), or answers an older ask "Done" when that is one of its choices; else it only
+    closes the view, which leaves an Open browser button. */
 function decideBrowserMount(st: DecState, it: NeedsEntry, slot: HTMLElement) {
   const [toolId = '', accountId = ''] = (slot.dataset.dcBrowser || '').split('/');
-  const answers = decideKind(it) === 'question' && (it.ask?.choices || []).includes('Done');
+  const marked = it.kind === 'question';
+  const answers = marked || (decideKind(it) === 'question' && (it.ask?.choices || []).includes('Done'));
   const taskId = it.task_id || it.task?.id || '', rid = decideRid(it), ver = it.task?.version ?? null;
   const closed = () => {
     if (!slot.isConnected || DEC !== st) return;
@@ -834,7 +836,8 @@ function decideBrowserMount(st: DecState, it: NeedsEntry, slot: HTMLElement) {
   browserView.mount(slot, {toolId, accountId, title: it.line, onClose: closed,
     onDone: async () => {
       if (!answers) return true;
-      await decideDo(st, it, 'Answered', () => taskAnswer(taskId, rid, 'Done', ver), decideUndoAnswer);
+      if (marked) await decideChatSend(st, 'Done', []);
+      else await decideDo(st, it, 'Answered', () => taskAnswer(taskId, rid, 'Done', ver), decideUndoAnswer);
       // Still on this item: the answer was refused and says why on the right; the view stays open.
       return !(DEC === st && st.at === it.id);
     }});
@@ -891,7 +894,7 @@ function decidePaintSide(st: DecState) {
     // A browser ask on a phone: Open browser is the forward action, Done once the person is back from it (when "Done"
     // can answer it: a question with that choice, or with none).
     const choices = it.ask?.choices || [], done = kind === 'question' && (!choices.length || choices.includes('Done'));
-    const browse = decidePhone() && (it.ask?.shows || []).some(r => r.startsWith('browser:'))
+    const browse = decidePhone() && (it.ask?.shows || it.shows || []).some(r => r.startsWith('browser:'))
       ? DEC_BROWSED.has(it.id) && done ? decideBtn('browse-done', 'Done', true, busy) : decideBtn('browse', 'Open browser', true, busy) : '';
     body = `<div class="dc-acts dc-acts-row">${kind === 'ok' && !DEC_APPROVED.has(it.id) ? decideBtn('approve', words ? `${label} with comments` : label, true,
       ` data-dc-label="${label}"` + (!ready || !(it.ask?.may || []).includes('ok') || st.busy ? ' disabled' : '')) : browse}</div>${decideMoreHTML(st, it)}`;
@@ -2135,7 +2138,10 @@ async function decideClick(st: DecState, ev: MouseEvent) {
     case 'again': await decideDo(st, it, 'Tried again', () => taskTryAgain(taskId)); return;
     case 'let-see': { const whom = it.task?.turn?.share || []; if (whom.length) await decideLetSee(st, it, whom); return; }
     case 'browse': ($('.decide .dc-thing [data-bv-launch], .decide .dc-thing [data-dc-browser-open]') as HTMLElement | null)?.click(); return;
-    case 'browse-done': await decideDo(st, it, 'Done', () => taskAnswer(taskId, rid, 'Done', ver), decideUndoAnswer); return;
+    case 'browse-done':
+      if (it.kind === 'question') await decideChatSend(st, 'Done', []);
+      else await decideDo(st, it, 'Done', () => taskAnswer(taskId, rid, 'Done', ver), decideUndoAnswer);
+      return;
     case 'close-task': {
       // Close (a stuck item's) and Close task (⋯): what is typed in the item's box is the reason, kept on the close (its
       // history, and the news a bot that asked for the task gets: task_effects._tell_requester). No confirm: ↶ reopens it.

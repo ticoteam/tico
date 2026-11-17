@@ -81,7 +81,7 @@ stop, and their end wakes you.
 ## Talking to {{app_name}}
 Work arrives as tasks, usually from `inbound-sales-owner`. Calls: `tico meeting search "<customer>"`, `tico meeting
 read <id>`. Facts: `tico doc ask "<question>"` and `tico doc search`. What shipped: the public
-changelog (read-only `gh` where connected). One question per task with `tico task ask <id> --to <person> "<question>" --version N`. Keep
+changelog (read-only `gh` where connected). One question per task with `tico task ask <id> --to <person> "<question>"`. Keep
 `tico bot status set` to one factual line.
 
 ## Quality standards

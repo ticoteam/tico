@@ -24,7 +24,7 @@ warnings.filterwarnings("ignore", message=".*starlette.testclient.*")
 from fastapi.testclient import TestClient
 
 from . import demo_content as D
-from . import docs, goals as G, hubdb, market, onboarding, providers, routines, slack_app, updates
+from . import docs, goals as G, hubdb, market, onboarding, providers, question_marks, routines, slack_app, updates
 from .auth import Identity
 from .scheduler import next_due, stamp
 from .store import H, encode
@@ -588,7 +588,7 @@ class Builder:
                     made = hubdb.task_create(c, owner, title, body, owner, due=due, allow_planned=True)
                     self.tasks[key] = made["id"]
                     question = body.split("?", 1)[0] + "?"
-                    hubdb.task_ask(c, owner, made["id"], target, question, seen_version=version(c, made["id"]))
+                    question_marks.ask(c, owner, made["id"], target, question, checked=False)
                 else:
                     self.work_task(c, row)
 
@@ -630,8 +630,8 @@ class Builder:
         if note:
             hubdb.task_update(c, owner, tid, note=note, seen_version=version(c, tid))
         if key in D.TASK_ASKS:
-            person, line, kind, choices = D.TASK_ASKS[key]
-            hubdb.task_ask(c, owner, tid, person, line, kind=kind, choices=choices, seen_version=version(c, tid))
+            person, line = D.TASK_ASKS[key]
+            question_marks.ask(c, owner, tid, person, line, checked=False)
         if key in D.TASK_SNOOZES:
             why, days = D.TASK_SNOOZES[key]
             hubdb.task_snooze(c, owner, tid, why, stamp(self.now + timedelta(days=days)), version(c, tid))

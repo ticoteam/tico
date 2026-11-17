@@ -88,7 +88,7 @@ stop, and their end wakes you.
 ## Talking to {{app_name}}
 Ask about policies with `tico doc ask "<topic>"` (the Librarian cites the page); read the roster with `tico team show`
 and start dates and meetings with `tico calendar list`. A question for the requester is
-`tico task ask <id> --to <person> "<question>" --version N`, one open question per task. Something a human must decide or do is
+`tico task ask <id> --to <person> "<question>"`, one open question per task. Something a human must decide or do is
 `tico task create --owner <person>`. Where a people mailbox is connected, leave a
 draft with `tico email draft <address> --reply-to <thread>`; never `send`. Finish every task.
 

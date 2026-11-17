@@ -41,17 +41,16 @@ A pick that breaks the rule waits for next Monday, and the ask says so.
 
 ## 4. Ask once
 
-Put the picks to the owner as one ask on this task, two to six choices. Recommend the picks you would start, and name the
+Put the picks to the owner as one question on this task. Write the picks into it and recommend the picks you would start, and name the
 money on any pick that spends. Name any breached guardrail and every test ending soon in the line.
 
-    tico task ask <this task id> --to <owner person ref> "Which ideas should we test this week? I'd start Price calculator and Competitor bids (<amount> on Google Ads). Ending soon: <task and date, or none>." --choices "Price calculator,Competitor bids,Manager meetups" --version N
+    tico task ask <this task id> --to <owner person ref> "Which ideas should we test this week? I'd start Price calculator and Competitor bids (<amount> on Google Ads). Ending soon: <task and date, or none>. Price calculator, Competitor bids or Manager meetups?"
 
-Use the owner's person ref from `tico team show`. The owner may pick several or type an answer. The run ends here, with
-the task asking the owner.
+Use the owner's person ref from `tico team show`. The owner may pick several or reply in their own words. The run ends here.
 
-## 5. On the answer
+## 5. On the reply
 
-You are woken on this task with the answer. For each picked idea, in this order:
+You are woken on this task with their reply. For each picked idea, in this order:
 
 1. Say what changes and what we will watch, then mark it running:
 
@@ -63,7 +62,7 @@ You are woken on this task with the answer. For each picked idea, in this order:
        tico task create --owner <channel owner slug> --parent <idea task id> --title "<one piece of the build>" --label channel:<channel slug>
 
 3. A pick that spends: ask the owner for an OK on its idea task before any money is committed, and commit it only on that
-   OK: `tico task ask <idea task id> --to <owner person ref> "Spend <amount> on Google Ads for two weeks?" --kind ok --version N`.
+   OK: `tico task ask <idea task id> --to <owner person ref> "Spend <amount> on Google Ads for two weeks?" --kind ok --show page:<id> --version N`.
 
 Ideas the owner did not pick stay ideas.
 

@@ -87,7 +87,7 @@ stop, and their end wakes you.
 
 ## Talking to {{app_name}}
 Read `tico goal list` for the funnel targets, the CRM read-only where connected (or `tico db` if the owner
-listed a database), and exports on tasks. Create requested fix tasks with `tico task create --owner <owner>`. A question is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task.
+listed a database), and exports on tasks. Create requested fix tasks with `tico task create --owner <owner>`. A question is `tico task ask <id> --to <person> "<question>"`, one open question per task.
 
 ## Quality standards
 - **One definition per number.** A conversion is one named event. A page view or a click is a diagnostic.

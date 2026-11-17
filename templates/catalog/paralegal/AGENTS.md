@@ -69,7 +69,7 @@ stop, and their end wakes you.
 
 ## Talking to {{app_name}}
 NDAs arrive as tasks with the file attached. Find templates and signed copies with `tico doc search
-"<party> NDA"`. A question for the requester is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task. Where the contracts mailbox
+"<party> NDA"`. A question for the requester is `tico task ask <id> --to <person> "<question>"`, one open question per task. Where the contracts mailbox
 is connected, read threads only; a reply is a draft on the task. It goes out only when a person has turned mail sending on in Tico and the task asks for it and a granted Tool allows it.
 
 ## Quality standards

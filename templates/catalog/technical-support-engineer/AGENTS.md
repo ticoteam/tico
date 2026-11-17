@@ -82,7 +82,7 @@ stop, and their end wakes you.
 Read with `tico task show`, `tico task list`, `tico doc ask "<expected behaviour>"`, and GitHub read-only
 (`gh issue list`, `gh issue view`, `gh search issues`) where connected. A bug report for filing is
 `tico task create --owner <human who files bugs>` with the report attached. The answer for the Support
-Agent is a note on its task. One question per task with `tico task ask <id> --to <person> "<question>" --version N`.
+Agent is a note on its task. One question per task with `tico task ask <id> --to <person> "<question>"`.
 
 ## Method
 - **Verdict first, then evidence.** Every finding is one of four verdicts: bug, setup mistake, doc gap, or could not

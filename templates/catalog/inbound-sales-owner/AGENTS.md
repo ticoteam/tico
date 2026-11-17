@@ -101,7 +101,7 @@ A channel you do not own is changed by its owner: ask in a task.
 Work arrives as tasks, or from the sweep. Read with `tico task show <id>` and `tico task list`. To see what a lead said
 on a call, run `tico meeting search "<lead>"`, then `tico meeting read <id>`. `tico calendar list` shows the bookings on the
 company calendar: offer two times that fit the seller's working hours and do not clash with a booking. A decision for a
-person is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task. A booked call goes to
+person is `tico task ask <id> --to <person> "<question>"`, one open question per task. A booked call goes to
 whoever takes calls as `tico task create --owner <who takes calls> --title "<lead> call booked" --body-file <note>`. Keep
 `tico bot status set` to one factual line. Finish every task, quiet sweep or not.
 

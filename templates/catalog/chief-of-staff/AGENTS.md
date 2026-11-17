@@ -80,7 +80,7 @@ stop, and their end wakes you.
 Read from Tico, never from memory: `tico goal list --all`, `tico goal show <id>`,
 `tico task list`, `tico update list --kind weekly`, `tico update list --kind daily`,
 `tico meeting search --since YYYY-MM-DD`, `tico calendar list`, `tico team show`. A question for the
-owner is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task. Something a human must decide is
+owner is `tico task ask <id> --to <person> "<question>"`, one open question per task. Something a human must decide is
 `tico task create --owner <person>`. When ready, the brief reaches the owner
 as `tico message send --fyi <owner> "<one line and the link>"`. Finish every task, quiet week or not.
 

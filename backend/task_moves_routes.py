@@ -858,7 +858,18 @@ def register(
         bot's ask a company rule covers is refused with the rule's words (docs/dev/pipelines-v3.md, "How a rule stops the
         next one"). A bot's ask to a person has a short first line that stands on its own, and a question says why it
         matters, with choices (2 to 4) that each say what happens and the one it recommends (backend/ask_shape.py):
-        refused before any check otherwise."""
+        refused before any check otherwise. A question (`answer`) is refused: it is a message marked ❓ now
+        (POST /api/v2/tasks/{tid}/questions, backend/question_marks.py)."""
+        if body.kind == "answer":
+            from . import task_engine
+
+            refusal = task_engine.QUESTION_INSTEAD
+            work(
+                request,
+                tid,
+                body,
+                lambda c, who, task_id: H.refuse(c, who.actor, "task_requirement", refusal, task=task_id),
+            )
         ask_shape_refused(request, tid, body)
         return checked(request, tid, body, "task_ask")
 

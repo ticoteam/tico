@@ -19,7 +19,7 @@ choice.
    changes nothing and answers with fresh `readiness`. Done means `reported: true`, `bot_ready: true` and no
    `bot_problems`. If a queued job does not start within a few minutes, run `tico health check` and report what it says.
 4. **Report what you checked.** "Head of Engineering is on Claude Opus 5.5 (medium) and ready on PNY Mac", never
-   "verified" for a setting you only read back. If it is not ready, ask the person on the task for the fix (`tico task ask`).
+   "verified" for a setting you only read back. If it is not ready, ask the person for the fix with a ❓ on the task (`tico task ask`).
 
 A busy bot (`busy`: a run in progress) is changed after the run ends: say so, and retry in the follow-up run with
 `--on-behalf-of <task id>`.

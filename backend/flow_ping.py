@@ -2,7 +2,7 @@
 """Ping: a person asks bots for the questions they have for them (docs/tasks.md, "Needs you"; skills/add-to-flow).
 
 Each bot gets one message from the person, in its chat with them, pointing at the add-to-flow skill. The bot does the
-thinking: its questions come back as ordinary tasks of its own, each with one ask to that person, in their Needs you
+thinking: its questions come back as ordinary tasks of its own, each with a ❓ to that person, in their Needs you
 (reach.pinged lets a bot ask the person who pinged it for a day). Nothing here calls a model or keeps a table: the
 message's `refs.add_to_flow` is the record, and a bot the same person pinged in the last COOLDOWN_MINUTES is skipped,
 so a double press asks once.
@@ -36,7 +36,7 @@ def text(name: str) -> str:
     """The person's message to each bot. It names them: the questions are theirs, not the bot's manager's."""
     return (
         f"Any questions for me? Read Tico's {SKILL} (under HUB_DIR) and follow it. Ask me, {name}, not your "
-        "manager: each question its own task with one ask to me. If nothing clears the bar, say so in one line."
+        "manager: each question its own task, with a ❓ message to me. If nothing clears the bar, say so in one line."
     )
 
 

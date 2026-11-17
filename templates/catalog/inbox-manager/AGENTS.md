@@ -98,7 +98,7 @@ step sorts the rest into `archive`, `needs-owner`, `route`, `reply` or `read` wi
 this repository; also in `$HUB_DIR/questions/`). `tico automation recent-runs --trigger message --range 24h` says what
 it did; `tico email inbox <address>` lists what is still in the inbox. Open one thread only when you are about to
 draft: `tico email thread <address> <thread-id>`. Something another bot or human owns is
-`tico task create --owner <slug> --parent <id>`. Ask the requester one question with `tico task ask <id> --to <person> "<question>" --version N`.
+`tico task create --owner <slug> --parent <id>`. Ask the requester one question with `tico task ask <id> --to <person> "<question>"`.
 
 ## Quality standards
 - **Answer first.** The brief opens with a count and the one thing the human must do today. Then the

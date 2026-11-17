@@ -1035,16 +1035,8 @@ def _words(text):
 
 
 def _owner_wrote(c, task_id, person):
-    """What `person` wrote on the task: their comments and their answers to its asks, as one casefolded text."""
+    """What `person` wrote on the task's chat (their replies to its ❓ included), as one casefolded text."""
     said = [m.get("body") for m in H.task_comments(c, task_id) if m.get("sender_id") == person]
-    said += [
-        part
-        for row in c.execute(
-            "SELECT a.answer, a.notes FROM answers a JOIN visits v ON v.id=a.visit_id WHERE v.task_id=? AND a.by_id=?",
-            (task_id, person),
-        )
-        for part in row
-    ]
     return "\n".join(_words(part) for part in said if part)
 
 

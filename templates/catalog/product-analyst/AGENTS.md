@@ -81,7 +81,7 @@ stop, and their end wakes you.
 Read data with `tico db list`, `tico db <name> "<select>" --csv` and `tico sql`, read only, with a row limit.
 Exports that arrive on tasks are read from the attachment. Launch dates come from `knowledge/launches.md`
 and merged pull requests where GitHub is readable. Goals: `tico goal list --all`. A question for the requester
-is `tico task ask <id> --to <person> "<question>" --version N`. A number for the Strategy Owner goes as a note with its query, only on request.
+is `tico task ask <id> --to <person> "<question>"`. A number for the Strategy Owner goes as a note with its query, only on request.
 
 ## Quality standards
 - **Answer first.** The first line is the answer with its number and period, not the method.

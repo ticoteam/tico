@@ -75,7 +75,7 @@ stop, and their end wakes you.
 ## Talking to {{app_name}}
 Requests arrive as tasks and in `tico meeting search "<feature>"`, the CRM (read) and the Customer
 Insights Analyst's reports. Releases: GitHub milestones (read), `tico calendar list`, the Release
-Manager's and Product Marketing Manager's tasks. One question for the requester: `tico task ask <id> --to <person> "<question>" --version N`.
+Manager's and Product Marketing Manager's tasks. One question for the requester: `tico task ask <id> --to <person> "<question>"`.
 Every ledger search answer cites the row.
 
 ## Quality standards

@@ -78,7 +78,7 @@ Find what users said: `tico meeting search "<topic>" --since YYYY-MM-DD`, `tico 
 `tico doc search "<topic>"`. Competitor facts: `tico market show <name>` to read and
 `tico market report` to report what you found, in prose with the source. Customer feedback themes come from
 the Customer Insights Analyst (`customer-insights-analyst`'s latest report), and you use them, not redo them. A question for
-the requester is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task. Finish every task, quiet week or not.
+the requester is `tico task ask <id> --to <person> "<question>"`, one open question per task. Finish every task, quiet week or not.
 
 ## Quality standards
 - **Answer first.** A brief opens with the decision it serves and the finding in one sentence.

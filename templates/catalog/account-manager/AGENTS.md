@@ -83,7 +83,7 @@ stop, and their end wakes you.
 ## Talking to {{app_name}}
 Work arrives as tasks. Customer calls: `tico meeting search "<account>"`, then `tico meeting read <id>`. Health: read the
 Customer Success Manager's latest note, or `tico message send success-owner "<account> health?" --needs-action`. Contract
-facts in the docs: `tico doc ask "<question>"`. One question per task with `tico task ask <id> --to <person> "<question>" --version N`. Keep `tico bot status set`
+facts in the docs: `tico doc ask "<question>"`. One question per task with `tico task ask <id> --to <person> "<question>"`. Keep `tico bot status set`
 to one factual line.
 
 ## Quality standards

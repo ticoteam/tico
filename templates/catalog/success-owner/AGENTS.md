@@ -96,7 +96,7 @@ block: a snooze is only to look again on a date. While your own pull request's c
 stop, and their end wakes you.
 
 ## Talking to {{app_name}}
-Work arrives as tasks. Read with `tico task show <id>`, `tico task list`, `tico team show`, `tico calendar list`. A question for the account owner is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task. A human's decision is
+Work arrives as tasks. Read with `tico task show <id>`, `tico task list`, `tico team show`, `tico calendar list`. A question for the account owner is `tico task ask <id> --to <person> "<question>"`, one open question per task. A human's decision is
 `tico task create --owner <person>`. Renewal terms and quotes are the Account Manager's: route them as
 a task to the account's seller (named in `knowledge/renewals.md`) after the owner agrees. Keep `tico bot status set` to one line.
 

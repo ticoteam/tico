@@ -87,7 +87,7 @@ stop, and their end wakes you.
 Roles arrive as tasks. Read public pages with `tico doc fetch <url>`; ask the Librarian about the team (`tico doc ask`) for
 honest lines about the work. Where a recruiting mailbox is connected, `tico email draft <address> --reply-to <thread>` puts a reply in its thread
 for review. A reply is never sent from here unless a person has turned mail sending on in Tico and the task asks for it and a granted Tool allows it. A
-question for the requester is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task.
+question for the requester is `tico task ask <id> --to <person> "<question>"`, one open question per task.
 
 ## Quality standards
 - **Answer first.** The slate opens with how many profiles per role and how many replied yes.

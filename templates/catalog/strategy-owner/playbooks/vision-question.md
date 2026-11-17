@@ -1,7 +1,7 @@
 # The vision question
 
 The server asks the owner "What is this team for?" for you while the team has no vision: a task you hold, titled
-"What is this team for?", with the question on it (a typed answer, no choices). Their reply to it wakes you. Never ask it
+"What is this team for?", with the question on it (a plain ❓ message). Their reply to it wakes you. Never ask it
 again yourself, and never write a vision of your own.
 
 0. Woken when the task is made, before the owner has written anything: nothing to do. The question is open and waits
@@ -14,8 +14,7 @@ again yourself, and never write a vision of your own.
 3. **A question** (what a vision is, an example, why you need it): answer it on the task in two or three plain sentences,
    from the published strategy and the market pages, never with a vision written for them. The question stays open
    for their next reply. If they answered the question itself with a question, ask it again on the task:
-   `tico task ask <id> --to <owner> "What is this team for? ..." --why "Every goal ties to the vision ..." --version N`
-   (N is the version `tico task show <id>` prints).
+   `tico task ask <id> --to <owner> "What is this team for? Every goal ties to the vision ..."`.
 4. **Anything else** (they want it changed later, they are not sure): say in one line that it is saved only when they
    send it, and leave the question open.
 

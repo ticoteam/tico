@@ -36,7 +36,7 @@ nobody. Report the queue, never a seller's name.
 
 Write `reports/YYYY-MM-DD-marketing-data.md` in the shape of `knowledge/examples/marketing-data-check.md`:
 the three shares first, then fixes (what, where, should be, owner), then the four-week trend. Then
-`tico file publish reports/YYYY-MM-DD-marketing-data.md`. Ask once with `tico task ask <id> --to <person> "<question>" --version N` whether to
+`tico file publish reports/YYYY-MM-DD-marketing-data.md`. Ask once with `tico task ask <id> --to <person> "<question>"` whether to
 create the fix tasks. Commit, and `tico task done <id> -m "..." --version N`.
 
 Done when: the report is published with the three shares, every error has an owner, the four-week trend is in,

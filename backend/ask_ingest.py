@@ -11,7 +11,7 @@ on their Needs you, snoozed ones left out), in this order:
 
   - a status update: FYI, off their plate;
   - the bot's own work, or not clear: refused;
-  - a decision: refused, to be asked as a question on the bot's own task (`tico task ask`), with its choices;
+  - a decision: refused, to be asked with a ❓ message on the bot's own task (`tico task ask`);
   - otherwise the budget B (default 10): under B clear; B to 3B also meets one of the person's criteria; 3B to 10B
     also meets one of the criteria and recommends; 10B or more urgency 3. Urgency 3 always passes.
 
@@ -456,8 +456,8 @@ def decide(answers, budget, decisions):
     if kind == OWN_WORK:
         return (THROUGH, "urgent") if urgent else (SENT_BACK, "own_work")
     if kind == DECISION:
-        # A decision is asked, not filed: as a question on the bot's own task, with its choices and recommendation
-        # (Tasks spec "Bots ask people a question with choices", AC-6). Urgent or not: an ask reaches them as fast.
+        # A decision is asked, not filed: a ❓ message on the bot's own task (backend/question_marks.py). Urgent or
+        # not: a ❓ reaches them as fast.
         return SENT_BACK, "decision"
     clear = answers["clear"]
     if clear is False:
@@ -494,8 +494,8 @@ def message(reason, name, load_now, manager_name, handle=""):
     --to` names the person."""
     if reason == "decision":
         return (
-            f"This asks {name} to decide, so ask it as a question on your own task: tico task ask <task> --to "
-            f"{handle or name}, with why it matters, your choices and your recommendation."
+            f'This asks {name} to decide, so ask it on your own task: tico task ask <task> --to {handle or name} '
+            '"<question>". Say why, the options and your pick in the message.'
         )
     why = REASONS.get(reason, "it doesn't meet {name}'s asking criteria").format(name=name, load=load_now)
     ask = f"ask {manager_name}, " if manager_name else ""

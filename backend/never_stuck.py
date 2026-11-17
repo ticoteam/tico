@@ -680,12 +680,13 @@ def manager_hears(conn: "sqlite3.Connection", row: Row) -> bool:
 
 def ask_person(conn: "sqlite3.Connection", row: Row) -> str | None:
     """The stopped task's bot asks a person who reads it what to do: its owner when a person owns it, else the person it
-    falls to (`_person`). The bot that stalled asks, in its own words; when it cannot run, BotOps asks for it. Once per
-    stop: an open question of this kind on the visit is not asked again. The ask keeps the ladder stopped; an answer is a
-    change, which starts it again. Returns the requirement's id, or None when nobody can ask or be asked."""
+    falls to (`_person`). The bot that stalled asks, in its own words, with a ❓ on the task's chat
+    (backend/question_marks.py); when it cannot run, BotOps asks for it. Once per stop: a task with an open ❓ is not
+    asked again. The ❓ keeps the ladder stopped; the person's reply is a change, which starts it again. Returns the
+    ❓'s wait id (`qmark:<id>`), or None when nobody can ask or be asked."""
     visit = row["visit"]
     kept = visit.get("person_id")
-    if any(not s.met and E.stuck_ask(s.requirement) for s in R.standings(conn, row)):
+    if question_marks.on_task(conn, row["id"]):
         return None
     owner = row.get("owner_id")
     person = owner if is_human(owner) and R.active_person(conn, owner) else _person(conn, row)
@@ -708,26 +709,15 @@ def ask_person(conn: "sqlite3.Connection", row: Row) -> str | None:
     said = STUCK_LINES[kind].format(me=me)
     who = "I'm" if author == bot else f"{_name(conn, bot)} is" if bot else "This task is"
     line = STUCK_ASK.format(who=who, stage=row["stage"]["name"], line=said)
-    brief = {"why": STUCK_WHY, "details": None, "recommend": None}
     H = _h()
     try:
-        asked = E.add_requirement(
-            conn,
-            row["id"],
-            author,
-            "answer",
-            person,
-            line,
-            seen_version=row.get("version"),
-            brief=brief,
-            title=E.STUCK_TITLE,
-        )
+        asked = question_marks.ask(conn, author, str(row["id"]), person, f"{line}\n\n{STUCK_WHY}", checked=False)
     except H.Refused:
-        return None  # the stage asks them already, or they left: what they see there is the way in
-    # The ask is a change, which starts the ladder again: it stays stopped until the person answers.
+        return None  # they left, or the chat is not theirs to read: what they see there is the way in
+    # The ❓ is a change, which starts the ladder again: it stays stopped until the person replies.
     conn.execute("UPDATE visits SET level='person', person_id=?, next_try_at=NULL WHERE id=?", (kept, visit["id"]))
     task_wakes.drop(conn, row["id"])
-    return str(asked["requirement_id"])
+    return question_marks.wait_id(asked)
 
 
 def _botops(conn: "sqlite3.Connection") -> str | None:

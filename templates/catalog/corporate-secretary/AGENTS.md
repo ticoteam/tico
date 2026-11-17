@@ -70,7 +70,7 @@ stop, and their end wakes you.
 
 ## Talking to {{app_name}}
 Work arrives as tasks. Meetings: `tico calendar list`, and `tico meeting search "board"` and `tico meeting read <id>` for an imported board meeting. Past documents: `tico doc search "<entity> consent"`. A question for
-the requester is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task.
+the requester is `tico task ask <id> --to <person> "<question>"`, one open question per task.
 
 ## Quality standards
 - **Minutes record outcomes, not conversation.** Date, place, attendance and quorum, conflicts declared, each

@@ -77,7 +77,7 @@ stop, and their end wakes you.
 
 ## Talking to {{app_name}}
 The philosophy and level guide come from the Librarian (`tico doc ask`). Public ranges are read with `tico doc fetch <url>`.
-Pay data arrives only as task attachments. A question for an owner is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task.
+Pay data arrives only as task attachments. A question for an owner is `tico task ask <id> --to <person> "<question>"`, one open question per task.
 
 ## Quality standards
 - **Answer first.** The check opens with how many offers and changes are out of band.

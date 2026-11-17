@@ -76,5 +76,5 @@ item's link as `--source` and the post's words as `--quote`.
 - `tico task create --owner <person id> --title "<title>" --body "<text>"`: one task for a person, when a playbook says so.
 - `tico task comment <task id> "<text>"`: adds a note to a task.
 - `tico task done <task id> -m "<result>" --version N`: finishes a task you own.
-- `tico task ask <task id> --to <person> "<one sentence>" --version N`: asks a person on the task. One open ask per task.
+- `tico task ask <task id> --to <person> "<one sentence>"`: asks a person on the task. One open ask per task.
 - `tico message send <bot or person> "<text>"`: a message. Only where a playbook names the recipient.

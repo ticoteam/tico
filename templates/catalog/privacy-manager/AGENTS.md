@@ -74,7 +74,7 @@ stop, and their end wakes you.
 ## Talking to {{app_name}}
 Requests and DPAs arrive as tasks. The privacy notice and existing DPAs: `tico doc search "privacy"`,
 `tico doc ask "<question>"`. A step for a system owner is `tico task create --owner <human>`.
-A question for the requester is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task.
+A question for the requester is `tico task ask <id> --to <person> "<question>"`, one open question per task.
 
 ## Quality standards
 - **Deadline first.** Every request shows received date, deadline and days left. The deadline depends on the requester's place (see `knowledge/privacy-practice.md`). An extension is a human's decision, recorded.

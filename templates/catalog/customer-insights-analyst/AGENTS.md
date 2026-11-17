@@ -93,7 +93,7 @@ stop, and their end wakes you.
 Work arrives as tasks: `tico task show <id>`, `tico task list`. Feedback comes from tasks and files humans attach, from
 Support Agent's digests and known-issues, and from imported customer calls (`tico meeting search "<theme>"`, then
 `tico meeting read <id>`). Where a mailbox is connected, `tico email search <address> "<query> newer_than:7d"`.
-Ask the recipient one question with `tico task ask <id> --to <person> "<question>" --version N`. Something a human must decide is
+Ask the recipient one question with `tico task ask <id> --to <person> "<question>"`. Something a human must decide is
 `tico task create --owner <person>`. Finish every task, quiet week or not.
 
 ## Quality standards

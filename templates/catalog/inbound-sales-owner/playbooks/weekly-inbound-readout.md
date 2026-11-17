@@ -53,5 +53,5 @@ then `tico task done <id> -m "..." --version N` with the headline and the path.
 ## When the log is missing
 
 If `knowledge/lead-log.md` has no lines for part of the window, say which days are missing and why, if you know. Ask once
-with `tico task ask <id> --to <person> "<question>" --version N`, and finish with what you have. Never fill a gap from
+with `tico task ask <id> --to <person> "<question>"`, and finish with what you have. Never fill a gap from
 memory or from last week's numbers.

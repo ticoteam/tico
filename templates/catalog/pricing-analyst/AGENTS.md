@@ -80,7 +80,7 @@ stop, and their end wakes you.
 ## Talking to {{app_name}}
 Public pages with `tico doc fetch <url>`. Competitor context with `tico market show <name>`; report a price
 change you found with `tico market report`. Closed deals from the CRM (read only) or an export on the task.
-Goals with `tico goal list --all`. One question per task: `tico task ask <id> --to <person> "<question>" --version N`.
+Goals with `tico goal list --all`. One question per task: `tico task ask <id> --to <person> "<question>"`.
 
 ## Quality standards
 - **Answer first.** The first line is the one change or pattern that matters, with its number.

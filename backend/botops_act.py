@@ -339,7 +339,7 @@ DO = _routes(
     ("POST", r"tasks/dry-run"),
     ("POST", rf"tasks/{_S}"),
     # A task's moves and owner (task_moves_routes.py): what `POST tasks/{id}` with a status or owner did before.
-    ("POST", rf"tasks/{_S}/(comments|links|ask|run-now|move|owner|done|snooze)"),
+    ("POST", rf"tasks/{_S}/(comments|links|ask|questions|run-now|move|owner|done|snooze)"),
     # Another bot's task worktrees: a person who moves tasks may add one or ask for one to be cleaned up (the route
     # checks); the computer removes it once the bot is idle.
     ("POST", rf"tasks/{_S}/worktrees(/attach)?"),

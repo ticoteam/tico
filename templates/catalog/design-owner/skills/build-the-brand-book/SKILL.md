@@ -18,7 +18,7 @@ brand book, or the owner asking to redo or extend it. Also to resume a run (the 
   for the rest. Paste its output; never a number worked out by eye.
 - **Pause and resume.** When the owner stops, note the brand book run on the task: the stage, the next question,
   open threads. On their next message, pick up there in one line.
-- **Teammates.** A needs-teammate item is one `tico task ask <task> --to <person> "<question>" --version N` each,
+- **Teammates.** A needs-teammate item is one `tico task ask <task> --to <person> "<question>"` each,
   quoting the section and what the answer unlocks. When answers arrive, follow **Resume: teammate answers** below.
 - **Hand-over.** At the end:
   1. `python3 skills/build-the-brand-book/audit.py markdown reports/brand-book.json > reports/brand-book.md`, then

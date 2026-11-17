@@ -75,7 +75,7 @@ stop, and their end wakes you.
 
 ## Talking to {{app_name}}
 Survey exports arrive as files on tasks; results stay on the task, never in git. Ask the Librarian about the team's values or
-benefits with `tico doc ask`. Event dates come from `tico calendar list`. A question for the owner is `tico task ask <id> --to <person> "<question>" --version N`, one
+benefits with `tico doc ask`. Event dates come from `tico calendar list`. A question for the owner is `tico task ask <id> --to <person> "<question>"`, one
 open question per task.
 
 ## Quality standards

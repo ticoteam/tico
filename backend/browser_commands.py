@@ -793,23 +793,38 @@ def session_view(account_id: str, c: sqlite3.Connection | None = None) -> Sessio
 
 
 # An ask still waiting: not withdrawn, on its task's current visit, with no standing answer (backend/task_privacy.py
-# _ASKERS reads the same).
+# _ASKERS reads the same). Asks made before ❓ marks; a browser ask now is a ❓ (`_OPEN_MARK`).
 _OPEN_ASK = (
     "SELECT 1 FROM requirements r JOIN visits v ON v.id=r.visit_id "
     "WHERE r.withdrawn_at IS NULL AND v.left_at IS NULL AND NOT EXISTS (SELECT 1 FROM answers a "
     "WHERE a.requirement_id=r.id AND a.visit_id=v.id AND a.undone_at IS NULL AND a.answer NOT IN ('give','again'))"
 )
+# An open ❓ whose message shows a browser (refs.shows).
+_OPEN_MARK = (
+    "SELECT 1 FROM question_marks q JOIN messages m ON m.id=q.message_id WHERE q.cleared_at IS NULL "
+    "AND q.person_id=? AND EXISTS (SELECT 1 FROM json_each(m.refs, '$.shows') s WHERE s.value=?) LIMIT 1"
+)
+# What a browser ❓ says after the bot's own line.
+BROWSER_HELP = "The live browser opens from this question in Flow. Reply Done once you are through."
 
 
 def open_ask(
     c: sqlite3.Connection, show: str | None = None, *, person: str | None = None, requirement_id: str | None = None
 ) -> bool:
-    """Whether a "needs you" ask is still open: the one named by `requirement_id`, or any that shows `show`
-    (`browser:<tool>/<account>`) and is addressed to `person`."""
+    """Whether a "needs you" ask is still open: the one named by `requirement_id` (a ❓'s `qmark:<id>`, or an older
+    ask's requirement), or any that shows `show` (`browser:<tool>/<account>`) and is addressed to `person`."""
     if requirement_id is not None:
+        from . import question_marks
+
+        mark = question_marks.mark_id(requirement_id)
+        if mark:
+            found = question_marks.get(c, mark)
+            return bool(found) and not found.get("cleared_at")
         return c.execute(_OPEN_ASK + " AND r.id=? LIMIT 1", (requirement_id,)).fetchone() is not None
     if not show or not person:
         return False
+    if c.execute(_OPEN_MARK, (person, show)).fetchone():
+        return True
     return (
         c.execute(
             _OPEN_ASK + " AND r.person_id=? AND r.shows IS NOT NULL "
@@ -1326,7 +1341,8 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
     @app.post("/api/v2/browser/needs-you")
     def browser_needs_you(request: Request, body: BrowserNeedsYou) -> Any:
         """A bot stuck on a website's text code, captcha or new-device check asks a person, on its task, to take over the
-        browser: an answer ask with Done that shows the live view (`browser:<tool>/<account>`)."""
+        browser: a ❓ on its message (backend/question_marks.py) that shows the live view (`browser:<tool>/<account>`,
+        the message's refs.shows); their reply ("Done") clears it."""
         who = request.state.identity
         if who.role != "bot" or not who.attempt_id or who.agent:
             raise Problem("forbidden", "Ask for browser help from a bot's live turn on a task.", 403)
@@ -1355,21 +1371,27 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
                     "Nobody who can read this task can take over the browser; ask an admin to assign a person to help.",
                     409,
                 )
-            made = H.task_ask(
+            from . import ask_shape, question_marks
+
+            # The bot's own line, checked as any ❓'s words are; the rest of the message is Tico's.
+            shape = ask_shape.line_refusal(body.line)
+            if shape:
+                H.refuse(c, who.actor, "lint", shape)
+            marked = question_marks.ask(
                 c,
                 who.actor,
                 task["id"],
                 person,
-                body.line,
-                kind="answer",
-                choices=["Done"],
-                shows=[f"browser:{picked['tool_id']}/{picked['account_id']}"],
-                seen_version=task.get("version"),  # a stuck browser, not the task's text: no version to have read
+                f"{body.line.strip()}\n\n{BROWSER_HELP}",
+                checked=False,
+                let_in=False,  # who holds the browser is not let into a private task they may not read
+                refs={"shows": [f"browser:{picked['tool_id']}/{picked['account_id']}"]},
             )
+            wait = question_marks.wait_id(marked)
             facts = mailbox.facts(str(picked["account_id"]))
-            mailbox.needs_you(str(picked["account_id"]), made.get("requirement_id"), who_of(c, who.actor))
+            mailbox.needs_you(str(picked["account_id"]), wait, who_of(c, who.actor))
             wt.log(c, picked, who, "needs_you", page_of(facts.url), facts.where or "central")
-            return {"requirement_id": made.get("requirement_id")}
+            return {"requirement_id": wait}
 
         return mutate(request, body, work)
 
