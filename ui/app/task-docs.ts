@@ -23,8 +23,8 @@ function docTabs(docs: TaskDoc[] | null | undefined, extra: DocTab[] = [], chatD
     tab's own attributes (the task window's data-task-tab, Flow's data-dc-tab). */
 function docTabsHTML(tabs: DocTab[], on: string, attrs: (key: string) => string, label = 'Show'): string {
   if (!tabs.length) return '';
-  const tab = (t: DocTab) => `<button type="button" role="tab" class="doc-tab" ${attrs(t.key)} aria-selected="${t.key === on}" tabindex="${t.key === on ? 0 : -1}">`
-    + `${esc(t.label)}${t.dot ? '<span class="tw-dot" role="img" aria-label="Waiting on you"></span>' : ''}</button>`;
+  const tab = (t: DocTab) => `<button type="button" role="tab" class="doc-tab" ${attrs(t.key)} aria-selected="${t.key === on}" tabindex="${t.key === on ? 0 : -1}" title="${esc(t.label)}">`
+    + `<span class="doc-tab-t">${esc(t.label)}</span>${t.dot ? '<span class="tw-dot" role="img" aria-label="Waiting on you"></span>' : ''}</button>`;
   return `<span class="doc-tabs" role="tablist" aria-label="${esc(label)}">${tabs.map(tab).join('')}</span>`;
 }
 /** ←/→, Home and End move along a tab row, as a tablist does; `show` opens the tab moved to. */
@@ -56,6 +56,7 @@ function docTabsPaint(row: ParentNode, on: string, keyOf: (tab: HTMLElement) => 
 // version shown, sandboxed as a page is. Kept per host across redraws of the same document.
 interface DocViewState { doc: TaskDoc; shown: number; open: boolean; compare: [number, number] | null; seq: number; }
 const DOC_VIEWS = new WeakMap<HTMLElement, DocViewState>();
+const DOC_BOUND = new WeakSet<HTMLElement>();  // hosts whose delegated listeners are on, once each
 /** A document's default look, the app's own theme: its background, text, lines and links, light or dark as the app is.
     Zero-specificity base styles, so a document that sets its own colours keeps them. */
 function docLook(): string {
@@ -67,19 +68,33 @@ function docLook(): string {
     + `:where(th,td){border:1px solid ${v('--line')};padding:4px 8px}:where(table){border-collapse:collapse}`
     + `:where(code,pre){background:${v('--surface2')};border-radius:4px}:where(code){padding:0 3px}:where(pre){padding:8px}`;
 }
-const docVersionSaid = (v: TaskDocVersion) => [`v${v.n}`, actorLabel(v.by), ago(v.at)].filter(Boolean).join(' · ');
-/** Shows `doc` in `host`: its newest version, or the version shown there before when it is the same document. */
-function docViewMount(host: HTMLElement, doc: TaskDoc) {
-  const was = DOC_VIEWS.get(host);
-  const same = was && was.doc.file_id === doc.file_id;
-  const st: DocViewState = same ? {...was, doc, shown: doc.versions.some(v => v.n === was.shown) && was.shown !== was.doc.version ? was.shown : doc.version}
-    : {doc, shown: doc.version, open: false, compare: null, seq: 0};
-  DOC_VIEWS.set(host, st);
-  if (!same || !host.querySelector('.doc-view')) {
-    host.innerHTML = '<div class="doc-view"><div class="doc-ver"></div><div class="doc-vers" hidden></div><div class="doc-body"></div></div>';
-    docViewBind(host);
+/** Each document open draws again in the app's colours when its theme changes (its bytes are read once, then held). */
+function docViewsRetheme() {
+  for (const view of document.querySelectorAll<HTMLElement>('.doc-view')) {
+    const host = view.parentElement, st = host ? DOC_VIEWS.get(host) : undefined;
+    if (host && st && !st.compare) void docViewBody(host, st);
   }
-  docViewPaint(host, st, !same || was.doc.version !== doc.version);
+}
+new MutationObserver(docViewsRetheme).observe(document.documentElement, {attributes: true, attributeFilter: ['data-theme']});
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', docViewsRetheme);
+const docVersionSaid = (v: TaskDocVersion) => [`v${v.n}`, actorLabel(v.by), ago(v.at)].filter(Boolean).join(' · ');
+/** Shows `doc` in `host`: its newest version, or the older version picked there before when it is the same document.
+    The same document keeps its state object, so a read already on its way still lands. */
+function docViewMount(host: HTMLElement, doc: TaskDoc) {
+  const was = DOC_VIEWS.get(host), same = !!was && was.doc.file_id === doc.file_id;
+  const fresh = !same || !host.querySelector('.doc-view');
+  if (fresh) host.innerHTML = '<div class="doc-view"><div class="doc-ver"></div><div class="doc-vers" hidden></div><div class="doc-body"></div></div>';
+  if (!DOC_BOUND.has(host)) { DOC_BOUND.add(host); docViewBind(host); }
+  if (!was || !same) {
+    const st: DocViewState = {doc, shown: doc.version, open: false, compare: null, seq: 0};
+    DOC_VIEWS.set(host, st);
+    docViewPaint(host, st);
+    return;
+  }
+  const pinned = was.shown !== was.doc.version && doc.versions.some(v => v.n === was.shown);
+  const shown = pinned ? was.shown : doc.version, moved = shown !== was.shown;
+  was.doc = doc; was.shown = shown;
+  docViewPaint(host, was, fresh || moved);
 }
 function docViewPaint(host: HTMLElement, st: DocViewState, body = true) {
   const line = host.querySelector<HTMLElement>('.doc-ver'), list = host.querySelector<HTMLElement>('.doc-vers');

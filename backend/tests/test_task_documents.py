@@ -147,3 +147,20 @@ def test_tico_task_attach_doc_sends_the_html_with_its_pictures(monkeypatch, tmp_
     (tmp_path / "notes.md").write_text("# Notes")
     with pytest.raises(ValueError, match="html"):
         hubtools.task_attach(Client(), {"id": "T-1", "document": "Spec", "path": "notes.md"})
+
+
+def test_an_ordinary_upload_named_like_a_document_starts_its_own_file(api):
+    # A document gets versions only by name, cleaned; a plain attachment called spec.html is a file of its own.
+    tid = task(api, "human:ben", "Review the export")
+    spec = write(api, tid, "Spec", "<p>Document spec</p>")
+    plain = post(
+        api, f"tasks/{tid}/files", {"name": "spec.html", "text": "<p>Ordinary attachment</p><script>x()</script>"}
+    )
+    assert plain["file_id"] != spec["file_id"]
+    [doc] = documents(api, tid)
+    assert (doc["file_id"], doc["version"]) == (spec["file_id"], 1)
+    assert "Document spec" in api.get(f"/api/v2/files/{spec['file_id']}?v=1", headers=headers()).text
+    # A second plain upload of the same name continues the plain file, not the document.
+    again = post(api, f"tasks/{tid}/files", {"name": "spec.html", "text": "<p>Ordinary, again</p>"})
+    assert (again["file_id"], again["version"]) == (plain["file_id"], 2)
+    assert documents(api, tid)[0]["version"] == 1

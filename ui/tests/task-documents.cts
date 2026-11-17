@@ -9,7 +9,10 @@ import type {Page} from 'playwright';
 // - a document opens under one small line, "v2 · Writer · 2h", which opens its versions (each once, with its note, the
 //   one shown in bold) and Compare; a version picked shows; Compare shows the two versions' text, line by line;
 // - a document takes the app's colours, light or dark;
-// - Details opens over a document and closes back to it;
+// - Details opens over a document and closes back to it; a long Details scrolls inside the window, with or without
+//   documents, on a computer and a phone;
+// - one document host, many documents: its controls answer once per tap; a read on its way still lands when the same
+//   document is shown again before it does;
 // - a phone at 390 px: the head holds the title (40% or more, up to two lines), the tabs, ⋯ and ✕; Details and Archive
 //   are in ⋯; the tabs scroll so the one selected shows, Chat from the start; nothing scrolls sideways.
 // TICO_SHOTS=<dir> saves each state, desktop and phone, dark and light.
@@ -32,9 +35,10 @@ const PAGES: Record<string, string> = {
   [`${SPEC}@2`]: '<h1>Saved carts</h1><p>A cart survives closing the tab.</p><p>It expires after 30 days.</p><p>Empty state: "Nothing saved yet."</p>',
   [`${QA}@1`]: '<h1>QA report</h1><ul><li>Cart survives closing the tab ✓</li><li>Expires after 30 days ✓</li></ul>',
 };
+const LONG = Array.from({length: 40}, (_, i) => `Step ${i + 1}: open a cart, close the tab, come back.`).join('\n\n');
 const tasks = () => [
-  task('t-1', 'Fix the login redirect', 'spec', {owner_id: 'bot:writer'}),
-  task('t-2', 'Saved carts that survive closing the tab', 'spec', {owner_id: 'bot:writer', documents: docs()}),
+  task('t-1', 'Fix the login redirect', 'spec', {owner_id: 'bot:writer', body: LONG}),
+  task('t-2', 'Saved carts that survive closing the tab', 'spec', {owner_id: 'bot:writer', documents: docs(), body: LONG}),
 ];
 const files = async (page: Page) => {
   await page.route(url => url.pathname.startsWith('/api/v2/files/'), route => {
@@ -47,6 +51,28 @@ const shot = async (page: Page, name: string) => {
   if (!shots) return;
   await page.waitForTimeout(250);
   await page.screenshot({path: path.join(shots, name + '.png')});
+};
+/** Details on, then its last part scrolled to: the pane stays inside the window and scrolls, so the facts show. */
+const longDetails = async (page: Page, id: string, phone: boolean, name: string) => {
+  const win = page.locator(`#task-modal[open][data-task="${id}"]`);
+  const toggle = async () => {
+    const button = win.locator('[data-task-tab="details"]');
+    if (await button.isVisible()) return button.click();   // a phone's head folds it into ⋯ beside document tabs
+    await win.locator('[data-task-more]').click();
+    await page.locator('.prop-pop:popover-open .tl-mi', {hasText: 'Details'}).click();
+  };
+  await toggle();
+  await win.locator('[data-task-props]').waitFor();
+  const got = await win.locator('.task-layout').evaluate(layout => {
+    const side = layout.querySelector<HTMLElement>('.task-side')!, props = side.querySelector('[data-task-props]')!;
+    side.scrollTop = 1e6;
+    const l = layout.getBoundingClientRect(), s = side.getBoundingClientRect(), f = props.getBoundingClientRect();
+    return {inside: s.bottom <= l.bottom + 1, scrolled: side.scrollTop > 0, factsShow: f.top < l.bottom && f.bottom > l.top, overflow: getComputedStyle(side).overflowY};
+  });
+  assert.deepEqual(got, {inside: true, scrolled: true, factsShow: true, overflow: 'auto'}, `a long Details scrolls inside the window (${id}, ${phone ? 'phone' : 'computer'})`);
+  await shot(page, name);
+  await win.locator('.task-side').evaluate(e => { e.scrollTop = 0; });
+  await toggle();
 };
 const texts = (page: Page) => page.locator('#task-modal[open] [role="tab"]').evaluateAll(els => els.map(e => (e.textContent || '').trim()));
 
@@ -66,6 +92,7 @@ const texts = (page: Page) => page.locator('#task-modal[open] [role="tab"]').eva
       assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll(':focus-visible')].map(e => [e.id || e.tagName, getComputedStyle(e).outlineStyle])),
         [['task-modal', 'none']], 'no focus ring');
       await shot(page, `no-documents-desktop-${theme}`);
+      await longDetails(page, 't-1', false, `details-long-desktop-${theme}`);
 
       // ---- a Spec and a QA report: the tabs on the title row, Chat first, then newest change first
       await page.evaluate(() => { location.hash = '#/task/t-2'; });
@@ -93,6 +120,15 @@ const texts = (page: Page) => page.locator('#task-modal[open] [role="tab"]').eva
       const [paper, app] = [await view.frameLocator('iframe.html-view').locator('html').evaluate(e => getComputedStyle(e).backgroundColor),
         await page.evaluate(() => getComputedStyle(document.body).backgroundColor)];
       assert.equal(paper, app, `the document's background is the app's (${paper} vs ${app})`);
+      // ...and follows the theme when it changes while the document is open.
+      const setTheme = (t: string) => page.evaluate(x => (window as unknown as {ticoTheme?: {set(t: string): void}}).ticoTheme?.set(x), t);
+      await setTheme(theme === 'light' ? 'dark' : 'light');
+      const flipped = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+      assert.notEqual(flipped, app);
+      const paperNow = () => view.frameLocator('iframe.html-view').locator('html').evaluate(e => getComputedStyle(e).backgroundColor).catch(() => '');
+      for (const t0 = Date.now(); await paperNow() !== flipped && Date.now() - t0 < 5000;) await page.waitForTimeout(50);
+      assert.equal(await paperNow(), flipped, 'the document follows the theme');
+      await setTheme(theme);
       await line.click();
       assert.equal(await line.getAttribute('aria-expanded'), 'true');
       assert.equal(await view.locator('.doc-ver').isVisible(), false, 'open: no row of its own over the list, no version said twice');
@@ -135,6 +171,7 @@ const texts = (page: Page) => page.locator('#task-modal[open] [role="tab"]').eva
       await details.click();
       assert.equal(await view.isVisible(), true, 'and closes back to the document');
       assert.equal(await docWin.getByRole('tab', {name: 'Spec'}).getAttribute('aria-selected'), 'true');
+      await longDetails(page, 't-2', false, `details-long-documents-desktop-${theme}`);
 
       // ←/→ move along the tabs.
       await docWin.getByRole('tab', {name: 'Chat'}).focus();
@@ -142,6 +179,13 @@ const texts = (page: Page) => page.locator('#task-modal[open] [role="tab"]').eva
       assert.equal(await docWin.getByRole('tab', {name: 'QA report'}).getAttribute('aria-selected'), 'true');
       await view.locator('iframe[title="QA report v1"]').waitFor();
       assert.match((await line.innerText()).trim(), /^v1 · Writer · 20m/);
+      // The host has shown two documents: one tap on the version line opens the list, once.
+      await line.click();
+      assert.equal(await view.locator('[data-doc-ver]').first().getAttribute('aria-expanded'), 'true', 'one tap, the list open');
+      assert.equal(await view.locator('.doc-vers').isVisible(), true);
+      await view.locator('[data-doc-ver]').first().click();
+      assert.equal(await view.locator('.doc-vers').isVisible(), false);
+
       assert.deepEqual(errors, []);
       await page.close();
     }
@@ -153,6 +197,7 @@ const texts = (page: Page) => page.locator('#task-modal[open] [role="tab"]').eva
       await win.locator('.task-chat textarea').waitFor();
       assert.equal(await win.getByRole('tab').count(), 0, 'no documents, no tabs');
       await shot(page, `no-documents-phone-${theme}`);
+      await longDetails(page, 't-1', true, `details-long-phone-${theme}`);
       await page.evaluate(() => { location.hash = '#/task/t-2'; });
       const docWin = page.locator('#task-modal[open][data-task="t-2"]');
       await docWin.locator('.tw-tabs').waitFor();
@@ -176,12 +221,26 @@ const texts = (page: Page) => page.locator('#task-modal[open] [role="tab"]').eva
       await shot(page, `more-menu-phone-${theme}`);
       await page.keyboard.press('Escape');
       await menu.waitFor({state: 'hidden'});
+      // A read on its way lands although the same document is shown again before it does (a tab tapped twice, a reread).
+      let release = () => {};
+      const held = new Promise<void>(r => { release = r; });
+      let asked = 0;
+      const fileReads = (url: URL) => url.pathname.startsWith('/api/v2/files/');
+      await page.route(fileReads, async route => { asked++; await held; await route.fallback(); });
       await docWin.getByRole('tab', {name: 'Spec'}).click();
-      await docWin.locator('.task-doc iframe.html-view').waitFor();
+      await page.waitForFunction(() => document.querySelector('#task-modal .task-doc .doc-ver-line'));
+      await docWin.getByRole('tab', {name: 'Spec'}).click();
+      await page.waitForTimeout(50);
+      release();
+      await docWin.locator('.task-doc').locator('iframe[title="Spec v2"]').waitFor({timeout: 5000});
+      assert.equal(asked, 1, 'one read, not two');
+      await page.unroute(fileReads);
       assert.equal(await inStrip('Spec'), true, 'the tab selected shows');
       await shot(page, `spec-phone-${theme}`);
       await docWin.locator('.task-doc [data-doc-ver]').click();
       await shot(page, `spec-versions-phone-${theme}`);
+      await docWin.locator('.task-doc [data-doc-ver]').first().click();
+      await longDetails(page, 't-2', true, `details-long-documents-phone-${theme}`);
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth) <= 390, 'nothing scrolls sideways');
 
       // A document written while the window is open: its tab comes as the task is read again.

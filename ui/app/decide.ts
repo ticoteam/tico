@@ -25,6 +25,8 @@ interface AskOkView {
   state: 'loading' | 'ready' | 'none' | 'failed';
   /** What it OKs, as its grant's subject names it (finance, email_send, spec…); '' for a stage's OK with no grant. */
   kind?: string;
+  /** The title its content gives, when it gives one: what its own tab on a phone is called. */
+  title?: string;
   hash: string | null;
   html: string;
   pages: import('../types/api').Page[];
@@ -1329,6 +1331,8 @@ async function decideOkLoad(st: DecState, it: NeedsEntry, changed: boolean) {
     const shown = await okShown(rid).catch((e: unknown) => { if (errorStatus(e) === 404) return null; throw e; });
     const [kind, ...rest] = (shown?.subject ?? '').split(':'), ref = rest.join(':');
     v.kind = kind ?? '';
+    const said = shown?.content && typeof shown.content === 'object' ? (shown.content as {title?: unknown}).title : null;
+    if (typeof said === 'string') v.title = said;
     if (!shown) {
       const before = it.ask?.page ? await decideRoundsRead(v, it) : null;
       await decideShowsRead(v, decideShowRefs(it), before);
@@ -1604,20 +1608,35 @@ function decideChatMount(st: DecState, it: NeedsEntry, host: HTMLElement, card: 
   decideTabsPaint(st, it, host);
 }
 // ---- a phone's tabs on an ask in the task's chat (ui/app/task-docs.ts, as the task window draws them): Chat, then the
-// task's documents, newest change first, with what an OK shows among them under its own name (its Spec, Proof,
-// Invoice...), or after Chat when it is no document of the task. A question on a task with no document has no tabs.
+// task's documents, newest change first. An OK whose page is one of those documents (the same file) opens on that
+// document's tab; any other OK has its own tab after Chat, named for what it shows, and opens there. A question on a
+// task with no document has no tabs.
 let DEC_TAB = 'chat';   // the tab shown for the item on screen: 'chat', 'task' (what the OK shows) or a document's key
+/** The task document an OK's page is, by its file: only then is what the OK shows that document. */
+function decideOkDoc(it: NeedsEntry, docs: TaskDoc[]): TaskDoc | null {
+  const fid = decideKind(it) === 'ok' ? it.ask?.page?.file_id : '';
+  return fid ? docs.find(d => d.file_id === fid) || null : null;
+}
+/** An OK's own tab: the title of what it shows (its page, its content), else what it is (Proof, Spec, Invoice...);
+    never the name of a document it is not. */
+function decideOkLabel(st: DecState, it: NeedsEntry, docs: TaskDoc[]): string {
+  const v = st.ok.get(decideOkKey(it)), title = (v?.pages[0]?.title || v?.title || '').trim();
+  const free = (name: string) => !!name && !docs.some(d => d.name.toLowerCase() === name.toLowerCase());
+  return [title, decideTabName(st, it)].find(free) || 'Approval';
+}
 function decideTabsOf(st: DecState, it: NeedsEntry): DocTab[] {
   const docs: TaskDoc[] = decideAboutOf(it)?.task?.documents || [];
   if (decideKind(it) !== 'ok') return docTabs(docs);
-  const name = decideTabName(st, it), shown = docs.find(d => d.name === name);
-  return [{key: 'chat', label: 'Chat'}, ...(shown ? [] : [{key: 'task', label: name}]),
-    ...docs.map(d => d === shown ? {key: 'task', label: d.name} : {key: docKey(d.name), label: d.name})];
+  const tabs = docTabs(docs, [], false);
+  if (decideOkDoc(it, docs)) return tabs;
+  return [{key: 'chat', label: 'Chat'}, {key: 'task', label: decideOkLabel(st, it, docs)}, ...tabs.slice(1)];
 }
 function decideTabsPaint(st: DecState, it: NeedsEntry, host: HTMLElement) {
   const bar = host.querySelector<HTMLElement>(':scope > .dc-tabs');
   if (!bar) return;
   const tabs = decideTabsOf(st, it), said = JSON.stringify(tabs);
+  const own = DEC_TAB === 'task' ? decideOkDoc(it, decideAboutOf(it)?.task?.documents || []) : null;
+  if (own) DEC_TAB = docKey(own.name);   // the OK's page is this document: its tab, with its version line
   if (!tabs.some(t => t.key === DEC_TAB)) DEC_TAB = 'chat';
   if (bar.dataset.tabs !== said) {
     bar.dataset.tabs = said;

@@ -61,6 +61,7 @@ const msg = (id: string, from: string, body: string, at: string) => ({id, seq: N
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (ui && fs.existsSync(uiFile(ui[1]!))) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
+      if (p.startsWith('/vendor/fonts/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile(p.slice(1)))});
       if (p === '/api/me') return json({...me, config});
       if (p === '/api/v2/config') return json(config);
       if (p === '/api/employees') return json([{slug: 'asp', id: 'asp', display_name: 'Agent Services Product Owner', status: 'active'},
@@ -74,7 +75,8 @@ const msg = (id: string, from: string, body: string, at: string) => ({id, seq: N
       const t = p.match(/^\/api\/v2\/tasks\/(t\d)$/);
       if (t && r.method() === 'GET') return json({task: {...(t[1] === 't1' ? question() : ok()).task as object, body: 'Your area and its products.',
         created_at: '2026-11-15T09:00:00Z', attachments: [], links: [], conversation_id: t[1] === 't1' ? 'c1' : 'c2', documents: t[1] === 't3' ? documents() : []}});
-      if (p.startsWith('/api/v2/files/f-')) return route.fulfill({contentType: 'text/html', body: '<h1>QA report</h1><p>Boards show stuck counts ✓</p>'});
+      if (p.startsWith('/api/v2/files/f-')) return route.fulfill({contentType: 'text/html', body: p.startsWith('/api/v2/files/f-spec')
+        ? `<h1>Spec</h1><p>Spec v${url.searchParams.get('v')}</p>` : '<h1>QA report</h1><p>Boards show stuck counts ✓</p>'});
       const th = p.match(/^\/api\/v2\/threads\/(c\d)\/timeline$/);
       if (th) return json({thread: {id: th[1], title: th[1] === 'c1' ? 'Set up: Agent Services' : 'Pipeline boards', me: {can_post: true}}, messages: th[1] === 'c1'
         ? [msg('m1', 'bot:asp', 'Seven things I could not find written down: 1. Who counts as a user of Search? … 7. Which products are hosted?', '2026-11-15T09:02:00Z')]
@@ -269,12 +271,43 @@ const msg = (id: string, from: string, body: string, at: string) => ({id, seq: N
     await page.evaluate('v2Refresh()');
     await page.evaluate('decideFlow(document.body)');
     await approve.and(page.locator(':not([disabled])')).waitFor();
-    // Its task has a Spec and a QA report: Chat, then them, newest change first; the OK opens on the Spec it approves.
+    // Its task has a Spec and a QA report: Chat, then them, newest change first. What this OK shows is no file of
+    // theirs, so it has its own tab, named for what it shows, and opens there; the Spec stays the Spec.
     const tabs = dialog.locator('.dc-tabs [role="tab"]');
-    await page.waitForFunction(() => document.querySelectorAll('.decide .dc-tabs [role="tab"]').length === 3);
+    const frameText = async () => (await dialog.locator('.dc-side > .dc-doc iframe.html-view').contentFrame().locator('body').innerText()).trim();
+    await page.waitForFunction(() => document.querySelectorAll('.decide .dc-tabs [role="tab"]').length === 4);
+    assert.deepEqual(await tabs.allInnerTexts(), ['Chat', 'Launch email', 'QA report', 'Spec']);
+    assert.equal(await taskTab.getAttribute('aria-selected'), 'true', 'an OK opens on what it shows');
+    assert.match(await dialog.locator('.dc-thing').innerText(), /Hello\./, 'its own tab shows what it approves');
+    if (process.env.TICO_SHOTS) {
+      await dialog.locator('.dc-start').waitFor({state: 'detached'});
+      await page.waitForTimeout(450);   // past a phone's calm (decideCalm)
+      for (const theme of ['dark', 'light']) {
+        await page.evaluate(t => (window as unknown as {ticoTheme?: {set(t: string): void}}).ticoTheme?.set(t), theme);
+        await page.waitForTimeout(100);
+        await page.screenshot({path: path.join(process.env.TICO_SHOTS, `flow-approval-own-tab-phone-${theme}.png`)});
+      }
+      await page.evaluate(() => (window as unknown as {ticoTheme?: {set(t: string): void}}).ticoTheme?.set('dark'));
+    }
+    const specTab = dialog.locator('[data-dc-tab="doc:Spec"]');
+    await specTab.click();
+    assert.equal(await dialog.locator('.dc-thing').isVisible(), false, 'the Spec tab is the Spec, not the approval');
+    await dialog.locator('.dc-side > .dc-doc iframe.html-view').contentFrame().locator('body', {hasText: 'Spec v3'}).waitFor();
+    assert.match(await frameText(), /Spec v3/, 'the Spec document, newest version');
+    assert.match(await dialog.locator('.dc-side > .dc-doc [data-doc-ver]').innerText(), /^v3 · Tasks Product Owner/);
+    await taskTab.click();
+    // An OK whose page is the Spec's own file opens on the Spec tab: the document itself, with its version line.
+    needs = [{...bound, id: 'v4:r3', ask: {...(bound['ask'] as object), page: {file_id: 'f-spec', ref: 'f-spec@3', version: 3}}}];
+    await dialog.locator('[data-dc="close"]').first().click();
+    await page.evaluate('v2Refresh()');
+    await page.evaluate('decideFlow(document.body)');
+    await page.waitForFunction(() => document.querySelector('.decide [data-dc-tab="doc:Spec"]')?.getAttribute('aria-selected') === 'true');
     assert.deepEqual(await tabs.allInnerTexts(), ['Chat', 'QA report', 'Spec']);
-    assert.equal(await taskTab.getAttribute('aria-selected'), 'true', 'an OK opens on its document');
-    assert.equal(await taskTab.innerText(), 'Spec');
+    assert.equal(await taskTab.count(), 0, 'no second tab for the same file');
+    await dialog.locator('.dc-side > .dc-doc iframe.html-view').contentFrame().locator('body', {hasText: 'Spec v3'}).waitFor();
+    assert.match(await frameText(), /Spec v3/);
+    assert.match(await dialog.locator('.dc-side > .dc-doc [data-doc-ver]').innerText(), /^v3 · /);
+    await approve.and(page.locator(':not([disabled])')).waitFor();
     if (process.env.TICO_SHOTS) {
       await dialog.locator('.dc-start').waitFor({state: 'detached'});
       await page.waitForTimeout(450);   // past a phone's calm (decideCalm): Approve as it is to tap

@@ -1546,14 +1546,16 @@ class Files:
         return fid
 
     def attach_task(self, c, who, task_id, item, digest, bot, *, file=None, series=True):
-        """A visible file with the same task and display name continues its series. `file` is the one to continue
-        instead (a task's document, backend/task_documents.py); with `series` off and no `file`, a new one starts."""
+        """A visible file with the same task and display name continues its series, unless it is one of the task's
+        documents: those get versions only by name, through `file` (backend/task_documents.py), which cleans them. With
+        `series` off and no `file`, a new one starts."""
         row = file
         if row is None and series:
             rows = c.execute(
                 "SELECT f.* FROM bot_files f JOIN bot_file_versions v "
                 "ON v.file_id=f.id AND v.version=f.current_version "
                 "WHERE f.task_id=? AND f.archived=0 AND v.name=? "
+                "AND NOT EXISTS (SELECT 1 FROM task_documents d WHERE d.file_id=f.id) "
                 "ORDER BY f.last_activity_at DESC",
                 (task_id, item["name"]),
             ).fetchall()

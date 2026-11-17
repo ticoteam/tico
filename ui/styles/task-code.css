@@ -37,7 +37,7 @@
 /* The panes fill the body; the one not shown is hidden but kept, so a file opened from a message still shows in the
    Files section's own viewer (task-files.ts, a modal dialog in the top layer, which takes visibility back). */
 #task-modal .tmodal-body.task-layout{position:relative;flex:1;min-height:0;max-height:none;display:block;overflow:hidden;padding:0;margin:0}
-#task-modal .task-layout>[role="tabpanel"]{position:absolute;inset:0;min-width:0;overflow:auto;overscroll-behavior:contain}
+#task-modal .task-layout>:is(.task-chat,.task-doc,.task-side){position:absolute;inset:0;min-width:0;overflow:auto;overscroll-behavior:contain}
 #task-modal .task-layout:not([data-task-tab-shown="doc"])>.task-doc,#task-modal .task-layout:not([data-task-tab-shown="chat"])>.task-chat,
 #task-modal .task-layout:not([data-task-tab-shown="details"])>.task-side{visibility:hidden;pointer-events:none}
 #task-modal .task-layout>.task-doc{overflow:hidden}

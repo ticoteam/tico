@@ -8,6 +8,7 @@
 .doc-tab:hover{color:var(--ink)}
 .doc-tab[aria-selected="true"]{background:var(--bg);color:var(--ink)}
 .doc-tab:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
+.doc-tab-t{max-width:14em;overflow:hidden;text-overflow:ellipsis}
 .doc-tab .tw-dot{width:6px;height:6px;border-radius:50%;background:var(--wait)}
 
 /* One document open: the version line, the version list when it is open, then the version itself. */
