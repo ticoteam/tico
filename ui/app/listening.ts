@@ -10,8 +10,9 @@
    POST /api/v2/listening/sources/{id}/address (a push source's new address). */
 'use strict';
 
-/** One thing to read: a search or a community on a site, one page, or an address an outside service posts to. */
-interface LstSource { id: string; kind: string; site?: string; target?: string }
+/** One thing to read: a search or a community on a site, one page, a GitHub repository (its merged PRs or its releases),
+ *  or an address an outside service posts to. */
+interface LstSource { id: string; kind: string; site?: string; target?: string; follow?: string }
 /** A rule: keep (a tag and a sentence) or drop (a sentence). Remove duplicates is always first and is not in the list. */
 interface LstRule { do: string; tag?: string; text?: string }
 /** "Up to `count` every `per`"; one per unit. */
@@ -31,7 +32,21 @@ interface LstRun {
 const LST_UNITS = ['hour', 'day', 'week', 'month'];
 const LST_PER: Record<string, string> = {hour: 'an hour', day: 'a day', week: 'a week', month: 'a month'};
 const LST_START: Record<string, number> = {hour: 3, day: 10, week: 50, month: 100};
-const LST_KINDS: Array<[string, string]> = [['search', 'Search'], ['page', 'Page'], ['push', 'Push']];
+const LST_KINDS: Array<[string, string]> = [['search', 'Search'], ['page', 'Page'], ['github', 'GitHub'], ['push', 'Push']];
+const LST_FOLLOWS: Array<[string, string]> = [['prs', 'Merged PRs'], ['releases', 'Releases']];
+/** `owner/repo` from what a person typed (the name or a github.com address), or '' (backend/listening_github.py repo_of). */
+function lstRepo(text: string): string {
+  const bare = text.trim().replace(/^(?:https?:\/\/)?(?:www\.)?github\.com\//i, '').split(/[?#]/)[0] ?? '';
+  const v = bare.replace(/^\/+|\/+$/g, '').replace(/\.git$/, '');
+  const repo = v.split('/').slice(0, 2).join('/');
+  return /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/.test(repo) ? repo : '';
+}
+/** What the block shows for a source's site and what it reads. */
+function lstSourceWords(s: LstSource): [string, string] {
+  if (s.kind === 'push') return [s.site || 'Push', 'Push'];
+  if (s.kind === 'github') return ['GitHub', `${s.target || ''} · ${s.follow === 'releases' ? 'Releases' : 'Merged PRs'}`];
+  return [s.site || 'Page', s.target || ''];
+}
 const LST_TAG = /^[a-z0-9][a-z0-9-]{0,23}$/;
 const LST_STALE = 2 * 864e5;   // a source not read for two days is overdue
 const LST_STATUS: Record<string, string> = {never: 'Not read yet', blocked: 'Blocked', rate_limited: 'Rate limited', error: 'Failed'};
@@ -142,9 +157,9 @@ function lstBlockHTML(a: AuAutomation): string {
   const rows = state.lstSources?.get(a.id) || [], limits = lstSorted(t.limits), first = limits[0];
   const add = (what: string, label: string) => edit ? `<button class="linkish au-plus" type="button" data-lst-add="${what}">+ ${label}</button>` : '';
   const sources = (t.sources || []).map(s => {
-    const r = lstRowOf(rows, s), addr = state.lstAddr?.[s.id];
-    return `<div class="lst-r">${lstDot(lstRowOk(r), lstRowWords(r))}<span class="lst-site">${esc(s.site || (s.kind === 'push' ? 'Push' : 'Page'))}</span>
-      <span class="lst-tg">${esc(s.kind === 'push' ? 'Push' : s.target || '')}</span><span class="lst-age">${esc(auAge(r?.last_read_at))}</span></div>`
+    const r = lstRowOf(rows, s), addr = state.lstAddr?.[s.id], [site, what] = lstSourceWords(s);
+    return `<div class="lst-r">${lstDot(lstRowOk(r), lstRowWords(r))}<span class="lst-site">${esc(site)}</span>
+      <span class="lst-tg">${esc(what)}</span><span class="lst-age">${esc(auAge(r?.last_read_at))}</span></div>`
       + (addr ? `<div class="lst-addr"><code>${esc(addr)}</code><button class="au-icon" type="button" data-lst-copy="${esc(addr)}" aria-label="Copy address">
         <span class="nav-icon" aria-hidden="true">content_copy</span></button></div>` : '');
   }).join('');
@@ -196,9 +211,11 @@ function lstFields(t: AuFlowTrigger, ed?: AuTriggerEd): string {
   const saved = new Set((auCur().trigger.sources || []).map(s => s.id)), limits = t.limits || [], dis = auDis();
   const sources = (t.sources || []).map((s, i) => `<div class="au-rb"><div class="au-ir">
       ${auSel(`trigger.sources.${i}.kind`, auWithCur(LST_KINDS, s.kind), s.kind, 'data-redraw aria-label="Kind"')}
-      ${auIn(`trigger.sources.${i}.site`, s.site, s.kind === 'push' ? 'Name' : 'Site', 'aria-label="Site"')}${auX('trigger.sources', i, 'Remove source')}</div>
+      ${s.kind === 'github' ? auSel(`trigger.sources.${i}.follow`, LST_FOLLOWS, s.follow || 'prs', 'aria-label="What to follow"')
+        : auIn(`trigger.sources.${i}.site`, s.site, s.kind === 'push' ? 'Name' : 'Site', 'aria-label="Site"')}${auX('trigger.sources', i, 'Remove source')}</div>
     ${s.kind === 'push' ? (saved.has(s.id) && !auRO() ? `<button class="linkish au-plus" type="button" data-op="lst-addr" data-v="${esc(s.id)}">New address</button>` : '')
-      : auIn(`trigger.sources.${i}.target`, s.target, s.kind === 'page' ? 'https://' : 'Search or community', 'aria-label="What to read"')}</div>`).join('');
+      : auIn(`trigger.sources.${i}.target`, s.target, s.kind === 'page' ? 'https://' : s.kind === 'github' ? 'owner/repo' : 'Search or community',
+        `aria-label="${s.kind === 'github' ? 'Repository' : 'What to read'}"${s.kind === 'github' ? ' autocapitalize="off" spellcheck="false"' : ''}`)}</div>`).join('');
   const rules = `<div class="au-rb lst-dup"><span class="nav-icon" aria-hidden="true">lock</span>Remove duplicates</div>`
     + (t.rules || []).map((r, i) => `<div class="au-rb"><div class="au-ir">
       ${auSel(`trigger.rules.${i}.do`, [['keep', 'Keep'], ['drop', 'Drop']], r.do, 'data-redraw aria-label="Rule"')}
@@ -226,6 +243,11 @@ function lstBody(ed: AuTriggerEd): {name: string; trigger: AuFlowTrigger} | stri
   for (const s of t.sources || []) {
     const site = String(s.site || '').trim(), target = String(s.target || '').trim();
     if (s.kind === 'push') { if (!site) return 'Name the push source'; sources.push({id: s.id, kind: 'push', site}); continue; }
+    if (s.kind === 'github') {
+      const repo = lstRepo(target);
+      if (!repo) return 'A GitHub source is owner/repo';
+      sources.push({id: s.id, kind: 'github', site: 'github', target: repo, follow: s.follow === 'releases' ? 'releases' : 'prs'}); continue;
+    }
     if (!target || (s.kind === 'search' && !site)) return 'Each source needs a site and what to read';
     if (s.kind === 'page' && !/^https?:\/\/\S+$/.test(target)) return 'A page is a web address';
     sources.push({id: s.id, kind: s.kind, site: site || target.replace(/^https?:\/\/(www\.)?/, '').split('/')[0] || '', target});

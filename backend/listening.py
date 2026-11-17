@@ -14,8 +14,9 @@ An item a run's steps did not deliver (the spend cap stopped them, or they faile
 (`settle`), with its score, copies and arrival unchanged, and `delivered` names the steps that did deliver it, so the
 next send hands it only to the others (backend/automation_engine.py `_fresh`).
 
-Posts arrive three ways, all through `save`: a bot that read a Search source, the server reading a Page source
-(`read_pages`, the market watch's reader), and a Push address anyone holding its token may post to.
+Posts arrive four ways, all through `save`: a bot that read a Search source, the server reading a Page source
+(`read_pages`, the market watch's reader) or a GitHub source (`read_github`, backend/listening_github.py: one item per
+merged PR or release), and a Push address anyone holding its token may post to.
 
 `run_pass` is the scheduler's pass, once per `automations.tick`, outside that tick's transaction: the model calls and
 the copy comparison run between short transactions, never inside one.
@@ -41,6 +42,7 @@ from . import automation_engine as E
 from . import automation_flow as F
 from . import decide_groups as DG
 from . import hubdb as H
+from . import listening_github as LG
 from . import listening_text as LT
 from .models import Contract
 from .store import Problem
@@ -74,6 +76,8 @@ KEEP_DAYS = 30
 SEARCH_DUE_HOURS = 24
 PAGE_DUE_HOURS = 24
 PAGES_PER_PASS = 10
+GITHUB_DUE_MINUTES = 60
+GITHUBS_PER_PASS = 10
 PASS_SECONDS = 20  # of page reads and model calls in one pass, across every listening: the tick waits on the pass
 OVERDUE_DAYS = 2  # a source not read for this long shows hollow
 STALLED_MINUTES = 30  # a post waiting unscored this long shows the listening hollow
@@ -139,6 +143,8 @@ def site_label(source):
         return ""
     if source["kind"] == "page":
         return "Page"
+    if source["kind"] == "github":
+        return str(source["target"] or "GitHub")
     site = str(source["site"] or "")
     return site[:1].upper() + site[1:]
 
@@ -516,6 +522,48 @@ def read_pages(store, aid, now, left=None):
                 c.execute("UPDATE listening_sources SET snapshot=? WHERE id=?", (text, row["id"]))
 
 
+def _follows(flow):
+    """Each GitHub source's `follow` in the flow, by its key: the source rows keep no more than kind and target."""
+    sources = ((flow or {}).get("trigger") or {}).get("sources") or []
+    return {src.get("id"): src.get("follow") or "prs" for src in sources if src.get("kind") == "github"}
+
+
+def read_github(store, aid, flow, now, left=None, github=None):
+    """The server reads each GitHub source once an hour: one item per PR merged into the default branch, or per
+    release, since the last read (backend/listening_github.py). The first read only sets where later ones start."""
+    if getattr(store.settings, "rehearsal", False) or (
+        LG.FETCH is None and getattr(store.settings, "test_identities", False)
+    ):
+        return
+    with store.read() as c:
+        due = [
+            dict(r)
+            for r in c.execute(
+                "SELECT * FROM listening_sources WHERE automation_id=? AND kind='github' AND deleted_at IS NULL "
+                "AND (last_read_at IS NULL OR last_read_at<?) ORDER BY last_read_at LIMIT ?",
+                (aid, H.shift(now, minutes=-GITHUB_DUE_MINUTES), GITHUBS_PER_PASS),
+            )
+        ]
+    follows = _follows(flow)
+    for row in due:
+        if left and not left():  # the pass's time is used up: the source is still due at the next
+            return
+        repo = LG.repo_of(row["target"]) or ""
+        result = LG.read(
+            row["target"], follows.get(row["key"], "prs"), row["snapshot"], now, LG.token_for(github, repo)
+        )
+        items = result["items"]
+        with store.transaction() as c:
+            try:
+                source = _source(c, row["id"])
+                for start in range(0, max(len(items), 1), MAX_ITEMS):
+                    save(c, source, result["status"], items[start : start + MAX_ITEMS], now, result["error"])
+            except Problem:  # removed or turned off while GitHub was read
+                continue
+            if result["snapshot"] is not None:
+                c.execute("UPDATE listening_sources SET snapshot=? WHERE id=?", (result["snapshot"], row["id"]))
+
+
 def _duplicate(c, item_id, original_id, now, claimed=None):
     """Mark one `new` item a copy of `original_id`; False when another pass got to it first. Copies never chain: a
     copy of a copy points at that one's original, and what already pointed at this item moves, with its count, to
@@ -544,7 +592,7 @@ def exact_copies(store, aid, now):
     with store.read() as c:
         rows = c.execute(
             "SELECT id, text_key, status FROM listening_items WHERE automation_id=? AND status<>'duplicate' "
-            "AND created_at>=? ORDER BY rowid",
+            "AND created_at>=? AND native_id NOT LIKE 'gh:%' ORDER BY rowid",
             (aid, H.shift(now, days=-COPY_DAYS)),
         ).fetchall()
     first, copies = {}, []
@@ -675,7 +723,10 @@ def score(store, row, flow, now, primary=None, left=None):
     def copy_of(item):
         """The earlier item this one is a near copy of. Two texts are alike when their first COPY_TEXT characters
         are; a longer text also needs the whole lengths within the bar and its last COPY_TEXT characters alike, so
-        two long posts that only open the same are not copies."""
+        two long posts that only open the same are not copies. A GitHub item is never a copy: its number names it, and
+        two PRs called "Bump deps" are two changes."""
+        if str(item["native_id"]).startswith("gh:"):
+            return None
         mine = tokens(item["text"][:COPY_TEXT] or item["title"])
         size, length = sum(mine.values()), len(item["text"])
         tail = None
@@ -994,7 +1045,7 @@ def settle_ended(c, aid, now=None):
     return sum(settle(c, rid, now) for rid in runs if rid)
 
 
-def run_pass(store, at=None, primary=None):
+def run_pass(store, at=None, primary=None, github=None):
     """One pass over every listening that is on: read its pages, mark copies, score, expire, send. Each listening's
     failure is its own; the others still run. Reading and scoring share PASS_SECONDS, so the tick is never held long;
     the listening whose unscored post has waited longest goes first, so a busy one cannot keep the others waiting.
@@ -1019,9 +1070,11 @@ def run_pass(store, at=None, primary=None):
         if not row["enabled"]:  # off: nothing is read or scored
             continue
         try:
+            flow = json.loads(row["flow"])
             read_pages(store, row["id"], now, left)
+            read_github(store, row["id"], flow, now, left, github)
             exact_copies(store, row["id"], now)
-            score(store, row, json.loads(row["flow"]), now, primary, left)
+            score(store, row, flow, now, primary, left)
         except Exception:
             log.exception("listening pass failed for %s", row["id"])
     for row in rows:
