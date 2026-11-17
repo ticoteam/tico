@@ -106,3 +106,13 @@ def test_a_release_only_a_person_cuts_asks_them_after_a_week(company, time_machi
         person = W.person_for(c, E.task(c, task_id))
         [ask] = _asked(c, person, task_id)
         assert ask["line"] == "Can you cut the next release?"
+
+
+def test_a_bot_that_finishes_after_all_takes_tico_s_question_with_it(c, time_machine):
+    X.pipeline(c)
+    task_id = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")["id"]
+    _stop(c, time_machine, task_id, "bot:builder")
+    assert _asked(c, ANA, task_id)
+    X.say_done(c, E.task(c, task_id))
+    E.advance(c, task_id)
+    assert E.task(c, task_id)["status"] == "done" and not _asked(c, ANA, task_id)

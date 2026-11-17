@@ -213,10 +213,11 @@ def test_no_release_after_an_ask_is_the_owner_s_then_a_person_s(company, gh):
         assert [w.state for w in W.of(c, E.task(c, task_id))] == [W.PERSON]
 
 
-def test_a_repo_whose_releases_a_person_cuts_waits_for_the_next_one_and_is_late_once_after_a_week(company, gh):
+def test_a_repo_whose_releases_a_person_cuts_waits_for_the_next_one_and_a_person_is_asked_once_after_a_week(
+    company, gh
+):
     """ticoteam/tico: Release with stays empty and a person tags each rc. Only that release ends the wait: no bot is
-    woken, climbs a ladder or is told Late, and after a week with no release it is Late once and the ladder rests (in
-    no person's Needs you: it holds only what is asked of a person)."""
+    woken, climbs a ladder or is told Late, and after a week with no release a person is asked, once, to cut it."""
     task_id = to_release(company, gh, release={})
     waiting = (R.WAITING, "github", f"Waiting for the next release of {REPO}")
     with company.transaction() as c:
@@ -231,8 +232,9 @@ def test_a_repo_whose_releases_a_person_cuts_waits_for_the_next_one_and_is_late_
         done = NS.check(c, H.shift(H.now(), days=7, minutes=1))
         assert (done["late"], done["to_person"], done["woken"]) == (1, 1, 0)
         waits = W.of(c, E.task(c, task_id))
-        assert [w.state for w in waits] == [W.SOURCE] and waits[0].line == waiting[2]
-        assert E.task(c, task_id)["visit"]["late_person_at"] and not W.needs(c, ANA)
+        assert [w.state for w in waits] == [W.PERSON, W.SOURCE] and waits[0].who == ANA
+        assert waits[1].line == waiting[2]
+        assert [n["line"] for n in W.needs(c, ANA)] == ["Can you cut the next release?"]
         assert NS.check(c, H.shift(H.now(), days=9))["late"] == 0  # once
         assert wakes(c, task_id) == [] and wakes(c, task_id, EM) == []
     gh.publish(REPO, "v1.0.0-rc.1", prerelease=True)  # the person's prerelease counts by default

@@ -1421,6 +1421,14 @@ def _tell_manager(conn: "sqlite3.Connection", row: Row, text: str, what: str) ->
     )
 
 
+TICOS_DONE = "Nothing else holds the task now"
+
+
+def _ticos(requirement: Row) -> bool:
+    """A question Tico itself asked on this visit (a stopped task's, never_stuck.ask_person)."""
+    return bool(requirement.get("visit_id")) and requirement.get("added_by_id") == _h().KEEPER
+
+
 def advance(conn: "sqlite3.Connection", task_id: str) -> Row | None:
     """Forward, by the engine: move the task to its next stage if everything is met, there is room, and nobody there
     is shut out of a private task (`shut_out`: it waits until it is shared). Returns the moved task, or None when it
@@ -1431,7 +1439,16 @@ def advance(conn: "sqlite3.Connection", task_id: str) -> Row | None:
     if task_depends.blocked(conn, task_id):
         return None  # a task it depends on is still open: it goes on when that ends (task_depends.release)
     target = next_stage(conn, row)
-    if not target or R.unmet(conn, row) or not has_room(conn, target, task_row=row) or shut_out(conn, row, target):
+    unmet = R.unmet(conn, row)
+    if target and unmet and all(_ticos(s.requirement) for s in unmet):
+        # Only Tico's own question is left (a stopped task's, never_stuck.ask_person): what it asked about is over (the
+        # bot finished, the release came), so it is taken back and the task moves on.
+        hub = _h()
+        for standing in unmet:
+            conn.execute("UPDATE requirements SET withdrawn_at=? WHERE id=?", (hub.now(), standing.requirement["id"]))
+            _event(conn, task_id, hub.KEEPER, "requirement_withdrawn", standing.requirement["id"], None, TICOS_DONE)
+        unmet = []
+    if not target or unmet or not has_room(conn, target, task_row=row) or shut_out(conn, row, target):
         return None
     if idea_checks.holds(conn, row):
         return None  # Jev's duplicate check comes first (idea_checks), for WAIT_S at most

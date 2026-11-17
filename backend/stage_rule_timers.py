@@ -232,9 +232,15 @@ def _then(conn: Any, rule: Row, task: Row, done: dict[str, int]) -> str:
         _tell_owner(conn, rule, task, said)
         done["told"] += 1
         return "told"
-    if task.get("late_told_at"):
-        return "late"  # already listed as Late on this visit: the manager has it
-    return "pending" if _manager(conn, task) else "no_manager"
+    outcome = "late" if task.get("late_told_at") else "pending" if _manager(conn, task) else "no_manager"
+    if outcome != "pending":
+        # No manager will hear of it: a task the ladder stopped on asks a person instead (never_stuck.ask_person).
+        E, NS = _mod("task_engine"), _mod("never_stuck")
+        row: Row | None = E.task(conn, task["id"])
+        visit: Row = (row or {}).get("visit") or {}
+        if row and visit.get("level") == "person":
+            NS.ask_person(conn, row)
+    return outcome
 
 
 def _move_back(conn: Any, rule: Row, task: Row, said: str) -> None:

@@ -379,7 +379,8 @@ def test_a_late_task_goes_to_the_manager_bot_once_and_at_three_times_the_time_th
     assert _said(c, task_id, MANAGER)[0].startswith("Late: 24 hours in To do, expected 24 hours. builder has it.")
     assert later(days=1) == {}  # once per visit
     assert later(days=1) == {"to_person": 1}  # three days: the ladder rests, once
-    assert W.headline(c, task_id).line == "Say when the work is done" and W.needs(c, ANA) == []
+    # No manager hears of it (it was listed as Late already): Ana is asked what should happen next.
+    assert [n["kind"] for n in W.needs(c, ANA)] == ["ask"]
     assert later(days=30) == {}
     # A bot changing the task starts the ladder again: no person holds it.
     E.add_requirement(
@@ -413,7 +414,7 @@ def test_a_hand_over_takes_back_the_wakes_no_run_has_taken(c, general, later):
     assert _queued(c, task_id) == [MANAGER]  # the builder's wake would only start work that is no longer its own
     assert later(days=2) == {"to_person": 1}
     assert _queued(c, task_id) == []  # the ladder rests: no bot is still on its way
-    assert W.needs(c, ANA) == []
+    assert [n["kind"] for n in W.needs(c, ANA)] == ["ask"]  # Late already told the manager: Ana is asked
     live = X.new_task(c, ANA, "Fix the footer", assignee=BUILDER)["id"]
     c.execute("UPDATE jobs SET state='running' WHERE state='queued'")
     assert task_wakes.drop(c, live) == 0  # a run already going is left alone

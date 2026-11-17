@@ -143,8 +143,10 @@ blocked on another task (depends_on; never a snooze). While its own pull request
 Anything else is "stopped early". The never-stuck check then wakes the bot again after 2 minutes, 15 minutes and 50
 minutes (inside the hour its session stays cached); then its manager bot, three tries more. Then the ladder rests: the
 task stays with its bot, nobody more is woken for it, and the built-in Quiet bot tasks rule tells the pipeline's
-manager once it has been quiet 6 hours (one batched wake per manager). It goes to no person's Needs you; the manager bot
-asks a person when it needs one. Any change to the task starts the count again. See
+manager once it has been quiet 6 hours (one batched wake per manager). When no manager can hear of it (none, the
+manager owns it or may not read it, it was Late already, a person owns it, or it waits only on a release a person
+cuts), Tico asks a person who reads it what should happen next, once, in their Needs you; the question goes when the
+task moves on. Any change to the task starts the count again. See
 [The never-stuck check](dev/pipelines-v3.md#the-never-stuck-check).
 
 A person hands a task back to its owner with **Try again** (`POST /api/v2/tasks/{id}/try-again`).

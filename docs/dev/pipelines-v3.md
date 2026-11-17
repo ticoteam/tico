@@ -585,8 +585,9 @@ the Assistant or BotOps writes for a person does not.
 - Late is a label on the task. It also hands the task to the manager bot, once per visit, on the same 3 tries.
 - A task that waits only on people's answers stays in their lists. The manager bot is woken only when a bot may push
   past one of those asks, and it is not offered a snooze. When every ask is people only, no bot is woken.
-- Still there at 3 times the expected time: the ladder rests, once (C5): nobody more is woken for it, and the quiet-task
-  rule tells the manager. If it is already a person's turn, nothing changes.
+- Still there at 3 times the expected time: the ladder rests, once (C5): nobody more is woken for it, and, since the
+  manager was told it was Late, a person who reads it is asked what should happen next. If it is already a person's
+  turn, nothing changes.
 - This is the backstop for work that keeps changing but never finishes, and for waits on the outside world.
 
 ### Long work: what 24 hours looks like
@@ -1332,8 +1333,8 @@ late. Nothing depends on the exact 10 seconds.
   releases" while a task waits on a Release with that needs it. Only a person sets Release with.
   With no way set (the repo releases on its own, or a person cuts each release, as on a repo that tags rcs by hand),
   the task shows "Waiting for the next release of <repo>" and only that release ends it: nobody's turn, no wake, no
-  ladder and no Late for a bot. After a week (or the stage's expected time, when longer) it is Late and the ladder rests,
-  once. A week, because a weekly stable train is the slowest cadence a repo keeps on purpose; a repo
+  ladder and no Late for a bot. After a week (or the stage's expected time, when longer) it is Late and a person is
+  asked to cut the release, once. A week, because a weekly stable train is the slowest cadence a repo keeps on purpose; a repo
   cutting pre-releases several times a day never gets near it.
 
 ### What gets deleted
