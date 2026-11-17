@@ -49,6 +49,11 @@ function flowMarkHTML(size = 16, live = false): string {
     + `<g class="f1"><path d="${FLOW_PLAY}" transform="translate(-.5 7.2) scale(.7)"/></g>`
     + `<g class="f2"><path d="${FLOW_PLAY}" transform="translate(10.5 7.2) scale(.7)"/></g></svg></span>`;
 }
+// The mark beside a heading or a tab that waits on the person (a question to answer, a form to fill in): still, and named
+// for screen readers, with no words or tooltip.
+function needsMarkHTML(size: number): string {
+  return `<span class="needs-mark" role="img" aria-label="Needs you">${flowMarkHTML(size)}</span>`;
+}
 // The dot hardly ever just vanishes: when it moves (a row into a panel and back, an older turn to the newest), a copy
 // flies from where it was (`from`, a rect) to `el` along an arc and squashes as it lands, while `el` waits unseen. Both
 // rects are measured once, before the flight (`to` when the caller knows better, e.g. a panel still sliding in); the

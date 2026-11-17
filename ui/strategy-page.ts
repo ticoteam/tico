@@ -606,8 +606,9 @@ function strategyPaintMarket(key: string) {
   if (!STRAT) return;
   const owner = strategyView(STRAT.data).owner;
   if (key === 'growth') {
-    const g = STRAT_MKT.growth;
-    if ($('#strat-setup')) patchHTML($('#strat-setup'), g ? brandSetupHtml(g.brand) : '');
+    const g = STRAT_MKT.growth, setup = g ? brandSetupHtml(g.brand) : '';
+    if ($('#strat-setup')) patchHTML($('#strat-setup'), setup);
+    strategyTabNeeds('strategy', !!setup);
     if ($('#strat-brand')) patchHTML($('#strat-brand'), g ? brandStripHtml(g.brand) : '');
     return;
   }

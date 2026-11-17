@@ -173,17 +173,69 @@ async function onePage(page: Page, tag: string) {
       assert.deepEqual(errors, [], 'empty: no page errors');
       await page.close();
     }
-    // Review screenshots, when TICO_UI_SHOTS names a folder: the whole page at 1280 and 400 wide, light and dark, the
-    // window as tall as the page so nothing is cut off.
-    for (const [name, width] of (process.env.TICO_UI_SHOTS ? [['desktop', 1280], ['phone', 400]] : []) as [string, number][]) {
-      const {page} = await openStrategy(browser, {viewport: {width, height: 900}, hash: '#/strategy/market'});
+    // The Flow mark on the question still waiting on the owner: Where is the money going? before anything is sized, and
+    // Market's tab beside its name. Starting the sizing takes its form away, so the mark goes from both and stays gone
+    // once the sizes arrive. Strategy marks its tab while the owner has no brand, and Market's mark carries to the other
+    // tabs; a member sees none.
+    {
+      const tag = 'marks', mark = '.needs-mark[aria-label="Needs you"]';
+      const {page, errors, writes, db} = await openStrategy(browser, {viewport: DESKTOP, hash: '#/strategy/market', sized: false});
+      await page.locator('#mkt-q-money [data-mkt-size]').waitFor();
+      assert.equal(await page.locator(`#mkt-q-money h3 ${mark}`).count(), 1, tag + ': the sizing question is marked');
+      assert.equal(await page.locator(`.strat-tabs [data-strat-tab="market"] ${mark}`).count(), 1, tag + ': Market\'s tab is marked');
+      assert.equal(await page.locator(mark).count(), 2, tag + ': nothing else on the page is');
+      await page.evaluate(() => { location.hash = '#/strategy'; });
+      await page.locator('#strat-setup .needs-mark').waitFor();
+      assert.equal(await page.locator(`.strat-tabs [data-strat-tab="strategy"] ${mark}`).count(), 1, tag + ': Strategy is marked while the owner has no brand');
+      assert.equal(await page.locator(`.strat-tabs [data-strat-tab="market"] ${mark}`).count(), 1, tag + ': Market\'s mark is kept on Strategy');
+      await page.evaluate(() => { location.hash = '#/strategy/market'; });
+      await page.locator('[data-mkt-size]').waitFor();
+      await page.locator('[data-mkt-size] input[name="description"]').fill('Release tooling for small teams');
+      await page.locator('[data-mkt-size] [type="submit"]').click();
+      await page.locator('[data-mkt-researching]').waitFor();
+      assert.equal(await page.locator(mark).count(), 0, tag + ': sizing started, so no mark on the section or the tab');
+      assert.deepEqual(writes.filter(w => w.method === 'POST').map(w => [w.path, w.body]), [['/api/v2/market/spend/research', {description: 'Release tooling for small teams'}]], tag + ': the sizing is filed once');
+      db.market.sized = true;
+      await page.reload();
       await page.locator('.mkt-map .mkt-box').first().waitFor();
+      assert.equal(await page.locator(mark).count(), 0, tag + ': sized, no mark');
+      assert.deepEqual(errors, [], tag + ': no page errors');
+      await page.close();
+    }
+    // A member is asked nothing: an unsized market shows no mark on the page or on any tab.
+    {
+      const tag = 'member', mark = '.needs-mark[aria-label="Needs you"]';
+      const {page, errors} = await openStrategy(browser, {viewport: DESKTOP, hash: '#/strategy/market', sized: false, viewer: 'ben'});
+      await page.locator('.mkt-pg').waitFor();
+      assert.equal(await page.locator('#mkt-q-money').count(), 0, tag + ': no sizing question for a member');
+      assert.equal(await page.locator(mark).count(), 0, tag + ': no mark');
+      await page.evaluate(() => { location.hash = '#/strategy'; });
+      await page.locator('#strat-body').waitFor();
+      assert.equal(await page.locator(mark).count(), 0, tag + ': no mark on Strategy either');
+      assert.deepEqual(errors, [], tag + ': no page errors');
+      await page.close();
+    }
+    // Market set up by the owner, not yet begun: its first question is the owner's to answer, so it and Market's tab are marked.
+    {
+      const mark = '.needs-mark[aria-label="Needs you"]';
+      const {page, errors} = await openStrategy(browser, {viewport: DESKTOP, hash: '#/strategy/market', market: false, setup: true});
+      await page.locator('[data-market-setup]').waitFor();
+      assert.equal(await page.locator(`[data-market-setup] h1 ${mark}`).count(), 1, 'the setup question is marked');
+      assert.equal(await page.locator(`.strat-tabs [data-strat-tab="market"] ${mark}`).count(), 1, 'Market\'s tab is marked during setup');
+      assert.deepEqual(errors, [], 'setup: no page errors');
+      await page.close();
+    }
+    // Review screenshots, when TICO_UI_SHOTS names a folder: the whole page at 1280 and 400 wide, light and dark, the
+    // window as tall as the page so nothing is cut off. Each market before sizing (its marks) and after it (none).
+    for (const sized of [true, false]) for (const [name, width] of (process.env.TICO_UI_SHOTS ? [['desktop', 1280], ['phone', 400]] : []) as [string, number][]) {
+      const {page} = await openStrategy(browser, {viewport: {width, height: 900}, hash: '#/strategy/market', sized});
+      await page.locator(sized ? '.mkt-map .mkt-box' : '[data-mkt-size]').first().waitFor();
       for (const theme of ['light', 'dark']) {
         await page.evaluate(t => { document.documentElement.dataset.theme = t; }, theme);
         const height = await page.evaluate(() => { const s = document.querySelector<HTMLElement>('#market-shell')!; return Math.ceil(s.getBoundingClientRect().top + s.scrollHeight + 80); });
         await page.setViewportSize({width, height});
         await page.waitForTimeout(300);
-        await shot(page, `market-${name}-${theme}`);
+        await shot(page, `market-${sized ? 'sized' : 'unsized'}-${name}-${theme}`);
       }
       await page.close();
     }

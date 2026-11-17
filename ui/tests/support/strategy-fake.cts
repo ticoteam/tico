@@ -56,6 +56,9 @@ export interface StrategyDb {
   groups: Group[];
   needs: Json[];
   goals: Goal[];
+  // Market: whether the spend is sized (a test flips it to stand for the sizes arriving), and whether the owner has a
+  // setup in progress (the questions Market asks before it is set up).
+  market: {sized: boolean; setup: boolean};
 }
 
 export interface OpenStrategyOptions {
@@ -65,6 +68,8 @@ export interface OpenStrategyOptions {
   briefing?: boolean;
   listening?: number;
   market?: boolean;
+  sized?: boolean;
+  setup?: boolean;
 }
 
 export interface StrategyPage {
@@ -119,8 +124,9 @@ function listeningStats(now = new Date()) {
 // One page on the fake hub. viewer: who is signed in (ana owns Acme; ben leads Sales and so Outbound below it; cara
 // is in Engineering).
 // briefing: false answers {briefing: null}. listening: 403 answers the stats with that status. market: false is a
-// market with nothing in it yet.
-async function openStrategy(browser: Browser, {viewport = PHONE, hash = '#/strategy/org', viewer = 'ana', briefing = true, listening = 200, market = true}: OpenStrategyOptions = {}): Promise<StrategyPage> {
+// market with nothing in it yet. sized: false answers the spend with no sizes (Market asks to size it). setup: true
+// answers the owner's Market setup in progress (its first question).
+async function openStrategy(browser: Browser, {viewport = PHONE, hash = '#/strategy/org', viewer = 'ana', briefing = true, listening = 200, market = true, sized = true, setup = false}: OpenStrategyOptions = {}): Promise<StrategyPage> {
   const mk = fixture<MarketFixture>('redesign-market.json');
   const fx = fixture<OrgFixture>('redesign-org.json');
   const person = fx.people.find(p => p.id === viewer);
@@ -133,8 +139,13 @@ async function openStrategy(browser: Browser, {viewport = PHONE, hash = '#/strat
       kpis: [{id: 'k-cust', name: 'Paying customers', status: 'green', link: {kind: 'improve', baseline: 20, baseline_at: '2026-09-01', target: 100, deadline: '2026-12-31'}}]},
     {id: 'g-sales', title: 'Book 40 demos a month', owner_id: 'bot:growth-manager', parent_id: 'g-co', status: 'yellow', status_source: 'auto', rank: 1, kpis: []},
   ];
-  const db: StrategyDb = {people: fx.people, emps: fx.employees, groups: fx.groups, needs: [], goals};
+  const db: StrategyDb = {people: fx.people, emps: fx.employees, groups: fx.groups, needs: [], goals, market: {sized, setup}};
   const writes: StrategyWrite[] = [];
+  // The spend as a sized market reads it, or with its sizes taken off (what a market is before anyone sizes it).
+  const spendOf = (dimension: string): Json => {
+    const spend = mk.spend[dimension] as Json;
+    return db.market.sized ? spend : {...spend, segments: ((spend.segments || []) as Json[]).map(seg => ({...seg, size: null, rolled_usd: null, estimates: []}))};
+  };
   // A teammate joins a group and leaves the one it was in (backend/groups.py); `remove` leaves it in no group.
   const move = (kind: 'people' | 'bots', id: string, to: string) => {
     for (const g of db.groups) g[kind] = g[kind].filter(x => x !== id);
@@ -192,10 +203,11 @@ async function openStrategy(browser: Browser, {viewport = PHONE, hash = '#/strat
     if (p === '/api/v2/market/graph') return json({entities: [], edges: []});
     if (p === '/api/v2/market/entities') return json(market ? mk.entities : {entities: [], total: 0});
     if (p.startsWith('/api/v2/market/entities/')) return json(mk.note);
-    if (p === '/api/v2/market/spend') return json(market ? mk.spend[url.searchParams.get('dimension') || 'offering'] : {segments: [], total: {spend_usd: 0}});
+    if (p === '/api/v2/market/spend') return json(market ? spendOf(url.searchParams.get('dimension') || 'offering') : {segments: [], total: {spend_usd: 0}});
+    if (p === '/api/v2/market/spend/research' && method === 'POST') return json({task_id: 'task-sizing'});
     if (p === '/api/v2/market/value-chain') return json(market ? mk.chain : {layers: [], edges: []});
     if (p === '/api/company-docs') return json({documents: []});
-    if (p === '/api/v2/librarian/setup') return json({market: null});
+    if (p === '/api/v2/librarian/setup') return json({market: db.market.setup ? {answers: {}, can_answer: true, skipped: false, step: 0, task: null} : null});
     // The Strategy Owner beside the tabs, and Goals.
     if (p === '/api/v2/strategy') return json({current: null, bets: [], may_edit: true});
     if (p === '/api/v2/conversations') return json({conversations: []});
