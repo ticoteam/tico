@@ -341,18 +341,27 @@ def test_needs_you_asks_a_person_and_their_answer_wakes_the_bot(setup, tools):
         token=s.ops["token"],
     )
     rid = asked["requirement_id"]
-    assert rid
+    assert rid.startswith("qmark:")  # a ❓ on the bot's message on its task
     assert task["id"] in {str(i.get("task_id") or i["id"]) for i in get(s.api, "needs-you")["items"]}
     with s.api.app.state.store.read() as c:
-        shows = c.execute("SELECT shows FROM requirements WHERE id=?", (rid,)).fetchone()[0]
-        before = c.execute("SELECT count(*) FROM messages WHERE wake_key LIKE ?", (task["id"] + ":%",)).fetchone()[0]
-    assert "browser:tool1/acct1" in shows
+        mark = c.execute(
+            "SELECT q.task_id, q.person_id, m.refs FROM question_marks q JOIN messages m ON m.id=q.message_id "
+            "WHERE q.id=?",
+            (rid.removeprefix("qmark:"),),
+        ).fetchone()
+    assert (mark["task_id"], mark["person_id"]) == (task["id"], "human:ana")
+    assert "browser:tool1/acct1" in mark["refs"]  # the message shows the live browser
     assert bc.session_view("acct1")["state"] == "needs_you"
     assert tools.logs[-1][:2] == ("bot:ops", "needs_you")
-    post(s.api, f"tasks/{task['id']}/asks/{rid}/answer", {"value": "Done"})
+    reply = post(s.api, f"tasks/{task['id']}/comments", {"text": "Done"})["comment"]
     with s.api.app.state.store.read() as c:
-        after = c.execute("SELECT count(*) FROM messages WHERE wake_key LIKE ?", (task["id"] + ":%",)).fetchone()[0]
-    assert after > before
+        assert not bc.open_ask(c, requirement_id=rid)  # her reply clears the ❓
+        reached = c.execute(
+            "SELECT 1 FROM messages m WHERE m.id=? AND (m.recipient_id='bot:ops' OR EXISTS (SELECT 1 FROM "
+            "message_deliveries d WHERE d.message_id=m.id AND d.recipient='bot:ops'))",
+            (reply["id"],),
+        ).fetchone()
+    assert reached  # and goes to the bot
     # A person's own call is refused: needs-you is a bot's, on its task.
     r = s.api.post("/api/v2/browser/needs-you", json={"site": "acme.example", "line": "Help."}, headers=headers())
     assert r.status_code == 403
@@ -514,9 +523,9 @@ def test_needs_you_clears_on_done_on_giving_back_and_on_the_bots_next_command(se
         with s.api.app.state.store.read() as c:
             return bc.session_view("acct1", c)["state"]
 
-    rid = ask()["requirement_id"]
+    ask()
     assert state() == "needs_you"
-    post(s.api, f"tasks/{task['id']}/asks/{rid}/answer", {"value": "Done"})
+    post(s.api, f"tasks/{task['id']}/comments", {"text": "Done"})  # her reply clears the ❓
     assert state() == "unknown"
     ask()
     assert state() == "needs_you"

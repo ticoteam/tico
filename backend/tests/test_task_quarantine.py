@@ -40,7 +40,13 @@ def test_external_asks_fence_their_task(api, external_work):
 
     def ask(row, expected=200):
         version = get(api, "tasks/" + row["id"])["task"]["version"]
-        body = {"to": "ana", "line": "OK to merge the export fix?", "kind": "ok", "version": version}
+        body = {
+            "to": "ana",
+            "line": "OK to merge the export fix?",
+            "kind": "ok",
+            "show": ["https://example.com/export-fix"],
+            "version": version,
+        }
         return post(api, f"tasks/{row['id']}/asks", body, token, expected=expected)
 
     with api.app.state.store.read() as c:

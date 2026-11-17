@@ -270,14 +270,13 @@ def test_the_library_does_not_say_a_page_is_on_someone_elses_dashboard(api):
 
 def test_needs_attention_rows_lead_with_the_task_title(api):
     # Two tasks of Cara's ask the same thing of her: each row reads its own task's title, with the ask as its line.
-    from backend import task_engine as E
+    # The asks are question rows from before a question was a ❓ message: still listed and answered.
+    from backend.tests.helpers.engine import old_question
 
     for title in ("Fix the invoice export", "Ship the pricing page"):
         tid = task(api, "human:cara", title)
         with api.app.state.store.transaction() as c:
-            E.add_requirement(
-                c, tid, "human:ana", "answer", "human:cara", "Is it done?", seen_version=H.task(c, tid)["version"]
-            )
+            old_question(c, tid, "human:ana", "human:cara", "Is it done?")
     task(api, "human:cara", "Book the venue")  # hers, with nothing asked: in Tasks, not here
     cards = {p["card"]["template"]: p["card"]["data"] for p in place(api, "person:me", "cara-test")["pins"]}
     rows = [it for it in cards["needs_attention"]["items"] if it["kind"] == "ask"]

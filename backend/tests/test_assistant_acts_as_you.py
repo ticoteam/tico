@@ -139,7 +139,14 @@ def test_a_batch_commit_never_oks_on_an_assistant_walk(api):
     with api.app.state.store.transaction() as c:
         made = H.task_create(c, "human:ana", "Run the LinkedIn ads", "Q4.", "bot:finance", lint=False)
         asked = H.task_ask(
-            c, "bot:finance", made["id"], "human:ana", "Spend $1,200?", kind="ok", seen_version=made["version"]
+            c,
+            "bot:finance",
+            made["id"],
+            "human:ana",
+            "Spend $1,200?",
+            kind="ok",
+            shows=["https://example.com/linkedin-ads-plan"],
+            seen_version=made["version"],
         )
     tid, rid = made["id"], asked["requirement_id"]
 
@@ -230,7 +237,14 @@ def test_a_background_card_never_approves_and_is_capped_per_person_per_day(api):
     with api.app.state.store.transaction() as c:
         ads = H.task_create(c, "human:ana", "Run the ads", "Q4.", "bot:ops")
         ok = H.task_ask(
-            c, "bot:ops", ads["id"], "human:ana", "Spend $500 on ads?", kind="ok", seen_version=ads["version"]
+            c,
+            "bot:ops",
+            ads["id"],
+            "human:ana",
+            "Spend $500 on ads?",
+            kind="ok",
+            shows=["https://example.com/ads-plan"],
+            seen_version=ads["version"],
         )
     give = f"/api/v2/tasks/{ads['id']}/asks/{ok['requirement_id']}/ok"
     for path, body in (("/api/v2/assistant/batch", {"actions": [{"path": give, "body": {}}]}), (give, {})):

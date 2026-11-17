@@ -10,6 +10,7 @@ import pytest
 
 from backend import ask_ingest as A
 from backend import hubdb as H
+from backend import question_marks
 from backend.tests.helpers.api import unrelated_task_managers
 from backend.tests.helpers.task_readers import run_on
 from backend.tests.helpers.task_readers import task as private_task
@@ -26,16 +27,10 @@ def file(api, token, title="Pick the launch date", body="Two dates: Nov 3 or Nov
 
 
 def asks_ben(api, task):
-    """The item reached Ben: a bot's task for him is its own, with its question to him (backend/person_asks.py), open
-    in his Needs you."""
+    """The item reached Ben: a bot's task for him is its own, with its question to him (backend/person_asks.py), a
+    message on the task's chat marked ❓ for him (backend/question_marks.py), open in his Needs you."""
     with api.app.state.store.read() as c:
-        return bool(
-            c.execute(
-                "SELECT 1 FROM visits v JOIN requirements r ON r.visit_id=v.id WHERE v.task_id=? AND r.person_id=? "
-                "AND r.withdrawn_at IS NULL",
-                (task["id"], "human:ben"),
-            ).fetchone()
-        )
+        return any(m["person_id"] == "human:ben" for m in question_marks.on_task(c, task["id"]))
 
 
 def write_state(api):
@@ -1069,12 +1064,13 @@ def test_off_at_write_time_does_not_refuse_an_ask_already_judged(gate):
 
 
 def test_the_plate_is_the_persons_needs_you_as_the_engine_reads_it(company):
-    """load, on_plate and open_items read waiting_on.needs: a task the person owns and an ask that names them each
+    """load, on_plate and open_items read waiting_on.needs: a task the person owns and a ❓ that names them each
     count, a snoozed task does not, and a bot is offered only what it may read."""
     with company.transaction() as c:
         mine = H.task_create(c, "bot:ops", "Pick the launch venue", "Two options.", "human:ben", lint=False)["id"]
         asked = H.task_create(c, "human:ana", "Draft the launch note", "For Monday.", "bot:ops", lint=False)["id"]
-        H.task_ask(c, "bot:ops", asked, "human:ben", "Monday or Friday?", seen_version=H.task(c, asked)["version"])
+        # The bot asks Ben on its own task: a ❓ (the plate's reading is the subject here, not the bot's reach).
+        question_marks.ask(c, "bot:ops", asked, "human:ben", "Monday or Friday?", checked=False)
         later = H.task_create(c, "bot:ops", "Plan the offsite", "Next quarter.", "human:ben", lint=False)["id"]
         H.task_snooze(c, "human:ben", later, "Next quarter", None)
         assert A.load(c, "human:ben") == 2

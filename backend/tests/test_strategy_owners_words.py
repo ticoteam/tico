@@ -110,7 +110,7 @@ def test_a_task_body_never_counts_as_the_owners_words(api):
 
 
 def test_an_answer_about_who_we_serve_ends_up_in_that_section_of_the_published_strategy(api):
-    """The add-to-flow round trip: the Strategy Owner asks Ana on a task of its own, she answers in free text, and it
+    """The add-to-flow round trip: the Strategy Owner asks Ana a ❓ on a task of its own, she replies in free text, and it
     writes her answer into "Who we serve" (and the bet it changes), then publishes citing the task. Only that section
     moves: the summary stays as it was."""
     goal_manager(api, level=2)
@@ -123,18 +123,12 @@ def test_an_answer_about_who_we_serve_ends_up_in_that_section_of_the_published_s
     with api.app.state.store.transaction() as c:
         task = H.task_create(c, G.AUTO_ACTOR, "Who do we serve?", "An add-to-flow question.", G.AUTO_ACTOR, lint=False)
     r = api.post(
-        f"/api/v2/tasks/{task['id']}/asks",
-        json={
-            "to": "ana",
-            "version": task["version"],
-            "line": "Who do we serve first?",
-            "why": "Every bet and page starts from it.",
-        },
+        f"/api/v2/tasks/{task['id']}/questions",
+        json={"to": "ana", "text": "Who do we serve first?\n\nEvery bet and page starts from it."},
         headers=headers(BOT),
     )
     assert r.status_code == 200, r.text
-    rid = r.json()["requirement_id"]
-    post(api, f"tasks/{task['id']}/asks/{rid}/answer", {"value": SAID})
+    post(api, f"tasks/{task['id']}/comments", {"text": SAID})  # her reply clears the ❓
     draft(api, {"sections": {"serve": SAID}, "task": task["id"]})
     r = api.post(
         "/api/v2/strategy/bets",
@@ -161,7 +155,7 @@ def test_an_answer_about_who_we_serve_ends_up_in_that_section_of_the_published_s
 
 
 def test_a_one_word_answer_of_the_owners_is_enough_to_write_and_publish(api):
-    """Any answer or comment the owner wrote on the task counts, a tapped choice or "Yes" included; none still refuses."""
+    """Any answer or comment the owner wrote on the task counts, a one-word "Yes" reply included; none still refuses."""
     goal_manager(api, level=2)
     as_bot(api, "strategy-owner")
     with api.app.state.store.transaction() as c:
@@ -171,17 +165,12 @@ def test_a_one_word_answer_of_the_owners_is_enough_to_write_and_publish(api):
     sections = {"serve": "Small landlords.", "not": "Enterprise."}
     assert draft(api, {"sections": sections, "task": task["id"]}, 422)["error"]["code"] == "invalid"  # nothing of hers
     r = api.post(
-        f"/api/v2/tasks/{task['id']}/asks",
-        json={
-            "to": "ana",
-            "version": task["version"],
-            "line": "Do we serve small landlords first?",
-            "why": "It sets who we sell to.",
-        },
+        f"/api/v2/tasks/{task['id']}/questions",
+        json={"to": "ana", "text": "Do we serve small landlords first?\n\nIt sets who we sell to."},
         headers=headers(BOT),
     )
     assert r.status_code == 200, r.text
-    post(api, f"tasks/{task['id']}/asks/{r.json()['requirement_id']}/answer", {"value": "Yes"})
+    post(api, f"tasks/{task['id']}/comments", {"text": "Yes"})  # her one-word reply to the ❓
     draft(api, {"sections": sections, "task": task["id"]})
     r = api.post(
         "/api/v2/strategy/bets",

@@ -12,6 +12,7 @@ from backend.tests.helpers import engine as X
 
 ANA = Identity("human:ana", "human")
 FINANCE = "bot:finance"
+SHOWS = ["https://example.com/q4-ads-budget"]  # what the bot's OK approves: a bot's OK names what it shows
 
 
 @pytest.fixture
@@ -46,18 +47,18 @@ def _start(c):
 def test_a_batch_holds_what_bots_ask_and_commit_applies_it_through_the_task_calls(c):
     ads = _work(c)
     ok = H.task_ask(
-        c, FINANCE, ads["id"], "human:ana", "Spend the Q4 ads budget?", kind="ok", seen_version=ads["version"]
-    )
-    other = _work(c, "Pick the launch day")
-    question = H.task_ask(
         c,
         FINANCE,
-        other["id"],
+        ads["id"],
         "human:ana",
-        "Monday or Friday?",
-        choices=["Monday", "Friday"],
-        seen_version=other["version"],
+        "Spend the Q4 ads budget?",
+        kind="ok",
+        shows=SHOWS,
+        seen_version=ads["version"],
     )
+    other = _work(c, "Pick the launch day")
+    # An older question (a requirement of kind answer): the batch still answers such rows.
+    question = X.old_question(c, other["id"], FINANCE, "ana", "Monday or Friday?", choices=["Monday", "Friday"])
     # A task handed to her with nothing asked is in her Tasks, not Needs you: the batch leaves it out.
     chore = H.task_create(c, FINANCE, "Sign the lease", "Sign it today.", "human:ana", lint=False)
     batch = _start(c)
@@ -82,7 +83,14 @@ def test_a_batch_holds_what_bots_ask_and_commit_applies_it_through_the_task_call
 def test_send_back_needs_notes_and_an_ok_or_a_close_only_fits_its_kind(c):
     ads = _work(c)
     ok = H.task_ask(
-        c, FINANCE, ads["id"], "human:ana", "Spend the Q4 ads budget?", kind="ok", seen_version=ads["version"]
+        c,
+        FINANCE,
+        ads["id"],
+        "human:ana",
+        "Spend the Q4 ads budget?",
+        kind="ok",
+        shows=SHOWS,
+        seen_version=ads["version"],
     )
     batch = _start(c)
     with pytest.raises(Problem, match="what to change"):
@@ -135,7 +143,14 @@ def test_a_bound_ok_is_never_given_on_a_walk(c):
 def test_an_assistant_walking_the_list_may_send_back_but_never_ok(c):
     ads = _work(c)
     ok = H.task_ask(
-        c, FINANCE, ads["id"], "human:ana", "Spend the Q4 ads budget?", kind="ok", seen_version=ads["version"]
+        c,
+        FINANCE,
+        ads["id"],
+        "human:ana",
+        "Spend the Q4 ads budget?",
+        kind="ok",
+        shows=SHOWS,
+        seen_version=ads["version"],
     )
     batch = _start(c)
     B.respond(c, ANA.actor, batch["id"], "decide", "", decision="ok")
@@ -149,7 +164,16 @@ def test_an_assistant_walking_the_list_may_send_back_but_never_ok(c):
 
 def test_a_batch_belongs_to_a_person_and_later_keeps_an_item_out_for_a_day(c):
     ads = _work(c)
-    H.task_ask(c, FINANCE, ads["id"], "human:ana", "Spend the Q4 ads budget?", kind="ok", seen_version=ads["version"])
+    H.task_ask(
+        c,
+        FINANCE,
+        ads["id"],
+        "human:ana",
+        "Spend the Q4 ads budget?",
+        kind="ok",
+        shows=SHOWS,
+        seen_version=ads["version"],
+    )
     batch = _start(c)
     with pytest.raises(Problem, match="not found"):
         B.respond(c, "human:ben", batch["id"], "skip")

@@ -562,11 +562,9 @@ def test_a_document_read_and_an_ask_make_only_calls_counsel_is_allowed(api, monk
             },
         ),
     )["id"]
-    tools(
-        token,
-        ("tico_rules_get", {"id": rule_id}),
-        ("tico_task_comment", {"id": read["task_id"], "text": "Wrote 1 suggestion."}),
-    )
+    # What it says goes in its reply at the end of the turn (`finish`), posted on its task: a bot does not comment on
+    # its own task during its turn there (task_comments_routes OWN_TURN).
+    tools(token, ("tico_rules_get", {"id": rule_id}))
     # The same tools over the hub's own MCP: the version it was asked to read comes back whole, a newer one is refused.
     assert not mcp(api, "tico_rules_list", {}, token=token)[0]
     failed, got = mcp(api, "tico_file_read", {"id": file_id, "version": version}, token=token)
@@ -577,8 +575,8 @@ def test_a_document_read_and_an_ask_make_only_calls_counsel_is_allowed(api, monk
     assert ("GET", f"/api/v2/files/{file_id}/versions/{newer}", counsel.READ_SCOPE) in seen
     seen[:] = [s for s in seen if s[2] is None]
     finish(api, r, attempt)
-    # A question's run: the rules in force, one rule and a note on its task. Closing it is not Counsel's: moving a task
-    # is outside its routes, so only the person who asked closes it.
+    # A question's run: the rules in force and one rule; its answer is its reply at the end of the turn. Closing it is
+    # not Counsel's: moving a task is outside its routes, so only the person who asked closes it.
     ask = post(api, "rules/ask", {"question": "Can I keep consent records?"}, token="cara-test")
     token = next_counsel_run(api, r)["token"]
     tools(
@@ -586,7 +584,6 @@ def test_a_document_read_and_an_ask_make_only_calls_counsel_is_allowed(api, monk
         ("tico_rules_list", {}),
         ("tico_rules_list", {"bot": "ops"}),
         ("tico_rules_get", {"id": rule_id}),
-        ("tico_task_comment", {"id": ask["task_id"], "text": "No rule covers it."}),
     )
     shown = api.get(f"/api/v2/tasks/{ask['task_id']}", headers=headers(token)).json()["task"]["version"]
     with pytest.raises(Exception, match="The Rules Owner reads only"):
@@ -602,7 +599,6 @@ def test_a_document_read_and_an_ask_make_only_calls_counsel_is_allowed(api, monk
         "/api/v2/rules",
         "/api/v2/rules/{id}",
         "/api/v2/tasks/{id}",
-        "/api/v2/tasks/{id}/comments",
         "/api/v2/files/{id}/versions/1",
     } <= paths, paths
 
@@ -1422,11 +1418,10 @@ def test_counsel_suggests_from_its_private_read_run_and_publishes_nothing_else(a
     )
     edit = api.post(f"/api/v2/rules/{made.json()['id']}", headers=run(), json={"version": 1, "text": "Changed."})
     assert edit.status_code == 403, edit.text
-    # Its note goes on its own task, which stays private.
-    note = api.post(
-        f"/api/v2/tasks/{read['task_id']}/comments", headers=run(), json={"text": "read, nothing else for us"}
-    )
-    assert note.status_code < 300, note.text
+    # Its note is its reply at the end of the turn, on its own task, which stays private.
+    finish(api, r, attempt, "Read, nothing else for us.")
+    assert any("nothing else for us" in n for n in done_notes(api, read["task_id"]))
+    assert task_state(api, read["task_id"])["private"]
 
 
 def done_notes(api, task_id):

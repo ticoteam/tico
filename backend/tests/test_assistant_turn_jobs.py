@@ -13,6 +13,7 @@ from backend import task_asks
 from backend.tests.helpers.api import assign, get, headers, post, runner, setup_attempt  # noqa: F401
 from backend.tests.helpers.assistant import assistant_turn, say
 from backend.tests.helpers.automation_access import flow
+from backend.tests.helpers.engine import old_question
 
 
 def turn(api, text="Please do it"):
@@ -128,10 +129,10 @@ def test_one_assistant_turn_makes_every_write_the_person_could_make_with_no_card
     with api.app.state.store.read() as c:
         assert H.task(c, task)["owner_id"] == "bot:ops", "owner"
 
-    # A turn answers a question the bot asked.
+    # A turn answers a question the bot asked (a question row from before questions were ❓ messages).
     with api.app.state.store.transaction() as c:
         tool = H.task_create(c, "human:ana", "Pick the outbound tool", "x", "bot:finance", lint=False)
-        asked = H.task_ask(c, "bot:finance", tool["id"], "human:ana", "Close or Apollo?", seen_version=tool["version"])
+        asked = old_question(c, tool["id"], "bot:finance", "human:ana", "Close or Apollo?")
     call(
         api,
         turn(api, "Apollo"),

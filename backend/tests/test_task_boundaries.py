@@ -31,16 +31,11 @@ def test_cross_task_provenance_filters_comments_asks_answers_and_mutation_receip
                 },
             )['id']
         )
-    # The bot's open ask on the target is the target's own: whoever reads the target reads it.
+    # The bot's open ❓ on the target is the target's own: whoever reads the target reads it.
     asked = post(
         api,
-        f"tasks/{target['id']}/asks",
-        {
-            'to': 'ana',
-            'line': 'Which packet is final?',
-            'why': 'It decides what ships next.',
-            'version': get(api, 'tasks/' + target['id'])['task']['version'],
-        },
+        f"tasks/{target['id']}/questions",
+        {'to': 'ana', 'text': 'Which packet is final? It decides what ships next.'},
         token=bot_token(api, 'ops'),
     )
     with api.app.state.store.transaction() as c:  # each task has its own room, so the cross-room reply is set here
@@ -61,7 +56,7 @@ def test_cross_task_provenance_filters_comments_asks_answers_and_mutation_receip
         assert all(mid not in json.dumps(value) for mid in derived)
         assert 'Restricted' not in json.dumps(value)
     shown = get(api, 'tasks/' + target['id'], 'ben-test')['task']
-    assert asked['task']['id'] == target['id'] and shown['status'] == 'open'
+    assert asked['question']['task_id'] == target['id'] and shown['status'] == 'open'
     # Task comments are say, ask and answer messages; the notice in the loop is not one of them.
     say_id, notice_id, answer_id = derived
     comment_ids = {m['id'] for m in get(api, 'tasks/' + target['id'] + '/comments')['comments']}

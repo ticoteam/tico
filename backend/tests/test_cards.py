@@ -146,10 +146,11 @@ def test_needs_you_rows_lead_with_the_task_and_carry_the_ask(api):
     """A Needs you row is titled by the task it is on, so asks with the same wording on different tasks read apart; the
     ask itself goes along as its line, with the word for what it needs."""
     from backend.store import H
+    from backend.tests.helpers.engine import old_question
 
     with api.app.state.store.transaction() as c:
         work = H.task_create(c, "human:ben", "Launch plan", "Plan it.", "human:ben", lint=False)
-        H.task_ask(c, "human:ben", work["id"], "human:ana", "Which region?")
+        old_question(c, work["id"], "human:ben", "human:ana", "Which region?")  # a question row from before ❓
     needs = next(p["card"] for p in place(api, "dashboard")["pins"] if p["card"]["template"] == "needs_you")
     asks = [row for row in needs["data"]["items"] if row["kind"] == "ask"]
     assert [(row["title"], row["line"], row["act"], row["task_id"]) for row in asks] == [

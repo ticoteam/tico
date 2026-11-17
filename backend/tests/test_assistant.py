@@ -13,6 +13,7 @@ from backend.tests.helpers.support import FakeHQ
 from backend.store import H
 from backend import bot_settings as BS
 from backend.tests.helpers.assistant import asked, assistant_turn, room, say, turn_message
+from backend.tests.helpers.engine import old_question
 
 
 def jobs(api):
@@ -384,16 +385,13 @@ def test_real_assistant_lease_keeps_actual_bot_private_boundaries_and_revocation
 
 def test_the_assistant_answers_what_a_bot_asks_the_person_and_no_one_elses_asks(api):
     """A bot's question to ben, asked on its task, is his Assistant's to answer on his words. Ana's ask on her private task
-    is neither readable nor answerable on his turn."""
+    is neither readable nor answerable on his turn. The questions are rows from before a question was a ❓ message: the
+    answer route still answers them."""
     with api.app.state.store.transaction() as c:
         ship = H.task_create(c, "human:ben", "Ship the zip fix", "For the next release.", "bot:ops")
-        mine = H.task_ask(
-            c, "bot:ops", ship["id"], "human:ben", "Ship the zip fix in the next release?", seen_version=ship["version"]
-        )
+        mine = old_question(c, ship["id"], "bot:ops", "human:ben", "Ship the zip fix in the next release?")
         budget = H.task_create(c, "human:ana", "Plan the budget", "Q4.", "bot:ops", private=True)
-        hers = H.task_ask(
-            c, "bot:ops", budget["id"], "human:ana", "Is the Q4 budget right?", seen_version=budget["version"]
-        )
+        hers = old_question(c, budget["id"], "bot:ops", "human:ana", "Is the Q4 budget right?")
         secret = H.task_create(
             c, "human:ben", "Review the confidential packet", "Confidential packet.", "human:ben", private=True
         )
@@ -509,7 +507,7 @@ def test_the_assistants_tools_cite_the_message_for_it(api):
     with api.app.state.store.transaction() as c:
         launch = H.task_create(c, "human:ben", "Plan the launch", "For ops.", "bot:ops")
         ads = H.task_create(c, "human:ben", "Run the ads", "Ben picks the channel.", "bot:ops")
-        pick = H.task_ask(c, "bot:ops", ads["id"], "human:ben", "Search or social ads?", seen_version=ads["version"])
+        pick = old_question(c, ads["id"], "bot:ops", "human:ben", "Search or social ads?")  # a row from before ❓
         ads_version = H.task(c, ads["id"])["version"]
     r, attempt = assistant_turn(api, "ben-test", "Close the launch task and say search ads")
     turn = Turn(attempt["token"])
@@ -622,7 +620,14 @@ def test_a_group_of_task_actions_is_one_card_and_one_click(api):
         secret = H.task_create(c, "human:ana", "Review the private mail", "Nothing for ben.", "bot:inbox")
         ads = H.task_create(c, "human:ben", "Run the ads", "Q4.", "bot:ops")
         spend = H.task_ask(
-            c, "bot:ops", ads["id"], "human:ben", "Spend $500 on ads?", kind="ok", seen_version=ads["version"]
+            c,
+            "bot:ops",
+            ads["id"],
+            "human:ben",
+            "Spend $500 on ads?",
+            kind="ok",
+            shows=["https://example.com/ads-plan"],
+            seen_version=ads["version"],
         )
     r, attempt = assistant_turn(api, "ben-test", "Clear out all my old tasks")
     token = attempt["token"]

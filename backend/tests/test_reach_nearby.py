@@ -10,6 +10,7 @@ import json
 from datetime import datetime, timedelta, timezone
 
 from backend import bot_settings as BS
+from backend import question_marks
 from backend import reach
 from backend.auth import Identity
 from backend.store import H, encode
@@ -36,13 +37,14 @@ def task(api, token, owner, title="Draft the launch note", expected=200, **extra
 
 
 def wait_on_cara(c, task_id):
-    """Ben, who handed the task over, asks Cara on it: she is one it waits on, and so one it is shared with."""
+    """Ben, who handed the task over, asks Cara to OK it: she is one it waits on, and so one it is shared with."""
     H.task_ask(
         c,
         "human:ben",
         task_id,
         "human:cara",
-        "Can you check the launch note before it goes out?",
+        "OK the launch note before it goes out?",
+        kind="ok",
         seen_version=H.task(c, task_id)["version"],
     )
 
@@ -590,12 +592,9 @@ def test_a_bot_asks_the_person_who_pinged_it_for_a_day(api):
     two_levels_down(api)
     mine = task(api, "ops-test", "bot:ops", title="A question for Ben")
 
-    def ask():
+    def ask():  # a ❓ on its task's chat, checked against its reach as any ask to a person is
         with api.app.state.store.transaction() as c:
-            row = H.task(c, mine["id"])
-            H.task_ask(
-                c, "bot:ops", mine["id"], "human:ben", "Which launch date do you want?", seen_version=row["version"]
-            )
+            question_marks.ask(c, "bot:ops", mine["id"], "human:ben", "Which launch date do you want?")
 
     with pytest.raises(reach.Refused):
         ask()
@@ -654,9 +653,9 @@ def test_a_task_for_the_person_goes_through_the_manager_who_passes_it_on_and_the
 
 
 def test_a_bot_reaches_the_bot_that_worked_the_task_in_an_earlier_stage(api):
-    """Finance and Ops share no manager and no team. Finance drafts, the pipeline hands the task to Ops, and Ops asks
-    Finance about the draft on that task: the bot that worked it before is one the task is shared with. Off the task,
-    Finance stays out of Ops's reach."""
+    """Finance and Ops share no manager and no team. Finance drafts, the pipeline hands the task to Ops, and Ops writes
+    to Finance about the draft on that task (as an ask on it was checked: reach.check with the task): the bot that
+    worked it before is one the task is shared with. Off the task, Finance stays out of Ops's reach."""
     from backend.tests.helpers import engine as X
 
     chart(api)
@@ -679,10 +678,6 @@ def test_a_bot_reaches_the_bot_that_worked_the_task_in_an_earlier_stage(api):
     with api.app.state.store.read() as c:
         now = H.task(c, copy["id"])
     assert now["owner_id"] == "bot:ops"
-    r = api.post(
-        f"/api/v2/tasks/{copy['id']}/asks",
-        json={"to": "bot:finance", "line": "Which figure is the launch price?", "version": now["version"]},
-        headers=headers("ops-test"),
-    )
-    assert r.status_code == 200, r.text
+    with api.app.state.store.read() as c:  # on the task: passes (raises nothing)
+        reach.check(c, Identity("bot:ops", "bot", agent="test"), "bot:finance", "task", task_id=copy["id"])
     task(api, "ops-test", "bot:finance", title="Something new for Finance", expected=409)

@@ -15,15 +15,16 @@ def stamp(t):
 
 
 def ask(c, n):
-    """A task of ops' own with one question to Ben on it; returns (task id, requirement id)."""
+    """A task of ops' own with one ask to Ben on it, an OK of the page it shows; returns (task id, requirement id)."""
     made = H.task_create(c, "bot:ops", f"Pricing step {n}", "", "bot:ops", lint=False)
     added = H.task_ask(
         c,
         "bot:ops",
         made["id"],
         "human:ben",
-        f"Which pricing page for step {n}?",
-        choices=["A", "B"],
+        f"OK the pricing page for step {n}?",
+        kind="ok",
+        shows=[f"https://example.com/pricing-{n}"],
         seen_version=made["version"],
     )
     return made["id"], added["requirement_id"]

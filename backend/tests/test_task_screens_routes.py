@@ -340,15 +340,13 @@ def test_health_counts_tasks_without_naming_them_and_a_member_counts_only_what_t
 
 
 def test_an_admins_needs_you_plates_count_only_what_the_admin_may_read(api):
-    from backend import task_engine as E
+    from backend import question_marks
     from backend.store import H
 
     with api.app.state.store.transaction() as c:
         for n in range(12):
             made = H.task_create(c, "human:cara", f"Private errand {n}", "x", "bot:finance", private=True, lint=False)
-            E.add_requirement(
-                c, made["id"], "bot:finance", "answer", "human:cara", f"Which shop {n}?", seen_version=made["version"]
-            )
+            question_marks.ask(c, "bot:finance", made["id"], "human:cara", f"Which shop {n}?")
     own = next((c for c in get(api, "health", token="cara-test")["checks"] if c["id"] == "needs_plate"), None)
     assert own and own["items"][0]["count"] >= 12
     admin = next((c for c in get(api, "health", token="ben-test")["checks"] if c["id"] == "needs_plate"), None)
