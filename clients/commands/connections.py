@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 from urllib.parse import quote
 
+from clients.cli_spec import Arg, Command, Group
 from clients.tico import APIError
 
 from clients.commands._registry import TOOLS, tool
@@ -707,18 +708,111 @@ def _command(group, words, help_, example, fn):
     return s
 
 
-def add_commands(sub):
-    """Add `tico github ...` and the connection verbs under `tico repo` to the CLI's parser. `tico health ready` is
-    in HEALTH (clients/commands/computers.py)."""
-    gh = sub.add_parser("github", help="the team's GitHub App: connect it from a terminal, see what it reaches")
-    github = gh.add_subparsers(dest="sub")
-    _command(
-        github,
-        "status",
-        "the App: connected, to which account, installed, ticked repositories, what is missing (the Owner)",
-        "tico github status",
+def _key_if_set(fields):
+    """The arguments with the request's operation id only when HUB_OPERATION_ID gave one, as run_command sends them."""
+    return {k: v for k, v in fields.items() if k != "operation_id" or v}
+
+
+# `tico github ...` and the connection verbs of `tico repo` (clients/cli_spec.py). `github connect` is still built by
+# add_commands below: it writes the page to open in a browser to a file on this computer (--html).
+GITHUB = (
+    Group("github", "the team's GitHub App: connect it from a terminal, see what it reaches"),
+    Command(
         "github status",
-    )
+        "the App: connected, to which account, installed, ticked repositories, what is missing (the Owner)",
+        convert=_key_if_set,
+        example="tico github status",
+    ),
+)
+# After the hand-built `github connect`, so `tico github` lists its leaves in the order it always has.
+GITHUB_AFTER_CONNECT = (
+    Command(
+        "github finish",
+        "after the Create click: keep the App's secrets and print its install page (the Owner)",
+        convert=_key_if_set,
+        example="tico github finish <state>",
+    ),
+    Command(
+        "github installed",
+        "after the Install click: record the install, sync repositories, print the status (the Owner)",
+        convert=_key_if_set,
+        example="tico github installed",
+    ),
+    Command(
+        "github check",
+        "read the App's permissions again after accepting new ones on GitHub (the Owner)",
+        convert=_key_if_set,
+        example="tico github check",
+    ),
+    Command(
+        "github disconnect",
+        "forget the App here; it stays on GitHub until uninstalled there (the Owner)",
+        args=(Arg("confirm", flag="--confirm", metavar="ACCOUNT"),),
+        convert=_key_if_set,
+        example="tico github disconnect --confirm acme",
+    ),
+)
+REPO = (
+    Command(
+        "repo show",
+        "one repository and every bot that may read or write it, and how (a teammate)",
+        args=(Arg("repository", metavar="OWNER/REPO"),),
+        convert=_key_if_set,
+        example="tico repo show acme/web",
+    ),
+    Command(
+        "repo grant",
+        "let a bot read or write one repository, keeping its other chosen ones (the Owner or an admin)",
+        args=(
+            Arg("repository", metavar="OWNER/REPO"),
+            Arg("access", positional=True, nargs="?", default="write"),
+            Arg("tick", default=None),
+            Arg("run_workflows", flag="--actions", action="store_const", const=True),
+            Arg("run_workflows", flag="--no-actions", action="store_const", const=False),
+            Arg("edit_workflows", flag="--edit", action="store_const", const=True),
+            Arg("edit_workflows", flag="--no-edit", action="store_const", const=False),
+        ),
+        exclusive=(("run_workflows",), ("edit_workflows",)),
+        convert=_key_if_set,
+        example="tico repo grant acme/web builder write --tick",
+    ),
+    Command(
+        "repo revoke",
+        "take one repository away from a bot, keeping its other chosen ones (the Owner or an admin)",
+        args=(Arg("repository", metavar="OWNER/REPO"),),
+        convert=_key_if_set,
+        example="tico repo revoke acme/web reviewer-1",
+    ),
+    Command(
+        "repo refresh",
+        "read the repository list from GitHub again (the Owner or an admin)",
+        convert=_key_if_set,
+        example="tico repo refresh",
+    ),
+    Command(
+        "repo default",
+        "the repository access a new bot starts with: own or all; without a mode, read it",
+        args=(Arg("mode", positional=True, nargs="?"),),
+        convert=_key_if_set,
+        example="tico repo default own",
+    ),
+    Command(
+        "repo setup-command",
+        "the command a computer runs after cloning the repository; '' clears it (the Owner or an admin)",
+        args=(Arg("repository", metavar="OWNER/REPO"),),
+        convert=_key_if_set,
+        example="tico repo setup-command acme/web 'npm ci'",
+    ),
+)
+
+
+def add_commands(sub):
+    """Add `tico github ...` and the connection verbs under `tico repo` to the CLI's parser: the specs above, and
+    `github connect`, built here. `tico health ready` is in HEALTH (clients/commands/computers.py)."""
+    from clients import cli_spec
+
+    cli_spec.add(sub, GITHUB)
+    github = _group(sub, "github")
     s = _command(
         github,
         "connect",
@@ -741,115 +835,11 @@ def add_commands(sub):
         help="do not let BotOps create bot repositories",
     )
     s.add_argument("--html", dest="html_file", metavar="PATH", help="write the page to open in a browser here")
-    s = _command(
-        github,
-        "finish",
-        "after the Create click: keep the App's secrets and print its install page (the Owner)",
-        "tico github finish <state>",
-        "github finish",
-    )
-    s.add_argument("state", help="the state tico github connect printed")
-    _command(
-        github,
-        "installed",
-        "after the Install click: record the install, sync repositories, print the status (the Owner)",
-        "tico github installed",
-        "github installed",
-    )
-    _command(
-        github,
-        "check",
-        "read the App's permissions again after accepting new ones on GitHub (the Owner)",
-        "tico github check",
-        "github check",
-    )
-    s = _command(
-        github,
-        "disconnect",
-        "forget the App here; it stays on GitHub until uninstalled there (the Owner)",
-        "tico github disconnect --confirm acme",
-        "github disconnect",
-    )
-    s.add_argument("--confirm", required=True, metavar="ACCOUNT", help="the connected account's exact name")
-
-    repo = _group(sub, "repo")
-    s = _command(
-        repo,
-        "show",
-        "one repository and every bot that may read or write it, and how (a teammate)",
-        "tico repo show acme/web",
-        "repo show",
-    )
-    s.add_argument("repository", metavar="OWNER/REPO")
-    s = _command(
-        repo,
-        "grant",
-        "let a bot read or write one repository, keeping its other chosen ones (the Owner or an admin)",
-        "tico repo grant acme/web builder write --tick",
-        "repo grant",
-    )
-    s.add_argument("repository", metavar="OWNER/REPO")
-    s.add_argument("bot")
-    s.add_argument("access", nargs="?", choices=["read", "write"], default="write")
-    s.add_argument("--tick", action="store_true", default=None, help="tick the repository first if it is not")
-    for flag, dest, words in (
-        ("actions", "run_workflows", "run workflows there"),
-        ("edit", "edit_workflows", "edit workflow files there"),
-    ):
-        on_off = s.add_mutually_exclusive_group()
-        on_off.add_argument(f"--{flag}", dest=dest, action="store_true", default=None, help=f"may {words}")
-        on_off.add_argument(f"--no-{flag}", dest=dest, action="store_false", default=None, help=f"may not {words}")
-    s = _command(
-        repo,
-        "revoke",
-        "take one repository away from a bot, keeping its other chosen ones (the Owner or an admin)",
-        "tico repo revoke acme/web reviewer-1",
-        "repo revoke",
-    )
-    s.add_argument("repository", metavar="OWNER/REPO")
-    s.add_argument("bot")
-    _command(
-        repo,
-        "refresh",
-        "read the repository list from GitHub again (the Owner or an admin)",
-        "tico repo refresh",
-        "repo refresh",
-    )
-    s = _command(
-        repo,
-        "default",
-        "the repository access a new bot starts with: own or all; without a mode, read it",
-        "tico repo default own",
-        "repo default",
-    )
-    s.add_argument("mode", nargs="?", choices=["own", "all"])
-    s = _command(
-        repo,
-        "setup-command",
-        "the command a computer runs after cloning the repository; '' clears it (the Owner or an admin)",
-        "tico repo setup-command acme/web 'npm ci'",
-        "repo setup-command",
-    )
-    s.add_argument("repository", metavar="OWNER/REPO")
-    s.add_argument("command")
+    cli_spec.add(sub, GITHUB_AFTER_CONNECT, parents={("github",): github})
+    cli_spec.add(sub, REPO, parents={("repo",): _group(sub, "repo")})
 
 
-COMMANDS = frozenset(
-    {
-        "github status",
-        "github connect",
-        "github finish",
-        "github installed",
-        "github check",
-        "github disconnect",
-        "repo show",
-        "repo grant",
-        "repo revoke",
-        "repo refresh",
-        "repo default",
-        "repo setup-command",
-    }
-)
+COMMANDS = frozenset({"github connect"})  # the connection commands add_commands builds; the others are specs
 
 
 def run_command(client, args):
