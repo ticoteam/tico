@@ -1054,7 +1054,7 @@ class Onboarding:
         c.execute("UPDATE bot_config SET onboarding_state=? WHERE bot=?", (ONBOARDED, slug))
         H.event(c, who.actor, "bot.onboarded", slug, {})
         H.setup_finished(c, slug)
-        # A bot whose setup was never started (Finish with defaults on Overview) gets its routines as Start setup
+        # A bot whose setup was never started (Finish with defaults on Health) gets its routines as Start setup
         # would have given them; once only, so ones already armed or turned off by a person are left alone.
         armed = self.arm_routines(c, who, slug)
         return {

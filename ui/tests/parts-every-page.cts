@@ -20,7 +20,7 @@ const ONLY: Record<string, string[]> = {'#/task/': TASK, '#/thread/': [], '#/set
 // Every page in the sidebar, the account menu, Company, Library and Settings. A bot's and a person's page are added from
 // the sidebar's links, a task's and a thread's from ones made on the hub.
 const ROUTES = [
-  '#/overview', '#/threads/new', '#/updates', '#/calendar', '#/meetings', '#/assistant', '#/assistant/learned',
+  '#/home', '#/overview/company-page', '#/threads/new', '#/updates', '#/calendar', '#/meetings', '#/assistant', '#/assistant/learned',
   '#/roadmap', '#/tags', '#/finance', '#/growth', '#/growth/sources', '#/strategy', '#/strategy/goals', '#/strategy/org',
   '#/strategy/budget', '#/strategy/market', '#/strategy/lenses', '#/strategy/brand', '#/automations', '#/listening',
   '#/rules', '#/company-page', '#/library/contacts', '#/library/skills', '#/library/files', '#/tools', '#/docs',

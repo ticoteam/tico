@@ -1657,8 +1657,9 @@ Examples, as drawn: "Ideas 12", "Spec 2/2", "Build 2/3", "Review 1 0".
 
 ### S9. A pipeline's state
 
-It shows in one place: the pipeline's box on Company › Factories (S12), as a mark. Red: a bot in it can't run. Amber: it
-needs a person. Otherwise nothing. The pipeline's own header says nothing about it.
+It is the pipeline's `mark` in `GET /api/v2/factories`: `cant_run` when a bot in it can't run, `needs_person` when it
+needs a person, otherwise none. No screen draws it: each task's row carries its own mark, and the pipeline's own header
+says nothing about it.
 
 ### S10. The manager rail
 
@@ -1711,26 +1712,20 @@ Rules:
 - Done and Closed are not listed. Every pipeline ends in them.
 - Going away from today's editor: Judge picker, Stuck after, Ask a person after, Questions expire, Then…, On ice.
 
-### S12. Company › Factories
+### S12. Factories on Strategy › Org
 
-Today: the factories map.
-
-**New:**
-
-- **Header:** "Company", with tabs "Mine", "Dashboard", "Factories" (selected). At the right, tabs "Day", "Week"
-  (selected), "Month".
-- **One block per factory,** its name and, at the right, how many reached Done. Inside, one box per pipeline: its name,
-  how many tasks are open, and a mark at the right when there is one. An arrow joins a pipeline to the one it files into.
-  - "Product", "4 done": box "Product" 17 with amber "!" → box "Engineering" 9.
-  - "Growth", "0 done": box "Lead" 6 with a red dot → box "Opportunity" 0.
-  - "Success", "7 done": box "Customer" 5.
-  - "Other", no count: boxes "General" 31 and "Legal" 0, with no arrow.
+Under the people chart, a **Factories** section: one locked box per factory, named on its tab. Its Factory Manager sits
+on top when it has two or more pipelines, then one Pipeline Manager card per pipeline, in the order work files from one
+pipeline into the next. A card's name opens its bot; its chip opens the pipeline on the Tasks page. Pipelines in no
+factory share one box, "Not in a factory", after them.
 
 Rules:
 
-- A box is a pipeline: its name, how many tasks are open, and a mark if it needs a person or can't run.
-- An arrow means one pipeline files tasks into the next.
-- "Done" counts tasks that reached Done. Closed never counts.
+- The cards come from the pipeline and factory setup: none moves, folds or opens an edit menu.
+- The company's owner and Admins have a quiet **+** beside the title: **New factory** asks a name and a goal
+  (`POST /api/v2/factories`). For them the section shows before the first factory; for anyone else it shows only once
+  there is one.
+- How full each stage is, and the rates in and out, are on Company's Floor card (docs/overview.md).
 
 ### S13. Home
 

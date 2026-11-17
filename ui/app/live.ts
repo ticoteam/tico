@@ -157,7 +157,7 @@ function liveTaskScope(): TaskScope {
   const botRef = r.startsWith('#/bot/') ? decodeURIComponent(String(r.slice(6).split(/[/?]/)[0])) : '';
   const party = botRef ? 'bot:' + (botByRef(botRef)?.id || botRef)
     : r.startsWith('#/person/') ? 'human:' + decodeURIComponent(String(r.slice(9).split(/[/?]/)[0]))
-    // My dashboard: the reader's own tasks, for its My tasks card (dashboard.ts dashTasksLive).
+    // Company: the reader's own tasks, for its My tasks card (dashboard.ts dashTasksLive).
     : r === HOME ? myActor() : '';
   return {task: open, party: party ? [party] : []};
 }

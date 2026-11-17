@@ -151,7 +151,7 @@ async function taskChanges(query: Omit<TaskBriefQuery, 'limit' | 'offset' | 'sor
 // ---- lists fed by the live stream
 // Each list puts an event's task in place by its own rule and never reads the whole list because an event came (Chris,
 // Nov 3). Its catch-up is a changed_after delta from the cursor its last read gave. The Tasks page, a bot's page, a
-// person's page and My dashboard share these.
+// person's page and Company share these.
 /** A row a live list holds: a list row, or a task as an event or a write carries it. */
 type TaskLiveRow = {id: string};
 /** A task as a write's reply carries it (Task), in a list row's terms (TaskBrief): a full task says `snooze`, not

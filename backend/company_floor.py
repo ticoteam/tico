@@ -1,6 +1,6 @@
 # pyright: strict
-"""Company › Floor: every factory the reader may see, its live pipelines, and each work stage's open tasks by who
-holds them now (GET /api/v2/company/floor).
+"""The Floor (Company's first card): every factory the reader may see, its live pipelines, and each work stage's open
+tasks by who holds them now (GET /api/v2/company/floor).
 
 A whole-company read in a fixed handful of grouped queries, whatever the number of factories, pipelines or stages:
 the factories, the pipelines, their work stages, the open tasks grouped by stage and holder, and the visits that

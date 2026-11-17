@@ -98,7 +98,7 @@ declare function bootSnapDrop(): unknown;
     // Only read-mostly pages are kept, and nothing private on them is.
     assert.deepEqual(await page.evaluate(() => ['#/home', '#/overview', '#/tasks', '#/tasks?view=board', '#/threads', '#/team/eng',
       '#/settings', '#/settings/keys', '#/task/t1', '#/thread/x', '#/bot/ops/dm', '#/mail', '#/welcome', '#/team/eng/x', '']
-      .map(snapRouteOk)), [true, true, true, true, true, true, false, false, false, false, false, false, false, false, false]);
+      .map(snapRouteOk)), [true, false, true, true, true, true, false, false, false, false, false, false, false, false, false], '#/overview only redirects to Company');
     await page.evaluate(() => {
       const bits = document.createElement('div');
       bits.id = 'private-bits';

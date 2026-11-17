@@ -70,7 +70,7 @@
     {
       "script": "dashboard",
       "seconds": 13.808,
-      "reason": "Overview Dashboard and team pages against a fake places API: default cards, order and saves"
+      "reason": "Company and team pages against a fake places API: default cards, the Floor card, order and saves"
     },
     {
       "script": "docs",

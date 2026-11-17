@@ -223,8 +223,6 @@ interface Employee {
   slug?: string;
   display_name?: string;
   status?: string;
-  /** The state a bot row may carry besides status (overview.ts reads it). */
-  state?: string;
   icon?: string;
   template?: string;
   harness?: string;
@@ -256,8 +254,6 @@ interface Employee {
   readiness?: { gateway?: string | null; goals?: boolean | null | undefined } | null;
   users?: BriefPerson[];
   bot_owners?: BriefPerson[];
-  /** Read by overview.js; no server path sends it on a bot row today, so it is optional and not relied on. */
-  owners?: BriefPerson[];
   [key: string]: unknown;
 }
 
@@ -276,7 +272,7 @@ interface OrgGroup {
 /** A person on the chart: the roster row plus the fields the server sends that the generated type leaves out. */
 type OrgPerson = AppState['people'][number] & {role?: string; inbox_bot?: string; report_position?: number};
 // A node of the team chart, as the sidebar builds it (orgTreeByParent, orgTreeWithHelpers in ui/app/sidebar.ts) and
-// other pages draw it (Company > Graph, Budget, goals). A bot node is its roster row; a seat node is its seat row (its
+// other pages draw it (Strategy › Org, Rules, Budget, goals). A bot node is its roster row; a seat node is its seat row (its
 // own `kind` is the node's). `kind` tells them apart, so a check on it narrows the node.
 type OrgGroupNode = { kind: 'group'; helpers?: boolean; id: string; name?: string | undefined; order: number };
 type OrgPersonNode = { kind: 'person'; id: string; person: OrgPerson };
@@ -284,8 +280,6 @@ type OrgBotNode = Employee & {kind: 'bot'};
 type OrgSeatRow = Omit<import('./api').Seat, 'kind'>;
 type OrgSeatNode = OrgSeatRow & {kind: 'seat'; seat: OrgSeatRow};
 type OrgNode = OrgGroupNode | OrgPersonNode | OrgBotNode | OrgSeatNode;
-/** A teammate on the chart (a group, a person or a bot): a node without the recruiting seats. */
-type OrgChartRow = Exclude<OrgNode, OrgSeatNode>;
 /** The chart's nodes by their parent's key ('' for the top, `g:`/`p:`/`b:` + id). */
 type OrgByParent = Record<string, OrgNode[]>;
 
@@ -362,15 +356,6 @@ interface SpendLimit {
   [key: string]: unknown;
 }
 
-/** What the person's Needs you went away on its own this week (`S.v2.wentAway`, backend/views.py went_away). */
-interface WentAway {
-  expired: number;
-  withdrawn: number;
-  assistant: number;
-  total: number;
-  days?: number;
-}
-
 /** One row of Needs you (`S.v2.needs`): GET /v2/needs-you's item (NeedsEntry, ui/app/task-api.ts). */
 type NeedsItem = NeedsEntry;
 
@@ -387,17 +372,6 @@ interface V2State {
   needsPlateCount?: number | null;
   needsByKind?: Record<string, number> | null;
   needsFoldedIds?: string[] | null;
-  wentAway?: WentAway | null;
-}
-
-/** One week of GET /api/v2/overview/bot-hours (backend/bot_hours.py), the Overview's bot-hours card. */
-interface BotHoursWeek { week: string; bot_hours: number; people: number; human_hours: number; ratio: number | null; so_far: boolean }
-/** A week the card can plot: one with a ratio. */
-type BotHoursPoint = BotHoursWeek & { ratio: number };
-interface BotHours {
-  zone: string; now: string; first_run: string | null; people: number; hours_per_person: number; gap_minutes: number;
-  last_7_days: { bot_hours: number; human_hours: number; ratio: number | null; full: boolean };
-  weeks: BotHoursWeek[];
 }
 
 /** The copies each page keeps for its next visit (S.lastRead). Pages not listed here keep their own shape. */
@@ -407,8 +381,6 @@ interface LastRead {
     list: AuRow[]; groups: Array<import('./api').Group>; stats?: AuStats | null; range?: string;
     maint: MaintView | null; heart: import('./api').HeartbeatView | null;
   };
-  /** The Overview's bot-hours answer (overview-hours.ts). */
-  hours?: BotHours | null;
   /** The Dashboard's places, keyed by the place's key. */
   places?: Record<string, DashView>;
   /** The Tasks page's last read, of the view it names (tasks-page.ts tasksLoad). */
@@ -454,7 +426,6 @@ interface AppState {
   seats?: import('./api').Seat[];
   updUnread?: number;
   notifyBrowser?: boolean;
-  overviewRosterFresh?: boolean;
 }
 
 // ---------------------------------------------------------------- the anchor a script-placed popover carries
@@ -468,7 +439,7 @@ interface HTMLElement {
 // ---------------------------------------------------------------- moving a node without taking it out of the page
 
 /** Element.moveBefore (Chromium 133+), shaped as lib.dom declares it from TypeScript 6. Older engines lack it: callers
- *  check for it first (visual-cards.ts visualSwap, overview.ts). */
+ *  check for it first (visual-cards.ts visualSwap). */
 interface ParentNode {
   moveBefore(node: Node, child: Node | null): void;
 }

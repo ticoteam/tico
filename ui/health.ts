@@ -238,7 +238,6 @@ async function hlRead(seq: number): Promise<HlHealth | null> {
   hlNav();
   hlSummaryDraw();
   hlPageDraw();
-  window.overviewStuckDraw?.();
   return HL;
 }
 
@@ -426,7 +425,7 @@ function hlQueueWords(row: HlStuck): string[] {
 }
 
 // Bots with queued work that is not starting, or left in setup for a day (backend/health.py `_stuck`): who, why, and
-// one fix. Overview shows the same rows.
+// one fix.
 window.hlStuckHtml = function hlStuckHtml(rows: HlStuck[] | null | undefined): string {
   return (rows || []).map(row => {
     // Refused words are manager-only context, not support diagnostics.

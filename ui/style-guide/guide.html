@@ -953,55 +953,11 @@
   </div>
 </section>
 
-<!-- FACTORIES -->
-<section class="rv-sec" id="sg-factories">
-  <header><h2>Pipelines and factories</h2><p>Company › Factories. One block per factory, one box per pipeline, arrows where one pipeline files into the next.</p></header>
-  <dl class="rv-use rv-use-sec">
-    <dt>Use</dt><dd>Company › Factories: a box is a pipeline, an arrow is a hand-off.</dd>
-    <dt>Markup</dt><dd><code>.of-factory &gt; .of-boxes &gt; .of-box</code>, <code>.of-box-name</code>, <code>.of-box-n</code>, <code>.of-arrow</code></dd>
-    <dt><span class="nav-icon" role="img" aria-label="Do">check</span></dt><dd>Counts as plain tabular numbers.</dd>
-    <dt><span class="nav-icon" role="img" aria-label="Don't">close</span></dt><dd>Colour a box by status; the marks carry status.</dd>
-  </dl>
-
-  <div class="rv-full">
-    <h3>Factory block</h3>
-    <p class="rv-note">The count on the right is how many tasks reached Done in the period picked (Day, Week or Month, kept in this browser). Closed tasks never count. A box shows its name, how many of its tasks are open, and a mark when it has one.</p>
-    <section class="of-factory" aria-label="Product, sample">
-      <header><h2>Product</h2><span class="of-done tnum">357 done</span></header>
-      <div class="of-boxes">
-        <a class="of-box" href="#sg-factories"><span class="of-box-name">Product</span><span class="of-box-n tnum">45</span><span class="tk-mark tk-mark-person" role="img" aria-label="Needs a person">!</span></a><span class="of-arrow" aria-label="files into">→</span><a class="of-box" href="#sg-factories"><span class="of-box-name">Engineering</span><span class="of-box-n tnum">14</span><span class="tk-mark tk-mark-person" role="img" aria-label="Needs a person">!</span></a>
-      </div>
-    </section>
-  </div>
-
-  <div class="rv-states">
-    <div class="rv-full">
-      <h3>Marks</h3>
-      <p class="rv-note">Amber with a "!" means a person is needed. Red, with no words, means a bot in the pipeline can't run. Both carry a label for screen readers.</p>
-      <div class="rv-row">
-        <a class="of-box" href="#sg-factories"><span class="of-box-name">Review</span><span class="of-box-n tnum">6</span><span class="tk-mark tk-mark-person" role="img" aria-label="Needs a person">!</span></a>
-        <a class="of-box" href="#sg-factories"><span class="of-box-name">Build</span><span class="of-box-n tnum">3</span><span class="tk-mark tk-mark-cant" role="img" aria-label="Can't run"></span></a>
-        <a class="of-box" href="#sg-factories"><span class="of-box-name">Triage</span><span class="of-box-n tnum">0</span></a>
-      </div>
-    </div>
-    <div class="rv-full">
-      <h3>Other</h3>
-      <p class="rv-note">Pipelines in no factory share one block called Other. It has no count, because it is not a team's output.</p>
-      <section class="of-factory" aria-label="Other, sample">
-        <header><h2>Other</h2></header>
-        <div class="of-boxes">
-          <a class="of-box" href="#sg-factories"><span class="of-box-name">Growth ideas</span><span class="of-box-n tnum">12</span></a>
-        </div>
-      </section>
-    </div>
-  </div>
-</section>
-
 <!-- FLOOR -->
 <section class="rv-sec" id="sg-floor">
-  <header><h2>Floor</h2><p>Company › Floor. A hall per factory, a line per pipeline, a stack per stage; one factory draws a deck per teammate.</p></header>
+  <header><h2>Floor</h2><p>Company's first card, full width. A hall per factory, a line per pipeline, a stack per stage; one factory draws a deck per teammate.</p></header>
   <dl class="rv-use rv-use-sec">
-    <dt>Use</dt><dd>Company › Floor: how full each stage is, at a glance, and who holds it.</dd>
+    <dt>Use</dt><dd>The Floor card on Company: how full each stage is, at a glance, and who holds it.</dd>
     <dt>Markup</dt><dd><code>.cf-slot &gt; .cf-stack &gt; .cf-box</code>, <code>.cf-stage &gt; .cf-decks &gt; .cf-deck</code> (<code>.cf-cap</code>, <code>.cf-ply</code>), <code>.cf-card</code></dd>
     <dt><span class="nav-icon" role="img" aria-label="Do">check</span></dt><dd>Heights relative and capped at eight; an empty stage keeps its spot.</dd>
     <dt><span class="nav-icon" role="img" aria-label="Don't">close</span></dt><dd>Write counts, names or waits on the company floor, or colour a stack by state.</dd>
@@ -2163,26 +2119,6 @@
 
   <div class="rv-states">
     <div class="rv-full">
-      <h3>Bot hours vs human hours</h3>
-      <p class="rv-note">The Overview card: one line of bot hours per human hour, week by week, against a dashed parity line at 1×. The week still going is dotted and hollow. Hovering or tapping a week shows its numbers. The card carries no caption: what counts as a bot hour and a human hour is said in the table the card opens.</p>
-      <div class="overview-hours has-plot">
-        <span class="ovh-title">Bot hours vs human hours</span>
-        <p class="ovh-head"><strong class="tnum">2.8×</strong> bot hours per human hour · last 7 days</p>
-        <div class="ovh-plot">
-          <svg class="ovh-chart" viewBox="0 0 300 72" preserveAspectRatio="none" role="img" aria-label="Bot hours per human hour, one point a week, with a parity line at 1×">
-      <line class="ovh-parity" x1="0" x2="300" y1="46.6" y2="46.6" vector-effect="non-scaling-stroke"/>
-      <path class="ovh-line" d="M6.0 50.1L63.6 44.9L121.2 39.7L178.8 31.0L236.4 24.0" vector-effect="non-scaling-stroke"/>
-      <path class="ovh-line ovh-so-far" d="M236.4 24.0L294.0 15.3" vector-effect="non-scaling-stroke"/>
-      <line class="ovh-cross" y1="0" y2="72" x1="-9" x2="-9" vector-effect="non-scaling-stroke"/>
-      <rect class="ovh-hit" data-i="0" x="-22.8" y="0" width="57.6" height="72"/><rect class="ovh-hit" data-i="1" x="34.8" y="0" width="57.6" height="72"/><rect class="ovh-hit" data-i="2" x="92.4" y="0" width="57.6" height="72"/><rect class="ovh-hit" data-i="3" x="150.0" y="0" width="57.6" height="72"/><rect class="ovh-hit" data-i="4" x="207.6" y="0" width="57.6" height="72"/><rect class="ovh-hit" data-i="5" x="265.2" y="0" width="57.6" height="72"/>
-    </svg>
-          <i class="ovh-dot" data-i="0" style="left:2.00%;top:69.57%"></i><i class="ovh-dot" data-i="1" style="left:21.20%;top:62.32%"></i><i class="ovh-dot" data-i="2" style="left:40.40%;top:55.07%"></i><i class="ovh-dot" data-i="3" style="left:59.60%;top:43.00%"></i><i class="ovh-dot" data-i="4" style="left:78.80%;top:33.33%"></i><i class="ovh-dot ovh-dot-so-far" data-i="5" style="left:98.00%;top:21.26%"></i>
-          <span class="ovh-parity-label" style="top:64.73%">Parity 1×</span>
-          <div class="ovh-tip" role="status" hidden></div>
-        </div>
-      </div>
-    </div>
-    <div class="rv-full">
       <h3>CPU and memory</h3>
       <p class="rv-note">One computer's Performance chart. Overloads are shaded behind the lines, and active turns sit in the strip below.</p>
       <section class="card">
@@ -3011,9 +2947,9 @@ console.log(`Total: ${total}`);</code></pre></div>
   <div class="rv-pair">
     <div class="rv-full">
       <h3>Pipeline stage with its tasks</h3>
-      <p class="rv-note">Parts: a factory block as the stage card, its count of open tasks, task rows from Containers, and a blocked pill on the task that waits for a person's approval.</p>
-      <section class="of-factory" aria-label="Build stage, sample">
-        <header><h2>Build</h2><span class="of-done tnum">3 open</span></header>
+      <p class="rv-note">Parts: a card as the stage, its count of open tasks, task rows from Containers, and a blocked pill on the task that waits for a person's approval.</p>
+      <section class="card" aria-label="Build stage, sample">
+        <header><h2>Build</h2><span class="sub tnum">3 open</span></header>
         <div class="tk-row" role="button" tabindex="0"><span class="tk-mark tk-mark-person" role="img" aria-label="Needs a person">!</span><span class="tk-title">Approve the staging deploy</span><span class="pill blocked">Blocked</span><span class="tk-who"><span class="av av-initials" style="width:16px;height:16px;--hue:140;font-size:7px" aria-hidden="true">BB</span></span><span class="tk-age">35m</span></div>
         <div class="tk-row" role="button" tabindex="0"><span class="tk-mark tk-mark-pick" role="img" aria-label="Waiting for a free bot"></span><span class="tk-title">Fix the export timeout</span><span class="tk-who"><span class="av av-initials" style="width:16px;height:16px;--hue:200;font-size:7px" aria-hidden="true">AD</span></span><span class="tk-age">1h</span></div>
         <div class="tk-row" role="button" tabindex="0"><span class="tk-mark" aria-hidden="true"></span><span class="tk-title">Update the release notes</span><span class="tk-who"><span class="av av-initials" style="width:16px;height:16px;--hue:30;font-size:7px" aria-hidden="true">SM</span></span><span class="tk-age">3h</span></div>

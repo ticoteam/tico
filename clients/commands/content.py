@@ -196,12 +196,13 @@ CARD_TEMPLATES = (
     "growth_channels",
     "growth_retention",
     "growth_board",
+    "floor",
 )
 
 
 PLACE = _s(
     "Where: dashboard, growth (the Growth page), team:<group id>, bot:<slug> (a sidebar), task:<id>, or person:me "
-    "(My dashboard, the person's own landing page)"
+    "(Company, the person's own landing page)"
 )
 
 

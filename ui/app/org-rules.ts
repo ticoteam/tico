@@ -22,8 +22,8 @@ const RU_STATUS: Record<string, [string, string]> = {overdue: ['Overdue', 'fail'
 // satisfied rows say nothing, and the Status filter still names them.
 const RU_STATUS_QUIET = new Set(['upcoming', 'satisfied']);
 const RU_KINDS: [string, string][] = [['vendor', 'Vendor'], ['customer', 'Customer'], ['government', 'Government'], ['other', 'Other']];
-// If broken: the stored values stay block / escalate / warn; each label says what happens (org-rule-holds.js and
-// overview-graph.js use the same words).
+// If broken: the stored values stay block / escalate / warn; each label says what happens (org-rule-holds.js uses the
+// same words).
 const RU_BROKEN: [IfBroken, string][] = [['block', 'Stop'], ['escalate', 'Ask first'], ['warn', 'Warn']];
 const RU_BROKEN_HINT: Record<string, string> = {block: 'The output is refused.', escalate: 'Held until the reviewer OKs it.', warn: 'It goes through with a note.'};
 const RU_PAGES = 50;        // pages read for one list at most (a page stops at 100 rows or at its byte budget)

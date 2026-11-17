@@ -963,7 +963,7 @@ STABLE = [
         "get",
         "Pipelines",
         "listFactories",
-        "Company › Factories: each factory's Done count for the period, each pipeline's open count, handoffs and mark",
+        "The factories: each factory's Done count for the period, each pipeline's open count, handoffs and mark",
         "FactoryMap",
     ),
     (
@@ -971,7 +971,7 @@ STABLE = [
         "get",
         "Pipelines",
         "getCompanyFloor",
-        "Company › Floor: each factory you see, its pipelines' tasks in and out over a day and a week, and each work "
+        "The Floor (Company's first card): each factory you see, its pipelines' tasks in and out over a day and a week, and each work "
         "stage's open tasks by who holds them (the 12 most loaded, the rest summed) and how many are in your Needs you",
         "CompanyFloor",
     ),
@@ -9427,6 +9427,7 @@ SCHEMAS['Card'] = obj(
                 'growth_channels',
                 'growth_retention',
                 'growth_board',
+                'floor',
             ]
         },
         'title': 's',

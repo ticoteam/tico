@@ -1,5 +1,5 @@
 """The reads the cut-over's screens need (docs/dev/pipelines-v3.md S7, S10, S12): a list's pipeline, stage, waiting-on and
-pushed-past filters, a row's `pushed_past` and `turn.running`, Company › Factories, the manager rail's Log, a person's
+pushed-past filters, a row's `pushed_past` and `turn.running`, the factories, the manager rail's Log, a person's
 preferences and a support report's answer."""
 
 from backend.tests.helpers.api import assign, claim, expire, get, headers, post, ready, runner
