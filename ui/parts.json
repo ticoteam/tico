@@ -316,11 +316,7 @@
   "deps": [],
   "pages": [],
   "calls": [
-   "pvPick",
-   "pvSelectAll",
-   "pvSelectEnd",
-   "pvSelectMove",
-   "pvSelectToggle"
+   "pvPick"
   ],
   "idle": []
  },

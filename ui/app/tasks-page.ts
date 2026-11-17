@@ -494,7 +494,7 @@ function tasksHeadPaint(state: TasksPageState) {
   const archiveWord = state.archive ? 'Leave Archived' : 'Archived';
   if (archive.textContent !== archiveWord) archive.textContent = archiveWord;
   tasksHidden($('#task-mi-edit'), !p || p.may_change === false || !TASK_PAGE_HOOKS.pipeline?.edit || !!state.archive);
-  tasksHidden($('#task-mi-select'), !p || !TASK_PAGE_HOOKS.pipeline?.select || !!state.archive || tasksViewOnly());
+  tasksHidden($('#task-mi-select'), !p || !TASK_PAGE_HOOKS.pipeline || !!state.archive || tasksViewOnly());
   tasksHidden($('#task-mi-layout'), !p || !!state.archive || matchMedia(PHONE).matches);
   for (const b of document.querySelectorAll<HTMLElement>('#task-mi-layout [data-layout]')) b.setAttribute('aria-pressed', String(b.dataset.layout === state.layout));
   tasksHidden($('#task-archive-x'), !state.archive);

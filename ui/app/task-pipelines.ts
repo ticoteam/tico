@@ -44,7 +44,7 @@ interface PvState {
   selecting: boolean;
   /** The tasks picked, by id, and the stage of the last one picked (All in <stage>). */
   sel: Set<string>;
-  selStage: string;
+  selStage?: string;
 }
 /** The view as last drawn: its element, what it was drawn as (the layout and the stages), the bar, and each column's header
  * and cards by stage (columns), or the whole view's HTML (the list, a phone). */
@@ -89,7 +89,7 @@ function pvStateFor(rec: PipelineRec): PvState {
   if (PV && PV.rec.id === rec.id) return PV;
   PV = {rec, tasks: [], opts: {layout: 'columns', phone: false, q: '', filters: {}}, root: null,
     stage: pvStageKept(rec.id), moving: new Map(), bar: null, x: pvScrollKept(rec.id), y: 0, open: new Set(), drawn: null, whole: true,
-    selecting: false, sel: new Set(), selStage: ''};
+    selecting: false, sel: new Set()};
   return PV;
 }
 
@@ -100,10 +100,6 @@ const pvSnoozed = (t: TaskAny): boolean => !!(t as {snoozed?: boolean}).snoozed;
  * the snoozed ones, with a stop mark and "#304" where a snoozed one shows its day. It holds no slot. Blocked wins over
  * a snooze: no list says Snoozed for a blocked task. */
 const pvBlocked = (t: TaskAny): boolean => taskBlockedBy(t).length > 0;
-
-/** The open tasks the manager's rail reads, when the view shows that pipeline: the snoozed and blocked ones are no one's
- * turn. */
-const pvTasksOf = (pipelineId: string): TaskAny[] => PV && PV.rec.id === pipelineId ? PV.tasks.filter(t => !pvSnoozed(t) && !pvBlocked(t)) : [];
 
 // ---------------------------------------------------------------- drawing
 
@@ -278,9 +274,9 @@ function pvPhoneHTML(state: PvState): string {
     + `${tip ? `<p class="pv-slots">${esc(tip)}</p>` : ''}<div class="pv-phone">${rows}</div>`;
 }
 
-/** The picking bar and the picked cards: task-pick.ts sets both when it loads. A pick or Select loads it first, and
-    nothing is picked before that, so until then there is nothing to draw. */
-const PV_PICK: {html: (state: PvState) => string; paint: (state: PvState, el: Element) => void} = {html: () => '', paint: () => {}};
+/** The picking bar and the picked cards (and the bar's clicks): task-pick.ts sets both when it loads. A pick or Select
+    loads it first, and nothing is picked before that, so until then there is nothing to draw. */
+const PV_PICK: {html: (state: PvState) => string; paint: (state: PvState, el: Element | null) => void} = {html: () => '', paint: () => {}};
 
 function pvBarHTML(bar: PvBar | null): string {
   if (!bar) return '';
@@ -329,7 +325,8 @@ function pvPaint(state: PvState, root: HTMLElement): void {
     }
   }
   const parts = new Map<string, {head: string; body: string}>(), html = pvHTML(state, parts);
-  if (!columns && was && el && was.el === el && was.whole === html) { state.whole = false; PV_PICK.paint(state, el); return; }
+  // Nothing changed, so the picked marks still stand: a change to the picks changes the picking bar's count.
+  if (!columns && was && el && was.el === el && was.whole === html) { state.whole = false; return; }
   state.whole = true;
   // Where the columns are scrolled, taken while they are still there; a phone's stage tabs keep theirs.
   if (state.root === root) pvScrollRead(state);
@@ -338,7 +335,7 @@ function pvPaint(state: PvState, root: HTMLElement): void {
   const tabs = root.querySelector('.pv-tabs');
   if (tabs && left) tabs.scrollLeft = left;
   state.drawn = root.firstElementChild ? {el: root.firstElementChild, frame, bar, cols: parts, whole: columns ? '' : html} : null;
-  if (root.firstElementChild) PV_PICK.paint(state, root.firstElementChild);
+  PV_PICK.paint(state, root.firstElementChild);
 }
 
 /** The columns drawn in the view's root now; null in the list and on a phone. */
@@ -409,11 +406,6 @@ function pvClick(state: PvState, ev: MouseEvent): void {
   const more = target.closest<HTMLElement>('[data-pv-more]');
   if (more) { state.open.add(more.dataset['pvMore'] ?? ''); pvDraw(state); return; }
   if (target.closest('[data-pv-bar-x]')) { state.bar = null; pvDraw(state); return; }
-  if (target.closest('[data-pv-sel-x]')) { pvSelectEnd(state); return; }
-  const all = target.closest<HTMLElement>('[data-pv-sel-all]');
-  if (all) { pvSelectAll(state, all.dataset['pvSelAll'] ?? ''); return; }
-  const move = target.closest<HTMLElement>('[data-pv-sel-move]');
-  if (move) { pvSelectMove(state, move); return; }
   const wake = target.closest<HTMLElement>('[data-pv-unsnooze]');
   if (wake) { ev.stopPropagation(); pvUnsnooze(state, wake.dataset['pvUnsnooze'] ?? ''); }
 }
@@ -529,8 +521,6 @@ function pvTake(rec: PipelineRec, tasks: TaskAny[], opts: PvOpts): PvState {
   state.rec = rec;
   state.opts = {layout: opts.layout, phone: opts.phone, q: opts.q, filters: opts.filters};
   state.tasks = tasks.filter(t => t.pipeline_id === rec.id && t.status === 'open');
-  // A picked task that left the board (moved, closed) is no longer picked.
-  if (state.sel.size) { const here = new Set(state.tasks.map(t => t.id)); for (const id of state.sel) if (!here.has(id)) state.sel.delete(id); }
   // A move the read already shows is no longer drawn by hand.
   if (state.moving.size) {
     const stageOf = new Map(state.tasks.map(t => [t.id, t.stage_id]));
@@ -563,7 +553,7 @@ TASK_PAGE_HOOKS.pipeline = {
       if (!state || !card || eventElement(ev)?.closest('button, a, input')) return;
       if (!state.selecting && !ev.shiftKey && !ev.metaKey && !ev.ctrlKey) return;
       ev.preventDefault(); ev.stopPropagation();
-      pvPick(state, card.dataset['task'] ?? '');
+      pvPick(state, card);
     }, {capture: true});
     root.addEventListener('click', ev => { if (PV?.root === root) pvClick(PV, ev); });
     // Scroll does not bubble: listen in the capture phase. Sideways is kept for the tab, once a frame.
@@ -586,5 +576,5 @@ TASK_PAGE_HOOKS.pipeline = {
   rail(rec, drawn) { pipelineRailSync(rec, drawn); },
   ask(host, rec, phone) { pipelineAskSync(host, rec, phone); },
   edit(rec) { void openPipelineEditor(rec.id); },
-  select(rec) { void pvSelectToggle(rec); },
+  select(rec) { void pvPick(pvStateFor(rec)); },
 };

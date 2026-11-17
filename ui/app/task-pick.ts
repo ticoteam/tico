@@ -1,8 +1,8 @@
 /* ui/app/task-pick.ts — Picking many tasks on a pipeline's board (⋯ › Select, or a shift-, ⌘- or Ctrl-click on a card),
    and Move to… for the picked tasks (docs/dev/pipelines-v3.md, "Move to another pipeline"). A page part (ui/parts.json
-   task-pick): a cold open does not download it. The first pick or Select loads it, through the shell's stand-ins
-   (task-pipelines.ts). The bar and the picked cards are drawn by the shell (pvSelHTML, pvSelPaint), since a draw cannot
-   wait for a part.
+   task-pick): a cold open does not download it. The first pick or Select loads it, through the shell's stand-in
+   (pvPick, task-pipelines.ts). The shell draws the bar and the picked cards through PV_PICK (pvSelHTML, pvSelPaint), since a draw
+   cannot wait for a part; the bar's clicks come back through it too.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -14,9 +14,11 @@ const tasksMoveTo = (ids: string[], pipeline: string, stage: string, why?: strin
 
 // ---------------------------------------------------------------- picking many, and Move to…
 
-/** A card picked or let go. Picking starts selecting. */
-function pvPick(state: PvState, id: string): void {
-  const t = state.tasks.find(x => x.id === id);
+/** A card picked or let go; picking starts selecting. With no card (⋯ › Select), selecting starts, or stops. The shell's
+    one stand-in for this part. */
+function pvPick(state: PvState, card?: HTMLElement): void {
+  if (!card) { if (state.selecting) pvSelectEnd(state); else { state.selecting = true; pvDraw(state); } return; }
+  const id = card.dataset['task'] ?? '', t = state.tasks.find(x => x.id === id);
   if (!t) return;
   state.selecting = true;
   if (state.sel.has(id)) state.sel.delete(id); else { state.sel.add(id); state.selStage = t.stage_id ?? ''; }
@@ -89,9 +91,12 @@ function pvSkipWords(skipped: TasksMoved['skipped']): string {
   }).join(', ');
 }
 
-/** While selecting: how many are picked, All in the stage last picked from (the stage shown on a phone), Move to… and ✕. */
+/** While selecting: how many are picked, All in the stage last picked from (the stage shown on a phone), Move to… and ✕.
+    A picked task that left the board (moved, closed) is let go first. */
 function pvSelHTML(state: PvState): string {
   if (!state.selecting) return '';
+  const here = new Set(state.tasks.map(t => t.id));
+  for (const id of state.sel) if (!here.has(id)) state.sel.delete(id);
   const n = state.sel.size, stageId = state.opts.phone ? state.stage : state.selStage || state.rec.stages[0]?.id || '';
   const stage = state.rec.stages.find(s => s.id === stageId);
   return `<div class="pv-bar pv-sel" role="toolbar" aria-label="Selected tasks"><span class="pv-bar-text tnum">${n} selected</span>`
@@ -101,8 +106,11 @@ function pvSelHTML(state: PvState): string {
 }
 
 /** The picked cards and rows marked as picked: drawn after the cards, so a card's HTML stays the same picked or not. */
-function pvSelPaint(state: PvState, el: Element): void {
+function pvSelPaint(state: PvState, el: Element | null): void {
+  if (!el) return;
   el.classList.toggle('pv-selecting', state.selecting);
+  const bar = el.querySelector<HTMLElement>(':scope > .pv-sel');
+  if (bar) bar.onclick = ev => { if (ev.target instanceof Element) pvSelClick(state, ev.target); };
   for (const card of el.querySelectorAll<HTMLElement>('[data-task]')) {
     const on = state.sel.has(card.dataset['task'] ?? '');
     if (card.classList.contains('pv-picked') !== on) card.classList.toggle('pv-picked', on);
@@ -110,10 +118,13 @@ function pvSelPaint(state: PvState, el: Element): void {
   }
 }
 
-/** ⋯ › Select: starts selecting, or stops it. */
-function pvSelectToggle(rec: PipelineRec): void {
-  const state = pvStateFor(rec);
-  if (state.selecting) pvSelectEnd(state); else { state.selecting = true; pvDraw(state); }
+/** A click on the picking bar (bound as it is painted): ✕, All in a stage, or Move to…. */
+function pvSelClick(state: PvState, target: Element): void {
+  if (target.closest('[data-pv-sel-x]')) { pvSelectEnd(state); return; }
+  const all = target.closest<HTMLElement>('[data-pv-sel-all]');
+  if (all) { pvSelectAll(state, all.dataset['pvSelAll'] ?? ''); return; }
+  const move = target.closest<HTMLElement>('[data-pv-sel-move]');
+  if (move) pvSelectMove(state, move);
 }
 
 // The shell draws the picking bar and the picked cards with these, from the moment this script runs (PV_PICK).
