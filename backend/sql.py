@@ -464,9 +464,24 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
     )
 
     by_task = "task_id IN (SELECT id FROM tasks)"
+    # A message's own rule: what the API lets the caller read of it. A run's jobs, attempts, mentions and files follow
+    # the message whether or not a person's timeline shows it (the task's Runs show a notice the run acted on).
+    readable_message = (
+        "conversation_id IN (SELECT id FROM conversations) AND deleted_at IS NULL AND "
+        + legacy_messages
+        + " AND "
+        + msg_gate
+        + " AND "
+        + function("page_message")
+        + "(refs)"
+    )
     # Correlate large history tables by primary key. An IN subquery materializes
-    # every readable message/job/attempt before even a LIMIT 1 can return.
-    by_message = "EXISTS (SELECT 1 FROM messages readable WHERE readable.id=source.message_id)"
+    # every readable message/job/attempt before even a LIMIT 1 can return. The rule is evaluated over its own `source`
+    # (as the messages view does), since materialize rewrites its gates to read `source.id`.
+    by_message = (
+        f"EXISTS (SELECT 1 FROM (SELECT * FROM {inner('messages')} AS source WHERE {readable_message}) readable "
+        "WHERE readable.id=source.message_id)"
+    )
     by_schedule = "schedule_id IN (SELECT id FROM schedules)"
     by_attempt = "EXISTS (SELECT 1 FROM attempts readable WHERE readable.id=source.attempt_id)"
     by_job = "EXISTS (SELECT 1 FROM jobs readable WHERE readable.id=source.job_id)"
@@ -524,20 +539,18 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
     # Imported drafts do not enter company search, exports or the audit feed.
     meetings = f"({meetings}) AND review_state='live'"
     events = f"({events}) AND target NOT IN (SELECT id FROM {inner('meetings')} WHERE review_state<>'live')"
+    # A person reads a room's messages through its timeline: the ones with a seq (task_privacy.page, threads.timeline).
+    # Tico's notices to a bot have none; they are the bot's run input (H.run_notice), so only a bot's view holds them.
+    timeline = "1" if bot else "seq IS NOT NULL"
     rules = {
         "conversations": conversations,
         # Rooms are the small authorization set, unlike message/run history.
         # Build their id set once rather than re-evaluate the room view per message.
-        "messages": (
-            "conversation_id IN (SELECT id FROM conversations) AND deleted_at IS NULL AND "
-            + legacy_messages
-            + " AND "
-            + msg_gate
-        ),
+        "messages": readable_message + " AND " + timeline,
         # Thread membership and follows are read with their thread; mentions with their message.
         "thread_members": "thread_id IN (SELECT id FROM conversations)",
         "thread_followers": "thread_id IN (SELECT id FROM conversations)",
-        "message_mentions": "EXISTS (SELECT 1 FROM messages readable WHERE readable.id=source.message_id)",
+        "message_mentions": by_message,
         "tasks": tasks,
         "tags": tag_gate,
         "task_tags": by_task,
@@ -714,7 +727,6 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         )
         rules[table] = "(" + rules[table] + ") AND " + content_gate(cols)
     rules["task_assets"] += " AND " + function("blob") + "(blob_id)"
-    rules["messages"] += " AND " + function("page_message") + "(refs)"
     rules["task_file_reviews"] = "file_id IN (SELECT id FROM bot_files) OR file_id IN (SELECT id FROM blobs)"
     rules["bot_file_activity"] += (
         " AND (task_id IS NULL OR " + by_task + ") AND (attempt_id IS NULL OR " + by_attempt + ")"

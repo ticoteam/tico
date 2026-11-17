@@ -264,7 +264,8 @@ def test_owner_sees_everything_but_other_peoples_rooms(api, world):
     assert tasks == sorted(world[k]["id"] for k in ("private", "coo_task", "finance_task"))
     assert "inbox" in column(api, "SELECT slug FROM bots")
     bodies = column(api, "SELECT body FROM messages")
-    assert "Ana private context." in bodies and "Sort the inbox is in To do (General)." in firsts(bodies)
+    # Tico's notice to a bot about its task is that bot's run input, in no person's timeline, the owner's included.
+    assert "Ana private context." in bodies and "Sort the inbox is in To do (General)." not in firsts(bodies)
     assert "Ben private context." not in bodies
     personal = column(api, "SELECT id FROM conversations WHERE scope='personal'")
     assert world["ana_room"] in personal and world["steven_room"] not in personal
@@ -324,13 +325,9 @@ def test_a_person_sees_the_company_but_not_private_bots_or_other_rooms(api, worl
     assert column(api, "SELECT bot FROM bot_status", ben) == sorted(
         b for b in column(api, "SELECT bot FROM bot_status") if b != "inbox"
     )
-    # Their own room, and the own rooms of the public tasks; not Ana's room or its "Started task" line.
-    # A task's first line in its own room says where it stands (the rest is the bot's brief).
-    assert firsts(column(api, "SELECT body FROM messages", ben)) == [
-        "Ben private context.",
-        "Close the books is in To do (General).",
-        "Summarize the week is in To do (General).",
-    ]
+    # Their own room, and the own rooms of the public tasks; not Ana's room or its "Started task" line, nor the notices
+    # Tico gives a bot about a task (where it stands): those are the bot's run input, in no person's timeline.
+    assert firsts(column(api, "SELECT body FROM messages", ben)) == ["Ben private context."]
     assert column(api, "SELECT id FROM conversations", ben) == sorted(
         [world["steven_room"], world["coo_task"]["conversation_id"], world["finance_task"]["conversation_id"]]
     )
