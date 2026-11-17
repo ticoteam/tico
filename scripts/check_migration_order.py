@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Reject PR-added legacy migration names and duplicate versions (stdlib and git only).
+"""Reject PR-added legacy migration names and duplicate versions, and edits to a migration the base already has
+(stdlib and git only).
+
+A merged migration may already be in a release, and a server refuses to start when an applied migration's file
+changed (backend/migrations `_verify`, checksums): put the change in a new migration instead.
 
 Fetch the base branch tip with full history before running this check; --head is the PR head, not its merge commit.
 """
@@ -21,8 +25,15 @@ def migrations(paths):
     return {path: match.group(1) for path in paths if (match := NAME.fullmatch(path))}
 
 
-def errors(added, head, base, base_name, *, now=None):
-    """Only additions need timestamps; consider both trees for collisions and free rename suggestions."""
+def errors(added, head, base, base_name, *, now=None, edited=()):
+    """Only additions need timestamps; consider both trees for collisions and free rename suggestions. `edited` are
+    the migrations the PR changed: any `base` already has is refused."""
+    frozen = [
+        f"{path}: {base_name} already has this migration, and a server that applied it refuses a changed file. "
+        "Restore it (git show <base>:<path> > <path>) and put the change in a new migration"
+        for path in sorted(migrations(edited))
+        if path in migrations(base)
+    ]
     added, head, base = migrations(added), migrations(head), migrations(base)
     by_number = defaultdict(set)
     for path, number in (base | head).items():
@@ -48,7 +59,7 @@ def errors(added, head, base, base_name, *, now=None):
         target = f"{DIRECTORY}/{timestamp}_{suffix}"
         found.append(f"{path}: " + "; ".join(reasons) + f". Rename with: git mv {path} {target}")
         used.add(timestamp)
-    return found
+    return found + frozen
 
 
 def check(base, head="HEAD", base_name="main", root=ROOT):
@@ -60,9 +71,12 @@ def check(base, head="HEAD", base_name="main", root=ROOT):
     added = git("diff", "--name-only", "--diff-filter=A", "--no-renames", "-z", ancestor, head, "--", DIRECTORY).split(
         "\0"
     )
+    edited = git("diff", "--name-only", "--diff-filter=M", "--no-renames", "-z", ancestor, head, "--", DIRECTORY).split(
+        "\0"
+    )
     head_files = git("ls-tree", "-r", "--name-only", "-z", head, "--", DIRECTORY).split("\0")
     base_files = git("ls-tree", "-r", "--name-only", "-z", base, "--", DIRECTORY).split("\0")
-    return errors(added, head_files, base_files, base_name)
+    return errors(added, head_files, base_files, base_name, edited=edited)
 
 
 def main(argv=None):
