@@ -147,3 +147,31 @@ def test_git_diff_uses_the_merge_base_and_current_tip_and_checks_renamed_paths(t
             [sys.executable, str(script), "--base", base, "--head", head], cwd=tmp_path, capture_output=True, text=True
         )
         assert result.returncode == status, result.stdout + result.stderr
+
+
+@pytest.mark.slow
+def test_putting_back_the_released_file_after_main_edited_it_passes(tmp_path):
+    def git(*args):
+        env = {**os.environ, "GIT_AUTHOR_NAME": "Acme", "GIT_AUTHOR_EMAIL": "dev@acme.example"}
+        env |= {"GIT_COMMITTER_NAME": "Acme", "GIT_COMMITTER_EMAIL": "dev@acme.example"}
+        return subprocess.check_output(["git", *args], cwd=tmp_path, text=True, env=env)
+
+    def commit():
+        git("add", "-A")
+        git("-c", "commit.gpgsign=false", "commit", "-qm", "fixture")
+
+    shipped = tmp_path / "backend/migrations/20261117023225_floor.py"
+    shipped.parent.mkdir(parents=True)
+    shipped.write_text("def up(conn): pass\n")
+    git("init", "-q", "-b", "main")
+    commit()
+    git("tag", "v0.6.15")
+    shipped.write_text("def up(conn): return\n")  # main edits it after the release
+    commit()
+    git("checkout", "-qb", "fix")
+    shipped.write_text("def up(conn): pass\n")  # the fix puts the released file back
+    commit()
+    assert guard.check("main", root=tmp_path) == []
+    shipped.write_text("def up(conn): return None\n")  # anything else is still an edit
+    commit()
+    assert "main already has this migration" in guard.check("main", root=tmp_path)[0]
