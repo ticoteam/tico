@@ -18,3 +18,5 @@
 .truns-list .mono{overflow-wrap:anywhere}
 .truns-what{font-weight:600}
 .truns-lease{margin-left:14px}
+.truns-told{margin:4px 0 4px 14px;font-size:var(--t-sm)}
+.truns-told-text{margin:2px 0;white-space:pre-wrap;overflow-wrap:anywhere;max-height:12em;overflow:auto}

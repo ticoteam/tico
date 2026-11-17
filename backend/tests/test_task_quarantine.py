@@ -496,7 +496,16 @@ def test_one_tasks_refusals_stop_only_its_turn_and_other_work_claims_and_runs(ap
             machine["token"],
         )
     assert claim(api, machine) is None
-    assert any("Held for" in m["body"] for m in get(api, f"conversations/{task['conversation_id']}/messages"))
+    # Tico's line to the bot about the hold: the bot reads it with the room; no person's chat shows it.
+    with api.app.state.store.read() as c:
+        said = [
+            r[0]
+            for r in c.execute(
+                "SELECT body FROM messages WHERE conversation_id=? AND sender_id='keeper'", (task["conversation_id"],)
+            )
+        ]
+    assert any("Held for" in body for body in said)
+    assert not any("Held for" in m["body"] for m in get(api, f"conversations/{task['conversation_id']}/messages"))
     assert other["id"] != task["id"]
 
 
