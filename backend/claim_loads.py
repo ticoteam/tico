@@ -4,20 +4,11 @@ page (health._prime_claims). Both run the same checks with it (execution._claim_
 hold, a bot it was not loaded for, is asked of the database the way the check always asked it, so a caller without the
 object keeps the same answers."""
 
-import json
-
-
-def _dict(raw):
-    try:
-        value = json.loads(raw) if raw else {}
-    except (ValueError, TypeError):
-        return {}
-    return value if isinstance(value, dict) else {}
-
 
 class Loads:
     """The company's values read once (`record`, `plain`, `access`, `given`), and each bot's rows keyed by the bot.
-    `runners` is {id: runners row}; `holds` is every login hold ({key: stored value}), so a missing key is no hold."""
+    `runners` is {id: runners row}; `holds` is every open hold, by (kind, holdable_type, holdable_id, bot_id or ''),
+    so a missing key is no hold."""
 
     def __init__(self, record, plain, access, given, runners, limits, backoff, held, holds, company=None):
         self.record = record  # providers.load(c, settings): the company's choice, the environment's seed included
@@ -28,7 +19,7 @@ class Loads:
         self.limits = limits  # {bot: own usage limits, as usage_limits.own returns them}
         self.backoff = backoff  # {bot: run_backoff row as a dict, {} when none}
         self.held = held  # {bot: turns it holds on every computer}
-        self.holds = holds  # {login-hold key: stored value}
+        self.holds = holds  # {(kind, holdable_type, holdable_id, bot_id or ''): open holds row}
         self.company = company  # company_pause.record(c): the company's pause on record, None while it runs
 
     def runner_of(self, c, runner_id, live=False):
@@ -69,10 +60,6 @@ class Loads:
 
         return start_places.bot_held(c, bot)
 
-    def hold_of(self, key):
-        """The login hold stored under `key`, as a dict ({} when none)."""
-        return _dict(self.holds.get(key))
-
 
 def read(c, settings, runners, bots):
     """The Loads for `bots` (their ids) and `runners` ({id: runners row}), in fixed set queries: the company's values
@@ -85,13 +72,6 @@ def read(c, settings, runners, bots):
     given = model_subscriptions._given(c)
     plain = providers.load(c) if given else None
     access = cloud_access.access(c)
-    holds = {
-        row["key"]: row["value"]
-        for row in c.execute(
-            "SELECT key,value FROM registry_metadata WHERE key>=? AND key<?",
-            (_hold_prefix(), _hold_prefix()[:-1] + ";"),
-        )
-    }
     return Loads(
         record,
         plain,
@@ -101,12 +81,14 @@ def read(c, settings, runners, bots):
         usage_limits.own_many(c, bots),
         run_backoff.get_many(c, bots),
         start_places.held_counts(c, bots),
-        holds,
+        open_holds(c),
         company_pause.record(c),
     )
 
 
-def _hold_prefix():
-    from .login_holds import PREFIX
-
-    return PREFIX
+def open_holds(c):
+    """Every open hold of every kind (backend/holds.py), by (kind, holdable_type, holdable_id, bot_id or '')."""
+    return {
+        (row["kind"], row["holdable_type"], row["holdable_id"], row["bot_id"] or ""): dict(row)
+        for row in c.execute("SELECT * FROM holds WHERE released_at IS NULL")
+    }

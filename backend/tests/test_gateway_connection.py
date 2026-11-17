@@ -10,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
+from backend import login_holds
 from backend.credentials import CredentialCipher
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, headers, post, put, runner  # noqa: F401
@@ -895,9 +896,7 @@ def test_out_of_credit_is_the_gateways_wait_and_tico_models_are_back_within_a_mi
     assert "{" not in status["focus"] and "usage limit" not in status["focus"] and "cap" not in status["focus"]
     with api.app.state.store.read() as c:
         # The Tico login waits only the Gateway's minute, never the 30-minute backoff.
-        holds = [
-            json.loads(r[0]) for r in c.execute("SELECT value FROM registry_metadata WHERE key LIKE 'login-hold:%'")
-        ]
+        holds = login_holds.every(c)
         assert all(hold["until"] <= H.shift(at, seconds=G.OUT_OF_CREDIT_WAIT + 1) for hold in holds), holds
         assert G.OUT_OF_CREDIT_WAIT <= limit_cooldown(c, "ops") <= G.OUT_OF_CREDIT_WAIT + 1
         # Not an API key's plan or billing: Health doesn't send the person to check one.
@@ -950,9 +949,7 @@ def test_a_rate_limited_bot_its_fallback_finished_for_is_back_on_tico_models_aft
         machine["token"],
     )
     with api.app.state.store.read() as c:
-        holds = [
-            json.loads(r[0]) for r in c.execute("SELECT value FROM registry_metadata WHERE key LIKE 'login-hold:%'")
-        ]
+        holds = login_holds.every(c)
     assert holds and all(hold["until"] <= H.shift(at, seconds=G.GATEWAY_WAIT + 1) for hold in holds), holds
     at = H.shift(at, seconds=G.GATEWAY_WAIT + 2)
     with api.app.state.store.transaction() as c:

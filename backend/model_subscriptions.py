@@ -542,7 +542,7 @@ def _listing(c, sid=None):
     computers there are (Settings > Models shows every plan's usage at once): the grants with their computers, each
     computer's readiness, its named logins' reported runtimes, the login holds, the API keys' month cost and the
     registry metadata. With `sid`, only that plan's grants and computers are read."""
-    from . import login_holds
+    from .claim_loads import open_holds
     from .subscriptions import subscription_meta
 
     # A plan in a person's set counts as given to each computer given that set, for its readings: the turns there that
@@ -596,13 +596,7 @@ def _listing(c, sid=None):
         )
     }
     costs = _api_costs(c, H.now()[:7] + "-01", sid)
-    holds = {
-        row["key"]: row["value"]
-        for row in c.execute(
-            "SELECT key,value FROM registry_metadata WHERE key>=? AND key<?",
-            (login_holds.PREFIX, login_holds.PREFIX[:-1] + ";"),
-        )
-    }
+    holds = open_holds(c)
     return {
         "grants": grants,
         "runners": runners,

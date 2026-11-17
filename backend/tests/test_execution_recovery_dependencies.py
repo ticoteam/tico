@@ -215,7 +215,7 @@ def test_no_fallback_ready_for_claim_persists_one_hold_until_named_reset(api, mo
         # The job is queued as it was; the one login hold keeps it waiting, the bot marked as having no fallback here.
         job = c.execute('SELECT state,held FROM jobs WHERE id=?', (fallback['job_id'],)).fetchone()
         assert tuple(job) == ('queued', 0)
-        assert c.execute("SELECT count(*) FROM registry_metadata WHERE key LIKE 'login-hold:%'").fetchone()[0] == 1
+        assert len(login_holds.every(c)) == 1
         hold = login_holds.get(c, machine['runner_id'], '', 'fake')
         assert hold['until'] == '2026-10-26T11:50:00.000000Z' and 'ops' in hold['stuck']
     assert '11:50' in health_detail(api, 'ops')
