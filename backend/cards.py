@@ -1677,6 +1677,7 @@ def add_pin(ctx, place, item, size="medium", position=None):
         require_manage(ctx, place)
     check_item(ctx, kind, item)
     place = canonical(kind, ident)
+    ensure(ctx, kind, ident)  # an unsaved page's defaults are real first: they may hold the Floor
     if (
         item.startswith("card:")
         and (card_row(ctx.c, item[5:]) or {}).get("template") == "floor"
@@ -1691,7 +1692,6 @@ def add_pin(ctx, place, item, size="medium", position=None):
         if size != "medium":
             ctx.c.execute("UPDATE pins SET size=? WHERE id=?", (size_of(size), pin["id"]))
         return pin["id"]
-    ensure(ctx, kind, ident)
     pid = insert_pin(ctx, place, item, size, position)
     log(ctx, "pin.added", place, {"item": item}, kind == "person")
     return pid
