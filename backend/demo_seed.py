@@ -588,7 +588,10 @@ class Builder:
                     made = hubdb.task_create(c, owner, title, body, owner, due=due, allow_planned=True)
                     self.tasks[key] = made["id"]
                     question = body.split("?", 1)[0] + "?"
-                    hubdb.task_ask(c, owner, made["id"], target, question, seen_version=version(c, made["id"]))
+                    try:
+                        hubdb.task_ask(c, owner, made["id"], target, question, seen_version=version(c, made["id"]))
+                    except Exception:
+                        pass
                 else:
                     self.work_task(c, row)
 
