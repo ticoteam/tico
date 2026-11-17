@@ -134,6 +134,7 @@ def rounds(conn: "sqlite3.Connection", task_id: str, requirement_id: str) -> lis
     replaced, note, changed, answered, jev: {verdict, reason}, answers: [{by, answer, note, at}]}. `answers` are the
     people's and bots' OKs (`ok`) and send backs (`no`) given while that version counted, not undone."""
     from . import page_verdicts as V
+    from . import task_pages as P
 
     pages = _rows(
         conn,
@@ -159,11 +160,12 @@ def rounds(conn: "sqlite3.Connection", task_id: str, requirement_id: str) -> lis
             saying[(str(data["file_id"]), int(data.get("version") or 0))] = data
     answers = _rows(
         conn,
-        "SELECT a.by_id, a.answer, a.notes, a.page_version, a.created_at, a.visit_id FROM answers a "
+        "SELECT a.id, a.requirement_id, a.by_id, a.answer, a.notes, a.page_version, a.created_at, a.visit_id FROM answers a "
         "JOIN visits v ON v.id = a.visit_id WHERE v.task_id=? AND a.requirement_id=? AND a.undone_at IS NULL "
         "AND a.answer IN ('ok', 'no') ORDER BY a.created_at, a.id",
         (task_id, requirement_id),
     )
+    snapshots = {a["id"]: P.answer_pages(conn, task_id, a) for a in answers}
     # The same version attached again (a new commit to judge it against) is one round: from its first attach, with
     # its newest verdict.
     runs: list[tuple[str, Row]] = []
@@ -174,12 +176,12 @@ def rounds(conn: "sqlite3.Connection", task_id: str, requirement_id: str) -> lis
             runs.append((str(page["created_at"]), page))
     out: list[Row] = []
     for index, (start, page) in enumerate(runs):
-        end = runs[index + 1][0] if index + 1 < len(runs) else None
+        end = next((at for at, later in runs[index + 1 :] if later["file_id"] == page["file_id"]), None)
         version = int(page["version"])
         given = [
             {"by": a["by_id"], "answer": a["answer"], "note": a["notes"] or "", "at": a["created_at"]}
             for a in answers
-            if a["page_version"] == version
+            if snapshots[a["id"]].get(page["file_id"]) == version
             and str(a["created_at"]) >= start
             and (end is None or str(a["created_at"]) < end)
         ]

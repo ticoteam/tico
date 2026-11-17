@@ -166,3 +166,20 @@ def test_an_ordinary_upload_named_like_a_document_starts_its_own_file(api):
     again = post(api, f"tasks/{tid}/files", {"name": "spec.html", "text": "<p>Ordinary, again</p>"})
     assert (again["file_id"], again["version"]) == (plain["file_id"], 2)
     assert documents(api, tid)[0]["version"] == 1
+
+
+def test_document_writes_make_a_page_and_links_without_task_document_rows(api):
+    tid = task(api, "human:ben", "Write a linked spec")
+    first = write(api, tid, "Spec", SPEC)
+    second = write(api, tid, "Spec", SPEC + "<p>Reviewed</p>", "ben-test")
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT 1 FROM pages WHERE file_id=?", (first["file_id"],)).fetchone()
+        assert not c.execute("SELECT 1 FROM task_documents WHERE task_id=?", (tid,)).fetchone()
+        links = {
+            (r[0], r[1]) for r in c.execute("SELECT target,role FROM page_links WHERE page_id=?", (first["file_id"],))
+        }
+    assert {("task:" + tid, "Spec"), ("human:ana", "writer"), ("human:ben", "writer")} <= links
+    assert second["file_id"] == first["file_id"]
+    [doc] = documents(api, tid)
+    assert doc["page_id"] == first["file_id"] and doc["changed_since_ok"] is False
+    assert any(link["target"] == "task:" + tid and link["role"] == "Spec" for link in doc["links"])

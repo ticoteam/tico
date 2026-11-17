@@ -373,6 +373,32 @@ STALE_REVIEW = "New commits since the review"
 
 
 def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
+    """A document approval meets the check only when every submitted page version does."""
+    from . import page_links as L
+    from . import task_pages as P
+
+    if not document_of(requirement):
+        return _one_page(conn, task, requirement, answer)
+    pages = P.current_pages(conn, task["visit"]["id"], requirement["id"])
+    if not pages:
+        return _one_page(conn, task, requirement, answer)
+    linked = set(L.pages_for(conn, "task:" + task["id"], document_of(requirement)))
+    pages = [p for p in pages if p["file_id"] in linked]
+    if not pages or linked - {str(p["file_id"]) for p in pages}:
+        return Standing(requirement, NOT_MET, task.get("owner_id"), "No page attached")
+    results = [_one_page(conn, task, requirement, answer, page) for page in pages]
+    # Work owed to the writer or decision model comes before asking a person to decide the complete set.
+    result = next((r for r in results if r.state == NOT_MET), None)
+    result = result or next((r for r in results if r.on == JEV and not r.met), None)
+    result = result or next((r for r in results if not r.met), results[0])
+    result.notices = tuple(dict.fromkeys(n for r in results for n in r.notices))
+    result.unchecked = any(r.unchecked for r in results)
+    return result
+
+
+def _one_page(
+    conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None, submitted: Row | None = None
+) -> Standing:
     """A page attached to this visit (task_pages), Jev's verdict on it (page_verdicts), then the named person's OK of that
     exact version when the requirement names one or is people only. An answer counts only for the page version it was given on,
     except a person's OK of an earlier version of the same page at the same commits (`_same_code_ok`), which stays.
@@ -390,6 +416,7 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
     visit_id = task["visit"]["id"]
     owner = task.get("owner_id")
     page, carried = page_for(conn, task, requirement)
+    page = submitted or page
     if not page:
         return Standing(requirement, NOT_MET, owner, "No page attached")
     settings: Row = requirement.get("settings") or {}
@@ -399,6 +426,13 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
     if signoff and answer and _reviews_new(requirement, answer):
         answer = _newest_signoff(conn, visit_id, requirement)  # a bot's review of new commits is not the OK
     answer = answer or carried
+    if answer and document_of(requirement):
+        from . import task_pages as P
+
+        approved = P.answer_pages(conn, task["id"], answer)
+        answer = (
+            dict(answer, page_version=page["version"]) if approved.get(page["file_id"]) == page["version"] else None
+        )
     if answer and (answer.get("page_version") != page["version"] or answer["created_at"] < page["created_at"]):
         # Given on an earlier page. A person's OK of an earlier version of this same page, at the commits the PRs are
         # at now, stays: publishing the page again changed no code (Nov 13, #3584: Chris was asked again for nothing).
@@ -523,6 +557,8 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
 def _same_code_ok(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row, page: Row) -> bool:
     """Whether `answer`, given on an earlier version of the page now attached, is a person's OK that still holds: the
     same file (another page is another thing to OK), and the linked PRs' newest commits the ones it was given at."""
+    if document_of(requirement):
+        return False
     if answer["answer"] != "ok" or not str(answer["by_id"]).startswith("human:"):
         return False
     heads = _heads_of(answer.get("heads"))

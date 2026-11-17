@@ -23,6 +23,7 @@ A source's action (`{"act": "github.queue"}`, Engineering's Merge queues the tas
 undo (backend/source_actions.py).
 """
 
+import json
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
@@ -140,9 +141,24 @@ def _handoff_body(conn: "sqlite3.Connection", task: Row) -> str:
     back = _sent_back(conn, task)
     if back:
         parts.append(back)
+    from . import page_links as L
+
+    ids = L.pages_for(conn, "task:" + task["id"], "Spec")
+    specs = conn.execute(
+        "SELECT f.id,f.current_version FROM bot_files f JOIN pages p ON p.file_id=f.id "
+        "WHERE f.id IN (SELECT value FROM json_each(?)) AND f.archived=0 AND p.archived=0 AND p.deleted_at IS NULL "
+        "ORDER BY f.id",
+        (json.dumps(ids),),
+    ).fetchall()
     page = _spec_page(conn, task)
-    if page:
+    if specs:
+        from . import task_documents as TD
+
+        approved = TD.approved_versions(conn, task["id"])
+        parts.extend(f"Spec: page:{p['id']}@{approved.get(p['id'], p['current_version'])}" for p in specs)
+    elif page:
         parts.append(f"Spec: page:{page['file_id']}@{page['version']}")
+    if page:
         for said in sign_off_notes(conn, str(page["visit_id"])):
             parts.append(f"{H.actor_name(conn, said['by'])}'s notes on the spec, given with their OK:\n{said['notes']}")
     return "\n\n".join(part for part in parts if part)
