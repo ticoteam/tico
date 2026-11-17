@@ -7,6 +7,7 @@ from fastapi import Request
 from . import hubdb as H, models as M
 from .repositories import metadata, save_metadata
 from .store import Problem
+from .api_contract import api_v2
 
 
 def connection_id(runner, profile):
@@ -33,7 +34,15 @@ def usage_label(c, sid):
 
 
 def install(app, store, auth, mutate):
-    @app.put('/api/v2/subscriptions/name')
+    @app.put(
+        '/api/v2/subscriptions/name',
+        **api_v2(
+            "Subscriptions",
+            "renameSubscription",
+            "Rename a subscription without changing its local login",
+            "SubscriptionIdentity",
+        ),
+    )
     def rename(request: Request, body: M.SubscriptionNameEdit):
         who = request.state.identity
 

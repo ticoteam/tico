@@ -22,6 +22,7 @@ import re
 import secrets
 
 from . import hubdb as H
+from .api_contract import api_v2
 
 ID = "_tico"  # the built-in trigger, its event is `webhook._tico`; the underscore is not a valid
 # trigger id (triggers.ID), so nobody can make one that collides
@@ -290,7 +291,15 @@ def install(app, store):
     from fastapi import Request
     from .store import Problem
 
-    @app.get("/api/v2/notices")
+    @app.get(
+        "/api/v2/notices",
+        **api_v2(
+            "Notices",
+            "listNotices",
+            "Notices from Tico Team, newest first, each once (any signed-in person)",
+            "NoticeList",
+        ),
+    )
     def notice_list(request: Request):
         """Notices from Tico Team: the ones that came through the Gateway relay and the current one from the release
         check, newest first, each once."""
