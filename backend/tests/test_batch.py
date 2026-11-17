@@ -175,3 +175,16 @@ def test_a_comment_that_fails_halfway_leaves_nothing_of_itself_and_the_batch_goe
     applied, errors = B._comment_instead(c, ANA, FINANCE, [(f"task:{task['id']}", "Run the ads\nGo.")], "test")
     assert applied == [] and "failed after writing" in errors[0]
     assert c.execute("SELECT COUNT(*) FROM events").fetchone()[0] == before
+
+
+def test_the_respond_tool_lists_the_decisions_the_server_takes():
+    """Three copies of one list: the tool's schema (what bots and the CLI see), the server's check (DECISIONS) and the
+    request model. approve and decline were in the schema and the server answered them with a 422."""
+    from typing import get_args
+
+    from backend.models import BatchRespond
+    from clients.commands._mcp import BY_NAME
+
+    schema = BY_NAME["tico_needs_you_respond"]["inputSchema"]["properties"]["decision"]
+    literal = next(a for a in get_args(BatchRespond.model_fields["decision"].annotation) if get_args(a))
+    assert schema["enum"] == list(B.DECISIONS) == list(get_args(literal))
