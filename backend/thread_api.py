@@ -531,7 +531,7 @@ def install(app, store, auth, mutate, rule_check):
         with store.read_transaction() as c:
             if with_actor:
                 return _shared(c, v, with_actor, cursor=cursor, limit=limit)
-            return threads.sidebar(c, v, cursor=cursor, limit=limit, sort=sort)
+            return threads.sidebar(c, v, cursor=cursor, limit=limit or 50, sort=sort)
 
     @app.get(
         "/api/v2/threads/search",
@@ -584,7 +584,7 @@ def install(app, store, auth, mutate, rule_check):
         Following one (PUT .../follow) puts it in the rail."""
         v = threads.viewer(auth, request.state.identity)
         with store.read_transaction() as c:
-            return thread_rail.browse(c, v, q=q, cursor=cursor, limit=limit)
+            return thread_rail.browse(c, v, q=q, cursor=cursor, limit=limit or thread_rail.BROWSE_LIMIT)
 
     @app.get(
         "/api/v2/threads/match",
@@ -633,7 +633,7 @@ def install(app, store, auth, mutate, rule_check):
         new messages in tree order. `count` (at most 99) is the badge. POST .../read-all reads one."""
         v = threads.viewer(auth, request.state.identity)
         with store.read_transaction() as c:
-            return thread_rail.catch_up(c, v, cursor=cursor, limit=limit)
+            return thread_rail.catch_up(c, v, cursor=cursor, limit=limit or thread_rail.CATCH_UP_LIMIT)
 
     @app.get(
         "/api/v2/threads/home/{actor}",
@@ -662,6 +662,7 @@ def install(app, store, auth, mutate, rule_check):
         with store.transaction() as c:
             _read_or_404(c, v, actor)
             row = threads.home(c, _home_owner(actor))
+            assert row is not None  # home() makes the Home when create is on
             return threads.get(c, v, row["id"])
 
     @app.get(
@@ -728,7 +729,7 @@ def install(app, store, auth, mutate, rule_check):
                 threads.viewer(auth, request.state.identity),
                 thread_id,
                 cursor=cursor,
-                limit=limit,
+                limit=limit or 50,
                 max_bytes=max_bytes,
                 flat=bool(flat),
             )
@@ -751,6 +752,7 @@ def install(app, store, auth, mutate, rule_check):
             v = threads.viewer(auth, request.state.identity)
             row = threads.require(c, v, thread_id)
             root = threads.root_of(c, row)
+            assert root is not None  # a thread's root is always one of its rows
             if root["id"] != row["id"]:
                 root = threads.require(c, v, root["id"])
             return {"bots": thread_bot_status.status(c, v, root)}
@@ -790,7 +792,7 @@ def install(app, store, auth, mutate, rule_check):
     def members(request: Request, thread_id: str, cursor: str | None = None, limit: int | None = None):
         with store.read() as c:
             return threads.members(
-                c, threads.viewer(auth, request.state.identity), thread_id, cursor=cursor, limit=limit
+                c, threads.viewer(auth, request.state.identity), thread_id, cursor=cursor, limit=limit or 100
             )
 
     @app.post(
@@ -1019,6 +1021,7 @@ def install(app, store, auth, mutate, rule_check):
                 return org_rule_check.held_answer(c, who, gate, auth=auth)
             reach.check_edit(c, who, message_id, body.text, viewer)
             edited = threads.edit_message(c, viewer, message_id, body.text)
+            assert edited is not None  # the message just edited
             return {**_thread_message(edited), **org_rule_check.answer(gate)}
 
         return mutate(request, body, work)
@@ -1057,7 +1060,7 @@ def install(app, store, auth, mutate, rule_check):
     def read_all(request: Request, thread_id: str, body: ReadAll | None = None):
         """Read up to now in the thread and every sub-thread under it (`ago_ms`: up to that long ago)."""
         who = request.state.identity
-        body = body or ReadAll()
+        body = body or ReadAll(ago_ms=None)
         return mutate(
             request, body, lambda c: threads.mark_all_read(c, threads.viewer(auth, who), thread_id, ago_ms=body.ago_ms)
         )
@@ -1309,6 +1312,7 @@ def install(app, store, auth, mutate, rule_check):
             if "id" not in posted:  # held: its files are in the hold's replay, linked when it is released
                 return posted
             message = _thread_message(H.message(c, posted["id"]))
+            assert message is not None  # the message just posted
             message["reply_to"] = threads.reply_quotes(c, v, [message]).get(message["id"])
             if way:
                 message = {**message, "sent_as": _sent_as(c, way, posted)}
@@ -1434,6 +1438,7 @@ def message_sender(app, auth, may_reference, routed_message, visual_view):
             }
             c.execute("UPDATE messages SET refs=? WHERE id=?", (encode(stored), message["id"]))
             message = H.message(c, message["id"])
+            assert message is not None  # the message just stored
         if body.attachments:
             # The visuals go on the message it was sent as: versions of files in this conversation (backend/visuals.py).
             attached, report = visuals.attach(
@@ -1802,6 +1807,7 @@ def register_messages(
             extra = {k: message.pop(k) for k in ("rule_warning", "ingest") if k in message}
             if cleared:
                 message = topic_change.record(c, who, message, topic)
+                assert message is not None  # the message the topic change recorded
             onboarding.start_setup(c, who, bot)
             return {"conversation": H.conversation(c, message["conversation_id"]), "message": message, **extra}
 

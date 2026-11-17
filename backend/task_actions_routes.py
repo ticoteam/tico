@@ -636,7 +636,7 @@ def register_core(
             or parent
             and H.task_private(c, parent)
         )
-        if body.due and (not H.parse_ts(body.due) or H.parse_ts(body.due).tzinfo is None):
+        if body.due and (not (parsed := H.parse_ts(body.due)) or parsed.tzinfo is None):
             raise Problem("date", "due must be an ISO-8601 date/time with a timezone", 422)
         # The org rule check (backend/org_rule_check.py), judged before the write: held, nothing is filed.
         rule_gate = (
@@ -677,6 +677,7 @@ def register_core(
                     requester_actor = origin["sender_id"]
                 else:
                     message = H.message(c, origin["id"])
+                    assert message is not None  # the origin message of this run
                     source_task = H.task(c, H.message_task_id(message, H.conversation(c, message["conversation_id"])))
                     if (
                         source_task
@@ -879,6 +880,8 @@ def register_core(
             changed = TR.relate(c, who.actor, row["id"], other, kind, mover=mover(c, who) or None)
             readback += TR.readback(c, row["id"], other, kind, changed=changed)
         if body.live_meeting_id:
+            filed_task = H.task(c, row["id"])
+            assert filed_task is not None  # the task this call just filed
             meeting_audience.check(
                 c,
                 auth,
@@ -886,8 +889,8 @@ def register_core(
                 owner,
                 live_id=body.live_meeting_id,
                 roles=body.roles,
-                readers=H.task_readers(H.task(c, row["id"])),
-                requester=H.task(c, row["id"])["requester_id"],
+                readers=H.task_readers(filed_task),
+                requester=filed_task["requester_id"],
             )
             c.execute("UPDATE tasks SET live_meeting_id=? WHERE id=?", (body.live_meeting_id, row["id"]))
             meeting_audience.grant(c, row["id"], meeting_participants, who.actor)
@@ -1021,7 +1024,7 @@ def register_core(
         from . import task_engine
 
         task_engine.check_version(c, who.actor, row, body.version)
-        if body.due and (not H.parse_ts(body.due) or H.parse_ts(body.due).tzinfo is None):
+        if body.due and (not (parsed := H.parse_ts(body.due)) or parsed.tzinfo is None):
             raise Problem("date", "due must be an ISO-8601 date/time with a timezone", 422)
         if body.goal_id and not G.goal(c, body.goal_id):
             raise Problem("not_found", "Unknown goal", 404)

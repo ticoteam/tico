@@ -222,6 +222,7 @@ def register_people(admin_only, app, auth, delegated_identity, mutate, propose_c
                 team=body.team,
                 reports_to=body.reports_to,
             )
+            assert row is not None  # add_person returns the person it added
             return {"person": row["id"], "email": email, "name": row["name"]}
 
         result = mutate(request, body, work)

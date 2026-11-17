@@ -10,7 +10,6 @@ Secrets go through Credentials, never arbitrary API request bodies.
 
 from dataclasses import replace
 from fastapi.responses import JSONResponse
-from . import tools_delegation
 from . import team_rules, usage_limits
 from .auth import Identity
 from .onboarding import BOTOPS
@@ -994,6 +993,9 @@ def fix(path, code, status, acting, names, base=""):
 
 
 def configure(app, assistant_valid, auth, create_proposal, settings, store):
+    # tools_delegation builds its route table from this module's _routes, so it is imported once both exist.
+    from . import tools_delegation
+
     # A person's request lends their rights for as long as the task it created (or that cites it) is open, up to
     # botops_act.LEND_MAX_DAYS after they last spoke on it, and never again once someone else reopens it. A chat
     # message with no open task lends them for a week; a new task filed from a message also needs it within the week,
@@ -1129,7 +1131,7 @@ def configure(app, assistant_valid, auth, create_proposal, settings, store):
                     )
                 requester = handed
             others_comment = False
-            if task and initial:
+            if task and task_id and initial:
                 refs = initial.get("refs") or {}
                 relayed = any(refs.get(key) for key in ("via", "assistant", "slack", "routing"))
                 if (
@@ -1185,7 +1187,7 @@ def configure(app, assistant_valid, auth, create_proposal, settings, store):
                 if (H.bot(c, H.actor_id(requester)) or {}).get("state") != "active":
                     raise Problem("forbidden", "The requesting bot is no longer active", 403)
                 person = lending_carried(c, task, requester) if carry else None
-                if person and others_comment and person["person"] != initial["sender_id"]:
+                if person and others_comment and initial and person["person"] != initial["sender_id"]:
                     person = None  # someone else's comment never lends the carried person's rights
                 if person:
                     # The bot handed on a person's own request (carried_request): BotOps acts as that person.
@@ -1194,7 +1196,7 @@ def configure(app, assistant_valid, auth, create_proposal, settings, store):
                 return acting_as(Identity(requester, "bot"))
             if not initial or requester == H.KEEPER or requester == who.actor:
                 return who
-            if task and task["owner_id"] == who.actor and not task.get("request_id"):
+            if task and task_id and task["owner_id"] == who.actor and not task.get("request_id"):
                 if str(task["requester_id"]).startswith("human:"):
                     made = c.execute(
                         "SELECT detail FROM events WHERE action='task.create' AND target=? AND actor=? LIMIT 1",
@@ -1227,7 +1229,13 @@ def configure(app, assistant_valid, auth, create_proposal, settings, store):
                 if task
                 else None
             )
-            if asked and task["owner_id"] == who.actor and H.is_human(task["requester_id"]) and open_task(task):
+            if (
+                asked
+                and task
+                and task["owner_id"] == who.actor
+                and H.is_human(task["requester_id"])
+                and open_task(task)
+            ):
                 # The person's own words to their Assistant, checked when it filed this (task_create): BotOps acts
                 # as them, as if they had asked it in their BotOps chat.
                 origin = H.message(c, (H._json(asked["detail"], {}) or {}).get("cited") or "")
@@ -1287,7 +1295,7 @@ def configure(app, assistant_valid, auth, create_proposal, settings, store):
             raise Problem(
                 "on_behalf_of", f"A person's words inside a task are not a request to {named}; ask in chat", 403
             )
-        slack = refs.get("slack") if isinstance(refs.get("slack"), dict) else {}
+        slack = slack_raw if isinstance(slack_raw := refs.get("slack"), dict) else {}
         own_dm = (
             slack.get("kind") == "im"
             and not slack.get("recorded_only")
@@ -1352,7 +1360,7 @@ def configure(app, assistant_valid, auth, create_proposal, settings, store):
         start = H.message(c, turn["message_id"]) if turn else None
         if not ref:
             refs = (start or {}).get("refs") or {}
-            slack = refs.get("slack") if isinstance(refs.get("slack"), dict) else {}
+            slack = slack_raw if isinstance(slack_raw := refs.get("slack"), dict) else {}
             if (
                 start
                 and H.is_human(start["sender_id"])
@@ -1382,7 +1390,7 @@ def configure(app, assistant_valid, auth, create_proposal, settings, store):
         refs = msg.get("refs") or {}
         conversation = H.conversation(c, msg["conversation_id"]) or {}
         task = H.task(c, H.message_task_id(msg, conversation) or "")
-        slack = refs.get("slack") if isinstance(refs.get("slack"), dict) else {}
+        slack = slack_raw if isinstance(slack_raw := refs.get("slack"), dict) else {}
         own_dm = slack.get("kind") == "im" and not slack.get("recorded_only")
         if msg["recipient_id"] != who.actor or msg["kind"] not in ("say", "answer"):
             why = "That message was not sent to you"
@@ -1481,13 +1489,14 @@ def configure(app, assistant_valid, auth, create_proposal, settings, store):
                 and task["requester_id"] == acting.actor
                 and task["owner_id"] == who.actor
                 and said.get("comment")
+                and start
                 and H.is_human(start["sender_id"])
                 and not any(said.get(k) for k in ("via", "assistant", "slack", "routing"))
             )
             # The person whose comment started this run asked, ahead of whoever the bot's hand-off named.
             found = (
                 {"person": start["sender_id"]}
-                if commented
+                if commented and start
                 else carried(c, task, acting.actor)
                 if task and task["requester_id"] == acting.actor
                 else None
@@ -1500,7 +1509,7 @@ def configure(app, assistant_valid, auth, create_proposal, settings, store):
                 and handed_over(c, task, who.actor) == acting.actor
             ):
                 found = {"person": task["requester_id"]}  # the bot gave BotOps a task this person asked for
-            if not found or not open_task(task):
+            if not found or not task or not open_task(task):
                 return None
             try:
                 person = auth.identity_for_actor(c, found["person"])
@@ -1708,6 +1717,7 @@ def configure(app, assistant_valid, auth, create_proposal, settings, store):
         rules = team_rules.load(c)
 
         def lowers():
+            assert path is not None  # a route's path normalizes; lowers only runs for one
             rest = path[len(API) :]
             if rest.startswith("usage/pools/"):
                 scope = rest[len("usage/pools/") :]

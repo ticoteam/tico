@@ -175,6 +175,7 @@ def register(app, auth, mutate, settings, store, visual_view):
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             if chat_with:
                 chat_with = (H.resolve_bot(c, chat_with) or {}).get("id", chat_with)
+                assert chat_with is not None  # named above, so never empty here
                 from .shared_bots import route
 
                 chat_with = H.actor_id(route(c, who.actor, "bot:" + chat_with))
@@ -322,7 +323,7 @@ def register_profile(app, auth, delegated_identity, mutate, settings, store, vis
                 boss = body.reports_to.strip()
                 if boss == pid:
                     raise Problem("hierarchy", "A person cannot report to themselves", 422)
-                if boss and (not P.person(boss, roster) or P.person(boss, roster).get("hidden")):
+                if boss and (not (boss_row := P.person(boss, roster)) or boss_row.get("hidden")):
                     raise Problem("not_found", "Reports-to person was not found", 404)
                 # Nobody moves under their own report: the chain from the new boss must not reach here.
                 at, seen = boss, set()

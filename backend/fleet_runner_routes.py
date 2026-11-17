@@ -477,7 +477,9 @@ def register(
                 raise Problem("forbidden", "Only people register bots", 403)
             created = settings_admin.register(c, who, body)
             if body.build and body.template:
-                bot_id = H.resolve_bot(c, created["slug"])["id"]
+                made_bot = H.resolve_bot(c, created["slug"])
+                assert made_bot is not None  # settings_admin.register just made it
+                bot_id = made_bot["id"]
                 current = onboarding._declared(c, bot_id)
                 if not created["created"] and current.get("template") != body.template:
                     raise Problem("template", "Change the bot's template in its definition before building it", 409)
@@ -867,6 +869,7 @@ def register_placement(
                 continue
             c.execute("RELEASE place_now")
             return {"bot": bot, "computer": runner["label"], "placed": True, "already": False}
+        assert refusal is not None  # options is not empty, so a place that failed left its refusal
         raise refusal
 
     def health_checks(who):
@@ -1043,6 +1046,7 @@ def register_completion(
         if not msg:
             raise Problem("not_found", "The message this reply answered is gone", 409)
         conv = H.conversation(c, msg["conversation_id"])
+        assert conv is not None  # a reply goes to its message's conversation
         tid = work_task_id(msg, conv)
         task = H.task(c, tid) if tid else None
         target = msg["sender_id"] if msg["kind"] == "ask" else reply_target(msg, conv, task)
