@@ -447,6 +447,9 @@ def test_a_pages_spec_ok_does_not_approve_its_other_document_role(api):
 
 
 def test_stale_approval_requires_answer_authority_and_visibility_of_every_page(api):
+    from backend.tests.helpers.api import as_member
+
+    as_member(api, "ben@acme.example")
     _, row = _flow(api)
     first = _write(api, row["id"], SPEC, "ana-test")
     second = _attach_second_spec(api, row)
@@ -459,11 +462,13 @@ def test_stale_approval_requires_answer_authority_and_visibility_of_every_page(a
     assert restricted.status_code == 200, restricted.text
     assert api.get(f"/api/v2/pages/{fid}", headers=headers("ben-test")).status_code == 404
     assert get(api, "tasks/" + row["id"], "ben-test")["task"]["id"] == row["id"]
-    refused = _approve(api, row["id"], entry, 999, token="ben-test")
+    path = f"/api/v2/tasks/{row['id']}/asks/{rid}/answer"
+    payload = {"value": "ok", "page_version": f"{first['file_id']}@999", "visit_id": row["visit"]["id"]}
+    refused = api.post(path, json=payload, headers=headers("ben-test"))
     assert refused.status_code >= 400 and "approval" not in refused.json(), refused.text
     assert all(p["file_id"] not in refused.text for p in (first, second))
     exact = api.post(
-        f"/api/v2/tasks/{row['id']}/asks/{rid}/answer",
+        path,
         json={"value": "ok", "page_version": entry["approval"]["page_version"], "visit_id": row["visit"]["id"]},
         headers=headers("ben-test"),
     )
@@ -473,8 +478,6 @@ def test_stale_approval_requires_answer_authority_and_visibility_of_every_page(a
     unauthorized = _approve(api, row["id"], entry, 999, token="cara-test")
     assert unauthorized.status_code >= 400 and "approval" not in unauthorized.json(), unauthorized.text
     assert all(p["file_id"] not in unauthorized.text for p in (first, second))
-    path = f"/api/v2/tasks/{row['id']}/asks/{rid}/answer"
-    payload = {"value": "ok", "page_version": f"{fid}@999", "visit_id": row["visit"]["id"]}
     request_headers = headers("ben-test")
     stale = api.post(path, json=payload, headers=request_headers)
     assert stale.status_code == 409, stale.text

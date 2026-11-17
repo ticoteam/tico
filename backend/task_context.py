@@ -36,7 +36,7 @@ def listing(c, auth, who, tid):
             "id": row["id"],
             "links": page_links.links_of(c, auth, who, row["id"]),
             "writers": page_links.writers_of(c, row["id"]),
-            "may_write": page_links.may_write(c, auth, who, row["id"]),
+            "may_write": page_links.may_write(c, auth, who, row),
             "title": row["title"][:200],
             "version": row["current_version"],
             "updated_at": row["context_updated_at"],
