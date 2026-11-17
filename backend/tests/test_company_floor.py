@@ -157,6 +157,18 @@ def test_a_stage_that_hands_off_names_the_pipeline_it_files_into_when_the_reader
     assert [s["into"] for s in find(floor(api, "cara-test"), "leads")["stages"]] == [None, None]
 
 
+def test_a_pipeline_names_the_ones_its_tasks_were_moved_into_lately(api):
+    made = post(api, "factories", {"name": "Product"})["factory"]
+    pipeline(api, "ideas", None)
+    pipeline(api, "builds", made["id"])
+    first = task(api, "Saved carts", "cara", "ideas")
+    task(api, "Dark mode", "cara", "ideas")
+    assert find(floor(api), "ideas")["moved_into"] == []
+    post(api, f"tasks/{first['id']}/move", {"to": "builds-spec", "to_pipeline": "builds", "version": first["version"]})
+    assert find(floor(api), "ideas")["moved_into"] == ["builds"]
+    assert find(floor(api), "builds")["moved_into"] == []
+
+
 def test_a_person_the_reader_may_not_see_holds_tasks_counted_but_not_named(acme):
     api, _ = acme
     legal = {"teams": ["legal"]}
