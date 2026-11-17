@@ -107,7 +107,8 @@ def ask_admin_detail(c, admins, what):
 def effective_grant(c, credential, subject):
     return c.execute(
         'SELECT g.* FROM credential_grants g LEFT JOIN credential_grants p ON p.id=g.parent_id '
-        "LEFT JOIN bot_config bc ON g.subject='bot:'||bc.bot "
+        # By the bot's key, so the grant seeks its bot rather than scanning bot_config.
+        "LEFT JOIN bot_config bc ON substr(g.subject,1,4)='bot:' AND bc.bot=substr(g.subject,5) "
         'WHERE g.credential_id=? AND g.subject=? AND g.revoked_at IS NULL '
         "AND (g.parent_id IS NULL OR (p.revoked_at IS NULL AND p.id IS NOT NULL AND p.subject='human:'||bc.owner_id))",
         (credential, subject),
@@ -210,6 +211,25 @@ def permitted(c, who, credential, admins):
     return administrator(c, who, admins) and not key_hidden(c, who, credential, admins)
 
 
+def usable(c, who, credential, admins):
+    """Whether `who` may put this credential to use, so that Tico sends its value somewhere for them (a Finance
+    connection, backend/finance/store/tico.py `may_use_credential`). It is the rule GET /api/v2/credentials lists by.
+    A person may use a credential they may reveal (`permitted`: a grant, or a credential administrator) or one they
+    stored for a bot (`owned`), never a key of a tool they may not see. A bot may use what it holds a grant to
+    (`effective_grant`), not a default read: the proxy holds those to reads, and this sends the key itself. A website
+    login or a service row never counts. Each part reads this credential's own rows by key, never every credential."""
+    row = c.execute(
+        'SELECT kind,member_stored,created_by,updated_by FROM credentials WHERE id=?', (credential,)
+    ).fetchone()
+    if row is None or row['kind'] in ('login', 'service'):
+        return False
+    if who.role == 'bot':
+        return effective_grant(c, credential, who.actor) is not None
+    if who.role not in ('human', 'owner') or key_hidden(c, who, credential, admins):
+        return False
+    return permitted(c, who, credential, admins) or _owns(c, who, row)
+
+
 def signed_in_person(who):
     """A person at their own session: not a bot, a computer, an agent token, a run, support, BotOps or the Assistant."""
     return who.role in ('human', 'owner') and not (
@@ -229,10 +249,7 @@ def owned(c, who):
     and a person demoted since must not keep those. A value someone else has since saved makes it no longer theirs, and
     the team rule "Members store credentials for their bots" off ends it for everyone. A bot acting as itself owns the
     keys it stored for itself (backend/tool_access.py `_itself`), the same way and whatever the team rule."""
-    from . import team_rules
-
-    own_bot = who.role == 'bot' and not getattr(who, 'via', '')
-    if not own_bot and (who.role not in ('human', 'owner') or not team_rules.load(c)['members_store_credentials']):
+    if not _may_own(c, who):
         return set()
     return {
         r[0]
@@ -242,8 +259,24 @@ def owned(c, who):
     }
 
 
+def _may_own(c, who):
+    """Whether `who` can own a credential at all (`owned`)."""
+    from . import team_rules
+
+    if who.role == 'bot' and not getattr(who, 'via', ''):
+        return True
+    return who.role in ('human', 'owner') and bool(team_rules.load(c)['members_store_credentials'])
+
+
+def _owns(c, who, row):
+    """`owned`, for one credentials row (member_stored, created_by, updated_by) rather than all of them."""
+    mine = bool(row['member_stored']) and row['created_by'] == who.actor and row['updated_by'] == who.actor
+    return mine and _may_own(c, who)
+
+
 def creator(c, who, credential):
-    return credential in owned(c, who)
+    row = c.execute('SELECT member_stored,created_by,updated_by FROM credentials WHERE id=?', (credential,)).fetchone()
+    return row is not None and _owns(c, who, row)
 
 
 def can_open(c, who, admins):
@@ -559,6 +592,17 @@ class Vault:
     @property
     def admins(self):
         return self.store.settings.credential_admins
+
+    def admins_now(self, c):
+        """The credential administrators in force, read in `c`: a request's own (`Auth.sync_access`, which adopts a
+        transfer or a change to the Admins) with the app's sign-in, else the same rule from the database
+        (backend/auth.py `credential_admins`), never the settings a worker was started with."""
+        from . import auth
+
+        if self.auth is not None:
+            self.auth.sync_access(c)
+            return self.admins
+        return auth.credential_admins(c, self.store.settings)
 
     def change(self, who, operation, key, body, authorize, fn):
         if not key or len(key) > 200:
