@@ -15,7 +15,7 @@ from backend.tests.helpers.email_sending import (
     BOX,
     CONTACT,
     autonomous,
-    claim,
+    dispatch,
     inbox,
     incoming,
     mime,
@@ -139,7 +139,6 @@ def test_mail_tico_composes_is_queued_while_gmail_is_down_and_decided_when_it_an
     who is known: it is queued pending, unchecked, and the drain decides it with Gmail's answer before it can go."""
     from backend import email_sending as S
 
-    monkeypatch.setattr(S, "server_sends", lambda c, mailbox: True)  # the server sends from it (its key is faked)
     autonomous(inbox, ask_new_address=True)
     fake_gmail.down.add(BOX)
     with inbox.app.state.store.transaction() as c:
@@ -183,9 +182,8 @@ def test_cli_sending_controls_share_the_email_command_and_api(inbox, monkeypatch
 def test_never_blocks_an_approved_send_at_dispatch(inbox):
     queued = queue(inbox)
     approved(inbox, queued)
-    machine = runner(inbox)
     policy(inbox, mode="never")
-    assert claim(inbox, machine["token"]) is None
+    assert dispatch(inbox) == []
     with inbox.app.state.store.read() as c:
         row = c.execute("SELECT * FROM email_sends WHERE id=?", (queued["id"],)).fetchone()
         assert row["state"] == "blocked" and "never" in json.loads(row["decision"])["reasons"]
@@ -196,14 +194,9 @@ def test_an_ok_from_the_preview_releases_the_frozen_send_and_is_used(inbox):
     queued = queue(inbox, actor="bot:ops")
     assert queued["state"] == "waiting_approval"
     approved(inbox, queued)
-    machine = runner(inbox)
-    assert claim(inbox, machine["token"]) is None
-    assert claim(inbox, machine["token"])["id"] == queued["id"]
-    permitted = post(
-        inbox, "connectors/email/sends/" + queued["id"] + "/dispatch", {"mailbox": BOX}, token=machine["token"]
-    )
-    assert permitted["send"]["id"] == queued["id"]
+    assert len(dispatch(inbox) + dispatch(inbox)) == 1  # the first pass lets it go, a later one sends it
     with inbox.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM email_sends WHERE id=?", (queued["id"],)).fetchone()[0] == "sent"
         assert task_asks.standing(c, queued["approval_id"]) == task_asks.USED
 
 
@@ -218,8 +211,7 @@ def test_an_approval_id_tico_does_not_know_neither_approves_nor_blocks(inbox):
 def test_undo_pending_restart_cancel_and_no_recall(inbox, tmp_path):
     autonomous(inbox, undo_seconds=120)
     queued = queue(inbox)
-    machine = runner(inbox)
-    assert claim(inbox, machine["token"]) is None
+    assert dispatch(inbox) == []  # inside its undo window
     # A fresh database connection sees the durable queue, without any worker memory.
     with sqlite3.connect(inbox.app.state.store.settings.db_path) as c:
         assert c.execute("SELECT state FROM email_sends WHERE id=?", (queued["id"],)).fetchone()[0] == "pending"
@@ -236,7 +228,7 @@ def test_undo_pending_restart_cancel_and_no_recall(inbox, tmp_path):
         assert recovered.json()["sends"][0]["id"] == queued["id"]
     response = post(inbox, "email/sends/" + queued["id"] + "/cancel", {})
     assert response["send"]["state"] == "canceled"
-    assert claim(inbox, machine["token"]) is None
+    assert dispatch(inbox) == []
     with inbox.app.state.store.transaction() as c:
         c.execute("UPDATE email_sends SET state='sent' WHERE id=?", (queued["id"],))
     response = inbox.post("/api/v2/email/sends/" + queued["id"] + "/cancel", json={}, headers=headers())
@@ -244,35 +236,29 @@ def test_undo_pending_restart_cancel_and_no_recall(inbox, tmp_path):
 
 
 def test_due_send_is_dispatched_once_with_a_receipt_and_audit(inbox):
+    import base64
+
     autonomous(inbox)
     queued = queue(inbox, raw=mime(files=True))
-    machine = runner(inbox)
-    assert claim(inbox, machine["token"])["id"] == queued["id"]
-    path = "connectors/email/sends/" + queued["id"]
-    permitted = post(inbox, path + "/dispatch", {"mailbox": BOX}, token=machine["token"], key="one-permit")
-    assert S.snapshot(permitted["send"]["raw"], BOX)["content_sha256"] == queued["content_sha256"]
-    assert post(inbox, path + "/dispatch", {"mailbox": BOX}, token=machine["token"], key="one-permit")["send"] is None
-    receipt = post(inbox, path + "/result", {"status": "sent", "message": "provider-123"}, token=machine["token"])
-    assert receipt["send"]["provider_message_id"] == "provider-123"
-    assert [{k: f[k] for k in ("name", "sha256")} for f in receipt["send"]["attachments"]] == [
+    (sent,) = dispatch(inbox)
+    raw = base64.urlsafe_b64encode(sent).decode()
+    assert S.snapshot(raw, BOX)["content_sha256"] == queued["content_sha256"]
+    assert dispatch(inbox) == []
+    receipt = inbox.get("/api/v2/email/sends/" + queued["id"], headers=headers()).json()["send"]
+    assert receipt["state"] == "sent" and receipt["provider_message_id"] == "sent-1"
+    assert [{k: f[k] for k in ("name", "sha256")} for f in receipt["attachments"]] == [
         {"name": "proof.pdf", "sha256": S.digest(b"proof")}
     ]
-    assert claim(inbox, machine["token"]) is None
 
 
-def test_permission_revocation_between_claim_and_dispatch(inbox):
+def test_permission_revoked_before_dispatch_sends_nothing(inbox):
     autonomous(inbox)
     queued = queue(inbox, actor="bot:ops")
-    machine = runner(inbox)
-    assert claim(inbox, machine["token"])
     with inbox.app.state.store.transaction() as c:
         c.execute("DELETE FROM mailbox_accesses WHERE grantee_type='bot' AND grantee_id='ops'")
-    assert (
-        post(inbox, "connectors/email/sends/" + queued["id"] + "/dispatch", {"mailbox": BOX}, token=machine["token"])[
-            "send"
-        ]
-        is None
-    )
+    assert dispatch(inbox) == []
+    with inbox.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM email_sends WHERE id=?", (queued["id"],)).fetchone()[0] != "sent"
 
 
 def test_external_agent_revocation_blocks_its_pending_send(inbox):
@@ -291,8 +277,7 @@ def test_external_agent_revocation_blocks_its_pending_send(inbox):
             via="agent:external",
         )
         c.execute("UPDATE agents SET revoked_at=? WHERE bot='ops'", (H.now(),))
-    machine = runner(inbox)
-    assert claim(inbox, machine["token"]) is None
+    assert dispatch(inbox) == []
     with inbox.app.state.store.read() as c:
         result = json.loads(c.execute("SELECT decision FROM email_sends WHERE id=?", (queued["id"],)).fetchone()[0])
     assert "agent_revoked" in result["reasons"]
@@ -301,14 +286,15 @@ def test_external_agent_revocation_blocks_its_pending_send(inbox):
 @pytest.mark.parametrize("cap", ["daily_cap", "mailbox_daily_cap", "company_daily_cap"])
 def test_caps_reserve_concurrent_dispatches_including_unknown_results(inbox, cap):
     autonomous(inbox, **{cap: 1})
+    from backend.tests.helpers.fake_gmail import CURRENT
+
     first = queue(inbox, raw=mime(body="First"))
     queue(inbox, raw=mime(body="Second"))
-    machine = runner(inbox)
-    assert claim(inbox, machine["token"])["id"] == first["id"]
-    assert claim(inbox, machine["token"]) is None
-    post(inbox, "connectors/email/sends/" + first["id"] + "/dispatch", {"mailbox": BOX}, token=machine["token"])
-    post(inbox, "connectors/email/sends/" + first["id"] + "/result", {"status": "unknown"}, token=machine["token"])
-    assert claim(inbox, machine["token"]) is None
+    CURRENT["fake"].send_answer = (503, {})  # Gmail never confirms the first: its result is unknown
+    assert len(dispatch(inbox)) == 1
+    with inbox.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM email_sends WHERE id=?", (first["id"],)).fetchone()[0] == "unknown"
+    assert dispatch(inbox) == []  # the unknown one still counts against the cap
 
 
 def test_pacing_duplicate_hash_and_reply_loop_protection(inbox):
@@ -316,9 +302,7 @@ def test_pacing_duplicate_hash_and_reply_loop_protection(inbox):
     first = queue(inbox, raw=mime(Message_ID="<one@acme.example>"))
     assert queue(inbox, raw=mime(Message_ID="<two@acme.example>"))["id"] == first["id"]
     queue(inbox, raw=mime(body="Second"))
-    machine = runner(inbox)
-    assert claim(inbox, machine["token"])
-    assert claim(inbox, machine["token"]) is None
+    assert len(dispatch(inbox)) == 1 and dispatch(inbox) == []  # paced: the second waits a minute
     with inbox.app.state.store.transaction() as c:
         incoming(c, facts={"auto-submitted": "auto-replied"}, mid="automatic")
     blocked = queue(
@@ -354,44 +338,36 @@ def test_named_approvers_and_private_inbox_boundaries(inbox):
     assert response.status_code == 403
 
 
-def test_new_automation_uses_the_same_approval_queue_and_never_bypasses_never(inbox):
-    machine = runner(inbox)
+def test_new_automation_uses_the_same_approval_queue_and_never_bypasses_never(inbox, monkeypatch):
+    from backend import automation_actions as A, automations as M
+
+    monkeypatch.setattr(S, "classify", lambda app, store, snap, review=None: {"legal_or_money": False})
     with inbox.app.state.store.transaction() as c:
         c.execute(
             "INSERT INTO automations(id,name,owner_id,trigger_type,enabled,flow,version,created_at,created_by_id,updated_at) "
             "VALUES('auto','Auto','person:ana','manual',1,?,1,?,'person:ana',?)",
             (json.dumps({"owner": "person:ana", "steps": []}), H.now(), H.now()),
         )
-        c.execute(
-            "INSERT INTO automation_mail_actions(id,automation_id,run_id,mailbox,msg_id,action,args,state,created_at,claimed_by) "
-            "VALUES('action','auto',NULL,?,'inbound','send','{}','claimed',?,?)",
-            (BOX, H.now(), machine["runner_id"]),
+        action = A._queue_mail(
+            c,
+            {"id": "auto", "flow": {"owner": "person:ana"}},
+            None,
+            "send",
+            {"mailbox": BOX, "id": "inbound"},
+            {"body": "Thanks for the update."},
+        )["mail_action"]
+    M.drain_workspace_mail(inbox.app.state.store)
+    with inbox.app.state.store.read() as c:
+        queued = S.public(c.execute("SELECT * FROM email_sends WHERE automation_action_id=?", (action,)).fetchone())
+        assert c.execute("SELECT state FROM automation_mail_actions WHERE id=?", (action,)).fetchone()[0] == (
+            "waiting_send"
         )
-    result = post(
-        inbox,
-        "email/sends",
-        {
-            "mailbox": BOX,
-            "raw": mime(In_Reply_To="<inbound@vendor.example>"),
-            "thread_id": "thread",
-            "reply_to_id": "inbound",
-            "automation_action_id": "action",
-        },
-        token=machine["token"],
-    )
-    queued = result["send"]
     assert queued["state"] == "waiting_approval" and queued["actor"] == "human:ana"
-    post(
-        inbox,
-        "automations/mail-actions/action/result",
-        {"ok": True, "send_queue_id": queued["id"]},
-        token=machine["token"],
-    )
     approved(inbox, queued)
     policy(inbox, mode="never")
-    assert claim(inbox, machine["token"]) is None
+    assert dispatch(inbox) == []
     with inbox.app.state.store.read() as c:
-        assert c.execute("SELECT state FROM automation_mail_actions WHERE id='action'").fetchone()[0] == "failed"
+        assert c.execute("SELECT state FROM automation_mail_actions WHERE id=?", (action,)).fetchone()[0] == "failed"
 
 
 def test_assistant_acting_for_a_person_queues_as_that_person_and_cannot_change_policy(inbox):
@@ -425,8 +401,7 @@ def test_a_bot_at_ask_first_cannot_send_without_approval(inbox):
     policy(inbox, undo_seconds=0, pacing_seconds=0)
     queued = queue(inbox, actor="bot:ops")
     assert queued["state"] == "waiting_approval" and "ask_first" in queued["decision"]["reasons"]
-    machine = runner(inbox)
-    assert claim(inbox, machine["token"]) is None and claim(inbox, machine["token"]) is None
+    assert dispatch(inbox) == [] and dispatch(inbox) == []
     with inbox.app.state.store.read() as c:
         assert (
             c.execute("SELECT state FROM email_sends WHERE id=?", (queued["id"],)).fetchone()[0] == "waiting_approval"
@@ -443,8 +418,7 @@ def test_a_bot_managers_message_approves_nothing(inbox):
         c.execute("UPDATE email_sends SET approval_id=? WHERE id=?", (note["id"], queued["id"]))
         row = c.execute("SELECT * FROM email_sends WHERE id=?", (queued["id"],)).fetchone()
         assert not S.approved(c, inbox.app.state.auth, row, S.effective(c, BOX, "ops"))
-    machine = runner(inbox)
-    assert claim(inbox, machine["token"]) is None and claim(inbox, machine["token"]) is None
+    assert dispatch(inbox) == [] and dispatch(inbox) == []
 
 
 def test_never_refuses_and_names_the_setting(inbox):
@@ -520,21 +494,17 @@ def test_a_failing_workspace_key_leaves_the_email_pending(inbox, monkeypatch):
         assert c.execute("SELECT state FROM email_sends WHERE id=?", (queued["id"],)).fetchone()[0] == "pending"
 
 
-def test_a_mailbox_the_server_cannot_mint_for_is_still_dispatched_by_its_computer(inbox, monkeypatch):
+def test_a_mailbox_no_server_credential_covers_fails_its_email_with_why(inbox, monkeypatch):
     from backend import google_workspace as GW
 
     autonomous(inbox)
     calls = workspace(monkeypatch, (200, {"id": "gmail-1"}))
     queued = queue(inbox, reply_to_id="inbound", thread_id="thread")
-    # No server credential covers it any more: the computer that holds one sends.
-    monkeypatch.setattr(GW, "authority", lambda c, mailbox: "legacy")
+    monkeypatch.setattr(GW, "authority", lambda c, mailbox: "legacy")  # the key and the grant are gone
     assert S.drain(inbox.app.state.store, inbox.app.state.auth) == 0 and calls == []
-    machine = runner(inbox)
-    assert claim(inbox, machine["token"])["id"] == queued["id"]
-    path = "connectors/email/sends/" + queued["id"]
-    assert post(inbox, path + "/dispatch", {"mailbox": BOX}, token=machine["token"])["send"]["id"] == queued["id"]
-    receipt = post(inbox, path + "/result", {"status": "sent", "message": "provider-9"}, token=machine["token"])
-    assert receipt["send"]["provider_message_id"] == "provider-9" and calls == []
+    with inbox.app.state.store.read() as c:
+        row = c.execute("SELECT state,detail FROM email_sends WHERE id=?", (queued["id"],)).fetchone()
+    assert row["state"] == "failed" and "covers" in row["detail"]
 
 
 def own_grant(inbox, monkeypatch, scopes):

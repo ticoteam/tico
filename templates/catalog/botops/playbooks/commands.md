@@ -82,6 +82,22 @@ Done when: the change is made as the requester and read back, or the refusal is 
 - `tico credential grant <name> --to <slug>`: give a bot a credential it does not have. `tico credential import <VARIABLE> --from-bot <slug>`
   moves a bot's own copy into Credentials first.
 - `tico credential revoke <name> --from <slug>` and `tico credential delete <name>`: take a grant away, or remove a credential.
+- A key a bot already holds (one it made through the vendor's API): `tico credential add <name> --env <VARIABLE> --from-env <SRC>`
+  (or `--from-file <path>`), with `--tool <tool> --level read` for a tool's key and `--for-bot <slug>` for the bot that gets it. The
+  value is read on the computer, never typed. `tico credential update <name>` renames it or replaces it the same way.
+
+## Every Tools change, without the Tools page
+Do it yourself, as the requester; the server decides and a refusal names who can. The MCP tools have the same names.
+- Read: `tico tool index`, `tico tool detail <tool>`, `tico tool vendor <vendor>`, `tico tool website show <tool>`.
+- API tools: `tico tool create <name> --base-url <url>`, `tico tool edit <tool> --delivery proxy --everyone-reads off`,
+  `tico tool delete <tool>`, `tico tool level <tool> <slug> read`, `tico tool check <tool>`.
+- Settings (a host, a region, a project id): `tico tool setting add <tool> <NAME> <value>`, `tico tool setting change`,
+  `tico tool setting remove`.
+- MCP servers: `tico tool mcp probe <url>`, `tico tool mcp add <name> <url> oauth`, then `tico tool sign-in <tool>` and send
+  the person the address it prints.
+- Websites: `tico tool website add --site <host>`, `tico tool website edit`, `tico tool website delete`; accounts with
+  `tico credential login add <tool> --username <name> --password-from-env <VAR>`, `tico credential login edit`,
+  `tico credential login delete`, `tico credential login share <tool> <account> bot:<slug> on`.
 
 ## Tools, repositories and access
 

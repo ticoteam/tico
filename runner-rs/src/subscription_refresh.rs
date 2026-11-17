@@ -194,6 +194,91 @@ pub async fn read_codex(profile: &crate::profiles::Profile, canceled: &AtomicBoo
     }
 }
 
+/// One read of a Claude plan's week: a one-line prompt on Haiku with its setup-token, in an empty home of the read's
+/// own, so no login, key or setting of the computer's is read or written (the home is removed after). A setup-token may
+/// only run prompts, so `/usage` refuses it; the usage windows come instead from the `rate_limit_event` Claude Code
+/// prints for any turn (`hosts::claude::rate_limit_windows`, as a turn's reading). It spends a few tokens of the plan.
+/// Any failure is a fixed state, never the CLI's own text.
+pub async fn read_claude_plan(token: &str, canceled: &AtomicBool) -> Value {
+    use std::os::unix::fs::PermissionsExt;
+
+    let Some(exe) = crate::env::which("claude", &std::env::var("PATH").unwrap_or_default()) else {
+        return json!({"state": "unavailable"});
+    };
+    if canceled.load(Ordering::SeqCst) {
+        return json!({"state": "failed"});
+    }
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    let home = std::env::temp_dir().join(format!("tico-plan-usage-{}-{nanos}", std::process::id()));
+    if std::fs::create_dir_all(&home).is_err() {
+        return json!({"state": "failed"});
+    }
+    let _ = std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700));
+    let mut env: crate::env::Env = std::env::vars().collect();
+    for name in [
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_BASE_URL",
+        "CLAUDE_CONFIG_DIR",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+    ] {
+        env.remove(name);
+    }
+    let dir = home.display().to_string();
+    env.insert("CLAUDE_CODE_OAUTH_TOKEN".into(), token.to_string());
+    env.insert("CLAUDE_CONFIG_DIR".into(), dir.clone());
+    env.insert("HOME".into(), dir);
+    let mut cmd = crate::isolation::command(exe);
+    cmd.args([
+        "-p",
+        "Reply with OK.",
+        "--model",
+        "haiku",
+        "--max-turns",
+        "1",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+    ])
+    .env_clear()
+    .envs(&env)
+    .current_dir(&home)
+    .stdin(std::process::Stdio::null())
+    .stdout(std::process::Stdio::piped())
+    .stderr(std::process::Stdio::null())
+    .kill_on_drop(true);
+    let reply = tokio::time::timeout(Duration::from_secs(90), cmd.output()).await;
+    let _ = std::fs::remove_dir_all(&home);
+    match reply {
+        Ok(Ok(out)) if !canceled.load(Ordering::SeqCst) => plan_week(&out.stdout),
+        _ => json!({"state": "failed"}),
+    }
+}
+
+/// The plan's week from a turn's stream-json lines: the last `rate_limit_event`'s seven-day window with both its used
+/// percent and its reset. Anything else is failed.
+pub(crate) fn plan_week(stdout: &[u8]) -> Value {
+    let week = String::from_utf8_lossy(stdout)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|msg| msg["type"] == "rate_limit_event")
+        .flat_map(|msg| crate::hosts::claude::rate_limit_windows(&msg["rate_limit_info"]))
+        .rfind(|w| {
+            w["window_minutes"] == 7 * 24 * 60
+                && w["used_percent"].is_number()
+                && w["resets_at"].is_string()
+        });
+    match week {
+        Some(w) => {
+            json!({"state": "succeeded", "plan": {"used_percent": w["used_percent"], "resets_at": w["resets_at"]}})
+        }
+        None => json!({"state": "failed"}),
+    }
+}
+
 /// One bounded worker per computer; a completed report is kept until delivered.
 pub struct Refreshes {
     polled: Option<Instant>,
@@ -241,6 +326,9 @@ impl Refreshes {
         let result = self.result.lock().unwrap().clone();
         if let (Some(result), Some(work)) = (result, self.work.clone()) {
             let mut body = json!({"profile": work["profile"], "runtime": work["runtime"]});
+            if let Some(sid) = work["subscription"].as_str().filter(|s| !s.is_empty()) {
+                body["subscription"] = json!(sid);
+            }
             for (k, v) in result.as_object().cloned().unwrap_or_default() {
                 body[k] = v;
             }
@@ -283,11 +371,18 @@ impl Refreshes {
         // Only a runtime whose weekly window a refresh can read (`weekly_usage = "refresh"`).
         let refreshable =
             crate::harness_tools::caps(&text_of(&work["runtime"]), "").weekly_usage == "refresh";
+        // A plan's read (backend/subscription_refresh.py `request_plan_read`): its setup-token travels in the work, for this read only.
+        let plan = work["subscription"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(|_| text_of(&work["env"]["CLAUDE_CODE_OAUTH_TOKEN"]));
         self.work = Some(work);
         let (slot, canceled) = (self.result.clone(), self.canceled.clone());
         self.worker = Some(tokio::spawn(async move {
-            let result = match profile {
-                Some(p) if refreshable => read_codex(&p, &canceled).await,
+            let result = match (plan, profile) {
+                (Some(token), _) if !token.is_empty() => read_claude_plan(&token, &canceled).await,
+                (Some(_), _) => json!({"state": "unavailable"}),
+                (None, Some(p)) if refreshable => read_codex(&p, &canceled).await,
                 _ => json!({"state": "unavailable"}),
             };
             *slot.lock().unwrap() = Some(result);
@@ -320,5 +415,26 @@ mod tests {
             weekly(&json!({"rateLimitsByLimitId": {"other": {}}}), now)["state"],
             "unavailable"
         );
+    }
+
+    #[test]
+    fn plan_week_reads_the_seven_day_window_of_a_turn() {
+        let lines = concat!(
+            r#"{"type":"system","subtype":"init"}"#,
+            "\n",
+            r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","rateLimitType":"five_hour","resetsAt":1795000000,"unifiedWindows":{"five_hour":{"utilization":0.03,"resetsAt":1795000000},"seven_day":{"utilization":0.42,"resetsAt":1795400000}}}}"#,
+            "\n",
+            r#"{"type":"result","result":"OK"}"#,
+            "\n",
+        );
+        let got = plan_week(lines.as_bytes());
+        assert_eq!(got["state"], "succeeded");
+        assert_eq!(got["plan"]["used_percent"], 42.0);
+        assert!(got["plan"]["resets_at"]
+            .as_str()
+            .is_some_and(|s| s.starts_with("2026-")));
+        assert_eq!(plan_week(b"not json")["state"], "failed");
+        let no_week = r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","rateLimitType":"five_hour","resetsAt":1795000000}}"#;
+        assert_eq!(plan_week(no_week.as_bytes())["state"], "failed");
     }
 }

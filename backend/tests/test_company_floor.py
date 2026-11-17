@@ -4,6 +4,7 @@ the reader may read is counted, and a private pipeline they may not read is not 
 
 from backend import hubdb as H
 from backend.tests.helpers.api import get, headers, post
+from backend.tests.helpers.teammate_access import acme, set_access  # noqa: F401  (the fixture)
 
 
 def pipeline(api, ident, factory_id, private=False, stages=("spec", "build"), manager=None):
@@ -36,10 +37,16 @@ def find(factories, ident):
 def test_each_stage_counts_its_open_tasks_by_holder_and_what_waits_on_the_reader(api):
     made = post(api, "factories", {"name": "Product development"})["factory"]
     pipeline(api, "product", made["id"])
-    for n in range(3):
-        task(api, f"Saved carts {n}", "ben", "product")
+    carts = [task(api, f"Saved carts {n}", "ben", "product") for n in range(3)]
     mine = task(api, "Order export", "ana", "product")
     moved = task(api, "Gift receipts", "ops", "product")
+    # Needs you holds what is asked of a person: a question on each of Ben's, and one on Ana's.
+    from backend import task_engine as E
+
+    with api.app.state.store.transaction() as c:
+        for row, person in [*((t, "human:ben") for t in carts), (mine, "human:ana")]:
+            version = H.task(c, row["id"])["version"]
+            E.add_requirement(c, row["id"], "human:cara", "answer", person, "Ready to ship?", seen_version=version)
     post(api, f"tasks/{moved['id']}/move", {"to": "product-build", "why": "The spec is in the PR"})
     seen = floor(api)
     [factory] = [f for f in seen if f["id"] == made["id"]]
@@ -47,7 +54,7 @@ def test_each_stage_counts_its_open_tasks_by_holder_and_what_waits_on_the_reader
     [pipe] = factory["pipelines"]
     spec, build = pipe["stages"]
     assert (spec["name"], spec["count"], build["name"], build["count"]) == ("Spec", 4, "Build", 1)
-    # The most loaded holder first; only Ana's own task is in her Needs you.
+    # The most loaded holder first; only what is asked of Ana is in her Needs you.
     assert spec["owners"] == [
         {"actor": "human:ben", "count": 3, "needs_you": 0},
         {"actor": "human:ana", "count": 1, "needs_you": 1},
@@ -113,6 +120,39 @@ def test_a_private_pipeline_a_reader_cannot_read_is_not_there(api):
     theirs = floor(api, "cara-test")
     assert [f["id"] for f in theirs] == [open_one["id"]]
     assert find(theirs, "product")["stages"][0]["count"] == 1
+
+
+def test_a_person_the_reader_may_not_see_holds_tasks_counted_but_not_named(acme):
+    api, _ = acme
+    legal = {"teams": ["legal"]}
+    set_access(api, "humans/cara", token="cara-test", see=legal, read=legal, write=legal)
+    made = post(api, "factories", {"name": "Legal"})["factory"]
+    pipeline(api, "contracts", made["id"], stages=("review",))
+    task(api, "Vendor terms", "cara", "contracts")
+    task(api, "NDA", "ben", "contracts")
+    # Eve may read Cara's task but not be told of Cara: it counts, and no group names her.
+    [stage] = find(floor(api, "eve-test"), "contracts")["stages"]
+    assert stage["count"] == 2 and stage["owners"] == [{"actor": "human:ben", "count": 1, "needs_you": 0}]
+    assert {o["actor"] for o in find(floor(api), "contracts")["stages"][0]["owners"]} == {"human:ben", "human:cara"}
+
+
+def test_pipelines_in_no_factory_are_drawn_last_in_other_once_one_holds_a_task(api):
+    made = post(api, "factories", {"name": "Product development"})["factory"]
+    pipeline(api, "product", made["id"])
+    pipeline(api, "errands", None)
+    pipeline(api, "quiet", None, private=True, manager="human:ben")
+    # Nothing open outside a factory yet: no Other hall.
+    assert None not in {f["id"] for f in floor(api)}
+    task(api, "Book the venue", "ben", "errands")
+    task(api, "Quiet errand", "ben", "quiet", token="ben-test", private=True)
+    *_, other = floor(api)
+    assert (other["id"], other["name"], other["manager_id"]) == (None, "Other", None)
+    # General, empty, is drawn with them, as an empty pipeline is in a factory.
+    assert [p["id"] for p in other["pipelines"]] == ["general", "errands", "quiet"]
+    assert find([other], "errands")["stages"][0]["count"] == 1
+    # Cara reads none of the private one's tasks: Other holds only the errands.
+    *_, theirs = floor(api, "cara-test")
+    assert theirs["id"] is None and [p["id"] for p in theirs["pipelines"]] == ["general", "errands"]
 
 
 def test_retired_pipelines_and_empty_factories_are_left_out_unless_the_reader_manages_the_factory(api):

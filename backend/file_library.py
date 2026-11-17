@@ -98,7 +98,7 @@ def has_fts(c):
 
 
 def own_place(who):
-    """The reader's My dashboard (backend/cards.py person places), or '' for anyone who has none."""
+    """The reader's Company page (backend/cards.py person places), or '' for anyone who has none."""
     actor = str(who.actor or "")
     return "person:" + actor[6:] if who.role in ("owner", "human") and actor.startswith("human:") else ""
 
@@ -386,7 +386,7 @@ class Library:
         out = []
         for r in c.execute("SELECT DISTINCT place FROM pins WHERE item=?", ("page:" + fid,)):
             place = str(r["place"])
-            if place.startswith("person:") and place != own_place(who):  # someone's My dashboard is theirs alone
+            if place.startswith("person:") and place != own_place(who):  # someone's Company page is theirs alone
                 continue
             if place.startswith("task:") and not self.files.task_info(c, who, place[5:], cache):
                 continue

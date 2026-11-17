@@ -263,10 +263,11 @@ def _bot_owner(conn: "sqlite3.Connection", bot: object) -> str | None:
 
 
 def holder(conn: "sqlite3.Connection", row: Row) -> str | None:
-    """Who has the task's own work now, as an actor: the owner, or whoever the ladder handed it to (the manager bot,
-    then a person). A person's own task stays theirs whatever the ladder did. A task with no owner is its pipeline
-    manager's to hand out. A person who left or was removed has nothing: it falls to `person_for`. Never None while
-    the company has a person.
+    """Who has the task's own work now, as an actor: the owner, or the manager bot the ladder handed it to. A task the
+    ladder could take no further (level `person`) stays with its owner: the ladder wakes nobody more, and the
+    quiet-task rule tells the pipeline's manager (stage_rule_timers). A person's own task stays theirs whatever the
+    ladder did. A task with no owner is its pipeline manager's to hand out. A person who left or was removed has
+    nothing: it falls to `person_for`. Never None while the company has a person.
     One person's Needs you reads only `candidates`: a new way this names a person must be added there."""
     visit: Row = row.get("visit") or {}
     level = visit.get("level") or "owner"
@@ -274,8 +275,6 @@ def holder(conn: "sqlite3.Connection", row: Row) -> str | None:
     manager = pipe.get("manager_id")
     if is_human(row.get("owner_id")):
         return row["owner_id"] if R.active_person(conn, row["owner_id"]) else person_for(conn, row)
-    if level == "person":
-        return person_for(conn, row)
     if level == "manager" or not row.get("owner_id"):
         return manager if is_bot(manager) or R.active_person(conn, manager) else person_for(conn, row)
     return row["owner_id"]
@@ -541,13 +540,12 @@ def of(
                 shut = shut or tuple(held["whom"])
                 share = tuple(held["whom"])
         out.append(Wait(ROOM, ahead["id"] if ahead else None, line, None, entered, share=share))
-    if visit.get("level") == "person" and not by_hand:
-        # The ladder or Late brought the task to a person. It is in their list whatever else it waits on, and the
-        # first thing it says is why.
+    if visit.get("level") == "person" and not by_hand and shut:
+        # The ladder could take the task no further because it waits on someone who may not open it: only a person who
+        # reads it can let them in, so it is in that person's list, and the first thing it says is why. Any other task
+        # at this level stays with its bot (`holder`), out of every list: the quiet-task rule tells the manager.
         late = visit.get("late_person_at")
-        line = f"Late in {stage['name']}" if late else f"Stuck in {stage['name']}"
-        if shut:
-            line = f"{line}: {_share_line(conn, shut)}"
+        line = f"{'Late' if late else 'Stuck'} in {stage['name']}: {_share_line(conn, shut)}"
         since = late or visit.get("last_change_at") or entered
         out.insert(0, Wait(PERSON, person_for(conn, row), line, None, since, share=shut))
     blockers = task_depends.blockers(conn, str(row["id"]))
@@ -575,8 +573,8 @@ def of(
 
 def turns(conn: "sqlite3.Connection", row: Row, waits: Sequence[Wait] | None = None) -> set[str]:
     """The bots whose turn it is on this task: each bot it waits on (Paused ones too: their wake waits until they can
-    run), and the pipeline's manager bot while the ladder has the task at its level. Empty at level `person`: nothing
-    runs until a person acts. A bot Paused on a cause a person fixes first (`Wait.fix`) has no turn: nothing it could
+    run), and the pipeline's manager bot while the ladder has the task at its level. Empty at level `person`: the
+    ladder could take it no further and wakes nobody until it changes (the quiet-task rule tells the manager). A bot Paused on a cause a person fixes first (`Wait.fix`) has no turn: nothing it could
     do would help, so it is not woken, and it is woken once when the cause goes (never_stuck's ladder)."""
     visit: Row = row.get("visit") or {}
     level = visit.get("level") or "owner"
@@ -592,14 +590,21 @@ def turns(conn: "sqlite3.Connection", row: Row, waits: Sequence[Wait] | None = N
 
 
 def turn(
-    conn: "sqlite3.Connection", row: Row, waits: Sequence[Wait] | None = None, *, paused: bool = False
+    conn: "sqlite3.Connection",
+    row: Row,
+    waits: Sequence[Wait] | None = None,
+    *,
+    paused: bool = False,
+    resting: bool = False,
 ) -> str | None:
     """The one bot to wake about this task now, as the never-stuck ladder picks it: the bot with the task's own work,
     before a bot that was only asked for an OK or an answer; the manager bot at level `manager`; nobody at level
-    `person`. With `paused`, a bot that cannot run yet is picked when no other can: its wake waits for it."""
+    `person`. With `paused`, a bot that cannot run yet is picked when no other can: its wake waits for it. With
+    `resting`, the bot whose turn it is at level `person` too, where the ladder wakes nobody (the quiet-task rule's
+    "the bot's turn", stage_rule_timers)."""
     visit: Row = row.get("visit") or {}
     level = visit.get("level") or "owner"
-    if level == "person" or row["stage"]["kind"] != "work":
+    if (level == "person" and not resting) or row["stage"]["kind"] != "work":
         return None
     found = of(conn, row) if waits is None else waits
     states = (BOT, PAUSED) if paused else (BOT,)
@@ -1129,27 +1134,31 @@ def _private_ladder_tasks(conn: "sqlite3.Connection", person: str, stage_asks: l
     return {str(row["id"]) for row in rows if _falls(conn, row, asks, visit_asks)}
 
 
-def needs(conn: "sqlite3.Connection", person: str, snoozed: str = "hide") -> list[Row]:
-    """Needs you, for one person, oldest first. A task whose work is theirs is listed once (`kind` "task"), however many
-    requirements are missing. Each OK or answer that names them is its own entry (`kind` "ask"). A bot that cannot run
-    is one entry per cause (`kind` "paused") for the person who can fix it, with the tasks it holds up, not one per
-    task; a cause the company's Owner fixes first (Connect GitHub, `Wait.fix`) is theirs, with `href` to where. A read:
-    nothing is stored, so nothing can fall out of step with the tasks. A task a person snoozed is set aside and is not
-    listed. A bot's snooze hides no ask: each OK or answer still asked of a person stays in their list (Acme rc.5, Nov
-    11: a manager bot's snooze took a people-only OK out of the person's list for two days); the rest of the task is
-    set aside. An ask the stage's merge conflict waits on says so in one more sentence
-    (pr_conflicts.held). A task of theirs that others depend on says "Blocks #307, #308" (`_blocks`), even when it is
-    not their turn; the tasks it blocks are in nobody's list. Like every entry here, that is for a task on a pipeline:
-    a plain task someone owns is not in Needs you, so its owner reads "Blocks" on the task itself.
+def needs(conn: "sqlite3.Connection", person: str, snoozed: str = "hide", *, own_work: bool = False) -> list[Row]:
+    """Needs you, for one person, oldest first: only what someone asks of them. Each OK or answer that names them is its
+    own entry (`kind` "ask"). A task whose own work is theirs, with nothing asked of them, is not listed: it lives in
+    Tasks, and so does a task of theirs that others depend on (its row says "Blocks #307"). A task the never-stuck
+    ladder could take no further stays with its bot and is in nobody's list: the quiet-task rule tells the pipeline's
+    manager (stage_rule_timers). Two things a person must fix before anything can move are listed too: a private task
+    that waits on someone who may not open it, once, for the person who can let them in (`kind` "task", its wait's
+    `share`); and a bot that cannot run, one entry per cause (`kind` "paused") for the person who can fix it, with the
+    tasks it holds up, not one per task; a cause the company's Owner fixes first (Connect GitHub, `Wait.fix`) is
+    theirs, with `href` to where. A read: nothing is stored, so nothing can fall out of step with the tasks. A task a
+    person snoozed is set aside and is not listed. A bot's snooze hides no ask: each OK or answer still asked of a
+    person stays in their list (Acme rc.5, Nov 11: a manager bot's snooze took a people-only OK out of the person's
+    list for two days). An ask the stage's merge conflict waits on says so in one more sentence (pr_conflicts.held).
 
     Read from the tasks that can put something in this person's list (`candidates`), each worked out as
     `needs_by_person` works out every task, so the list is the one it gives this person, item for item.
 
     An ask the person snoozed for themselves (`ask_snoozes`) is left out until its time, or until it is asked again;
-    `snoozed` "keep" lists it too, with its `snoozed_until`, and "only" lists only those."""
+    `snoozed` "keep" lists it too, with its `snoozed_until`, and "only" lists only those.
+
+    `own_work` adds one entry (`kind` "task") for each task whose own work is theirs: not Needs you, but the load ask
+    ingest weighs before a bot hands a person more (backend/ask_ingest.py)."""
     if not is_human(person):
         return []
-    return _lists(conn, candidates(conn, person), person, snoozed=snoozed).get(person, [])
+    return _lists(conn, candidates(conn, person), person, snoozed=snoozed, own_work=own_work).get(person, [])
 
 
 def needs_by_person(conn: "sqlite3.Connection") -> dict[str, list[Row]]:
@@ -1235,7 +1244,11 @@ def snoozed_until(
 
 
 def _lists(
-    conn: "sqlite3.Connection", task_ids: list[str], *only_people: str, snoozed: str = "hide"
+    conn: "sqlite3.Connection",
+    task_ids: list[str],
+    *only_people: str,
+    snoozed: str = "hide",
+    own_work: bool = False,
 ) -> dict[str, list[Row]]:
     """Needs you from these open tasks (in id order), for every person, or only for `only_people`: each task's waits
     are worked out whoever they are for, and only the chosen people's entries are kept. An ask a person snoozed for
@@ -1248,7 +1261,6 @@ def _lists(
     seen = _seen(conn)
     fixers: dict[str, str | None] = {}
     read = prime(conn, task_ids)
-    holding = task_depends.blocking(conn, task_ids)
     for task_id in task_ids:
         row = read[str(task_id)] if str(task_id) in read else E.task(conn, task_id)
         if row is None:  # the query lists only tasks on the engine
@@ -1264,7 +1276,10 @@ def _lists(
             if any(wait.about for wait in mine):  # said to them: a sub-task they may not open is not named
                 shown = _shown(conn, row, person)
                 mine = [unnamed(wait, shown) for wait in mine]
-            work = [wait for wait in mine if not wait.ask]
+            # What is asked of them, each OK or answer its own entry. The task's own work is not: a task they have with
+            # nothing asked lives in Tasks. A task that waits on someone being let in is theirs to share (`share`),
+            # once: nothing else can move it.
+            work = [wait for wait in mine if not wait.ask and (wait.share or own_work)]
             for wait in [wait for wait in mine if wait.ask] + work[:1]:
                 asked = asks.get(str(wait.requirement_id))
                 until = snoozed_until(conn, snoozes, person, row, wait, asked) if snoozes else None
@@ -1290,10 +1305,7 @@ def _lists(
                     }
                 )
         if snoozed == "only":
-            continue  # only the asks a person snoozed: no task's blocks, no Paused cause
-        owner = str(row.get("owner_id") or "")
-        if holding.get(str(task_id)) and owner in only and is_human(owner) and _holds_up(conn, row):
-            _blocks(conn, out.setdefault(owner, []), row, owner, holding[str(task_id)])
+            continue  # only the asks a person snoozed: no Paused cause
         for wait in waits:
             if wait.state != PAUSED or not wait.who:
                 continue
@@ -1331,51 +1343,6 @@ def _lists(
         person: sorted(items, key=lambda item: (item["since"] or "", item.get("task_id") or "", item["line"]))
         for person, items in out.items()
     }
-
-
-def _holds_up(conn: "sqlite3.Connection", row: Row) -> bool:
-    """Whether a task that others depend on is its person owner's to move on: not set aside by them, and not itself
-    blocked (the end of the chain is the one to move)."""
-    snooze: Row = row.get("snooze") or {}
-    if snooze and not is_bot(snooze.get("by_id")):
-        return False
-    return not task_depends.blocked(conn, str(row["id"]))
-
-
-def _blocks(
-    conn: "sqlite3.Connection", mine: list[Row], row: Row, owner: str, held: list[tuple[str, Any, str]]
-) -> None:
-    """ "Blocks #307, #308" in the Needs you of the person who owns a task others depend on (task_depends.blocking).
-    Said after the task's own line where it is already in their list, else as the task's one entry. A task they may
-    not read is counted, not named."""
-    from . import hubdb
-
-    H: Any = hubdb
-    named: list[str] = []
-    for other, number, _since in held:
-        found = H.task(conn, other)
-        if found and H.task_private_readable(conn, owner, found):
-            named.append(task_depends.ref({"id": other, "number": number}))
-    said = task_depends.blocks_line(named, len(held) - len(named))
-    task_id = str(row["id"])
-    entry: Row | None = next((e for e in mine if e.get("task_id") == task_id and e["kind"] == "task"), None)
-    if entry is None:
-        entry = {
-            "kind": "task",
-            "task_id": task_id,
-            "number": row.get("number"),
-            "title": row.get("title"),
-            "pipeline_id": row["pipeline_id"],
-            "stage_id": row["stage_id"],
-            "requirement_id": None,
-            "visit_id": None,
-            "line": "",
-            "missing": [],
-            "since": min(since for _other, _number, since in held),
-        }
-        mine.append(entry)
-    entry["line"] = R.sentences(str(entry["line"] or ""), said)
-    entry["blocks"] = named
 
 
 def listed(waits: list[Wait], row: Row) -> list[Wait]:

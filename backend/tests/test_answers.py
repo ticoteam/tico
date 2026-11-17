@@ -392,10 +392,10 @@ def test_give_a_stage_ok_to_another_person_and_needs_you_follows(c, build):
 
 def test_give_your_own_task_to_someone_else_is_a_reassign(c, general):
     row = X.new_task(c, ANA, "Call the bank", assignee=ANA)
-    assert [n["task_id"] for n in W.needs(c, ANA)] == [row["id"]]
+    assert [w.who for w in W.waiting_on(c, row["id"])] == [ANA]
     given = A.give_to(c, row["id"], _owner_done(c, row), ANA, BEN)
     assert (given["owner_id"], given["version"]) == (BEN, row["version"] + 1)
-    assert W.needs(c, ANA) == [] and [n["task_id"] for n in W.needs(c, BEN)] == [row["id"]]
+    assert [w.who for w in W.waiting_on(c, row["id"])] == [BEN]  # his turn now, in his Tasks (not Needs you)
 
 
 def test_an_ask_is_given_or_named_only_to_a_person_who_is_here(c, build):

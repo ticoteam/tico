@@ -12,11 +12,9 @@ stays where it was and bots can read it: `exposed` says so, and Settings > Healt
 import json
 import os
 import stat
-import subprocess
 import tempfile
 from pathlib import Path
 
-from . import isolation
 from .outage import log
 
 FILE = "google-sa.json"
@@ -148,98 +146,3 @@ def protected_path(config):
 
 def workspace_path(config):
     return Path(config.get("projects_dir") or "") / "secrets" / FILE
-
-
-def protect(config):
-    """Move a key found in the workspace (put there by an older install, or by an operator following
-    an older doc) to the protected place. One time in practice; cheap, so it runs on every check.
-    Returns True when it moved one. A no-op wherever isolation is off."""
-    if not isolation.enabled() or os.environ.get("GOOGLE_SA_KEY"):
-        return False
-    moved = False
-    for name in (FILE, GRANTS):
-        old, new = workspace_path(config).with_name(name), protected_path(config).with_name(name)
-        try:
-            if old.is_symlink() or not old.is_file():
-                continue
-            data = old.read_bytes()
-            if name == GRANTS and new.is_file():
-                data = _merged_grants(new, data)
-            new.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            temporary = new.with_name(new.name + ".new")
-            temporary.unlink(missing_ok=True)
-            descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(descriptor, "wb") as handle:
-                handle.write(data)
-            os.replace(temporary, new)
-            old.unlink()
-        except (OSError, ValueError) as exc:  # ValueError: a workspace grants file that is not JSON; both stay
-            log(f"Tico runner: could not move {name} out of the bots' reach ({type(exc).__name__})")
-            continue
-        log(f"Tico runner: moved {name} out of workspace/secrets to {new}; bots ask the runner for mail access")
-        moved = True
-    return moved
-
-
-def _merged_grants(protected, incoming):
-    """The protected grants with the workspace's merged in, so a move never drops a grant already protected."""
-    from connectors.mail.oauth import merge_into
-
-    try:
-        kept = json.loads(protected.read_text())
-    except ValueError:
-        kept = {}
-    found = json.loads(incoming)
-    if not isinstance(found, dict):
-        raise ValueError("the workspace grants file is not a JSON object")
-    return json.dumps(merge_into(kept if isinstance(kept, dict) else {}, found), indent=2, sort_keys=True).encode()
-
-
-def status(config):
-    """`protected`, `exposed` (a key bots can read) or None (no key on this computer)."""
-    if isolation.enabled():
-        if any(workspace_path(config).with_name(n).is_file() for n in (FILE, GRANTS)):
-            return "exposed"
-        return "protected" if any(protected_path(config).with_name(n).is_file() for n in (FILE, GRANTS)) else None
-    from .connectors import mail_credential_present
-
-    return "exposed" if mail_credential_present(config) else None
-
-
-def held_by_computer(config):
-    """True when this computer holds the Google key or a connected account's grant for its bots: the two-user layout is on, the key is in
-    the supervisor's state directory and the connectors job runs here (the runner supervises it when
-    TICO_SIDE_JOBS is 1, the container default). A bot's turn never has GOOGLE_SA_KEY in its environment
-    then; it asks for a short-lived token over the credential socket, so the key is there, not missing."""
-    if not isolation.enabled() or os.environ.get("TICO_SIDE_JOBS") != "1":
-        return False
-    from .connectors import mail_credential_present
-
-    return mail_credential_present(config)
-
-
-def minter(config, script=None):
-    """(service, mailbox) -> {"token", "expiry"}: the mail CLI, run here with the key, prints one token."""
-    from .connectors import mail_cli_env, mail_umask
-
-    script = script or ROOT / "scripts" / "mail.sh"
-    key = protected_path(config)
-
-    def mint(service, mailbox):
-        env = mail_cli_env(config, key)
-        env["GOOGLE_SA_KEY"] = str(key)
-        result = subprocess.run(
-            [str(script), "mint-token", "--mailbox", mailbox, "--service", service],
-            cwd=ROOT,
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            timeout=60,
-            env=env,
-            **mail_umask(),
-        )
-        if result.returncode:
-            raise RuntimeError("mint-token failed")
-        return json.loads(result.stdout)
-
-    return mint

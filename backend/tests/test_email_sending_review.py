@@ -21,7 +21,7 @@ from backend.tests.helpers.email_sending import (
     H,
     S,
     autonomous,
-    claim,
+    dispatch,
     inbox,
     incoming,
     mime,
@@ -126,7 +126,7 @@ def test_named_inline_bodies_cannot_hide_commitments_from_classification(inbox, 
         result = api_post(inbox, "email/sends", {"mailbox": BOX, "raw": raw(message)})["send"]
     assert ask.call_count == int(supported)
     assert result["classification"]["legal_or_money"] is (True if supported else None)
-    assert result["state"] == "waiting_approval" and claim(inbox, runner(inbox)["token"]) is None
+    assert result["state"] == "waiting_approval" and dispatch(inbox) == []
 
 
 @pytest.mark.parametrize("subtype", ["plain", "html", "enriched"])
@@ -154,7 +154,7 @@ def test_inline_text_files_are_classified_and_keep_attachment_approval_and_downl
     else:
         ask.assert_not_called()
         assert not snap["classification_complete"]
-    assert result["state"] == "waiting_approval" and claim(inbox, runner(inbox)["token"]) is None
+    assert result["state"] == "waiting_approval" and dispatch(inbox) == []
     response = inbox.get(f'/api/v2/email/sends/{result["id"]}/attachments/{file["part"]}', headers=headers())
     assert response.status_code == 200 and response.content == expected
     message.get_payload()[-1].set_payload("Changed notes")
@@ -570,25 +570,30 @@ def test_mime_reply_headers_enforce_loop_and_duplicate_guards_without_caller_met
         queue(inbox, raw=mime(In_Reply_To="<inbound@vendor.example>"), reply_to_id="automatic")
 
 
-def test_expired_unpermitted_claim_is_recoverable_and_old_lease_is_fenced(inbox):
+def test_an_older_computers_abandoned_lease_is_recovered_and_its_old_lease_fenced(inbox):
+    """An unpermitted lease an older computer held is safe to send again (no permit, nothing reached Gmail); a permitted
+    one that never reported is unknown, never sent again."""
     autonomous(inbox)
-    queued = queue(inbox)
+    first, second = queue(inbox), queue(inbox, raw=mime(body="Second answer"))
     machine = runner(inbox)
-    old = claim(inbox, machine["token"])
+    stale = H.shift(H.now(), minutes=-6)
     with inbox.app.state.store.transaction() as c:
-        c.execute("UPDATE email_sends SET claimed_at=? WHERE id=?", (H.shift(H.now(), minutes=-6), queued["id"]))
-    renewed = claim(inbox, machine["token"])
-    assert renewed["id"] == queued["id"] and renewed["lease_id"] != old["lease_id"]
-    path = "connectors/email/sends/" + queued["id"] + "/dispatch"
-    api_post(inbox, path, {"mailbox": BOX, "lease_id": old["lease_id"]}, token=machine["token"], expected=403)
-    permit = api_post(inbox, path, {"mailbox": BOX, "lease_id": renewed["lease_id"]}, token=machine["token"])
-    assert permit["send"]["raw"]
-    with inbox.app.state.store.transaction() as c:
-        c.execute("UPDATE email_sends SET claimed_at=? WHERE id=?", (H.shift(H.now(), minutes=-6), queued["id"]))
-    assert claim(inbox, machine["token"]) is None
+        c.execute(
+            "UPDATE email_sends SET state='dispatching',runner_id=?,lease_id='old',claimed_at=? WHERE id=?",
+            (machine["runner_id"], stale, first["id"]),
+        )
+        c.execute(
+            "UPDATE email_sends SET state='dispatching',runner_id=?,lease_id='permitted',claimed_at=?,"
+            "provider_attempted_at=? WHERE id=?",
+            (machine["runner_id"], stale, stale, second["id"]),
+        )
+    assert len(dispatch(inbox) + dispatch(inbox)) == 1  # recovered on one pass, sent on the next
+    path = "connectors/email/sends/" + first["id"] + "/dispatch"
+    api_post(inbox, path, {"mailbox": BOX, "lease_id": "old"}, token=machine["token"], expected=403)
     with inbox.app.state.store.read() as c:
-        row = c.execute("SELECT * FROM email_sends WHERE id=?", (queued["id"],)).fetchone()
-        assert row["state"] == "unknown" and not row["raw"]
+        rows = {r["id"]: r for r in c.execute("SELECT * FROM email_sends").fetchall()}
+    assert rows[first["id"]]["state"] == "sent"
+    assert rows[second["id"]]["state"] == "unknown" and not rows[second["id"]]["raw"]
 
 
 def test_one_hundred_waiting_approvals_do_not_starve_a_due_send(inbox):
@@ -600,8 +605,9 @@ def test_one_hundred_waiting_approvals_do_not_starve_a_due_send(inbox):
     for index in range(100):
         queue(inbox, actor="bot:ops", raw=mime(body="Unapproved " + str(index)))
     due = queue(inbox, raw=mime(body="Authorized human send"))
-    machine = runner(inbox)
-    assert claim(inbox, machine["token"])["id"] == due["id"]
+    assert len(dispatch(inbox)) == 1
+    with inbox.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM email_sends WHERE id=?", (due["id"],)).fetchone()[0] == "sent"
 
 
 def test_approver_must_load_authorized_frozen_preview_and_download_exact_attachment(inbox):

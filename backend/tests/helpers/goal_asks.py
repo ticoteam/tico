@@ -36,7 +36,7 @@ def asks(api, owner=None):
         return [
             dict(r)
             for r in c.execute(
-                "SELECT t.id, t.title, t.body, t.owner_id, t.status, a.kind, a.ref FROM goal_asks a JOIN tasks t ON t.id=a.task_id "
+                "SELECT t.id, t.title, t.body, t.owner_id, t.status, a.kind, a.ref, a.owner AS asked FROM goal_asks a JOIN tasks t ON t.id=a.task_id "
                 "WHERE t.requester_id=?" + (" AND a.owner=?" if owner else "") + " ORDER BY t.created_at",
                 (MANAGER, owner) if owner else (MANAGER,),
             )

@@ -15,7 +15,7 @@
 'use strict';
 
 /** What an item is on this screen. */
-type AskKind = 'ok' | 'question' | 'yours' | 'stuck' | 'fix' | 'mention';
+type AskKind = 'ok' | 'question' | 'stuck' | 'fix' | 'mention';
 /** What an OK shows, as it was read: `hash` is the hash of exactly this content, the one Approve sends. `none` is an OK
     with no bound grant (a stage's OK of a page): Approve is a plain answer. `missing`: a part of what it shows did not
     load, so Approve stays off. `urls`: the object URLs of bytes read for it (a proof, a file), let go with it. `page`: on
@@ -85,8 +85,6 @@ interface DecState {
       all of it). */
   stage: string;
   pipeline: string;
-  /** Own tasks snoozed here this visit, for "All done · 2 snoozed" (with the asks snoozed: `snoozedAsks`). */
-  snoozed: number;
   /** The asks the person snoozed for themselves (GET /v2/needs-you/snoozed), read on the end screen; null until then.
       `snoozedOpen`: their list is open under "N snoozed". */
   snoozedAsks: NeedsEntry[] | null;
@@ -301,7 +299,7 @@ function decideOpen(id: string = '', items: NeedsEntry[] = decideSource(), stage
 }
 /** A screen not open yet: nothing walked, nothing answered, its ping to the person's reports. */
 const decideBlank = (opener: HTMLElement | null): DecState => ({order: [], at: null, items: new Map(), ok: new Map(), gone: new Set(),
-  more: '', busy: false, error: '', barTimer: 0, opener, off: [], stage: '', pipeline: '', snoozed: 0, snoozedAsks: null,
+  more: '', busy: false, error: '', barTimer: 0, opener, off: [], stage: '', pipeline: '', snoozedAsks: null,
   snoozedOpen: false, snzOther: false, files: [], open: new Set(), seen: new Set(), bots: [], botsName: '', ping: {scope: 'reports'},
   asking: false});
 /** "Getting ready to flow" with the mark, for well under a second over the first item, which is drawn and takes input
@@ -505,18 +503,16 @@ async function decideWalkTo(stage: string, pipeline: string) {
   Object.assign(DEC, {bots: [], botsName: '', ping: {scope: 'reports'}});
   if (!decideOpen('', decideSource(), stage, pipeline)) decideOpen('', decideSource());
 }
-/** Nothing left: All done, how many are snoozed (your own tasks snoozed on this visit, and every ask you snoozed for
-    yourself that is still snoozed), and Ping your bots. With asks snoozed, "N snoozed"
+/** Nothing left: All done, how many asks you snoozed for yourself are still snoozed, and Ping your bots. "N snoozed"
     opens their list: each by its task's title, with ↩ to bring it back now. */
 function decideDoneHTML(st: DecState): string {
-  const asks = st.snoozedAsks, n = st.snoozed + (asks?.length || 0);
+  const asks = st.snoozedAsks, n = asks?.length || 0;
   const list = st.snoozedOpen && asks?.length ? `<ul class="dc-snzl" aria-label="Snoozed">${asks.map(a => {
     const title = a.task?.title || a.line, back = `Unsnooze${a.snoozed_until ? ` · snoozed until ${timeSaid(a.snoozed_until)}` : ''}`;
     return `<li><span class="dc-snzl-t" title="${esc(a.line)}">${esc(title)}</span><button type="button" class="dc-icon" data-dc="unsnooze" data-dc-ask="${esc(a.id)}" aria-label="${esc(`Unsnooze: ${title}`)}" title="${esc(back)}">${DEC_UNDO_ICON}</button></li>`;
   }).join('')}</ul>` : '';
-  const said = !n ? '' : asks?.length
-    ? `<button type="button" class="linkish dc-sub dc-snzd" data-dc="snoozed" aria-expanded="${st.snoozedOpen}">${n} snoozed</button>`
-    : `<p class="dc-sub">${n} snoozed</p>`;
+  const said = !n ? ''
+    : `<button type="button" class="linkish dc-sub dc-snzd" data-dc="snoozed" aria-expanded="${st.snoozedOpen}">${n} snoozed</button>`;
   const ping = st.asking ? '<p class="dc-sub dc-asking" role="status">Asking your bots</p>'
     : '<button type="button" class="primary" data-dc="ping">Want more? Ping your bots</button>';
   return `<div class="dc-done">${flowMarkHTML(48, st.asking)}<h2>All done</h2>`
@@ -842,16 +838,14 @@ function decidePaintSide(st: DecState) {
   const earlier = kind === 'ok' && !parts ? decideEarlier(it) : null, dot = '<span class="dc-dot" aria-hidden="true">·</span>';
   const earlierMeta = earlier ? `<div class="dc-meta">${[by ? `<span class="dc-meta-who">${esc(actorLabel(by))}</span>` : '',
     earlier.stage ? `<span>${esc(earlier.stage)}</span>` : '', `<span>v${earlier.version}</span>`, tag].filter(Boolean).join(dot)}</div>` : '';
-  // A person's own task: its title. A question: itself, once, in full (#3786).
-  const question = kind === 'question', short = parts || question ? null : decideHeadOf(it, kind);
-  const go = short || question ? decideGoOf(decideAboutText(decideAboutOf(it)?.task)) : null;
+  // A question: itself, once, in full (#3786).
+  const question = kind === 'question';
+  const go = question ? decideGoOf(decideAboutText(decideAboutOf(it)?.task)) : null;
   const goBtn = go ? `<button type="button" class="ghost dc-go" data-dc="go" data-dc-href="${esc(go[1])}">${esc(go[0])}</button>` : '';
-  const links = goBtn || open ? `<div class="dc-links">${goBtn}${open}</div>` : '';
   // The task's title heads a page's OK on a wide screen; a phone drops it, the page has its own heading (decide.css).
   const head = chat ? '' : parts ? `<h3 class="dc-q dc-q-page">${esc(title)}</h3>${parts.sub}${parts.body}`
     : question ? decideQuestionHeadHTML(it, tag) + (goBtn ? `<div class="dc-links">${goBtn}</div>` : '')
     : earlier ? `<h3 class="dc-q">${esc(it.line)}</h3>${earlierMeta}`
-    : short ? q('dc-q dc-q-short', short.head) + links
     : q('dc-q', title || typed?.question || it.line) + open
       + (said && said !== title ? `<p class="dc-said">${esc(said)}</p>` : '');
   const err = st.error ? `<p class="err" role="alert">${esc(st.error)}</p>` : '';
@@ -885,9 +879,6 @@ function decidePaintSide(st: DecState) {
         decidePhone() ? busy : ` data-dc-needs="#dc-notes" disabled`)}${decideBtn('approve', checked ? 'OK' : 'Approve', true, !ready || !may.includes('ok') || st.busy ? ' disabled' : '')}</div>`;
   } else if (question) {
     body = decideQuestionHTML(st, it, typed);
-  } else if (kind === 'yours') {
-    // The row an ask has: Done, then the snooze icon and ⋯ (Give to…, Skip) at the right.
-    body = `${decideReplyHTML(st, it)}<div class="dc-acts dc-acts-row">${decideBtn('done', 'Done', true, busy)}${decideSnoozeHTML(st)}${decideAskMoreHTML(st, it)}</div>${decideMoreHTML(st, it)}`;
   } else if (kind === 'stuck') {
     // Stuck because someone can't see the private task: one button lets exactly them see it and moves it on, and says
     // what they get before the press (task #392). Else Try again.
@@ -905,7 +896,6 @@ function decidePaintSide(st: DecState) {
   const held = same ? host.querySelector<HTMLInputElement>('#dc-other')?.value : undefined;
   const heldSaid = same ? host.querySelector<HTMLTextAreaElement>('#dc-other-note')?.value : undefined;
   const heldNote = same ? host.querySelector<HTMLTextAreaElement>('#dc-notes')?.value : undefined;
-  const heldReply = same ? host.querySelector<HTMLTextAreaElement>('#dc-reply')?.value : undefined;
   // So does the caret: a redraw while someone types (a refusal, the end of a send) leaves them typing in the same box.
   const typing = document.activeElement;
   const caret = same && typing instanceof HTMLTextAreaElement && host.contains(typing) && typing.id
@@ -913,17 +903,17 @@ function decidePaintSide(st: DecState) {
   const card = `<div data-key="${esc(it.id)}">${head}${err}${body}</div>`;
   if (chat) decideChatMount(st, it, host, card); else { decideChatStop(); host.innerHTML = card; }
   $('.decide')?.classList.toggle('dc-chatmode', chat);
-  // An ask has Snooze (for you alone) at the end of the answer row, on every width; anything else has Skip there (your
-  // own task: in its ⋯). An item with no row of its own (a typed choice) gets one.
+  // An ask has Snooze (for you alone) at the end of the answer row, on every width; anything else has Skip there. An
+  // item with no row of its own (a typed choice) gets one.
   const ask = it.kind === 'ask';
-  if (ask || (kind !== 'yours' && decideLive(st).length > 1)) {
+  if (ask || decideLive(st).length > 1) {
     const card = host.querySelector<HTMLElement>(':scope > [data-key]')!, row = card.querySelector<HTMLElement>(':scope > .dc-acts');
     const end = ask ? decideSnoozeHTML(st) : `<button type="button" class="linkish dc-skip" data-dc="skip"${busy}>Skip</button>`;
     if (row) row.insertAdjacentHTML('beforeend', end); else card.insertAdjacentHTML('beforeend', `<div class="dc-acts">${end}</div>`);
   }
   // ⋯ is last on every item's row, after Snooze: a question's other answers (I don't know, Give it back, Ask back),
   // and Close task.
-  const more = kind !== 'yours' ? decideAskMoreHTML(st, it) : '';
+  const more = decideAskMoreHTML(st, it);
   if (more) host.querySelector<HTMLElement>('[data-key] > .dc-acts')?.insertAdjacentHTML('beforeend', more);
   const box = host.querySelector<HTMLInputElement>('#dc-other');
   if (box && held) box.value = held;
@@ -931,8 +921,6 @@ function decidePaintSide(st: DecState) {
   if (saidBox && heldSaid) saidBox.value = heldSaid;
   const note = host.querySelector<HTMLTextAreaElement>('#dc-notes');
   if (note && heldNote) note.value = heldNote;
-  const reply = host.querySelector<HTMLTextAreaElement>('#dc-reply');
-  if (reply && heldReply) reply.value = heldReply;
   host.querySelectorAll<HTMLTextAreaElement>('textarea[data-dc-grow]').forEach(decideGrow);
   // "more" only under a part its 2 lines cut.
   host.querySelectorAll<HTMLElement>('.dc-clamp:not(.open)').forEach(p => {
@@ -1084,16 +1072,14 @@ function decideQuestionHTML(st: DecState, it: NeedsEntry, typed: TaskReq['typed'
 }
 /** ⋯ last on an item's row. A question's: a bot's "I don't know, explain" and "Give it back" (answers.DONT_KNOW and
     GIVE_BACK, which Tico adds to every bot's question), and Ask back, which sends the box's words to whoever asked as a
-    comment and leaves the question open. On your own task: Give to…, and Skip when there is a next. On every item
-    whose task the person may close (decideMayClose): Close task. '' when it would hold nothing. */
+    comment and leaves the question open. On every item whose task the person may close (decideMayClose): Close task.
+    '' when it would hold nothing. */
 function decideAskMoreHTML(st: DecState, it: NeedsEntry): string {
   const busy = st.busy ? ' disabled' : '', open = st.more === 'ask', bot = decideAsker(it).startsWith('bot:');
   const kind = decideKind(it), question = kind === 'question';
   // In the task's chat, a reply in the chat does what the other answers did: only Give to… and Close task.
   const chat = decideChatOf(it);
   const items: [string, string][] = chat ? []
-    : kind === 'yours'
-    ? [['give', 'Give to…'], ...(decideLive(st).length > 1 ? [['skip', 'Skip']] as [string, string][] : [])]
     : [...(question && bot ? [['dont-know', DEC_DONT_KNOW], ['give-back', DEC_GIVE_BACK]] as [string, string][] : []),
       ...(question && decideReplyTo(it) ? [['askback', 'Ask back']] as [string, string][] : [])];
   // Close task, on every item with a task the person may close (a stuck one has its own Close).
@@ -1134,7 +1120,7 @@ function decideGrow(box: HTMLTextAreaElement) {
   box.style.height = `${Math.min(Math.max(start, need), most)}px`;
 }
 /** A paste counts for the note only while a note box has the focus. */
-const eventInNote = (root: HTMLElement) => !!root.querySelector('[data-dc-attach]') && !!document.activeElement?.matches('#dc-notes, #dc-other, #dc-reply');
+const eventInNote = (root: HTMLElement) => !!root.querySelector('[data-dc-attach]') && !!document.activeElement?.matches('#dc-notes, #dc-other');
 /** The files row under the note: each file with its state and ✕ (Retry when it failed), then 📎 Attach. */
 function decideFilesHTML(st: DecState, list = false): string {
   const rows = st.files.map(f => `<li class="dc-file" data-dc-file="${f.key}" data-state="${f.state}"><span class="dc-file-name">${esc(f.file.name)}</span>`
@@ -1222,14 +1208,12 @@ function decidePaintSideKeepGive(st: DecState, it: NeedsEntry) {
   const now = decideGiveBtn(), e = to ? giveToEntries(to).find(x => giveToIs(x, to)) : undefined;
   if (now && e) giveToFieldSet(now, e);
 }
-/** Snooze and its menu, at the end of an ask's answer row (an icon, no word) or in your own task's row (`word`): 1 hour,
-    1 day, 1 week, 1 month, then Other, a time of your own in the same menu. One menu for both. It opens upward from a
-    row at the bottom and downward from one near the top (decideMenuPlace), at the row's end, off the other buttons. */
-function decideSnoozeHTML(st: DecState, word = ''): string {
+/** Snooze and its menu, at the end of an ask's answer row (an icon, no word): 1 hour, 1 day, 1 week, 1 month, then
+    Other, a time of your own in the same menu. It opens upward from a row at the bottom and downward from one near the
+    top (decideMenuPlace), at the row's end, off the other buttons. */
+function decideSnoozeHTML(st: DecState): string {
   const busy = st.busy ? ' disabled' : '', open = st.more === 'snooze';
-  const btn = word
-    ? `<button type="button" class="ghost" data-dc="snooze" aria-haspopup="menu" aria-expanded="${open}"${busy}>${esc(word)}</button>`
-    : `<button type="button" class="dc-icon dc-snz-b" data-dc="snooze" aria-label="Snooze" title="Snooze" aria-haspopup="menu" aria-expanded="${open}"${busy}>${DEC_SNOOZE_ICON}</button>`;
+  const btn = `<button type="button" class="dc-icon dc-snz-b" data-dc="snooze" aria-label="Snooze" title="Snooze" aria-haspopup="menu" aria-expanded="${open}"${busy}>${DEC_SNOOZE_ICON}</button>`;
   if (!open) return `<span class="dc-snzw">${btn}</span>`;
   const item = (k: string, label: string) => `<button type="button" role="menuitem" class="dc-mi" data-dc="snooze-${k}"${busy}>${esc(label)}</button>`;
   // The time box starts an hour on, to the minute, in the person's own clock (datetime-local has no zone).
@@ -1267,19 +1251,14 @@ function decideSnoozeUntil(what: string): string | null {
   const typed = decideSnzBox()?.value || '', at = typed ? new Date(typed) : null;
   return at && !Number.isNaN(at.getTime()) && at.getTime() > now.getTime() ? at.toISOString() : null;
 }
-/** Snoozes the item on screen until `until`: an ask for you alone (POST /v2/needs-you/snooze: it stays in everyone
-    else's list, and its bot is not told), your own task as a whole (POST /v2/tasks/{id}/snooze). Undo brings it back. */
+/** Snoozes the ask on screen until `until`, for you alone (POST /v2/needs-you/snooze: it stays in everyone else's
+    list, and its bot is not told). Undo brings it back. Only an ask has Snooze. */
 async function decideSnooze(st: DecState, it: NeedsEntry, until: string) {
   st.more = ''; st.snzOther = false;
-  if (it.kind === 'ask') {
-    // Counted on the end screen from the snoozed asks as the server has them (decideSnoozedRead), read again after this.
-    await decideDo(st, it, 'Snoozed', async () => { const r = await askSnooze(it.id, until); st.snoozedAsks = null; needsWakeAt(until); return r; },
-      () => async () => { await askUnsnooze(it.id); st.snoozedAsks = null; });
-    return;
-  }
-  const taskId = decideTaskId(it), ver = it.task?.version ?? null;
-  await decideDo(st, it, 'Snoozed', async () => { const r = await taskSnooze(taskId, until, ver); st.snoozed++; return r; },
-    () => async () => { await taskUnsnooze(taskId); st.snoozed = Math.max(0, st.snoozed - 1); });
+  if (it.kind !== 'ask') return;
+  // Counted on the end screen from the snoozed asks as the server has them (decideSnoozedRead), read again after this.
+  await decideDo(st, it, 'Snoozed', async () => { const r = await askSnooze(it.id, until); st.snoozedAsks = null; needsWakeAt(until); return r; },
+    () => async () => { await askUnsnooze(it.id); st.snoozedAsks = null; });
 }
 /** ↩ on a snoozed ask in the end screen's list: it is back in your Needs you now, and on screen. */
 async function decideUnsnooze(st: DecState, b: HTMLElement, id: string) {
@@ -1972,7 +1951,6 @@ async function decideClick(st: DecState, ev: MouseEvent) {
       await decideDo(st, it, 'Answered', () => taskAnswer(taskId, rid, decideWithFiles(text, files), ver, note), decideUndoAnswer);
       return;
     }
-    case 'reply': await decideReplySend(st, it, '#dc-reply'); return;
     case 'ask-more':
       if (decideAskMoreClose(st)) return;
       st.more = 'ask'; decidePaintSide(st);
@@ -1994,7 +1972,6 @@ async function decideClick(st: DecState, ev: MouseEvent) {
     case 'dont-know': await decideDo(st, it, 'Answered', () => taskAnswer(taskId, rid, DEC_DONT_KNOW, ver), decideUndoAnswer); return;
     case 'give-back': await decideDo(st, it, 'Given back', () => taskAnswer(taskId, rid, DEC_GIVE_BACK, ver), decideUndoAnswer); return;
     case 'task': decideStop(); void taskModalOpen(taskId, undefined, {direct: true}); return;
-    case 'done': await decideDo(st, it, 'Done', () => taskDone(taskId, ver), decideUndoReopen(taskId)); return;
     case 'again': await decideDo(st, it, 'Tried again', () => taskTryAgain(taskId)); return;
     case 'let-see': { const whom = it.task?.turn?.share || []; if (whom.length) await decideLetSee(st, it, whom); return; }
     case 'browse': ($('.decide .dc-thing [data-bv-launch], .decide .dc-thing [data-dc-browser-open]') as HTMLElement | null)?.click(); return;

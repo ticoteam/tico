@@ -169,9 +169,11 @@ on the proxy the runner sends the server's calls through the proxy with the run'
 key in its place; a bot at Read gets only the server's reads ([credential-vault.md](credential-vault.md#proxied-tools)).
 A key on computers goes in the header as itself. Covered by the stub suite; no account-free server takes a token.
 
-**MCP OAuth** (`oauth_mcp`, `oauth_dcr`, `oauth_client_allowlist`). Sign-in with dynamic client registration and
-PKCE. Not supported yet for bots' MCP servers. Candidates for when it is: the MCP conformance suite's auth scenarios,
-example-server.modelcontextprotocol.io.
+**MCP OAuth** (`oauth_mcp`, `oauth_dcr`, `oauth_client_allowlist`). Sign-in with PKCE, the client registered by
+dynamic client registration when the server offers it, else the client id and secret a person gives. Hand it over:
+Tools > Add > MCP server, its address, then **Sign in**; the tokens stay on the server and every call goes through the
+proxy (backend/mcp_connect.py). A server that admits only listed clients (Figma, Vercel, Canva) may refuse the sign-in.
+Candidates: the MCP conformance suite's auth scenarios, example-server.modelcontextprotocol.io.
 
 ## Not supported yet
 

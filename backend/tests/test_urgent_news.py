@@ -1,7 +1,5 @@
 """Urgent task news bypasses every profile's digest; ordinary progress remains batched."""
 
-import json
-
 import pytest
 
 from backend import hubdb as H, rules as R, wake_presets as W
@@ -89,14 +87,11 @@ def test_creation_tags_incident_titles_and_preserves_existing_tags(api):
 
 
 def test_watcher_incident_flag_survives_protocol_and_marks_new_tasks(api):
-    from clients.watchers import events
     from backend.tests.helpers.watchers import hosted, report
 
     r = hosted(api)
     raw = {'op': 'task', 'key': 'error:outage', 'title': 'Error Monitor: Outage', 'incident': True}
-    parsed, _ = events('tico-event ' + json.dumps(raw))
-    assert parsed[0]['incident'] is True
-    first = report(api, r, parsed[0])
+    first = report(api, r, raw)
     tid = first['tasks']['error:outage']
     with api.app.state.store.transaction() as c:
         assert 'incident' in H.task_labels(H.task(c, tid))

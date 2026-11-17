@@ -2,25 +2,22 @@
 
 > **Beta**: message bots (mail and calendar) work today and may still change. See [Beta features](support.md#beta-features).
 
-Status: stages 1-2 built. `mail doctor` checks the Google service account against
-Gmail and Calendar, and calendar impersonation is verified read-only for each human in
-`registry/people.yaml`. Reading, filing, the rules engine, lint, `draft`, `send`, `reply`, `sent-log`, `slots`,
-`upcoming`, and `schedule` are in; every send goes through Tico's send queue.
+Status: stages 1-2 built. `tico email mailboxes` shows each mailbox's connection with its last check or error.
+Reading, filing, each inbox's Message automation, lint, `draft`, `send`, `reply`, `sends`, `tico calendar free`, `list`
+and `schedule` are in; every send goes through Tico's send queue.
 
 ## Why one service
 
 Three of the next five bots (two message bots and Influencer) need Gmail as
 ana@acme.example or legal@acme.example. Business Development, Email Marketing, Recruiting and Support will need it after them. Email is the highest-blast-radius thing a bot can do: one
 wrong send reaches a customer, a creator, or a lawyer under Ana's name. So no bot talks to
-Gmail on its own. There is one tool, the rules live in code (not in prompts), and every action is
+Gmail on its own. There is one tool, the rules live on the server (not in prompts), and every action is
 logged in one place.
 
 ## Shape
 
-- **A CLI, `mail`, in Tico at `connectors/mail/`.** Python. Uses the official Google client
-  libraries in a small venv that `scripts/mail.sh` creates on first use. No daemon: a daemon adds
-  a process and gives no real isolation, because every bot runs as the same Unix user anyway. The
-  rules are enforced inside the CLI, and state lives in one SQLite file, `runtime/mail/mail.db`.
+- **Thin `tico email` and `tico calendar` commands over the server's routes.** The commands hold no Google
+  credential; the server reads, files, drafts and queues sends, and enforces the rules.
 - **Bots never call the Gmail or Calendar API directly.** AGENTS.md for every bot with mail
   access says so; the audit log is how we notice if one does.
 - **Auth: one Google service account with domain-wide delegation.** Key at
@@ -28,50 +25,53 @@ logged in one place.
   the CLI reads it by path. Google-side scopes are granted once for the whole domain
   (`gmail.modify`, `calendar`); Google has no scope that allows drafts but forbids sending, so the
   send gate is Tico's send queue, not Google's.
-- **Who may act as which mailbox comes from `bot.yaml`.** The dispatcher already sets the
-  bot's env; it will add `HUB_BOT=<slug>`. The CLI reads that (or `--as <slug>`), loads
-  the bot's `tools:` block, and refuses anything not declared there: mailbox identity, verbs
-  (`read`, `draft`, `send`). Whether a send goes is Tico's sending policy, which a person sets in Tico.
+- **Who may act as which mailbox is Tico's answer.** Each command runs as its caller (a bot's turn token, a person's
+  own Tico login) at their own mailbox level, and names the mailbox; a bot's `tools:` block only narrows that
+  (mailbox identity, verbs `read`, `draft`, `send`). Whether a send goes is Tico's sending policy, which a person sets
+  in Tico.
 
 ## Commands (the interface every bot learns)
 
 ```text
-Reading
-  mail inbox   --new [--since 24h] [--label X]      unread-by-this-employee messages
-  mail inbox   --untriaged                          in:inbox minus every hub/* label; idempotent
-  mail thread  <thread-id>                          whole thread, plain text, attachments listed
-  mail search  "<gmail query>"                      bounded to 50 results
-      all three take --format brief|md|json         brief: four lines a message, no bodies
-  mail attachments <message-id> --format json       attachment references from all MIME parts
-  mail attachment <message-id> <ref> --out <path>    download one attachment to a new private file
-State (visible in Gmail too)
-  mail label   add|remove <msg> hub/needs-owner     labels: hub/triaged/<slug>, hub/drafted,
-  mail archive <msg>   mail mark-read <msg>            hub/needs-owner, hub/handled/<slug>
+Mailboxes
+  tico email mailboxes                                 yours, your level, what you may do, the connection
+Reading (lists: headers and snippets; bodies only in thread and message, audited)
+  tico email inbox   <address> [--q '<gmail query>'] [--limit N]    newest first
+  tico email search  <address> '<gmail query>'
+  tico email thread  <address> <thread-id>             whole thread, plain text, attachments listed
+  tico email message <address> <message-id>
+  tico email attachments <address> <message-id>        attachment references from all MIME parts
+  tico email attachment  <address> <message-id> <ref> --out <path>   one attachment to a new private file
+State (visible in Gmail too; each prints an undo line)
+  tico email archive|unarchive|mark-read|mark-unread <address> <message-id>...  (or --query)
+  tico email label|unlabel <address> <label> <message-id>...   hub/<name> labels; STARRED stars
 Writing (all go through the guardrails below)
-  mail draft   --to --subject --body-file [--reply-to <thread>] [--attach <path>] --issue N
-  mail draft discard <draft-id>                      an unsent draft this bot made, nothing else
-  mail send    --draft <id> --issue N [--approval <msg>]   queue it with Tico, which decides
-  mail reply   --thread <id> --body-file --issue N [--approval <msg>]  draft, then queue it
+  tico email draft   <address> --to <addr> [--cc <addr>] --subject "..." --body-file <path>
+  tico email draft   <address> --reply-to <thread-id> --body-file <path>
+  tico email discard <address> <draft-id>
+  tico email send    <address> --draft <draft-id>      queue it with Tico, which decides
+  tico email reply   <address> --thread <thread-id> --body-file <path>   draft, then queue it
+  tico email unsubscribe <address> <message-id>        one RFC 8058 one-click request
 Calendar
-  mail slots   --for ana@acme.example --n 2 --minutes 20      real free slots, buffer applied
-  mail upcoming --for ana@acme.example --hours 24             recordable timed meetings, metadata only
-  mail schedule --thread <id> --slot <iso> --body-file      event + confirmation in one step
+  tico calendar free --who human:ana --minutes 20      free times within working hours
+  tico calendar list --who human:ana                   events
+  tico calendar schedule --title ... --start ... --end ... --attendee ...   event + invitation in one step
 Ops
-  mail doctor [--e2e]     mail audit --since 24h     mail sent-log --as influencer
-  mail lint --body-file   mail policy show --as <slug>      every write command takes --dry-run
+  tico email lint <address> --body-file <path>         tico email policy --bot <slug>
+  tico email sends --mailbox <address> [--pending]     tico email cancel <send-id>
 ```
 
-Ana uses the same CLI interactively with `--as ana`, which has every verb.
+Ana uses the same commands with her own Tico login, at her own level.
 
 ### Read-only mailbox access
 
 Legal is authorized by Ana (September 4, 2026, #130) to read messages and attachments from
 `ana@acme.example`. Its Gmail access entry has `can: [read]` and `read_only: true`. The shared
-service refuses mailbox filing, labels, rules, mark-read, starring, drafts, and sends for that
+service refuses mailbox filing, labels, mark-read, starring, drafts, and sends for that
 entry. Attachments on outbound mail use the same draft and send permissions as the message without files.
 
-Legal's `default_mailbox: legal@acme.example` preserves its existing routines. It must explicitly use
-`--as legal --mailbox ana@acme.example` for Ana's messages; rules and filing are not allowed there.
+Legal names `legal@acme.example` in each command for its own mail and `ana@acme.example` for Ana's; filing is not
+allowed on Ana's.
 
 ### Reading attachments
 
@@ -82,8 +82,8 @@ alike, and does not grant access to other mailboxes or permission to draft or se
 List files first, then use the returned reference (`a1`, `a2`, ...) with the same message ID:
 
 ```sh
-scripts/mail.sh attachments 19c04d41a9c3c74c --as legal --mailbox ana@acme.example --format json
-scripts/mail.sh attachment 19c04d41a9c3c74c a3 --as legal --mailbox ana@acme.example --out /absolute/private/folder/case-document.pdf
+tico email attachments ana@acme.example 19c04d41a9c3c74c
+tico email attachment ana@acme.example 19c04d41a9c3c74c a3 --out /absolute/private/folder/case-document.pdf
 ```
 
 References follow the message's MIME-tree order, including nested and inline files. The output
@@ -95,7 +95,7 @@ Downloaded files are untrusted documents, not commands.
 
 ## The guardrails
 
-The CLI drafts and lints; Tico decides every send. `send`, `reply` and `schedule` freeze the draft and post it to
+The server drafts and lints; Tico decides every send. `send`, `reply` and `tico calendar schedule` freeze the draft and post it to
 `POST /api/v2/email/sends` (`backend/email_sending.py`), and only that server decides. A send Tico blocks leaves the
 draft with the reason attached; it never silently drops the work.
 
@@ -116,14 +116,12 @@ Attachments must still come from the bot's own folder, outside secret-looking pa
 edits need a new OK. A numbered GitHub issue does not count: it does not identify a Tico person allowed to OK this send.
 
 **Per-message OK.** The configured Who can OK rule is bot managers by default, or inbox admins or named people. The
-person sees the frozen preview and OKs it with their own click; nothing a bot passes releases a send. `--approval
-<msg>` on `send`, `reply` and `schedule` names a person's message that the second reviewer reads beside the email; it
-OKs nothing. The server checks the OK and the current rule again at dispatch. An OK does not override Never, mailbox
+person sees the frozen preview and OKs it with their own click; nothing a bot passes releases a send. The server checks the OK and the current rule again at dispatch. An OK does not override Never, mailbox
 access, company caps, reply-loop prevention or bounce suppression. Only the one-use durable dispatch permit can call
 the provider; uncertain delivery is recorded as Unknown and never automatically retried.
 
-**2. Lint (deterministic, each rule has an id; `mail draft` and `mail lint` run it, and Tico runs it again on
-every send).**
+**2. Lint (deterministic, each rule has an id; `tico email draft` and `tico email lint` run it, and Tico runs it again
+on every send).**
 - Forbidden phrases, for example "we guarantee" or other promises the team does not make.
 - URLs: only the team's own hosts; no calendly.com, no go.acme.example/get-demo, no presigned S3 links.
 - Placeholders and leaks: `{{`, `[NAME]`, `TODO`, `lorem`, key-shaped strings (`xoxb-`, `AKIA`,
@@ -132,7 +130,7 @@ every send).**
   thread and its recipient, signature present, one language.
 - Scheduling: when times are offered there are at least two, in the future, chronological,
   weekdays in business hours, time zone spelled out, and each one is actually free on every
-  calendar on ana@acme.example with a 30-minute buffer (checked live). `mail schedule` creates the
+  calendar on ana@acme.example with a 30-minute buffer (checked live). `tico calendar schedule` creates the
   event silently, then freezes its invitation with the confirmation in the shared queue. Neither notification leaves
   before the OK, undo and dispatch
 checks.
@@ -144,99 +142,66 @@ connector runs no reviewer of its own.
 
 **4. Execution.**
 The durable queue records content-and-recipient duplicate protection and the operation identity before dispatch. Retries of one operation stay the same; a new intent may follow a definite non-send. Gmail receives frozen raw MIME in the send request, never a mutable draft ID. A provider attempt is never
-automatically repeated if delivery is uncertain. `mail schedule` deletes its newly created event if queueing the
+automatically repeated if delivery is uncertain. `tico calendar schedule` deletes its newly created event if queueing the
 confirmation fails; a queued confirmation leaves a silent event in place while awaiting an OK or after cancellation.
 Frozen body and attachment
 previews load through the viewer's authorization before the OK.
-The sent-log row comes from the provider response.
+The send audit row comes from the provider response.
 
 **5. Audit.**
-Every read of a thread body, label change, draft and queued send goes to
-`runtime/mail/audit.jsonl` and the database: bot, task, mailbox, recipient, rule results,
-message id. `mail audit` prints it; Inboxes shows pending sends, cancellation and the server's send audit.
+Every read of a thread body, label change, draft and queued send is recorded on the server (`mail.read`,
+`mail.organize`, the send audit): who, mailbox, recipient, message id. `tico email sends` lists the send audit;
+Inboxes shows pending sends, cancellation and the server's send audit.
 
 ## Mailbox rules (deterministic, run before any model sees the mail)
 
 The goal for the message bots is inbox zero with almost no input from Ana. Most of
-that is not judgement, it is rules, and rules cost no tokens. `mail rules run --as <slug>` applies
-`registry/mail-rules.yaml` to every new message before the bot reads anything:
+that is not judgement, it is rules, and rules cost no tokens. Each person's inbox has a **Message automation** on the
+server ("<Name>'s inbox", trigger `message` on the mailbox) that runs on every new message as it arrives, before a bot
+reads anything. Its filter steps are the rules; for example, from the Founder template
+(`backend/automation_templates/founder.json`):
 
-```yaml
-rules:
-  - id: legal-risk-words                          # protections first: never_archive blocks every later archive
-    when: { subject_or_body_matches: ["\\bsubpoena\\b", "\\bcease and desist\\b", "\\blawsuit\\b"] }
-    do:   { label: hub/needs-owner, never_archive: true }
-  - id: clio-bills                                # an exact sender Ana has settled: file, mark read, stop
-    when: { to_matches: ["ana@acme.example"], from_matches: ["notifications@billing.example"], subject_matches: ["^A bill from "] }
-    do:   { label: hub/notification, archive: true, mark_read: true, stop: true }
-  - id: receipts
-    when: { to_matches: ["ana@acme.example"], subject_matches: ["\\breceipt\\b", "\\bpayment successful\\b"] }
-    do:   { label: hub/notification, archive: true, mark_read: true, stop: true }
-  - id: payment-risk-words                        # money owed, not money already paid
-    when: { subject_or_body_matches: ["\\bpast due\\b", "\\boverdue\\b", "\\bfinal notice\\b"] }
-    do:   { label: hub/needs-owner, never_archive: true }
-  - id: unsubscribe-is-marketing
-    when: { has_unsubscribe_link: true }          # List-Unsubscribe header or an unsubscribe URL in the body
-    do:   { label: hub/marketing, archive: true }
-  - id: known-notification-senders
-    when: { from_matches: ["noreply@", "no-reply@", "notifications@github.com", "*@calendly.com"] }
-    do:   { label: hub/notification, archive: true }
-  - id: internal-thread-ana-already-replied
-    when: { from_domain: acme.example, last_reply_by: ana@acme.example }
-    do:   { label: hub/handled/owner }
+```json
+{"when": [{"field": "message.subject", "op": "matches", "value": "subpoena|lawsuit|cease and desist"},
+          {"field": "message.snippet", "op": "matches", "value": "subpoena|lawsuit|cease and desist"}],
+ "match": "any", "then": [{"do": "label", "args": {"name": "STARRED"}}], "to": "legal", "next": "end", "stop": true}
+{"when": [{"field": "message.subject", "op": "matches", "value": "receipt|your order|payment received"}],
+ "to": "archive", "next": "end", "stop": true}
+{"when": [{"field": "message.category", "op": "is", "value": "promotions"}],
+ "to": "archive", "next": "end", "stop": true}
 ```
 
-Conditions are a fixed vocabulary implemented in code (headers, sender patterns, domains, thread
-state, regexes, attachment types, age). Actions are label, archive, mark-read, star,
-`never_archive`, and `stop` (do not show this to the model at all). Rules run in order; the
-first `stop` wins. Every rule hit is audited with the rule id so a wrong archive is one query
-away and one label away from undone. The bot only sees what the rules did not settle,
-which is the token saving Ana asked for. Ana and the message bots add rules over time; a bot
-proposes a rule on its task, Ana merges it into the Tico file.
-
-A proposed rule comes with a backtest, not just a fixture. `mail rules backtest --as <slug>
-[--since 14d] [--rules candidate.yaml] [--limit 2000] [--format md|json]` replays the registry
-(and the candidate file, if given) over every message in the window, all mail and not only the
-inbox, and changes nothing: no labels, no unsubscribe, no seen row, no watermark, one audit row
-of counts. It reports hits per rule with sample subjects; the candidate's diff against the
-registry bucketed as newly archived, no longer archived, newly protected, no longer protected;
-conflicts, meaning anything the rules would archive that carries `hub/needs-owner`,
-`hub/drafted` or `hub/handled/owner`, sits on a thread with a hub draft or a scheduling action,
-or comes from a human at acme.example; and the number that would still reach the model. The
-conflicts list is the part to read before merging.
+Conditions read the message's fields (subject, snippet, sender and its domain, Gmail category and so on). Its decide
+step sorts what the rules leave with a few questions a small model answers, and its actions archive, label, leave for
+you (`hub/needs-owner`), draft, send, forward or unsubscribe. Rules run in order; the first `stop` wins. Every run is
+kept (`tico automation recent-runs --trigger message`), so a wrong archive is one look away, and each archive has an
+undo. The bot only sees what the rules did not settle, which is the token saving Ana asked for. Ana and the message
+bots add rules over time: a bot proposes one with `tico automation update <id> --file <json> --summary "..."`, a
+pending version Ana accepts.
 
 Day one for ana@acme.example: anything with an unsubscribe link is marketing and is archived
 immediately. Same for legal@acme.example.
 
 ## Reading side
 
-- Watermarks per mailbox and bot, so a run only sees what it has not triaged.
-- Normalized JSON: from, to, date in America/Los_Angeles, thread id, plain-text body extracted
-  from HTML, attachments listed with names and sizes but not downloaded unless asked, bodies
-  truncated at 32 KB with a marker.
+- Plain-text bodies extracted from HTML, attachments listed with names and sizes but not downloaded unless asked.
 - Tico labels make the bot's state visible in Gmail, so Ana can see at a glance what a bot
   touched and can override by relabeling.
-- A bot lists with `--format brief` and verifies with `inbox --untriaged`. Brief is four lines
-  a message (id, date, sender; subject; thread, labels, unsubscribe, attachment count; the
-  snippet) and no bodies; the bot opens the threads that need reading with `mail thread`. The
-  full `md` read of a busy inbox once cost 948K input tokens in one run and truncated the
-  answer after `--new` had already marked everything seen, so the untriaged half was lost.
-- `inbox --untriaged` is `in:inbox` minus every message carrying any `hub/*` label. It is
-  label-based and idempotent, touches neither `seen` nor the watermark, and cannot be combined
-  with `--new` or `--since`. An empty answer means the pass is complete; a non-empty one lists
-  exactly what is still owed, however the previous run ended.
+- A bot lists with `tico email inbox`, which carries headers and snippets and no bodies, and opens the threads that
+  need reading with `tico email thread`. A full read of a busy inbox's bodies once cost 948K input tokens in one run.
 
 ## Reading and hearing mail
 
 The server reads Gmail itself. `backend/gmail_watch.py`, on the server's `gmail_watch` drain worker, checks each watched
 mailbox about every 90 seconds: it hears each new message once, runs the mailbox's message automations, and keeps only
-where it got to. Nothing of a message is stored; an automation run sees the body while it runs. People read mail live
-through the read API (`GET /api/v2/mail/...`, [Message bots](mail.md)), and every body read is audited as `mail.read`.
+where it got to. Nothing of a message is stored; an automation run sees the body while it runs. People and bots read mail
+live through the read API (`GET /api/v2/mail/...`, `tico email`, [Message bots](mail.md)), and every body read is audited
+as `mail.read`.
 
-No computer syncs mail any more: `mailboxes` is empty in `GET /api/v2/connectors/mail/targets`. A computer still carries
-out queued sends and automation mail actions for the mailboxes it acts for. Older computers may still post a copy to
-`POST /api/v2/connectors/mail/messages`; the server keeps such a copy for `TICO_MAIL_RETENTION_DAYS` (default 180).
-SQL access to `mail_*` is owner-only.
+No computer syncs mail or carries out mail any more: `mailboxes` is empty in `GET /api/v2/connectors/mail/targets`, and
+the server itself sends every queued email and carries out every automation mail action (a computer that still asks for
+them gets none). Older computers may still post a copy to `POST /api/v2/connectors/mail/messages`; the server keeps such
+a copy for `TICO_MAIL_RETENTION_DAYS` (default 180). SQL access to `mail_*` is owner-only.
 
 ## Shared sending policy and queue
 
@@ -250,8 +215,6 @@ use that queue too. Pending work survives restarts, and an uncertain delivery ne
 
 - Unit tests for policy and lint with fixture emails, `python3 -m unittest`, and preflight runs
   them for any bot that declares gmail access.
-- `mail doctor --e2e` uses a sandbox mailbox, `hub-test@acme.example`: draft, label, queue an email to itself,
-  create and delete a throwaway event. Run by preflight before any message bot goes active.
 - Week one: all three bots read and draft only (sending Never). Ana reviews drafts in Gmail and on the tasks. Week
   two, if the drafts are good: Influencer at Ask first, so Ana OKs each send in Tico. A message bot sends on its
   own only once a person who manages it sets On their own (Settings > Bots > <bot> > Email sending, or
@@ -274,7 +237,7 @@ use that queue too. Pending work survives restarts, and an uncertain delivery ne
    delegation > Add new: the client ID with scopes
    `https://www.googleapis.com/auth/gmail.modify` and `https://www.googleapis.com/auth/calendar`.
 3. Make sure `legal@acme.example` is a real user mailbox, not a group or alias (delegation can only
-   act as a user), and create `hub-test@acme.example` for the end-to-end check.
+   act as a user).
 4. Answer the open questions below.
 
 ## Decisions

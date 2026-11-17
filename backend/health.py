@@ -684,37 +684,6 @@ def repository_fix(c, bot, label, github_owner=""):
     return repository, f"Run `{command}` on {label}, or ask BotOps"
 
 
-def _member_bots_beside_shared_keys(c):
-    """Computers whose `_shared.env` holds keys every bot there receives, and that also host bots members
-    created: a member's bot instructions could ask a run for them."""
-    runners = [
-        r
-        for r in c.execute("SELECT id,label,readiness FROM runners_with_state WHERE revoked_at IS NULL ORDER BY label")
-        if readiness_document(r["readiness"]).get("shared_env")
-    ]
-    out, members = [], {}
-    if runners:
-        marks = ",".join("?" * len(runners))
-        for row in c.execute(
-            "SELECT a.runner_id,a.bot FROM assignments a JOIN bot_config bc ON bc.bot=a.bot "
-            f"WHERE a.runner_id IN ({marks}) AND bc.created_by LIKE 'human:%'",
-            [r["id"] for r in runners],
-        ):
-            if _made_by_member(c, row["bot"]):
-                members.setdefault(row["runner_id"], []).append(row["bot"])
-    for runner in runners:
-        found = members.get(runner["id"])
-        if found:
-            out.append((runner["label"], found))
-    return out
-
-
-def _made_by_member(c, bot):
-    from .auth import Auth
-
-    return Auth.member_bot_row(c, bot)
-
-
 def _rejected(computers):
     """Online computers whose wanted harness refused its key or login: (computer, runtime, when, why, credential source)."""
     return [
@@ -2692,8 +2661,8 @@ def _plate_tasks(item):
 
 
 def _plate_check(c, who, auth, full):
-    """Each person's Needs you count from the engine's read (waiting_on.needs: their asks, their own tasks' work and the
-    Paused causes they fix). An administrator reads everyone's plate; anyone else reads only their own. Warn over
+    """Each person's Needs you count from the engine's read (waiting_on.needs: the OKs and questions asked of them, a
+    private task they must let someone see, and the Paused causes they fix). An administrator reads everyone's plate; anyone else reads only their own. Warn over
     NEEDS_PLATE_WARN items, bad over NEEDS_PLATE_BAD. Only the plates over the warning are listed, each with the bots
     that asked for most of its tasks."""
     from . import waiting_on
@@ -2751,7 +2720,8 @@ def _plate_check(c, who, auth, full):
 
 def never_stuck_reading(c):
     """What the never-stuck check finds over every open task: the seven rules' breaks (never_stuck.rules_hold) and
-    where the ladder has the tasks (S15): waiting on nothing, on a retry, with a manager, reached a person, can't run.
+    where the ladder has the tasks (S15): waiting on nothing, on a retry, with a manager, at the ladder's end (it rests
+    there, with its bot), can't run.
     `tasks` keeps which tasks each number counts, and `broken_tasks` the tasks each break is about (never_stuck.Break,
     tied when it was found), so someone who reads only some tasks is shown only those. A private task no person who
     reads it can move is held, not a break: it counts under `no_one`, a number only. It reads every open task, so it
@@ -2857,7 +2827,7 @@ def _never_stuck_check(c, visible_sql=None):
         counts = {key: int(reading.get(key) or 0) for key in NEVER_STUCK_COUNTS}
     summary = (
         f"{counts['waiting_on_nothing']} waiting on nothing, {counts['retry']} on a retry, "
-        f"{counts['manager']} with a manager, {counts['person']} reached a person, {counts['cant_run']} can't run."
+        f"{counts['manager']} with a manager, {counts['person']} at the ladder's end, {counts['cant_run']} can't run."
     )
     if reading.get("at") and str(reading["at"]) < H.shift(H.now(), minutes=-NEVER_STUCK_FRESH_MINUTES):
         summary += f" Read at {str(reading['at'])[11:16]} UTC; tasks closed since are left out."
@@ -3951,21 +3921,6 @@ def view(c, who, settings, auth, github, config, filing=False):
     if full and (browser := browser_commands.health_problem(c)):
         checks.append(
             _check("browser_host", "Browser host", "warn", browser, [_fix("Open Computers", "#/settings", "devices")])
-        )
-    beside = _member_bots_beside_shared_keys(c) if full else []
-    if beside:
-        checks.append(
-            _check(
-                "member_bots",
-                "Members' bots",
-                "warn",
-                "Bots members created run on a computer that holds keys every bot there receives "
-                "(secrets/_shared.env): "
-                + "; ".join(f"{label}: {', '.join(_bot_name(c, b) for b in bots[:3])}" for label, bots in beside[:3])
-                + ". A member's bot instructions could ask a run for them. Move those bots to a computer "
-                "with no shared keys and open only that one to members' bots (Settings > Computers).",
-                [_fix("Open Computers", "#/settings", "devices")],
-            )
         )
     exposed = _mail_key_exposed(c) if full else []
     if exposed:

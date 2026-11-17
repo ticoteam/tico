@@ -65,13 +65,13 @@ def test_a_new_task_is_open_in_the_first_stage_of_general_with_one_visit_and_its
     assert refs["version"] == row["version"]
 
 
-def test_a_task_for_a_person_wakes_nobody_and_is_in_their_needs_you(c):
+def test_a_task_for_a_person_wakes_nobody_and_is_their_turn_in_tasks_not_needs_you(c):
     from backend import waiting_on as W
 
     row = _new(c, by=BUILDER, owner=ANA, title="Pick the launch date")
     assert X.wakes(c, row["id"]) == []
-    mine = [item for item in W.needs(c, ANA) if item["task_id"] == row["id"]]
-    assert [item["kind"] for item in mine] == ["task"]
+    assert [(w.state, w.who) for w in W.waiting_on(c, row["id"])] == [("person", ANA)]
+    assert not [item for item in W.needs(c, ANA) if item["task_id"] == row["id"]]  # nothing is asked of her
 
 
 def test_a_sub_task_is_linked_both_ways_and_its_parent_waits_on_nothing_it_did_not_ask_for(c):

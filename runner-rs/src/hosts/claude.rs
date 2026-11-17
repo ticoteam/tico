@@ -2041,7 +2041,7 @@ impl ClaudeHost {
 /// (`five_hour`, `seven_day`), each with a `utilization` from 0 to 1; that field is undocumented, so a window whose
 /// utilization is missing or out of range reads unknown (null), never 0 or 100, and any other window name is left out.
 /// Without it (an older CLI) only `rateLimitType`'s window goes, with no percentage.
-fn rate_limit_windows(info: &Value) -> Vec<Value> {
+pub(crate) fn rate_limit_windows(info: &Value) -> Vec<Value> {
     let minutes = |name: &str| match name {
         "five_hour" => Some(300),
         "seven_day" => Some(7 * 24 * 60),

@@ -7,6 +7,7 @@ from urllib.parse import quote
 from datetime import datetime
 from pathlib import Path
 
+from clients.cli_spec import Arg, Command, Group
 from clients.commands._registry import tool
 from clients.commands._schemas import TASK_ID, _key, _s
 from clients.commands._requester import _as_person
@@ -537,3 +538,47 @@ def call_bot_remove(api, args):
     return _as_person(api).call(
         "DELETE", f"calls/{args['call_id']}/bots/{quote(str(args['bot']), safe='')}", {}, key=_key(args)
     )
+
+
+# `tico call ...` (clients/cli_spec.py): Tico Meet, a call in a thread. `--speak` is the tool's speak_replies.
+CALL = (
+    Group("call", "Tico Meet: audio and screen share in a thread, with a transcript posted to it"),
+    Command(
+        "call list",
+        "the calls in a thread, newest first",
+        args=(Arg("limit", default=25),),
+        example="tico call list t1 --limit 10",
+    ),
+    Command(
+        "call start",
+        "start a call in a thread you can write to; you become its connector",
+        args=(Arg("title", default=""), Arg("speak_replies", flag="--speak")),
+        example="tico call start t1 --title 'Weekly sync'",
+    ),
+    Command("call show", "a call: its state, people, bots and how it ended", example="tico call show c1"),
+    Command(
+        "call join",
+        "join a call: the URL and a token good for 5 minutes",
+        example="tico call join c1",
+    ),
+    Command("call token", "a fresh token while you are joined", example="tico call token c1"),
+    Command("call leave", "leave a call you joined", example="tico call leave c1"),
+    Command("call end", "end a call you started; its transcript is posted to the thread", example="tico call end c1"),
+    Command(
+        "call retry",
+        "ask again for action items the Gateway could not make",
+        example="tico call retry c1",
+    ),
+    Group("call bot", "bots that listen to a call and reply in its thread"),
+    Command(
+        "call bot add",
+        "let bots listen to a call you joined (up to 10)",
+        args=(Arg("bots", action="store", nargs="+"),),
+        example="tico call bot add c1 ana ben",
+    ),
+    Command(
+        "call bot remove",
+        "take a bot out of a call",
+        example="tico call bot remove c1 ana",
+    ),
+)

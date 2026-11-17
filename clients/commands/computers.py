@@ -368,8 +368,10 @@ def health_metrics(api, args):
 @tool(
     "tico_support_file",
     "Tell the Tico team about something the product cannot do, or a fault you cannot fix. BotOps files it as the "
-    "person who asked, with their rights; with its own rights it is refused. Say what they asked for, what you tried, what the "
-    "product answered, the bot and the version. No secrets, no other people's details.",
+    "person who asked, with their rights; with its own rights it is refused. The person reads it on a Confirm card before "
+    "it is sent, so start with one short plain sentence anyone can follow: what is broken. Then say what they asked "
+    "for, what you tried, what the product answered, the bot and the version. No secrets, no other people's details, "
+    "no internal words such as keeper.",
     {"message": _s("What happened and what is missing, in plain words")},
     required=("message",),
     writes=True,

@@ -260,14 +260,6 @@ def delivery_of(args):
     return {"delivery": args.delivery} if getattr(args, "delivery", None) else {}
 
 
-def _pair(text):
-    """`KEY=VALUE` on a command line, split at the first `=`: a match, a value or an option of `tico contacts`."""
-    key, sep, value = str(text).partition("=")
-    if not sep or not key.strip():
-        raise argparse.ArgumentTypeError(f"{text} is not KEY=VALUE")
-    return key.strip(), value
-
-
 def _compact_at(text):
     """`--compact-at` of `tico bot model`: a size in tokens, or `default` for the model's own."""
     if text == "default":
@@ -437,6 +429,11 @@ class HubParser(argparse.ArgumentParser):
 CALENDAR_SCOPES = ("this", "following", "all")
 
 
+def _group_subparsers(sub, name):
+    """The subcommands of group `name`, already added by a spec, so the hand parser can add one leaf it still builds."""
+    return next(a for a in sub.choices[name]._actions if isinstance(a, argparse._SubParsersAction))
+
+
 def parser():
     p = HubParser(
         prog=PROG,
@@ -448,35 +445,27 @@ def parser():
     from clients.commands import mail as mail_commands, rules as rule_commands, strategy as strategy_commands
     from clients.commands import market as market_commands
     from clients.commands import company_page, finance, listening as listening_commands, threads as thread_commands
-    from clients.commands import webhooks
+    from clients.commands import calls, webhooks
+    from clients.commands import contacts as contacts_commands
     from clients.commands import computer_upkeep, computers, org as org_commands, pipelines as pipeline_commands
     from clients.commands import gateway as gateway_commands, goals as goal_commands
     from clients.commands import admin as admin_commands, content as content_commands, task_work as task_work_commands
+    from clients.commands import assistant as assistant_commands
+    from clients.commands import automations as automations_commands
     from clients.commands import browser as browser_commands, logins
+    from clients.commands import tools_admin
 
     sub.add_parser("whoami", help="who you are, to which company, and through which profile").set_defaults(fn="whoami")
     cli_plumbing.add_parsers(sub)  # tico auth, tico token, tico events tail (clients/cli_plumbing.py)
 
-    alerts = sub.add_parser('alerts', help='your own phone and paid alert preferences').add_subparsers(dest='sub')
-    for action in ('show', 'remove', 'confirm', 'verify', 'test', 'set', 'company'):
-        item = alerts.add_parser(action)
-        item.set_defaults(fn='alerts ' + action)
-        if action == 'confirm':
-            item.add_argument('code')
-        if action == 'verify':
-            item.add_argument('phone')
-            item.add_argument('--sms-consent', action='store_true', required=True)
-            item.add_argument('--call-consent', action='store_true', default=False)
-        if action == 'test':
-            item.add_argument('--accept-charge', action='store_true', required=True, help='company pays $1 if accepted')
-            item.add_argument('--operation-id', required=True, help='stable id for this paid test and retries')
-        if action in ('set', 'company'):
-            item.add_argument('--monthly-cap', type=int)
-        if action == 'set':
-            for flag in ('urgent-needs', 'legal-mail', 'bot-stuck', 'urgent-calls', 'emergency-exception'):
-                item.add_argument('--' + flag, action=argparse.BooleanOptionalAction, default=None)
-            for flag in ('timezone', 'quiet-start', 'quiet-end'):
-                item.add_argument('--' + flag)
+    cli_spec.add(sub, admin_commands.ALERTS)  # tico alerts: clients/commands/admin.py (all but `set`)
+    item = _group_subparsers(sub, "alerts").add_parser("set")  # hand-built: see ALERTS in clients/commands/admin.py
+    item.set_defaults(fn="alerts set")
+    item.add_argument("--monthly-cap", type=int)
+    for flag in ("urgent-needs", "legal-mail", "bot-stuck", "urgent-calls", "emergency-exception"):
+        item.add_argument("--" + flag, action=argparse.BooleanOptionalAction, default=None)
+    for flag in ("timezone", "quiet-start", "quiet-end"):
+        item.add_argument("--" + flag)
 
     cli_spec.add(sub, listening_commands.INBOUND)  # tico inbound: clients/commands/listening.py
     cli_spec.add(sub, mail_commands.LETTER)  # tico letter and tico mail: clients/commands/mail.py
@@ -647,128 +636,17 @@ def parser():
 
     cli_spec.add(sub, task_work_commands.FEEDBACK)  # tico feedback: clients/commands/task_work.py
 
-    files = sub.add_parser(
-        "file", help="what you publish for people: reports, documents, imported objects"
-    ).add_subparsers(dest="sub")
-    s = files.add_parser("archive", help="archive a File with your rights")
-    s.add_argument("id")
-    s.set_defaults(fn="file archive")
-    s = files.add_parser("list", help="the files on your page, newest activity first")
-    s.add_argument("--bot")
-    s.add_argument("--limit", type=int)
-    s.add_argument("--cursor")
-    s.set_defaults(fn="file list")
-    s = files.add_parser("publish", help="upload a file from this checkout (reports/x.md); again adds a version")
-    s.add_argument("path")
-    s.add_argument("--title")
-    s.add_argument("--task", help="the task it is for; defaults to the one you are working on")
-    s.add_argument("--scope", choices=["task", "bot"])
-    s.set_defaults(fn="file publish")
-    s = files.add_parser("link", help="list a Google Doc, Notion page, Figma file or any https link")
-    s.add_argument("url")
-    s.add_argument("--title")
-    s.add_argument("--task")
-    s.add_argument("--scope", choices=["task", "bot"])
-    s.set_defaults(fn="file link")
-    s = files.add_parser("touch", help="you edited a linked document again: move it to the top")
-    s.add_argument("target", help="a file id or its https link")
-    s.set_defaults(fn="file touch")
-    s = files.add_parser("import", help="copy an s3:// object with this computer's credentials into Tico")
-    s.add_argument("uri")
-    s.add_argument("--title")
-    s.add_argument("--task")
-    s.set_defaults(fn="file import")
-    s = files.add_parser("search", help="every file you may read, by title and text")
-    s.add_argument("q")
-    s.add_argument("--kind", choices=["page", "document", "image", "data", "media", "other"])
-    s.add_argument("--limit", type=int)
-    s.set_defaults(fn="file search")
-    s = files.add_parser("read", help="one version of a file you may read, as text, in full (default: the current one)")
-    s.add_argument("id")
-    s.add_argument("--version", type=int)
-    s.set_defaults(fn="file read")
-    s = files.add_parser("delete", help="the owner deletes a file for good: its bytes leave storage")
-    s.add_argument("id")
-    s.set_defaults(fn="file delete")
-    s = files.add_parser(
-        "approved",
-        help="exit 0 when a person approved this exact version on a review question, "
-        "1 when not (its JSON answer says \"approved\": false), 2 on bad input. "
-        "A failed call exits 1 or 2 with an error answer: check the answer, not only "
-        "the code",
-    )
-    s.add_argument(
-        "target", help="a path in this checkout (its bytes now), or FILE[@N] (the current version without @N)"
-    )
-    s.add_argument("--by", help="whose verdicts count: human (default), any, or bot:SLUG")
-    s.set_defaults(fn="file approved")
-    s = files.add_parser("review", help="approve or ask for changes on another bot's file version, on a task you read")
-    s.add_argument(
-        "target", help="FILE[@N] (the current version without @N), or a path in this checkout (its bytes now)"
-    )
-    verdict = s.add_mutually_exclusive_group(required=True)
-    verdict.add_argument("--approve", dest="verdict", action="store_const", const="approve")
-    verdict.add_argument("--changes", dest="verdict", action="store_const", const="changes")
-    s.add_argument("--task", required=True, help="the task the review is for")
-    s.add_argument("--note", help="what to change, or why it is approved")
-    s.set_defaults(fn="file review")
+    cli_spec.add(sub, content_commands.FILE)  # tico file: clients/commands/content.py
     cli_spec.add(sub, content_commands.PAGE)  # tico page: clients/commands/content.py
     cli_spec.add(sub, content_commands.CARD)  # tico card
     cli_spec.add(sub, content_commands.PIN)  # tico pin
-    docs = sub.add_parser(
-        "doc", help="read and search team docs and external sources, write internal docs, ask the Librarian"
-    ).add_subparsers(dest="sub")
-    s = docs.add_parser("archive", help="archive an internal Doc with your rights")
-    s.add_argument("ref")
-    s.set_defaults(fn="doc archive")
-    s = docs.add_parser("list", help="internal docs by path")
-    s.add_argument("--prefix", help="only paths starting with this, e.g. sales/")
-    s.add_argument("--limit", type=int)
-    s.add_argument("--cursor", help="the page after this one: a page's next_cursor")
-    s.set_defaults(fn="doc list")
-    s = docs.add_parser("read", help="one internal or indexed external doc in full")
-    s.add_argument("ref", help="a doc id/path, external:<id>, or manual:<name>")
-    s.add_argument("--revision", help="external commit returned by search")
-    s.set_defaults(fn="doc read")
-    s = docs.add_parser("search", help="search internal, indexed external and linked docs, then the Tico manual")
-    s.add_argument("q")
-    s.add_argument("--limit", type=int)
-    s.add_argument(
-        "--manual",
-        dest="collection",
-        action="store_const",
-        const="manual",
-        help="only the read-only Tico manual (how to do something in Tico)",
+    cli_spec.add(sub, content_commands.DOC)  # tico doc: clients/commands/content.py (all but `fetch`, below)
+    s = _group_subparsers(sub, "doc").add_parser(
+        "fetch", help="read a public link as text; runs on this computer, never on the server"
     )
-    s.add_argument("--team", dest="collection", action="store_const", const="team", help="only team docs")
-    s.add_argument("--market", action="store_true", default=None, help="also the market's notes, entities and evidence")
-    s.add_argument("--source-id", help="only this external source")
-    s.set_defaults(fn="doc search")
-    s = docs.add_parser("write", help="create or replace an internal doc at a path")
-    s.add_argument("path")
-    s.add_argument(
-        "--base-version",
-        dest="base_version",
-        type=int,
-        help="the version you read (tico doc read); refused if someone saved since. Leave out only to create a doc "
-        "or to replace your own latest version",
-    )
-    s.add_argument("--title")
-    s.add_argument("--body-file", dest="body_file", help="the Markdown file; standard input when omitted")
-    s.add_argument("--note", help="one line on what changed")
-    s.add_argument(
-        "--section",
-        help="a heading's text: replace only the text under it, up to the next heading of the same or a higher level",
-    )
-    s.add_argument(
-        "--append", action="store_true", default=None, help="add the text at the end of the doc, or of --section"
-    )
-    s.set_defaults(fn="doc write")
-    s = docs.add_parser("history", help="the versions of a doc")
-    s.add_argument("ref", help="a doc id or a path")
-    s.set_defaults(fn="doc history")
-    s = docs.add_parser("link-list", help="the linked docs: where the company's other docs live")
-    s.set_defaults(fn="doc link-list")
+    s.add_argument("url")
+    s.add_argument("--max-chars", dest="max_chars", type=int, default=30000)
+    s.set_defaults(fn="doc fetch")
     chat = sub.add_parser("chat", help="bot chat goals and commands").add_subparsers(dest="sub")
     s = chat.add_parser("goal", help="read, set, edit, pause, resume or clear a chat goal")
     s.add_argument("conversation_id")
@@ -1422,6 +1300,16 @@ def parser():
     s = tools.add_parser("check", help="check an API tool's keys now")
     s.add_argument("id", help="the API tool id (`tico tool index`)")
     s.set_defaults(fn="tool check")
+    s = tools.add_parser(
+        "activity",
+        help="an API tool's recent calls and key uses, with repeated calls and errors summed up; never a value",
+    )
+    s.add_argument("id", metavar="tool", help="the API tool id (`tico tool index`)")
+    s.add_argument("--since", help="only rows from this window on: 24h, 7d or an ISO time")
+    s.add_argument("--result", choices=("sent", "refused", "failed", "use"), help="only rows with this result")
+    s.add_argument("--limit", type=int, help="rows on the page (default 50, at most 200)")
+    s.add_argument("--cursor", help="the previous page's next")
+    s.set_defaults(fn="tool activity")
     s = tools.add_parser("level", help="set a bot's level on an API tool: read, read_write or none")
     s.add_argument("id", help="the API tool id (`tico tool index`)")
     s.add_argument("bot", help="the bot's slug")
@@ -1486,18 +1374,11 @@ def parser():
     s.add_argument("bot")
     s.add_argument("id", help="the tool id from `tico tool list --bot`")
     s.set_defaults(fn="tool remove")
+    cli_spec.add(sub, tools_admin.TOOL_CLI, parents={("tool",): tools})  # clients/commands/tools_admin.py
 
-    auto = sub.add_parser(
-        "automation", aliases=["automations"], help="automations: a trigger and steps"
-    ).add_subparsers(dest="sub")
-    s = auto.add_parser("list")
-    s.add_argument("--owner", help="person:<id>, bot:<slug> or group:<id>")
-    s.add_argument("--limit", type=int)
-    s.add_argument("--cursor", type=int, help="`next` from the page before")
-    s.set_defaults(fn="automation list")
-    s = auto.add_parser("show")
-    s.add_argument("id")
-    s.set_defaults(fn="automation get")
+    # Automations (clients/commands/automations.py): every leaf but create, update and inbox, which stay here.
+    cli_spec.add(sub, automations_commands.AUTOMATION)
+    auto = _group_subparsers(sub, "automation")
     s = auto.add_parser("create", help="save a new automation from a JSON flow")
     s.add_argument("--file", required=True, help="a JSON object {name, owner, trigger, steps, ...}; - reads stdin")
     s.set_defaults(fn="automation create")
@@ -1510,56 +1391,6 @@ def parser():
     switch.add_argument("--enable", action="store_true")
     switch.add_argument("--disable", action="store_true")
     s.set_defaults(fn="automation update")
-    s = auto.add_parser("delete")
-    s.add_argument("id")
-    s.set_defaults(fn="automation delete")
-    s = auto.add_parser("run", help="run it now and print the run")
-    s.add_argument("id")
-    s.add_argument("--input", help="a JSON object standing in for the trigger's output")
-    s.set_defaults(fn="automation run")
-    s = auto.add_parser("runs")
-    s.add_argument("id")
-    s.add_argument("--limit", type=int)
-    s.add_argument("--before", help="`next` from the page before")
-    s.set_defaults(fn="automation runs")
-    s = auto.add_parser("held", help="end a run-guard hold: release queues its held runs, drop skips them")
-    s.add_argument("id")
-    s.add_argument("action", choices=["release", "drop"])
-    s.set_defaults(fn="automation held")
-    s = auto.add_parser("recent-runs", help="runs across every automation you may see, newest first")
-    s.add_argument("--range", choices=["5m", "1h", "24h", "7d"])
-    s.add_argument("--status", choices=["done", "failed", "waiting", "running", "held"])
-    s.add_argument("--trigger", help="message, task_received, schedule, webhook, listening, event, due or system")
-    s.add_argument("--owner", help="person:<id>, bot:<slug> or group:<id>")
-    s.add_argument("--limit", type=int)
-    s.add_argument("--before", help="`next` from the page before")
-    s.set_defaults(fn="automation recent-runs")
-    s = auto.add_parser("stats", help="runs, failures and cost per automation over a range")
-    s.add_argument("--range", choices=["5m", "1h", "24h", "7d"])
-    s.set_defaults(fn="automation stats")
-    s = auto.add_parser("versions")
-    s.add_argument("id")
-    s.add_argument("--pending", action="store_true", help="proposals only")
-    s.set_defaults(fn="automation versions")
-    s = auto.add_parser("restore")
-    s.add_argument("id")
-    s.add_argument("n", type=int)
-    s.set_defaults(fn="automation restore")
-    s = auto.add_parser("discard", help="drop a pending version (a proposal)")
-    s.add_argument("id")
-    s.add_argument("n", type=int)
-    s.set_defaults(fn="automation discard")
-    s = auto.add_parser("question-sets", help="the question sets a Decide step may name")
-    s.set_defaults(fn="automation question-sets")
-    s = auto.add_parser("guide", help="how BotOps builds automations, with the flow format")
-    s.set_defaults(fn="automation guide")
-    s = auto.add_parser("templates", help="the inbox templates: founder, support, sales, blank")
-    s.set_defaults(fn="automation templates")
-    s = auto.add_parser("template", help="one inbox template filled in for an owner and an inbox (saves nothing)")
-    s.add_argument("id", help="founder, support, sales or blank")
-    s.add_argument("--owner", required=True, help="person:<id>, bot:<slug> or group:<id>")
-    s.add_argument("--inbox", required=True, help="an email address, slack:dm or slack:#<channel>")
-    s.set_defaults(fn="automation template")
     s = auto.add_parser("inbox", help="read or set an inbox's send switch")
     s.add_argument("inbox", help="an email address, slack:dm or slack:#<channel>")
     s.add_argument("--send", choices=["on", "off"], help="leave out to read it")
@@ -1581,46 +1412,7 @@ def parser():
     s.set_defaults(fn="event-types")
     cli_spec.add(sub, webhooks.CLI)  # tico trigger: clients/commands/webhooks.py
     cli_spec.add(sub, webhooks.RELAY)  # tico relay: clients/commands/webhooks.py
-    call = sub.add_parser(
-        "call", help="Tico Meet: audio and screen share in a thread, with a transcript posted to it"
-    ).add_subparsers(dest="sub")
-    s = call.add_parser("list", help="the calls in a thread, newest first")
-    s.add_argument("thread_id")
-    s.add_argument("--limit", type=int, default=25)
-    s.add_argument("--before", help="the next_before of the page you read, to read the next page")
-    s.set_defaults(fn="call list")
-    s = call.add_parser("start", help="start a call in a thread you can write to; you become its connector")
-    s.add_argument("thread_id")
-    s.add_argument("--title", default="")
-    s.add_argument(
-        "--speak",
-        dest="speak_replies",
-        action="store_true",
-        help="bots speak their replies on this call (refused until the Gateway has text-to-speech)",
-    )
-    s.set_defaults(fn="call start")
-    for action, help_text in (
-        ("show", "a call: its state, people, bots and how it ended"),
-        ("join", "join a call: the URL and a token good for 5 minutes"),
-        ("token", "a fresh token while you are joined"),
-        ("leave", "leave a call you joined"),
-        ("end", "end a call you started; its transcript is posted to the thread"),
-        ("retry", "ask again for action items the Gateway could not make"),
-    ):
-        s = call.add_parser(action, help=help_text)
-        s.add_argument("call_id")
-        s.set_defaults(fn="call " + action)
-    bot = call.add_parser("bot", help="bots that listen to a call and reply in its thread").add_subparsers(
-        dest="subsub"
-    )
-    s = bot.add_parser("add", help="let bots listen to a call you joined (up to 10)")
-    s.add_argument("call_id")
-    s.add_argument("bots", nargs="+")
-    s.set_defaults(fn="call bot add")
-    s = bot.add_parser("remove", help="take a bot out of a call")
-    s.add_argument("call_id")
-    s.add_argument("bot")
-    s.set_defaults(fn="call bot remove")
+    cli_spec.add(sub, calls.CALL)  # tico call: clients/commands/calls.py
     cli_spec.add(sub, webhooks.SLEEP)
 
     oks = sub.add_parser("ok", help="an OK you asked for with --for: use it once, just before you act").add_subparsers(
@@ -1652,35 +1444,7 @@ def parser():
     )
     s.add_argument("ref", help="a task id (or its first 8 characters), a message id or an approval id")
     s.set_defaults(fn="origin show")
-    bt = sub.add_parser(
-        "needs-you", help="a person's walk through what needs them: respond, commit (backend/batch.py)"
-    ).add_subparsers(dest="sub")
-    s = bt.add_parser("start", help="start the batch of the bot that most needs you, or resume the one in progress")
-    s.add_argument("--bot", help="only this bot's items (a slug)")
-    s.add_argument("--all", action="store_true", help="every item from every bot in one batch")
-    s.add_argument("--fresh", action="store_true", help="drop the batch in progress and build a new list")
-    s.set_defaults(fn="needs-you start")
-    s = bt.add_parser("next", help="the next item; at the end, the summary to read back")
-    s.add_argument("batch")
-    s.set_defaults(fn="needs-you next")
-    s = bt.add_parser("respond", help="record a response to the current item; nothing applies until commit")
-    s.add_argument("batch")
-    s.add_argument("kind", choices=["decide", "needs_info", "instruct", "rule", "skip", "later"])
-    s.add_argument("--text", default="")
-    s.add_argument("--decision", choices=["ok", "send_back", "done", "close", "answer"])
-    s.add_argument("--item", type=int, help="another item's number")
-    s.add_argument("--until", help="with later: an ISO date-time")
-    s.set_defaults(fn="needs-you respond")
-    s = bt.add_parser("commit", help="apply every recorded response")
-    s.add_argument("batch")
-    s.set_defaults(fn="needs-you commit")
-    s = bt.add_parser("abandon", help="drop the batch without applying anything")
-    s.add_argument("batch")
-    s.set_defaults(fn="needs-you abandon")
-    s = bt.add_parser("show", help="what needs you: the count per kind and the items, oldest first")
-    s.add_argument("--kind", choices=["task", "ask", "paused", "mention"], help="only this kind")
-    s.add_argument("--limit", type=int, help="the items listed (default 20); the counts are of every item")
-    s.set_defaults(fn="needs-you show")
+    cli_spec.add(sub, assistant_commands.NEEDS_YOU)  # tico needs-you: clients/commands/assistant.py
 
     runs = sub.add_parser("run", help="a bot's runs").add_subparsers(dest="sub")
     s = runs.add_parser("list", help="a bot's recent runs")
@@ -1942,19 +1706,6 @@ def parser():
 
     # A new bot: BotOps builds the chosen template in the workspace (`tico bot create`) or only registers it (--record-only).
     # The Librarian (docs/librarian.md): ask a question, and read a linked doc on this computer.
-    s = docs.add_parser("ask", help="ask the Librarian about the team's docs and wait for the answer")
-    s.add_argument("question")
-    s.add_argument("--wait", type=float, default=120, help="seconds to wait for the answer (default 120)")
-    s.set_defaults(fn="doc ask")
-    s = docs.add_parser("ask-status", help="collect the same Librarian answer without sending another question")
-    s.add_argument("conversation_id")
-    s.add_argument("message_id")
-    s.add_argument("--wait", type=float, default=0)
-    s.set_defaults(fn="doc ask-status")
-    s = docs.add_parser("fetch", help="read a public link as text; runs on this computer, never on the server")
-    s.add_argument("url")
-    s.add_argument("--max-chars", dest="max_chars", type=int, default=30000)
-    s.set_defaults(fn="doc fetch")
     sub.add_parser("template", help="the bot templates this company can pick from").add_subparsers(
         dest="sub"
     ).add_parser("list", help="the bot templates this company can pick from").set_defaults(fn="template list")
@@ -2412,6 +2163,7 @@ def parser():
     s.add_argument("--kind", choices=["api_key", "token", "password", "connection"])
     s.add_argument("--wait", type=int, help="seconds to wait for the computer to answer (30; at most 60)")
     s.set_defaults(fn="credential import")
+    cli_spec.add(sub, tools_admin.CREDENTIAL_CLI, parents={("credential",): cred})  # clients/commands/tools_admin.py
     slack = sub.add_parser("slack", help="the Slack channels bots may read and post in").add_subparsers(dest="sub")
     chan = slack.add_parser("channel", help="list, add or remove a channel").add_subparsers(dest="subsub")
     chan.add_parser("list", help="the listed channels, their readers, and whether bots may post").set_defaults(
@@ -2446,81 +2198,12 @@ def parser():
     cli_spec.add(sub, computers.SUPPORT)  # tico support: clients/commands/computers.py
     cli_spec.add(sub, finance.CLI)  # tico finance: clients/commands/finance.py
     # Contacts (backend/entities/routes.py): every reader sees what the read rule lets it see; writes name their actor.
-    contacts = sub.add_parser(
-        "contacts",
-        help="contacts: people, organizations and places, their links, values and notes, as you see them",
-    ).add_subparsers(dest="sub")
-    s = contacts.add_parser("self", help="who we are: our company, where we operate, the obligations that bind us")
-    s.add_argument("--text", dest="as_text", action="store_true", help="a short summary, not JSON")
-    s.set_defaults(fn="contacts self")
-    contacts.add_parser("types", help="the entity types and their descriptions, and who added each").set_defaults(
-        fn="contacts types"
+    cli_spec.add(sub, contacts_commands.CONTACTS)  # tico contacts: clients/commands/contacts.py (not attribute add)
+    attribute = (
+        _group_subparsers(sub, "contacts")
+        .add_parser("attribute", help="add an attribute to a type")
+        .add_subparsers(dest="subsub")
     )
-    s = contacts.add_parser(
-        "describe", help="one type: its attributes (owners, options) and the link types that touch it"
-    )
-    s.add_argument("type")
-    s.set_defaults(fn="contacts describe")
-    s = contacts.add_parser("find", help="entities of one type you can see, by name, status or a link to us")
-    s.add_argument("type")
-    s.add_argument("--name", help="a name prefix")
-    s.add_argument("--status")
-    s.add_argument("--link", help="a link to us, like customer_of")
-    s.add_argument("--after", help="the next the last page gave")
-    s.add_argument("--limit", type=int, help="up to 50")
-    s.add_argument("--text", dest="as_text", action="store_true", help="one line per entity, not JSON")
-    s.set_defaults(fn="contacts find")
-    s = contacts.add_parser("get", help="one entity as you see it: values with source, links, records and your notes")
-    s.add_argument("ref", metavar="id|email|domain|name")
-    s.add_argument("--text", dest="as_text", action="store_true", help="a short card, not JSON")
-    s.set_defaults(fn="contacts get")
-    s = contacts.add_parser("rules", help="the rules that apply to an entity (none until rules arrive)")
-    s.add_argument("ref", metavar="id|email|domain|name")
-    s.add_argument("--as", dest="as_bot", metavar="BOT", help="the bot the rules are for")
-    s.add_argument("--action", help="what you would do, like email")
-    s.set_defaults(fn="contacts rules")
-    s = contacts.add_parser("upsert", help="create or update one entity: --match names it, --set sets its values")
-    s.add_argument("type")
-    s.add_argument("--match", required=True, type=_pair, metavar="KEY=VALUE", help="email, domain, name or id")
-    s.add_argument(
-        "--set", dest="set_values", action="append", type=_pair, metavar="KEY=VALUE", help="one value, repeatable"
-    )
-    s.add_argument("--name")
-    s.add_argument("--evidence", dest="evidence_id", metavar="EVIDENCE_ID", help="the market evidence it rests on")
-    s.add_argument("--confidence", type=float, help="0 to 1; the default is 0.6")
-    s.set_defaults(fn="contacts upsert")
-    s = contacts.add_parser("link", help="a typed, dated link between two entities: a works_at b")
-    s.add_argument("from_ref", metavar="a")
-    s.add_argument("link_key", metavar="link")
-    s.add_argument("to_ref", metavar="b")
-    s.add_argument("--from", dest="valid_from_on", metavar="DATE", help="YYYY-MM-DD the link starts")
-    s.add_argument("--until", dest="valid_until_on", metavar="DATE", help="YYYY-MM-DD the link ends")
-    s.add_argument("--evidence", dest="evidence_id", metavar="EVIDENCE_ID", help="the market evidence it rests on")
-    s.add_argument("--confidence", type=float, help="0 to 1; the default is 0.6")
-    s.set_defaults(fn="contacts link")
-    s = contacts.add_parser("unlink", help="end a link: it stops being current today; its history stays")
-    s.add_argument("link_id")
-    s.set_defaults(fn="contacts unlink")
-    s = contacts.add_parser("merge", help="merge a duplicate into the entity it copies; unmerge reverses it")
-    s.add_argument("keep")
-    s.add_argument("drop")
-    s.set_defaults(fn="contacts merge")
-    s = contacts.add_parser("unmerge", help="reverse the last merge of a dropped entity, named by its own id")
-    s.add_argument("drop")
-    s.set_defaults(fn="contacts unmerge")
-    s = contacts.add_parser("history", help="past values of an entity's fields, newest first")
-    s.add_argument("ref", metavar="id|email|domain|name")
-    s.add_argument("--attribute", help="one field's history")
-    s.add_argument("--after", help="the next the last page gave")
-    s.add_argument("--limit", type=int, help="up to 50")
-    s.set_defaults(fn="contacts history")
-    s = contacts.add_parser("note", help="a note on an entity; --audience me keeps it to you")
-    s.add_argument("ref", metavar="id|email|domain|name")
-    s.add_argument("body")
-    s.add_argument("--audience", choices=["me", "company"])
-    s.add_argument("--evidence", dest="evidence_id", metavar="EVIDENCE_ID", help="the market evidence it cites")
-    s.set_defaults(fn="contacts note")
-    attribute = contacts.add_parser("attribute", help="add an attribute to a type").add_subparsers(dest="subsub")
     s = attribute.add_parser("add", help="add an attribute: name, value type, description, and options for a select")
     s.add_argument("type")
     s.add_argument("key")
@@ -2528,7 +2211,7 @@ def parser():
     s.add_argument("--value-type", dest="value_type", required=True, help="text, number, date, select, status ...")
     s.add_argument("--description", required=True, help="what it holds; required")
     s.add_argument(
-        "--option", dest="options", action="append", type=_pair, metavar="KEY=LABEL", help="a select's option"
+        "--option", dest="options", action="append", type=cli_spec.pair, metavar="KEY=LABEL", help="a select's option"
     )
     s.add_argument("--multiple", action="store_true")
     s.add_argument("--unique", dest="unique_value", action="store_true")
@@ -2536,27 +2219,6 @@ def parser():
     s.add_argument("--sensitive", action="store_true", help="only Finance's owner and the system read it")
     s.add_argument("--owner", help="tico (the default) or connection:<id>")
     s.set_defaults(fn="contacts attribute add")
-    kind = contacts.add_parser("type", help="add an entity type").add_subparsers(dest="subsub")
-    s = kind.add_parser("add", help="add an entity type, with its description")
-    s.add_argument("key")
-    s.add_argument("--name", required=True)
-    s.add_argument("--description", required=True)
-    s.add_argument("--plural", dest="plural_name")
-    s.add_argument("--icon")
-    s.set_defaults(fn="contacts type add")
-    link_type = contacts.add_parser("link-type", help="add a link type").add_subparsers(dest="subsub")
-    s = link_type.add_parser("add", help="add a link type: its name both ways, its description, the ends it may join")
-    s.add_argument("key")
-    s.add_argument("--name", required=True)
-    s.add_argument("--inverse", dest="inverse_name", required=True, help="the name from the far end")
-    s.add_argument("--description", required=True)
-    s.add_argument("--from", dest="from_type", help="the type the link starts at")
-    s.add_argument("--to", dest="to_type", help="the type the link ends at")
-    s.add_argument(
-        "--inherits-rules", dest="inherits_rules", action="store_true", help="a rule toward one end reaches the other"
-    )
-    s.add_argument("--symmetric", action="store_true", help="stored once, both ways")
-    s.set_defaults(fn="contacts link-type add")
     manager = sub.add_parser(
         "general-manager", help="the General Manager's hourly department check (docs/general-manager.md)"
     ).add_subparsers(dest="sub")

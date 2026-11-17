@@ -91,6 +91,9 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
     # Reversible Gmail labels; the route checks the person's mailbox level and the company organize switch.
     if path == "/api/v2/mail/messages/organize":
         return True
+    # A Gmail draft delivers nothing: sending it is the send gate's, which the Assistant's queueing already meets.
+    if path == "/api/v2/mail/drafts":
+        return True
     # An org rule check of a draft changes nothing: a person's own mail is never checked (backend/org_rule_check.py),
     # and the send itself meets every check in the send queue.
     if re.fullmatch(r"/api/v2/bots/[^/]+/mail-check", path):
@@ -1049,8 +1052,9 @@ def describe(c, method, path, body, viewer=None, admins=()):
             r"/api/v2/(?:goal-proposals|proposals)/[^/]+/decide",
             lambda g: str(body.get("decision") or "Decide").title() + " a goal proposal",
         ),
-        # Only a preview: the card lists the whole message among its fields, and what is sent is exactly that.
-        (r"/api/v2/support/tickets", lambda g: "Send this to the Tico team: " + preview(body.get("message"))),
+        # A plain title only: the card shows the whole message under it, and what is sent is exactly that. "Tico
+        # support", never "the Tico team", which reads as a company's own team (or the company named Tico Team).
+        (r"/api/v2/support/tickets", lambda g: "Report a bug to Tico support"),
         (r"/api/v2/directory(/sync|/preview)?", lambda g: "Change the people directory sync"),
         (r"/api/v2/(slack|github/app)/disconnect", lambda g: "Disconnect " + g[0].split("/")[0].title()),
         (r"/api/v2/tasks/([^/]+)/requesters/([^/]+)/delete", lambda g: "Remove a requester from this task"),

@@ -10,7 +10,7 @@ with its evidence. Nothing is sent.
     tico task show <id>
 
 Check `knowledge/asks.md` and the last two updates: has this been answered already? If so, the draft points to it in one line. If mail is connected, read the
-thread with `$HUB_DIR/scripts/mail.sh search`.
+thread with `tico email search <address> "<investor>"`.
 
 ## 2. Find the facts
 

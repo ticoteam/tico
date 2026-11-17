@@ -56,8 +56,15 @@ def jobs_for(api, bot):
         return c.execute("SELECT count(*) FROM jobs WHERE bot_id=?", (bot,)).fetchone()[0]
 
 
+def filed_for(api, person):
+    """A task ops filed that a person owns: one from before a bot's task for a person became its own with a question
+    (backend/person_asks.py), or one handed to them since. Comments on it reach whom they name."""
+    with api.app.state.store.transaction() as c:
+        return H.task_create(c, "bot:ops", "Fix the sign-in check", "x", "human:" + person, lint=False)
+
+
 def _a_comment_on_a_task_a_bot_filed_wakes_it_only_when_addressed_to_it(api, token):
-    task = post(api, "tasks", {"owner": "ben", "title": "Fix the sign-in check", "body": "x"}, token=token)
+    task = filed_for(api, "ben")
     path = f"tasks/{task['id']}/comments"
     queued = jobs_for(api, "ops")
     for teammate in ("ana-test", "priya-test"):  # a mover, then a teammate: neither owns it
@@ -76,7 +83,7 @@ def _a_comment_on_a_task_a_bot_filed_wakes_it_only_when_addressed_to_it(api, tok
 
 
 def _a_person_mentioned_in_a_comment_is_reached_and_follows_the_task(api, token):
-    task = post(api, "tasks", {"owner": "ana", "title": "Fix the sign-in check", "body": "x"}, token=token)
+    task = filed_for(api, "ana")
     queued = jobs_for(api, "ops")
     said = post(api, f"tasks/{task['id']}/comments", {"text": "@ben can you test it on staging?"}, token="priya-test")
     assert said["comment"]["kind"] == "say" and mention_reason(api, said["comment"]["id"], "human:ben") == "mention"

@@ -167,11 +167,13 @@ def gated(who, assistant_bot=""):
 
 
 def _needs(c, person):
-    """The person's Needs you as the engine reads it (backend/waiting_on.py `needs`): their tasks, the asks that name
-    them and the Paused causes they can fix, snoozed tasks left out."""
+    """The person's plate as the engine reads it (backend/waiting_on.py `needs` with `own_work`): the asks that name
+    them, the Paused causes they can fix, and the tasks whose work is theirs, snoozed tasks left out. Needs you itself
+    holds no task that is only theirs, but a task a bot hands a person still weighs on them, so the gate counts it,
+    and a repeat of one joins it."""
     from . import waiting_on
 
-    return waiting_on.needs(c, person)
+    return waiting_on.needs(c, person, own_work=True)
 
 
 def _plate_tasks(c, person):
@@ -180,8 +182,8 @@ def _plate_tasks(c, person):
 
 
 def load(c, person):
-    """The open items on the person's Needs you: each task of theirs, each ask that names them and each Paused cause
-    they can fix, snoozed ones left out. Read before the item is written, so it never counts itself."""
+    """The open items on the person's plate (`_needs`): each task of theirs, each ask that names them and each Paused
+    cause they can fix, snoozed ones left out. Read before the item is written, so it never counts itself."""
     return len(_needs(c, person))
 
 
@@ -806,8 +808,11 @@ def _next_day(day):
     return (dt.date.fromisoformat(day) + dt.timedelta(days=1)).isoformat() + "T00:00:00"
 
 
+# Theirs then: a task they owned, or one a bot asked them on (backend/person_asks.py: a bot's task for a person is its
+# own, with its question to them).
 _ACTIVE_AT = (
-    "owner_id=? AND created_at<? AND (done_at IS NULL OR done_at>?) AND (closed_at IS NULL OR closed_at>?) "
+    "(owner_id=? OR id IN (SELECT v.task_id FROM visits v JOIN requirements r ON r.visit_id=v.id "
+    "WHERE r.person_id=? AND r.created_at<?)) AND created_at<? AND (done_at IS NULL OR done_at>?) AND (closed_at IS NULL OR closed_at>?) "
     "AND NOT EXISTS (SELECT 1 FROM snoozes sz WHERE sz.task_id=tasks.id AND sz.ended_at IS NULL "
     "AND (sz.until_at IS NULL OR sz.until_at>?))"
 )
@@ -853,7 +858,9 @@ def replay_items(c, person, start, end, assistant_bot=None):
         for r in c.execute(
             "SELECT t.id,t.title,t.body,t.requester_id AS asker,t.created_at AS at "
             "FROM tasks t "
-            f"WHERE {_OWNER_THEN}=? AND t.created_at>=? AND t.created_at<? "
+            # Theirs then, or the asking bot's own task with its question to them (backend/person_asks.py).
+            f"WHERE ({_OWNER_THEN}=? OR t.id IN (SELECT v.task_id FROM visits v JOIN requirements r ON "
+            "r.visit_id=v.id WHERE r.person_id=? AND r.added_by_id=t.requester_id)) AND t.created_at>=? AND t.created_at<? "
             "AND t.requester_id LIKE 'bot:%' AND t.requester_id<>? AND NOT EXISTS "
             "(SELECT 1 FROM ask_ingest_items i WHERE i.ref=t.id AND i.person=? AND i.kind='task' "
             f"AND julianday(i.created_at)<=COALESCE({_FIRST_OWNER_CHANGE}, 1e9)) "
@@ -866,7 +873,7 @@ def replay_items(c, person, start, end, assistant_bot=None):
             "AND h.created_at>=? AND h.created_at<? AND NOT EXISTS "
             "(SELECT 1 FROM ask_ingest_items i WHERE i.person=? AND i.kind='task' AND i.ref=t.id "
             "AND i.asker=h.actor_id AND abs(julianday(i.created_at)-julianday(h.created_at))<=1.0/86400)",
-            (person, start, end, skip, person, person, start, end, skip, person, skip, start, end, person),
+            (person, person, start, end, skip, person, person, start, end, skip, person, skip, start, end, person),
         )
     ]
     return sorted(out, key=lambda it: it["created_at"])
@@ -876,7 +883,7 @@ def load_at(c, person, at, leave_out=""):
     """Roughly how full the person's plate was just before `at`: their tasks open then, snoozed ones left out, and the
     replayed item itself (put on them after it was created, it may already be theirs)."""
     return c.execute(
-        f"SELECT COUNT(*) FROM tasks WHERE {_ACTIVE_AT} AND id<>?", (person, at, at, at, at, leave_out)
+        f"SELECT COUNT(*) FROM tasks WHERE {_ACTIVE_AT} AND id<>?", (person, person, at, at, at, at, at, leave_out)
     ).fetchone()[0]
 
 
@@ -886,7 +893,7 @@ def open_items_at(c, person, at, leave_out="", asker=""):
     out = {}
     for r in c.execute(
         f"SELECT id,title FROM tasks WHERE {_ACTIVE_AT} AND id<>? ORDER BY created_at DESC",
-        (person, at, at, at, at, leave_out),
+        (person, person, at, at, at, at, at, leave_out),
     ):
         if len(out) >= MAX_ITEMS:
             break

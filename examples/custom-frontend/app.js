@@ -294,7 +294,7 @@ async function saveFile(f) {
 async function loadNeeds() {
   const { items } = await api("/api/v2/needs-you");
   const list = el("ul");
-  // Each item is an ask, a task of yours, a stuck stretch or a mention; `line` says what is wanted, `task` is its task.
+  // Each item is an ask of you, a task to fix, a Paused cause or a mention; `line` says what is wanted, `task` is its task.
   for (const i of items) {
     const title = (i.task && i.task.title) || "";
     list.append(el("li", i.kind + ": " + [title, i.line !== title && i.line].filter(Boolean).join(" - ")));

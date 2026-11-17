@@ -4,11 +4,10 @@
    screen (GET /v2/tasks/{id}, as Open task reads it), and the next item's is read ahead; Needs you itself carries
    nothing new. "Go to … ↗" opens the place the text names: an app link (#/strategy, or a link to this team's app), else
    a "Page → Tab" phrase that matches a sidebar page and one of its tabs (Finance → Access). No model is asked.
-   The heading on the right is short: a person's own task is its title. A question is itself, once, in full; its task's
-   title and text are the background under it (decideBgHTML), one line until it is opened (#3786).
-   Reply (a person's own task) and Ask back (a question) post a comment on the task that @mentions whoever asked, which
-   wakes that bot or notifies that person; the item stays in Needs you. A task Tico filed itself has no one to reply to:
-   the box is a note on the task, which reaches the bots following it.
+   A question's heading is itself, once, in full; its task's title and text are the background under it (decideBgHTML),
+   one line until it is opened (#3786).
+   Ask back (a question) posts a comment on the task that @mentions whoever asked, which wakes that bot or notifies that
+   person; the item stays in Needs you.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -31,10 +30,10 @@ interface DecAbout {
   error: string;
 }
 const DEC_ABOUT = new Map<string, DecAbout>();   // held while the screen is open (decideStop clears it)
-let DEC_SENT = '';                               // the item whose reply was just sent: "Sent" shows under its box
+let DEC_SENT = '';                               // the item whose Ask back was just sent: "Sent" shows under its box
 /** A reply an org rule held (the comment's answer, `held`): shown under its box as the task page shows it, with the
     rule and the actions the sender may take. Nothing was written; an "Ask first" hold may still be sent by a reviewer. */
-interface DecHeld { item: string; box: '#dc-reply' | '#dc-other' | '#dc-other-note'; hold: RuleHold; words: string; }
+interface DecHeld { item: string; box: '#dc-other' | '#dc-other-note'; hold: RuleHold; words: string; }
 /** Kept per item while the screen is open, so a reply held after the person moved on still shows when they come back. */
 const DEC_HELD = new Map<string, DecHeld>();
 /** The items whose reply is on its way: a second Send waits for the first (the walk may move on meanwhile). */
@@ -100,8 +99,8 @@ function decideHandle(actor: string): string {
 /** "From Strategy Owner · 2h ago" (a task, a mention). A question says who asked on its own meta line. */
 function decideAboutWho(it: NeedsEntry, kind: AskKind, t: DecAboutTask | null): string {
   const title = t?.title || it.task?.title || '';
-  // A person's own task and a bare OK carry the title as their heading already.
-  const on = kind !== 'yours' && kind !== 'ok' && title ? ` · on <b>${esc(title)}</b>` : '';
+  // A bare OK carries the title as its heading already.
+  const on = kind !== 'ok' && title ? ` · on <b>${esc(title)}</b>` : '';
   const from = kind === 'mention' ? it.from_id || '' : t?.requester_id || it.task?.requester_id || '';
   const name = !from || from === 'keeper' || !/^(bot|human):/.test(from) ? 'Tico' : from === myActor() ? 'you' : actorLabel(from);
   const when = kind === 'mention' ? it.since : t?.created_at;
@@ -204,26 +203,11 @@ function decideGoThere(st: DecState, href: string) {
   location.hash = href;
 }
 
-// ---- the heading
-/** A person's own task's heading: its title. Null for an item whose heading decide.ts draws (an OK, a question, a
-    stuck task, a mention). */
-function decideHeadOf(it: NeedsEntry, kind: AskKind): {head: string} | null {
-  return kind === 'yours' ? {head: it.task?.title || decideAboutOf(it)?.task?.title || it.line} : null;
-}
-
-// ---- the reply
-/** The reply box under a person's own task: "Reply to <who asked>", or "Note on the task" when Tico filed it. */
-function decideReplyHTML(st: DecState, it: NeedsEntry): string {
-  const to = decideReplyTo(it), label = to ? `Reply to ${actorLabel(to)}` : 'Note on the task';
-  const off = st.busy ? ' disabled' : '';
-  return `<div class="dc-reply"><label class="dc-notes"><span>${esc(label)}</span><textarea id="dc-reply" data-dc-grow rows="3" maxlength="4000"></textarea></label>
-    ${decideFilesHTML(st)}<div class="dc-reply-row">${decideBtn('reply', 'Send', false, ` data-dc-needs="#dc-reply" disabled${off}`)}`
-    + `${DEC_SENT === it.id ? '<span class="dc-sent" role="status">Sent</span>' : ''}</div>${decideHeldHTML(it, '#dc-reply')}</div>`;
-}
-/** Reply and Ask back: the words (and the files added with 📎) as a comment on the task that @mentions whoever asked,
-    or, given `ask` (a bot's question), that names the question, which the server writes to the bot that asked. The item stays; the box clears and says Sent. A comment an org rule holds writes nothing: the words
+// ---- Ask back
+/** Ask back: the words (and the files added with 📎) as a comment on the task that @mentions whoever asked, or, given
+    `ask` (a bot's question), that names the question, which the server writes to the bot that asked. The item stays; the box clears and says Sent. A comment an org rule holds writes nothing: the words
     stay. */
-async function decideReplySend(st: DecState, it: NeedsEntry, box: '#dc-reply' | '#dc-other' | '#dc-other-note', ask = '') {
+async function decideReplySend(st: DecState, it: NeedsEntry, box: '#dc-other' | '#dc-other-note', ask = '') {
   const words = decideNote(box), taskId = decideTaskId(it);
   if (!words || !taskId || st.busy || DEC_SENDING.has(it.id)) return;
   const files = await decideFilesReady(st, it.id);
@@ -258,7 +242,7 @@ async function decideReplySend(st: DecState, it: NeedsEntry, box: '#dc-reply' | 
   decidePaintSide(st);
 }
 /** The held reply under its box: what happened in one line, then the hold's card (rule, and Edit and resend). */
-function decideHeldHTML(it: NeedsEntry, box: '#dc-reply' | '#dc-other' | '#dc-other-note'): string {
+function decideHeldHTML(it: NeedsEntry, box: '#dc-other' | '#dc-other-note'): string {
   const held = DEC_HELD.get(it.id), h = held?.box === box ? held.hold : null;
   if (!h) return '';
   const line = h.outcome === 'escalated' ? 'Held for a reviewer: a rule asks first. It is posted if they send it anyway.'

@@ -1,43 +1,12 @@
-"""Durable local event outbox and session references; never a shared task database."""
+"""The runner's local SQLite file, shared with the Rust runner (runner-rs/src/state.rs, which owns turns and
+sessions): the side jobs' import cursors and pending closes here; never a shared task database."""
 
-import json
 import os
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 
-from clients import sessions
-
 from . import isolation
-
-
-def session_task(attempt):
-    """The task a claimed turn keys its session on: the server's `session_task_id` (a subtask continues its
-    parent's session, backend/hubdb.py session_root), else the task itself."""
-    task = attempt.get("task") or {}
-    return task.get("session_task_id") or task.get("id")
-
-
-def session_key(config, attempt):
-    """The provider thread this turn continues (clients/sessions.py), read from a claimed attempt."""
-    if isinstance((attempt.get("make_page") or {}).get("task"), dict):
-        return "make-page:" + attempt["id"]
-    conv = attempt.get("conversation") or {}
-    return sessions.session_key(
-        config,
-        attempt.get("bot"),
-        session_task(attempt),
-        conv.get("id"),
-        conv.get("root_id"),
-        conv.get("audience_class"),
-    )
-
-
-def lane(config, attempt):
-    """The lane this turn runs in: the server's word when it sent one, else worked out the same way."""
-    return attempt.get("lane") or sessions.lane(
-        config, attempt.get("bot"), session_task(attempt), (attempt.get("conversation") or {}).get("id")
-    )
 
 
 class State:
@@ -106,130 +75,6 @@ class State:
             raise
         finally:
             c.close()
-
-    def record(self, attempt):
-        with self.connect() as c:
-            c.execute(
-                "INSERT OR IGNORE INTO attempts(id,payload,phase) VALUES(?,?,'claimed')",
-                (attempt["id"], json.dumps(attempt)),
-            )
-
-    def input_phase(self, aid, mid, phase=None):
-        with self.connect() as c:
-            if phase:
-                c.execute(
-                    "INSERT INTO inputs VALUES(?,?,?) ON CONFLICT(attempt_id,message_id) DO UPDATE SET phase=excluded.phase",
-                    (aid, mid, phase),
-                )
-            row = c.execute("SELECT phase FROM inputs WHERE attempt_id=? AND message_id=?", (aid, mid)).fetchone()
-            return row[0] if row else None
-
-    def phase(self, aid, phase):
-        with self.connect() as c:
-            c.execute("UPDATE attempts SET phase=? WHERE id=?", (phase, aid))
-
-    def append(self, aid, kind, payload):
-        with self.connect() as c:
-            c.execute("BEGIN IMMEDIATE")
-            seq = c.execute("SELECT coalesce(max(seq),0)+1 FROM events WHERE attempt_id=?", (aid,)).fetchone()[0]
-            c.execute("INSERT INTO events VALUES(?,?,?,?)", (aid, seq, kind, json.dumps(payload)))
-            return seq
-
-    def pending(self, aid):
-        with self.connect() as c:
-            rows = c.execute(
-                "SELECT e.* FROM events e JOIN attempts a ON a.id=e.attempt_id "
-                "WHERE e.attempt_id=? AND e.seq>a.ack ORDER BY e.seq LIMIT 100",
-                (aid,),
-            ).fetchall()
-            return [{"seq": r["seq"], "kind": r["kind"], "payload": json.loads(r["payload"])} for r in rows]
-
-    def ack(self, aid, seq):
-        with self.connect() as c:
-            c.execute("UPDATE attempts SET ack=max(ack,?) WHERE id=?", (seq, aid))
-
-    def finish(self, aid, completion):
-        with self.connect() as c:
-            seq = c.execute("SELECT coalesce(max(seq),0) FROM events WHERE attempt_id=?", (aid,)).fetchone()[0]
-            completion = {**completion, "last_seq": seq}
-            c.execute("UPDATE attempts SET phase='uploading',completion=? WHERE id=?", (json.dumps(completion), aid))
-        return completion
-
-    def interrupted(self, aid, text):
-        """Saves an interrupted completion for an attempt that has none yet; a result already saved stands."""
-        with self.connect() as c:
-            seq = c.execute("SELECT coalesce(max(seq),0) FROM events WHERE attempt_id=?", (aid,)).fetchone()[0]
-            c.execute(
-                "UPDATE attempts SET phase='uploading',completion=? WHERE id=? AND completion IS NULL "
-                "AND phase NOT IN ('synced','historical')",
-                (json.dumps({"outcome": "interrupted", "text": text, "last_seq": seq}), aid),
-            )
-
-    def settled(self, aid, text):
-        """The completion to send for an attempt being recovered, read fresh: a result saved since the snapshot
-        stands, an attempt with none is settled as interrupted, and None when it was synced or set aside meanwhile."""
-        self.interrupted(aid, text)
-        with self.connect() as c:
-            row = c.execute("SELECT phase, completion FROM attempts WHERE id=?", (aid,)).fetchone()
-        if not row or row["phase"] in ("synced", "historical") or not row["completion"]:
-            return None
-        return json.loads(row["completion"])
-
-    def unfinished(self):
-        with self.connect() as c:
-            return [dict(r) for r in c.execute("SELECT * FROM attempts WHERE phase NOT IN ('synced','historical')")]
-
-    def unreported(self, bot, files):
-        """The files in `files` ({path: stamp}) not yet reported for this bot at that stamp, and remember them all.
-        A file that is gone from the list is forgotten, so it is reported again if it comes back."""
-        with self.connect() as c:
-            seen = {
-                r["path"]: r["stamp"] for r in c.execute("SELECT path,stamp FROM left_out_reported WHERE bot=?", (bot,))
-            }
-            c.executemany(
-                "DELETE FROM left_out_reported WHERE bot=? AND path=?",
-                [(bot, path) for path in seen if path not in files],
-            )
-            c.executemany(
-                "INSERT OR REPLACE INTO left_out_reported VALUES(?,?,?)",
-                [(bot, path, stamp) for path, stamp in files.items()],
-            )
-        return [path for path, stamp in files.items() if seen.get(path) != stamp]
-
-    def session(self, bot, conversation, runtime):
-        with self.connect() as c:
-            row = c.execute(
-                "SELECT thread FROM sessions WHERE bot=? AND conversation=? AND runtime=?", (bot, conversation, runtime)
-            ).fetchone()
-            return row[0] if row else None
-
-    def save_session(self, bot, conversation, runtime, thread):
-        with self.connect() as c:
-            c.execute("INSERT OR REPLACE INTO sessions VALUES(?,?,?,?)", (bot, conversation, runtime, thread))
-
-    def forget_session(self, bot, conversation, runtime, thread):
-        """Drop a failed provider thread without deleting a newer replacement."""
-        with self.connect() as c:
-            c.execute(
-                "DELETE FROM sessions WHERE bot=? AND conversation=? AND runtime=? AND thread=?",
-                (bot, conversation, runtime, thread),
-            )
-
-    def cursor(self, thread, message=None):
-        with self.connect() as c:
-            if message is not None:
-                c.execute("INSERT OR REPLACE INTO session_cursors VALUES(?,?)", (thread, message))
-            row = c.execute("SELECT message FROM session_cursors WHERE thread=?", (thread,)).fetchone()
-            return row[0] if row else None
-
-    def repo_rules(self, thread, digest=None):
-        """The hash of the repo rules a thread was last given (runner-rs/src/sessions.rs), so they are sent
-        again only to a fresh thread or when they change."""
-        with self.connect() as c:
-            if digest is not None:
-                c.execute("INSERT OR REPLACE INTO session_repo_rules VALUES(?,?)", (thread, digest))
-            row = c.execute("SELECT digest FROM session_repo_rules WHERE thread=?", (thread,)).fetchone()
-            return row[0] if row else None
 
     def import_cursor(self, source, cursor=None):
         """How far an importer has read its source, so a restart never re-reads the world."""

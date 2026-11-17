@@ -64,10 +64,10 @@ def test_email_cli_returns_refusal_for_a_member_without_mailbox_access(email_cli
     assert live["calls"] == []
 
 
-def test_email_mcp_reads_share_the_same_rights_and_are_offered_to_the_assistant(api, live, assistant_token):
+def test_email_mcp_reads_share_the_same_rights_and_are_offered_to_the_assistant_and_bots(api, live, assistant_token):
     names = {"tico_email_" + action for action in ("mailboxes", "inbox", "search", "thread", "message")}
     assert names <= {tool["name"] for tool in hubtools.listing(kind="assistant")}
-    assert not names & {tool["name"] for tool in hubtools.listing(kind="bot")}
+    assert names <= {tool["name"] for tool in hubtools.listing(kind="bot")}  # the server checks the bot's level
     for name, args in (
         ("mailboxes", {}),
         ("inbox", {"mailbox": SHARED}),

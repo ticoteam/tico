@@ -1760,3 +1760,28 @@ def test_a_plan_list_runs_the_month_cost_query_only_when_an_api_key_is_saved(api
     assert not any("est_cost_usd" in sql for sql in listing_statements(api, monkeypatch))
     add(api, "anthropic_key", secret="sk-ant-api-" + "c" * 24, name="Company API")
     assert any("est_cost_usd" in sql for sql in listing_statements(api, monkeypatch))
+
+
+def test_a_persons_plans_list_in_use_first_across_tools(api):
+    """Settings lists a person's plans together: the one a computer is using first, whichever tool it is, then the rest
+    by their soonest weekly reset (`place`). Each tool's `order` stays its own pick order."""
+    setup(api)
+    company(api)
+    on(api, "ops", "codex", "gpt-6.1-sol")
+    claude = add(api)["id"]
+    chatgpt = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
+    m = machine(api)
+    give(api, m, "codex", chatgpt)
+    by = {s["id"]: s for s in listed(api)}
+    assert by[chatgpt]["in_use_on"] and by[chatgpt]["place"] == 1
+    assert not by[claude]["in_use_on"] and by[claude]["place"] == 2
+    assert by[chatgpt]["order"] == by[claude]["order"] == 1
+
+
+def test_a_chatgpt_plan_added_with_no_name_takes_its_login_email(api):
+    """A plan added with no name is named for its account where Tico knows it: a ChatGPT login's email. A Claude token
+    names none, so it is named for its plan."""
+    setup(api)
+    company(api)
+    assert add(api, "codex_login", codex_file(), name=None)["name"] == "ana@acme.example"
+    assert add(api, name=None)["name"] == "Claude"

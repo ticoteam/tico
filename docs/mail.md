@@ -45,62 +45,54 @@ API: `POST /api/v2/mail/messages/organize`.
 Automation archive, label and leave actions run on the server for Whole Workspace mailboxes, without waiting for a
 computer. Other mail actions and personal connections still use the mailbox's computer; owner access is checked again before acting.
 
-Mail is one shared tool, `$HUB_DIR/scripts/mail.sh`. One Google service account acts as every
-mailbox; who may act as which one comes from the `tools:` block in your `bot.yaml`
-(`policies/access.md`), never from a prompt. Every read of a body and every label, archive or
-star is written to an audit log with your slug and the task.
+Mail is one shared tool, `tico email` (with `tico calendar`), over the server's routes. Who may act as which
+mailbox is Tico's answer (below), never a prompt's. Every read of a body and every label, archive or
+star is recorded with who did it.
 
 **Never call the Gmail or Calendar API directly.** Not with curl, not with a Google SDK, not
 from your own `software/`. The access checks, the rules, the audit log and the retry handling
-live in the tool; a direct call skips all four and is a policy violation, not a shortcut. The
+live on the server; a direct call skips all four and is a policy violation, not a shortcut. The
 service-account key is not in your environment, so a direct call would not work anyway.
 
-The dispatcher gives every run `HUB_BOT` (your slug) and `HUB_DIR` (Tico's own install, never a place
-for Git work), so `mail.sh` already knows who you are. `--as <slug>` is only for running it by hand.
+Every command names its mailbox: a message bot's is the `Mailbox:` line in its instructions. There is no `--as` and
+no default mailbox; each command runs as its caller (a bot's turn token, a person's own Tico login) at their own level.
 
 ## What you can do today
 
 Reading:
 
 ```bash
-$HUB_DIR/scripts/mail.sh inbox --untriaged --format brief   # inbox mail with no hub/* label; the list you work
-$HUB_DIR/scripts/mail.sh inbox --untriaged --all-mailboxes --format brief  # every mailbox Tico gives this run
-$HUB_DIR/scripts/mail.sh inbox --new --since 24h      # what you have not seen in the last day (marks it seen)
-$HUB_DIR/scripts/mail.sh inbox --label hub/needs-owner --format brief
-$HUB_DIR/scripts/mail.sh thread 18f2c9a3b4d5e6f7 --format brief   # the conversation, no bodies; md when drafting
-$HUB_DIR/scripts/mail.sh search "from:stripe.com newer_than:7d"   # any Gmail query, max 50
+tico email mailboxes                                   # the mailboxes you may use, your level, what you may do, the connection
+tico email inbox ana@acme.example                      # newest first, headers and snippets only
+tico email inbox ana@acme.example --q 'label:hub/needs-owner' --limit 20
+tico email thread ana@acme.example 18f2c9a3b4d5e6f7    # the conversation with bodies; audited
+tico email search ana@acme.example 'from:stripe.com newer_than:7d'
 ```
 
-Output is markdown by default: one block per message with id, thread, from, to, date
-(America/Los_Angeles), labels, whether it carries an unsubscribe link, attachments listed by
-name and size, and a plain-text body (HTML stripped, cut at 32 KB with a marker). Add
-`--format json` when you want to process it, `--json` on the other commands.
+Lists carry headers and snippets, never bodies; `thread` and `message` carry bodies and are audited.
 
 Filing, which is visible in Gmail so Ana can see and undo what you did:
 
 ```bash
-$HUB_DIR/scripts/mail.sh label add 18f2... 18f3... hub/needs-owner
-$HUB_DIR/scripts/mail.sh label remove 18f2... hub/needs-owner
-$HUB_DIR/scripts/mail.sh archive 18f2...             # removes INBOX, deletes nothing
-$HUB_DIR/scripts/mail.sh mark-read 18f2...
-$HUB_DIR/scripts/mail.sh star 18f2...
-$HUB_DIR/scripts/mail.sh triaged 18f2... 18f3...     # you are done with these
+tico email label ana@acme.example hub/needs-owner 18f2... 18f3...
+tico email unlabel ana@acme.example hub/needs-owner 18f2...
+tico email archive ana@acme.example 18f2...           # removes INBOX, deletes nothing
+tico email mark-read ana@acme.example 18f2...
+tico email label ana@acme.example STARRED 18f2...     # stars it
 ```
 
-Every one of those takes `--dry-run`, which prints what would change and changes nothing.
+Each prints an undo line ([Organizing live](#organizing-live)).
 
-The rules, which run before you read anything:
+The inbox's Message automation, which runs before you read anything:
 
 ```bash
-$HUB_DIR/scripts/mail.sh rules run --dry-run          # what the rules would do
-$HUB_DIR/scripts/mail.sh rules run                    # do it
-$HUB_DIR/scripts/mail.sh rules run --all-mailboxes    # each mailbox's own rules, own plus reports
-$HUB_DIR/scripts/mail.sh rules explain 18f2...        # why this message got what it got
+tico automation list --owner person:<id>              # "Ana's inbox", trigger message on her mailbox
+tico automation show <id>                             # its rules, decide step and actions
+tico automation recent-runs --trigger message --range 24h   # what it did to new mail
 ```
 
-Rules run before any model. Marketing (unsubscribe links), notification senders, and
-`registry/mail-rules.yaml` `skip:` addresses/domains are filed and never opened by the bot.
-Each mailbox can add its own rules under that address after `common`.
+Its rules run on the server on every new message, before any model. Marketing, notification senders and the
+senders the person has settled are filed and never opened by a bot. Each person's inbox has its own.
 
 Who may use a mailbox is Tico's answer, never the run's (backend/mailbox_access.py; Tools > Settings > Email):
 - a person has Read and write on their own mailbox, and admins on a shared inbox;
@@ -123,21 +115,17 @@ switches it on. Change its time zone on its automation in **Automations**.
 And the record:
 
 ```bash
-$HUB_DIR/scripts/mail.sh whoami                       # your mailboxes and verbs
-$HUB_DIR/scripts/mail.sh policy show                  # your sending policy, as Tico answers it
-$HUB_DIR/scripts/mail.sh audit --since 24h            # everything mail did
-$HUB_DIR/scripts/mail.sh sent-log --since 7d          # what actually went out
-$HUB_DIR/scripts/mail.sh doctor                       # is mail set up at all
+tico email mailboxes                                   # your mailboxes, what you may do, the connection and its last check
+tico email policy --bot <slug>                         # your sending policy, as Tico answers it
+tico email sends --mailbox ana@acme.example            # what was queued and what went out
 ```
 
-Mail is read live from Gmail on the server, so nothing here needs a sync. The CLI's `sync` subcommand still copies a
-mailbox's messages into `<projects>/runtime/mail/mail.db` for a by-hand local copy; the `connectors` job does not run it,
-and no computer publishes that copy to Tico.
+Mail is read live from Gmail on the server, so nothing here needs a sync.
 
 ## Writing: draft, reply, send
 
-`mail draft` lints the text and writes a Gmail draft. `send`, `reply` and `schedule` hand the frozen message to
-Tico's send queue, and Tico decides every send: your sending policy (**On their own**, **Ask first** or **Never**),
+`tico email draft` lints the text and writes a Gmail draft. `send` and `reply` (and `tico calendar schedule`'s
+invitation) hand the frozen message to Tico's send queue, and Tico decides every send: your sending policy (**On their own**, **Ask first** or **Never**),
 blocked recipients, the people the owner handles personally, outside Cc and many outside recipients, the lint and a
 second reviewer on the text, the org rules, bounces and a person's OK. An allowed send waits out the undo window before it
 goes. A send Tico blocks never throws the words away - the draft stays in Gmail with Tico's reason. Read the reason.
@@ -146,51 +134,31 @@ Do not retry the same text, and do not look for another route.
 ### Draft
 
 ```bash
-$HUB_DIR/scripts/mail.sh draft --to ava@creator.example \
-  --subject "Ava, 6 months of Acme on us" --body-file out/ava.txt --issue 128 [--dry-run]
-$HUB_DIR/scripts/mail.sh draft --reply-to 18f2c9a3b4d5e6f7 --body-file out/reply.txt --issue 128 \
-  --attach out/response-letter.pdf
-$HUB_DIR/scripts/mail.sh draft discard r-882... --issue 128
+tico email draft ana@acme.example --to ava@creator.example \
+  --subject "Ava, 6 months of Acme on us" --body-file out/ava.txt
+tico email draft ana@acme.example --reply-to 18f2c9a3b4d5e6f7 --body-file out/reply.txt
+tico email discard ana@acme.example r-882...
 ```
 
-`--reply-to <thread>` fills in the recipient and the subject from the thread and keeps
+`--reply-to <thread>` answers the thread's last sender, takes the subject from the thread and keeps
 `In-Reply-To` and `References`, so the message lands in the conversation instead of starting a
-new one. `--cc` adds copies; Tico decides whether an outside Cc needs a person. `--dry-run` lints and writes nothing.
+new one. `--cc` adds copies; Tico decides whether an outside Cc needs a person.
 
-The draft is keyed on (you, the task, the recipient, the subject, the body, and the hashes of any
-attached files): running the same
-command twice **updates the same Gmail draft** instead of leaving two. Change a word and it is a
-new draft. The thread gets `hub/drafted`, so Ana can see it in Gmail.
+The lint refuses a draft with an error: rewrite it once, and never route around it. The answer carries the draft id,
+the thread and the second reviewer's verdict. Running the same draft again **finds the same Gmail draft** instead of
+leaving two. Change a word and it is a new draft. The thread gets `hub/drafted`, so Ana can see it in Gmail. A draft is
+harmless: it sits in Gmail Drafts until someone sends it.
 
-`--attach <path>` adds a file; repeat it for several, up to 25 MB in all (Gmail's limit, checked
-from the file sizes before anything is read). Attachments use the shared sending policy, whose attachment prompt is on by default. A file must be inside your own folder
-(`bot-<slug>`, or an older bot's `emp-<slug>`), after following symlinks; a relative path starts
-there, and `..` is refused. Files that look like keys or passwords are refused wherever they are: `.env*`, `*.pem`,
-`*.key`, `id_rsa*`, `id_ed25519*`, `*.p12`, `*.pfx`, `.netrc`, `.npmrc`, `.pypirc`,
-`credentials*`, `*secret*`, `*token*`, and anything under `secrets/`, `private keys/`, `.ssh/`,
-`.aws/`, `.gnupg/` or `.config/gh/`. The type comes from the file's extension. Attaching lifts no permission. The server freezes and hashes every attachment, including unnamed inline parts. An OK binds that exact snapshot; changed files need a new send and OK.
+Attachments use the shared sending policy, whose attachment prompt is on by default. The server freezes and hashes
+every attachment, including unnamed inline parts. An OK binds that exact snapshot; changed files need a new send and OK.
 
-`mail draft --attach --json` returns an `approval_request` summary (`attachments: [{name, size, sha256}]`) and the
-`mail send` command that freezes the draft through the shared queue. When the draft belongs to a Tico task
-(`--issue <task id>`, or the task the run is for), `mail draft` first attaches each file to it and adds its `file_id`
-to the summary, so a person can open the file from the task. Attached files become readable by everyone who can read
-the task.
-
-`draft discard <draft-id>` (or `discard <draft-id>`) deletes an unsent draft you made with `mail draft`, and nothing else: a
-draft someone else wrote, a draft already sent, or a message id is refused (exit 2). It needs
-the `draft` verb and is audited.
-
-```json
-{ "ok": true, "draft": "r-882...", "thread": "18f2c9a3b4d5e6f7", "to": ["ava@creator.example"],
-  "subject": "Ava, 6 months of Acme on us", "created": true, "updated": false,
-  "lint": { "ok": true, "findings": [], "summary": "clean" },
-  "label": "hub/drafted" }
-```
+`discard <draft-id>` deletes an unsent draft, and nothing else: a draft already sent, or a message id, is refused. It
+needs Read and write on the mailbox and is audited.
 
 ### Send
 
 ```bash
-$HUB_DIR/scripts/mail.sh send --draft r-882... --issue 128 [--approval <message-id>] [--dry-run]
+tico email send ana@acme.example --draft r-882...
 ```
 
 `send` freezes the draft and queues it with Tico. Your sending policy is set in Tico, never in `bot.yaml`: **Settings >
@@ -204,45 +172,32 @@ Some sends always ask a person whatever the mode, for example a new corresponden
 outside recipients, legal or money matters; the effective **Who can OK** rule decides whose yes counts. A held send
 is an OK on a task, "Send this email?", in that person's Needs you. It is bound to the frozen send: the person sees the
 whole email (the complete MIME and exact To, Cc and Bcc) and OKs it with their own click; a changed email needs a new
-OK. Nothing a bot passes releases a send. `--approval <message-id>` names a person's message ("send it") that the second
-reviewer reads beside the email; it OKs nothing. A numbered GitHub issue authorizes nothing either. Finance queues its
+OK. Nothing a bot passes releases a send, and a numbered GitHub issue authorizes nothing either. Finance queues its
 exact invoice email the same way; OKing the finance action does not OK an email nobody saw.
-`mail policy show` prints the mode and limits Tico applies to you.
+`tico email policy --bot <slug>` prints the mode and limits Tico applies to a bot.
 
-`send` always answers in JSON and exits 0 whatever Tico decided. A queued send:
+`send` answers with Tico's decision:
 
-```json
-{ "ok": true, "sent": false, "queued": true, "state": "pending", "send_id": "…", "send_after": "…",
-  "draft": "r-882...", "to": ["ava@creator.example"],
-  "note": "Queued in Tico; it goes out after the undo window unless someone cancels it." }
-```
+- `pending`: the undo window runs, then it goes unless someone cancels it (`tico email cancel <send-id>`).
+- `waiting_approval`: a person OKs it in Tico.
+- `blocked`, with the reason: the draft stays in Drafts. This is not an error.
 
-`state` is `pending` (the undo window runs) or `waiting_approval` (a person OKs it in Tico; `approval_id` is the
-OK's requirement id). A send Tico blocks is a **downgrade**, not an error:
-
-```json
-{ "ok": true, "sent": false, "downgraded": "draft", "state": "blocked",
-  "reason": "Sending is Never for this bot.", "reasons": ["…"], "draft": "r-882...",
-  "note": "the draft is still in ana@acme.example Drafts; Tico's sending policy blocked the send." }
-```
-
-A bot whose `bot.yaml` grants no `send` verb on the mailbox gets the draft and `"gate": "verb"`; nothing is queued.
+A bot whose `bot.yaml` grants no `send` verb on the mailbox keeps the draft; nothing is queued.
 Queuing the same draft twice queues nothing the second time.
 
 ### Reply
 
 ```bash
-$HUB_DIR/scripts/mail.sh reply --thread 18f2c9a3b4d5e6f7 --body-file out/reply.txt --issue 128
+tico email reply ana@acme.example --thread 18f2c9a3b4d5e6f7 --body-file out/reply.txt
 ```
 
-Drafts, then queues the send with Tico, with the same answer as `send` in one JSON object. `--approval <message-id>`
-works the same way. This is the command to use on a thread; `draft` plus `send` is the same thing in two steps.
+Drafts, then queues the send with Tico, with the same answer as `send`. This is the command to use on a thread;
+`draft` plus `send` is the same thing in two steps.
 
 ## Lint on its own
 
 ```bash
-$HUB_DIR/scripts/mail.sh lint --body-file out/ava.txt --subject "Ava, ..." [--to addr] \
-  [--reply-to <thread>] [--check-calendar] [--slot 2026-09-08T13:00:00-07:00]
+tico email lint ana@acme.example --body-file out/ava.txt --subject "Ava, ..." [--to addr]
 ```
 
 `lint` exits 0 when clean and 2 when a rule blocks. Every finding has a stable id, a severity
@@ -260,7 +215,7 @@ The rules, in short: no forbidden phrases (for example `we guarantee`); links on
 task numbers; a subject under 120 characters, a body of 20-2500, at most three exclamation
 marks, a signature naming Ana; and for times offered: at least two, in
 order, in the future, on a weekday, in business hours, with the zone spelled out. Confirmation
-language without `--slot` is an error - **never confirm a time before the invite exists.**
+language before the invite exists is an error - **never confirm a time before the invite exists.**
 
 Tico runs the same lint, and a second reviewer, on every send of a bot's own writing; `lint` here is the quick
 check before you queue it.
@@ -306,110 +261,62 @@ The MCP tools are `tico_calendar_events`, `tico_calendar_free`, `tico_calendar_a
 `tico_calendar_cancel` and `tico_calendar_search`. `tico_calendar_list` with no `who` still reads the company calendar's
 appointments.
 
-The mail-local calendar commands have a broader registry-based grant: every bot can read or create
-an event on any address in `registry/people.yaml`; Gmail permissions, including `read_only`, do not
-change that calendar access. On a Docker runner with the two-user layout a bot gets calendar tokens only for the
-mailboxes on its mail token list (the ones Tico gives it, Tools > Settings > Email) (see [Who can read the key](#who-can-read-the-key)). An address outside the roster needs an explicit `google-calendar`
-Tool entry with the required verbs. The private Google service-account setup must also be working
-on that computer. These commands do not expand the MCP/API rule above:
-
-```bash
-$HUB_DIR/scripts/mail.sh slots --for ana@acme.example --n 2 --minutes 20 [--days 7]
-$HUB_DIR/scripts/mail.sh calendar list --for teammate@acme.example --hours 48 --json
-$HUB_DIR/scripts/mail.sh calendar add --for teammate@acme.example \
-  --start 2026-09-22T09:00:00-07:00 --minutes 30 --summary "Customer follow-up" \
-  [--attendee another-teammate@acme.example] [--description "Internal context"]
-$HUB_DIR/scripts/mail.sh calendar get --for teammate@acme.example --event <id> --json
-$HUB_DIR/scripts/mail.sh schedule --thread 18f2... --slot 2026-09-08T13:00:00-07:00 \
-  --minutes 20 --attendee ava@creator.example --body-file out/confirm.txt --issue 128
-```
-
-`calendar add` is audited and deterministic: the same exact request retrieves the existing event
-instead of making a duplicate. It accepts any attendee address by default. Set `TICO_BLOCK_EXTERNAL_INVITES=1` to allow only roster attendees;
-this opt-in rule also applies to the `schedule` flow.
+`tico calendar add` accepts any attendee address by default. Set `TICO_BLOCK_EXTERNAL_INVITES=1` to allow only roster
+attendees; this opt-in rule also applies to `tico calendar schedule`.
 In Docker, set it in the server install's `.env` and run `docker compose up -d`.
 **Settings > General > Health > Details** shows an **Outside calendar invites** check that says whether this calendar Tool setting is active.
-A mail-local calendar command on a computer needs the setting in that computer's environment too.
 
-`slots` reads **every** calendar the mailbox can see, treats all of them as busy, keeps a
-30-minute buffer both sides, and only offers weekdays 09:00-17:00 America/Los_Angeles. It prints
-lines you can paste straight into a draft - `Tue Sep 8, 1:00–1:20pm PT` - and
-`{"slots": [{"start": "...", "end": "...", "human": "Tue Sep 8, 1:00–1:20pm PT"}]}` with `--json`.
+`tico calendar free` offers times within the working hours of everyone named, treating every calendar they can see as
+busy; paste its times into a draft as options. A hold is `tico calendar add` with no `--who` and `--no-meet`.
 
-`schedule` creates a silent event and queues the confirmation with the invitation attached, or does neither: if Tico
-does not queue the send, the event is deleted again. With the inbox at **Never** it puts **nothing** on the calendar.
-Without the `send` verb it answers with the draft plus `"would_schedule": {...}` so Ana can do it in one click.
+`tico calendar schedule` creates a silent event and queues the confirmation with the invitation attached, or does
+neither: if Tico does not queue the send, the event is deleted again. With the inbox at **Never** it puts **nothing**
+on the calendar.
 
 ## Verbs, and the one thing that is implied
 
 Your `tools:` entry lists verbs: `read`, `draft`, `send`.
 
-`read` also allows `label`, `archive`, `mark-read`, `star` and `triaged` **on your own
+`read` also allows `label`, `archive` and `mark-read` (and starring, the `STARRED` label) **on your own
 mailbox**. Moving a message between folders is not a send: nothing leaves the team, the
 change is visible in Gmail, and Ana undoes it by relabelling.
 
-`draft` is needed for `draft`, `reply` and `schedule`. `send` is needed on top of that for
+`draft` is needed for `draft` and `reply`. `send` is needed on top of that for
 anything to leave, and `send` also needs sending turned on for you in Tico by a person. Until then every send
 is a draft, whatever your `bot.yaml` or an older instruction says.
 
-Anything you are not granted is refused with exit code 2 and a line telling you what to ask
+Anything you are not granted is refused with a line telling you what to ask
 for. Do not work around a refusal: open a task with `owner:ana` and `type:decision` naming
 the mailbox and why, per `policies/access.md`.
 
 ## The rules do the boring half
 
-`registry/mail-rules.yaml` files the obvious mail before a model sees it: legal risk words
-(`legal-risk-words`) and money-owed words like past due or final notice (`payment-risk-words`)
-get `hub/needs-owner` and are never archived; receipts and a short list of exact senders Ana
-has settled (Clio bills, Postiz digests, and so on) are archived and marked read; anything with
-an unsubscribe link is marketing and gets archived; machine senders get `hub/notification`.
-Rules cost no tokens, so everything they settle is free.
+Each person's inbox has a **Message automation** on the server, named "<Name>'s inbox", with trigger `message` on the
+mailbox. It runs on every new message as it arrives, before a bot reads anything. Its filter steps are the rules. For
+example, legal risk words and money-owed words like past due or final notice are left for the person (`hub/needs-owner`) and never
+archived; receipts and the senders Ana has settled are archived; marketing is archived or unsubscribed; machine
+senders are labelled. Rules cost no tokens, so everything they settle is free. Its decide step sorts what the rules
+leave with a few questions a small model answers (a message bot's template carries them as
+`questions/mail-triage.json`), and its actions archive, label, leave for you, draft, send, forward or unsubscribe.
+`backend/automation_templates/founder.json` is a worked example, and [Inbox templates](routines.md#inbox-templates)
+lists the others.
 
-Run `rules run` first, then `inbox --untriaged --format brief --decisions`. What is left is the part that
-needs judgement. `--format brief` is id, date, from, subject, labels and a snippet; `md` prints
-whole bodies, so use it on one thread you are about to act on, never on a list.
-
-`--decisions` asks the decision model (an optional decision model, `skills/decisions/SKILL.md`) about every listed
-message before any thread is opened, from the listing's fields alone, and prints one more line
-under each:
-
-```text
-  decision: reply  (reply 0.81; ask 0.90, money 0.05, legal 0.02, urgency 1.4)
+```bash
+tico automation list --owner person:<id>                    # find "Ana's inbox"
+tico automation show <id>                                   # its rules, questions and actions
+tico automation recent-runs --trigger message --range 24h   # what it did to new mail
+tico email inbox ana@acme.example                           # what is still in the inbox
 ```
 
-The word after `decision:` is what the thresholds in `questions/mail-triage.json` say to do:
-`archive`, `needs-owner`, `route`, `reply`, or `read`. Legal protects first, at a low
-threshold, because a wrong needs-owner costs one look; money protects only when someone is
-also asking, because payroll runs and receipts score money high with nobody asking anything;
-filings need high confidence, because a wrong archive costs a missed email. `read` means the model was not sure enough: open the thread
-and decide the way you always did. It changes nothing in Gmail; the JSON carries the same under
-`judgment`, and one `judge` audit line (the audit name is unchanged) keeps the counts and the suggestion per id. Several
-messages can share one call, each judged from its own answers only (`GROUP` in `connectors/mail/judge.py`, today one
-message a call). Inside a bot
-run the call goes through Tico with your credential; outside one it needs
-the decision model API key (`skills/decisions/SKILL.md`), and `MAIL_DECISIONS=none` switches it off (`MAIL_JUDGE` and `--judge` are the deprecated old names and still work).
+What is left in the inbox is the part that needs judgement. Lists carry headers and snippets; open one thread you are
+about to act on with `tico email thread`, never a whole list.
 
-`draft` runs the same model as a gate: six yes/no questions
-(`questions/mail-draft-gate.json`) about money, dates, a confirmed time, unsupported claims, a
-legal position and tone, printed as `gate: ok` or `gate: flagged commitment_money 0.81`. The
-gate is advisory: a flagged draft is still written, Tico still decides the send, and the audit
-keeps both so the thresholds can be tuned from what actually happened. Rewrite a flagged draft
-once before you try again.
+`tico email draft` runs a second reviewer on the text. Its verdict is advisory: a flagged draft is still written, and
+Tico still decides the send. Rewrite a flagged draft once before you try again.
 
-Three rules under `ana@acme.example` (`judge-legal-risk`, `judge-needs-owner`, `judge-noise`) ask the decision model
-instead of matching words: a `decision` condition (`judge` is the old spelling and is still read) reads what the model said about the message
-from the same listing fields as `--decisions` (`registry/mail-rules.yaml` explains the shape). They
-sit under the mailbox on purpose: they run after every common rule, so a word protection still
-blocks the model's archive, and only that mailbox's mail is sent to the model. Inside a bot run
-the call goes through Tico; with no decision model available those rules simply do not fire and the
-report says so. `mail rules explain <id>` prints the answer a message got.
-
-If you keep triaging the same kind of message by hand, that is a rule. Write it in the file's
-own shape - id, `when`, `do` - for `common`, above the protections, with `to_matches` on your
-mailbox and `stop: true` (a mailbox-section rule runs after `common` and can never archive what a
-`never_archive` rule protected). Prove it with `rules backtest --since 14d --rules <file>` and one
-fixture, then open a PR against ticoteam/tico; a human merges it. Do not edit
-`registry/mail-rules.yaml` in place.
+If you keep sorting the same kind of message by hand, that is a rule. Propose it as a change to the inbox's Message
+automation: `tico automation update <id> --file <json> --summary "..."`. A bot's change to a person's automation is a
+pending version the person accepts; nothing changes until they do.
 
 ## Labels Tico owns
 
@@ -429,7 +336,6 @@ Deliverable: labels in Gmail; 2 messages carry hub/needs-owner:
   18f2c9a3b4d5e6f7  Acme renewal quote, they want an answer by Friday
   18f2c9a3b4d5e6f8  Invoice 4471 past due, $2,140
 What the requester should know: the renewal needs a number I do not have.
-Audit: scripts/mail.sh audit --since 24h --employee <slug>
 ```
 
 When a message bot files a task from an email sent to its mailbox, the task may include the
@@ -441,10 +347,9 @@ mailbox goes into Slack.
 
 ## When something is wrong
 
-`doctor` prints one line per problem with the exact fix. If it says the key is missing or
-delegation is not granted, that is Ana's twenty minutes, not yours: open a task with
-`owner:ana` and `needs-human` quoting the failing line, and stop. Exit codes: 0 fine,
-1 something broke, 2 a Tico policy refused you.
+`tico email mailboxes` shows each mailbox's connection (Whole Workspace, Connect Google, or none) with its last check
+or error. If it says the mailbox is not connected or the last check failed, that is Ana's twenty minutes, not yours:
+open a task with `owner:ana` and `needs-human` quoting the line, and stop.
 
 Details of the plan and the reasoning behind it: `docs/mail-service.md`. The rule ids and how a send reaches Tico:
 `connectors/mail/README.md`.
@@ -656,15 +561,6 @@ company's own app made also holds `gmail.modify` and `calendar.events` if Google
 write before Google is asked. Each connect has its own id: a grant Google gives a sign-in the person has since replaced
 or disconnected is not kept, and the grant connected before stays until a new connect finishes. Mail sent from such a
 mailbox goes out from the server's own send queue, as Whole Workspace mail does.
-A grant made with `google connect --client-file` (a team's own Desktop client) keeps its own secret and is used only by
-a mail CLI run by hand: under the runner, every mailbox's token comes from the server, never from a key file or grant
-on the computer.
-
-On a computer holding grants made there with `--client-file`, `scripts/mail.sh google status` lists the connected accounts and what each may
-do (never a token). `scripts/mail.sh google revoke --mailbox <address>` removes that account's grant from this computer
-and asks Google to revoke it. The local copy goes first, so this computer stops using the grant even when Google cannot
-be reached. If Google does not confirm the revocation, the command says so; the grant may still be active at Google, so
-remove Tico at myaccount.google.com/permissions. The command ends without an error either way, so read its message.
 
 Grants still end for Google's other reasons: the person removes the app or changes their password, six months without
 use, a newer grant past Google's per-account limit, or an admin's policy. Settings > General > Health > Details then says to reconnect.
@@ -687,8 +583,7 @@ The key can act as any mailbox in the team, so bots must not be able to read it.
   ones it holds a level on in Tico (`mailbox_levels` on its turn; a message bot gets its grant when it is set as a
   person's message bot). The server checks the level again on every mint, and a Read level gets the read-only scopes,
   except on the computer that acts for the mailbox, whose connector holds the full scope. Calendar tokens come from the same
-  list, so on this layout the mail-local calendar commands reach only those mailboxes' calendars. Any other bot, and any
-  other mailbox, is refused.
+  list. Any other bot, and any other mailbox, is refused.
   A bot is a message bot to the server when it is its person's `inbox_bot`, which is what the server checks before it names any
   mailbox for a run. Making a bot from the `inbox-manager` template does that itself: adding it in Settings, in the team builder, or
   through BotOps records the bot as the `inbox_bot` of the person the `Mailbox:` line names (by their roster email; for a bot
@@ -699,8 +594,7 @@ The key can act as any mailbox in the team, so bots must not be able to read it.
   `tico api POST access/people/<person> '{"inbox_bot": "<bot>", "mailbox": "ana@acme.example"}'`. Without the link the runner holds the key
   but gives the bot no token, and the mail tool says "this bot has no mailbox" (the bot's Tools list shows a problem; it is not "ready").
   Because the key is not in the bot's environment, the Tools list shows `GOOGLE_SA_KEY` as "present (held by the computer)" when the
-  computer has the key and runs the `connectors` job, and as missing only when the computer has no key. The `mail.db` and
-  `audit.jsonl` files in `workspace/runtime/mail` are group-writable so the bot's `mail.sh` and the job can both write them.
+  computer has the key and runs the `connectors` job, and as missing only when the computer has no key.
 - **A Mac, or Docker started the old way**: bots run as the same user as the runner and can read the key file, and Settings >
   Health says so ("Mail key"). Keep such a computer for the message bot alone.
 - A message bot may share a computer with other bots. To wall its mail key off, keep a computer for message bots alone
@@ -716,7 +610,7 @@ the job (and show a sign-in problem in Settings until the key is there).
 | Setting | Default (Mac) | Linux runner |
 | --- | --- | --- |
 | `TICO_PROJECTS_DIR` bot repos, `secrets/` | folder above the checkout | `<home>/workspace` |
-| `TICO_MAIL_VENV` | `<projects>/runtime/mail/venv` | `<tools>/mail-venv` for the `connectors` job; a bot's run is given `TICO_PROJECTS_DIR`, so its first `mail.sh` builds `<home>/workspace/runtime/mail/venv` (the bot user can write it) |
+| `TICO_MAIL_VENV` | `<projects>/runtime/mail/venv` | `<tools>/mail-venv` for the `connectors` job |
 | `TICO_MAIL_RUNTIME_DIR` mail.db, audit log | `<projects>/runtime/mail` | same, under `workspace/runtime/mail` |
 | `GOOGLE_SA_KEY` | `<projects>/secrets/google-sa.json` | the runner's state directory (`~/state-<id>/google-sa.json`) |
 | `GOOGLE_OAUTH_GRANTS` connected accounts | `google-oauth.json` beside the key | beside the key, in the runner's state directory |
@@ -749,7 +643,7 @@ Use these instead of the Settings steps above when you make the Google key yours
 
 **Tico's Google app on a server you run**
 
-The server's operator can set Tico's OAuth client in its environment, `TICO_GOOGLE_OAUTH_CLIENT_ID` and `TICO_GOOGLE_OAUTH_CLIENT_SECRET`, as a Web application client whose redirect URI is `<TICO_PUBLIC_URL>/api/v2/mail/google/callback`. Tools > Settings > Email can set the same client under **One account at a time**. When the environment sets it, the card says Set on the server and can't change it. Until one of them is set, Connect Google isn't set up on this server. A self-hosted team may use its own client the same way, or connect from the runner with `scripts/mail.sh google connect --mailbox <address> --client-file client.json` (a Desktop app client). `google status`, `google revoke` and `doctor` list, remove and check grants there.
+The server's operator can set Tico's OAuth client in its environment, `TICO_GOOGLE_OAUTH_CLIENT_ID` and `TICO_GOOGLE_OAUTH_CLIENT_SECRET`, as a Web application client whose redirect URI is `<TICO_PUBLIC_URL>/api/v2/mail/google/callback`. Tools > Settings > Email can set the same client under **One account at a time**. When the environment sets it, the card says Set on the server and can't change it. Until one of them is set, Connect Google isn't set up on this server. A self-hosted team may use its own client the same way.
 
 ## Turning sending on
 
@@ -806,7 +700,7 @@ compatible: their switch sets the bot's mode, and forward addresses are refused.
 setting, and the mail tool reads no `registry/mail-policy.yaml`: every computer, Mac or Docker, asks Tico. The message
 bot's template also carries `questions/mail-triage.json`, so the decision questions are in the bot's own repository wherever it runs.
 
-**The decision model.** `mail.sh inbox --decisions` and the spam and injection check (`tico classify`) ask the
+**The decision model.** A Message automation's decide step and the spam and injection check (`tico classify`) ask the
 server's decision model. It asks the Tico AI Gateway first, with the gateway key in the server's `.env`
 (`TICO_GATEWAY_KEY`); then your own `TYPESAFE_API_KEY`, if you set one (it is optional); then one of the team's model keys
 (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY`, `OPENROUTER_API_KEY`). `compose.yaml` hands them
@@ -815,34 +709,29 @@ to the server. A provider that fails hands the question to the next, and without
 
 ## Unsubscribe before model triage
 
-`rules run` now attempts RFC 8058 one-click unsubscribe for eligible subscription mail before
-archiving it. It never calls a model. Earlier `never_archive` protection also blocks unsubscribe.
-The acting bot needs the separate Gmail `unsubscribe` verb; read/draft/send do not imply it.
-This grant cancels email-list subscriptions only, without enabling general emails or invites.
+An inbox's Message automation can unsubscribe from eligible subscription mail (its `unsubscribe` action) before it
+archives it, and a bot or person can ask for one message:
 
 ```
-scripts/mail.sh unsubscribe <message-id> --as inbox-manager --dry-run --json
-scripts/mail.sh unsubscribe <message-id> --as inbox-manager --archive --json
-scripts/mail.sh rules run --as inbox-manager --json
+tico email unsubscribe ana@acme.example <message-id>
 ```
 
-The command verifies DKIM over the raw message and both unsubscribe headers, then POSTs the
-standard one-click body to HTTPS. No cookies, authorization, redirects, email requests or body
-links are used. Connections are pinned to validated public IPs. Audit/state contains endpoint
-hosts and token hashes, never full unsubscribe URLs. Duplicate endpoint requests are suppressed,
-including uncertain outcomes after timeouts. A sender's 2xx means `accepted`, not proof it will
-never send again. Unsupported methods return `manual_required`; uncertain requests return
-`unknown`. The rules pass still archives unwanted mail and exposes the unsubscribe result;
-standalone `--archive` archives only after acceptance. No request is made in a dry run.
+Either way the server makes one RFC 8058 one-click request. It never calls a model. It uses only the message's own
+`List-Unsubscribe` header, when that holds exactly one HTTPS link, asks for one-click, and a DKIM signature over From and
+both unsubscribe headers verifies. It POSTs the standard one-click body to a public address, with no cookies,
+authorization or redirects followed. It refuses starred mail, internal mail, people on the roster and senders the
+mailbox already writes to. Tico keeps the endpoint's host and a hash of it, never the full unsubscribe URL. A request
+is claimed before it goes, so a retry after an unclear answer sends nothing and answers what the first one did. A
+sender's 2xx means `accepted`, not proof it will never send again; an error or a redirect is `manual_required`, and no
+answer is `unknown`, never tried again. In an automation, a refusal or an unconfirmed request fails the step, and an
+archive after an unsubscribe in the same step waits for it and is skipped if it failed.
 
-An automation's `unsubscribe` action (mail only) makes the same request on the mail computer. It refuses starred mail, internal mail, people on the roster and senders the mailbox already writes to, and a refusal or an unconfirmed request fails the step. Mail actions on one message within one automation step run in order: an archive after an unsubscribe waits for it, and is skipped if it failed.
-
-Keep the processing order: scripts and filing rules, then model analysis of unresolved mail.
+Keep the processing order: filing rules, then model analysis of unresolved mail.
 Unsubscribe requires choosing unwanted subscription mail; it does not cancel a paid service.
 
 ## Scoped automatic scheduling (Ana approved September 8)
 
-The message bot uses `mail scheduling offer|book`, not generic `reply`, `send` or `schedule`.
+The message bot offers and books times with `tico calendar free` and `tico calendar schedule`, not generic `reply` or `send`.
 It has `scheduling_send: true` in `bot.yaml` (with an optional `scheduling: {mailbox, booking_url, meeting_title}`) and
 separate Gmail/Calendar `schedule` verbs; its general sending policy in Tico is unchanged, and every offer and booking
 still goes through Tico's send queue. Scope is influencers and BD-confirmed non-investor contacts only. The decision
@@ -856,7 +745,7 @@ falls back to paginated event reads; unreadable calendars block scheduling. Thre
 are rechecked immediately before a send. Bookings send a single invite with Google Meet creation,
 not an invite followed by a separately fallible email. Per-mailbox locking and action records
 suppress duplicates; uncertain delivery is recorded for reconciliation, never automatically
-retried or falsely described as rolled back. `--dry-run` performs no outbound action.
+retried or falsely described as rolled back.
 
-Ana's `mail slots` uses the same time rules and defaults to 30 minutes. The older generic
+`tico calendar free` uses the same time rules and defaults to 30 minutes. The older generic
 scheduler is not the message bot's standing-authorized workflow.
