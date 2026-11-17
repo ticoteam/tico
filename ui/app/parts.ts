@@ -1,13 +1,12 @@
 /* ui/app/parts.ts — Page parts: a page's code, fetched the first time a person goes there
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them.
 
-   A cold open downloads only the shell; the files ui/parts.json puts in a page part are served as that part alone
-   (backend/ui_bundle.py), and the page lists each part's address in a JSON block (#ui-parts). The shell's first script
+   A cold open downloads only the shell; the files ui/parts.json puts in a page part are built as that part alone
+   (scripts/build-ui.cjs), and the page lists each part's address in a JSON block (#ui-parts). The shell's first script
    declares a stand-in for each name a part lets others call: a page or a call comes here, which loads the part (with
    the parts it needs) and calls the real function, the part's own declaration having taken the stand-in's place. A part that
    does not load leaves the page with Retry in its main area (the sidebar keeps working), or, when a release changed
-   the app since this page was opened (its old part address is gone), reloads to the current release. Served as
-   separate files (TICO_UI_BUNDLE=off) the page has no list: every file is already loaded and nothing here runs. */
+   the app since this page was opened (its old part address is gone), reloads to the current release. */
 'use strict';
 
 interface UiPartsTable { build: string; parts: Record<string, {url: string; load: string[]; events?: string[]}>; }
@@ -51,7 +50,7 @@ function uiPartLoad(name: string): Promise<void> {
   return part ? Promise.all(part.load.map(uiPartScript)).then(() => undefined) : Promise.resolve();
 }
 
-// What a stand-in calls (backend/ui_bundle.py stubs): `fn` of `part`, once that is loaded. A page (`page`, called by
+// What a stand-in calls (scripts/build-ui.cjs stubs): `fn` of `part`, once that is loaded. A page (`page`, called by
 // the router) is drawn only while the person is still on the route it was asked for.
 function uiPartCall(part: string, fn: string, args: unknown[], page: boolean): Promise<unknown> {
   const route = typeof S === 'undefined' ? '' : S.route;

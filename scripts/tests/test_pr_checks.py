@@ -1510,7 +1510,7 @@ def test_a_ui_file_outside_the_map_runs_its_readers_its_linked_scripts_and_the_s
 
 
 def test_index_html_script_urls_map_to_the_files_the_server_serves():
-    # The page names scripts by URL (backend/ui_bundle.py): /tico/ui/x is ui/x, /vendor/x is ui/vendor/x.
+    # The page names scripts by URL (scripts/build-ui.cjs): /tico/ui/x is ui/x, /vendor/x is ui/vendor/x.
     diff = (
         '+<script src="/tico/ui/app/b.ts"></script>\n'
         '+<script src="/vendor/marked.min.js"></script>\n'
@@ -2462,8 +2462,7 @@ def test_a_cli_command_change_runs_the_cli_spec_test_even_in_a_light_plan(event,
         "ui/parts.json",
         "ui/index.html",
         "ui/vendor/marked.min.js",
-        "backend/ui_bundle.py",
-        "backend/ui_compression.py",
+        "backend/ui_build.py",
         "scripts/build-ui.cjs",
         "package-lock.json",
     ],

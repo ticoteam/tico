@@ -5,7 +5,7 @@ globals (`S`, `$`, `esc`, `get`, `post`, `route`, ...). A script is JavaScript o
 
     index.html        the markup skeleton, then <link> and <script> tags in load order; no inline script.
                       The tags between the `<!-- bundle:css:start/end -->` and `<!-- bundle:js:start/end -->`
-                      markers are the styles and app scripts; the server bundles them (below)
+                      markers are the styles and app scripts; the build bundles them (below)
     styles/*.css      the stylesheet, one file per area, linked in cascade order
     app/*.ts          the app: routing, state, sidebar and one file per page or feature
     *.ts              features that mount into a page through a small `window.*` API
@@ -19,61 +19,69 @@ download still leaves a styled Reload and Contact support screen. `theme.ts` dis
 `tico:app-loaded` event and all stylesheets have loaded without an asset error. Keep billing notices `hidden` in the
 markup: only a confirmed cloud access state may reveal them. A failed page load is not evidence of exhausted credit.
 
-## One request each: the bundle
+## The build
 
-The many files are for editing. The server (`backend/ui_bundle.py`) concatenates the files listed between the
-markers, in that order, into `/tico/ui/app.bundle.js` and `/tico/ui/app.bundle.css` (each file after a
-`// file: app/name.ts` comment), cut between files into parts of at most 512 KB (`app.bundle.2.js`, ...: WebKit's
-disk cache keeps nothing larger than an eighth of its size), and serves index.html with each region replaced by the
-parts' tags, each `?v=<hash of the whole bundle>`. The bundles are immutable for that URL (`Cache-Control: public, max-age=31536000,
-immutable`, strong ETag, gzip when the browser accepts it); index.html is revalidated on every load. It
-rebuilds when a listed file changes. Editing a `.ts` file needs a build first (`npm run watch:ui` while editing);
-the server refuses a stale build. index.html is the only list: adding a file to it
-adds it to the bundle.
+The many files are for editing; the server serves only what `npm run build:ui` (scripts/build-ui.cjs, after `npm ci`)
+writes to `build/ui/` (backend/ui_bundle_routes.py). The build:
 
-A file that is not strict cannot share the bundle's one script (the bundle opens with `'use strict'` once), so
-start every `app/` file and every feature file (`ui/*.ts`) with it. `TICO_UI_BUNDLE=off` serves the files separately, as listed. The browser
-tests run the real bundler and serve the bundle by default; `TICO_UI_BUNDLE=off npm run test:ui` runs them on
-the separate files. The feature files (`ui/*.ts`) are in the bundle too, ahead of `app/`; only `theme.ts` (in the head, before
-the first paint) and `vendor/` load on their own. The page names `theme.ts` and `vendor/marked.min.js` with `?v=<content hash>` too, and the
-server keeps them for a year at that URL (`STANDALONE` in backend/ui_bundle.py), so opening the app revalidates neither.
+- compiles each `.ts` file on its own to `build/ui/` at the same path (`build/ui/app/name.js`, with its map) with
+  esbuild's per-file transform: types stripped, nothing bundled. The overview's modules and the service worker are
+  served from there, and the unit tests read those files;
+- minifies each file listed between the markers and concatenates them in index.html's order (each after a
+  `// file: app/name.ts` comment), cut between files into parts of at most 512 KB (WebKit's disk cache keeps nothing
+  larger than an eighth of its size). The page parts (`parts.json`, below) are cut out as parts of their own, and
+  `theme.ts` (in the head, before the first paint) and `vendor/marked.min.js` are copied as files of their own;
+- names every one of those files by its content (`build/ui/bundle/app.bundle.<hash>.js`, `app.bundle.<part>.<hash>.js`,
+  `app.bundle.theme.<hash>.js`, ...), with an index source map (each file's own map placed at the line it starts on, so
+  the developer tools show the `.ts` source) and a gzip copy beside it. The server sends them as
+  `/tico/ui/app.bundle.…` with `Cache-Control: public, max-age=31536000, immutable`, and the gzip copy to a browser
+  that accepts it. An older build's file is gone: a 404;
+- writes `build/ui/index.html`, the page with each marked region replaced by the parts' tags and the page parts' list
+  (a JSON block, `#ui-parts`, holding `build`, this build's id). It is revalidated on every load;
+- writes `build/ui/manifest.json` last: the build id, the scripts a cold open runs, and the sha256 of every file under
+  `ui/` it read. backend/ui_build.py compares it with `ui/`: `python -m backend.server` refuses to start on a missing or
+  stale build (it builds first when the checkout has Node on PATH and `npm ci`; so do pytest and `npm run test:ui`),
+  and the image builds the UI in its own stage (Dockerfile `ui-build`) and checks it there. The server image has no Node.
+
+While editing, run `npm run watch:ui`: every change under `ui/` rebuilds (about a second), and a reload shows it. The
+server never builds or checks the UI per request.
+
+One script is one scope for `'use strict'` (each part opens with it once), so start every `app/` file and every feature
+file (`ui/*.ts`) with it; the build refuses one that is not strict. The bundle's first statement marks
+`tico:bundle-start` for the boot timing (ui/app/boot-timing.ts). `python -m backend.ui_build --where
+app.bundle.<hash>.js:1:4567` reads a Sentry frame back to its source with the build's maps, and `--shell-size` prints
+what a cold open of Home downloads (backend/tests/test_ui_shell_size.py holds it under its ceiling).
+
+**Page parts** (`parts.json`). A cold open downloads only the shell; a page part's files are fetched the first time a
+person goes to one of its pages (ui/app/parts.ts). This list is not the load order (index.html is): it says which
+files wait for a click, and the names the rest of the app calls them by. The shell's first script declares a stand-in
+for each entry: a page or a call loads the part (with its `deps`) and then calls the real function; an idle name does
+nothing until the part is loaded. `events` are selectors of controls the shell draws whose click the part's own
+listener answers. `scripts/check_ui_parts.cjs` checks every use from outside a part.
 
 ## TypeScript
 
 Write a new file as TypeScript, `app/name.ts`, and list it in index.html by that name: strict types, no `any`, and
 only syntax that erases (no `enum`, `namespace` or constructor parameter properties), since it stays a classic
-script whose top-level names are globals like any other file's. `npm run build:ui` (scripts/build-ui.cjs, after
-`npm ci`) compiles each `.ts` file to `build/ui/` at the same path (`build/ui/app/name.js`) with esbuild's per-file
-transform: types stripped, nothing bundled, the file's place in the load order unchanged. `npm run watch:ui`
-recompiles on every change. `build/` is not committed. Each output has an external source map beside it
-(`name.js.map`, which its last line names), served as `/tico/ui/app/name.js.map`, so with the files served separately
-(`TICO_UI_BUNDLE=off`) a stack trace and the developer tools show the `.ts`. The bundle drops that line: its parts have
-no maps, for `.js` files either. `build/ui/manifest.json` records each source's, output's and map's
-sha256, and the bundle and the server's `/tico/ui/<name>.ts` route serve the output only while both match
-(backend/ui_build.py): a missing or stale build is a 503 naming the command, and `python -m backend.server` refuses
-to start on one (it compiles first when the checkout has Node and `npm ci`; so do pytest and `npm run test:ui`). The
-image compiles the UI in its own stage (Dockerfile `ui-build`) and ships only the output: the server image has no
-Node. `bash scripts/check_ui_types.sh` type-checks the `.ts` files with the rest.
+script whose top-level names are globals like any other file's. `bash scripts/check_ui_types.sh` type-checks the
+`.ts` files with the rest.
 
 The service worker, `sw.ts`, is compiled the same way (to `build/ui/sw.js`, a classic script: no `import` or
-`export`) and served at the root as `/sw.js` with its map at `/sw.js.map` (backend/ui_bundle_routes.py), under either
-bundle setting. That URL never changes: `app/boot.ts` registers `/sw.js?v=…` with scope `/`, and an installed worker
-checks the same URL for updates (`updateViaCache: 'none'`, `Cache-Control: private, no-cache`). A missing or stale
-build is the same 503, never the `.ts` source. Its global is a `ServiceWorkerGlobalScope`, which the page's DOM lib
+`export`) and served at the root as `/sw.js` with its map at `/sw.js.map` (backend/ui_bundle_routes.py). That URL never changes: `app/boot.ts` registers `/sw.js?v=…` with scope `/`, and an installed worker
+checks the same URL for updates (`updateViaCache: 'none'`, `Cache-Control: private, no-cache`). Its global is a `ServiceWorkerGlobalScope`, which the page's DOM lib
 contradicts, so it is its own program: `ui/tsconfig.worker.json` (lib `WebWorker`, every strict flag) checks it alone,
 and the page configs exclude it. Any finding there fails, with no baseline (`python3 scripts/check_ui_strict.py`, and
 `--worker-only` in `scripts/check_ui_types.sh`). The worker caches nothing: it lets the hashed bundle through to the
 browser cache and fetches the page itself past every cache.
 
 An open tab does not pick up a new release by itself. The config carries the release (`version`) and the served build
-(`ui_build`, the `?v=` of the two bundle tags joined by a dot); `app/notices.ts` compares both with what the page loaded with, on the
-config poll and when a hidden tab is shown, and shows "New version · Reload" (`#stale-banner`). It is empty when the files are served
-unbundled, so only the release is compared then.
+(`ui_build`, the build id the page's `#ui-parts` list holds); `app/notices.ts` compares both with what the page loaded with, on the
+config poll and when a hidden tab is shown, and shows "New version · Reload" (`#stale-banner`).
 
 ## The rule
 
 **One feature per file; load order is in index.html.** Add a page or feature as its own file and add its
-`<script>` (or `<link>`) tag where it belongs. Nothing else lists files: the server serves the folder, the
+`<script>` (or `<link>`) tag where it belongs. Nothing else lists the load order: the build reads index.html, the
 icon-font scan (`scripts/build-icon-font.py`) reads `app/` and `styles/`, and the tests load whatever
 `index.html` asks for.
 

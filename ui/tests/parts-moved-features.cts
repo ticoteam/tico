@@ -1,4 +1,4 @@
-// Code moved out of the shell to keep a cold open of Home under 300 KB (P05b, backend/ui_bundle.py SHELL_JS_CEILING),
+// Code moved out of the shell to keep a cold open of Home under 300 KB (P05b, backend/ui_build.py SHELL_JS_CEILING),
 // on a real hub with the bundle served as in production, in Chromium and in WebKit (Safari):
 // - a cold open of Home downloads none of the moved parts;
 // - each moved feature works on its first use: Tags, What's new, the style guide, a thread's settings and Members, the

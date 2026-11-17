@@ -138,8 +138,8 @@ def pytest_configure(config):
     app_build.install()  # every app after a worker's first builds in half the time
     if hasattr(config, "workerinput") or config.option.pyargs:
         return  # --pyargs names modules, not paths
-    # The page serves the UI's TypeScript as its compiled JavaScript: compiled here once when this checkout can
-    # (Node and `npm ci`); otherwise the tests that load the page fail and say to run `npm run build:ui`.
+    # The server serves the UI as scripts/build-ui.cjs builds it to build/ui: built here once when it is stale and this
+    # checkout can (Node and `npm ci`); otherwise the tests that load the page fail and say to run `npm run build:ui`.
     from backend import ui_build
 
     try:

@@ -1,4 +1,4 @@
-// Page parts on a real hub (support/real-hub.cts), the bundle served as in production (backend/ui_bundle.py, ui/parts.json):
+// Page parts on a real hub (support/real-hub.cts), the bundle served as in production (scripts/build-ui.cjs, ui/parts.json):
 // every page opens on a cold first visit, its address typed straight in, with no error on the page, and downloads the
 // shell and that page's part (with the parts it needs) and nothing else. Home, Retry and a tab from before a release are
 // parts-first-visit.cts.

@@ -72,7 +72,7 @@ UPGRADE_TESTS = (
 #   (`--file signups.csv`) fails it when the test writes no stand-in for that kind of file (#3598, fixed by #3684).
 #   A change under clients/commands/ picks it.
 # - UI_SHELL_SIZE builds the whole UI bundle and fails when a cold open of Home downloads more JavaScript than its ceiling
-#   (backend/ui_bundle.py SHELL_JS_CEILING, P05b). Any UI source, ui/parts.json, a vendor script, the bundler, the UI
+#   (backend/ui_build.py SHELL_JS_CEILING, P05b). Any UI source, ui/parts.json, a vendor script, the bundler, the UI
 #   build or the npm lockfile (esbuild's version decides the minified bytes) can move that number: each picks it.
 #   Between P05's two pull requests the shell crept from 341 to 383 KB with no check noticing.
 RELEASE_SHOTS = "scripts/tests/test_release_shots.py"
@@ -80,9 +80,7 @@ CLI_SPEC = "clients/tests/test_cli_spec.py"
 CLI_COMMANDS = "clients/commands/"
 UI_SHELL_SIZE = "backend/tests/test_ui_shell_size.py"
 UI_SHELL_INPUTS = (
-    "backend/ui_bundle.py",
     "backend/ui_build.py",
-    "backend/ui_compression.py",
     "scripts/build-ui.cjs",
     "package.json",
     "package-lock.json",
@@ -1181,7 +1179,7 @@ def script_srcs(path, diff):
             src = src.split("?", 1)[0].split("#", 1)[0]
             if src and not src.startswith("//") and not re.match(r"[a-z][a-z0-9+.-]*:", src, re.IGNORECASE):
                 # The page names its scripts by URL: /tico/ui/x is ui/x and /vendor/x is ui/vendor/x
-                # (backend/ui_bundle.py); a relative name sits beside the page.
+                # (scripts/build-ui.cjs); a relative name sits beside the page.
                 for mount, there in SCRIPT_MOUNTS:
                     if src.startswith(mount):
                         src = there + src[len(mount) :]

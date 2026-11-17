@@ -60,12 +60,8 @@ function snapRouteOk(hash?: string): boolean {
   const team = page.startsWith(TEAM_PAGE) ? page.slice(TEAM_PAGE.length) : '';
   return !!team && !team.includes('/');
 }
-// The bundle that draws the page (its ?v=); the separate files of a development checkout have none.
-const SNAP_VERSION = (() => {
-  const js = document.querySelector<HTMLScriptElement>('script[src*="/tico/ui/app.bundle.js"]');
-  try { return SNAP_SCHEMA + ':' + (js ? new URL(js.src, location.href).searchParams.get('v') || '' : 'files'); }
-  catch { return SNAP_SCHEMA + ':'; }
-})();
+// The build that draws the page (scripts/build-ui.cjs; ui/app/parts.ts reads it from the page).
+const SNAP_VERSION = SNAP_SCHEMA + ':' + UI_PARTS.build;
 const snapWho = (me: SelfPerson | null | undefined): string => JSON.stringify([location.origin, String(me?.owner_id || ''), String(me?.id || ''), String(me?.email || '')]);
 
 function snapDb(): Promise<IDBDatabase> {
