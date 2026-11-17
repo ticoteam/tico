@@ -9,7 +9,8 @@ running this.
   (clients/cli_spec.py) is one when none of the tools it can run writes (`writes` on the tool) or runs on this computer
   (`local`: it saves files), and it is not a paid lookup (PAID). The commands the hand parser still builds are listed in
   HAND_READ_PATHS, which shrinks as they move to specs. Left out on purpose: reads that mark something (`inbox`,
-  `message list`, `update read`, `changelog list`), reads with a writing flag (`rules read --from`), paid lookups
+  `message list`, `update read`, `changelog list`, and the MARKS commands such as `growth setup`), reads with a writing
+  flag (`rules read --from`), paid lookups
   (`gateway search`, `doc fetch`), checks, and every group or alias of a group (`status`, `org`, `docs`).
 """
 
@@ -170,13 +171,18 @@ def spec_paths():
 # Spec'd commands whose tools neither write nor run on this computer, but spend: from the company's Gateway cap, or
 # (`market ask`, `feedback rule-draft`) a model call on the server's key.
 PAID = ("gateway search", "gateway fetch", "gateway digest", "market ask", "feedback rule-draft")
+# Spec'd reads that also mark something: their first call records a team date (`growth setup` records the first open and
+# the step dates, backend/growth_setup.py), so the runner asks before running them.
+MARKS = ("growth setup",)
 
 
 def read_paths():
     reads = set(HAND_READ_PATHS)
     for path, command in spec_paths().items():
         tools = [hubtools.BY_NAME[name] for name in (command.tool, *command.tools)]
-        if path not in PAID and not any(tool["writes"] or tool["local"] for tool in tools):
+        if path in PAID or path in MARKS:
+            continue
+        if not any(tool["writes"] or tool["local"] for tool in tools):
             reads.add(path)
     return sorted(reads)
 
