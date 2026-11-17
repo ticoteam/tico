@@ -319,8 +319,8 @@ fn both_clis_report_a_version_the_runner_can_read() {
         // A CLI that takes a message for the running turn (`steer`) may need a minimum version for it.
         if m.capabilities.steer {
             assert!(
-                crate::hosts::claude::version_tuple(&out).is_some(),
-                "`{} --version` decides steering; its three numbers could not be read from {:?}",
+                crate::hosts::claude::own_version(&out).is_some(),
+                "`{} --version` decides steering; Claude Code's own version line could not be read from {:?}",
                 m.executable,
                 out.trim()
             );

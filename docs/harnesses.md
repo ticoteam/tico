@@ -381,8 +381,9 @@ fetched (`runner-rs/src/cli_compat.rs`). The daily update skips a broken release
 runner logs why once and the harness's status says it (`Claude Code 2.1.301 is a known-broken release (...); staying on
 2.1.299`), with no update offered. An install or **Update** whose newest release is broken takes the newest earlier
 one that is not. An installed release below the minimum or on the list, the runner's or a person's own, is named in
-the status the same way. A flag only newer releases have is passed only to one that has it, read from the CLI's own
-version line (`2.1.326 (Claude Code)`), so a wrapper's number never decides: `--effort` needs Claude Code 2.1.38.
+the status the same way. A flag or feature only newer releases have is passed or used only with one that has it, read
+from the CLI's own version line (`2.1.326 (Claude Code)`), so a wrapper's number never decides: `--effort` needs Claude
+Code 2.1.38, steering 2.1.296 and native goals 2.1.212. An unreadable version leaves each one off.
 
 A harness can be **pinned** to a version: the runner keeps that version and only reports that a newer one exists.
 The manifest can ship a pin (`[update] policy = "pinned"`, `pin = "1.2.3"`), and the owner can pin or unpin per

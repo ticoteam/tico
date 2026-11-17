@@ -1985,8 +1985,8 @@ mod tests {
 // Per-host answers behind a capability: generic code reads the manifest's capability and asks here, so the adapters
 // stay the one place that knows a CLI by name.
 
-/// Native goals and built-in commands of one installed harness (goals.capabilities): Claude Code by version, Codex by
-/// the protocol its app-server describes; every other host has none.
+/// Native goals and built-in commands of one installed harness (goals.capabilities): Claude Code by its own version
+/// line, Codex by the protocol its app-server describes; every other host has none.
 pub async fn probe_goals(
     runtime: &str,
     exe: &std::path::Path,
@@ -1996,7 +1996,7 @@ pub async fn probe_goals(
     match runtime {
         "claude" => {
             supported =
-                crate::hosts::claude::version_tuple(version).is_some_and(|v| v >= (2, 1, 212));
+                crate::hosts::claude::own_version(version).is_some_and(|v| v >= (2, 1, 212));
             if supported {
                 commands = vec![
                     crate::goals::command("compact", "Compact this conversation", "[instructions]"),
