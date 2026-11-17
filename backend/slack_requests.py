@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import hubdb as _H
+from . import slack_errors as SE
 from .store import Problem
 
 H: Any = _H  # untyped: typed as Any at the door
@@ -252,7 +253,7 @@ def serve_forever(gateway: Any) -> None:
                     swept = time.monotonic()
                 serve(gateway, QUEUED, workers)
             except Exception as exc:  # noqa: BLE001 one bad pass never stops the thread
-                LOG.error("Slack requests failed: %s", type(exc).__name__)
+                LOG.error("Slack requests failed: %s", SE.describe(exc))
             gateway.stop.wait(SERVE_SECONDS)
     finally:
         workers.close()

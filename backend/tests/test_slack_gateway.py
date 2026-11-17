@@ -6,11 +6,16 @@ guardrails are the point.
 """
 
 import json
+import logging
+import sqlite3
+import threading
+from types import SimpleNamespace
 
 import pytest
 
 from backend import hubdb as H
 from backend import slack_gateway as G
+from backend import slack_requests as SR
 from backend.config import Settings
 from backend.store import Store, encode
 from clients import judge as J
@@ -1124,3 +1129,19 @@ def test_visual_and_task_replies_share_one_gateway_story(gateway, hub, subtests)
     ):
         with subtests.test(check.__name__):
             check(gateway, hub)
+
+
+def test_a_request_loop_failure_logs_its_message_scrubbed(monkeypatch, caplog):
+    """A failed pass of the requests loop logs the exception's class and message, with a token redacted."""
+    gateway = SimpleNamespace(stop=threading.Event())
+
+    def failing_pass(*_args):
+        gateway.stop.set()
+        raise sqlite3.OperationalError("database is locked (key sk-testkey-000000000000)")
+
+    monkeypatch.setattr(SR, "serve", failing_pass)
+    monkeypatch.setattr(SR, "sweep", lambda _gateway: 0)
+    with caplog.at_level(logging.ERROR, logger="tico.slack_requests"):
+        SR.serve_forever(gateway)
+    assert "Slack requests failed: OperationalError: database is locked (key [redacted])" in caplog.text
+    assert "sk-testkey" not in caplog.text

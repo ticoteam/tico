@@ -37,6 +37,7 @@ from . import hubdb as H
 from . import org_rule_check as OR
 from . import screening
 from . import slack_channels as SC
+from . import slack_errors as SE
 from . import slack_gateway as G
 from .auth import Identity
 from .store import Problem
@@ -779,7 +780,7 @@ class Bridge:
         try:
             return self.drain(link["id"])
         except Exception as exc:  # noqa: BLE001 the queue is kept; the next pass carries it in
-            LOG.error("Slack inbound carry failed: %s", type(exc).__name__)
+            LOG.error("Slack inbound carry failed: %s", SE.describe(exc))
             return "queued"
 
     def drain(self, link_id):
@@ -817,7 +818,7 @@ class Bridge:
             try:
                 out.append(self.drain(link_id))
             except Exception as exc:  # noqa: BLE001 one link's queue never stops the others
-                LOG.error("Slack queue for a link failed: %s", type(exc).__name__)
+                LOG.error("Slack queue for a link failed: %s", SE.describe(exc))
                 out.append("error")
         return out
 
@@ -1111,7 +1112,7 @@ class Bridge:
                 try:
                     out.append(self.send_one(link, d))
                 except Exception as exc:  # noqa: BLE001 one delivery never stops the others
-                    LOG.error("Slack delivery %s failed: %s", d.get("id"), type(exc).__name__)
+                    LOG.error("Slack delivery %s failed: %s", d.get("id"), SE.describe(exc))
                     out.append({"delivery_id": d.get("id"), "state": "error"})
         return out
 
@@ -1623,6 +1624,7 @@ class Bridge:
             try:
                 out["gated"].append(self.gate(link))
             except Exception as exc:  # noqa: BLE001 a check that breaks is tried again, never lost
+                # A Slack error from the channel lookup can echo a message, so the class alone is logged.
                 LOG.error("Slack link %s check failed: %s", link["id"], type(exc).__name__)
                 out["gated"].append("error")
         self.check_links()
@@ -1643,7 +1645,7 @@ class Bridge:
             try:
                 out["history"].append(self.import_history(link))
             except Exception as exc:  # noqa: BLE001 the import is tried again, not lost
-                LOG.error("Slack history import failed: %s", type(exc).__name__)
+                LOG.error("Slack history import failed: %s", SE.describe(exc))
                 self._history_state(link["id"], "pending")
         return out
 
