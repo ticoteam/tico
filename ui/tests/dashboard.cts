@@ -199,11 +199,11 @@ async function shot(page: Page, name: string) {
       await shot(page, 'desktop-dashboard');
 
       // The shared header (style guide "Top bars: one line"): Company at the page title's size, five tabs on the row with
-      // Share, the sixth, in ⋯, and ⋯ last. One line.
+      // Factories and Share, the sixth and seventh, in ⋯, and ⋯ last. One line.
       const head = page.locator('#main header.ph');
       assert.equal(await head.locator('h1').evaluate(h => getComputedStyle(h).fontSize), '17px', 'the page title size');
-      assert.deepEqual(await head.locator('.ph-tabs > .ph-tab:visible').allInnerTexts(), ['Mine', 'Dashboard', 'Campus', 'Graph', 'Factories']);
-      assert.deepEqual(await head.locator('.ph-menu .ph-mtab').allTextContents(), ['Share'], 'Share waits in ⋯');
+      assert.deepEqual(await head.locator('.ph-tabs > .ph-tab:visible').allInnerTexts(), ['Mine', 'Dashboard', 'Floor', 'Campus', 'Graph']);
+      assert.deepEqual(await head.locator('.ph-menu .ph-mtab').allTextContents(), ['Factories', 'Share'], 'Factories and Share wait in ⋯');
       assert.ok((await head.boundingBox())!.height < 60, 'one line');
       assert.equal(await head.evaluate(h => h.querySelector(':scope > .ph-menu')!.previousElementSibling!.matches('.ph-more')), true, '⋯ last');
 

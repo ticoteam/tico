@@ -81,7 +81,7 @@ on another team or another repository? Is every rabbit hole fixed, cut or time-b
 
 ## 6. Build the page and attach it
 
-Follow `skills/build-the-page/SKILL.md`: screenshots at phone (390 px) and desktop (1280 px) width, arrows, then
+Follow `.claude/skills/build-the-page/SKILL.md`: screenshots at phone (390 px) and desktop (1280 px) width, arrows, then
 build and check it with the skill's `page.py` (`--kind bug-spec`, `screen-spec` or `change-spec`), then publish it:
 
     tico page publish specs/<slug>.html --spec --task <id>

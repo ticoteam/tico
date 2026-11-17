@@ -50,3 +50,12 @@ first_routine:
 reasoning_effort: medium
 recommend_when: [always, has_pipeline]
 when: "A company with legal, finance and partner work that nobody sees together, where the owner needs one page on the company's obligations and deals each week."
+# Files this template takes from templates/catalog/_shared, one copy for every template that lists them.
+shared_files:
+  - knowledge/manager-practice.md
+  - .claude/skills/read-what-is-missing
+  - .claude/skills/write-the-stuck-task-question
+  - .claude/skills/find-the-owner-of-a-task
+  - playbooks/decide-a-stuck-task.md
+# Base files (templates/catalog/_base) this template does not take.
+base_skip: [knowledge/README.md, playbooks/README.md]

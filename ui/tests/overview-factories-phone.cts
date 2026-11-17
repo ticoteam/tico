@@ -1,7 +1,7 @@
 import type {Route} from 'playwright';
 // Company › Factories in the shared page header, at a phone width (390 × 844) and a desktop one: the title line keeps
 // Company, the Day/Week/Month segment, the quiet + and ⋯ on screen; the Company tabs get their own full-width row (five,
-// Share in ⋯); #main does not scroll sideways. At a desktop width the header stays one row. Fixtures only.
+// the open one among them; Graph and Share in ⋯); #main does not scroll sideways. At a desktop width the header stays one row. Fixtures only.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -55,7 +55,8 @@ const FACTORIES = {factories: [{id: 'f-growth', name: 'Growth', goal: null, mana
     });
 
     // Phone: the shared header (ui/app/page-head.ts). The title line holds Company, Day/Week/Month, the quiet + and ⋯;
-    // the Company tabs take one full-width row under it, five of them, Share waiting in ⋯. Nothing past the right edge,
+    // the Company tabs take one full-width row under it, five of them with Factories, the open one, in the fifth place;
+    // Graph and Share wait in ⋯. Nothing past the right edge,
     // and every control a 44px target.
     {
       const {page, errors} = await open(390, 844);
@@ -68,8 +69,8 @@ const FACTORIES = {factories: [{id: 'f-growth', name: 'Growth', goal: null, mana
       assert.equal(g.tabTops.length, 1, `the Company tabs stack instead of one row: tops ${g.tabTops.join(', ')}`);
       assert.ok(g.nav.top >= g.add.bottom - 1, 'the tabs sit on their own row below the header controls');
       assert.ok(g.nav.right <= g.vw && g.navScroll <= g.navClient, 'the tab row fits the screen');
-      assert.deepEqual(g.tabs, ['Mine', 'Dashboard', 'Campus', 'Graph', 'Factories'], 'five tabs on the row');
-      assert.deepEqual(g.held, ['Share'], 'Share, the sixth, is in ⋯');
+      assert.deepEqual(g.tabs, ['Mine', 'Dashboard', 'Floor', 'Campus', 'Factories'], 'five tabs on the row, the open one last');
+      assert.deepEqual(g.held, ['Graph', 'Share'], 'Graph and Share are in ⋯');
       assert.equal(g.last, 'ph-more', '⋯ is the last control');
       assert.deepEqual(g.small, [], 'every header control is 44px on a phone');
       assert.deepEqual(errors, []);

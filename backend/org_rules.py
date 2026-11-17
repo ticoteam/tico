@@ -1223,10 +1223,12 @@ def seed_external(c, who, text, source_name, source_kind):
 # The built-in rule "Asks to a person" (Tasks spec "Bots ask people a question with choices", AC-7 and AC-8): added
 # once to every team, on, followed by all bots and met only by a bot's question to a person (`kind:ask`). The team edits
 # it or turns it off on the Rules page like any rule; the marker stays, so it is never added again.
+# Its tone only: the ask's shape (a short first line that stands on its own, no paths or ids) is checked in code
+# (backend/ask_shape.py). A team's stored copy still in earlier built-in words is brought up to date by migration
+# 20261116234252_asks_to_a_person_choices_optional; one the team edited keeps its words.
 ASKS_TO_A_PERSON = (
-    "A bot's ask or task for a person says in plain words why it matters, gives 2 to 4 choices with the bot's "
-    "recommendation, says what happens on each, and uses no Markdown or file paths. Otherwise it is refused, and the "
-    "bot rewrites it."
+    "A bot's ask or task for a person is in plain words, says in one line why it matters, and uses no Markdown or "
+    "file paths. Choices are optional. Otherwise it is refused, and the bot rewrites it."
 )
 ASKS_TO_A_PERSON_ADDED = "rules.asks_to_a_person"  # registry_metadata: added once; never again
 

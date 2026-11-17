@@ -23,3 +23,5 @@ reasoning_effort: high
 # Every task for the Rules Owner is private to its requester and the Rules Owner: a document's text and a question are a company's own.
 private_tasks_default: true
 recommend_when: [never]
+# Base files (templates/catalog/_base) this template does not take.
+base_skip: [knowledge/README.md, playbooks/README.md]
