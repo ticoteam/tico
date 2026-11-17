@@ -379,6 +379,10 @@ def register(
                     c.execute("SAVEPOINT tasks_move_one")
                     before = len(c.after_commit)
                     try:
+                        # A move of many is made against each task as it is now (a bot names the tasks, not their
+                        # versions): read inside this write, so nothing changes between the read and the move.
+                        current: Any = H.task(c, task_id)
+                        now: Any = current["version"] if current else None
                         H.task_move_to(
                             c,
                             who.actor,
@@ -386,7 +390,7 @@ def register(
                             body.to_pipeline,
                             body.to,
                             body.why,
-                            None,
+                            now,
                             mover=mover(c, who) or None,
                             batch=batch,
                         )

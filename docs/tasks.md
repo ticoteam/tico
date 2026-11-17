@@ -51,7 +51,8 @@ stayed stay picked.
 - A Done or Closed task lands in the new pipeline's Done or Closed, never reopened.
 - Refused, and listed in a move of many: a task whose bot is mid-turn (`task_turn_running`), a full stage
   (`task_stage_full`), one the mover can't read. There is no undo: move it back the same way.
-- Anyone who can read the task may move it, into any pipeline. A bot never lands a task past a person's OK.
+- Anyone who can read the task may move it, into any pipeline. A bot never lands a task past a person's OK, and only a
+  person moves a task into a private pipeline (entering one makes it private and adds the pipeline's readers).
 - The history reads "Steven moved it from Dev › Ideas to Backlog › On ice — why". The event is `task.moved` (from and
   to pipeline and stage, who, and the bulk move's id); the old stage's leaves and the new stage's enters fire on
   `task.step_changed`.

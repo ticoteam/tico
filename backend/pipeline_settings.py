@@ -1506,8 +1506,8 @@ def move_to_hint(conn: "sqlite3.Connection", record: Row) -> Row | None:
 
 def _move_out(conn: "sqlite3.Connection", by: str, pid: str, gone: list[Row], to: Row) -> None:
     """Move the open tasks of the stages a save removes to `to` ({"pipeline", "stage"}, each an id or a name): a stage of
-    this pipeline that stays, or of any other (task_engine.refile, which a bot's own turn on a task does not hold here:
-    the stage is going). Any task that cannot go refuses the whole save."""
+    this pipeline that stays, or of any other (task_engine.refile). Any task that cannot go (a bot's turn on it runs, no
+    room, one the saver can't read) refuses the whole save."""
     target = str(to.get("stage") or "").strip() or None
     pipe = task_engine.pipeline_named(conn, by, str(to.get("pipeline") or ""))
     leaving = {str(g["id"]) for g in gone} | {str(g["name"]).lower() for g in gone}
@@ -1525,8 +1525,17 @@ def _move_out(conn: "sqlite3.Connection", by: str, pid: str, gone: list[Row], to
             )
         ]
         for task_id in ids:
+            row = task_engine.task(conn, task_id) or {}
+            if by != task_engine.SYSTEM and not _h().task_private_readable(conn, by, row):
+                # Changing the pipeline is not reading its tasks: one they can't read is moved by someone who can.
+                _refuse(
+                    conn,
+                    by,
+                    "task_settings",
+                    f"{stage['name']} holds a task you can't read. Ask someone who can to move it.",
+                )
             task_engine.refile(
-                conn, task_id, str(pipe["id"]), target, by, f"{stage['name']} was removed", turn_check=False
+                conn, task_id, str(pipe["id"]), target, by, f"{stage['name']} was removed", row.get("version")
             )
 
 

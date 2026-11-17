@@ -184,3 +184,23 @@ def test_a_pipeline_that_holds_tasks_retires_once_they_move_to_another(api):
     assert out["pipeline"]["retired_at"]
     for t in made:
         assert get(api, "tasks/" + t["id"])["task"]["stage"]["id"] == "on-ice"
+
+
+def test_a_bot_moves_a_stage_of_tasks_without_versions_and_never_into_a_private_pipeline(api):
+    boards(api)
+    bot = as_bot(api)
+    made = [idea(api, f"Idea {n}", owner="ops", token=bot) for n in range(2)]
+    out = post(
+        api,
+        "tasks/move",
+        {"from": {"pipeline": "Dev", "stage": "Ideas"}, "to_pipeline": "Backlog", "why": "Old ideas"},
+        token=bot,
+    )
+    assert sorted(out["moved"]) == sorted(t["id"] for t in made) and out["skipped"] == []
+    post(
+        api,
+        "pipelines/vault",
+        {"name": "Vault", "private": True, "manager_id": "human:ana", "stages": [{"id": "kept", "name": "Kept"}]},
+    )
+    out = post(api, "tasks/move", {"ids": [made[0]["id"]], "to_pipeline": "vault", "why": "Secret"}, token=bot)
+    assert out["moved"] == [] and out["skipped"][0]["code"] == "task_needs_person"

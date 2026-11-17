@@ -1324,6 +1324,12 @@ def refile(
             if any(R.people_only(r) for r in R.on_stage(conn, skipped["id"])):
                 _refuse(conn, by, "task_needs_person", f"{skipped['name']} needs a person's OK first", task_id)
     if private_pipelines.is_private(pipe) and pipe["id"] != row["pipeline_id"]:
+        # Every task in a private pipeline is private and its manager reads it: entering one adds readers, which only a
+        # person does (a bot never widens who reads a task).
+        if not is_human(by) and by != SYSTEM:
+            _refuse(
+                conn, by, "task_needs_person", f"Only a person moves a task into {pipe['name']}: it is private", task_id
+            )
         private_pipelines.admit(conn, task_id, pipe)  # undone with the move if the move is refused
         row = task(conn, task_id) or row
     held = shut_out(conn, row, target)
