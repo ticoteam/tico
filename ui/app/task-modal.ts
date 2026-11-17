@@ -1463,7 +1463,7 @@ function taskTabPaint(d: ModalDialog) {
   const tab = d.taskTab || 'chat', body = $('.task-layout', d), doc = docOf(d.taskDocs, tab);
   if (body) body.dataset.taskTabShown = doc ? 'doc' : tab;
   const row = taskTabRow(d);
-  if (row) docTabsPaint(row, tab === 'details' ? d.taskTabBack || 'chat' : tab, b => b.dataset.taskTab);
+  if (row) docTabsPaint(row, tab === 'details' ? d.taskTabBack || 'chat' : tab, b => b.dataset.taskTab, tab !== 'details');   // Details covers them: none selected
   taskDetailsButton(d)?.setAttribute('aria-pressed', String(tab === 'details'));
   const pane = $('.task-doc', d) as HTMLElement | null;
   if (pane && doc) docViewMount(pane, doc);

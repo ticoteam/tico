@@ -9,8 +9,11 @@ import type {Page} from 'playwright';
 // - a document opens under one small line, "v2 · Writer · 2h", which opens its versions (each once, with its note, the
 //   one shown in bold) and Compare; a version picked shows; Compare shows the two versions' text, line by line;
 // - a document takes the app's colours, light or dark;
-// - Details opens over a document and closes back to it; a long Details scrolls inside the window, with or without
-//   documents, on a computer and a phone;
+// - Details opens over a document and closes back to it, and while it shows no tab looks selected; a long Details
+//   scrolls inside the window, with or without documents, on a computer and a phone;
+// - Details after the description: "Pages" left with its + at the row's right end, then the pages; "To leave <stage>"
+//   left with its requirements under it; a stage with nothing to leave by has no To leave at all (⋯ › Ask someone…
+//   opens its form);
 // - one document host, many documents: its controls answer once per tap; a read on its way still lands when the same
 //   document is shown again before it does;
 // - a phone at 390 px: the head holds the title (40% or more, up to two lines), the tabs, ⋯ and ✕; Details and Archive
@@ -36,11 +39,16 @@ const PAGES: Record<string, string> = {
   [`${QA}@1`]: '<h1>QA report</h1><ul><li>Cart survives closing the tab ✓</li><li>Expires after 30 days ✓</li></ul>',
 };
 const LONG = Array.from({length: 40}, (_, i) => `Step ${i + 1}: open a cart, close the tab, come back.`).join('\n\n');
+const req = (id: string, line: string, met: boolean) => ({requirement_id: id, line, met, who: 'bot:writer', may: [], typed: false, answer: null, standing: '', asked_by: null, choices: null});
 const tasks = () => [
   task('t-1', 'Fix the login redirect', 'spec', {owner_id: 'bot:writer', body: LONG}),
-  task('t-2', 'Saved carts that survive closing the tab', 'spec', {owner_id: 'bot:writer', documents: docs(), body: LONG}),
+  task('t-2', 'Saved carts that survive closing the tab', 'spec', {owner_id: 'bot:writer', documents: docs(), body: LONG,
+    to_leave: [req('r-1', 'Spec written', true), req('r-2', 'OK from anyone', false)]} as Parameters<typeof task>[3]),
 ];
+// Each task's pages (GET /api/v2/places/task:<id>): one, and the reader may link more.
+const PIN = {id: 'pin-1', size: 'medium', can_unpin: true, page: {file_id: 'file-brief', title: 'Saved carts brief', version: 1, replaced_by_id: null, archived: false}};
 const files = async (page: Page) => {
+  await page.route(url => url.pathname.startsWith('/api/v2/places/'), route => route.fulfill({contentType: 'application/json', body: JSON.stringify({can_link: true, pins: [PIN]})}));
   await page.route(url => url.pathname.startsWith('/api/v2/files/'), route => {
     const url = new URL(route.request().url()), id = decodeURIComponent(url.pathname.split('/').pop()!);
     const body = PAGES[`${id}@${url.searchParams.get('v') || 1}`];
@@ -61,8 +69,32 @@ const longDetails = async (page: Page, id: string, phone: boolean, name: string)
     await win.locator('[data-task-more]').click();
     await page.locator('.prop-pop:popover-open .tl-mi', {hasText: 'Details'}).click();
   };
+  const back = await win.locator('[role="tab"][aria-selected="true"]').evaluateAll(els => els.map(e => (e.textContent || '').trim()));
   await toggle();
   await win.locator('[data-task-props]').waitFor();
+  assert.deepEqual(await win.locator('[role="tab"][aria-selected="true"]').count(), 0, `while Details shows, no tab looks selected (${id}, ${phone ? 'phone' : 'computer'})`);
+  // After the description: Pages, its label left and + at the row's right end, its page under them; then To leave
+  // <stage>, a label at the left with its requirements under it, or nothing at all when the stage has none.
+  await win.locator('.task-pages .tp-row').waitFor();
+  const parts = await win.locator('.task-side').evaluate(side => {
+    const box = (e: Element | null) => e ? e.getBoundingClientRect() : null, s = box(side.querySelector('.task-pages'))!;
+    const head = box(side.querySelector('.tp-head')), label = box(side.querySelector('.tp-head .lbl')), add = box(side.querySelector('[data-tp-add]')), row = box(side.querySelector('.tp-row'));
+    const reqs = side.querySelector<HTMLElement>('.task-requirements'), rh = reqs?.querySelector('h3'), shown = !!reqs && reqs.offsetHeight > 0;
+    const rows = shown ? [...reqs.querySelectorAll('.task-req')].map(r => box(r)!) : [];
+    const words = [...side.querySelectorAll<HTMLElement>('h3, h4, .lbl')].filter(e => e.offsetHeight > 0 && /^To leave/.test(e.innerText || '')).length;
+    return {
+      pagesFirst: !!head && !!label && !!add && !!row && label.left - s.left < 2 && s.right - add.right < 2 && Math.abs(label.top + label.height / 2 - (add.top + add.height / 2)) < 4 && row.top >= head.bottom - 1,
+      toLeave: shown ? (rh as HTMLElement).innerText.split('\n')[0]!.replace(/\s+\d+ of \d+$/, '').trim() : null,
+      leaveLeft: shown ? box(rh!.querySelector('span'))!.left - box(reqs)!.left < 2 : null,
+      reqsUnder: shown ? rows.length > 0 && rows.every(r => r.top >= box(rh!)!.bottom - 1) : null,
+      afterPages: shown ? box(reqs)!.top >= s.bottom - 1 : null, words,
+      // the two +s line up, one above the other
+      plusesAlign: shown ? Math.abs(box(reqs.querySelector('[data-req-ask]'))!.right - add!.right) < 1 && Math.abs(box(reqs.querySelector('[data-req-ask]'))!.width - add!.width) < 1 : null,
+    };
+  });
+  const want = id === 't-2' ? {pagesFirst: true, toLeave: 'To leave Spec', leaveLeft: true, reqsUnder: true, afterPages: true, words: 1, plusesAlign: true}
+    : {pagesFirst: true, toLeave: null, leaveLeft: null, reqsUnder: null, afterPages: null, words: 0, plusesAlign: null};
+  assert.deepEqual(parts, want, `Details: Pages, then To leave (${id}, ${phone ? 'phone' : 'computer'})`);
   const got = await win.locator('.task-layout').evaluate(layout => {
     const side = layout.querySelector<HTMLElement>('.task-side')!, props = side.querySelector('[data-task-props]')!;
     side.scrollTop = 1e6;
@@ -70,9 +102,12 @@ const longDetails = async (page: Page, id: string, phone: boolean, name: string)
     return {inside: s.bottom <= l.bottom + 1, scrolled: side.scrollTop > 0, factsShow: f.top < l.bottom && f.bottom > l.top, overflow: getComputedStyle(side).overflowY};
   });
   assert.deepEqual(got, {inside: true, scrolled: true, factsShow: true, overflow: 'auto'}, `a long Details scrolls inside the window (${id}, ${phone ? 'phone' : 'computer'})`);
+  // The shot: the end of the description, Pages, To leave and the facts.
+  await win.locator('.task-side').evaluate(side => { side.scrollTop = side.querySelector<HTMLElement>('.task-pages')!.offsetTop - 120; });
   await shot(page, name);
   await win.locator('.task-side').evaluate(e => { e.scrollTop = 0; });
   await toggle();
+  assert.deepEqual(await win.locator('[role="tab"][aria-selected="true"]').evaluateAll(els => els.map(e => (e.textContent || '').trim())), back, 'and closes back to the tab it covered');
 };
 const texts = (page: Page) => page.locator('#task-modal[open] [role="tab"]').evaluateAll(els => els.map(e => (e.textContent || '').trim()));
 
@@ -93,6 +128,16 @@ const texts = (page: Page) => page.locator('#task-modal[open] [role="tab"]').eva
         [['task-modal', 'none']], 'no focus ring');
       await shot(page, `no-documents-desktop-${theme}`);
       await longDetails(page, 't-1', false, `details-long-desktop-${theme}`);
+      // With nothing to leave by, Ask someone is in ⋯: it opens Details on To leave's form, under its heading.
+      await win.locator('[data-task-more]').click();
+      await page.locator('.prop-pop:popover-open .tl-mi', {hasText: 'Ask someone…'}).click();
+      const leave = win.locator('.task-requirements');
+      await leave.locator('[data-req-ask-form] input[name="line"]').waitFor();
+      assert.equal(await win.locator('[data-task-tab="details"]').getAttribute('aria-pressed'), 'true', 'on Details');
+      assert.match(await leave.locator('h3').innerText(), /^To leave Spec/);
+      await leave.locator('[data-req-ask]').click();
+      assert.equal(await leave.isVisible(), false, 'and goes again with its form');
+      await win.locator('[data-task-tab="details"]').click();
 
       // ---- a Spec and a QA report: the tabs on the title row, Chat first, then newest change first
       await page.evaluate(() => { location.hash = '#/task/t-2'; });

@@ -1,6 +1,6 @@
 /* ui/app/task-requirements.ts — "To leave <stage>" in a task's Details (docs/dev/pipelines-v3.md S4): what the task needs
    before it leaves its stage, each a mark and its words, whose it is in the tooltip (a stage's answer, once given, its value); × takes back an ask you may withdraw, and +
-   asks someone for an answer or an OK (POST /v2/tasks/{id}/asks). A task with nothing to leave by shows only +.
+   asks someone for an answer or an OK (POST /v2/tasks/{id}/asks). A task with nothing to leave by shows no section; ⋯ › Ask someone… opens its form.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 

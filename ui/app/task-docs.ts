@@ -39,11 +39,13 @@ function docTabsKeys(row: HTMLElement, show: (tab: HTMLElement) => void) {
     show(next); next.focus();
   };
 }
-/** Marks the tab `on` selected in a row, and scrolls the row (only the row) so it shows: Chat, first, from the start. */
-function docTabsPaint(row: ParentNode, on: string, keyOf: (tab: HTMLElement) => string | undefined) {
+/** Marks the tab `on` selected in a row, and scrolls the row (only the row) so it shows: Chat, first, from the start.
+    `shown` false: something else covers the tabs' pane (a task's Details), so none looks selected; `on` keeps the
+    keyboard's stop. */
+function docTabsPaint(row: ParentNode, on: string, keyOf: (tab: HTMLElement) => string | undefined, shown = true) {
   for (const b of row.querySelectorAll<HTMLElement>('.doc-tabs [role="tab"]')) {
     const yes = keyOf(b) === on;
-    b.setAttribute('aria-selected', String(yes)); b.tabIndex = yes ? 0 : -1;
+    b.setAttribute('aria-selected', String(yes && shown)); b.tabIndex = yes ? 0 : -1;
     const strip = b.parentElement;
     if (!yes || !strip) continue;
     const left = b.getBoundingClientRect().left - strip.getBoundingClientRect().left + strip.scrollLeft, right = left + b.offsetWidth;

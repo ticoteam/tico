@@ -571,6 +571,9 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
     if (task.pipeline_id) items.push({text: 'Move to…', icon: 'swap_horiz', run: () => setTimeout(() => void taskMoveToMenu(d, more, {
       pipeline: task.pipeline_id ?? null, stage: task.stage_id ?? null,
       run: (p, st, why) => void save('stage', {move: String(st.id), pipeline: p.id, where: `${p.name} › ${st.name}`, ...(why ? {why} : {})})}))});
+    // Ask someone: To leave's +, whose section shows nothing while the stage has nothing to leave by (task-code.css).
+    const ask = $('.task-requirements.tsec-empty [data-req-ask]', d) as HTMLElement | null;
+    if (ask) items.push({text: 'Ask someone…', icon: 'person_search', run: () => { taskTabShow(taskModalOf(d), 'details'); ask.click(); }});
     if (r.edit) items.push({text: 'Reassign…', icon: 'person', run: () => setTimeout(() => { taskTabShow(taskModalOf(d), 'details'); ($('[data-prop="owner"]', d) as HTMLElement | null)?.click(); })});
     // Empty facts wait hidden in Details (a passed wake time counts as no due date); these show one and open its editor.
     const waiting = (key: string) => !!$(`[data-prop-row="${key}"][hidden]`, d);

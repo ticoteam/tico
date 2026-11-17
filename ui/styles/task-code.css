@@ -66,13 +66,16 @@
 #task-modal .task-side .tsec{margin:0;padding:0;border:0}
 /* Labels inside the window are small, muted and in sentence case (search.css's caps are for the other dialogs). */
 #task-modal .task-layout .lbl{margin:0;color:var(--muted);font-size:var(--t-sm);font-weight:400;letter-spacing:var(--track-normal);text-transform:none}
-#task-modal .task-side .rail-h .prop-add{margin-left:auto;width:var(--ctl);height:var(--ctl)}
-#task-modal .task-side .tsec-empty:not(:has(form:not([hidden]))):not(.task-requirements):not(.tf-shown){display:none}
+#task-modal .task-side :is(.rail-h,.tp-head) .prop-add{margin-left:auto;width:var(--ctl);height:var(--ctl)}
+/* A stage with nothing to leave by has no To leave at all; ⋯ › Ask someone… opens its form (task-props.ts). */
+#task-modal .task-side .tsec-empty:not(:has(form:not([hidden]))):not(.tf-shown){display:none}
 /* Pages: a row is the page's mark and name, and opens it; + opens the page search. */
 #task-modal .task-pages:not([hidden]){display:flex;flex-direction:column;gap:0}
 #task-modal .task-pages .tp-pages{display:flex;flex-direction:column;gap:0}
 #task-modal .task-pages .tp-row{gap:var(--s2);padding:5px 0;border-radius:var(--r-ctl)}
 #task-modal .task-pages .tp-row .nav-icon{font-size:18px;width:18px;height:18px}
+#task-modal .task-pages .tp-unlink{border:0;background:none;color:var(--muted)}
+#task-modal .task-pages .tp-unlink:hover{color:var(--ink);background:var(--surface2)}
 #task-modal .task-pages .tp-picker{display:flex;flex-direction:column;gap:2px;margin:0 0 var(--s2);padding:var(--s1);border:1px solid var(--line);border-radius:var(--r-pop);background:var(--surface);box-shadow:0 8px 24px rgb(0 0 0/.18)}
 #task-modal .task-pages .tp-picker[hidden]{display:none}
 #task-modal .task-pages .tp-picker>input{width:100%;height:var(--ctl);margin-bottom:var(--s1)}
