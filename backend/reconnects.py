@@ -106,6 +106,8 @@ def line(c, bot, service, label, fix=None):
         return f"{name} needs {label} to go on."
     if service == "login":
         return f"{name} can't sign in to {label}."
+    if service == "access":
+        return f"{name} asks for {label}."
     return f"{name} can't reach {label}."
 
 
@@ -375,9 +377,12 @@ def dropped(c, request_id):
 
 
 def _said(c, wait):
+    if wait["ended"] == "canceled" and wait["service"] == "access":
+        return f"{wait['label']} was declined."
     if wait["ended"] == "canceled":
         return f"{_H().actor_name(c, wait['person'])} canceled the card for {wait['label']}: it was not saved."
-    return f"{wait['label']} is " + ("saved" if wait["service"] == "secret" else "reconnected") + "."
+    done = {"secret": "saved", "access": "granted"}.get(wait["service"], "reconnected")
+    return f"{wait['label']} is {done}."
 
 
 def _claim_owed(c, task_id, owner):
@@ -427,6 +432,8 @@ def deliver(c, task_id, why=""):
     keys = [w["key"] for w in owed]
     H.event(c, H.KEEPER, "task.reconnected", row["id"], {"keys": keys, "why": why})
     head = "Reconnected" if all(w["ended"] == "fixed" for w in owed) else "Reconnect card closed"
+    if all(w["service"] == "access" for w in owed):
+        head = "Access granted" if all(w["ended"] == "fixed" for w in owed) else "Access request closed"
     text = f"{head}: {row['title']}\n{said} Continue."
     if not H._wake(
         c,
@@ -543,11 +550,9 @@ def hold(c, task_id):
     card = pending(c, task_id)
     if not card:
         return None
-    return {
-        "why": f"{card['label']} to be reconnected" if card["service"] != "secret" else f"{card['label']} to be saved",
-        "on": card["person"],
-        "what": ("save " if card["service"] == "secret" else "reconnect ") + card["label"],
-    }
+    verb = {"secret": "save", "access": "grant"}.get(card["service"], "reconnect")
+    done = {"secret": "saved", "access": "granted"}.get(card["service"], "reconnected")
+    return {"why": f"{card['label']} to be {done}", "on": card["person"], "what": f"{verb} {card['label']}"}
 
 
 def for_tasks(c, task_ids, person):

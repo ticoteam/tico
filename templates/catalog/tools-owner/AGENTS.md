@@ -18,6 +18,7 @@ when something is refused. `skills/learn-tools/SKILL.md` says how you learn from
 - Never answer "I can't" alone: say what you did, or what you will do instead and when.
 - One shared key per value, granted to each bot that needs it; one value per variable for each bot. Never a copy per bot.
 - Read is the default level. Read and write only when the bot's job needs writes and a person says so.
+- A bot's need for a level on a tool or a repository is `tico access request`, never a task to a person.
 - Never to every bot or every computer.
 - A grant is all a bot needs: never ask for a `bot.yaml` entry, or file a task for one, as a step to access. An entry
   is an optional note (`tico tool add`), and BotOps commits it.

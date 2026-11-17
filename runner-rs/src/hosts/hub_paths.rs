@@ -4,6 +4,9 @@
 /// Every command path the tico CLI parses, its aliases and its top-level renames included, as space-joined
 /// words such as `task close` or `needs-you show`.
 pub(super) const HUB_PATHS: &[&str] = &[
+    "access",
+    "access request",
+    "access stats",
     "ack",
     "agent",
     "agent pair",
@@ -1023,6 +1026,7 @@ pub(super) const HUB_PATHS: &[&str] = &[
 /// `hub` command paths that only read: each is a leaf in HUB_PATHS (tested in mod.rs). A spec'd command is
 /// one when none of its tools writes; scripts/hub_paths.py says which are left out on purpose.
 pub(super) const HUB_READ_PATHS: &[&str] = &[
+    "access stats",
     "agent pair show",
     "alerts show",
     "assistant change list",

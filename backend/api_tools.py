@@ -74,6 +74,7 @@ from pydantic import ConfigDict, Field, SecretStr
 from . import mcp_connect
 from . import tool_services as TS
 from . import tool_settings
+from . import access_requests
 from . import tool_templates
 from . import default_read
 from . import tool_access as TA
@@ -1271,6 +1272,8 @@ def update_tool(c, who, tool_id, body, admins, auth=None):
             {"before": not body.everyone_reads, "after": body.everyone_reads},
         )
         tool = dict(tool_row(c, tool_id))
+        if body.everyone_reads:  # every bot reads it now: requests for Read on it close themselves
+            access_requests.settled(c, who, resource_type="tool", resource_id=tool_id, via="everyone-reads")
     fields = {k: v for k, v in _clean(asked).items()}
     merged = tool | fields
     if merged["delivery"] == "proxy" and not merged["base_url"]:
@@ -1451,6 +1454,7 @@ def add_key(c, who, vault, tool_id, body):
         (tool_id, body.access_level, body.expires_on or None, brief["id"]),
     )
     H.event(c, who.actor, "tool.key_added", tool_id, {"credential": brief["id"], "access_level": body.access_level})
+    access_requests.settled(c, who, resource_type="tool", resource_id=tool_id)  # a Read key may make Read default
     return _key_view(c, who, vault.row(c, brief["id"]), True, vault.admins)
 
 
@@ -1647,6 +1651,17 @@ def set_level(c, who, vault, tool_id, subject, level):
     subject = subject_of(c, subject)
     if not subject.startswith(("bot:", "human:")):
         raise Problem("subject", "Choose a person or a bot", 422)
+    deferred = access_requests.DEFERRED.set(True)  # the grant is made, then its level set: settled once both are
+    try:
+        _set_level(c, who, vault, tool, tool_id, subject, level)
+    finally:
+        access_requests.DEFERRED.reset(deferred)
+    if subject.startswith("bot:") and level != "none":
+        access_requests.settled(c, who, subject=subject, resource_type="tool", resource_id=tool_id)
+    return {"subject": subject, "level": subject_level(c, tool_id, subject)}
+
+
+def _set_level(c, who, vault, tool, tool_id, subject, level):
     keys = [k for k in _keys(c, tool_id) if k["ciphertext"] is not None]
     if _templated(c, tool_id) and level != "none":
         return _set_template_level(c, who, vault, tool, subject, level, keys)
@@ -1674,7 +1689,6 @@ def set_level(c, who, vault, tool_id, subject, level):
         grant = vault.grant(c, who, target["id"], subject)
         c.execute("UPDATE credential_grants SET access_level=? WHERE id=?", (level, grant["id"]))
     H.event(c, who.actor, "tool.access_set", tool_id, {"subject": subject, "level": level})
-    return {"subject": subject, "level": subject_level(c, tool_id, subject)}
 
 
 def _set_template_level(c, who, vault, tool, subject, level, keys):

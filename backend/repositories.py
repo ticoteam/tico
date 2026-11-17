@@ -580,6 +580,10 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_clic
     lost = stopped(before, after)
     detail = {'before': before, 'after': after, **lost, **({'default': True} if default else {})}
     H.event(c, actor, 'bot.repos_changed', bot, detail)
+    # An access request for a repository this bot reaches now closes itself (backend/access_requests.py).
+    from . import access_requests
+
+    access_requests.settled(c, subject='bot:' + bot, resource_type='repository', actor=actor)
     return {**after, **lost}
 
 
@@ -1315,6 +1319,10 @@ def install(app, store, service):
             c.execute('UPDATE repositories SET updated_at=? WHERE full_name=?', (H.now(), name))
             after = dict(c.execute('SELECT * FROM repositories WHERE full_name=?', (name,)).fetchone())
             H.event(c, who.actor, 'repositories.changed', name, {'before': dict(before), 'after': after})
+            if body.enabled:  # bots on All ticked repos reach it now
+                from . import access_requests
+
+                access_requests.settled(c, who, resource_type='repository', resource_id=after['full_name'])
         return after
 
     def botops(request, bot):

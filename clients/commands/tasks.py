@@ -43,7 +43,8 @@ def task_context(api, args):
     "yes, I'll send the invite.\" It starts in its pipeline's first stage (General if none is "
     "named). Asking criteria can refuse it as ask_refused, with the reason and fix; nothing is "
     "created. `dry_run` reports what would fail and writes nothing. To ask a person on your own "
-    "task, use tico_task_ask.",
+    "task, use tico_task_ask. Access to a tool or a repository that exists is never a task: use "
+    "tico_access_request.",
     {
         "owner": _s(
             "Who does it: a bot slug, a person id, or `me`. Left out, a pipeline's first stage that picks from several "

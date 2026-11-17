@@ -832,6 +832,8 @@ function thvMsgHTML(view: ThvView, m: ThvMessage, cont = false) {
   else if (m.refs?.call?.card) body = callCardHTML(m);
   // The Tools owner's proposal: rows the server built, and Grant (tools-key-drop.ts).
   else if (m.refs?.card === 'key_grant') body = kgCardHTML(m);
+  // A bot's access request: who asks for what, Grant or Decline; every copy shows how it ended (backend/access_requests.py).
+  else if (m.refs?.card === 'access_request') body = arCardHTML(m);
   // A met or stopped goal: the one line the chat showed (chat-goal.js).
   else if (m.refs?.chat_goal && m.refs?.goal_status) body = chatGoalNoticeHTML(m, view.goals?.goal);
   // A card a bot left for you fills in from its action or request (ui/assistant.ts, ui/credential-card.ts).
@@ -1784,6 +1786,7 @@ async function thvClick(view: ThvView, ev: Event) {
   const upd = t.closest<HTMLElement>('[data-th-update]');
   if (upd) { thvUpdateToggle(view, upd); return; }
   if (kgClick(view, ev)) return;
+  if (arClick(view, ev)) return;
   const file = t.closest<HTMLElement>('[data-th-file]');
   if (file) { void openFileLink(file.dataset.thFile, file.dataset.name); return; }
   if (t.closest('[data-thv-members]')) { threadMembersOpen(view); return; }
@@ -2027,5 +2030,43 @@ function kgClick(view: ThvView, ev: Event): boolean {
     if (err) { err.textContent = errorMessage(e, 'Could not grant'); err.hidden = false; }
   });
   thvDraw(view);
+  return true;
+}
+
+// ---- an access request's card (backend/access_requests.py): one copy per person who can grant it; the first tap
+// decides, and every copy then shows how it ended. A grant made at once carries Take back for the person told of it.
+interface ArCard { id: string; state: string; subject_name: string; resource_name: string; level: string; why: string; auto: boolean; by: string }
+const AR_LEVELS: Record<string, string> = {read: 'Read', read_write: 'Read and write'};
+const arCard = (m: ThvMessage): ArCard | null => (m.refs?.card === 'access_request' && m.refs.access_request ? m.refs.access_request as ArCard : null);
+
+function arCardHTML(m: ThvMessage): string {
+  const card = arCard(m);
+  if (!card) return '';
+  const what = `<b>${esc(card.subject_name)}</b> → ${esc(card.resource_name)} · ${esc(AR_LEVELS[card.level] || card.level)}`;
+  const mark: Record<string, string> = {granted: '✓', declined: '✕', revoked: '↺', withdrawn: '–'};
+  const tail = card.state === 'open'
+    ? `<div class="kg-acts"><button type="button" class="primary small" data-ar-act="grant">Grant</button><button type="button" class="ghost small" data-ar-act="decline">Decline</button></div>`
+    : `<div class="kg-result ${card.state === 'granted' ? 'kg-ok' : 'kg-bad'}"><span aria-hidden="true">${mark[card.state] || ''}</span>${card.by ? ` ${esc(card.by)}` : ''}${
+      card.state === 'granted' && card.auto ? ` <button type="button" class="ghost small" data-ar-act="take-back">Take back</button>` : ''}</div>`;
+  return `<div class="kg-card" data-ar="${esc(m.id)}" role="group" aria-label="Access request"><div class="kg-row">${what}</div>${
+    card.why ? `<div class="kg-replaces">${esc(card.why)}</div>` : ''}${tail}<p class="kg-err" role="alert" hidden></p></div>`;
+}
+
+/** A press on an access request's card: Grant, Decline or Take back. True when it was the card's. */
+function arClick(view: ThvView, ev: Event): boolean {
+  const target = eventElement(ev), host = target?.closest<HTMLElement>('[data-ar]');
+  const button = target?.closest<HTMLButtonElement>('[data-ar-act]');
+  if (!host || !button) return false;
+  const m = view.messages.find(x => x.id === host.dataset.ar), card = m && arCard(m);
+  if (!m || !card) return false;
+  button.disabled = true;
+  void post('/v2/access-requests/' + encodeURIComponent(card.id) + '/' + (button.dataset.arAct || 'grant'), {}).then((done: ArCard) => {
+    m.refs = {...m.refs, access_request: {...card, state: done.state, by: done.by, auto: done.auto}};
+    thvDraw(view);
+  }).catch((e: unknown) => {
+    button.disabled = false;
+    const err = view.el.querySelector<HTMLElement>(`[data-ar="${CSS.escape(m.id)}"] .kg-err`);
+    if (err) { err.textContent = errorMessage(e, 'Could not change it'); err.hidden = false; }
+  });
   return true;
 }

@@ -371,6 +371,26 @@ never on the command line) as that human, and the server takes the pasted words 
 for retries, replacing them with `•••• saved as <VARIABLE>`; later events of the same run are scrubbed as they arrive. The runner masks granted values in
 what it posts and logs. `tico message redact <id>` does the same for one message.
 
+## Access asked for on a tool or a repository
+
+A bot that needs a level on something that exists (a tool in Tools, a GitHub repository) asks for it with
+`tico access request <tool or owner/repo> --level read|read_write --why "..."` (MCP `tico_access_request`; BotOps, the
+Tools Owner and people name the bot with `--for`). It never files a task for it.
+- It already has that level (a grant, Everyone can read, a repository it reaches): the answer says so.
+- Read on a tool every bot could read by default (a Read key, or the proxy's read filter, and Everyone can read on), or on
+  a repository the team ticked that is no bot's own, is granted at once. The person who added the tool or the
+  repository gets a card saying so, with Take back.
+- Anything else (a write, a tool switched off, an Only listed tool, a database or a key on computers, a bot's
+  repository) is one card for each person who can grant it, the one who added it first, in their chat with the Tools
+  page's owner. The first Grant or Decline decides; the other copies show it and ask nothing.
+- Asking again adds nothing and notifies nobody. One open request per bot, resource and level.
+- A request closes itself the moment the access exists, whoever gives it and however: the card, Tools, the Tools
+  Owner, the API, Everyone can read turning on, Settings > General › Repositories. The task it was asked on waits on it
+  (Paused) and is woken once, with "granted" or "declined". An hourly pass closes what no write announced, and old
+  free-text access tasks whose title names one bot, one level and resources that exist, once that access exists.
+- `tico access stats` gives the week's numbers: requests, how many reached people, the share granted at once and the
+  median time to grant. The Tools Owner's weekly review reads them.
+
 ## Keys dropped in the Tools chat
 
 Tools has its owner's chat at the right (the built-in Tools Owner by default, else an IT Support Specialist the company
@@ -436,7 +456,8 @@ breaks the `op://` form; reference it by its item id.
   draft fails lint for this reason. A bot that needs one opens a card in the thread; BotOps stores what a human
   pastes and removes it from the thread.
 - A missing credential is not yours to work around: open the card (`tico credential request`); on a task it goes in the
-  task's thread and the task is Paused until it is saved, so stop there. The bot's Tools list shows every declared
+  task's thread and the task is Paused until it is saved, so stop there. Access to a tool or a repository that exists is
+  `tico access request`, never a task to a person. The bot's Tools list shows every declared
   Credential as present or missing.
 - Saving a credential is not permission to use it. Only a `tools:` entry and a grant connects a bot to a credential (an MCP
   server added in Tools needs the grant alone). Changing `tools:` is a task for the owner.

@@ -107,7 +107,11 @@ A task is open, done or closed. It sits in a stage of a pipeline; General has on
 - Never close what a person asked for: ask that person.
 - A refusal says what is missing and which commands are allowed next. Do one of those. Never retry the same command.
 
-When a person asks you for something only BotOps can do (repository access, a Tool, a setting), hand it on with
+When you need a level on a tool or a GitHub repository that exists, ask for it yourself: `tico access request <tool or
+owner/repo> --level read|read_write --why "<what for>"`. Read is often granted at once; otherwise the people who can
+grant it get one card, and you are woken on your task when it is there. Never file a task to a person for access.
+
+When a person asks you for something only BotOps can do (a new Tool, a setting), hand it on with
 their own message: `tico task create --owner botops ... --request-id turn` (or that message's id). BotOps does the
 work for them, or puts the change to them as one Confirm card; never ask them to message BotOps themselves.
 
