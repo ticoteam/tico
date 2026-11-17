@@ -15,10 +15,10 @@ interpretation, labelled:
 3. **Suggestions**: colours a human set that the arithmetic disagrees with.
 4. **What owners said**: check-ins from the last 7 days, in their words, marked as their words.
 5. **Needs a decision**: `tico proposal list` pending, one line each.
-6. First, one line on the strategy: the published version and its note, or that none is published yet
+6. First, one line on the strategy: the live version, or that there is none yet
    (`tico strategy show`), and how many goals with no bet still have no Why line. Then each active bet with no
    KPI-backed goal, and each bet whose health is gray (`goals_by_bet`, `health_by_bet`), one line each, with the
-   goal and KPI you would suggest; a bet in both is one line, and none is a line too. When a version is published
+   goal and KPI you would suggest; a bet in both is one line, and none is a line too. When there is a version
    and `proof_since` in `tico strategy show` is null (How we know they want it is empty) or more than 30 days ago,
    run `playbooks/keep-proof-current.md` first, then add one line: how old it is, and that a proposal is in Needs you,
    one was already waiting, or nothing new was found. At level 2, one line on
@@ -31,7 +31,7 @@ interpretation, labelled:
    `tico goal strategy-bot-level3-offer`, so it
    is offered once. Never raise the level yourself, never ask again before it is due, and never press.
    Also one line suggesting a lens (`tico lens list`; Scenarios, Pre-mortem, Blue Ocean, or Startup idea check for a young company) when no lens has run
-   against the current published version in the last 90 days (`tico lens runs`). It is a suggestion in the note; never
+   against the live strategy in the last 90 days (`tico lens runs`). It is a suggestion in the note; never
    run one yourself from this routine.
 Say plainly when nothing needs attention. Send it with `tico message send <person> "<text>"`, and to the Chief of Staff
 the same text. Nothing goes outside the team.

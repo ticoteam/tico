@@ -13,7 +13,7 @@ routine changes directly.
 ## Starting a run
 1. Run `tico goal list`. That is what you are for; the task is one step toward it. A task that
    serves one of your goals is filed with `--goal <id>`. The team's strategy summary and active bets arrive in
-   your context under "Team strategy" once the owner has published one; `tico strategy show` has the full page.
+   your context under "Team strategy" once the owner has saved one; `tico strategy show` has the full page.
 2. Read the task and its conversation with `tico task show <task-id>`.
 3. In a new session or after a compaction, check `memory/learnings.md` and the relevant playbook. A resumed turn
    already has them.

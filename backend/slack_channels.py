@@ -2,9 +2,9 @@
 
 Settings > Tools > Slack (an owner or an admin), `tico slack channel`, the MCP tools and BotOps all change this one
 list. An entry names the channel (its name, its id, or both), the bots that read it, whether bots may post there
-(on by default, like every internal channel) and a note. The Slack gateway's readers' pass and the `connectors/slack.py`
-connector read it; nobody edits a file. A channel shared outside the workspace is refused by the gateway and the
-connector whatever this list says: neither can be overridden here.
+(on by default, like every internal channel) and a note. The Slack gateway's readers' pass and the bots' Slack routes
+(backend/slack_bots.py) read it; nobody edits a file. A channel shared outside the workspace is refused by the gateway
+whatever this list says: that cannot be overridden here.
 """
 
 import json
@@ -301,11 +301,15 @@ def install(app, settings, store, auth):
 
     @app.get("/api/v2/slack/channels")
     def channels(request: Request):
-        """The list bots' Slack reads and posts follow. Anyone signed in may read it (a bot reads it for its own checks)."""
+        """The list bots' Slack reads and posts follow, and whether the gateway they go through is connected. Anyone
+        signed in may read it (a bot's `connectors/slack.py channels` and `doctor`)."""
+        from .slack_app import status
+
         who = person(request)
         with store.read() as c:
             return {
                 "channels": listing(c, settings),
+                "gateway": status(c)["state"],
                 "can_manage": auth.bot_admin(who),
                 "bots": [
                     {"id": b["id"], "name": b.get("name") or b["slug"]}

@@ -20,7 +20,7 @@ const stage = (id: string, name: string, owners: Owner[], more = {owners: 0, cou
   needs_you: owners.reduce((n, o) => n + o.needs_you, 0),
 });
 const o = (actor: string, count: number, needs_you = 0): Owner => ({actor, count, needs_you});
-const FEATURES = {id: 'features', name: 'Features', manager_id: 'bot:pm', in: {day: 3, week: 19}, out: {day: 2, week: 14}, stages: [
+const FEATURES = {id: 'features', name: 'Features', manager_id: 'bot:pm', moved_into: [] as string[], in: {day: 3, week: 19}, out: {day: 2, week: 14}, stages: [
   stage('pitch', 'Pitch', [o('bot:f1', 2), o('bot:f2', 1)]),
   stage('spec', 'Spec', [o('bot:f1', 4, 4), o('bot:f2', 2, 2), o('bot:f3', 1, 1), o('bot:f4', 1), o('bot:f5', 1)]),
   stage('build', 'Build', [o('bot:b1', 400)]),
@@ -29,7 +29,7 @@ const FEATURES = {id: 'features', name: 'Features', manager_id: 'bot:pm', in: {d
 ]};
 // Fourteen holders in one stage: the server lists twelve and sums the other two.
 const TRIAGE = stage('triage', 'Triage', Array.from({length: 12}, (_, i) => o(`bot:fx${i}`, 12 - i)), {owners: 2, count: 3});
-const FIXES = {id: 'fixes', name: 'Fixes', manager_id: 'bot:em', in: {day: 9, week: 52}, out: {day: 7, week: 41}, stages: [
+const FIXES = {id: 'fixes', name: 'Fixes', manager_id: 'bot:em', moved_into: [] as string[], in: {day: 9, week: 52}, out: {day: 7, week: 41}, stages: [
   TRIAGE, stage('fix-build', 'Build', [o('bot:fb', 7)]), stage('fix-qa', 'QA', [o('bot:qa', 11)]),
 ]};
 const FLOOR = {factories: [
@@ -37,29 +37,34 @@ const FLOOR = {factories: [
   {id: 'f-eng', name: 'Engineering', manager_id: null, pipelines: [FIXES]},
 ]};
 // Pipelines in no factory: one hall at the end, Other, with no page and no org chart.
-const ERRANDS = {id: 'errands', name: 'Errands', manager_id: 'bot:pm', in: {day: 1, week: 4}, out: {day: 0, week: 2}, stages: [
+const ERRANDS = {id: 'errands', name: 'Errands', manager_id: 'bot:pm', moved_into: [] as string[], in: {day: 1, week: 4}, out: {day: 0, week: 2}, stages: [
   stage('errand-do', 'Do', [o('bot:f1', 2)]),
 ]};
 // Handoffs: a stage that files a linked task into another pipeline (`into`). Leads' last stage hands off to Deals in the
 // same hall, so they are one line; Deals' last stage hands off to Accounts in another hall, and Ideas hands off to
 // Fixes (another hall) from a middle stage: those are marked where they are, two chevrons, named only for a reader.
 const hand = (st: ReturnType<typeof stage>, into: string) => ({...st, into});
-const LEADS = {id: 'leads', name: 'Leads', manager_id: 'bot:pm', in: {day: 14, week: 90}, out: {day: 0, week: 1}, stages: [
+const LEADS = {id: 'leads', name: 'Leads', manager_id: 'bot:pm', moved_into: [] as string[], in: {day: 14, week: 90}, out: {day: 0, week: 1}, stages: [
   stage('lead-new', 'New', [o('bot:f1', 6)]), hand(stage('lead-ok', 'Qualified', [o('bot:f2', 2)]), 'deals'),
 ]};
-const DEALS = {id: 'deals', name: 'Deals', manager_id: 'bot:pm', in: {day: 2, week: 9}, out: {day: 1, week: 5}, stages: [
+const DEALS = {id: 'deals', name: 'Deals', manager_id: 'bot:pm', moved_into: [] as string[], in: {day: 2, week: 9}, out: {day: 1, week: 5}, stages: [
   stage('deal-talk', 'Talking', [o('bot:f3', 3)]), hand(stage('deal-won', 'Won', [o('bot:f4', 1)]), 'accounts'),
 ]};
-const IDEAS = {id: 'ideas', name: 'Ideas', manager_id: 'bot:pm', in: {day: 1, week: 6}, out: {day: 1, week: 4}, stages: [
+const IDEAS = {id: 'ideas', name: 'Ideas', manager_id: 'bot:pm', moved_into: [] as string[], in: {day: 1, week: 6}, out: {day: 1, week: 4}, stages: [
   hand(stage('idea-ready', 'Ready', [o('bot:f5', 2)]), 'fixes'), stage('idea-done', 'Shipped', []),
 ]};
-const ACCOUNTS = {id: 'accounts', name: 'Accounts', manager_id: 'bot:em', in: {day: 1, week: 5}, out: {day: 0, week: 0}, stages: [
+const ACCOUNTS = {id: 'accounts', name: 'Accounts', manager_id: 'bot:em', moved_into: [] as string[], in: {day: 1, week: 5}, out: {day: 0, week: 0}, stages: [
   stage('acct-onboard', 'Onboard', [o('bot:qa', 1)]),
 ]};
 const HANDOFFS = {factories: [
   {id: 'f-growth', name: 'Growth', manager_id: null, pipelines: [LEADS, DEALS, IDEAS]},
   {id: 'f-eng', name: 'Engineering', manager_id: null, pipelines: [FIXES, ACCOUNTS]},
 ]};
+// Moves: Backlog has no handoff, but its tasks were moved into Features lately; its end and Features' start say so.
+const BACKLOG = {id: 'backlog', name: 'Backlog', manager_id: 'bot:pm', moved_into: ['features'], in: {day: 2, week: 11}, out: {day: 0, week: 0}, stages: [
+  stage('bug-reports', 'Bug reports', [o('bot:f1', 3)]), stage('on-ice', 'On ice', []),
+]};
+const MOVES = {factories: [...FLOOR.factories, {id: null, name: 'Other', manager_id: null, pipelines: [BACKLOG]}]};
 const OTHER = {factories: [...FLOOR.factories, {id: null, name: 'Other', manager_id: null, pipelines: [ERRANDS]}]};
 // `idle` reports to the Product manager and holds no task: it is on the hall's chart all the same.
 const BOTS = ['pm', 'f1', 'f2', 'f3', 'f4', 'f5', 'b1', 'rm', 'em', 'fb', 'qa', 'idle', ...Array.from({length: 12}, (_, i) => `fx${i}`)]
@@ -373,6 +378,18 @@ const levels = (page: Page, sel: string) => page.locator(sel).evaluateAll(els =>
       await page.locator('.cf-one').waitFor();
       assert.equal(await page.locator('[data-cf-line="leads"] .cf-chev.cf-end.cf-into').getAttribute('aria-label'), 'Into Deals');
       await shot(page, 'floor-handoffs-factory');
+      assert.deepEqual(errors, []);
+      await close();
+    }
+    // Tasks moved from one pipeline into another lately: two chevrons at the end of one and the start of the other.
+    {
+      const hub: Hub = {floor: MOVES, fail: false, reads: []};
+      const {page, errors, close} = await open(1440, 900, hub);
+      await page.locator('.cf-hall').first().waitFor();
+      assert.equal(await page.locator('[data-cf-line="backlog"] .cf-chev.cf-end.cf-into').getAttribute('aria-label'), 'Into Features');
+      assert.equal(await page.locator('[data-cf-line="features"] .cf-chev.cf-from').getAttribute('aria-label'), 'From Backlog');
+      assert.equal(await page.locator('[data-cf-line="fixes"] .cf-chev.cf-into').count(), 0, 'a line with no flows is as it was');
+      await shot(page, 'floor-moves');
       assert.deepEqual(errors, []);
       await close();
     }

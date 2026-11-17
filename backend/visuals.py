@@ -885,6 +885,6 @@ def _headers(rule, how="inline"):
         "Cross-Origin-Resource-Policy": "cross-origin",
         "Referrer-Policy": "no-referrer",
         "X-Content-Type-Options": "nosniff",
-        "Cache-Control": "private, no-cache",
+        "Cache-Control": "private, no-cache, no-transform",
         "Content-Disposition": how,
     }

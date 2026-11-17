@@ -60,7 +60,7 @@ class AdImport:
     last_import_at: str | None = None
     last_error: str = ""
     run_requested_at: str | None = None
-    created_by: str = ""
+    created_by: str = ""  # who bound its keys (ads.configure): whoever last changed which keys it reads
     created_at: str = ""
     updated_at: str = ""
 
@@ -125,13 +125,14 @@ def import_for(c: sqlite3.Connection, tool_id: str) -> AdImport | None:
 
 
 def save_import(c: sqlite3.Connection, imp: AdImport, at: str) -> None:
-    """Insert or update a tool's import settings (its result fields stay as they are on an update)."""
+    """Insert or update a tool's import settings (its result fields stay as they are on an update; `created_by` is
+    who bound its keys, so it follows a change of keys)."""
     c.execute(
         "INSERT INTO fin_ad_imports(id, tool_id, platform, enabled, history_from, account_id, credentials, "
         "status, last_import_at, last_error, run_requested_at, created_by, created_at, updated_at) "
         "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(tool_id) DO UPDATE SET enabled=excluded.enabled, "
         "history_from=excluded.history_from, account_id=excluded.account_id, "
-        "credentials=excluded.credentials, last_import_at=excluded.last_import_at, "
+        "credentials=excluded.credentials, created_by=excluded.created_by, last_import_at=excluded.last_import_at, "
         "run_requested_at=excluded.run_requested_at, updated_at=excluded.updated_at",
         (
             imp.id or new_id(),

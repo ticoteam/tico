@@ -12,7 +12,7 @@ again yourself, and never write a vision of your own.
    words around them ("Our vision is"), never change a word inside. The server checks the text is theirs and at least
    three words, saves it, says so on the task and closes the question. Nothing more to do.
 3. **A question** (what a vision is, an example, why you need it): answer it on the task in two or three plain sentences,
-   from the published strategy and the market pages, never with a vision written for them. The question stays open
+   from the live strategy and the market pages, never with a vision written for them. The question stays open
    for their next reply. If they answered the question itself with a question, ask it again on the task:
    `tico task ask <id> --to <owner> "What is this team for? ..." --why "Every goal ties to the vision ..." --version N`
    (N is the version `tico task show <id>` prints).

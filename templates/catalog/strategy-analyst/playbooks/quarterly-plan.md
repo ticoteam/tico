@@ -24,8 +24,8 @@ Otherwise write the check-in (step 6). If the task names one, do that.
     tico update list --kind weekly --limit 12
     tico meeting search --since <quarter start>
 
-The strategy first: the published version's active bets are what the quarter serves, and each goal's `bet_id`
-says which. `health_by_bet` shows which bets have a KPI-backed goal and how it is going. Nothing published: plan
+The strategy first: the live version's active bets are what the quarter serves, and each goal's `bet_id`
+says which. `health_by_bet` shows which bets have a KPI-backed goal and how it is going. No strategy: plan
 against the setup answer in `knowledge/rhythm.md`, marked unconfirmed. Then `knowledge/scorecard.md` and last quarter's
 report. A source you cannot read is named in the closing line.
 

@@ -119,6 +119,7 @@ OPERATIONS = {
     "reply": "a reply in a conversation",
     "automation": "an automation's write",
     "slack": "a Slack reply",
+    "slack_post": "a Slack channel post",
     "mail": "an email",
     "letter": "a letter",
     "update": "an update",

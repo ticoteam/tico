@@ -18,7 +18,9 @@ from .core import dates
 from .core import rights as R
 from .core.errors import CONFLICT, DENIED, INVALID, NOT_FOUND, FinanceError
 from .store import ads as SA
+from .store import tico
 from . import ad_import as AI
+from . import key_use
 
 Row = dict[str, object]
 DENIED_TEXT = "Ad spend is for finance admins"
@@ -163,7 +165,7 @@ def configure(
     at: str | None = None,
 ) -> Row:
     """Save a tool's import settings; switching it on asks for a run. Refused: switching on a tool one of whose ad
-    accounts another enabled import already reads, a day that is not one, a line that is not an active expense line, a key for a slot that is neither that
+    accounts another enabled import already reads, a key the one saving may not use (key_use), a day that is not one, a line that is not an active expense line, a key for a slot that is neither that
     slot's variable nor on this tool (ad_import.candidates), or switching on without the required keys or a line."""
     ctx = _admin(c, viewer, at)
     platform, _ = _tool(c, tool_id)
@@ -199,6 +201,14 @@ def configure(
                     f"Pick a {AI.SLOT_LABEL[slot]} key: its variable is "
                     f"{AI.SLOTS[platform][slot][0]}, or it is on this tool",
                 )
+    # Saving keys binds them (the picker's default set too): the import reads them with the binder's rights, so the one
+    # saving must be able to use each (key_use). A change that binds no key leaves them with whoever bound them.
+    binder = imp.created_by or viewer
+    if not imp.id or mapping != imp.credentials:
+        for cid in dict.fromkeys(mapping.values()):
+            if cid and not tico.may_use_credential(c, viewer, cid):
+                raise FinanceError(DENIED, key_use.KEY_NOT_YOURS)
+        binder = viewer
     if enabled:
         overlap = _overlap(c, tool_id, platform) if not imp.enabled else None
         if overlap is not None:
@@ -224,7 +234,7 @@ def configure(
             last_import_at=changed.last_import_at,
             last_error=imp.last_error,
             run_requested_at=asked if enabled else None,
-            created_by=imp.created_by or viewer,
+            created_by=binder,
             created_at=imp.created_at or ctx.at,
         ),
         ctx.at,

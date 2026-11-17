@@ -69,7 +69,7 @@ TAGS = {
     'Support': 'Reports to Tico support (docs/support.md).',
     'Rules': "Org rules: what teammates follow (internal) and what someone outside requires (external), with their "
     "due dates and sources.",
-    'Strategy': "The team's strategy: a draft the owner edits, numbered published versions, and the bets goals serve.",
+    'Strategy': "The team's strategy: what the owner saves is live at once as the next numbered version; the bets goals serve.",
     'Inbound': 'Shared company inbound email and SMS for people and agents; reads never consume messages.',
     'Triggers': 'Webhook triggers: an address any sender can post to, how its calls are verified, kept and run again.',
     'Tools': 'Every way the company reaches the outside world in one list, and API tools: their keys per level, who can use each, its checks and calls.',

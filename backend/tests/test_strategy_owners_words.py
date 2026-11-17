@@ -1,6 +1,7 @@
-"""The Strategy Owner writes the strategy draft and publishes only on what the owner told it (backend/strategy.py
-owners_words): it names a task of its own the owner wrote on, the history says whose words, and nothing else lets a
-bot write it. Acme is the fictional company; Ana is its owner."""
+"""The Strategy Owner writes the strategy only on what the owner told it (backend/strategy.py owners_words): it names a
+task of its own the owner wrote on, the history and the version's note say whose words, and nothing else lets a bot
+write it. What it saves is live at once, like the owner's own saves. Acme is the fictional company; Ana is its
+owner."""
 
 import json
 
@@ -71,24 +72,25 @@ def test_another_bot_naming_a_task_still_only_proposes(api):
     assert r.status_code == 403, r.text
 
 
-def test_the_strategy_owner_publishes_on_the_owners_words_and_the_note_says_whose(api):
+def test_what_the_strategy_owner_saves_on_the_owners_words_is_live_and_the_note_says_whose(api):
     goal_manager(api, level=2)
     as_bot(api, "strategy-owner")
-    post(api, "strategy/bets", {"statement": "Small landlords pay for bots", "status": "active"})
     task = asked(api)
     draft(api, {"sections": {"serve": "Small landlords.", "not": "Enterprise."}, "task": task})
+    assert get(api, "strategy", token="cara-test")["current"]["sections"]["serve"] == "Small landlords."
+    [latest] = get(api, "strategy/versions")
+    assert latest["published_by"] == G.AUTO_ACTOR
+    assert latest["note"].startswith("From ") and "\u201cWho we serve\u201d" in latest["note"]
+    # Publish, kept for older callers, needs the owner's words too, and only answers the live version.
     r = api.post("/api/v2/strategy/publish", json={"note": "", "revision": revision(api)}, headers=headers(BOT))
-    assert r.status_code == 403, r.text  # publishing needs the owner's words too
+    assert r.status_code == 403, r.text
     r = api.post(
         "/api/v2/strategy/publish",
         json={"note": "Who we serve", "revision": revision(api), "task": task},
         headers=headers(BOT),
     )
     assert r.status_code == 200, r.text
-    versions = get(api, "strategy/versions")
-    latest = (versions if isinstance(versions, list) else versions["versions"])[0]
-    assert latest["note"].startswith("Who we serve (From ") and "\u201cWho we serve\u201d" in latest["note"]
-    assert history(api, "published")[-1]["from"] == {"task": task, "person": "human:ana"}
+    assert r.json()["n"] == latest["n"] and len(get(api, "strategy/versions")) == 1
 
 
 def test_a_task_body_never_counts_as_the_owners_words(api):
@@ -109,9 +111,9 @@ def test_a_task_body_never_counts_as_the_owners_words(api):
     )
 
 
-def test_an_answer_about_who_we_serve_ends_up_in_that_section_of_the_published_strategy(api):
+def test_an_answer_about_who_we_serve_ends_up_in_that_section_of_the_live_strategy(api):
     """The add-to-flow round trip: the Strategy Owner asks Ana on a task of its own, she answers in free text, and it
-    writes her answer into "Who we serve" (and the bet it changes), then publishes citing the task. Only that section
+    writes her answer into "Who we serve" (and the bet it changes) citing the task, live at once. Only that section
     moves: the summary stays as it was."""
     goal_manager(api, level=2)
     as_bot(api, "strategy-owner")
@@ -147,20 +149,14 @@ def test_an_answer_about_who_we_serve_ends_up_in_that_section_of_the_published_s
         headers=headers(BOT),
     )
     assert r.status_code == 200, r.text
-    r = api.post(
-        "/api/v2/strategy/publish",
-        json={"note": "Who we serve", "revision": revision(api), "task": task["id"]},
-        headers=headers(BOT),
-    )
-    assert r.status_code == 200, r.text
-    published = get(api, "strategy")["current"]
+    published = get(api, "strategy", token="cara-test")["current"]
     assert published["sections"]["serve"] == SAID
     assert published["summary"] == "Acme runs rentals with bots."
     assert [b["statement"] for b in published["bets"]] == ["Small landlords pay for bots"]
     assert history(api, "bet.add")[-1]["from"] == {"task": task["id"], "person": "human:ana"}
 
 
-def test_a_one_word_answer_of_the_owners_is_enough_to_write_and_publish(api):
+def test_a_one_word_answer_of_the_owners_is_enough_to_write(api):
     """Any answer or comment the owner wrote on the task counts, a tapped choice or "Yes" included; none still refuses."""
     goal_manager(api, level=2)
     as_bot(api, "strategy-owner")
@@ -194,6 +190,4 @@ def test_a_one_word_answer_of_the_owners_is_enough_to_write_and_publish(api):
         headers=headers(BOT),
     )
     assert r.status_code == 200, r.text
-    r = api.post("/api/v2/strategy/publish", json={"revision": revision(api), "task": task["id"]}, headers=headers(BOT))
-    assert r.status_code == 200, r.text
-    assert get(api, "strategy")["current"]["sections"]["serve"] == "Small landlords."
+    assert get(api, "strategy", token="cara-test")["current"]["sections"]["serve"] == "Small landlords."

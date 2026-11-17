@@ -14,12 +14,12 @@ entry, and the task note carries the call and the report path.
 
 ---
 
-## 1. Read the bet as published
+## 1. Read the bet as written
 
     tico task show <id>
     tico strategy show
 
-Find this seat's bet by the id in `knowledge/plan.md`. If the bet is not in the published strategy, or its status is not
+Find this seat's bet by the id in `knowledge/plan.md`. If the bet is not in the live strategy, or its status is not
 `active`, say so in one line on the task and stop: the check-in reports the bet's status, it does not guess one. Note
 its statement, what it rules out, its wrong-if text and check-by date, and any change since last week.
 

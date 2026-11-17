@@ -4,7 +4,7 @@
 # Canned reads follow the real routes: `whoami` (backend/app.py /me), `goal list` (backend/goal_routes.py: the default is
 # {owner, goals, chain, reports, company} of bare goal rows with no KPIs; `--all` is a bare list), `goal show` (goals.view:
 # the row with kpis, tasks, checkins), `strategy show` (strategy.view; in a person's Assistant chat the identity acts via the
-# Assistant, so it is never the strategy editor: no draft, published bets only, `may_edit` false), `proposal list`
+# Assistant, so it is never the strategy editor: no draft, live bets only, `may_edit` false), `proposal list`
 # ({proposals}), `human list` (a bare list), and `assistant morning` ({message_id, conversation_id, day, next_at}, or the
 # CLI's error JSON on a 409). A goal always has an owner; a company goal is owned by the Team (`company`).
 
@@ -126,8 +126,8 @@
     - '^goal (save|create|update|status|read-back)\b'
     - '^assistant propose'
   reply: |
-    Says no strategy is published yet, so no goal serves a live bet. The top thing only Dana can do is write and publish
-    it, linked to the page, [Strategy](#/strategy). It does not publish, draft or edit anything, and invents no bet names
+    Says there is no strategy yet, so no goal serves a live bet. The top thing only Dana can do is write it, linked to
+    the page, [Strategy](#/strategy). It does not draft or edit anything, and invents no bet names
     (the record shows none). The trials goal may appear with its number (318 against 400), linked. At most three items,
     and no headings, sections or list of reads that came back empty.
 

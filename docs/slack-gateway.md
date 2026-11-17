@@ -17,10 +17,10 @@ and the decision model deciding who a DM or a mention is for. The code is
 | A DM to Tico | Routed; the reply lands at the bottom of the DM, or in the reply thread the human wrote in. A DM is one Tico conversation per bot for its life, however the human types: a follow-up at the bottom of the DM continues it. |
 | `@Tico` in a channel Tico is in | Routed; the reply goes under the message. Mentioning Tico again in that thread continues the same conversation. |
 | A reply in a thread a bot already talks in, no mention | Routed at once, like a mention: the decision model sees the thread's routing and the reply usually continues it. |
-| Any other message in a channel Tico is in, bots' posts included | Stored (Channels, below). The channel's readers get it on the hourly pass; nobody is woken now. A bot still reads a channel through `connectors/slack.py history` during its own run. |
+| Any other message in a channel Tico is in, bots' posts included | Stored (Channels, below). The channel's readers get it on the hourly pass; nobody is woken now. A bot still reads a channel with `connectors/slack.py history` during its own run, which the gateway answers (Bots on computers, below). |
 | An edit or a deletion in a channel | Applied to the stored message; a reader that had already seen it is told. |
 | A join, a reaction | Ignored. |
-| A file shared with a DM, a mention or a channel message | A `[file F...] name` line per file is added to the message; the bot opens it with `connectors/slack.py file --id F...` (the app needs `files:read`). |
+| A file shared with a DM, a mention or a channel message | A `[file F...] name` line per file is added to the message; the bot opens it with `connectors/slack.py file --id F...`, which the gateway downloads (the app needs `files:read`). |
 | A Slack Connect or externally shared channel | Refused; nothing is written. |
 | A guest, a deactivated account, a sender whose verified email is not on `registry/people.yaml` or not admitted by `registry/hub-access.yaml` | Refused silently: no reply, the reason on the event. |
 
@@ -197,7 +197,28 @@ tries at most, then the post is `failed`. Any other Slack refusal (`channel_not_
 `missing_scope`) is `failed`. A network fault, an unreadable answer or a crash between send and
 record is `uncertain` and waits for a human.
 Thread replies are solicited: turning bot posting off for a channel does not stop them, and they
-grant no bot any posting right there; `connectors/slack.py` and its gates are unchanged.
+grant no bot any posting right there; a bot's own posts go through `connectors/slack.py` and its gates (below).
+
+## Bots on computers
+
+A bot never holds the Slack token. `connectors/slack.py` on its computer asks Tico (`backend/slack_bots.py`), which
+checks the bot's `service: slack` entry, onboarding, the channel list, the 3,800-character limit (what the gateway sends whole), the recipient, the
+org's rules and screening, and then has the gateway act:
+
+- `GET /api/v2/slack/history` and `GET /api/v2/slack/files/{id}` write a row to `slack_requests`. The gateway's
+  request thread (beside its tick, so a slow decision model never holds a read) claims it and hands it to one of four
+  workers, which asks Slack and writes the answer back; the API reads it and deletes the row. The API waits without
+  holding a thread, at most 16 waits per server (503 `slack_busy` past that). Before each Slack call a worker checks
+  that the API still waits (the row is there and its deadline, 60 s for history and 150 s for a file, has not passed),
+  so a read the API gave up on stops at once. A ref like `<#C...|name>` is authorized on its id alone. A file's bytes go to `slack-files/` beside the database (the
+  shared `tico-data` volume), never into it, and are deleted once streamed.
+- `POST /api/v2/slack/posts` writes the post as a message in the bot's room plus a `slack_posts` row, which `deliver`
+  sends with the bot's name and `(sent from <bot>)`. `deliver` asks Slack about the channel on every post
+  (never from a cache) and cancels it in a Slack Connect channel; a rate-limited check leaves it for the next pass.
+- `POST /api/v2/slack/dms` is the bot's message to the person in Tico, which `originate` copies into their Slack DM.
+
+With the gateway not connected, or not claiming a request within 8 seconds, each route answers 503 and says what to
+start. A computer on v0.6.0-rc.1 still runs its own connector with a granted `SLACK_BOT_TOKEN` (older computers only).
 
 ## Link previews
 
@@ -233,6 +254,7 @@ the preview is sent again with the same link as text.
 | `slack_events` | Slack message, unique on `event_id` and on `(channel, ts)`; `author`, `author_name`, `edited`, `deleted` | `received`, `denied`, `recorded`, `routed`, `failed`; `stored` for a channel message the readers get |
 | `slack_threads` | Slack thread and bot: the Tico conversation it continues | |
 | `slack_posts` | bot reply to mirror | `ready`, `sending`, `sent`, `rate_limited`, `failed`, `uncertain` |
+| `slack_requests` | bot's history read or file download waiting on the gateway; deleted once read, or after 10 minutes | `pending`, `running`, `done`, `failed` |
 | `slack_reads` | channel and reader: the cursor (`last_ts`, `last_run`, `digests`) | |
 | `slack_digests` | digest written: the reader, its conversation and message, the channels, the event ids it covered | |
 
@@ -263,7 +285,7 @@ Tico needs undoing.
 
 ## Installing or reinstalling the app
 
-`connectors/slack-app-manifest.yaml` is the app: the scopes `connectors/slack.py` uses, plus
+`connectors/slack-app-manifest.yaml` is the app: the scopes bots' reads and posts use, plus
 `app_mentions:read`, `chat:write.customize`, `links:read` and `links:write`, Socket Mode and
 interactivity on, the `app_mention`, `message.im`, `message.channels`, `message.groups` and
 `link_shared` events, and the link-preview hosts in `unfurl_domains`. When the installed app lacks any of these (the gateway log says which):
@@ -272,8 +294,8 @@ interactivity on, the `app_mention`, `message.im`, `message.channels`, `message.
    the old one, save.
 2. **Install App**, reinstall to the Acme workspace (Slack shows the reinstall banner).
 3. If the Bot User OAuth Token changed, paste it in Tools > Slack (or, with `TICO_SLACK_SECRET_ARN` set,
-   update `bot_token` in that secret) (and the bots' `SLACK_BOT_TOKEN` in the Mac computer's
-   `secrets/_shared.env`). The app-level token
+   update `bot_token` in that secret), and in the `SLACK_BOT_TOKEN` credential granted to bots if any computer
+   is still on v0.6.0-rc.1 (older computers only). The app-level token
    (`xapp-`, `connections:write`, **Basic Information → App-Level Tokens**) is unchanged by a
    reinstall.
 4. Restart the gateway unit (`configure` with the same values does it) and check the log for
@@ -331,3 +353,5 @@ lines as context, edits and deletions before and after delivery, the cap and the
 past what it skipped, a reply in a bot's thread routed at once, the channel copy of a mention
 routed once, history filling a gap without routing and an unreadable channel skipped, a refused
 delivery leaving the cursors where they were, and the pause. Nothing live is called.
+`backend/tests/test_slack_bots.py` covers the bots' routes: every gate, the 503s, history and files through the
+request thread, a post in the outbox and its Slack Connect cancel, a DM, and Send anyway on a held post.

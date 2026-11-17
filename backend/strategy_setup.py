@@ -11,7 +11,7 @@ the shared prompt in backend/strategy_prompt.py (Tico HQ's setup page asks the s
 sections (How we know they want it and Why now only when the pages show it) and three bets the site implies, each with what it rules out and a suggested wrong-if. It asks for no vision:
 `found` keeps `vision: ""` and the draft's vision is left as it is.
 
-What it writes, as the owner who started it, and never published:
+What it writes, as the owner who started it, live at once as one version (backend/strategy.py go_live):
 - the summary, and each of the seven sections, only where the draft's is empty; each section starts with
   the UNCONFIRMED line, which the owner deletes by keeping or editing the text;
 - each bet as `proposed`, its wrong-if a sentence with a check date CHECK_DAYS out.
@@ -415,7 +415,7 @@ def finish(c, job_id, found):
     }
     lines = {k: found[k] for k in ("summary", "vision") if found.get(k) and not row[k].strip()}
     if sections or lines:
-        S.update_draft(c, actor, row["revision"], sections=sections or None, **lines)
+        S.update_draft(c, actor, row["revision"], sections=sections or None, live=False, **lines)
     made = []
     live = [b for b in S.bets(c) if b["status"] != "retired"]
     known = {b["statement"].strip().lower() for b in live}
@@ -426,7 +426,9 @@ def finish(c, job_id, found):
         wrong = {"kind": "text", "text": item["wrong_if"], "check_by": check_by} if item["wrong_if"] else None
         c.execute("SAVEPOINT draft_from_bet")
         try:
-            bet, _ = S.add_bet(c, actor, item["statement"], item["why"], item["rules_out"], wrong, None, "proposed")
+            bet, _ = S.add_bet(
+                c, actor, item["statement"], item["why"], item["rules_out"], wrong, None, "proposed", live=False
+            )
         except H.Refused:
             c.execute("ROLLBACK TO draft_from_bet")
             bet = None
@@ -434,6 +436,7 @@ def finish(c, job_id, found):
         if bet:
             made.append(bet["id"])
             known.add(item["statement"].lower())
+    S.go_live(c, actor)
     return _put(
         c,
         {

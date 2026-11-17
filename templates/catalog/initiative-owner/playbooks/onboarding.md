@@ -38,7 +38,7 @@ Write the bet's id and statement at the top of `knowledge/plan.md` first. Then e
 
 ## 5. Produce the first result now
 
-Follow `playbooks/weekly-check-in.md` for the bet as published today. Write `reports/YYYY-MM-DD-initiative.md`,
+Follow `playbooks/weekly-check-in.md` for the bet as written today. Write `reports/YYYY-MM-DD-initiative.md`,
 publish it with `tico file publish`, attach it to the task and label it "First draft, not yet reviewed". Make no call the
 record cannot back. Change nothing on the Strategy page or in Tico's goals.
 

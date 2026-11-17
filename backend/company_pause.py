@@ -1,15 +1,17 @@
 # pyright: strict
-"""The company-wide pause: one record that every bot on the team is under until a person resumes it.
+"""The company-wide pause: one record that every bot on the team is under until a person resumes it. And a bot's own
+pause (`pause_bot`), the same kind of hold on one bot.
 
-- The record is one row in `registry_metadata` under KEY, holding {"paused_by": actor, "paused_at": time}. Pause writes
-  it when none is on record; Resume deletes it. There is never a second record: every surface that reads the pause
-  reads this one.
+- The record is an open `paused` hold on the company (backend/holds.py, holdable_id ''): who paused is its
+  created_by_id, when its created_at. Pause opens it when none is open; Resume releases it, kept as history. There is
+  never a second record: every surface that reads the pause reads this one.
 - Who may pause or resume: the owner and admins (`auth.company_role`), signed in as a person. Tico support sessions,
   bots and service keys are refused, with the reason. A refusal changes nothing.
 - A pause or resume that changes nothing (already paused, or nothing to resume) succeeds and says so, and the first
   pauser stays on record.
-- Separate from a bot's own pause (bots.state 'paused', set by `bot_settings_routes`): resuming the company does not
-  lift a bot paused on its own. `read` counts those bots.
+- Separate from a bot's own pause (an open `paused` hold on the bot, `pause_bot`): resuming the company does not lift a
+  bot paused on its own. `read` counts those bots. The bot's hold also sets bots.state 'paused', the switch the rest
+  of Tico reads (placement, routines, deliveries, its key): the hold keeps who, why and the history.
 - Separate from the billing pause (`company_billing.paused`): this module never reads or writes it.
 - While it is on record no new turn starts: the claim refuses every bot (`company_paused`, read through
   backend/holds.py), queued work waits with a held line on its task, and task cards say the company is paused.
@@ -22,20 +24,19 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, TypedDict, cast
 
+from . import holds
 from . import hubdb as H
-from . import read_cache
 from .store import Problem
 
 if TYPE_CHECKING:
     from .auth import Auth, Identity
 
-KEY = "company_pause"
+PAUSED = holds.PAUSED  # the holds kind: on the company (holdable_id '') and on a bot
 CONTROLLERS = ("owner", "admin")
 HELD = "company.held"  # the event that marks a held line written on a task in one pause
 log = logging.getLogger(__name__)
 
 # The hub's helpers and the auth class are not annotated in full; these name their shapes for this module.
-_metadata = cast("Callable[[sqlite3.Connection, str], tuple[Any, ...] | None]", read_cache.metadata)
 _human = cast("Callable[[sqlite3.Connection, str], dict[str, Any] | None]", H.human)
 _actor_id = cast("Callable[[str], str]", H.actor_id)
 _task_comment = cast("Callable[..., object]", H.task_comment)
@@ -62,24 +63,28 @@ class Reading(TypedDict):
 
 def record(c: sqlite3.Connection) -> Record | None:
     """The one company pause on record, or None when the company runs."""
-    # Read through read_cache: a status page asks for every bot's line, and the snapshot reads the record once.
-    row = _metadata(c, KEY)
-    if not row:
+    # Read through read_cache (holds.get): a status page asks for every bot's line, and the snapshot reads it once.
+    found = holds.get(c, PAUSED, "company", "")
+    if not found:
         return None
-    try:
-        loaded: Any = json.loads(str(row[0]))
-    except ValueError:
-        return None
-    if not isinstance(loaded, dict):
-        return None
-    stored = cast("dict[str, Any]", loaded)
-    paused_at = str(stored.get("paused_at") or "")
-    if not paused_at:
-        return None
-    paused_by = str(stored.get("paused_by") or "")
+    paused_at = str(found["created_at"])
+    paused_by = str(found["created_by_id"])
     person = _human(c, _actor_id(paused_by)) if paused_by.startswith("human:") else None
     name = str((person or {}).get("name") or "") or "a person on Tico Team"
     return {"paused_by": paused_by, "paused_at": paused_at, "paused_by_name": name}
+
+
+def pause_bot(c: sqlite3.Connection, actor: str, bot: str, reason: str = "") -> None:
+    """A bot's own pause: an open `paused` hold on it, the first pauser kept on record. The hold sets bots.state
+    'paused' (holds.STATE_KINDS)."""
+    if not holds.get(c, PAUSED, "bot", bot):
+        holds.put(c, PAUSED, "bot", bot, actor=actor, reason=reason)
+
+
+def resume_bot(c: sqlite3.Connection, actor: str, bot: str) -> None:
+    """End a bot's own pause, kept as history: a person's resume, else BotOps's (or Tico's for it). A bot still
+    'paused' with no other stopping hold is active again (holds.STATE_KINDS)."""
+    holds.release(c, PAUSED, "bot", bot, actor=actor, how="person" if actor.startswith("human:") else "botops")
 
 
 def bots_paused_on_own(c: sqlite3.Connection) -> int:
@@ -114,10 +119,7 @@ def pause(c: sqlite3.Connection, auth: "Auth", who: "Identity") -> dict[str, Any
         raise Problem("forbidden", "Only the owner or an admin can pause all bots on Tico Team", 403)
     if record(c):
         return {"changed": False, "state": read(c)}
-    c.execute(
-        "INSERT INTO registry_metadata(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        (KEY, json.dumps({"paused_by": who.actor, "paused_at": H.now()})),
-    )
+    holds.put(c, PAUSED, "company", "", actor=who.actor)
     _event(c, who.actor, "company.pause", "company", {"bots_paused_on_own": bots_paused_on_own(c)})
     hold_queued(c)
     return {"changed": True, "state": read(c)}
@@ -131,7 +133,7 @@ def resume(c: sqlite3.Connection, auth: "Auth", who: "Identity") -> dict[str, An
     if not record(c):
         return {"changed": False, "state": read(c)}
     held = queued_jobs(c)
-    c.execute("DELETE FROM registry_metadata WHERE key=?", (KEY,))
+    holds.release(c, PAUSED, "company", "", actor=who.actor, how="person")
     _event(c, who.actor, "company.resume", "company", {"bots_paused_on_own": bots_paused_on_own(c), "held": held})
     return {"changed": True, "state": read(c), "held": held}
 

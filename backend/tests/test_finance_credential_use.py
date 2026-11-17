@@ -186,7 +186,7 @@ def test_a_sync_reads_the_key_while_its_connector_may_use_it_and_refuses_once_th
     with books.transaction() as c:
         c.execute("UPDATE credential_grants SET revoked_at=? WHERE id=?", (AT, gid))
         c.execute("UPDATE fin_connections SET next_sync_at=NULL WHERE id=?", (cid,))
-    with caplog.at_level(logging.WARNING, logger="backend.finance.banking"):
+    with caplog.at_level(logging.WARNING, logger="backend.finance.key_use"):
         assert sync.connection(books, vault, cid, make=make, at=AT) == "refused"
     assert tokens == ["mercury-secret-0001"]  # never read again
     with books.read() as c:

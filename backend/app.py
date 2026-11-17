@@ -1274,6 +1274,8 @@ def create_app(settings=None):
                 and response.status_code in (200, 206, 302, 304, 416)
                 and "cache-control" in response.headers
             )
+            # A route's no-transform (file_delivery.serve, visuals._headers) survives the rewrite below.
+            transform_off = "no-transform" in str(response.headers.get("cache-control", ""))
             if route_keeps or file_bytes:
                 pass  # the route's own "private, max-age=…" stands
             elif (
@@ -1297,6 +1299,8 @@ def create_app(settings=None):
             else:
                 response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
                 response.headers["Pragma"] = "no-cache"
+            if transform_off and "no-transform" not in response.headers["Cache-Control"]:
+                response.headers["Cache-Control"] += ", no-transform"
             response.headers["CDN-Cache-Control"] = "no-store"
             response.headers["X-Content-Type-Options"] = "nosniff"
             response.headers["Referrer-Policy"] = "same-origin"
@@ -5810,6 +5814,10 @@ def create_app(settings=None):
     from .slack_channels import install as install_slack_channels
 
     install_slack_channels(app, settings, store, auth)
+    # Bots read and post in Slack through the gateway, never with a token of their own (connectors/slack.py).
+    from .slack_bots import install as install_slack_bots
+
+    install_slack_bots(app, settings, store, auth, checked_write, say)
     from .slack_threads import install as install_slack_threads
 
     install_slack_threads(app, settings, store, auth)

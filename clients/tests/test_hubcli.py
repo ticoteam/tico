@@ -1874,7 +1874,7 @@ def test_the_retired_gtm_lines_run_their_new_commands_with_a_notice(monkeypatch,
     assert '"tico gtm show" is now "tico strategy show --section how"' in capsys.readouterr().err
 
 
-def test_strategy_show_section_how_prints_the_section_or_says_nothing_is_published(monkeypatch, capsys):
+def test_strategy_show_section_how_prints_the_section_or_says_there_is_no_strategy(monkeypatch, capsys):
     from clients import remotecli
 
     published = {"current": {"sections": {"how": "- Motion: self serve", "serve": "SMBs"}}}
@@ -1898,7 +1898,7 @@ def test_strategy_show_section_how_prints_the_section_or_says_nothing_is_publish
     }  # the tool's answer
     published["current"] = None
     remotecli.main(hubcli.parser().parse_args(["strategy", "show", "--section", "how"]))
-    assert capsys.readouterr().out == "Nothing published yet.\n"
+    assert capsys.readouterr().out == "No strategy yet.\n"
 
 
 def test_a_json_flag_no_command_takes_is_ignored(monkeypatch, capsys):

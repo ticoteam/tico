@@ -463,6 +463,12 @@ def _state(c, settings, bot):
     }
 
 
+def reported_tools(c, settings, bot):
+    """The `tools:` entries the bot's computer (or its external harness) reports, each with its scope: what a server
+    gate on a tool reads (backend/slack_bots.py)."""
+    return _state(c, settings, bot)["raw"]
+
+
 def _requests(c, bot):
     from .read_cache import rows
 

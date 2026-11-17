@@ -14,7 +14,7 @@ optional strategy bet it serves (`bet_id`, shown as **Bet** in the goal editor n
 ([permissions](permissions.md)). A goal with no bet is shown as "not tied to a bet", a filter on the Strategy page, never a nag; a
 retired bet keeps its goals. A bet's health comes only from its goals that have a KPI: a goal without one leaves the bet gray.
 
-When the **Bet** picker shows **Retired or unpublished**, the goal's linked bet is not visible to you.
+When the **Bet** picker shows **Retired**, the goal's linked bet is not visible to you.
 Saving another field keeps that link. Choose **None** to remove it, or choose an active bet to replace it.
 
 **KPI.** A standalone record. A goal links to zero or more KPIs, one KPI can serve several goals, and not every goal has one.
@@ -126,7 +126,7 @@ computer and a model exist. Its template is `templates/catalog/strategy-owner/`;
 
 There is no On/Off switch. How much it does is the [level](strategy-bot.md) the owner picks, and a new install starts at
 **Suggests actions**. Its first job is the team's [strategy](strategy.md): it proposes the Strategy page to the owner and, when a
-bet's wrong-if trips, puts one proposal in front of them; the owner writes and publishes, never the bot.
+bet's wrong-if trips, puts one proposal in front of them; the owner writes it, never the bot.
 On goals and KPIs it does five things:
 
 1. **Goals make sense.** It flags vague or duplicate goals and may suggest a measure once or clearer wording, as proposals on
@@ -196,11 +196,11 @@ a month (`level3_offer` in `GET /api/v2/strategy-bot`). The Strategy Owner never
 The top of Goals used to be a **Company** section with two fields, a **Vision** (400 characters) and a **Description**
 (2000 characters). Both now live on the [Strategy](strategy.md) page: the vision is the strategy's `vision`, and the
 description became the *What we sell* section of the first draft. The top of Goals is one line, "Strategy v3 ·
-<summary…>", linking to the Strategy page; while nothing is published it says so and links the owner to the draft.
+<summary…>", linking to the Strategy page; while there is no strategy it says so and links the owner to the page.
 The vision is still what a goal's [Why](#a-goals-why) ties to.
 
-Only the owner writes the vision and publishes a version, on their own click. An admin cannot. No bot writes the draft
-or publishes, the Strategy Owner included: it proposes, at every level ([Strategy](strategy.md#who-may-do-what)).
+Only the owner writes the vision and the strategy; each save is live. An admin cannot. No bot writes them on its own
+reading, the Strategy Owner included: it proposes, at every level ([Strategy](strategy.md#who-may-do-what)).
 One exception: while the team has no vision, the Strategy Owner asks the owner "What is this team for?" as a question
 in their Needs you (above Passive), on a task it holds. When they reply with a vision, it saves their words as the
 vision (`tico strategy vision`, which refuses any text they did not write there, and any write once there is a vision)
@@ -209,8 +209,7 @@ and the question closes; when they reply with a question, it answers and the que
 strategy draft (the owner only), so there is one source. `/company/history` still answers for older clients.
 
 A [hub SQL](hub-sql.md) read of `company_profile.vision` returns the same team-visible vision.
-Before the first publication, that is the draft's vision. After publication, it is the latest published vision;
-an unpublished edit stays private. Publishing and server startup bring the SQL value into line on upgraded installs too.
+It is the live version's vision. Each save and server startup bring the SQL value into line on upgraded installs too.
 
 ### A goal's Why
 
@@ -254,7 +253,7 @@ Only a human can; confirming makes the change as that human.
 | `kpi_target` | the target fields, with `goal_id` | the goal's owner or the KPI's |
 | `flag` | `issue`: `vague` or `duplicate`, and a `note` | the goal's owner |
 | `goal_why` | `why`: one line, up to 200 characters ([A goal's Why](#a-goals-why)); never for a goal tied to a bet | whoever may change the goal |
-| `strategy_draft` | partial `summary`, `vision`, `sections`, `bets` ([Strategy](strategy.md#who-may-do-what)); confirming writes the draft, never publishes | the team owner |
+| `strategy_draft` | partial `summary`, `vision`, `sections`, `bets` ([Strategy](strategy.md#who-may-do-what)); confirming writes it, live at once as one version | the team owner |
 | `recovery` | `evidence`, 1 to 4 `options` (`label`, 1 to 6 `actions`: `create`, `reorder` or `settle` on bots' tasks), `pick`; only the Strategy Owner at **Suggests actions** or **Acts on its own** ([Recoveries](#recoveries-and-merged-asks)) | the goal's owner; `{"decision": "confirm", "option": n}` approves another option than the pick |
 
 Pending proposals appear under **Needs you** on the Goals page for the human who decides them, except a Why, which
@@ -343,7 +342,7 @@ from active KPIs; a KPI's detail panel offers **Restore KPI** to return it to ac
 
 ## Permissions
 
-- Everyone signed in reads the strategy and its versions. Only the owner publishes one, on their own click
+- Everyone signed in reads the strategy and its versions. Only the owner writes it, and each save is live
   ([Strategy](strategy.md#who-may-do-what)).
 - Team goals and team KPIs are visible to everyone signed in. A bot's goals and KPIs, and its automatic KPIs, are
   visible to whoever may Read the bot. A goal shows its KPIs, and their numbers in its colour's reason, to everyone

@@ -1327,7 +1327,7 @@ STRATEGY_FILE = Path(__file__).parent / "fixtures" / "company_strategy" / "compa
 
 def test_a_strategy_block_imports_as_an_unconfirmed_draft_with_its_market_watches_and_insights(environment):
     """The fictional Acme Build file both repos test against: everything the setup page drafted lands for the owner to
-    confirm, nothing published, and each goal on the bet it came from."""
+    confirm, live at once as one version, and each goal on the bet it came from."""
     api = environment()
     summary = preview_and_import(api, STRATEGY_FILE.read_text())["strategy"]
     assert [b["id"] for b in summary["bets"]] == ["b1", "b2", "b3"] and summary["sections"][-1] == "watching"
@@ -1353,7 +1353,7 @@ def test_a_strategy_block_imports_as_an_unconfirmed_draft_with_its_market_watche
         "title": "Watching",
         "body": "- Competitor changelogs: Trestle, FieldCraft\n- Superintendents asking for a better schedule app",
     }
-    assert api.get("/api/v2/strategy/versions", headers=signed_in()).json() == []
+    assert [v["n"] for v in api.get("/api/v2/strategy/versions", headers=signed_in()).json()] == [1]
     bets = {b["statement"]: b for b in strategy["bets"]}
     assert {b["status"] for b in bets.values()} == {"proposed"} and len(bets) == 3
     phone = bets["Win the superintendent's phone"]

@@ -61,6 +61,7 @@ a.cf-hall-name:focus-visible{outline:var(--focus-ring);outline-offset:var(--focu
 .cf-chev.cf-into::before{left:calc(50% - 6px)}
 .cf-chev.cf-into::after{content:"";position:absolute;left:calc(50% - 1px);top:-3px;width:5px;height:5px;border:solid var(--g5);border-width:1px 1px 0 0;transform:rotate(45deg)}
 .cf-chev.cf-end.cf-into{width:20px}
+.cf-chev.cf-from{flex:none;width:20px;min-width:0;margin-right:4px}
 .cf-chev.cf-end.cf-into::before{left:auto;right:6px}
 .cf-chev.cf-end.cf-into::after{left:auto;right:1px}
 
