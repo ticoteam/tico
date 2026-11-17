@@ -1185,6 +1185,7 @@ def task_view(
             "side": bool(stage.get("side")),
         },
         "came_from": task_reads.came_from(conn, [task_id]).get(task_id) if stage.get("side") else None,
+        "stage_since": visit.get("entered_at") if live else None,
         "owner_id": row.get("owner_id"),
         "assignee_id": row.get("assignee_id"),
         "turn": waits[0] if waits else None,

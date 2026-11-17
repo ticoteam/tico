@@ -130,7 +130,9 @@ SCHEMAS.update(
             },
             stage_since={
                 "type": ["string", "null"],
-                "description": "On a list row: when it entered its stage, else when it was filed",
+                "format": "date-time",
+                "description": "On the task's own read, when it entered its current open visit, or null if it has none. "
+                "On a list row, when it entered its stage, falling back to when it was filed.",
             },
             waits=items(ref("TaskWait")) | {"description": "On the task's own read: every wait, headline first"},
             to_leave=items(ref("TaskRequirement"))
@@ -457,7 +459,7 @@ SCHEMAS.update(
         ),
         "TaskDetail": obj(
             {
-                "task": ref("Task"),
+                "task": {"allOf": [ref("Task"), obj({"stage_since": "n"})]},
                 "events": "a",
                 "children": "a",
                 # The parent ticket (null: none, or the reader may not read it), with its label and stage
