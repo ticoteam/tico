@@ -42,7 +42,7 @@ def task_context(api, args):
     "(\"PR #1555\" is fine; refused otherwise), e.g. \"Approve the video tool trial for Thursday? If yes, I'll send "
     "the invite.\" Details go below. It starts in the first stage of its pipeline (General when none is named). "
     "`dry_run` reports the checks a create would fail and writes nothing. A person’s asking criteria can refuse "
-    "the write as ask_refused, with the reason and fix; no task is created. To ask a person something on your own "
+    "the write as ask_refused, with the reason and fix; no task is created. To ask a person on your own "
     "task, use tico_task_ask. Access: tico_access_request.",
     {
         "owner": _s(
