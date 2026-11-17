@@ -5,7 +5,10 @@ never does, and whether the runner may set it up itself (`bootstrap: true`, whic
 assistant and BotOps, because BotOps cannot create itself). Everything else in the folder is the
 repository a new bot starts from — AGENTS.md, bot.yaml, playbooks, knowledge, memory — with
 `{{company_name}}`, `{{app_name}}`, `{{assistant_name}}` and `{{bot_name}}` standing in for what
-this installation calls itself and this bot.
+this installation calls itself and this bot. A template holds only what is its own: the files every
+bot starts with live once in the catalog's `_base/`, and files several templates share live once in
+`_shared/`, named by each card that takes them (`shared_files`). `files` lays them in that order,
+each layer over the one before, so a template's own file wins.
 
 Pure: no HTTP, no database, no launchd. The runner materializes the two bootstrap bots before
 their first turn (runner_support/catalog_job.py); BotOps materializes every other chosen bot inside a turn
@@ -34,13 +37,14 @@ from clients.repo_safety import contained_file, outside_installation
 ROOT = Path(__file__).resolve().parents[1]
 CARD = "card.yaml"
 # What a bot made from a template takes from a newer one (`refresh`), and the record of what it was given (STAMP).
-# PRODUCT_OWNED is what a card says is Tico's own (`product_owned` overrides it): its instructions, playbooks and skills.
+# PRODUCT_OWNED is what a card says is Tico's own (`product_owned` overrides it): its instructions, playbooks and skills
+# (`.claude/skills` is where Claude Code loads a repository's skills itself).
 # A built-in bot (a `bootstrap: true` card) takes those on every update even over its own edits.
 STAMP = ".tico-template.json"
 INSTRUCTIONS = "AGENTS.md"
 # The instruction file's name before AGENTS.md: the runner moves it to AGENTS.md on the bot's next turn.
 OLD_INSTRUCTIONS = "AGENT.md"
-PRODUCT_OWNED = (INSTRUCTIONS, "playbooks", "skills")
+PRODUCT_OWNED = (INSTRUCTIONS, "playbooks", "skills", ".claude/skills")
 # Also the template's: the permissions file it ships (no template ships a Codex settings file) and its knowledge pages.
 TEMPLATE_OWNED = (".claude/settings.json", "knowledge")
 # Written for this company when the bot is made, never by the template: the onboarding answers.
@@ -51,6 +55,10 @@ SET_UP = re.compile(r"^Set up \S+ from the \S+ template$")
 JOB = re.compile(r"^## Job description[ \t]*$", re.M)
 RELEASE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$")
 SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+# Folders in the catalog that are not templates (no card, and never a slug): what every bot starts with unless its card's
+# `base_skip` leaves a path out, and what several templates share, each taking the paths its card's `shared_files` names.
+BASE = "_base"
+SHARED = "_shared"
 SLUG_MAX = 40  # short enough for `bot-<slug>` on GitHub and readable in a path
 # What a template's text is filled with before the first commit.
 PLACEHOLDERS = ("company_name", "app_name", "assistant_name", "bot_name")
@@ -140,6 +148,57 @@ def template_dir(template, directory=None):
     if not (path / CARD).is_file():
         raise ValueError(f"No catalog template named {template} in {catalog_dir(directory)}")
     return path
+
+
+# ----------------------------------------------------------------------------- the layers
+def _tree(root):
+    """{relative path: file} of every file under `root`, never a card or anything under a .git folder."""
+    found = {}
+    for path in sorted(root.rglob("*")) if root.is_dir() else []:
+        rel = path.relative_to(root)
+        if path.is_file() and CARD not in rel.parts and ".git" not in rel.parts:
+            found[rel.as_posix()] = path
+    return found
+
+
+def _paths(found, key, template):
+    """A card's list of repository paths under `key`, each a plain relative path."""
+    listed = found.get(key) or []
+    if not isinstance(listed, list):
+        raise ValueError(f"The {template} card's {key} is a list of paths")
+    paths = []
+    for item in listed:
+        rel = str(item or "").strip().strip("/")
+        if not rel or rel.startswith(".git/") or any(part in ("", ".", "..") for part in rel.split("/")):
+            raise ValueError(f"The {template} card's {key} names {item!r}, which is not a path in a bot's repository")
+        paths.append(rel)
+    return paths
+
+
+def _under(rel, prefixes):
+    return any(rel == p or rel.startswith(p + "/") for p in prefixes)
+
+
+def files(template, directory=None):
+    """{relative path: file on disk} of every file a bot made from `template` starts with, unfilled: the catalog's
+    `_base/` less the card's `base_skip`, then each `_shared/` path the card's `shared_files` names, then the template's
+    own folder. A later layer's file replaces an earlier one at the same path. Never the card: it describes the template
+    to a person choosing and is not part of the bot's repository."""
+    source = template_dir(template, directory)
+    found = card(template, directory) or {}
+    root = catalog_dir(directory)
+    skip = _paths(found, "base_skip", template)
+    layered = {rel: path for rel, path in _tree(root / BASE).items() if not _under(rel, skip)}
+    for rel in _paths(found, "shared_files", template):
+        path = root / SHARED / rel
+        if path.is_file():
+            layered[rel] = path
+        elif path.is_dir():
+            layered.update({f"{rel}/{sub}": file for sub, file in _tree(path).items()})
+        else:
+            raise ValueError(f"The {template} card shares {rel}, which {root / SHARED} does not have")
+    layered.update(_tree(source))
+    return layered
 
 
 # ----------------------------------------------------------------------------- materializing one
@@ -242,7 +301,6 @@ def materialize(
     """
     if not SLUG_RE.fullmatch(slug or ""):
         raise ValueError("A bot slug is lowercase letters, digits, and single hyphens")
-    source = template_dir(template, directory)
     target = Path(workspace).expanduser() / (REPO_PREFIX + slug)
     recorded = folder_dir(Path(workspace).expanduser(), folder) if folder else None
     if recorded is not None:
@@ -260,9 +318,11 @@ def materialize(
     values["bot_name"] = (
         fill(str(display_name or (card(template, directory) or {}).get("name") or slug), values) or slug
     )
-    target.parent.mkdir(parents=True, exist_ok=True)
-    # The card describes the template to a person choosing; it is not part of the bot's repository.
-    shutil.copytree(source, target, ignore=shutil.ignore_patterns(CARD, ".git"))
+    layered = files(template, directory)
+    target.mkdir(parents=True)
+    for rel, path in layered.items():
+        (target / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, target / rel)
     for path in sorted(target.rglob("*")):
         if not path.is_file() or path.stat().st_size > MAX_FILL:
             continue
@@ -295,23 +355,23 @@ def _digest(text):
     return hashlib.sha256(text.encode()).hexdigest()
 
 
-def _files_under(source, names, values):
-    """(relative path, filled text) of every readable file under `names` in a template folder."""
-    for name in names:
-        base = source / name
-        for path in [base] if base.is_file() else sorted(base.rglob("*")) if base.is_dir() else []:
-            if not path.is_file() or path.stat().st_size > MAX_FILL:
+def _files_under(layered, names, values):
+    """(relative path, filled text) of every readable file under `names` in a template's layered files (`files`)."""
+    for rel, path in layered.items():
+        if not _under(rel, names):
+            continue
+        try:
+            if path.stat().st_size > MAX_FILL:
                 continue
-            try:
-                yield str(path.relative_to(source)), fill(path.read_text(), values)
-            except (UnicodeError, OSError):
-                continue
+            yield rel, fill(path.read_text(), values)
+        except (UnicodeError, OSError):
+            continue
 
 
-def _product_files(source, template, values, directory=None):
-    """(relative path, filled text) of every product-owned file the template ships."""
+def _product_files(template, values, directory=None):
+    """(relative path, filled text) of every product-owned file a bot from the template is given."""
     owned = (card(template, directory) or {}).get("product_owned") or PRODUCT_OWNED
-    yield from _files_under(source, owned, values)
+    yield from _files_under(files(template, directory), owned, values)
 
 
 def with_job(text, instructions):
@@ -327,15 +387,14 @@ def offered(template, values, instructions=None, directory=None, mailbox=None):
     and the template's knowledge pages, never the company page. AGENTS.md keeps the job description of `instructions`
     (what the bot was made with, or its AGENTS.md now), and a `{{mailbox}}` is filled from `mailbox`, else from the
     `Mailbox:` line of `instructions`."""
-    source = template_dir(template, directory)
-    files = dict(_product_files(source, template, values, directory))
-    for rel, text in _files_under(source, TEMPLATE_OWNED, values):
-        files.setdefault(rel, text)
-    files.pop(COMPANY_PAGE, None)
-    if INSTRUCTIONS in files:
-        files[INSTRUCTIONS] = with_job(files[INSTRUCTIONS], instructions)
+    given = dict(_product_files(template, values, directory))
+    for rel, text in _files_under(files(template, directory), TEMPLATE_OWNED, values):
+        given.setdefault(rel, text)
+    given.pop(COMPANY_PAGE, None)
+    if INSTRUCTIONS in given:
+        given[INSTRUCTIONS] = with_job(given[INSTRUCTIONS], instructions)
     box = mailbox if mailbox is not None else mailbox_of(instructions)
-    return {rel: text.replace("{{mailbox}}", box) if box else text for rel, text in files.items()}
+    return {rel: text.replace("{{mailbox}}", box) if box else text for rel, text in given.items()}
 
 
 def _write(target, path, text):
@@ -477,14 +536,18 @@ def refresh(template, target, names, display_name=None, directory=None, instruct
             record_of[INSTRUCTIONS] = record_of.pop(OLD_INSTRUCTIONS)
     agent = _text(target / INSTRUCTIONS)
     offer = offered(template, values, agent, directory, mailbox=mailbox_of(agent) or mailbox_of(instructions))
-    product = {rel for rel, _ in _product_files(template_dir(template, directory), template, values, directory)}
+    product = {rel for rel, _ in _product_files(template, values, directory)}
     built_in = bool(found.get("bootstrap"))
     # Check every path before any commit or write, even if its digest says it needs no refresh.
     for rel in [*offer, *given, STAMP]:
         contained_file(target, target / rel)
+    # A skill the template moved (skills/<name> to .claude/skills/<name>) moves with the bot's own version of it: what
+    # it was given is counted at the new path, so an edited file there is kept and an unedited one follows the template.
+    moves = _skill_moves(target, offer, given)
+    given, declined = _moved(given, moves), _moved(declined, moves)
     files, kept, write, gone, saved = {}, {}, {}, [], []
     for rel in sorted({*offer, *given}):
-        text, base, have = offer.get(rel), given.get(rel), _text(target / rel)
+        text, base, have = offer.get(rel), given.get(rel), _text(target / _before_move(rel, moves))
         mine = have is not None and _digest(have) != base
         if text is None:  # the template dropped it
             if have is not None and base is not None:
@@ -510,28 +573,125 @@ def refresh(template, target, names, display_name=None, directory=None, instruct
             kept[rel] = digest
             if base is not None:
                 files[rel] = base
-    if record is not None and not write and not gone and (files, kept) == (given, declined):
+    if record is not None and not moves and not write and not gone and (files, kept) == (given, declined):
         return result
     at = version if is_release(version) else at
+    moved = _move_skills(target, moves)
+    result["removed"] += [old for old, _ in moved]
+    result["added"] += [new for _, new in moved]
     if saved:
         # What the bot had, saved in the history before the release's text replaces it.
         commit_paths(target, saved, f"Keep the bot's version of {', '.join(saved)} before the refresh")
     for rel, text in write.items():
-        result["updated" if (target / rel).exists() else "added"].append(rel)
+        if rel not in result["added"]:
+            result["updated" if (target / rel).exists() else "added"].append(rel)
         _write(target, target / rel, text)
     for rel in gone:
         (target / rel).unlink()
         result["removed"].append(rel)
+    pointed = _repoint(
+        target, moves, lambda rel: rel not in write and _digest(_text(target / rel) or "") != files.get(rel)
+    )
     _stamp(target, template, files, kept, at or "")
-    touched = len(write) + len(gone)
+    touched = len(write) + len(gone) + len(moved)
     commit_paths(
         target,
-        [*write, *gone, STAMP],
+        [*write, *gone, *pointed, STAMP],
         f"Refresh {touched} file{'s' if touched != 1 else ''} from the {template} template"
         if touched
         else f"Record the {template} template's files",
     )
     return result
+
+
+def _skill_moves(target, offer, given):
+    """{old folder: new folder} for each skill the bot was given under `skills/` that the template now ships only under
+    `.claude/skills/`, where Claude Code loads it. A bot that already has something at the new path keeps both as
+    they are: nothing is moved over it."""
+    moves = {}
+    for rel in given:
+        parts = rel.split("/")
+        if len(parts) < 3 or parts[0] != "skills":
+            continue
+        old, new = f"skills/{parts[1]}", f".claude/skills/{parts[1]}"
+        if old in moves or (target / new).exists() or (target / new).is_symlink():
+            continue
+        if _under_any(offer, new) and not _under_any(offer, old):
+            moves[old] = new
+    return moves
+
+
+def _under_any(paths, folder):
+    return any(rel.startswith(folder + "/") for rel in paths)
+
+
+def _moved(record, moves):
+    """A stamp's {path: digest} with each moved skill's paths at the new folder."""
+    out = {}
+    for rel, digest in record.items():
+        for old, new in moves.items():
+            if rel.startswith(old + "/"):
+                rel = new + rel[len(old) :]
+                break
+        out[rel] = digest
+    return out
+
+
+def _before_move(rel, moves):
+    """Where the bot's file for `rel` is until its skill is moved: under the old folder."""
+    for old, new in moves.items():
+        if rel.startswith(new + "/"):
+            return old + rel[len(new) :]
+    return rel
+
+
+def _move_skills(target, moves):
+    """Move each skill folder the bot has, with every file in it (its edits and its own additions), to the new path, and
+    commit the move on its own. Returns [(old path, new path)] of each file moved."""
+    moved = []
+    for old, new in moves.items():
+        source = contained_file(target, target / old)
+        if not source.is_dir() or source.is_symlink():
+            continue  # the bot deleted it: what it was given counts as deleted at the new path too
+        files = sorted(p.relative_to(source).as_posix() for p in source.rglob("*") if p.is_file())
+        destination = contained_file(target, target / new)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        os.rename(source, destination)
+        moved += [(f"{old}/{rel}", f"{new}/{rel}") for rel in files]
+        commit_paths(target, [old, new], f"Move {old} to {new}, where Claude Code loads it")
+    return moved
+
+
+# Where a bot's instructions name its skills: rewritten when a skill moves, so nothing points at the old path.
+POINTERS = (INSTRUCTIONS, "playbooks", "knowledge", "skills", ".claude/skills")
+
+
+def _repoint(target, moves, rewrite):
+    """Rewrite `skills/<name>` to `.claude/skills/<name>` for each moved skill in the bot's instruction files that
+    `rewrite(rel)` allows (its own and its kept ones: a file the template just wrote names the new path already).
+    Returns the paths rewritten."""
+    if not moves:
+        return []
+    pattern = re.compile(r"(?<![\w./-])(" + "|".join(re.escape(old) for old in moves) + r")(?![\w.-])")
+    pointed = []
+    for name in POINTERS:
+        base = Path(target) / name
+        for path in [base] if base.is_file() else sorted(base.rglob("*")) if base.is_dir() else []:
+            rel = path.relative_to(target).as_posix()
+            if path.is_file() and not path.is_symlink() and path.stat().st_size <= MAX_FILL and rewrite(rel):
+                pointed += _repoint_one(target, path, rel, pattern, moves)
+    return pointed
+
+
+def _repoint_one(target, path, rel, pattern, moves):
+    text = _text(path)
+    if text is None or text.startswith("\0"):
+        return []
+    new = pattern.sub(lambda found: moves[found.group(1)], text)
+    if new == text:
+        return []
+    _write(target, path, new)
+    return [rel]
 
 
 # ----------------------------------------------------------------------------- git

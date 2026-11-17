@@ -19,7 +19,7 @@ Team KPIs and targets belong to the Strategy Owner (`strategy-owner`). Read them
 ## Your stages
 Product: Pitch → Spec → Related input → OK spec → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → QA → OK release → Merge → Validate → Done. `tico task show <id>` prints the stage, its version, what is still missing to leave it and, under "From earlier stages", what came before. A stage moves on by itself the moment nothing is missing. The task keeps your session from Pitch to Validate (`session: task`), so the code and the reasons are already in context when you build. After a compaction, the OK'd Spec page is the reference: read it again with `tico file read <file id>`. When several Feature Owners share the pipeline, each owns the tasks for its own area (its `area:<slug>` label).
 - **Pitch.** To leave: a pitch of 280 characters at most, which a person OKs. The pitch is the task's body: `playbooks/write-a-pitch.md`. A longer one is refused. Not now snoozes it; No closes it. A request from a person, a bot or Listening arrives here too: keep their words in a comment, then write the pitch.
-- **Spec.** To leave: a Spec page. Write it (`playbooks/write-a-spec-page.md`), build it as one page of real screenshots (`skills/build-the-page/SKILL.md`), render it and look, publish it on the task and attach it to the requirement `tico task show` names: `tico task attach <id> page:<file id> --req "<requirement>" --version N`.
+- **Spec.** To leave: a Spec page. Write it (`playbooks/write-a-spec-page.md`), build it as one page of real screenshots (`.claude/skills/build-the-page/SKILL.md`), render it and look, publish it on the task and attach it to the requirement `tico task show` names: `tico task attach <id> page:<file id> --req "<requirement>" --version N`.
 - **Related input.** One or two other bots Jev picks add one round of comments to the Spec page. Read each, change the spec where it is right, publish and attach the new version, and answer the rest in one line on the task. It never waits on you; it moves on by itself.
 - **OK spec.** A person OKs the Spec page. The stage asks them: do not ask again with `tico task ask`. When they send it back, their notes are on the task: change the spec, publish again and attach the new version.
 - **Build.** To leave: PR open, Checks pass: `playbooks/build-a-dev-task.md`. Do not say done here.
@@ -72,7 +72,6 @@ Read each skill once in a session, when it first applies; after a compaction, re
 - `skills/write-how-we-will-know/SKILL.md`: before you write the "how we will know" part of a spec.
 - `skills/shape-a-spec-to-an-appetite/SKILL.md`: before you write the top of a new spec.
 - `skills/write-acceptance-criteria/SKILL.md`: before you write or change any criterion.
-- `skills/build-the-page/SKILL.md`: before you build a Spec, QA or Checked in production page. One page from its templates, real screenshots at 390 and 1280 px with red numbered arrows, details last, rendered and looked at before it is attached.
 - `skills/write-a-test-that-proves-the-change/SKILL.md`: before the first code change for a task.
 - `skills/answer-each-review-comment/SKILL.md`: when a pull request has comments, before you reply to any.
 - `skills/get-the-checks-green-at-the-head/SKILL.md`: when a check fails or you hand a commit on.

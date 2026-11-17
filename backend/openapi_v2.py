@@ -967,6 +967,15 @@ STABLE = [
         "FactoryMap",
     ),
     (
+        "/api/v2/company/floor",
+        "get",
+        "Pipelines",
+        "getCompanyFloor",
+        "Company › Floor: each factory you see, its pipelines' tasks in and out over a day and a week, and each work "
+        "stage's open tasks by who holds them (the 12 most loaded, the rest summed) and how many are in your Needs you",
+        "CompanyFloor",
+    ),
+    (
         "/api/v2/factories",
         "post",
         "Pipelines",
@@ -3518,6 +3527,42 @@ SCHEMAS = {
                     }
                 )
             ),
+        }
+    ),
+    "CompanyFloor": obj(
+        {
+            "factories": items(
+                obj(
+                    {
+                        "id": "s",
+                        "name": "s",
+                        "manager_id": "n",
+                        "pipelines": items(
+                            obj(
+                                {
+                                    "id": "s",
+                                    "name": "s",
+                                    "manager_id": "n",
+                                    "in": obj({"day": "i", "week": "i"}),
+                                    "out": obj({"day": "i", "week": "i"}),
+                                    "stages": items(
+                                        obj(
+                                            {
+                                                "id": "s",
+                                                "name": "s",
+                                                "count": "i",
+                                                "needs_you": "i",
+                                                "owners": items(obj({"actor": "s", "count": "i", "needs_you": "i"})),
+                                                "more": obj({"owners": "i", "count": "i"}),
+                                            }
+                                        )
+                                    ),
+                                }
+                            )
+                        ),
+                    }
+                )
+            )
         }
     ),
     "FactoryCreated": obj({"factory": obj({"id": "s", "name": "s", "goal": "s"}, required=["id", "name"])}),

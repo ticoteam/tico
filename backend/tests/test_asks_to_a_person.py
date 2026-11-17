@@ -3,11 +3,14 @@ code before any model call (backend/ask_shape.py, AC-1, AC-2), the built-in rule
 judged only for such a question, in the one call the check already makes (org_rules.ensure_builtin, AC-7 to AC-9), and
 a bot's task for a person that is really a decision is refused (backend/ask_ingest.py, AC-6)."""
 
+import importlib
+
 import pytest
 
 from backend import ask_ingest as A
 from backend import ask_shape as S
 from backend import org_rules as OR
+from backend.store import H
 from backend.tests.helpers.api import get, headers, post
 from backend.tests.helpers.counsel import store_file
 from backend.tests.helpers.org_rule_check import (  # noqa: F401 - fixtures
@@ -238,6 +241,82 @@ def test_the_shape_is_a_bots_question_to_a_person_only(ruled):
     assert r.status_code == 200, r.text
 
 
+# ---- the shape of every ask a bot puts to a person (Flow simplified, change 6) ---------------------------------------
+
+# Real asks that pointed at text the person could not see from Flow, or put a path in front of them.
+UNSEEN = (
+    "Can I go ahead with my suggested answer to each of the five Growth questions on this task?",
+    "Five Listening questions are in the comment above. Yes to all, or answer by number?",
+)
+LIST = (
+    "Three things before I write the spec:\n1. Guest checkout, yes or no?\n2. Keep carts 30 days?\n3. Email a reminder?"
+)
+
+
+@pytest.mark.parametrize(
+    "change,said",
+    [
+        ({"line": UNSEEN[0]}, '"on this task"'),
+        ({"line": UNSEEN[1]}, '"comment above"'),
+        (
+            {"why": "Background: knowledge/onboarding-in-flow.md"},
+            '--why has a file path: "knowledge/onboarding-in-flow.md"',
+        ),
+        ({"line": "Ship the fix in commit a7cf7af today?"}, 'has an id or hash: "a7cf7af"'),
+        ({"line": "Which launch note tone? " + "x" * 120}, S.SHORT_LINE),
+        ({"why": "It goes out Friday.\nUnder our name."}, S.WHY_ONE_LINE),
+        (
+            {
+                "line": "See above: OK to send?",
+                "kind": "ok",
+                "why": None,
+                "choices": None,
+                "details": None,
+                "recommend": None,
+            },
+            '"See above"',
+        ),
+    ],
+)
+def test_an_ask_that_breaks_its_shape_is_refused_with_the_fix_before_any_call(ruled, change, said):
+    api, judge = ruled
+    color_rule(api)  # a rule in force, so a call would be made if the ask got that far
+    task = task_for_ops(api)
+    r = ask(api, task, {**GOOD, **change})
+    assert r.status_code == 409, r.text
+    assert r.json()["error"] == "task_ask_shape" and said in r.json()["detail"], r.text
+    assert judge.calls == [], "refused in plain code: no model call"
+    assert version(api, task) == task["version"], "nothing written"
+
+
+@pytest.mark.parametrize("line", ["Is a price above $50 OK?", LIST])
+def test_an_ask_that_stands_on_its_own_is_asked_and_a_list_may_follow_its_first_line(ruled, line):
+    api, _ = ruled
+    task = task_for_ops(api)
+    r = ask(api, task, {"line": line, "why": WHY})
+    assert r.status_code == 200, r.text
+    assert refusals(api) == []
+
+
+def test_every_path_that_asks_a_person_checks_the_shape_whatever_the_bot_was_told(ruled):
+    """H.task_ask is where every ask is made (the asks routes, OKs, browser help, built-in bots), so a path that skips
+    the route's early check is refused there too."""
+    api, _ = ruled
+    task = task_for_ops(api)
+    with api.app.state.store.transaction() as c:
+        for line, why in (
+            (UNSEEN[1], None),
+            ("Which onboarding flow first?", "Background: knowledge/onboarding-in-flow.md"),
+        ):
+            with pytest.raises(H.Refused) as refused:
+                H.task_ask(
+                    c, "bot:ops", task["id"], "human:ana", line, seen_version=task["version"], brief={"why": why}
+                )
+            assert refused.value.rule == "lint"
+        made = H.task_ask(c, "bot:ops", task["id"], "human:ana", LIST, seen_version=task["version"], brief={"why": WHY})
+        assert made["requirement_id"]
+
+
 # ---- the built-in rule (AC-7, AC-8, AC-9) ---------------------------------------------------------------------------
 
 
@@ -254,6 +333,26 @@ def test_asks_to_a_person_is_on_once_and_a_team_that_turns_it_off_keeps_it_off(a
     assert builtin(api) == []
     [kept] = sql(api, "SELECT status, text FROM org_rules WHERE id=?", (found["id"],))
     assert kept == {"status": "retired", "text": "Edited by the team"}
+
+
+def test_the_stored_built_in_rule_stops_requiring_choices_unless_the_team_edited_it(api):
+    migration = importlib.import_module("backend.migrations.20261116234252_asks_to_a_person_choices_optional")
+    assert migration.NOW == OR.ASKS_TO_A_PERSON, "a team set up now gets the words the migration writes"
+    [found] = builtin(api)
+    store = api.app.state.store
+    with store.transaction() as c:
+        c.execute("UPDATE org_rules SET text=? WHERE id=?", (migration.EARLIER, found["id"]))
+        edited = dict(found, id=H.new_id(), text=migration.EARLIER + " Name the customer.")
+        c.execute(
+            f"INSERT INTO org_rules ({', '.join(edited)}) VALUES ({', '.join('?' * len(edited))})",
+            tuple(edited.values()),
+        )
+        migration.up(c)
+        migration.up(c)  # again: nothing more changes
+    [now] = sql(api, "SELECT text, version FROM org_rules WHERE id=?", (found["id"],))
+    assert now == {"text": OR.ASKS_TO_A_PERSON, "version": found["version"] + 1}
+    [kept] = sql(api, "SELECT text, version FROM org_rules WHERE id=?", (edited["id"],))
+    assert kept == {"text": edited["text"], "version": found["version"]}
 
 
 def test_the_rule_judges_a_bots_question_to_a_person_with_all_its_choices_in_one_call(ruled):

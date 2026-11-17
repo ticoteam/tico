@@ -132,9 +132,9 @@ async function tabAndToggle(browser: import('playwright').Browser) {
   await page.locator('.dash-tabs a', {hasText: 'Graph'}).click();
   await page.waitForFunction(() => location.hash === '#/overview/graph');
   await ready(page, 'rules');
-  assert.deepEqual(await page.locator('.dash-tabs a').allInnerTexts(), ['Mine', 'Dashboard', 'Campus', 'Graph', 'Factories', 'Share']);
+  assert.deepEqual(await page.locator('.dash-tabs a').allInnerTexts(), ['Mine', 'Dashboard', 'Floor', 'Campus', 'Graph', 'Factories', 'Share']);
   assert.equal(await page.locator('.dash-tabs a.cur').innerText(), 'Graph');
-  // One top bar: Company, five tabs (Share waits in ⋯), the Rules | Goals segment as its tool, ⋯ last. No second bar.
+  // One top bar: Company, five tabs (Factories and Share wait in ⋯), the Rules | Goals segment as its tool, ⋯ last. No second bar.
   const head = page.locator('#main header.ph');
   assert.equal(await head.locator('.ph-tabs > .ph-tab:visible').count(), 5);
   assert.equal(await head.locator('.ph-tools [data-og-view]').count(), 2, 'the segment is in the top bar');

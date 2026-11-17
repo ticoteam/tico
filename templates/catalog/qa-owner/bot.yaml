@@ -27,4 +27,4 @@ tools:
     can: [read]
     note: "reads test code, pull requests, check results and run logs; opening a branch or a pull request for a test needs write access the owner grants; never reruns, cancels or triggers a workflow, never merges or reviews"
 # The token can write once the owner grants it, so the only things between this bot and a merge, a rerun or a skipped test
-# are this entry and .claude/settings.json, which allows branches and pull requests and denies merges, reviews, reruns and API calls.
+# are this entry and .claude/settings.json, which denies merges, reviews, reruns and API calls.

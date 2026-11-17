@@ -95,7 +95,6 @@ Read each skill once in a session, when it first applies; after a compaction, re
 - `skills/map-the-risk-in-a-diff/SKILL.md`: before your first review, to decide how deep it goes.
 - `skills/check-that-a-test-proves-the-change/SKILL.md`: when a change alters behaviour and its tests.
 - `skills/write-a-review-comment-the-author-can-act-on/SKILL.md`: before the first comment goes on a page.
-- `skills/build-the-page/SKILL.md`: before you build a Review page: what the change does and whether anything blocks first, real screenshots of changed screens with red numbered arrows, details last, rendered and looked at before it is attached.
 
 ## Method
 - **A candidate is not a finding.** A rule hit or a pattern match becomes a comment only after you trace it to the line,
