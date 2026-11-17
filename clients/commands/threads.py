@@ -145,12 +145,11 @@ def chat_goal(api, args):
 
 @tool(
     "tico_chat_ask",
-    "Ask a person something in a direct chat and mark it ❓: it needs their reply, and sits in their Needs you until "
-    "they reply there. No task is filed and nothing else is sent. One open ❓ per chat: a new one replaces yours.",
+    "Ask a person in a chat, marked ❓: in their Needs you until they reply there. Files no task.",
     {
         "to": _s("The person's id"),
-        "message": _s("What you ask: a short first line that stands on its own, then any detail"),
-        "conversation_id": _s("A chat you are both in; leave out for your chat with them"),
+        "message": _s("A short first line, then any detail"),
+        "conversation_id": _s("A chat you share; default: your chat with them"),
     },
     required=("to", "message"),
     writes=True,
