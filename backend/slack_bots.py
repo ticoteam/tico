@@ -17,16 +17,22 @@ scope), onboarding, the channel list (Settings > Tools > Slack: readers, posting
 a recipient on the roster who may sign in, the org rule check on what is posted, and screening on what is read. The
 gateway refuses a channel shared outside the workspace (Slack Connect) for both, since only Slack can say.
 `connectors/slack.py` is a thin client of these routes.
+
+History and files wait on the gateway for up to a minute or more, so those two routes are async and hold no thread while
+they wait (slack_requests.ask); at most MAX_WAITS wait at once per server, and more answer 503 `slack_busy`.
 """
 
+import asyncio
 import hashlib
 import json
 import re
+import threading
 import time
 import urllib.parse
 from typing import Any, Callable
 
 from fastapi import Query, Request, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from . import hubdb as _H
@@ -70,6 +76,10 @@ def _mod(name: str) -> Any:
 
 MAX_POST_CHARS = 4000
 HISTORY_WAIT, FILE_WAIT = 60.0, 150.0
+# Waits on the gateway in flight per server. A wait holds no thread, only a row and a poll, but the gateway answers the
+# rows one after another on its own thread, so past this many more would only queue: 503 `slack_busy` instead.
+MAX_WAITS, BUSY_RETRY_SECONDS = 16, 5
+BUSY = "Tico is already waiting on Slack for many bots; try again in a few seconds."
 TS_RE = r"^\d{6,12}\.\d{1,6}$"
 FILE_RE = re.compile(r"^F[A-Z0-9]{6,}$")
 OFF = {"no", "false", "off", "0"}
@@ -336,28 +346,51 @@ def install(
             raise Problem("forbidden", "These routes are for bots; a person uses Slack itself.", 403)
         return who, str(who.actor)[4:]
 
+    app.state.slack_waits = threading.BoundedSemaphore(MAX_WAITS)
+
+    async def wait_for_slack(kind: str, bot: str, params: dict[str, Any], wait: float) -> dict[str, Any] | Response:
+        """The gateway's answer, waited for without a thread (slack_requests.ask). At most MAX_WAITS at once per
+        server: past that, 503 `slack_busy` with Retry-After, before anything is asked of Slack."""
+        slots: Any = app.state.slack_waits
+        if not slots.acquire(blocking=False):
+            return JSONResponse(
+                {"error": {"code": "slack_busy", "detail": BUSY, "retryable": True}},
+                status_code=503,
+                headers={"Retry-After": str(BUSY_RETRY_SECONDS)},
+            )
+        try:
+            return await SR.ask(store, kind, bot, params, wait=wait)
+        finally:
+            slots.release()
+
     @app.get("/api/v2/slack/history")
-    def slack_history(
+    async def slack_history(
         request: Request,
         channel: str = Query(min_length=1, max_length=200),
         oldest: float = Query(ge=0),
         latest: float | None = Query(default=None, ge=0),
         threads: bool = False,
-    ) -> dict[str, Any]:
+    ) -> Any:
         """A channel's messages from `oldest` to `latest` (Unix seconds; now by default), with threads on request."""
-        _, bot = bot_of(request)
         end = time.time() if latest is None else latest
-        if end < oldest:
-            raise Problem("slack_range", "`latest` is before `oldest`.", 422)
-        with store.read() as c:
-            entry = slack_entry(c, settings, bot)
-            need(c, bot, entry, "read")
-            ref = may_read(c, bot, readable(c, settings, bot, entry), channel)
-            gateway_up(c)
-        params = {"channel": ref, "oldest": f"{oldest:.6f}", "latest": f"{end:.6f}", "threads": threads}
-        answer = SR.ask(store, "history", bot, params, wait=HISTORY_WAIT)
+
+        def gates() -> tuple[str, dict[str, Any]]:
+            _, bot = bot_of(request)
+            if end < oldest:
+                raise Problem("slack_range", "`latest` is before `oldest`.", 422)
+            with store.read() as c:
+                entry = slack_entry(c, settings, bot)
+                need(c, bot, entry, "read")
+                ref = may_read(c, bot, readable(c, settings, bot, entry), channel)
+                gateway_up(c)
+            return bot, {"channel": ref, "oldest": f"{oldest:.6f}", "latest": f"{end:.6f}", "threads": threads}
+
+        bot, params = await asyncio.to_thread(gates)
+        answer = await wait_for_slack("history", bot, params, HISTORY_WAIT)
+        if isinstance(answer, Response):
+            return answer
         answer.pop("request_id", None)
-        warning = screened(store, bot, all_text(answer.get("messages") or []))
+        warning = await asyncio.to_thread(screened, store, bot, all_text(answer.get("messages") or []))
         return {"ok": True, **answer, **({"warning": warning} if warning else {})}
 
     @app.post("/api/v2/slack/posts")
@@ -402,20 +435,28 @@ def install(
         return {**answer, "message_id": answer.get("id"), "to": person["email"] or person["id"]}
 
     @app.get("/api/v2/slack/files/{fid}")
-    def slack_file(request: Request, fid: str) -> Response:
+    async def slack_file(request: Request, fid: str) -> Response:
         """A file someone shared, by its `F...` id: where the bot may read its message."""
-        _, bot = bot_of(request)
-        if not FILE_RE.match(fid):
-            raise Problem("slack_file", "A Slack file id looks like F0123ABCD, from a `[file F...]` line.", 422)
-        with store.read() as c:
-            entry = slack_entry(c, settings, bot)
-            need(c, bot, entry, "read")
-            params = {"file": fid, "channels": sorted(readable(c, settings, bot, entry)), "dms": dms_on(entry)}
-            gateway_up(c)
-        answer = SR.ask(store, "file", bot, params, wait=FILE_WAIT)
-        raw = SR.take_file(settings, str(answer["request_id"]))
+
+        def gates() -> tuple[str, dict[str, Any]]:
+            _, bot = bot_of(request)
+            if not FILE_RE.match(fid):
+                raise Problem("slack_file", "A Slack file id looks like F0123ABCD, from a `[file F...]` line.", 422)
+            with store.read() as c:
+                entry = slack_entry(c, settings, bot)
+                need(c, bot, entry, "read")
+                params = {"file": fid, "channels": sorted(readable(c, settings, bot, entry)), "dms": dms_on(entry)}
+                gateway_up(c)
+            return bot, params
+
+        bot, params = await asyncio.to_thread(gates)
+        answer = await wait_for_slack("file", bot, params, FILE_WAIT)
+        if isinstance(answer, Response):
+            return answer
+        raw = await asyncio.to_thread(SR.take_file, settings, str(answer["request_id"]))
         mimetype = str(answer.get("mimetype") or "")
-        warning = screened(store, bot, raw[:200_000].decode("utf-8", "replace")) if mimetype.startswith("text/") else ""
+        text = raw[:200_000].decode("utf-8", "replace") if mimetype.startswith("text/") else ""
+        warning = await asyncio.to_thread(screened, store, bot, text) if text else ""
         headers = {
             "X-Slack-File-Id": str(answer.get("id") or fid),
             "X-Slack-File-Name": urllib.parse.quote(str(answer.get("name") or fid)),

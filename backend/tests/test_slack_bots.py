@@ -5,11 +5,14 @@ gateway's outbox, DMs as the bot's message to a person, and a clear 503 when the
 Ops is the bot (its computer reports a `service: slack` entry); Ana owns the company and has a Slack id.
 """
 
+import asyncio
 import json
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
+import anyio
 import pytest
 
 from backend import hubdb as H
@@ -158,9 +161,10 @@ def slack(api, monkeypatch):
     )
     thread = threading.Thread(target=SR.serve_forever, args=(gw,), daemon=True)
     thread.start()
-    yield SimpleNamespace(api=api, token=attempt["token"], machine=machine, fake=fake, gw=gw, store=store)
+    ns = SimpleNamespace(api=api, token=attempt["token"], machine=machine, fake=fake, gw=gw, store=store, thread=thread)
+    yield ns
     gw.stop.set()
-    thread.join(5)
+    ns.thread.join(5)
 
 
 class Answer:
@@ -334,6 +338,101 @@ def test_the_gateway_being_off_answers_503_saying_what_to_start(slack, monkeypat
     )
     with slack.store.read() as c:
         assert c.execute("SELECT count(*) FROM slack_requests").fetchone()[0] == 0
+
+
+# ----------------------------------------------------------------------------- waiting holds no thread
+def pause_gateway(s):
+    """The gateway's request thread stops answering: what is asked stays pending (and is not 503 for a while)."""
+    s.gw.stop.set()
+    s.thread.join(5)
+
+
+def resume_gateway(s):
+    s.gw.stop = threading.Event()
+    s.thread = threading.Thread(target=SR.serve_forever, args=(s.gw,), daemon=True)
+    s.thread.start()
+
+
+def pending(s):
+    with s.store.read() as c:
+        return c.execute("SELECT count(*) FROM slack_requests WHERE state='pending'").fetchone()[0]
+
+
+def until(check, seconds=5.0):
+    stop = time.monotonic() + seconds
+    while not check():
+        assert time.monotonic() < stop, "timed out"
+        time.sleep(0.01)
+
+
+def test_bots_waiting_on_slack_do_not_hold_the_servers_threads(slack, monkeypatch):
+    """With every thread pool down to two threads, six bots wait on the gateway at once and an unrelated request is
+    still answered at once: a waiting read holds no thread. A sync wait would hold all of them and queue the rest."""
+    monkeypatch.setattr(SR, "CLAIM_SECONDS", 30)
+    portal = slack.api.portal
+    loop = portal.call(asyncio.get_running_loop)
+    limiter = portal.call(anyio.to_thread.current_default_thread_limiter)
+    tokens, executor, small = limiter.total_tokens, loop._default_executor, ThreadPoolExecutor(2)
+
+    def shrink(n, pool):
+        limiter.total_tokens = n
+        loop.set_default_executor(pool)
+
+    pause_gateway(slack)
+    portal.call(shrink, 2, small)
+    try:
+        answers = []
+        waits = [
+            threading.Thread(
+                target=lambda: answers.append(
+                    slack.api.get(
+                        "/api/v2/slack/history",
+                        params={"channel": "#general", "oldest": 0},
+                        headers=headers(slack.token),
+                    ).status_code
+                )
+            )
+            for _ in range(6)
+        ]
+        for t in waits:
+            t.start()
+        until(lambda: pending(slack) == 6)
+        started = time.monotonic()
+        me = slack.api.get("/api/v2/me", headers=headers(slack.token))
+        assert me.status_code == 200 and time.monotonic() - started < 1.0, "an unrelated request is not kept waiting"
+        assert all(t.is_alive() for t in waits) and pending(slack) == 6, "the six reads are still waiting"
+        resume_gateway(slack)
+        for t in waits:
+            t.join(10)
+        assert answers == [200] * 6
+    finally:
+        portal.call(shrink, tokens, executor)
+        small.shutdown(wait=False)
+
+
+def test_past_the_cap_a_read_is_told_slack_is_busy(slack, monkeypatch):
+    monkeypatch.setattr(SR, "CLAIM_SECONDS", 30)
+    monkeypatch.setattr(slack.api.app.state, "slack_waits", threading.BoundedSemaphore(1))
+    pause_gateway(slack)
+    first = []
+    waiting = threading.Thread(
+        target=lambda: first.append(call(slack, "GET", "slack/files/F0FILE0001").content), daemon=True
+    )
+    waiting.start()
+    until(lambda: pending(slack) == 1)
+    for path, kw in (
+        ("slack/history", {"params": {"channel": "#general", "oldest": 0}}),
+        ("slack/files/F0FILE0001", {}),
+    ):
+        busy = call(slack, "GET", path, 503, **kw)
+        assert busy.json()["code"] == "slack_busy" and busy.json()["retryable"], path
+        assert busy.headers["Retry-After"] == str(SB.BUSY_RETRY_SECONDS)
+    assert pending(slack) == 1, "nothing more was asked of Slack"
+    resume_gateway(slack)
+    waiting.join(10)
+    assert first == [b"hello world"]
+    # The slot is given back: the next read goes through.
+    assert call(slack, "GET", "slack/history", params={"channel": "#general", "oldest": 0}).json()["ok"]
 
 
 # ----------------------------------------------------------------------------- DMs

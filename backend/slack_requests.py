@@ -10,6 +10,7 @@ What a bot may read is decided by the API before it asks (backend/slack_bots.py)
 can tell: that a channel is not shared outside the workspace (Slack Connect), and where a file was shared.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -52,39 +53,54 @@ def files_dir(settings: Any) -> Path:
 
 
 # ----------------------------------------------------------------------------- the API's side
-def ask(store: Any, kind: str, bot: str, params: dict[str, Any], wait: float = 30.0) -> dict[str, Any]:
+async def ask(store: Any, kind: str, bot: str, params: dict[str, Any], wait: float = 30.0) -> dict[str, Any]:
     """Write one request and wait for the gateway's answer. 503 when no gateway claims it in CLAIM_SECONDS, 504 when it
-    is not done in `wait`; a refusal comes back as the gateway's Problem."""
+    is not done in `wait`; a refusal comes back as the gateway's Problem.
+
+    The wait holds no thread: it sleeps on the event loop and hops to a thread only for each short read, so bots
+    waiting on Slack never starve the server's thread pool. A wait the caller abandons leaves its row to `sweep`."""
+    rid = await asyncio.to_thread(_submit, store, kind, bot, params)
+    started = time.monotonic()
+    while True:
+        await asyncio.sleep(POLL_SECONDS)
+        answer = await asyncio.to_thread(_step, store, rid, time.monotonic() - started, wait)
+        if answer is not None:
+            return answer
+
+
+def _submit(store: Any, kind: str, bot: str, params: dict[str, Any]) -> str:
     rid, now = H.new_id(), H.now()
     with store.transaction() as c:
         c.execute(
             "INSERT INTO slack_requests(id,kind,bot,params,state,created_at,updated_at) VALUES(?,?,?,?,'pending',?,?)",
             (rid, kind, bot, json.dumps(params), now, now),
         )
-    started = time.monotonic()
-    while True:
-        time.sleep(POLL_SECONDS)
-        with store.read() as c:
-            row = c.execute("SELECT state,result,error FROM slack_requests WHERE id=?", (rid,)).fetchone()
-        state = row["state"] if row else "failed"
-        waited = time.monotonic() - started
-        if state in ("done", "failed"):
-            _forget(store, rid)
-            if state == "done":
-                return {**json.loads(row["result"] or "{}"), "request_id": rid}
-            error = json.loads((row["error"] if row else None) or "{}")
-            raise Problem(
-                str(error.get("code") or "slack_failed"),
-                str(error.get("detail") or "Slack did not answer"),
-                int(error.get("status") or 502),
-            )
-        if (state == "pending" and waited >= CLAIM_SECONDS) or waited >= wait:
-            with store.transaction() as c:
-                gone = c.execute("DELETE FROM slack_requests WHERE id=? AND state=?", (rid, state)).rowcount
-            if gone:
-                if state == "pending":
-                    raise Problem("slack_gateway_off", NOT_RUNNING, 503, retryable=True)
-                raise Problem("slack_timeout", "Slack took too long to answer; try a shorter time range", 504)
+    return rid
+
+
+def _step(store: Any, rid: str, waited: float, wait: float) -> dict[str, Any] | None:
+    """One look at request `rid`: its answer when the gateway is done, None while it is still to come, or a Problem."""
+    with store.read() as c:
+        row = c.execute("SELECT state,result,error FROM slack_requests WHERE id=?", (rid,)).fetchone()
+    state = row["state"] if row else "failed"
+    if state in ("done", "failed"):
+        _forget(store, rid)
+        if state == "done":
+            return {**json.loads(row["result"] or "{}"), "request_id": rid}
+        error = json.loads((row["error"] if row else None) or "{}")
+        raise Problem(
+            str(error.get("code") or "slack_failed"),
+            str(error.get("detail") or "Slack did not answer"),
+            int(error.get("status") or 502),
+        )
+    if (state == "pending" and waited >= CLAIM_SECONDS) or waited >= wait:
+        with store.transaction() as c:
+            gone = c.execute("DELETE FROM slack_requests WHERE id=? AND state=?", (rid, state)).rowcount
+        if gone:
+            if state == "pending":
+                raise Problem("slack_gateway_off", NOT_RUNNING, 503, retryable=True)
+            raise Problem("slack_timeout", "Slack took too long to answer; try a shorter time range", 504)
+    return None
 
 
 def _forget(store: Any, rid: str) -> None:
