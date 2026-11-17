@@ -557,10 +557,9 @@ _STAGE_ASK = ("kind", "choices", "choice", "recommend", "title", "show", "subjec
 
 @tool(
     "tico_task_ask",
-    "Ask a person on this task. With only `to` and `line`: post it on the task's chat marked ❓, needing their reply; "
-    "it sits in their Needs you until they reply there, and you are not chased meanwhile. One open ❓ per chat: a new "
-    "one replaces yours. With `kind`, choices, `why` or the like: a stage ask the task waits on in its stage (a "
-    "question or an OK), whose answer wakes you once. `withdraw` takes a stage ask back.",
+    "Ask a person on this task. Only `to` and `line`: a ❓ on its chat, in their Needs you until they reply (you are "
+    "not chased; a new ❓ replaces yours). With `kind`, choices or `why`: a stage ask; its answer wakes you once. "
+    "`withdraw` takes that back.",
     {
         "id": TASK_ID,
         "to": _s("The person's id"),
