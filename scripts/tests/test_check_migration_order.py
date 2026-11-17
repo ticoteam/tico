@@ -59,6 +59,18 @@ def test_an_addition_cannot_reuse_a_heads_or_base_tips_timestamp():
     assert "main already contains backend/migrations/20261104235958_new.py" in errors(added, added, added)[0]
 
 
+def test_an_edit_to_a_migration_the_base_has_is_refused_but_a_new_ones_is_not():
+    base = paths("20261117023225_company_floor_widget.py")
+    new = paths("20261118000000_new.py")
+    assert errors([], base + new, base) == []
+    found = guard.errors(new, base + new, base, "main", now=NOW, edited=base + new)
+    assert found == [
+        "backend/migrations/20261117023225_company_floor_widget.py: main already has this migration, and a server "
+        "that applied it refuses a changed file. Restore it (git show <base>:<path> > <path>) and put the change in a "
+        "new migration"
+    ]
+
+
 @pytest.mark.slow
 def test_git_diff_uses_the_merge_base_and_current_tip_and_checks_renamed_paths(tmp_path):
     def git(*args):
@@ -108,6 +120,13 @@ def test_git_diff_uses_the_merge_base_and_current_tip_and_checks_renamed_paths(t
     assert "version also used by 20261104000000_main.py" in guard.check("main", colliding_head, root=tmp_path)[0]
     git("checkout", "-q", "feature")
     (directory / "20261104000000_renamed.sql").rename(directory / "20261105000000_renamed.sql")
+    commit()
+    # The edit to a migration main already has is refused; put back, the branch passes.
+    assert guard.check("main", root=tmp_path) == [
+        "backend/migrations/0001_old.sql: main already has this migration, and a server that applied it refuses a "
+        "changed file. Restore it (git show <base>:<path> > <path>) and put the change in a new migration"
+    ]
+    (directory / "0001_old.sql").write_text("SELECT 1;\n")
     commit()
     assert guard.check("main", root=tmp_path) == []
     git("-c", "commit.gpgsign=false", "merge", "--no-edit", "main")
