@@ -60,6 +60,7 @@ import logging
 import os
 import re
 import sqlite3
+import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -532,6 +533,21 @@ def leave_wal_for_litestream(conn):
     return conn
 
 
+def wal_mode(conn, wait=30.0):
+    """Switch the file to WAL. Two connections switching a new file at once is the one place SQLite answers "database is
+    locked" without waiting for the other (its busy handler is not asked, to avoid a deadlock), so the loser tries again
+    until `wait` seconds have passed; the switch itself takes milliseconds."""
+    deadline = time.monotonic() + wait
+    while True:
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            return
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc) or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.01)
+
+
 def connect(path=None):
     """Open (and if need be create) hub.db. WAL, foreign keys on, migrations applied.
 
@@ -550,7 +566,11 @@ def connect(path=None):
     conn.row_factory = sqlite3.Row
     if fresh:
         conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
-    conn.execute("PRAGMA journal_mode=WAL")
+    try:
+        wal_mode(conn)
+    except Exception:
+        conn.close()
+        raise
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA busy_timeout=30000")
     conn.execute(f"PRAGMA synchronous={synchronous('NORMAL')}")
