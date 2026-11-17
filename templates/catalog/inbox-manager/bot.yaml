@@ -3,16 +3,14 @@ display_name: "Inbox Manager"
 labels: [owner:inbox-manager]
 reads: []                        # other bot repositories this one may clone read-only
 
-# This must agree with the bot's settings on the server, or be left out of this file entirely.
 max_run_minutes: 60
 
 # What the Tico AI Gateway gives this bot when nobody picked a model: its group's pick at this level.
 gateway:
   level: low
 
-# The first routine is declared but not armed (`enabled: false`). The bot arms it with
-# `tico automation update <id> --enable` when Setup starts; setup-done allows normal work.
-# `tico bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
+# The first routine is armed by the bot with `tico automation update <id> --enable` when Setup starts; setup-done
+# allows normal work.
 # A second or third pass a day is a routine the bot adds after a week of a brief the human reads.
 routines:
   - id: morning-mail-brief
@@ -23,11 +21,9 @@ routines:
     labels: [priority:p2]
     enabled: false
 
-# What this bot may touch. Not listed is not allowed. `env:` names the variable a credential
-# arrives in, never the value. Store a Credential in Tico and grant it to this bot;
-# the runner delivers it during a run. Declaring access here does not create a grant. BotOps replaces {{mailbox}} from
-# the Mailbox: line in the reviewed instructions. Only the assigned mailbox is read, through the grant this bot gets
-# as its person's message bot (Tools); another mailbox is that mailbox's person's to share.
+# What this bot may touch. BotOps replaces {{mailbox}} from the Mailbox: line in the reviewed instructions.
+# Only the assigned mailbox is read, through the grant this bot gets as its person's message bot (Tools); another
+# mailbox is that mailbox's person's to share.
 tools:
   - service: gmail
     identity: "{{mailbox}}"

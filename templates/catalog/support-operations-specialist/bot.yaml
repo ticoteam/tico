@@ -3,11 +3,8 @@ display_name: "Support Operations Specialist"
 labels: [owner:support-operations-specialist]
 reads: []                        # other bot repositories this one may clone read-only
 
-# This must agree with the bot's settings on the server, or be left out of this file entirely.
 max_run_minutes: 60
 
-# The first routine is declared off (`enabled: false`) and switched on when a human starts the bot's setup
-# (Start setup, go-live). `tico bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
 # Cron runs Mondays 1-7 of the month; the playbook skips a run that is not the month's first Monday.
 routines:
   - id: monthly-helpdesk-audit
@@ -18,9 +15,6 @@ routines:
     labels: [priority:p3]
     enabled: false
 
-# What this bot may touch. Not listed is not allowed. `env:` names the variable a credential
-# arrives in, never the value; declaring access here does not create it. Changing access is an
-# owner decision, so the bot files a task for the owner rather than editing this file.
 # Optional, uncomment when connected. Add write, modify or delete only for the requested systems and work.
 # tools:
 #   - service: zendesk

@@ -543,6 +543,10 @@ tools:
 - `note:` records who authorized it and what is excluded; human and bot readers rely on it. A
   browser-based access also names `sites:`, so the tool can refuse everything else.
 
+**Changing what a bot declares.** Optional entries stay commented out until the service is connected. Changing an
+entry is the owner's decision, not an edit the bot makes to its own file: a bot or a person who needs one asks through
+Tools (below), and BotOps writes it into `bot.yaml`, commits and pushes.
+
 **Where the values live.** Store the value in Credentials or its thread card and grant it to the bot.
 Tico delivers it for one run as an environment variable or a mode-0600 temporary file removed afterwards.
 Never put a value in a task, thread, or repository.
@@ -686,7 +690,9 @@ Levers set in **Settings → Bots**, not in the repository:
   Compact at alone. The line under the picker shows what the bot runs on. Each run in a task's **Runs** says what woke it.
   A branch picks its own. The old **Wakes** setting (`wake_preset`) is still read and set by older clients: it changes only
   the Doer's window.
-- **`max_run_minutes`**: the ceiling on one run. Set it from the longest real routine, not hope.
+- **`max_run_minutes`**: the ceiling on one run. Set it from the longest real routine, not hope. A template's
+  `bot.yaml` may carry the same number: keep it equal to the value in Settings → Bots, or leave it out. The server
+  holds the value a run is held to, and no check compares the file with it.
 - **`gateway:`** (optional, in a template's `bot.yaml`): `level: xlow | low | medium | high | xhigh` and `fast: true` (Fast costs more and runs on another vendor, so no template turns it on). A bot made from the
   template that runs on the [Tico AI Gateway](ai-gateway.md) with no model of its own starts on that
   level, for example `gateway: {level: low}` on a mail watcher, or `level: high` on an engineering builder. It
