@@ -361,7 +361,7 @@
   "pp311-pypy311_pp80-win_amd64"
  ],
  "dkimpy==1.1.8": [],
- "dnspython==2.9.0": [
+ "dnspython==2.9.2": [
   "py3-none-any"
  ],
  "fastapi==0.141.1": [

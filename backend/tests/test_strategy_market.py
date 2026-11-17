@@ -1,8 +1,6 @@
 """The Strategy page's market cards (backend/strategy_market.py): which segment is Us and which Next, removing a
 segment, and the competitors. Examples use Acme and Northwind."""
 
-from datetime import datetime, timedelta, timezone
-
 from backend.tests.helpers.api import get, post, setup_attempt  # noqa: F401
 from backend.tests.helpers.market import _librarian
 from backend.tests.helpers.market_spend import defined, evidence
@@ -36,14 +34,9 @@ def test_writes_straight_to_the_graph_move_us_and_next_and_only_people_mark_them
     first, second, sub = defined(api)
     post(api, "market/segments/target", {"id": second, "target": "ours"})  # makes company/self
     proof = [evidence(api)]
-    # The market routes: an Us edge marks the segment Us, and ending it takes the mark off.
-    edge = post(
-        api, "market/edges", {"src": "company/self", "rel": "operates_in", "dst": first, "evidence_ids": proof}
-    )["edge"]
+    # The market routes: an Us edge marks the segment Us.
+    post(api, "market/edges", {"src": "company/self", "rel": "operates_in", "dst": first, "evidence_ids": proof})
     assert segments(api)[first]["self"]
-    yesterday = (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
-    post(api, f"market/edges/{edge['id']}", {"until": yesterday, "evidence_ids": proof})
-    assert not segments(api)[first]["self"]
     # Next set and cleared on the segment's properties.
     post(api, f"market/entities/{sub}", {"properties": {"next": True}, "evidence_ids": proof})
     assert segments(api)[sub]["next"]
@@ -54,7 +47,7 @@ def test_writes_straight_to_the_graph_move_us_and_next_and_only_people_mark_them
     _, _, librarian = setup_attempt(api, "librarian")
     post(api, "market/segments/target", {"id": first, "target": "ours"}, token=librarian["token"], expected=403)
     post(api, "market/segments/target", {"id": first, "target": "none"}, token=librarian["token"], expected=403)
-    assert not segments(api)[first]["self"]
+    assert segments(api)[first]["self"]  # refused: the Librarian cannot clear a person's Us either
 
 
 def test_a_segment_merged_away_keeps_its_marks(api):

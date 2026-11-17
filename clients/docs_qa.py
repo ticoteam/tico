@@ -1,15 +1,13 @@
-"""One Gemini request, for the market librarian's answers (backend/market.py).
+"""The Gemini key for the model calls that need one (the seat drafts in backend/recruiting.py).
 
 The key is the server's GEMINI_API_KEY. The `secrets/` files beside the checkout are the local and
 development layout (a projects folder holding the hub checkout); a Docker server has no such folder and
 reads the environment only.
 """
 
-import json
 import os
 from functools import lru_cache
 from pathlib import Path
-from urllib.request import Request, urlopen
 
 # The projects folder holds secrets/ beside the hub checkout; TICO_PROJECTS names it when this
 # checkout is somewhere else (a worktree), the way the runner's --projects does.
@@ -43,14 +41,3 @@ def key():
     if not env['GEMINI_API_KEY']:
         raise NoKey('Docs answers need a configured Gemini API key.')
     return env['GEMINI_API_KEY']
-
-
-def request(path, body):
-    return urlopen(
-        Request(
-            'https://generativelanguage.googleapis.com/v1beta/' + path,
-            data=json.dumps(body).encode(),
-            headers={'Content-Type': 'application/json', 'x-goog-api-key': key()},
-        ),
-        timeout=30,
-    )

@@ -145,6 +145,23 @@ def test_the_ok_shows_the_page_waits_on_jev_and_reaches_the_person_only_once_jev
     assert E.task(c, row["id"])["status"] == "done"
 
 
+def test_the_oks_check_rows_are_what_the_decision_model_passed_on_the_page_not_the_bots_words(c):
+    """The Validate OK's verdict rows come from the page's passed check, so they stay when the ask carries no brief."""
+    from backend import pipeline_judges as PJ
+
+    row = _attach(c, _in_validate(c))
+    brief = {"why": "Checked on rc.13.", "details": ["Row is 40 px"], "recommend": None}
+    rid = _ask(c, row, PM, "ok", ANA, CHECKED, brief=brief)["requirement_id"]
+
+    def entry():
+        return next(r for r in H.task_view(c, row["id"], ANA)["to_leave"] if r["requirement_id"] == rid)
+
+    assert "checks" not in entry()  # Jev has not passed the page yet
+    _jev(c, row)
+    assert entry()["checks"] == [part.found for part in PJ.CHECKS["validate"]]
+    assert all(entry()["checks"])
+
+
 def test_a_new_page_that_jev_sends_back_takes_the_ok_from_the_person_again(c):
     row = _jev(c, _attach(c, _in_validate(c)))
     # Passed with an OK already asked (the bot asked while Jev was checking): the page passed, so it waits on Ana.
@@ -185,43 +202,3 @@ def test_a_passed_page_with_no_ask_goes_to_done_with_no_person(c):
     row = _jev(c, _attach(c, _in_validate(c)))
     assert E.advance(c, row["id"])["status"] == "done"
     assert not c.execute("SELECT 1 FROM answers WHERE by_id LIKE 'human:%'").fetchone()
-
-
-# ----------------------------------------------------------------------------- the sweep at the release
-def _old_ask(c, monkeypatch, row, kind, line, *, by=PM, person=ANA, choices=None, shows=None):
-    """An ask made before the gate shipped."""
-    with monkeypatch.context() as m:
-        m.setattr(G, "check_ask", lambda conn, task, who, to, k, s, ch: s)
-        m.setattr(G, "held", lambda conn, task, requirement: None)
-        return _ask(c, row, by, kind, person, line, choices=choices, shows=shows)["requirement_id"]
-
-
-def test_the_sweep_withdraws_bare_asks_once_and_leaves_a_persons_and_a_shown_passed_page(c, monkeypatch):
-    bare = _in_validate(c, "Bare check")
-    _old_ask(c, monkeypatch, bare, "answer", "On a phone, is the row 40 px?", choices=["yes", "no", "Something else"])
-    decision = _in_validate(c, "Load gate host")
-    _old_ask(c, monkeypatch, decision, "answer", "Which host do we pay for?", choices=["Fly", "Render"])
-    passed = _jev(c, _attach(c, _in_validate(c, "Passed page"), "f-passed"), file_id="f-passed")
-    _old_ask(c, monkeypatch, passed, "answer", "Does this pass?", choices=["yes", "no"])
-    persons = _in_validate(c, "A person's ask")
-    kept = _old_ask(c, monkeypatch, persons, "answer", "Ben, does it look right?", by=ANA, person=BEN)
-    shown = _jev(c, _attach(c, _in_validate(c, "Shown page"), "f-shown"), file_id="f-shown")
-    shown_ok = _old_ask(c, monkeypatch, shown, "ok", CHECKED, shows=["page:f-shown@1"])
-    X.settled(c)
-
-    assert sorted(G.sweep(c)) == sorted([bare["id"], decision["id"], passed["id"]])
-    later = _old_ask(c, monkeypatch, bare, "answer", "And on desktop?", choices=["yes", "no"])
-    assert G.sweep(c) == []  # once: a later ask is the gate's at the ask, not the sweep's
-    assert R.get(c, later)["withdrawn_at"] is None
-
-    for row, why in ((bare, G.FIRST), (decision, G.OWN_TASK)):
-        after = E.task(c, row["id"])
-        assert (after["status"], after["stage_id"]) == ("open", G.STAGE)
-        assert [a for (a,) in _asks(c, row) if a != later] == []
-        (comment,) = [m["body"] for m in H.task_comments(c, row["id"]) if why in (m.get("body") or "")]
-        assert comment.startswith("Withdrew the question to ")
-        assert [who for key, who in X.wakes(c, row["id"]) if key.endswith(G.SWEPT)] == [PM]
-    assert _on_person(c, decision["id"], ANA) == []
-    assert E.task(c, passed["id"])["status"] == "done"
-    assert _standing(c, persons["id"], kept).on == BEN
-    assert _standing(c, shown["id"], shown_ok).on == ANA

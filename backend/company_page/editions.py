@@ -545,15 +545,7 @@ def _ok_view(c, rid, current):
     requirement = R.get(c, rid)
     visit = requirement.get("visit_id") if requirement else None
     asked_of = R.person_of(c, requirement, visit) if requirement and visit else None
-    answer = (
-        c.execute(
-            "SELECT notes FROM answers WHERE requirement_id=? AND answer='no' AND undone_at IS NULL "
-            "ORDER BY created_at DESC LIMIT 1",
-            (rid,),
-        ).fetchone()
-        if standing == task_asks.SENT_BACK
-        else None
-    )
+    answer = R.last_sent_back(c, rid) if standing == task_asks.SENT_BACK else None
     state = {
         task_asks.USED: "spent",
         task_asks.WITHDRAWN: "lapsed",
@@ -573,7 +565,7 @@ def _ok_view(c, rid, current):
         "created_at": found["created_at"],
         "decided_by": found["ok_by_id"],
         "decided_at": found["ok_at"],
-        "note": (answer[0] or "") if answer else "",
+        "note": (answer["notes"] or "") if answer else "",
     }
 
 

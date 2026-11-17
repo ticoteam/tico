@@ -1182,10 +1182,6 @@ class Onboarding:
                 pass
         return True
 
-    def turn_on_goal_manager(self, c, who):
-        """The same for the built-in Strategy Owner (docs/strategy-bot.md)."""
-        return self._turn_on(c, who, STRATEGY_OWNER, STRATEGY_OWNER, strategy_bot.name(c), "goal_manager.turned_on")
-
     def complete_company(self, c, failed=None):
         """What makes a set-up company whole once its bots can run: the built-ins it is missing (`_ensure_builtin`: the
         Librarian, the Strategy Owner, the General Manager, the Rules Owner, the Design Owner, the Tools Owner, and the Finance Owner

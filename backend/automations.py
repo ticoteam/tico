@@ -560,7 +560,7 @@ def _checked(c, flow, settings=None, access=True, saved=None, aid=None, wake_ste
     _chooser_fits(flow)
     if flow["trigger"]["type"] == "due":
         # Stored on the flow, so a later change to the company's zone does not move the routine.
-        flow["trigger"] = {"open_days": D.OPEN_DAYS, "tz": D.zone_of({}), **flow["trigger"]}
+        flow["trigger"] = {"open_days": D.DEFAULT_OPEN_DAYS, "tz": D.zone_of({}), **flow["trigger"]}
     if flow.get("wakes"):  # a converted "What wakes" automation: only edits its wake rules can carry out
         from .redesign_migration import check_wakes
 

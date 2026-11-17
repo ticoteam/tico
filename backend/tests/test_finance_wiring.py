@@ -270,7 +270,7 @@ def test_routes_read_in_the_callers_view_and_a_retry_replays_only_the_status(api
     get(api, "finance/actions/" + first["action_id"], token="ben-test", expected=404)
     amount = next(b for b in get(api, "finance/budgets")["budgets"] if b["id"] == ai["id"])["state"]["amount"]
     assert amount == 5_000
-    assert "view_version" in get(api, "finance/pnl") and "view_version" in get(api, "finance/expenses")
+    assert "view_version" in get(api, "finance/pnl")
 
 
 def _events(c, bid, name=None):

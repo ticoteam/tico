@@ -65,7 +65,7 @@ dkimpy==1.1.8
     # via
     #   -c requirements.txt
     #   -r requirements.in
-dnspython==2.9.0
+dnspython==2.9.2
     # via
     #   -c requirements.txt
     #   -r requirements.in
