@@ -531,9 +531,7 @@ def test_rule_6_follows_helpers_matches_names_and_runs_every_script_past_the_lim
 
 
 def test_rule_6_runs_the_scripts_that_name_a_ui_function_the_diff_changes(tmp_path):
-    # Nov 12: #3485 changed taskModalOpen in ui/app/task-modal.ts; task-code.cts calls it but was not selected, and the
-    # release check went red. A script that names a top-level function or const whose definition the diff changes runs;
-    # one that names only an unchanged global of the same file does not.
+    # Diff hints find callers of changed definitions. The dependency map also links callers of the file's other globals.
     def git(*args):
         return subprocess.check_output(
             ["git", "-c", "user.name=t", "-c", "user.email=t@acme.example", *args], cwd=tmp_path, text=True
@@ -561,13 +559,16 @@ def test_rule_6_runs_the_scripts_that_name_a_ui_function_the_diff_changes(tmp_pa
     line = modal[body : modal.index("\n", body) + 1]
     picked = change(line, line + "  void 0;\n")  # one line inside taskModalOpen
     assert "task-code" in picked["browser_direct"] and "task-code" in picked["browser"]
-    assert "other" not in picked["browser_direct"]
+    assert "other" in picked["browser_direct"]
     assert checks.changed_definitions(base, "HEAD", ["ui/app/task-modal.ts"], tmp_path) == {
         "ui/app/task-modal.ts": {"taskModalOpen"}
     }
     git("reset", "-q", "--hard", base)
     picked = change("function taskModalLoadFailed(", "function taskModalLoadFailed(/* changed */ ")
-    assert "other" in picked["browser_direct"] and "task-code" not in picked["browser_direct"]
+    assert {"other", "task-code"} <= set(picked["browser_direct"])
+    assert checks.changed_definitions(base, "HEAD", ["ui/app/task-modal.ts"], tmp_path) == {
+        "ui/app/task-modal.ts": {"taskModalLoadFailed"}
+    }
     # A deleted UI file names its old functions: a script still calling one runs.
     git("reset", "-q", "--hard", base)
     git("rm", "-q", "ui/app/task-modal.ts")
@@ -689,6 +690,54 @@ def test_typescript_source_guards_follow_their_walked_folder(tmp_path):
     assert "guard" in light["browser"]
 
 
+def test_ui_links_skip_oversized_and_binary_sources_and_browser_scripts(tmp_path):
+    source(tmp_path, "ui/app/page.ts", "function openPage() {}\n")
+    source(tmp_path, "ui/app/large.ts", "function openLarge() {}\n" + " " * (512 * 1024))
+    source(tmp_path, "ui/app/binary.ts", "\0function openBinary() {}\n")
+    calls = "openPage(); openLarge(); openBinary();\n"
+    walk = "const walk = dir => fs.readdirSync(dir);\nwalk('ui/app');\n"
+    source(tmp_path, "ui/tests/page.cts", calls)
+    source(tmp_path, "ui/tests/large.cts", calls + walk + " " * (512 * 1024))
+    source(tmp_path, "ui/tests/binary.cts", "\0" + calls + walk)
+    graph = checks.DependencyMap(tmp_path)
+    assert graph.runs["ui/tests/page.cts"] == {"ui/app/page.ts"}
+    for script in ("large", "binary"):
+        assert not graph.runs[f"ui/tests/{script}.cts"]
+        assert not graph.reads[f"ui/tests/{script}.cts"]
+
+
+def test_ui_walk_helpers_use_only_a_bounded_binding_before_each_listing(tmp_path):
+    source(tmp_path, "ui/app/page.ts", "function openPage() {}\n")
+    declarations = "\n".join(f"const value{i} = {i}" for i in range(2000))
+    source(
+        tmp_path,
+        "ui/tests/guard.cts",
+        declarations + "\nconst walk = dir => fs.readdirSync(dir)\nwalk('ui/app')\n",
+    )
+    source(
+        tmp_path,
+        "ui/tests/unrelated.cts",
+        "const unrelated = 1\n" + " " * 301 + "fs.readdirSync(dir)\nunrelated('ui/app')\n",
+    )
+    graph = checks.DependencyMap(tmp_path)
+    assert "ui/app/" in graph.reads["ui/tests/guard.cts"]
+    assert "ui/app/" not in graph.reads["ui/tests/unrelated.cts"]
+
+
+def test_browser_comments_do_not_run_the_python_modules_they_describe(tmp_path):
+    source(tmp_path, "backend/health.py", "VALUE = 1\n")
+    source(tmp_path, "ui/app/page.ts", "function openPage() {}\n")
+    source(
+        tmp_path,
+        "ui/tests/page.cts",
+        "// backend/health.py serves this shape.\n/* backend.health.VALUE */\n"
+        "const url = 'https://acme.example'; openPage(); // backend.health\n",
+    )
+    graph = checks.DependencyMap(tmp_path)
+    assert graph.runs["ui/tests/page.cts"] == {"ui/app/page.ts"}
+    assert "https://acme.example" in checks.without_js_comments((tmp_path / "ui/tests/page.cts").read_text())
+
+
 def test_command_names_and_table_sweeps_link_to_defining_modules(tmp_path):
     smoke_tree(tmp_path)
     source(
@@ -703,7 +752,8 @@ def test_command_names_and_table_sweeps_link_to_defining_modules(tmp_path):
     source(tmp_path, "clients/tests/test_other.py", 'def test_x(): assert tools["tico_other_list"]\n')
     graph = checks.DependencyMap(tmp_path)
     tests = {"clients/tests/test_mcp_widget.py", "clients/tests/test_cli_widget.py", "clients/tests/test_tree.py"}
-    assert graph.run_by["clients/commands/widgets.py"] == tests
+    assert graph.run_by["clients/commands/widgets.py"] == tests - {"clients/tests/test_tree.py"}
+    assert graph.command_sweeps_for("clients/commands/widgets.py") == {"clients/tests/test_tree.py"}
     changed = ["clients/commands/widgets.py"]
     picked = checks.selection(changed, root=tmp_path, graph=graph, core=[])
     light = checks.narrow(picked, changed, "pull_request", root=tmp_path, graph=graph)
@@ -711,27 +761,42 @@ def test_command_names_and_table_sweeps_link_to_defining_modules(tmp_path):
     assert "clients/tests/test_other.py" not in light["python"]
 
 
-def test_migration_checks_are_discovered_from_calls_and_schema_reads(tmp_path):
+def test_command_sweeps_do_not_change_hub_counts_or_propagate_from_dependencies(tmp_path):
     smoke_tree(tmp_path)
-    source(tmp_path, "backend/migrations/__init__.py", 'def apply(conn): pass\n')
-    source(tmp_path, "backend/migrations/change.sql", 'CREATE TABLE example (id TEXT);\n')
+    source(tmp_path, "clients/dbquery.py", "def query(): pass\n")
     source(
         tmp_path,
-        "backend/tests/test_apply.py",
-        'from backend.migrations import apply as upgrade\ndef test_x(): upgrade(None)\n',
+        "clients/commands/strategy.py",
+        'from clients.dbquery import query\n@tool("tico_growth_source_run")\ndef run(): query()\n',
     )
-    source(tmp_path, "backend/tests/test_floor.py", 'def test_x(): read("schema_floor.sql")\n')
-    source(tmp_path, "backend/tests/test_baseline.py", 'def test_x(): read("baseline.sql")\n')
-    source(tmp_path, "backend/tests/test_other.py", 'def test_x(): pass\n')
+    test = "backend/tests/test_growth_db_query.py"
+    source(tmp_path, test, "from clients.commands import strategy\ndef test_x(): strategy.run()\n")
+    sweeps = {f"clients/tests/test_sweep{i}.py" for i in range(checks.HUB_TEST_USERS + 1)}
+    for sweep in sweeps:
+        source(tmp_path, sweep, 'def test_x(): hubcli.parser(); tools["tico_growth_source_run"]\n')
     graph = checks.DependencyMap(tmp_path)
-    expected = {"backend/tests/test_apply.py", "backend/tests/test_floor.py", "backend/tests/test_baseline.py"}
-    assert graph.upgrade_tests == expected
-    for migration in ("backend/migrations/change.sql", "backend/migrations/gone.sql"):
-        picked = checks.selection([migration], root=tmp_path, graph=graph, core=[])
-        light = checks.narrow(picked, [migration], "pull_request", root=tmp_path, graph=graph)
-        assert expected <= set(light["python"])
-        assert all(light["narrow"]["tier"][t] == 0 for t in expected)
-        assert "backend/tests/test_other.py" not in light["python"]
+    assert graph.run_by["clients/commands/strategy.py"] == {test}
+    changed = ["clients/dbquery.py"]
+    picked = checks.selection(changed, root=tmp_path, graph=graph, core=[])
+    light = checks.narrow(picked, changed, "merge_group", root=tmp_path, graph=graph)
+    assert test in light["python"] and light["narrow"]["tier"][test] == 3
+    assert not sweeps & set(picked["python"])
+    for module in ("clients/commands/strategy.py", "clients/commands/gone.py"):
+        changed = [module]
+        picked = checks.selection(changed, root=tmp_path, graph=graph, core=[])
+        light = checks.narrow(picked, changed, "pull_request", root=tmp_path, graph=graph)
+        assert sweeps <= set(light["python"])
+
+
+def test_dbquery_keeps_its_growth_query_coverage_in_the_merge_queue(repo_map):
+    changed = ["clients/dbquery.py"]
+    picked = checks.selection(changed, "merge_group", graph=repo_map)
+    light = checks.narrow(picked, changed, "merge_group", graph=repo_map)
+    assert "backend/tests/test_growth_db_query.py" in light["python"]
+
+
+def test_the_explicit_upgrade_checks_exist():
+    assert all((ROOT / test).is_file() for test in checks.UPGRADE_TESTS)
 
 
 def test_package_initialization_reaches_tests_through_one_helper_but_still_stops_at_hubs(tmp_path, monkeypatch):
@@ -2540,18 +2605,12 @@ def test_a_migration_change_runs_the_upgrade_tests_even_in_a_light_plan(event, r
     for changed in ([migration], ["backend/migrations/__init__.py"]):
         picked = checks.selection(changed, event, graph=repo_map, added=changed[:1] if changed == [migration] else [])
         light = checks.narrow(picked, changed, event, added=[], graph=repo_map)
-        assert repo_map.upgrade_tests <= set(light["python"]), changed
-        assert all(light["narrow"]["tier"][t] == 0 for t in repo_map.upgrade_tests), changed
-    assert {
-        "backend/tests/test_migrations.py",
-        "backend/tests/test_schema_baseline.py",
-        "backend/tests/test_upgrade.py",
-        "backend/tests/test_upgrade_boot.py",
-    } <= repo_map.upgrade_tests
+        assert set(checks.UPGRADE_TESTS) <= set(light["python"]), changed
+        assert all(light["narrow"]["tier"][t] == 0 for t in checks.UPGRADE_TESTS), changed
     # Another change keeps its own plan: the upgrade tests it reaches are not lifted to always run.
     other = ["backend/health.py"]
     tier = checks.narrow(checks.selection(other, event, graph=repo_map), other, event, graph=repo_map)["narrow"]["tier"]
-    assert not any(tier.get(t) == 0 for t in repo_map.upgrade_tests)
+    assert not any(tier.get(t) == 0 for t in checks.UPGRADE_TESTS)
 
 
 def light_plan(changed, event, repo_map, added):

@@ -77,11 +77,17 @@ def ui_map_key(name):
 
 
 CONFORMANCE = "runner_support/tests/test_conformance.py"
-# A migration runs the checks that apply migrations or inspect the baseline and compatibility floor, in light plans
-# too. DependencyMap discovers those checks from their source rather than the names of individual test files.
+# A migration runs the checks that upgrade the floor's database or a fixture through every migration, in light plans
+# too. Booting through helpers and subprocesses makes source-only discovery unreliable.
 MIGRATIONS = "backend/migrations/"
+UPGRADE_TESTS = (
+    "backend/tests/test_migrations.py",  # baseline, converge, rerun, roll back, refuse
+    "backend/tests/test_schema_baseline.py",  # the upgraded floor matches a new database
+    "backend/tests/test_upgrade.py",  # foreign and empty files, and the journey's seeded rows
+    "backend/tests/test_upgrade_boot.py",  # the floor through create_app and backend.boot
+)
 # Guard tests check a repository-wide invariant through a path the map cannot follow, so a change that can break one
-# names it directly, and it runs in a light plan too (level 0, like the discovered upgrade checks). On Nov 13 main went red
+# names it directly, and it runs in a light plan too (level 0, like UPGRADE_TESTS). On Nov 13 main went red
 # on guards the change's plan never picked:
 # - RELEASE_SHOTS runs scripts/screenshots/index.cts --list-pages, which lists every tracked ui/ file through git: a new
 #   ui/ file that no PAGES, SHARED or UNSHOWN entry names fails it (#3335 ui/app/browser-view.ts), and a gone one can
@@ -259,6 +265,14 @@ TOKEN = re.compile(r"[\w.\-/]+")
 IDENTIFIER = re.compile(r"[A-Za-z_]\w*(\.[A-Za-z_]\w*)*$")
 CODE = {".py", ".sh", ".bash", ".js", ".cjs", ".mjs", ".ts", ".cts"}
 JS_SOURCES = CODE - {".py", ".sh", ".bash"}  # browser and Node code: no Python imports by bare name
+JS_COMMENTS = re.compile(r"//[^\n]*|/\*[\s\S]*?\*/|'(?:\\.|[^'\\])*'|\"(?:\\.|[^\"\\])*\"|`(?:\\.|[^`\\])*`")
+
+
+def without_js_comments(text):
+    """Keep strings and line breaks while excluding prose from JavaScript dependency scans."""
+    return JS_COMMENTS.sub(lambda m: " " + "\n" * m[0].count("\n") if m[0].startswith("/") else m[0], text)
+
+
 PATHLIKE = {
     "Path",
     "PurePath",
@@ -382,7 +396,6 @@ class DependencyMap:
         self.commands = defaultdict(set)  # literal CLI command or MCP tool name -> defining modules
         self.js_imports = defaultdict(set)
         self.command_sweeps = set()
-        self.upgrade_tests = set()
         self._tokens = None  # built on first use by tokens()
         # Every scan needs `bare` (from all files' imports) first, so the Python files are parsed twice, one tree alive
         # at a time; the build takes no longer. Holding every tree at once peaked near 2.3 GB per map, and the
@@ -426,7 +439,11 @@ class DependencyMap:
                 continue
             if Path(path).suffix not in {".ts", ".js", ".css"}:
                 continue
-            text = (self.root / path).read_text(errors="replace")
+            text = self.source_text(path)
+            if text is None:
+                continue
+            if not path.endswith(".css"):
+                text = without_js_comments(text)
             sources[path] = ui_selectors(text)
             if not path.endswith(".css"):
                 for match in re.finditer(r"^" + TOP_LEVEL.pattern, text, re.MULTILINE):
@@ -440,23 +457,30 @@ class DependencyMap:
         for path in self.files:
             if not is_browser(path):
                 continue
-            text = (self.root / path).read_text(errors="replace")
+            text = self.source_text(path)
+            if text is None:
+                continue
+            text = without_js_comments(text)
             for token in ui_selectors(text):
                 self.runs[path] |= selectors.get(token, set())
             for token in set(re.findall(r"[A-Za-z_$][\w$]*", text)):
                 if len(owners.get(token, ())) == 1:
                     self.runs[path] |= owners[token]
             # Source guards recursively walk a literal folder through a local helper, such as walk('ui').
-            for helper in re.findall(r"\bconst\s+(\w+)\s*=\s*[^;]*?\breaddirSync\s*\(", text):
-                for folder in re.findall(r"\b" + re.escape(helper) + r"\(\s*['\"]([^'\"]+)['\"]", text):
-                    if (self.root / folder).is_dir():
-                        self.reads[path].add(folder.rstrip("/") + "/")
+            helpers = set()
+            for call in re.finditer(r"\breaddirSync\s*\(", text):
+                window = text[max(0, call.start() - 300) : call.start()].rsplit(";", 1)[-1]
+                bindings = re.findall(r"\bconst\s+(\w+)\s*=", window)
+                if bindings:
+                    helpers.add(bindings[-1])
+            for helper, folder in re.findall(r"\b(\w+)\(\s*['\"]([^'\"]+)['\"]", text):
+                if helper in helpers and (self.root / folder).is_dir():
+                    self.reads[path].add(folder.rstrip("/") + "/")
 
     def command_links(self):
         """A test naming a command uses its implementation, even through the CLI parser or MCP registry."""
-        modules = set().union(*self.commands.values()) if self.commands else set()
         for path, names in self.names.items():
-            if not is_test(path):
+            if not is_test(path) or path in self.command_sweeps:
                 continue
             for text in names:
                 for tool in re.findall(r"\btico_[a-z0-9_]+\b", text):
@@ -464,8 +488,10 @@ class DependencyMap:
                 words = text.removeprefix("tico ").split()
                 for end in range(1, min(5, len(words)) + 1):
                     self.runs[path] |= self.commands.get(" ".join(words[:end]), set())
-            if path in self.command_sweeps:
-                self.runs[path] |= modules
+
+    def command_sweeps_for(self, name):
+        """Direct selection edges for changed or gone command modules, excluded from import traversal and hub counts."""
+        return self.command_sweeps if name.startswith(CLI_COMMANDS) and name.endswith(".py") else set()
 
     def ui_users(self, name):
         """Browser consumers through UI imports and test helpers, stopping before backend application imports."""
@@ -738,7 +764,7 @@ class DependencyMap:
             elif isinstance(node, ast.Call):
                 function = dotted_name(node.func)
                 last = function.rsplit(".", 1)[-1]
-                if path.startswith("clients/") and last in {"tool", "Command"} and node.args:
+                if path.startswith(CLI_COMMANDS) and last in {"tool", "Command"} and node.args:
                     for command in self.strings(node.args[0]):
                         self.commands[command].add(path)
                 if is_test(path) and function in {"hubcli.parser", "hubcli.command_paths", "hubtools.listing"}:
@@ -822,7 +848,7 @@ class DependencyMap:
                 prose = len(node.value.split()) > 1
                 for token in TOKEN.findall(node.value.replace(":", " ")):
                     self.path(token, reads_ if prose else runs_, reads_, module=not prose)
-        imported, migration_calls = set(), set()
+        imported = set()
         for node in nodes:
             if isinstance(node, ast.Import):
                 imported |= {alias.name for alias in node.names}
@@ -831,20 +857,7 @@ class DependencyMap:
                 module = ".".join([*prefix, *([node.module] if node.module else [])])
                 imported.add(module)
                 imported |= {".".join(filter(None, [module, alias.name])) for alias in node.names}
-                if module == "backend.migrations":
-                    migration_calls |= {a.asname or a.name for a in node.names if a.name == "apply"}
         self.imports[path] = imported
-        if is_test(path) and (
-            any("baseline.sql" in name or "schema_floor.sql" in name for name in names)
-            or "backend.migrations.MigrationError" in imported
-            or "backend/migrations/__init__.py" in runs
-            and any(
-                isinstance(n, ast.Call)
-                and (dotted_name(n.func).endswith(".apply") or dotted_name(n.func) in migration_calls)
-                for n in nodes
-            )
-        ):
-            self.upgrade_tests.add(path)
         if is_test(path):
             for node in nodes:
                 if isinstance(node, (ast.List, ast.Tuple)) and all(
@@ -855,16 +868,24 @@ class DependencyMap:
         self.reads[path] |= reads
         self.names[path] = names
 
-    def text(self, path):
+    def source_text(self, path):
+        """Bound source scans by size and skip binary files."""
         try:
-            raw = (self.root / path).read_bytes()
+            with (self.root / path).open("rb") as stream:
+                raw = stream.read(512 * 1024 + 1)
         except OSError:
-            return
+            return None
         if len(raw) > 512 * 1024 or b"\0" in raw[:4096]:
+            return None
+        return raw.decode("utf-8", "replace")
+
+    def text(self, path):
+        text = self.source_text(path)
+        if text is None:
             return
         folder = str(Path(path).parent)
-        text = raw.decode("utf-8", "replace")
         if Path(path).suffix in JS_SOURCES:
+            text = without_js_comments(text)
             # Module specifiers may omit the extension, or name the .js emitted from a TypeScript source.
             for spec in re.findall(r"(?:\bfrom\s*|\brequire\s*\(\s*|\bimport\s*)['\"]([.][^'\"]+)['\"]", text):
                 target = os.path.normpath(folder + "/" + spec)
@@ -1375,7 +1396,7 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
        consumers of a UI file's globals, selectors and imports are added exactly, without widening to all scripts.
        `browser_direct` lists them: a light pull request keeps them.
     7. A path a CONTENT_SWEEPS test reads turns that slow test on in the contracts job (`sweeps`), with its environment.
-    8. A file under MIGRATIONS runs the discovered schema and upgrade checks, which a light plan keeps (narrow).
+    8. A file under MIGRATIONS runs UPGRADE_TESTS, which a light plan keeps (narrow).
     9. Guard tests (`guards`, which a light plan keeps): a ui/ file the release-shot harness lists that is added or gone
        runs RELEASE_SHOTS; a file under CLI_COMMANDS runs CLI_SPEC; a path that can move what a
        cold open of Home downloads (moves_ui_shell) runs UI_SHELL_SIZE.
@@ -1574,9 +1595,10 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
         python |= owned_tests
         notes.append(owned_reason(owned))
     if any(n.startswith(MIGRATIONS) for n in names):  # rule 8
-        python |= graph.upgrade_tests
-        guards |= graph.upgrade_tests
+        guards |= {t for t in UPGRADE_TESTS if (root / t).is_file()}
         notes.append("rule 8: a migration runs the upgrade tests")
+    # Command-table sweeps apply only to changed command modules; they do not alter import traversal or hub counts.
+    python |= {test for name in names for test in graph.command_sweeps_for(name)}
     if any(shot_listed(n) and (n in added or n in gone) for n in names) and (root / RELEASE_SHOTS).is_file():
         guards.add(RELEASE_SHOTS)
         notes.append("rule 9: a new or gone ui/ file runs the release-shot table test")
@@ -1915,6 +1937,9 @@ def reach_levels(names, depth, added=None, root=ROOT, graph=None):
                 for test in graph.run_by.get(helper, ()):
                     if is_test(test):
                         level[test] = min(level.get(test, hop + 2), hop + 2)
+    for name in names:
+        for test in graph.command_sweeps_for(name):
+            level.setdefault(test, 1)
     return level
 
 
