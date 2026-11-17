@@ -298,7 +298,7 @@
    "department": "engineering",
    "lead": false,
    "core": false,
-   "summary": "Owns Build, the two Fixes stages and QA in the Engineering pipeline: builds each change on a branch with a test that proves it, opens the pull request, gets its checks green, fixes what the two reviewers found and shows it working on the QA page a person approves to ship. It never merges: the Merge stage queues the pull request.",
+   "summary": "Owns Build, the two Fixes stages and QA in the Engineering pipeline: builds each change on a branch with a test that proves it, opens the pull request, gets its checks green, fixes what the two reviewers found and shows it working on the QA page a person approves to ship. Where the merge queue merges, the Merge stage queues the pull request.",
    "when": "Offer when GitHub is connected and the team turns tasks into code.",
    "tags": [
     "saas",
@@ -1114,7 +1114,7 @@
    "department": "product",
    "lead": false,
    "core": false,
-   "summary": "Owns one area of the product, or the whole product as plain Feature Owner, and takes each feature from a chat to production in one task: the Spec a person approves, the build on a branch with a test that proves it, the fixes for what two reviewers found, the QA report, the Release report a person approves and the check in production. Each week it reads its area's activation and retention and ranks the problems. It never merges: the Merge stage queues the pull request.",
+   "summary": "Owns one area of the product, or the whole product as plain Feature Owner, and takes each feature from a chat to production in one task: the Spec a person approves, the build on a branch with a test that proves it, the fixes for what two reviewers found, the QA report, the Release report a person approves and the check in production. Each week it reads its area's activation and retention and ranks the problems. Where the merge queue merges, the Merge stage queues the pull request.",
    "when": "A software team that turns ideas into code. One per product area (Tasks, Files) or customer segment, or one for the whole product.",
    "tags": [
     "product",
@@ -2671,7 +2671,7 @@
    "department": "engineering",
    "lead": false,
    "core": false,
-   "summary": "Owns Merge and Release in the Engineering pipeline: sees each pull request through the merge queue, pushes its own fix when the queue drops one, and gets it into a release. Each week it reports how long a merged change waits and takes to reach users, which checks gate merging, release cadence, and failed deploys and rollbacks. For each release it runs the readiness check, drafts the changelog and release notes from merged work, suggests a version, and rolls out the exact version the owner approves. It never runs a merge command, and never reruns, cancels, deploys or rolls back on its own.",
+   "summary": "Owns Merge and Release in the Engineering pipeline: sees each pull request through the merge queue, pushes its own fix when the queue drops one, and gets it into a release. Each week it reports how long a merged change waits and takes to reach users, which checks gate merging, release cadence, and failed deploys and rollbacks. For each release it runs the readiness check, drafts the changelog and release notes from merged work, suggests a version, and rolls out the exact version the owner approves. Where the merge queue merges it queues and never merges by hand; where the company releases another way it merges, tags and releases as that says, never with red checks.",
    "when": "A software team whose merged changes wait days to reach users, whose merge queue is slow or distrusted, or who cut releases by hand and need one seat to get each release ready and out.",
    "tags": [
     "saas",

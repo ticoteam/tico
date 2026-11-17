@@ -25,5 +25,5 @@ tools:
     identity: "the product repositories the owner lists for this bot"
     can: [read]
     note: "reads design docs, ADR folders, pull requests and code; proposes ADRs as files on the task; never commits or comments"
-# The token can write, so the only thing between this bot and a change on GitHub is this entry and
-#.claude/settings.json, which denies every pull request write and gh api. Requested ADR commits use the granted Tools.
+# The token can write, so the only thing between this bot and a change on GitHub is this entry and its
+# instructions. Requested ADR commits use the granted Tools.

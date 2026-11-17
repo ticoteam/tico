@@ -26,5 +26,5 @@ tools:
 #    env: UPDATE_KEY_OTHER
 #    note: "checks for, starts and follows an update of that install after the owner approves the release; nothing else"
 # Writing to GitHub is the owner's decision, not the template's: the team's GitHub App token can write, so the only
-# thing between this bot and a public comment is its declared access and.claude/settings.json, which deny every write
-# verb. It stays read only; requested changes need granted write access.
+# thing between this bot and a public comment is its declared access and its
+# instructions. It stays read only; requested changes need granted write access.

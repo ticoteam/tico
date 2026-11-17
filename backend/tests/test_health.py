@@ -984,8 +984,8 @@ def test_a_harness_deny_on_a_github_write_the_access_allows_is_named(environment
         },
     )
     assert "harness_denies" not in health_of(api)[1]
-    # Denying `gh` writes to a bot that may push is its job's policy, not a leftover: a Release Owner given write to
-    # push fixes denies opening and commenting on pull requests, because Tico queues and merges them itself.
+    # Denying `gh` writes to a bot that may push is its owner's policy, not a leftover: write access says nothing about
+    # whether its work opens, comments on or merges pull requests.
     _hosted(
         api,
         runner,

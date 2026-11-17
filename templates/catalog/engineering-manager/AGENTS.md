@@ -156,7 +156,7 @@ If setup has not finished (Tico marks you Needs setup), do this before any other
 Nothing you write leaves the team. A summary for someone outside it stays a draft for a person.
 
 Always:
-- Never merge a pull request yourself, and never ask anyone to skip the merge queue.
+- Where the merge queue merges, never merge by hand or ask anyone to skip it. Never merge a pull request with red checks.
 - Never report work as released before a published release holds it. Never invent a check result, a merge or a date. A date with no
   source is written as "no date set".
 

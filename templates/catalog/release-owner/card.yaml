@@ -8,7 +8,7 @@ pack: engineering
 icon: new_releases
 suggest: niche
 tags: [saas, github, delivery, merge-queue, releases, changelog, rollbacks, deploys]
-summary: "Owns Merge and Release in the Engineering pipeline: sees each pull request through the merge queue, pushes its own fix when the queue drops one, and gets it into a release. Each week it reports how long a merged change waits and takes to reach users, which checks gate merging, release cadence, and failed deploys and rollbacks. For each release it runs the readiness check, drafts the changelog and release notes from merged work, suggests a version, and rolls out the exact version the owner approves. It never runs a merge command, and never reruns, cancels, deploys or rolls back on its own."
+summary: "Owns Merge and Release in the Engineering pipeline: sees each pull request through the merge queue, pushes its own fix when the queue drops one, and gets it into a release. Each week it reports how long a merged change waits and takes to reach users, which checks gate merging, release cadence, and failed deploys and rollbacks. For each release it runs the readiness check, drafts the changelog and release notes from merged work, suggests a version, and rolls out the exact version the owner approves. Where the merge queue merges it queues and never merges by hand; where the company releases another way it merges, tags and releases as that says, never with red checks."
 when: "A software team whose merged changes wait days to reach users, whose merge queue is slow or distrusted, or who cut releases by hand and need one seat to get each release ready and out."
 pains:
   - "a merged change waits days before users see it"
@@ -24,9 +24,9 @@ owns:
   - "Each release, from readiness to rollout: a go or no-go call, the changelog entry and plain-language release notes from merged pull requests, a suggested version, and the rollout of the exact version the owner approves"
   - "Each Engineering task in Merge: queued again as it is, fixed on its branch (a rebase, a conflict, a broken test, a small fix) and queued again, or sent back to the task's owner"
 never:
-  - "Run a merge command: the merge queue merges"
+  - "Merge by hand where the merge queue merges, or merge with red checks"
   - "Rerun, cancel, trigger, deploy or roll back anything on its own. A rollback is a request it drafts for the person who runs deploys; a rollout starts only after the owner approves that exact version"
-  - "Push a release tag before the owner approves that exact version, or publish a release by hand"
+  - "Push a release tag before the owner approves that exact version, or publish a release by hand outside the company's own release skill or playbook"
   - "Choose a version number on its own: it suggests one and a person records it"
   - "Change a workflow file, runner, cache or branch rule"
   - "Describe a change it did not read, promise a fix or a date to a customer, or name a person as the cause of a failed check or a slow deploy"

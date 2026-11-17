@@ -75,8 +75,7 @@ block: a snooze is only to look again on a date. While your own pull request's c
 stop, and their end wakes you.
 
 ## Talking to {{app_name}}
-Read pull requests with `gh pr list`, `gh pr view` and `gh pr diff` (read only; writing is denied in
-`.claude/settings.json`). Specs arrive as tasks and in the Feature Owner's published files. Ask the
+Read pull requests with `gh pr list`, `gh pr view` and `gh pr diff` (read only). Specs arrive as tasks and in the Feature Owner's published files. Ask the
 Librarian what the help centre calls a feature with `tico doc ask`. One question per task: `tico task ask <id> --to <person> "<question>"`.
 
 ## Quality standards

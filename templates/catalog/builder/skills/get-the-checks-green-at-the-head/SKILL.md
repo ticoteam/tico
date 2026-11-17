@@ -47,5 +47,5 @@ re-run.
 
    Then record the new head on the task. A re-run is only for a flaky check, on a head whose base is already green.
 
-{{app_name}} reads the checks itself and moves the task when they pass. You never merge: Merge is the Release
-Manager's stage.
+{{app_name}} reads the checks itself and moves the task when they pass. Merge is the Release Owner's stage: where the
+merge queue merges, never merge by hand, and never merge with red checks.

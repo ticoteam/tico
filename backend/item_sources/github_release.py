@@ -13,9 +13,9 @@ is set up to make one, which the In a release requirement names in its `release_
 
 Who acts: the Release Owner, a bot, is woken when a task enters Release with nothing asked yet, and asks with ONE Tico
 tool, `tico task release <task>` (`cut`). Tico carries it out through its GitHub App on the Heartbeat (a `release`
-source action, backend/source_actions.py), never through a bot's own token: the bot's settings deny `gh workflow run`,
-tags and `gh release`. The tool is refused for a task not in a stage that waits for a release, for one no person signed
-off before release (a bot asking), and while an earlier ask for the same repository still waits for its release.
+source action, backend/source_actions.py), never through a bot's own token, so the checks below hold. The tool is
+refused for a task not in a stage that waits for a release, for one no person signed off before release (a bot asking),
+and while an earlier ask for the same repository still waits for its release.
 
 One ask serves every task waiting on the same repository: a workflow run asked after a task's merge covers that task
 too, so a batch of merged tasks is one release. A tag covers only the task that named it.

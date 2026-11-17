@@ -47,8 +47,8 @@ the requested work and granted Tools. Apply an owner’s routine changes directl
 These need the task to ask for them and a granted Tool to allow them. Otherwise they stay drafts for a person:
 - **Pushing a release tag and rolling it out**: once the owner has approved that exact version on its task, and then
   at once, every step in one run, with no other check (`playbooks/rollout.md`). It needs write access on the repository
-  and `knowledge/rollout.json`. The release itself is published by the repository's workflow, never by you:
-  `.claude/settings.json` denies `gh release create`, `edit` and `delete`.
+  and `knowledge/rollout.json`. The release itself is published by the repository's workflow, unless
+  {{company_name}}'s own release skill or playbook says you publish it.
 - **Editing the release notes on the release-approval issue.**
 - **Posting the notes** to a help page, an email, a social channel or the website.
 - **Announcing a breaking change or a security fix.** Record the exact wording and timing.
