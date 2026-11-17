@@ -75,7 +75,7 @@ const groupOf = (page: Page, id: string) => page.locator(`[data-need="${id}"]`)
           await card.locator('[data-dc="snooze"]').click();
         }
         if (phone) {
-          assert.equal(await side.locator('.dc-tabs [data-dc-tab="chat"]').getAttribute('aria-selected'), 'true', 'a phone opens on Chat');
+          assert.equal(await side.locator('.dc-tabs [role="tab"]').count(), 0, 'a task with no documents: its chat alone, no tabs');
           const box = await side.locator('.dc-chat .thv-composer').boundingBox();
           assert.ok(box && box.width >= viewport.width - 40, `the composer spans the phone (${box?.width}px)`);
         }
@@ -104,8 +104,8 @@ const groupOf = (page: Page, id: string) => page.locator(`[data-need="${id}"]`)
         assert.deepEqual(errors, []);
       } finally { await page.close(); }
     }
-    // Someone else's ❓ (Sam's): the mark in the timestamp's muted tone. Opening the task from a link lands on its Chat
-    // tab with no focus ring (a ring shows only once the keyboard moves the focus).
+    // Someone else's ❓ (Sam's): the mark in the timestamp's muted tone. Opening the task from a link lands on the
+    // window itself, with no focus ring on any control.
     {
       const {tasks, comments} = world();
       (comments['t-4'][0]!.refs as Record<string, unknown>)['question'] = {id: 'q1', to: 'human:sam'};
@@ -116,11 +116,8 @@ const groupOf = (page: Page, id: string) => page.locator(`[data-need="${id}"]`)
         assert.equal(await q.getAttribute('title'), "Needs Sam's reply");
         const tone = await q.evaluate(el => [getComputedStyle(el).color, getComputedStyle(el.parentElement!.querySelector('time')!).color]);
         assert.equal(tone[0], tone[1], 'the same tone as the time');
-        const tab = page.locator('#task-modal[open] [data-task-tab][aria-selected="true"]');
-        await page.waitForFunction(() => document.activeElement?.matches('#task-modal [data-task-tab]'));
-        assert.equal(await tab.evaluate(el => document.activeElement === el && getComputedStyle(el).outlineStyle), 'none', 'no ring on opening');
-        await page.keyboard.press('Tab');
-        assert.equal(await tab.getAttribute('data-quiet-focus'), null, 'quiet only until the focus moves');
+        await page.waitForFunction(() => document.activeElement?.matches('#task-modal[open]'));
+        assert.equal(await page.locator('#task-modal[open]').evaluate(el => getComputedStyle(el).outlineStyle), 'none', 'no ring on opening');
         assert.deepEqual(errors, []);
       } finally { await page.close(); }
     }
