@@ -114,6 +114,8 @@ OPERATIONS = {
     "task_update": "a change to a task",
     "task_owner": "a task assignment",
     "task_ask": "a question on a task",
+    "question": "a question to a person on a task's chat",
+    "chat_question": "a question to a person in a chat",
     "bulk": "a change to several tasks",
     "note": "a note to a bot",
     "reply": "a reply in a conversation",
@@ -2382,7 +2384,8 @@ def current_people(c, hold, audience=None, auth=None):
 
 def place_now(c, hold, people, replay=None):
     """The place the held write has now, read again on the people it reaches now (teams, outside members, the thread's
-    participants). A write that starts its thread (`start`, with no thread yet) has the place it would start."""
+    participants). A write that starts its thread (`start`, with no thread yet) has the place it would start. A bot's
+    question to a person (`ask`, a ❓: backend/question_marks.py) is one still: that is what the write is, not where."""
     stored = hold_provenance(hold).get("place")
     if not stored:
         return None
@@ -2390,7 +2393,7 @@ def place_now(c, hold, people, replay=None):
     if replay.get("start") is not None and not stored.get("thread"):
         start = replay["start"]
         audience = "personal" if "dm" in start else (start.get("audience") or "members")
-        return place_for_start(
+        found = place_for_start(
             c,
             hold["author"],
             people,
@@ -2398,7 +2401,9 @@ def place_now(c, hold, people, replay=None):
             audience_group_id=start.get("audience_group_id"),
             members=start.get("dm") or start.get("members") or (),
         )
-    return place_for(c, hold["author"], people, stored.get("thread") or "")
+    else:
+        found = place_for(c, hold["author"], people, stored.get("thread") or "")
+    return {**found, "ask": True} if stored.get("ask") else found
 
 
 def current_matched(c, hold, audience=None, auth=None):

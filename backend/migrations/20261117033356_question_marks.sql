@@ -24,7 +24,10 @@ CREATE TABLE IF NOT EXISTS question_marks (
 CREATE UNIQUE INDEX IF NOT EXISTS question_marks_one_open ON question_marks(room_id, bot_id) WHERE cleared_at IS NULL;
 CREATE INDEX IF NOT EXISTS question_marks_open_person ON question_marks(person_id, room_id) WHERE cleared_at IS NULL;
 CREATE INDEX IF NOT EXISTS question_marks_open_task ON question_marks(task_id) WHERE cleared_at IS NULL;
+CREATE INDEX IF NOT EXISTS question_marks_open_bot ON question_marks(bot_id) WHERE cleared_at IS NULL;
 CREATE INDEX IF NOT EXISTS question_marks_message ON question_marks(message_id);
+-- A task's replied marks: task_engine.progress_mark counts them on every ladder pass.
+CREATE INDEX IF NOT EXISTS question_marks_replied_task ON question_marks(task_id) WHERE cleared_message_id IS NOT NULL;
 -- A task that ends (done or closed, a merge closes it too) clears the ❓ on its chat, whichever path ended it. Reopening
 -- it brings none back.
 CREATE TRIGGER IF NOT EXISTS question_marks_task_ends AFTER UPDATE OF status ON tasks
