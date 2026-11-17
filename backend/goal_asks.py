@@ -461,14 +461,25 @@ def _reword(conn, task, item):
         )
 
 
+def said(conn, task_id):
+    """What the Strategy Owner's task says now: its last word on the task's chat (what it was filed with, or the list a
+    relist said there), "" when none. Its ❓ to the person is the question, not what the task says, so it is skipped."""
+    asked = {row[0] for row in conn.execute("SELECT message_id FROM question_marks WHERE task_id=?", (task_id,))}
+    words = [
+        m["body"]
+        for m in H.task_comments(conn, task_id)
+        if m.get("sender_id") == G.AUTO_ACTOR and m.get("body") and m.get("id") not in asked
+    ]
+    return words[-1] if words else ""
+
+
 def _relist(conn, task, item):
     """A bundled ask lists what waits now: a goal or a measure joined or was settled since it was filed. Its title counts
     them too (a measure's name, or how many), so it follows the list."""
     title, body = _ask(conn, item, strategy_bot.name(conn))
     changes = {}
     # The list, as the Strategy Owner said it last on the task's chat: a new one is said there (no description).
-    said = [m["body"] for m in H.task_comments(conn, task["id"]) if m.get("sender_id") == G.AUTO_ACTOR]
-    if (said[-1] if said else "") != body:
+    if said(conn, task["id"]) != body:
         with isolated(conn, "goal_ask_relist_said", task["id"], private=True):
             H.task_comment(conn, G.AUTO_ACTOR, task["id"], body, wake=False)
     # The title the Strategy Owner wrote follows the list; a title a person wrote stays.

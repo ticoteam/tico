@@ -32,10 +32,9 @@ def raise_level(api, level):
 
 
 def said(c, task_id):
-    """What the Strategy Owner's task says now: its last word on the task's chat (a relisted ask says the new list
-    there), else what it was filed with. A task has no description."""
-    words = [m["body"] for m in H.task_comments(c, task_id) if m.get("sender_id") == MANAGER and m.get("body")]
-    return words[-1] if words else H.task_words(c, task_id)
+    """What the Strategy Owner's task says now (goal_asks.said: its last word on the task's chat, not its ❓), else what
+    it was filed with. A task has no description."""
+    return GA.said(c, task_id) or H.task_words(c, task_id)
 
 
 def asks(api, owner=None):
