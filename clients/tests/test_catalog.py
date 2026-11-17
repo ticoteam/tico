@@ -463,19 +463,71 @@ class Layers(unittest.TestCase):
         # A file from the base is still the template's: an unchanged one is never taken for one the template dropped.
         self.assertEqual(refresh(), NOTHING)
         self.assertTrue((path / ".claude/settings.json").is_file())
-        # A skill a release moves from the template's skills/ to the shared .claude/skills/ moves in the bot too.
+
+    def moving_a_skill(self, edit):
+        """A bot made while its template had `skills/check`, then the release that moves it to the shared
+        `.claude/skills/check`. `edit(path)` is what the bot did to its repository in between."""
         (self.template / "skills/check").mkdir(parents=True)
         (self.template / "skills/check/SKILL.md").write_text("Check it.\n")
-        self.assertEqual(refresh(), {**NOTHING, "added": ["skills/check/SKILL.md"]})
+        (self.template / "skills/check/run.py").write_text("print('check')\n")
+        path = self.make()
+        edit(path)
+        git(path, "add", "-A")
+        git(path, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "The bot's own work")
         (self.shared / ".claude/skills/check").mkdir()
-        (self.template / "skills/check/SKILL.md").rename(self.shared / ".claude/skills/check/SKILL.md")
+        for name in ("SKILL.md", "run.py"):
+            (self.template / "skills/check" / name).rename(self.shared / ".claude/skills/check" / name)
+        (self.template / "AGENTS.md").write_text(AGENT + "Read `.claude/skills/check/SKILL.md` first.\n")
         card = self.template / "card.yaml"
         card.write_text(
             card.read_text().replace("[.claude/skills/page,", "[.claude/skills/page, .claude/skills/check,")
         )
+        done = catalog.refresh("sales", path, NAMES, directory=self.catalog)
+        self.assertFalse((path / "skills/check").exists())
+        self.assertEqual(git(path, "status", "--porcelain"), "")
+        self.assertEqual(catalog.refresh("sales", path, NAMES, directory=self.catalog), NOTHING)
+        return path, done
+
+    def test_an_unedited_skill_moves_and_kept_instructions_name_its_new_path(self):
+        def edit(path):  # the runner's standing section: AGENTS.md is the bot's own from here on
+            (path / "AGENTS.md").write_text((path / "AGENTS.md").read_text() + "Use `skills/check/SKILL.md`.\n")
+            (path / "playbooks/mine.md").write_text("Run python3 skills/check/run.py; not skills/checker/.\n")
+
+        path, done = self.moving_a_skill(edit)
+        moved = [".claude/skills/check/SKILL.md", ".claude/skills/check/run.py"]
         self.assertEqual(
-            refresh(), {**NOTHING, "added": [".claude/skills/check/SKILL.md"], "removed": ["skills/check/SKILL.md"]}
+            done,
+            {
+                **NOTHING,
+                "added": moved,
+                "removed": ["skills/check/SKILL.md", "skills/check/run.py"],
+                "kept": ["AGENTS.md"],
+            },
         )
+        self.assertEqual((path / ".claude/skills/check/SKILL.md").read_text(), "Check it.\n")
+        self.assertIn("Use `.claude/skills/check/SKILL.md`.", (path / "AGENTS.md").read_text())
+        self.assertEqual(
+            (path / "playbooks/mine.md").read_text(), "Run python3 .claude/skills/check/run.py; not skills/checker/.\n"
+        )
+
+    def test_an_edited_skill_moves_as_the_bot_has_it_and_the_stock_copy_does_not_replace_it(self):
+        def edit(path):
+            (path / "skills/check/SKILL.md").write_text("Check it twice.\n")
+            (path / "skills/check/notes.md").write_text("The bot's own notes.\n")
+
+        path, done = self.moving_a_skill(edit)
+        self.assertEqual((path / ".claude/skills/check/SKILL.md").read_text(), "Check it twice.\n")
+        self.assertEqual((path / ".claude/skills/check/notes.md").read_text(), "The bot's own notes.\n")
+        self.assertIn(".claude/skills/check/notes.md", done["added"])
+        self.assertIn("Move skills/check to .claude/skills/check", git(path, "log", "--format=%s"))
+        # The template's next change to the skill reaches the file the bot never edited; its edit stays, reported once.
+        (self.shared / ".claude/skills/check/SKILL.md").write_text("Check it, then report.\n")
+        (self.shared / ".claude/skills/check/run.py").write_text("print('check, again')\n")
+        self.assertEqual(
+            catalog.refresh("sales", path, NAMES, directory=self.catalog),
+            {**NOTHING, "updated": [".claude/skills/check/run.py"], "kept": [".claude/skills/check/SKILL.md"]},
+        )
+        self.assertEqual((path / ".claude/skills/check/SKILL.md").read_text(), "Check it twice.\n")
 
 
 class ShippedLayers(unittest.TestCase):

@@ -541,9 +541,13 @@ def refresh(template, target, names, display_name=None, directory=None, instruct
     # Check every path before any commit or write, even if its digest says it needs no refresh.
     for rel in [*offer, *given, STAMP]:
         contained_file(target, target / rel)
+    # A skill the template moved (skills/<name> to .claude/skills/<name>) moves with the bot's own version of it: what
+    # it was given is counted at the new path, so an edited file there is kept and an unedited one follows the template.
+    moves = _skill_moves(target, offer, given)
+    given, declined = _moved(given, moves), _moved(declined, moves)
     files, kept, write, gone, saved = {}, {}, {}, [], []
     for rel in sorted({*offer, *given}):
-        text, base, have = offer.get(rel), given.get(rel), _text(target / rel)
+        text, base, have = offer.get(rel), given.get(rel), _text(target / _before_move(rel, moves))
         mine = have is not None and _digest(have) != base
         if text is None:  # the template dropped it
             if have is not None and base is not None:
@@ -569,28 +573,125 @@ def refresh(template, target, names, display_name=None, directory=None, instruct
             kept[rel] = digest
             if base is not None:
                 files[rel] = base
-    if record is not None and not write and not gone and (files, kept) == (given, declined):
+    if record is not None and not moves and not write and not gone and (files, kept) == (given, declined):
         return result
     at = version if is_release(version) else at
+    moved = _move_skills(target, moves)
+    result["removed"] += [old for old, _ in moved]
+    result["added"] += [new for _, new in moved]
     if saved:
         # What the bot had, saved in the history before the release's text replaces it.
         commit_paths(target, saved, f"Keep the bot's version of {', '.join(saved)} before the refresh")
     for rel, text in write.items():
-        result["updated" if (target / rel).exists() else "added"].append(rel)
+        if rel not in result["added"]:
+            result["updated" if (target / rel).exists() else "added"].append(rel)
         _write(target, target / rel, text)
     for rel in gone:
         (target / rel).unlink()
         result["removed"].append(rel)
+    pointed = _repoint(
+        target, moves, lambda rel: rel not in write and _digest(_text(target / rel) or "") != files.get(rel)
+    )
     _stamp(target, template, files, kept, at or "")
-    touched = len(write) + len(gone)
+    touched = len(write) + len(gone) + len(moved)
     commit_paths(
         target,
-        [*write, *gone, STAMP],
+        [*write, *gone, *pointed, STAMP],
         f"Refresh {touched} file{'s' if touched != 1 else ''} from the {template} template"
         if touched
         else f"Record the {template} template's files",
     )
     return result
+
+
+def _skill_moves(target, offer, given):
+    """{old folder: new folder} for each skill the bot was given under `skills/` that the template now ships only under
+    `.claude/skills/`, where Claude Code loads it. A bot that already has something at the new path keeps both as
+    they are: nothing is moved over it."""
+    moves = {}
+    for rel in given:
+        parts = rel.split("/")
+        if len(parts) < 3 or parts[0] != "skills":
+            continue
+        old, new = f"skills/{parts[1]}", f".claude/skills/{parts[1]}"
+        if old in moves or (target / new).exists() or (target / new).is_symlink():
+            continue
+        if _under_any(offer, new) and not _under_any(offer, old):
+            moves[old] = new
+    return moves
+
+
+def _under_any(paths, folder):
+    return any(rel.startswith(folder + "/") for rel in paths)
+
+
+def _moved(record, moves):
+    """A stamp's {path: digest} with each moved skill's paths at the new folder."""
+    out = {}
+    for rel, digest in record.items():
+        for old, new in moves.items():
+            if rel.startswith(old + "/"):
+                rel = new + rel[len(old) :]
+                break
+        out[rel] = digest
+    return out
+
+
+def _before_move(rel, moves):
+    """Where the bot's file for `rel` is until its skill is moved: under the old folder."""
+    for old, new in moves.items():
+        if rel.startswith(new + "/"):
+            return old + rel[len(new) :]
+    return rel
+
+
+def _move_skills(target, moves):
+    """Move each skill folder the bot has, with every file in it (its edits and its own additions), to the new path, and
+    commit the move on its own. Returns [(old path, new path)] of each file moved."""
+    moved = []
+    for old, new in moves.items():
+        source = contained_file(target, target / old)
+        if not source.is_dir() or source.is_symlink():
+            continue  # the bot deleted it: what it was given counts as deleted at the new path too
+        files = sorted(p.relative_to(source).as_posix() for p in source.rglob("*") if p.is_file())
+        destination = contained_file(target, target / new)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        os.rename(source, destination)
+        moved += [(f"{old}/{rel}", f"{new}/{rel}") for rel in files]
+        commit_paths(target, [old, new], f"Move {old} to {new}, where Claude Code loads it")
+    return moved
+
+
+# Where a bot's instructions name its skills: rewritten when a skill moves, so nothing points at the old path.
+POINTERS = (INSTRUCTIONS, "playbooks", "knowledge", "skills", ".claude/skills")
+
+
+def _repoint(target, moves, rewrite):
+    """Rewrite `skills/<name>` to `.claude/skills/<name>` for each moved skill in the bot's instruction files that
+    `rewrite(rel)` allows (its own and its kept ones: a file the template just wrote names the new path already).
+    Returns the paths rewritten."""
+    if not moves:
+        return []
+    pattern = re.compile(r"(?<![\w./-])(" + "|".join(re.escape(old) for old in moves) + r")(?![\w.-])")
+    pointed = []
+    for name in POINTERS:
+        base = Path(target) / name
+        for path in [base] if base.is_file() else sorted(base.rglob("*")) if base.is_dir() else []:
+            rel = path.relative_to(target).as_posix()
+            if path.is_file() and not path.is_symlink() and path.stat().st_size <= MAX_FILL and rewrite(rel):
+                pointed += _repoint_one(target, path, rel, pattern, moves)
+    return pointed
+
+
+def _repoint_one(target, path, rel, pattern, moves):
+    text = _text(path)
+    if text is None or text.startswith("\0"):
+        return []
+    new = pattern.sub(lambda found: moves[found.group(1)], text)
+    if new == text:
+        return []
+    _write(target, path, new)
+    return [rel]
 
 
 # ----------------------------------------------------------------------------- git

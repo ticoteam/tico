@@ -30,6 +30,8 @@ from clients.manifest import folder_dir, manifest_path, repo_dir, tools_of
 # to AGENTS.md yet: kept in scope so the move reads as one deletion and one addition.
 INSTRUCTION_FILES = ("AGENTS.md", "AGENT.md")
 SCOPE = (*INSTRUCTION_FILES, "skills/", ".claude/skills/", "playbooks/")
+# Where a bot's skill folders are: where Claude Code loads them first, then the older place.
+SKILL_FOLDERS = (".claude/skills", "skills")
 # Left out unless the person asked for the original's memory: what the bot learned and did, not how it works.
 # state.md is the status note an older repository may still hold.
 MEMORY_DIRS = ("memory", "notes", "state", "reports", "artifacts")
@@ -459,17 +461,24 @@ def suggestion(workspace, original, slug, base_sha, paths=None, theirs=None, fol
 
 # ----------------------------------------------------------------------------- a skill
 def copy_skill(workspace, skill, from_bot, to_bots, replace=False, path=None):
-    """`skills/<skill>/` from one bot's repository into each target's, one commit each. Per target: copied, replaced, unchanged,
-    or why not. A target that already has a different skill of that name is left alone unless `replace`."""
+    """A skill's folder from one bot's repository into each target's, one commit each: `.claude/skills/<skill>/`, where
+    Claude Code loads it, else `skills/<skill>/` (a bot made before its template moved the skill), copied to the same
+    path. Per target: copied, replaced, unchanged, or why not. A target that already has a different skill of that name
+    is left alone unless `replace`."""
     if not SKILL.match(skill or ""):
         raise CopyError(
             "skill", "A skill is named by its folder under skills/: lowercase letters, digits, dots, hyphens"
         )
     path = path or source(workspace, from_bot, "the source bot")
-    prefix = f"skills/{skill}/"
-    files = {rel: data for rel, data in tree(path, head(path)).items() if rel.startswith(prefix) and safe_path(rel)}
-    if not files:
+    held_files = tree(path, head(path))
+    for folder in SKILL_FOLDERS:
+        prefix = f"{folder}/{skill}/"
+        files = {rel: data for rel, data in held_files.items() if rel.startswith(prefix) and safe_path(rel)}
+        if files:
+            break
+    else:
         raise CopyError("no_skill", f"{from_bot} has no skill {skill} (skills/{skill}/ in its repository)")
+    skill_dir = prefix.rstrip("/")
     out = []
     for slug in to_bots:
         # A target is its slug, or {bot, folder} as the server names it: its checkout is the folder the server
@@ -479,9 +488,9 @@ def copy_skill(workspace, skill, from_bot, to_bots, replace=False, path=None):
         if not (target / ".git").exists() or not head(target):
             out.append({"bot": slug, "status": "no_repository", "detail": f"{slug} has no repository on this computer"})
             continue
-        held = dirty(target, f"skills/{skill}")
+        held = dirty(target, skill_dir)
         if held:
-            out.append({"bot": slug, "status": "dirty", "detail": f"{slug} has uncommitted changes in skills/{skill}"})
+            out.append({"bot": slug, "status": "dirty", "detail": f"{slug} has uncommitted changes in {skill_dir}"})
             continue
         there = {rel: data for rel, data in tree(target, head(target)).items() if rel.startswith(prefix)}
         if there == files:
@@ -496,12 +505,11 @@ def copy_skill(workspace, skill, from_bot, to_bots, replace=False, path=None):
                 }
             )
             continue
-        folder = target / "skills" / skill
-        shutil.rmtree(folder, ignore_errors=True)
+        shutil.rmtree(target / skill_dir, ignore_errors=True)
         for rel, data in files.items():
             (target / rel).parent.mkdir(parents=True, exist_ok=True)
             (target / rel).write_bytes(data)
-        made = commit(target, [f"skills/{skill}"], f"Copy the {skill} skill from {from_bot}")
+        made = commit(target, [skill_dir], f"Copy the {skill} skill from {from_bot}")
         out.append(
             {"bot": slug, "status": "replaced" if there else "copied", "files": len(files), "commit": made}
             if made
