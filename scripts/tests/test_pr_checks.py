@@ -557,9 +557,7 @@ def test_rule_6_follows_helpers_matches_names_and_runs_every_script_past_the_lim
 
 
 def test_rule_6_runs_the_scripts_that_name_a_ui_function_the_diff_changes(tmp_path):
-    # Nov 12: #3485 changed taskModalOpen in ui/app/task-modal.ts; task-code.cts calls it but was not selected, and the
-    # release check went red. A script that names a top-level function or const whose definition the diff changes runs;
-    # one that names only an unchanged global of the same file does not.
+    # Diff hints find callers of changed definitions. The dependency map also links callers of the file's other globals.
     def git(*args):
         return subprocess.check_output(
             ["git", "-c", "user.name=t", "-c", "user.email=t@acme.example", *args], cwd=tmp_path, text=True
@@ -587,13 +585,16 @@ def test_rule_6_runs_the_scripts_that_name_a_ui_function_the_diff_changes(tmp_pa
     line = modal[body : modal.index("\n", body) + 1]
     picked = change(line, line + "  void 0;\n")  # one line inside taskModalOpen
     assert "task-code" in picked["browser_direct"] and "task-code" in picked["browser"]
-    assert "other" not in picked["browser_direct"]
+    assert "other" in picked["browser_direct"]
     assert checks.changed_definitions(base, "HEAD", ["ui/app/task-modal.ts"], tmp_path) == {
         "ui/app/task-modal.ts": {"taskModalOpen"}
     }
     git("reset", "-q", "--hard", base)
     picked = change("function taskModalLoadFailed(", "function taskModalLoadFailed(/* changed */ ")
-    assert "other" in picked["browser_direct"] and "task-code" not in picked["browser_direct"]
+    assert {"other", "task-code"} <= set(picked["browser_direct"])
+    assert checks.changed_definitions(base, "HEAD", ["ui/app/task-modal.ts"], tmp_path) == {
+        "ui/app/task-modal.ts": {"taskModalLoadFailed"}
+    }
     # A deleted UI file names its old functions: a script still calling one runs.
     git("reset", "-q", "--hard", base)
     git("rm", "-q", "ui/app/task-modal.ts")
@@ -669,6 +670,180 @@ def source(root, name, text):
 def smoke_tree(root):
     """A temporary tree reads its own copy of the smoke set (rules 2 to 4 run it)."""
     source(root, checks.SMOKE_FILE, (ROOT / checks.SMOKE_FILE).read_text())
+
+
+def test_browser_links_globals_selectors_styles_and_typescript_imports(tmp_path):
+    smoke_tree(tmp_path)
+    source(
+        tmp_path,
+        "ui/app/widget.ts",
+        'function widgetOpen() {}\nconst html = `<div class="widget-card" data-widget-open></div>`;\n',
+    )
+    source(tmp_path, "ui/styles/widget.css", '.widget-card { color: red; }\n')
+    source(tmp_path, "ui/app/dependency.ts", 'export const value = 1;\n')
+    source(tmp_path, "ui/app/entry.ts", "import {value} from './dependency.js';\n")
+    source(tmp_path, "ui/tests/call.cts", 'await page.evaluate(() => widgetOpen());\n')
+    source(tmp_path, "ui/tests/layout.cts", "await page.locator('.widget-card [data-widget-open]').click();\n")
+    source(tmp_path, "ui/tests/import.cts", "import '../app/entry';\n")
+    source(tmp_path, "ui/tests/unrelated.cts", "await page.locator('.other-card').click();\n")
+    graph = checks.DependencyMap(tmp_path)
+    assert "ui/app/dependency.ts" in graph.runs["ui/app/entry.ts"]
+    assert "ui/app/entry.ts" in graph.runs["ui/tests/import.cts"]
+    for changed, expected in (
+        ("ui/app/widget.ts", {"call", "layout"}),
+        ("ui/styles/widget.css", {"layout"}),
+        ("ui/app/dependency.ts", {"import"}),
+    ):
+        plan = checks.selection([changed], root=tmp_path, graph=graph, core=[])
+        light = checks.narrow(plan, [changed], "pull_request", root=tmp_path, graph=graph)
+        assert expected <= set(light["browser_direct"]) <= set(light["browser"])
+        assert "unrelated" not in light["browser"]
+    assert not checks.ui_selectors('.button #fff .value')
+
+
+def test_typescript_source_guards_follow_their_walked_folder(tmp_path):
+    smoke_tree(tmp_path)
+    source(tmp_path, "ui/app/new.ts", 'function openNew() {}\n')
+    source(
+        tmp_path,
+        "ui/tests/guard.cts",
+        "const walk = (dir: string) => fs.readdirSync(dir).flatMap(entry => walk(entry));\nfor (const f of walk('ui/app')) fs.readFileSync(f);\n",
+    )
+    graph = checks.DependencyMap(tmp_path)
+    assert "ui/app/" in graph.reads["ui/tests/guard.cts"]
+    picked = checks.selection(["ui/app/new.ts"], root=tmp_path, graph=graph, core=[])
+    light = checks.narrow(picked, ["ui/app/new.ts"], "pull_request", root=tmp_path, graph=graph)
+    assert "guard" in light["browser"]
+
+
+def test_ui_links_skip_oversized_and_binary_sources_and_browser_scripts(tmp_path):
+    source(tmp_path, "ui/app/page.ts", "function openPage() {}\n")
+    source(tmp_path, "ui/app/large.ts", "function openLarge() {}\n" + " " * (512 * 1024))
+    source(tmp_path, "ui/app/binary.ts", "\0function openBinary() {}\n")
+    calls = "openPage(); openLarge(); openBinary();\n"
+    walk = "const walk = dir => fs.readdirSync(dir);\nwalk('ui/app');\n"
+    source(tmp_path, "ui/tests/page.cts", calls)
+    source(tmp_path, "ui/tests/large.cts", calls + walk + " " * (512 * 1024))
+    source(tmp_path, "ui/tests/binary.cts", "\0" + calls + walk)
+    graph = checks.DependencyMap(tmp_path)
+    assert graph.runs["ui/tests/page.cts"] == {"ui/app/page.ts"}
+    for script in ("large", "binary"):
+        assert not graph.runs[f"ui/tests/{script}.cts"]
+        assert not graph.reads[f"ui/tests/{script}.cts"]
+
+
+def test_ui_walk_helpers_use_only_a_bounded_binding_before_each_listing(tmp_path):
+    source(tmp_path, "ui/app/page.ts", "function openPage() {}\n")
+    declarations = "\n".join(f"const value{i} = {i}" for i in range(2000))
+    source(
+        tmp_path,
+        "ui/tests/guard.cts",
+        declarations + "\nconst walk = dir => fs.readdirSync(dir)\nwalk('ui/app')\n",
+    )
+    source(
+        tmp_path,
+        "ui/tests/unrelated.cts",
+        "const unrelated = 1\n" + " " * 301 + "fs.readdirSync(dir)\nunrelated('ui/app')\n",
+    )
+    graph = checks.DependencyMap(tmp_path)
+    assert "ui/app/" in graph.reads["ui/tests/guard.cts"]
+    assert "ui/app/" not in graph.reads["ui/tests/unrelated.cts"]
+
+
+def test_browser_comments_do_not_run_the_python_modules_they_describe(tmp_path):
+    source(tmp_path, "backend/health.py", "VALUE = 1\n")
+    source(tmp_path, "ui/app/page.ts", "function openPage() {}\n")
+    source(
+        tmp_path,
+        "ui/tests/page.cts",
+        "// backend/health.py serves this shape.\n/* backend.health.VALUE */\n"
+        "const url = 'https://acme.example'; openPage(); // backend.health\n",
+    )
+    graph = checks.DependencyMap(tmp_path)
+    assert graph.runs["ui/tests/page.cts"] == {"ui/app/page.ts"}
+    assert "https://acme.example" in checks.without_js_comments((tmp_path / "ui/tests/page.cts").read_text())
+
+
+def test_command_names_and_table_sweeps_link_to_defining_modules(tmp_path):
+    smoke_tree(tmp_path)
+    source(
+        tmp_path,
+        "clients/commands/widgets.py",
+        '@tool("tico_widget_add")\ndef add(): pass\nCLI = [Command("widget add", "add a widget")]\n',
+    )
+    source(tmp_path, "clients/commands/other.py", '@tool("tico_other_list")\ndef listing(): pass\n')
+    source(tmp_path, "clients/tests/test_mcp_widget.py", 'def test_x(): assert tools["tico_widget_add"]\n')
+    source(tmp_path, "clients/tests/test_cli_widget.py", 'def test_x(): run(["widget", "add", "--name", "sample"])\n')
+    source(tmp_path, "clients/tests/test_tree.py", 'def test_x(): hubcli.parser()\n')
+    source(tmp_path, "clients/tests/test_other.py", 'def test_x(): assert tools["tico_other_list"]\n')
+    graph = checks.DependencyMap(tmp_path)
+    tests = {"clients/tests/test_mcp_widget.py", "clients/tests/test_cli_widget.py", "clients/tests/test_tree.py"}
+    assert graph.run_by["clients/commands/widgets.py"] == tests - {"clients/tests/test_tree.py"}
+    assert graph.command_sweeps_for("clients/commands/widgets.py") == {"clients/tests/test_tree.py"}
+    changed = ["clients/commands/widgets.py"]
+    picked = checks.selection(changed, root=tmp_path, graph=graph, core=[])
+    light = checks.narrow(picked, changed, "pull_request", root=tmp_path, graph=graph)
+    assert tests <= set(light["python"])
+    assert "clients/tests/test_other.py" not in light["python"]
+
+
+def test_command_sweeps_do_not_change_hub_counts_or_propagate_from_dependencies(tmp_path):
+    smoke_tree(tmp_path)
+    source(tmp_path, "clients/dbquery.py", "def query(): pass\n")
+    source(
+        tmp_path,
+        "clients/commands/strategy.py",
+        'from clients.dbquery import query\n@tool("tico_growth_source_run")\ndef run(): query()\n',
+    )
+    test = "backend/tests/test_growth_db_query.py"
+    source(tmp_path, test, "from clients.commands import strategy\ndef test_x(): strategy.run()\n")
+    sweeps = {f"clients/tests/test_sweep{i}.py" for i in range(checks.HUB_TEST_USERS + 1)}
+    for sweep in sweeps:
+        source(tmp_path, sweep, 'def test_x(): hubcli.parser(); tools["tico_growth_source_run"]\n')
+    graph = checks.DependencyMap(tmp_path)
+    assert graph.run_by["clients/commands/strategy.py"] == {test}
+    changed = ["clients/dbquery.py"]
+    picked = checks.selection(changed, root=tmp_path, graph=graph, core=[])
+    light = checks.narrow(picked, changed, "merge_group", root=tmp_path, graph=graph)
+    assert test in light["python"] and light["narrow"]["tier"][test] == 3
+    assert not sweeps & set(picked["python"])
+    for module in ("clients/commands/strategy.py", "clients/commands/gone.py"):
+        changed = [module]
+        picked = checks.selection(changed, root=tmp_path, graph=graph, core=[])
+        light = checks.narrow(picked, changed, "pull_request", root=tmp_path, graph=graph)
+        assert sweeps <= set(light["python"])
+
+
+def test_dbquery_keeps_its_growth_query_coverage_in_the_merge_queue(repo_map):
+    changed = ["clients/dbquery.py"]
+    picked = checks.selection(changed, "merge_group", graph=repo_map)
+    light = checks.narrow(picked, changed, "merge_group", graph=repo_map)
+    assert "backend/tests/test_growth_db_query.py" in light["python"]
+
+
+def test_the_explicit_upgrade_checks_exist():
+    assert all((ROOT / test).is_file() for test in checks.UPGRADE_TESTS)
+
+
+def test_package_initialization_reaches_tests_through_one_helper_but_still_stops_at_hubs(tmp_path, monkeypatch):
+    smoke_tree(tmp_path)
+    source(tmp_path, "backend/sections/__init__.py", "from . import growth\n")
+    source(tmp_path, "backend/sections/growth.py", "VALUE = 1\n")
+    source(tmp_path, "backend/sections/finance.py", "VALUE = 2\n")
+    source(tmp_path, "backend/tests/helpers/demo.py", "from backend.sections import finance\n")
+    source(tmp_path, "backend/tests/test_demo.py", "from backend.tests.helpers import demo\ndef test_x(): pass\n")
+    source(tmp_path, "backend/tests/test_direct.py", "from backend.sections import finance\ndef test_x(): pass\n")
+    source(tmp_path, "backend/tests/test_other.py", "def test_x(): pass\n")
+    graph = checks.DependencyMap(tmp_path)
+    changed = ["backend/sections/growth.py"]
+    picked = checks.selection(changed, root=tmp_path, graph=graph, core=[])
+    light = checks.narrow(picked, changed, "pull_request", root=tmp_path, graph=graph)
+    assert "backend/tests/test_demo.py" in light["python"]
+    assert light["narrow"]["tier"]["backend/tests/test_demo.py"] == 4
+    assert "backend/tests/test_other.py" not in light["python"]
+    monkeypatch.setattr(checks, "HUB_TEST_USERS", 0)
+    capped = checks.narrow(picked, changed, "pull_request", root=tmp_path, graph=graph)
+    assert "backend/tests/test_demo.py" not in capped["python"]
 
 
 def test_hub_change_selects_every_test_that_imports_it_transitively_and_no_other(tmp_path, mapped):
@@ -2465,7 +2640,6 @@ def test_a_migration_change_runs_the_upgrade_tests_even_in_a_light_plan(event, r
         light = checks.narrow(picked, changed, event, added=[], graph=repo_map)
         assert set(checks.UPGRADE_TESTS) <= set(light["python"]), changed
         assert all(light["narrow"]["tier"][t] == 0 for t in checks.UPGRADE_TESTS), changed
-    assert all((ROOT / t).is_file() for t in checks.UPGRADE_TESTS)
     # Another change keeps its own plan: the upgrade tests it reaches are not lifted to always run.
     other = ["backend/health.py"]
     tier = checks.narrow(checks.selection(other, event, graph=repo_map), other, event, graph=repo_map)["narrow"]["tier"]
