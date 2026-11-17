@@ -195,7 +195,7 @@ const VIEW = {width: 390, height: 844};
     check(!await say.isVisible(), 'no line is drawn once the opinion is ready');
     check(await say.textContent() === '', 'the bar holds no line');
     check(await dialog.locator('.dc-chat .p-text').inputValue() === '', 'Tico never types for the person');
-    check(await dialog.locator('.dc-chat .p-text').getAttribute('placeholder') === `Message ${TITLE}`, `the box is named for the task (${await dialog.locator('.dc-chat .p-text').getAttribute('placeholder')})`);
+    check(await dialog.locator('.dc-chat .p-text').getAttribute('placeholder') === 'Message Tasks Product Owner', `the box names the task's owner, as the task's window does (${await dialog.locator('.dc-chat .p-text').getAttribute('placeholder')})`);
     if (shots) await p.screenshot({path: path.join(shots, 'phone-ok-page-after.png')});
     await p.close();
 

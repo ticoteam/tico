@@ -41,6 +41,14 @@
 .dc-up{flex:0 1 auto;max-width:28%;min-width:0;color:var(--muted);opacity:.7;font-size:var(--t-sm);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dc-up:empty{display:none}
 .dc-nav{display:flex;align-items:center;gap:2px;margin-left:auto;flex:none}
+/* A ❓'s Snooze and ⋯ on a wide screen (decide.ts): on the header row by ‹ ›; their menus open downward. */
+.dc-head-acts{display:flex;align-items:center;margin-left:auto;flex:none}
+.dc-head-acts:empty{display:none}
+.dc-head-acts:not(:empty)+.dc-nav{margin-left:0}
+.dc-head-acts>.dc-acts{display:flex;align-items:center;gap:2px;margin:0;padding:0;border:0}
+.dc-head-acts .dc-snz{top:calc(100% + 6px);bottom:auto;right:0;left:auto}
+.decide.dc-chatmode .dc-side>[data-key]:empty{display:none}
+.decide.dc-chatmode .dc-side:has(>[data-key]:empty) .dc-chat .thv-composer{padding-bottom:16px}
 .dc-icon{display:grid;place-items:center;width:40px;height:40px;padding:0;border:0;border-radius:8px;background:none;color:var(--ink);font-size:18px;line-height:var(--lh-none);cursor:pointer}
 .dc-icon:hover:not(:disabled),.dc-icon[aria-pressed="true"]{background:var(--surface2)}
 .dc-icon:disabled{color:var(--muted);opacity:.4;cursor:default}
@@ -250,6 +258,8 @@ button.dc-jev{cursor:pointer}
 .decide.dc-solo .dc-main{grid-template-columns:minmax(0,720px);justify-content:center}
 .decide.dc-solo .dc-thing{display:none}
 .decide.dc-solo .dc-side{border:0}
+/* Flow's chat brings the message it is about into view with a faint tint alone (no bar). */
+.dc-chat .th-msg.th-focus{box-shadow:none}
 .decide.dc-empty .dc-thing{display:none}
 .decide.dc-empty .dc-side{border:0}
 .dc-done{display:grid;place-content:center;justify-items:center;gap:14px;min-height:240px;text-align:center}

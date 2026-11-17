@@ -300,7 +300,7 @@ async function taskModalShow(task: ModalTask, d: ModalDialog = taskModal(), opts
   const keep = !a ? '' : a.matches('[data-modal-close]') ? '[data-modal-close]' : a.matches('[data-task-more]') ? '[data-task-more]' : a.matches('.tmodal-title') ? '.tmodal-title'
     : a.matches('[data-thread-back]') ? '[data-thread-back]' : a instanceof HTMLElement && a.dataset.taskTab ? `[data-task-tab="${CSS.escape(a.dataset.taskTab)}"]`
     : a instanceof HTMLElement && a.dataset.prop ? `[data-prop="${CSS.escape(a.dataset.prop)}"]` : '';
-  const quiet = a instanceof HTMLElement && a.dataset.quietFocus !== undefined;
+  const quiet = !!a && (a as HTMLElement).dataset?.quietFocus !== undefined;
   taskModalRunsKeep(d, kept);
   taskLiveFocusKeep(d);
   const fullForm = taskFormCapture(d);
