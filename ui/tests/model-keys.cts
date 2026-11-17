@@ -150,8 +150,8 @@ async function signOut(browser: import('playwright').Browser) {
     const own = (name: string) => table.locator(`[data-connection="own:${name}"]`);
     // Switch account and Sign out are icons: their name is the aria-label.
     const buttons = (row: import('playwright').Locator) => row.locator('.computer-conn-signin button').evaluateAll((all: HTMLElement[]) => all.map(b => b.getAttribute('aria-label') || b.innerText));
-    assert.deepEqual(await buttons(own('codex')), ['Switch account', 'Switch to API key', 'Sign out']);
-    assert.deepEqual(await buttons(own('claude')), ['Switch account', 'Switch to API key', 'Sign out']);
+    assert.deepEqual(await buttons(own('codex')), ['Switch account', 'Sign out']);
+    assert.deepEqual(await buttons(own('claude')), ['Switch account', 'Sign out']);
     assert.equal(await table.locator('[data-connection^="profile:"]').count(), 0, 'a leftover named subscription has no line');
     assert.deepEqual(await buttons(own('gemini')), [], 'no logout in its manifest: nothing to offer');
 
@@ -277,8 +277,8 @@ async function signOut(browser: import('playwright').Browser) {
     await page.evaluate(() => loadSettings());
     await own('claude').getByRole('button', {name: 'Sign out'}).waitFor();
 
-    // A Mac: Claude Code keeps its login in the keychain there, so it offers Sign out but no Switch account, nor Switch
-    // to API key (a logout there could not be undone).
+    // A Mac: Claude Code keeps its login in the keychain there, so it offers Sign out but no Switch account (a
+    // logout there could not be undone).
     box.platform = 'darwin';
     await page.evaluate(() => loadSettings());
     await own('claude').getByRole('button', {name: 'Sign out'}).waitFor();

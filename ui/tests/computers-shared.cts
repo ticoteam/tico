@@ -147,7 +147,8 @@ function start(): Promise<Server> {
     const replaced = await page.request.post(`${server.url}/api/v2/model-subscriptions/${server.subscriptions.team}`,
       {data: {secret: ROTATED, confirm: true}, headers: {'Idempotency-Key': `rotate-${Date.now()}`}});
     assert.equal(replaced.status(), 200, await replaced.text());
-    await lineShows(lab, '.machine-key', 'sk-…321');
+    // Settings > Models previews a key as its first 7 and last 4 characters (model_subscriptions.checked).
+    await lineShows(lab, '.machine-key', 'sk-ant-…4321');
     const until = Date.now() + 20000;
     while (!received().includes(ROTATED) && Date.now() < until) await page.waitForTimeout(250);
     assert.ok(received().includes(ROTATED), 'Lab box took the new key');
@@ -157,7 +158,7 @@ function start(): Promise<Server> {
     assert.equal((await page.request.post(`${server.url}/test/signed-out/${lab}`)).status(), 200);
     await lineShows(lab, '[data-model-shared-key]', 'Use the shared key', true);
     await line.locator('[data-model-shared-key]').click();
-    await lineShows(lab, '.machine-key', 'shared key sk-…321');
+    await lineShows(lab, '.machine-key', 'shared key sk-ant-…4321');
     assert.equal(await line.locator('[data-model-shared-key]').count(), 0);
 
     assert.deepEqual(errors, []);
