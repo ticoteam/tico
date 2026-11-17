@@ -155,8 +155,10 @@ const Q = ['Which plan do new signups get?', 'Ship on Monday?', 'Write the relea
     assert.equal(await left(), 1, 'the snoozed ask is out of the walk');
     await dialog.locator('[data-dc-choice="Yes"]').click();
     await dialog.locator('.dc-done').waitFor();
-    // The end screen reads the snoozed list after it shows: wait for its count, don't read it once.
-    await dialog.locator('.dc-done', {hasText: /\b1 snoozed\b/}).waitFor();
+    // The end screen reads the snoozed list after it shows: wait for its count, don't read it once. The count is its own
+    // button: hasText matches an element's text with its children's run together ("All done1 snoozedWant more?"), so a
+    // pattern on the whole .dc-done never sees "1 snoozed" as words.
+    await dialog.locator('.dc-done [data-dc="snoozed"]', {hasText: /^1 snoozed$/}).waitFor();
 
     assert.deepEqual(errors, []);
     await page.close();
