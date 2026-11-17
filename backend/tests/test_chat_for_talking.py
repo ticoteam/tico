@@ -270,3 +270,89 @@ def test_the_migration_takes_notices_and_bare_answers_out_of_peoples_timelines(c
         fresh = task_wakes.add(c, task, "bot:cpo", task["visit"], "One more.", try_n=5)
         assert c.execute("SELECT seq FROM messages WHERE id=?", (fresh,)).fetchone()[0] is None
         assert _counters_of(c, room) == (newest, newest)
+
+
+def _old_room(c):
+    """cpo's task from Ana, written with the old stamp trigger, and its first notice already run."""
+    X.bot(c, "cpo")
+    X.place(c, "cpo")
+    _old_stamp(c)
+    task = X.new_task(c, ANA, "Add the export button", assignee="bot:cpo")
+    c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
+    return task, task["conversation_id"]
+
+
+def _seq(c, message_id):
+    return c.execute("SELECT seq FROM messages WHERE id=?", (message_id,)).fetchone()[0]
+
+
+def test_the_report_of_a_run_that_finished_its_task_stays_after_the_task_is_reopened(company):
+    """Whether a run finished its task is read from the task's moves (its visits), not its latest done or closed time,
+    which a reopen clears."""
+    with company.transaction() as c:
+        task, room = _old_room(c)
+        poke = task_wakes.add(c, task, "bot:cpo", task["visit"], STOPPED, try_n=1)
+        done = _answer(c, room, poke, "Done: the real deliverable is ready.", finished=True, task_id=task["id"])
+        stage = c.execute("SELECT id FROM stages WHERE kind='work' ORDER BY position LIMIT 1").fetchone()[0]
+        E.move(c, task["id"], stage, ANA, "One more thing", seen_version=E.task(c, task["id"])["version"])
+        assert E.task(c, task["id"])["done_at"] is None
+        importlib.import_module(MIGRATION).up(c)
+        assert _seq(c, done) is not None
+
+
+def test_an_answer_to_a_persons_message_carried_into_the_run_stays(company):
+    """A person's message folded into a notice's run through a carrier (the keeper's copy: refs.carries, refs.from) is
+    a person's words in the run, as the completion reads it (H.in_person_name_sql)."""
+    with company.transaction() as c:
+        task, room = _old_room(c)
+        poke = task_wakes.add(c, task, "bot:cpo", task["visit"], STOPPED, try_n=1)
+        asked = H.say(c, ANA, "bot:cpo", "What is the answer?", conversation_id=room)["id"]
+        reply = _answer(c, room, poke, "The answer to your folded-in question is 42.", task_id=task["id"])
+        run = H.message(c, reply)["refs"]["turn_id"]
+        carrier = H.new_id()
+        c.execute(
+            "INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at,revision,restricted) "
+            "VALUES(?,?,?,?,'notice','What is the answer?',?,?,0,1)",
+            (carrier, room, H.KEEPER, "bot:cpo", json.dumps({"carries": asked, "from": ANA}), H.now()),
+        )
+        c.execute("INSERT INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)", (run, carrier))
+        importlib.import_module(MIGRATION).up(c)
+        assert _seq(c, reply) is not None
+
+
+def test_the_unread_mark_keeps_a_bot_post_people_were_delivered(company):
+    """A bot's post in a group DM names nobody but is delivered to its people: once a later notice leaves, the room's
+    unread mark still covers the post, so the sidebar's summary and the thread's own count agree."""
+    with company.transaction() as c:
+        X.bot(c, "cpo")
+        X.place(c, "cpo")
+        _old_stamp(c)
+        ana = threads.actor_viewer(c, ANA)
+        room = threads.dm(c, ana, ["human:ben", "bot:cpo"], title="Launch")["id"]
+        post = threads.post(c, threads.actor_viewer(c, "bot:cpo"), room, "The report is ready.")
+        H.say(c, H.KEEPER, "bot:cpo", "Late in To do.", conversation_id=room, kind="notice")
+        importlib.import_module(MIGRATION).up(c)
+        assert _counters_of(c, room)[1] == _seq(c, post["id"])
+        ben = threads.actor_viewer(c, "human:ben")
+        assert threads.subtree_summaries(c, ben, [room])[room]["unread"] == threads.unread(c, ben, room)["unread"] == 1
+
+
+def test_the_answers_query_follows_the_reply_index_whatever_the_statistics(company):
+    """Under the migration's write lock the answers are found from each notice through messages_reply_kind, never by
+    walking every message of the notice's bot, with no statistics and with statistics that favour the sender index."""
+    migration = importlib.import_module(MIGRATION)
+    with company.transaction() as c:
+
+        def plan():
+            return " | ".join(r[-1] for r in c.execute("EXPLAIN QUERY PLAN " + migration.ANSWERS))
+
+        c.execute("ANALYZE sqlite_schema")  # makes sqlite_stat1 where there is none, and loads what it holds
+        c.execute("DELETE FROM sqlite_stat1")
+        c.execute("ANALYZE sqlite_schema")
+        assert "m USING INDEX messages_reply_kind" in plan(), plan()
+        c.execute(
+            "INSERT INTO sqlite_stat1(tbl,idx,stat) VALUES ('messages','messages_reply_kind','1000000 500000 500000'),"
+            "('messages','messages_from_kind','1000000 1 1')"
+        )
+        c.execute("ANALYZE sqlite_schema")  # stale statistics that favour the sender index
+        assert "m USING INDEX messages_reply_kind" in plan(), plan()
