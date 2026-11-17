@@ -102,6 +102,11 @@ def ui_map_key(name):
 
 
 CONFORMANCE = "runner_support/tests/test_conformance.py"
+# Test files that read this checkout's git history (a commit count, origin/main, HEAD~1). The plan marks a test VM
+# holding one "history" so the tests job of pr-checks.yml can check out only the commit under test on every other VM
+# (fetch-depth from matrix.history), which saves the full-history fetch. scripts/tests/test_pr_checks.py fails when a test file runs such
+# a git command in this checkout and is not listed here.
+HISTORY_TESTS = frozenset({"backend/tests/test_e2e_cli.py"})
 # A migration runs the checks that upgrade the floor's database or a fixture through every migration, in light plans
 # too. Booting through helpers and subprocesses makes source-only discovery unreliable.
 MIGRATIONS = "backend/migrations/"
@@ -2348,6 +2353,9 @@ def prepare(event, base, output, timings_path=None, head="HEAD", light=False, pr
     # for documented no-test changes, without invoking bare pytest.
     if not jobs:
         jobs.append({"suite": "selection", "files": []})
+    for job in jobs:
+        if HISTORY_TESTS.intersection(job["files"]):
+            job["history"] = True
     coverage = {"lines": {}}
     if event in ("pull_request", "merge_group") and base:
         # The statements this change adds to backend/ and clients/ (diff_coverage.py): the gate counts which of them run.
