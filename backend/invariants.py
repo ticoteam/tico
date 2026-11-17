@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable
 
-from . import flight, hook_relay, run_backoff
+from . import flight, hook_relay, run_failures
 from .store import H
 
 log = logging.getLogger(__name__)
@@ -89,10 +89,11 @@ def refused_again(c, ctx):
 def sign_in_held(c, ctx):
     """Bots held because their runs fail to sign in to the provider (a key or a login that stopped working)."""
     rows = c.execute(
-        "SELECT bot FROM run_backoff WHERE held_at IS NOT NULL AND error_class=? ORDER BY held_at LIMIT ?",
-        (run_backoff.SIGN_IN, LIMIT),
+        f"{run_failures.HELD_SQL} AND json_extract(details,'$.error_class')=? "
+        "ORDER BY json_extract(details,'$.held_at') LIMIT ?",
+        (run_failures.SIGN_IN, LIMIT),
     ).fetchall()
-    return [row["bot"] for row in rows]
+    return [row["holdable_id"] for row in rows]
 
 
 def webhook_stuck(c, ctx):

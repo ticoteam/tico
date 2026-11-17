@@ -960,7 +960,7 @@
   "backend/tests/test_rule_due_routine.py": 12.14,
   "backend/tests/test_rules.py": 12.2,
   "backend/tests/test_rules_by_bot.py": 12.66,
-  "backend/tests/test_run_backoff.py": 17.69,
+  "backend/tests/test_run_failures.py": 17.69,
   "backend/tests/test_run_diagnostics.py": 30.75,
   "backend/tests/test_run_provenance.py": 4.0,
   "backend/tests/test_run_time_limits.py": 28.81,

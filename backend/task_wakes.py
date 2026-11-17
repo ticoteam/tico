@@ -365,7 +365,7 @@ HOLD_CAUSES = {
     "quarantined": STATE_CAUSES["quarantined"],
     "company_paused": COMPANY_PAUSED,
     "cloud_locked": CLOUD_LOCKED,
-    "run_hold": RUNS_FAILING,  # held until a try completes or a person releases it (backend/run_backoff.py)
+    "run_hold": RUNS_FAILING,  # held until a try completes or a person releases it (backend/run_failures.py)
     "budget": RUNAWAY,  # held until a person releases it or raises its budget (backend/turn_budgets.py)
     "cooling_off": USAGE_LIMIT,  # its login is held until its reset, then one probe (backend/login_holds.py)
 }
@@ -483,7 +483,7 @@ def prime_bots(conn: "sqlite3.Connection", actors: Collection[str | None]) -> No
     budget holds, its sign-in cards) in a few statements for all of them, and keep it in the snapshot's read
     cache: a pass over many tasks then asks "can this bot run" for each bot without reading it again. Nothing without a
     read cache."""
-    from . import bot_settings, holds, read_cache, reconnects, run_backoff
+    from . import bot_settings, holds, read_cache, reconnects
 
     RC: Any = read_cache
     H = _h()
@@ -517,12 +517,8 @@ def prime_bots(conn: "sqlite3.Connection", actors: Collection[str | None]) -> No
         )
     }
     RC.prime(conn, _ONBOARDING, {(b,): onboarding.get(b) for b in bots})
-    # Most bots have no back-off row or budget hold: the miss is kept too, or each would be read again.
-    backoffs = {
-        str(r["bot"]): r
-        for r in conn.execute("SELECT * FROM run_backoff WHERE bot IN (SELECT value FROM json_each(?))", listed)
-    }
-    RC.prime(conn, cast("Any", run_backoff).GET_SQL, {(b,): backoffs.get(b) for b in bots})
+    # Most bots have no failed-runs or budget hold: the miss is kept too, or each would be read again.
+    holds.prime(conn, holds.FAILING, "bot", bots)
     holds.prime(conn, holds.RUNAWAY, "bot", bots)
     cast("Any", reconnects).prime_open(conn, bots, "login:")
 

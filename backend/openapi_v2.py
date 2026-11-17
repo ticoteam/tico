@@ -2922,7 +2922,7 @@ SCHEMAS.update(
     }
 )
 
-# Failed-run back-off and run budgets (backend/run_backoff.py, backend/turn_budgets.py).
+# Failed-run back-off and run budgets (backend/run_failures.py, backend/turn_budgets.py).
 SCHEMAS.update(
     {
         "BotBudgetState": obj(

@@ -1,7 +1,8 @@
 """The holds table (backend/holds.py): one writer that keeps one open hold of a kind on a thing, a release that keeps it
-as history, and migration 20261117061834_holds_runaway, which moves every bot_budget row (run budgets) into it."""
+as history, the one backoff and probe, and migrations 20261117061834_holds_runaway and 20261117072000_holds_failing,
+which move every bot_budget row (run budgets) and every run_backoff row (failed runs) into it."""
 
-from backend import general_manager, holds, maintenance_health, turn_budgets
+from backend import general_manager, holds, invariants, maintenance_health, run_failures, turn_budgets
 from backend.migrations import DIRECTORY, statements
 from backend.store import H
 from backend.tests.helpers.api import get  # noqa: F401  (the api fixture)
@@ -136,3 +137,138 @@ def test_a_budget_raised_above_the_count_releases_the_hold_as_raised(api):
         how = c.execute("SELECT released_how, released_by_id FROM holds WHERE holdable_id='ops'").fetchone()
         assert tuple(how) == ("raised", "human:ana")
         assert turn_budgets.release(c, "bot:botops", "ops") is False  # nothing open now
+
+
+FAILING = DIRECTORY / "20261117072000_holds_failing.sql"
+OLD_FAILING = (
+    "CREATE TABLE IF NOT EXISTS run_backoff(bot TEXT PRIMARY KEY, fails INTEGER NOT NULL DEFAULT 0, wait_until TEXT, "
+    "error_class TEXT, error TEXT, last_failed_at TEXT, held_at TEXT, task_id TEXT, released_at TEXT, released_by TEXT)"
+)
+LATER = "2026-10-24T12:30:00.000000Z"
+
+
+def _migrate_failing(c, rows):
+    c.execute(OLD_FAILING)  # an older database's table, as a release before this one left it
+    c.executemany(
+        "INSERT INTO run_backoff(bot,fails,wait_until,error_class,error,last_failed_at,held_at,task_id,released_at,"
+        "released_by) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        rows,
+    )
+    for statement in statements(FAILING.read_text()):
+        c.execute(statement)
+
+
+def _failing_rows(c):
+    return {
+        r["id"]: dict(r)
+        for r in c.execute(
+            "SELECT id,holdable_id,bot_id,reason,details,streak,until_at,probe_at,upkeep_task_id,created_at,released_at,"
+            "released_by_id,released_how FROM holds WHERE kind='failing' AND holdable_type='bot'"
+        )
+    }
+
+
+def test_every_run_backoff_row_moves_open_and_released_and_running_it_again_changes_nothing(api, monkeypatch):
+    monkeypatch.setattr(H, "now", lambda: "2026-10-24T12:01:00.000000Z")
+    with api.app.state.store.transaction() as c:
+        _migrate_failing(
+            c,
+            [
+                ("ops", 5, LATER, "sign_in", "401 unauthorized", HELD, HELD, "task-1", None, None),  # held now
+                ("cpo", 2, LATER, "other", "boom", HELD, None, None, None, None),  # waits after two failures
+                ("finance", 0, None, "other", "boom", EARLIER, None, None, EARLIER, "human:ana"),  # released
+                ("inbox", 6, None, None, None, HELD, HELD, None, EARLIER, "bot:botops"),  # held again, no next try kept
+                ("assistant", 0, None, "other", "boom", EARLIER, None, None, None, None),  # ran normally since
+                ("gone", 1, LATER, "other", "boom", HELD, None, None, None, None),  # a bot since removed
+            ],
+        )
+        assert not c.execute("SELECT 1 FROM sqlite_master WHERE name='run_backoff'").fetchone()
+        moved = _failing_rows(c)
+        _migrate_failing(c, [])  # again: the older table comes back empty and goes
+        assert _failing_rows(c) == moved
+
+        assert set(moved) == {
+            "run_backoff:open:ops",
+            "run_backoff:open:cpo",
+            "run_backoff:released:finance",
+            "run_backoff:open:inbox",
+            "run_backoff:released:inbox",
+            "run_backoff:open:gone",
+        }
+        ops = moved["run_backoff:open:ops"]
+        assert ops["reason"] == (
+            "Tico stopped ops: its last 5 runs failed within a minute (the AI sign-in was refused). Tico tries one run "
+            "on its own at growing intervals and releases it when one completes. Check its last runs, or release it now."
+        )
+        assert (ops["bot_id"], ops["streak"], ops["until_at"], ops["probe_at"], ops["upkeep_task_id"]) == (
+            "ops",
+            5,
+            None,
+            LATER,
+            "task-1",
+        )
+        cpo = moved["run_backoff:open:cpo"]
+        assert (cpo["reason"], cpo["streak"], cpo["until_at"], cpo["probe_at"]) == ("", 2, LATER, None)
+        assert moved["run_backoff:open:inbox"]["probe_at"] == "2026-10-24T12:30:00.000000Z"  # 30 minutes after the hold
+        assert moved["run_backoff:open:gone"]["bot_id"] is None
+        assert (
+            moved["run_backoff:released:finance"]["released_by_id"],
+            moved["run_backoff:released:finance"]["released_how"],
+        ) == ("human:ana", "person")
+        assert moved["run_backoff:released:inbox"]["released_how"] == "botops"
+
+        # The pages, Health and the claim read the moved holds as they read the rows.
+        held = run_failures.get(c, "ops")
+        assert held["details"] == {
+            "error_class": "sign_in",
+            "error": "401 unauthorized",
+            "last_failed_at": HELD,
+            "held_at": HELD,
+        }
+        assert holds.why(c, "ops") == holds.RUN_HOLD and run_failures.words(c, "ops") == ops["reason"]
+        assert holds.why(c, "cpo") == holds.BACKOFF and "cpo is pausing 1740 s" in run_failures.words(c, "cpo")
+        assert holds.why(c, "finance") is None and run_failures.get(c, "assistant") == {}
+        assert [hold["holdable_id"] for hold in run_failures.held(c)] == ["inbox", "ops"]
+        assert {f["key"] for f in maintenance_health._stop_checks(c)} >= {"run_hold:ops", "run_hold:inbox"}
+        said = [item["why"] for item in general_manager._held(c)]
+        assert any("ops is held after five fast failures in a row (sign_in)" in why for why in said)
+        assert invariants.sign_in_held(c, None) == ["ops"]
+        assert turn_budgets.view(c, "ops", {"config": "{}", "revision": 1})["run_hold"] == {
+            "fails": 5,
+            "error_class": "sign_in",
+            "since": HELD,
+            "next_try": LATER,
+            "words": ops["reason"],
+        }
+
+
+def test_ids_name_the_rows_kind_before_the_bot_so_no_two_bots_rows_share_one(api):
+    with api.app.state.store.transaction() as c:
+        _migrate_failing(
+            c,
+            [
+                ("ops", 5, LATER, "other", "boom", HELD, HELD, None, EARLIER, "human:ana"),  # held, and released before
+                ("released:ops", 1, LATER, "other", "boom", HELD, None, None, None, None),
+                ("open:ops", 0, None, "other", "boom", HELD, None, None, EARLIER, "human:ana"),
+            ],
+        )
+        carried = {(r["holdable_id"], r["released_at"] is None) for r in _failing_rows(c).values()}
+        assert carried == {("ops", True), ("ops", False), ("released:ops", True), ("open:ops", False)}
+
+
+def test_the_one_backoff_doubles_to_its_cap_and_a_held_kind_probes_at_its_own_gap():
+    assert [holds.wait(holds.FAILING, n) for n in range(1, 5)] == [15, 30, 60, 120]
+    assert [holds.wait(holds.FAILING, n) for n in range(5, 12)] == [1800, 3600, 7200, 14400, 28800, 28800, 28800]
+
+
+def test_a_probe_is_taken_once_and_never_while_a_run_of_the_bot_is_out(api, monkeypatch):
+    monkeypatch.setattr(H, "now", lambda: LATER)
+    with api.app.state.store.transaction() as c:
+        hold = holds.put(c, holds.FAILING, "bot", "ops", actor=H.KEEPER, streak=5, probe_at=HELD)
+        c.execute("INSERT INTO attempts(id,bot_id,state,created_at) VALUES('a-out','ops','running',?)", (HELD,))
+        assert not holds.take_probe(c, hold, "job-1")  # a run of the bot is still out
+        c.execute("DELETE FROM attempts WHERE id='a-out'")
+        assert holds.take_probe(c, hold, "job-1")
+        taken = holds.get(c, holds.FAILING, "bot", "ops")
+        assert (taken["probe_job_id"], taken["probe_at"]) == ("job-1", H.shift(LATER, seconds=3600))
+        assert not holds.take_probe(c, taken, "job-2")  # the next try is an hour out

@@ -193,13 +193,15 @@ def _paused(c):
 
 
 def _held(c):
-    """Bots held after five fast failures in a row (run_backoff) or for going over a turn budget (turn_budgets). Each
+    """Bots held after five fast failures in a row (run_failures) or for going over a turn budget (turn_budgets). Each
     hold already has its Needs-you item; this line hands the look at its runs to BotOps, since the General Manager never
     releases a bot itself."""
     rows = []
     for sql, why in (
         (
-            "SELECT bot, held_at, error_class AS reason FROM run_backoff WHERE held_at IS NOT NULL",
+            "SELECT holdable_id AS bot, json_extract(details,'$.held_at') AS held_at, "
+            "json_extract(details,'$.error_class') AS reason FROM holds WHERE kind='failing' AND holdable_type='bot' "
+            "AND until_at IS NULL AND released_at IS NULL",
             "held after five fast failures in a row",
         ),
         (
