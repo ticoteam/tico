@@ -11,10 +11,13 @@ Two scenarios, both slow (the release binary and a runner process):
   them from repository secrets of the same names; .github/workflows/ci.yml):
       TICO_GIT_CHECK_APP_ID           the App's numeric id
       TICO_GIT_CHECK_PRIVATE_KEY      the App's private key (PEM text)
-      TICO_GIT_CHECK_REPOSITORY       owner/name of a scratch repository the App is installed on (Contents: write)
+      TICO_GIT_CHECK_REPOSITORY       owner/name of a scratch repository the App is installed on
       TICO_GIT_CHECK_INSTALLATION_ID  optional: the installation's id (otherwise found from the owner's name)
-  Without them it skips, naming what to set. It leaves nothing behind: its branch `tico-git-check-<random>` is
-  deleted by the turn, or by the test through the API when the turn could not."""
+  Without them it skips, naming what to set. The App needs what a bot's turn token asks for (G.TURN_PERMISSIONS:
+  Contents, Pull requests and Issues, each read and write), accepted on its installation: GitHub refuses a token that
+  names a permission the installation lacks, so with Contents alone the turn gets no credential at all. The test says
+  so first rather than failing in git. It leaves nothing behind: its branch `tico-git-check-<random>` is deleted by the
+  turn, or by the test through the API when the turn could not."""
 
 import base64
 import datetime
@@ -89,7 +92,9 @@ def git_check(api, computer, url, branch):
 
 def assert_pushed(use, tokens):
     credential = use["credential"]
-    assert credential["username"] == "x-access-token", credential
+    assert credential["username"] == "x-access-token", (
+        f"git got no credential from the runner's helper (exit {credential['code']}): {credential.get('stderr', '')}"
+    )
     assert credential["sha256"] in {hashlib.sha256(t.encode()).hexdigest() for t in tokens}, (
         "git's credential helper gave a value the hub never minted",
         credential,
@@ -147,7 +152,7 @@ class GitServer:
         server = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
-            def log_message(self, *args):
+            def log_message(self, format, *args):
                 pass
 
             def do_GET(self):
@@ -280,6 +285,19 @@ def live_config():
     )
 
 
+def assert_turn_permissions(service):
+    """The live App grants what a bot's turn token asks for (G.TURN_PERMISSIONS). Without it GitHub refuses the turn's
+    token (422), the hub answers github_app_permissions and git's helper quits: a configuration fault, named here."""
+    granted = service.live_permissions(refresh=True)
+    assert granted is not None, "GitHub did not say what the live check's App installation grants"
+    lacking = [name for name, level in G.TURN_PERMISSIONS.items() if granted.get(name) not in (level, "write")]
+    assert not lacking, (
+        "The live check's GitHub App lacks what a bot's turn token asks for: "
+        + ", ".join(f"{name} ({G.TURN_PERMISSIONS[name]})" for name in lacking)
+        + f". It grants {granted}. Add them to the App's permissions and accept them on its installation"
+    )
+
+
 def delete_branch(service, repository, branch):
     """The branch gone through the API, whatever the turn managed (a failed run leaves nothing behind)."""
     try:
@@ -295,13 +313,15 @@ def delete_branch(service, repository, branch):
 
 @pytest.mark.skipif(
     bool(MISSING),
-    reason="The live git check needs a GitHub App installed on a scratch repository (Contents: write): set "
+    reason="The live git check needs a GitHub App installed on a scratch repository (Contents, Pull requests and "
+    "Issues: write): set "
     + ", ".join(MISSING)
     + " (TICO_GIT_CHECK_INSTALLATION_ID optional); release validation passes repository secrets of those names",
 )
 def test_a_real_app_token_pushes_to_github_through_the_runners_credential_helper(api, computer):
     app_id, pem, repository, installation = live_config()
     service = connect_app(api, app_id, pem, repository, installation)
+    assert_turn_permissions(service)
     computer.start()
     branch = "tico-git-check-" + secrets.token_hex(4)
     try:

@@ -80,8 +80,10 @@ limited skips its scenario. It calls the internet, so it never runs unless asked
 installation token as it does for a bot, the real runner hands it to the turn as its credential helper, and plain git
 clones, commits, pushes a branch and deletes it. Offline, a fake GitHub mints GitHub's stateless tokens
 (`ghs_<app id>_<JWT>`) and a local HTTPS git server takes a push only with the minted one; it runs in every release.
-Live, against the real GitHub, it needs a GitHub App with Contents (write) installed on one scratch repository, and
-skips, naming them, without:
+Live, against the real GitHub, it needs a GitHub App installed on one scratch repository with what a bot's turn token
+asks for (Contents, Pull requests and Issues, each read and write, accepted on the installation: GitHub refuses a token
+naming a permission the installation lacks, so with Contents alone the turn gets no credential), and skips, naming
+them, without:
 
     TICO_GIT_CHECK_APP_ID=<id> TICO_GIT_CHECK_PRIVATE_KEY="$(cat app.pem)" TICO_GIT_CHECK_REPOSITORY=<owner>/<name> \
         python3 -m pytest -q -n 0 -m slow runner_support/tests/test_github_git.py
