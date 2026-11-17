@@ -27,6 +27,8 @@ owed line in one wake (`deliver`, or folded into the next wake H._wake sends it)
   one it is for, the task's `owner` is BotOps) (backend/credential_cards.py); fixed when that variable is stored for
   or granted to that bot (backend/credentials.py). Canceling its credential card ends the wait with a wake that
   says so (`dropped`).
+- `tool:<id>`: a tool's key was rejected; the Tools page's owner's Reconnect task waits on its key card
+  (backend/reconnect_tasks.py), which ends that task with the fix (`settle`) instead of waking it.
 
 Anything else (GitHub, an MCP server's OAuth) is a new key with its own fix kind, opened and fixed through the same
 `open` and `fixed`. The person is the bot's operator, else the company owner (usage_limits.recipients), except a
@@ -347,6 +349,27 @@ def fixed(c, key, bot=None, why=""):
     woken = [t for t in dict.fromkeys(w["task_id"] for w in done) if deliver(c, t, why=why)]
     _release_sign_in_holds(c, {w["bot"] for w in done if w["key"].startswith("login:")})
     return woken
+
+
+def settle(c, task_id, key, ended="fixed"):
+    """The task waiting on `key` ends with its fix (backend/reconnect_tasks.py closes it right after): its card says
+    `ended` (fixed or retired) and owes no wake, since there is no work left to go back to. Whether a card was open."""
+    if not _present(c):
+        return False
+    H = _H()
+    wait = c.execute(
+        "SELECT * FROM task_reconnects WHERE task_id=? AND key=? AND fixed_at IS NULL", (task_id, key)
+    ).fetchone()
+    if not wait:
+        return False
+    wait, at = dict(wait), H.now()
+    if ended == "retired":
+        _retire(c, wait)
+    elif _close(c, wait, ended, at):
+        c.execute("UPDATE task_reconnects SET woke_at=? WHERE task_id=? AND key=?", (at, task_id, key))
+        _settle_requests(c, [wait] if wait["service"] == "secret" else [], at)
+    H._recount(c, wait["owner"])
+    return True
 
 
 def _settle_requests(c, waits, at):

@@ -65,6 +65,14 @@ the reply's text), so calls a restricted key may not make never count toward Key
 ends the count as a 2xx would. A status counts only the checks that would run today: an id stored as a key is never checked, and a tool
 with no address or check path reads from its real calls alone, so an old check row never keeps it Key rejected.
 
+**Reconnect tasks.** A tool that turns Key rejected (its check, or its proxied calls; never Works (limited)) gives the
+Tools page's owner (the Tools Owner, else BotOps) one task, **Reconnect <vendor>**, whose thread holds a key card for
+the person who connected the tool, or a credential administrator when they may not change it. A run whose failed command
+got a 401 with a key no check reaches (a tool with no check path) opens it too. The value typed into the card replaces
+that key in place, every grant kept. A repeat adds nothing to the open task and tells nobody; the task closes itself
+when the tool reads Working again or the key gets a new value (the card, Tools or the API), and closes as not needed
+when the tool is deleted (backend/reconnect_tasks.py).
+
 **Ids are not keys.** A variable whose name says id (`_PROJECT_ID`, `_ACCOUNT_ID`, `_ACCOUNT_SID`, `_ORG_ID`,
 `_WORKSPACE_ID`, `_TEAM_ID`, `_CUSTOMER_ID`) and whose value is one short word that does not look like a credential is a
 setting, never behind the proxy: a bot sends it as it is (Twilio's Account SID is also its Basic username), so a proxy

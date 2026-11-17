@@ -220,8 +220,11 @@ a key: put it under Settings.
 - **409 `env_in_use`**: the bot already gets that variable from another key. Same value: it is a duplicate (section 6).
   Different value: a person decides which the bot keeps, takes the other away, then grants.
 - **Key rejected**: the vendor refused it (revoked, expired, wrong account, wrong format such as `email:token` for
-  Basic). Open a card for the bot whose key it is, or ask for a new drop in your chat; the new value replaces the old.
-  Check again after it is saved.
+  Basic). Tico gives you one **Reconnect <vendor>** task for it, with a key card in its thread already addressed to the
+  person who connected the tool (or a credential admin): do not open another card or ask for the key in words. The new
+  value replaces the old key in place, every grant kept, and the task closes itself once it is saved or the tool reads
+  Working again. Repeats of the same rejection fold into that task. Work it only when the person asks you something
+  there, or the card is not enough (a key that needs a new scope, a vendor account that is gone: say so on the task).
 - **Check failed**: the address or check path is wrong, the vendor is down, or the address is not public (the proxy
   only sends to public https addresses). Read the check's detail before blaming the key.
 - **Proxy 403 "<bot>'s level on <tool> is Read: only GET calls"**: the bot holds Read and the tool has no Read key. Add a

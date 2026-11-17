@@ -29,7 +29,7 @@ from pydantic import Field, SecretStr
 from .auth import validate_identity
 from .credentials import CredentialWrite, administrator, admin_names as _admin_names, ask_admin_detail, owned
 from .models import Contract, ID
-from . import reconnects, runner_online
+from . import reconnect_tasks, reconnects, runner_online
 from .store import H, Problem
 
 ENV = r"^[A-Z_][A-Z0-9_]{0,99}$"
@@ -278,11 +278,24 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
     def view(c, row, viewer):
         bot = H.bot(c, row["bot"]) or {}
         name = bot.get("display_name") or bot.get("slug") or row["bot"]
-        allowed = TA.may_change_access(
-            c, viewer, TA.key(), "bot:" + row["bot"], TA.STORE, admins=vault.admins, auth=vault.auth
+        # A Reconnect card (backend/reconnect_tasks.py) replaces a tool's key: whoever may change that tool saves it.
+        replacing = reconnect_tasks.card_tool(c, row)
+        allowed = (
+            reconnect_tasks.may_replace(c, viewer, replacing)
+            if replacing is not None
+            else TA.may_change_access(
+                c, viewer, TA.key(), "bot:" + row["bot"], TA.STORE, admins=vault.admins, auth=vault.auth
+            )
         )
         note = None
-        if row["status"] == "pending" and not allowed:
+        if replacing is not None and not allowed:
+            names = admin_names(c, vault)
+            note = (
+                "Only a credential admin can replace this key"
+                + (". Ask " + ", ".join(names[:3]) if names else "")
+                + "."
+            )
+        elif row["status"] == "pending" and not allowed:
             names = admin_names(c, vault)
             note = (
                 "Only a credential admin, or someone who manages this bot, can store this"
@@ -558,6 +571,10 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
             if row["status"] != "pending":
                 raise Problem("state", "This card is already " + row["status"], 409)
             value = check_format(row["format"], body.value.get_secret_value())
+            if reconnect_tasks.card_tool(c, row) is not None:
+                # A Reconnect card: the value replaces the tool's key in place, every grant kept, and its task ends.
+                reconnect_tasks.save(c, vault, who, row, value)
+                return view(c, c.execute("SELECT * FROM credential_requests WHERE id=?", (rid,)).fetchone(), who)
             manager(c, auth.identity_for_actor(c, row["requester"]), row["bot"])
             stored = store_for_bot(c, vault, who, row["env"], row["bot"], value, kind=row["kind"])
             c.execute(
