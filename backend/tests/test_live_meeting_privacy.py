@@ -14,6 +14,7 @@ from backend.tests.helpers.live_meetings import attach, chunk, live, ready  # no
 from backend.tests.helpers.botops_parity import act
 from backend.tests.helpers.member_bots import botops, turn as botops_turn  # noqa: F401
 from backend.tests.helpers.sql import query
+from backend.tests.helpers.statement_scope import belongs, measuring
 
 
 def private(api, token="ana-test"):
@@ -799,10 +800,10 @@ def test_ordinary_api_reads_do_not_scan_unrelated_keeper_history(api, monkeypatc
         c = take()
 
         def statement(sql):
-            in_provenance[0] = "JOIN live_meeting_turns" in sql
+            in_provenance[0] = belongs(work) and "JOIN live_meeting_turns" in sql
 
         def progress():
-            if in_provenance[0]:
+            if in_provenance[0] and belongs(work):
                 work[0] += 100
             return 0
 
@@ -817,7 +818,8 @@ def test_ordinary_api_reads_do_not_scan_unrelated_keeper_history(api, monkeypatc
         result = []
         for path in paths:
             work[0] = 0
-            get(api, path)
+            with measuring(work):
+                get(api, path)
             result.append(work[0])
         return result
 
