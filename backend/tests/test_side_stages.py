@@ -15,6 +15,7 @@ import pytest
 
 from backend import never_stuck as NS
 from backend import pipeline_settings as PS
+from backend import stage_rules as SR
 from backend import task_calls
 from backend import task_engine as E
 from backend import task_requirements as R
@@ -115,6 +116,31 @@ def test_rejected_moves_to_bot_qa_or_in_progress_as_plain_moves_with_no_why(c):
     assert _move(c, to_build["id"], "In progress", BUILDER)["stage"]["name"] == "In progress"
     assert _visits(c, to_qa["id"])[-1] == ("Bot QA", None, "side")
     assert _visits(c, to_build["id"])[-1] == ("In progress", None, "side")
+
+
+def test_an_enters_block_rule_refuses_the_proposed_owner_in_both_directions(c):
+    pipe = _pipeline(c)
+    rejected, qa = (pipe["stages"][name] for name in ("Rejected", "Bot QA"))
+    rule = SR.add(
+        c,
+        ANA,
+        {
+            "name": "A person holds this stage",
+            "pipeline_id": pipe["id"],
+            "stages": [rejected, qa],
+            "event": "enters",
+            "cond": {"owner_kind": "bot"},
+            "then": "block",
+        },
+    )
+    task_id = X.new_task(c, ANA, "Build the importer", "eng")["id"]
+    for destination in (rejected, qa):
+        moved = _move(c, task_id, destination, ANA)
+        assert moved["stage_id"] == destination and moved["owner_id"] is None
+    logged = c.execute(
+        "SELECT new FROM history_events WHERE subject_id=? AND kind='stage_rule' ORDER BY rowid", (task_id,)
+    ).fetchall()
+    assert [row[0] for row in logged] == [rule["id"], rule["id"]]
 
 
 def test_a_main_stage_task_limit_still_refuses_a_move_out_of_a_side_stage(c):

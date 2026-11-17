@@ -26,7 +26,8 @@ SCHEMAS.update(
                 "stage_id": "n",
                 "came_from": {
                     "oneOf": [obj({"id": "s", "name": "s"}), {"type": "null"}],
-                    "description": "In a side stage, the last main work stage this task visited in this pipeline, if any",
+                    "description": "In a side stage, the last main work stage this task visited in this pipeline. "
+                    "Null when there is no origin. A brief list omits the field when it is null.",
                 },
                 "turn": {
                     "oneOf": [ref("TaskWait"), {"type": "null"}],
@@ -59,7 +60,6 @@ SCHEMAS.update(
                 "version",
                 "pipeline_id",
                 "stage_id",
-                "came_from",
                 "turn",
                 "late",
                 "lane",

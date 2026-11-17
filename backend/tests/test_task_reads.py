@@ -24,6 +24,23 @@ def delta(api, query, cursor, token="ana-test"):
     return tasks(api, f"{query}&changed_after={cursor}", token=token)
 
 
+def test_brief_rows_keep_side_stage_origins_and_omit_null_origins(api):
+    pipeline = post(
+        api,
+        "pipelines/triage",
+        {"name": "Triage", "stages": [{"name": "Review"}, {"name": "Rejected", "side": True}]},
+    )["pipeline"]
+    body = {"owner": "ana", "body": "Please review.", "pipeline": pipeline["id"]}
+    main = post(api, "tasks", {**body, "title": "Review the draft"})
+    side = post(api, "tasks", {**body, "title": "Review the outline"})
+    post(api, f"tasks/{side['id']}/move", {"to": pipeline["stages"][1]["id"]})
+
+    brief = {row["id"]: row for row in tasks(api, "pipeline=triage&brief=1")["tasks"]}
+    assert "came_from" not in brief[main["id"]]
+    assert brief[side["id"]]["came_from"] == {"id": pipeline["stages"][0]["id"], "name": "Review"}
+    assert get(api, f"tasks/{main['id']}")["task"]["came_from"] is None
+
+
 def test_a_delta_returns_what_changed_and_what_left(api):
     keep = post(api, "tasks", {"owner": "ben", "title": "Draft the agenda", "body": "Please."})
     finish = post(api, "tasks", {"owner": "ben", "title": "Book the room", "body": "Please."})
