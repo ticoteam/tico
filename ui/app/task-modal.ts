@@ -274,7 +274,7 @@ async function taskModalShow(task: ModalTask, d: ModalDialog = taskModal(), opts
     // Opening lands on the window itself (Back in the thread view): not the title, whose focus would open it for editing
     // and show all of a long one, nor a control, which would wear a focus ring before the keyboard moves. Tab goes on.
     if (d.open && d.matches(':modal')) {
-      if (d.classList.contains('thread')) $('[data-thread-back]', d)?.focus({preventScroll: true, focusVisible: false} as FocusOptions);
+      if (d.classList.contains('thread')) $('[data-thread-back]', d)?.focus(TASK_QUIET_FOCUS);
       else { d.tabIndex = -1; d.focus({preventScroll: true}); }
     }
   }
@@ -1537,11 +1537,13 @@ function taskActivityOpen(d: ModalDialog, focus = '.rail-h') {
 }
 /** Where opening puts the focus, with no ring: Chrome draws one on script focus when nothing was clicked first (a link,
     a reload). data-quiet-focus keeps it off (forms.css) until the focus moves; a redraw keeps it quiet. */
+// Focus without a ring (focusVisible is newer than the DOM types) and without scrolling.
+const TASK_QUIET_FOCUS = {preventScroll: true, focusVisible: false} as FocusOptions;
 function taskQuietFocus(el: HTMLElement | null) {
   if (!el) return;
   el.dataset.quietFocus = '';
   el.addEventListener('blur', () => { delete el.dataset.quietFocus; }, {once: true});
-  el.focus({preventScroll: true, focusVisible: false} as FocusOptions);
+  el.focus(TASK_QUIET_FOCUS);
 }
 // Whether the task waits on the reader's own answer (its turn is the reader's ask).
 const taskYours = (t: ModalTask) => { const turn = !taskFinished(t) ? t.turn : null, me = myActor(); return !!turn?.ask && !!turn.requirement_id && !!me && turn.who === me && !!turn.line; };
