@@ -16,6 +16,12 @@ def test_show_one_reads_the_task(monkeypatch):
     assert ["GET", "tasks/T1"] in [call[:2] for call in result["http"]]
 
 
+def test_show_json_is_local_and_still_reads_the_task(monkeypatch):
+    result = run_line(["task", "show", "T1", "--json"], monkeypatch)
+    assert result["exit"] == 0
+    assert ["GET", "tasks/T1"] in [call[:2] for call in result["http"]]
+
+
 def test_label_splits_comma_lists(monkeypatch):
     result = run_line(["task", "label", "T1", "--add", "a, b", "--add", "c", "--remove", "d"], monkeypatch)
     name, args = result["tools"][0]

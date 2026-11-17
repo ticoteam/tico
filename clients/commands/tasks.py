@@ -1069,8 +1069,9 @@ def _via(name):
     return run
 
 
-def _show(client, fields):
-    """`tico task show ID ...`: one task, or several in one read (tico_task_show_many)."""
+def _show(client, fields, **_local):
+    """`tico task show ID ...`: one task, or several in one read (tico_task_show_many). `--json` is local: it shapes
+    what prints (remotecli), so it is taken here and never sent."""
     from clients import hubtools
 
     ids = fields["id"] if isinstance(fields["id"], list) else [fields["id"]]
