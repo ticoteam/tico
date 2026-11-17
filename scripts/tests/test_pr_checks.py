@@ -821,7 +821,7 @@ def test_command_sweeps_do_not_change_hub_counts_or_propagate_from_dependencies(
     changed = ["clients/dbquery.py"]
     picked = checks.selection(changed, root=tmp_path, graph=graph, core=[])
     light = checks.narrow(picked, changed, "merge_group", root=tmp_path, graph=graph)
-    assert test in light["python"] and light["narrow"]["tier"][test] == 3
+    assert test in light["python"] and light["narrow"]["tier"][test] == 5
     assert not sweeps & set(picked["python"])
     for module in ("clients/commands/strategy.py", "clients/commands/gone.py"):
         changed = [module]
@@ -855,7 +855,7 @@ def test_package_initialization_reaches_tests_through_one_helper_but_still_stops
     picked = checks.selection(changed, root=tmp_path, graph=graph, core=[])
     light = checks.narrow(picked, changed, "pull_request", root=tmp_path, graph=graph)
     assert "backend/tests/test_demo.py" in light["python"]
-    assert light["narrow"]["tier"]["backend/tests/test_demo.py"] == 4
+    assert light["narrow"]["tier"]["backend/tests/test_demo.py"] == 6
     assert "backend/tests/test_other.py" not in light["python"]
     monkeypatch.setattr(checks, "HUB_TEST_USERS", 0)
     capped = checks.narrow(picked, changed, "pull_request", root=tmp_path, graph=graph)
@@ -2667,6 +2667,32 @@ def light_plan(changed, event, repo_map, added):
     return checks.narrow(picked, changed, event, added=added, graph=repo_map)
 
 
+@pytest.mark.parametrize(
+    ("changed", "test"),
+    [
+        ("backend/mail.py", "ui/tests/e2e-tools.cts"),
+        ("backend/mail_actions.py", "ui/tests/redesign-e2e-automations.cts"),
+        ("backend/model_subscriptions.py", "ui/tests/computers-shared.cts"),
+        ("backend/threads.py", "backend/tests/test_sql_parity.py"),
+        ("templates/catalog/example/card.yaml", "backend/tests/test_recruiting.py"),
+    ],
+)
+def test_light_plans_keep_checks_with_an_explicit_input_link(tmp_path, changed, test):
+    smoke_tree(tmp_path)
+    for path in (changed, test, "backend/other.py"):
+        source(tmp_path, path, "")
+    graph = checks.DependencyMap(tmp_path)
+
+    def selected(path, event):
+        picked = checks.selection([path], event, root=tmp_path, graph=graph, core=[])
+        return checks.narrow(picked, [path], event, root=tmp_path, graph=graph)
+
+    suite, name = ("browser", Path(test).stem) if checks.is_browser(test) else ("python", test)
+    for event in checks.NARROW:
+        assert name in selected(changed, event)[suite]
+        assert name not in selected("backend/other.py", event)[suite]
+
+
 @pytest.mark.parametrize("event", ["pull_request", "merge_group"])
 def test_a_new_ui_file_runs_the_release_shot_table_test_even_in_a_light_plan(event, repo_map):
     # Nov 13: #3335 added ui/app/browser-view.ts and ui/styles/browser-view.css, which no PAGES, SHARED or UNSHOWN entry
@@ -2735,6 +2761,47 @@ def test_a_light_plan_caps_its_python_tests_by_priority_and_a_changed_test_alway
     )
 
 
+def test_the_budget_keeps_a_specific_dependency_ahead_of_a_broad_read(tmp_path):
+    smoke_tree(tmp_path)
+    changed = ["backend/leaf.py"]
+    linked = "backend/tests/test_linked.py"
+    broad = "backend/tests/test_broad.py"
+    source(tmp_path, changed[0], "VALUE = 1\n")
+    source(tmp_path, linked, "from backend import leaf\ndef test_x(): pass\n")
+    source(tmp_path, broad, "import subprocess\ndef test_x(): subprocess.run(['git', 'ls-files'])\n")
+    graph = checks.DependencyMap(tmp_path)
+    picked = checks.selection(changed, root=tmp_path, graph=graph, core=[])
+    light = checks.narrow(picked, changed, "pull_request", root=tmp_path, graph=graph)
+    assert {broad, linked} <= set(light["python"])
+    kept, left = checks.cap_tests([broad, linked], light["narrow"]["tier"], {broad: 1, linked: 10}, budget=10)
+    assert kept == [linked] and left == [broad]
+
+
+def test_the_queue_reaches_a_third_hop_only_for_the_named_hub_and_input(tmp_path, monkeypatch):
+    smoke_tree(tmp_path)
+    monkeypatch.setattr(checks, "HUB_TEST_USERS", 0)
+    threads = "backend/threads.py"
+    other = "backend/other.py"
+    store_test = "backend/tests/test_store_path.py"
+    sibling_test = "backend/tests/test_sibling_path.py"
+    source(tmp_path, threads, "")
+    source(tmp_path, other, "")
+    source(tmp_path, "backend/bridge.py", "from backend import threads, other\n")
+    for hub, test in (("store", store_test), ("sibling", sibling_test)):
+        source(tmp_path, f"backend/{hub}.py", "from backend import bridge\n")
+        source(tmp_path, test, f"from backend import {hub}\ndef test_x(): pass\n")
+    graph = checks.DependencyMap(tmp_path)
+
+    def selected(path, event):
+        picked = checks.selection([path], event, root=tmp_path, graph=graph, core=[])
+        return checks.narrow(picked, [path], event, root=tmp_path, graph=graph)["python"]
+
+    group = selected(threads, "merge_group")
+    assert store_test in group and sibling_test not in group
+    assert store_test not in selected(other, "merge_group")
+    assert store_test not in selected(threads, "pull_request")
+
+
 def test_a_light_pull_request_plan_runs_at_most_four_python_vms_and_lists_what_it_left(tmp_path, monkeypatch):
     files = {f"backend/tests/test_{i:02}.py": 1 for i in range(40)}
     monkeypatch.setattr(checks, "collect", lambda: Counter(files))
@@ -2795,7 +2862,7 @@ def test_a_queue_group_runs_the_tests_two_levels_from_a_change_and_keeps_its_oth
         record["left_transitive"] == ["backend/tests/test_outer.py"]
         and record["shards"] == checks.NARROW["merge_group"]["shards"]
     )
-    assert record["tier"]["backend/tests/test_leaf.py"] == 2 and record["tier"]["backend/tests/test_helper.py"] == 3
+    assert record["tier"]["backend/tests/test_leaf.py"] == 2 and record["tier"]["backend/tests/test_helper.py"] == 5
     # A queue group keeps its browser scripts, Caddy job and contracts as the selection decided.
     assert (group["browser"], group["caddy"], group["contracts"]) == (full["browser"], full["caddy"], full["contracts"])
     assert "browser_left" not in record

@@ -60,6 +60,24 @@ UI_ALSO = {
     "ui/app/refresh.js": ["board-flood"],
     "ui/app/live.js": ["board-flood"],
 }
+# Checks whose inputs arrive through an HTTP request or catalog discovery.
+CHECK_ALSO = {
+    "backend/mail.py": ("ui/tests/e2e-tools.cts",),
+    "backend/mail_actions.py": ("ui/tests/redesign-e2e-automations.cts",),
+    "backend/model_subscriptions.py": ("ui/tests/computers-shared.cts",),
+    "backend/threads.py": ("backend/tests/test_sql_parity.py",),
+    "templates/catalog/*/card.yaml": ("backend/tests/test_recruiting.py",),
+}
+
+
+def additional_checks(names, root):
+    return {
+        test
+        for pattern, tests in CHECK_ALSO.items()
+        if any(fnmatch.fnmatchcase(name, pattern) for name in names)
+        for test in tests
+        if (root / test).is_file()
+    }
 
 
 def browser_script(root, stem):
@@ -1413,6 +1431,7 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
     9. Guard tests (`guards`, which a light plan keeps): a ui/ file the release-shot harness lists that is added or gone
        runs RELEASE_SHOTS; a file under CLI_COMMANDS runs CLI_SPEC; a path that can move what a
        cold open of Home downloads (moves_ui_shell) runs UI_SHELL_SIZE.
+    10. Inputs in CHECK_ALSO run the tests and browser scripts that exercise them through HTTP or catalog discovery.
 
     `added` names the new files (None: any changed file may be new) and `core` the core browser scripts (None: read from
     scripts/ui-tests.cts).
@@ -1573,7 +1592,12 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
         direct |= linked_scripts
         if direct:
             notes.append("rule 6: browser scripts the release check runs")
-        browser |= direct
+    extra_checks = additional_checks(names, root)
+    if extra_checks:
+        notes.append("rule 10: HTTP and catalog checks")
+        python |= {p for p in extra_checks if is_test(p)}
+        direct |= {Path(p).stem for p in extra_checks if is_browser(p)}
+    browser |= direct
     touched |= graph.affected(sorted(seeds), added, via)
     if data:
         touched |= graph.read_by_tests(data, added, via)
@@ -1860,8 +1884,9 @@ def queue_jobs(changed):
 #            what made every change select hundreds of tests.
 # When it drops anything, by depth or by the cap below, it adds the smoke set (scripts/queue-smoke.json). Then it caps the
 # Python tests to `shards` VMs of about NARROW_SHARD_SECONDS, by measured seconds (the run's timings over scripts/test-timings.json), keeping changed
-# test files first, then the smoke set, then the nearer level, then the shorter file. What it leaves out is listed in the
-# job summary and in the plan (narrow.left_transitive, narrow.left_over_budget). A light pull request also runs the browser
+# test files first, then the smoke set, then tests linked to a specific changed file (non-hub links first), then the
+# nearer level and the shorter file. What it leaves out is listed in the job summary and in the plan
+# (narrow.left_transitive, narrow.left_over_budget). A light pull request also runs the browser
 # scripts and the Caddy job only when the change touches their own inputs directly; a queue group keeps
 # them, the contracts, the static checks on its merge commit and the Rust, desktop and recorder jobs as they were.
 # What a queue group leaves out still runs before a release: release validation's incremental runs select with the full
@@ -1870,6 +1895,12 @@ def queue_jobs(changed):
 NARROW = {"pull_request": {"depth": 1, "shards": 10}, "merge_group": {"depth": 2, "shards": 19}}
 NARROW_SHARD_SECONDS = JOB_SECONDS
 HUB_TEST_USERS = 40
+# The queue follows these hubs to their direct tests for changes to the corresponding inputs, up to three hops.
+QUEUE_HUB_INPUTS = {
+    "backend/threads.py": "backend/thread_attention.py",
+    "backend/store.py": "backend/threads.py",
+    "backend/hubdb.py": "backend/waiting_on.py",
+}
 TIMINGS_FILE = "scripts/test-timings.json"
 
 
@@ -1892,6 +1923,10 @@ def shapes_the_api(name, root=ROOT):
         return "**api_v2(" in (root / name).read_text()
     except OSError:
         return False
+
+
+def is_hub(users):
+    return sum(is_test(user) for user in users) > HUB_TEST_USERS
 
 
 def reach_levels(names, depth, added=None, root=ROOT, graph=None):
@@ -1931,7 +1966,7 @@ def reach_levels(names, depth, added=None, root=ROOT, graph=None):
         found = set()
         for name in frontier:
             users = set(graph.run_by.get(name, ()))
-            if is_browser(name) or sum(1 for user in users if is_test(user)) > HUB_TEST_USERS:
+            if is_browser(name) or is_hub(users):
                 continue
             found |= users
         frontier = found - set(level)
@@ -1943,7 +1978,7 @@ def reach_levels(names, depth, added=None, root=ROOT, graph=None):
         if hop > 1 or not module.endswith("/__init__.py"):
             continue
         users = graph.run_by.get(module, ())
-        if sum(is_test(user) for user in users) > HUB_TEST_USERS:
+        if is_hub(users):
             continue
         for helper in users:
             if "/tests/helpers/" in helper:
@@ -1963,7 +1998,26 @@ def narrow(picked, changed, event, added=None, root=ROOT, graph=None):
         return picked
     mode = NARROW[event]
     names = [n for n in changed if not unread(n)]
-    level = reach_levels(names, mode["depth"], added, root, graph) if names else {}
+    level, linked, hub_linked = {}, set(), set()
+    if names:
+        graph = graph or DependencyMap(root)
+        level = reach_levels(names, mode["depth"], added, root, graph)
+        if event == "merge_group":
+            for hub, source in QUEUE_HUB_INPUTS.items():
+                if source in names and (hop := level.get(hub)) in (1, 2):
+                    for test in graph.run_by.get(hub, ()):
+                        if is_test(test):
+                            level[test] = min(level.get(test, hop + 1), hop + 1)
+        linked = additional_checks(names, root)
+        for test in linked:
+            level.setdefault(test, 1)
+        for name in names:
+            users = graph.run_by.get(name, ())
+            (hub_linked if is_hub(users) else linked).update(users)
+            linked.update(graph.read_by.get(name, ()))
+            stem = Path(name).stem
+            linked.update(graph.by_base.get(f"test_{stem}.py", ()))
+            linked.update(graph.by_base.get(f"{stem}_test.py", ()))
     smoke_tests, smoke_scripts = smoke(root)
     full = set(picked["python"])
     # Schema and other guard checks run like changed tests; their repository-wide reads exceed the depth limit.
@@ -1976,8 +2030,12 @@ def narrow(picked, changed, event, added=None, root=ROOT, graph=None):
     extra = sorted(set(smoke_tests) - python - full) if full and not left else []
     if full:
         python |= set(smoke_tests)
-    # Changed tests 0, the smoke set 1, level 1 is 2, level 2 is 3.
-    tier = {p: 0 if level.get(p) == 0 else 1 if p in smoke_tests else 1 + level[p] for p in python}
+    # Changed tests and guards run first, then smoke. Concrete links outrank broad reads and downstream users.
+    tier = {p: 3 + level.get(p, 0) for p in python}
+    tier.update(dict.fromkeys(python & hub_linked, 3))
+    tier.update(dict.fromkeys(python & linked, 2))
+    tier.update(dict.fromkeys(python & set(smoke_tests), 1))
+    tier.update(dict.fromkeys((p for p in python if level.get(p) == 0), 0))
     out = {**picked, "python": sorted(python)}
     record = {
         "event": event,

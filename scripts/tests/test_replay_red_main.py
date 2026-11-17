@@ -11,7 +11,6 @@ from scripts import replay_red_main as replay
 
 ROOT = Path(__file__).resolve().parents[2]
 # Case numbers in red_main_cases.json from the recorded PR replay.
-# Cases 26 and 27 (76-file changes) lose test_pr_checks.py to the time budget; that's the capped-misses ticket.
 PINNED_CAUGHT = {
     1,
     2,
@@ -127,6 +126,7 @@ def test_replay_applies_each_stages_time_cap(monkeypatch, tmp_path, event):
     assert calls == [event, event]
     assert result["python"] == (["test_fast.py"] if event == "pull_request" else list(runner.counts))
     assert result["narrow"]["left_over_budget"] == (["test_over_budget.py"] if event == "pull_request" else [])
+    assert result["narrow"]["selected_seconds"] == (1 if event == "pull_request" else 16)
 
 
 @pytest.mark.parametrize("stage", ["pull_request", "merge_group", None])
