@@ -12,7 +12,7 @@ kind at a time, written by `put` and ended by `release`:
 | `cloud_locked`    | company | Tico Cloud access (cloud_access)                       | Tico HQ unlocks the company        |
 | `run_hold`        | bot     | `holds`, kind `failing`, held: no until_at             | a try completes, or a release      |
 | `budget`          | bot     | `holds`, kind `runaway` (runaway runs)                 | a release, or a raised budget      |
-| `cooling_off`     | login   | the login hold (login_holds); the bot's status shows it | the reset, then one probe; Try now |
+| `cooling_off`     | login   | `holds`, kind `usage_limit` (login_holds)              | the reset, then one probe; Try now |
 | `cant_start`      | task    | `task.cant_start` events with BotOps's open task       | BotOps closes its task             |
 | `task_quarantine` | task    | `holds`, kind `quarantine`, on the task                | the cooldown, or a person          |
 | `claim_held`      | job     | `jobs.hold_reason` (claim_holds)                       | its wait, a start, or a release    |
@@ -89,6 +89,7 @@ STATE_SQL = "SELECT state FROM bots WHERE id=?"
 RUNAWAY = "runaway"  # a bot over its run budget (turn_budgets): BUDGET to the pages and the claim
 QUARANTINE = "quarantine"  # rule 8 (hubdb.quarantine, task_quarantine): QUARANTINED and TASK_QUARANTINE to the pages
 FAILING = "failing"  # a bot whose runs fail at once (run_failures): BACKOFF while it waits, RUN_HOLD once held
+LOGIN_LIMIT = "usage_limit"  # a login over its provider's usage limit (login_holds): USAGE_LIMIT to the pages
 # A bot-wide hold of these kinds is also bots.state, the switch every reader of a bot checks: its open hold sets it (not
 # on an archived or planned bot), and its release sets the bot active again only while no other such hold is open.
 STATE_KINDS = {QUARANTINE: "quarantined"}
@@ -109,9 +110,11 @@ def _switch(c: Any, kind: str, holdable_type: str, holdable_id: str, held: bool)
     )
 
 
+# Pinned to the partial indexes of open holds: released holds stay as history, and stats taken while the table was small
+# plan a scan of all of it (the test_holds_*_plan tests).
 OPEN_SQL = (
-    "SELECT * FROM holds WHERE kind=? AND holdable_type=? AND holdable_id=? AND coalesce(bot_id,'')=? "
-    "AND released_at IS NULL"
+    "SELECT * FROM holds INDEXED BY holds_open WHERE kind=? AND holdable_type=? AND holdable_id=? "
+    "AND coalesce(bot_id,'')=? AND released_at IS NULL"
 )
 
 
@@ -208,16 +211,19 @@ def put(
     until_at: str | None = None,
     probe_at: str | None = None,
     upkeep_task_id: str | None = None,
+    probe_job_id: str | None = None,
 ) -> dict[str, Any]:
     """The one writer: open a hold of `kind` on the holdable, or update the one open already (holds_open). Answers
-    the row. A bot's own hold names it as its bot_id."""
+    the row. A bot's own hold names it as its bot_id. `probe_job_id` is the one job let try after `until_at`, taken at
+    `probe_at`."""
     now = str(H.now())
     found = c.execute(
         "INSERT INTO holds(id,kind,holdable_type,holdable_id,bot_id,reason,details,streak,until_at,probe_at,"
-        "upkeep_task_id,created_by_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+        "upkeep_task_id,probe_job_id,created_by_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
         "ON CONFLICT(kind,holdable_type,holdable_id,coalesce(bot_id,'')) WHERE released_at IS NULL DO UPDATE SET "
         "reason=excluded.reason,details=excluded.details,streak=excluded.streak,until_at=excluded.until_at,"
-        "probe_at=excluded.probe_at,upkeep_task_id=excluded.upkeep_task_id,updated_at=excluded.updated_at RETURNING *",
+        "probe_at=excluded.probe_at,upkeep_task_id=excluded.upkeep_task_id,probe_job_id=excluded.probe_job_id,"
+        "updated_at=excluded.updated_at RETURNING *",
         (
             H.new_id(),
             kind,
@@ -230,6 +236,7 @@ def put(
             until_at,
             probe_at,
             upkeep_task_id,
+            probe_job_id,
             actor,
             now,
             now,
@@ -246,8 +253,8 @@ def release(
     expired, probe_passed, moot, superseded). Answers the row it ended, or None when none was open."""
     now = str(H.now())
     found = c.execute(
-        "UPDATE holds SET released_at=?,released_by_id=?,released_how=?,updated_at=? WHERE kind=? AND holdable_type=? "
-        "AND holdable_id=? AND coalesce(bot_id,'')=? AND released_at IS NULL RETURNING *",
+        "UPDATE holds INDEXED BY holds_open SET released_at=?,released_by_id=?,released_how=?,updated_at=? WHERE kind=? "
+        "AND holdable_type=? AND holdable_id=? AND coalesce(bot_id,'')=? AND released_at IS NULL RETURNING *",
         (now, actor, how, now, kind, holdable_type, holdable_id, _held_bot(holdable_type, holdable_id, bot_id) or ""),
     ).fetchall()
     if found:
@@ -433,8 +440,10 @@ def _budget(a: _Ask) -> bool:
     return not a.human  # new work: a person's message passes
 
 
-# Any login hold at all (login_holds.PREFIX): without one no login keeps a bot waiting. One read per snapshot.
-ANY_LOGIN_HOLD_SQL = "SELECT 1 FROM registry_metadata WHERE key >= 'login-hold:' AND key < 'login-hold;' LIMIT 1"
+# Any login hold at all (LOGIN_LIMIT): without one no login keeps a bot waiting. One read per snapshot.
+ANY_LOGIN_HOLD_SQL = (
+    "SELECT 1 FROM holds INDEXED BY holds_open WHERE kind='usage_limit' AND released_at IS NULL LIMIT 1"
+)
 
 
 def _usage_limit(a: _Ask) -> bool:
