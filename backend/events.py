@@ -1984,9 +1984,9 @@ def status_line(c, who, slug, default=None, inputs=None, auth=None):
                 {"id": task["id"], "title": task["title"]} if task and privacy.task_readable(c, who, task) else None
             )
             row["quarantine"]["review"] = review
-    from . import bot_stops
+    from . import holds
 
-    return bot_stops.overlay(c, usage_limits.overlay(c, row, usage_limits.company(c) if default is None else default))
+    return holds.overlay(c, usage_limits.overlay(c, row, usage_limits.company(c) if default is None else default))
 
 
 def _trashed_visible(c, who, task_id):

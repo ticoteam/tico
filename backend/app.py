@@ -42,7 +42,7 @@ from . import counsel
 from . import thread_api
 from . import recipients as recipient_gate
 from . import runs
-from . import bot_stops, turn_budgets, task_caps, reach
+from . import holds, turn_budgets, task_caps, reach
 from . import (
     check_models,
     profiles,
@@ -2013,7 +2013,7 @@ def create_app(settings=None):
         if note := (
             H.held_note(c, to)
             or usage_limits.warning(c, to)
-            or bot_stops.warning(c, to)
+            or holds.warning(c, to)
             or (None if H.is_human(who.actor) else H.setup_hold(c, to, who.actor))
         ):
             message = {**message, "warning": note}
@@ -3715,7 +3715,7 @@ def create_app(settings=None):
         note = " ".join(
             filter(
                 None,
-                (usage_limits.warning(c, owner) or bot_stops.warning(c, owner) or H.setup_hold(c, owner),),
+                (usage_limits.warning(c, owner) or holds.warning(c, owner) or H.setup_hold(c, owner),),
             )
         )
         return {

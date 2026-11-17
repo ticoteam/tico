@@ -227,6 +227,7 @@ def register(app, auth, settings, settings_admin, store):
             W.CLOUD_STARTING: "open_computers",
             W.CLOUD_FAILED: "open_computers",
             W.RUNS_FAILING: "release_hold",
+            W.RUNAWAY: "release_hold",
             W.LOGIN: "reconnect",
             W.COMPANY_PAUSED: "resume_company",
             W.CLOUD_LOCKED: "unlock_cloud",

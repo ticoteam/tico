@@ -26,7 +26,7 @@ from . import visuals
 from . import login_holds, needs_lane, providers, runner_versions, runs
 from .runs import LIVE as LIVE_RUN_STATES
 from . import personal_tokens, profiles, rooms, team_rules, turns, wake_presets
-from . import bot_rows, bot_stops, run_triggers
+from . import bot_rows, holds, run_triggers
 
 from . import read_cache, roster_clock
 from .store import (
@@ -1293,10 +1293,11 @@ def cloud_machine_wait(c, bot):
     return waiting(c, bot)
 
 
-def queued_label(c, bot, location, settings=None, human=False, behind=False, queued=False):
+def queued_label(c, bot, location, settings=None, human=False, behind=False, queued=False, job=None):
     """(label, readiness_reason) for a bot's queued work: what it is waiting for, in a person's words. `human`: a
     person's message; `behind`: the bot is still answering earlier work in this same conversation; `queued`: it was
-    sent with queue, so it waits for that turn to end rather than steering into it (backend/delivery.py)."""
+    sent with queue, so it waits for that turn to end rather than steering into it (backend/delivery.py); `job`: the
+    queued run's row, when the label is its own (a hold on that run alone, backend/holds.py)."""
     from .start_places import computer_hold
     from .cloud_machines import resting
     from . import org_turns
@@ -1318,8 +1319,9 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False, que
         label = "Saved — this bot is paused; this starts when it's resumed"
     elif bot_state != "active":
         label = "Saved — bot " + bot_state
-    elif stop := bot_stops.queued_reason(c, bot, human):
-        # Tico stopped the bot (failed runs, run budget) or it waits out a failed run: the words say why.
+    elif stop := holds.queued_reason(c, bot, human, job):
+        # Tico stopped the bot (failed runs, run budget), holds this run (its claim failed), or it waits out a failed
+        # run: the words say why (backend/holds.py).
         label = "Saved — " + stop
     elif (not location["online"] or asleep) and (cloud := cloud_machine_wait(c, bot)):
         # Its own cloud machine is stopped or starting (backend/cloud_machines.py): the words say which, or why not.
@@ -1376,7 +1378,8 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False, que
 # The queued job of a task. INDEXED BY jobs_queued: the expression on the message cannot use an index, and with the
 # stale sqlite_stat1 row for messages the planner scanned all of them (40-44 ms a call on TIDY v0.5.1, 545 an hour).
 TASK_WAIT_SQL = (
-    f"SELECT j.bot_id,{H.in_person_name_sql()} AS person_sent FROM jobs j INDEXED BY jobs_queued "
+    f"SELECT j.bot_id,j.held,j.hold_reason,j.hold_until,{H.in_person_name_sql()} AS person_sent "
+    "FROM jobs j INDEXED BY jobs_queued "
     "JOIN messages m ON m.id=j.message_id "
     "JOIN conversations cv ON cv.id=m.conversation_id "
     f"WHERE j.state='queued' AND {H.MESSAGE_TASK_SQL}=? ORDER BY j.created_at LIMIT 1"
@@ -1388,7 +1391,9 @@ def task_wait(c, task_id, settings=None):
     job = c.execute(TASK_WAIT_SQL, (task_id,)).fetchone()
     if not job:
         return ""
-    label = queued_label(c, job["bot_id"], machine(c, job["bot_id"]), settings, human=bool(job["person_sent"]))[0]
+    label = queued_label(
+        c, job["bot_id"], machine(c, job["bot_id"]), settings, human=bool(job["person_sent"]), job=job
+    )[0]
     reason = label.removeprefix("Saved — ")
     return "Queued" if reason == "queued" else reason[:1].upper() + reason[1:]
 
@@ -1506,6 +1511,7 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
                 human=bool(job["person_sent"]),
                 behind=bool(behind),
                 queued=(message.get("refs") or {}).get("delivery") == "queue",
+                job=job,
             )
             if (H.status(c, job['bot_id']) or {}).get('state') == 'limited' and (
                 reason := login_holds.fallback_resume_reason(c, job['attempt_id'])
