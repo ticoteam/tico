@@ -1563,10 +1563,15 @@ function decideChatStop() { if (DEC_CHAT?.view) threadUnmount(DEC_CHAT.view); DE
     back. `product-validate-2`: Product added beside the pair it replaced (validate_gate.STAGES). */
 const decideCheckedOk = (it: NeedsEntry): boolean => !it.ask?.page && /^product-validate(-\d+)?$/.test(it.task?.stage_id || '')
   && decideAsker(it).startsWith('bot:') && /^page:/.test(it.ask?.shows?.[0] || '');
+/** Flow's crumb names this bot alone (its Flow mark on the bot's page, or a setup area's): the name is on the screen
+    already, so a chat's title row leaves it out. A team's crumb names the team, so its bots keep their names. */
+const decideCrumbNames = (st: DecState, bot: string): boolean => st.bots.includes(bot) && st.botsName === actorLabel(bot);
 /** The right side of an ask: the task's chat, kept through every redraw of the item (its thread is mounted once the
     task's read names it), then `card`, the row under it. On a phone the task folds to its title above the chat. */
 function decideChatMount(st: DecState, it: NeedsEntry, host: HTMLElement, card: string) {
   const taskId = decideTaskId(it), mark = decideMarkRoom(it);
+  // A phone's title row (decide.css, decideTabsPaint) names the task, else a ❓ in a direct chat (no task) names its bot.
+  const title = decideAboutOf(it)?.task?.title || it.task?.title || (mark && !decideCrumbNames(st, it.from_id || '') ? actorLabel(it.from_id || '') : '');
   if (taskId) decideAboutLoad(taskId);
   const cid = mark || decideAboutOf(it)?.task?.conversation_id || '';
   if (!DEC_CHAT || DEC_CHAT.item !== it.id || (cid && !DEC_CHAT.view) || !host.querySelector(':scope > .dc-chat')) {
@@ -1576,9 +1581,7 @@ function decideChatMount(st: DecState, it: NeedsEntry, host: HTMLElement, card: 
     if (DEC_CHAT?.item !== it.id) DEC_TAB = decideKind(it) === 'ok' ? 'task' : 'chat';
     decideChatStop();
     // A phone's title row and tabs (decide.css, decideTabsPaint): the task's chat, its documents, what an OK shows.
-    // A ❓ in a direct chat has no task: the bot's name heads its chat.
-    const title = decideAboutOf(it)?.task?.title || it.task?.title || (mark ? actorLabel(it.from_id || '') : '');
-    host.innerHTML = `<div class="dc-tabs"><h3 class="dc-tabs-t">${esc(title)}</h3></div><div class="dc-chat"></div><p class="dc-docnote" role="alert" hidden></p><div class="dc-docpane"></div>`;
+    host.innerHTML = `<div class="dc-tabs"><h3 class="dc-tabs-t"></h3></div><div class="dc-chat"></div><p class="dc-docnote" role="alert" hidden></p><div class="dc-docpane"></div>`;
     const el = host.querySelector<HTMLElement>('.dc-chat')!;
     DEC_CHAT = {item: it.id, cid, view: null, typed};
     if (cid) {
@@ -1590,6 +1593,9 @@ function decideChatMount(st: DecState, it: NeedsEntry, host: HTMLElement, card: 
     } else el.innerHTML = `<div class="thv-list">${decideAskBubbleHTML(st, it)}</div>`;   // until the task's read lands
   } else if (DEC_CHAT.view) thvDraw(DEC_CHAT.view, {parts: ['list']});
   else host.querySelector('.dc-chat .thv-list')!.innerHTML = decideAskBubbleHTML(st, it);
+  // Drawn on every pass: the crumb can change under the same ❓ (All mine, or this bot alone), and the title with it.
+  const heading = host.querySelector<HTMLElement>(':scope > .dc-tabs > .dc-tabs-t');
+  if (heading) heading.textContent = title;
   host.querySelector(':scope > [data-key]')?.remove();
   host.insertAdjacentHTML('beforeend', card);
   // The tabs wait on the task's read (its documents) and on what an OK shows (an invoice, an email): drawn on each pass.
