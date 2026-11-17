@@ -112,3 +112,10 @@ body.board-holding .pv-cols{align-items:stretch}
 .pa-x{width:44px;height:44px;flex:none}
 .pa-chat{flex:1;min-height:0;display:flex;flex-direction:column;padding:0 10px max(8px, env(safe-area-inset-bottom))}
 .pa-chat>.thv{flex:1;min-height:0}
+
+/* Show N more: a stage past its first 30 cards (task-pipelines.ts PV_CAP), quiet, the width of its column. */
+.pv-more{align-self:stretch;justify-content:center;color:var(--muted);font-size:var(--t-sm)}
+/* A card out of view (most of a big board's) is not laid out or painted until it scrolls in: each change to a 1,000-task
+   board, or to the header above it, lays out the cards in view, not all of them (ui/tests/board-flood.cts). `auto`
+   keeps each card's last drawn height meanwhile. A card's own outline and shadow still show; a phone's stage is short. */
+.pv-col-body > .tk-card{content-visibility:auto;contain-intrinsic-size:auto 64px}
