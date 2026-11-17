@@ -349,6 +349,8 @@ write route has no command, or a command calls another route.
 | Change a tool's key (level, name, end date, value) | `PATCH api-tools/{id}/keys/{key}` | `tico credential update` | `tico_credential_update` |
 | Delete a tool's key | `DELETE api-tools/{id}/keys/{key}` | `tico credential delete` | `tico_credential_delete` |
 | Settings | `POST`, `PATCH`, `DELETE api-tools/{id}/settings` | `tico tool setting add`, `change`, `remove` | `tico_tool_setting_*` |
+| Auth templates: list, set, ungroup | `GET tool-templates`, `PUT api-tools/{id}/template`, `POST api-tools/{id}/ungroup` | `tico tool templates`, `tico tool template`, `tico tool ungroup` | `tico_tool_templates`, `tico_tool_template_set`, `tico_tool_ungroup` |
+| A vendor account's values: classify, store in one step (read from a variable or file) | `POST tool-templates/classify`, `POST api-tools/{id}/paste` | `tico tool classify`, `tico tool paste` | `tico_tool_classify`, `tico_tool_paste` |
 | MCP server: probe, add, start its sign-in | `POST mcp-tools/probe`, `POST mcp-tools`, `POST api-tools/{id}/sign-in` | `tico tool mcp probe`, `tico tool mcp add`, `tico tool sign-in` | `tico_tool_mcp_probe`, `tico_tool_mcp_add`, `tico_tool_sign_in` |
 | Website tool | `GET`, `POST`, `PATCH`, `DELETE website-tools` | `tico tool website show`, `add`, `edit`, `delete` | `tico_tool_website_*` |
 | Website account: add, change, delete | `POST`, `PATCH`, `DELETE website-tools/{id}/accounts` | `tico credential login add`, `edit`, `delete` | `tico_credential_login_*` |

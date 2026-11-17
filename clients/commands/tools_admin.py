@@ -15,6 +15,7 @@ the command, read there. Those tools are `local` (the server's own MCP endpoint 
 own environment or files for a caller). No answer carries a value or its preview.
 """
 
+import argparse
 import os
 from urllib.parse import quote
 
@@ -294,6 +295,82 @@ def tool_sign_in(api, args):
 )
 def tool_forget(api, args):
     return _as_person(api).post(f"tools/{_q(args['service'])}/learnings/{_q(args['id'])}/delete", {}, key=_key(args))
+
+
+# ----------------------------------------------------------------------------- auth templates (backend/tool_templates.py)
+@tool(
+    "tico_tool_templates",
+    "The known auth templates: each vendor account's values (secret, id, setting) and how a call carries them.",
+    {},
+)
+def tool_templates(api, args):
+    return _as_person(api).get("tool-templates")
+
+
+@tool(
+    "tico_tool_template_set",
+    "Set a tool's auth template: a known one by id (twilio), the tool's own {fields, ways}, or none (null).",
+    {
+        "id": TOOL_ID,
+        "template": {
+            "type": ["string", "object", "null"],
+            "description": "A known template's id, the tool's own {fields, ways}, or null for none",
+        },
+    },
+    required=("id", "template"),
+    writes=True,
+)
+def tool_template_set(api, args):
+    template = args["template"]
+    template = {"id": template} if isinstance(template, str) else template
+    path = f"api-tools/{_api_tool(args)}/template"
+    return _hide(_as_person(api).call("PUT", path, {"template": template}, _key(args)))
+
+
+@tool(
+    "tico_tool_ungroup",
+    "Split a tool Tico grouped from several back into the tools it was made of, with their keys and settings.",
+    {"id": TOOL_ID},
+    required=("id",),
+    writes=True,
+)
+def tool_ungroup(api, args):
+    return _hide(_as_person(api).post(f"api-tools/{_api_tool(args)}/ungroup", {}, key=_key(args)))
+
+
+PASTE_TEMPLATE = _s("A known template's id to match the values to; found from the names when left out")
+
+
+@tool(
+    "tico_tool_classify",
+    "What a vendor account's values are (secret, id or setting, by template field), read from a variable or a file on "
+    "this computer (lines NAME=value). Nothing is stored and no value is answered.",
+    {**_from("the values"), "template": PASTE_TEMPLATE},
+    local=True,
+)
+def tool_classify(api, args):
+    text = secret_from(args)
+    if text is None:
+        raise ValueError("Say where the values are: from_env or from_file, never the values")
+    body = {"text": text, **_given(args, ("template",))}
+    return _hide(_as_person(api).post("tool-templates/classify", body))
+
+
+@tool(
+    "tico_tool_paste",
+    "Store a vendor account's values on a tool in one step, read from a variable or a file on this computer (lines "
+    "NAME=value): each secret as a key, each id or setting as a setting, and the template when one matches.",
+    {"id": TOOL_ID, **_from("the values"), "template": PASTE_TEMPLATE},
+    required=("id",),
+    writes=True,
+    local=True,
+)
+def tool_paste(api, args):
+    text = secret_from(args)
+    if text is None:
+        raise ValueError("Say where the values are: from_env or from_file, never the values")
+    body = {"text": text, **_given(args, ("template",))}
+    return _hide(_as_person(api).post(f"api-tools/{_api_tool(args)}/paste", body, key=_key(args)))
 
 
 # ----------------------------------------------------------------------------- website tools
@@ -594,6 +671,11 @@ AUDIENCE = {
         "tico_tool_mcp_add",
         "tico_tool_sign_in",
         "tico_tool_forget",
+        "tico_tool_templates",
+        "tico_tool_template_set",
+        "tico_tool_ungroup",
+        "tico_tool_classify",
+        "tico_tool_paste",
         "tico_tool_website_show",
         "tico_tool_website_add",
         "tico_tool_website_edit",
@@ -624,6 +706,10 @@ ROUTES = {
     "PATCH /api/v2/api-tools/{tool_id}/settings/{setting_id}": "tico_tool_setting_change",
     "DELETE /api/v2/api-tools/{tool_id}/settings/{setting_id}": "tico_tool_setting_remove",
     "POST /api/v2/api-tools/{tool_id}/sign-in": "tico_tool_sign_in",
+    "PUT /api/v2/api-tools/{tool_id}/template": "tico_tool_template_set",
+    "POST /api/v2/api-tools/{tool_id}/ungroup": "tico_tool_ungroup",
+    "POST /api/v2/api-tools/{tool_id}/paste": "tico_tool_paste",
+    "POST /api/v2/tool-templates/classify": "tico_tool_classify",
     "POST /api/v2/mcp-tools/probe": "tico_tool_mcp_probe",
     "POST /api/v2/mcp-tools": "tico_tool_mcp_add",
     "POST /api/v2/website-tools": "tico_tool_website_add",
@@ -678,6 +764,11 @@ def _json(value):
     import json
 
     return json.loads(value)
+
+
+def _template(value):
+    """A template on the command line: the tool's own as JSON, else a known template's id."""
+    return _json(value) if str(value).lstrip().startswith("{") else value
 
 
 _AUDIENCE_ARGS = (
@@ -749,6 +840,33 @@ TOOL_CLI = (
         args=(Arg("rows", "--rows", type=_json, metavar="JSON", action="store"),),
         example='tico tool propose-grant <thread id> --rows \'[{"key": "LINEAR_API_KEY", "tool": "linear", '
         '"level": "read", "bots": ["ops"]}]\'',
+    ),
+    Command("tool templates", "the known auth templates", example="tico tool templates"),
+    Command(
+        "tool template",
+        "set a tool's auth template: a known one's id, the tool's own JSON, or --none",
+        tool="tico_tool_template_set",
+        args=(
+            Arg("template", positional=True, nargs="?", type=_template, metavar="ID|JSON", default=argparse.SUPPRESS),
+            Arg("template", "--none", action="store_const", const=NULL),
+        ),
+        one_of=(("template",),),
+        example="tico tool template twilio twilio",
+    ),
+    Command("tool ungroup", "split a grouped tool back into its parts", example="tico tool ungroup twilio"),
+    Command(
+        "tool classify",
+        "what a vendor account's values are, read from a variable or a file; nothing is stored",
+        args=_FROM,
+        one_of=(("from_env", "from_file"),),
+        example="tico tool classify --from-file ./twilio.env",
+    ),
+    Command(
+        "tool paste",
+        "store a vendor account's values on a tool, read from a variable or a file",
+        args=_FROM,
+        one_of=(("from_env", "from_file"),),
+        example="tico tool paste twilio --from-file ./twilio.env",
     ),
     Group("tool website", "website tools: the sites bots sign in to"),
     Command("tool website show", "one website tool and its accounts", example="tico tool website show slack"),

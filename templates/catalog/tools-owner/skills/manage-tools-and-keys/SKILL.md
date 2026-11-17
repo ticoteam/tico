@@ -43,6 +43,9 @@ person's rights; a refusal names who can. The MCP tools have the same names (`ti
   <tool>`.
 - Settings: `tico tool setting add <tool> <NAME> <value>`, `tico tool setting change <tool> <NAME> --value <value>`,
   `tico tool setting remove <tool> <NAME>`.
+- Auth templates: `tico tool templates`, `tico tool template <tool> <template id>` (or `--none`), `tico tool ungroup
+  <tool>`; a vendor account's values a bot holds in a file go on in one step with `tico tool paste <tool> --from-file
+  <path>` (`tico tool classify --from-file <path>` first shows what each is, storing nothing).
 - MCP servers: `tico tool mcp probe <url>`; `tico tool mcp add <name> <url> oauth`, then `tico tool sign-in <tool>` and
   send the person the address it prints (a token server's token comes from the person, on a card).
 - Websites: `tico tool website add --site <host>`, `tico tool website edit <tool>`, `tico tool website delete <tool>`;
