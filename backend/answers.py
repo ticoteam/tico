@@ -194,8 +194,10 @@ def _may_answer_page(
         # The approver can refresh a stale key while the Decision model checks the new submission.
         visit = row["visit"]["id"]
         person = R.person_of(conn, requirement, visit)
-        if not requirement.get("person_id") and (back := R._sent_back(conn, visit, requirement["id"])):
-            person = person or str(back["by_id"])
+        if not requirement.get("person_id") and (back := R.last_sent_back(conn, requirement["id"], visit_id=visit)):
+            sender = str(back["by_id"] or "")
+            if is_human(sender) and R.active_person(conn, sender):
+                person = person or sender
     elif standing.state != R.WAITING or R.outside(person):
         _refuse(conn, by, "task_requirement", f"{R.name_of(requirement)} is not waiting on anyone", task_id)
     if by != person and not (person is None and is_human(by)):
@@ -248,7 +250,7 @@ def _page_version(
             from . import files, teammate_access
             from .auth import Auth
 
-            viewer: Any = cast(Callable[..., Any], teammate_access._viewer_for)(conn, by)
+            viewer: Any = cast(Callable[..., Any], teammate_access._viewer_for)(conn, by)  # pyright: ignore[reportPrivateUsage]
             policy: Any = cast(Callable[..., Any], Auth.read_policy)(conn)
             readable = viewer is not None and cast(Callable[..., bool], files.page_refs_readable)(
                 conn, policy, viewer, refs

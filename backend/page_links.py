@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Generator, Iterable
 from contextlib import contextmanager
 from functools import cache
 from typing import Any, cast
@@ -289,7 +289,7 @@ def filters(
 @contextmanager
 def visible_filters(
     c: Any, auth: Any, who: Any, linked: str, role: str, writer: str
-) -> Iterator[tuple[list[str], list[str]]]:
+) -> Generator[tuple[list[str], list[str]]]:
     """Apply target visibility before limiting, ranking or creating a cursor for a result set."""
     role_only = bool(role and not linked)
     where, args = filters(linked, role, writer, check_role_target=role_only)
