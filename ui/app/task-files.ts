@@ -110,13 +110,12 @@ function tfNorm(f: TfFile): TfFile {
 }
 const tfVersion = (f: TfFile, n?: number | string | null): TfVersion => f.versions.find(v => v.n === Number(n)) || f.versions.find(v => v.n === f.current_version) || f.versions[0]!;
 const tfAskOpen = (v: TfVersion | null | undefined): boolean => !!(v?.ask && !(v.answers || []).length);
-function tfFiles(d: TfDialog | null | undefined): TfFile[] {
-  const files = new Map((d?.taskFiles || []).map(f => [f.id, f]));
-  for (const [id, listed] of d?.tfListed || []) {
-    const file = files.get(id);
-    if (!file || file.current_version < listed.current_version) files.set(id, listed);
-  }
-  return [...files.values()].filter(f => !f.archived && f.versions.length);
+const tfFiles = (d: TfDialog | null | undefined): TfFile[] => (d?.taskFiles || []).filter(f => !f.archived && f.versions.length);
+// A Files row can be clicked while the task's separate attachment read is still on its way.
+function tfFile(d: TfDialog, id: string | undefined): TfFile | undefined {
+  if (!id) return undefined;
+  const file = tfFiles(d).find(f => f.id === id), listed = d.tfListed?.get(id);
+  return file && (!listed || file.current_version >= listed.current_version) ? file : listed;
 }
 const TF_CACHE = new Map<string, TfFile[]>();          // task id -> its files, for a task reopened before the read lands
 
@@ -147,7 +146,7 @@ function tfAdopt(d: TfDialog, task: {id: string | number; attachments?: unknown}
 }
 async function tfLoad(d: TfDialog, id: string | number): Promise<void> {
   const opening = d.taskOpening, seq = d.tfLoadSeq = (d.tfLoadSeq || 0) + 1;
-  const data = await v2Get(`/v2/tasks/${encodeURIComponent(id)}/files`);
+  const data = await v2Get(`/v2/tasks/${encodeURIComponent(id)}/files`, {fresh: true});
   if (!d.open || String(d.dataset.task) !== String(id) || d.taskOpening !== opening || d.tfLoadSeq !== seq) return;
   if (!data && TF_CACHE.has(String(id))) return;          // a failed poll keeps what the last one found
   const files = Array.isArray(data?.files) ? data.files.map(tfNorm) : tfFromAttachments(d.liveTask?.attachments);
@@ -161,8 +160,7 @@ async function tfLoad(d: TfDialog, id: string | number): Promise<void> {
 function tfPaint(d: TfDialog): void {
   const el = d.tfEl;
   if (!el) return;
-  const files = tfFiles(d);
-  const open = d.tfOpen; if (open && !files.some(f => f.id === open.id)) d.tfOpen = null;
+  const open = d.tfOpen; if (open && !tfFile(d, open.id)) d.tfOpen = null;
   if (!$('[data-tf-view]', el)) {
     el.innerHTML = '<span class="sr-only" data-tf-status role="status"></span>'
       + '<input type="file" multiple hidden data-tf-input aria-label="Add files to this task">'
@@ -178,7 +176,7 @@ function tfSelection(d: TfDialog) {
     row.setAttribute('aria-expanded', String(row.dataset.tftFile === d.tfOpen?.id));
 }
 function tfOpen(d: TfDialog, id: string | undefined, n: string | number | null = null): boolean {
-  const f = tfFiles(d).find(x => x.id === id);
+  const f = tfFile(d, id);
   if (!f) return false;
   d.tfOpen = {id: f.id, n: n == null ? null : Number(n), cmp: null};
   tfPaint(d);
@@ -224,7 +222,7 @@ function tfCanRemove(d: TfDialog): boolean {
 }
 async function tfRemove(d: TfDialog, fid: string, button: HTMLButtonElement): Promise<void> {
   const id = String(d.dataset.task || ''), opening = d.taskOpening;
-  const f = tfFiles(d).find(x => x.id === fid);
+  const f = tfFile(d, fid);
   button.disabled = true;
   try {
     await patch(`/v2/files/${encodeURIComponent(fid)}`, {archived: true});
@@ -257,7 +255,7 @@ function tfViewPaint(d: TfDialog, force = false): void {
   if (!el) throw new Error('The task has no files section');
   const box = $('[data-tf-view]', el);
   if (!box) return;
-  const open = d.tfOpen, f = open && tfFiles(d).find(x => x.id === open.id);
+  const open = d.tfOpen, f = open && tfFile(d, open.id);
   if (!f) { if (box.open || box.dataset.sig) { box.querySelector('video, audio')?.pause(); if (box.open) box.close(); box.innerHTML = ''; box.dataset.sig = ''; } return; }
   const v = tfVersion(f, open.n), sig = JSON.stringify([f, open, d.canComment !== false]);
   if (!force && box.dataset.sig === sig) { tfViewModal(box); return; }
@@ -372,7 +370,7 @@ function tfWire(d: TfDialog): void {
     if (eventElement(ev)?.closest('[data-tf-close]')) { tfClose(d); return; }
     // The file full screen with the task's thread beside it (file-review.ts); the task's viewer stays under it.
     if (eventElement(ev)?.closest('[data-tf-review]') && d.tfOpen) {
-      const f = tfFiles(d).find(x => x.id === d.tfOpen?.id);
+      const f = tfFile(d, d.tfOpen.id);
       if (f) fileReviewOpen(f.id, {name: f.name, version: d.tfOpen.n, task: String(d.dataset.task || '') || undefined});
       return;
     }
@@ -386,12 +384,12 @@ function tfWire(d: TfDialog): void {
     if (ver && d.tfOpen) {
       const open = d.tfOpen;
       const n = Number(ver.dataset.tfV);
-      if (open.cmp === n) open.cmp = tfVersion(tfFiles(d).find(f => f.id === open.id)!, open.n).n;
+      if (open.cmp === n) open.cmp = tfVersion(tfFile(d, open.id)!, open.n).n;
       open.n = n; tfViewPaint(d); return;
     }
     if (eventElement(ev)?.closest('[data-tf-cmp]') && d.tfOpen) {
       const open = d.tfOpen;
-      const f = tfFiles(d).find(x => x.id === open.id)!, v = tfVersion(f, open.n);
+      const f = tfFile(d, open.id)!, v = tfVersion(f, open.n);
       open.cmp = open.cmp != null ? null : (f.versions.find(x => x.n < v.n) || f.versions.find(x => x.n !== v.n))!.n;
       tfViewPaint(d); return;
     }

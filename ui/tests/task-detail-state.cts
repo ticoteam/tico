@@ -98,8 +98,10 @@ async function show(page: Page) {
    await page.locator('#task-modal [data-tft-file="f-notes"] .tft-m', {hasText: 'v2'}).waitFor({timeout: t(12000)});
    await page.locator('#task-modal [data-tft-file="f-notes"]').click();
    await page.locator('#task-modal [data-tf-view]', {hasText: 'Receipt check version 2.'}).waitFor();
+   await page.waitForFunction(() => (document.querySelector('#task-modal') as TaskDialog).taskFiles[0]?.current_version === 2);
+   const fileReads = await reads(page, '/api/v2/tasks/t-checkout/files');
    const delivered = page.waitForResponse(r => r.url().endsWith('/tasks/t-checkout/files')); held.resolve(); await delivered;
-   await page.waitForFunction((n: number) => readDone.filter(x => x === '/api/v2/tasks/t-checkout/files').length >= n, requests);   // the stale answer was read
+   await page.waitForFunction((n: number) => readDone.filter(x => x === '/api/v2/tasks/t-checkout/files').length > n, fileReads);
    assert.equal(await page.evaluate(() => (document.querySelector('#task-modal') as TaskDialog).taskFiles[0]!.current_version), 2);
    assert.equal(await page.evaluate(() => TF_CACHE.get('t-checkout')![0]!.current_version), 2);
    assert.match(await page.locator('#task-modal [data-tf-view]').innerText(), /Receipt check version 2/);
