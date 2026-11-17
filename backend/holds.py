@@ -203,12 +203,6 @@ class _Ask:
             self._backoff_read = True
         return self._backoff
 
-    def by_person(self) -> bool:
-        """Whether the work is a person's message, which a budget hold lets through (turn_budgets.refusal)."""
-        if self.message is not None:
-            return str(_col(self.message, "sender_id") or "").startswith("human:")
-        return self.human
-
     def on_task(self, kind: str) -> bool:
         if not self.task_id:
             return False
@@ -242,7 +236,10 @@ def _cloud_locked(a: _Ask) -> bool:
 def _budget(a: _Ask) -> bool:
     from . import turn_budgets
 
-    return not a.by_person() and bool(cast(Any, turn_budgets).get(a.c, a.bot).get("held_at"))
+    TB: Any = turn_budgets
+    if a.message is not None:
+        return TB.refusal(a.c, a.bot, a.message) == BUDGET  # the claim's own rule for one job
+    return not a.human and bool(TB.get(a.c, a.bot).get("held_at"))
 
 
 def _usage_limit(a: _Ask) -> bool:
