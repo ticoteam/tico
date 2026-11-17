@@ -57,7 +57,6 @@ is_human: Callable[[object], bool] = _core.is_human
 _batch: Any = batch_work
 storage_error: Callable[[BaseException], bool] = _batch.storage_error
 SYSTEM: str = E.SYSTEM
-SYSTEM_ASKER: str = _core.KEEPER  # Tico itself, asking a person about a stopped task (`ask_person`)
 
 # Seconds a bot is left alone after it stopped, before try 1, try 2 and try 3. The first gap is only for a run that was
 # cut off (a crash, a limit) or a wake that never ran: after a run that finished, the first look waits the second gap
@@ -633,7 +632,7 @@ def _to_person(conn: "sqlite3.Connection", row: Row, level: str, done: dict[str,
     """The ladder's last step: it rests (level `person`). Nothing more is woken for the task until it changes, and
     every wake still queued for it is canceled; a live run goes on. The task stays with its bot (waiting_on.holder)
     and the quiet-task rule tells the pipeline's manager. When that rule cannot reach a manager (`manager_hears`), a
-    person who reads it is asked instead (`ask_person`), so a stopped task always reaches someone. A task that waits
+    person who reads it is asked instead, by the bot that stalled (`ask_person`), so a stopped task always reaches someone. A task that waits
     on someone who may not open it is in the list of `_person`, who may let them in."""
     visit = row["visit"]
     person = _person(conn, row)
@@ -647,16 +646,17 @@ def _to_person(conn: "sqlite3.Connection", row: Row, level: str, done: dict[str,
         ask_person(conn, stopped)
 
 
-# Tico's question to a person when the ladder stops and no manager hears of it. A first line that says what is asked,
-# a why, no paths (backend/ask_shape.py).
-STOPPED_ASK = "{bot} stopped on this task. What should happen next?"
-STOPPED_WHY = "It tried 3 times without finishing, and no manager can take it. Reply to try again, or close it."
-UNANSWERED_ASK = "{bot} did not answer your ask. What should happen next?"
-UNANSWERED_WHY = "It was woken 3 times without answering. Reply to try again, ask someone else, or close it."
-RELEASE_ASK = "Can you cut the next release?"
-RELEASE_WHY = "This task waits for the next release, which only a person cuts, and none has come for a week."
-STUCK_ASK = "This task is stuck in {stage}. What should happen next?"
-STUCK_WHY = "Nothing moved it after every try, and no manager can take it."
+# The question a stopped task's bot asks a person when no manager hears of it, in its own voice (only bots write
+# questions): a first line that says what is asked, a why, no paths (backend/ask_shape.py). `{who}` is "I" from the
+# stalled bot, or the bot's name when BotOps asks for it.
+STUCK_ASK = "{who} stuck on {stage}: {line}. Can you help or tell me what to do?"
+STUCK_LINES = {
+    "stopped": "{me} stopped 3 times without finishing",
+    "unanswered": "{me} could not answer your ask",
+    "release": "this waits for the next release, which only a person cuts",
+    "other": "nothing has moved it",
+}
+STUCK_WHY = "The ladder tried it and no manager can take it. Reply to try again, or close it."
 
 
 def manager_hears(conn: "sqlite3.Connection", row: Row) -> bool:
@@ -677,40 +677,61 @@ def manager_hears(conn: "sqlite3.Connection", row: Row) -> bool:
 
 
 def ask_person(conn: "sqlite3.Connection", row: Row) -> str | None:
-    """Ask a person who reads this stopped task what should happen next: its owner when a person owns it, else the
-    person it falls to (`_person`). Once per stop: an open question of Tico's on the visit is not asked again. The ask
-    keeps the ladder stopped; an answer is a change, which starts it again. Returns the requirement's id."""
+    """The stopped task's bot asks a person who reads it what to do: its owner when a person owns it, else the person it
+    falls to (`_person`). The bot that stalled asks, in its own words; when it cannot run, BotOps asks for it. Once per
+    stop: an open question of this kind on the visit is not asked again. The ask keeps the ladder stopped; an answer is a
+    change, which starts it again. Returns the requirement's id, or None when nobody can ask or be asked."""
     visit = row["visit"]
     kept = visit.get("person_id")
-    open_asks = [
-        s
-        for s in R.standings(conn, row)
-        if not s.met and s.requirement.get("visit_id") and s.requirement.get("added_by_id") == SYSTEM_ASKER
-    ]
-    if open_asks:
+    if any(not s.met and E.stuck_ask(s.requirement) for s in R.standings(conn, row)):
         return None
     owner = row.get("owner_id")
     person = owner if is_human(owner) and R.active_person(conn, owner) else _person(conn, row)
     if not person:
         return None  # no person reads it: held, and Health counts it (rules_hold rule 3)
     waits = W.of(conn, row)
-    bot = W.turn(conn, row, waits, resting=True)
-    if is_human(owner) and is_bot(bot):
-        line, why = UNANSWERED_ASK.format(bot=_name(conn, bot)), UNANSWERED_WHY
-    elif is_bot(bot):
-        line, why = STOPPED_ASK.format(bot=_name(conn, bot)), STOPPED_WHY
-    elif _next_release_only(conn, waits):
-        line, why = RELEASE_ASK, RELEASE_WHY
-    else:
-        line, why = STUCK_ASK.format(stage=row["stage"]["name"]), STUCK_WHY
-    brief = {"why": why, "details": None, "recommend": None}
-    asked = E.add_requirement(
-        conn, row["id"], SYSTEM_ASKER, "answer", person, line, seen_version=row.get("version"), brief=brief
+    stalled = W.turn(conn, row, waits, resting=True)
+    bot = stalled if is_bot(stalled) else owner if is_bot(owner) else None
+    kind = (
+        ("unanswered" if is_human(owner) else "stopped")
+        if is_bot(stalled)
+        else "release"
+        if _next_release_only(conn, waits)
+        else "other"
     )
+    author = bot if bot and _usable(conn, bot, {}) else _botops(conn) or bot
+    if not author:
+        return None
+    me = "I" if author == bot else str(_name(conn, bot)) if bot else "This task"
+    said = STUCK_LINES[kind].format(me=me)
+    who = "I'm" if author == bot else f"{_name(conn, bot)} is" if bot else "This task is"
+    line = STUCK_ASK.format(who=who, stage=row["stage"]["name"], line=said)
+    brief = {"why": STUCK_WHY, "details": None, "recommend": None}
+    H = _h()
+    try:
+        asked = E.add_requirement(
+            conn,
+            row["id"],
+            author,
+            "answer",
+            person,
+            line,
+            seen_version=row.get("version"),
+            brief=brief,
+            title=E.STUCK_TITLE,
+        )
+    except H.Refused:
+        return None  # the stage asks them already, or they left: what they see there is the way in
     # The ask is a change, which starts the ladder again: it stays stopped until the person answers.
     conn.execute("UPDATE visits SET level='person', person_id=?, next_try_at=NULL WHERE id=?", (kept, visit["id"]))
     task_wakes.drop(conn, row["id"])
     return str(asked["requirement_id"])
+
+
+def _botops(conn: "sqlite3.Connection") -> str | None:
+    """BotOps, when the company has it and it can run: it asks for a stalled bot that cannot."""
+    bot = "bot:" + str(_h().FLEET_MAINTAINER)
+    return bot if _usable(conn, bot, {}) else None
 
 
 def _person(conn: "sqlite3.Connection", row: Row) -> str | None:

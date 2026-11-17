@@ -1422,11 +1422,16 @@ def _tell_manager(conn: "sqlite3.Connection", row: Row, text: str, what: str) ->
 
 
 TICOS_DONE = "Nothing else holds the task now"
+STUCK_TITLE = "Stuck"  # the heading of a stopped task's question (never_stuck.ask_person), kept in its settings
 
 
-def _ticos(requirement: Row) -> bool:
-    """A question Tico itself asked on this visit (a stopped task's, never_stuck.ask_person)."""
-    return bool(requirement.get("visit_id")) and requirement.get("added_by_id") == _h().KEEPER
+def stuck_ask(requirement: Row) -> bool:
+    """A stopped task's question to a person on this visit (never_stuck.ask_person), by its heading."""
+    if not requirement.get("visit_id"):
+        return False
+    settings: object = requirement.get("settings")
+    found: object = json.loads(settings) if isinstance(settings, str) and settings else settings
+    return isinstance(found, dict) and cast("dict[str, object]", found).get("title") == STUCK_TITLE
 
 
 def advance(conn: "sqlite3.Connection", task_id: str) -> Row | None:
@@ -1440,9 +1445,9 @@ def advance(conn: "sqlite3.Connection", task_id: str) -> Row | None:
         return None  # a task it depends on is still open: it goes on when that ends (task_depends.release)
     target = next_stage(conn, row)
     unmet = R.unmet(conn, row)
-    if target and unmet and all(_ticos(s.requirement) for s in unmet):
-        # Only Tico's own question is left (a stopped task's, never_stuck.ask_person): what it asked about is over (the
-        # bot finished, the release came), so it is taken back and the task moves on.
+    if target and unmet and all(stuck_ask(s.requirement) for s in unmet):
+        # Only a stopped task's question is left (never_stuck.ask_person): what it asked about is over (the bot
+        # finished, the release came), so it is taken back and the task moves on.
         hub = _h()
         for standing in unmet:
             conn.execute("UPDATE requirements SET withdrawn_at=? WHERE id=?", (hub.now(), standing.requirement["id"]))

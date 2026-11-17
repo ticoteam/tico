@@ -387,7 +387,7 @@ def test_a_late_task_goes_to_the_manager_bot_once_and_at_three_times_the_time_th
         c, task_id, MANAGER, "answer", REVIEWER, "OK the note", seen_version=E.task(c, task_id)["version"]
     )
     assert _ladder(c, task_id) == ("owner", 0) and _queued(c, task_id) == [REVIEWER]  # the reviewer's OK reaches it
-    assert later(minutes=2) == {"woken": 1}  # and the owner, after the first gap
+    assert later(minutes=2) == {}  # the builder waits for Ana's answer to its own question
     assert later(days=30).get("late") is None  # late once per visit: the ladder does not rest on it for Late again
 
 
@@ -396,13 +396,14 @@ def test_an_ask_added_while_the_ladder_rests_starts_it_again(c, general, later):
     assert later(days=1).get("to_manager") == 1 and later(days=2) == {"to_person": 1}  # Late rested the ladder
     assert _queued(c, task_id) == []
     # A run of the manager bot that was still going asks the reviewer for an OK: a change, so the ladder starts again,
-    # and every bot that has a turn now is woken, the reviewer named on that OK too.
+    # and the reviewer named on that OK is woken.
     E.add_requirement(
         c, task_id, MANAGER, "answer", REVIEWER, "OK the note", seen_version=E.task(c, task_id)["version"]
     )
     assert _ladder(c, task_id) == ("owner", 0) and _queued(c, task_id) == [REVIEWER]
     assert later(seconds=10) == {}  # the owner's turn comes after the first gap
-    assert later(minutes=2) == {"woken": 1} and _queued(c, task_id) == [BUILDER, REVIEWER]
+    # The builder asked Ana what to do when the ladder rested: it waits for her answer, not for a wake.
+    assert later(minutes=2) == {} and _queued(c, task_id) == [REVIEWER]
     assert _said(c, task_id, REVIEWER) == ["manager asks you: OK the note"]
     assert later(seconds=10) == {}  # once
 

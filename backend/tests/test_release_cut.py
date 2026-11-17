@@ -234,7 +234,8 @@ def test_a_repo_whose_releases_a_person_cuts_waits_for_the_next_one_and_a_person
         waits = W.of(c, E.task(c, task_id))
         assert [w.state for w in waits] == [W.PERSON, W.SOURCE] and waits[0].who == ANA
         assert waits[1].line == waiting[2]
-        assert [n["line"] for n in W.needs(c, ANA)] == ["Can you cut the next release?"]
+        [ask] = W.needs(c, ANA)
+        assert "this waits for the next release, which only a person cuts" in ask["line"]
         assert NS.check(c, H.shift(H.now(), days=9))["late"] == 0  # once
         assert wakes(c, task_id) == [] and wakes(c, task_id, EM) == []
     gh.publish(REPO, "v1.0.0-rc.1", prerelease=True)  # the person's prerelease counts by default

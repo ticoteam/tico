@@ -36,10 +36,16 @@ def find(factories, ident):
 def test_each_stage_counts_its_open_tasks_by_holder_and_what_waits_on_the_reader(api):
     made = post(api, "factories", {"name": "Product development"})["factory"]
     pipeline(api, "product", made["id"])
-    for n in range(3):
-        task(api, f"Saved carts {n}", "ben", "product")
+    carts = [task(api, f"Saved carts {n}", "ben", "product") for n in range(3)]
     mine = task(api, "Order export", "ana", "product")
     moved = task(api, "Gift receipts", "ops", "product")
+    # Needs you holds what is asked of a person: a question on each of Ben's, and one on Ana's.
+    from backend import task_engine as E
+
+    with api.app.state.store.transaction() as c:
+        for row, person in [*((t, "human:ben") for t in carts), (mine, "human:ana")]:
+            version = H.task(c, row["id"])["version"]
+            E.add_requirement(c, row["id"], "human:cara", "answer", person, "Ready to ship?", seen_version=version)
     post(api, f"tasks/{moved['id']}/move", {"to": "product-build", "why": "The spec is in the PR"})
     seen = floor(api)
     [factory] = [f for f in seen if f["id"] == made["id"]]
@@ -47,7 +53,7 @@ def test_each_stage_counts_its_open_tasks_by_holder_and_what_waits_on_the_reader
     [pipe] = factory["pipelines"]
     spec, build = pipe["stages"]
     assert (spec["name"], spec["count"], build["name"], build["count"]) == ("Spec", 4, "Build", 1)
-    # The most loaded holder first; only Ana's own task is in her Needs you.
+    # The most loaded holder first; only what is asked of Ana is in her Needs you.
     assert spec["owners"] == [
         {"actor": "human:ben", "count": 3, "needs_you": 0},
         {"actor": "human:ana", "count": 1, "needs_you": 1},

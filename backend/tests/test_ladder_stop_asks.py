@@ -45,6 +45,11 @@ def _asked(c, person, task_id):
     return [n for n in W.needs(c, person) if n["kind"] == "ask" and n["task_id"] == task_id]
 
 
+def _author(c, item):
+    """Who wrote the question: a bot, never Tico (only bots write questions)."""
+    return c.execute("SELECT added_by_id FROM requirements WHERE id=?", (item["requirement_id"],)).fetchone()[0]
+
+
 @pytest.mark.parametrize("case", ["no_manager", "manager_owns_task", "private_manager_cannot_read"])
 def test_a_stopped_task_no_manager_can_hear_of_asks_a_person(c, time_machine, case):
     manager = {"no_manager": None, "manager_owns_task": "bot:builder"}.get(case, "bot:manager")
@@ -54,7 +59,8 @@ def test_a_stopped_task_no_manager_can_hear_of_asks_a_person(c, time_machine, ca
         c.execute("UPDATE tasks SET private=1, readers=? WHERE id=?", (json.dumps([ANA, "bot:builder"]), task_id))
     _stop(c, time_machine, task_id, "bot:builder")
     [ask] = _asked(c, ANA, task_id)
-    assert ask["line"].endswith("What should happen next?")
+    assert ask["line"] == "I'm stuck on To do: I stopped 3 times without finishing. Can you help or tell me what to do?"
+    assert _author(c, ask) == "bot:builder"
     assert E.task(c, task_id)["visit"]["level"] == "person"  # asking her does not wake the bot again
     assert NS.rules_hold(c) == []
 
@@ -74,7 +80,9 @@ def test_a_persons_task_whose_bot_never_answered_asks_her_again(c, time_machine)
     E.add_requirement(c, row["id"], ANA, "answer", "bot:reviewer", "Please review", seen_version=row["version"])
     _stop(c, time_machine, row["id"], "bot:reviewer")
     [ask] = _asked(c, ANA, row["id"])
-    assert "reviewer" in ask["line"] and "did not answer" in ask["line"]
+    assert (
+        ask["line"].startswith("I'm stuck on To do: I could not answer your ask.") and _author(c, ask) == "bot:reviewer"
+    )
 
 
 def test_an_answer_starts_the_ladder_again(c, time_machine):
@@ -105,7 +113,8 @@ def test_a_release_only_a_person_cuts_asks_them_after_a_week(company, time_machi
         NS.check(c)
         person = W.person_for(c, E.task(c, task_id))
         [ask] = _asked(c, person, task_id)
-        assert ask["line"] == "Can you cut the next release?"
+        assert "this waits for the next release, which only a person cuts" in ask["line"]
+        assert _author(c, ask) == E.task(c, task_id)["owner_id"]  # the release's own bot asks
 
 
 def test_a_bot_that_finishes_after_all_takes_tico_s_question_with_it(c, time_machine):
@@ -116,3 +125,15 @@ def test_a_bot_that_finishes_after_all_takes_tico_s_question_with_it(c, time_mac
     X.say_done(c, E.task(c, task_id))
     E.advance(c, task_id)
     assert E.task(c, task_id)["status"] == "done" and not _asked(c, ANA, task_id)
+
+
+def test_botops_asks_for_a_stalled_bot_that_cannot_run(c):
+    """A stopped task whose bot was paused since (the Quiet rule finds no manager for it): BotOps asks for it."""
+    X.bot(c, "botops")
+    X.pipeline(c)
+    task_id = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")["id"]
+    c.execute("UPDATE visits SET level='person' WHERE task_id=? AND left_at IS NULL", (task_id,))
+    c.execute("UPDATE bots SET state='paused' WHERE id='builder'")
+    NS.ask_person(c, E.task(c, task_id))
+    [ask] = _asked(c, ANA, task_id)
+    assert _author(c, ask) == "bot:botops" and ask["line"].startswith("builder is stuck on To do:")
