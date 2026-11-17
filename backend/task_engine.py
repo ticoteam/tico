@@ -199,6 +199,15 @@ def stage(conn: "sqlite3.Connection", stage_id: str) -> Row | None:
     return _h()._one(conn, "SELECT * FROM stages WHERE id=?", (stage_id,))
 
 
+def is_main_work(stage_row: Row) -> bool:
+    return stage_row["kind"] == "work" and not stage_row.get("side")
+
+
+def main_work(order: Iterable[Row]) -> list[Row]:
+    """The work stages on a pipeline's main path, in their original order."""
+    return [s for s in order if is_main_work(s)]
+
+
 def task(conn: "sqlite3.Connection", task_id: str) -> Row | None:
     """A task as the engine sees it: its row, with `visit` (the open one), `stage`, `pipeline` and `snooze` (the open
     one, or None). None for a task that is not on the engine."""
@@ -253,7 +262,7 @@ def has_room(conn: "sqlite3.Connection", stage_row: Row, extra: int = 0, task_ro
     (`rides_with_filer`): the stage may then hold one over its limit, and takes no other task until it is under
     again."""
     limit = stage_row.get("task_limit")
-    if stage_row["kind"] != "work" or not limit:
+    if not is_main_work(stage_row) or not limit:
         return True
     if task_row and rides_with_filer(conn, str(task_row["id"]), str(stage_row["id"])):
         return True
@@ -271,11 +280,11 @@ def has_room(conn: "sqlite3.Connection", stage_row: Row, extra: int = 0, task_ro
 
 
 def next_stage(conn: "sqlite3.Connection", task_row: Row) -> Row | None:
-    """The stage after the task's own: the next work stage, or Done after the last one. None for an ended task."""
-    if task_row["stage"]["kind"] != "work":
+    """The next main work stage, or Done after the last one. Side stages and ended tasks have no automatic next."""
+    if not is_main_work(task_row["stage"]):
         return None
     order = stages(conn, task_row["pipeline_id"])
-    work = [s for s in order if s["kind"] == "work"]
+    work = main_work(order)
     at = next((i for i, s in enumerate(work) if s["id"] == task_row["stage_id"]), None)
     if at is not None and at + 1 < len(work):
         return work[at + 1]
@@ -763,7 +772,7 @@ def enter(
     if row.get("pipeline_id"):
         _refuse(conn, by, "task_changed", "The task is already in a pipeline", task_id)
     pipe = pipeline(conn, pipeline_id)
-    work = [s for s in stages(conn, pipeline_id) if s["kind"] == "work"] if pipe else []
+    work = main_work(stages(conn, pipeline_id)) if pipe else []
     first = next((s for s in work if s["id"] == start), None) if start else (work[0] if work else None)
     if not pipe or pipe.get("retired_at") or not first:
         _refuse(conn, by, "task_no_such_stage", "No such pipeline", task_id)
@@ -849,23 +858,29 @@ def short_of_queue(work: Sequence[Row], stage: Row | None) -> Row | None:
     new visit. Nothing that skips the stages before it lands in a stage that queues PRs."""
     from .item_sources import github as GS
 
-    if not stage or not GS.queues_prs(stage):
+    if not stage or not is_main_work(stage) or not GS.queues_prs(stage):
         return stage
-    at = next((i for i, s in enumerate(work) if s["id"] == stage["id"]), 0)
-    return work[at - 1] if at > 0 else stage
+    main = main_work(work)
+    at = next((i for i, s in enumerate(main) if s["id"] == stage["id"]), 0)
+    return main[at - 1] if at > 0 else stage
 
 
 def _target(conn: "sqlite3.Connection", by: str, row: Row, to: str) -> tuple[Row, str] | tuple[None, None]:
-    """The stage `to` names for this task, and the kind of move it is: forward, back, done, closed or reopen. None
+    """The stage `to` names for this task, and the kind of move it is: forward, side, back, done, closed or reopen. None
     when the task is already there."""
     order = stages(conn, row["pipeline_id"])
-    work = [s for s in order if s["kind"] == "work"]
+    work = main_work(order)
     here = row["stage"]
     ended = here["kind"] != "work"
     if to == NEXT:
         if ended:
             _refuse(conn, by, "task_ended", f"The task is {here['name']}. Reopen it first.", row["id"])
-        target = next_stage(conn, row)
+        if here.get("side"):
+            position = (here["position"], here["id"])
+            target = next((s for s in work if (s["position"], s["id"]) > position), None)
+            target = target or next((s for s in order if s["kind"] == "done"), None)
+        else:
+            target = next_stage(conn, row)
     elif to in (DONE, CLOSED):
         target = next((s for s in order if s["kind"] == to), None)
     elif to == REOPEN:
@@ -874,10 +889,10 @@ def _target(conn: "sqlite3.Connection", by: str, row: Row, to: str) -> tuple[Row
         before = conn.execute(
             "SELECT v.stage_id FROM visits v JOIN stages s ON s.id = v.stage_id "
             "WHERE v.task_id=? AND v.left_at IS NOT NULL AND s.kind='work' AND s.retired_at IS NULL "
-            "ORDER BY v.left_at DESC, v.entered_at DESC LIMIT 1",
-            (row["id"],),
+            "AND s.pipeline_id=? ORDER BY v.left_at DESC, v.entered_at DESC, v.rowid DESC LIMIT 1",
+            (row["id"], row["pipeline_id"]),
         ).fetchone()
-        target = next((s for s in work if before and s["id"] == before[0]), None) or (work[0] if work else None)
+        target = next((s for s in order if before and s["id"] == before[0]), None) or (work[0] if work else None)
         target = short_of_queue(work, target)
     else:
         target = next((s for s in order if s["id"] == to), None)
@@ -894,13 +909,15 @@ def _target(conn: "sqlite3.Connection", by: str, row: Row, to: str) -> tuple[Row
         return target, "closed"
     if target["kind"] == "done":
         return target, "done"
+    if here.get("side") or target.get("side"):
+        return target, "side"
     positions = {s["id"]: i for i, s in enumerate(work)}
     return target, "forward" if positions[target["id"]] > positions[here["id"]] else "back"
 
 
 def _skipped(conn: "sqlite3.Connection", row: Row, target: Row) -> list[R.Standing]:
     """The requirements of every work stage a forward move jumps over, each as not met."""
-    work = [s for s in stages(conn, row["pipeline_id"]) if s["kind"] == "work"]
+    work = main_work(stages(conn, row["pipeline_id"]))
     at = next(i for i, s in enumerate(work) if s["id"] == row["stage_id"])
     end = next((i for i, s in enumerate(work) if s["id"] == target["id"]), len(work))
     out: list[R.Standing] = []
@@ -1020,19 +1037,25 @@ def _decide(conn: "sqlite3.Connection", by: str, row: Row, why: str | None, deci
         answers._write(conn, row, standing.requirement["id"], by, "ok", why, version)  # pyright: ignore[reportPrivateUsage]
 
 
-def _may_go_back_to(conn: "sqlite3.Connection", by: str, row: Row, target: Row, kind: str) -> None:
+def _may_go_back_to(conn: "sqlite3.Connection", by: str, row: Row, target: Row) -> None:
     """Only a person moves a task back into a stage that queues its PRs (from a later stage, where a new PR may have
     been linked). Anyone else moves it back to the stage before that one, where what it needs is asked again."""
-    if kind != "back" or is_human(by):
+    if is_human(by):
         return
-    work = [s for s in stages(conn, row["pipeline_id"]) if s["kind"] == "work"]
+    from .item_sources import github as GS
+
+    if not GS.queues_prs(target):
+        return
+    work = main_work(stages(conn, row["pipeline_id"]))
     short = short_of_queue(work, target)
-    if short and short["id"] != target["id"]:
+    earlier = short is not None and short["id"] != target["id"]
+    if earlier or row["stage"].get("side"):
+        alternative = f" Move it back to {short['name']} instead." if short and earlier else ""
         _refuse(
             conn,
             by,
             "task_stage",
-            f"Only a person moves a task back into {target['name']}. Move it back to {short['name']} instead.",
+            f"Only a person moves a task back into {target['name']}.{alternative}",
             row["id"],
             row=row,
             then=("back", "ask"),
@@ -1084,7 +1107,8 @@ def move(
     target, kind = _target(conn, by, row, to)
     if not target or kind is None:
         return row
-    if kind in ("forward", "done", "closed") and not cascade:
+    side = kind == "side" or (kind == "done" and bool(row["stage"].get("side")))
+    if kind in ("forward", "done", "closed") and not cascade and not side:
         from . import question_marks
 
         question_marks.refuse_ending(
@@ -1107,7 +1131,8 @@ def move(
     visit = row["visit"]
     pushed: list[Row] = []
     decided: list[R.Standing] = []
-    if kind in ("forward", "done"):
+    missing: list[R.Standing] = []
+    if kind in ("forward", "done") and not side:
         missing = R.unmet(conn, row) + _skipped(conn, row, target)
         if is_bot(by) and (why or "").strip():
             # The bot asked to decide a page Jev was unsure of moved it on with a reason: that is its decision, an OK
@@ -1115,42 +1140,47 @@ def move(
             decided = [s for s in missing if R.asked_to_decide(s, by)]
             missing = [s for s in missing if not R.asked_to_decide(s, by)]
         _may_push_past(conn, by, row, why, missing, target["id"])
-        if target["kind"] == "work" and not has_room(conn, target, task_row=row):
-            # From a stage tasks leave by hand the task stays put until someone moves it again, unless it is a
-            # person's request that moves on by itself (`not_held_by_hand`).
-            held_here = bool(row["stage"].get("by_hand")) and not not_held_by_hand(conn, row)
-            then_what = (
-                f"It holds {target['task_limit']} a bot is working on: move it again when one leaves."
-                if held_here
-                else "The task moves in when there is room."
-            )
-            _refuse(
-                conn,
-                by,
-                "task_stage_full",
-                f"No room in {target['name']}. {then_what}",
-                task_id,
-                row=row,
-                then=("snooze", "close"),
-                version=row.get("version"),
-            )
+    if kind in ("forward", "side") and not has_room(conn, target, task_row=row):
+        # A stage tasks leave by hand needs another move when the target has room.
+        held_here = bool(row["stage"].get("by_hand")) and not not_held_by_hand(conn, row)
+        then_what = (
+            f"It holds {target['task_limit']} a bot is working on: move it again when one leaves."
+            if held_here
+            else "The task moves in when there is room."
+        )
+        _refuse(
+            conn,
+            by,
+            "task_stage_full",
+            f"No room in {target['name']}. {then_what}",
+            task_id,
+            row=row,
+            then=("snooze", "close"),
+            version=row.get("version"),
+        )
+    if kind in ("forward", "done") and not side:
         _decide(conn, by, row, why, decided)
         pushed = _push_past(conn, by, row, why, missing, ts)
     elif kind == "reopen":
         _need_why(conn, by, why, "reopen it", task_id, everyone=True)
-    else:
+    elif kind in ("back", "closed"):
         _need_why(conn, by, why, "close it" if kind == "closed" else "move it back", task_id)
-        _may_go_back_to(conn, by, row, target, kind)
+    if kind == "back" or (kind == "side" and row["stage"].get("side") and is_main_work(target)):
+        _may_go_back_to(conn, by, row, target)
     if kind == "closed" and not cascade:
         _may_close(conn, by, row)
     # Why its sub-tasks close, kept on each: their readers may not read a private task that filed them, so it is not named.
     named = not H.task_private(conn, row) and row.get("title")
     closed_with = f"Closed with {named or 'the task that filed it'}"
-    if kind in ("back", "closed"):
+    if kind in ("back", "closed") or (kind == "side" and is_main_work(row["stage"])):
         stage_effects.undo(conn, row, by, closed_with)
     if kind == "closed":
         _close_under(conn, task_id, by, closed_with)
-    how = {"forward": "met", "done": "met", "back": "back", "closed": "closed", "reopen": "reopened"}[kind]
+    how = (
+        "side"
+        if side
+        else {"forward": "met", "done": "met", "back": "back", "closed": "closed", "reopen": "reopened"}[kind]
+    )
     if pushed:
         how = "pushed_past"
     _close_visit(conn, visit, how, by, why, ts)
@@ -1201,7 +1231,7 @@ def move(
         target["id"],
         ". ".join(part for part in (why, unable) if part) or None,
         {
-            "move": "pushed_past" if pushed else kind,
+            "move": how if pushed or side else kind,
             "owner": owner,
             "was_owner": row.get("owner_id"),
             **({"pushed_past": pushed} if pushed else {}),
@@ -1232,7 +1262,7 @@ def move(
         task_depends.release(conn, task_id, SYSTEM)
     # What a move causes beyond the task's own row: the events, a routine's day, stopping work on a closed task
     # (backend/task_effects.py). Last, and for every move, so nothing that moves a task can leave them out.
-    task_effects.moved(conn, row, moved, kind, by, why, revision)
+    task_effects.moved(conn, row, moved, "side" if side else kind, by, why, revision)
     return _task(conn, task_id)
 
 
@@ -1259,7 +1289,7 @@ def _refile_target(conn: "sqlite3.Connection", by: str, row: Row, pipe: Row, to:
     if here != "work":
         found = next((s for s in order if s["kind"] == here), None)
     elif not str(to or "").strip():
-        found = next((s for s in order if s["kind"] == "work"), None)
+        found = next((s for s in order if is_main_work(s)), None)
     else:
         wanted = str(to).strip()
         work = [s for s in order if s["kind"] == "work"]
@@ -1330,8 +1360,11 @@ def refile(
         )
     if not is_human(by) and target["kind"] == "work":
         # Landing further in skips the stages before it, so a bot never moves a task past a person's OK.
-        work = [s for s in stages(conn, str(pipe["id"])) if s["kind"] == "work"]
-        for skipped in work[: work.index(target)]:
+        work = main_work(stages(conn, str(pipe["id"])))
+        target_at = (target["position"], target["id"])
+        for skipped in work:
+            if (skipped["position"], skipped["id"]) >= target_at:
+                break
             if any(R.people_only(r) for r in R.on_stage(conn, skipped["id"])):
                 _refuse(conn, by, "task_needs_person", f"{skipped['name']} needs a person's OK first", task_id)
     if private_pipelines.is_private(pipe) and pipe["id"] != row["pipeline_id"]:
@@ -1815,7 +1848,7 @@ def _sets_assignee(conn: "sqlite3.Connection", row: Row) -> bool:
     (Product's Spec: who the feature owner is), or while it has none."""
     if not row.get("assignee_id"):
         return True
-    first = next((s for s in stages(conn, str(row.get("pipeline_id") or "")) if s["kind"] == "work"), None)
+    first = next((s for s in stages(conn, str(row.get("pipeline_id") or "")) if is_main_work(s)), None)
     here: Row = row.get("stage") or {}
     return first is not None and first["id"] == here.get("id")
 
@@ -2118,7 +2151,7 @@ def restore(conn: "sqlite3.Connection", task_id: str, by: str, was: Row) -> Row:
 def _restore_stage(conn: "sqlite3.Connection", by: str, row: Row, work: Sequence[Row], was: object) -> Row | None:
     """Where an open task comes back (`restore`): the work stage it was in, while it is still in the pipeline, has
     room and may take it, else the first one if that may. Refused when a private task may go into neither."""
-    first = work[0] if work else None
+    first = next((s for s in work if is_main_work(s)), None)
     saved = short_of_queue(work, next((s for s in work if s["id"] == was), None))
     held: Row | None = None
     for stage in (saved, first):

@@ -591,6 +591,7 @@ _STAGE_ASK = ("kind", "show", "subject", "why")
         ),
         "content": {"description": "With subject: exactly what the OK covers (any JSON)"},
         "withdraw": {"type": "boolean", "description": "Take back your open OK instead"},
+        "not_known": {"type": "boolean", "description": "Ask even if Tico answered"},
         "requirement": _s("With withdraw: the OK's requirement id, if several"),
         "why": _s("With withdraw: why"),
         "version": VERSION,
@@ -608,7 +609,10 @@ def task_ask(api, args):
         raise ValueError(f"An ask names who it is for and the one line they are asked: give {' and '.join(missing)}")
     if not any(args.get(field) for field in _STAGE_ASK):
         # A ❓: the message on the task's chat, needing their reply (backend/question_marks.py).
-        return api.post(f"tasks/{args['id']}/questions", {"to": args["to"], "text": args["line"]}, key=_key(args))
+        question = {"to": args["to"], "text": args["line"]}
+        if args.get("not_known"):
+            question["not_known"] = True  # past Tico's own answer (backend/ask_known.py)
+        return api.post(f"tasks/{args['id']}/questions", question, key=_key(args))
     if args.get("kind") != "ok" and not args.get("subject"):
         raise ValueError(QUESTION_INSTEAD)
     body = {"to": args["to"], "line": args["line"], "version": _seen(args)}

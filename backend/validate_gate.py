@@ -146,7 +146,7 @@ def back_to(conn: "sqlite3.Connection", task_id: str) -> str:
     from . import task_requirements as R
 
     row = E.task(conn, task_id) or {}
-    work = [s for s in E.stages(conn, str(row.get("pipeline_id") or "")) if s["kind"] == "work"]
+    work = E.main_work(E.stages(conn, str(row.get("pipeline_id") or "")))
     if any(s["id"] == BACK_TO for s in work):
         return BACK_TO
     for stage in work:

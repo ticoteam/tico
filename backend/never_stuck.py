@@ -1174,8 +1174,9 @@ def _rule_5(conn: "sqlite3.Connection") -> list[str]:
 
 
 def _rule_6(conn: "sqlite3.Connection") -> list[str]:
-    """A forward move never overfills a stage. Counted: the open tasks that came into a limited stage by a forward move
-    (or a move from another pipeline, held to room the same way) since the stage's settings last changed, were never snoozed there and hold a slot now (`waiting_on.slots`: a task
+    """A move held to room never overfills a stage. Counted: the open tasks that came into a limited stage by a forward
+    move, side move or refile since the stage's settings last changed, were never snoozed there and hold a slot now
+    (`waiting_on.slots`: a task
     waiting only on a person's OK or answer holds none). A task that came back, was reopened or had a snooze end may sit
     one over. So may a sub-task filed by a task while it was in the stage: it comes in on its filer's slot
     (task_engine.rides_with_filer). So may one a person answered on this visit, or whose ask was withdrawn: its turn
@@ -1184,7 +1185,7 @@ def _rule_6(conn: "sqlite3.Connection") -> list[str]:
     found = conn.execute(
         "SELECT s.id, s.task_limit, t.id FROM stages s JOIN tasks t ON t.stage_id = s.id AND t.status='open' "
         "AND t.pipeline_id IS NOT NULL JOIN visits v ON v.task_id = t.id AND v.left_at IS NULL "
-        "WHERE s.kind='work' AND s.task_limit > 0 AND v.entered_how IN ('met', 'pushed_past', 'moved') "
+        "WHERE s.kind='work' AND s.side=0 AND s.task_limit > 0 AND v.entered_how IN ('met', 'pushed_past', 'moved', 'side') "
         "AND v.entered_at >= s.updated_at "
         "AND NOT EXISTS (SELECT 1 FROM snoozes z WHERE z.task_id = t.id AND z.visit_id = v.id) "
         "AND NOT EXISTS (SELECT 1 FROM links l JOIN visits f ON f.id = l.visit_id "

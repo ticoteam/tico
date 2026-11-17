@@ -15,7 +15,7 @@ from fastapi import Request
 from . import models as M
 from . import pipeline_settings
 from .store import Problem
-from .api_contract import api_v2
+from .api_contract import api_v2, ref
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -35,7 +35,10 @@ def register(app: "FastAPI", auth: Any, mutate: "Callable[..., Any]", store: Any
         row = c.execute("SELECT * FROM pipelines WHERE id=?", (pipeline_id,)).fetchone()
         return {**found, "may_change": pipeline_settings.may_change(c, who.actor, dict(row))}
 
-    @app.get("/api/v2/pipelines", **api_v2("Pipelines", "listPipelines", "Every pipeline, each as its settings record"))
+    @app.get(
+        "/api/v2/pipelines",
+        **api_v2("Pipelines", "listPipelines", "Every pipeline, each as its settings record", "PipelineSettingsList"),
+    )
     def pipelines(request: Request):
         """Every pipeline, in the order they were made, each as its settings record."""
         who: Any = request.state.identity
@@ -44,7 +47,10 @@ def register(app: "FastAPI", auth: Any, mutate: "Callable[..., Any]", store: Any
             ids = [r[0] for r in c.execute("SELECT id FROM pipelines ORDER BY created_at, id")]
             return {"pipelines": [record(c, who, pid) for pid in ids]}
 
-    @app.get("/api/v2/pipelines/{pipeline_id}", **api_v2("Pipelines", "getPipeline", "One pipeline's settings record"))
+    @app.get(
+        "/api/v2/pipelines/{pipeline_id}",
+        **api_v2("Pipelines", "getPipeline", "One pipeline's settings record", "PipelineSettingsResult"),
+    )
     def pipeline(request: Request, pipeline_id: str):
         who: Any = request.state.identity
         auth.domain(who)
@@ -57,6 +63,12 @@ def register(app: "FastAPI", auth: Any, mutate: "Callable[..., Any]", store: Any
             "Pipelines",
             "savePipeline",
             "Make or change a pipeline: the whole record, with the settings_version it was read at. Removing a stage that holds open tasks answers 409 stage_has_tasks (stages, and a move_to hint) until the record carries move_tasks_to {pipeline, stage}: its tasks move there first, in any pipeline",
+            "PipelineSettingsResult",
+            description="Set side: true on a work stage after the first to make it hand-moved. Side stages have no requirements, limit, expected time or on-enter action.",
+            request_body={
+                "required": True,
+                "content": {"application/json": {"schema": ref("PipelineSettingsInput")}},
+            },
         ),
     )
     def pipeline_save(request: Request, pipeline_id: str, body: M.PipelineRecord):
@@ -99,6 +111,7 @@ def register(app: "FastAPI", auth: Any, mutate: "Callable[..., Any]", store: Any
             "Pipelines",
             "addPipelineFromPreset",
             "Make a pipeline from a preset the company does not have (Product beside the pair it replaced)",
+            "PipelineSettingsResult",
         ),
     )
     def pipeline_from_preset(request: Request, pipeline_id: str, body: M.PipelineFromPreset):

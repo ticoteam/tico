@@ -26,6 +26,7 @@ The moves ([The moves](dev/pipelines-v3.md#the-moves)):
 - **Forward.** The engine moves the task the moment everything is met and the next stage has room.
 - **Push past.** Forward with something unmet, with a reason. Anyone may, bots included.
 - **Back.** To an earlier stage. Never refused.
+- **Side.** Move a task into or out of a side stage by hand. Entry rules and the destination's limit still apply.
 - **Close.** From any stage. Never refused. Its open sub-tasks close with it. A bot gives a reason.
 - **Reopen.** From Done or Closed back to a stage, with a note.
 - **Reassign.** A new owner for this visit to the stage.
@@ -33,6 +34,10 @@ The moves ([The moves](dev/pipelines-v3.md#the-moves)):
   stage of another pipeline (the first by default). See below.
 
 A bot cannot close a task a person asked for. It asks that person instead.
+
+A side stage such as **Rejected** sits beside a main stage. Automatic moves skip it. Move a task there or back
+without giving a reason. In a side stage, **Send back** returns the task to the last main stage it visited.
+Reopening a task that ended in a side stage returns it there.
 
 ### Moving a task to another pipeline
 

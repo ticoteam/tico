@@ -700,6 +700,13 @@ def parser():
     s.add_argument("--content", type=json_value, help="with --for: exactly what the OK covers, as JSON")
     s.add_argument("--withdraw", action="store_true", default=None, help="take back your open ask instead")
     s.add_argument("--requirement", help="with --withdraw: the ask's requirement id, when several may be withdrawn")
+    s.add_argument(
+        "--not-known",
+        dest="not_known",
+        action="store_true",
+        default=None,
+        help="send it to the person even though Tico answered it (its answer did not cover your question)",
+    )
     s.add_argument("-m", "--why", help="with --withdraw: why")
     s.add_argument("--version", type=int, help=version_help)
     s.set_defaults(fn="task ask")

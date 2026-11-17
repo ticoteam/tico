@@ -632,6 +632,8 @@ class Question(Contract):
 
     to: ID
     text: Text
+    # A question Tico answered itself (backend/ask_known.py), sent again because the answer did not cover it.
+    not_known: bool = False
 
 
 class ChatQuestion(Question):

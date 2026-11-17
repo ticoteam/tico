@@ -334,6 +334,20 @@ The life of a task, in a line: First stage → Stage → Last stage → Done.
 Every move records who, when and why, and raises the task's version. A move made against an old version is refused with
 "changed since you looked". A bot's command always carries the version from its wake.
 
+### Side stages
+
+A side stage sits after its nearest main work stage in pipeline order. It can have a name, purpose, owner and stage
+rules. It comes after at least one main work stage and always leaves by hand. Automatic moves, wakes and the flow
+map follow the main path.
+
+People and bots can move a task into a side stage, back onto the main path, or from a side stage to Done without a
+reason or a requirement to meet. Entry rules and the destination's task limit still apply. Only a person can move a
+task from a side stage into a stage that queues its PRs. `next` from a side stage goes to the next main stage, or to
+Done at the end. Close and Reopen keep their usual rules, and reopening returns to the side stage where the task ended.
+
+Visits record these plain moves as `side`. The task read's `came_from` names its latest main work stage in the same
+pipeline while it is in a side stage.
+
 ### Entering a stage
 
 - The owner becomes the stage's owner.

@@ -24,6 +24,11 @@ SCHEMAS.update(
                 "version": "i",
                 "pipeline_id": "n",
                 "stage_id": "n",
+                "came_from": {
+                    "oneOf": [obj({"id": "s", "name": "s"}), {"type": "null"}],
+                    "description": "In a side stage, the last main work stage this task visited in this pipeline. "
+                    "Null when there is no origin. A brief list omits the field when it is null.",
+                },
                 "turn": {
                     "oneOf": [ref("TaskWait"), {"type": "null"}],
                     "description": "The headline wait: whose turn it is",
@@ -88,7 +93,15 @@ SCHEMAS.update(
             },
             stage={
                 "oneOf": [
-                    obj({"id": "s", "name": "s", "kind": {"enum": ["work", "done", "closed"]}, "by_hand": "b"}),
+                    obj(
+                        {
+                            "id": "s",
+                            "name": "s",
+                            "kind": {"enum": ["work", "done", "closed"]},
+                            "by_hand": "b",
+                            "side": "b",
+                        }
+                    ),
                     {"type": "null"},
                 ],
                 "description": "On the task's own read: the stage it is in",
@@ -117,7 +130,9 @@ SCHEMAS.update(
             },
             stage_since={
                 "type": ["string", "null"],
-                "description": "On a list row: when it entered its stage, else when it was filed",
+                "format": "date-time",
+                "description": "On the task's own read, when it entered its current open visit, or null if it has none. "
+                "On a list row, when it entered its stage, falling back to when it was filed.",
             },
             waits=items(ref("TaskWait")) | {"description": "On the task's own read: every wait, headline first"},
             to_leave=items(ref("TaskRequirement"))
@@ -455,7 +470,7 @@ SCHEMAS.update(
         ),
         "TaskDetail": obj(
             {
-                "task": ref("Task"),
+                "task": {"allOf": [ref("Task"), obj({"stage_since": "n"})]},
                 "events": "a",
                 "children": "a",
                 # The parent ticket (null: none, or the reader may not read it), with its label and stage
