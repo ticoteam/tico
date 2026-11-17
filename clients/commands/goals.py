@@ -252,10 +252,7 @@ def goal_strategy_bot(api, args):
 
 @tool(
     "tico_goal_strategy_bot_merge",
-    "The Strategy Owner only, at level 2 or 3: "
-    "when several bots ask a person the same thing, "
-    "make them one item in that person's Needs you. The originals leave their Needs you while it is open; their one "
-    "answer goes to every bot that asked. Counts toward the 5 a day.",
+    "Refused now: a bot's question to a person is a ❓ message on its own task, so there is nothing to merge.",
     {
         "person": _s("The person they all wait on: a person id"),
         "title": _s("The merged item's title"),

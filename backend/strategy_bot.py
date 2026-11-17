@@ -525,10 +525,12 @@ def asked_today(c, person, at=None):
     )
 
 
-# A question asked of a person today on a task the Strategy Owner holds (backend/person_asks.py: its asks to a person),
-# the vision question and merged items aside (counted on their own).
+# A question asked of a person today on a task the Strategy Owner holds (backend/person_asks.py: its ❓ or OK to a
+# person), the vision question and merged items aside (counted on their own).
 ASKED_ON_OWN = (
-    "SELECT {select} FROM tasks t JOIN visits v ON v.task_id=t.id JOIN requirements r ON r.visit_id=v.id "
+    "SELECT {select} FROM tasks t JOIN (SELECT v.task_id, q.person_id, q.added_by_id FROM visits v "
+    "JOIN requirements q ON q.visit_id=v.id UNION ALL SELECT task_id, person_id, bot_id FROM question_marks "
+    "WHERE task_id IS NOT NULL) r ON r.task_id=t.id "
     "WHERE t.requester_id=? AND t.owner_id=r.added_by_id AND r.added_by_id=? AND t.created_at>=? {who} "
     "AND NOT EXISTS (SELECT 1 FROM goal_asks g WHERE g.task_id=t.id AND g.kind='vision') "
     "AND NOT EXISTS (SELECT 1 FROM strategy_merges m WHERE m.merged_into=t.id) {group}"

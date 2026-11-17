@@ -273,6 +273,18 @@ def test_a_question_mark_in_a_direct_chat_is_listed_and_the_reply_there_clears_i
     assert questions(api) == []
 
 
+def test_a_question_mark_in_a_direct_chat_that_breaks_its_shape_is_refused_before_any_call(ruled):
+    api, judge = ruled
+    judge.needles = {OR.ASKS_TO_A_PERSON: "**"}  # a rule in force, so a call would be made if it got that far
+    text = "Ship the fix in commit a7cf7af today?"
+    r = api.post("/api/v2/questions", json={"to": "ana", "text": text}, headers=headers("ops-test"))
+    assert r.status_code == 409, r.text
+    said = r.json()
+    code = said["error"]["code"] if isinstance(said.get("error"), dict) else said["error"]
+    assert code == "task_ask_shape" and "a7cf7af" in r.text, r.text
+    assert judge.calls == [] and sql(api, "SELECT count(*) AS n FROM messages WHERE body=?", (text,))[0]["n"] == 0
+
+
 # ---- a bot's end-of-turn words on its own open task ---------------------------------------------------------------
 
 

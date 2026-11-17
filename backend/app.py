@@ -22,7 +22,7 @@ from starlette.requests import ClientDisconnect
 
 from . import built_on
 from . import agents, app_view, mcp_oauth, oidc, runner_online, views
-from . import outcome_stats, person_asks, question_marks
+from . import ask_shape, outcome_stats, person_asks, question_marks
 from . import pipeline_judges
 from . import recorder_installs
 from . import assistant_changes, why_here
@@ -2813,6 +2813,8 @@ def create_app(settings=None):
         who = request.state.identity
         if who.role != "bot":
             raise Problem("forbidden", "Only a bot marks a message ❓", 403)
+        if shape := ask_shape.line_refusal(body.text):  # in plain code, before the rule check's call
+            mutate(request, body, lambda c: H.refuse(c, who.actor, "task_ask_shape", shape))
         sent = M.MessageCreate(to=body.to, text=body.text, conversation_id=body.conversation_id)
         asking = question_marks.Asking(
             lambda c, author, recipients: rule_message_place(who, sent)(c, author, recipients)
