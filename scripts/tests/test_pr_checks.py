@@ -396,7 +396,13 @@ def test_free_disk_removes_the_unused_sdks_only_under_the_space_a_job_needs(tmp_
 def test_a_route_change_selects_the_contract_tests(repo_map):
     # The spec is generated from the code, so no committed spec file in a route's diff reaches the contract test any more.
     # The route's module reaches it through the app's imports, and the generator reaches it directly.
-    for changed in ("backend/computers_routes.py", "backend/openapi_v2.py"):
+    for changed in (
+        "backend/computers_routes.py",
+        "backend/openapi_v2.py",
+        "backend/api_contract.py",
+        "backend/api_schemas/bots.py",
+        "backend/calendar_api.py",  # declares its routes with **api_v2(...) but is not a *_routes.py
+    ):
         picked = checks.selection([changed], graph=repo_map)
         assert "backend/tests/test_openapi_v2.py" in picked["python"], changed
         # A light pull request narrows the plan (depth 1, the hub app.py is not followed): the contract test must stay.

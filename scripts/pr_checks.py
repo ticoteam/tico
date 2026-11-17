@@ -1723,6 +1723,22 @@ def narrow_budget(shards):
     return shards * WORKERS * (NARROW_SHARD_SECONDS - SETUP_SECONDS["python"])
 
 
+API_CONTRACT = ("backend/openapi_v2.py", "backend/api_contract.py")
+
+
+def shapes_the_api(name, root=ROOT):
+    """True for a file the v2 API document is made from: the generator, the contract, a schema (backend/api_schemas/), a
+    routes module, or any backend module that declares a route (`**api_v2(` on its decorator)."""
+    if not (name.startswith("backend/") and name.endswith(".py")) or "/tests/" in name:
+        return False
+    if name in API_CONTRACT or name.startswith("backend/api_schemas/") or name.endswith("_routes.py"):
+        return True
+    try:
+        return "**api_v2(" in (root / name).read_text()
+    except OSError:
+        return False
+
+
 def reach_levels(names, depth, added=None, root=ROOT, graph=None):
     """{file: level} for the files a change reaches within `depth` levels (see NARROW): 0 for the changed files, 1 for
     what uses one directly, 2 for what runs a level-1 file that is not a hub."""
@@ -1734,9 +1750,9 @@ def reach_levels(names, depth, added=None, root=ROOT, graph=None):
         first |= set(graph.run_by.get(name, ())) | graph.readers(name, added) | graph.fixture_users(name, True)
         if owned := owned_data(name):
             first |= set(owned[1])
-        if name == "backend/openapi_v2.py" or (name.startswith("backend/") and name.endswith("_routes.py")):
+        if shapes_the_api(name, root):
             # The contract test reads every route through the app's imports (a hub, not followed within a depth) and
-            # no longer reads a committed spec file, so a route or generator change names it directly.
+            # no longer reads a committed spec file, so a change to a route, its declaration or the generator names it.
             first.add("backend/tests/test_openapi_v2.py")
         if Path(name).name == "conftest.py":  # rule 2: the tests below it while they are few, and its fixtures' users
             below = graph.below(name)
