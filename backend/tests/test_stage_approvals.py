@@ -374,3 +374,21 @@ def test_every_spec_version_is_checked_before_the_set_can_be_approved(api):
     _all_verdicts(api, row["id"])
     assert _standing(api, row["id"]).state == R.WAITING
     assert any(p["file_id"] == second["file_id"] for p in approval["pages"])
+
+
+def test_a_report_cannot_borrow_another_pages_decision_model_round(api):
+    _, row = _flow(api, "QA report")
+    _write(api, row["id"], SPEC, "ana-test", "QA report")
+    _verdict(api, row["id"], "not_met")
+    _write(api, row["id"], SPEC + "<p>Fixed</p>", "ana-test", "QA report")
+    _verdict(api, row["id"], "met")
+    second = _attach_second_spec(api, row)
+    with api.app.state.store.transaction() as c:
+        page = c.execute(
+            "SELECT p.* FROM requirement_pages p JOIN visits v ON v.id=p.visit_id "
+            "WHERE v.task_id=? AND p.file_id=? AND p.replaced_at IS NULL",
+            (row["id"], second["file_id"]),
+        ).fetchone()
+        _say(c, dict(page), "not_met")
+    standing = _standing(api, row["id"])
+    assert (standing.state, standing.on) == (R.NOT_MET, OPS)
