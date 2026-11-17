@@ -136,8 +136,11 @@ def register(app, auth, delegated_identity, mutate, settings_admin, store, reset
 
         return mutate(request, body, work)
 
-    @app.get("/api/v2/inbox")
-    def inbox(request: Request):
+    @app.get("/api/v2/messages")
+    def messages(request: Request, unread: bool = True):
+        """The caller's unread messages, with any notices: the only list there is. `unread=0` is refused."""
+        if not unread:
+            raise Problem("unread_only", "Only unread messages are listed: pass unread=1", 422)
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:

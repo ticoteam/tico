@@ -358,7 +358,7 @@ def test_the_decisions_readout_counts_refusals_and_reconciles_their_calls(gate):
     )
     model.meets = "$200 a month"
     file(api, token, "Raise the Gateway cap to $400 a month")
-    readout = get(api, "judge/readout")
+    readout = get(api, "decisions/readout")
     [row] = [r for r in readout["sets"] if r["set"] == A.QUESTION_SET]
     assert row["calls"] == 2
     assert row["gate"] == {"outcomes": {A.SENT_BACK: 1, A.THROUGH: 1}, "let_through": 0}
@@ -926,12 +926,12 @@ def test_the_readout_reconciles_every_call_to_a_row_or_a_named_reason(gate):
         json={"owner": "ben", "title": "Goal gone", "body": "x", "goal_id": "no-such-goal"},
         headers=headers(token),
     )  # refused: a named reason
-    row = next(r for r in get(api, "judge/readout")["sets"] if r["set"] == A.QUESTION_SET)
+    row = next(r for r in get(api, "decisions/readout")["sets"] if r["set"] == A.QUESTION_SET)
     assert row["reconcile"] == {"calls": 2, "landed": 1, "reasons": {"refused": 1}, "unexplained": 0, "no_call": 0}
     assert row["versions"] == ["2"], "the readout groups answers by the set's version, now 2"
     assert (
         "calls reconciled: 2 = 1 with an item row, refused 1; unexplained 0; rows with no call 0"
-        in get(api, "judge/readout")["text"]
+        in get(api, "decisions/readout")["text"]
     )
 
 
@@ -939,7 +939,7 @@ def test_a_call_with_neither_a_row_nor_a_reason_is_shown_as_unexplained(gate):
     api, model, token = gate
     with api.app.state.store.transaction() as c:
         H.event(c, H.KEEPER, "judge.call", "person-ask-ingest@2", {"label": "person-ask-ingest@2", "mode": "on"})
-    row = next(r for r in get(api, "judge/readout")["sets"] if r["set"] == A.QUESTION_SET)
+    row = next(r for r in get(api, "decisions/readout")["sets"] if r["set"] == A.QUESTION_SET)
     assert row["reconcile"]["unexplained"] == 1 and row["reconcile"]["calls"] == 1
 
 

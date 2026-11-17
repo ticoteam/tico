@@ -45,7 +45,7 @@ def open_computer(api, label="Team Mac"):
     """A computer an admin has opened to members' bots."""
     machine = runner(api, label=label)
     ready(api, machine, [])
-    post(api, f"runners/{machine['runner_id']}/member-bots", {"accepts": True}, "ben-test")
+    post(api, f"computers/{machine['runner_id']}/member-bots", {"accepts": True}, "ben-test")
     return machine
 
 

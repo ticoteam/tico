@@ -294,7 +294,7 @@ def test_rehearsal_cases_team_rules_paused_bots_and_long_inbox_instructions(api)
     routine(api, "sch_ops", bot="ops", cron="0 8 * * 1", zone="UTC", title="Weekly ops check")
     with db(api).transaction() as c:
         c.execute("UPDATE bots SET state='paused' WHERE slug='ops'")
-    post(api, "access/people/cara", {"inbox_bot": "inbox", "mailbox": "cara@acme.example"})
+    post(api, "access/humans/cara", {"inbox_bot": "inbox", "mailbox": "cara@acme.example"})
     with db(api).transaction() as c:
         c.execute(
             "INSERT OR REPLACE INTO mail_agent_instructions(bot, content, runner_id, updated_at) VALUES(?,?,?,?)",
@@ -330,7 +330,7 @@ def test_the_moved_inbox_hands_the_assistant_the_mail_it_runs_on(api, monkeypatc
     from types import SimpleNamespace
     from backend import automations
 
-    post(api, "access/people/ana", {"inbox_bot": "inbox", "mailbox": "ana@acme.example"})
+    post(api, "access/humans/ana", {"inbox_bot": "inbox", "mailbox": "ana@acme.example"})
     first_start(api)
     prompts = []
     monkeypatch.setattr(
@@ -423,7 +423,7 @@ OLD_INBOX = "Sort Acme mail by sender and urgency. Refunds go to Ben."  # short 
 
 def inbox_of(api, content=OLD_INBOX):
     """Ana's inbox, moved by the cutover on this release's code, with her Inbox Manager's instructions as given."""
-    post(api, "access/people/ana", {"inbox_bot": "inbox", "mailbox": "ana@acme.example"})
+    post(api, "access/humans/ana", {"inbox_bot": "inbox", "mailbox": "ana@acme.example"})
     with db(api).transaction() as c:
         c.execute(
             "INSERT OR REPLACE INTO mail_agent_instructions(bot, content, runner_id, updated_at) VALUES(?,?,?,?)",

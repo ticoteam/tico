@@ -497,7 +497,7 @@ async function machineGatewayFallbackSave(box: HTMLInputElement) {
   const id = box.dataset.gatewayFallback || '', on = box.checked;
   box.disabled = true;
   try {
-    await post(`/v2/runners/${encodeURIComponent(id)}/gateway-fallback`, {on});
+    await post(`/v2/computers/${encodeURIComponent(id)}/gateway-fallback`, {on});
     toast(on ? 'Falls back to Tico Gateway' : 'Waits for a plan');
     await loadSettings();
   } catch (error) {
@@ -512,7 +512,7 @@ async function machineBrowserHostSave(box: HTMLInputElement) {
   const id = box.dataset.browserHost || '', on = box.checked;
   box.disabled = true;
   try {
-    await post(`/v2/runners/${encodeURIComponent(id)}/browser-host`, {on});
+    await post(`/v2/computers/${encodeURIComponent(id)}/browser-host`, {on});
     toast(on ? 'Browser host' : 'Not the browser host');
     await loadSettings();
   } catch (error) {

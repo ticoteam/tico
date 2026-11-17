@@ -1357,7 +1357,7 @@ def install(app, store, auth, mutate):
             raise Problem(
                 "forbidden",
                 "A bot proposes a change to the strategy and the owner confirms it "
-                "(POST /api/v2/goal-proposals, kind strategy_draft)",
+                "(POST /api/v2/proposals, kind strategy_draft)",
                 403,
             )
         raise Problem("forbidden", "Only the owner writes the strategy and its bets, on their own click", 403)

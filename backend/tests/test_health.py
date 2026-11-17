@@ -133,7 +133,7 @@ def test_a_computer_silent_with_work_queued_goes_to_its_owner(environment):
     assert machine_issue(api, riley)["needs_person"] and machine_issue(api, riley)["action"]
     assert not machine_issue(api, quinn)["needs_person"] and not machine_issue(api, owner)["needs_person"]
     # Once they have left, the company owner is the one asked.
-    assert api.post("/api/v2/people/riley", json={"left": True}, headers=owner).status_code == 200
+    assert api.post("/api/v2/humans/riley", json={"left": True}, headers=owner).status_code == 200
     assert machine_issue(api, owner)["needs_person"]
 
 

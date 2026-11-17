@@ -264,22 +264,20 @@ def test_the_declared_answers_match_the_live_ones(api):
     proposal = call(
         "createGoalProposal",
         "post",
-        "/api/v2/goal-proposals",
+        "/api/v2/proposals",
         json={"kind": "kpi_definition", "kpi_id": kpi["id"], "payload": {"unit": "pct"}, "reason": "Say it plainly"},
     )["proposal"]
-    call("listGoalProposals", "get", "/api/v2/goal-proposals")
+    call("listGoalProposals", "get", "/api/v2/proposals")
     call("getGoalsNeedsYou", "get", "/api/v2/goals/needs-you")
-    call(
-        "decideGoalProposal", "post", "/api/v2/goal-proposals/%s/decide" % proposal["id"], json={"decision": "confirm"}
-    )
+    call("decideGoalProposal", "post", "/api/v2/proposals/%s/decide" % proposal["id"], json={"decision": "confirm"})
     turned = call(
         "createGoalProposal",
         "post",
-        "/api/v2/goal-proposals",
+        "/api/v2/proposals",
         json={"kind": "kpi_definition", "kpi_id": kpi["id"], "payload": {"unit": "percent"}, "reason": "Spell it out"},
     )["proposal"]
-    call("decideGoalProposal", "post", "/api/v2/goal-proposals/%s/decide" % turned["id"], json={"decision": "reject"})
-    call("addGoalProposalReason", "post", "/api/v2/goal-proposals/%s/note" % turned["id"], json={"note": "pct is fine"})
+    call("decideGoalProposal", "post", "/api/v2/proposals/%s/decide" % turned["id"], json={"decision": "reject"})
+    call("addGoalProposalReason", "post", "/api/v2/proposals/%s/note" % turned["id"], json={"note": "pct is fine"})
     call("getUsage", "get", "/api/v2/usage")
     call("getUsageLimits", "get", "/api/v2/usage/limits")
     call("setUsageDefault", "put", "/api/v2/usage/limits", json={"monthly_usd": 500, "count_subscription": False})

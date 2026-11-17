@@ -38,8 +38,8 @@ def onboarding(api):
         "answers": {"what_we_do": "We make pottery.", "customers": "consumers", "team_size": "1 (just me)"},
         "selected": {},
     }
-    assert api.put("/api/v2/onboarding", json=body, headers=signed_in()).status_code == 200
-    done = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+    assert api.put("/api/v2/setup", json=body, headers=signed_in()).status_code == 200
+    done = api.post("/api/v2/setup/complete", json={}, headers=signed_in())
     assert done.status_code == 200, done.text
 
 
@@ -51,10 +51,10 @@ def company_file(api):
     draft["company"].update(name="Kiln & Co", about="We make pottery.")
     draft["bots"] = [b for b in draft["bots"] if b["template"] in ("assistant", "botops")]
     body = {"company_yaml": C.to_yaml(draft)}
-    preview = api.post("/api/v2/onboarding/company/preview", json=body, headers=signed_in())
+    preview = api.post("/api/v2/setup/company/preview", json=body, headers=signed_in())
     assert preview.status_code == 200, preview.text
     done = api.post(
-        "/api/v2/onboarding/company/import",
+        "/api/v2/setup/company/import",
         json={**body, "fingerprint": preview.json()["fingerprint"]},
         headers=signed_in(),
     )

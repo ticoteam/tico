@@ -208,7 +208,7 @@ def test_an_awaiting_mailbox_is_private_and_joining_links_it(api):
 def test_adding_a_person_links_their_awaiting_mailbox(api):
     with tx(api) as c:
         awaiting(c, "eve@acme.example")
-    r = api.post("/api/v2/access/people", json={"email": "eve@acme.example", "name": "Eve"}, headers=headers())
+    r = api.post("/api/v2/access/humans", json={"email": "eve@acme.example", "name": "Eve"}, headers=headers())
     assert r.status_code == 200, r.text
     with tx(api) as c:
         row = MA._row(c, "eve@acme.example")

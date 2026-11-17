@@ -100,7 +100,7 @@ def test_who_may_copy_what_and_how_many(api, botops, scribe):
     assert call(api, "put", "access/limits", "ben-test", {"member_bot_limit": 1}).status_code == 200
     copy(api)
     assert copy(api, expected=409)["error"]["code"] == "bot_limit"
-    assert call(api, "post", "access/people/cara", "ben-test", {"create_bots": False}).status_code == 200
+    assert call(api, "post", "access/humans/cara", "ben-test", {"create_bots": False}).status_code == 200
     copy(api, expected=403)
 
 

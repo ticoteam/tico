@@ -43,7 +43,7 @@ const PEOPLE = [{id: 'chris', name: 'Chris', email: 'chris@example.test', title:
       if (p === '/api/me') return json({id: 'chris', owner_id: 'chris', role: 'owner', name: 'Chris', email: 'chris@example.test', registered: true, config: {version: 'dev', company_name: 'Acme'}});
       if (p === '/api/v2/config') return json({version: 'dev', company_name: 'Acme'});
       if (p === '/api/employees') return json(BOTS);
-      if (p === '/api/humans' || p === '/api/people') return json({people: PEOPLE, org_groups: GROUPS, teams: {}});
+      if (p === '/api/humans' || p === '/api/humans') return json({people: PEOPLE, org_groups: GROUPS, teams: {}});
       if (p === '/api/status') return json({keeper_alive: true, active: [], queued: [], recent_runs: [], health_issues: []});
       if (p === '/api/issues') return json([]);
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});

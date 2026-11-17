@@ -60,7 +60,7 @@ def test_bound_rows_survive_the_retention_sweep_and_stored_answers_do_not(api): 
 
 def test_an_invite_whose_outcome_is_unknown_is_refused_again_and_its_send_is_never_repeated(signin, monkeypatch):  # noqa: F811
     headers_ = owner(signin)
-    url = "/api/v2/access/people/cara/invite"
+    url = "/api/v2/access/humans/cara/invite"
     attempts = []
 
     def lost(auth, settings, person):

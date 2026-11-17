@@ -115,7 +115,7 @@ interface PageWin { computerClosed?: Promise<void>; presenceDraft?: HTMLTextArea
       if (p === '/api/employees') return json(['helper', 'ops', 'writer'].map(name => ({name, display_name: name[0]!.toUpperCase() + name.slice(1),
         status: 'active', owner_id: 'ana', can_manage: true, users: [], bot_owners: [], machine: {runner_id: 'box', label: 'Team box', owner_id: 'ana'}})));
       if (p === '/api/issues') return json([]);
-      if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'cara', name: 'Cara'}], teams: {}});
+      if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'cara', name: 'Cara'}], teams: {}});
       if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
       if (p === '/api/v2/status') return json({bots: []});
       if (p === '/api/v2/needs-you') return json({items: []});
@@ -246,8 +246,8 @@ interface PageWin { computerClosed?: Promise<void>; presenceDraft?: HTMLTextArea
 
     // Settings: inbox-only saves; Revoke is here and not on the row.
     await dialog.locator('[data-inbox-only=box]').check();
-    for (let i = 0; i < 100 && !writes.some(w => w.p === '/api/v2/runners/box/inbox-only'); i++) await page.waitForTimeout(20);
-    assert.deepEqual(writes.find(w => w.p === '/api/v2/runners/box/inbox-only')!.body, {enabled: true});
+    for (let i = 0; i < 100 && !writes.some(w => w.p === '/api/v2/computers/box/inbox-only'); i++) await page.waitForTimeout(20);
+    assert.deepEqual(writes.find(w => w.p === '/api/v2/computers/box/inbox-only')!.body, {enabled: true});
     // Rename: the name becomes a field; Escape and Cancel leave it; a blank name is not sent; Save renames.
     const renamed = () => writes.filter(w => w.p === '/api/v2/computers/box/label');
     const nameField = dialog.locator('[data-computer-rename-input]');

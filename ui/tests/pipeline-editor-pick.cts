@@ -50,7 +50,7 @@ const FAMILY: Record<string, string> = {'bot:builder': 'Claude', 'bot:builder-2'
         if (p === '/api/me') return json({...me, config});
         if (p === '/api/v2/config') return json(config);
         if (p === '/api/employees') return json(bots.map(b => ({id: b.id, slug: b.id, display_name: b.name, state: 'active'})));
-        if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
+        if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
         if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
         // As pipeline_settings.save answers: the pick as stored, each listed bot's family, and the next-task sentence.
         if (p === '/api/v2/pipelines/engineering' && r.method() === 'POST') {

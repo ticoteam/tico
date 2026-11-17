@@ -40,7 +40,7 @@ async function open(browser: import('playwright').Browser, me: Record<string, un
     if (p === '/api/me') return json({...me, config});
     if (p === '/api/v2/config') return json(config);
     if (p === '/api/employees') return json([]);
-    if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'cara', name: 'Cara'}], teams: {}});
+    if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'cara', name: 'Cara'}], teams: {}});
     if (p === '/api/v2/pipelines') return json({pipelines: [pipeline(mayChange)]});
     if (p === '/api/v2/pipelines/product') return json({pipeline: pipeline(mayChange)});
     if (p === '/api/v2/factories') return json({factories: [], pipelines: []});

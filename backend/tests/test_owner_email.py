@@ -212,7 +212,7 @@ def test_the_new_address_signs_in_as_the_same_owner_and_the_old_one_joins_no_one
     after = state(api)
     assert after["joined"] == 0 and len(after["humans"]) == 3
     # The owner can still put the old address on the roster on purpose, as someone else.
-    call(api, "POST", "/people", {"name": "Morgan (old)", "email": OWNER_EMAIL}, headers=signed_in())
+    call(api, "POST", "/humans", {"name": "Morgan (old)", "email": OWNER_EMAIL}, headers=signed_in())
     assert api.get("/api/v2/me", headers=old).json()["role"] == "human"
 
 

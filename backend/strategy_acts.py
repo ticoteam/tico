@@ -486,7 +486,7 @@ def decide(c, actor, reason, changes, goal_id=None, *, visible, give, sees):
             actor,
             "state",
             f"The {strategy_bot.name(c)} acts on its own only at level 3, which the owner chooses "
-            "in Settings; propose a recovery instead (POST /api/v2/goal-proposals)",
+            "in Settings; propose a recovery instead (POST /api/v2/proposals)",
         )
     reason = " ".join(str(reason or "").split())[:1000]
     if not reason:

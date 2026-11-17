@@ -187,7 +187,7 @@ def computers(website):
     share(s, s.aid, "bot:ops")
     s.host = runner(s.api, label="Host")
     ready(s.api, s.host, [], capabilities=["browser_v1"])
-    post(s.api, f"runners/{s.host['runner_id']}/browser-host", {"on": True})
+    post(s.api, f"computers/{s.host['runner_id']}/browser-host", {"on": True})
     s.own = runner(s.api, operator="ben", label="Own")
     with s.store.transaction() as c:
         c.execute("UPDATE bot_config SET owner_id='cara',created_by='human:cara',team='product' WHERE bot='ops'")
@@ -308,7 +308,7 @@ def test_an_attempt_ending_mid_command_is_refused_before_delivery_or_report(comp
     """11: the attempt must still run on its own computer, for central commands as well as fallback."""
     s = computers
     if not central:
-        post(s.api, f"runners/{s.host['runner_id']}/browser-host", {"on": False})
+        post(s.api, f"computers/{s.host['runner_id']}/browser-host", {"on": False})
     machine = s.host if central else s.own
     thread, box = begin(s)
     if delivered:
@@ -365,7 +365,7 @@ def test_botops_uses_the_requesters_rights_and_the_host_change_waits_for_confirm
     assert response.status_code == 200
     assert pick(s, "bot:ops")["account_id"] == aid
     host = runner(s.api, label="Host")
-    response = act(s.api, attempt, "POST", f"runners/{host['runner_id']}/browser-host", {"on": True})
+    response = act(s.api, attempt, "POST", f"computers/{host['runner_id']}/browser-host", {"on": True})
     assert response.status_code == 200 and response.json()["needs_confirm"]
     with s.store.read() as c:
         assert B.host_id(c) is None
@@ -491,7 +491,7 @@ def test_host_change_rejects_an_old_report_and_the_next_command_uses_the_new_hos
     get(s.api, "runner-browser-commands?wait=0", other["token"])
     thread, box = begin(s)
     [old] = poll(s, s.host, wait=3)
-    post(s.api, f"runners/{other['runner_id']}/browser-host", {"on": True})
+    post(s.api, f"computers/{other['runner_id']}/browser-host", {"on": True})
     assert report(s, s.host, old, expected=404)["error"]["code"] == "not_found"
     end(thread, box, 409, "browser_host_offline")
     thread, box = begin(s)
@@ -511,7 +511,7 @@ def test_changing_a_host_closes_an_already_open_session_on_the_old_computer(comp
     other = runner(s.api, label="New host")
     ready(s.api, other, [], capabilities=["browser_v1"])
     get(s.api, "runner-browser-commands?wait=0", other["token"])
-    post(s.api, f"runners/{other['runner_id']}/browser-host", {"on": True})
+    post(s.api, f"computers/{other['runner_id']}/browser-host", {"on": True})
     assert B.session_view(s.aid)["state"] == "unknown"
     [close] = poll(s, s.host, wait=3)
     assert close["verb"] == "close" and "value" not in close

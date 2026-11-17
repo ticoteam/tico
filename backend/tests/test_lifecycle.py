@@ -203,7 +203,7 @@ def test_a_seat_may_report_to_an_open_seat_and_hangs_under_it_until_that_seat_cl
     shown = {s["id"]: s for s in get(api, "org")["seats"]}
     assert shown[agent["id"]]["org_parent"] == "s:" + lead["id"] and shown[lead["id"]]["org_parent"] == "b:assistant"
     people = {
-        s["id"]: s for s in api.get("/api/people", headers=headers()).json()["seats"]
+        s["id"]: s for s in api.get("/api/humans", headers=headers()).json()["seats"]
     }  # the sidebar's team chart reads these
     assert people[agent["id"]]["org_parent"] == "s:" + lead["id"] and people[agent["id"]]["stage"] == "recruiting"
 
@@ -222,7 +222,7 @@ def test_a_seat_may_report_to_an_open_seat_and_hangs_under_it_until_that_seat_cl
     assert {s["id"]: s for s in get(api, "org")["seats"]}[agent["id"]]["org_parent"] == "b:assistant"
     # The sidebar refreshes its seats from GET /api/v2/seats (ui/app/refresh.ts): those rows hang the same way.
     listed = {s["id"]: s["org_parent"] for s in get(api, "seats")["seats"]}
-    people = {s["id"]: s["org_parent"] for s in api.get("/api/people", headers=headers()).json()["seats"]}
+    people = {s["id"]: s["org_parent"] for s in api.get("/api/humans", headers=headers()).json()["seats"]}
     assert listed == people and listed[agent["id"]] == "b:assistant"
 
     # A line through a closed seat still counts: B <- A (closed) <- C, so B cannot move under C.

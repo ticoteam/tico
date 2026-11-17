@@ -30,7 +30,7 @@ def set_up(environment, tools_owner=True):
     with_templates(api, "general-manager", *(["tools-owner"] if tools_owner else []))
     machine(api)
     draft(api)
-    done = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+    done = api.post("/api/v2/setup/complete", json={}, headers=signed_in())
     assert done.status_code == 200, done.text
     return api
 
@@ -47,7 +47,7 @@ def test_its_daily_learn_from_use_is_on_for_a_new_company_and_reaches_a_tools_ow
     manifest.write_text(shipped.replace("id: learn-from-use", "id: learn-from-use-gone"))  # as the older template
     machine(api)
     draft(api)
-    assert api.post("/api/v2/onboarding/complete", json={}, headers=signed_in()).status_code == 200
+    assert api.post("/api/v2/setup/complete", json={}, headers=signed_in()).status_code == 200
     with api.app.state.store.read() as c:
         assert routines.row(c, "tools-owner:review-the-tools")["enabled"] == 1
         assert routines.row(c, "tools-owner:learn-from-use") is None

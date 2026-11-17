@@ -163,7 +163,7 @@ def test_only_the_two_gateway_choices_put_the_gateway_last_and_spend_its_key(api
     assign(api, machine, "ops")
     heartbeat(api, machine, "ops", signed_in=True, isolated=True)
     # The Gateway is the last hop only on a computer that falls back to it (its own switch, off until turned on).
-    post(api, f"runners/{machine['runner_id']}/gateway-fallback", {"on": True})
+    post(api, f"computers/{machine['runner_id']}/gateway-fallback", {"on": True})
     with api.app.state.store.read() as c:
         record = providers.load(c, api.app.state.store.settings)
     rows = providers.default_fallbacks(record)
@@ -515,7 +515,7 @@ def test_a_gateway_segment_records_the_key_its_runner_was_handed_and_the_install
     machine = runner(api)
     assign(api, machine, "ops")
     heartbeat(api, machine, "ops", signed_in=True, isolated=True)
-    post(api, f"runners/{machine['runner_id']}/gateway-fallback", {"on": True})  # it finishes on the Gateway
+    post(api, f"computers/{machine['runner_id']}/gateway-fallback", {"on": True})  # it finishes on the Gateway
     post(api, "chat/ops", {"text": "Use only the synthetic fixture"})
     attempt = claim(api, machine, "ops")
     with api.app.state.store.read() as c:

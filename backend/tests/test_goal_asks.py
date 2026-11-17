@@ -165,7 +165,7 @@ def test_a_proposal_asks_whoever_decides_it_and_closes_when_decided(api):
     log(api, kpi["id"], 45, token="ben-test", period_end=H.now())
     proposal = post(
         api,
-        "goal-proposals",
+        "proposals",
         {
             "kind": "kpi_target",
             "goal_id": goal["id"],
@@ -185,7 +185,7 @@ def test_a_proposal_asks_whoever_decides_it_and_closes_when_decided(api):
     # The environment owner may decide it too: it stays on their Goals page, without the task, which is Ben's.
     [theirs] = [i for i in get(api, "goals/needs-you")["items"] if i["kind"] == "proposal"]
     assert theirs["proposal"]["id"] == proposal["id"] and "task" not in theirs
-    post(api, f"goal-proposals/{proposal['id']}/decide", {"decision": "reject", "note": "Keep it"}, token="ben-test")
+    post(api, f"proposals/{proposal['id']}/decide", {"decision": "reject", "note": "Keep it"}, token="ben-test")
     with api.app.state.store.read() as c:
         row = H.task(c, task["id"])
         assert row["status"] == "closed" and "rejected" in close_note(c, task["id"])

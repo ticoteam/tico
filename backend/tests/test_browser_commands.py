@@ -102,7 +102,7 @@ def setup(api, tools):
         {"version": "test", "platform": "test", "capabilities": ["browser_v1"]},
         token=host["token"],
     )
-    post(api, f"runners/{host['runner_id']}/browser-host", {"on": True})
+    post(api, f"computers/{host['runner_id']}/browser-host", {"on": True})
     own = runner(api, label="Own Mac")
     assign(api, own, "ops")
     assign(api, own, "finance")
@@ -402,7 +402,7 @@ def test_a_computer_that_is_neither_the_host_nor_running_the_turn_gets_nothing(s
     assert collect(s, other, wait=0) == []
     assert collect(s, s.own, wait=0) == []
     # The host stops being the host before it collects: it gets nothing and the bot is told.
-    post(s.api, f"runners/{s.host['runner_id']}/browser-host", {"on": False})
+    post(s.api, f"computers/{s.host['runner_id']}/browser-host", {"on": False})
     assert all(cmd["verb"] == "close" for cmd in collect(s, s.host, wait=0))
     r = done(thread, box)
     assert r.status_code == 409 and r.json()["error"]["code"] == "browser_host_offline"
@@ -427,10 +427,10 @@ def test_the_browser_host_takes_no_other_bots(setup, tools):
         bc.check_placement(c, "ops", s.own["runner_id"])
     assert refused.value.code == "browser_host"
     # A computer with bots on it is not made the host.
-    r = s.api.post(f"/api/v2/runners/{s.own['runner_id']}/browser-host", json={"on": True}, headers=headers())
+    r = s.api.post(f"/api/v2/computers/{s.own['runner_id']}/browser-host", json={"on": True}, headers=headers())
     assert r.status_code == 409 and r.json()["error"]["code"] == "browser_host"
     r = s.api.post(
-        f"/api/v2/runners/{s.own['runner_id']}/browser-host", json={"on": True}, headers=headers("cara-test")
+        f"/api/v2/computers/{s.own['runner_id']}/browser-host", json={"on": True}, headers=headers("cara-test")
     )
     assert r.status_code == 403
 

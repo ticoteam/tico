@@ -58,7 +58,7 @@ def _company(environment):
     """A company made the way staff create makes one: setup completed with no chart (the default org), then its
     computer. Returns the client, the computer and {bot id: (slug, setup task id)} for the seat bots."""
     api = environment()
-    done = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+    done = api.post("/api/v2/setup/complete", json={}, headers=signed_in())
     assert done.status_code == 200, done.text
     computer = machine(api)
     found = rows(

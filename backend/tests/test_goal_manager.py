@@ -28,7 +28,7 @@ def built(environment):
     with_goal_manager(api)
     machine(api)
     draft(api)
-    record = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in()).json()
+    record = api.post("/api/v2/setup/complete", json={}, headers=signed_in()).json()
     return api, record
 
 
@@ -42,7 +42,7 @@ def test_it_is_built_for_every_company_with_its_two_pass_routines_paused(environ
         "strategy-owner:goals-review": 0,
         "strategy-owner:market-briefing": 1,
     }
-    api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+    api.post("/api/v2/setup/complete", json={}, headers=signed_in())
     assert len(routines(api)) == 3  # twice is still three
 
 
@@ -50,7 +50,7 @@ def test_a_company_from_before_gets_it_on_update_once_a_computer_and_model_exist
     api = environment(seed={}, cards=BASE)
     machine(api)
     draft(api)
-    api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+    api.post("/api/v2/setup/complete", json={}, headers=signed_in())
     assert "strategy-owner" not in states(api)  # this release's catalog has no card yet
     with_goal_manager(api)
     with TestClient(create_app(api.app.state.store.settings)):  # a restart is an update

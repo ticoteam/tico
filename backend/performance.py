@@ -1012,7 +1012,7 @@ def install(app, store, auth, mutate, execution):
 
         return store.write(who, work)  # a poll: no idempotency record
 
-    @app.post("/api/v2/runners/{rid}/performance")
+    @app.post("/api/v2/computers/{rid}/performance")
     def performance_mode(request: Request, rid: str, body: M.PerformanceMode):
         """Turn performance diagnostics off (or back on) for this computer; they are on by default. Its operator or an
         admin. Off stops sampling; what was recorded stays until it ages out (14 days) or is deleted."""
@@ -1040,7 +1040,7 @@ def install(app, store, auth, mutate, execution):
 
         return mutate(request, body, work)
 
-    @app.delete("/api/v2/runners/{rid}/performance")
+    @app.delete("/api/v2/computers/{rid}/performance")
     def performance_erase(request: Request, rid: str):
         """Delete this computer's recorded performance history now. Its operator or an admin."""
         who = request.state.identity
@@ -1076,7 +1076,7 @@ def install(app, store, auth, mutate, execution):
             )
         return hit[0]
 
-    @app.get("/api/v2/runners/{rid}/performance")
+    @app.get("/api/v2/computers/{rid}/performance")
     def performance_view(request: Request, rid: str, hours: int = 24):
         """The computer's performance over the last `hours` (1 to 336): CPU, memory, load, swap and disk points, the
         turns that ran, the bots with the most turns and the busiest processes, overloads and a summary. Every person

@@ -85,8 +85,8 @@ def test_a_legacy_named_login_waits_for_acknowledgement_and_sign_out_is_reversib
     task(api, 'finance', 'Keep the legacy account until upgrade')
     assert claim(api, machine, 'finance') is None
     assert 'Update Test Mac' in get(api, 'bots/finance/subscription')['problem']
-    get(api, f'runners/{rid}/logouts/bots?runtime=codex', expected=409)
-    refused = post(api, f'runners/{rid}/logouts', {'runtime': 'codex'}, expected=409)
+    get(api, f'computers/{rid}/logouts/bots?runtime=codex', expected=409)
+    refused = post(api, f'computers/{rid}/logouts', {'runtime': 'codex'}, expected=409)
     assert refused['error']['code'] == 'runner_version'
     with api.app.state.store.read() as c:
         assert execution.bot_refusal(c, api.app.state.store.settings, rid, 'finance') == 'login_upgrade'
@@ -97,13 +97,13 @@ def test_a_legacy_named_login_waits_for_acknowledgement_and_sign_out_is_reversib
     set_runtime(api, 'codex', bot='product-design')
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET state='paused' WHERE slug='product-design'")
-    assert [b['bot'] for b in get(api, f'runners/{rid}/logouts/bots?runtime=codex')['bots']] == ['finance']
-    assert [b['bot'] for b in get(api, f'runners/{rid}/logouts/bots?runtime=claude')['bots']] == ['ops']
-    logout = post(api, f'runners/{rid}/logouts', {'runtime': 'codex'})
+    assert [b['bot'] for b in get(api, f'computers/{rid}/logouts/bots?runtime=codex')['bots']] == ['finance']
+    assert [b['bot'] for b in get(api, f'computers/{rid}/logouts/bots?runtime=claude')['bots']] == ['ops']
+    logout = post(api, f'computers/{rid}/logouts', {'runtime': 'codex'})
     report(api, machine, logout['id'], state='signed_out')
     heartbeat(api, machine, current=True, signed=False)
     assert claim(api, machine, 'finance') is None
-    login = post(api, f'runners/{rid}/logins', {'runtime': 'codex'})
+    login = post(api, f'computers/{rid}/logins', {'runtime': 'codex'})
     report(api, machine, login['id'], state='signed_in')
     heartbeat(api, machine, current=True)
     assert claim(api, machine, 'finance')

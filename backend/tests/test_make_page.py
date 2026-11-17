@@ -412,7 +412,7 @@ def test_make_page_does_not_fall_back_to_bot_rights_after_person_loses_sign_in(a
     assign(api, machine, "assistant")
     ready(api, machine, ["assistant"], capabilities=["make_page"])
     request = post(api, f"tasks/{t['id']}/make-page", {"text": "Make the plan"}, "ben-test")["message"]
-    post(api, "access/people/ben", {"sign_in": False})
+    post(api, "access/humans/ben", {"sign_in": False})
     assert post(api, "jobs/claim", {"next_run": True}, machine["token"])["attempt"] is None
     with api.app.state.store.read() as c:
         assert not c.execute(
@@ -524,9 +524,9 @@ def test_cached_make_page_claim_requires_the_current_person_and_computer(api):
     t = task(api, private=True)
     machine, attempt, sent = start(api, t["id"])
     key, body = "claim:" + sent["id"], {"next_run": True}
-    post(api, "access/people/ben", {"sign_in": False})
+    post(api, "access/humans/ben", {"sign_in": False})
     post(api, "jobs/claim", body, machine["token"], key, expected=403)
-    post(api, "access/people/ben", {"sign_in": True})
+    post(api, "access/humans/ben", {"sign_in": True})
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0}, machine["token"])
     other = runner(api)
     assign(api, other, "assistant", generation=attempt["generation"])
