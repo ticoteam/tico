@@ -17,18 +17,18 @@ Sample output for Acme, a fictional creator tools company. Nothing has been shar
 Two cohorts of this size moved 2 points: too small to call a trend.
 
 ## Ranked problems (last 30 days, distinct accounts)
-1. **"I can't connect my calendar when it is a shared calendar."** 14 accounts, 3 sources (2 calls, 9 tickets, 1 feedback theme). Activation 21% for the 14 (3 of 14), against 44% for the other 103 (45 of 103). Pitch filed: task 4187. Previous rank: new.
+1. **"I can't connect my calendar when it is a shared calendar."** 14 accounts, 3 sources (2 calls, 9 tickets, 1 feedback theme). Activation 21% for the 14 (3 of 14), against 44% for the other 103 (45 of 103). Feature filed: task 4187. Previous rank: new.
 2. **"The onboarding checklist does not say what to do after step 3."** 11 accounts, 2 sources (1 call, 1 feedback theme). Activation gap 9 points. Watching: one more source needed before a pitch.
 3. **"Invites go to spam."** 8 accounts, 2 sources (tickets). Activation gap 4 points. Routed to `support-owner` as a delivery issue; watching.
 
 ## Requests (not ranked)
 - "Add a Notion export": 6 accounts, 2 sources.
 
-## Pitch filed this week
-- "Calendar connection fails for shared calendars", task 4187, in Pitch: "Shared-calendar users can't connect (14 of 117 new Creators accounts, 9 tickets, 2 calls); their activation is 21% against 44%. Fix: read shared calendars through the delegated scope."
+## Feature filed this week
+- "Calendar connection fails for shared calendars", task 4187, in Spec: "Shared-calendar users can't connect (14 of 117 new Creators accounts, 9 tickets, 2 calls); their activation is 21% against 44%. Fix: read shared calendars through the delegated scope."
 
 ## Decisions waiting
-- A person: OK, Not now or No on the pitch in task 4187. Asked on 2026-11-02.
+- A person: approve the Spec in task 4187. Submitted on 2026-11-02.
 
 ## Left out
 - 6 tickets about invoices: billing, routed to `support-owner`.

@@ -1,6 +1,6 @@
 # Product practice for an area
 
-The standing rules behind the weekly review, the ranking and every pitch. The thresholds are this team's defaults. The owner
+The standing rules behind the weekly review, the ranking and every feature filed. The thresholds are this team's defaults. The owner
 may change them at setup, and each change is dated in `knowledge/area.md`.
 
 ## Activation
@@ -35,13 +35,13 @@ may change them at setup, and each change is dated in `knowledge/area.md`.
 - A request for something the product lacks is listed under requests with its count. It is not ranked above a failure.
 - Re-rank at every review. A problem that drops out is kept with its last rank and the date it dropped.
 
-## Pitches
+## Features filed
 
-- A pitch is 280 characters at most: the problem in the customer's words, who has it, and the fix in one line. The
-  evidence goes in a comment below it; what done looks like and how we will know go in the spec.
+- A feature starts as a chat. Its first comment says the problem in the customer's words, who has it, and the fix in
+  one line, with the evidence below it; what done looks like and how we will know go in the Spec.
 - One open task per problem. More evidence is a comment on that task.
 - A decline is an answer. It is recorded with its reason and the date to look again.
-- Threshold to write a pitch (default): the problem is in the top three for two reviews running, and either its activation
+- Threshold to file a feature (default): the problem is in the top three for two reviews running, and either its activation
   gap is at least 10 points, or, with no usage export, at least 5 distinct accounts are on record.
 
 ## Sources
@@ -50,4 +50,4 @@ may change them at setup, and each change is dated in `knowledge/area.md`.
   channel definitions that the area's figures must agree with.
 - 2026-11-06: Tico repo hubcli command help (`tico task`, `tico meeting`, `tico update`, `tico kpi`): the commands this
   practice names.
-- The counting, ranking and pitch thresholds above are this team's defaults. No outside benchmark is cited.
+- The counting, ranking and filing thresholds above are this team's defaults. No outside benchmark is cited.

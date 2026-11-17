@@ -8,6 +8,5 @@ backend/github_app.py:2
 backend/provenance_clock.py:2
 backend/roster_clock.py:2
 backend/row_clock.py:2
-backend/slack_app.py:1
 backend/status_values.py:5
 backend/wake_presets.py:1

@@ -332,130 +332,233 @@ def register(
         with `to_pipeline`, to a stage of another pipeline (`to`, its first when left out)."""
         return checked(request, tid, body, "task_move")
 
-    # ------------------------------------------------------------------ many to another pipeline
+    # ------------------------------------------------------------------ many at once
+    def many_ids(c: Any, who: Any, body: Any) -> tuple[list[str], list[dict[str, Any]]]:
+        """The tasks a write to many names (M.TaskManyOf) as `who` reads them, and those it skips already: an id that
+        names nothing they read is counted, never named (it may not be theirs). Past MOVE_CAP it is refused whole."""
+        ids: list[str] = []
+        skipped: list[dict[str, Any]] = []
+        if body.from_ is not None:
+            place = body.from_
+            pipe = task_engine.pipeline_named(c, who.actor, place.pipeline)
+            stage = next(
+                (
+                    s
+                    for s in task_engine.stages(c, pipe["id"])
+                    if s["id"] == place.stage or str(s["name"]).lower() == place.stage.lower()
+                ),
+                None,
+            )
+            if not stage:
+                raise Problem("task_no_such_stage", f"No stage {place.stage} in {pipe['name']}", 409)
+            ids = [
+                r[0]
+                for r in c.execute(
+                    f"SELECT id FROM tasks WHERE pipeline_id=? AND stage_id=? AND ({auth.task_sql(c, who)}) "
+                    "ORDER BY created_at, id LIMIT ?",
+                    (pipe["id"], stage["id"], MOVE_CAP + 1),
+                )
+            ]
+        else:
+            for ident in dict.fromkeys(body.ids or []):
+                try:
+                    ids.append(auth.resolve_task(c, who, ident))
+                except Problem as exc:
+                    skipped.append({"code": exc.code, "reason": exc.detail})
+        if len(ids) > MOVE_CAP:
+            raise Problem("too_many", f"A change takes at most {MOVE_CAP} tasks at once", 422, extra={"cap": MOVE_CAP})
+        return ids, skipped
+
+    def many(c: Any, who: Any, body: Any, batch: str, one: Callable[[str, Any], bool]) -> dict[str, Any]:
+        """One write to many tasks: `one(task_id, version)` makes the single write on each, as it is now (read inside
+        this write, so a caller names tasks, not versions), and says whether it changed it. A task that can't is
+        skipped with its code and the rest still change. One live `bulk` change for the lot, not one per task.
+        Answers what changed and what was skipped; a task the write took out of the caller's sight is only counted."""
+        ids, skipped = many_ids(c, who, body)
+        seq = c.execute("SELECT COALESCE(MAX(seq), 0) FROM changes").fetchone()[0]
+        changed: list[str] = []
+        unchanged = 0
+        token = H.BULK_CALL.set(batch)  # the tasks it skips keep their refusals, counted once
+        try:
+            for task_id in ids:
+                try:
+                    auth.task(c, who, task_id)
+                except Problem as exc:
+                    skipped.append({"code": exc.code, "reason": exc.detail})  # not named: not theirs to read
+                    continue
+                c.execute("SAVEPOINT tasks_many_one")
+                before = len(c.after_commit)
+                try:
+                    current: Any = H.task(c, task_id)
+                    done = one(task_id, current["version"] if current else None)
+                except H.Refused as exc:
+                    del c.after_commit[before:]
+                    problem = store_module.refused(c, who, exc, savepoint="tasks_many_one")
+                    skipped.append({"id": task_id, "code": problem.code, "reason": problem.detail})
+                except Problem as exc:
+                    c.execute("ROLLBACK TO tasks_many_one")
+                    c.execute("RELEASE tasks_many_one")
+                    del c.after_commit[before:]
+                    skipped.append({"id": task_id, "code": exc.code, "reason": exc.detail})
+                else:
+                    c.execute("RELEASE tasks_many_one")
+                    if done:
+                        changed.append(task_id)
+                    else:
+                        unchanged += 1
+        finally:
+            H.BULK_CALL.reset(token)
+        if len(changed) > 1:
+            # One `bulk` change for the open screens (events.FAN_CAP): each reads its list once, not a task at a time.
+            c.execute("DELETE FROM changes WHERE topic='tasks' AND kind<>'bulk' AND seq>?", (seq,))
+            c.execute("INSERT INTO changes(topic,kind,created_at) VALUES('tasks','bulk',?)", (H.now(),))
+        readable = {
+            r[0]
+            for r in c.execute(
+                f"SELECT id FROM tasks WHERE id IN (SELECT value FROM json_each(?)) AND ({auth.task_sql(c, who)})",
+                (json.dumps(changed + [s["id"] for s in skipped if s.get("id")]),),
+            )
+        }
+        return {
+            "batch_id": batch,
+            "changed": [t for t in changed if t in readable],
+            "changed_unseen": len([t for t in changed if t not in readable]),
+            "unchanged": unchanged,
+            "skipped": [s for s in skipped if not s.get("id") or s["id"] in readable],
+        }
+
     @app.post(
         "/api/v2/tasks/move",
         **api_v2(
             "Tasks",
             "moveTasks",
-            "Move many tasks to a stage of another pipeline: ids, or from {pipeline, stage} for every open task there; to_pipeline, to (its first stage when left out) and why (a bot's is required). Each moves as one move does; one that cannot is skipped with its code (task_turn_running, task_stage_full, not_found, ...) and the rest still move. At most 500 tasks",
+            "Move many tasks: ids, or from {pipeline, stage} for every open task there; to_pipeline and to (its first "
+            "stage when left out), or to alone (next, done, closed, reopen or a stage, each in its own pipeline); why (a "
+            "bot's is required). Each moves as one move does; one that cannot is skipped with its code "
+            "(task_turn_running, task_stage_full, task_not_met, not_found, ...) and the rest still move. At most 500 tasks",
             "TaskMoveResult",
         ),
     )
     def tasks_move(request: Request, body: M.TaskMoveMany):
-        """Move many tasks to a stage of another pipeline: the tasks `ids` names, or every open task in the stage `from`
-        names. Each moves as a single move would (H.task_move_to): one that can't move is skipped with its code (a bot's
-        turn running on it, no room, not one the caller reads) and the rest still move. A bot says why. One live
-        `bulk` change for the lot, not one per task."""
+        """Move many tasks: the tasks `ids` names, or every open task in the stage `from` names. With `to_pipeline`, to
+        its stage `to`, each as a single move there would (H.task_move_to); without, each in its own pipeline as a
+        single move's `to` says (next, done, closed, reopen or a stage). One that can't move is skipped with its code
+        (a bot's turn running on it, no room, what its stage still needs, not one the caller reads) and the rest still
+        move. A bot says why. One live `bulk` change for the lot, not one per task."""
         caller: Any = request.state.identity
         auth.domain(caller)
         if H.is_bot(caller.actor) and not (body.why or "").strip():
-            raise Problem("task_why", "Say why you move them to another pipeline", 422)
+            raise Problem("task_why", "Say why you move them", 422)
         batch = H.new_id()
 
         def write(c: Any) -> dict[str, Any]:
             who = acting(c, caller, body)
-            visible = auth.task_sql(c, who)
-            ids: list[str] = []
-            skipped: list[dict[str, Any]] = []
-            if body.from_ is not None:
-                place = body.from_
-                pipe = task_engine.pipeline_named(c, who.actor, place.pipeline)
-                stage = next(
-                    (
-                        s
-                        for s in task_engine.stages(c, pipe["id"])
-                        if s["id"] == place.stage or str(s["name"]).lower() == place.stage.lower()
-                    ),
-                    None,
-                )
-                if not stage:
-                    raise Problem("task_no_such_stage", f"No stage {place.stage} in {pipe['name']}", 409)
-                ids = [
-                    r[0]
-                    for r in c.execute(
-                        f"SELECT id FROM tasks WHERE pipeline_id=? AND stage_id=? AND ({visible}) "
-                        "ORDER BY created_at, id LIMIT ?",
-                        (pipe["id"], stage["id"], MOVE_CAP + 1),
+            moves = mover(c, who) or None
+
+            def one(task_id: str, version: Any) -> bool:
+                if body.to_pipeline:
+                    H.task_move_to(
+                        c, who.actor, task_id, body.to_pipeline, body.to, body.why, version, mover=moves, batch=batch
                     )
-                ]
-            else:
-                for ident in dict.fromkeys(body.ids or []):
-                    try:
-                        ids.append(auth.resolve_task(c, who, ident))
-                    except Problem as exc:
-                        skipped.append({"code": exc.code, "reason": exc.detail})  # not named: it may not be theirs
-            if len(ids) > MOVE_CAP:
-                raise Problem(
-                    "too_many", f"A move takes at most {MOVE_CAP} tasks at once", 422, extra={"cap": MOVE_CAP}
-                )
-            seq = c.execute("SELECT COALESCE(MAX(seq), 0) FROM changes").fetchone()[0]
-            moved: list[str] = []
-            token = H.BULK_CALL.set(batch)  # the tasks it skips keep their refusals, counted once
-            try:
-                for task_id in ids:
-                    try:
-                        auth.task(c, who, task_id)
-                    except Problem as exc:
-                        skipped.append({"code": exc.code, "reason": exc.detail})  # not named: not theirs to read
-                        continue
-                    c.execute("SAVEPOINT tasks_move_one")
-                    before = len(c.after_commit)
-                    try:
-                        # A move of many is made against each task as it is now (a bot names the tasks, not their
-                        # versions): read inside this write, so nothing changes between the read and the move.
-                        current: Any = H.task(c, task_id)
-                        now: Any = current["version"] if current else None
-                        H.task_move_to(
-                            c,
-                            who.actor,
-                            task_id,
-                            body.to_pipeline,
-                            body.to,
-                            body.why,
-                            now,
-                            mover=mover(c, who) or None,
-                            batch=batch,
-                        )
-                    except H.Refused as exc:
-                        del c.after_commit[before:]
-                        problem = store_module.refused(c, who, exc, savepoint="tasks_move_one")
-                        skipped.append({"id": task_id, "code": problem.code, "reason": problem.detail})
-                    except Problem as exc:
-                        c.execute("ROLLBACK TO tasks_move_one")
-                        c.execute("RELEASE tasks_move_one")
-                        del c.after_commit[before:]
-                        skipped.append({"id": task_id, "code": exc.code, "reason": exc.detail})
-                    else:
-                        c.execute("RELEASE tasks_move_one")
-                        moved.append(task_id)
-            finally:
-                H.BULK_CALL.reset(token)
-            if len(moved) > 1:
-                # One `bulk` change for the open screens (events.FAN_CAP): each reads its list once, not a task at a time.
-                c.execute("DELETE FROM changes WHERE topic='tasks' AND kind<>'bulk' AND seq>?", (seq,))
-                c.execute("INSERT INTO changes(topic,kind,created_at) VALUES('tasks','bulk',?)", (H.now(),))
-            # Each task the caller can still read is named; one the move took out of their sight (into a private
-            # pipeline they do not read) is only counted.
-            readable = {
-                r[0]
-                for r in c.execute(
-                    f"SELECT id FROM tasks WHERE id IN (SELECT value FROM json_each(?)) AND ({auth.task_sql(c, who)})",
-                    (json.dumps(moved + [s["id"] for s in skipped if s.get("id")]),),
-                )
-            }
+                    return True
+                if str(body.to).strip().lower() == "done":
+                    setup_finished(c, who, task_id)
+                after: Any = H.task_move(c, who.actor, task_id, body.to, body.why, version, mover=moves)
+                # A move to where the task already is changes nothing (the engine leaves it as it is).
+                return not after or after.get("version") != version
+
+            out = many(c, who, body, batch, one)
             return {
                 "batch_id": batch,
-                "moved": [t for t in moved if t in readable],
-                "moved_unseen": len([t for t in moved if t not in readable]),
-                "skipped": [s for s in skipped if not s.get("id") or s["id"] in readable],
+                "moved": out["changed"],
+                "moved_unseen": out["changed_unseen"],
+                "skipped": out["skipped"],
             }
 
         return mutate(request, body, write)
 
-    # Before `POST /api/v2/tasks/{tid}` (app.py), which would take "move" for a task's id.
+    def people_many(request: Request, body: Any, operation: str, said: Any, new_owner: Any, one: Callable[..., bool]):
+        """A write to many tasks that only a person makes, or a bot for a person (`on_behalf_of`): a bot acting alone
+        reassigns or snoozes one task at a time, through the checks that single write has. What it says (`said`) is
+        checked once against the company's rules for all the people it reaches (each task's owner and requester, and
+        `new_owner`), outside the write, as `POST /api/v2/task-bulk` checks it; held, nothing changes, and warned,
+        each task's why carries the line. `one(c, who, task_id, version, why)` is the single write."""
+        caller: Any = request.state.identity
+        auth.domain(caller)
+        batch = H.new_id()
+
+        def reach(c: Any) -> list[str]:
+            who = acting(c, caller, body)
+            ids, _ = many_ids(c, who, body)
+            people = [task_rules.rule_target(c, caller, new_owner)] if new_owner else []
+            for task_id in ids:
+                row: Any = H.task(c, task_id)
+                if row:
+                    people += [row["owner_id"], row["requester_id"]]
+            return list(dict.fromkeys(a for a in people if a))
+
+        verdict = task_rules.check_words(caller, operation, said, reach)
+
+        def write(c: Any) -> dict[str, Any]:
+            who = acting(c, caller, body)
+            if not H.is_human(who.actor):
+                raise Problem("forbidden", "A bot changes these one task at a time; a person changes many at once", 403)
+            gate = task_rules.apply_words(c, caller, verdict, said, reach)
+            if task_rule_gate.held(gate):
+                return org_rule_check.answer(gate)
+            why = task_rule_gate.warn_on(gate, body.why) if gate and gate.get("warn") else body.why
+            out = many(c, who, body, batch, lambda task_id, version: one(c, who, task_id, version, why))
+            return {**out, **org_rule_check.answer(gate)}
+
+        return mutate(request, body, write)
+
+    @app.post(
+        "/api/v2/tasks/owner",
+        **api_v2(
+            "Tasks",
+            "reassignTasks",
+            "Give many tasks to one owner for their stage: ids, or from {pipeline, stage} for every open task there; "
+            "owner and why. Each is given as one reassign is; one that can't be is skipped with its code and the rest "
+            "still change. A person's, or a bot's for a person (on_behalf_of). At most 500 tasks",
+            "TaskManyResult",
+        ),
+    )
+    def tasks_owner(request: Request, body: M.TaskOwnerMany):
+        def one(c: Any, who: Any, task_id: str, version: Any, why: Any) -> bool:
+            before: Any = H.task(c, task_id)
+            reassign(c, who, task_id, M.TaskOwner(owner=body.owner, why=why, version=version))
+            after: Any = H.task(c, task_id)
+            return bool(after and before and after["owner_id"] != before["owner_id"])
+
+        return people_many(request, body, "task_owner", [("Why", body.why)], body.owner, one)
+
+    @app.post(
+        "/api/v2/tasks/snooze",
+        **api_v2(
+            "Tasks",
+            "snoozeTasks",
+            "Snooze many tasks in their stages: ids, or from {pipeline, stage} for every open task there; until (a date "
+            "to come; none is On ice) and why. Each is snoozed as one snooze is; one that can't be is skipped with its "
+            "code and the rest still change. A person's, or a bot's for a person (on_behalf_of). At most 500 tasks",
+            "TaskManyResult",
+        ),
+    )
+    def tasks_snooze(request: Request, body: M.TaskSnoozeMany):
+        until = parse_until(body.until)  # a bad date is refused before anything is checked
+
+        def one(c: Any, who: Any, task_id: str, version: Any, why: Any) -> bool:
+            setup_live.refuse_snooze_once_live(c, task_id)  # a seat's setup task waits for its go-live
+            H.task_snooze(c, who.actor, task_id, why, until, version, mover=mover(c, who) or None)
+            return True
+
+        return people_many(request, body, "task_snooze", [("Why", body.why)], None, one)
+
+    # Before `POST /api/v2/tasks/{tid}` (app.py), which would take "move", "owner" or "snooze" for a task's id.
     routes = app.router.routes
-    mine = routes.pop()
+    many_paths = ("/api/v2/tasks/move", "/api/v2/tasks/owner", "/api/v2/tasks/snooze")
+    mine = [r for r in routes if getattr(r, "path", None) in many_paths]
+    for r in mine:
+        routes.remove(r)
     at = next(
         (
             i
@@ -464,7 +567,7 @@ def register(
         ),
         len(routes),
     )
-    routes.insert(at, mine)
+    routes[at:at] = mine
 
     def reassign(c: Any, who: Any, task_id: str, body: Any, ingest: Any = None) -> Any:
         """H.task_reassign, with the checks a hand-over makes before it: the new owner is someone the caller may give
@@ -798,6 +901,8 @@ def register(
             body.version,
             own_click=task_asks.own_click(who),
             page_version=body.page_version,
+            visit_id=body.visit_id,
+            keyed=True,
         )
         # An answer on the Strategy Owner's merged item goes to each original it stands for.
         strategy_merge.on_answer(c, who.actor, task_id, body.value)

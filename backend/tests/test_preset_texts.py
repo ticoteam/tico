@@ -236,7 +236,7 @@ def test_an_edited_engineering_pipeline_gets_qa_with_the_page_its_person_oks_as_
         "people_only",
         "Our own check.",
     )
-    assert moved["line"] == "QA page"  # an unedited line follows the preset
+    assert (moved["line"], moved["settings"].get("document")) == ("QA report", "QA report")  # the preset's line
     assert new["settings_version"] == version + 2  # QA added, then the page's line moved to the preset's
     # Once: a second start changes nothing, and a QA stage a person removes stays removed.
     PS.ensure_presets(c)
@@ -250,7 +250,7 @@ def test_an_edited_engineering_pipeline_gets_qa_with_the_page_its_person_oks_as_
 def test_a_task_waiting_in_fixes_2_on_the_old_page_moves_on_to_qa_once_the_builder_says_done(c):
     """A task in Fixes 2 when QA is added, its page attached and waiting on the person: the page leaves Fixes 2 with
     the requirement, so the task waits on the Builder's done (the never-stuck check wakes it) and then moves to QA,
-    where the Builder attaches the QA page and the person is asked. Nothing is left waiting on a requirement gone."""
+    where the Builder writes the QA report and the person is asked. Nothing is left waiting on a requirement gone."""
     _before_qa(c)
     c.execute("UPDATE requirements SET withdrawn_at=? WHERE kind='item' AND stage_id LIKE 'engineering-%'", (H.now(),))
     row = H.task_create(c, ANA, "Saved carts", "Let a shopper keep a cart.", ANA, pipeline="engineering", lint=False)
@@ -271,7 +271,7 @@ def test_a_task_waiting_in_fixes_2_on_the_old_page_moves_on_to_qa_once_the_build
     qa = E.task(c, row["id"])
     assert qa["stage_id"] == "engineering-qa"
     (page,) = R.standings(c, qa)
-    assert (R.name_of(page.requirement), page.state, page.on) == ("QA page", R.NOT_MET, "bot:builder")
+    assert (R.name_of(page.requirement), page.state, page.on) == ("QA report", R.NOT_MET, "bot:builder")
     assert N.rules_hold(c) == []
 
 

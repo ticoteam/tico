@@ -42,6 +42,12 @@ card) picks tasks; **All in <stage>** picks a stage's, and **Move to…** moves 
 and what stayed and why ("Moved 214. 3 didn't move: 2 are in a bot's running turn, 1 you can't read"). Those that
 stayed stay picked.
 
+A stage's own ⋯, at the right of its column's header, works on the tasks the column shows (the search and filter
+applied): **Move all to…** (this pipeline's stages, Done, then other pipelines'), **Close all** (Undo reopens them),
+**Assign all to…**, **Snooze all…** and, for whoever may change the pipeline, **Edit stage**. Move all and Close all ask
+first with the count ("Close 22 tasks?"). Each is one write that makes the single change on every task with the
+caller's rights; a task that can't change stays, and the board says how many and why.
+
 - It is a re-file, not a forward move: the old stage's unmet requirements don't hold it. Entering the new stage is a
   normal entry: its owner rule, stage rules, limit and wake apply (a by-hand stage wakes nobody).
 - The task keeps its label: D18450 stays D18450 on the Backlog board, and `D18450` still finds it. The prefix is the
@@ -510,6 +516,9 @@ tico task done <id> -m "what was done" --version N
 tico task move <id> next|<stage>|done|closed|reopen -m "why" --version N
 tico task move <id> --to "Backlog/On ice" -m "why" --version N    # another pipeline (its first stage without /Stage)
 tico task move --from "Dev/Ideas" --to "Backlog/On ice" -m "why"  # every open task in a stage
+tico task move --from "Dev/Ideas" closed -m "why"                 # close (or move inside its pipeline) a stage's tasks
+tico task reassign --from "Dev/Ideas" <owner>                      # a person's: every open task in a stage
+tico task snooze --from "Dev/Ideas" [--until date]                 # a person's: every open task in a stage
 tico task close <id> -m "why" --version N
 tico task reassign <id> <owner> -m "why" --version N
 tico task ask <id> --to <person> "line" [--title "short"] [--kind ok] [--choices a,b] [--show page:12] --version N
@@ -538,7 +547,9 @@ refusal never counts toward a bot's quarantine.
 | `POST /api/v2/tasks/{id}/done` | `note?, version` | the work of this stage is finished |
 | `POST /api/v2/tasks/{id}/move` | `to, why?, version` | forward, push past, back, done, close, reopen |
 | `POST /api/v2/tasks/{id}/move` | `to_pipeline, to?, why?, version` | to another pipeline |
-| `POST /api/v2/tasks/move` | `ids` or `from: {pipeline, stage}`, `to_pipeline, to?, why?` | many to another pipeline: `{batch_id, moved, skipped: [{id?, code, reason}]}`, at most 500 |
+| `POST /api/v2/tasks/move` | `ids` or `from: {pipeline, stage}`, `to_pipeline?, to?, why?` | many: to another pipeline, or (`to` alone) each in its own: `{batch_id, moved, skipped: [{id?, code, reason}]}`, at most 500 |
+| `POST /api/v2/tasks/owner` | `ids` or `from`, `owner, why?` | reassign many; a person's: `{batch_id, changed, unchanged, skipped}` |
+| `POST /api/v2/tasks/snooze` | `ids` or `from`, `until?, why?` | snooze many; a person's: as above |
 | `POST /api/v2/tasks/{id}/owner` | `owner, why?, version` | reassign |
 | `POST /api/v2/tasks/{id}/snooze` | `until?, why?, version` | snooze |
 | `POST /api/v2/tasks/{id}/unsnooze` | `why?` | unsnooze |

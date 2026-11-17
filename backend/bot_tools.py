@@ -625,7 +625,8 @@ def listing(c, settings, bot, reads=None):
 GRANT_KEYS_SQL = (
     "SELECT k.id, k.name, k.env, k.tool_id, k.access_level, k.kind, k.holder, k.ciphertext IS NOT NULL AS stored, "
     "t.name AS tool_name, t.service, COALESCE(t.kind,'api') AS tool_kind, COALESCE(t.mcp_url,'') AS mcp_url "
-    "FROM credentials k LEFT JOIN tools t ON t.id=k.tool_id ORDER BY lower(coalesce(t.name, k.name)), k.id"
+    "FROM credentials k LEFT JOIN tools t ON t.id=k.tool_id WHERE k.kind!='service' "
+    "ORDER BY lower(coalesce(t.name, k.name)), k.id"
 )
 GRANT_LEVELS_SQL = "SELECT credential_id, access_level FROM credential_grants WHERE subject=? AND revoked_at IS NULL"
 LEVEL_WORDS = {"read": "Read", "read_write": "Read and write"}

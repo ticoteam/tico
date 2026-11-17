@@ -8,7 +8,7 @@ import pytest
 from backend.tests.helpers.api import headers, post  # noqa: F401
 
 
-@pytest.mark.parametrize("kind", ["task_multipart"])
+@pytest.mark.parametrize("kind", ["task_multipart", "task_json"])
 def test_upload_replays_and_conflicts_do_not_write_blobs(api, monkeypatch, kind):
     tid = post(api, "tasks", {"title": "Review upload", "owner": "ops", "body": "Read the report."})["id"]
     path = "/api/v2/uploads/chat/ops" if kind == "chat_multipart" else f"/api/v2/tasks/{tid}/files"
@@ -34,6 +34,21 @@ def test_upload_replays_and_conflicts_do_not_write_blobs(api, monkeypatch, kind)
     assert again.status_code == 200 and again.json() == first.json()
     changed = upload("changed")
     assert changed.status_code == 409 and changed.json()["error"]["code"] == "idempotency_conflict"
+
+
+def test_task_file_raises_a_refusal_the_write_replays(api, monkeypatch):
+    """A concurrent retry can store a refusal between the replay check and the write lock: the route raises it."""
+    tid = post(api, "tasks", {"title": "Review upload", "owner": "ops", "body": "Read the report."})["id"]
+    refusal = {
+        "_refusal": {"code": "file_refused", "detail": "Refused under the write lock", "status": 422, "extra": {}}
+    }
+    monkeypatch.setattr(api.app.state.store, "mutate", lambda *args, **kwargs: refusal)
+    response = api.post(
+        f"/api/v2/tasks/{tid}/files",
+        files={"file": ("report.txt", b"original", "text/plain")},
+        headers=headers("ana-test", "upload-refused"),
+    )
+    assert response.status_code == 422 and "file_refused" in response.text
 
 
 def test_multipart_parser_hashes_and_writes_in_worker_thread(tmp_path, monkeypatch):

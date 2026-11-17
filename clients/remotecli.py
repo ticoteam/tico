@@ -460,35 +460,18 @@ def run(args, who=None):
     if args.cmd in ("template", "bot"):  # `bot create`, `check` and `model`; the other bot leaves are specs
         return bots(client, args)
     if fn in (
-        "group list",
-        "group update",
-        "group delete",
-        "group access",
         "update create",
-        "update redo",
-        "update list",
-        "update show",
-        "update mark-read",
-        "update reply",
-        "update settings",
-        "changelog list",
-        "changelog mark-read",
         "origin show",
         "brief",
         "mcp stats",
         "calendar list",
         "calendar status",
-        "team show",
-        "team budget",
         "run list",
         "message list",
         "message mark-read",
         "agent pair show",
         "agent pair approve",
         "agent pair decline",
-        "slack channel list",
-        "slack channel add",
-        "slack channel remove",
         "setup show",
         "setup complete",
         "setup invite",
@@ -521,21 +504,6 @@ def run(args, who=None):
         return via_tool(client, args)
     if fn == "audit":
         return via_tool(client, args)
-    if fn and fn.startswith("general-manager "):
-        from clients import hubtools
-
-        op = os.environ.get("HUB_OPERATION_ID")
-        if fn == "general-manager status":
-            return hubtools.general_manager_status(client, {})
-        if fn == "general-manager run":
-            return hubtools.general_manager_run(client, {"operation_id": op})
-        change = {
-            "general-manager on": {"on": True},
-            "general-manager off": {"on": False},
-            "general-manager schedule": {"preset": getattr(args, "preset", None), "at": getattr(args, "at", None)},
-            "general-manager bot": {"bot": getattr(args, "state", None)},
-        }[fn]
-        return hubtools.general_manager_set(client, {**change, "operation_id": op})
     if args.cmd in ("api", "credential") or fn == "message redact":
         return botops_tools(client, args)
     if args.cmd == "classify":

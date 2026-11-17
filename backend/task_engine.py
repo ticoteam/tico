@@ -1800,7 +1800,7 @@ def _may_name(conn: "sqlite3.Connection", by: str, actor: str | None, task_id: s
 
 def _sets_assignee(conn: "sqlite3.Connection", row: Row) -> bool:
     """Whether a reassign in an assignee-held stage names the task's assignee: in its pipeline's first work stage
-    (Product's Pitch: who the feature owner is), or while it has none."""
+    (Product's Spec: who the feature owner is), or while it has none."""
     if not row.get("assignee_id"):
         return True
     first = next((s for s in stages(conn, str(row.get("pipeline_id") or "")) if s["kind"] == "work"), None)
@@ -2312,8 +2312,12 @@ def add_requirement(
         _refuse(conn, by, "task_requirement", "Nobody answers their own ask: ask someone else", task_id)
     if kind == "ok" and not is_human(person):
         _refuse(conn, by, "task_requirement", "An OK is asked of a person", task_id)
-    if is_bot(by):
+    if is_bot(by) and not for_action:
         page = _people_page(conn, row, kind, shows, choices)
+        if page and page in R.APPROVED:
+            # A stage's approval is asked by Tico when the bot writes the document, never by the bot.
+            hint = R.DOCUMENT_OK_HINT.format(document=page)
+            _refuse(conn, by, "task_requirement", f"This stage asks a person to approve the {page}. {hint}", task_id)
         if page:
             _refuse(conn, by, "task_requirement", f"{page} is a person's OK already. {R.PAGE_OK_HINT}", task_id)
     if not for_action:
@@ -2376,7 +2380,8 @@ def _people_page(
     conn: "sqlite3.Connection", row: Row, kind: str, shows: object, choices: list[str] | None
 ) -> str | None:
     """The name of the stage's people-only page requirement a bot's ask would duplicate, or None: an OK that shows that
-    page or shows nothing, or a yes/no question that shows that page, while the stage has one. A person OKs that page
+    page or shows nothing, or a yes/no question that shows that page, while the stage has one; any OK at all while the
+    stage names a document for a person to approve (its name, task_requirements.APPROVED). A person OKs that page
     already, every version, so the bot's ask adds a second one and nothing passes on it. A yes/no that shows nothing is
     a plain question (a Spec stage's clarifying question) and is allowed."""
     yes_no = kind == "answer" and sorted(str(c).strip().lower() for c in (choices or [])) == ["no", "yes"]
@@ -2386,7 +2391,13 @@ def _people_page(
 
     refs = [str(ref) for ref in cast("list[object]", shows)] if isinstance(shows, list) else []
     for requirement in R.for_visit(conn, row["visit"]):
-        if requirement["kind"] != "page" or not requirement.get("stage_id") or not R.people_only(requirement):
+        signoff = R.people_only(requirement) or bool(requirement.get("person_id"))
+        if requirement["kind"] != "page" or not requirement.get("stage_id") or not signoff:
+            continue
+        document = R.document_of(requirement)
+        if document and kind == "ok":
+            return document
+        if not R.people_only(requirement):
             continue
         attached = P.current(conn, row["visit"]["id"], requirement["id"])
         named = bool(attached) and any(str(attached["file_id"]) in ref for ref in refs)
