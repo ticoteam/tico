@@ -485,7 +485,14 @@ def email_text(result, action):
         )
     if action == 'mailboxes':
         boxes = result.get('mailboxes') or []
-        return "# Email mailboxes\n\n" + ("\n".join("- " + box['address'] for box in boxes) or "No readable mailboxes.")
+        lines = []
+        for box in boxes:
+            may = [verb for verb in ('read', 'organize', 'draft', 'send') if (box.get('may') or {}).get(verb)]
+            state = f"connection {box.get('connection') or 'none'}" + (
+                f", error: {box['error']}" if box.get('error') else ""
+            )
+            lines.append(f"- {box['address']}: may {', '.join(may) or 'nothing'}; {state}")
+        return "# Email mailboxes\n\n" + ("\n".join(lines) or "No readable mailboxes.")
     messages = [result] if action == 'message' else result.get('messages') or []
     lines = ["# Email", ""]
     if not messages:
