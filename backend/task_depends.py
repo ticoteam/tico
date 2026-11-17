@@ -181,13 +181,6 @@ def blocking(conn: "sqlite3.Connection", task_ids: Iterable[str]) -> dict[str, l
     return out
 
 
-def blocks_line(named: list[str], hidden: int = 0) -> str:
-    """ "Blocks #307, #308", "Blocks #307 and 1 more", or "Blocks 2 tasks" when none may be named."""
-    if not named:
-        return f"Blocks {hidden} task{'' if hidden == 1 else 's'}"
-    return f"Blocks {', '.join(named)}" + (f" and {hidden} more" if hidden else "")
-
-
 def dependents(conn: "sqlite3.Connection", task_id: str) -> list[str]:
     """The tasks that depend on this one."""
     return [

@@ -31,7 +31,7 @@ shows the same summaries.
 
 **Tasks** shows the never-stuck check's hourly reading: whether every rule that holds at all times holds (each open task
 waits on something; each bot's turn has a run, a wake or a next try), and how many tasks are on a retry, with a
-manager, with a person or unable to run. It is bad when a rule is broken. See
+manager, at the ladder's end or unable to run. It is bad when a rule is broken. See
 [Rules that hold at all times](dev/pipelines-v3.md#rules-that-hold-at-all-times).
 
 A cloud machine asleep while all its jobs wait on purpose shows those waits as queue information. If any job needs

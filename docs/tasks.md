@@ -141,18 +141,21 @@ there." Reopening it brings it back; what moved stays on the other task.
 A bot's run must leave its task done with the stage, asking a person, waiting on a task it filed, snoozed, closed, or
 blocked on another task (depends_on; never a snooze). While its own pull request's checks run, the turn is GitHub's.
 Anything else is "stopped early". The never-stuck check then wakes the bot again after 2 minutes, 15 minutes and 50
-minutes (inside the hour its session stays cached); then its manager bot, three tries more; then one person, once, in
-Needs you, with Try again, Reassign, Move back, Close and Snooze. Any change to the task starts the count again. See
+minutes (inside the hour its session stays cached); then its manager bot, three tries more. Then the ladder rests: the
+task stays with its bot, nobody more is woken for it, and the built-in Quiet bot tasks rule tells the pipeline's
+manager once it has been quiet 6 hours (one batched wake per manager). It goes to no person's Needs you; the manager bot
+asks a person when it needs one. Any change to the task starts the count again. See
 [The never-stuck check](dev/pipelines-v3.md#the-never-stuck-check).
 
 A person hands a task back to its owner with **Try again** (`POST /api/v2/tasks/{id}/try-again`).
 
 ## Needs you
 
-Needs you is the one list a person checks. It holds every ask with their name, every task they own, every Paused
-cause they can fix (one row per cause, not per task), every task the ladder or Late brought to them, and every @ of
-them by a person until they reply. A bot's @ only marks the task unread. No chat, email or push goes to a person about
-a task.
+Needs you is the one list a person checks, and it holds only what someone asks of them: every open question and OK
+with their name, every @ of them by a person until they reply, and two things only they can fix before a task can move:
+every Paused cause they can fix (one row per cause, not per task) and a private task that waits on someone being let
+in. A task they own with nothing asked of them is in Tasks, not Needs you, and so is a task the never-stuck ladder could
+take no further. A bot's @ only marks the task unread. No chat, email or push goes to a person about a task.
 
 `GET /api/v2/needs-you` returns the list; `?count=true` returns its one number (beside Flow in the Tasks header; the sidebar shows Flow's mark while it is above 0, and a phone's Flow tab turns jade).
 
@@ -325,8 +328,8 @@ Besides its owner, a task can list people or bots under a **role**, a short name
 
 A task may name one **Human**: the person accountable for it, whoever owns it, such as the developer on a ticket a bot
 owns. It is optional. The owner still has the work and is the one woken; the Human is the person the task falls to
-first. An OK, a page or a question that names nobody goes to them and is in their Needs you, as is the task once the
-ladder brings it to a person, and the owner bot's wake tells it to ask them. Naming one who cannot read a private task
+first. An OK, a page or a question that names nobody goes to them and is in their Needs you, and the owner bot's wake
+tells it to ask them. Naming one who cannot read a private task
 is refused (it adds no reader). A Human who left, cannot sign in or can no longer read the task is passed over for the
 rest of the ladder. Task create and update take `"human": "human:charlie"` (`""` takes them off); the task carries
 `human_id`. `tico task create|update --human <person>`. It stays when the task moves to another pipeline.

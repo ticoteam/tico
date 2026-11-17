@@ -1674,22 +1674,16 @@ def progress_mark(conn: "sqlite3.Connection", visit_id: str, standings: Sequence
 
 def _reset_ladder(conn: "sqlite3.Connection", visit: Row, ts: str, by: str) -> None:
     """The task changed: start the never-stuck ladder again. The owner has it, no tries are counted, and the check
-    looks again after the first gap. Call it after the change is written, so the mark it keeps includes the change. A
-    task that Late brought to a person stays with that person until a person acts. Wakes still queued for a bot that
-    has no turn now are canceled (`_drop_stale`)."""
+    looks again after the first gap, also when the ladder had rested on it (Late included: it is in no person's list
+    to keep it in). Call it after the change is written, so the mark it keeps includes the change. Wakes still queued
+    for a bot that has no turn now are canceled (`_drop_stale`)."""
     mark = progress_mark(conn, visit["id"])
     look = _h().shift(ts, seconds=FIRST_TRY_S)
-    if visit.get("level") == "person" and visit.get("late_person_at") and not _h().by_own_hand(by):
-        conn.execute(
-            "UPDATE visits SET progress_mark=?, last_change_at=?, next_try_at=? WHERE id=?",
-            (mark, ts, look, visit["id"]),
-        )
-    else:
-        conn.execute(
-            "UPDATE visits SET tries=0, level='owner', person_id=NULL, next_try_at=?, last_change_at=?, progress_mark=? "
-            "WHERE id=?",
-            (look, ts, mark, visit["id"]),
-        )
+    conn.execute(
+        "UPDATE visits SET tries=0, level='owner', person_id=NULL, next_try_at=?, last_change_at=?, progress_mark=? "
+        "WHERE id=?",
+        (look, ts, mark, visit["id"]),
+    )
     _drop_stale(conn, visit["task_id"])
 
 

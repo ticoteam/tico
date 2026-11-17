@@ -37,8 +37,8 @@ architecture) and C (the screens).
 - **One hold.** Snooze. There is no Blocked.
 
 > **The promise the build is tested against.** No open task is ever waiting on nothing. A task whose bot stops early
-> costs at most 7 runs, then it is in a person's Needs you with buttons, about 3 hours later. A person can always move a
-> task back, close it or snooze it, whatever state it is in.
+> costs at most 7 runs, about 3 hours, then the ladder rests and the quiet-task rule tells its manager. A person can
+> always move a task back, close it or snooze it, whatever state it is in.
 
 ## Decided
 
@@ -66,7 +66,7 @@ architecture) and C (the screens).
 - **All tasks** sit in a pipeline, in this build. General is a visible pipeline with a generic manager.
 - **General:** when the bot says done, it is Done. It can be reopened with a note.
 - **Never stuck:** a bot gets 3 tries (15 min, 15 min, 50 min; 2 min for the first after a run that was cut off),
-  then its manager bot, then a person.
+  then its manager bot; then the ladder rests and the quiet-task rule tells the manager.
 - **One ask:** everything you are asked is the task. You see the page itself, then Approve, or Send back with notes. The
   notes go to the bot.
 - **Person OKs** on Product: the pitch, the spec, the QA page and the release. The rest is bots and Jev.
@@ -99,7 +99,7 @@ Close calls that change behavior, C1 to C31. They are part of sign-off A. Text i
   page version, an ask, a snooze, a sub-task filed. A comment alone does not count, so a bot can't loop on "working on
   it".
 - **C5.** Late has two steps and no extra settings. At the stage's expected time the manager bot gets the task. At 3
-  times that, it lands in one person's list, once.
+  times that, the ladder rests, once.
 - **C6.** A task owned by a person is never chased. It shows Late only after its due date.
 - **C7.** Asks never expire and tasks never close by themselves. *Today: questions expire after 7 days or go ahead on a
   default answer, and done Engineering tasks close after 24 hours.*
@@ -152,8 +152,9 @@ Close calls that change behavior, C1 to C31. They are part of sign-off A. Text i
   the number counts tasks that hold a slot, and beside it a person mark and a number count those waiting only on a
   person's OK or answer; the words ("15 wait on a person") are its label and tooltip only, on desktop and phone. The
   setting is called Limit. The word "pool" is gone.
-- **C28.** Needs you is the one place to check. It holds every requirement with your name, every task you own, and every
-  @ of you by a person, on a task or in a channel, until you reply. A bot's @ on a task only marks it unread: a bot that
+- **C28.** Needs you is the one place to check, and it holds only what someone asks of you: every requirement with your
+  name, and every @ of you by a person, on a task or in a channel, until you reply. A task you own with nothing asked of
+  you is in Tasks. A bot's @ on a task only marks it unread: a bot that
   needs you has to use a requirement. A task never waits on an @, and an @ sends no push. A bot that @s someone and stops
   is still the one whose turn it is. *Today an @ on a task reaches no list. Channels are not changed.*
 - **C29.** Only a requirement a person can meet with a button can name a person: OK from someone, a page's OK, Answer
@@ -368,7 +369,7 @@ lists all of them. The list is never empty for an open task. Each state's look i
 4. **A bot's turn**
    - Starts: A requirement is not met and the owner is a bot.
    - Ends: The bot meets it, asks, files a task, snoozes or closes.
-   - If not: 3 tries, then the manager bot, then a person.
+   - If not: 3 tries, then the manager bot, then the ladder rests (the quiet-task rule tells the manager).
 5. **Jev is checking**
    - Starts: A page is attached.
    - Asked: a check Tico ships (Spec, Review, QA, Checked in production) is asked as its named parts, each a yes/no
@@ -584,8 +585,8 @@ the Assistant or BotOps writes for a person does not.
 - Late is a label on the task. It also hands the task to the manager bot, once per visit, on the same 3 tries.
 - A task that waits only on people's answers stays in their lists. The manager bot is woken only when a bot may push
   past one of those asks, and it is not offered a snooze. When every ask is people only, no bot is woken.
-- Still there at 3 times the expected time: it lands in one person's list, once (C5). If it is already a person's turn,
-  nothing is added.
+- Still there at 3 times the expected time: the ladder rests, once (C5): nobody more is woken for it, and the quiet-task
+  rule tells the manager. If it is already a person's turn, nothing changes.
 - This is the backstop for work that keeps changing but never finishes, and for waits on the outside world.
 
 ### Long work: what 24 hours looks like
@@ -693,8 +694,8 @@ snoozed by itself: snoozing it snoozes the task. Talk about it is the task's con
 Five kinds on one screen. Only a requirement added to one task stores anything. The rest are read from what already
 exists, so they can't go stale or double up.
 
-In the list they sit under today's three headings. Answer: questions and stuck tasks. Review: things to approve. Do:
-your own tasks and one-tap fixes.
+In the list they sit under today's three headings. Answer: questions. Review: things to approve. Do: one-tap fixes.
+A task you own with nothing asked of you is not in the list: it is in Tasks.
 
 - **Approve:** a stage's requirement names you, or a rule holds an action such as "Send this email?". Buttons: Approve,
   Send back.
@@ -703,11 +704,14 @@ your own tasks and one-tap fixes.
   cause goes. A stage reading PRs with no GitHub App installed is one: **Connect GitHub**, for the company's owner,
   links to Tools, GitHub (**Choose a repository** once installed with none In use); its tasks wake nobody until then,
   and each bot is woken once after (docs/github-app.md).
-- **Yours:** a task you own. Done, then the snooze icon and ⋯ (Give to…, Skip), the row an ask has.
-- **Stuck:** the ladder or Late reached you. Buttons: Try again, Reassign, Move back, Close, Snooze.
+- **Let them see:** a private task waits on someone who can't open it. Buttons: Let them see it, Reassign, Move back,
+  Close.
+
+A task the never-stuck ladder could take no further is in no list: it stays with its bot, and the quiet-task rule tells
+the pipeline's manager, who asks a person when it needs one.
 
 Stored: a requirement added to one task (a question, a held action, an OK someone added). Read: a stage's OK (from the
-stage), Do (from the bot's state), Yours (from the task's owner), Stuck (from the visit).
+stage), Do (from the bot's state), Let them see (from the task's readers).
 
 ### The shape of an ask
 
@@ -827,7 +831,7 @@ there. The pipeline itself (name, goal, stages, manager, counts) is seen by ever
 - Private is set as a pipeline is made (a preset, or a new one), or while it holds no task; never changed on one that
   holds tasks. Only a person turns it off.
 - Its manager reads its tasks, so it is never the General Manager (which reads no private task) and never empty. The
-  never-stuck ladder stops at the manager, then a person who reads the task (the company's owner).
+  never-stuck ladder stops at the manager.
 - Its stages have no limit (a limit counts tasks a reader can't see) and no OK from a person.
 - Legal: prefix LG, "Contracts and compliance questions answered before they hold up the business". Intake → Review →
   Rules check. Manager and every stage: the Legal Owner.
@@ -1328,8 +1332,8 @@ late. Nothing depends on the exact 10 seconds.
   releases" while a task waits on a Release with that needs it. Only a person sets Release with.
   With no way set (the repo releases on its own, or a person cuts each release, as on a repo that tags rcs by hand),
   the task shows "Waiting for the next release of <repo>" and only that release ends it: nobody's turn, no wake, no
-  ladder and no Late for a bot. After a week (or the stage's expected time, when longer) it is Late and lands in one
-  person's list, once. A week, because a weekly stable train is the slowest cadence a repo keeps on purpose; a repo
+  ladder and no Late for a bot. After a week (or the stage's expected time, when longer) it is Late and the ladder rests,
+  once. A week, because a weekly stable train is the slowest cadence a repo keeps on purpose; a repo
   cutting pre-releases several times a day never gets near it.
 
 ### What gets deleted
@@ -1510,11 +1514,10 @@ The phone view is in [S17](#s17-on-a-phone). What changed since the version you 
   to two lines and is never cut; a green thumb leads it when Tico would approve.
 - **Snooze:** one menu, 1 hour, 1 day, 1 week, 1 month (each exactly that long from now) and Other (a date and time of
   your own, in the same menu). On an ask it is a quiet clock icon at the end of the answer row, in Skip's place, and
-  snoozes the ask for you alone (#3769): it stays in everyone else's Needs you and its bot is not told. On your own
-  task it is the Snooze button and snoozes the task. Either leaves Flow until then, with ↩ "Snoozed" in the top bar,
-  which brings it back. Mentions, stuck tasks, fixes and your own tasks keep Skip.
-- **The end:** "All done", and "2 snoozed" counting your own tasks snoozed on this visit and every ask you have
-  snoozed; with asks it opens their list, each with ↩ to bring it back now.
+  snoozes the ask for you alone (#3769): it stays in everyone else's Needs you and its bot is not told. It leaves Flow
+  until then, with ↩ "Snoozed" in the top bar, which brings it back. Mentions, stuck tasks and fixes keep Skip.
+- **The end:** "All done", and "2 snoozed" counting every ask you have snoozed; it opens their list, each with ↩ to
+  bring it back now.
 
 Flow has no 👍 or 👎; the rules are in [Thumbs down, and rules](#thumbs-down-and-rules).
 
@@ -1755,7 +1758,7 @@ On a bot's page the words Blocked, Waiting on a human and Waiting on a bot go aw
 - "0" waiting on nothing
 - "3" on a retry
 - "1" with a manager
-- "1" reached a person
+- "1" at the ladder's end
 - "6" can't run
 
 ### S16. What bots see
@@ -1887,12 +1890,12 @@ into a test in phase 1.
   again with "your last run was cut off, check what it did". Quarantine is still per bot, but it shows as Paused.
 - **F3. Follow-up timers flooded the queue.** Prevented. There are no check-back wakes. A bot is woken only when it is
   its turn and it has no live run: 7 runs at most per visit. A task that waits on a person, or is owned by one, wakes
-  nobody. There are no "Find why" tasks. The end of the ladder is the task itself in a person's list, and it leaves when
-  the task moves or closes.
+  nobody. There are no "Find why" tasks. At the end of the ladder the task rests with its bot, and the quiet-task rule
+  tells the manager, in one batched wake.
 - **F4. 173 tasks stranded in "doing".** Prevented. There is no "doing". A run that ends without one of the five endings
   is "stopped early", and the bot is woken again in 15 minutes (2 when its run was cut off).
 - **F5. A stage whose owner never pulls work.** Caught. Bots don't pull. The engine wakes the stage's owner. An owner
-  that does nothing gets 3 tries, then the manager, then a person. One wake per task, so 134 jobs can't queue. Post
+  that does nothing gets 3 tries, then the manager, then the ladder rests. One wake per task, so 134 jobs can't queue. Post
   Release QA itself is dropped (D46).
 - **F6. Asks that never leave.** Prevented. An ask belongs to one visit and ends when the task moves, goes back or
   closes. One question per bot per task, so no copies. "Reconnect" rows are read from the bot's state, one per cause, and
@@ -2138,8 +2141,8 @@ failure can be replayed exactly. It runs in CI, not on your machine.
 
 Numbered in order so they can be cited (scenario 1 to 52).
 
-1. A bot stops early with nothing changed: woken at 15 min, 15 min and 50 min, then the manager, then one person's list. At
-   most 7 runs.
+1. A bot stops early with nothing changed: woken at 15 min, 15 min and 50 min, then the manager, then the ladder rests
+   and the quiet-task rule tells the manager. At most 7 runs.
 2. A bot comments "working on it" and stops: counts as stopped early.
 3. A wake is lost: the next pass queues it again. Never two.
 4. A crash at any point inside a move: after restart the task is fully moved or not moved. The on-enter action happened

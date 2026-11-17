@@ -211,14 +211,16 @@ def test_a_blocked_task_holds_no_slot_is_never_late_and_is_not_handed_on(c):
     assert (E.task(c, blocked)["visit"].get("level") or "owner") == "owner"
 
 
-def test_a_blocked_task_leaves_its_person_owners_needs_you(c):
+def test_a_blocked_task_leaves_its_person_owners_plate(c):
+    """Its own work leaves the load ask ingest weighs (`own_work`); it was never in Needs you, which holds only asks."""
     build(c)
     X.pipeline(c)  # General: To do, the assignee's
     blocker = task(c, "Part 1")
     mine = X.new_task(c, X.ANA, "Write the copy", assignee=X.ANA)["id"]
-    assert any(item.get("task_id") == mine for item in W.needs(c, X.ANA))
-    TR.relate(c, X.ANA, mine, blocker, "depends_on")
+    assert any(item.get("task_id") == mine for item in W.needs(c, X.ANA, own_work=True))
     assert not any(item.get("task_id") == mine for item in W.needs(c, X.ANA))
+    TR.relate(c, X.ANA, mine, blocker, "depends_on")
+    assert not any(item.get("task_id") == mine for item in W.needs(c, X.ANA, own_work=True))
 
 
 def test_blocked_time_does_not_count_toward_late():

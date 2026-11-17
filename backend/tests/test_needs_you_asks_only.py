@@ -45,15 +45,16 @@ def test_an_open_question_and_an_ok_asked_of_a_person_are_in_their_needs_you(c):
     mine = X.new_task(c, ANA, "Renew the lease", assignee=ANA)
     asked = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
     E.add_requirement(c, asked["id"], "bot:builder", "answer", ANA, "Which date?", seen_version=asked["version"])
-    asked = E.task(c, asked["id"])
-    E.add_requirement(c, asked["id"], "bot:builder", "ok", ANA, "OK the headline", seen_version=asked["version"])
+    # One open ask per bot on a task: the OK is another task's.
+    ok = X.new_task(c, ANA, "Write the press note", assignee="bot:builder")
+    E.add_requirement(c, ok["id"], "bot:builder", "ok", ANA, "OK the headline", seen_version=ok["version"])
     # A question on her own task is hers to answer, though the task's own work is not listed.
     E.add_requirement(c, mine["id"], "bot:builder", "answer", ANA, "Which landlord?", seen_version=mine["version"])
     listed = W.needs(c, ANA)
     assert sorted((n["kind"], n["task_id"], n["line"]) for n in listed) == sorted(
         [
             ("ask", asked["id"], "Which date?"),
-            ("ask", asked["id"], "OK the headline"),
+            ("ask", ok["id"], "OK the headline"),
             ("ask", mine["id"], "Which landlord?"),
         ]
     )

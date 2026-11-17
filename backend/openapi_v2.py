@@ -2460,7 +2460,8 @@ NEEDS_ITEM = obj(
         "kind": {
             "type": "string",
             "enum": ["task", "ask", "paused", "mention"],
-            "description": "task: a task whose work is theirs; ask: a requirement with their name (its fields in "
+            "description": "task: a private task they must let someone see (`task.turn.share`); ask: a requirement "
+            "with their name (its fields in "
             "`ask`); paused: a bot that cannot run, which they can fix; mention: an @ of them by a person they have "
             "not replied to",
         },

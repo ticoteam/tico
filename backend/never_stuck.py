@@ -13,12 +13,15 @@ are on it:
 - A bot's turn: nothing while the bot has a live run or a wake queued for the task. Otherwise the ladder: the bot is
   woken again 15 minutes after a run that finished (2 minutes after one that was cut off, or a wake that never ran),
   then 15 minutes, then 50 minutes. After 3 tries with no change the pipeline's
-  manager bot gets the task on the same 3 tries, then a person. If the task changed, the count goes back to zero.
+  manager bot gets the task on the same 3 tries; after those the ladder rests (level `person`): the task stays with its
+  bot, nobody more is woken for it, and the quiet-task rule tells the manager (backend/stage_rule_timers.py). It is in
+  no person's list, unless it waits on someone who may not open it: a person who reads it lets them in. If the task
+  changed, the count goes back to zero.
 - Paused, a person's turn, other tasks, room, by-hand stages and snoozed tasks: nothing. `waiting_on` shows them. A
   person's request is not held in a by-hand stage: it moves on when the next stage has room (`_requests`). Nobody
   is told that a stage has room.
-- Late: past the stage's expected time the manager bot gets the task once per visit; at 3 times the expected time it
-  lands in one person's list, once.
+- Late: past the stage's expected time the manager bot gets the task once per visit; at 3 times the expected time the
+  ladder rests, once.
 - A snooze whose date came ends, and the owner is woken once.
 - Stage rules whose When is a timer (N h in the stage, N h quiet, N h waiting on a person) are judged after the
   tasks (backend/stage_rule_timers.py): they tell the manager, in one wake an hour, tell the owner or move the task back.
@@ -68,7 +71,7 @@ RUNS = task_wakes.RUNS
 assert RUNS == 1 + 2 * TRIES
 QUIET = 8  # tasks in a row that changed nothing before the pass reads ahead again (`check`)
 HOPS = 20  # stages one task is taken through in one pass, at most
-LATE_PERSON = 3  # times a stage's expected time before a late task lands in a person's list (C5)
+LATE_PERSON = 3  # times a stage's expected time before a late task's ladder rests (C5)
 CUT_OFF = ("expired", "failed", "interrupted")
 MANAGER_HAS_IT = "It is yours now: do it, reassign it, ask a person, snooze it or close it."
 
@@ -110,7 +113,7 @@ def _usable(conn: "sqlite3.Connection", bot: str | None, seen: dict[str, str | N
 def _reads(conn: "sqlite3.Connection", actor: str | None, row: Row) -> bool:
     """Whether `actor` may read this task already. The engine never adds a reader (docs/dev/pipelines-v3.md: private
     tasks, "Who can see them doesn't change"), so on a private task the ladder skips a manager bot that cannot read it,
-    and a bot that cannot read it is never woken: the task goes to a person who may."""
+    and a bot that cannot read it is never woken: the ladder rests."""
     return bool(actor) and bool(_h().task_private_readable(conn, actor, row))
 
 
@@ -125,7 +128,7 @@ def check(
     conn: "sqlite3.Connection", now: str | None = None, failures: list[tuple[str, Exception]] | None = None
 ) -> dict[str, int]:
     """One pass. Returns what it did: snoozes ended, tasks moved, bots woken, tasks handed to a manager bot, tasks
-    handed to a person, and tasks that became late. A task that raised is rolled back on its own and added to
+    whose ladder rests (`to_person`), and tasks that became late. A task that raised is rolled back on its own and added to
     `failures` with its error; without the list, the error is raised."""
     H = _h()
     at: str = now or H.now()
@@ -410,7 +413,7 @@ def _one(
     level: str = row["visit"].get("level") or "owner"
     if level != "person" and W.unreadable(conn, row, standings):
         # It waits on someone who may not open it (a stage edited to ask them, its readers narrowed): nothing they can
-        # do and no time to wait out. A person who reads it has it now, told whom to add under Who can see.
+        # do and no time to wait out. The ladder rests, and a person who reads it is asked to let them in.
         _to_person(conn, row, level, done)
         return
     _ladder(conn, row, waits, E.progress_mark(conn, row["visit"]["id"], standings), at, done, seen, live)
@@ -444,7 +447,8 @@ def _ladder(
     target = W.turn(conn, row, waits)
     manager = _manager(conn, row, seen)
     if target and ((level == "manager" and not manager) or (is_bot(target) and not _reads(conn, target, row))):
-        # The manager bot cannot take it any more, or the bot whose turn it is cannot read this private task: a person.
+        # The manager bot cannot take it any more, or the bot whose turn it is cannot read this private task: the
+        # ladder rests.
         _to_person(conn, row, level, done)
         return
     epoch: str = visit.get("last_change_at") or visit["entered_at"]
@@ -609,7 +613,7 @@ def _to_manager(
     """Hand the task to the pipeline's manager bot, told who tried and what is missing: its first of 3 tries. A wake
     still queued for a bot that has no turn now is canceled: it would start a run about a turn that is over. A bot
     named on an OK or an answer that still waits keeps its wake (R2). A live run goes on. When the visit has used its
-    7 runs since the last change, a person has it instead."""
+    7 runs since the last change, the ladder rests instead."""
     visit = row["visit"]
     epoch: str = visit.get("last_change_at") or visit["entered_at"]
     if task_wakes.runs_since(conn, row) >= RUNS:
@@ -625,8 +629,10 @@ def _to_manager(
 
 
 def _to_person(conn: "sqlite3.Connection", row: Row, level: str, done: dict[str, int]) -> None:
-    """Hand the task to a person. It shows in their Needs you, once, and nothing more runs until a person acts: every
-    wake still queued for the task is canceled. A live run goes on."""
+    """The ladder's last step: it rests (level `person`). Nothing more is woken for the task until it changes, and
+    every wake still queued for it is canceled; a live run goes on. The task stays with its bot (waiting_on.holder)
+    and is in no person's list: the quiet-task rule tells the pipeline's manager. Only a task that waits on someone
+    who may not open it is in a list, the list of `_person`, who may let them in."""
     visit = row["visit"]
     person = _person(conn, row)
     conn.execute("UPDATE visits SET level='person', person_id=?, next_try_at=NULL WHERE id=?", (person, visit["id"]))
@@ -770,9 +776,10 @@ def _late(
         conn.execute("UPDATE visits SET late_person_at=? WHERE id=?", (at, visit["id"]))
         fresh = E.task(conn, row["id"]) or row
         waits = W.of(conn, fresh, seen)
-        if not (waits and waits[0].state in (W.PERSON, W.PAUSED)):
-            # Still there at 3 times the expected time: one person's list, once. Already a person's turn, or paused
-            # with its cause in a person's list: nothing.
+        rested = fresh["visit"].get("level") == "person"
+        if not rested and not (waits and waits[0].state in (W.PERSON, W.PAUSED)):
+            # Still there at 3 times the expected time: the ladder rests, once. Rested already, a person's turn, or
+            # paused with its cause in a person's list: nothing.
             _to_person(conn, fresh, fresh["visit"].get("level") or "owner", done)
 
 
@@ -794,8 +801,8 @@ def _late_release(
     conn: "sqlite3.Connection", row: Row, at: str, spent: float, minutes: int, done: dict[str, int]
 ) -> None:
     """A task that waits only for the next release, which no bot can bring: no bot is told Late or woken. After a week
-    (github_release.RELEASE_WAIT_S), or the stage's expected time when that is longer, it is Late and lands in one
-    person's list, once."""
+    (github_release.RELEASE_WAIT_S), or the stage's expected time when that is longer, it is Late and the ladder
+    rests, once."""
     from .item_sources import github_release
 
     visit = row["visit"]
@@ -949,7 +956,9 @@ def rules_hold(conn: "sqlite3.Connection") -> list[str]:
                     Break(f"2: task {task_id} is {wait.who}'s turn with no run, no wake and no next try", [task_id])
                 )
         private = H.task_private(conn, row)
-        if any(wait.state == W.PERSON and not wait.who for wait in waits):
+        # The ladder rested on a private task that no person reads: no one could move it if its bot never does.
+        unread = private and visit.get("level") == "person" and not W.person_for(conn, row)
+        if unread or any(wait.state == W.PERSON and not wait.who for wait in waits):
             if someone is None:
                 someone = W.company_person(conn) is not None
             if private and someone:
@@ -974,7 +983,8 @@ def rules_hold(conn: "sqlite3.Connection") -> list[str]:
             # An ask the person snoozed for themselves is out of their list until its time (backend/ask_snoozes.py).
             mine = [wait for wait in mine if not W.snoozed_until(conn, snoozes, person, row, wait)]
             asks = [wait.requirement_id for wait in mine if wait.ask]
-            want = len(asks) + (1 if any(not wait.ask for wait in mine) else 0)
+            # Each ask, and one entry for a task they must let someone see; the task's own work is not listed.
+            want = len(asks) + (1 if any(not wait.ask and wait.share for wait in mine) else 0)
             got_asks = sorted(str(item["requirement_id"]) for item in listed if item["kind"] == "ask")
             if len(listed) != want or got_asks != sorted(str(a) for a in asks):
                 said = f"3: task {task_id} shows {len(listed)} times in {person}'s Needs you, not {want}"

@@ -2692,8 +2692,8 @@ def _plate_tasks(item):
 
 
 def _plate_check(c, who, auth, full):
-    """Each person's Needs you count from the engine's read (waiting_on.needs: their asks, their own tasks' work and the
-    Paused causes they fix). An administrator reads everyone's plate; anyone else reads only their own. Warn over
+    """Each person's Needs you count from the engine's read (waiting_on.needs: the OKs and questions asked of them, a
+    private task they must let someone see, and the Paused causes they fix). An administrator reads everyone's plate; anyone else reads only their own. Warn over
     NEEDS_PLATE_WARN items, bad over NEEDS_PLATE_BAD. Only the plates over the warning are listed, each with the bots
     that asked for most of its tasks."""
     from . import waiting_on
@@ -2751,7 +2751,8 @@ def _plate_check(c, who, auth, full):
 
 def never_stuck_reading(c):
     """What the never-stuck check finds over every open task: the seven rules' breaks (never_stuck.rules_hold) and
-    where the ladder has the tasks (S15): waiting on nothing, on a retry, with a manager, reached a person, can't run.
+    where the ladder has the tasks (S15): waiting on nothing, on a retry, with a manager, at the ladder's end (it rests
+    there, with its bot), can't run.
     `tasks` keeps which tasks each number counts, and `broken_tasks` the tasks each break is about (never_stuck.Break,
     tied when it was found), so someone who reads only some tasks is shown only those. A private task no person who
     reads it can move is held, not a break: it counts under `no_one`, a number only. It reads every open task, so it
@@ -2857,7 +2858,7 @@ def _never_stuck_check(c, visible_sql=None):
         counts = {key: int(reading.get(key) or 0) for key in NEVER_STUCK_COUNTS}
     summary = (
         f"{counts['waiting_on_nothing']} waiting on nothing, {counts['retry']} on a retry, "
-        f"{counts['manager']} with a manager, {counts['person']} reached a person, {counts['cant_run']} can't run."
+        f"{counts['manager']} with a manager, {counts['person']} at the ladder's end, {counts['cant_run']} can't run."
     )
     if reading.get("at") and str(reading["at"]) < H.shift(H.now(), minutes=-NEVER_STUCK_FRESH_MINUTES):
         summary += f" Read at {str(reading['at'])[11:16]} UTC; tasks closed since are left out."

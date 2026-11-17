@@ -400,19 +400,16 @@ def needs_list(ctx):
 
 
 def needs_act(it):
-    """What a Needs you row asks of the reader, as ui/app/tasks.ts decideKind sorts it: done, ok, answer, reply, fix.
-    Only an OK or a page's OK is ok; an ask of any other kind is answered."""
-    kind, task = it.get("kind"), it.get("task") or {}
+    """What a Needs you row asks of the reader, as ui/app/decide.ts decideKind sorts it: ok, answer, reply, fix. Only an
+    OK or a page's OK is ok; an ask of any other kind is answered. A task row is one a person must fix before it can
+    move (a private task to let someone see): Needs you lists no task only because it is the reader's
+    (waiting_on.needs)."""
+    kind = it.get("kind")
     if kind == "ask":
         return "ok" if (it.get("ask") or {}).get("kind") in ("ok", "page") else "answer"
-    if kind == "paused":
-        return "fix"
     if kind == "mention":
         return "reply"
-    turn = task.get("turn") or {}
-    late = (task.get("late") or {}).get("level") == "person"
-    stuck = turn.get("state") == "paused" or late or bool(task.get("stuck")) or bool(turn.get("share"))
-    return "fix" if stuck else "done"
+    return "fix"
 
 
 def needs_brief(items, n):

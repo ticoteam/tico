@@ -116,7 +116,7 @@
 /* a question (#3786): itself once, in full, its meta line under it; then its choices, the box and one row:
    Send · Snooze · ⋯. Its task is the background: one line that opens (decideBgHTML), on the left on a wide screen. */
 .dc-ask{display:flex;flex-direction:column;gap:4px}
-.dc-q.dc-q-short,.dc-q.dc-q-ask{font-size:var(--t-lg)}
+.dc-q.dc-q-ask{font-size:var(--t-lg)}
 .dc-q.dc-q-ask{white-space:pre-wrap}
 .dc-ask-meta{min-height:28px}
 .dc-ask-meta .dc-meta-who{flex:0 1 auto;min-width:24px;overflow:hidden;text-overflow:ellipsis;color:var(--ink)}
@@ -132,9 +132,6 @@
 .dc-links{display:flex;flex-wrap:wrap;align-items:center;gap:12px}
 .dc-links .dc-open-task{margin:0}
 .dc-go{min-height:36px;padding:0 12px;border-radius:10px;font-weight:600}
-.dc-reply{display:flex;flex-direction:column;gap:6px}
-.dc-reply-row{display:flex;align-items:center;gap:10px}
-.dc-reply-row button{min-height:36px;padding:0 14px;border-radius:10px;font-weight:600}
 .dc-sent{color:var(--muted);font-size:var(--t-sm)}
 .dc-held{display:flex;flex-direction:column;gap:6px}
 .dc-held-line{margin:0;font-size:var(--t-sm);font-weight:600}
@@ -417,7 +414,7 @@ button.dc-jev{cursor:pointer}
   .dc-vmenu{top:auto;bottom:calc(100% + 4px)}
   /* Notes starts one row, the clip inside it, and opens up when it is focused */
   .dc-note-row textarea:focus{min-height:88px}
-  .dc-file-x,.dc-attach,.dc-open-task,.dc-go,.dc-reply-row button,.dc-acts .dc-skip{min-height:44px}
+  .dc-file-x,.dc-attach,.dc-open-task,.dc-go,.dc-acts .dc-skip{min-height:44px}
   .dc-acts .dc-snz-b{width:44px;min-width:44px;height:44px;min-height:44px}
   .dc-snz .dc-mi,.dc-snz-at input{min-height:44px}
   .dc-acts .dc-snz-at .dc-icon{width:44px;min-width:44px;height:44px;min-height:44px}

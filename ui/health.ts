@@ -297,7 +297,7 @@ function hlFixHtml(fix: HlFix): string {
 // Health · Tasks (S15): where the never-stuck check has the open tasks, a big number and its words on each line.
 type HlLadderKey = 'waiting_on_nothing' | 'retry' | 'manager' | 'person' | 'cant_run' | 'broken';
 const HL_LADDER: [HlLadderKey, string][] = [['waiting_on_nothing', 'waiting on nothing'], ['retry', 'on a retry'],
-  ['manager', 'with a manager'], ['person', 'reached a person'], ['cant_run', "can't run"], ['broken', 'broken']];
+  ['manager', 'with a manager'], ['person', "at the ladder's end"], ['cant_run', "can't run"], ['broken', 'broken']];
 function hlLadderHtml(counts: HlCheck['counts']): string {
   if (!counts) return '';
   return `<ul class="hl-ladder">${HL_LADDER.map(([key, words]) => `<li><strong>${esc(String(counts[key] ?? 0))}</strong> ${esc(words)}</li>`).join('')}</ul>`;

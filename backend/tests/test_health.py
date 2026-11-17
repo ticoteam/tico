@@ -1734,10 +1734,11 @@ def test_batched_computer_load_and_overload_reads_answer_what_each_computer_read
 
 
 def _asks(api, owner, askers, start=0):
-    """One open task for `owner` per entry of `askers`, each asked by that bot, titled apart."""
+    """One open question to `owner` per entry of `askers`, each on its own task of that bot's, titled apart."""
     with api.app.state.store.transaction() as c:
         for i, asker in enumerate(askers, start=start):
-            H.task_create(c, asker, f"Item {i} for {owner}", "x", owner, private=False)
+            made = H.task_create(c, asker, f"Item {i} for {owner}", "x", asker, private=False)
+            H.task_ask(c, asker, made["id"], owner, f"Question {i}?", seen_version=made["version"])
 
 
 def test_a_plate_over_ten_warns_and_names_the_three_bots_asking_most(environment):

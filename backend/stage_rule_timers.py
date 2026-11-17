@@ -190,8 +190,9 @@ def _judge(conn: Any, rule: Row, task: Row, at: str, done: dict[str, int]) -> No
 
 # ----------------------------------------------------------------------------- If
 def _matches(conn: Any, rule: Row, task: Row) -> bool:
-    """The rule's If: `turn` is read here (whose turn the task is, as the never-stuck ladder reads it: a bot's, or a
-    person's when the first thing it waits on is a person); every other key by stage_rules.matches."""
+    """The rule's If: `turn` is read here (whose turn the task is, as the never-stuck ladder reads it: a bot's, also
+    once the ladder has rested on it and wakes nobody, or a person's when the first thing it waits on is a person);
+    every other key by stage_rules.matches."""
     SR, E, W = _mod("stage_rules"), _mod("task_engine"), _mod("waiting_on")
     row = E.task(conn, task["id"])
     if not row:
@@ -199,7 +200,9 @@ def _matches(conn: Any, rule: Row, task: Row) -> bool:
     turn = rule["cond"].get("turn")
     if turn:
         waits: list[Any] = W.of(conn, row)
-        who: str | None = W.turn(conn, row, waits) or (waits[0].who if waits and waits[0].state == W.PERSON else None)
+        who: str | None = W.turn(conn, row, waits, resting=True) or (
+            waits[0].who if waits and waits[0].state == W.PERSON else None
+        )
         if _kind(who) != turn:
             return False
     return bool(SR.matches(conn, rule, row)[0])
