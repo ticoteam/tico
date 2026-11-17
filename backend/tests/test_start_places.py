@@ -10,6 +10,7 @@ from backend.tests.helpers.api import assign, claim, get, headers, post, ready, 
 from backend.tests.helpers.attempt_contention import fleet
 from backend.tests.helpers.runner_load import point
 from backend.tests.helpers.start_places import memory, overload, waiters
+from backend.tests.helpers.held_runs import no_start_wait
 
 
 def sent_by(api, message_id, actor):
@@ -201,8 +202,7 @@ def test_repeated_overdue_starts_stop_at_the_pre_start_retry_limit(api, monkeypa
     from backend.tests.helpers.api import setup_attempt
 
     monkeypatch.setattr(execution, 'PRE_START_TRIES', 2)
-    # A lapse now waits before the job goes out again (execution.handed_back_until); not what this test is about.
-    monkeypatch.setattr(execution, 'HAND_BACK_WAIT', 0)
+    no_start_wait(monkeypatch)  # a lapse's wait before the next try is not what this test is about
     machine, message, first = setup_attempt(api)
     store = api.app.state.store
     attempt = first

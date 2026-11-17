@@ -6,6 +6,7 @@ import pytest
 from backend.tests.helpers.api import assign, runner, setup_attempt, post, get, expire, ready, claim, headers
 from backend import bot_settings as BS
 from backend.tests.helpers.task_lanes import RUNNER_CAPABILITIES
+from backend.tests.helpers.held_runs import no_start_wait
 from backend.tests.helpers.execution_review import (
     add_recovery_reviewer,
     aged,
@@ -38,8 +39,7 @@ def test_pre_start_retry_limit_fails_unstarted_jobs_and_preserves_running_work(a
     from backend import execution
 
     monkeypatch.setattr(execution, "PRE_START_TRIES", 2)
-    # A lapse now waits before the job goes out again (execution.handed_back_until); not what this test is about.
-    monkeypatch.setattr(execution, "HAND_BACK_WAIT", 0)
+    no_start_wait(monkeypatch)  # a lapse's wait before the next try is not what this test is about
     machine, message, first = setup_attempt(api)
     get(api, "credential-runtime", first["token"])
     expire(api, first["id"])
@@ -1518,8 +1518,7 @@ def test_a_person_writing_or_try_now_lifts_a_usage_limit_cooldown_once(api):
 def test_a_claim_that_lapsed_before_its_run_started_does_not_count_as_stopping_partway(api, monkeypatch):
     from backend import execution
 
-    # A lapse now waits before the job goes out again (execution.handed_back_until); not what this test is about.
-    monkeypatch.setattr(execution, "HAND_BACK_WAIT", 0)
+    no_start_wait(monkeypatch)  # a lapse's wait before the next try is not what this test is about
     machine, message, lapsed = setup_attempt(api)
     expire(api, lapsed['id'])  # the computer never started it: back in the queue
     ready(api, machine, ['ops'])
@@ -1545,8 +1544,7 @@ def test_a_claim_expires_lapsed_leases_in_its_own_write_and_rechecks_one_job_und
     from backend import execution
     from backend.execution import Execution
 
-    # A lapse now waits before the job goes out again (execution.handed_back_until); not what this test is about.
-    monkeypatch.setattr(execution, "HAND_BACK_WAIT", 0)
+    no_start_wait(monkeypatch)  # a lapse's wait before the next try is not what this test is about
     machine, message, lapsed = setup_attempt(api)
     expire(api, lapsed['id'])
     ready(api, machine, ['ops'])

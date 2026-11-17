@@ -88,7 +88,6 @@ backend/census.py
 backend/changelog.py
 backend/chat_goals.py
 backend/check_models.py
-backend/claim_holds.py
 backend/claim_loads.py
 backend/client_ip.py
 backend/cloud_access.py

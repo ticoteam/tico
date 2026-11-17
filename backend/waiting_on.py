@@ -937,12 +937,11 @@ def _blocked_bots(conn: "sqlite3.Connection", person: str, company: bool) -> set
 def _held_tasks(conn: "sqlite3.Connection") -> set[str]:
     """The tasks one of whose bots is held on them (task_wakes.task_cause): a held run, runs that can't start, or a
     worktree wait. Few at any time."""
-    from . import start_holds
+    from . import holds
 
-    SH: Any = start_holds
     TW: Any = task_wakes  # its held-runs read for every task, as task_wakes.prime_holds reads it
     out = {str(found[0]) for found in conn.execute(TW._held_runs_sql(many=True)).fetchall()}
-    out |= {str(found[0]) for found in conn.execute(SH.held_sql(many=True), (_core.KEEPER, SH.EVENT)).fetchall()}
+    out |= {str(found[0]) for found in conn.execute(holds.cant_start_sql(many=True)).fetchall()}
     return out | set(task_wakes.worktree_holds(conn))
 
 
@@ -1360,7 +1359,7 @@ def _lists(
             if wait.line.endswith(task_wakes.RUN_HELD) and _botops_reviews(conn, wait.who):
                 continue  # BotOps has the held run's review task (execution._hand_to_maintainer): no person row
             if wait.line.endswith(task_wakes.ENDS_BY_ITSELF):
-                # BotOps has the task to find why its runs can't start (start_holds.file), or the hold on its run or
+                # BotOps has the task to find why its runs can't start (bot_stops.cant_start), or the hold on its run or
                 # on this task lifts by itself (a claim hold's wait, a quarantine's cooldown): no person row
                 continue
             if task_wakes.cannot_run(conn, wait.who, seen) in task_wakes.STARTS_BY_ITSELF:

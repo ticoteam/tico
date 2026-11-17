@@ -1341,7 +1341,7 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False, que
 # The queued job of a task. INDEXED BY jobs_queued: the expression on the message cannot use an index, and with the
 # stale sqlite_stat1 row for messages the planner scanned all of them (40-44 ms a call on TIDY v0.5.1, 545 an hour).
 TASK_WAIT_SQL = (
-    f"SELECT j.bot_id,j.message_id,j.held,j.hold_reason,j.hold_until,{H.in_person_name_sql()} AS person_sent "
+    f"SELECT j.id,j.bot_id,j.message_id,j.state,{H.in_person_name_sql()} AS person_sent "
     "FROM jobs j INDEXED BY jobs_queued "
     "JOIN messages m ON m.id=j.message_id "
     "JOIN conversations cv ON cv.id=m.conversation_id "

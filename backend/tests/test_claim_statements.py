@@ -39,3 +39,24 @@ def test_claim_work_path_statements_do_not_grow_with_assigned_bots(api):
     few = work_claim_statements(api, 5, "few")
     many = work_claim_statements(api, 20, "many")
     assert few == many, (few, many)
+
+
+def test_runs_waiting_out_a_claim_error_add_no_statements_to_an_idle_claim(api):
+    """A run a claim error holds waits up to 50 minutes while its computer polls: the claim passes its bot over in the
+    query that finds bots with work (execution.CLAIM_WAITING_SQL), so the poll reads no more than with nothing queued."""
+    from backend import holds
+    from backend.store import H
+
+    machine = seed(api, "held", 5)
+    store = api.app.state.store
+    with store.transaction() as c:
+        for job, bot in c.execute("SELECT id,bot_id FROM jobs WHERE state='queued'").fetchall():
+            holds.put(c, holds.CLAIM_ERROR, "job", job, actor=H.KEEPER, bot_id=bot, until_at=H.shift(H.now(), hours=1))
+    claim(api, machine)  # the first claim may do the company's first-time reads
+    answer, held = claim(api, machine)
+    assert answer.get("attempt") is None, answer
+    with store.transaction() as c:
+        c.execute("UPDATE jobs SET state='canceled' WHERE state='queued'")
+    answer, empty = claim(api, machine)
+    assert answer.get("attempt") is None, answer
+    assert held == empty, (held, empty)

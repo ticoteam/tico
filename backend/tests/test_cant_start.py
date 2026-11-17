@@ -5,10 +5,12 @@ on its Review 2 task with "the bot's checkout's upstream could not be read", two
 
 import json
 
-from backend import execution, start_holds, task_wakes, waiting_on
+from backend import execution, task_wakes, waiting_on
+from backend import run_diagnostics as RD
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, post, ready, runner  # noqa: F401 (fixture)
 from backend.tests.helpers.execution_review import add_recovery_reviewer
+from backend.tests.helpers.held_runs import start_wait_over
 
 UPSTREAM = (
     "the bot's checkout's upstream could not be read (fatal: ambiguous argument '@{{u}}': unknown revision or path not "
@@ -30,10 +32,7 @@ def hand_back(api, machine, attempt, reason):
         machine["token"],
     )
     with api.app.state.store.transaction() as c:
-        c.execute(
-            "UPDATE attempts SET finished_at=? WHERE id=?",
-            (H.shift(H.now(), seconds=-execution.HAND_BACK_MAX - 1), attempt["id"]),
-        )
+        start_wait_over(c)
     ready(api, machine, ["ops"])
 
 
@@ -64,7 +63,7 @@ def test_three_hand_backs_for_the_same_reason_go_to_botops_and_pause_the_task(ap
     machine, task_id, attempt = start(api)
     job_id = attempt["job_id"]
     reason = UPSTREAM.format(task=task_id)
-    for n in range(start_holds.SAME):
+    for n in range(RD.SAME):
         assert attempt and attempt["job_id"] == job_id
         hand_back(api, machine, attempt, reason)
         with api.app.state.store.read() as c:
@@ -75,12 +74,12 @@ def test_three_hand_backs_for_the_same_reason_go_to_botops_and_pause_the_task(ap
                 )
             ]
         assert detail["cause"] == "handed_back"  # the category the server logs it with
-        if n < start_holds.SAME - 1:
+        if n < RD.SAME - 1:
             assert job_state(api, job_id) == "queued"
             assert not botops_tasks(api)
             attempt = claim(api, machine)
     # The third in a row stops the retries, long before PRE_START_TRIES.
-    assert start_holds.SAME < execution.PRE_START_TRIES
+    assert RD.SAME < execution.PRE_START_TRIES
     assert job_state(api, job_id) == "failed"
     assert claim(api, machine) is None
     [review] = botops_tasks(api)
@@ -91,7 +90,7 @@ def test_three_hand_backs_for_the_same_reason_go_to_botops_and_pause_the_task(ap
     turn = next(t for t in get(api, "bots/ops/turns") if t["id"] == attempt["id"])
     assert "upstream could not be read" in turn["end_reason"]
     stop = get(api, "status?bot=ops")["status"]["last_stop"]
-    assert stop["needs_person"] is False and stop["text"].endswith(start_holds.BOTOPS_HAS_IT)
+    assert stop["needs_person"] is False and stop["text"].endswith(RD.BOTOPS_HAS_IT)
     # The task waits on the bot, Paused with the cause: not "Queued", not a person's.
     with api.app.state.store.read() as c:
         assert task_wakes.task_cause(c, task_id, "bot:ops") == task_wakes.CANT_START
@@ -121,14 +120,14 @@ def test_hand_backs_for_different_reasons_or_none_keep_retrying(api):
 
 def test_a_second_task_of_the_same_bot_is_named_on_the_open_botops_task(api):
     machine, first, attempt = start(api)
-    for _ in range(start_holds.SAME):
+    for _ in range(RD.SAME):
         hand_back(api, machine, attempt, UPSTREAM.format(task=first))
         attempt = claim(api, machine)
     assert attempt is None
     made = post(api, "tasks", {"owner": "ops", "title": "Review the multiply PR", "body": "Review it."})
     second = made.get("task", made).get("id") or made["refs"]["task"]
     attempt = claim(api, machine)
-    for _ in range(start_holds.SAME):
+    for _ in range(RD.SAME):
         assert attempt
         hand_back(api, machine, attempt, UPSTREAM.format(task=second))
         attempt = claim(api, machine)

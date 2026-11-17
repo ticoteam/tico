@@ -259,7 +259,7 @@ def _claim(b, slug):
         with b.store.transaction() as c:
             c.execute(
                 "UPDATE jobs SET held=0,released=json_object('warm',0,'waited',0,'at',?) WHERE held=1 "
-                "AND state='queued' AND wake_class='routine' AND hold_reason IS NULL",
+                "AND state='queued' AND wake_class='routine'",
                 (H.now(),),
             )
         claim = b.call("POST", "jobs/claim", {"bot": slug}, token=_computer(b, slug)["token"])["attempt"]
