@@ -224,6 +224,7 @@ pub(super) const HUB_PATHS: &[&str] = &[
     "changelog list",
     "changelog mark-read",
     "chat",
+    "chat ask",
     "chat goal",
     "chat send",
     "classify",
