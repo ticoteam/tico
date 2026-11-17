@@ -123,7 +123,7 @@ const shot = async (page: Page, name: string) => {
       await page.locator('.prop-pop:popover-open .tl-mi', {hasText: 'Close'}).click();
       await page.locator('.pv-bar:not(.pv-sel)').waitFor();
       assert.deepEqual(writes[1]!.body, {ids: ['t1', 't2', 't3', 't4'], to: 'closed'});
-      assert.equal((await page.locator('.pv-bar:not(.pv-sel) .pv-bar-text').innerText()).trim(), "Closed 3. 1 didn't close: 1 is in a bot's running turn.");
+      assert.equal((await page.locator('.pv-bar:not(.pv-sel) .pv-bar-text').innerText()).trim(), "1 didn't close: in a bot's running turn.", 'the toast says what closed');
       await page.locator('.tk-card[data-task="t3"]').waitFor({state: 'detached'});
       assert.equal(await page.locator('.pv-col[data-pv-col="build"] .tk-card').count(), 1);
       await shot(page, `close-after-desktop-${theme}`);

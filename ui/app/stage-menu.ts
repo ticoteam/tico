@@ -67,12 +67,13 @@ function pvColClose(state: PvState, ids: string[], anchor: HTMLElement): void {
       out => ({done: out.moved, unseen: out.moved_unseen ?? 0, skipped: out.skipped}),
       closed => {
         state.tasks = state.tasks.filter(t => !closed.has(t.id));
-        if (!closed.size) return;
+        if (!closed.size) return false;
         const back = [...closed];
         toast(`Closed ${pvMany(back.length)}`, false, {label: 'Undo', run: async () => {
           await post('/v2/tasks/move', {ids: back, to: 'reopen', why: 'Undone'}, newRequestId());
           if (TASKS_ST) void tasksCatchUp(TASKS_ST);
         }});
+        return true;
       });
   }});
 }
@@ -92,17 +93,18 @@ function pvColSnooze(state: PvState, ids: string[], anchor: HTMLElement): void {
     out => ({done: out.changed, unseen: out.changed_unseen ?? 0, skipped: out.skipped})));
 }
 
-/** One write to the column's tasks, and what the board says after it: nothing more when every task changed (Close all's
-    `after` says Closed with Undo), else "Closed 20. 2 didn't close: 2 are in a bot's running turn." above the stages.
-    `after(done)` changes the board at once; the page's read follows. */
+/** One write to the column's tasks, and what the board says after it: nothing when every task changed, else above the
+    stages what didn't, and why. "Moved 20. 2 didn't move: 2 are in a bot's running turn."; after a toast that already
+    says what changed (Close all's, with Undo), only "2 didn't close: in a bot's running turn.". `after(done)` changes
+    the board at once, and is true when it showed that toast; the page's read follows. */
 async function pvColWrite<T>(state: PvState, [did, verb]: [string, string], send: () => Promise<T>,
-  read: (out: T) => {done: string[]; unseen: number; skipped: TasksMoved['skipped']}, after?: (done: Set<string>) => void): Promise<void> {
+  read: (out: T) => {done: string[]; unseen: number; skipped: TasksMoved['skipped']}, after?: (done: Set<string>) => boolean | void): Promise<void> {
   try {
     const out = read(await send());
     if (PV !== state) return;
-    after?.(new Set(out.done));
-    const stayed = out.skipped.length;
-    state.bar = stayed ? {taskId: '', to: '', push: false, text: `${did} ${out.done.length + out.unseen}. ${stayed} didn't ${verb}: ${pvSkipWords(out.skipped)}.`} : null;
+    const toasted = after?.(new Set(out.done)) === true, stayed = out.skipped.length;
+    const why = `${stayed} didn't ${verb}: ${pvSkipWords(out.skipped, toasted)}.`;
+    state.bar = stayed ? {taskId: '', to: '', push: false, text: toasted ? why : `${did} ${out.done.length + out.unseen}. ${why}`} : null;
   } catch (error) {
     if (PV !== state) return;
     state.bar = {taskId: '', to: '', push: false, text: errorMessage(error, 'Not changed.')};

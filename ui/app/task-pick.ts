@@ -75,18 +75,21 @@ function pvSelectMove(state: PvState, anchor: HTMLElement): void {
     })()});
 }
 
-/** Why the tasks of a move stayed, counted by reason: "2 are in a bot's running turn, 1 you can't read". */
-function pvSkipWords(skipped: TasksMoved['skipped']): string {
-  const words: Record<string, [string, string]> = {
-    task_turn_running: ["is in a bot's running turn", "are in a bot's running turn"],
-    task_stage_full: ['had no room', 'had no room'],
-    not_found: ["you can't read", "you can't read"],
-    task_not_shared: ['is private to people the stage needs', 'are private to people the stage needs'],
-    task_not_met: ["doesn't meet the stage's rules", "don't meet the stage's rules"],
-    identity: ["isn't yours to change", "aren't yours to change"],
+/** Why the tasks of a move stayed, counted by reason: "2 are in a bot's running turn, 1 you can't read". `bare`: one
+    reason alone, uncounted, after a line that already counts them ("1 didn't close: in a bot's running turn"). */
+function pvSkipWords(skipped: TasksMoved['skipped'], bare = false): string {
+  const words: Record<string, [string, string, string]> = {
+    task_turn_running: ["is in a bot's running turn", "are in a bot's running turn", "in a bot's running turn"],
+    task_stage_full: ['had no room', 'had no room', 'no room in the stage'],
+    not_found: ["you can't read", "you can't read", "you can't read them"],
+    task_not_shared: ['is private to people the stage needs', 'are private to people the stage needs', 'private to people the stage needs'],
+    task_not_met: ["doesn't meet the stage's rules", "don't meet the stage's rules", "the stage's rules aren't met"],
+    identity: ["isn't yours to change", "aren't yours to change", 'not yours to change'],
   };
   const counts = new Map<string, number>();
   for (const x of skipped) counts.set(x.code, (counts.get(x.code) ?? 0) + 1);
+  const only = counts.size === 1 ? [...counts.keys()][0] ?? '' : '';
+  if (bare && only) return words[only]?.[2] ?? skipped[0]?.reason ?? only;
   return [...counts].map(([code, n]) => {
     const said = words[code];
     return said ? `${n} ${code === 'not_found' ? said[0] : said[n === 1 ? 0 : 1]}` : `${n}: ${skipped.find(x => x.code === code)?.reason ?? code}`;
