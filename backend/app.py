@@ -84,7 +84,7 @@ from .files import raw_media
 from clients import gateway as gateway_client
 from . import company_server, gateway_connection
 from . import access as Access
-from . import hosted_updates, releases, runner_versions, ui_bundle
+from . import hosted_updates, releases, runner_versions, ui_build
 from .census import Census
 from .providers import MODEL_BY_ID
 from .settings_admin import SettingsAdmin
@@ -1279,11 +1279,11 @@ def create_app(settings=None):
             if route_keeps or file_bytes:
                 pass  # the route's own "private, max-age=…" stands
             elif (
-                ui_bundle.is_part(request.url.path)
+                request.url.path.startswith(ui_build.BUNDLE_PREFIX)
                 and response.status_code in (200, 304)
-                and response.headers.get("cache-control") in (ui_bundle.IMMUTABLE, "no-store")
+                and response.headers.get("cache-control") == ui_build.IMMUTABLE
             ):
-                pass  # the bundle route keeps current bytes, never another build under an old URL
+                pass  # a bundle file is named by its content (scripts/build-ui.cjs): kept for a year
             elif (
                 request.query_params.get("v")
                 and response.status_code in (200, 304)
@@ -1291,15 +1291,7 @@ def create_app(settings=None):
             ):
                 # A font under its hashed URL (scripts/build-*-font.py): kept for a year. Inter's font-display is
                 # optional, so a font that had to be revalidated first could miss the first paint.
-                response.headers["Cache-Control"] = ui_bundle.IMMUTABLE
-            elif (
-                request.query_params.get("v")
-                and response.status_code in (200, 304)
-                and ui_bundle.versioned(settings.ui_dir, request.url.path, request.query_params.get("v"))
-            ):
-                # theme.ts and marked under the `?v=` the page names them with (ui_bundle STANDALONE): kept for a
-                # year, so an open needs no round trip for them; theme.ts holds up the first paint.
-                response.headers["Cache-Control"] = ui_bundle.IMMUTABLE
+                response.headers["Cache-Control"] = ui_build.IMMUTABLE
             elif not request.url.path.startswith("/api") and "etag" in response.headers:
                 response.headers["Cache-Control"] = (
                     "private, max-age=3600" if request.url.path.startswith("/assets/") else "private, no-cache"

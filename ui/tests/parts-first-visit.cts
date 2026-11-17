@@ -1,4 +1,4 @@
-// Page parts on a real hub (support/real-hub.cts), the bundle served as in production (backend/ui_bundle.py, ui/parts.json):
+// Page parts on a real hub (support/real-hub.cts), the bundle served as in production (scripts/build-ui.cjs, ui/parts.json):
 // - a cold open of Home or Tasks downloads the shell only, and so does an owner's first visit and Home's refresh;
 // - a part that cannot load leaves Retry in the main area while the sidebar still works, and Retry opens the page once
 //   the network is back;

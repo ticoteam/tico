@@ -542,13 +542,19 @@ async function decideBotsFlow(from: HTMLElement, bots: string[], name: string, p
   decideOpen('', decideSource(), '', '', true);
 }
 let DEC_SNZ_READ = false;                    // the snoozed asks are being read
-/** The asks the person snoozed for themselves, read for the end screen (decideDoneHTML). */
+let DEC_SNZ_GEN = 0;                         // bumped by a snooze or its undo: a read begun before it is stale
+/** The asks the person snoozed for themselves, read for the end screen (decideDoneHTML). A snooze or undo while the
+    read is out makes its answer stale, so it reads again rather than keep a list without that change. */
 async function decideSnoozedRead(st: DecState) {
-  const r = await v2Get<{items?: NeedsEntry[]; next?: string | null}>('/v2/needs-you/snoozed', {fresh: true});
-  if (DEC !== st || !r) return;
+  let gen: number, r: {items?: NeedsEntry[]; next?: string | null} | null;
+  do {
+    gen = DEC_SNZ_GEN;
+    r = await v2Get<{items?: NeedsEntry[]; next?: string | null}>('/v2/needs-you/snoozed', {fresh: true});
+    if (DEC !== st || !r) return;
+  } while (gen !== DEC_SNZ_GEN);
   st.snoozedAsks = r.items || [];
   needsWakeAt(r.next || null);
-  if (!st.at) decideRender(st);
+  if (!decideCurrent(st)) decideRender(st);   // the end screen (st.at may still name the last, now gone, ask)
 }
 
 const decideStageName = (id: string | null | undefined): string => {
@@ -1284,8 +1290,8 @@ async function decideSnooze(st: DecState, it: NeedsEntry, until: string) {
   st.more = ''; st.snzOther = false;
   if (it.kind !== 'ask') return;
   // Counted on the end screen from the snoozed asks as the server has them (decideSnoozedRead), read again after this.
-  await decideDo(st, it, 'Snoozed', async () => { const r = await askSnooze(it.id, until); st.snoozedAsks = null; needsWakeAt(until); return r; },
-    () => async () => { await askUnsnooze(it.id); st.snoozedAsks = null; });
+  await decideDo(st, it, 'Snoozed', async () => { const r = await askSnooze(it.id, until); st.snoozedAsks = null; DEC_SNZ_GEN++; needsWakeAt(until); return r; },
+    () => async () => { await askUnsnooze(it.id); st.snoozedAsks = null; DEC_SNZ_GEN++; });
 }
 /** ↩ on a snoozed ask in the end screen's list: it is back in your Needs you now, and on screen. */
 async function decideUnsnooze(st: DecState, b: HTMLElement, id: string) {

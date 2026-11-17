@@ -377,7 +377,7 @@ Later phases: the other requirement kinds; Product and Engineering.
 | callers | every other backend module, in five groups (rules and automations; strategy, goals, market and roadmaps; task management and settings; demo data; the rest), each with its tests |
 | bot tools | `clients/` but `agent_skill.py`, `backend/mcp.py`, `e2e/cli/`, `e2e/mcp/`, `test_botops_parity.py` |
 | bot words | `templates/`, `skills/`, `clients/agent_skill.py`, `backend/dream.py` |
-| screens | `ui/`, `backend/ui_bundle.py` |
+| screens | `ui/`, `scripts/build-ui.cjs` |
 | last | `e2e/goldens`, `e2e/tests`, `docs/`, `evals/`, `scripts/` (a script that inserts tasks by hand makes them through `task_create`; one that builds an old release's database keeps that release's shape) |
 
 A test file belongs to the track that owns the module it is named after.

@@ -46,7 +46,7 @@ RUN fetch-tool litestream /out
 FROM download AS node
 RUN fetch-tool node /opt/node
 
-# The UI's TypeScript files compiled to JavaScript (scripts/build-ui.cjs, backend/ui_build.py). The server image has
+# The UI build: the page, the bundle and the compiled TypeScript (scripts/build-ui.cjs, backend/ui_build.py). The server image has
 # no Node, so only build/ui goes on from here. npm ci installs the lock's pinned esbuild and runs no package scripts.
 FROM node AS ui-build
 ENV PATH=/opt/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin

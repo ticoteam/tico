@@ -1,5 +1,5 @@
 {
- "//": "Page parts: files a cold open does not download, fetched the first time a person goes to one of their pages (backend/ui_bundle.py, ui/app/parts.ts). Each part's entries are the names code outside it calls: pages (the router's, drawn only while the person stays on that route), calls (load the part, then call) and idle (do nothing until the part is loaded). deps load with the part. events are selectors of controls drawn outside the part whose click or change its own document listener answers: their first use loads the part. scripts/check_ui_parts.cjs checks every use from outside.",
+ "//": "Page parts: files a cold open does not download, fetched the first time a person goes to one of their pages (scripts/build-ui.cjs, ui/app/parts.ts). Each part's entries are the names code outside it calls: pages (the router's, drawn only while the person stays on that route), calls (load the part, then call) and idle (do nothing until the part is loaded). deps load with the part. events are selectors of controls drawn outside the part whose click or change its own document listener answers: their first use loads the part. scripts/check_ui_parts.cjs checks every use from outside.",
  "library-files": {
   "files": [
    "app/library-files.ts"

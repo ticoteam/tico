@@ -15,8 +15,8 @@ suite=${1:?suite required}
 # satisfied (a few seconds, no downloads), and a missing or wrong package is installed, so a broken lock still fails.
 "$RUNNER_TEMP/venv/bin/python" -c '' 2>/dev/null || python3 -m venv --clear "$RUNNER_TEMP/venv"
 "$RUNNER_TEMP/venv/bin/python" -m pip install --disable-pip-version-check --retries 1 --timeout 30 -r backend/requirements-dev.txt
-# Every suite serves the UI, whose TypeScript files run as their compiled JavaScript (backend/ui_build.py refuses
-# a missing or stale one): the lock's esbuild compiles them to build/ui.
+# Every suite serves the UI as scripts/build-ui.cjs builds it to build/ui with the lock's esbuild (backend/ui_build.py
+# refuses a missing or stale build).
 npm ci --fetch-retries=1 --no-audit --no-fund --prefer-offline
 npm run --silent build:ui
 # Python tests do not use Playwright. The browser VM also needs Python for its synthetic server.

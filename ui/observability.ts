@@ -132,7 +132,7 @@ declare var module: {exports?: unknown} | undefined;
     const frames = (event.exception?.values || []).flatMap(value => value.stacktrace?.frames || []).slice(-30)
       .map(frame => {
         // Only known static application filenames, no origin/query/hash/function/source text.
-        const match = /(?:^|\/)(app\/(?:pill|chat|api|session)\.(?:js|ts)|app\.bundle(?:\.\d+)?\.js|index\.html|observability\.(?:js|ts)|observability-vendors\.js|docs-page\.(?:js|ts)|docs-search\.(?:js|ts)|docs-pr-chat\.(?:js|ts)|changelog\.(?:js|ts))(?:[?#].*)?$/.exec(frame.filename || '');
+        const match = /(?:^|\/)(app\/(?:pill|chat|api|session)\.(?:js|ts)|app\.bundle\.(?:[a-z][a-z0-9-]*\.)?[0-9a-f]{16}\.js|index\.html|observability\.(?:js|ts)|observability-vendors\.js|docs-page\.(?:js|ts)|docs-search\.(?:js|ts)|docs-pr-chat\.(?:js|ts)|changelog\.(?:js|ts))(?:[?#].*)?$/.exec(frame.filename || '');
         return match ? {filename: match[1], ...(Number.isInteger(frame.lineno) ? {lineno: frame.lineno} : {}),
           ...(Number.isInteger(frame.colno) ? {colno: frame.colno} : {})} : null;
       }).filter(Boolean);

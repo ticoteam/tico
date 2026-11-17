@@ -23,7 +23,7 @@ from clients.manifest import group_of, manifest_path, routines_of
 from . import goals as G
 from . import models as M
 from . import providers, runner_online
-from . import beta, census, changelog, hosted_updates, releases, replication, runner_versions, support_asks, ui_bundle
+from . import beta, census, changelog, hosted_updates, releases, replication, runner_versions, support_asks, ui_build
 from .config import ASSISTANT_NAME
 from . import strategy_bot, lifecycle, rooms, routines, statuses
 from . import access as Access
@@ -436,7 +436,7 @@ def config_view(c, settings, who=None):
         value["visual_files"] = "" if settings.visual_origin else tico_storage.visual_address(c)[0]
     value["in_docker"] = running_in_docker()  # the first run offers a Linux computer first when the server is one
     value["version"] = releases.version()
-    value["ui_build"] = ui_bundle.build_id(settings.ui_dir)  # an open page compares it with its own (ui/app/notices.ts)
+    value["ui_build"] = ui_build.build_id(settings.ui_dir)  # an open page compares it with its own (ui/app/notices.ts)
     value["update"] = hosted_updates.notice(c, settings)  # with the release Tico support scheduled, if any
     if who is not None and who.role in ("owner", "human"):
         value["changelog"] = changelog.summary(c, settings, who.actor)

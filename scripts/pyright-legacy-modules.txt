@@ -467,7 +467,6 @@ backend/triggers.py
 backend/turn_budgets.py
 backend/turn_fixer.py
 backend/turns.py
-backend/ui_bundle.py
 backend/ui_bundle_routes.py
 backend/ui_compression.py
 backend/update_feeds.py
