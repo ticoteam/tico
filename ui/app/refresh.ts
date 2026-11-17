@@ -129,6 +129,7 @@ function liveWire(): void {
       renderTree();
       tasksNeedsLive();
       if (BOT) botNeedsChanged(BOT.slug);
+      if (typeof DEC !== 'undefined' && DEC) decideRefresh(DEC, S.v2.needs || []);   // open Flow: a pinged bot's ❓ comes on screen
     }, 200);
   }).catch(() => {}));
   // Company puts each change in its cards (ui/app/dashboard.ts); it reads nothing for them.

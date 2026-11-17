@@ -12,6 +12,8 @@ You ask the questions whose answers would change what you do next, and nothing e
 - **Pinged** (a person's message points you here): ask that person, by the name the message gives, even when they
   are not your manager. Their ping lets you ask them for a day.
 - **On your own**: ask your supervisor, your `reports_to` on the chart (`tico team show`).
+- **Setup**: a message asking you to help set something up (Market, Strategy, Goals, Org, Tools, Budget) follows
+  `skills/setup-in-flow/SKILL.md` instead: one ❓ at a time, and you fill the area in.
 
 ## Before you ask
 

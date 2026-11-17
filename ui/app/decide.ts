@@ -107,7 +107,7 @@ interface DecState {
   asking: boolean;
 }
 /** Who All done's "Ping your bots" asks (POST /v2/flow/ping): the person's reports, one bot, or a team's bots. */
-interface DecPing {scope: 'reports' | 'bot' | 'group'; id?: string}
+interface DecPing {scope: 'reports' | 'bot' | 'group' | 'setup'; id?: string}
 /** A file added to a note: uploaded to the task's Files at once; its name and id end the note that is sent. */
 interface DecFile {
   key: number;
@@ -527,13 +527,14 @@ async function decidePing(st: DecState) {
   }
 }
 /** A bot's or a team's Flow mark: Flow on those bots' items only, every page of Needs you read first; All done's ping
-    asks them, whoever manages them. */
-async function decideBotsFlow(from: HTMLElement, bots: string[], name: string, ping: DecPing) {
+    asks them, whoever manages them. `ask`: ping them now (a setup mark, ui/app/setup-gaps.ts), so their ❓ comes in. */
+async function decideBotsFlow(from: HTMLElement, bots: string[], name: string, ping: DecPing, ask = false) {
   if (decideNoFlow()) return;
   if (!needsAll()) await needsReadAll();
   if (DEC) decideStop();
   DEC = {...decideBlank(from), bots, botsName: name, ping};
   decideOpen('', decideSource(), '', '', true);
+  if (ask && DEC) void decidePing(DEC);
 }
 let DEC_SNZ_READ = false;                    // the snoozed asks are being read
 let DEC_SNZ_GEN = 0;                         // bumped by a snooze or its undo: a read begun before it is stale

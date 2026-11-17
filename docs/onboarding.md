@@ -341,6 +341,32 @@ with **Ask** opening the Assistant panel over the page. It shows only to humans 
 `can_build`), and has nothing to close. Asking the Assistant (it hands the request to BotOps) is how a bot is added (`playbooks/build-me-a-bot.md`); connecting
 an external agent you already have is the **Connect an external agent** button in the sidebar footer.
 
+### Setup in Flow
+
+What setup leaves empty is filled in by asking, one question at a time, in Flow. `GET /api/v2/setup/gaps`
+(`backend/setup_gaps.py`) answers, area by area, whether it still waits on a person (the owner or an admin) and the bot
+that asks for it:
+
+| Area | Waits while | Asked by |
+|---|---|---|
+| Market | no active market entity, no page past the seed, no open "Set up the market map" task | the Librarian |
+| Strategy | no strategy summary, or no brand (draft or published) | the Strategy page's owner (Strategy Owner) |
+| Goals | no goal | the Goals page's owner (Strategy Owner) |
+| Org | no bot besides the built-ins | BotOps |
+| Tools | no tool | the Tools page's owner (Tools Owner) |
+| Budget | no company spending limit | BotOps |
+
+Each open area carries Flow's mark: on its Strategy tab (Market, Strategy, Org, Goals, Budget), beside the Tools title, and
+beside the Market setup question and the **Set up brand** button. A tap on a mark opens Flow on that bot alone and pings it
+(`POST /api/v2/flow/ping` `{"scope": "setup", "id": "<area>"}`). The bot follows `skills/setup-in-flow/SKILL.md`: one short
+free-form ❓ for the most important gap, it fills the area in from the reply, then asks the next, and it stops when the area
+is filled or the person says not now. A write that may open or close a gap rings the `setup` topic of
+`GET /api/v2/events`, so the mark goes as soon as the area is filled, by whoever fills it.
+
+It runs only when asked: once when the onboarding modal finishes (`{"scope": "setup"}` pings every open area's bot with its
+areas), on a mark tap, and on Flow's **Ping your bots** (which adds the setup bots to the person's reports). There is no
+schedule; a bot pinged in the last ten minutes is not pinged again.
+
 ### An empty Market page
 
 Market is the Market tab of [Strategy](strategy.md) (`#/strategy/market`; `#/market` redirects there). While the market has

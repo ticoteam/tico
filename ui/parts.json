@@ -356,6 +356,22 @@
    "decidePaintBody"
   ]
  },
+ "setup-gaps": {
+  "files": [
+   "app/setup-gaps.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [
+   "setupGapsWatch"
+  ],
+  "idle": [
+   "setupGapsPaint"
+  ],
+  "events": [
+   "[data-setup-area]"
+  ]
+ },
  "stage-rules": {
   "files": [
    "app/stage-rules.ts"
@@ -582,6 +598,9 @@
    "rulesStop",
    "strategyStop",
    "goalsFollowRoster"
+  ],
+  "events": [
+   "[data-brand-setup-go]"
   ]
  },
  "finance": {

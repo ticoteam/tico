@@ -63,7 +63,19 @@ from . import visuals as V
 from .store import H, Problem, encode
 from .api_contract import api_v2, ref as schema_ref
 
-TOPICS = ("tasks", "messages", "runs", "bots", "needs", "threads", "meeting_items", "presence", "letters", "calendar")
+TOPICS = (
+    "tasks",
+    "messages",
+    "runs",
+    "bots",
+    "needs",
+    "threads",
+    "meeting_items",
+    "presence",
+    "letters",
+    "calendar",
+    "setup",
+)
 AGENT_TOPICS = ("messages", "threads")  # what an external agent's standing token may follow (outside a turn)
 KEEP_HOURS = 24  # a client away longer than this reads in full
 FALLBACK_SECONDS = 1.5  # the shared look for changes another process wrote
@@ -1503,6 +1515,84 @@ THREAD_TRIGGERS = [
     ),
 ]
 TRIGGERS += THREAD_TRIGGERS
+
+# Setup gaps (backend/setup_gaps.py): a write that may open or close one rings `setup` with the area, and a page that
+# shows setup marks reads GET /api/v2/setup/gaps again. Each fires only when the gap can move (the first or the last
+# row of its kind), so building a market of hundreds of entities rings once.
+_MARKET_TASK = "NEW.owner_id='bot:librarian' AND NEW.title LIKE 'Set up the market map%'"
+
+
+def _setup(area):
+    return _row("setup", area, f"'{area}'")
+
+
+SETUP_TRIGGERS = [
+    (
+        "changes_setup_entities_insert",
+        "INSERT",
+        "entities",
+        "NEW.status='active' AND NOT EXISTS (SELECT 1 FROM entities WHERE status='active' AND id<>NEW.id)",
+        _setup("market"),
+    ),
+    (
+        "changes_setup_entities_update",
+        "UPDATE",
+        "entities",
+        "OLD.status IS NOT NEW.status AND 'active' IN (OLD.status, NEW.status)",
+        _setup("market"),
+    ),
+    ("changes_setup_entities_delete", "DELETE", "entities", "OLD.status='active'", _setup("market")),
+    ("changes_setup_market_pages_insert", "INSERT", "market_pages", "NEW.seeded=0", _setup("market")),
+    ("changes_setup_market_pages_update", "UPDATE", "market_pages", "OLD.seeded IS NOT NEW.seeded", _setup("market")),
+    ("changes_setup_market_pages_delete", "DELETE", "market_pages", "OLD.seeded=0", _setup("market")),
+    ("changes_setup_market_task_insert", "INSERT", "tasks", _MARKET_TASK, _setup("market")),
+    (
+        "changes_setup_market_task_update",
+        "UPDATE",
+        "tasks",
+        "OLD.status IS NOT NEW.status AND " + _MARKET_TASK,
+        _setup("market"),
+    ),
+    ("changes_setup_strategy_insert", "INSERT", "strategy_versions", None, _setup("strategy")),
+    (
+        "changes_setup_strategy_update",
+        "UPDATE",
+        "strategy_versions",
+        "(OLD.summary='') IS NOT (NEW.summary='')",
+        _setup("strategy"),
+    ),
+    ("changes_setup_brand_draft_insert", "INSERT", "brand_drafts", None, _setup("strategy")),
+    ("changes_setup_brand_draft_update", "UPDATE", "brand_drafts", "OLD.body IS NOT NEW.body", _setup("strategy")),
+    ("changes_setup_brand_versions_insert", "INSERT", "brand_versions", None, _setup("strategy")),
+    (
+        "changes_setup_goals_insert",
+        "INSERT",
+        "goals",
+        "NOT EXISTS (SELECT 1 FROM goals WHERE id<>NEW.id)",
+        _setup("goals"),
+    ),
+    ("changes_setup_goals_delete", "DELETE", "goals", "NOT EXISTS (SELECT 1 FROM goals)", _setup("goals")),
+    ("changes_setup_bots_insert", "INSERT", "bots", None, _setup("org")),
+    (
+        "changes_setup_bots_update",
+        "UPDATE",
+        "bots",
+        "(OLD.state IN ('archived','planned')) IS NOT (NEW.state IN ('archived','planned'))",
+        _setup("org"),
+    ),
+    ("changes_setup_bots_delete", "DELETE", "bots", None, _setup("org")),
+    (
+        "changes_setup_tools_insert",
+        "INSERT",
+        "tools",
+        "NOT EXISTS (SELECT 1 FROM tools WHERE id<>NEW.id)",
+        _setup("tools"),
+    ),
+    ("changes_setup_tools_delete", "DELETE", "tools", "NOT EXISTS (SELECT 1 FROM tools)", _setup("tools")),
+    ("changes_setup_budget_insert", "INSERT", "budget_nodes", "NEW.scope='company'", _setup("budget")),
+    ("changes_setup_budget_delete", "DELETE", "budget_nodes", "OLD.scope='company'", _setup("budget")),
+]
+TRIGGERS += SETUP_TRIGGERS
 
 # Tables (and `table.column`s) a trigger's body reads besides its own: without them it is skipped,
 # so a write never fails on a table this install does not have.
@@ -3124,6 +3214,9 @@ def read_in(
         # Which calendar moved, never what is on it: the reader refetches through /api/v2/calendar/events, which
         # decides what this viewer may see (a private event is Busy).
         picked.append(("calendar", row, {"calendar": row["ref"], "id": row["subject_id"], "kind": row["kind"]}))
+    for row in by_topic.get("setup", []):
+        # Which setup area may have moved, never what is in it: the page reads GET /api/v2/setup/gaps again.
+        picked.append(("setup", row, {"area": row["subject_id"]}))
     for topic in ('meeting_items', 'presence'):
         for row in by_topic.get(topic, []):
             picked.append(
@@ -3297,6 +3390,8 @@ EVENTS_DESCRIPTION = (
     "`base`. `ready` then carries `needs_version`.\n"
     "- `calendar`: `calendar` (the calendar row id, `human:<id>` for time away, `google:<id>` for a Google write), "
     "`id` and `kind` (event, away, google); refetch the calendar window on screen.\n"
+    "- `setup`: `area` (market, strategy, goals, org, tools or budget) when a write may have opened or closed that "
+    "setup gap; read `GET /api/v2/setup/gaps` again.\n"
     "- `letters`: `id` and `letter` (as `GET /api/v2/letters/{id}` shows it), only to readers of that record. Patch this row without rereading the list.\n"
     "Also `event: ready` (`seq`: where the log stands), `event: cursor` (the change number to resume from, past changes "
     "the viewer may not see), `event: reset` (the client was further behind than the log keeps, 24 hours or more than 5,000 changes: read in full), "

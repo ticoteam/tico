@@ -253,9 +253,11 @@ async function pageTools() {
   const add = toolsAddItems().length;
   $('#main').classList.add('au-layout');
   // The one page header (ui/app/page-head.ts): a phone's filter button and the owner's chat in its tools, the quiet +
-  // (Automations' .au-plus) for adding, then ⋯ with mail Settings, last.
+  // (Automations' .au-plus) for adding, then ⋯ with mail Settings, last. Flow's mark beside the title while no tool is
+  // set up (ui/app/setup-gaps.ts).
+  void setupGapsWatch();
   $('#main').innerHTML = `<div class="au tt-au" id="tools-root" data-screen="list">
-    ${pageHead({title: 'Tools', hook: 'tt-head', pad: true,
+    ${pageHead({title: 'Tools', hook: 'tt-head', pad: true, after: '<span data-setup-mark="tools"></span>',
       tools: `<button type="button" class="au-fbtn" data-tl-filters aria-label="Filters" aria-expanded="false">${filterIcon(18)}<span class="au-fbn" hidden></span></button>`,
       primary: add ? `<span class="au-newbox"><button class="ghost ph-go au-plus" type="button" data-tl-add aria-label="Add tool" title="Add tool" aria-haspopup="menu" aria-expanded="false"><span class="nav-icon" aria-hidden="true">add</span></button><div class="au-newm" role="menu" aria-label="Add tool" hidden></div></span>` : '',
       more: `<a href="#/tools/settings" data-tl-settings>Settings</a>`})}
