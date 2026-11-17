@@ -169,10 +169,14 @@ def rounds(conn: "sqlite3.Connection", task_id: str, requirement_id: str) -> lis
     # The same version attached again (a new commit to judge it against) is one round: from its first attach, with
     # its newest verdict.
     runs: list[tuple[str, Row]] = []
+    positions: dict[tuple[str, int], int] = {}
     for page in pages:
-        if runs and (runs[-1][1]["file_id"], runs[-1][1]["version"]) == (page["file_id"], page["version"]):
-            runs[-1] = (runs[-1][0], page)
+        key = (str(page["file_id"]), int(page["version"]))
+        if key in positions:
+            index = positions[key]
+            runs[index] = (runs[index][0], page)
         else:
+            positions[key] = len(runs)
             runs.append((str(page["created_at"]), page))
     out: list[Row] = []
     for index, (start, page) in enumerate(runs):

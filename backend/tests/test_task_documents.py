@@ -72,7 +72,7 @@ def test_fixed_names_keep_their_spelling_and_a_bot_may_name_its_own(api, monkeyp
     again = write(api, tid, "release-notes", "<p>Notes, again</p>")
     assert (again["document"], again["file_id"], again["version"]) == ("Release notes", own["file_id"], 2)
     assert sorted(d["name"] for d in documents(api, tid)) == ["Email", "Invoice", "Release notes", "Release report"]
-    for bad in ("", "  ", "--", "x" * 41):
+    for bad in ("", "  ", "--", "x" * 41, "writer", "related"):
         write(api, tid, bad, "<p>Hi</p>", expected=422)
     monkeypatch.setattr(TD, "MOST", 4)
     assert "at most 4" in write(api, tid, "Research", "<p>Hi</p>", expected=422)["error"]["detail"]

@@ -283,6 +283,10 @@ def test_two_specs_are_one_approval_with_both_submitted_versions(api):
     entry = _entry(api, row["id"])
     approval = entry["approval"]
     expected = {first["file_id"]: 1, second["file_id"]: 1}
+    documents = get(api, "tasks/" + row["id"])["task"]["documents"]
+    assert [d["name"] for d in documents] == ["Spec", "Spec"]
+    ambiguous = api.post(f"/api/v2/tasks/{row['id']}/files", json={"document": "Spec", "text": SPEC}, headers=headers())
+    assert ambiguous.status_code == 409
     assert {p["file_id"]: p["version"] for p in approval["pages"]} == expected
     assert len(entry["shows"]) == 2
     # A single page key cannot approve the unseen rest of a submission.
@@ -300,6 +304,10 @@ def test_two_specs_are_one_approval_with_both_submitted_versions(api):
         assert P.answer_pages(c, row["id"], answer) == expected
         history = rounds.rounds(c, row["id"], entry["requirement_id"])
         assert len(history) == 2 and all(p["answers"][0]["answer"] == "ok" for p in history)
+        from backend import stage_effects
+
+        body = stage_effects._handoff_body(c, E.task(c, row["id"]))
+        assert all(f"Spec: page:{fid}@1" in body for fid in expected)
 
 
 def test_a_shared_spec_has_separate_task_oks_and_changes_since_each(api):
@@ -333,3 +341,36 @@ def test_a_shared_spec_has_separate_task_oks_and_changes_since_each(api):
     with api.app.state.store.read() as c:
         assert TD.approved_versions(c, a["id"]) == TD.approved_versions(c, b["id"]) == {written["file_id"]: 1}
         assert len(P.current_pages(c, a["visit"]["id"], requirement_id)) == 1
+
+
+def test_unlinking_a_spec_removes_it_from_the_approval_set(api):
+    from backend import page_links as L
+
+    _, row = _flow(api)
+    first = _write(api, row["id"], SPEC, "ana-test")
+    second = _attach_second_spec(api, row)
+    _all_verdicts(api, row["id"])
+    with api.app.state.store.transaction() as c:
+        L.unlink(c, second["file_id"], "task:" + row["id"], "Spec", ANA)
+    entry = _entry(api, row["id"])
+    assert entry["shows"] == [f"page:{first['file_id']}@1"]
+    assert _approve(api, row["id"], entry, 1).status_code == 200
+
+
+def test_every_spec_version_is_checked_before_the_set_can_be_approved(api):
+    _, row = _flow(api)
+    _write(api, row["id"], SPEC, "ana-test")
+    _verdict(api, row["id"], "met")
+    second = _attach_second_spec(api, row)
+    entry = _entry(api, row["id"])
+    approval = entry["approval"]
+    refused = post(
+        api,
+        f"tasks/{row['id']}/asks/{entry['requirement_id']}/answer",
+        {"value": "ok", "page_version": approval["page_version"], "visit_id": approval["visit_id"]},
+        expected=409,
+    )
+    assert "not waiting" in refused["error"]["detail"]
+    _all_verdicts(api, row["id"])
+    assert _standing(api, row["id"]).state == R.WAITING
+    assert any(p["file_id"] == second["file_id"] for p in approval["pages"])
