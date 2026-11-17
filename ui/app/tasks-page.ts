@@ -344,7 +344,9 @@ async function tasksLoad(state: TasksPageState, pipelinesToo = true): Promise<vo
     held = taskFeedLanded(state.feed, ticket, rows ? rows.cursor : '');
     if (!held) return;
     state.pipelines = pipelines;
-    if (state.pipeline && !pipelines.some(p => p.id === state.pipeline)) { state.pipeline = ''; tasksURLWrite(state); }
+    // A pipeline gone (or one a task's window named before the pipelines landed) falls back to You. The address is the
+    // list's to rewrite, not an open task's (#/task/<id>): closing that window writes the list's.
+    if (state.pipeline && !pipelines.some(p => p.id === state.pipeline)) { state.pipeline = ''; if (!location.hash.startsWith('#/task/')) tasksURLWrite(state); }
     state.stalled = false;
     if (needs) state.needs = needs;
     if (!rows) { state.tasks = []; state.base = []; state.cursor = ''; state.more = false; state.edge = null; state.after = ''; }
