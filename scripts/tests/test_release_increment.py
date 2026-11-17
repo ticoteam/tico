@@ -26,6 +26,17 @@ PYTEST_FAILURES = (
 )
 
 
+def test_release_selection_skips_map_for_documentation_and_owned_baselines(monkeypatch):
+    checkout = ri.Checkout()
+    monkeypatch.setattr(checkout, "known", lambda sha: True)
+    monkeypatch.setattr(ri.pr_checks, "script_changes", lambda *args, **kwargs: [])
+    paths = ["README.md", "baselines/ruff/example.json"]
+    monkeypatch.setattr(ri.pr_checks, "changed_files", lambda *args, **kwargs: paths)
+    monkeypatch.setattr(ri.pr_checks, "DependencyMap", lambda root: pytest.fail("unnecessary dependency scan"))
+    _, selected = checkout.selected(A, B)
+    assert selected["python"] == sorted(pr_checks.OWNED_DATA["baselines/"])
+
+
 def record(id, sha, *, conclusion="success", hours=1, incremental=False, status="completed"):
     return {
         "id": id,
