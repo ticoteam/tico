@@ -108,6 +108,7 @@ const DEMO_NOW = process.env.TICO_DEMO_NOW || '2026-11-06T18:00:00Z';
 // The files the Tasks page draws: the Needs you page shows the same list (its route is #/tasks).
 const TASKS_UI = [
   'ui/app/stage-rules.ts', 'ui/app/stage-rules-mark.ts', 'ui/styles/stage-rules.css',  // each stage header's Rules button and panel
+  'ui/app/stage-menu.ts',  // each stage header's ⋯: Move all to…, Close all, Assign all to…, Snooze all…
   'ui/app/tasks.ts', 'ui/app/tasks-page.ts', 'ui/app/task-*.ts', 'ui/app/pull-refresh.ts', 'ui/app/hub-v2.ts',
   'ui/app/issues.ts', 'ui/styles/tasks.css', 'ui/styles/task-*.css', 'ui/styles/board.css', 'ui/styles/hub-v2.css',
   'ui/app/pipeline-*.ts', 'ui/styles/pipeline.css',

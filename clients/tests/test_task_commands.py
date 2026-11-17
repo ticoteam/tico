@@ -74,6 +74,28 @@ COMMANDS = [
         ),
     ),
     (
+        ["task", "move", "--from", "Dev/Ideas", "closed", "-m", "Stale"],
+        ("tico_task_move", {"from_pipeline": "Dev", "from_stage": "Ideas", "to": "closed", "why": "Stale"}),
+        ("POST", "tasks/move", {"from": {"pipeline": "Dev", "stage": "Ideas"}, "to": "closed", "why": "Stale"}),
+    ),
+    (
+        ["task", "reassign", "--from", "Dev/Ideas", "ana", "-m", "Hers now"],
+        ("tico_task_reassign", {"from_pipeline": "Dev", "from_stage": "Ideas", "owner": "ana", "why": "Hers now"}),
+        ("POST", "tasks/owner", {"from": {"pipeline": "Dev", "stage": "Ideas"}, "owner": "ana", "why": "Hers now"}),
+    ),
+    (
+        ["task", "snooze", "--from", "Dev/Ideas", "--until", "2026-12-01", "-m", "After the launch"],
+        (
+            "tico_task_snooze",
+            {"from_pipeline": "Dev", "from_stage": "Ideas", "until": "2026-12-01", "why": "After the launch"},
+        ),
+        (
+            "POST",
+            "tasks/snooze",
+            {"from": {"pipeline": "Dev", "stage": "Ideas"}, "until": "2026-12-01", "why": "After the launch"},
+        ),
+    ),
+    (
         ["task", "close", "T1", "-m", "Not needed", "--version", "3"],
         ("tico_task_close", {"id": "T1", "why": "Not needed", "version": 3}),
         ("POST", "tasks/T1/move", {"to": "closed", "version": 3, "why": "Not needed"}),
@@ -672,6 +694,7 @@ def test_task_show_says_it_waits_for_a_free_bot_and_who_each_pick_gave_it_to():
     "args, why",
     [
         ({"id": None, "from_pipeline": "Dev", "from_stage": None, "to_pipeline": "Backlog"}, "needs from_pipeline"),
+        ({"id": None, "from_pipeline": "Dev", "from_stage": "Ideas"}, "Say where it goes"),
         ({"id": "T1", "from_pipeline": "Dev", "from_stage": "Ideas", "to_pipeline": "Backlog"}, "not both"),
         ({"id": None, "to": "next"}, "Say which task"),
         ({"id": "T1"}, "Say where it goes"),
@@ -688,7 +711,7 @@ def test_a_task_move_that_names_no_task_or_no_place_sends_nothing(args, why):
     "place, why",
     [
         ({"id": None, "to": "next", "to_place": "Backlog/On ice", "from_place": None}, "Give the stage"),
-        ({"id": None, "to": None, "to_place": None, "from_place": "Dev/Ideas"}, "add --to"),
+        ({"id": None, "to": None, "to_place": None, "from_place": "Dev/Ideas"}, "Say where they go"),
         ({"id": "T1", "to": None, "to_place": "Backlog", "from_place": "Dev/Ideas"}, "Give a task, or --from"),
         ({"id": None, "to": None, "to_place": "Backlog", "from_place": "Dev"}, "names a stage"),
         ({"id": None, "to": None, "to_place": None, "from_place": None}, "Say which task"),

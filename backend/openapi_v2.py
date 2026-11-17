@@ -1341,6 +1341,16 @@ SCHEMAS = {
         {
             "batch_id": "s",
             "moved": items("s"),
+            "moved_unseen": "i",
+            "skipped": items(obj({"id": "s", "code": "s", "reason": "s"})),
+        }
+    ),
+    "TaskManyResult": obj(
+        {
+            "batch_id": "s",
+            "changed": items("s"),
+            "changed_unseen": "i",
+            "unchanged": "i",
             "skipped": items(obj({"id": "s", "code": "s", "reason": "s"})),
         }
     ),

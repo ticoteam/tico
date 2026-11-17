@@ -11,6 +11,7 @@
 interface TasksMoved { batch_id: string; moved: string[]; moved_unseen?: number; skipped: {id?: string; code: string; reason: string}[] }
 const tasksMoveTo = (ids: string[], pipeline: string, stage: string, why?: string): Promise<TasksMoved> =>
   post('/v2/tasks/move', {ids, to_pipeline: pipeline, to: stage, ...(why ? {why} : {})}, newRequestId()) as Promise<TasksMoved>;
+const pvMany = (n: number): string => `${n} task${n === 1 ? '' : 's'}`;
 
 // ---------------------------------------------------------------- picking many, and Move to…
 
@@ -51,10 +52,9 @@ function pvMenuHost(): HTMLElement {
 function pvSelectMove(state: PvState, anchor: HTMLElement): void {
   const ids = [...state.sel].filter(id => state.tasks.some(t => t.id === id));
   if (!ids.length) return;
-  const many = (n: number) => `${n} task${n === 1 ? '' : 's'}`;
   const stages = new Set(ids.map(id => state.tasks.find(t => t.id === id)?.stage_id ?? ''));
   void taskMoveToMenu(pvMenuHost(), anchor, {pipeline: state.rec.id, stage: stages.size === 1 ? [...stages][0] ?? null : null,
-    confirm: where => `Move ${many(ids.length)} to ${where}?`,
+    confirm: where => `Move ${pvMany(ids.length)} to ${where}?`,
     run: (p, st, why) => void (async () => {
       try {
         const out = await tasksMoveTo(ids, p.id, String(st.id), why || undefined);
@@ -65,7 +65,7 @@ function pvSelectMove(state: PvState, anchor: HTMLElement): void {
         state.selecting = state.sel.size > 0;
         const done = out.moved.length + (out.moved_unseen ?? 0), stayed = ids.length - done;
         state.bar = stayed ? {taskId: '', to: '', push: false, text: `Moved ${done}. ${stayed} didn't move: ${pvSkipWords(out.skipped)}.`} : null;
-        if (!stayed) toast(`Moved ${many(done)} to ${p.name} › ${st.name}`);
+        if (!stayed) toast(`Moved ${pvMany(done)} to ${p.name} › ${st.name}`);
       } catch (error) {
         if (PV !== state) return;
         state.bar = {taskId: '', to: '', push: false, text: errorMessage(error, 'Not moved.')};
@@ -82,6 +82,8 @@ function pvSkipWords(skipped: TasksMoved['skipped']): string {
     task_stage_full: ['had no room', 'had no room'],
     not_found: ["you can't read", "you can't read"],
     task_not_shared: ['is private to people the stage needs', 'are private to people the stage needs'],
+    task_not_met: ["doesn't meet the stage's rules", "don't meet the stage's rules"],
+    identity: ["isn't yours to change", "aren't yours to change"],
   };
   const counts = new Map<string, number>();
   for (const x of skipped) counts.set(x.code, (counts.get(x.code) ?? 0) + 1);

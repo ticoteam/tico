@@ -323,14 +323,11 @@ class TaskMovePlace(Contract):
     stage: Annotated[str, Field(min_length=1, max_length=200)]
 
 
-class TaskMoveMany(Contract):
-    """Move many tasks to a stage of another pipeline (`POST /api/v2/tasks/move`): the tasks `ids` names, or every open
-    task in the stage `from` names. `to` is the stage of `to_pipeline`, its first when left out."""
+class TaskManyOf(Contract):
+    """The tasks a write to many names: `ids`, or every open task in the stage `from` names (a board's column)."""
 
     ids: list[ID] | None = Field(default=None, min_length=1, max_length=500)
     from_: TaskMovePlace | None = Field(default=None, alias="from")
-    to_pipeline: Annotated[str, Field(min_length=1, max_length=200)]
-    to: Annotated[str, Field(min_length=1, max_length=200)] | None = None
     why: Why | None = None
     on_behalf_of: ID | None = None
 
@@ -339,6 +336,32 @@ class TaskMoveMany(Contract):
         if (self.ids is None) == (self.from_ is None):
             raise ValueError("name the tasks: ids, or from (a pipeline and a stage), not both")
         return self
+
+
+class TaskMoveMany(TaskManyOf):
+    """Move many tasks (`POST /api/v2/tasks/move`): with `to_pipeline`, to its stage `to` (its first when left out);
+    without, each in its own pipeline, as a single move's `to` says (next, done, closed, reopen or a stage)."""
+
+    to_pipeline: Annotated[str, Field(min_length=1, max_length=200)] | None = None
+    to: Annotated[str, Field(min_length=1, max_length=200)] | None = None
+
+    @model_validator(mode="after")
+    def somewhere(self):
+        if not self.to_pipeline and not self.to:
+            raise ValueError("say where they go: to, or to_pipeline")
+        return self
+
+
+class TaskOwnerMany(TaskManyOf):
+    """Give many tasks to one owner for their stage (`POST /api/v2/tasks/owner`)."""
+
+    owner: ID
+
+
+class TaskSnoozeMany(TaskManyOf):
+    """Snooze many tasks in their stages (`POST /api/v2/tasks/snooze`): until a date, or with none (On ice)."""
+
+    until: str | None = Field(default=None, min_length=10, max_length=40)
 
 
 class TaskQueue(Contract):
