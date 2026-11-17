@@ -130,10 +130,13 @@ function cfOrgHTML(manager: string | null, mates: string[]): string {
     + (shown.length ? `<div class="cf-org-row${manager ? ' cf-org-under' : ''}">${shown.map(a => tile(a, 14)).join('')}</div>` : '')
     + '</div>';
 }
+/** A hall: a factory, or Other (`id` null: the pipelines in no factory), which has no page and no org chart. */
 function cfHallHTML(f: FloorFactory): string {
   const manager = cfManager(f);
-  return `<section class="cf-hall" data-cf-factory="${esc(f.id)}" aria-label="${esc(f.name)}">`
-    + `<div class="cf-hall-head"><a class="cf-hall-name" href="${esc(cfHref(f.id))}">${esc(f.name)}</a>${cfOrgHTML(manager, cfMates(f, manager))}</div>`
+  const name = f.id === null ? `<span class="cf-hall-name">${esc(f.name)}</span>`
+    : `<a class="cf-hall-name" href="${esc(cfHref(f.id))}">${esc(f.name)}</a>${cfOrgHTML(manager, cfMates(f, manager))}`;
+  return `<section class="cf-hall" data-cf-factory="${esc(f.id ?? '')}" aria-label="${esc(f.name)}">`
+    + `<div class="cf-hall-head">${name}</div>`
     + `<div class="cf-lines">${f.pipelines.map(p => cfLineHTML(p, false)).join('')}</div></section>`;
 }
 
@@ -239,7 +242,7 @@ function cfDraw(st: FloorState, data: FloorData): void {
  *  replaced only when its own numbers did. A pinned card, the scroll and the focus stay where they were. */
 function cfPatch(body: HTMLElement, html: string, factories: FloorFactory[]): void {
   const halls = body.querySelector<HTMLElement>(':scope > .cf-halls:not([aria-busy])');
-  const ids = factories.map(f => f.id);
+  const ids = factories.map(f => f.id ?? '');
   const had = halls ? [...halls.querySelectorAll<HTMLElement>(':scope > .cf-hall')].map(h => h.dataset['cfFactory'] ?? '') : [];
   if (!halls || had.join('|') !== ids.join('|')) { body.innerHTML = html; return; }
   const next = document.createElement('div');

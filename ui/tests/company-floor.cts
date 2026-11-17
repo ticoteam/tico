@@ -3,7 +3,7 @@ import type {Page, Route} from 'playwright';
 // stacks whose heights are relative and capped,
 // Flow's mark only over a stage holding something that waits on the reader, the rate flip kept per browser, the card a
 // hover shows and a click pins with its task rows, one factory with a deck per teammate and one mark by a stage's name,
-// a factory the reader may not see never drawn, the old Dashboard, Floor, Campus, Graph and Factories links landing on
+// a factory the reader may not see never drawn, pipelines in no factory in an Other hall with no link, the old Dashboard, Floor, Campus, Graph and Factories links landing on
 // Company, a phone's stacked halls and sheet. Fixtures only.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
@@ -36,6 +36,11 @@ const FLOOR = {factories: [
   {id: 'f-product', name: 'Product', manager_id: null, pipelines: [FEATURES]},
   {id: 'f-eng', name: 'Engineering', manager_id: null, pipelines: [FIXES]},
 ]};
+// Pipelines in no factory: one hall at the end, Other, with no page and no org chart.
+const ERRANDS = {id: 'errands', name: 'Errands', manager_id: 'bot:pm', in: {day: 1, week: 4}, out: {day: 0, week: 2}, stages: [
+  stage('errand-do', 'Do', [o('bot:f1', 2)]),
+]};
+const OTHER = {factories: [...FLOOR.factories, {id: null, name: 'Other', manager_id: null, pipelines: [ERRANDS]}]};
 // `idle` reports to the Product manager and holds no task: it is on the hall's chart all the same.
 const BOTS = ['pm', 'f1', 'f2', 'f3', 'f4', 'f5', 'b1', 'rm', 'em', 'fb', 'qa', 'idle', ...Array.from({length: 12}, (_, i) => `fx${i}`)]
   .map(id => ({id, slug: id, display_name: id.toUpperCase(), state: 'active', ...(id === 'idle' ? {reports_to: 'pm'} : {})}));
@@ -249,6 +254,21 @@ const levels = (page: Page, sel: string) => page.locator(sel).evaluateAll(els =>
       await page.waitForFunction(() => location.hash === '#/home');
       await page.locator('.cf-hall').first().waitFor();
       assert.equal(await page.locator('.cf-hall[data-cf-factory="f-hidden"]').count(), 0);
+      assert.deepEqual(errors, []);
+      await close();
+    }
+    // Pipelines in no factory: a last hall, Other, its name not a link and no org chart; its stacks show their cards.
+    {
+      const hub: Hub = {floor: OTHER, fail: false, reads: []};
+      const {page, errors, close} = await open(1440, 900, hub);
+      await page.locator('.cf-hall').first().waitFor();
+      assert.deepEqual(await page.locator('.cf-hall').evaluateAll(els => els.map(el => el.getAttribute('data-cf-factory'))), ['f-product', 'f-eng', '']);
+      const other = page.locator('.cf-hall').last();
+      assert.equal(await other.locator('span.cf-hall-name').innerText(), 'Other');
+      assert.equal(await other.locator('a, .cf-org').count(), 0);
+      assert.deepEqual(await levels(page, '[data-cf-line="errands"] .cf-stack'), [2]);
+      await page.locator('[data-cf-line="errands"] .cf-stack').hover();
+      await page.locator('#cf-card .cf-row').first().waitFor();
       assert.deepEqual(errors, []);
       await close();
     }
