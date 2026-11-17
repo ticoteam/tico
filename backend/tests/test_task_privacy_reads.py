@@ -561,10 +561,11 @@ def test_sql_event_privacy_scales_with_matching_attempts_not_their_cross_product
     machine = runner(api)
     with api.app.state.store.transaction() as c:
         conv = H.open_conversation(c, "human:ana", ["bot:ops"], subject="Public work")
-        private_mid = next(
-            r["id"] for r in c.execute("SELECT * FROM messages WHERE conversation_id=?", (private["conversation_id"],))
-        )
-        private_job = c.execute("SELECT id FROM jobs WHERE message_id=?", (private_mid,)).fetchone()[0]
+        # The task's job: the request opens its chat quietly, so the job is the owner's notice that follows it.
+        private_job = c.execute(
+            "SELECT j.id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE m.conversation_id=?",
+            (private["conversation_id"],),
+        ).fetchone()[0]
         c.execute(
             "INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,finished_at) "
             "VALUES('synthetic-private',?,'ops',?,1,'synthetic-private','completed',?,?,?)",
