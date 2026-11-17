@@ -16,6 +16,7 @@ from . import org_rule_check
 from . import task_privacy as privacy
 from . import reach
 from . import views
+from .api_contract import api_v2
 
 
 # The query parameters GET /api/v2/tasks takes: its own filters (the handler's keywords below, kept equal by
@@ -76,7 +77,15 @@ def unknown_filters(names):
 
 
 def register(app, auth, mutate, rule_check, rule_target, store, task_filters, task_idents, visible_tasks):
-    @app.get("/api/v2/tasks")
+    @app.get(
+        "/api/v2/tasks",
+        **api_v2(
+            "Tasks",
+            "listTasks",
+            "Tasks the caller can see, brief: each row's version, pipeline_id, stage_id, owner, turn (whose turn it is, and why), late and snoozed. q matches title words or #N; status (open, done, closed), number and updated_since filter, member=<actor> keeps the tasks that person or bot is on in some role (role=<name> narrows it to one), brief=true leaves out bodies. Snoozed tasks are left out unless snoozed=only|all, status=all, or asked for by ids or number. Each answer carries a `cursor`; changed_after=<cursor> with the same filters answers only the tasks changed since (`tasks`) and the ids that left (`gone`), or `reset: true` to read in full. A full read has an ETag: If-None-Match answers 304 when nothing changed. A query parameter that is not one of these filters answers 422 `filter` naming it (owner=, not assignee=)",
+            "TaskList",
+        ),
+    )
     def tasks(
         request: Request,
         response: Response,
@@ -478,7 +487,10 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
 
         return mutate(request, body, work)
 
-    @app.get("/api/v2/tasks/labels")
+    @app.get(
+        "/api/v2/tasks/labels",
+        **api_v2("Tasks", "listTaskLabels", "Labels in use (ETag: If-None-Match answers 304 when unchanged)"),
+    )
     def task_labels(request: Request, response: Response):
         from . import task_reads as reads
 

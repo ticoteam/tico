@@ -8,6 +8,7 @@ from pydantic import Field, StrictBool
 from . import media, meetings, models as M
 from .store import H, Problem, encode
 from .views import human_only
+from .api_contract import api_v2
 
 
 class Review(M.Contract):
@@ -152,14 +153,30 @@ def install_meeting_review(app, store, auth, mutate):
         H.event(c, who.actor, 'meeting.reviewed', rid, {'action': action})
         return media.view(c, who, rid, auth=auth)
 
-    @app.get('/api/v2/meetings/settings')
+    @app.get(
+        '/api/v2/meetings/settings',
+        **api_v2(
+            "Meetings",
+            "getMeetingReviewSettings",
+            "Your meeting review preference and Team default",
+            "MeetingReviewPreferences",
+        ),
+    )
     def settings(request: Request):
         who = request.state.identity
         human_only(who)
         with store.read() as c:
             return meetings.review_settings(c, who)
 
-    @app.post('/api/v2/meetings/settings')
+    @app.post(
+        '/api/v2/meetings/settings',
+        **api_v2(
+            "Meetings",
+            "setMeetingReviewSettings",
+            "Set auto-share; only the owner sets the Team default",
+            "MeetingReviewPreferences",
+        ),
+    )
     def set_settings(request: Request, body: ReviewSettings):
         who = request.state.identity
         human_only(who)
@@ -186,7 +203,10 @@ def install_meeting_review(app, store, auth, mutate):
 
         return mutate(request, body, work)
 
-    @app.get('/api/v2/meetings')
+    @app.get(
+        '/api/v2/meetings',
+        **api_v2("Meetings", "listMeetings", "Meetings; review=pending reads your own queue", "MeetingReviewList"),
+    )
     def listing(request: Request, review: Literal['pending', 'live', 'dismissed'] = 'live', q: str = ''):
         who = request.state.identity
         human_only(who)
@@ -207,7 +227,10 @@ def install_meeting_review(app, store, auth, mutate):
                     rows.append(item)
             return {'meetings': rows, 'count': len(rows), 'pending_count': meetings.pending_count(c, who)}
 
-    @app.post('/api/v2/meetings/review')
+    @app.post(
+        '/api/v2/meetings/review',
+        **api_v2("Meetings", "reviewMeetings", "Share or dismiss your Pending meetings", "MeetingReviewList"),
+    )
     def review_many(request: Request, body: ReviewMany):
         who = request.state.identity
         human_only(who)
@@ -234,7 +257,10 @@ def install_meeting_review(app, store, auth, mutate):
 
         return mutate(request, body, work)
 
-    @app.post('/api/v2/meetings/{id}/review')
+    @app.post(
+        '/api/v2/meetings/{id}/review',
+        **api_v2("Meetings", "reviewMeeting", "Approve, dismiss or restore your own meeting", "ReviewedMeeting"),
+    )
     def review_one(request: Request, id: str, body: Review):
         return mutate(
             request,
@@ -242,7 +268,10 @@ def install_meeting_review(app, store, auth, mutate):
             lambda c: apply(c, request.state.identity, id, body.action, body.private, body.send_to, body.audience),
         )
 
-    @app.get('/api/v2/meetings/{id}')
+    @app.get(
+        '/api/v2/meetings/{id}',
+        **api_v2("Meetings", "getMeeting", "Read a meeting with its notes and transcripts", "ReviewedMeeting"),
+    )
     def detail(request: Request, id: str):
         with store.read() as c:
             return media.view(c, request.state.identity, id, include_transcripts=True, auth=auth)

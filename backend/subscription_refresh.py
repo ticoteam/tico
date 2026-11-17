@@ -13,6 +13,7 @@ from . import hubdb as H, models as M
 from . import runner_online
 from .repositories import metadata, save_metadata
 from .store import Problem
+from .api_contract import api_v2
 
 LIFETIME = 120
 COOLDOWN = 60
@@ -336,7 +337,15 @@ def plan_report(c, runner, rid, body):
 
 
 def install(app, store, auth, mutate):
-    @app.post('/api/v2/subscriptions/refresh')
+    @app.post(
+        '/api/v2/subscriptions/refresh',
+        **api_v2(
+            "Subscriptions",
+            "refreshSubscriptionWeekly",
+            "Request a bounded weekly allowance read on its computer",
+            "SubscriptionRefreshResult",
+        ),
+    )
     def refresh_subscription(request: Request, body: Refresh):
         return mutate(request, body, lambda c: request_refresh(c, auth, request.state.identity, body))
 

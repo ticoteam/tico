@@ -17,7 +17,8 @@ const {html} = require('./support/page.cts');
 const {open, task} = require('./tasks-page.cts') as Tasks.Api;
 // The facts are on the task window's Details tab.
 const openDetails = async (page: import('playwright').Page, id: string) => {
-  await page.locator(`#task-modal[open][data-task="${id}"] [data-task-tab="details"]`).click();
+  const tab = page.locator(`#task-modal[open][data-task="${id}"] [data-task-tab="details"]`);
+  if (await tab.getAttribute('aria-pressed') !== 'true') await tab.click();   // pressed again, Details would close
 };
 declare function openTaskCreate(owner: string, opts?: {parent: {id: string; title: string; private: boolean}}): void;
 declare function loadSettings(): Promise<void>;

@@ -18,6 +18,7 @@ from . import mailbox_access as MA
 from . import people as P
 from .models import MailboxAccessCreate, MailboxAccessUpdate, MailboxCreate, MailboxContactsUpdate
 from .store import Problem
+from .api_contract import api_v2
 
 PATH = "/api/v2/mailboxes"
 PROVIDER = "google_workspace"
@@ -314,14 +315,30 @@ def detail(c, who, mid):
 def install(app, store):
     """The Mailboxes routes. Reads go through store.read(); writes check their own rights in one transaction."""
 
-    @app.get(PATH)
+    @app.get(
+        PATH,
+        **api_v2(
+            "Mailboxes",
+            "listMailboxes",
+            "An admin's every mailbox (person, status, routines); for everyone their own mailbox and the ones shared with them",
+            "MailboxList",
+        ),
+    )
     def list_mailboxes(request: Request):
         """Tools for whoever is signed in: the admin's table, or your own mailbox and what is shared
         with you."""
         with store.read() as c:
             return listing(c, request.state.identity)
 
-    @app.post(PATH)
+    @app.post(
+        PATH,
+        **api_v2(
+            "Mailboxes",
+            "connectMailbox",
+            "An admin connects a mailbox: a person's own by verified email, else a shared inbox when `shared`, else it waits for its person",
+            "MailboxResult",
+        ),
+    )
     def connect_mailbox(request: Request, body: MailboxCreate):
         """An admin adds a mailbox for Tico to use. The address of a person on the roster is that person's own; any
         other is a shared inbox when `shared`, else it waits for its person (private, nobody has access)."""
@@ -363,13 +380,26 @@ def install(app, store):
         with store.read() as c:
             return {"mailbox": _Reader(c, who).row(_box(c, mid))}
 
-    @app.get(PATH + "/{mid}")
+    @app.get(
+        PATH + "/{mid}",
+        **api_v2(
+            "Mailboxes",
+            "getMailbox",
+            "One mailbox: who can use it, its routines, and who could be added (for whoever manages it)",
+            "MailboxDetail",
+        ),
+    )
     def get_mailbox(request: Request, mid: str):
         """One mailbox: who can use it, its routines, and (for whoever manages it) who could be added."""
         with store.read() as c:
             return detail(c, request.state.identity, mid)
 
-    @app.post(PATH + "/{mid}/share")
+    @app.post(
+        PATH + "/{mid}/share",
+        **api_v2(
+            "Mailboxes", "shareMailbox", "An admin makes a mailbox that has no person a shared inbox", "MailboxDetail"
+        ),
+    )
     def share_mailbox(request: Request, mid: str):
         """An admin makes a mailbox that has no person a shared inbox: admins get Read and write on it."""
         who = request.state.identity
@@ -379,7 +409,15 @@ def install(app, store):
         with store.read() as c:
             return detail(c, who, mid)
 
-    @app.post(PATH + "/{mid}/accesses")
+    @app.post(
+        PATH + "/{mid}/accesses",
+        **api_v2(
+            "Mailboxes",
+            "addMailboxAccess",
+            "Give a person or a bot Read, or Read and write (the mailbox's owner, or an admin for a shared inbox)",
+            "MailboxDetail",
+        ),
+    )
     def add_mailbox_access(request: Request, mid: str, body: MailboxAccessCreate):
         """Give a person or a bot Read, or Read and write, on this mailbox."""
         from .views import roster
@@ -410,7 +448,12 @@ def install(app, store):
         with store.read() as c:
             return detail(c, who, mid)
 
-    @app.patch(PATH + "/{mid}/accesses/{access_id}")
+    @app.patch(
+        PATH + "/{mid}/accesses/{access_id}",
+        **api_v2(
+            "Mailboxes", "changeMailboxAccess", "Change one access between Read and Read and write", "MailboxDetail"
+        ),
+    )
     def change_mailbox_access(request: Request, mid: str, access_id: str, body: MailboxAccessUpdate):
         """Change one access between Read and Read and write."""
         who = request.state.identity
@@ -426,7 +469,10 @@ def install(app, store):
         with store.read() as c:
             return detail(c, who, mid)
 
-    @app.delete(PATH + "/{mid}/accesses/{access_id}")
+    @app.delete(
+        PATH + "/{mid}/accesses/{access_id}",
+        **api_v2("Mailboxes", "removeMailboxAccess", "Take one person's or bot's access away", "MailboxDetail"),
+    )
     def remove_mailbox_access(request: Request, mid: str, access_id: str):
         """Take one person's or bot's access away."""
         who = request.state.identity
@@ -448,7 +494,15 @@ def install(app, store):
         with store.read() as c:
             return {**detail(c, who, mid), "feeds_directory": MA.feeds_directory(c, MA.row_by_id(c, mid))}
 
-    @app.delete(PATH + "/{mid}")
+    @app.delete(
+        PATH + "/{mid}",
+        **api_v2(
+            "Mailboxes",
+            "stopMailbox",
+            "Stop using this mailbox in Tico (an admin, or the person whose mailbox it is)",
+            "MailboxResult",
+        ),
+    )
     def stop_mailbox(request: Request, mid: str):
         """Stop using this mailbox in Tico: an admin, or the person whose mailbox it is."""
         who = request.state.identity

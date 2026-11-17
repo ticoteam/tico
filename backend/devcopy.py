@@ -573,6 +573,7 @@ KEEP = (
             "task_check_models",
             "task_delegations",
             "history_events",
+            "task_documents",
             "task_file_reviews",
             "task_links",
             "task_relations",

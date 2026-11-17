@@ -1,8 +1,8 @@
 import type {Page, Route} from 'playwright';
 // Offline browser check of the ask screen on a 390 px phone (task #454, spec "Review on a phone"), against a fake of the
 // new routes. An ask is answered in its task's chat (decide.ts decideChatMount):
-// - two tabs, Chat and the document's; an OK opens on its document, a question on Chat; the chat and its row take the
-//   rest, the row at the bottom;
+// - an OK has tabs, Chat and what it shows, and opens on what it shows; a question on a task with no documents has
+//   none; the chat and its row take the rest, the row at the bottom;
 // - Approve and Snooze stay fully visible, at least 44 px tall and tappable while ↶ shows: it sits in the top bar;
 // - ‹ › show on the phone, 8 px clear of ✕: next opens the next item and previous comes back;
 // - a second tap on the same spot within 400 ms of the next item coming in approves nothing;
@@ -146,7 +146,7 @@ const box = async (page: Page, sel: string): Promise<Box | null> => page.locator
     }
     await page.locator(`${approve}:not([disabled])`).waitFor();
 
-    // Approve: "✓ Approved · Undo" in the bar's slot, over nothing else: not the page, not the buttons; all three
+    // Approve: "✓ Approved · Undo" on the top bar's row, over nothing else: not the page, not the buttons; all three
     // buttons visible, 44 px, and reached by a tap.
     const spot = (await box(page, approve))!;
     await page.mouse.click(spot.x + spot.width / 2, spot.y + spot.height / 2);
@@ -156,8 +156,8 @@ const box = async (page: Page, sel: string): Promise<Box | null> => page.locator
     check(await dialog.locator('.dc-bar:not([hidden])').count() === 1, 'the message still shows');
     if (shots) await page.screenshot({path: path.join(shots, 'ask-phone-390-approved.png')});
     const toast = (await box(page, '#need-card .dc-bar'))!, row = (await box(page, `${approve} >> xpath=..`))!;
-    const slot = (await box(page, '#need-card .dc-sayw'))!;
-    check(Math.abs(toast.y - slot.y) < 1 && Math.abs(toast.height - slot.height) < 1, `the undo sits in the bar's slot (${JSON.stringify(toast)} vs ${JSON.stringify(slot)})`);
+    const nav = (await box(page, '#need-card .dc-nav'))!;
+    check(Math.abs((toast.y + toast.height / 2) - (nav.y + nav.height / 2)) < 2, `the undo sits on the top bar's row, beside ‹ › (${JSON.stringify(toast)} vs ${JSON.stringify(nav)})`);
     check((await page.locator('#need-card .dc-bar').innerText()).startsWith('✓ Approved'), 'it says what was done');
     check(toast.y + toast.height <= row.y, `the undo is clear of the buttons (${toast.y + toast.height} > ${row.y})`);
     const undoBtn = (await box(page, '#need-card .dc-bar [data-dc="undo"]'))!;
@@ -167,7 +167,7 @@ const box = async (page: Page, sel: string): Promise<Box | null> => page.locator
     const covers = await page.evaluate(() => {
       const r = document.querySelector('#need-card .dc-bar')!.getBoundingClientRect();
       const under = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-      const others = [...document.querySelectorAll<HTMLElement>('#need-card .dc-head > :not(.dc-nav):not(.dc-sayw), #need-card .dc-nav > button')]
+      const others = [...document.querySelectorAll<HTMLElement>('#need-card .dc-head > :not(.dc-nav):not(.dc-sayw):not(.dc-bar), #need-card .dc-nav > button')]
         .filter(e => e.offsetParent).map(e => e.getBoundingClientRect())
         .filter(o => o.width && o.left < r.right && o.right > r.left && o.top < r.bottom && o.bottom > r.top);
       return [!!under?.closest('.dc-bar'), others.length];
@@ -204,18 +204,18 @@ const box = async (page: Page, sel: string): Promise<Box | null> => page.locator
     await at(3);
     await dialog.locator('.dc-thing .dc-bg').waitFor({state: 'attached'});   // its task: one line under it (#3786)
     await page.waitForTimeout(100);
-    check(await dialog.locator('[data-dc="tab"][data-dc-tab="chat"]').getAttribute('aria-selected') === 'true', 'a question opens on Chat');
+    check(await dialog.locator('[data-dc="tab"]').count() === 0, 'a question on a task with no documents: no tabs, just its chat');
     const head = (await box(page, '#need-card .dc-head'))!, q = (await box(page, '#need-card .dc-msg-ask .dc-q'))!;
     const composer = (await box(page, '#need-card .dc-chat .thv-composer .p-pill'))!;
     check(q.y >= head.y + head.height && q.y + q.height <= composer.y, `the question is on screen in the chat, above the box (${q.y}..${q.y + q.height}, box at ${composer.y})`);
     // No forward action: the box is full width, and Snooze and ⋯ are two icons at the right end of the tabs row, ⋯ last.
     check(composer.width >= VIEW.width - 40, `the box is full width (${composer.width})`);
     const tabs = (await box(page, '#need-card .dc-tabs'))!, sz = (await box(page, snooze))!, more = (await box(page, '#need-card [data-dc="ask-more"]'))!;
-    const list = (await box(page, '#need-card .dc-tabs [role="tablist"]'))!, title = (await box(page, '#need-card .dc-tabs-t'))!;
+    const title = (await box(page, '#need-card .dc-tabs-t'))!;
     check([sz, more].every(b => b.y >= tabs.y - 1 && b.y + b.height <= tabs.y + tabs.height + 1 && b.width >= 44 && b.height >= 44),
       `Snooze and ⋯ are 44 px icons in the tabs row (${JSON.stringify([tabs, sz, more])})`);
-    check(sz.x >= list.x + list.width && more.x >= sz.x + sz.width - 1 && more.x + more.width <= VIEW.width, 'Snooze then ⋯ at the right end, after the tabs');
-    check(title.x + title.width <= list.x + 1 && title.width > 40, `the title gives way, cut before the tabs (${JSON.stringify(title)})`);
+    check(more.x >= sz.x + sz.width - 1 && more.x + more.width <= VIEW.width, 'Snooze then ⋯ at the right end');
+    check(title.x + title.width <= sz.x + 1 && title.width > 40, `the title gives way, cut before Snooze (${JSON.stringify(title)})`);
     check(await dialog.locator('.dc-tabs-t').evaluate(e => getComputedStyle(e).textOverflow === 'ellipsis'), 'the title is cut with an ellipsis');
     if (shots) await page.screenshot({path: path.join(shots, 'ask-phone-390-question.png')});
     await page.close();

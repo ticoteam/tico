@@ -25,6 +25,8 @@ interface AskOkView {
   state: 'loading' | 'ready' | 'none' | 'failed';
   /** What it OKs, as its grant's subject names it (finance, email_send, spec…); '' for a stage's OK with no grant. */
   kind?: string;
+  /** The title its content gives, when it gives one: what its own tab on a phone is called. */
+  title?: string;
   hash: string | null;
   html: string;
   pages: import('../types/api').Page[];
@@ -210,8 +212,8 @@ function decideDialog(): HTMLDialogElement {
       <span class="dc-flow">${flowMarkHTML(24)}</span>
       <button type="button" class="dc-wave" data-dc="voice" aria-label="Voice" aria-pressed="true" title="Voice" hidden><i></i><i></i><i></i><i></i><i></i></button>
       <button type="button" class="dc-mic" data-dc="voice" aria-label="Voice" aria-pressed="false" title="Voice">${DEC_MIC}</button>
-      <div class="dc-sayw"><span class="dc-say"></span><span class="dc-vh" aria-live="polite"></span><span class="dc-bar" role="status" hidden></span></div>
-      <span class="dc-up"></span>
+      <div class="dc-sayw"><span class="dc-say"></span><span class="dc-vh" aria-live="polite"></span></div>
+      <span class="dc-up"></span><span class="dc-bar" role="status" hidden></span>
       <span class="dc-nav">
         <button type="button" class="dc-icon dc-wide" data-dc="prev" aria-label="Previous" title="Previous (←)">‹</button>
         <button type="button" class="dc-icon dc-wide" data-dc="next" aria-label="Next" title="Next (→)">›</button>
@@ -577,7 +579,7 @@ function decidePaintHead(st: DecState) {
   $('.dc-flow', root)!.hidden = DEC_VOICE;
   $('.dc-mic', root)!.hidden = DEC_VOICE;
   $('.dc-wave', root)!.hidden = !DEC_VOICE;
-  // The slot over the bar's undo notice holds the voice notice while the mic is on, and nothing else.
+  // The slot holds the voice notice while the mic is on, and nothing else (the undo notice is beside it: decideBar).
   const say = DEC_VOICE ? 'Voice is coming soon' : '';
   const line = $('.dc-say', root)!, heard = line.nextElementSibling as HTMLElement;
   if (line.textContent !== say) line.textContent = say;
@@ -1284,13 +1286,13 @@ function decideMoreHTML(st: DecState, it: NeedsEntry): string {
   }
   return '';
 }
-/** After an action, in the top bar's slot: "✓ <what was done>" and Undo, which takes it back.
+/** After an action, quiet in the top bar left of ‹ ›: "✓ <what was done>" and Undo, which takes it back.
     It stays DEC_UNDO_MS, longer while it has the focus, then fades. A failed undo says so there. */
 function decideBar(label: string, undo: (() => Promise<unknown>) | null) {
   const st = DEC, bar: HTMLElement | null = $('.decide .dc-bar');
   if (!st || !bar) return;
   clearTimeout(st.barTimer);
-  // In the top bar's slot, for DEC_UNDO_MS: "✓ Approved with comments · Undo".
+  // For DEC_UNDO_MS: "✓ Approved with comments  Undo".
   bar.innerHTML = `<span class="dc-bar-w">✓ ${esc(label)}</span>` + (undo ? '<button type="button" data-dc="undo">Undo</button>' : '');
   bar.classList.remove('dc-bar-out', 'dc-bar-err');
   const b = $('button', bar) as HTMLButtonElement | null;
@@ -1329,6 +1331,8 @@ async function decideOkLoad(st: DecState, it: NeedsEntry, changed: boolean) {
     const shown = await okShown(rid).catch((e: unknown) => { if (errorStatus(e) === 404) return null; throw e; });
     const [kind, ...rest] = (shown?.subject ?? '').split(':'), ref = rest.join(':');
     v.kind = kind ?? '';
+    const said = shown?.content && typeof shown.content === 'object' ? (shown.content as {title?: unknown}).title : null;
+    if (typeof said === 'string') v.title = said;
     if (!shown) {
       const before = it.ask?.page ? await decideRoundsRead(v, it) : null;
       await decideShowsRead(v, decideShowRefs(it), before);
@@ -1584,14 +1588,11 @@ function decideChatMount(st: DecState, it: NeedsEntry, host: HTMLElement, card: 
     const typed = DEC_CHAT?.item === it.id ? DEC_CHAT.typed : '';
     // Each item opens on what it needs from the person: an OK on what is to be approved (its Spec, Proof, Invoice...),
     // anything else on its chat. A redraw of the same item keeps the tab the person chose.
-    const fresh = DEC_CHAT?.item !== it.id, onTask = fresh ? decideKind(it) === 'ok' : !!$('.decide')?.classList.contains('dc-on-task');
-    if (fresh) $('.decide')?.classList.toggle('dc-on-task', onTask);
+    if (DEC_CHAT?.item !== it.id) DEC_TAB = decideKind(it) === 'ok' ? 'task' : 'chat';
     decideChatStop();
-    // A phone's two tabs, Chat and Task (decide.css): the task's chat, or the task itself, open, with its page.
-    const tab = (k: string, label: string, on: boolean) => `<button type="button" role="tab" data-dc="tab" data-dc-tab="${k}" aria-selected="${on}">${label}</button>`;
+    // A phone's title row and tabs (decide.css, decideTabsPaint): the task's chat, its documents, what an OK shows.
     const title = decideAboutOf(it)?.task?.title || it.task?.title || '';
-    host.innerHTML = `<div class="dc-tabs"><h3 class="dc-tabs-t">${esc(title)}</h3><span role="tablist" aria-label="Show">${tab('chat', 'Chat', !onTask)}`
-      + `${tab('task', decideTabName(st, it), onTask)}</span></div><div class="dc-chat"></div>`;
+    host.innerHTML = `<div class="dc-tabs"><h3 class="dc-tabs-t">${esc(title)}</h3></div><div class="dc-chat"></div><div class="dc-docpane"></div>`;
     const el = host.querySelector<HTMLElement>('.dc-chat')!;
     DEC_CHAT = {item: it.id, cid, view: null, typed};
     if (cid) {
@@ -1603,9 +1604,58 @@ function decideChatMount(st: DecState, it: NeedsEntry, host: HTMLElement, card: 
   else host.querySelector('.dc-chat .thv-list')!.innerHTML = decideAskBubbleHTML(st, it);
   host.querySelector(':scope > [data-key]')?.remove();
   host.insertAdjacentHTML('beforeend', card);
-  // The second tab's name waits on what the OK shows (an invoice, an email), which may land after the chat.
-  const second = host.querySelector<HTMLElement>('.dc-tabs [data-dc-tab="task"]'), name = decideTabName(st, it);
-  if (second && second.textContent !== name) second.textContent = name;
+  // The tabs wait on the task's read (its documents) and on what an OK shows (an invoice, an email): drawn on each pass.
+  decideTabsPaint(st, it, host);
+}
+// ---- a phone's tabs on an ask in the task's chat (ui/app/task-docs.ts, as the task window draws them): Chat, then the
+// task's documents, newest change first. An OK whose page is one of those documents (the same file) opens on that
+// document's tab; any other OK has its own tab after Chat, named for what it shows, and opens there. A question on a
+// task with no document has no tabs.
+let DEC_TAB = 'chat';   // the tab shown for the item on screen: 'chat', 'task' (what the OK shows) or a document's key
+/** The task document an OK's page is, by its file: only then is what the OK shows that document. */
+function decideOkDoc(it: NeedsEntry, docs: TaskDoc[]): TaskDoc | null {
+  const fid = decideKind(it) === 'ok' ? it.ask?.page?.file_id : '';
+  return fid ? docs.find(d => d.file_id === fid) || null : null;
+}
+/** An OK's own tab: the title of what it shows (its page, its content), else what it is (Proof, Spec, Invoice...);
+    never the name of a document it is not. */
+function decideOkLabel(st: DecState, it: NeedsEntry, docs: TaskDoc[]): string {
+  const v = st.ok.get(decideOkKey(it)), title = (v?.pages[0]?.title || v?.title || '').trim();
+  const free = (name: string) => !!name && !docs.some(d => d.name.toLowerCase() === name.toLowerCase());
+  return [title, decideTabName(st, it)].find(free) || 'Approval';
+}
+function decideTabsOf(st: DecState, it: NeedsEntry): DocTab[] {
+  const docs: TaskDoc[] = decideAboutOf(it)?.task?.documents || [];
+  if (decideKind(it) !== 'ok') return docTabs(docs);
+  const tabs = docTabs(docs, [], false);
+  if (decideOkDoc(it, docs)) return tabs;
+  return [{key: 'chat', label: 'Chat'}, {key: 'task', label: decideOkLabel(st, it, docs)}, ...tabs.slice(1)];
+}
+function decideTabsPaint(st: DecState, it: NeedsEntry, host: HTMLElement) {
+  const bar = host.querySelector<HTMLElement>(':scope > .dc-tabs');
+  if (!bar) return;
+  const tabs = decideTabsOf(st, it), said = JSON.stringify(tabs);
+  const own = DEC_TAB === 'task' ? decideOkDoc(it, decideAboutOf(it)?.task?.documents || []) : null;
+  if (own) DEC_TAB = docKey(own.name);   // the OK's page is this document: its tab, with its version line
+  if (!tabs.some(t => t.key === DEC_TAB)) DEC_TAB = 'chat';
+  if (bar.dataset.tabs !== said) {
+    bar.dataset.tabs = said;
+    bar.querySelector('.doc-tabs')?.remove();
+    bar.insertAdjacentHTML('beforeend', docTabsHTML(tabs, DEC_TAB, k => `data-dc="tab" data-dc-tab="${esc(k)}"`));
+    const row = bar.querySelector<HTMLElement>('.doc-tabs');
+    if (row) docTabsKeys(row, b => decideTabShow(it, b.dataset.dcTab || 'chat'));
+  }
+  decideTabShow(it, DEC_TAB);
+}
+/** Shows a tab: the chat, what the OK shows (the task open, with its page), or a document with its version line. */
+function decideTabShow(it: NeedsEntry, key: string) {
+  DEC_TAB = key;
+  const root = $('.decide'), doc = docOf(decideAboutOf(it)?.task?.documents, key), pane = $('.decide .dc-side > .dc-docpane');
+  root?.classList.toggle('dc-on-task', key === 'task');
+  root?.classList.toggle('dc-on-doc', !!doc);
+  const bar = $('.decide .dc-side > .dc-tabs');
+  if (bar) docTabsPaint(bar, key, b => b.dataset.dcTab);
+  if (doc && pane) docViewMount(pane, doc);
 }
 /** The second tab, named for what it holds: the Spec a page's OK is about, the Proof a Validate or QA OK shows, an
     action's Invoice or Email, else the Task. */
@@ -1822,7 +1872,12 @@ async function decideApprove(st: DecState, it: NeedsEntry) {
       if (!left && take) decideChatGone(take);
     }
     if (DEC !== st) return;
-    decideBar(said && !left ? 'Approved with comments' : 'Approved', decideUndoAnswer(r));
+    // Undone, an approval whose comment did not go is not approved any more: Approve comes back, without the why.
+    const undo = decideUndoAnswer(r);
+    decideBar(said && !left ? 'Approved with comments' : 'Approved', undo && left ? async () => {
+      await undo(); DEC_APPROVED.delete(it.id);
+      if (DEC === st && st.at === it.id) { st.error = ''; decidePaintSide(st); }
+    } : undo);
     if (left) {
       DEC_APPROVED.add(it.id);
       st.busy = false; st.error = `Approved. Your comment did not go: ${left} The arrow sends it again.`;
@@ -1888,9 +1943,9 @@ async function decideClick(st: DecState, ev: MouseEvent) {
   if (what === 'close') { decideStop(); return; }
   if (what === 'ping') { await decidePing(st); return; }
   if (what === 'tab') {
-    // A phone's Chat and Task tabs: the task's chat, or the task itself, open.
-    $('.decide')?.classList.toggle('dc-on-task', b.dataset.dcTab === 'task');
-    document.querySelectorAll('.decide .dc-tabs [role="tab"]').forEach(t => { t.setAttribute('aria-selected', String((t as HTMLElement).dataset.dcTab === b.dataset.dcTab)); });
+    // A phone's tabs: the task's chat, what an OK shows, or one of the task's documents.
+    const it = decideCurrent(st);
+    if (it) decideTabShow(it, b.dataset.dcTab || 'chat');
     // The ask's Proof link hides with the chat: the focus goes to the tab it opened.
     if (b.getAttribute('role') !== 'tab') ($(`.decide .dc-tabs [role="tab"][data-dc-tab="${b.dataset.dcTab}"]`) as HTMLElement | null)?.focus();
     return;

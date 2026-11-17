@@ -19,6 +19,7 @@ from . import company_floor as _floor
 from . import models as M
 from .store import H as _H
 from .store import Problem
+from .api_contract import api_v2
 
 H: Any = _H
 Access: Any = _Access
@@ -189,7 +190,15 @@ def log(c: Any, pipeline_id: str, visible_sql: str) -> list[dict[str, Any]]:
 
 
 def register(app: FastAPI, auth: Any, mutate: Callable[..., Any], store: Any) -> None:
-    @app.get("/api/v2/factories")
+    @app.get(
+        "/api/v2/factories",
+        **api_v2(
+            "Pipelines",
+            "listFactories",
+            "The factories: each factory's Done count for the period, each pipeline's open count, handoffs and mark",
+            "FactoryMap",
+        ),
+    )
     def factory_list(request: Request, period: str = "7d"):
         """The factories: the live factories with their Done count for the period, and every live pipeline with
         its open count, what it files into and its mark."""
@@ -198,7 +207,15 @@ def register(app: FastAPI, auth: Any, mutate: Callable[..., Any], store: Any) ->
         with store.read() as c:
             return factories(c, auth.task_sql(c, who), period)
 
-    @app.get("/api/v2/company/floor")
+    @app.get(
+        "/api/v2/company/floor",
+        **api_v2(
+            "Pipelines",
+            "getCompanyFloor",
+            "The Floor (Company's first card): each factory you see, its pipelines' tasks in and out over a day and a week, and each work stage's open tasks by who holds them (the 12 most loaded, the rest summed) and how many are in your Needs you",
+            "CompanyFloor",
+        ),
+    )
     def company_floor(request: Request):
         """The Floor: each factory the reader sees, its pipelines' in and out rates, and each work stage's open
         tasks by who holds them (backend/company_floor.py)."""
@@ -207,7 +224,10 @@ def register(app: FastAPI, auth: Any, mutate: Callable[..., Any], store: Any) ->
         with store.read() as c:
             return _floor.floor(c, auth, who)
 
-    @app.post("/api/v2/factories")
+    @app.post(
+        "/api/v2/factories",
+        **api_v2("Pipelines", "createFactory", "Make a factory (the company's owner and Admins)", "FactoryCreated"),
+    )
     def factory_create(request: Request, body: M.FactoryNew):
         """Make a factory. The company's owner and Admins only."""
         who = request.state.identity
@@ -218,7 +238,15 @@ def register(app: FastAPI, auth: Any, mutate: Callable[..., Any], store: Any) ->
 
         return mutate(request, body, write)
 
-    @app.get("/api/v2/pipelines/{pipeline_id}/log")
+    @app.get(
+        "/api/v2/pipelines/{pipeline_id}/log",
+        **api_v2(
+            "Pipelines",
+            "getPipelineLog",
+            "The manager rail's Log: each push past, each snooze with no end date, and each pipeline save, newest first",
+            "PipelineLog",
+        ),
+    )
     def pipeline_log(request: Request, pipeline_id: str):
         """The manager rail's Log and Learned (S10). Learned has no source in this engine yet: it is always empty."""
         who = request.state.identity

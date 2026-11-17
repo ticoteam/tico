@@ -40,6 +40,7 @@ TASK_ROWS = (
     "service_key_tasks",
     "task_roles",
     "task_assets",
+    "task_documents",
     "task_requesters",
     "task_check_models",
     "task_run_models",

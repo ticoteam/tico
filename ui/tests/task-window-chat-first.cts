@@ -1,6 +1,7 @@
 import type * as Tasks from './tasks-page.cts';
 import type {Page} from 'playwright';
-// The task window, chat first (the style guide's Task window: Description, Chat and Details tabs), on the v3 fixture
+// The task window, chat first (the style guide's Task window: the chat, Details from its icon, and tabs only for a task
+// with documents, ui/tests/task-documents.cts), on the v3 fixture
 // (ui/tests/tasks-page.cts); every request is intercepted.
 // - 1280 × 800: a task with messages opens on Chat; the newest line and the message box are in view without scrolling.
 // - 60 lines: the newest show, and scrolling up draws older ones until the first message.
@@ -10,7 +11,7 @@ import type {Page} from 'playwright';
 // - One Visible to row (Team, Public roadmap or Private · names); no Private or Public box, no Size, no Who can see.
 // - A page row is its icon and name and opens the page; + opens the page search (recent pages, "or drop a file to
 //   upload"); ⋯ › Make a page… opens the Describe box.
-// - A phone at 390 px: the same three tabs, open on Chat, the box at the foot of the window.
+// - A phone at 390 px: no tabs, open on the chat, the box at the foot of the window.
 // - No links, runs or meetings: none of those sections show; ⋯ › Activity and links opens them.
 declare function liveEmit(topic: string, data: unknown): void;
 const {chromium} = require('playwright') as typeof import('playwright');
@@ -67,16 +68,16 @@ const pages = async (page: Page) => {
       await page.waitForFunction(() => { const t = document.querySelector('#task-modal .task-comments')!; return t.scrollHeight - t.scrollTop - t.clientHeight < 4; });
       assert.ok(await inView('#task-modal .task-comments [data-message="m99"]'), 'the newest line is in view');
       assert.ok(await inView('#task-modal .task-chat textarea'), 'the message box is in view');
-      // Opening lands on the tab shown, not the title (a focused title would open in full).
-      assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('data-task-tab')), 'chat', 'the focus is on the Chat tab');
-      // Three tabs; a task with messages opens on Chat, and Details is a tab away.
-      assert.deepEqual((await win.getByRole('tab').allInnerTexts()).map(t => t.replace(/\s+/g, ' ').trim().replace(/ \d+$/, '')), ['Description', 'Chat', 'Details']);
-      assert.equal(await win.getByRole('tab', {name: 'Chat'}).getAttribute('aria-selected'), 'true');
-      assert.equal(await win.locator('.task-side').isVisible(), false, 'Details is a tab away');
+      // Opening lands on the window itself, not the title (a focused title would open in full) nor a control (no ring).
+      assert.equal(await page.evaluate(() => document.activeElement?.id), 'task-modal', 'the focus is on the window');
+      // No documents, no tabs: the chat, and Details behind its icon.
+      assert.equal(await win.getByRole('tab').count(), 0, 'no tabs');
+      assert.equal(await win.locator('[data-task-tab="details"]').getAttribute('aria-pressed'), 'false');
+      assert.equal(await win.locator('.task-side').isVisible(), false, 'Details is behind its icon');
       // The title is top left, on the same row as the actions; the window's ✕ is last, after Archive and ⋯.
       const title = (await win.locator('.tw-head .tmodal-title').boundingBox())!, close = (await win.locator('[data-modal-close]').boundingBox())!;
       assert.ok(Math.abs(title.y - close.y) < 12 && title.x < close.x, `title and actions share the head row (${title.y} / ${close.y})`);
-      assert.deepEqual(await win.locator('.tw-acts > button:not([hidden])').evaluateAll(els => els.map(e => e.getAttribute('aria-label'))).then(l => l.slice(-3)), ['Archive', 'More actions', 'Close window']);
+      assert.deepEqual(await win.locator('.tw-acts > button:not([hidden])').evaluateAll(els => els.map(e => e.getAttribute('aria-label')?.replace(/,.*$/, ''))).then(l => l.slice(-4)), ['Archive', 'Details', 'More actions', 'Close window']);
       assert.equal(await win.getByRole('button', {name: 'Close', exact: true}).count(), 0, 'no "Close" word button');
 
       // 2. Only the newest lines are drawn; scrolling up draws older ones until the first message.
@@ -119,7 +120,7 @@ const pages = async (page: Page) => {
 
       // 5. One Visible to row; no Private or Public box, no Size, no Who can see.
       const props = win.locator('[data-task-props]');
-      await win.getByRole('tab', {name: /Details/}).click();
+      await win.getByRole('button', {name: /^Details/}).click();
       assert.equal(await win.locator('details.task-details').count(), 0, 'no Details fold: the facts are one line each');
       assert.equal(await props.locator('[data-prop-row="visible"]').count(), 1);
       assert.match(await props.locator('[data-prop-row="visible"]').innerText(), /Visible to\s+(groups\s*)?Team/);
@@ -199,19 +200,17 @@ const pages = async (page: Page) => {
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // ---- 7. a phone at 390 px: the same three tabs, Chat first, the box at the window's foot
+    // ---- 7. a phone at 390 px: no tabs, the chat first, the box at the window's foot
     {
       const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}, hash: '#/task/t-1', tasks: tasks(), needs: [],
         comments: {'t-1': comments}, events: {'t-1': events}, beforeGoto: pages});
       const win = page.locator('#task-modal[open]');
       await win.locator('.task-comments').getByText('The newest line').waitFor();
-      const tabs = win.getByRole('tab');
-      assert.deepEqual((await tabs.allInnerTexts()).map(s => s.replace(/\s+/g, ' ').trim().replace(/ \d+$/, '')), ['Description', 'Chat', 'Details']);
-      assert.equal(await win.getByRole('tab', {name: 'Chat'}).getAttribute('aria-selected'), 'true');
-      assert.equal(await win.locator('[data-task-props]').isVisible(), false, 'Details is a tab away');
-      // The head keeps Archive, ⋯ and ✕, each a 44px target; the age goes into ⋯.
-      for (const name of ['Archive', 'More actions', 'Close window']) {
-        const b = (await win.getByRole('button', {name, exact: true}).boundingBox())!;
+      assert.equal(await win.getByRole('tab').count(), 0, 'no tabs');
+      assert.equal(await win.locator('[data-task-props]').isVisible(), false, 'Details is behind its icon');
+      // The head keeps Archive, Details, ⋯ and ✕, each a 44px target; the age goes into ⋯.
+      for (const name of ['Archive', 'Details', 'More actions', 'Close window']) {
+        const b = (await (name === 'Details' ? win.locator('[data-task-tab="details"]') : win.getByRole('button', {name, exact: true})).boundingBox())!;
         assert.ok(b.width >= 44 && b.height >= 44, `${name} is a 44px target (${b.width}×${b.height})`);
       }
       assert.equal(await win.locator('.tmodal-age').isVisible(), false, 'the age is in ⋯ on a phone');
@@ -222,7 +221,7 @@ const pages = async (page: Page) => {
       const up = (await win.locator('.task-chat textarea').boundingBox())!;
       assert.ok(up.y + up.height <= 500, `the box stays above the keyboard (bottom ${up.y + up.height})`);
       await page.evaluate(() => document.documentElement.style.removeProperty('--chat-viewport-height'));
-      await win.getByRole('tab', {name: /Details/}).click();
+      await win.getByRole('button', {name: /^Details/}).click();
       await win.locator('[data-task-pages] .tp-row').waitFor({state: 'visible'});
       await win.locator('[data-prop-row="visible"]').waitFor({state: 'visible'});
       assert.equal(await win.locator('.task-chat').isVisible(), false);
@@ -230,7 +229,7 @@ const pages = async (page: Page) => {
       // A task whose reader cannot link pages: its last page goes, so its Pages section goes too (nothing to add).
       await page.evaluate(() => { location.hash = '#/task/t-2'; });
       const other = page.locator('#task-modal[open][data-task="t-2"]');
-      await other.getByRole('tab', {name: /Details/}).click();
+      await other.getByRole('button', {name: /^Details/}).click();
       await other.locator('[data-task-pages] .tp-row').waitFor();
       assert.equal(await other.locator('[data-tp-add]').isVisible(), false, 'no + for a reader who may not link pages');
       PLACES['t-2'] = {can_link: false, pins: []};

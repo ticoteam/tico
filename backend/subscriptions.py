@@ -11,6 +11,7 @@ from .execution import readiness_document
 from .subscription_identity import identity
 from .store import Problem, encode
 from . import bot_settings as BS
+from .api_contract import api_v2
 
 COMPUTER_LOGIN_CAPABILITY = 'computer_logins_v1'
 
@@ -468,14 +469,27 @@ def install(app, store, auth, mutate, settings, computer_rows):
 
     subscription_identity.install(app, store, auth, mutate)
 
-    @app.get('/api/v2/subscriptions')
+    @app.get(
+        '/api/v2/subscriptions',
+        **api_v2(
+            "Subscriptions", "listSubscriptions", "Subscription logins reported by each Computer", "SubscriptionList"
+        ),
+    )
     def subscriptions(request: Request):
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
             return listing(c, auth, who, computer_rows)
 
-    @app.put('/api/v2/subscriptions/weekly')
+    @app.put(
+        '/api/v2/subscriptions/weekly',
+        **api_v2(
+            "Subscriptions",
+            "recordSubscriptionWeekly",
+            "Record or clear a manual weekly allowance observation",
+            "SubscriptionWeeklyResult",
+        ),
+    )
     def subscription_weekly(request: Request, body: M.SubscriptionWeeklyEdit):
         who = request.state.identity
 
@@ -510,7 +524,10 @@ def install(app, store, auth, mutate, settings, computer_rows):
 
         return mutate(request, body, work)
 
-    @app.get('/api/v2/bots/{bot}/subscription')
+    @app.get(
+        '/api/v2/bots/{bot}/subscription',
+        **api_v2("Subscriptions", "getBotSubscription", "The Computer login a bot runs on", "BotSubscription"),
+    )
     def subscription(request: Request, bot: str):
         who = request.state.identity
         auth.domain(who)

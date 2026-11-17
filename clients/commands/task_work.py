@@ -13,6 +13,7 @@ from pathlib import Path
 from clients import s3links
 from clients.cli_spec import Arg, Command, Group
 
+from clients.bot_files import DOCUMENTS
 from clients.commands._registry import tool
 from clients.commands._schemas import DEFER_FOR, TASK_ID, _delivery, _key, _s
 from clients.commands._shared import ASKED, VERSION, VISUALS, _seen, _uploaded, _visuals, text_file
@@ -614,9 +615,19 @@ def task_follow(api, args):
     "With req and page instead, attach a page to the stage's page requirement: Jev checks it, then the person it "
     "names OKs that version. Attaching again replaces it. With a new version after a send back, say what changed "
     "(changed: up to 5 one-line bullets) and what you did with each of their points (answered: "
-    "\"<point>: done|not done, <why>\"); never quote their note back to them.",
+    "\"<point>: done|not done, <why>\"); never quote their note back to them. "
+    "With document instead, the HTML in text or the .html file at path is that document's next version: one per name "
+    "per task, shown as a tab beside the task's chat; put what changed in note. Spec, QA report (the proof), Release "
+    "report, Invoice and Email are the names a stage approves; name any other document as you like.",
     {
         "id": _s("Task id"),
+        "document": {
+            "type": "string",
+            "maxLength": 40,
+            "description": "The task's document this HTML is the next version of: "
+            + ", ".join(DOCUMENTS)
+            + " or your own name",
+        },
         "req": _s("The page requirement's name or id, e.g. Spec page"),
         "page": _s("page:<file id> for its newest version, or page:<file id>@<version>"),
         "version": VERSION,
@@ -643,6 +654,8 @@ def task_follow(api, args):
     writes=True,
 )
 def task_attach(api, args):
+    if args.get("document"):
+        return _document(api, args)
     if args.get("req") or args.get("page"):
         if not (args.get("req") and args.get("page")):
             raise ValueError("A page requirement takes both req and page, e.g. req: Spec page, page: page:file-…")
@@ -676,6 +689,30 @@ def task_attach(api, args):
     for field in ("text", "content_base64", "note"):
         if args.get(field) is not None:
             body[field] = args[field]
+    return api.post(f"tasks/{args['id']}/files", body, key=_key(args))
+
+
+def _document(api, args):
+    """A task document's next version: `text`, or the .html file at `path` with the images beside it embedded (as
+    `tico page publish` sends one: the server drops anything that would load from elsewhere)."""
+    body = {"document": args["document"]}
+    if args.get("path"):
+        from clients import bot_files as BF, visual_embed
+
+        root = BF.checkout_root()
+        try:
+            name, _, data, _ = BF.read_local(root, args["path"])
+            if not visual_embed.is_page(name):
+                raise ValueError("A document is an .html file")
+            body["text"] = visual_embed.embed(root, args["path"])[0].decode("utf-8", errors="replace")
+        except BF.Refused as exc:
+            raise ValueError(str(exc)) from None
+    elif args.get("text") is not None:
+        body["text"] = args["text"]
+    else:
+        raise ValueError("Send the document's HTML as text, or path to an .html file")
+    if args.get("note"):
+        body["note"] = args["note"]
     return api.post(f"tasks/{args['id']}/files", body, key=_key(args))
 
 
