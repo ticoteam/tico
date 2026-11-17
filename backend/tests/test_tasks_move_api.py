@@ -71,7 +71,7 @@ def test_one_task_moves_to_another_pipeline_keeps_its_label_and_is_found_by_it(a
     assert r.status_code == 404, "the label stays the one it was made with"
     # Naming its own pipeline is the move inside it that it always was: forward, here.
     on = post(api, f"tasks/{made['id']}/move", {"to_pipeline": "backlog", "to": "Next up"})
-    assert on["stage"]["id"] == "next-up" and on["prefix"] == "D"
+    assert on["stage"]["id"] == "next-up" and get(api, f"tasks/D{made['number']}")["task"]["id"] == made["id"]
 
 
 def test_a_reader_moves_a_task_and_a_bot_says_why(api):
