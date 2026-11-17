@@ -13,9 +13,6 @@ One JSON line each way: {"token": "<attempt token>", "repository": "owner/repo",
 No mail crosses it: the server reads and sends mail itself, so the supervisor refuses a mail question.
 """
 
-import json
-import socket
-
 SOCKET_ENV = "TICO_CRED_SOCKET"
 MAX_LINE = 4096
 
