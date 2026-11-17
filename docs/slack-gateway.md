@@ -245,7 +245,7 @@ In the Docker install, see [slack.md](slack.md): the `slack` compose profile run
 Settings: `TICO_SLACK_GATEWAY_ENABLED` (the kill switch), `SLACK_TEAM_ID`
 (the one workspace whose events are accepted), `SLACK_APP_ID` (optional; the app `bots.info`
 must name), `TICO_SLACK_SECRET_ARN` (the JSON credential `{"bot_token","app_token","team_id","app_id"}`;
-`SLACK_BOT_TOKEN`/`SLACK_APP_TOKEN` in the environment or `/etc/tico/slack` also work), and the
+unset, the tokens come from Tools > Slack), and the
 three thresholds above, `TICO_SLACK_DIGEST_MINUTES` and `TICO_SLACK_DIGEST_CAP` (Channels,
 above), and `TICO_SLACK_UNFURL_HOSTS`, `TICO_SLACK_OPEN_LABEL` and `TICO_SLACK_OPEN_URL` (Link previews,
 above). Only the gateway process reads it; the API never holds a Slack token. Change them in `.env` and run `docker compose up -d`, which restarts only the gateway.
@@ -271,8 +271,9 @@ interactivity on, the `app_mention`, `message.im`, `message.channels`, `message.
 1. On <https://api.slack.com/apps>, open the Tico app, **App Manifest**, paste the manifest over
    the old one, save.
 2. **Install App**, reinstall to the Acme workspace (Slack shows the reinstall banner).
-3. If the Bot User OAuth Token changed, update `bot_token` in the `tico/slack` credential (and
-   `SLACK_BOT_TOKEN` in the Mac computer's `secrets/_shared.env`). The app-level token
+3. If the Bot User OAuth Token changed, paste it in Tools > Slack (or, with `TICO_SLACK_SECRET_ARN` set,
+   update `bot_token` in that secret) (and the bots' `SLACK_BOT_TOKEN` in the Mac computer's
+   `secrets/_shared.env`). The app-level token
    (`xapp-`, `connections:write`, **Basic Information → App-Level Tokens**) is unchanged by a
    reinstall.
 4. Restart the gateway unit (`configure` with the same values does it) and check the log for

@@ -228,6 +228,7 @@ let browser: Browser | null = null;
   {
     const {page, errors} = await open(browser, {phone: true});
     await page.goto('https://tico-ui.test/#/thread/t-home');
+    await page.locator('#threads-shell').waitFor();
     await msgRow(page, 'b2').waitFor();
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth) <= 390, 'no sideways scroll');
     const summary = page.locator('.thv-list details.src-group > summary');

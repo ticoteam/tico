@@ -350,11 +350,25 @@ CLOUD_WORDS = "its cloud computer"
 CLOUD_STARTING = "is waiting for its cloud computer to start"
 CLOUD_FAILED = "can't run: its cloud computer didn't start"
 RUNS_FAILING = "keeps failing its runs"
+RUNAWAY = "was stopped for starting too many runs"
+USAGE_LIMIT = "is at its usage limit"
 LOGIN = "has a login to reconnect"
 COMPANY_PAUSED = "The company is paused"
 CLOUD_LOCKED = "Tico Cloud is locked"
 OUT_OF_CREDIT = "Tico Cloud is out of credit"
 COMPANY_WIDE = (COMPANY_PAUSED, CLOUD_LOCKED, OUT_OF_CREDIT)
+# A bot that runs again by itself with nobody asked: its cloud machine is on its way, or its usage limit resets.
+STARTS_BY_ITSELF = (CLOUD_STARTING, USAGE_LIMIT)
+# Each hold that stops a bot (backend/holds.py STOPS) as its cause.
+HOLD_CAUSES = {
+    "paused": STATE_CAUSES["paused"],
+    "quarantined": STATE_CAUSES["quarantined"],
+    "company_paused": COMPANY_PAUSED,
+    "cloud_locked": CLOUD_LOCKED,
+    "run_hold": RUNS_FAILING,  # held until a try completes or a person releases it (backend/run_backoff.py)
+    "budget": RUNAWAY,  # held until a person releases it or raises its budget (backend/turn_budgets.py)
+    "cooling_off": USAGE_LIMIT,  # its login is held until its reset, then one probe (backend/login_holds.py)
+}
 
 
 def cause_line(conn: "sqlite3.Connection", actor: str | None, cause: str) -> str:
@@ -406,11 +420,10 @@ def _cause(conn: "sqlite3.Connection", bot: str) -> str | None:
     from . import (
         bot_settings,
         cloud_access,
-        company_pause,
         gateway_connection,
         harnesses,
+        holds,
         reconnects,
-        run_backoff,
         setup_live,
         statuses,
     )
@@ -421,17 +434,16 @@ def _cause(conn: "sqlite3.Connection", bot: str) -> str | None:
     state = row[0] or "active"
     if state == "planned" and cast("Any", setup_live).being_set_up(conn, bot):
         return BEING_SET_UP
-    if state != "active":
+    if state not in ("active", "paused", "quarantined"):
         return STATE_CAUSES.get(state, f"is {state}")
-    if company_pause.record(conn) is not None:
-        return COMPANY_PAUSED
+    # A hold that stops the bot: its own pause or quarantine, the company's pause, a locked Tico Cloud company, its
+    # failed runs, its run budget, or its login's usage limit (backend/holds.py, the claim's own answer).
+    if kind := holds.why(conn, bot, kinds=holds.STOPS):
+        return HOLD_CAUSES[kind]
     # These modules are untyped: what they return is Any here.
     cloud: Any = cloud_access
     config: Row = cast("Any", bot_settings).read_in_snapshot(conn, bot) or {}
-    access = cloud.access(conn)
-    if cloud.locked(conn, access):
-        return CLOUD_LOCKED
-    if cloud.frozen(conn, access) and cast("Any", gateway_connection).is_tico(config.get("model")):
+    if cloud.frozen(conn) and cast("Any", gateway_connection).is_tico(config.get("model")):
         return OUT_OF_CREDIT  # a bot on its own subscription or keys still runs
     kinds: Any = harnesses
     if kinds.resolve_harness(config) not in kinds.EXTERNAL_HARNESSES:
@@ -442,9 +454,6 @@ def _cause(conn: "sqlite3.Connection", bot: str) -> str | None:
     onboarding = _read(conn, _ONBOARDING, (bot,))
     if onboarding and cast("Any", statuses).is_parked(onboarding[0] or ""):
         return ONBOARDING
-    held: Row = cast("Any", run_backoff).get(conn, bot) or {}
-    if held.get("held_at"):
-        return RUNS_FAILING  # held until a person releases it (backend/run_backoff.py)
     if cast("Any", reconnects).bot_open(conn, bot, "login:"):
         return LOGIN  # its computer's sign-in was refused: a person reconnects it (backend/reconnects.py)
     return None
@@ -464,16 +473,17 @@ def _computer_cause(conn: "sqlite3.Connection", bot: str) -> str:
 
 
 # `_cause`'s reads of one bot, kept for the snapshot (`_read`); `prime_bots` reads them for many bots at once.
-_BOT_STATE = "SELECT state FROM bots WHERE id=?"
+_BOT_STATE = "SELECT state FROM bots WHERE id=?"  # holds.STATE_SQL, so one read serves both
 _PLACED = "SELECT r.revoked_at FROM assignments a JOIN runners r ON r.id = a.runner_id WHERE a.bot=?"
 _ONBOARDING = "SELECT onboarding_state FROM bot_config WHERE bot=?"
 
 
 def prime_bots(conn: "sqlite3.Connection", actors: Collection[str | None]) -> None:
-    """Read what `cannot_run` asks of each of these bots (its state, its settings, its computer, its run back-off, its
-    sign-in cards) in a few statements for all of them, and keep it in the snapshot's read cache: a pass over many tasks then asks
-    "can this bot run" for each bot without reading it again. Nothing without a read cache."""
-    from . import bot_settings, read_cache, reconnects, run_backoff
+    """Read what `cannot_run` asks of each of these bots (its state, its settings, its computer, its run back-off and
+    budget holds, its sign-in cards) in a few statements for all of them, and keep it in the snapshot's read
+    cache: a pass over many tasks then asks "can this bot run" for each bot without reading it again. Nothing without a
+    read cache."""
+    from . import bot_settings, holds, read_cache, reconnects, run_backoff
 
     RC: Any = read_cache
     H = _h()
@@ -507,12 +517,13 @@ def prime_bots(conn: "sqlite3.Connection", actors: Collection[str | None]) -> No
         )
     }
     RC.prime(conn, _ONBOARDING, {(b,): onboarding.get(b) for b in bots})
-    # Most bots have no back-off row: the miss is kept too, or each would be read again.
-    backoff = {
+    # Most bots have no back-off row or budget hold: the miss is kept too, or each would be read again.
+    backoffs = {
         str(r["bot"]): r
         for r in conn.execute("SELECT * FROM run_backoff WHERE bot IN (SELECT value FROM json_each(?))", listed)
     }
-    RC.prime(conn, cast("Any", run_backoff).GET_SQL, {(b,): backoff.get(b) for b in bots})
+    RC.prime(conn, cast("Any", run_backoff).GET_SQL, {(b,): backoffs.get(b) for b in bots})
+    holds.prime(conn, holds.RUNAWAY, "bot", bots)
     cast("Any", reconnects).prime_open(conn, bots, "login:")
 
 
@@ -529,25 +540,34 @@ RUN_HELD = "stopped partway: waiting on a person to run it again"
 # Or its computer handed back its runs on the task before starting them, start_holds.SAME times for the same reason, and
 # BotOps has a task to find why (backend/start_holds.py). Paused until BotOps closes it: never a silent "Queued" loop.
 CANT_START = "can't start its runs here: BotOps is checking why"
+# Or a refusal-count quarantine holds it on this task alone (backend/task_quarantine.py): it lifts after the cooldown,
+# or when a person clears the quarantine.
+TASK_QUARANTINED = "is quarantined on this task"
+# Or its claim could not start its run on the task and holds that run for a wait (backend/claim_holds.py): Tico tries it
+# again by itself, and the operator already has the item about it.
+CLAIM_HELD = "couldn't start its run here: Tico tries it again"
+# Each hold on the bot's work on one task (backend/holds.py ON_TASK) as its cause. None asks a person: BotOps has the
+# first, and the other two lift by themselves (`ENDS_BY_ITSELF`, which Needs you leaves out).
+TASK_HOLD_CAUSES = {"cant_start": CANT_START, "task_quarantine": TASK_QUARANTINED, "claim_held": CLAIM_HELD}
+ENDS_BY_ITSELF = tuple(TASK_HOLD_CAUSES.values())
 
 
 def task_cause(
     conn: "sqlite3.Connection", task_id: str, actor: str | None, waits: dict[str, str] | None = None
 ) -> str | None:
-    """Why this bot cannot run on this task though it can run: a run of it on the task held for a check, an open
-    worktree wait of this task's, or None. `waits` is `worktree_holds` read once for a pass over many tasks."""
+    """Why this bot cannot run on this task though it can run: a run of it on the task held for a check, a hold on its
+    work on the task (backend/holds.py ON_TASK), an open worktree wait of this task's, or None. `waits` is
+    `worktree_holds` read once for a pass over many tasks."""
     H = _h()
     if not H.is_bot(actor):
         return None
     held = _read(conn, _held_runs_sql(), (task_id,))
     if held and held[0] and str(H.actor_id(actor)) in str(held[0]).split(","):
         return RUN_HELD
-    from . import start_holds
+    from . import holds
 
-    SH: Any = start_holds
-    held = _read(conn, SH.held_sql(), (H.KEEPER, SH.EVENT, task_id))
-    if held and held[0] and str(H.actor_id(actor)) in str(held[0]).split(","):
-        return CANT_START
+    if kind := holds.why(conn, str(H.actor_id(actor)), kinds=holds.ON_TASK, task_id=task_id):
+        return TASK_HOLD_CAUSES[kind]
     if waits is None:
         from . import worktree_waits
 
@@ -1231,12 +1251,9 @@ def prime_holds(conn: "sqlite3.Connection", task_ids: list[str]) -> None:
         return
     held = dict(conn.execute(_held_runs_sql(many=True)).fetchall())
     RC.prime(conn, _held_runs_sql(), {(t,): (held.get(t),) for t in task_ids})
-    from . import start_holds
+    from . import holds
 
-    SH: Any = start_holds
-    keys = (_h().KEEPER, SH.EVENT)
-    cant = dict(conn.execute(SH.held_sql(many=True), keys).fetchall())
-    RC.prime(conn, SH.held_sql(), {(*keys, t): (cant.get(t),) for t in task_ids})
+    holds.on_tasks(conn, task_ids)
     if not cast("Any", worktree_waits)._exists(conn):
         return
     holds = worktree_holds(conn, task_ids)

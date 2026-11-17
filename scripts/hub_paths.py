@@ -44,16 +44,6 @@ HAND_READ_PATHS = (
     "automations templates",
     "automations versions",
     "board",
-    "bot list",
-    "bot recent",
-    "bot show",
-    "bot status history",
-    "bot status list",
-    "bots list",
-    "bots recent",
-    "bots show",
-    "bots status history",
-    "bots status list",
     "calendar free",
     "calendar list",
     "calendar search",
@@ -160,18 +150,38 @@ MARKS = ("growth setup",)
 # Spec'd reads the runner did not run without asking before they became specs, so the hand list left them out. They stay
 # out so the runner list does not widen; each one needs its own decision. `call token` mints a token, a POST that its
 # tool does not mark as a write; `file approved` reads a checkout file's bytes; the automation reads (and their
-# `automations` spellings) were never in the hand list; the others are Librarian and link reads.
+# `automations` spellings) were never in the hand list; the others are Librarian and link reads. `task run` starts a
+# bot's task, but its tool (tico_task_run) is not marked a write, so it stays out until that tool says so. The Assistant
+# reads (a person's own chat, what it learned, a shared chat, the waiting cards) were never in the hand list either;
+# `meeting granola sync` starts a sync, a POST its tool does not mark as a write, and `meeting pending` was not listed.
+# The `tool`, `github` and `repo` reads were never in the hand list; `tool check` POSTs a fresh check of a tool's keys.
 UNDECIDED = (
+    "assistant learned",
+    "assistant proposals",
+    "assistant read",
+    "assistant shared",
+    "assistant shared-read",
     "call token",
     "doc ask-status",
     "doc link-list",
     "file approved",
+    "meeting granola sync",
+    "meeting pending",
     "automation question-sets",
     "automation recent-runs",
     "automation template",
     "automations question-sets",
     "automations recent-runs",
     "automations template",
+    "task run",
+    "tasks run",
+    "github installed",
+    "github status",
+    "repo show",
+    "tool activity",
+    "tool check",
+    "tool index",
+    "tool query-search",
 )
 
 

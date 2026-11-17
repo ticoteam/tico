@@ -3,7 +3,7 @@ import type {Page, Route} from 'playwright';
 // stacks whose heights are relative and capped,
 // Flow's mark only over a stage holding something that waits on the reader, the rate flip kept per browser, the card a
 // hover shows and a click pins with its task rows, one factory with a deck per teammate and one mark by a stage's name,
-// a factory the reader may not see never drawn, the old Dashboard, Floor, Campus, Graph and Factories links landing on
+// a factory the reader may not see never drawn, pipelines in no factory in an Other hall with no link, the old Dashboard, Floor, Campus, Graph and Factories links landing on
 // Company, a phone's stacked halls and sheet. Fixtures only.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
@@ -36,6 +36,11 @@ const FLOOR = {factories: [
   {id: 'f-product', name: 'Product', manager_id: null, pipelines: [FEATURES]},
   {id: 'f-eng', name: 'Engineering', manager_id: null, pipelines: [FIXES]},
 ]};
+// Pipelines in no factory: one hall at the end, Other, with no page and no org chart.
+const ERRANDS = {id: 'errands', name: 'Errands', manager_id: 'bot:pm', in: {day: 1, week: 4}, out: {day: 0, week: 2}, stages: [
+  stage('errand-do', 'Do', [o('bot:f1', 2)]),
+]};
+const OTHER = {factories: [...FLOOR.factories, {id: null, name: 'Other', manager_id: null, pipelines: [ERRANDS]}]};
 // `idle` reports to the Product manager and holds no task: it is on the hall's chart all the same.
 const BOTS = ['pm', 'f1', 'f2', 'f3', 'f4', 'f5', 'b1', 'rm', 'em', 'fb', 'qa', 'idle', ...Array.from({length: 12}, (_, i) => `fx${i}`)]
   .map(id => ({id, slug: id, display_name: id.toUpperCase(), state: 'active', ...(id === 'idle' ? {reports_to: 'pm'} : {})}));
@@ -58,9 +63,10 @@ const levels = (page: Page, sel: string) => page.locator(sel).evaluateAll(els =>
 (async () => {
   const browser = await chromium.launch({channel: (process.env.TICO_BROWSER_CHANNEL ?? 'chrome') as string, headless: true});
   try {
-    const open = async (width: number, height: number, hub: Hub, hash = '#/home', touch = false) => {
+    const open = async (width: number, height: number, hub: Hub, hash = '#/home', touch = false, clock = false) => {
       const context = await browser.newContext({viewport: {width, height}, serviceWorkers: 'block', hasTouch: touch, isMobile: touch});
       const page = await context.newPage();
+      if (clock) await page.clock.install({time: new Date('2026-11-16T09:00:00Z')});
       const errors: string[] = [];
       page.on('pageerror', e => errors.push(e.message));
       await page.route('**/*', async (route: Route) => {
@@ -159,6 +165,7 @@ const levels = (page: Page, sel: string) => page.locator(sel).evaluateAll(els =>
       assert.equal(read.searchParams.get('pipeline'), 'features');
       assert.equal(read.searchParams.get('stages'), 'spec');
       assert.equal(read.searchParams.get('owners'), null, 'a company stack lists every holder\'s tasks');
+      assert.equal(read.searchParams.get('snoozed'), 'all', 'and the snoozed ones its count includes');
       await shot(page, 'floor-desktop-card');
       // Away from it, it goes.
       await page.mouse.move(5, 890);
@@ -241,6 +248,47 @@ const levels = (page: Page, sel: string) => page.locator(sel).evaluateAll(els =>
       await page.locator('.cf-stage').first().waitFor();
       assert.equal(await page.locator('.cf-stage[data-cf-stage-id="triage"] .cf-deck').count(), 13);
       assert.equal(await page.locator('.cf-stage[data-cf-stage-id="triage"] .cf-deck[data-cf-actor="+"]').count(), 1);
+      // The overflow deck opens the whole stage's card: its count and rows agree, snoozed ones too.
+      hub.reads.length = 0;
+      await page.locator('.cf-stage[data-cf-stage-id="triage"] .cf-deck[data-cf-actor="+"]').click();
+      const card = page.locator('#cf-card');
+      await card.locator('.cf-row').first().waitFor();
+      assert.match(await card.locator('.cf-card-stage').innerText(), / · \d+$/);
+      assert.ok(await card.locator('.cf-card-faces').count());
+      assert.equal(await card.locator('.cf-row').count(), 5);
+      const read = hub.reads.find(u => u.pathname === '/api/v2/tasks')!;
+      assert.equal(read.searchParams.get('pipeline'), 'fixes');
+      assert.equal(read.searchParams.get('stages'), 'triage');
+      assert.equal(read.searchParams.get('owners'), null);
+      assert.equal(read.searchParams.get('snoozed'), 'all');
+      await page.keyboard.press('Escape');
+      assert.deepEqual(errors, []);
+      await close();
+    }
+    // Company's safety read (every 2 minutes, or 5 with the live stream) reads the Floor again: an answer that differs is
+    // drawn, and the same answer leaves the floor as it is.
+    {
+      const hub = fresh();
+      const {page, errors, close} = await open(1440, 900, hub, '#/home', false, true);
+      await page.locator('.cf-hall').first().waitFor();
+      const floorReads = () => hub.reads.filter(u => u.pathname === '/api/v2/company/floor').length;
+      const until = async (done: () => boolean | Promise<boolean>) => {
+        for (let i = 0; i < 100 && !(await done()); i++) await page.waitForTimeout(50);
+        assert.ok(await done());
+      };
+      const build = async () => (await levels(page, '[data-cf-line="features"] .cf-stack[data-cf-stage="build"]'))[0];
+      let reads = floorReads();
+      await page.clock.fastForward(310e3);
+      await until(() => floorReads() > reads);
+      await page.waitForTimeout(200);
+      assert.deepEqual(await levels(page, '[data-cf-line="features"] .cf-stack'), [3, 5, 8, 0, 2], 'the same answer, the same floor');
+      // Build is one task now, not 400: the next read draws it.
+      hub.floor = {factories: [{...FLOOR.factories[0]!, pipelines: [{...FEATURES, stages: FEATURES.stages.map(s => s.id === 'build' ? stage('build', 'Build', [o('bot:b1', 1)]) : s)}]}, FLOOR.factories[1]]};
+      reads = floorReads();
+      await page.clock.fastForward(310e3);
+      await until(async () => (await build()) === 1);
+      assert.deepEqual(await levels(page, '[data-cf-line="features"] .cf-stack'), [3, 5, 1, 0, 2]);
+      assert.ok(floorReads() > reads);
       assert.deepEqual(errors, []);
       await close();
     }
@@ -251,6 +299,21 @@ const levels = (page: Page, sel: string) => page.locator(sel).evaluateAll(els =>
       await page.waitForFunction(() => location.hash === '#/home');
       await page.locator('.cf-hall').first().waitFor();
       assert.equal(await page.locator('.cf-hall[data-cf-factory="f-hidden"]').count(), 0);
+      assert.deepEqual(errors, []);
+      await close();
+    }
+    // Pipelines in no factory: a last hall, Other, its name not a link and no org chart; its stacks show their cards.
+    {
+      const hub: Hub = {floor: OTHER, fail: false, reads: []};
+      const {page, errors, close} = await open(1440, 900, hub);
+      await page.locator('.cf-hall').first().waitFor();
+      assert.deepEqual(await page.locator('.cf-hall').evaluateAll(els => els.map(el => el.getAttribute('data-cf-factory'))), ['f-product', 'f-eng', '']);
+      const other = page.locator('.cf-hall').last();
+      assert.equal(await other.locator('span.cf-hall-name').innerText(), 'Other');
+      assert.equal(await other.locator('a, .cf-org').count(), 0);
+      assert.deepEqual(await levels(page, '[data-cf-line="errands"] .cf-stack'), [2]);
+      await page.locator('[data-cf-line="errands"] .cf-stack').hover();
+      await page.locator('#cf-card .cf-row').first().waitFor();
       assert.deepEqual(errors, []);
       await close();
     }

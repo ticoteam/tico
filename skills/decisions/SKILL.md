@@ -230,13 +230,11 @@ the cookbook nearest your shape (`cookbooks/rerank_typesafe.md`, `hierarchical_c
 
 ## Worked examples
 
-**Message pass.** `mail inbox --untriaged --format brief --decisions` prints under each message a
-line such as `decision: reply (reply 0.81; ask 0.90, money 0.05, legal 0.02, urgency 1.4)`. The word
-after `decision:` is what the thresholds in `questions/mail-triage.json` say: `archive`,
-`needs-owner`, `route`, `reply`, or `read`. Open the threads marked `reply` and `read`; act on
-`archive` and `route` from the listing; put `needs-owner` on the batch. Then `mail draft`
-prints the decision gate beside the reviewer's verdict; a flagged draft gets one rewrite before you
-try again, and the reviewer still decides.
+**Message pass.** An inbox's Message automation asks its decide step about each new message as it arrives, and its
+filter reads the answers against thresholds such as those in `questions/mail-triage.json`: archive, leave for the
+person (`hub/needs-owner`), route to a team, or draft a reply. `tico automation recent-runs --trigger message` shows
+each run's answers and what it did. A bot's `tico email draft` returns the second reviewer's verdict; a draft it
+stops gets one rewrite before you try again, and the reviewer still decides.
 
 **Peec actions (SEO).** State per action: title, brief, URL, competitor demand, first seen.
 Questions of your own, all in one call: `kind` (content, technical, authority, noise),

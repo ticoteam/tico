@@ -274,6 +274,34 @@ def task_move(
 
 
 @_task_write()
+def task_move_to(
+    conn: "sqlite3.Connection",
+    actor: str,
+    task_id: str,
+    to_pipeline: str,
+    to: str | None = None,
+    why: str | None = None,
+    seen_version: int | str | None = None,
+    *,
+    mover: bool | None = None,
+    batch: str | None = None,
+) -> Row:
+    """Move a task to a stage of another pipeline (`task_engine.refile`): `to` names the stage (none: the first), and a
+    Done or Closed task lands in that pipeline's Done or Closed. Anyone who reads the task may (docs/pipelines-v3.md,
+    "Who may move"): anyone may add tasks to any pipeline, a private one too. A bot says why. `to_pipeline` naming the
+    task's own pipeline is a move inside it (`task_move`)."""
+    from . import task_engine as E
+
+    row = _open(conn, actor, task_id, mover, work=False)
+    pipe = E.pipeline_named(conn, actor, to_pipeline, task_id)
+    if pipe["id"] == row.get("pipeline_id"):
+        first = next((str(s["id"]) for s in E.stages(conn, str(pipe["id"])) if s["kind"] == "work"), "")
+        return task_move(conn, actor, task_id, str(to or "").strip() or first, why, seen_version, mover=mover)
+    with task_effects.because(actor):
+        return E.refile(conn, task_id, str(pipe["id"]), to, actor, why, seen_version, batch=batch)
+
+
+@_task_write()
 def task_let_see(
     conn: "sqlite3.Connection",
     actor: str,

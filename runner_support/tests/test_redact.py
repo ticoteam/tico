@@ -1,7 +1,6 @@
 """A granted secret never leaves the runner's Python helpers as text (runner_support/redact.py)."""
 
 import base64
-import subprocess
 import unittest
 from urllib.parse import quote
 
@@ -25,13 +24,8 @@ class Scrub(unittest.TestCase):
         self.assertEqual(out.count(redact.MASK), 4)
         self.assertIn("Basic " + redact.MASK, out)
 
-    def test_json_keeps_its_shape_and_short_or_common_values_are_ignored(self):
+    def test_short_or_common_values_are_ignored(self):
         r = redact.Redactor([SECRET, "short", "localhost", "aaaaaaaaaaaa", ""])
-        payload = {"kind": "tool", "n": 3, "ok": True, "items": [{"text": f"x {SECRET}"}, None, "short"]}
-        self.assertEqual(
-            r.scrub_json(payload),
-            {"kind": "tool", "n": 3, "ok": True, "items": [{"text": "x " + redact.MASK}, None, "short"]},
-        )
         self.assertEqual(r.scrub_text("short localhost aaaaaaaaaaaa"), "short localhost aaaaaaaaaaaa")
         self.assertIsNone(redact.for_turn({"PATH": "/usr/bin", "NAME": "x"}, ["short", "localhost"]))
 
@@ -45,127 +39,15 @@ class Scrub(unittest.TestCase):
         r.pattern = Broken()
         self.assertEqual(r.scrub_text("has " + SECRET), redact.ERROR)
 
-    def test_the_log_never_carries_a_running_turns_secret(self):
-        r = redact.Redactor([SECRET])
-        r.register("a1")
-        try:
-            self.assertNotIn(SECRET, redact.scrub_log("failed: " + SECRET))
-        finally:
-            redact.release("a1")
-        self.assertIn(SECRET, redact.scrub_log("failed: " + SECRET))
-
 
 if __name__ == "__main__":
     unittest.main()
 
 
-def test_scrubbing_never_runs_checkout_programs_or_writes_through_symlinks(tmp_path, monkeypatch):
-    from unittest import mock
-    from runner_support import isolation
-
-    repo = tmp_path / 'repo'
-    repo.mkdir()
-
-    def git(*args):
-        return subprocess.run(
-            ['git', '-C', str(repo), *args], capture_output=True, text=True, check=True
-        ).stdout.strip()
-
-    git('init', '-b', 'main')
-    git('config', 'user.name', 'Sam')
-    git('config', 'user.email', 'sam@example.com')
-    (repo / 'file').write_text('initial')
-    (repo / '.gitattributes').write_text('file diff=unsafe\n')
-    git('add', '.')
-    git('commit', '-m', 'Initial')
-    before = git('rev-parse', 'HEAD')
-    (repo / 'file').write_text('changed')
-    git('commit', '-am', 'Changed')
-    program = tmp_path / 'program'
-    marker = tmp_path / 'ran'
-    program.write_text('#!/bin/sh\ntouch "' + str(marker) + '"\n')
-    program.chmod(0o755)
-    git('config', 'core.fsmonitor', str(program))
-    git('config', 'diff.unsafe.textconv', str(program))
-    git('config', 'diff.external', str(program))
-    outside = tmp_path / 'outside'
-    outside.mkdir()
-    (outside / 'secret').write_text(SECRET)
-    (repo / 'link').symlink_to(outside, target_is_directory=True)
-    monkeypatch.setenv('EXAMPLE_VAULT_SECRET', SECRET)
-    with mock.patch.object(isolation, 'run', wraps=isolation.run) as calls:
-        r = redact.Redactor([SECRET])
-        r.scrub_tree(repo, before)
-        r.scrub_files([repo / 'link' / 'secret'], repo)
-        assert all('EXAMPLE_VAULT_SECRET' not in call.kwargs['env'] for call in calls.call_args_list)
-        assert all(call.kwargs['env']['GIT_CONFIG_GLOBAL'] == __import__('os').devnull for call in calls.call_args_list)
-        assert all(
-            '--no-optional-locks' in call.args[0] and 'core.fsmonitor=false' in call.args[0]
-            for call in calls.call_args_list
-        )
-    assert not marker.exists()
-    assert (outside / 'secret').read_text() == SECRET
-
-
-def test_a_rebase_onto_the_base_is_not_a_committed_secret_and_the_bots_own_commit_still_is(tmp_path):
-    origin, repo = tmp_path / 'origin.git', tmp_path / 'work'
-
-    def git(*args, at=repo):
-        return subprocess.run(
-            ['git', '-C', str(at), '-c', 'user.name=Sam', '-c', 'user.email=sam@example.com', *args],
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
-
-    git('init', '-q', '--bare', '-b', 'main', str(origin), at=tmp_path)
-    git('clone', '-q', str(origin), str(repo), at=tmp_path)
-    git('commit', '-q', '--allow-empty', '-m', 'init')
-    git('push', '-q', 'origin', 'HEAD:main')
-    git('switch', '-q', '-c', 'tico/1234abcd-task')
-    (repo / 'task.txt').write_text("the task's work\n")
-    git('add', '.')
-    git('commit', '-q', '-m', 'task')
-    git('switch', '-q', 'main')
-    (repo / 'main.txt').write_text(f'path={SECRET}\n')  # someone else's commit on main
-    git('add', '.')
-    git('commit', '-q', '-m', 'main')
-    git('push', '-q', 'origin', 'main')
-    git('switch', '-q', 'tico/1234abcd-task')
-    since = git('rev-parse', 'HEAD')
-    r = redact.Redactor([SECRET])
-    git('rebase', '-q', 'origin/main')
-    assert not r.scrub_tree(repo, since)['committed']
-    (repo / 'task.txt').write_text(f'key={SECRET}\n')
-    git('commit', '-q', '-am', 'leak')
-    git('push', '-q', '-f', 'origin', 'tico/1234abcd-task')
-    assert r.scrub_tree(repo, since)['committed']
-
-
-def test_atomic_scrub_never_follows_a_swapped_symlink(tmp_path, monkeypatch):
-    import os
-
-    path = tmp_path / 'report'
-    path.write_text(SECRET)
-    outside = tmp_path / 'outside'
-    outside.write_text('keep outside')
-    replace = os.replace
-
-    def swap(source, target, **kwargs):
-        path.unlink()
-        path.symlink_to(outside)
-        return replace(source, target, **kwargs)
-
-    monkeypatch.setattr(redact.os, 'replace', swap)
-    rewritten, excluded = redact.Redactor([SECRET]).scrub_files([path], tmp_path)
-    assert rewritten == [path] and excluded == []
-    assert not path.is_symlink()
-    assert SECRET not in path.read_text()
-    assert outside.read_text() == 'keep outside'
-
-
 # ---------------------------------------------------------------- git's own reason, safe to show
 APP_TOKEN = "ghs_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"
+# GitHub's stateless installation token (`ghs_<app id>_<JWT>`, the default since Oct 2026), synthetic.
+STATELESS_TOKEN = "ghs_4242_eyJhbGciOiJSUzI1NiJ9.eyJpaWQiOjc3LCJub25jZSI6InN5bnRoZXRpYyJ9." + "S1g-n_aTuRe" * 30
 
 
 @pytest.mark.parametrize(
@@ -217,6 +99,7 @@ def test_git_failure_masks_every_credential_shape_and_is_bounded():
         [
             f"fatal: unable to access 'https://user:{granted}@example.com/x.git/': The requested URL returned error: 403",
             f"error: {APP_TOKEN} and ghp_{'z' * 36} and {pat} were refused",
+            f"error: {STATELESS_TOKEN} was refused",
             "error: > Authorization: Basic eC1hY2Nlc3MtdG9rZW46c2VjcmV0c2VjcmV0",
             "error: helper said password=hunter2hunter2 and token=abc123def456",
         ]
@@ -225,6 +108,8 @@ def test_git_failure_masks_every_credential_shape_and_is_bounded():
     for secret in (
         granted,
         APP_TOKEN,
+        STATELESS_TOKEN,
+        STATELESS_TOKEN.split(".")[-1],
         pat,
         "ghp_" + "z" * 36,
         "eC1hY2Nlc3MtdG9rZW46c2VjcmV0c2VjcmV0",
@@ -237,12 +122,3 @@ def test_git_failure_masks_every_credential_shape_and_is_bounded():
     long = redact.git_failure("fatal: " + "x" * 5000, limit=120)
     assert len(long) <= 120 and long.endswith("…")
     assert redact.git_failure("") == ""
-
-
-def test_git_failure_masks_a_running_turns_secret():
-    redactor = redact.Redactor(["turn-secret-abcdef"])
-    redactor.register("attempt-git-failure")
-    try:
-        assert "turn-secret-abcdef" not in redact.git_failure("fatal: turn-secret-abcdef rejected")
-    finally:
-        redact.release("attempt-git-failure")

@@ -1,6 +1,4 @@
-"""Every task is its own session by default: the shared keying, and the one-time clearing of the old written default."""
-
-import json
+"""Every task is its own session by default: the shared keying."""
 
 from clients import sessions
 from backend import bot_settings as BS
@@ -35,27 +33,6 @@ def test_a_private_task_on_session_bot_keeps_its_own_session():
     assert sessions.session_key(on_bot, "ops", None, "c1", task_private=True) == sessions.BOT_THREAD
     # The server's lanes are unchanged: the turn still runs in the bot's one checkout.
     assert sessions.lane(on_bot, "ops", "t1", "c1") == sessions.MAIN_LANE
-
-
-def test_the_old_written_bot_default_is_cleared_once(api):
-    store = api.app.state.store
-
-    def session(bot):
-        with store.transaction() as c:
-            return BS.read(c, bot).get("session", "")
-
-    def put(bot, value):
-        with store.transaction() as c:
-            BS.update(c, bot, {'session': value})
-
-    put("ops", "bot"), put("cpo", "task")
-    with store.transaction() as c:
-        c.execute("DELETE FROM registry_metadata WHERE key='task_session_default'")
-    store.initialize(seed_market=False)
-    assert (session("ops"), session("cpo")) == ("", "task")
-    put("ops", "bot")  # a later explicit choice stays
-    store.initialize(seed_market=False)
-    assert session("ops") == "bot"
 
 
 def test_a_retired_assignment_hands_its_task_back_awake_but_waits_out_a_running_turn(api):

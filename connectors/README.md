@@ -8,14 +8,14 @@ curl, not with a vendor SDK, not from an employee's own `software/`. The policy 
 log, and the retry handling live in here; a direct call skips all three and is a policy violation,
 not a shortcut.
 
-- `slack.py` - read and post to Slack, and DM the team. Token: `SLACK_BOT_TOKEN` from
-  `secrets/_shared.env`.
+- `slack.py` - read and post to Slack, and DM the team. Token: `SLACK_BOT_TOKEN`, from the
+  Tools credential granted to the bot.
 - `slack-app-manifest.yaml` - the Slack app definition the owner installs, with exactly the scopes
   `slack.py` and the server's Slack gateway use, Socket Mode on, and the events the gateway
   subscribes to (`app_mention`, `message.im`, `message.channels`, `message.groups`, `link_shared`). The gateway itself is `backend/slack_gateway.py`
   on the API host (`docs/slack-gateway.md`); it is the one other thing that holds the token.
-- `mail/` - read and file email as ana@acme.example or legal@acme.example, and the deterministic inbox
-  rules. Run it as `scripts/mail.sh`. One Google service account with domain-wide delegation,
+- `mail/` - read, file, draft and send email as ana@acme.example or legal@acme.example. Bots and people
+  use it through `tico email` and `tico calendar`, never directly. One Google service account with domain-wide delegation,
   key at `secrets/google-sa.json`, never in a bot's environment. Employee guide: `docs/mail.md`;
   developer notes and the owner's Google setup: `connectors/mail/README.md`.
 
@@ -35,7 +35,7 @@ recipes, gotchas, and the learnings bots add): `tico tool show slack`, `tico too
 get pages in its own config (`integrations/README.md`).
 
 Which channels bots may use is the list under Settings > Tools > Slack (`tico slack channel list`), kept in Tico's database; a bot may post to any of them unless an owner or admin turned posting off for it. A run reads the list from the hub.
-What the mail rules do to new messages is `registry/mail-rules.yaml`. Which employee may post at
+What happens to a new message is its inbox's Message automation (`docs/routines.md`). Which employee may post at
 all, and which mailbox it may act as, is the `access:` block in its own `employee.yaml`
 (`policies/access.md`). All of it is checked in code on every call.
 
@@ -60,13 +60,11 @@ all, and which mailbox it may act as, is the `access:` block in its own `employe
    because nothing calls us. For the gateway, also mint an **App-Level Token** with
    `connections:write` under **Basic Information** (starts with `xapp-`); it opens the Socket
    Mode connection.
-5. Put the bot token in the shared env file, which every run inherits, and both tokens in the
-   server's `tico/slack` secret (`docs/slack-gateway.md`, Running it):
-
-       echo 'SLACK_BOT_TOKEN=xoxb-...' >> ~/tico-work/secrets/_shared.env
-
-6. Lock the file down: `chmod 600 ~/tico-work/secrets/_shared.env`. Never paste the token into
-   an Issue, a commit, a Slack message, or a bot prompt.
+5. Save the bot token in **Tools > Credentials** with **Bot variable name** `SLACK_BOT_TOKEN`, and
+   grant it to the bots that use Slack. For the gateway, paste both tokens in the server's
+   **Tools > Slack**, or put them in the secret named by `TICO_SLACK_SECRET_ARN`
+   (`docs/slack-gateway.md`, Running it).
+6. Never paste the token into an Issue, a commit, a Slack message, or a bot prompt.
 7. Invite the bot to every channel the bots read. Public channels can be joined by the bot itself
    (`connectors/slack.py join --channel <id>`); **private channels must be invited by a human**:
    in each channel type `/invite @Tico`. Today that is `#release_notes`, `#sales`,

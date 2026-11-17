@@ -1,4 +1,4 @@
-"""Mail is read live from Gmail by people at their level, never by bots or runners; no copy is kept. Workspace
+"""Mail is read live from Gmail by people and bots at their own level, never by runners; no copy is kept. Workspace
 coverage is in test_mail_live."""
 
 from backend.tests.helpers.api import get, runner, setup_attempt  # noqa: F401
@@ -81,7 +81,7 @@ def subjects(api, token, **params):
     return [row["subject"] for row in get(api, path, token)["messages"]]
 
 
-def test_steven_sees_only_his_mailbox_and_bots_and_runners_see_none(api, fake_gmail):
+def test_steven_sees_only_his_mailbox_a_bot_without_a_level_sees_none_and_runners_are_refused(api, fake_gmail):
     seed_mail(api)
     assert boxes(api, "ben-test") == {"ben@acme.example"}
     assert subjects(api, "ben-test", mailbox="ben@acme.example") == ["Ben standup"]
@@ -95,5 +95,5 @@ def test_steven_sees_only_his_mailbox_and_bots_and_runners_see_none(api, fake_gm
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM mail_messages").fetchone()[0] == 0
     _, _, attempt = setup_attempt(api)
-    get(api, "mail/mailboxes", attempt["token"], expected=403)
+    assert get(api, "mail/mailboxes", attempt["token"])["mailboxes"] == []  # a bot holds no level on any of them
     get(api, "mail/messages/c1?mailbox=ana@acme.example", attempt["token"], expected=403)

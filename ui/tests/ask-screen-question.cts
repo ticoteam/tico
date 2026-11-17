@@ -75,7 +75,7 @@ const times = (all: string, part: string) => all.split(part).length - 1;
         if (p === '/api/me') return json({...me, config});
         if (p === '/api/v2/config') return json(config);
         if (p === '/api/employees') return json([{name: 'reviewer-2', display_name: 'Reviewer 2'}, {name: 'growth', display_name: 'Growth Owner'}]);
-        if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'ben', name: 'Ben'}], teams: {}});
+        if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'ben', name: 'Ben'}], teams: {}});
         if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
         if (p === '/api/v2/needs-you') return json({actor: 'human:ana', count: needs.length, items: needs, version: String(needs.length), next: null});
         // Tico's opinion on the Growth question is ready and says what kind of answer is wanted: it picks nothing and shows no line.

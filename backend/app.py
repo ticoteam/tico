@@ -22,7 +22,7 @@ from starlette.requests import ClientDisconnect
 
 from . import built_on
 from . import agents, app_view, mcp_oauth, oidc, runner_online, views
-from . import outcome_stats
+from . import outcome_stats, person_asks
 from . import pipeline_judges
 from . import recorder_installs
 from . import assistant_changes, why_here
@@ -42,7 +42,7 @@ from . import counsel
 from . import thread_api
 from . import recipients as recipient_gate
 from . import runs
-from . import bot_stops, turn_budgets, task_caps, reach
+from . import holds, turn_budgets, task_caps, reach
 from . import (
     check_models,
     profiles,
@@ -77,8 +77,7 @@ from .recruit import Recruiter
 from . import rooms
 from . import fast_json
 from . import names as actor_names
-from .openapi_v2 import STABLE as STABLE_ROUTES
-from .route_renames import old_paths as old_route_paths
+from .openapi_v2 import stable_path
 from . import settings_catalog
 from . import updates
 from .files import raw_media
@@ -127,17 +126,6 @@ from . import (
     bot_seats_routes,
     fleet_runner_routes,
     ui_bundle_routes,
-)
-
-
-# The stable v2 routes whose answers carry display names (backend/names.py); streams are left alone.
-STABLE_PATH = re.compile(
-    "|".join(
-        re.sub(r"\\\{[^}]+\\\}", "[^/]+", re.escape(spelling))
-        for path, *_ in STABLE_ROUTES
-        if path != "/api/v2/events"
-        for spelling in (path, *old_route_paths(path))
-    )
 )
 
 
@@ -1491,7 +1479,7 @@ def create_app(settings=None):
             or "content-disposition" in response.headers
             or "x-content-sha256" in response.headers
             or "count" in request.query_params
-            or not STABLE_PATH.fullmatch(request.url.path)
+            or not stable_path(app).fullmatch(request.url.path)  # the stable v2 routes (backend/names.py)
             or "application/json" not in response.headers.get("content-type", "")
         ):
             return response
@@ -1534,7 +1522,7 @@ def create_app(settings=None):
     class DisplayNameRoute(APIRoute):
         def __init__(self, path, endpoint, **options):
             # FastAPI calls the handler it was given; the JSON it answers is encoded by orjson (backend/fast_json.py).
-            # `endpoint` stays the handler itself, for the callers that read its dicts (backend/route_renames.py).
+            # `endpoint` stays the handler itself, for the callers that read its dicts.
             plain = isinstance(options.get("response_class", DefaultPlaceholder(None)), DefaultPlaceholder)
             super().__init__(
                 path, fast_json.answering_json(endpoint, options.get("status_code")) if plain else endpoint, **options
@@ -1555,7 +1543,7 @@ def create_app(settings=None):
     # type. Annotate before that wrapping so actual file/stream responses stay untouched.
     app.router.route_class = DisplayNameRoute
 
-    @app.get("/api/v2/ops/timing")
+    @app.get("/api/v2/operations/timing")
     def request_timings(request: Request):
         """Where requests spend their time (backend/timing.py): the owner, or BotOps."""
         who = request.state.identity
@@ -1622,8 +1610,9 @@ def create_app(settings=None):
             privacy.require_payload(c, request.state.identity, result)
         return result
 
-    # The columns of a task's row that are the server's own, never in a view.
-    SERVER_COLUMNS = ("checkpoint_state", "work_revision", "occurrence_step", "rule_due_id")
+    # The columns of a task's row that are the server's own, never in a view. `prefix` is read as the task's label
+    # (hubdb.ticket_refs); a list of 500 rows carries no copy of it.
+    SERVER_COLUMNS = ("checkpoint_state", "work_revision", "occurrence_step", "rule_due_id", "prefix")
 
     def plain_view(row, c=None):
         """A task's plain fields, as every view of it starts: the row, without the server's own columns."""
@@ -2013,7 +2002,7 @@ def create_app(settings=None):
         if note := (
             H.held_note(c, to)
             or usage_limits.warning(c, to)
-            or bot_stops.warning(c, to)
+            or holds.warning(c, to)
             or (None if H.is_human(who.actor) else H.setup_hold(c, to, who.actor))
         ):
             message = {**message, "warning": note}
@@ -2162,7 +2151,7 @@ def create_app(settings=None):
 
     billing_routes.register(app, admin_only, auth, mutate, settings, store)
 
-    @app.post("/api/v2/access/people")
+    @app.post("/api/v2/access/humans")
     def access_person_add(request: Request, body: M.AccessPersonAdd):
         """Add a person to the roster and the sign-in allow list. An owner or admin may add anyone; a member only
         a coworker in the company's email domain (and only if `add_people` is on for them). BotOps adds a coworker in the
@@ -2197,7 +2186,7 @@ def create_app(settings=None):
             auth.sync_access(c)
         return result
 
-    @app.post("/api/v2/access/people/{pid}/invite")
+    @app.post("/api/v2/access/humans/{pid}/invite")
     def access_person_invite(request: Request, pid: str, body: M.Empty):
         """Owners and admins send someone on the roster an invite from Tico's own sign-in mail (backend/invites.py),
         never the company's mailbox; a refusal says why, so the owner can tell the person themselves."""
@@ -2212,7 +2201,7 @@ def create_app(settings=None):
         at = invites.record_send(store, who, request, pid)  # a repeat answers the time its own send recorded
         return {"person": pid, "invited_at": at}
 
-    @app.post("/api/v2/access/people/{pid}/password")
+    @app.post("/api/v2/access/humans/{pid}/password")
     def access_person_password(request: Request, pid: str, body: M.Empty):
         """Owners and admins make someone on the roster a Tico account with a generated password (backend/invites.py
         `make_password`), answered once. Not `mutate`: its request cache would keep the password. Nothing else keeps
@@ -2231,7 +2220,8 @@ def create_app(settings=None):
             H.event(c, who.actor, "person.account_created", pid, {})
         return {"person": pid, "email": person["email"], "password": password}
 
-    @app.post("/api/v2/access/people/{pid}")
+    @app.post("/api/v2/access/humans/{pid}")
+    @app.post("/api/v2/access/people/{pid}", deprecated=True)  # rc.1 playbooks and mail setup text
     def access_person_edit(request: Request, pid: str, body: M.AccessPersonEdit):
         """Owners and admins edit a person, including what a member may do (create bots, add people). Only an
         owner makes or removes an admin. Through BotOps, a role or add_people change is a Confirm card."""
@@ -2266,7 +2256,7 @@ def create_app(settings=None):
                     c,
                     who,
                     "POST",
-                    "/api/v2/access/people/" + pid,
+                    "/api/v2/access/humans/" + pid,
                     changes,
                     "Change " + ", ".join(changes) + " for " + ((H.human(c, pid) or {}).get("name") or pid),
                 )
@@ -2305,7 +2295,7 @@ def create_app(settings=None):
 
         return teammate_access.can(c, who, "manage", "human:" + pid, auth=auth)
 
-    @app.post("/api/v2/people/{pid}")
+    @app.post("/api/v2/humans/{pid}")
     def person_update(request: Request, pid: str, body: M.PersonUpdate):
         caller = request.state.identity
 
@@ -3307,6 +3297,15 @@ def create_app(settings=None):
         except check_models.CheckModelError as exc:
             raise Problem(exc.code, str(exc), 409 if exc.code == "runner_not_ready" else 422)
 
+    def reads_bot(c, person, bot):
+        """Whether `person` may read `bot`'s activity, so a task the bot holds is one they can open (auth.task_row)."""
+        try:
+            them = auth.identity_for_actor(c, person)
+        except Problem:
+            return False
+        level = auth.bot_accesses(c, them, [H.actor_id(bot)]).get(H.actor_id(bot))
+        return not level or bool(level["read"])
+
     def task_create(c, who, body, lint=True, ingest=None, same=None, rule=None, wake_refs=None):
         """`POST /api/v2/tasks`: the task is made and put in the first stage of its pipeline (H.task_create). A task
         for a bot wakes it; `wake_refs` go on that wake (an auto dream's release policy, backend/dream_auto.py)."""
@@ -3521,12 +3520,17 @@ def create_app(settings=None):
             raise Problem("privacy", "The acting bot must be a current participant of the private task", 403)
         if reach_to:
             H.task_reach(c, who.actor, parent, owner)
+        # A bot's task for a person is the bot's own task with its question to them (backend/person_asks.py): Needs you
+        # holds only what is asked of a person, so a plain task handed to them would reach no list they are told of.
+        asks_person = ask_ingest.gated(who, settings.assistant_bot) and H.is_human(owner)
+        # The bot holds it when the person may read its work; else the task stays the person's, with the bot's question.
+        holder = who.actor if asks_person and reads_bot(c, owner, who.actor) else owner
         row = H.task_create(
             c,
             who.actor,
             body.title,
             body.body,
-            owner,
+            holder,
             body.due,
             parent_id,
             requester_actor=requester_actor,
@@ -3536,7 +3540,7 @@ def create_app(settings=None):
             public_summary=body.public_summary,
             public_warning=public_warning,
             private=private,
-            conversation_id=rooms.task_conversation_id(c, auth, owner, who.actor),
+            conversation_id=rooms.task_conversation_id(c, auth, holder, who.actor),
             lane=body.lane,
             labels=body.labels,
             top=body.top,
@@ -3556,8 +3560,20 @@ def create_app(settings=None):
             unassigned=unassigned,
             wake_refs=wake_refs,
             human_id=body.human,
+            asks=owner if asks_person and holder != owner else None,
         )
         c.execute("UPDATE tasks SET acceptance=? WHERE id=?", (encode(body.acceptance_criteria), row["id"]))
+        if asks_person:
+            person_asks.ask_on(
+                c,
+                who.actor,
+                row,
+                owner,
+                body.title,
+                person_asks.HANDED_WHY,
+                ends_with_task=holder == owner,
+            )
+            row = {**row, **(H.task(c, row["id"]) or {})}
         if body.for_actor:
             H._task_event(
                 c,
@@ -3715,7 +3731,7 @@ def create_app(settings=None):
         note = " ".join(
             filter(
                 None,
-                (usage_limits.warning(c, owner) or bot_stops.warning(c, owner) or H.setup_hold(c, owner),),
+                (usage_limits.warning(c, owner) or holds.warning(c, owner) or H.setup_hold(c, owner),),
             )
         )
         return {
@@ -3995,7 +4011,19 @@ def create_app(settings=None):
             if exc.code == "report_cap" and ask:
                 store.write(
                     request.state.identity,
-                    lambda c: H.task_create(c, ask["actor"], ask["title"], ask["body"], ask["person"]),
+                    # Its question to the person above (person_asks), so the ask is in their Needs you.
+                    lambda c: person_asks.task_for(
+                        c,
+                        ask["actor"],
+                        ask["title"],
+                        ask["body"],
+                        ask["person"],
+                        question=ask["question"],
+                        why="I'm at this week's limit for report changes, so the person above me decides.",
+                        bot=ask["actor"],
+                        asker=ask["actor"],  # the manager bot that asked, in its own words
+                        lint=True,
+                    ),
                 )
             raise
 
@@ -5116,10 +5144,8 @@ def create_app(settings=None):
             return {"bot": bot, "computer": runner["label"], "placed": True, "already": False}
         raise refusal
 
-    @app.get("/api/v2/fleet/check")
-    def fleet_check(request: Request):
+    def health_checks(who):
         """What is wrong with the bots this person may see, most urgent first, each with its one fix."""
-        who = request.state.identity
         auth.domain(who)
         with store.read_transaction() as c:  # one snapshot: company-wide reads are shared by every bot's row
             result = fleet_check_module.check(c, who, auth, settings)
@@ -5159,6 +5185,20 @@ def create_app(settings=None):
                 level: sum(i["severity"] == level for i in result["issues"]) for level in fleet_check_module.ORDER
             }
             return result
+
+    @app.get("/api/v2/health/issues")
+    def health_issues(request: Request):
+        """What is wrong with the bots this person may see, most urgent first, each with its one fix. The Assistant
+        also gets the live team snapshot (views.fleet_snapshot) with it."""
+        who = request.state.identity
+        checked = health_checks(who)
+        if getattr(who, "via", None) == "assistant":
+            from .views import fleet_snapshot
+
+            with store.read() as c:
+                snapshot = fleet_snapshot(c, auth, who, task_view)
+            return {**snapshot, **{key: checked[key] for key in ("checks", "issues", "services", "counts")}}
+        return checked
 
     def computer_rows(c, who):
         from .performance import load_statuses
@@ -5545,6 +5585,9 @@ def create_app(settings=None):
     from . import api_tools
 
     api_tools.install(app, store, auth, settings)  # Tools: API tools, their keys and levels, and the tool index
+    from . import access_requests
+
+    access_requests.install(app, store, auth, mutate)  # a bot asks for a level on a tool or a repository
     from . import website_tools
 
     website_tools.install(app, store, auth, settings)  # Tools: website tools and their accounts

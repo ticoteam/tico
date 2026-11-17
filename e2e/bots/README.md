@@ -73,3 +73,18 @@ limited skips its scenario. It calls the internet, so it never runs unless asked
     TICO_LIVE_AUTH=1 python3 -m pytest -q -n 2 -m slow runner_support/tests/test_credential_live.py
 
 [docs/auth-types.md](../../docs/auth-types.md) maps every auth type to how a person hands it over and its scenario.
+
+## Live git check
+
+`runner_support/tests/test_github_git.py` is a bot's git push with a GitHub App token, end to end: the hub mints an
+installation token as it does for a bot, the real runner hands it to the turn as its credential helper, and plain git
+clones, commits, pushes a branch and deletes it. Offline, a fake GitHub mints GitHub's stateless tokens
+(`ghs_<app id>_<JWT>`) and a local HTTPS git server takes a push only with the minted one; it runs in every release.
+Live, against the real GitHub, it needs a GitHub App with Contents (write) installed on one scratch repository, and
+skips, naming them, without:
+
+    TICO_GIT_CHECK_APP_ID=<id> TICO_GIT_CHECK_PRIVATE_KEY="$(cat app.pem)" TICO_GIT_CHECK_REPOSITORY=<owner>/<name> \
+        python3 -m pytest -q -n 0 -m slow runner_support/tests/test_github_git.py
+
+Release validation passes repository secrets of the same names (and `TICO_GIT_CHECK_INSTALLATION_ID`, optional) to its
+Python VMs, so a GitHub change that breaks bots' pushes fails the release instead of every bot.

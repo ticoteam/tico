@@ -174,9 +174,13 @@ EMPTY = (
     "credential_uses",
     "credential_requests",
     "credential_imports",
+    "access_requests",  # an open one posts cards and grants: a copy starts with none
     "directory_credentials",
     "company_storage",
     "tico_storage",
+    # Refresh claims on OAuth sign-ins (backend/oauth_refresh.py): transient. A copy starts with none, so a claim the
+    # source holds never blocks the copy's refresh.
+    "oauth_refresh_claims",
     # API tools: emptied with their keys, so a copy never calls a vendor or shows a real vendor's call log
     "tools",
     "tool_checks",
@@ -194,6 +198,8 @@ EMPTY = (
     "email_send_operations",
     "email_send_previews",
     "email_legacy_automations",
+    "mail_unsubscribes",  # one-click unsubscribes sent from the source: a copy sends none
+    "mail_drafts",  # ids of the source's Gmail drafts
     # mail, Slack, GitHub, Granola, meeting bots, support; the old copies of mail (read live from Gmail now) stay behind
     "mail_mailboxes",
     "mail_messages",
@@ -386,6 +392,8 @@ KEEP = (
             "blob_media",
             "blobs",
             "bot_agent_instructions",
+            # Run-budget holds before migration 20261117061834_holds_runaway moves them into `holds`: a copy is pruned
+            # before its first start runs that migration, so an unlisted table here would be emptied and its holds lost.
             "bot_budget",
             "bot_config",
             "bot_settings",
@@ -446,6 +454,7 @@ KEEP = (
             "goals",
             "health_findings",
             "health_reports",
+            "holds",  # why a bot may not start work: the copy holds what the source held (runaway runs, so far)
             "humans",
             "principals",
             "import_refs",

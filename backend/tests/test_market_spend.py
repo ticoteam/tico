@@ -248,6 +248,19 @@ def test_the_total_counts_a_sized_grandchild_under_unsized_parents(api):
     assert by_id[desks]["rolled_usd"]["spend_usd"] == 10_000_000 and by_id[offices]["size"] is None
 
 
+def test_the_owner_adds_a_part_with_its_summary_and_renames_a_segment_through_the_entity_route(api):
+    # What Where we play sends: a segment under another with its one line, then a new name for it (no new route).
+    _, _, _ = defined(api)
+    offices = post(api, "market/segments", {"name": "Offices"})["segment"]["id"]
+    made = post(api, "market/segments", {"name": "Rooms", "parent_id": offices, "summary": "Meeting rooms"})
+    rooms = made["segment"]["id"]
+    post(api, f"market/entities/{rooms}", {"name": "Meeting rooms"}, token="cara-test", expected=403)
+    post(api, f"market/entities/{rooms}", {"name": "Meeting rooms"})
+    by_id = {s["id"]: s for s in get(api, "market/spend")["segments"]}
+    assert by_id[rooms]["name"] == "Meeting rooms" and by_id[rooms]["parent"] == offices
+    assert by_id[rooms]["summary"] == "Meeting rooms" and by_id[rooms]["depth"] == 2
+
+
 def test_a_shared_parameter_that_puts_a_formula_out_of_range_leaves_no_spend_and_stays_out_of_the_total(api):
     first, second, _ = defined(api)
     proof = evidence(api)
@@ -341,11 +354,15 @@ def test_asking_for_the_market_to_be_sized_files_one_task_and_asking_again_retur
     _librarian(api)
     post(api, "market/spend/research", {"description": "Software for small landlords"}, token="ben-test", expected=403)
     first = post(api, "market/spend/research", {"description": "Software for small landlords"})
-    again = post(api, "market/spend/research", {"description": "A different words"})
+    again = post(api, "market/spend/research", {"description": " Software  for small landlords "})
     assert first["task_id"] == again["task_id"]
+    # The answer carries the task as the spend view has it, so the card shows it without another read.
+    assert first["sizing"]["id"] == first["task_id"] and first["sizing"]["ask"] is None
     with api.app.state.store.read() as c:
         rows = H._rows(c.execute("SELECT owner_id, title, body FROM tasks WHERE title LIKE 'Size the market%'"))
+        said = [m["body"] or "" for m in H.task_comments(c, first["task_id"])]
     assert len(rows) == 1 and rows[0]["owner_id"] == "bot:librarian" and "size-the-market.md" in rows[0]["body"]
+    assert not any("The market is now" in t for t in said)  # the same sentence changes nothing
     assert get(api, "market/spend")["definition"]["description"] == "Software for small landlords"
     with api.app.state.store.transaction() as c:
         H.task_done(c, "human:ana", first["task_id"], "Sized")
@@ -353,11 +370,77 @@ def test_asking_for_the_market_to_be_sized_files_one_task_and_asking_again_retur
     assert later["task_id"] != first["task_id"]
 
 
+def test_a_new_sentence_changes_the_market_and_tells_the_open_task(api):
+    _librarian(api)
+    first = post(api, "market/spend/research", {"description": "Software for small landlords"})
+    again = post(api, "market/spend/research", {"description": "Software for property managers"})
+    assert again["task_id"] == first["task_id"]
+    assert get(api, "market/spend")["definition"]["description"] == "Software for property managers"
+    with api.app.state.store.read() as c:
+        said = [(m["sender_id"], m["body"] or "") for m in H.task_comments(c, first["task_id"])]
+        count = c.execute("SELECT count(*) FROM tasks WHERE title LIKE 'Size the market%'").fetchone()[0]
+    assert count == 1
+    assert any(
+        who == "human:ana" and "The market is now: Software for property managers" in text for who, text in said
+    ), said
+    # With no task open, a new sentence files a new task and is the definition.
+    with api.app.state.store.transaction() as c:
+        H.task_done(c, "human:ana", first["task_id"], "Sized")
+    later = post(api, "market/spend/research", {"description": "Software for letting agents"})
+    assert later["task_id"] != first["task_id"]
+    assert get(api, "market/spend")["definition"]["description"] == "Software for letting agents"
+    with api.app.state.store.read() as c:
+        body = c.execute("SELECT body FROM tasks WHERE id=?", (later["task_id"],)).fetchone()[0]
+    assert "Define and size our market: Software for letting agents" in body
+
+
+def test_the_owner_changes_the_sentence_of_a_sized_market(api):
+    # Sized, with no task open: a new sentence is the definition and files the work again; the sizes stay until then.
+    first, _, _ = defined(api)
+    size(api, first, B, accept=True)
+    _librarian(api)
+    sent = post(api, "market/spend/research", {"description": "Cleaning for offices and schools"})
+    seen = get(api, "market/spend")
+    assert seen["definition"]["description"] == "Cleaning for offices and schools"
+    assert seen["sizing"]["id"] == sent["task_id"] and seen["total"]["spend_usd"] == B
+
+
+def test_the_spend_view_carries_the_open_sizing_task_and_the_question_it_asks_the_reader(api):
+    assert get(api, "market/spend")["sizing"] is None
+    _librarian(api)
+    task_id = post(api, "market/spend/research", {"description": "Software for small landlords"})["task_id"]
+    shown = get(api, "market/spend")["sizing"]
+    assert shown["id"] == task_id and shown["turn"] == "working" and shown["ask"] is None
+    with api.app.state.store.transaction() as c:
+        asked = H.task_ask(
+            c,
+            "bot:librarian",
+            task_id,
+            "human:ana",
+            "Which country should we size first?",
+            seen_version=H.task(c, task_id)["version"],
+        )
+    shown = get(api, "market/spend?dimension=buyer")["sizing"]
+    assert shown["turn"] == "person"
+    assert shown["ask"]["requirement_id"] == asked["requirement_id"] and shown["ask"]["kind"] == "answer"
+    assert shown["ask"]["line"] == "Which country should we size first?" and shown["ask"]["choices"] == []
+    post(
+        api,
+        f"tasks/{task_id}/asks/{asked['requirement_id']}/answer",
+        {"value": "The US", "version": shown["version"]},
+    )
+    after = get(api, "market/spend")["sizing"]
+    assert after["id"] == task_id and after["ask"] is None and after["turn"] == "working"
+    with api.app.state.store.transaction() as c:
+        H.task_done(c, "human:ana", task_id, "Sized")
+    assert get(api, "market/spend")["sizing"] is None
+
+
 def test_asking_for_the_market_names_the_places_the_company_serves(api):
     _librarian(api)
     put(
         api,
-        "onboarding",
+        "setup",
         {
             "names": {"company_name": "Acme", "app_name": "Atlas", "assistant_name": "Morgan"},
             "answers": {"what_we_do": "Kits.", "regions": ["Texas", "Ohio"]},

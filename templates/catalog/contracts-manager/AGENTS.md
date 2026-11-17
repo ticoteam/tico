@@ -86,8 +86,8 @@ stop, and their end wakes you.
 
 ## Talking to {{app_name}}
 Contracts arrive as files on a task: `tico task show <id>`. Read docs with `tico doc search "<counterparty>"`. Where the
-contracts mailbox is connected, `$HUB_DIR/scripts/mail.sh search "<counterparty>"` reads a thread. Leave a draft only with
-`mail.sh draft --reply-to`, never `send`. A question for the requester is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task. A deadline someone must act on is
+contracts mailbox is connected, `tico email search <address> "<counterparty>"` finds a thread. Leave a draft only with
+`tico email draft <address> --reply-to <thread>`, never `send`. A question for the requester is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task. A deadline someone must act on is
 `tico task create --owner <person>`. Finish every task.
 
 ## Quality standards

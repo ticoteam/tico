@@ -30,9 +30,33 @@ def set_up(environment, tools_owner=True):
     with_templates(api, "general-manager", *(["tools-owner"] if tools_owner else []))
     machine(api)
     draft(api)
-    done = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+    done = api.post("/api/v2/setup/complete", json={}, headers=signed_in())
     assert done.status_code == 200, done.text
     return api
+
+
+def test_its_daily_learn_from_use_is_on_for_a_new_company_and_reaches_a_tools_owner_from_before(environment):
+    """The routine is seeded on with the bot, and a Tools Owner set up before it existed gets it at the next start, once."""
+    from backend import routines
+
+    api = environment(seed={}, cards=BASE)
+    with_templates(api, "general-manager", "tools-owner")
+    manifest = Path(api.app.state.store.settings.catalog_dir) / "tools-owner" / "bot.yaml"
+    shipped = manifest.read_text()
+    assert "id: learn-from-use" in shipped
+    manifest.write_text(shipped.replace("id: learn-from-use", "id: learn-from-use-gone"))  # as the older template
+    machine(api)
+    draft(api)
+    assert api.post("/api/v2/setup/complete", json={}, headers=signed_in()).status_code == 200
+    with api.app.state.store.read() as c:
+        assert routines.row(c, "tools-owner:review-the-tools")["enabled"] == 1
+        assert routines.row(c, "tools-owner:learn-from-use") is None
+    manifest.write_text(shipped)
+    with api.app.state.store.transaction() as c:
+        assert ("tools-owner", "learn-from-use") in api.app.state.onboarding.ensure_builtin_routines(c)
+    with api.app.state.store.transaction() as c:
+        assert api.app.state.onboarding.ensure_builtin_routines(c) == []
+        assert routines.row(c, "tools-owner:learn-from-use")["enabled"] == 1
 
 
 def line(api, slug):
@@ -122,3 +146,57 @@ def test_the_tools_owner_reads_every_tool_and_who_holds_it_but_changes_nothing(a
     assert page["can_manage"] is False and [a["subject"] for a in page["access"]] == ["bot:cpo"]
     assert all(k["preview"] == "" for k in page["keys"])
     level(api, tid, "bot:ops", "read", ops, expected=403)
+
+
+def test_the_tools_owner_reads_every_callers_activity_never_a_value_and_others_only_what_they_may(api):
+    """`tico tool activity` (tico_tool_activity) over GET /api-tools/{id}/activity: the Tools page's owner reads every
+    caller's calls, filtered by window and result; a bot that is not the owner and holds no level is refused."""
+    from backend.tests.helpers.mcp import call
+
+    vault(api)
+    tid = tool(api)["id"]
+    key(api, tid, SECRET)
+    level(api, tid, "bot:cpo", "read")
+    with api.app.state.store.transaction() as c:
+        for actor, method, path, code, result, hours in (
+            ("bot:cpo", "GET", "/api/v1/lead/lead_8f2k91x/", 404, "sent", 1),
+            ("bot:cpo", "GET", "/api/v1/lead/lead_77ab12y/", 404, "sent", 2),
+            ("bot:cpo", "POST", "/api/v1/lead/", None, "refused", 3),
+            ("human:ana", "GET", "/api/v1/me/", 200, "sent", 50),
+        ):
+            c.execute(
+                "INSERT INTO tool_calls(id,tool_id,credential_id,actor,bot,access_level,method,path,status_code,result,"
+                "detail,duration_ms,created_at) VALUES(?,?,NULL,?,?,'read',?,?,?,?,'',5,?)",
+                (
+                    H.new_id(),
+                    tid,
+                    actor,
+                    actor.removeprefix("bot:") if actor.startswith("bot:") else "",
+                    method,
+                    path,
+                    code,
+                    result,
+                    H.shift(H.now(), hours=-hours),
+                ),
+            )
+    ops = ops_turn(api)["token"]
+    get(api, f"api-tools/{tid}/activity", ops, expected=404)  # not the owner, no level: it may not know the tool
+    put(api, "page-owners/tools", {"bot": "ops"})
+    every = get(api, f"api-tools/{tid}/activity", ops)
+    assert [r["actor"] for r in every["rows"]] == ["bot:cpo"] * 3 + ["human:ana"]
+    assert SECRET not in str(every)
+    assert len(get(api, f"api-tools/{tid}/activity?since=24h", ops)["rows"]) == 3
+    assert [r["method"] for r in get(api, f"api-tools/{tid}/activity?result=refused", ops)["rows"]] == ["POST"]
+    get(api, f"api-tools/{tid}/activity?since=yesterday", ops, expected=422)
+    get(api, f"api-tools/{tid}/activity", "cara-test", expected=404)  # a member with no level
+    level(api, tid, "human:cara", "read")
+    assert "human:ana" not in [r["actor"] for r in get(api, f"api-tools/{tid}/activity", "cara-test")["rows"]]
+    err, out = call(api, "tico_tool_activity", {"id": "api:" + tid, "since": "24h"}, ops)
+    assert not err, out
+    assert out["tool"]["id"] == tid and out["added_by"] == ["human:ana"] and SECRET not in str(out)
+    top = out["summary"][0]
+    assert (top["caller"], top["endpoint"], top["status_code"], top["count"]) == ("cpo", "/api/v1/lead/:id/", 404, 2)
+    from clients import hubcli, remotecli
+
+    args = hubcli.parser().parse_args(["tool", "activity", "close-crm", "--since", "24h", "--result", "refused"])
+    assert remotecli.tool_name(args.fn) == "tico_tool_activity" and (args.id, args.since) == ("close-crm", "24h")

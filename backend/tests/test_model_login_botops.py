@@ -13,7 +13,8 @@ from backend.tests.helpers.member_bots import botops, finish, turn  # noqa: F401
 from backend.tests.helpers.model_logout import online, pending, report
 from backend.store import H, Problem
 
-ALIASES = ("runners", "computers")
+# The removed runners/{rid}/... spelling is gone (rc.1 calls none of these); the canonical computers/ path only.
+ALIASES = ("computers",)
 PROFILE = "work"  # a named subscription left from before one login per computer: signed out only
 SWITCHES = (True, 1, "true", "1", "on", "yes")  # what the typed `switch: bool` reads as a switch
 NOTHING = {"logins": [], "cleared": [], "invalidated": False, "events": []}

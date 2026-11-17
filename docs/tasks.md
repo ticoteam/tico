@@ -29,8 +29,38 @@ The moves ([The moves](dev/pipelines-v3.md#the-moves)):
 - **Close.** From any stage. Never refused. Its open sub-tasks close with it. A bot gives a reason.
 - **Reopen.** From Done or Closed back to a stage, with a note.
 - **Reassign.** A new owner for this visit to the stage.
+- **Move to another pipeline.** The same task, with its number, label, history, comments, files and links, into a
+  stage of another pipeline (the first by default). See below.
 
 A bot cannot close a task a person asked for. It asks that person instead.
+
+### Moving a task to another pipeline
+
+Task ⋯ › **Move to…** lists every pipeline's stages ("Backlog › On ice"); typing finds by each word ("back ice"). The
+why is optional for a person; a bot always gives one. On a board, ⋯ › **Select** (or a shift-, ⌘- or Ctrl-click on a
+card) picks tasks; **All in <stage>** picks a stage's, and **Move to…** moves them in one write, then says what moved
+and what stayed and why ("Moved 214. 3 didn't move: 2 are in a bot's running turn, 1 you can't read"). Those that
+stayed stay picked.
+
+- It is a re-file, not a forward move: the old stage's unmet requirements don't hold it. Entering the new stage is a
+  normal entry: its owner rule, stage rules, limit and wake apply (a by-hand stage wakes nobody).
+- The task keeps its label: D18450 stays D18450 on the Backlog board, and `D18450` still finds it. The prefix is the
+  task's own, from the pipeline it was made in.
+- The old stage's open asks are withdrawn, a snooze ends, and what the old stage did on entering is undone as a back
+  move undoes it. Sub-tasks stay in their own pipelines, linked as they were.
+- A Done or Closed task lands in the new pipeline's Done or Closed, never reopened.
+- Refused, and listed in a move of many: a task whose bot is mid-turn (`task_turn_running`), a full stage
+  (`task_stage_full`), one the mover can't read. There is no undo: move it back the same way.
+- Anyone who can read the task may move it, into any pipeline. A bot never lands a task past a person's OK, and only a
+  person moves a task into a private pipeline (entering one makes it private and adds the pipeline's readers).
+- The history reads "Steven moved it from Dev › Ideas to Backlog › On ice — why". The event is `task.moved` (from and
+  to pipeline and stage, who, and the bulk move's id); the old stage's leaves and the new stage's enters fire on
+  `task.step_changed`.
+
+Removing a stage that holds open tasks asks where they go, in any pipeline: the save answers 409 `stage_has_tasks`
+(the stages, and a suggested `move_to`) until it carries `move_tasks_to: {pipeline, stage}`. The tasks move first, then
+the stage goes. Retiring a pipeline that holds open tasks takes the same `move_tasks_to` (a stage of another
+pipeline) on `POST /api/v2/pipelines/{id}/retire`.
 
 ## Whose turn it is
 
@@ -158,6 +188,12 @@ with their name, every @ of them by a person until they reply, and two things on
 every Paused cause they can fix (one row per cause, not per task) and a private task that waits on someone being let
 in. A task they own with nothing asked of them is in Tasks, not Needs you, and so is a task the never-stuck ladder could
 take no further. A bot's @ only marks the task unread. No chat, email or push goes to a person about a task.
+
+So whatever needs a person to act asks them, and only bots write questions, never Tico. A bot that files a task for a
+person (`tico task create --owner <person>`) files its own task, with the title as its question to them; Tico's own
+notices to a person (an automation on hold, legal mail, a held webhook, a rule that asks for a person, a stopped bot)
+are the person's task with BotOps' question on it; the Strategy Owner's asks are its own tasks with its question, which
+BotOps asks for it while it cannot run. The question goes when the task moves on.
 
 `GET /api/v2/needs-you` returns the list; `?count=true` returns its one number (beside Flow in the Tasks header; the sidebar shows Flow's mark while it is above 0, and a phone's Flow tab turns jade).
 
@@ -472,6 +508,8 @@ show <id>` first."
 tico task show <id>
 tico task done <id> -m "what was done" --version N
 tico task move <id> next|<stage>|done|closed|reopen -m "why" --version N
+tico task move <id> --to "Backlog/On ice" -m "why" --version N    # another pipeline (its first stage without /Stage)
+tico task move --from "Dev/Ideas" --to "Backlog/On ice" -m "why"  # every open task in a stage
 tico task close <id> -m "why" --version N
 tico task reassign <id> <owner> -m "why" --version N
 tico task ask <id> --to <person> "line" [--title "short"] [--kind ok] [--choices a,b] [--show page:12] --version N
@@ -499,6 +537,8 @@ refusal never counts toward a bot's quarantine.
 | `POST /api/v2/tasks/{id}` | `version` + fields | field edits only |
 | `POST /api/v2/tasks/{id}/done` | `note?, version` | the work of this stage is finished |
 | `POST /api/v2/tasks/{id}/move` | `to, why?, version` | forward, push past, back, done, close, reopen |
+| `POST /api/v2/tasks/{id}/move` | `to_pipeline, to?, why?, version` | to another pipeline |
+| `POST /api/v2/tasks/move` | `ids` or `from: {pipeline, stage}`, `to_pipeline, to?, why?` | many to another pipeline: `{batch_id, moved, skipped: [{id?, code, reason}]}`, at most 500 |
 | `POST /api/v2/tasks/{id}/owner` | `owner, why?, version` | reassign |
 | `POST /api/v2/tasks/{id}/snooze` | `until?, why?, version` | snooze |
 | `POST /api/v2/tasks/{id}/unsnooze` | `why?` | unsnooze |

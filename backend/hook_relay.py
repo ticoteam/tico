@@ -53,6 +53,7 @@ from . import tico_notices
 from .auth import validate_identity
 from .models import Contract, Empty
 from .store import Problem
+from .api_contract import api_v2
 
 TRANSPORT = None  # tests' fake HQ, never the live one
 EVERY = 15  # seconds between pulls when this server has a relay address of its own
@@ -924,40 +925,96 @@ def install(app, settings, store, auth):
         if request.state.identity.role not in ("human", "owner", "bot"):
             raise Problem("forbidden", "Only people and bots read triggers", 403)
 
-    @app.get("/api/v2/relay")
+    @app.get(
+        "/api/v2/relay",
+        **api_v2(
+            "Webhook relay",
+            "getWebhookRelay",
+            "The Gateway key, how many relay addresses exist, the last pull, the last problem and what waits at the Gateway",
+            "WebhookRelayState",
+        ),
+    )
     def relay_status(request: Request):
         """Webhooks through Tico Gateway: the key, how many addresses, the last pull and what waits at the Gateway."""
         readers(request)
         with store.read() as c:
             return {"relay": service.status(c)}
 
-    @app.get("/api/v2/hooks/wake-url")
+    @app.get(
+        "/api/v2/hooks/wake-url",
+        **api_v2(
+            "Webhook relay",
+            "getWebhookWakeUrl",
+            "The address Tico Gateway knocks on to start this server when a webhook waits for it, who set it and when (the owner)",
+            "WebhookWakeUrl",
+        ),
+    )
     def wake_url_read(request: Request):
         """The address Tico Gateway knocks on to start this server when a webhook waits for it, and who set it and when. Owner only."""
         return service.wake_url(request)
 
-    @app.put("/api/v2/hooks/wake-url")
+    @app.put(
+        "/api/v2/hooks/wake-url",
+        **api_v2(
+            "Webhook relay",
+            "setWebhookWakeUrl",
+            "Set the wake address (https) or turn it off (url null); the answer carries the signing secret once, for the receiver (the owner; needs the Gateway key)",
+            "WebhookWakeUrlSet",
+        ),
+    )
     def wake_url_set(request: Request, body: WakeUrl):
         """Set the wake address (`url`, https) or turn it off (`url: null`). The answer carries the Standard Webhooks signing
         `secret` once, for the receiver; this server does not keep it. Owner only; needs the Gateway key."""
         return service.set_wake_url(request, body.url, request.headers.get("idempotency-key"))
 
-    @app.post("/api/v2/triggers/{trigger_id}/relay")
+    @app.post(
+        "/api/v2/triggers/{trigger_id}/relay",
+        **api_v2(
+            "Webhook relay",
+            "createWebhookRelay",
+            "Give a trigger an address through Tico Gateway; the answer carries the secret once (people who manage the trigger, and BotOps)",
+            "WebhookRelayAddress",
+        ),
+    )
     def relay_create(request: Request, trigger_id: str, body: Empty):
         """An address through Tico Gateway for this trigger. The answer's `address` carries the secret and is shown only now."""
         return service.make(request, trigger_id, request.headers.get("idempotency-key"))
 
-    @app.post("/api/v2/triggers/{trigger_id}/relay/rotate")
+    @app.post(
+        "/api/v2/triggers/{trigger_id}/relay/rotate",
+        **api_v2(
+            "Webhook relay",
+            "rotateWebhookRelay",
+            "Replace the Gateway address's secret; the old address stops at once and the new one is shown once",
+            "WebhookRelayAddress",
+        ),
+    )
     def relay_rotate(request: Request, trigger_id: str, body: Empty):
         """A new secret for the Gateway address; the old one stops working at once."""
         return service.rotate(request, trigger_id, request.headers.get("idempotency-key"))
 
-    @app.post("/api/v2/triggers/{trigger_id}/relay/wake")
+    @app.post(
+        "/api/v2/triggers/{trigger_id}/relay/wake",
+        **api_v2(
+            "Webhook relay",
+            "setWebhookRelayWake",
+            "Say whether a delivery to the Gateway address starts a sleeping server (people who manage the trigger, and BotOps)",
+            "WebhookRelayWake",
+        ),
+    )
     def relay_wake(request: Request, trigger_id: str, body: RelayWake):
         """Whether a delivery to the Gateway address starts a sleeping server. HQ keeps the switch."""
         return service.wake(request, trigger_id, body.wake, request.headers.get("idempotency-key"))
 
-    @app.post("/api/v2/triggers/{trigger_id}/relay/delete")
+    @app.post(
+        "/api/v2/triggers/{trigger_id}/relay/delete",
+        **api_v2(
+            "Webhook relay",
+            "deleteWebhookRelay",
+            "Remove the Gateway address; the trigger and its own address stay",
+            "WebhookRelayDeleted",
+        ),
+    )
     def relay_delete(request: Request, trigger_id: str, body: Empty):
         """Remove the Gateway address. The trigger's own address is untouched."""
         return service.remove(request, trigger_id)

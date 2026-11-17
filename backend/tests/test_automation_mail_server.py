@@ -1,4 +1,5 @@
-"""Workspace filing needs no computer: Gmail runs outside writes and shares the connector's settlement and audit."""
+"""Filing needs no computer: the server changes Gmail outside writes, settles the run and leaves an ids-only audit. A
+computer of an older release that still asks for its mailbox's actions gets none."""
 
 import json
 
@@ -8,7 +9,7 @@ from backend import automation_actions as A, automations as M, gmail_live as G, 
 from backend.store import H
 from backend.tests.helpers.api import post, runner  # noqa: F401
 from backend.tests.helpers.fake_gmail import fake_gmail  # noqa: F401
-from backend.tests.helpers.automation_mail_actions import BOX, automate, claim, computer, last_run, later, owned_by_ana  # noqa: F401
+from backend.tests.helpers.automation_mail_actions import BOX, automate, claim, last_run, later, owned_by_ana
 from backend.tests.helpers.gmail_live import gmail_http  # noqa: F401
 from backend.tests.helpers.google_workspace import personal
 from backend.tests.helpers.google_workspace_authz import place, publish, workspace_key  # noqa: F401
@@ -170,47 +171,35 @@ def test_a_chained_action_waits_for_a_successful_retry(api, live, monkeypatch):
     assert [r["attempts"] for r in rows(api, aid)] == [2, 1]
 
 
-def test_a_chain_can_move_from_the_computer_to_the_server(api, live):
-    machine = organizer(api)
-    aid, run = run_mail(api, {"do": "unsubscribe"}, ARCHIVE)
-    assert run["status"] == "waiting" and live["writes"] == []
-    (first,) = claim(api, machine["token"])["actions"]
-    assert first["action"] == "unsubscribe"
-    assert claim(api, machine["token"])["actions"] == []
-    post(
-        api, f"automations/mail-actions/{first['id']}/result", {"ok": True, "detail": "unsubscribed"}, machine["token"]
-    )
-    M.tick(api.app.state.store)
-    assert last_run(api, aid)["status"] == "ok"
-    assert [r["claimed_by"] for r in rows(api, aid)] == [machine["runner_id"], M.SERVER_MAIL]
-    assert len(live["writes"]) == 1
-
-
-def test_chains_waiting_on_computers_do_not_crowd_out_ready_work(api, live):
-    queued(api, "unsubscribe", "archive", step="first")
-    queued(api, "unsubscribe", "archive", step="second")
+def test_chains_waiting_on_an_earlier_action_do_not_crowd_out_ready_work(api, live):
+    heads = [queued(api, "unsubscribe", "archive", step=step)[0] for step in ("first", "second")]
+    with api.app.state.store.transaction() as c:  # each chain's first action is out on a lease
+        for mid in heads:
+            c.execute(
+                "UPDATE automation_mail_actions SET state='claimed',claimed_by=?,claimed_at=? WHERE id=?",
+                (M.SERVER_MAIL, H.now(), mid),
+            )
     (ready,) = queued(api, "archive")
     assert M.drain_workspace_mail(api.app.state.store, limit=1) == 1
     assert next(r for r in rows(api) if r["id"] == ready)["state"] == "done"
-    assert all(r["state"] == "queued" for r in rows(api) if r["id"] != ready)
+    assert all(r["state"] in ("queued", "claimed") for r in rows(api) if r["id"] != ready)
 
 
-def test_claim_excludes_workspace_filing_before_its_limit_and_keeps_other_actions(api, live):
+def test_an_older_computer_that_asks_for_actions_gets_none(api, live):
     machine = organizer(api)
-    queued(api, *(["archive", "label", "leave"] * 8), "draft", "send", "forward", "unsubscribe")
-    actions = claim(api, machine["token"])["actions"]
-    assert [a["action"] for a in actions] == ["draft", "send", "forward", "unsubscribe"]
-    assert all(r["state"] == "queued" and r["attempts"] == 0 for r in rows(api)[:24])
-    assert live["writes"] == []
+    queued(api, "archive", "label", "leave", "draft", "send", "forward", "unsubscribe")
+    assert claim(api, machine["token"])["actions"] == []
+    assert all(r["state"] == "queued" and r["attempts"] == 0 for r in rows(api))
 
 
-def test_personal_connection_still_queues_for_its_computer(api, live):
-    machine = organizer(api)
+def test_a_personal_connection_is_acted_on_by_the_server(api, live, monkeypatch):
+    from backend import google_tokens
+
     personal(api, "ana", BOX)
-    aid, run = run_mail(api, ARCHIVE, LABEL, LEAVE)
-    assert run["status"] == "waiting" and live["calls"] == []
-    assert all(r["state"] == "queued" and r["attempts"] == 0 for r in rows(api, aid))
-    assert [a["action"] for a in claim(api, machine["token"])["actions"]] == ["archive"]
+    monkeypatch.setattr(google_tokens, "token", lambda c, mailbox, service, write=False: "own-grant-token")
+    aid, run = run_mail(api, ARCHIVE)
+    assert run["status"] == "ok" and rows(api, aid)[0]["claimed_by"] == M.SERVER_MAIL
+    assert [token for _, _, token in live["writes"]] == ["own-grant-token"]
 
 
 def grant_ops(api, level):
@@ -341,22 +330,6 @@ def test_demo_and_rehearsal_never_change_gmail(api, live, monkeypatch, mode):
     assert rows(api)[0]["state"] == "failed" and not live["calls"]
 
 
-def test_computer_filing_leaves_the_same_ids_only_audit(api, computer):
-    aid = automate(api, {"id": "file", "type": "action", "do": "archive"})
-    computer.sync()
-    assert computer.worker.mail_action_tick() == 1
-    with api.app.state.store.read() as c:
-        (event,) = c.execute("SELECT actor,target,detail FROM events WHERE action='mail.organize'").fetchall()
-    assert (event["actor"], event["target"]) == ("human:ana", BOX)
-    assert json.loads(event["detail"]) == {
-        "mailbox": BOX,
-        "action": "archive",
-        "ids": ["m1"],
-        "count": 1,
-        "via": "automation:" + aid,
-    }
-
-
 def test_the_loop_requeues_a_server_lease_its_stuck_worker_never_reported(api, live):
     """AC-6: the lease's upkeep is the loop's (automations.tick, without draining), not the stuck worker's."""
     (mid,) = queued(api, "archive")
@@ -385,3 +358,18 @@ def test_the_loop_fails_a_lease_that_ran_out_on_its_last_try(api, live):
     row = next(r for r in rows(api) if r["id"] == mid)
     assert row["state"] == "failed" and "no result after" in json.loads(row["result"])["detail"]
     assert live["writes"] == []
+
+
+def test_a_draft_an_older_computer_let_run_out_is_not_made_again(api, live):
+    """That computer may already have made the draft: the server does not make a second one."""
+    machine = organizer(api)
+    (mid,) = queued(api, "draft")
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "UPDATE automation_mail_actions SET state='claimed',claimed_by=?,claimed_at=?,attempts=1 WHERE id=?",
+            (machine["runner_id"], H.shift(H.now(), minutes=-M.MAIL_LEASE_MINUTES - 1), mid),
+        )
+    M.tick(api.app.state.store, drain=False)
+    (row,) = rows(api)
+    assert row["state"] == "failed" and "not run again" in json.loads(row["result"])["detail"]
+    assert M.drain_workspace_mail(api.app.state.store) == 0 and live["calls"] == []

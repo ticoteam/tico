@@ -137,12 +137,12 @@ def test_deleted_group_cannot_regain_grants_when_legal_is_recreated(api):
 
 def test_removed_person_and_archived_bot_lose_explicit_page_grants(api):
     fid, _ = promoted(api)
-    pid = post(api, "access/people", {"name": "New member", "email": "new-member@acme.example"})["person"]
+    pid = post(api, "access/humans", {"name": "New member", "email": "new-member@acme.example"})["person"]
     edit(api, fid, {"people": [pid], "bots": ["finance"]})
-    post(api, "people/" + pid, {"left": True})
-    removed = api.delete("/api/v2/people/" + pid, headers=headers("ana-test"))
+    post(api, "humans/" + pid, {"left": True})
+    removed = api.delete("/api/v2/humans/" + pid, headers=headers("ana-test"))
     assert removed.status_code == 200, removed.text
-    assert post(api, "access/people", {"name": "Replacement", "email": "new-member@acme.example"})["person"] == pid
+    assert post(api, "access/humans", {"name": "Replacement", "email": "new-member@acme.example"})["person"] == pid
     with api.app.state.store.transaction() as c:
         from backend.settings_admin import archive_bot
 

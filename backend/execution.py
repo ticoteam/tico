@@ -57,7 +57,7 @@ from .auth import Identity
 from .batch_work import isolated, report, shared_check, shared_scope, storage_error
 from .harnesses import bot_keyed, reports_tool_calls
 from .run_diagnostics import HANDED_BACK, LAPSED, RESTART_TEXT, UNSTARTED_CATEGORIES, clean_stop_reported
-from . import company_pause, lifecycle, start_holds
+from . import holds, lifecycle, start_holds
 from .store import H, P, Problem, bot_readiness, digest, encode, readiness_document
 from .config import Settings
 from . import bot_settings as BS
@@ -2452,17 +2452,12 @@ def _claim_refusal(
     lanes, every bot with a running turn. `ready` is the computer's readiness document. `loads`: see claim_refusal."""
     if draining:
         return ("moving" if draining == 2 else "draining"), None
-    company = loads.company if loads is not None else company_pause.record(c)
-    if company is not None:
-        # The company pause: nothing new starts until someone resumes (backend/company_pause.py).
-        return "company_paused", None
-    if cloud_access.locked(c, loads.access if loads is not None else cloud_access.access(c)):
-        return "cloud_locked", None  # a locked Tico Cloud company runs no bot (backend/cloud_access.py)
+    # The company pause, a locked Tico Cloud company, and the bot's failed runs: held, or waiting out a back-off that a
+    # person's waiting message goes past (backend/holds.py).
+    if why := holds.why(c, bot, kinds=holds.CLAIM_BOT, claim=True, loads=loads):
+        return why, None
     if bot in held_bots and "maintaining" not in ignore_refusals:
         return "maintaining", None
-    state = loads.backoff_of(c, bot) if loads is not None else None
-    if (why := run_backoff.refusal(c, bot, state)) and not (why == "backoff" and run_backoff.person_waiting(c, bot)):
-        return why, None  # waiting out failed runs, or held until a person releases it (backend/run_backoff.py)
     try:
         config = json.loads(config_json)
     except (ValueError, TypeError):
@@ -2801,7 +2796,7 @@ def job_refusal(c, job, followed, ready, busy, live=frozenset(), *, runner=None)
     # The bot's budget and back-off are the bot's own state: an error reading them is shared_check's, and the whole
     # bot is passed over. The checks below depend on this job, so an error in them holds this job alone.
     with shared_check():
-        if why := turn_budgets.refusal(c, job["bot_id"], message) or run_backoff.job_refusal(c, job["bot_id"], message):
+        if why := holds.why(c, job["bot_id"], kinds=holds.CLAIM_JOB, message=message, claim=True):
             return why  # over its run budget or waiting out failed runs: except for a person's message
     conversation = H.conversation(c, message["conversation_id"])
     task_id = work_task_id(message, conversation)
@@ -2838,9 +2833,7 @@ def job_refusal(c, job, followed, ready, busy, live=frozenset(), *, runner=None)
         return "lane_held"
     if turn_moved_on(c, job["bot_id"], task_id, refs, live or None):  # Health passes no live set: read it
         return "task_turn_out"
-    if (until := handed_back_until(c, job)) and until > H.now():
-        return "handed_back"
-    return None
+    return holds.why(c, job["bot_id"], kinds=(holds.HANDED_BACK,), job=job)
 
 
 def turn_moved_on(c, bot, task_id, refs, live=None):
@@ -3333,14 +3326,7 @@ def bot_claimable(
     queue = rows(c, queued_jobs_sql(), (bot,))
     for job in sorted(queue, key=lambda j: (j["created_at"], j["id"])) if oldest else queue:
         person = bool(job["person_sent"])
-        if not job["in_scope"]:
-            why = "scoped"
-        elif not job["free"]:
-            why = "uncertain" if job["quarantine_free"] else "task_quarantine"
-        else:
-            why = job_refusal(c, job, followed, ready, busy, runner=runner) or (
-                "cooling_off" if login_refusal(c, settings, runner_id, bot, followed, job["id"], loads=loads) else None
-            )
+        why = job_reason(c, settings, runner, job, followed, ready, busy, frozenset(), loads)
         if why is None or why in ignore_refusals or (oldest and why != "lane_held"):
             return result(None if why in ignore_refusals else why, job["created_at"], person, job["id"])
         if refused is None or job["created_at"] < refused[0]:
@@ -3388,15 +3374,23 @@ def queued_reasons(c, settings, runner_id, bot, default=None, *, oldest=False, l
     followed = follow(c, bot, config)
     live = live_tasks(c)
     for job in queue:
-        if not job["in_scope"]:
-            why = "scoped"
-        elif not job["free"]:
-            why = "uncertain" if job["quarantine_free"] else "task_quarantine"
-        else:
-            why = job_refusal(c, job, followed, ready, busy, live, runner=runner) or (
-                "cooling_off" if login_refusal(c, settings, runner_id, bot, followed, job["id"], loads=loads) else None
-            )
+        why = job_reason(c, settings, runner, job, followed, ready, busy, live, loads)
         yield job, None if why in ignore_refusals else why
+
+
+def job_reason(c, settings, runner, job, followed, ready, busy, live, loads):
+    """Why the claim passes over one queued job (a queued_jobs_sql row) of a bot claim_refusal let through, or None:
+    the one per-job answer bot_claimable and queued_reasons give. A claim scope, the interrupted-work fence and a
+    quarantine on its task or chat come from the row; the rest is job_refusal's, then the job's own login hold."""
+    if not job["in_scope"]:
+        return "scoped"
+    if not job["free"]:
+        return "uncertain" if job["quarantine_free"] else holds.TASK_QUARANTINE
+    return job_refusal(c, job, followed, ready, busy, live, runner=runner) or (
+        "cooling_off"
+        if login_refusal(c, settings, runner["id"], job["bot_id"], followed, job["id"], loads=loads)
+        else None
+    )
 
 
 # Stop and redirect (Execution._redirect_job) reads the caller's own job in this turn's conversation. jobs.message_id is
@@ -3637,8 +3631,6 @@ class Execution:
             readiness.pop('harnesses', None)
         if not readiness.get('mail_key'):
             readiness.pop('mail_key', None)
-        if not readiness.get('shared_env'):
-            readiness.pop('shared_env', None)
         # The platform named at enrollment stands: backend/sql.py decides on it (a heartbeat
         # from a stolen credential must not turn a shared server into a personal Mac).
         # Most beats repeat the last report: then only the contact times move (readiness_at too: the page tells a
@@ -9203,14 +9195,19 @@ class Execution:
         if again:
             job_line += " The earlier review task was closed while the run remained unresolved."
         try:
-            H.task_create(
+            from . import person_asks
+
+            person_asks.task_for(
                 c,
                 H.KEEPER,
                 title,
                 boundary + job_line + "\n\n" + named + "\n" + by_id,
                 owner,
+                question="Resume or dismiss the held run, once you have checked what it did?",
+                why="It stopped partway, so Tico holds it rather than repeat a possible outside action.",
                 private=True,
                 deduplicate=False,
+                lint=True,
             )
         except H.Refused:
             pass

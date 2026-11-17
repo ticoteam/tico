@@ -2558,9 +2558,9 @@ def main(argv=None, make_slack=None):
                 credentials = stored
         if not credentials["bot_token"] or not credentials["app_token"]:
             if not wait:
-                LOG.error("No Slack tokens: set SLACK_BOT_TOKEN and SLACK_APP_TOKEN or TICO_SLACK_SECRET_ARN")
+                LOG.error("No Slack tokens: paste them in Tools > Slack or set TICO_SLACK_SECRET_ARN")
                 return 1
-            LOG.info("No Slack tokens yet; paste them in Settings > Slack")
+            LOG.info("No Slack tokens yet; paste them in Tools > Slack")
             if _sleep(stopping, 15):
                 continue
             return 0

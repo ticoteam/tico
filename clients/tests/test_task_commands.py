@@ -7,6 +7,7 @@ import json
 import pytest
 
 from clients import hubcli, hubtools, remotecli
+from clients.commands import tasks as task_commands
 from clients.tico import APIError
 
 
@@ -54,6 +55,23 @@ COMMANDS = [
         ["task", "move", "T1", "Build", "--version", "3"],
         ("tico_task_move", {"id": "T1", "to": "Build", "version": 3}),
         ("POST", "tasks/T1/move", {"to": "Build", "version": 3}),
+    ),
+    (
+        ["task", "move", "T1", "--to", "Backlog/On ice", "-m", "Parked", "--version", "3"],
+        ("tico_task_move", {"id": "T1", "to_pipeline": "Backlog", "to": "On ice", "why": "Parked", "version": 3}),
+        ("POST", "tasks/T1/move", {"to": "On ice", "to_pipeline": "Backlog", "version": 3, "why": "Parked"}),
+    ),
+    (
+        ["task", "move", "--from", "Dev/Ideas", "--to", "Backlog", "-m", "Old ideas"],
+        (
+            "tico_task_move",
+            {"from_pipeline": "Dev", "from_stage": "Ideas", "to_pipeline": "Backlog", "why": "Old ideas"},
+        ),
+        (
+            "POST",
+            "tasks/move",
+            {"from": {"pipeline": "Dev", "stage": "Ideas"}, "to_pipeline": "Backlog", "why": "Old ideas"},
+        ),
     ),
     (
         ["task", "close", "T1", "-m", "Not needed", "--version", "3"],
@@ -648,3 +666,37 @@ def test_task_show_says_it_waits_for_a_free_bot_and_who_each_pick_gave_it_to():
             return {"task": task, "events": events, "actors": {}}
 
     assert "Picked: Build given to Builder 2" in hubtools.BY_NAME["tico_task_show"]["fn"](Shown(), {"id": "T1"})["text"]
+
+
+@pytest.mark.parametrize(
+    "args, why",
+    [
+        ({"id": None, "from_pipeline": "Dev", "from_stage": None, "to_pipeline": "Backlog"}, "needs from_pipeline"),
+        ({"id": "T1", "from_pipeline": "Dev", "from_stage": "Ideas", "to_pipeline": "Backlog"}, "not both"),
+        ({"id": None, "to": "next"}, "Say which task"),
+        ({"id": "T1"}, "Say where it goes"),
+    ],
+)
+def test_a_task_move_that_names_no_task_or_no_place_sends_nothing(args, why):
+    api = Recorder()
+    with pytest.raises(ValueError, match=why):
+        hubtools.BY_NAME["tico_task_move"]["fn"](api, args)
+    assert api.writes() == []
+
+
+@pytest.mark.parametrize(
+    "place, why",
+    [
+        ({"id": None, "to": "next", "to_place": "Backlog/On ice", "from_place": None}, "Give the stage"),
+        ({"id": None, "to": None, "to_place": None, "from_place": "Dev/Ideas"}, "add --to"),
+        ({"id": "T1", "to": None, "to_place": "Backlog", "from_place": "Dev/Ideas"}, "Give a task, or --from"),
+        ({"id": None, "to": None, "to_place": "Backlog", "from_place": "Dev"}, "names a stage"),
+        ({"id": None, "to": None, "to_place": None, "from_place": None}, "Say which task"),
+    ],
+)
+def test_the_cli_refuses_a_move_place_it_cannot_read_before_it_sends(place, why):
+    api = Recorder()
+    fields = {k: place[k] for k in ("id", "to") if place[k]}
+    with pytest.raises(APIError, match=why):
+        task_commands._move(api, fields, to_place=place["to_place"], from_place=place["from_place"])
+    assert api.writes() == []

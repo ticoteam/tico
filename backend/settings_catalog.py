@@ -345,9 +345,9 @@ def raw_refusal(c, auth, who, method, path, body=None, base=""):
     `tico settings` gives for that setting (`refusal`), as `{"fix", "link", "who_may"}`, when the request is one entry's
     (or its route is only entries with the same who), that who is not everyone, and the entry's own check refuses this
     person too (so a refusal for another reason keeps the route's words); else None."""
-    from .route_renames import new_path
+    from .legacy_spellings import canonical
 
-    path = new_path(path) or path  # `/runners/<id>/revoke` is `computers/{computer}/revoke`
+    path = canonical(path) or path  # a kept old spelling (`/api/v2/runners/<id>/inbox-only`) is checked as its route
     found = matched(method, path, body)
     rows = [found[:2]] if found else routed(method, path)
     if not rows or len({e.who for e, _ in rows}) != 1 or rows[0][0].who in ("anyone", "self"):

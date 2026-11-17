@@ -2,7 +2,7 @@
   "id": "mail-triage",
   "version": 1,
   "owner": "ana",
-  "summary": "One inbox message from its brief listing (sender, subject, snippet, headers; no body): which bucket it belongs in, whether it asks for something, whether money or legal risk is involved, and how urgent. Run before any thread is opened (`mail inbox --decisions`).",
+  "summary": "One inbox message from its brief listing (sender, subject, snippet, headers; no body): which bucket it belongs in, whether it asks for something, whether money or legal risk is involved, and how urgent. The inbox's Message automation asks it in its decide step, before any thread is opened.",
   "state": ["mailbox", "from", "from_name", "to", "date", "subject", "snippet", "unsubscribe", "list_id", "attachments", "is_internal", "is_calendar_invite", "labels", "from_domain", "category", "known_sender"],
   "questions": {
     "bucket": {

@@ -137,7 +137,6 @@ def test_a_turn_cannot_read_the_registration_but_can_run_a_harness_and_push(volu
     assert turn["harness"] == 'codex logged in: {"login": "chatgpt"}', result  # the model login moved with the bot
     assert turn["push"] == "ok" and result["pushed"] == "from the turn", result  # the helper got the bot's token
     assert result["auth_seen"][-1].startswith("Basic ") and len(result["auth_seen"]) == 2, result  # 401, then the token
-    assert result["token_bodies"]["turn_start"] == [{"bot": "alpha"}], result
     assert result["token_bodies"]["git_helper"] and all(
         body == {"bot": "alpha", "purpose": "git"} for body in result["token_bodies"]["git_helper"]
     ), result

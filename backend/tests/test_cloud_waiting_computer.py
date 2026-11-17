@@ -16,7 +16,7 @@ from backend.tests.helpers.fresh_install import booted, environment, rows, signe
 def _cloud_company(environment, monkeypatch):
     """Setup finished on Tico Cloud: HQ lists its sizes and makes the shared machine, which has not enrolled."""
     api = environment()
-    done = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+    done = api.post("/api/v2/setup/complete", json={}, headers=signed_in())
     assert done.status_code == 200, done.text
     cloud_access.apply(api.app.state.store, cloud_access.parse(signals("open")))
     hq, manager = FakeHQ(), api.app.state.cloud_machines
@@ -77,7 +77,7 @@ def test_a_failed_cloud_machine_or_no_credit_is_the_persons_with_where_to_fix_it
 
 def test_a_self_hosted_bot_with_no_computer_keeps_add_a_computer(environment):
     api = environment()
-    done = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+    done = api.post("/api/v2/setup/complete", json={}, headers=signed_in())
     assert done.status_code == 200, done.text
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET state='active' WHERE id='botops'")

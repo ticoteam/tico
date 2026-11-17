@@ -698,7 +698,7 @@ made or revoked is an `events` row (`token.create`, `token.revoke`).
 | `clients/` | what bots and the runner call: the `tico` CLI, the HTTP client, attachment download, routine validation, preflight, the docs read and write commands |
 | `connectors/` | shared Slack, mail/calendar and browser adapters bots use instead of vendor APIs |
 | `integrations/` | one page per outside system (what it is, how a bot uses it, rules, recipes) and the query lists; served as **Tools** and `tico tool show <service>`, with the learnings bots add |
-| `questions/` | the question sets the decision model answers (`tico_decision_ask`, `tico decision ask`, `mail inbox --decisions`, the meeting brain): one versioned JSON file per decision, with its thresholds |
+| `questions/` | the question sets the decision model answers (`tico_decision_ask`, `tico decision ask`, an automation's decide step, the meeting brain): one versioned JSON file per decision, with its thresholds |
 | `ui/` | the web interface (`index.html`, `app/` scripts, `styles/`, feature scripts, browser tests; see `ui/README.md`) |
 | `app/` | the native macOS shell around hub.acme.example |
 | `infra/` | the EC2 stack, release packaging, deploy and restore scripts |

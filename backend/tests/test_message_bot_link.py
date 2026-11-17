@@ -87,5 +87,5 @@ def test_backfill_leaves_what_is_a_choice_for_an_owner(api):
         c.execute("UPDATE bots SET state='archived' WHERE slug='second'")
     assert backfill(api) == ["first"]
     # An owner who takes the link away is not overruled at the next start.
-    post(api, "access/people/ben", {"inbox_bot": ""})
+    post(api, "access/humans/ben", {"inbox_bot": ""})
     assert inbox_bot_of(api, "ben") is None and backfill(api) == []

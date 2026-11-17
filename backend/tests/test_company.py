@@ -83,7 +83,7 @@ def test_no_bot_writes_the_company_or_accepts_a_why_the_strategy_bot_included(ap
     post(api, f"goals/{company_goal}/why", {"why": "Said for her."}, token="ana-via", expected=403)
     unchanged = goal(api, company_goal)
     assert unchanged["why"] == "" and not [e for e in unchanged["events"] if e["field"] == "why"]
-    assert [x["status"] for x in get(api, "goal-proposals?status=all")["proposals"] if x["id"] == waiting["id"]] == [
+    assert [x["status"] for x in get(api, "proposals?status=all")["proposals"] if x["id"] == waiting["id"]] == [
         "pending"
     ]
     # Her own click does it.
@@ -91,7 +91,7 @@ def test_no_bot_writes_the_company_or_accepts_a_why_the_strategy_bot_included(ap
     proposal = propose_why(api, gid, "Fast answers keep landlords on Tico.", strategy_token)
     assert proposal["status"] == "pending" and proposal["proposed_by"] == STRATEGY_BOT
     for token in (strategy_token, ops, "ana-via"):
-        post(api, f"goal-proposals/{proposal['id']}/decide", {"decision": "confirm"}, token=token, expected=403)
+        post(api, f"proposals/{proposal['id']}/decide", {"decision": "confirm"}, token=token, expected=403)
     assert goal(api, gid)["why"] == ""
 
 
@@ -111,7 +111,7 @@ def test_the_strategy_bot_proposes_a_why_and_the_owner_accepts_or_edits_it(api):
     first = propose_why(api, a, "More landlords on Tico is the vision.", strategy_token)
     assert first["id"] != seen["id"] and first["payload"] == {"why": "More landlords on Tico is the vision."}
     for body in ({"decision": "confirm"}, {"decision": "confirm", "why": "My own line."}):
-        refused = post(api, f"goal-proposals/{seen['id']}/decide", body, expected=422)
+        refused = post(api, f"proposals/{seen['id']}/decide", body, expected=422)
         assert "replaced by a newer one" in str(refused)
     assert goal(api, a)["why"] == "" and not [e for e in goal(api, a)["events"] if e["field"] == "why"]
     tree = get(api, "goals/tree")
@@ -131,7 +131,7 @@ def test_the_strategy_bot_proposes_a_why_and_the_owner_accepts_or_edits_it(api):
         GA.sync(conn, api.app.state.auth.owner_id(conn))
         assert [r[0] for r in conn.execute("SELECT kind FROM goal_asks ORDER BY kind")] == ["vision", "why"]
     # Accepted as it is.
-    decided = post(api, f"goal-proposals/{first['id']}/decide", {"decision": "confirm"})["proposal"]
+    decided = post(api, f"proposals/{first['id']}/decide", {"decision": "confirm"})["proposal"]
     assert decided["status"] == "confirmed" and decided["result"] == {
         "why": "More landlords on Tico is the vision.",
         "edited": False,
@@ -143,30 +143,30 @@ def test_the_strategy_bot_proposes_a_why_and_the_owner_accepts_or_edits_it(api):
     p = propose_why(api, b, "The stats page shows landlords their money.", strategy_token)
     post(
         api,
-        f"goal-proposals/{p['id']}/decide",
+        f"proposals/{p['id']}/decide",
         {"decision": "confirm", "why": "  Landlords see   their money. "},
         token="cara-test",
         expected=403,
     )
     edited = post(
         api,
-        f"goal-proposals/{p['id']}/decide",
+        f"proposals/{p['id']}/decide",
         {"decision": "confirm", "why": "  Landlords see   their money. "},
         token="ben-test",
     )["proposal"]
     assert edited["result"] == {"why": "Landlords see their money.", "edited": True}
     assert goal(api, b)["why"] == "Landlords see their money." and goal(api, b)["why_by_id"] == "human:ben"
-    post(api, f"goal-proposals/{edited['id']}/decide", {"decision": "confirm"}, token="ben-test", expected=422)
+    post(api, f"proposals/{edited['id']}/decide", {"decision": "confirm"}, token="ben-test", expected=422)
     # An edited line is for a Why only, and an accepted Why is never empty.
     p2 = propose_why(api, c, "Support keeps landlords.", strategy_token)
-    post(api, f"goal-proposals/{p2['id']}/decide", {"decision": "reject", "why": "x"}, expected=422)
-    post(api, f"goal-proposals/{p2['id']}/decide", {"decision": "confirm", "why": "   "}, expected=422)
+    post(api, f"proposals/{p2['id']}/decide", {"decision": "reject", "why": "x"}, expected=422)
+    post(api, f"proposals/{p2['id']}/decide", {"decision": "confirm", "why": "   "}, expected=422)
     # Written by hand: the waiting proposal is settled, so nobody is asked about it again.
     post(api, f"goals/{c}/why", {"why": "x" * 201}, expected=422)
     post(api, f"goals/{c}/why", {"why": "Ben's line."}, token="ben-test", expected=403)
     written = post(api, f"goals/{c}/why", {"why": "Good support keeps landlords on Tico."}, token="cara-test")["goal"]
     assert written["why"] == "Good support keeps landlords on Tico." and written["why_by_id"] == "human:cara"
-    settled = get(api, "goal-proposals?status=all")["proposals"]
+    settled = get(api, "proposals?status=all")["proposals"]
     assert {(x["id"], x["status"], x["decision_note"]) for x in settled if x["id"] == p2["id"]} == {
         (p2["id"], "rejected", "The Why was set")
     }

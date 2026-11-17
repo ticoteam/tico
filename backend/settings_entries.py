@@ -1728,7 +1728,7 @@ ALIASES = {
     ("POST", "access/humans/{x}/invite"): "people.add",
     ("POST", "{x}/password"): "people.add",
     ("POST", "{x}/{x}"): "webhooks.outgoing",
-    ("POST", "runners/{x}/inbox-only"): "computer.inbox_only",
+    ("POST", "computers/{x}/inbox-only"): "computer.inbox_only",
     ("POST", "inbound/phone-requests/{x}"): "inbound.phone_request.accept",
     ("POST", "system-routines/{x}"): "rules.system",
     ("POST", "tags/{x}"): "tasks.tag",

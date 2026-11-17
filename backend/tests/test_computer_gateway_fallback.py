@@ -69,7 +69,7 @@ def used_up(api, sid, days=1):
 
 
 def switch(api, m, on, token="ana-test", expected=200):
-    return post(api, f"runners/{m['runner_id']}/gateway-fallback", {"on": on}, token, expected=expected)
+    return post(api, f"computers/{m['runner_id']}/gateway-fallback", {"on": on}, token, expected=expected)
 
 
 def listed(api, m):

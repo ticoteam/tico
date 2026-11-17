@@ -121,7 +121,7 @@ def test_at_the_monthly_cap_a_call_is_refused_before_any_model_is_asked(api, mon
     spend(api, 19.7, actor="human:ben")  # every actor's calls count: the cap is the team's
     post(api, "decisions", {"state": {"team": "Acme"}, "questions": QUESTIONS})  # its most (~$0.21) fits
     assert len(engine.calls) == 1
-    shown = get(api, "judge")
+    shown = get(api, "decisions")
     assert shown["monthly_usd"] == 50.0 and shown["spent_this_month_usd"] == pytest.approx(49.7, abs=0.001)
 
     spend(api, 0.2)  # under the cap, but a call's most no longer fits

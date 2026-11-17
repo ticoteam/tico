@@ -451,7 +451,7 @@ def inbox_read(org, inbox, who=DANA):
 
 def assistant_of(org, person, who=DANA):
     """The person's Assistant bot (CONTRACT §2 Assistant): {"bot": slug} or {"bot": null}."""
-    return org.api("get", f"/api/v2/people/{person}/assistant", who=who, wave=W3)
+    return org.api("get", f"/api/v2/humans/{person}/assistant", who=who, wave=W3)
 
 
 def audit_of(org, obj=None, limit=None, before=None, who=DANA):

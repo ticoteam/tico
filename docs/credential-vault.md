@@ -3,7 +3,7 @@
 How a credential reaches a bot. A bot receives only its granted Credentials; a `tools:` entry names the
 variable a tool needs. The runner retrieves the granted values and resolves 1Password references. It masks a run's
 granted values (as typed, URL-encoded or base64) with `••••` in everything it posts and logs, in the text
-files the run changed in the repository, and holds back a push whose commits contain one (`runner_support/redact.py`).
+files the run changed in the repository, and holds back a push whose commits contain one (`runner-rs/src/redact.rs`).
 Text-file scrubbing opens regular files without following symlinks and replaces them atomically in the same folder.
 Oversized files are left out of publication; scrubbing never writes through a swapped file or parent symlink.
 
@@ -14,7 +14,8 @@ Four words, used the same way everywhere:
 - A **human** signs in. The owner and the admins are the **credential administrators**: they store, delete and grant credentials
   (`TICO_CREDENTIAL_ADMINS` names a different list). A member is never one, but stores a credential for a bot they own or manage,
   granted to that bot, and shares it with their other bots (team rule **Members store credentials for their bots**, on by default).
-- A **bot** is a worker. It has the credentials it was given and nothing else. **A bot never uses a credential that was not
+- A **bot** is a worker. It has the credentials it was given, and keys it made itself and stored as its own
+  ([below](#a-key-a-bot-already-holds)), and nothing else. **A bot never uses a credential that was not
   granted to it**, and never another bot's: having one in its own file on its computer does not make it anyone else's.
   A bot can list the credentials granted to it (`GET /api/v2/credentials`) to check they reach its turns. Each entry has the
   credential's name, kind and variable name; it never has the value, a preview, or anyone else's grants.
@@ -54,10 +55,23 @@ the proxy's Read rules; a tool with no API address cannot be held to reads, and 
 service's own address) with each stored key, every 30 minutes for every tool with an address and a check path, its keys
 on the proxy or on computers alike (the server holds every value, and a check sends a key only to the tool's own public
 https address). A 2xx is **Working**; a 403 is **Works (limited)**, not a problem: the vendor knows the key and the
-path needs a scope the key was not given (a restricted ElevenLabs or Calendly key); only a 401 is **Key rejected**
-(and the 403 a known service answers a bad key with: Vercel's);
-anything else is **Check failed**. A proxied tool's real calls outrank its check: any 2xx in the last 24 hours makes it
-Working whatever the check said, and only 3 calls in a row answered 401, with no 2xx since, make it Key rejected.
+path needs a scope the key was not given (a restricted ElevenLabs or Calendly key). So is a 401 whose reply says a
+permission is missing (`missing_permissions`, `insufficient_scope`, read from the WWW-Authenticate challenge and the
+first 2 KB of the reply, nothing kept). Any other 401 is **Key rejected** (and the 403 a known service answers a bad key
+with: Vercel's); anything else is **Check failed**. A proxied tool's real calls outrank its check: any 2xx in the last
+24 hours makes it Working whatever the check said, and only 3 calls in a row answered 401, with no 2xx since, make it
+Key rejected. The proxy reads a real call's 401 the same way and records only that it named a missing permission (never
+the reply's text), so calls a restricted key may not make never count toward Key rejected, and the newest such call
+ends the count as a 2xx would. A status counts only the checks that would run today: an id stored as a key is never checked, and a tool
+with no address or check path reads from its real calls alone, so an old check row never keeps it Key rejected.
+
+**Reconnect tasks.** A tool that turns Key rejected (its check, or its proxied calls; never Works (limited)) gives the
+Tools page's owner (the Tools Owner, else BotOps) one task, **Reconnect <vendor>**, whose thread holds a key card for
+the person who connected the tool, or a credential administrator when they may not change it. A run whose failed command
+got a 401 with a key no check reaches (a tool with no check path) opens it too. The value typed into the card replaces
+that key in place, every grant kept. A repeat adds nothing to the open task and tells nobody; the task closes itself
+when the tool reads Working again or the key gets a new value (the card, Tools or the API), and closes as not needed
+when the tool is deleted (backend/reconnect_tasks.py).
 
 **Ids are not keys.** A variable whose name says id (`_PROJECT_ID`, `_ACCOUNT_ID`, `_ACCOUNT_SID`, `_ORG_ID`,
 `_WORKSPACE_ID`, `_TEAM_ID`, `_CUSTOMER_ID`) and whose value is one short word that does not look like a credential is a
@@ -204,10 +218,9 @@ How a bot uses one is [integrations/website.md](../integrations/website.md); the
 
 ## The key: nothing to set up
 
-During a server-first upgrade, the one-time import of legacy team `HUB_` variables waits for
-the Computer to report runner 0.2.31 or newer. An older or unreported runner cannot consume that
-step; existing grants keep working. The first import can finish on an older runner while this
-later step remains pending.
+During a server-first upgrade, every Computer is offered the one-time import of legacy team `HUB_`
+variables. No runner version is needed. Existing grants keep working. A Computer that is offline
+has not run the import yet, and it runs when it next connects.
 
 The vault works as soon as Tico starts. The AES-256 data key is 32 random bytes made once, the first time a credential is stored,
 and kept in `credential.key` (mode 0600, the server's user) in the data volume next to the database (`/data/credential.key` in the
@@ -349,10 +362,44 @@ card for the same variable stays (saving either saves both); canceling the card 
 When the task finishes, changes hands, or is made private from the card's person, its card says Not needed and its
 request is canceled; a person who cannot read the task cannot open its request either.
 
+## A key a bot already holds
+
+A bot that made a key itself (through a vendor's API, or one already in a file on its computer) keeps it as its own,
+with no person and no page: `tico credential add <name> --from-env <VAR>` or `--from-file <path>` (MCP
+`tico_credential_add`; the value is read on that computer and is never an argument). It is stored under `--env` (by
+default the `--from-env` name), granted to that bot alone, and reaches its next run like any granted key. It goes on a
+new tool of its own under the vendor of `--tool` (or of its variable and name), its key on computers and **Everyone can
+read** off, so the tool others use and its keys are never changed and no other bot reads with it. Storing again replaces
+only a key the bot stored itself; a bot never overwrites anyone else's key, never gives its own to anyone else (a
+credential administrator does that in Tools, where the key shows like any other), and a variable it already gets from
+another key is refused (one value per variable). The run is scrubbed of the value, and the audit log records
+`credential.created`, `credential.granted` and `credential.set_for_bot` as the bot, never the value. The Tools Owner keeps
+no key of its own. The rule is `_itself` in `backend/tool_access.py`.
+
 If a human pastes a credential into a thread instead, BotOps stores it with `tico credential set <VARIABLE> --for-bot <bot>` (the value on standard input,
 never on the command line) as that human, and the server takes the pasted words out of their messages, the run's recorded events and the answers kept
 for retries, replacing them with `•••• saved as <VARIABLE>`; later events of the same run are scrubbed as they arrive. The runner masks granted values in
 what it posts and logs. `tico message redact <id>` does the same for one message.
+
+## Access asked for on a tool or a repository
+
+A bot that needs a level on something that exists (a tool in Tools, a GitHub repository) asks for it with
+`tico access request <tool or owner/repo> --level read|read_write --why "..."` (MCP `tico_access_request`; BotOps, the
+Tools Owner and people name the bot with `--for`). It never files a task for it.
+- It already has that level (a grant, Everyone can read, a repository it reaches): the answer says so.
+- Read on a tool every bot could read by default (a Read key, or the proxy's read filter, and Everyone can read on), or on
+  a repository the team ticked that is no bot's own, is granted at once. The person who added the tool or the
+  repository gets a card saying so, with Take back.
+- Anything else (a write, a tool switched off, an Only listed tool, a database or a key on computers, a bot's
+  repository) is one card for each person who can grant it, the one who added it first, in their chat with the Tools
+  page's owner. The first Grant or Decline decides; the other copies show it and ask nothing.
+- Asking again adds nothing and notifies nobody. One open request per bot, resource and level.
+- A request closes itself the moment the access exists, whoever gives it and however: the card, Tools, the Tools
+  Owner, the API, Everyone can read turning on, Settings > General › Repositories. The task it was asked on waits on it
+  (Paused) and is woken once, with "granted" or "declined". An hourly pass closes what no write announced, and old
+  free-text access tasks whose title names one bot, one level and resources that exist, once that access exists.
+- `tico access stats` gives the week's numbers: requests, how many reached people, the share granted at once and the
+  median time to grant. The Tools Owner's weekly review reads them.
 
 ## Keys dropped in the Tools chat
 
@@ -383,9 +430,9 @@ On upgrade, each existing bot automatically gets grants for everything it could 
 every key in its computer's `_shared.env` (except the Codex sign-in key), the variables its Tools name, and the key used
 by its model runtime. The Computer encrypts those values into Credentials through its own signed-in
 channel. A bot created after the upgrade inherits no shared tool credentials. Migration is once per existing bot, and
-never restores a revoked grant. A pending one-time migration waits for a runner version that supports
-it; an older, pinned or offline runner does not consume the step. The `HUB_` migration needs a
-runner reporting 0.2.31 or newer. Legacy files stay available to operator tools, but are no longer a source for run environments.
+never restores a revoked grant. A pending one-time migration stays pending until the Computer runs it. An offline
+Computer runs it when it reconnects. The `HUB_` pass needs no particular runner version. Computers older than 0.6
+are not supported. Legacy files stay available to operator tools, but are no longer a source for run environments.
 A variable that is a setting rather than a key, a name ending in `_HOST`, `_REGION`, `_PROFILE`, `_PROJECT_ID`,
 `_BUCKET` or `_URL` whose value does not look like a credential (one line, no key shape, no user, password or token in a
 URL), comes in as a **Setting** on the tool of its vendor the bot holds a key of (`POSTHOG_HOST` beside `POSTHOG_API_KEY`
@@ -419,7 +466,8 @@ breaks the `op://` form; reference it by its item id.
   draft fails lint for this reason. A bot that needs one opens a card in the thread; BotOps stores what a human
   pastes and removes it from the thread.
 - A missing credential is not yours to work around: open the card (`tico credential request`); on a task it goes in the
-  task's thread and the task is Paused until it is saved, so stop there. The bot's Tools list shows every declared
+  task's thread and the task is Paused until it is saved, so stop there. Access to a tool or a repository that exists is
+  `tico access request`, never a task to a person. The bot's Tools list shows every declared
   Credential as present or missing.
 - Saving a credential is not permission to use it. Only a `tools:` entry and a grant connects a bot to a credential (an MCP
   server added in Tools needs the grant alone). Changing `tools:` is a task for the owner.

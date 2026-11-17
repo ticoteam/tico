@@ -607,8 +607,9 @@ async function shot(page: Page, name: string) {
         assert.ok(n && head && n.x + n.width <= head.x + head.width + 0.5, `the count is inside the header ${where}`);
         assert.equal(await longCount.evaluate(el => el.scrollWidth <= el.clientWidth), true, `the count is shown whole ${where}`);
         if (viewport === PHONE) assert.ok(n!.height >= 44, `the count is a finger-sized target on a phone: ${n!.height}px`);
-        // Nothing in the main area above 16px, icon glyphs and the page title (17px, the shared header's) aside.
-        assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('#main *')].filter(el => el instanceof HTMLElement && el.checkVisibility() && !el.matches('header.ph > .ph-t')
+        // Nothing in the main area above 16px, icon glyphs, the page title (17px, the shared header's) and the Floor's
+        // faint stencilled hall names (a backdrop, not a figure) aside.
+        assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('#main *')].filter(el => el instanceof HTMLElement && el.checkVisibility() && !el.matches('header.ph > .ph-t, .cf-hall > .cf-hall-head > .cf-hall-name')
           && [...el.childNodes].some(c => c.nodeType === 3 && c.textContent!.trim()) && parseFloat(getComputedStyle(el).fontSize) > 16
           && !/Material Symbols/i.test(getComputedStyle(el).fontFamily)).map(el => el.className + ': ' + el.textContent!.trim().slice(0, 30))), [], where);
         await shot(page, `counts-${viewport.width}`);

@@ -68,7 +68,7 @@ def install(app, store, auth, mutate, execution, settings):
     def computer(c, rid):
         return c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
 
-    @app.post("/api/v2/runners/{rid}/screen")
+    @app.post("/api/v2/computers/{rid}/screen")
     def screen_mode(request: Request, rid: str, body: M.ScreenMode):
         """Who may open this computer's screen from the app: off, view, or control. The computer's operator or an
         admin; a mode other than off needs the screen turned on on the computer. Off closes open sessions, view
@@ -93,7 +93,7 @@ def install(app, store, auth, mutate, execution, settings):
         sessions.set_mode(rid, mode, "screen turned off" if mode == "off" else "view only now")
         return result
 
-    @app.post("/api/v2/runners/{rid}/screen/sessions")
+    @app.post("/api/v2/computers/{rid}/screen/sessions")
     def open_screen(request: Request, rid: str, body: M.ScreenSessionStart):
         """Open the computer's screen: a single-use ticket for the browser's websocket at `ws_path`, good for a
         minute. The computer's operator or an admin, in person: not the Assistant, BotOps or a personal token."""

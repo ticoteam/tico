@@ -22,6 +22,7 @@ from . import start_places
 from . import teammate_access
 from .auth import validate_identity
 from . import views
+from .api_contract import api_v2
 
 
 def register(
@@ -83,7 +84,14 @@ def register(
         telemetry,
     )
 
-    @app.post("/api/v2/runners/{rid}/turns-at-once")
+    @app.post(
+        "/api/v2/computers/{rid}/turns-at-once",
+        **api_v2(
+            "Computers",
+            "setComputerTurnsAtOnce",
+            "Set the most turns a computer runs at once: null is automatic (its own capacity)",
+        ),
+    )
     def runner_turns_at_once(request: Request, rid: str, body: M.RunnerTurnsAtOnce):
         """How many turns a computer runs at once; null is automatic, its own capacity. Owners and admins."""
         who = request.state.identity
@@ -108,7 +116,10 @@ def register(
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/runners/{rid}/label")
+    @app.post(
+        "/api/v2/computers/{rid}/label",
+        **api_v2("Computers", "renameComputer", "Rename a computer: 1 to 100 characters, trimmed; owners and admins"),
+    )
     def runner_label(request: Request, rid: str, body: M.RunnerLabel):
         """Rename a computer. A cloud machine made again keeps the name. Owners and admins."""
         from . import cloud_machines
@@ -134,7 +145,7 @@ def register(
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/runners/{rid}/member-bots")
+    @app.post("/api/v2/computers/{rid}/member-bots")
     def runner_member_bots(request: Request, rid: str, body: M.RunnerMemberBots):
         """Whether a computer takes the bots members create. Owners and admins."""
         who = request.state.identity
@@ -149,7 +160,7 @@ def register(
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/runners/{rid}/gateway-fallback")
+    @app.post("/api/v2/computers/{rid}/gateway-fallback")
     def runner_gateway_fallback(request: Request, rid: str, body: M.RunnerGatewayFallback):
         """Whether this computer's turns run on Tico Gateway when its plans run out (backend/models_preset.py
         computer_falls_back). Off by default; owners and admins turn it on."""
@@ -315,7 +326,15 @@ def register(
 
         return mutate(request, body, work)
 
-    @app.get("/api/v2/bots/{bot}/access")
+    @app.get(
+        "/api/v2/bots/{bot}/access",
+        **api_v2(
+            "Bots",
+            "getBotAccess",
+            "Who may see, read and write to a bot (its managers only; docs/permissions.md)",
+            "BotAccessView",
+        ),
+    )
     def bot_access_read(request: Request, bot: str, on_behalf_of: str = ""):
         """Who may see, read and write to this bot (docs/permissions.md). For the people who manage it."""
         who = request.state.identity
@@ -330,7 +349,15 @@ def register(
             return settings_admin.access(c, who, bot)
 
     @app.post("/api/v2/bots/{bot}/access")  # the same write for the tools, whose client only posts
-    @app.put("/api/v2/bots/{bot}/access")
+    @app.put(
+        "/api/v2/bots/{bot}/access",
+        **api_v2(
+            "Bots",
+            "setBotAccess",
+            "Set who may see, read and write to a bot; send the revision you read (409 version_conflict otherwise)",
+            "BotAccessView",
+        ),
+    )
     def bot_access_write(request: Request, bot: str, body: M.BotAccess):
         caller = request.state.identity
 
@@ -374,23 +401,55 @@ def register(
 
         return mutate(request, body, work)
 
-    @app.get("/api/v2/people/{pid}/access")
+    @app.get(
+        "/api/v2/humans/{pid}/access",
+        **api_v2(
+            "Team chart",
+            "getPersonAccess",
+            "Who may see, read and write to a person (themselves, whoever they report up to, admins; docs/permissions.md)",
+            "TeammateAccessView",
+        ),
+    )
     def person_access_read(request: Request, pid: str, on_behalf_of: str = ""):
         """Who may see, read and write to this person (docs/permissions.md). For whoever manages them."""
         return teammate_access_read(request, "human:" + pid, on_behalf_of)
 
-    @app.post("/api/v2/people/{pid}/access")  # the same write for the tools, whose client only posts
-    @app.put("/api/v2/people/{pid}/access")
+    @app.post("/api/v2/humans/{pid}/access")  # the same write for the tools, whose client only posts
+    @app.put(
+        "/api/v2/humans/{pid}/access",
+        **api_v2(
+            "Team chart",
+            "setPersonAccess",
+            "Set who may see, read and write to a person; send the revision you read (409 version_conflict otherwise)",
+            "TeammateAccessView",
+        ),
+    )
     def person_access_write(request: Request, pid: str, body: M.TeammateAccess):
         return teammate_access_write(request, "human:" + pid, body)
 
-    @app.get("/api/v2/groups/{gid}/access")
+    @app.get(
+        "/api/v2/groups/{gid}/access",
+        **api_v2(
+            "Team chart",
+            "getGroupAccess",
+            "Who may see, read and write to a group (its leads and admins; docs/permissions.md)",
+            "TeammateAccessView",
+        ),
+    )
     def group_access_read(request: Request, gid: str, on_behalf_of: str = ""):
         """Who may see, read and write to this group (docs/permissions.md). For its leads and the admins."""
         return teammate_access_read(request, "group:" + gid, on_behalf_of)
 
     @app.post("/api/v2/groups/{gid}/access")
-    @app.put("/api/v2/groups/{gid}/access")
+    @app.put(
+        "/api/v2/groups/{gid}/access",
+        **api_v2(
+            "Team chart",
+            "setGroupAccess",
+            "Set who may see, read and write to a group; send the revision you read (409 version_conflict otherwise)",
+            "TeammateAccessView",
+        ),
+    )
     def group_access_write(request: Request, gid: str, body: M.TeammateAccess):
         return teammate_access_write(request, "group:" + gid, body)
 

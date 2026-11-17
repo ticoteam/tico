@@ -39,7 +39,7 @@ def online(api, **overrides):
 
 
 def ask(api, r, action="update", harness="codex", **kw):
-    return post(api, f"runners/{r['runner_id']}/harness-actions", {"harness": harness, "action": action}, **kw)
+    return post(api, f"computers/{r['runner_id']}/harness-actions", {"harness": harness, "action": action}, **kw)
 
 
 def events(api, action):
@@ -102,7 +102,7 @@ def test_the_owners_on_off_per_harness_is_kept_per_computer_and_handed_to_its_ru
     beat(api, r, codex=HARNESS, grok={**HARNESS, "name": "Grok Build", "runtime": "grok", "installed": False})
     assert get(api, "runner-harness-actions", token=r["token"])["choices"] == {}
     choose = lambda harness, enabled, **kw: post(
-        api, f"runners/{r['runner_id']}/harness-choices", {"harness": harness, "enabled": enabled}, **kw
+        api, f"computers/{r['runner_id']}/harness-choices", {"harness": harness, "enabled": enabled}, **kw
     )
     choose("grok", True, token="ben-test", expected=403)
     choose("nothing", True, expected=404)  # a harness the computer never reported
@@ -156,7 +156,7 @@ def test_what_a_bot_there_runs_on_its_fallback_included_cannot_be_turned_off(api
         grok={**HARNESS, "name": "Grok Build", "runtime": "grok"},
     )
     choose = lambda harness, enabled, **kw: post(
-        api, f"runners/{r['runner_id']}/harness-choices", {"harness": harness, "enabled": enabled}, **kw
+        api, f"computers/{r['runner_id']}/harness-choices", {"harness": harness, "enabled": enabled}, **kw
     )
     choose("codex", False, expected=409)  # the bot's own
     choose("gemini-cli", False, expected=409)  # its fallback

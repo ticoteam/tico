@@ -4,6 +4,7 @@
 // task (edit with its version, done, move, owner, snooze, an ask's answer, a comment). Checks here:
 //  - You: Needs you under Answer, Review and Do, each row its task's title (an Answer row the question under it); a question with two choices answers in
 //    place and leaves (not on a phone); search narrows the rows, and Escape clears it; nothing scrolls sideways on a phone;
+//  - You: the person's own open tasks (nothing asked of them, so not in Needs you or its count) at the end of Do, kept live;
 //  - the view button lists You and every pipeline still in use (a retired one is not offered); picking one puts it in
 //    the address and reads its open tasks, snoozed ones too, drawn last in their stage and dimmed;
 //  - the archive: Snoozed, Done and Closed each read their own tasks, and a row opens the task in its window; a
@@ -255,7 +256,7 @@ async function open(browser: Browser, {viewport = {width: 1440, height: 900}, th
     if (p === '/api/me') return json({...me, config: CONFIG});
     if (p === '/api/v2/config') return json(CONFIG);
     if (p === '/api/employees') return json(bots);
-    if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'sam', name: 'Sam'}], teams: {}});
+    if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'sam', name: 'Sam'}], teams: {}});
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
     if (p === '/api/v2/status') return json({bots: []});
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
@@ -392,6 +393,59 @@ async function you(browser: Browser) {
     await page.close();
   }
   console.log('You: Answer, Review and Do; rows by task title; search; a two-choice answer in place: ok');
+}
+
+/** A person's own open tasks, with nothing asked of them, are not in Needs you (its count, ▶, the badge) but are in You:
+ * after Needs you's rows, at the end of Do, each once, kept live from the stream; their snoozed ones are in the archive. */
+async function youOwnTasks(browser: Browser) {
+  const tasks = [...fixtures(),
+    task('t-8', 'Call the landlord', 'doing', {owner_id: 'human:ana', requester_id: 'human:ana', turn: turn('person', 'human:ana', 'Waiting on Ana')}),
+    task('t-9', 'File the permit', 'todo', {owner_id: 'human:ana', snoozed: true, snooze: {by: 'human:ana', until: new Date(NOW + 86400e3).toISOString(), why: null},
+      turn: turn('snoozed', null, 'Snoozed')})];
+  const of = (id: string) => brief(tasks.find(t => t.id === id)!);
+  // Needs you as the server gives it now: the asks, and a bot's private task Ana must let someone see (a Do row); t-3 and
+  // t-8 are Ana's own, with nothing asked of her, so Needs you leaves them out.
+  const needs: Need[] = [...needsOf(tasks).filter(n => n.kind === 'ask'),
+    {kind: 'task', id: 'task:t-4', task_id: 't-4', line: 'Let Sam see this task', since: at(120), task: of('t-4')}];
+  for (const viewport of [{width: 1440, height: 900}, {width: 390, height: 844}]) {
+    const {page, errors, reads} = await open(browser, {viewport, tasks, needs});
+    await page.locator('#task-body [data-task="t-8"]').waitFor();
+    const own = reads.find(u => u.searchParams.get('owner'))!.searchParams;
+    assert.deepEqual([own.get('owner'), own.get('status'), own.get('snoozed')], ['human:ana', 'open', 'hide'], 'You reads her own open tasks');
+    assert.deepEqual(await groups(page), ['Answer', 'Review', 'Do']);
+    assert.deepEqual(await rowTitles(page), ['Signup plans', 'Checkout flow', 'Rounding in the API', 'Book the team offsite', 'Call the landlord'],
+      'Needs you first, then her own tasks at the end of Do; a snoozed one is not here');
+    assert.deepEqual(await page.locator('#task-body .tk-row').evaluateAll(els => els.map(e => { const d = (e as HTMLElement).dataset; return d['need'] || 'task:' + d['task']; })),
+      ['r2', 'r1', 'task:t-4', 'task:t-3', 'task:t-8'], 'an own task is a task row, not a Needs you item');
+    assert.equal(await page.locator('#task-body [data-task="t-3"] .tk-mark').count(), 0, 'your own row has no mark');
+    // Needs you, its count and ▶ stay what someone asks of her.
+    assert.equal(await page.locator('#task-play .tl-review-n').innerText(), '3');
+    assert.deepEqual(await page.evaluate(() => TASKS_ST.needs.map(n => n.id)), ['r1', 'r2', 'task:t-4']);
+    assert.ok(await sideways(page) <= 1, `nothing scrolls sideways at ${viewport.width}px`);
+    // Search narrows her own tasks too.
+    await page.locator('#task-q').fill('landlord');
+    await page.waitForFunction(() => !TASKS_ST.loading && document.querySelectorAll('#task-body .tk-row').length === 1);
+    assert.deepEqual(await rowTitles(page), ['Call the landlord']);
+    await page.locator('#task-q').press('Escape');
+    await page.waitForFunction(() => !TASKS_ST.loading && document.querySelectorAll('#task-body .tk-row').length === 5);
+    // Live, with nothing read: a task given to her comes in, one she finished leaves, a bot's never shows.
+    const before = reads.length;
+    const given = brief(task('t-10', 'Sign the lease', 'todo', {owner_id: 'human:ana', created_at: at(1)}));
+    const finished = {...of('t-3'), status: 'done', stage_id: 'done', turn: null, version: 4};
+    const bots = brief(task('t-11', 'Draft the newsletter', 'spec', {owner_id: 'bot:writer'}));
+    await page.evaluate(([a, b, c]) => tasksLiveApply([{id: 't-10', task: a}, {id: 't-3', task: b}, {id: 't-11', task: c}]), [given, finished, bots] as const);
+    await page.waitForFunction(() => document.querySelector('#task-body [data-task="t-10"]') && !document.querySelector('#task-body [data-task="t-3"]'));
+    assert.deepEqual((await rowTitles(page)).slice(-2), ['Call the landlord', 'Sign the lease']);
+    assert.equal(await page.locator('#task-body [data-task="t-11"]').count(), 0);
+    assert.equal(reads.length, before, 'live changes read nothing');
+    assert.equal(await page.locator('#task-play .tl-review-n').innerText(), '3', 'her own tasks never count in Needs you');
+    // Her own task opens in its window.
+    await page.locator('#task-body [data-task="t-8"]').click();
+    await page.locator('#task-modal[open] .tmodal-title', {hasText: 'Call the landlord'}).waitFor();
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+  console.log("You: a person's own open tasks after Needs you, not in it; live; search: ok");
 }
 
 /** Rows with the same ask read by their tasks' titles; a Paused cause and a mention outside a task by their own line. */
@@ -579,6 +633,6 @@ module.exports = api;
 if (require.main === module) (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
-    for (const run of [you, youByTitle, views, archive, pipelineArchive, pages]) await run(browser);
+    for (const run of [you, youOwnTasks, youByTitle, views, archive, pipelineArchive, pages]) await run(browser);
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

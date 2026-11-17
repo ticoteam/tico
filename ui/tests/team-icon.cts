@@ -47,7 +47,7 @@ const logo = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQV
       if (p === '/api/me') return json({id:'ana',role,name:'Ana',email:'ana@example.com',cloud:true,registered:true,config:{version:'dev',company_name:'Acme'}});
       if (p === '/api/v2/config') return json({version:'dev',company_name:'Acme'});
       if (p === '/api/employees') return json([]);
-      if (p === '/api/humans' || p === '/api/people') return json({people:[],teams:{}});
+      if (p === '/api/humans') return json({people:[],teams:{}});
       if (p === '/api/status') return json({cloud:true,keeper_alive:true,active:[],queued:[],recent_runs:[],health_issues:[]});
       if (p === '/api/issues') return json([]);
       if (p === '/api/v2/operations') return json({machines:[],services:[]});

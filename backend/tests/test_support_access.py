@@ -270,19 +270,19 @@ def test_app_access_reads_and_changes_setup_and_nothing_else(environment, hq):
     computer = machine(api)
     # A model sign-in's code would let support choose the account the computer runs on.
     for path in (
-        f"/api/v2/runners/{computer['runner_id']}/logins",
-        f"/api/v2/runners/{computer['runner_id']}/harness-actions",
+        f"/api/v2/computers/{computer['runner_id']}/logins",
+        f"/api/v2/computers/{computer['runner_id']}/harness-actions",
     ):
         r = api.post(path, json={"harness": "codex"}, headers=token)
         assert r.status_code == 403 and r.json()["error"]["code"] == "support_access", (path, r.text)
     # Nor read the link and code of a sign-in the person starts during the session.
     for path in (
-        f"/api/v2/runners/{computer['runner_id']}/logins/lgn_1",
-        f"/api/v2/runners/{computer['runner_id']}/logins",
+        f"/api/v2/computers/{computer['runner_id']}/logins/lgn_1",
+        f"/api/v2/computers/{computer['runner_id']}/logins",
     ):
         r = api.get(path, headers=token)
         assert r.status_code == 403 and r.json()["error"]["code"] == "support_access", (path, r.text)
-    r = api.post(f"/api/v2/runners/{computer['runner_id']}/restart", json={}, headers=token)
+    r = api.post(f"/api/v2/computers/{computer['runner_id']}/restart", json={}, headers=token)
     assert r.status_code < 300, r.text
     with api.app.state.store.read() as c:
         actors = {row[0] for row in c.execute("SELECT actor FROM events WHERE actor LIKE '%support%'")}
@@ -332,7 +332,7 @@ def test_full_access_keeps_the_owners_lasting_changes_and_neither_tier_opens_a_p
     # The owner's reach, as decided for the full level: a webhook it makes, or a computer's model sign-in, is its owner's
     # call, not refused here.
     computer = machine(api)
-    for path in ("/api/v2/triggers", f"/api/v2/runners/{computer['runner_id']}/logins"):
+    for path in ("/api/v2/triggers", f"/api/v2/computers/{computer['runner_id']}/logins"):
         r = api.post(path, json={}, headers=full_token)
         assert not (r.status_code == 403 and r.json()["error"]["code"] == "support_access"), (path, r.text)
 

@@ -18,6 +18,7 @@ from datetime import timedelta
 
 from . import automation_flow as F
 from .store import H, Problem
+from .api_contract import api_v2
 
 # range: (seconds, buckets). 5m is 10 of 30s, 1h 12 of 5 min, 24h 24 of an hour, 7d 28 of 6 hours.
 RANGES = {"5m": (300, 10), "1h": (3600, 12), "24h": (86400, 24), "7d": (7 * 86400, 28)}
@@ -655,7 +656,15 @@ def install(app, store, auth):
     """Registered before GET /api/v2/automations/{aid}, which would read `runs` and `stats` as ids."""
     from fastapi import Request
 
-    @app.get("/api/v2/automations/runs")
+    @app.get(
+        "/api/v2/automations/runs",
+        **api_v2(
+            "Automations",
+            "listAllAutomationRuns",
+            "Runs across every automation you may see in the last range (5m, 1h, 24h, 7d), newest first: what started each, its outcome or failing step, steps, time and cost; status, trigger, owner and ids narrow it (before → next)",
+            "AutomationOverviewRuns",
+        ),
+    )
     def automations_all_runs(
         request: Request,
         range: str = "1h",
@@ -675,7 +684,15 @@ def install(app, store, auth):
             auth.domain(who)
             return runs(c, who, range, status, trigger, owner, ids, limit, before, store.settings)
 
-    @app.get("/api/v2/automations/stats")
+    @app.get(
+        "/api/v2/automations/stats",
+        **api_v2(
+            "Automations",
+            "getAutomationStats",
+            "Runs, failures and cost per automation you may see over the range, in buckets oldest first, with totals",
+            "AutomationStats",
+        ),
+    )
     def automations_stats(request: Request, range: str = "1h"):
         """Runs, failures and cost per automation you may see over the last `range` (5m, 1h, 24h, 7d), each split into
         buckets oldest first (10 of 30s, 12 of 5 min, 24 of an hour, 28 of 6 hours), and the totals the same way."""

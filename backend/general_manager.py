@@ -154,7 +154,7 @@ def _paused(c):
         for bot in owners
         if (cause := task_wakes.cannot_run(c, bot, seen)) is not None
         and cause
-        not in (*task_wakes.COMPANY_WIDE, task_wakes.BEING_SET_UP, task_wakes.CLOUD_STARTING)  # it starts by itself
+        not in (*task_wakes.COMPANY_WIDE, task_wakes.BEING_SET_UP, *task_wakes.STARTS_BY_ITSELF)  # it starts by itself
     ]
     if not stopped:
         return []
@@ -202,8 +202,9 @@ def _held(c):
             "held after five fast failures in a row",
         ),
         (
-            "SELECT bot, held_at, runs || ' runs in the last ' || coalesce(window,'hour') AS reason "
-            "FROM bot_budget WHERE held_at IS NOT NULL",
+            "SELECT holdable_id AS bot, created_at AS held_at, json_extract(details,'$.runs') || ' runs in the last ' "
+            "|| coalesce(json_extract(details,'$.window'),'hour') AS reason "
+            "FROM holds WHERE kind='runaway' AND holdable_type='bot' AND released_at IS NULL",
             "held by its turn budget, a likely runaway loop",
         ),
     ):

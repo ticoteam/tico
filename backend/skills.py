@@ -22,6 +22,7 @@ from . import brand
 from . import hubdb as H
 from . import models as M
 from .store import Problem
+from .api_contract import api_v2
 
 PEOPLE_AND_BOTS = (
     "owner",
@@ -516,14 +517,29 @@ def install(app, store, auth, mutate):
         return who
 
     # Fixed paths first: `skills/proposals`, `skills/installs` must not be read as a skill's name.
-    @app.post("/api/v2/skills/proposals", status_code=201)
+    @app.post(
+        "/api/v2/skills/proposals",
+        status_code=201,
+        **api_v2(
+            "Skills",
+            "proposeSkill",
+            "Propose a skill or an update as its whole folder of text files; an admin approves it after screening",
+        ),
+    )
     def skill_propose(request: Request, body: M.SkillPropose):
         """Propose a skill or an update: the whole folder as text files. A bot or a person may; an admin approves. The bundle is
         checked here (the same rules as `tico skill submit`), and screening follows before anyone can approve it."""
         who = reader(request)
         return mutate(request, body, lambda c: propose(c, auth, who, body))
 
-    @app.get("/api/v2/skills/proposals")
+    @app.get(
+        "/api/v2/skills/proposals",
+        **api_v2(
+            "Skills",
+            "listSkillProposals",
+            "Proposals waiting for an OK (status=all or a status for history): admins see all, anyone else their own",
+        ),
+    )
     def skill_proposals(request: Request, status: str = Query(default="pending")):
         """The proposals waiting for an OK: admins see every one, anyone else their own. Newest first, at most 200. A
         decided proposal is history (an approved one is the skill's version); `status` names one to read it anyway,
@@ -544,7 +560,14 @@ def install(app, store, auth, mutate):
             rows = c.execute(_PROPOSAL_SQL + where + " ORDER BY p.created_at DESC LIMIT 200", args).fetchall()
             return {"proposals": [_proposal_view(dict(row)) for row in rows]}
 
-    @app.get("/api/v2/skills/proposals/{pid}")
+    @app.get(
+        "/api/v2/skills/proposals/{pid}",
+        **api_v2(
+            "Skills",
+            "getSkillProposal",
+            "A proposal with its files, its diff, whether the skill moved on, and its latest screening",
+        ),
+    )
     def skill_proposal(request: Request, pid: str):
         """A proposal with its files, its diff against the version it was based on, whether the skill has moved on since (then
         `diff_latest` too), and its latest screening. Its proposer and admins only."""
@@ -573,29 +596,48 @@ def install(app, store, auth, mutate):
                 value["screening"] = _screening_view(screen)
             return value
 
-    @app.post("/api/v2/skills/proposals/{pid}/approve")
+    @app.post(
+        "/api/v2/skills/proposals/{pid}/approve",
+        **api_v2("Skills", "approveSkillProposal", "Admins approve a screened proposal as the skill's next version"),
+    )
     def skill_approve(request: Request, pid: str, body: M.SkillApprove):
         """An admin approves a screened proposal (409 not_screened or stale otherwise): the next version of the skill."""
         who = reader(request)
         return mutate(request, body, lambda c: approve(c, auth, who, pid, body.acknowledged))
 
-    @app.post("/api/v2/skills/proposals/{pid}/decline")
+    @app.post(
+        "/api/v2/skills/proposals/{pid}/decline",
+        **api_v2("Skills", "declineSkillProposal", "Admins decline a pending proposal with a reason"),
+    )
     def skill_decline(request: Request, pid: str, body: M.SkillDecline):
         who = reader(request)
         return mutate(request, body, lambda c: decline(c, auth, who, pid, body.reason))
 
-    @app.post("/api/v2/skills/proposals/{pid}/withdraw")
+    @app.post(
+        "/api/v2/skills/proposals/{pid}/withdraw",
+        **api_v2("Skills", "withdrawSkillProposal", "The proposer withdraws a pending proposal"),
+    )
     def skill_withdraw(request: Request, pid: str, body: M.Empty):
         who = reader(request)
         return mutate(request, body, lambda c: withdraw(c, auth, who, pid))
 
-    @app.post("/api/v2/skills/proposals/{pid}/rescreen")
+    @app.post(
+        "/api/v2/skills/proposals/{pid}/rescreen",
+        **api_v2("Skills", "rescreenSkillProposal", "Admins or the proposer send a pending proposal back to screening"),
+    )
     def skill_rescreen(request: Request, pid: str, body: M.Empty):
         """Screen the proposal again (an admin or its proposer): approval waits for the new screen."""
         who = reader(request)
         return mutate(request, body, lambda c: rescreen(c, auth, who, pid))
 
-    @app.get("/api/v2/skills/installs")
+    @app.get(
+        "/api/v2/skills/installs",
+        **api_v2(
+            "Skills",
+            "listSkillInstalls",
+            "The installs of one bot or person, with what is wanted and what is staged there",
+        ),
+    )
     def skill_installs(request: Request, target_type: str = Query(...), target_id: str = Query(...)):
         """The installs of one bot or person, with what is wanted and what is staged there."""
         who = reader(request)
@@ -615,7 +657,10 @@ def install(app, store, auth, mutate):
                 for row in _installs(c, "i.target_type=? AND i.target_id=?", (target_type, target_id))
             ]
 
-    @app.delete("/api/v2/skills/installs/{iid}")
+    @app.delete(
+        "/api/v2/skills/installs/{iid}",
+        **api_v2("Skills", "uninstallSkill", "Take a skill off a bot or person, with the rights to install it"),
+    )
     def skill_uninstall(request: Request, iid: str):
         """Take a skill off a bot or person: the same rights as installing it."""
         who = reader(request)
@@ -637,7 +682,14 @@ def install(app, store, auth, mutate):
 
         return mutate(request, M.Empty(), work)
 
-    @app.get("/api/v2/skills")
+    @app.get(
+        "/api/v2/skills",
+        **api_v2(
+            "Skills",
+            "listSkills",
+            "The directory: each skill with its latest approved version, install count and the first few it is on",
+        ),
+    )
     def skills_list(request: Request):
         """The directory: each skill with its latest approved version, how many installs it has, and the first few of
         them the caller may see (`on`)."""
@@ -667,7 +719,10 @@ def install(app, store, auth, mutate):
                 ]
             }
 
-    @app.get("/api/v2/skills/{name}")
+    @app.get(
+        "/api/v2/skills/{name}",
+        **api_v2("Skills", "getSkill", "One skill: its versions and the installs the caller may see"),
+    )
     def skill_detail(request: Request, name: str):
         """One skill: its versions (no files) and the installs the caller may see."""
         who = reader(request)
@@ -693,7 +748,10 @@ def install(app, store, auth, mutate):
                 "installs": installs,
             }
 
-    @app.get("/api/v2/skills/{name}/versions/{number}")
+    @app.get(
+        "/api/v2/skills/{name}/versions/{number}",
+        **api_v2("Skills", "getSkillVersion", "One approved version of a skill, with its files"),
+    )
     def skill_version(request: Request, name: str, number: int):
         """One approved version, with its files."""
         reader(request)
@@ -704,7 +762,12 @@ def install(app, store, auth, mutate):
                 raise Problem("not_found", f"{name} has no version {number}", 404)
             return {"skill": name, "version": _version_view(version, with_files=True)}
 
-    @app.post("/api/v2/skills/{name}/installs")
+    @app.post(
+        "/api/v2/skills/{name}/installs",
+        **api_v2(
+            "Skills", "installSkill", "Install a skill for one bot or person, at the latest version or pinned to one"
+        ),
+    )
     def skill_install(request: Request, name: str, body: M.SkillInstall):
         """Install a skill for one bot or person, latest or pinned to a version. Explicit only: nothing reaches later joiners."""
         who = reader(request)
@@ -728,7 +791,12 @@ def install(app, store, auth, mutate):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/skills/{name}/installs/bulk")
+    @app.post(
+        "/api/v2/skills/{name}/installs/bulk",
+        **api_v2(
+            "Skills", "installSkillForTargets", "Install a skill for several bots or people at once, all or nothing"
+        ),
+    )
     def skill_install_bulk(request: Request, name: str, body: M.SkillInstallBulk):
         """Install for several targets at once, all or nothing: each target is checked before any row is written."""
         who = reader(request)

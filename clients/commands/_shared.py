@@ -10,10 +10,11 @@ VISUALS = {
     "type": "array",
     "maxItems": 10,
     "description": (
-        "Visuals to show with this message, in order: a picture, SVG, self-contained HTML page, video or audio. Each is "
-        "{path, title} for a file in your checkout (on your Computer: a page's local images and fonts are embedded first) "
-        "or {file: \"<file id>@<version>\", title} for a file already on this task or conversation. Remote images in a page "
-        "are not loaded; the result lists them. Too big or another type: it shows as a normal file."
+        "Visuals with this message, in order: a picture, SVG, self-contained HTML page, video or "
+        "audio. {path, title} is a file in your checkout (on your Computer, a page's local images "
+        "and fonts are embedded first); {file: \"<file id>@<version>\", title} is a file already on "
+        "this task or conversation. Remote images in a page are not loaded; the result lists "
+        "them. Too big or another type: a normal file."
     ),
     "items": {
         "type": "object",
@@ -65,8 +66,8 @@ def _uploaded(made):
 
 # The Assistant, citing the person's message for something they asked for (`_asked`).
 ASKED = _s(
-    "Assistant only: the person asked for this in their Assistant chat: `turn` (the message that started "
-    "this run) or its id. Omit unless they clearly asked; propose instead"
+    "Assistant only, when the person asked in their Assistant chat: `turn` (the message that "
+    "started this run) or its id. Omit unless they clearly asked; propose instead."
 )
 
 
@@ -78,8 +79,9 @@ ASKED = _s(
 VERSION = {
     "type": "integer",
     "minimum": 0,
-    "description": "The task's version you were last shown (tico_task_show, a list row or your wake: \"version 12\"). "
-    "Changed since: refused as task_changed with the version it has now; read the task again and decide again",
+    "description": "The version you last saw (tico_task_show, a list row, or your wake: \"version "
+    "12\"). If it changed, refused as task_changed with the version it has now: "
+    "read the task again and decide again.",
 }
 
 

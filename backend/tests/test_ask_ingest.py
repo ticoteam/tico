@@ -25,6 +25,19 @@ def file(api, token, title="Pick the launch date", body="Two dates: Nov 3 or Nov
     return r.json()
 
 
+def asks_ben(api, task):
+    """The item reached Ben: a bot's task for him is its own, with its question to him (backend/person_asks.py), open
+    in his Needs you."""
+    with api.app.state.store.read() as c:
+        return bool(
+            c.execute(
+                "SELECT 1 FROM visits v JOIN requirements r ON r.visit_id=v.id WHERE v.task_id=? AND r.person_id=? "
+                "AND r.withdrawn_at IS NULL",
+                (task["id"], "human:ben"),
+            ).fetchone()
+        )
+
+
 def write_state(api):
     """The domain rows a refused ask must leave intact, including delivery and refusal/quarantine state."""
     with api.app.state.store.read() as c:
@@ -140,7 +153,7 @@ def test_a_clear_task_under_budget_reaches_the_person(gate):
     api, model, token = gate
     plate(api, 4)
     out = file(api, token)
-    assert out["task"]["owner_id"] == "human:ben"
+    assert asks_ben(api, out["task"])
     assert "ingest" not in out, "an item that goes through reads as before"
     [item], [call] = items(api), calls(api)
     assert (item["outcome"], item["reason"]) == (A.THROUGH, "under_budget")
@@ -171,7 +184,7 @@ def test_meeting_a_criterion_gets_it_through_at_that_load(gate):
     plate(api, 15)
     model.meets = "$200 a month"
     out = file(api, token, "Raise the Gateway cap to $400 a month")
-    assert out["task"]["owner_id"] == "human:ben" and "ingest" not in out
+    assert asks_ben(api, out["task"]) and "ingest" not in out
     assert [(i["outcome"], i["reason"]) for i in items(api)] == [(A.THROUGH, "criteria")]
 
 
@@ -209,7 +222,7 @@ def test_it_fails_open_and_records_the_failure(gate, monkeypatch, how):
     out = file(api, token)
     if model.hold:
         model.hold.set()
-    assert out["task"]["owner_id"] == "human:ben" and "ingest" not in out
+    assert asks_ben(api, out["task"]) and "ingest" not in out
     [item] = items(api)
     assert item["outcome"] == A.FAILED_OPEN and item["ref"] == out["task"]["id"]
     if how == "cap":
@@ -247,7 +260,7 @@ def test_no_decision_model_is_decide_off(gate):
     api.app.state.store.settings.rehearsal = True
     plate(api, 120)
     out = file(api, token)
-    assert out["task"]["owner_id"] == "human:ben" and "ingest" not in out and not items(api) and not calls(api)
+    assert asks_ben(api, out["task"]) and "ingest" not in out and not items(api) and not calls(api)
 
 
 def test_mode_off_asks_nothing(gate):
@@ -255,7 +268,7 @@ def test_mode_off_asks_nothing(gate):
     with api.app.state.store.transaction() as c:
         A.save(c, "human:ben", "human:ben", {"mode": "off", "budget": 10, "chores_budget": 5, "criteria": []})
     out = file(api, token)
-    assert out["task"]["owner_id"] == "human:ben" and "ingest" not in out and not model.calls
+    assert asks_ben(api, out["task"]) and "ingest" not in out and not model.calls
 
 
 def test_a_settings_change_applies_to_the_next_item_only(gate):
@@ -276,7 +289,7 @@ def test_a_settings_change_applies_to_the_next_item_only(gate):
     )
     assert_refused(api, refused, before)
     with api.app.state.store.read() as c:
-        assert H.task(c, first["id"])["owner_id"] == "human:ben"
+        assert asks_ben(api, H.task(c, first["id"]))
 
 
 def test_settings_are_a_persons_own_and_the_team_default_is_an_admins(gate):
@@ -284,7 +297,7 @@ def test_settings_are_a_persons_own_and_the_team_default_is_an_admins(gate):
     own = get(api, "ask-ingest/settings", token="priya-test")
     assert own["settings"]["mode"] == "on" and own["settings"]["budget"] == 10, "ships as On"
     assert own["modes"] == ["off", "on"]
-    assert len(own["settings"]["criteria"]) == 6 and own["may_edit_team"] is False
+    assert own["settings"]["criteria"] == A.DEFAULTS["criteria"] and own["may_edit_team"] is False
     body = {"mode": "on", "budget": 8, "chores_budget": 3, "criteria": ["Pricing"], "team": True}
     r = api.put("/api/v2/ask-ingest/settings", headers=headers("priya-test"), json=body)
     assert r.status_code == 403
@@ -345,7 +358,7 @@ def test_the_decisions_readout_counts_refusals_and_reconciles_their_calls(gate):
     )
     model.meets = "$200 a month"
     file(api, token, "Raise the Gateway cap to $400 a month")
-    readout = get(api, "judge/readout")
+    readout = get(api, "decisions/readout")
     [row] = [r for r in readout["sets"] if r["set"] == A.QUESTION_SET]
     assert row["calls"] == 2
     assert row["gate"] == {"outcomes": {A.SENT_BACK: 1, A.THROUGH: 1}, "let_through": 0}
@@ -404,7 +417,7 @@ def test_a_repeat_from_an_unrelated_bot_never_sees_another_bots_private_item(gat
     assert all("covered" not in call["questions"] for call in model.calls), "no covered option was offered"
     assert all("Acme pricing secret" not in json.dumps(call) for call in model.calls)
     assert "Acme pricing secret" not in json.dumps(second)
-    assert second["owner_id"] == "human:ben", "judged as new, under budget: it reaches the person"
+    assert asks_ben(api, second), "judged as new, under budget: it reaches the person"
     api.post(f"/api/v2/tasks/{first}/comments", json={"text": "Use $40."}, headers=headers("ben-test"))
     with api.app.state.store.read() as c:
         told = c.execute("SELECT 1 FROM messages WHERE recipient_id='bot:ops' AND body LIKE '%Use $40.%'").fetchall()
@@ -420,7 +433,7 @@ def test_a_company_task_whose_bot_hides_its_activity_from_the_asker_is_not_offer
     second = file(api, token, "Escrow terms for the vendor?", "Which escrow term do we take?")["task"]
     assert all("covered" not in call["questions"] for call in model.calls)
     assert "Vendor escrow terms" not in json.dumps(model.calls)
-    assert second["owner_id"] == "human:ben" and [i["merged_into"] for i in items(api)] == [None]
+    assert asks_ben(api, second) and [i["merged_into"] for i in items(api)] == [None]
 
 
 @pytest.mark.parametrize("how", ["private", "access", "plate"])
@@ -444,7 +457,7 @@ def test_an_item_lost_between_judgment_and_write_names_no_source(gate, how):
     with api.app.state.store.read() as c:
         assert H.task(c, first)["status"] == "open", "the source stays open: only the lost right fails"
     assert "Vendor escrow terms" not in json.dumps(second), "no title in the write's reply"
-    assert second["task"]["owner_id"] == "human:ben", "the fallback is the ordinary fail-open path"
+    assert asks_ben(api, second["task"]), "the fallback is the ordinary fail-open path"
     [row] = [i for i in items(api) if i["ref"] == second["task"]["id"]]
     # covered_gone can only follow a merge the model picked: the offered source was the one it chose
     assert (row["outcome"], row["reason"], row["merged_into"]) == (A.FAILED_OPEN, "covered_gone", None)
@@ -766,7 +779,9 @@ def test_a_handoff_just_after_midnight_is_not_the_filing_from_just_before(gate):
     api, model, token = gate
     with api.app.state.store.transaction() as c:
         A.save(c, "human:ben", "human:ben", {"mode": "off", "budget": 10, "chores_budget": 5, "criteria": []})
-    tid = file(api, token, "Renew the vendor contract")["task"]["id"]
+    # A plain task the bot gave Ben, as filings were before a bot's task for a person became its own with a question.
+    with api.app.state.store.transaction() as c:
+        tid = H.task_create(c, "bot:ops", "Renew the vendor contract", "x", "human:ben", lint=False)["id"]
     assert not [i for i in items(api) if i["ref"] == tid], "Off asks nothing, so the filing has no ask row"
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET created_at='2026-10-05T23:59:40.000000Z' WHERE id=?", (tid,))
@@ -816,7 +831,7 @@ def test_preflight_exception_keeps_failed_open_record(gate, monkeypatch, where, 
 
     monkeypatch.setattr(A.J if where == "load_set" else A, where, fail)
     out = file(api, token)
-    assert out["task"]["owner_id"] == "human:ben" and "ingest" not in out
+    assert asks_ben(api, out["task"]) and "ingest" not in out
     [item] = items(api)
     assert (item["outcome"], item["would"], item["reason"]) == (A.FAILED_OPEN, A.FAILED_OPEN, reason)
     assert item["ref"] == out["task"]["id"] and item["call_id"] is None
@@ -837,7 +852,7 @@ def test_exception_after_judging_keeps_call_link_and_fails_open(gate, monkeypatc
 
     monkeypatch.setattr(A, "_criteria", criteria)
     out = file(api, token)
-    assert out["task"]["owner_id"] == "human:ben" and "ingest" not in out
+    assert asks_ben(api, out["task"]) and "ingest" not in out
     [item], [call] = items(api), calls(api)
     assert (item["outcome"], item["reason"], item["call_id"]) == (A.FAILED_OPEN, "error", call["id"])
     assert len(model.calls) == 1
@@ -911,12 +926,12 @@ def test_the_readout_reconciles_every_call_to_a_row_or_a_named_reason(gate):
         json={"owner": "ben", "title": "Goal gone", "body": "x", "goal_id": "no-such-goal"},
         headers=headers(token),
     )  # refused: a named reason
-    row = next(r for r in get(api, "judge/readout")["sets"] if r["set"] == A.QUESTION_SET)
+    row = next(r for r in get(api, "decisions/readout")["sets"] if r["set"] == A.QUESTION_SET)
     assert row["reconcile"] == {"calls": 2, "landed": 1, "reasons": {"refused": 1}, "unexplained": 0, "no_call": 0}
     assert row["versions"] == ["2"], "the readout groups answers by the set's version, now 2"
     assert (
         "calls reconciled: 2 = 1 with an item row, refused 1; unexplained 0; rows with no call 0"
-        in get(api, "judge/readout")["text"]
+        in get(api, "decisions/readout")["text"]
     )
 
 
@@ -924,7 +939,7 @@ def test_a_call_with_neither_a_row_nor_a_reason_is_shown_as_unexplained(gate):
     api, model, token = gate
     with api.app.state.store.transaction() as c:
         H.event(c, H.KEEPER, "judge.call", "person-ask-ingest@2", {"label": "person-ask-ingest@2", "mode": "on"})
-    row = next(r for r in get(api, "judge/readout")["sets"] if r["set"] == A.QUESTION_SET)
+    row = next(r for r in get(api, "decisions/readout")["sets"] if r["set"] == A.QUESTION_SET)
     assert row["reconcile"]["unexplained"] == 1 and row["reconcile"]["calls"] == 1
 
 
@@ -942,7 +957,7 @@ def test_a_settings_failure_before_the_verdict_keeps_the_failed_open_record(gate
 
     monkeypatch.setattr(A, "settings", fails_once)
     out = file(api, token)
-    assert out["task"]["owner_id"] == "human:ben" and "ingest" not in out
+    assert asks_ben(api, out["task"]) and "ingest" not in out
     [item] = items(api)
     assert (item["outcome"], item["would"], item["reason"]) == (A.FAILED_OPEN, A.FAILED_OPEN, "error")
     assert item["ref"] == out["task"]["id"] and item["call_id"] is None
@@ -960,7 +975,7 @@ def test_a_settings_read_that_always_fails_still_lands_a_failed_open_row(gate, m
 
     monkeypatch.setattr(A, "settings", always_fails)
     out = file(api, token)
-    assert out["task"]["owner_id"] == "human:ben" and "ingest" not in out
+    assert asks_ben(api, out["task"]) and "ingest" not in out
     [item] = items(api)
     assert (item["outcome"], item["would"], item["reason"]) == (A.FAILED_OPEN, A.FAILED_OPEN, "error")
     assert item["ref"] == out["task"]["id"] and item["call_id"] is None
@@ -1017,7 +1032,7 @@ def test_a_refusal_can_be_fixed_and_retried_with_the_same_key(gate):
     body["body"] = "Strategy and positioning: Nov 3 or Nov 10? I recommend Nov 10."
     fixed = api.post("/api/v2/tasks", json=body, headers=keyed)
     assert fixed.status_code == 200, fixed.text
-    assert fixed.json()["task"]["owner_id"] == "human:ben"
+    assert asks_ben(api, fixed.json()["task"])
     assert len(items(api)) == 2 and len(calls(api)) == 2
 
 
@@ -1049,7 +1064,7 @@ def test_off_at_write_time_does_not_refuse_an_ask_already_judged(gate):
             A.save(c, "human:ben", "human:ben", {**A.DEFAULTS, "mode": "off"})
 
     model.before = turn_off
-    assert file(api, token)["task"]["owner_id"] == "human:ben"
+    assert asks_ben(api, file(api, token)["task"])
     assert items(api)[0]["outcome"] == A.THROUGH
 
 

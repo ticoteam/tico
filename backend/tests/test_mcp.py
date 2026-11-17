@@ -85,7 +85,9 @@ def test_every_thread_tool_is_listed_with_a_schema_a_caller_can_check(api):
     assert THREAD_READS | THREAD_WRITES <= set(tools)
     for name in THREAD_READS | THREAD_WRITES:
         schema = tools[name]["inputSchema"]
-        assert schema["additionalProperties"] is False, name
+        # The listing leaves out `additionalProperties: false` for room (#3935); the tool's own schema keeps it, and a
+        # call with an unknown argument is still refused.
+        assert hubtools.BY_NAME[name]["inputSchema"]["additionalProperties"] is False, name
         assert set(schema.get("required", [])) <= set(schema["properties"]), name
         assert ("operation_id" in schema["properties"]) == (name in THREAD_WRITES), name
     assert "kind" not in tools["tico_thread_post"]["inputSchema"]["properties"]  # asks are gone: a post is a say
@@ -205,7 +207,8 @@ def test_tools_write_through_the_same_rules_as_http(api):
     )
     assert not err and out["ok"] is True and any("verb" in w for w in out["warnings"])
     err, out = call(api, "tico_task_create", {"owner": "ana", "title": "The thing", "body": wordy}, token=token)
-    assert not err and out["task"]["owner_id"] == "human:ana" and any("words outside" in w for w in out["warnings"])
+    # The bot's own task, with its question to Ana (backend/person_asks.py).
+    assert not err and out["task"]["owner_id"] == "bot:ops" and any("words outside" in w for w in out["warnings"])
     wordy_task = out["task"]["id"]
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM tasks WHERE requester_id='bot:ops'").fetchone()[0] == 1

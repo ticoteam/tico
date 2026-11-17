@@ -22,10 +22,10 @@ GOAL_YES = _s(
 
 @tool(
     "tico_goal_read_back",
-    "Tico writes and stores the read-back in the owner's Strategy Owner chat. "
-    "Saves nothing until the owner agrees. Read back the whole plan at once. "
-    "Returns message_id, text and exact method/path/body steps; save agreed steps with tico_goal_save. "
-    "Kinds: goal_create, goal_update, measure_add, target_set, measure_remove, suggestion.",
+    "Tico writes and stores the read-back in the owner's Strategy Owner chat. Saves nothing until "
+    "the owner agrees. Read back the whole plan at once. Returns message_id, text and exact "
+    "method/path/body steps; save agreed steps with tico_goal_save. Kinds: goal_create, "
+    "goal_update, measure_add, target_set, measure_remove, suggestion.",
     {
         "changes": {
             "type": "array",
@@ -53,10 +53,11 @@ def goal_read_back(api, args):
 
 @tool(
     "tico_goal_save",
-    "Save one exact method/path/body step returned by tico_goal_read_back after the owner agrees. "
-    "For later steps of a new goal, created_goal is the id from its first save. On not_agreed read back again; do not retry. "
-    "Also records the owner's \"no\" to a suggestion you made in chat: path /api/v2/goal-proposals/turned-down, with the "
-    "suggestion's kind, goal_id, kpi_id, payload and reason as the body; the owner's words become its reason.",
+    "Save one exact method/path/body step from tico_goal_read_back, after the owner agrees. For "
+    "later steps of a new goal, created_goal is the id from its first save. On not_agreed, read "
+    "back again; do not retry. Also records the owner's \"no\" to a suggestion you made in chat "
+    "(path /api/v2/proposals/turned-down, with kind, goal_id, kpi_id, payload and the "
+    "owner's words as reason).",
     {
         "method": {"type": "string", "enum": ["POST"]},
         "path": _s("The step's /api/v2 path"),
@@ -76,7 +77,7 @@ def goal_save(api, args):
         path = path.replace("{new}", created)
     # This helper only replays goal read-back writes; the server checks the cited yes and exact body.
     if args["method"] != "POST" or not re.fullmatch(
-        r"/api/v2/(?:goals(?:/[^/]+(?:/why|/kpis(?:/[^/]+(?:/unlink)?)?)?)?|goal-proposals/(?:[^/]+/decide|turned-down))",
+        r"/api/v2/(?:goals(?:/[^/]+(?:/why|/kpis(?:/[^/]+(?:/unlink)?)?)?)?|(?:goal-)?proposals/(?:[^/]+/decide|turned-down))",
         path,
     ):
         raise ValueError("path must be a goal read-back save step")
@@ -120,10 +121,10 @@ def goal_show(api, args):
 
 @tool(
     "tico_goal_create",
-    "Set a goal for yourself, under a goal you own, or for someone below "
-    "you on the org chart. A parent is optional: with none the goal is simply not linked. With one "
-    "it supports that goal. It starts with no colour, which its data or a person (its owner, the owner of "
-    "the goal it serves, or someone above them) sets.",
+    "Set a goal for yourself, under a goal you own, or for someone below you on the org chart. A "
+    "parent is optional: with none the goal is not linked; with one it supports that goal. It "
+    "starts with no colour; its data or a person (its owner, the owner of the goal it serves, or "
+    "someone above them) sets it.",
     {
         "owner": _s("`me`, a bot slug, or a person id (`company` is the owner's)"),
         "title": _s("Plain English: what you are going for"),
@@ -240,10 +241,9 @@ def goal_company(api, args):
 
 @tool(
     "tico_goal_strategy_bot",
-    "The Strategy Owner's name, how much it does (level 1 Passive, "
-    "2 suggests actions, 3 acts on its "
-    "own; only the owner changes it), whether its regular checks run, and how many items it put in each person's "
-    "Needs you today against its cap of 5.",
+    "The Strategy Owner's name, how much it does (level 1 Passive, 2 suggests actions, 3 acts on "
+    "its own; only the owner changes it), whether its regular checks run, and how many items it "
+    "put in each person's Needs you today against its cap of 5.",
     {},
 )
 def goal_strategy_bot(api, args):
@@ -343,10 +343,9 @@ def goal_strategy_bot_decide(api, args):
 
 @tool(
     "tico_goal_strategy_bot_log",
-    "The Strategy Owner log, newest first: "
-    "each decision it made alone and each thing it proposed "
-    "instead because it stays the owner's, with the reason and what Undo restored. The owner only: anyone else, "
-    "the Strategy Owner included, is refused.",
+    "The Strategy Owner log, newest first: each decision it made alone and each thing it proposed "
+    "instead because it stays the owner's, with the reason and what Undo restored. The owner "
+    "only: anyone else, the Strategy Owner included, is refused.",
     {
         "before": _s("next_before from the previous page"),
         "limit": {"type": "integer", "minimum": 1, "maximum": 50, "description": "Entries in this page (50 at most)"},
@@ -432,9 +431,9 @@ def _target_body(args):
 
 @tool(
     "tico_kpi_list",
-    "The KPIs you may see, each with its latest reading, freshness and colour. `bot` is one "
-    "bot's five automatic KPIs (tasks done, time to first response, approval rate, failed runs, model cost; "
-    "Read on the bot).",
+    "The KPIs you may see, each with its latest reading, freshness and colour. `bot` is one bot's "
+    "five automatic KPIs (tasks done, time to first response, approval rate, failed runs, model "
+    "cost; Read on the bot).",
     {
         "goal_id": _s("Only the KPIs this goal uses"),
         "owner": _s("Only this owner's: me, a bot slug or a person id"),
@@ -460,9 +459,9 @@ def kpi_list(api, args):
 
 @tool(
     "tico_kpi_show",
-    "One KPI: its definition and version history, owner, the goals that use it with each "
-    "target and colour, every reading (oldest first, with what superseded what), and the latest check-ins. "
-    "`effective` leaves out the readings a correction replaced.",
+    "One KPI: its definition and version history, owner, the goals that use it with each target "
+    "and colour, every reading (oldest first, with what superseded what), and the latest "
+    "check-ins. `effective` leaves out the readings a correction replaced.",
     {"id": _s("KPI id"), "effective": {"type": "boolean", "default": False}},
     required=("id",),
 )
@@ -476,10 +475,11 @@ def kpi_show(api, args):
 
 @tool(
     "tico_kpi_create",
-    "Make a KPI: a measure on its own that goals link to. Name what is counted, per what; "
-    "give a definition, the unit, which way is good, how often it is read and who is accountable (default you). "
-    "With `goal_id` it is linked to that goal, with the target fields on the link (an improvement: target and "
-    "deadline; or a range: min/max). The Strategy Owner proposes instead (tico_proposal_create).",
+    "Make a KPI: a measure that goals link to. Name what is counted, per what; give a definition, "
+    "the unit, which way is good, how often it is read and who is accountable (default you). With "
+    "`goal_id` it is linked to that goal, with the target on the link (an improvement: target and "
+    "deadline; or a range: min and max). The Strategy Owner proposes instead "
+    "(tico_proposal_create).",
     {
         "name": _s("'booked Calendly demos per two weeks'"),
         "goal_id": _s("Link it to this goal"),
@@ -558,8 +558,8 @@ def kpi_restore(api, args):
 
 @tool(
     "tico_kpi_link",
-    "Link a goal to a KPI and set the target on that link, or change the target of an "
-    "existing link: an improvement (baseline, target, deadline) or a range (min, max); none is just "
+    "Link a goal to a KPI and set the target on that link, or change the target of an existing "
+    "link: an improvement (baseline, target, deadline) or a range (min, max); none is just "
     "linked. The goal's owner or someone above them; the Strategy Owner proposes instead.",
     {
         "goal_id": _s("Goal id"),
@@ -729,6 +729,7 @@ def proposal_decide(api, args):
     body = {"decision": args["decision"], "note": args.get("note") or ""}
     if args.get("option") is not None:
         body["option"] = int(args["option"])
+    # The rc.1 spelling for an on-behalf-of decide (the frozen fixture pins it); the server serves both.
     path = "goal-proposals" if args.get("on_behalf_of") else "proposals"
     return _asked(api, args).post(f"{path}/{args['id']}/decide", body, key=_key(args))["proposal"]
 

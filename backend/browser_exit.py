@@ -24,6 +24,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import Request
 
 from .store import H, Problem
+from .api_contract import api_v2
 
 GB = 1_000_000_000
 DEFAULT_CAP = 5 * GB
@@ -264,7 +265,15 @@ def install(app, store, auth, mutate, execution, sessions):
             "may_turn_off": manage,
         }
 
-    @app.get("/api/v2/runners/{rid}/browser-exit")
+    @app.get(
+        "/api/v2/computers/{rid}/browser-exit",
+        **api_v2(
+            "Computers",
+            "getComputerBrowserExit",
+            "Whether this computer shares its internet with bots, which bots, and its daily cap in bytes",
+            "BrowserExit",
+        ),
+    )
     def exit_policy(request: Request, rid: str):
         """Whether this computer shares its internet with bots, which bots, and its daily cap in bytes."""
         who = request.state.identity
@@ -275,7 +284,14 @@ def install(app, store, auth, mutate, execution, sessions):
                 raise Problem("not_found", "Computer not found", 404)
             return view(c, who, runner)
 
-    @app.post("/api/v2/runners/{rid}/browser-exit")
+    @app.post(
+        "/api/v2/computers/{rid}/browser-exit",
+        **api_v2(
+            "Computers",
+            "setComputerBrowserExit",
+            "Share this computer's internet with chosen bots, or stop: its owner only; an admin may turn it off",
+        ),
+    )
     def set_exit_policy(request: Request, rid: str, body: M.BrowserExitPolicy):
         """Share this computer's internet with bots, or stop. Only the person whose computer it is turns it on or
         changes the bots and cap; an admin may turn it off. Turning it off, or taking a bot off, closes their
@@ -325,7 +341,15 @@ def install(app, store, auth, mutate, execution, sessions):
         sessions.push_exit_policy(rid)  # what is stored now, never this request's (a replay must not reopen)
         return result
 
-    @app.get("/api/v2/runners/{rid}/browser-exit/usage")
+    @app.get(
+        "/api/v2/computers/{rid}/browser-exit/usage",
+        **api_v2(
+            "Computers",
+            "listComputerBrowserExitUsage",
+            "Bytes and connections through this computer per day, bot and hostname (30 days); its owner or an admin",
+            "BrowserExitUsage",
+        ),
+    )
     def exit_usage(request: Request, rid: str, days: int = 7, limit: int = USAGE_PAGE, offset: int = 0):
         """What went through this computer for bots: per day, bot and hostname, the bytes and connections, newest day
         first, kept 30 days. The person whose computer it is, or an admin."""
@@ -371,7 +395,15 @@ def install(app, store, auth, mutate, execution, sessions):
             if bot in _bots(r["bots"])
         ]
 
-    @app.get("/api/v2/bots/{bot}/browser-exit")
+    @app.get(
+        "/api/v2/bots/{bot}/browser-exit",
+        **api_v2(
+            "Bots",
+            "getBotBrowserExit",
+            "The computer the bot's browser reaches the web through (null: its own) and the ones it may pick",
+            "BotBrowserExitView",
+        ),
+    )
     def bot_browser_exit(request: Request, bot: str):
         """The computer the bot's browser reaches the web through (null: its own), and the computers it may pick:
         those whose owners share their internet with it."""
@@ -385,7 +417,15 @@ def install(app, store, auth, mutate, execution, sessions):
                 "may_change": auth.bot_manager(c, who, bot),
             }
 
-    @app.post("/api/v2/bots/{bot}/browser-exit")
+    @app.post(
+        "/api/v2/bots/{bot}/browser-exit",
+        **api_v2(
+            "Bots",
+            "setBotBrowserExit",
+            "Browse through a computer that shares its internet with this bot, or null for its own",
+            "BotBrowserExitView",
+        ),
+    )
     def set_bot_browser_exit(request: Request, bot: str, body: M.BotBrowserExit):
         """Browse through another computer's internet, or null for the bot's own. Only a computer whose owner shares
         its internet with this bot; a person who manages the bot."""

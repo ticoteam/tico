@@ -643,7 +643,7 @@ PY
   status)
     require_setup
     fail=0
-    version="$(sed -n 's/^RUNNER_VERSION = "\(.*\)"/\1/p' "$HUB/runner/version.py")"
+    version="$(sed -n 's/^RUNNER_VERSION = "\(.*\)"/\1/p' "$HUB/runner_support/version.py")"
     echo "runner: version $version at $HUB ($(git -C "$HUB" rev-parse --short HEAD 2>/dev/null || echo 'not a git checkout'))"
     if [ -n "$ENV_DIR" ]; then
       echo "environment: $ENV_SLUG ($(env_field company_name), $(env_field id)) at $SITE"

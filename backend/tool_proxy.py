@@ -473,8 +473,10 @@ def install(app, store):
             )
             if credential_id and result == 'sent':
                 from .credentials import record_use
+                from . import reconnect_tasks
 
                 record_use(c, subject, 'credential.proxied_call', credential_id, {'tool': tool_id}, windowed=True)
+                reconnect_tasks.called(c, tool_id, status)  # Key rejected opens its Reconnect task, Working ends it
 
     def plan(request, tool_id, rest, method):
         """Everything the call needs, read once: (refusal, None) or (None, plan)."""
@@ -652,6 +654,8 @@ def install(app, store):
             ),
             stream=True,
         )
+        from . import api_tools
+
         try:
             upstream = await forward(key)
             if upstream.status_code == 401 and credential['kind'] == 'oauth':
@@ -672,12 +676,25 @@ def install(app, store):
                     return refused(401, 'tool_sign_in', f'{name} needs a new sign-in: Tools > {name} > Sign in.')
                 secrets = secrets_of(key, '')
                 upstream = await forward(key)
+            # A 401's first bytes are read before its row is written, so the row can say whether the reply names a missing
+            # scope. They are relayed first, exactly as they came; nothing else is read ahead.
+            stream = upstream.aiter_bytes()
+            ahead, seen = [], 0
+            if upstream.status_code == 401:
+                async for chunk in stream:
+                    ahead.append(chunk)
+                    seen += len(chunk)
+                    if seen >= api_tools.SCOPE_READ:
+                        break
         except httpx.HTTPError as exc:
             await client.aclose()
             detail = scrub_text(f'{type(exc).__name__}: {exc}', secrets)[:200]
             await log(None, 'failed', detail)
             return refused(502, 'tool_unreachable', f"{tool['name'] or tool_id} did not answer: {detail}")
-        await log(upstream.status_code, 'sent', '')
+        scoped = upstream.status_code == 401 and api_tools.said_missing_scope(
+            upstream.headers.get('www-authenticate', ''), b''.join(ahead)
+        )
+        await log(upstream.status_code, 'sent', api_tools.MISSING_SCOPE if scoped else '')
         headers = [
             (name, scrub_text(value, secrets))
             for name, value in upstream.headers.multi_items()
@@ -688,9 +705,15 @@ def install(app, store):
         scrubber = Scrubber(secrets)
         heard = [] if listing else None
 
+        async def relayed():
+            for chunk in ahead:
+                yield chunk
+            async for chunk in stream:
+                yield chunk
+
         async def body():
             try:
-                async for chunk in upstream.aiter_bytes():
+                async for chunk in relayed():
                     if heard is not None and sum(map(len, heard)) < MAX_LISTING:
                         heard.append(chunk)
                     out = scrubber.feed(chunk)

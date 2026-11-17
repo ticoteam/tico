@@ -99,9 +99,9 @@ def test_private_make_page_receipts_replay_after_finish_and_recheck_person_and_c
         assert post(api, path, body, outsider["token"], key)["attempt"] is None
     else:
         post(api, path, body, outsider["token"], key, expected=403)
-    post(api, "access/people/ben", {"sign_in": False})
+    post(api, "access/humans/ben", {"sign_in": False})
     post(api, path, body, machine["token"], key, expected=403)
-    post(api, "access/people/ben", {"sign_in": True})
+    post(api, "access/humans/ben", {"sign_in": True})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET requester_id='human:cara' WHERE id=?", (t["id"],))
         task_engine.reassign(c, t["id"], "human:cara", task_engine.SYSTEM)

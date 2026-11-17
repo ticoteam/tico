@@ -166,13 +166,13 @@ def test_a_turned_down_suggestion_saves_through_the_same_cited_save(api):
     body = (
         '{"kind":"goal_kpi","goal_id":"g","payload":{"kpi":{"name":"Companies that tried Tico"}},"reason":"A number."}'
     )
-    cli = ['goal', 'save', 'POST', '/api/v2/goal-proposals/turned-down', body, '--on-behalf-of', 'turn']
+    cli = ['goal', 'save', 'POST', '/api/v2/proposals/turned-down', body, '--on-behalf-of', 'turn']
     result = remotecli.run(hubcli.parser().parse_args(cli))
     assert result == hubtools.goal_save(
         api,
         {
             'method': 'POST',
-            'path': '/api/v2/goal-proposals/turned-down',
+            'path': '/api/v2/proposals/turned-down',
             'body': body,
             'on_behalf_of': 'turn',
             'operation_id': 'synthetic-operation',
@@ -181,10 +181,10 @@ def test_a_turned_down_suggestion_saves_through_the_same_cited_save(api):
     assert (
         api.calls[0]
         == api.calls[1]
-        == ('POST', 'goal-proposals/turned-down', json.loads(body), 'synthetic-operation', 'turn')
+        == ('POST', 'proposals/turned-down', json.loads(body), 'synthetic-operation', 'turn')
     )
     with pytest.raises(ValueError):
         hubtools.goal_save(
             api,
-            {'method': 'POST', 'path': '/api/v2/goal-proposals/x/turned-down', 'body': body, 'on_behalf_of': 'turn'},
+            {'method': 'POST', 'path': '/api/v2/proposals/x/turned-down', 'body': body, 'on_behalf_of': 'turn'},
         )

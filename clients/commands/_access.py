@@ -2,7 +2,7 @@
 
 Moved from clients/hubtools.py; clients/commands/__init__.py says how the table is put together."""
 
-from clients.commands import computer_upkeep, connections, pipelines
+from clients.commands import computer_upkeep, connections, pipelines, tools_admin
 from clients.commands import org as hubtools_org
 
 from clients.commands._registry import TOOLS, tool
@@ -115,17 +115,9 @@ ASSISTANT_WRITES = {
 ASSISTANT_WRITES.update('tico_email_' + action for action in EMAIL_ORGANIZE)
 
 
+# The email reads are everyone's: a person, the Assistant and a bot, at the mailbox level the server checks
+# (backend/mail.py), so they take the default audience.
 AUDIENCE = {
-    **{
-        name: HUMANS_AND_ASSISTANT
-        for name in (
-            "tico_email_mailboxes",
-            "tico_email_inbox",
-            "tico_email_search",
-            "tico_email_thread",
-            "tico_email_message",
-        )
-    },
     **{
         name: PEOPLE
         for name in (
@@ -158,6 +150,9 @@ AUDIENCE = {
     # The Tools page's owner bot proposes key grants in its own chat (backend/key_grants.py refuses any other caller); a
     # person grants on the card. Never the Assistant.
     "tico_tools_propose_grant": ("bot", "botops"),
+    # Access requests' weekly numbers are the Tools Owner's review (backend/access_requests.py); the Assistant's listing
+    # stays small.
+    "tico_access_stats": PEOPLE + BOTS,
     # Org changes: the Strategy Owner's owner chat makes one the person asked for, citing their words (`on_behalf_of`).
     **{name: REQUESTER + ("assistant",) for name in ("tico_group_update", "tico_group_delete", "tico_org_reports_to")},
     # Maintenance: the owner or an admin changes it; the team reads it (backend/maintenance.py may_change).
@@ -310,7 +305,7 @@ AUDIENCE = {
 
 
 # Modules that keep their own AUDIENCE (and SHELL_ONLY) lines next to their tools.
-for _module in (hubtools_org, connections, computer_upkeep, pipelines):
+for _module in (hubtools_org, connections, computer_upkeep, pipelines, tools_admin):
     AUDIENCE.update(_module.AUDIENCE)
 SHELL_ONLY |= pipelines.SHELL_ONLY
 
@@ -332,6 +327,10 @@ COUNSEL_TOOLS = frozenset(
 # The tools whose route the Assistant's own turn may never make (backend/assistant.py `NEVER`): a credential, a key, a
 # sign-in, a support report, SQL, a message's redaction. The server refuses them on a turn whatever is offered; they are
 # not offered to the Assistant either, so the live Assistant is shown what its gate admits and nothing else.
+# Size: the Assistant's listing is asserted under 200,000 bytes (backend/tests/test_assistant_acts_as_you.py). It is
+# kept under by compacting the text at source (short descriptions, shared strings such as `operation_id` and
+# `SETUP_NOTE`) and by `listing()` dropping `additionalProperties: false` from its copy (`_advertised`), not by hiding
+# more here. Never hide a tool the Assistant template runs to make room; a tool added here is one the Assistant may not run.
 ASSISTANT_HIDDEN = frozenset(
     {
         # Contacts schema and field history: a person's Assistant reads entities (get, find, rules, self).
@@ -359,7 +358,12 @@ ASSISTANT_HIDDEN = frozenset(
         "tico_tool_call",
         "tico_task_readers_list",  # tico_task_show has the readers; the Assistant's listing is near its size cliff
         "tico_tool_check",  # tico_tool_index has each tool's status; Check now is on the tool's page. Same cliff.
+        "tico_tool_activity",  # the Tools Owner's reading of how tools are used; the tool's page shows it. Same cliff.
         "tico_tool_level",  # a Tools change the Assistant hands the Tools Owner (playbooks/acting-for-them.md)
+        # A message's attachments: the person opens them in Gmail; the Assistant reads the message. Same cliff.
+        "tico_email_attachments",
+        "tico_email_attachment",
+        "tico_email_lint",  # tico_email_draft runs the same lint; same cliff
     }
 )
 
@@ -465,6 +469,8 @@ DEVELOPER_TOOLS = frozenset(
         "tico_task_label",
         "tico_task_snooze",
         "tico_task_queue",
+        # Access to a tool or a repository a code bot needs (backend/access_requests.py), never a task to a person.
+        "tico_access_request",
         "tico_task_release",
         "tico_task_worktree_add",
         "tico_task_worktree_attach",
@@ -536,12 +542,30 @@ def listing(local=False, kind=None, profile=None):
     """`tools/list` payload: the public fields of every tool this server may offer this kind of caller (all of them
     when the kind is not known), never an UNLISTED one, and with a profile only its list (PROFILES). Sorted by
     name, so the order never depends on where a tool is defined (and `tico_<noun>_<verb>` names keep a noun's tools
-    together)."""
+    together). Only the Assistant's listing is compacted (_advertised): every other caller gets the full schema, which
+    a caller checks (backend/tests/test_mcp.py)."""
+    compact = kind == "assistant"
     return [
-        {"name": t["name"], "description": t["description"], "inputSchema": t["inputSchema"]}
+        {
+            "name": t["name"],
+            "description": t["description"],
+            "inputSchema": _advertised(t["inputSchema"]) if compact else t["inputSchema"],
+        }
         for t in sorted(TOOLS, key=lambda t: t["name"])
         if t["name"] not in UNLISTED
         and (local or not t.get("local"))
         and (kind is None or kind in offered_to(t))
         and (profile not in PROFILES or t["name"] in PROFILES[profile])
     ]
+
+
+def _advertised(schema):
+    """A copy of a tool's input schema without `additionalProperties: false`, which is about 8.5 KB of the Assistant's
+    listing. Only the Assistant's listing drops it (listing, kind "assistant"): TOOLS keeps the full schema, and
+    `_mcp.argument_error` still refuses an unknown argument on every call, so a client that sends one is refused as
+    before."""
+    if isinstance(schema, dict):
+        return {k: _advertised(v) for k, v in schema.items() if not (k == "additionalProperties" and v is False)}
+    if isinstance(schema, list):
+        return [_advertised(v) for v in schema]
+    return schema

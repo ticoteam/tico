@@ -181,6 +181,33 @@ enum Command {
         /// git's verb: only `get` answers.
         action: Option<String>,
     },
+    /// A task worktree inside a turn (`tico task worktree`; prints JSON, reads the turn's environment).
+    Worktree {
+        #[command(subcommand)]
+        action: WorktreeAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum WorktreeAction {
+    /// Make (or resume, or verify) the task's worktree of a repository and run its setup.
+    Add {
+        repo: String,
+        #[arg(long)]
+        task: Option<String>,
+    },
+    /// Register a Git worktree already inside the team workspace.
+    Attach {
+        path: String,
+        #[arg(long)]
+        task: Option<String>,
+    },
+    /// Run (or retry) the setup of the task's worktree of a repository.
+    Setup {
+        repo: String,
+        #[arg(long)]
+        task: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -298,13 +325,12 @@ fn profile_main(action: ProfileAction, config: &mut config::Config) -> i32 {
             let home = profile.home(&runtime).unwrap_or_default();
             let command = profiles::login_command(&runtime).unwrap_or_default();
             if command.is_empty() && harness_tools::caps(&runtime, "").api_keys == "bot" {
-                let secrets = config.projects_dir().join("secrets");
                 let key = harness_tools::api_key_env(&runtime)
                     .into_iter()
                     .next()
                     .unwrap_or_default();
                 let name = harness_tools::name_for(&runtime);
-                println!("{name} authenticates with an API key, not an interactive login: put {key} in {}/_shared.env or <bot>.env. This profile's {name} sessions live in {}.", secrets.display(), home.display());
+                println!("{name} authenticates with an API key, not an interactive login: save {key} in Tools > Credentials and grant it to the bot. This profile's {name} sessions live in {}.", home.display());
                 return 0;
             }
             if command.is_empty()
@@ -385,6 +411,14 @@ fn main() {
             std::process::exit(0);
         }
         std::process::exit(gitcred::git_credential_main(socket.clone()));
+    }
+    if let Command::Worktree { action } = &cli.command {
+        let (operation, value, task) = match action {
+            WorktreeAction::Add { repo, task } => ("add", repo, task),
+            WorktreeAction::Attach { path, task } => ("attach", path, task),
+            WorktreeAction::Setup { repo, task } => ("setup", repo, task),
+        };
+        std::process::exit(worktrees::cli::main(operation, value, task.as_deref()));
     }
     util::start_clock();
     if let Command::Flight {

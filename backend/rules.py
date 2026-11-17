@@ -51,6 +51,7 @@ from typing import NamedTuple, Optional
 
 from . import event_catalog as CAT, hubdb as H, templating, tico_notices, task_trigger_rules as TTR
 from .migrations import renames
+from .api_contract import api_v2
 
 log = logging.getLogger(__name__)
 
@@ -874,13 +875,16 @@ def _ask_without_task(conn, decision, actor, body, target, conv):
     sender = "Tico" if actor == H.KEEPER else H.actor_id(actor)
     text = str(body or "").strip()[:1500]
     heading = " ".join(text.split())[:80] or f"a message to {H.actor_id(target)}"
-    made = H.task_create(
+    from . import person_asks
+
+    made = person_asks.task_for(
         conn,
         H.KEEPER,
         f"A rule needs you: {heading}"[:300],
         f"The rule {decision.rule} asked for a person on a message to {H.actor_id(target)}.\n\nFrom {sender}: {text}",
         who,
-        lint=False,
+        question=f"A rule stopped a message to {H.actor_name(conn, target)}. Should it go on?",
+        why="A rule asks a person before this message goes on.",
         deduplicate=False,
         private=True,  # the message was for the bot: only the person it falls to reads it
     )
@@ -1405,13 +1409,16 @@ def _event_ask(conn, row, name, params, values, ctx):
         return True, "already asked"
     text = templating.render(str(params.get("text") or ""), values, cap=1500).strip() or f"{name} happened."
     heading = " ".join(text.split())[:80]
-    made = H.task_create(
+    from . import person_asks
+
+    made = person_asks.task_for(
         conn,
         H.KEEPER,
         f"A rule needs you: {heading}"[:300],
         f"The rule {row['id']} asked for a person.\n\n{text}",
         who,
-        lint=False,
+        question=f"A rule needs you: {heading}",
+        why="A rule asks a person to look at it when this happens.",
         deduplicate=False,
     )
     H.event(conn, H.KEEPER, ASKED, made["id"], {"rule": row["id"], "event": name})
@@ -1604,7 +1611,15 @@ def install(app, store, auth):
     decides by them."""
     from fastapi import Request
 
-    @app.get("/api/v2/event-types")
+    @app.get(
+        "/api/v2/event-types",
+        **api_v2(
+            "Events",
+            "listEventTypes",
+            "Every named event with its description, version and an example payload (`group` narrows it)",
+            "EventTypeList",
+        ),
+    )
     def event_types(request: Request, group: str | None = None):
         """Every event Tico names, with a plain description and an example payload (`data`): what automations and
         outgoing webhooks read. Nothing secret."""

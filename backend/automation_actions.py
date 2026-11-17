@@ -121,8 +121,8 @@ def _queue_mail(c, auto, run_id, action, message, args, result=None, step=None, 
     )
     after, state = (prev["id"] if prev else None), "queued"
     if not refused and mailbox:
-        # The owner's level on the mailbox now (backend/mailbox_access.py); each executor checks it again. A message with
-        # no mailbox (a test run's sample) names nothing a computer can claim, so it waits as it always did.
+        # The owner's level on the mailbox now (backend/mailbox_access.py); the server's drain checks it again. A message
+        # with no mailbox (a test run's sample) skips this check, and the drain fails it with why: no credential covers it.
         from . import mailbox_access
 
         refused = mailbox_access.action_refusal(
@@ -353,12 +353,17 @@ def _create_task(c, auto, run_id, args, values, step=None):
     if owner.startswith("person:"):
         owner = "human:" + owner[7:]
     due, marker, refs = _occurrence(c, auto, args, values)
-    row = H.task_create(
+    from . import person_asks
+
+    # A task for a person carries the automation's question to them (person_asks), so it is in their Needs you.
+    row = person_asks.task_for(
         c,
         actor,
         title,
         _text(args, "body") or title,
         owner,
+        question=title[:200],
+        why="An automation filed it for you.",
         due=due,
         lint=False,
         deduplicate=False,

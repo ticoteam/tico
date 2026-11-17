@@ -49,40 +49,6 @@ def _server_rejects_token_purpose(exc):
     )
 
 
-def request(path, attempt_token, timeout=20, repository=None, purpose="turn"):
-    """The GitHub token for the bot this attempt belongs to. Raises OSError/ValueError on failure."""
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-        connection.settimeout(timeout)
-        connection.connect(str(path))
-        asked = {"token": attempt_token}
-        if repository:
-            asked["repository"] = repository
-        if purpose != "turn":
-            if purpose != "git":
-                raise ValueError("bad purpose")
-            asked["purpose"] = purpose
-        connection.sendall(json.dumps(asked).encode() + b"\n")
-        line = connection.makefile("rb").readline(MAX_LINE)
-    reply = json.loads(line)
-    if not reply.get("token"):
-        raise ValueError(reply.get("error") or "refused")
-    return reply["token"]
-
-
-def request_refresh(path, attempt_token, repository, timeout=60):
-    """Refresh only a mirror this attempt can read; no supervisor token is returned."""
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-        connection.settimeout(timeout)
-        connection.connect(str(path))
-        connection.sendall(
-            json.dumps({'token': attempt_token, 'repository': repository, 'refresh': True}).encode() + b'\n'
-        )
-        reply = json.loads(connection.makefile('rb').readline(MAX_LINE))
-    if not reply.get('refreshed') and not reply.get('cached'):
-        raise ValueError(reply.get('error') or 'mirror refresh failed')
-    return reply
-
-
 class MailRefused(ValueError):
     """The supervisor said no: `reason` ("no mailbox": the hub named none for this bot, "not this bot's mailbox")
     and, when it is the mailbox that was wrong, the ones this run may ask for."""

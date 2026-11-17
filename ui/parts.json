@@ -1,10 +1,34 @@
 {
  "//": "Page parts: files a cold open does not download, fetched the first time a person goes to one of their pages (backend/ui_bundle.py, ui/app/parts.ts). Each part's entries are the names code outside it calls: pages (the router's, drawn only while the person stays on that route), calls (load the part, then call) and idle (do nothing until the part is loaded). deps load with the part. events are selectors of controls drawn outside the part whose click or change its own document listener answers: their first use loads the part. scripts/check_ui_parts.cjs checks every use from outside.",
+ "library-files": {
+  "files": [
+   "app/library-files.ts"
+  ],
+  "deps": [],
+  "pages": [
+   "pageLibraryFiles"
+  ],
+  "calls": [
+   "lfLoad"
+  ],
+  "idle": []
+ },
+ "thread-connect": {
+  "files": [
+   "app/thread-connect.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [],
+  "idle": []
+ },
  "thread-settings": {
   "files": [
    "app/threads-page.ts"
   ],
-  "deps": [],
+  "deps": [
+   "thread-connect"
+  ],
   "pages": [],
   "calls": [
    "threadMembersOpen",
@@ -12,6 +36,72 @@
    "threadEarlierOpen"
   ],
   "idle": []
+ },
+ "access-requests": {
+  "files": [
+   "app/access-requests.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [
+   "arMount"
+  ],
+  "idle": []
+ },
+ "thread-library": {
+  "files": [
+   "app/thread-library.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [
+   "thvLibOpen"
+  ],
+  "idle": []
+ },
+ "thread-pin-archive": {
+  "files": [
+   "app/thread-pin-archive.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [
+   "thvPinToggle",
+   "thvArchive"
+  ],
+  "idle": []
+ },
+ "thread-reactions": {
+  "files": [
+   "app/thread-reactions.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [
+   "thvReact",
+   "thvEmojiPick",
+   "thvSheet"
+  ],
+  "idle": []
+  },
+ "threads-rail": {
+  "files": [
+   "app/thread-rail.ts",
+   "app/catch-up.ts",
+   "app/new-message.ts"
+  ],
+  "deps": [],
+  "pages": [
+   "pageThreads",
+   "pageThread",
+   "pageNewMessage"
+  ],
+  "calls": [],
+  "idle": [
+   "railRender",
+   "cuReconcile",
+   "catchUpGone"
+  ]
  },
  "browser-view": {
   "files": [
@@ -234,7 +324,8 @@
  "decide": {
   "files": [
    "app/decide.ts",
-   "app/decide-about.ts"
+   "app/decide-about.ts",
+   "app/decide-content.ts"
   ],
   "deps": [
    "browser-view"
@@ -298,6 +389,7 @@
    "taskCommentsRender",
    "taskModalOpen",
    "taskModalShow",
+   "taskMoveToMenu",
    "taskPropsMsgPaint",
    "taskRunCatalog",
    "taskThreadOpen"
@@ -307,6 +399,17 @@
    "taskChatStop",
    "taskModalRouteClose"
   ]
+ },
+ "task-pick": {
+  "files": [
+   "app/task-pick.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [
+   "pvPick"
+  ],
+  "idle": []
  },
  "bot": {
   "files": [
@@ -457,7 +560,8 @@
    "goalSheetOpen",
    "goalsRefresh",
    "headGoalsLoad",
-   "openGoal"
+   "openGoal",
+   "strategyBrandSaved"
   ],
   "idle": [
    "companyPageStop",
@@ -524,7 +628,8 @@
    "finance",
    "webhooks",
    "docs-editor",
-   "browser-view"
+   "browser-view",
+   "thread-connect"
   ],
   "pages": [
    "pageCompanyDocs",
@@ -631,7 +736,6 @@
    "app/assistant-page.ts",
    "app/learned.ts",
    "app/learnings.ts",
-   "app/new-message.ts",
    "app/mail.ts",
    "app/messaging.ts",
    "app/sql.ts"
@@ -645,7 +749,6 @@
    "pageLearnings",
    "pageMail",
    "pageMessaging",
-   "pageNewMessage",
    "pagePerson",
    "pageSql"
   ],

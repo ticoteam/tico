@@ -52,7 +52,7 @@ const Q = ['Which plan do new signups get?', 'Ship on Monday?'];
         if (p === '/api/me') return json({...me, config});
         if (p === '/api/v2/config') return json(config);
         if (p === '/api/employees') return json([]);
-        if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
+        if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
         if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
         if (p === '/api/v2/needs-you') return json({actor: 'human:ana', count: needs.length, items: needs, version: 'v' + needs.length, next: null});
         if (p === '/api/v2/threads/rail') return json({pinned: [], threads: [], catch_up: 3, catch_up_ids: ['a', 'b', 'c'], next_cursor: null, dms: {}});

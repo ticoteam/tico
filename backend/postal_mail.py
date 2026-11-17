@@ -53,6 +53,7 @@ from .models import Contract
 from .store import Problem
 from . import bot_settings as BS
 from . import read_cache
+from .api_contract import api_v2
 
 LOG = logging.getLogger("tico.postal_mail")
 TRANSPORT = None  # tests' fake HQ, never the live one
@@ -850,6 +851,25 @@ class PostalMail:
         """The letter's task for `to`; a bot that cannot take it (paused, gone) hands it to the owner."""
         private = True if private else None
         requester = owner_actor(c, self.auth) if inform_owner else None
+        if H.is_human(to):
+            # A letter for a person is their task with BotOps' question on it (backend/person_asks.py), so it is in their
+            # Needs you, not only their Tasks. No bot holds it: a private letter never reaches a bot's turn unasked.
+            from . import person_asks
+
+            when = f", due {due[:10]}" if due else ""
+            return person_asks.ask(
+                c,
+                H.KEEPER,
+                to,
+                title,
+                body,
+                f"Can you handle this letter{when}?",
+                f"{title[:150]}. It came by post, and only a person can act on it.",
+                due=due,
+                deduplicate=False,
+                private=private,
+                requester_actor=requester,
+            )["id"]
         made = H.attempt(
             c,
             H.task_create,
@@ -1064,7 +1084,15 @@ def install(app, settings, store, auth):
         more = len(rows) > len(out)
         return {"address_id": scope, "grants": out, "next": out[-1]["id"] if more and out else None}
 
-    @app.get("/api/v2/postal/bots")
+    @app.get(
+        "/api/v2/postal/bots",
+        **api_v2(
+            "Physical mail",
+            "listPostalMailBots",
+            "Mail picker bots and read/routing restrictions; paged and 64 KB capped; owner or admin",
+            "PostalMailBots",
+        ),
+    )
     def mail_bots(
         request: Request,
         after: str = Query(default="", max_length=120),
@@ -1095,7 +1123,15 @@ def install(app, settings, store, auth):
                 size += added
             return {"bots": out, "next": out[-1]["id"] if len(rows) > len(out) and out else None}
 
-    @app.get("/api/v2/postal/addresses/{address_id}/grants")
+    @app.get(
+        "/api/v2/postal/addresses/{address_id}/grants",
+        **api_v2(
+            "Physical mail",
+            "listPostalMailGrants",
+            "Read grants for one assignment, or all addresses (`all`); paged and 64 KB capped; owner or admin",
+            "PostalMailGrants",
+        ),
+    )
     def mail_grants(
         request: Request,
         address_id: str = Path(min_length=1, max_length=300),
@@ -1112,7 +1148,15 @@ def install(app, settings, store, auth):
     class PostalReadGrant(Contract):
         level: str = Field(default="read", pattern="^read$")
 
-    @app.put("/api/v2/postal/addresses/{address_id}/grants/{grantee_type}/{grantee_id}")
+    @app.put(
+        "/api/v2/postal/addresses/{address_id}/grants/{grantee_type}/{grantee_id}",
+        **api_v2(
+            "Physical mail",
+            "grantPostalMailRead",
+            "Give one person or bot Read, including private letters and scans; owner or admin",
+            "PostalMailGrantResult",
+        ),
+    )
     def mail_grant(
         request: Request,
         body: PostalReadGrant,
@@ -1145,7 +1189,10 @@ def install(app, settings, store, auth):
                 )
             return {"grant": dict(row)}
 
-    @app.delete("/api/v2/postal/addresses/{address_id}/grants/{grantee_type}/{grantee_id}")
+    @app.delete(
+        "/api/v2/postal/addresses/{address_id}/grants/{grantee_type}/{grantee_id}",
+        **api_v2("Physical mail", "revokePostalMailRead", "Revoke one Read grant; owner or admin", "PostalMailRevoked"),
+    )
     def mail_revoke(
         request: Request,
         address_id: str = Path(min_length=1, max_length=300),
@@ -1178,7 +1225,15 @@ def install(app, settings, store, auth):
     def routing_view(c):
         return {"settings": dict(c.execute("SELECT * FROM postal_mail_settings WHERE id=1").fetchone())}
 
-    @app.get("/api/v2/postal/settings")
+    @app.get(
+        "/api/v2/postal/settings",
+        **api_v2(
+            "Physical mail",
+            "getPostalMailSettings",
+            "Legal mail routing; null legal_bot_id means owner",
+            "PostalMailSettings",
+        ),
+    )
     def mail_settings(request: Request):
         """Legal mail routing: a null legal_bot_id means the owner. Changing this never moves existing tasks."""
         with store.read() as c:
@@ -1188,7 +1243,15 @@ def install(app, settings, store, auth):
     class PostalLegalRouting(Contract):
         legal_bot_id: str | None = Field(max_length=120)
 
-    @app.put("/api/v2/postal/settings")
+    @app.put(
+        "/api/v2/postal/settings",
+        **api_v2(
+            "Physical mail",
+            "setPostalMailSettings",
+            "Route future legal mail to an active bot or the owner (null), keeping the owner informed; owner or admin",
+            "PostalMailSettings",
+        ),
+    )
     def mail_settings_set(request: Request, body: PostalLegalRouting):
         """Choose an active bot for future legal mail, or null for the owner. The owner stays informed. Owner or admin."""
         who = request.state.identity

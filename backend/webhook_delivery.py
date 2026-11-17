@@ -389,7 +389,9 @@ def exhausted(c, send, attempts, status, shown, now):
     try:
         # One savepoint: a refusal to file the line must not undo the failed send's record.
         c.execute("SAVEPOINT webhook_notice")
-        task = H.task_create(
+        from . import person_asks
+
+        task = person_asks.task_for(
             c,
             H.KEEPER,
             f"Webhook {hook['name']} is not receiving events",
@@ -397,7 +399,8 @@ def exhausted(c, send, attempts, status, shown, now):
             f"Check the endpoint, then retry the send from Tools › Webhooks or "
             f"`tico webhook retry {send['id']}`.",
             hook["created_by"],
-            lint=False,
+            question=f"Can you check the endpoint of webhook {hook['name']}?",
+            why=f"Tico gave up on an event after {attempts} attempts.",
         )
         c.execute("UPDATE webhooks SET notify_task=? WHERE id=?", (task["id"], hook["id"]))
         c.execute("RELEASE webhook_notice")

@@ -77,7 +77,7 @@ def built(environment):
     api = environment(seed={}, cards=BASE)
     runner = machine(api, label=CANARY)
     draft(api)
-    api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+    api.post("/api/v2/setup/complete", json={}, headers=signed_in())
     return api, runner
 
 

@@ -55,7 +55,7 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
       if (p === '/api/me') return json({...me, config});
       if (p === '/api/v2/config') return json(config);
       if (p === '/api/employees') return json([]);
-      if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
+      if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
       if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
       if (p === '/api/v2/needs-you') return json({actor: 'human:ana', count: needs.length, items: needs, version: String(needs.length), next: null});
       if (p === '/api/v2/oks/r3') return json({requirement_id: 'r3', subject: 'spec:3', content: {title: 'Pricing page: pitch', body: 'A page per plan.'}, shown_hash: 'c'.repeat(64), standing: 'waiting', task_id: 't3'});
@@ -114,7 +114,7 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
     await dialog.locator('.dc-bar:not([hidden])').waitFor();
     assert.deepEqual(writes[1], {p: '/api/v2/tasks/t1/asks/r1/ok', body: {shown_hash: 'b'.repeat(64)}});
     const undo = dialog.locator('.dc-bar [data-dc="undo"]');
-    assert.equal((await dialog.locator('.dc-sayw > .dc-bar').innerText()).replace(/\s+/g, ' ').trim(), '✓ Approved Undo', "in the bar's slot: what was done, then Undo");
+    assert.equal((await dialog.locator('.dc-head > .dc-bar').innerText()).replace(/\s+/g, ' ').trim(), '✓ Approved Undo', "in the top bar: what was done, then Undo");
     assert.equal((await undo.innerText()).trim(), 'Undo');
     // Undo stays while it has the keyboard's focus, and fades a few seconds after it is left.
     await undo.focus();

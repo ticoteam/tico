@@ -222,7 +222,7 @@ class Live:
         until(accepted, "runner's browser heartbeat was not accepted", 75)
 
     def select_host(self, machine):
-        self.api(f"runners/{machine['runner_id']}/browser-host", {"on": True})
+        self.api(f"computers/{machine['runner_id']}/browser-host", {"on": True})
 
     def setup(self):
         self.start_server()
@@ -362,7 +362,7 @@ class Live:
         finally:
             os.kill(host_proc.pid, signal.SIGCONT)
             self.beat(self.host)
-        self.api(f"runners/{self.host['runner_id']}/browser-host", {"on": False})
+        self.api(f"computers/{self.host['runner_id']}/browser-host", {"on": False})
         self.phase = "Routing revoked host"
         require(self.open(a, "/login")["where"] == "own", "revoked host did not fall back")
         self.browser(a, "close")
@@ -370,7 +370,7 @@ class Live:
 
     def ended_attempt(self):
         a = self.account("Attempt boundary")
-        self.api(f"runners/{self.host['runner_id']}/browser-host", {"on": False})
+        self.api(f"computers/{self.host['runner_id']}/browser-host", {"on": False})
         attempt = self.tokens["ops"]["id"]
         before, state = self.sql("SELECT runner_id,state FROM attempts WHERE id=?", (attempt,))[0]
         count = self.practice.logs.count("GET /login 200")
@@ -396,7 +396,7 @@ class Live:
     def restarts(self):
         a = self.account("Restarts")
         self.open(a, "/login")
-        self.api(f"runners/{self.host['runner_id']}/browser-host", {"on": False})
+        self.api(f"computers/{self.host['runner_id']}/browser-host", {"on": False})
         require(self.open(a, "/login")["where"] == "own", "host change did not move session")
         self.browser(a, "close")
         self.select_host(self.host)
@@ -497,7 +497,7 @@ class Live:
 
     def challenges(self):
         a = self.account("Authenticator", twofa=True, shared=True)
-        self.api(f"runners/{self.host['runner_id']}/browser-host", {"on": True}, token="ben-test", expect="forbidden")
+        self.api(f"computers/{self.host['runner_id']}/browser-host", {"on": True}, token="ben-test", expect="forbidden")
         self.open(a, "/login")
         text = self.read(a)
         self.fill(a, "username", self.ref(text, "Username"))
@@ -511,7 +511,7 @@ class Live:
         require("Signed in" in self.read(a), "TOTP sign-in failed")
         for own in (False, True):
             if own:
-                self.api(f"runners/{self.host['runner_id']}/browser-host", {"on": False})
+                self.api(f"computers/{self.host['runner_id']}/browser-host", {"on": False})
             try:
                 for path in ("/texted", "/captcha"):
                     self.open(a, path)

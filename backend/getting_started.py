@@ -422,7 +422,8 @@ def install(app, store, auth, mutate, settings):
 
     from . import models as M
 
-    @app.get("/api/v2/getting-started")
+    @app.get("/api/v2/setup/getting-started")
+    @app.get("/api/v2/getting-started", deprecated=True)  # rc.1 CLI (`tico` setup status)
     def read(request: Request):
         who = request.state.identity
         _person(who)
@@ -430,12 +431,12 @@ def install(app, store, auth, mutate, settings):
         with store.read() as c:
             return view(c, who, settings, auth, github.row(c) if github else None)
 
-    @app.post("/api/v2/getting-started/state")
+    @app.post("/api/v2/setup/getting-started/state")
     def state(request: Request, body: M.GettingStartedState):
         who = request.state.identity
         return mutate(request, body, lambda c: change_state(c, who, body))
 
-    @app.post("/api/v2/getting-started/market")
+    @app.post("/api/v2/setup/getting-started/market")
     def market(request: Request, body: M.GettingStartedMarket):
         who = request.state.identity
         _person(who)

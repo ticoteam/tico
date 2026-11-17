@@ -132,7 +132,7 @@ def test_task_completion_replay_requires_current_runner_ownership_and_private_ac
         destination = runner(api, label="Other fixture Mac") if revocation == "assignment" else machine
         assign(api, destination, "ops", generation=attempt["generation"])
     elif revocation == "runner":
-        post(api, f"runners/{machine['runner_id']}/revoke", {})
+        post(api, f"computers/{machine['runner_id']}/revoke", {})
     elif revocation == "private-task":
         # A done task keeps its owner: reopened, it goes to someone else and the runner loses the private task.
         task = post(

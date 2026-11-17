@@ -34,12 +34,12 @@ def test_people_and_bots_move_under_people_and_bots_and_only_managers_move_them(
     )
     as_member(api, "ben@acme.example")  # an Admin manages everyone (the fixture makes Ben one); this is about the chart
     # Ben moves Cara under himself: Cara reports to Ana, so Ben may not.
-    post(api, "people/cara", {"reports_to": "ben"}, token="ben-test", expected=403)
-    post(api, "people/cara", {"reports_to": "ben"})  # the owner may
+    post(api, "humans/cara", {"reports_to": "ben"}, token="ben-test", expected=403)
+    post(api, "humans/cara", {"reports_to": "ben"})  # the owner may
     people, _ = tree(api)
     assert people["cara"] == "p:ben"
     # Now Cara is Ben's: Ben may edit his profile, and put a bot under him.
-    post(api, "people/cara", {"goals": "Ship the mobile app"}, token="ben-test")
+    post(api, "humans/cara", {"goals": "Ship the mobile app"}, token="ben-test")
     post(
         api,
         "bots/cpo/definition",
@@ -50,12 +50,12 @@ def test_people_and_bots_move_under_people_and_bots_and_only_managers_move_them(
     assert bots["cpo"] == "p:cara"
     # A bot under a person is that person's to talk to; Cara may not touch Ben.
     post(api, "chat/cpo", {"text": "Hello"}, token="cara-test")
-    post(api, "people/ben", {"goals": "Mine now"}, token="cara-test", expected=403)
-    post(api, "people/cara", {"goals": "My own goals"}, token="cara-test")  # yourself, always
+    post(api, "humans/ben", {"goals": "Mine now"}, token="cara-test", expected=403)
+    post(api, "humans/cara", {"goals": "My own goals"}, token="cara-test")  # yourself, always
     # Nobody moves under their own report, and nobody reports to themselves.
-    post(api, "people/ben", {"reports_to": "cara"}, expected=422)
-    post(api, "people/ben", {"reports_to": "ben"}, expected=422)
-    post(api, "people/ben", {"reports_to": "nobody"}, expected=404)
+    post(api, "humans/ben", {"reports_to": "cara"}, expected=422)
+    post(api, "humans/ben", {"reports_to": "ben"}, expected=422)
+    post(api, "humans/ben", {"reports_to": "nobody"}, expected=404)
     # A bot moves back under a bot; a circle is refused as before.
     post(api, "bots/cpo/definition", {"reports_to": "assistant", "expected_revision": revision(api, "cpo")})
     _, bots = tree(api)

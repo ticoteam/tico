@@ -23,6 +23,7 @@ from . import models as M
 from . import org_rules
 from . import views
 from .store import Problem
+from .api_contract import api_v2
 
 LIST_DAYS = 30
 LIST_DAYS_MAX = 90
@@ -35,7 +36,15 @@ UNDO_WHY = "Undo of the Assistant's change"
 
 
 def install(app, store, auth, mutate, settings):
-    @app.get("/api/v2/assistant/changes")
+    @app.get(
+        "/api/v2/assistant/changes",
+        **api_v2(
+            "Assistant",
+            "listAssistantChanges",
+            "What your Assistant changed for you in the last `days` (default 30), newest first, each with the words it acted on and whether it can still be undone; paged with `limit` and `before`",
+            "AssistantChangeList",
+        ),
+    )
     def assistant_changes(request: Request, days: int = LIST_DAYS, limit: int = PAGE, before: str | None = None):
         """What your Assistant did for you, newest first: each change's `what`, the `words` it acted on, its `object`,
         and `undoable` with `why_not` when it cannot be taken back. `before` is the `next` of the page before."""
@@ -46,7 +55,15 @@ def install(app, store, auth, mutate, settings):
         with store.read_transaction() as c:
             return listing(c, auth, who, days, limit, before, settings)
 
-    @app.post("/api/v2/assistant/changes/{cid}/restore")
+    @app.post(
+        "/api/v2/assistant/changes/{cid}/restore",
+        **api_v2(
+            "Assistant",
+            "restoreAssistantChange",
+            "Undo one change your Assistant made for you where the record allows it; repeating it answers `already: true`",
+            "AssistantChangeResult",
+        ),
+    )
     def assistant_restore(request: Request, cid: str, body: M.Empty):
         """Take one of your Assistant's changes back, as you. Restoring it again changes nothing."""
         who = request.state.identity
@@ -388,7 +405,12 @@ def restore_task(c, who, row):
     if row["kind"] == "reassign":
         H.task_reassign(c, who.actor, task_id, old, UNDO_WHY)
         return
-    stage = c.execute("SELECT kind FROM stages WHERE id=?", (old,)).fetchone()
+    stage = c.execute("SELECT kind, pipeline_id FROM stages WHERE id=?", (old,)).fetchone()
+    now = H.task(c, task_id) or {}
+    if stage and stage["pipeline_id"] != now.get("pipeline_id"):
+        # A move to another pipeline is taken back by moving it back the same way (a Done or Closed one stays so).
+        H.task_move_to(c, who.actor, task_id, stage["pipeline_id"], old, UNDO_WHY)
+        return
     to = {"done": H.TASK_DONE, "closed": H.TASK_CLOSED}.get(stage["kind"] if stage else "", old)
     if (H.task(c, task_id) or {}).get("status") != "open" and to not in (H.TASK_DONE, H.TASK_CLOSED):
         to = H.TASK_REOPEN  # a done or closed task goes back to work by a reopen, which lands where it left

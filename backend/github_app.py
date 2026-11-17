@@ -39,6 +39,7 @@ from .health import GITHUB_HEALTH, note_github_token
 from .store import Problem, digest, encode
 from . import bot_settings as BS
 from . import brand_icons
+from .api_contract import api_v2
 
 log = logging.getLogger("tico.github_app")
 
@@ -2633,7 +2634,7 @@ def install_github_app(app, settings, store):
             "configured": True,
             "token": value,
             "expires_at": expires,
-            # The runner publishes the bot's history to this one (git_credentials.publish_history): none when withheld.
+            # The runner publishes the bot's history to this one (runner-rs/src/execute.rs publish_history): none when withheld.
             "repository": "" if own_unused else repo,
             "repositories": repos,
             **({"history": R.HOME_WORDS[own_unused]} if own_unused else {}),
@@ -2652,7 +2653,10 @@ def install_github_app(app, settings, store):
         )
         return row, own
 
-    @app.get("/api/v2/bots/{bot}/github-repos")
+    @app.get(
+        "/api/v2/bots/{bot}/github-repos",
+        **api_v2("Repositories", "getExtraRepositories", "Chosen write repositories (legacy alias)"),
+    )
     def extra_get(request: Request, bot: str):
         with store.read() as c:
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
@@ -2670,7 +2674,10 @@ def install_github_app(app, settings, store):
                 ],
             }
 
-    @app.put("/api/v2/bots/{bot}/github-repos")
+    @app.put(
+        "/api/v2/bots/{bot}/github-repos",
+        **api_v2("Repositories", "setExtraRepositories", "Set chosen write repositories (legacy alias)"),
+    )
     def extra_put(request: Request, bot: str, body: ExtraRepos):
         with store.read() as c:
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
@@ -2890,7 +2897,15 @@ def install_github_app(app, settings, store):
             "_moved": moved is not None,
         }
 
-    @app.get("/api/v2/github/product-repos/preview")
+    @app.get(
+        "/api/v2/github/product-repos/preview",
+        **api_v2(
+            "Repositories",
+            "previewProductRepository",
+            "Preview an empty private product repository",
+            "ProductRepositoryPreview",
+        ),
+    )
     def product_repo_preview(request: Request, name: str):
         who = product_creator(request)
         name = validate_product_repo_name(name)
@@ -2911,7 +2926,15 @@ def install_github_app(app, settings, store):
             "capability_detail": capability["detail"],
         }
 
-    @app.post("/api/v2/github/product-repos")
+    @app.post(
+        "/api/v2/github/product-repos",
+        **api_v2(
+            "Repositories",
+            "createProductRepository",
+            "Create the confirmed product repository",
+            "ProductRepositoryResult",
+        ),
+    )
     def create_product_repo(request: Request, body: ProductRepoCreate):
         who = product_creator(request)
         name = validate_product_repo_name(body.name)

@@ -628,7 +628,7 @@ def install_judge(app, store, auth):
     settings = store.settings
     app.state.judge = primary_engine(settings, store, getattr(app.state, "vault", None))
 
-    @app.get("/api/v2/judge")
+    @app.get("/api/v2/decisions")
     def config(request: Request):
         who = request.state.identity
         auth.domain(who)
@@ -651,7 +651,7 @@ def install_judge(app, store, auth):
             "max_call_chars": J.MAX_CALL_CHARS,
         }
 
-    @app.get("/api/v2/judge/readout")
+    @app.get("/api/v2/decisions/readout")
     def readout(request: Request, days: int = 7):
         """The Decide readout over the last `days` (backend/decide_readout.py): the same readers as the config above,
         since it names no caller, no state and no free-text label."""
@@ -664,7 +664,7 @@ def install_judge(app, store, auth):
         with store.read() as c:
             return build(c, settings, days)
 
-    @app.post("/api/v2/judge")
+    @app.post("/api/v2/decisions")
     def ask(request: Request, body: Ask):
         who = request.state.identity
         auth.domain(who)
@@ -750,7 +750,7 @@ def install_judge(app, store, auth):
             "ref": call["id"],
         }
 
-    @app.post("/api/v2/judge/outcome")
+    @app.post("/api/v2/decisions/outcome")
     def outcome(request: Request, body: Outcome):
         """What the caller did with one of its decision calls (`ref`, from the call's answer): one `decision.outcome`."""
         who = request.state.identity

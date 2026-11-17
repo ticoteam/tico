@@ -21,9 +21,12 @@ keys, levels and settings. Mailboxes, Tico's numbers and addresses and Tico's ow
 
 A check is one authenticated GET to the tool's `check_path` (its known service's when it has none:
 tool_services.check_path_for) with each stored key: 2xx is Working, 403 Works (limited) (the vendor knows the key, the
-path needs a scope it lacks), only 401 Key rejected, anything else (a timeout, a refused address, a 500) Check failed.
-An id stored as a key is never sent as one. A proxied tool's real calls (`call_health`, over CALLS_WINDOW) outrank its
-check: a 2xx makes it Working whatever the check said, and only REJECTED_AFTER 401s in a row, none 2xx since, make it
+path needs a scope it lacks), a 401 whose reply says the key lacks a permission for the path (`_missing_scope`) Works
+(limited) too, only any other 401 Key rejected, anything else (a timeout, a refused address, a 500) Check failed.
+An id stored as a key (`tool_settings.known_name`) is never sent as one, and a status never comes from a check that
+would not run today (`_checked_today`). A proxied tool's real calls (`call_health`, over CALLS_WINDOW) outrank its
+check: a 2xx makes it Working whatever the check said, and only REJECTED_AFTER 401s in a row, none 2xx since and none
+whose reply says a permission is missing (`said_missing_scope`, stored as `MISSING_SCOPE` on the call), make it
 Key rejected. The scheduler checks every API tool with a check path every CHECK_EVERY on a background thread, its keys
 on the proxy or on computers alike (the server holds every value); "Check now" runs one at once. A check sends
 the key only to the tool's own https address, pinned to the public IP it resolved to (backend/egress.py), and nothing
@@ -64,6 +67,7 @@ import re
 import sqlite3
 import threading
 from datetime import date, datetime, timedelta, timezone
+from typing import NamedTuple
 
 from fastapi import Query, Request
 from pydantic import ConfigDict, Field, SecretStr
@@ -71,8 +75,10 @@ from pydantic import ConfigDict, Field, SecretStr
 from . import mcp_connect
 from . import tool_services as TS
 from . import tool_settings
+from . import access_requests
 from . import tool_templates
 from . import default_read
+from . import reconnect_tasks
 from . import tool_access as TA
 from .credentials import CredentialWrite, administrator, effective_grant, owned
 from .models import AccessAudience, Contract
@@ -98,6 +104,21 @@ RESULTS = ("sent", "refused", "failed", "use")
 CALLS_WINDOW = timedelta(hours=24)  # real calls this recent say whether a proxied tool works (`call_health`)
 REJECTED_AFTER = 3  # 401s in a row on real calls, none 2xx since, before a tool reads Key rejected
 LIMITED = "Works (limited)"  # a check that got 403: the vendor knows the key, this path needs a scope it lacks
+SCOPE_READ = 2048  # bytes of a 401's reply read to tell a restricted key from a bad one (`said_missing_scope`)
+# What a 401's reply (lowercased) says when the key is known and lacks a permission for the path: ElevenLabs'
+# restricted keys answer missing_permissions, and RFC 6750 bearer challenges answer insufficient_scope.
+SCOPE_SAYS = (
+    "missing_permissions",
+    "missing the permission",
+    "missing permission",
+    "insufficient_scope",
+    "insufficient scope",
+    "insufficient permission",
+    "missing_scope",
+    "missing scope",
+)
+# A tool_calls row's detail for a real call the vendor answered 401 with a missing scope (never the reply's text).
+MISSING_SCOPE = "missing_scope"
 CHECK_PATH = re.compile(r"^/[A-Za-z0-9._~!$&'()*+,;=:@%/?-]{0,299}$")
 DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 # connections.py's statuses, as the tones and words Tools shows them in.
@@ -269,31 +290,47 @@ def _check_text(ok, status_code, service=""):
 
 
 def _limited(tool, row):
-    """A check row that got a 403 from an API (not an MCP server's initialize) whose service does not answer a bad key
-    with 403: the key is accepted, its scope limited. Rows stored as failed before 403 meant this read the same."""
-    return row["status_code"] == 403 and not _field(tool, "mcp_url") and not TS.rejects(tool["service"], 403)
+    """A check row that found the key accepted but a scope of this path missing: a 401 whose reply said so (stored as
+    LIMITED), or a 403 from an API (not an MCP server's initialize) whose service does not answer a bad key with 403.
+    Rows stored as failed before 403 meant this read the same."""
+    if _field(tool, "mcp_url"):
+        return False
+    if row["ok"] and row["detail"] == LIMITED:
+        return True
+    return row["status_code"] == 403 and not TS.rejects(tool["service"], 403)
+
+
+def _checked_today(tool, key):
+    """Whether a check would send this key today: never an id (`tool_settings.known_name`), and only on a tool it can
+    reach, an MCP server or an address with a check path (`check_path_of`). A check row of a key no check sends any more
+    (an id, a tool whose address or path went) says nothing about the key now."""
+    if tool_settings.known_name(key["env"]):
+        return False
+    return bool(_field(tool, "mcp_url")) or bool(tool["base_url"] and check_path_of(tool))
 
 
 def call_health(c, tool_id, now=None):
     """What the tool's real calls through the proxy say, over the last CALLS_WINDOW: `working` when one got a 2xx,
-    `rejected` when REJECTED_AFTER calls in a row got 401 and none got a 2xx since; else None (nothing to say)."""
+    `rejected` when REJECTED_AFTER calls in a row got a 401 and none got a 2xx since; else None (nothing to say).
+    A 401 whose reply says a permission is missing is the vendor knowing the key, so it is no rejection, and it ends
+    the scan as a 2xx does: an older run of 401s from before the key was right says nothing about it now."""
     since = H.shift(now or H.now(), seconds=-int(CALLS_WINDOW.total_seconds()))
-    codes = [
-        r[0]
+    calls = [
+        (r[0], r[1] == MISSING_SCOPE)
         for r in c.execute(
-            "SELECT status_code FROM tool_calls WHERE tool_id=? AND result='sent' AND status_code IS NOT NULL "
+            "SELECT status_code, detail FROM tool_calls WHERE tool_id=? AND result='sent' AND status_code IS NOT NULL "
             "AND created_at>=? ORDER BY created_at DESC, id DESC LIMIT 200",
             (tool_id, since),
         )
     ]
     run = 0
-    for code in codes:  # newest first, up to the newest 2xx
-        if 200 <= code < 300:
+    for code, scoped in calls:  # newest first, up to the newest 2xx or scoped 401
+        if 200 <= code < 300 or scoped:
             break
         run = run + 1 if code == 401 else 0
         if run >= REJECTED_AFTER:
             return "rejected"
-    return "working" if any(200 <= code < 300 for code in codes) else None
+    return "working" if any(200 <= code < 300 for code, _ in calls) else None
 
 
 def state_of(c, tool, keys=None, now=None):
@@ -315,8 +352,9 @@ def status(tool, keys, checks, today=None, calls=None):
     `call_health`: REJECTED_AFTER 401s in a row); a refused sign-in; a failed check, unless a real call got a 2xx
     within CALLS_WINDOW (a check's path may need a scope the key's calls do not); an expired key; then a key expiring
     within EXPIRING_DAYS (Needs you, not broken); then Working once a real call worked or every stored key passed its
-    last check (Works (limited) when a check got 403), else Not checked. How its key reaches runs (`delivery`) is never
-    one of them."""
+    last check (Works (limited) when a check got 403), else Not checked. Only the checks that would run today count
+    (`_checked_today`): an id stored as a key, or a tool whose check path went, is never Key rejected from an old check.
+    How its key reaches runs (`delivery`) is never one of them."""
     today = today or _today()
     stored = [k for k in keys if k["ciphertext"] is not None]
     if not stored:
@@ -324,7 +362,7 @@ def status(tool, keys, checks, today=None, calls=None):
         return {"tone": "fail", "text": "Not signed in" if _field(tool, "mcp_oauth") else "No key", "needs_you": True}
     if calls == "rejected":
         return {"tone": "fail", "text": "Key rejected", "needs_you": True}
-    last = [checks.get(k["id"]) for k in stored]
+    last = [checks.get(k["id"]) for k in stored if _checked_today(tool, k)]
     if _field(tool, "auth_template"):
         last = [r for r in last if r is not None] or [None]  # a template's keys are checked together, on one row
     failed = [r for r in last if r is not None and not r["ok"] and not _limited(tool, r)]
@@ -346,7 +384,7 @@ def status(tool, keys, checks, today=None, calls=None):
         }
     if calls == "working":
         return {"tone": "ok", "text": "Working", "needs_you": False}
-    if all(r is not None for r in last):
+    if last and all(r is not None for r in last):
         limited = any(_limited(tool, r) for r in last)
         return {"tone": "ok", "text": LIMITED if limited else "Working", "needs_you": False}
     return {"tone": "idle", "text": "Not checked", "needs_you": False}
@@ -811,12 +849,17 @@ def detail(c, who, tool_id, admins, auth=None):
     return out
 
 
-def activity(c, who, tool_id, admins, auth, cursor="", limit=50, result=""):
+def activity(c, who, tool_id, admins, auth, cursor="", limit=50, result="", since=""):
     """Calls through the proxy and, for a tool whose key goes to computers, the newest time each caller's run took a
     key (credential_uses keeps one row a caller), newest first. A proxied tool's uses are its calls, already listed, so
-    its use rows are left out. `cursor` is the last row's `<at>|<id>`."""
+    its use rows are left out. `cursor` is the last row's `<at>|<id>`; `since` (an ISO time or 24h / 7d) leaves out
+    older rows. A credential administrator and the Tools page's owner bot (`tools_reader`, which learns from how tools
+    are used) see every caller's rows; anyone else their own and those of the bots they may see."""
+    from .views import since_time
+
     proxied = _readable(c, who, tool_id, admins, auth)["delivery"] == "proxy"
-    admin = _admin(c, who, admins)
+    admin = _admin(c, who, admins) or tools_reader(c, who)
+    floor = since_time(since) if since else None
     at, _, last = str(cursor or "").partition("|")
     if cursor and not last:
         raise Problem("invalid_request", "cursor is the `next` of the page before", 422)
@@ -828,6 +871,8 @@ def activity(c, who, tool_id, admins, auth, cursor="", limit=50, result=""):
         sql, args = "SELECT * FROM tool_calls WHERE tool_id=?", [tool_id]
         if result:
             sql, args = sql + " AND result=?", args + [result]
+        if floor:
+            sql, args = sql + " AND created_at>=?", args + [floor]
         if cursor:
             sql, args = sql + " AND (created_at<? OR (created_at=? AND id<?))", args + [at, at, last]
         for row in c.execute(sql + " ORDER BY created_at DESC, id DESC LIMIT ?", (*args, ACTIVITY_MAX * 2)):
@@ -840,6 +885,8 @@ def activity(c, who, tool_id, admins, auth, cursor="", limit=50, result=""):
             for row in c.execute(f"SELECT * FROM credential_uses WHERE credential_id IN ({marks})", list(keys)):
                 ident = f"use:{row['credential_id']}:{row['actor']}:{row['bot']}"
                 if cursor and (row["used_at"], ident) >= (at, last):
+                    continue
+                if floor and row["used_at"] < floor:
                     continue
                 probe = {"actor": row["actor"], "bot": row["bot"]}
                 if not _call_visible(c, who, auth, admin, probe):
@@ -865,9 +912,31 @@ def activity(c, who, tool_id, admins, auth, cursor="", limit=50, result=""):
 # ---- checks
 
 
+class Reply(NamedTuple):
+    """A check's answer: the status code, and whether a 401's reply says the key lacks a permission for the path."""
+
+    status_code: int
+    missing_scope: bool = False
+
+
+def said_missing_scope(challenge, body):
+    """Whether a 401 says the key is known but lacks a permission or scope for this path (SCOPE_SAYS: a restricted key,
+    not a bad one), from its WWW-Authenticate `challenge` and the first bytes of its reply `body`: only SCOPE_READ of
+    them are read, and nothing of them is kept. The tool proxy (backend/tool_proxy.py) and the checks share it."""
+    said = (challenge + " " + body[:SCOPE_READ].decode("utf-8", "replace")).lower()
+    return any(phrase in said for phrase in SCOPE_SAYS)
+
+
+def _missing_scope(response):
+    """`said_missing_scope` for a check's reply: its first chunk is read, at most SCOPE_READ bytes of it."""
+    return said_missing_scope(
+        response.headers.get("www-authenticate", ""), next(response.iter_bytes(chunk_size=SCOPE_READ), b"")
+    )
+
+
 def send_check(url, headers, params):
-    """One GET; its status code. Tests replace it. Only to a public https address, pinned to the IP it resolved to,
-    no redirects followed, no proxy from the environment, at most CHECK_TIMEOUT seconds."""
+    """One GET: a `Reply`. Tests replace it. Only to a public https address, pinned to the IP it resolved to, no
+    redirects followed, no proxy from the environment, at most CHECK_TIMEOUT seconds."""
     import httpx
     from . import egress
 
@@ -879,7 +948,8 @@ def send_check(url, headers, params):
         with client.stream(
             "GET", pinned, headers={**headers, "Host": host}, extensions={"sni_hostname": parts.hostname}
         ) as response:
-            return response.status_code
+            code = response.status_code
+            return Reply(code, code == 401 and _missing_scope(response))
 
 
 def _check_one(tool, key, secret, auth=None):
@@ -901,18 +971,28 @@ def _check_one(tool, key, secret, auth=None):
     }
     url = tool["base_url"].rstrip("/") + check_path_of(tool)
     try:
-        code = send_check(url, headers, params)
+        reply = send_check(url, headers, params)
     except egress.Blocked:
         return False, None, "Check failed: address refused"
     except Exception as exc:  # noqa: BLE001 - every network failure is one answer: the check failed
         return False, None, "Check failed: " + ("timed out" if "Timeout" in type(exc).__name__ else "no answer")
+    code = reply.status_code
+    if code == 401 and reply.missing_scope:  # a restricted key: known to the vendor, this path needs another permission
+        return True, code, LIMITED
     rejected = TS.rejects(tool["service"], code)
     ok = 200 <= code < 300 or (code == 403 and not rejected)  # a 403: the key is known, the path needs another scope
     return ok, code, _check_text(ok, code, tool["service"]) if ok or rejected else f"Check failed: {code}"
 
 
 def check_tool(store, vault, tool_id):
-    """Check each stored key of the tool and record a tool_checks row for it; the rows written, worst first."""
+    """Check each stored key of the tool and record a tool_checks row for it; the rows written, worst first. A tool that
+    reads Key rejected now gets its Reconnect task, and one that reads Working ends it (backend/reconnect_tasks.py)."""
+    rows = _check_tool(store, vault, tool_id)
+    reconnect_tasks.checked(store, tool_id)
+    return rows
+
+
+def _check_tool(store, vault, tool_id):
     with store.transaction() as c:  # decrypt may reseal an old value in place
         tool = tool_row(c, tool_id)
         if _field(tool, "mcp_url"):
@@ -927,10 +1007,13 @@ def check_tool(store, vault, tool_id):
             mcp = False
         spec = None if mcp else tool_templates.spec_of(tool)
         together = tool_templates.check_auth(c, vault, tool, spec) if spec and spec.get("ways") else None
+        held = [k for k in _keys(c, tool_id) if k["ciphertext"] is not None]
+        # An id stored as a key (TWILIO_ACCOUNT_SID, POSTHOG_PROJECT_ID) is no key to the vendor, whatever its value
+        # looks like: sent as one it would read Key rejected. It is never decrypted for a check.
         stored = (
             []
             if mcp or together
-            else [(k, vault.cipher.decrypt(c, k)) for k in _keys(c, tool_id) if k["ciphertext"] is not None]
+            else [(k, vault.cipher.decrypt(c, k)) for k in held if not tool_settings.known_name(k["env"])]
         )
     if mcp:  # initialize and tools/list, with a sign-in's access token when it signs in
         return mcp_connect.check(store, vault, tool_id)
@@ -938,11 +1021,9 @@ def check_tool(store, vault, tool_id):
         key, headers, params = together
         return _record_checks(store, tool_id, [(key, *_check_one(tool, key, "", (headers, params)))])
     if not stored:
+        if held:
+            raise Problem("check", f"{tool['name']} holds only ids, no key to check", 409)
         raise Problem("check", f"{tool['name']} has no stored key. Add one in Tools > {tool['name']} > Keys", 409)
-    # An id stored as a key (TWILIO_ACCOUNT_SID) is no key to the vendor: sent as one it would read Key rejected.
-    stored = [(k, secret) for k, secret in stored if not tool_settings.is_setting(k["env"], secret)]
-    if not stored:
-        raise Problem("check", f"{tool['name']} holds only ids, no key to check", 409)
     results = [(key, *_check_one(tool, key, secret)) for key, secret in stored]
     stored = None  # the values leave scope before anything is written
     return _record_checks(store, tool_id, results)
@@ -1209,6 +1290,8 @@ def update_tool(c, who, tool_id, body, admins, auth=None):
             {"before": not body.everyone_reads, "after": body.everyone_reads},
         )
         tool = dict(tool_row(c, tool_id))
+        if body.everyone_reads:  # every bot reads it now: requests for Read on it close themselves
+            access_requests.settled(c, who, resource_type="tool", resource_id=tool_id, via="everyone-reads")
     fields = {k: v for k, v in _clean(asked).items()}
     merged = tool | fields
     if merged["delivery"] == "proxy" and not merged["base_url"]:
@@ -1337,6 +1420,7 @@ def delete_tool(c, who, tool_id, admins, kind="api"):
     c.execute("DELETE FROM tool_checks WHERE tool_id=?", (tool_id,))
     c.execute("DELETE FROM tool_oauth_states WHERE tool_id=?", (tool_id,))
     c.execute("DELETE FROM tools WHERE id=?", (tool_id,))
+    reconnect_tasks.gone(c, tool_id)
     H.event(c, who.actor, "tool.deleted", tool_id, {"name": tool["name"], "keys": len(keys)})
     return {"deleted": True, "id": tool_id}
 
@@ -1389,6 +1473,7 @@ def add_key(c, who, vault, tool_id, body):
         (tool_id, body.access_level, body.expires_on or None, brief["id"]),
     )
     H.event(c, who.actor, "tool.key_added", tool_id, {"credential": brief["id"], "access_level": body.access_level})
+    access_requests.settled(c, who, resource_type="tool", resource_id=tool_id)  # a Read key may make Read default
     return _key_view(c, who, vault.row(c, brief["id"]), True, vault.admins)
 
 
@@ -1410,6 +1495,8 @@ def ensure_tool(c, who, credential_id, from_computer=False, value=None):
         return None
     if row["source"] == "tools-chat":
         return None  # a key dropped in the Tools chat goes to the tool the person grants it to (backend/key_grants.py)
+    if row["member_stored"] and str(row["created_by"] or "").startswith("bot:"):
+        return None  # a bot's own key goes on a tool of its own (`own_tool`), never on a tool others use
     on_computers = c.execute(
         "SELECT 1 FROM computer_keys WHERE credential_id=? UNION SELECT 1 FROM credential_grants WHERE credential_id=?"
         " AND (subject='computers' OR subject LIKE 'computer:%')",
@@ -1457,6 +1544,43 @@ def ensure_tool(c, who, credential_id, from_computer=False, value=None):
         )
     c.execute("UPDATE credentials SET tool_id=?, access_level='read_write' WHERE id=?", (tid, credential_id))
     H.event(c, who.actor, "tool.key_added", tid, {"credential": credential_id, "access_level": "read_write"})
+    return tid
+
+
+def own_tool(c, who, credential_id, near="", level="read_write"):
+    """Put a key a bot stored for itself (backend/credential_cards.py `store_for_bot`) on a new tool of its own, so it
+    shows on Tools like any key and never changes a tool others use: under the vendor of the tool `near` names (one
+    everybody may see) or else of its own variable and name, its keys to computers (the bot gets back the value it
+    already held), and "Everyone can read" off, so no other bot reads with it until an administrator gives it to them.
+    The tool id."""
+    row = c.execute("SELECT * FROM credentials WHERE id=?", (credential_id,)).fetchone()
+    if not row or row["tool_id"]:
+        return row["tool_id"] if row else None
+    beside = (
+        c.execute(
+            "SELECT * FROM tools WHERE id=? AND audience IS NULL AND COALESCE(kind,'api')='api'", (str(near),)
+        ).fetchone()
+        if near
+        else None
+    )
+    service = (beside["service"] if beside is not None else "") or TS.match(env=row["env"], name=row["name"]) or ""
+    bot = H.bot(c, H.actor_id(who.actor)) or {}
+    name = (
+        f"{beside['name']} ({bot.get('display_name') or bot.get('slug') or H.actor_id(who.actor)})"
+        if beside
+        else row["name"]
+    )
+    now = H.now()
+    tid = TS.insert_tool(c, service, name, "computer", who.actor, now, tid=_unique_id(c, TS.slug(name)), first=False)
+    if beside is not None:
+        c.execute(
+            "UPDATE tools SET base_url=?, auth_scheme=?, check_path=? WHERE id=?",
+            (beside["base_url"], beside["auth_scheme"], beside["check_path"], tid),
+        )
+    c.execute("UPDATE tools SET everyone_reads=0 WHERE id=?", (tid,))
+    c.execute("UPDATE credentials SET tool_id=?, access_level=? WHERE id=?", (tid, level, credential_id))
+    H.event(c, who.actor, "tool.created", tid, {"service": service, "delivery": "computer", "own": True})
+    H.event(c, who.actor, "tool.key_added", tid, {"credential": credential_id, "access_level": level})
     return tid
 
 
@@ -1508,6 +1632,8 @@ def update_key(c, who, vault, tool_id, key_id, body):
         tool_id,
         {"credential": key_id, "access_level": level, "value_changed": body.value is not None},
     )
+    if body.value is not None:
+        reconnect_tasks.replaced(c, tool_id)  # its Reconnect task, if one is open, is done
     return _key_view(c, who, vault.row(c, key_id), True, vault.admins)
 
 
@@ -1546,6 +1672,17 @@ def set_level(c, who, vault, tool_id, subject, level):
     subject = subject_of(c, subject)
     if not subject.startswith(("bot:", "human:")):
         raise Problem("subject", "Choose a person or a bot", 422)
+    deferred = access_requests.DEFERRED.set(True)  # the grant is made, then its level set: settled once both are
+    try:
+        _set_level(c, who, vault, tool, tool_id, subject, level)
+    finally:
+        access_requests.DEFERRED.reset(deferred)
+    if subject.startswith("bot:") and level != "none":
+        access_requests.settled(c, who, subject=subject, resource_type="tool", resource_id=tool_id)
+    return {"subject": subject, "level": subject_level(c, tool_id, subject)}
+
+
+def _set_level(c, who, vault, tool, tool_id, subject, level):
     keys = [k for k in _keys(c, tool_id) if k["ciphertext"] is not None]
     if _templated(c, tool_id) and level != "none":
         return _set_template_level(c, who, vault, tool, subject, level, keys)
@@ -1573,7 +1710,6 @@ def set_level(c, who, vault, tool_id, subject, level):
         grant = vault.grant(c, who, target["id"], subject)
         c.execute("UPDATE credential_grants SET access_level=? WHERE id=?", (level, grant["id"]))
     H.event(c, who.actor, "tool.access_set", tool_id, {"subject": subject, "level": level})
-    return {"subject": subject, "level": subject_level(c, tool_id, subject)}
 
 
 def _set_template_level(c, who, vault, tool, subject, level, keys):
@@ -2054,6 +2190,7 @@ def install(app, store, auth, settings):
         cursor: str = Query(default="", max_length=200),
         limit: int = Query(default=50, ge=1, le=ACTIVITY_MAX),
         result: str = Query(default="", max_length=20),
+        since: str = Query(default="", max_length=40),
     ):
         with store.read_transaction() as c:
-            return activity(c, request.state.identity, tool_id, vault().admins, auth, cursor, limit, result)
+            return activity(c, request.state.identity, tool_id, vault().admins, auth, cursor, limit, result, since)

@@ -6,7 +6,7 @@ from backend.tests.helpers.api import post
 def propose(api, kind, payload, goal_id=None, kpi_id=None, token="ana-test"):
     return post(
         api,
-        "goal-proposals",
+        "proposals",
         {"kind": kind, "goal_id": goal_id, "kpi_id": kpi_id, "payload": payload, "reason": "No measure yet"},
         token=token,
     )["proposal"]

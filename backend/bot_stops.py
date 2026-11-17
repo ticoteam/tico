@@ -6,12 +6,10 @@
 - `claim_holds`: one queued run whose claim raised while preparing it is held by itself; the bot's other runs go on.
 
 A hold keeps the bot's queued work and starts none of it until a person releases the bot (one action, all three
-holds) or, for a failed-runs hold, until Tico's own try completes. A claim hold keeps only its run. A person's chat
-message does not bypass a failed-runs hold (it goes with the next try); it does bypass a budget hold, which only
-stops work nobody asked for. This module is the one place the pages read: the status row (`overlay`), the warning
-beside a message or a task sent to a held bot
-(`warning`), the "Saved - waiting" label (`queued_reason`), Health's reason (`reason`), and the Needs-you item both
-holds file for the bot's operator (`raise_item`, `close_item`).
+holds) or, for a failed-runs hold, until Tico's own try completes. A claim hold keeps only its run. What every page
+says about a hold (the status row, a sender's warning, the "Saved - waiting" label, a task's Paused cause) is read in
+one place, backend/holds.py. This module files and closes the Needs-you item each hold raises for the bot's operator
+(`raise_item`, `close_item`), and releases the bot (`release`).
 """
 
 import logging
@@ -26,49 +24,6 @@ def name_of(c, bot):
     return (H.bot(c, bot) or {}).get("display_name") or bot
 
 
-def hold(c, bot, human=False):
-    """The hold that stops the bot as {kind, words}, or None. `human`: the work is a person's message, which a budget
-    hold lets through. The failed-runs hold is named first: it is the one that needs a fix before a release."""
-    if run_backoff.get(c, bot).get("held_at"):
-        return {"kind": "run_hold", "words": run_backoff.words(c, bot)}
-    if not human and turn_budgets.get(c, bot).get("held_at"):
-        return {"kind": "budget", "words": turn_budgets.words(c, bot)}
-    return None
-
-
-def overlay(c, row):
-    """A bot's status row as the pages should read it while a hold stops it: paused, with the words. A running turn
-    keeps its row. Only a hold stops it: a short back-off after a failed run keeps the state and focus, and adds its
-    wait in words as `backoff` for the pages to show beside them."""
-    if not row or row.get("state") in ("running", "quarantined"):
-        return row
-    found = hold(c, row["bot"])
-    if found:
-        return {**row, "state": "paused", "focus": found["words"], "stopped": found["kind"]}
-    if run_backoff.refusal(c, row["bot"]) == "backoff":
-        return {**row, "backoff": run_backoff.words(c, row["bot"])}
-    return row
-
-
-def warning(c, actor):
-    """The words a sender gets when its message or task goes to a stopped bot, else None. A note beside the saved
-    message, not a refusal: the work stays queued and runs once the bot is released."""
-    if not str(actor or "").startswith("bot:"):
-        return None
-    found = hold(c, actor[4:])
-    return f"{found['words']} What you sent is kept and starts when the bot runs again." if found else None
-
-
-def queued_reason(c, bot, human=False):
-    """The words after "Saved - " for work waiting on a stop or a back-off, else None."""
-    found = hold(c, bot, human)
-    if found:
-        return "waiting: " + found["words"]
-    if run_backoff.refusal(c, bot) == "backoff":
-        return "waiting: " + run_backoff.words(c, bot)
-    return None
-
-
 def raise_item(c, settings, bot, title, body):
     """One Needs-you task for the bot's operator (else the owner), and its id; None when nobody can be asked or the
     task was refused. The hold stands either way, and Health names it."""
@@ -78,7 +33,18 @@ def raise_item(c, settings, bot, title, body):
     if not person:
         return None
     try:
-        return H.task_create(c, H.KEEPER, title, body, H.human_actor(person["id"]), lint=False)["id"]
+        from . import person_asks
+
+        return person_asks.task_for(
+            c,
+            H.KEEPER,
+            title,
+            body,
+            H.human_actor(person["id"]),
+            question=f"Can you get {H.actor_name(c, H.bot_actor(bot))} running again?",
+            why=person_asks.first_sentence(body),
+            asker=person_asks.botops(),
+        )["id"]
     except H.Refused:
         log.warning("Could not file the Needs-you task for the stopped bot %s", bot)
         return None

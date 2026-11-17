@@ -40,6 +40,7 @@ from . import slack_channels as SC
 from . import slack_gateway as G
 from .auth import Identity
 from .store import Problem
+from .api_contract import api_v2
 
 LOG = logging.getLogger("tico.slack.threads")
 HISTORY_DAYS = 30
@@ -205,7 +206,17 @@ def failure_item(c, link_id, code):
         "Check the channel and the link in the thread's settings."
     )
     try:
-        created = H.task_create(c, H.KEEPER, title, body, row["linked_by"], lint=False)
+        from . import person_asks
+
+        created = person_asks.task_for(
+            c,
+            H.KEEPER,
+            title,
+            body,
+            row["linked_by"],
+            question=f"Can you check the Slack link for #{name}?",
+            why="Slack refused a message, and Tico stopped trying it.",
+        )
         c.execute("UPDATE slack_thread_links SET failure_task_id=? WHERE id=?", (created["id"], link_id))
     except H.Refused:
         LOG.warning("Could not file the Needs-you item for a failed Slack send")
@@ -671,7 +682,17 @@ class Bridge:
             "checks the link again in the thread's settings."
         )
         try:
-            created = H.task_create(c, H.KEEPER, title, body, row["linked_by"], lint=False)
+            from . import person_asks
+
+            created = person_asks.task_for(
+                c,
+                H.KEEPER,
+                title,
+                body,
+                row["linked_by"],
+                question=f"Can you check the Slack link for #{name} again?",
+                why="Nothing moves between the channel and the thread until an owner or admin checks it.",
+            )
             c.execute("UPDATE slack_thread_links SET needs_task_id=? WHERE id=?", (created["id"], link_id))
         except H.Refused:
             LOG.warning("Could not file the Needs-you item for a suspended Slack link")
@@ -1710,18 +1731,50 @@ def install(app, settings, store, auth):
             raise Problem("forbidden", "Only an owner or an admin links a Slack channel to a thread", 403)
         return who
 
-    @app.get("/api/v2/slack/links")
+    @app.get(
+        "/api/v2/slack/links",
+        **api_v2(
+            "Slack links",
+            "listSlackLinks",
+            "The Slack links (of one thread with `thread`), newest first, up to `limit` (at most 100) a page; `next_cursor` reads the next page; unlinked ones are left out",
+            "SlackLinkList",
+        ),
+    )
     def links(request: Request, thread: str = "", limit: int = 50, cursor: str = ""):
         return list_links(store, admin(request), thread, limit, cursor, auth=auth)
 
-    @app.post("/api/v2/slack/links")
+    @app.post(
+        "/api/v2/slack/links",
+        **api_v2(
+            "Slack links",
+            "requestSlackLink",
+            "Ask for a thread to be linked to a Slack channel (`#name` or its id): the gateway checks it and activates or refuses it later; `history` also brings in its earlier messages",
+            "SlackLink",
+        ),
+    )
     def link_add(request: Request, body: LinkRequest):
         return request_link(store, admin(request), body.thread_id, body.channel, history=body.history, auth=auth)
 
-    @app.delete("/api/v2/slack/links/{link_id}")
+    @app.delete(
+        "/api/v2/slack/links/{link_id}",
+        **api_v2(
+            "Slack links",
+            "unlinkSlackLink",
+            "Stop a Slack link: nothing more is sent to the channel after this; answers the link, now unlinked",
+            "SlackLink",
+        ),
+    )
     def link_remove(request: Request, link_id: str):
         return unlink_link(store, admin(request), link_id, auth=auth)
 
-    @app.post("/api/v2/slack/links/{link_id}/resume")
+    @app.post(
+        "/api/v2/slack/links/{link_id}/resume",
+        **api_v2(
+            "Slack links",
+            "resumeSlackLink",
+            "Check a suspended or refused link again; any other state answers 409",
+            "SlackLink",
+        ),
+    )
     def link_resume(request: Request, link_id: str):
         return resume_link(store, admin(request), link_id, auth=auth)

@@ -16,11 +16,11 @@ def test_only_owners_and_admins_read_access_and_only_the_owner_changes_who_signs
     view(api, quinn, expected=403)
     view(api, riley)
     # A member may add a coworker in the company's domain, but not someone outside it.
-    call(api, "POST", "/people", {"name": "Zed", "email": "zed@other.example"}, quinn, expected=403)
-    call(api, "POST", "/people/riley", {"title": "CTO"}, quinn, expected=403)
+    call(api, "POST", "/humans", {"name": "Zed", "email": "zed@other.example"}, quinn, expected=403)
+    call(api, "POST", "/humans/riley", {"title": "CTO"}, quinn, expected=403)
     call(api, "PUT", "/allow", {"allowed": [], "allowed_domains": ["acme.example"]}, riley, expected=403)
     call(api, "POST", "/owner", {"person": "riley", "confirm": True}, riley, expected=403)
-    call(api, "POST", "/people/quinn", {"role": "admin"}, riley, expected=403)  # only an owner makes admins
+    call(api, "POST", "/humans/quinn", {"role": "admin"}, riley, expected=403)  # only an owner makes admins
     assert view(api)["owner"]["email"] == OWNER_EMAIL
 
 
@@ -52,7 +52,7 @@ def test_a_person_who_left_loses_their_tokens_and_cannot_sign_in(environment):
     api = environment()
     riley = person_headers(api, "riley")
     assert api.get("/api/v2/tasks", headers=riley).status_code == 200
-    assert api.post("/api/v2/people/riley", json={"left": True}, headers=signed_in()).status_code == 200
+    assert api.post("/api/v2/humans/riley", json={"left": True}, headers=signed_in()).status_code == 200
     assert api.get("/api/v2/tasks", headers=riley).status_code == 401
     with api.app.state.store.read() as c:
         assert c.execute("SELECT revoked_at FROM human_tokens WHERE human='riley'").fetchone()[0]
@@ -61,7 +61,7 @@ def test_a_person_who_left_loses_their_tokens_and_cannot_sign_in(environment):
     assert api.get("/api/v2/tasks", headers={"x-test-email": "riley@acme.example"}).status_code == 403
     assert api.get("/api/v2/tasks", headers={"x-test-email": "quinn@acme.example"}).status_code == 200
     # The owner can bring them back.
-    call(api, "POST", "/people/riley", {"left": False})
+    call(api, "POST", "/humans/riley", {"left": False})
     assert api.get("/api/v2/tasks", headers={"x-test-email": "riley@acme.example"}).status_code == 200
 
 

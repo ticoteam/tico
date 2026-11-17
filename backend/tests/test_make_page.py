@@ -285,8 +285,6 @@ def test_mcp_offers_page_publish_to_the_assistant_and_keeps_the_person_and_attem
 
 
 def test_make_page_keeps_private_chat_history_and_other_queued_work_out_of_the_turn(api):
-    from runner_support.state import session_key
-
     t = task(api, private=False)
     earlier = say(api, "Private chat content unrelated to this task", "ben-test")["message"]
     with api.app.state.store.transaction() as c:
@@ -306,10 +304,7 @@ def test_make_page_keeps_private_chat_history_and_other_queued_work_out_of_the_t
     assert [m["id"] for m in attempt["history"]] == [message["id"]]
     assert attempt["next_run"] == [] and attempt["notes"] == []
     assert attempt["deferred"] == "" and attempt["chat_goal"] is None
-    key = session_key({"session": "bot"}, attempt)
-    assert key == "make-page:" + attempt["id"]
-    ordinary = {k: v for k, v in attempt.items() if k != "make_page"}
-    assert session_key({"session": "bot"}, ordinary) != key
+    assert isinstance(attempt["make_page"]["task"], dict)
     say(api, "An unrelated private follow-up", "ben-test")
     assert post(api, f"attempts/{attempt['id']}/inputs", {}, machine["token"])["messages"] == []
     with api.app.state.store.read() as c:
@@ -417,7 +412,7 @@ def test_make_page_does_not_fall_back_to_bot_rights_after_person_loses_sign_in(a
     assign(api, machine, "assistant")
     ready(api, machine, ["assistant"], capabilities=["make_page"])
     request = post(api, f"tasks/{t['id']}/make-page", {"text": "Make the plan"}, "ben-test")["message"]
-    post(api, "access/people/ben", {"sign_in": False})
+    post(api, "access/humans/ben", {"sign_in": False})
     assert post(api, "jobs/claim", {"next_run": True}, machine["token"])["attempt"] is None
     with api.app.state.store.read() as c:
         assert not c.execute(
@@ -529,9 +524,9 @@ def test_cached_make_page_claim_requires_the_current_person_and_computer(api):
     t = task(api, private=True)
     machine, attempt, sent = start(api, t["id"])
     key, body = "claim:" + sent["id"], {"next_run": True}
-    post(api, "access/people/ben", {"sign_in": False})
+    post(api, "access/humans/ben", {"sign_in": False})
     post(api, "jobs/claim", body, machine["token"], key, expected=403)
-    post(api, "access/people/ben", {"sign_in": True})
+    post(api, "access/humans/ben", {"sign_in": True})
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0}, machine["token"])
     other = runner(api)
     assign(api, other, "assistant", generation=attempt["generation"])

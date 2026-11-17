@@ -120,7 +120,9 @@ def granola_sync(api, args):
 
 @tool(
     "tico_meeting_search",
-    "Search meeting history and transcripts, with excerpts and available speaker timestamps. Bots see shared Team meetings and filed meetings they were attached to, never personal notes. Empty q lists recent accessible meetings.",
+    "Search meeting history and transcripts, with excerpts and available speaker timestamps. Bots "
+    "see shared Team meetings and filed meetings they were attached to, never personal notes. "
+    "Empty q lists recent accessible meetings.",
     {
         "q": _s("Words to search for; omit for recent history"),
         "person": _s("Owner, participant, or speaker"),
@@ -152,9 +154,10 @@ def meetings_transcript(api, args):
 @tool(
     "tico_meeting_import",
     "File a meeting transcript or notes from another tool (Zoom, Google Meet, Granola, Otter, "
-    "Fireflies, a file...) into your Pending queue unless you choose live or auto-share. The transcript is plain text (one line per turn: an optional "
-    "[mm:ss] and 'Name: text'), WebVTT, SRT, or JSON segments [{speaker, start, end, text}] with times in seconds; the "
-    "format is detected. Send the same source and external_id again to update it instead of adding another.",
+    "Fireflies, a file...) into your Pending queue, unless you choose live or auto-share. Plain "
+    "text (one 'Name: text' line per turn, optional [mm:ss]), WebVTT, SRT, or JSON segments "
+    "[{speaker, start, end, text}] with times in seconds; the format is detected. The same source "
+    "and external_id again updates it.",
     {
         "title": _s("What the meeting was"),
         "transcript": {
@@ -203,10 +206,9 @@ def meetings_import_file(api, args):
 # ----------------------------------------------------------------------------- calendar
 @tool(
     "tico_calendar_list",
-    "Read upcoming appointments on a team calendar. Every bot may "
-    "use this tool. The default is the team owner's calendar; pass `calendar` for your "
-    "operator's. "
-    "Results are read live from the calendar and include when they were read.",
+    "Read upcoming appointments on a team calendar. Every bot may use this tool. The default is "
+    "the team owner's calendar; pass `calendar` for your operator's. Results are read live from "
+    "the calendar and include when they were read.",
     {"calendar": _s("Roster email whose calendar to read; default the team owner's", default="")},
 )
 def calendar_upcoming(api, args):
@@ -281,9 +283,9 @@ def _clean(fields):
 
 @tool(
     "tico_calendar_events",
-    "Events, bot runs, due dates and time away on the calendars in `who` (default: yours), in a window of up to 62 "
-    "days. Everyone in the company reads a Tico calendar; a Google calendar shows what Google's sharing allows. A "
-    "busy-only event shows as Busy. Returns occurrences.",
+    "Events, bot runs, due dates and time away on the calendars in `who` (default: yours), in a "
+    "window of up to 62 days. Everyone in the company reads a Tico calendar; a Google calendar "
+    "shows what Google's sharing allows. A busy-only event shows as Busy. Returns occurrences.",
     {
         "who": CALENDAR_WHO,
         "from": _s("Window start: ISO-8601 with zone, or YYYY-MM-DD. Default: today"),
@@ -315,10 +317,10 @@ def calendar_free(api, args):
 
 @tool(
     "tico_calendar_add",
-    "Book an event with `attendees`, optionally repeated. Bots and the Assistant may book anyone unless the Who bots "
-    "may book rule prevents it, and the refusal names that rule. A person may add only to their own Tico calendar, "
-    "and only without Google connected. A write to a connected person's calendar lands on their Google calendar. "
-    "Returns the occurrence.",
+    "Book an event with `attendees`, optionally repeated. Bots and the Assistant may book anyone "
+    "unless the Who bots may book rule prevents it; the refusal names that rule. A person may add "
+    "only to their own Tico calendar, and only without Google connected. A write to a connected "
+    "person's calendar lands on their Google calendar. Returns the occurrence.",
     {
         "calendar": _s(
             "Whose calendar: a ref (human:<id>, bot:<id>, shared:<id>, google:<id>) or an email such as "
@@ -390,10 +392,10 @@ def calendar_cancel(api, args):
 
 @tool(
     "tico_calendar_search",
-    "Find events whose title, notes or location match the words, across the calendars in `who` (default: yours), "
-    "nearest first. Tokens in q: with:<name>, bot:<name>, kind:<event|run|due|away>, before:<date>, after:<date>, "
-    "has:transcript, automation:<name>, trigger:<kind>, longer:<N>m. `partial` true means some Google calendars ran "
-    "out of time.",
+    "Find events whose title, notes or location match the words, across the calendars in `who` "
+    "(default: yours), nearest first. Tokens in q: with:<name>, bot:<name>, "
+    "kind:<event|run|due|away>, before:<date>, after:<date>, has:transcript, automation:<name>, "
+    "trigger:<kind>, longer:<N>m. `partial` true means some Google calendars ran out of time.",
     {"q": _s("Words and tokens"), "who": CALENDAR_WHO},
     required=("q",),
 )
@@ -580,5 +582,81 @@ CALL = (
         "call bot remove",
         "take a bot out of a call",
         example="tico call bot remove c1 ana",
+    ),
+)
+
+
+def _no_key(fields):
+    """The meeting tools without an operation id: the hand parser these specs replaced never sent one, so a meeting
+    write carries no idempotency key, as before."""
+    return {k: v for k, v in fields.items() if k != "operation_id"}
+
+
+# `tico meeting ...` (clients/cli_spec.py). `meeting import` is still built by the hand parser (clients/hubcli.py): it
+# reads the transcript and notes files on this computer.
+MEETING = (
+    Group("meeting", "search meetings, read transcripts, import a transcript from another tool"),
+    Group("meeting granola", "your Granola account; connect in Meetings in your browser"),
+    Command(
+        "meeting granola status",
+        "your Granola connection",
+        convert=_no_key,
+        example="tico meeting granola status",
+    ),
+    Command(
+        "meeting granola sync",
+        "start a background sync of your Granola notes",
+        convert=_no_key,
+        example="tico meeting granola sync",
+    ),
+    Command(
+        "meeting link",
+        "link existing tasks to a saved meeting",
+        args=(Arg("task_ids", action="store", nargs="+"),),
+        omit=("kind",),
+        convert=_no_key,
+        example="tico meeting link m1 T1 T2",
+    ),
+    Command("meeting unlink", "remove a meeting's task link", convert=_no_key, example="tico meeting unlink m1 T1"),
+    Command(
+        "meeting search",
+        "search meeting history and transcripts; no words lists recent meetings",
+        args=(
+            Arg("q", positional=True, nargs="?", default=""),
+            Arg("person", default=""),
+            Arg("limit", default=20),
+            Arg("offset", default=0),
+        ),
+        convert=_no_key,
+        example="tico meeting search pricing --since 2026-09-01",
+    ),
+    Command(
+        "meeting read",
+        "read a transcript",
+        args=(Arg("offset", default=0), Arg("limit", default=20000), Arg("notes", default=None)),
+        convert=_no_key,
+        example="tico meeting read m1 --notes",
+    ),
+    Command("meeting delete", "delete a Meeting you may edit", convert=_no_key, example="tico meeting delete m1"),
+    Command("meeting pending", "your Pending queue", convert=_no_key, example="tico meeting pending"),
+    Command(
+        "meeting approve",
+        "share your Pending meetings",
+        args=(Arg("id", positional=True, nargs="?"), Arg("private", default=None)),
+        one_of=(("id", "all"),),
+        convert=_no_key,
+        example="tico meeting approve --all",
+    ),
+    Command(
+        "meeting dismiss",
+        "dismiss one of your Pending meetings",
+        convert=_no_key,
+        example="tico meeting dismiss m1",
+    ),
+    Command(
+        "meeting restore",
+        "restore a dismissed meeting to Pending",
+        convert=_no_key,
+        example="tico meeting restore m1",
     ),
 )

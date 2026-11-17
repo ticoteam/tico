@@ -87,7 +87,7 @@ def test_bots_propose_members_read_only_published_and_admins_confirm(api):
     goal = post(api, "goals", {"title": "More bookings", "owner": "ana"})["goal"]
     refused = post(
         api,
-        "goal-proposals",
+        "proposals",
         {"kind": "brand_draft", "goal_id": goal["id"], "payload": {"sections": {"positioning": "Secret"}}},
         token=ops,
         expected=422,
@@ -95,7 +95,7 @@ def test_bots_propose_members_read_only_published_and_admins_confirm(api):
     assert refused["error"]["detail"].startswith("a brand draft proposal is about the page")
     proposal = post(
         api,
-        "goal-proposals",
+        "proposals",
         {
             "kind": "brand_draft",
             "reason": "Plain words sell better.",
@@ -104,10 +104,10 @@ def test_bots_propose_members_read_only_published_and_admins_confirm(api):
         token=ops,
     )["proposal"]
     # The proposal carries unpublished words: admins and the bot that made it read it; a member does not.
-    assert not [p for p in get(api, "goal-proposals", token="cara-test")["proposals"] if p["kind"] == "brand_draft"]
-    assert [p["id"] for p in get(api, "goal-proposals", token="ben-test")["proposals"]] == [proposal["id"]]
-    post(api, f"goal-proposals/{proposal['id']}/decide", {"decision": "confirm"}, token="cara-test", expected=403)
-    post(api, f"goal-proposals/{proposal['id']}/decide", {"decision": "confirm"}, token="ben-test")
+    assert not [p for p in get(api, "proposals", token="cara-test")["proposals"] if p["kind"] == "brand_draft"]
+    assert [p["id"] for p in get(api, "proposals", token="ben-test")["proposals"]] == [proposal["id"]]
+    post(api, f"proposals/{proposal['id']}/decide", {"decision": "confirm"}, token="cara-test", expected=403)
+    post(api, f"proposals/{proposal['id']}/decide", {"decision": "confirm"}, token="ben-test")
     assert get(api, "brand")["published"]["n"] == 1
     assert [v["trait"] for v in get(api, "brand")["draft"]["body"]["voice"]] == ["plain"]
 

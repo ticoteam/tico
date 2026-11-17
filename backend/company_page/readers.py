@@ -597,13 +597,17 @@ def _file_task(c, owner, reader, edition, kind, text, verdict):
     )
     token = H.NO_TRIGGERS.set(True)
     try:
-        row = H.task_create(
+        from .. import person_asks
+
+        # A question to the person on their own task (person_asks): no bot reads a reader's words unasked.
+        row = person_asks.task_for(
             c,
             H.KEEPER,
             title,
             body,
             owner,
-            lint=False,
+            question="Pass this reader's message on?",
+            why="A reader of the Company page wrote in, and nothing runs until a person passes it on.",
             deduplicate=False,
             visibility="private",
             private=True,

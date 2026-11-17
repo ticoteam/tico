@@ -159,7 +159,7 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/runners/{rid}/restart")
+    @app.post("/api/v2/computers/{rid}/restart")
     def restart_runner(request: Request, rid: str, body: M.Empty):
         """Restart a computer's runner on the latest code. The runner pulls
         main when that is safe and restarts once no turn is running, so nothing is cut off."""
@@ -177,7 +177,8 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/runners/{rid}/inbox-only")
+    @app.post("/api/v2/computers/{rid}/inbox-only")
+    @app.post("/api/v2/runners/{rid}/inbox-only", deprecated=True)  # rc.1 clients: the UI and the playbooks
     def inbox_only(request: Request, rid: str, body: M.InboxOnly):
         """Keep this computer for inbox bots, or stop (backend/inbox_isolation.py)."""
         who = request.state.identity
@@ -207,7 +208,7 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/runners/{rid}/logins")
+    @app.post("/api/v2/computers/{rid}/logins")
     def start_login(request: Request, rid: str, body: M.LoginStart):
         return mutate(
             request,
@@ -218,7 +219,7 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
         )
 
     # Sign a login out (the computer's own, or a named subscription's); it is read back like a sign-in.
-    @app.post("/api/v2/runners/{rid}/logouts")
+    @app.post("/api/v2/computers/{rid}/logouts")
     def start_logout(request: Request, rid: str, body: M.LogoutStart):
         return mutate(
             request,
@@ -227,7 +228,7 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
         )
 
     # The bots a sign-out would stop, for the confirmation.
-    @app.get("/api/v2/runners/{rid}/logouts/bots")
+    @app.get("/api/v2/computers/{rid}/logouts/bots")
     def logout_bots(request: Request, rid: str, runtime: str, profile: str = ""):
         with store.read() as c:
             return model_login.affected_bots(
@@ -235,7 +236,7 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
             )
 
     # Take a named subscription off a computer (refused, naming them, while bots run on it); read back like a sign-in.
-    @app.post("/api/v2/runners/{rid}/removals")
+    @app.post("/api/v2/computers/{rid}/removals")
     def start_removal(request: Request, rid: str, body: M.RemovalStart):
         return mutate(
             request,
@@ -246,7 +247,7 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
         )
 
     # A signed-out computer login takes the company's shared key again.
-    @app.post("/api/v2/runners/{rid}/shared-key")
+    @app.post("/api/v2/computers/{rid}/shared-key")
     def use_shared_key(request: Request, rid: str, body: M.SharedKeyUse):
         if body.credential:
             return mutate(
@@ -262,12 +263,12 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
 
     # Clear key / Replace key (backend/computer_keys.py). What signs it in, and for the company's shared key every
     # computer it serves: the "this computer only / all of them" ask. Previews only.
-    @app.get("/api/v2/runners/{rid}/keys")
+    @app.get("/api/v2/computers/{rid}/keys")
     def computer_key_info(request: Request, rid: str, runtime: str):
         with store.read() as c:
             return model_login.key_info(c, request.state.identity, rid, runtime, auth=auth, vault=app.state.vault)
 
-    @app.post("/api/v2/runners/{rid}/keys/clear")
+    @app.post("/api/v2/computers/{rid}/keys/clear")
     def clear_computer_key(request: Request, rid: str, body: M.KeyClear):
         return mutate(
             request,
@@ -277,7 +278,7 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
 
     # The key goes to the vault, never into the login relay; the vault's own write path keeps it out of the request
     # receipt (a keyed fingerprint, as for Credentials).
-    @app.post("/api/v2/runners/{rid}/keys")
+    @app.post("/api/v2/computers/{rid}/keys")
     def replace_computer_key(request: Request, rid: str, body: M.KeyReplace):
         who = request.state.identity
         vault = app.state.vault
@@ -321,7 +322,7 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
             ),
         )
 
-    @app.get("/api/v2/runners/{rid}/logins/{lid}")
+    @app.get("/api/v2/computers/{rid}/logins/{lid}")
     def read_login(request: Request, rid: str, lid: str):
         # A read that also expires: a sign-in nobody finished does not stay open. Polled while a sign-in runs, so the
         # write lock is taken only when something has run out.
@@ -331,13 +332,13 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
         with store.transaction() as c:
             return model_login.read(c, request.state.identity, rid, lid, auth=auth)
 
-    @app.post("/api/v2/runners/{rid}/logins/{lid}/code")
+    @app.post("/api/v2/computers/{rid}/logins/{lid}/code")
     def login_code(request: Request, rid: str, lid: str, body: M.LoginCode):
         return mutate(
             request, body, lambda c: model_login.submit_code(c, request.state.identity, rid, lid, body.code, auth=auth)
         )
 
-    @app.post("/api/v2/runners/{rid}/logins/{lid}/cancel")
+    @app.post("/api/v2/computers/{rid}/logins/{lid}/cancel")
     def cancel_login(request: Request, rid: str, lid: str, body: M.Empty):
         return mutate(request, body, lambda c: model_login.cancel(c, request.state.identity, rid, lid, auth=auth))
 
@@ -362,13 +363,13 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
             lambda c: (execution.runner(c, who), model_login.report(c, who.runner_id, lid, body, store.settings))[1],
         )
 
-    @app.post("/api/v2/runners/{rid}/harness-actions")
+    @app.post("/api/v2/computers/{rid}/harness-actions")
     def harness_action(request: Request, rid: str, body: M.HarnessAction):
         return mutate(
             request, body, lambda c: harness_actions.request(c, request.state.identity, rid, body.harness, body.action)
         )
 
-    @app.post("/api/v2/runners/{rid}/harness-choices")
+    @app.post("/api/v2/computers/{rid}/harness-choices")
     def harness_choice(request: Request, rid: str, body: M.HarnessChoice):
         return mutate(
             request,
@@ -400,7 +401,7 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
             request, body, lambda c: (execution.runner(c, who), harness_actions.report(c, who.runner_id, aid, body))[1]
         )
 
-    @app.post("/api/v2/runners/{rid}/revoke")
+    @app.post("/api/v2/computers/{rid}/revoke")
     def revoke(request: Request, rid: str, body: M.Empty):
         from . import computers
 

@@ -27,6 +27,8 @@ owed line in one wake (`deliver`, or folded into the next wake H._wake sends it)
   one it is for, the task's `owner` is BotOps) (backend/credential_cards.py); fixed when that variable is stored for
   or granted to that bot (backend/credentials.py). Canceling its credential card ends the wait with a wake that
   says so (`dropped`).
+- `tool:<id>`: a tool's key was rejected; the Tools page's owner's Reconnect task waits on its key card
+  (backend/reconnect_tasks.py), which ends that task with the fix (`settle`) instead of waking it.
 
 Anything else (GitHub, an MCP server's OAuth) is a new key with its own fix kind, opened and fixed through the same
 `open` and `fixed`. The person is the bot's operator, else the company owner (usage_limits.recipients), except a
@@ -106,6 +108,8 @@ def line(c, bot, service, label, fix=None):
         return f"{name} needs {label} to go on."
     if service == "login":
         return f"{name} can't sign in to {label}."
+    if service == "access":
+        return f"{name} asks for {label}."
     return f"{name} can't reach {label}."
 
 
@@ -347,6 +351,27 @@ def fixed(c, key, bot=None, why=""):
     return woken
 
 
+def settle(c, task_id, key, ended="fixed"):
+    """The task waiting on `key` ends with its fix (backend/reconnect_tasks.py closes it right after): its card says
+    `ended` (fixed or retired) and owes no wake, since there is no work left to go back to. Whether a card was open."""
+    if not _present(c):
+        return False
+    H = _H()
+    wait = c.execute(
+        "SELECT * FROM task_reconnects WHERE task_id=? AND key=? AND fixed_at IS NULL", (task_id, key)
+    ).fetchone()
+    if not wait:
+        return False
+    wait, at = dict(wait), H.now()
+    if ended == "retired":
+        _retire(c, wait)
+    elif _close(c, wait, ended, at):
+        c.execute("UPDATE task_reconnects SET woke_at=? WHERE task_id=? AND key=?", (at, task_id, key))
+        _settle_requests(c, [wait] if wait["service"] == "secret" else [], at)
+    H._recount(c, wait["owner"])
+    return True
+
+
 def _settle_requests(c, waits, at):
     """A secret saved through one task's card is saved for every task that asked for it: their cards stop asking."""
     if not waits or not _H()._has_table(c, "credential_requests"):
@@ -375,9 +400,12 @@ def dropped(c, request_id):
 
 
 def _said(c, wait):
+    if wait["ended"] == "canceled" and wait["service"] == "access":
+        return f"{wait['label']} was declined."
     if wait["ended"] == "canceled":
         return f"{_H().actor_name(c, wait['person'])} canceled the card for {wait['label']}: it was not saved."
-    return f"{wait['label']} is " + ("saved" if wait["service"] == "secret" else "reconnected") + "."
+    done = {"secret": "saved", "access": "granted"}.get(wait["service"], "reconnected")
+    return f"{wait['label']} is {done}."
 
 
 def _claim_owed(c, task_id, owner):
@@ -427,6 +455,8 @@ def deliver(c, task_id, why=""):
     keys = [w["key"] for w in owed]
     H.event(c, H.KEEPER, "task.reconnected", row["id"], {"keys": keys, "why": why})
     head = "Reconnected" if all(w["ended"] == "fixed" for w in owed) else "Reconnect card closed"
+    if all(w["service"] == "access" for w in owed):
+        head = "Access granted" if all(w["ended"] == "fixed" for w in owed) else "Access request closed"
     text = f"{head}: {row['title']}\n{said} Continue."
     if not H._wake(
         c,
@@ -543,11 +573,9 @@ def hold(c, task_id):
     card = pending(c, task_id)
     if not card:
         return None
-    return {
-        "why": f"{card['label']} to be reconnected" if card["service"] != "secret" else f"{card['label']} to be saved",
-        "on": card["person"],
-        "what": ("save " if card["service"] == "secret" else "reconnect ") + card["label"],
-    }
+    verb = {"secret": "save", "access": "grant"}.get(card["service"], "reconnect")
+    done = {"secret": "saved", "access": "granted"}.get(card["service"], "reconnected")
+    return {"why": f"{card['label']} to be {done}", "on": card["person"], "what": f"{verb} {card['label']}"}
 
 
 def for_tasks(c, task_ids, person):

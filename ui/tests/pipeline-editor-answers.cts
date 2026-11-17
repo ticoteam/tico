@@ -42,7 +42,7 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
       if (p === '/api/me') return json({...me, config});
       if (p === '/api/v2/config') return json(config);
       if (p === '/api/employees') return json([]);
-      if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
+      if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
       if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
       // As pipeline_settings.save answers: the record as stored, each new requirement with its id.
       if (p === '/api/v2/pipelines/product' && r.method() === 'POST') {

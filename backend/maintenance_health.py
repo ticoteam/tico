@@ -742,7 +742,7 @@ def _stop_checks(c):
             )
         )
     for hold in turn_budgets.held(c):
-        bot = hold["bot_id"]
+        bot = hold["bot"]
         row = H.bot(c, bot) or {}
         name = row.get("display_name") or row.get("slug") or bot
         out.append(

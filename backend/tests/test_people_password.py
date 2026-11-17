@@ -48,7 +48,7 @@ def test_an_owner_makes_an_account_and_sees_its_password_once_and_tico_keeps_non
 )
 def test_a_refused_account_is_a_plain_422(signin, answer, code, words):  # noqa: F811
     signin.fake.accounts = [answer]
-    refused = signin.api.post("/api/v2/access/people/cara/password", json={}, headers=owner(signin))
+    refused = signin.api.post("/api/v2/access/humans/cara/password", json={}, headers=owner(signin))
     assert refused.status_code == 422, refused.text  # never 429 or 502: the browser would retry those
     assert refused.json()["error"]["code"] == code and words in refused.json()["error"]["detail"], refused.text
 
@@ -57,7 +57,7 @@ def test_without_an_issuer_that_makes_accounts_the_button_is_off_and_nothing_is_
     headers = owner(signin)
     assert signin.api.get("/api/v2/access", headers=headers).json()["account_password"] is False
     signin.fake.accounts = None
-    refused = signin.api.post("/api/v2/access/people/cara/password", json={}, headers=headers)
+    refused = signin.api.post("/api/v2/access/humans/cara/password", json={}, headers=headers)
     assert refused.status_code == 422 and refused.json()["error"]["code"] == "password_unavailable"
     assert signin.fake.account_calls == []
 
@@ -68,7 +68,7 @@ def test_a_rehearsal_makes_no_account_and_asks_the_issuer_nothing(signin, monkey
     monkeypatch.setenv("TICO_REHEARSAL", "1")
     monkeypatch.setattr(signin.auth.proxy, "_discover", lambda *a, **k: pytest.fail("a rehearsal asked the issuer"))
     assert signin.api.get("/api/v2/access", headers=headers).json()["account_password"] is False
-    refused = signin.api.post("/api/v2/access/people/cara/password", json={}, headers=headers)
+    refused = signin.api.post("/api/v2/access/humans/cara/password", json={}, headers=headers)
     assert refused.status_code == 422 and refused.json()["error"]["code"] == "rehearsal"
     assert signin.fake.account_calls == []
 
@@ -77,11 +77,11 @@ def test_only_an_owner_or_admin_makes_accounts_for_someone_else_on_the_roster(si
     signin.fake.accounts = [(201, {"status": "created", "password": PASSWORD})]
     assert signin.login(claims={"email": "cara@acme.example"}).status_code == 302
     member = {"origin": signin.settings.public_url, "idempotency-key": "k-member"}
-    assert signin.api.post("/api/v2/access/people/ben/password", json={}, headers=member).status_code == 403
+    assert signin.api.post("/api/v2/access/humans/ben/password", json={}, headers=member).status_code == 403
     signin.api.cookies.clear()
     headers = owner(signin)
-    assert signin.api.post("/api/v2/access/people/nobody/password", json={}, headers=headers).status_code == 404
-    assert signin.api.post("/api/v2/access/people/ana/password", json={}, headers=headers).status_code == 422
+    assert signin.api.post("/api/v2/access/humans/nobody/password", json={}, headers=headers).status_code == 404
+    assert signin.api.post("/api/v2/access/humans/ana/password", json={}, headers=headers).status_code == 422
     keyless = {k: v for k, v in headers.items() if k != "idempotency-key"}
-    assert signin.api.post("/api/v2/access/people/cara/password", json={}, headers=keyless).status_code == 422
+    assert signin.api.post("/api/v2/access/humans/cara/password", json={}, headers=keyless).status_code == 422
     assert signin.fake.account_calls == []

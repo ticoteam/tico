@@ -45,7 +45,7 @@ def test_a_cross_runtime_task_model_is_required_until_cleared_and_runs_after_syn
     shown = lambda: next(m for m in get(api, "operations")["machines"] if m["id"] == machine["runner_id"])
     assert "grok" in shown()["bot_runtimes"]
     # Just like the bot's primary and fallback, the task runtime cannot be switched off while required.
-    post(api, f"runners/{machine['runner_id']}/harness-choices", {"harness": "grok", "enabled": False}, expected=409)
+    post(api, f"computers/{machine['runner_id']}/harness-choices", {"harness": "grok", "enabled": False}, expected=409)
     # Grok's actual runner readiness has no sign-in check; installed + unknown must still run.
     rust_heartbeat(
         api,
@@ -61,7 +61,7 @@ def test_a_cross_runtime_task_model_is_required_until_cleared_and_runs_after_syn
     assert get(api, "tasks/" + task["id"])["runs"][0]["ran_on"]["task_model"]["source"] == "task"
     set_task_model(api, None)
     assert "grok" not in shown()["bot_runtimes"]
-    post(api, f"runners/{machine['runner_id']}/harness-choices", {"harness": "grok", "enabled": False})
+    post(api, f"computers/{machine['runner_id']}/harness-choices", {"harness": "grok", "enabled": False})
 
 
 def test_with_no_task_model_a_task_runs_on_the_bots_own_model_and_effort(api):

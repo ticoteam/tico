@@ -57,7 +57,7 @@ const msg = (id: string, from: string, body: string, at: string) => ({id, seq: N
       if (p === '/api/v2/config') return json(config);
       if (p === '/api/employees') return json([{slug: 'asp', id: 'asp', display_name: 'Agent Services Product Owner', status: 'active'},
         {slug: 'tpo', id: 'tpo', display_name: 'Tasks Product Owner', status: 'active'}]);
-      if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
+      if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
       if (p === '/api/v2/pipelines') return json({pipelines: []});
       if (p === '/api/v2/needs-you') return json({actor: 'human:ana', count: needs.length, items: needs, version: needs.map(n => n.id).join(','), next: null});
       if (p === '/api/v2/oks/r2') return json({error: 'not_found'}, 404);   // a plain OK: approved with its note

@@ -32,6 +32,7 @@ from .harnesses import EXTERNAL_HARNESSES, resolve_harness
 from .store import H, Problem, encode, readiness_document, repo_url
 from . import bot_settings as BS
 from . import tool_access as TA
+from .api_contract import api_v2
 
 CREDENTIALS_NOTE = (
     "Store a needed Credential through Credentials or its chat card, and grant it to this bot. "
@@ -536,7 +537,7 @@ def listing(c, settings, bot, reads=None):
                     detail="",
                     problem=(
                         f"{label} holds the Google key, but {slug} is nobody's message bot on the server, so its runs get no mail "
-                        "token. An owner or admin names it: POST /api/v2/access/people/<person> "
+                        "token. An owner or admin names it: POST /api/v2/access/humans/<person> "
                         '{"inbox_bot": "' + bot + '", "mailbox": "<address>"}'
                     ),
                 )
@@ -1172,7 +1173,15 @@ def install(app, store, auth, mutate, settings_admin, requester=None):
                 keep.append(row)
         return keep
 
-    @app.get("/api/v2/bots/{bot}/tools")
+    @app.get(
+        "/api/v2/bots/{bot}/tools",
+        **api_v2(
+            "Bots",
+            "listBotTools",
+            "The tools a bot uses, for the row at the top of its page: its model and harness, its repository, each declared `tools:` entry and each tool granted to it in Tools, with its status; names and verbs, never a secret",
+            "BotTools",
+        ),
+    )
     def bot_tools(request: Request, bot: str):
         who = request.state.identity
         auth.domain(who)
@@ -1204,7 +1213,15 @@ def install(app, store, auth, mutate, settings_admin, requester=None):
             redact(result)
             return result
 
-    @app.post("/api/v2/bots/{bot}/tools")
+    @app.post(
+        "/api/v2/bots/{bot}/tools",
+        **api_v2(
+            "Bots",
+            "registerBotTool",
+            "Add a note entry for a bot you manage: validated, kept as a pending request and handed to BotOps as a task with the exact `tools:` entry. One that only names a tool the bot already holds through a grant opens no task. Never a credential: `env` is a variable's name",
+            "BotToolRegistered",
+        ),
+    )
     def register_tool(request: Request, bot: str, body: M.ToolRegister):
         """Register a tool for a bot: checked, kept as a pending request, and handed to BotOps as a task
         with the exact `tools:` entry. A credential is never accepted; `env` is a variable's name."""
@@ -1223,7 +1240,15 @@ def install(app, store, auth, mutate, settings_admin, requester=None):
             lambda c: unregister(c, auth, store.settings, acting(c, who), bot, tool_id, admins()),
         )
 
-    @app.post("/api/v2/bots/{bot}/tools/{tool_id}/update")
+    @app.post(
+        "/api/v2/bots/{bot}/tools/{tool_id}/update",
+        **api_v2(
+            "Bots",
+            "updateBotTool",
+            "Change a declared tool's `can`, `scope` or `note` in place (bot managers): one BotOps task with the changed entry; the tool shows `pending: update` until the computer reports it",
+            "BotToolUpdated",
+        ),
+    )
     def update_tool(request: Request, bot: str, tool_id: str, body: M.ToolUpdate):
         """Change a declared tool's `can`, `scope` or `note` in place: one task for BotOps with the changed entry,
         the tool shown as pending its change. BotOps acts for the person who asked it, like `register_tool`."""
@@ -1234,12 +1259,25 @@ def install(app, store, auth, mutate, settings_admin, requester=None):
             lambda c: update(c, auth, store.settings, acting(c, who), bot, tool_id, body, admins()),
         )
 
-    @app.delete("/api/v2/bots/{bot}/tools/{tool_id}")
+    @app.delete(
+        "/api/v2/bots/{bot}/tools/{tool_id}",
+        **api_v2(
+            "Bots",
+            "removeBotTool",
+            "Ask BotOps to remove a declared tool, or withdraw a pending request (bot managers)",
+            "BotToolRemoval",
+        ),
+    )
     def delete_tool(request: Request, bot: str, tool_id: str):
         """Ask BotOps to remove a declared tool (or withdraw a pending request)."""
         return remove(request, bot, tool_id)
 
-    @app.post("/api/v2/bots/{bot}/tools/{tool_id}/delete")
+    @app.post(
+        "/api/v2/bots/{bot}/tools/{tool_id}/delete",
+        **api_v2(
+            "Bots", "removeBotToolPost", "The same as DELETE, for clients that only send GET and POST", "BotToolRemoval"
+        ),
+    )
     def delete_tool_post(request: Request, bot: str, tool_id: str, body: M.Empty):
         """The same as DELETE, for clients (the tico CLI, MCP) that only send GET and POST."""
         return remove(request, bot, tool_id)

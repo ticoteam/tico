@@ -71,7 +71,7 @@ const box = async (page: Page, sel: string): Promise<Box | null> => page.locator
       if (p === '/api/me') return json({...me, config});
       if (p === '/api/v2/config') return json(config);
       if (p === '/api/employees') return json([]);
-      if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'bo', name: 'Bo'}], teams: {}});
+      if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'bo', name: 'Bo'}], teams: {}});
       if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
       if (p === '/api/v2/needs-you') return json({actor: 'human:ana', count: needs.length, items: needs, version: String(needs.length), next: null});
       // An OK with nothing attached: no grant to read.
@@ -146,7 +146,7 @@ const box = async (page: Page, sel: string): Promise<Box | null> => page.locator
     }
     await page.locator(`${approve}:not([disabled])`).waitFor();
 
-    // Approve: "✓ Approved · Undo" in the bar's slot, over nothing else: not the page, not the buttons; all three
+    // Approve: "✓ Approved · Undo" on the top bar's row, over nothing else: not the page, not the buttons; all three
     // buttons visible, 44 px, and reached by a tap.
     const spot = (await box(page, approve))!;
     await page.mouse.click(spot.x + spot.width / 2, spot.y + spot.height / 2);
@@ -156,8 +156,8 @@ const box = async (page: Page, sel: string): Promise<Box | null> => page.locator
     check(await dialog.locator('.dc-bar:not([hidden])').count() === 1, 'the message still shows');
     if (shots) await page.screenshot({path: path.join(shots, 'ask-phone-390-approved.png')});
     const toast = (await box(page, '#need-card .dc-bar'))!, row = (await box(page, `${approve} >> xpath=..`))!;
-    const slot = (await box(page, '#need-card .dc-sayw'))!;
-    check(Math.abs(toast.y - slot.y) < 1 && Math.abs(toast.height - slot.height) < 1, `the undo sits in the bar's slot (${JSON.stringify(toast)} vs ${JSON.stringify(slot)})`);
+    const nav = (await box(page, '#need-card .dc-nav'))!;
+    check(Math.abs((toast.y + toast.height / 2) - (nav.y + nav.height / 2)) < 2, `the undo sits on the top bar's row, beside ‹ › (${JSON.stringify(toast)} vs ${JSON.stringify(nav)})`);
     check((await page.locator('#need-card .dc-bar').innerText()).startsWith('✓ Approved'), 'it says what was done');
     check(toast.y + toast.height <= row.y, `the undo is clear of the buttons (${toast.y + toast.height} > ${row.y})`);
     const undoBtn = (await box(page, '#need-card .dc-bar [data-dc="undo"]'))!;
@@ -167,7 +167,7 @@ const box = async (page: Page, sel: string): Promise<Box | null> => page.locator
     const covers = await page.evaluate(() => {
       const r = document.querySelector('#need-card .dc-bar')!.getBoundingClientRect();
       const under = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-      const others = [...document.querySelectorAll<HTMLElement>('#need-card .dc-head > :not(.dc-nav):not(.dc-sayw), #need-card .dc-nav > button')]
+      const others = [...document.querySelectorAll<HTMLElement>('#need-card .dc-head > :not(.dc-nav):not(.dc-sayw):not(.dc-bar), #need-card .dc-nav > button')]
         .filter(e => e.offsetParent).map(e => e.getBoundingClientRect())
         .filter(o => o.width && o.left < r.right && o.right > r.left && o.top < r.bottom && o.bottom > r.top);
       return [!!under?.closest('.dc-bar'), others.length];

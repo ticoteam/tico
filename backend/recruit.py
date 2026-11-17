@@ -1,6 +1,6 @@
 """The org builder's suggestions: which bots to recruit into one department (docs/onboarding.md, PRIVACY.md).
 
-The browser never talks to Tico HQ. It asks `POST /api/v2/onboarding/recruit` with a department, the owner's one-line
+The browser never talks to Tico HQ. It asks `POST /api/v2/setup/recruit` with a department, the owner's one-line
 answer and their "Suggestions from Tico HQ" toggle, and this module answers from one of two places:
 
 - **Tico HQ** (`POST <TICO_HQ_URL>/v1/recruit`), only when the toggle is on *and* the install allows it: not in demo
@@ -175,7 +175,7 @@ class Recruiter:
             raise Problem("forbidden", "Only the owner or a bot administrator builds the org chart", 403)
 
     def departments(self, who):
-        """`GET /api/v2/onboarding/departments`: the departments, every card with its department and icon, and whether
+        """`GET /api/v2/setup/groups`: the departments, every card with its department and icon, and whether
         this install may ask Tico HQ (`hq.available`, and `hq.off_by` when it may not)."""
         self._reader(who)
         with self.store.read() as c:
@@ -184,7 +184,7 @@ class Recruiter:
         return {**value, "hq": {"available": not off, "off_by": off}}
 
     def recruit(self, who, body):
-        """`POST /api/v2/onboarding/recruit`: the suggestions for one department, from HQ when the person's toggle is on
+        """`POST /api/v2/setup/recruit`: the suggestions for one department, from HQ when the person's toggle is on
         and the install allows it, else from the local recommender. `source` says which answered."""
         self._reader(who)
         with self.store.read() as c:

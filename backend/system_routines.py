@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, time as clock, timedelta, timezone
 
 from .store import H, Problem
+from .api_contract import api_v2
 
 LOG = logging.getLogger("tico.system_routines")
 
@@ -178,6 +179,10 @@ ACTIONS = {
     "goal_colours": ("work out every goal's colour again", ("goal", "colour", "color")),
     "check_gateway": ("check this server's Gateway key and the month's cap", ("gateway", "key", "cap")),
     "check_tools": ("call each proxied API tool's check with its keys", ("tools", "keys", "check")),
+    "close_access_requests": (
+        "close access requests and old access tasks whose access exists now",
+        ("access", "requests", "grant", "tools", "repositories"),
+    ),
     "read_billing": ("read HQ's nightly billing check", ("billing",)),
     "check_pages": (
         "read the watched competitor pages and file an insight for each that changed",
@@ -524,6 +529,16 @@ JOBS = [
         300,
         then=("check_tools",),
         applies=_tools_checked,
+    ),
+    Job(
+        "access_requests",
+        "Access requests",
+        "Closes each open access request whose access exists by now, and each old access task that asks for "
+        "access a bot has now, so nobody is asked twice.",
+        HOUSEKEEPING,
+        "Hourly",
+        3600,
+        then=("close_access_requests",),
     ),
     Job(
         "billing_check",
@@ -1478,7 +1493,14 @@ def install(app, store, auth, mutate):
 
     from . import models as M
 
-    @app.get("/api/v2/system-routines")
+    @app.get(
+        "/api/v2/system-routines",
+        **api_v2(
+            "Health",
+            "listSystemRoutines",
+            "Every job Tico runs on its own: schedule, last and next run, on or off, and what the viewer may change",
+        ),
+    )
     def system_routines(request: Request):
         """Every job Tico runs on its own, in one flat list: WHEN <trigger> THEN <actions>, its department tag, schedule,
         last and next run, on/off, for a Decide job which route answered and this month's spend, and `can_change`: what
@@ -1488,7 +1510,15 @@ def install(app, store, auth, mutate):
         with store.read() as c:
             return listing(c, store.settings, who=who, auth=auth)
 
-    @app.put("/api/v2/system-routines/{key}")
+    @app.put(
+        "/api/v2/system-routines/{key}",
+        **api_v2(
+            "Health",
+            "saveSystemRoutine",
+            "The owner or an admin: switch a system routine on or off, pick its schedule preset (15m, hourly, 4h, daily, business) or its daily time; answers {job}: the routine's listing row, or for ask_deadlines (a Heartbeat step with its own switch) its HeartbeatStep row",
+            "SystemRoutineSaved",
+        ),
+    )
     def system_routine_save(key: str, request: Request, body: M.SystemRoutineUpdate):
         """Switch a job on or off, or pick its schedule preset and daily time. An owner or an admin.
         Topic changed's switch is its team rule (backend/team_rules.py)."""
@@ -1502,7 +1532,14 @@ def install(app, store, auth, mutate):
         with store.read() as c:
             return {"job": row_of(c, store.settings, key, who, auth)}
 
-    @app.post("/api/v2/system-routines/{key}/run")
+    @app.post(
+        "/api/v2/system-routines/{key}/run",
+        **api_v2(
+            "Health",
+            "runSystemRoutine",
+            "The owner or an admin: run one controlled system routine once, now; 409 while it is off or already running. The retired task_roundup and learnings jobs run Maintenance Find stuck and Learn respectively and return {run, started}.",
+        ),
+    )
     def system_routine_run(key: str, request: Request, body: M.Empty):
         """Run one of the controlled jobs once, now, through the code and caps of its scheduled run; its result lands
         on its row. `running` while a job that asks Decide works on its own thread. 409 while it is off or already

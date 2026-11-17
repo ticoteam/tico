@@ -179,6 +179,8 @@ interface PipelineViewHooks {
   rail?(p: PipelineRec, drawn: boolean): void;   // drawn: the board is on screen (not loading, not failed)
   ask?(host: HTMLElement, p: PipelineRec, phone: boolean): void;
   edit?(p: PipelineRec): void;
+  /** ⋯ › Select: pick tasks to move many at once (Move to…); again, stop. */
+  select?(p: PipelineRec): void;
 }
 const TASK_PAGE_HOOKS: {pipeline?: PipelineViewHooks} = {};
 const taskFiltersOn = (f: TaskFilters | null | undefined) =>

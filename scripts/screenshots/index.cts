@@ -130,6 +130,11 @@ const SETTINGS_UI = ['ui/app/settings.ts', 'ui/styles/settings.css'];
 // open a dialog). ui: the files under ui/ that draw the page, as globs (scripts/screenshots/select.cts): a change
 // to one of them shoots this page, and a change to a file no page claims is listed, never silently dropped.
 const PAGES: PageSpec[] = [
+  // Company (#/home): the Floor first, then the reader's cards. The halls are the Floor's only words until a hover.
+  {name: 'company', route: '#/home', ready: 'Needs you', ui: ['ui/app/dashboard.ts', 'ui/app/company-floor.ts', 'ui/styles/dashboard.css', 'ui/styles/company-floor.css'],
+    steps: async page => {
+      await page.locator('.cf-hall-name').first().waitFor({timeout: 20000});
+    }},
   {name: 'updates', route: '#/updates', ready: 'The rivals sit $20 to $40 above Home Pro, so we still win on price.', ui: ['ui/app/updates.ts', 'ui/styles/updates.css']},
   {name: 'tasks', route: '#/tasks', ready: 'Raise Home Pro from $449 to $479 for December?', ui: TASKS_UI, steps: async page => {
     await page.click('#task-scope');
@@ -220,7 +225,7 @@ const PAGES: PageSpec[] = [
   {name: 'learnings', route: '#/learnings', ready: 'set the phone on a flat surface before calibrating',
     ui: ['ui/app/learnings.ts', 'ui/app/learned.ts', 'ui/app/assistant-viewers.ts', 'ui/app/bot-learnings.ts', 'ui/styles/learnings.css', 'ui/styles/bot-learnings.css', 'ui/app/empty-art.ts']},
   {name: 'threads', route: '#/threads', ready: 'Threads',
-    ui: ['ui/app/threads*.ts', 'ui/app/thread-*.ts', 'ui/app/catch-up.ts', 'ui/app/chat*.ts', 'ui/app/feedback.ts', 'ui/app/visual-*.ts',
+    ui: ['ui/app/threads*.ts', 'ui/app/thread-*.ts', 'ui/app/access-requests.ts', 'ui/app/catch-up.ts', 'ui/app/chat*.ts', 'ui/app/feedback.ts', 'ui/app/visual-*.ts',
       'ui/app/slash-commands.ts', 'ui/styles/threads.css', 'ui/styles/thread-*.css', 'ui/styles/chat*.css', 'ui/styles/feedback.css',
       'ui/styles/visual-*.css', 'ui/app/call-ring.ts', 'ui/app/new-message.ts', 'ui/styles/calls.css', 'ui/app/empty-art.ts']},
   {name: 'calendar', route: '#/calendar', ready: 'Calendar', ui: ['ui/app/calendar*.ts', 'ui/styles/calendar.css']},

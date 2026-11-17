@@ -20,7 +20,7 @@ def built(environment):
     shutil.copytree(TEMPLATE, Path(api.app.state.store.settings.catalog_dir) / "finance-owner")
     machine(api)
     draft(api)
-    api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+    api.post("/api/v2/setup/complete", json={}, headers=signed_in())
     return api
 
 

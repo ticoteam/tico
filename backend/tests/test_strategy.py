@@ -76,7 +76,7 @@ def test_only_the_owner_writes_and_reads_the_draft_a_bot_proposes_at_any_level(a
     bet = get(api, "strategy")["bets"][0]
     proposal = post(
         api,
-        "goal-proposals",
+        "proposals",
         {
             "kind": "strategy_draft",
             "reason": "The site says so.",
@@ -89,12 +89,12 @@ def test_only_the_owner_writes_and_reads_the_draft_a_bot_proposes_at_any_level(a
     )["proposal"]
     # The proposal carries the unpublished draft: the owner and the bot that made it read it, no one else.
     for token in ("ben-test", "cara-test"):
-        assert not [p for p in get(api, "goal-proposals", token=token)["proposals"] if p["kind"] == "strategy_draft"]
+        assert not [p for p in get(api, "proposals", token=token)["proposals"] if p["kind"] == "strategy_draft"]
         assert not [p for p in get(api, "goals/tree", token=token)["proposals"] if p["kind"] == "strategy_draft"]
-    assert [p["id"] for p in get(api, "goal-proposals", token=strategy_token)["proposals"]] == [proposal["id"]]
-    assert [p["id"] for p in get(api, "goal-proposals")["proposals"]] == [proposal["id"]]
-    post(api, f"goal-proposals/{proposal['id']}/decide", {"decision": "confirm"}, token=strategy_token, expected=403)
-    post(api, f"goal-proposals/{proposal['id']}/decide", {"decision": "confirm"})
+    assert [p["id"] for p in get(api, "proposals", token=strategy_token)["proposals"]] == [proposal["id"]]
+    assert [p["id"] for p in get(api, "proposals")["proposals"]] == [proposal["id"]]
+    post(api, f"proposals/{proposal['id']}/decide", {"decision": "confirm"}, token=strategy_token, expected=403)
+    post(api, f"proposals/{proposal['id']}/decide", {"decision": "confirm"})
     view = get(api, "strategy")
     assert view["draft"]["summary"] == "Acme runs rentals for small landlords." and view["current"] is None
     assert {(b["statement"], b["status"]) for b in view["bets"]} == {
@@ -108,14 +108,14 @@ def test_two_pending_strategy_proposals_apply_in_the_order_confirmed(api):
     ids = [
         post(
             api,
-            "goal-proposals",
+            "proposals",
             {"kind": "strategy_draft", "reason": "r", "payload": {"summary": text}},
             token=strategy_token,
         )["proposal"]["id"]
         for text in ("First.", "Second.")
     ]
     for pid in reversed(ids):
-        post(api, f"goal-proposals/{pid}/decide", {"decision": "confirm"})
+        post(api, f"proposals/{pid}/decide", {"decision": "confirm"})
     assert draft(api)["summary"] == "First."
 
 
@@ -165,7 +165,7 @@ def test_proof_since_is_when_the_published_proof_last_changed_and_every_reader_s
     # The Strategy Owner proposes proof from the evidence; the owner confirms; publishing dates it.
     proposal = post(
         api,
-        "goal-proposals",
+        "proposals",
         {
             "kind": "strategy_draft",
             "reason": "October's numbers are in.",
@@ -173,7 +173,7 @@ def test_proof_since_is_when_the_published_proof_last_changed_and_every_reader_s
         },
         token=strategy_token,
     )["proposal"]
-    post(api, f"goal-proposals/{proposal['id']}/decide", {"decision": "confirm"})
+    post(api, f"proposals/{proposal['id']}/decide", {"decision": "confirm"})
     second = publish(api, "Proof")
     write(api, summary="Acme runs small rentals with bots.")
     publish(api, "Summary only")
@@ -254,7 +254,7 @@ def test_a_title_only_section_rename_from_a_proposal_renames_and_keeps_the_body(
     strategy_token = with_strategy_bot(api)
     pid = post(
         api,
-        "goal-proposals",
+        "proposals",
         {
             "kind": "strategy_draft",
             "reason": "r",
@@ -262,7 +262,7 @@ def test_a_title_only_section_rename_from_a_proposal_renames_and_keeps_the_body(
         },
         token=strategy_token,
     )["proposal"]["id"]
-    post(api, f"goal-proposals/{pid}/decide", {"decision": "confirm"})
+    post(api, f"proposals/{pid}/decide", {"decision": "confirm"})
     assert draft(api)["sections"]["extra"]["brand"] == {"title": "Positioning", "body": "Plain."}
     current = get(api, "strategy")["current"]
     assert current["n"] == 1 and current["sections"]["extra"]["brand"]["title"] == "Brand"
@@ -327,13 +327,17 @@ def test_retiring_a_bet_with_goals_files_one_realign_card_for_the_owner(api):
             "SELECT t.* FROM goal_asks a JOIN tasks t ON t.id=a.task_id WHERE a.kind='proposal' AND a.ref=?",
             (proposal["id"],),
         )
+    # The Strategy Owner's task, with its question to Ana: in her Needs you.
     assert (
-        task and task["owner_id"] == "human:ana" and task["title"] == "Choose what happens to 1 goal after strategy v2"
+        task
+        and task["owner_id"] == "bot:strategy-owner"
+        and task["title"] == "Choose what happens to 1 goal after strategy v2"
     )
+    assert task["id"] in {i.get("task_id") for i in get(api, "needs-you")["items"]}
     assert "Keep as it is, Retire goal, or Move to a bet" in task["body"] and "Confirm" not in task["body"]
     payload = json.loads(proposal["payload"])
     assert [g["goal_id"] for g in payload["goals"]] == [goal["id"]] and payload["bets"][0]["id"] == two["id"]
-    post(api, f"goal-proposals/{proposal['id']}/decide", {"decision": "confirm", "moves": {goal["id"]: two["id"]}})
+    post(api, f"proposals/{proposal['id']}/decide", {"decision": "confirm", "moves": {goal["id"]: two["id"]}})
     assert get(api, f"goals/{goal['id']}")["goal"]["bet_id"] == two["id"]
     with api.app.state.store.read() as c:
         closed = H._one(c, "SELECT status FROM tasks WHERE id=?", (task["id"],))
@@ -365,7 +369,7 @@ def realign_card(api):
     publish(api)
     post(api, f"strategy/bets/{one['id']}", {"statement": "Small landlords pay $99 a month"})
     publish(api, "Second")
-    [card] = [p for p in get(api, "goal-proposals")["proposals"] if p["kind"] == S.REALIGN]
+    [card] = [p for p in get(api, "proposals")["proposals"] if p["kind"] == S.REALIGN]
     with api.app.state.store.read() as c:
         task = H._one(c, "SELECT t.* FROM goal_asks a JOIN tasks t ON t.id=a.task_id WHERE a.ref=?", (card["id"],))
     return card, task, goals
@@ -378,7 +382,7 @@ def test_a_reworded_bet_carries_its_earlier_wording_and_keeping_every_goal_says_
     ] * 2
     assert card["closed_goals"] == []
     assert task["title"] == "Choose what happens to 2 goals after strategy v2" and "reworded" in task["body"]
-    post(api, f"goal-proposals/{card['id']}/decide", {"decision": "confirm", "moves": {g["id"]: "keep" for g in goals}})
+    post(api, f"proposals/{card['id']}/decide", {"decision": "confirm", "moves": {g["id"]: "keep" for g in goals}})
     assert all(get(api, f"goals/{g['id']}")["goal"]["bet_id"] == card["payload"]["goals"][0]["bet_id"] for g in goals)
     assert closing_note(api, task["id"]) == "Resolved: the goals stay as they are."
 
@@ -386,11 +390,11 @@ def test_a_reworded_bet_carries_its_earlier_wording_and_keeping_every_goal_says_
 def test_a_goal_closed_since_the_card_was_filed_is_listed_closed_and_left_alone(api):
     card, task, goals = realign_card(api)
     post(api, f"goals/{goals[0]['id']}/status", {"status": "done", "note": "Signed"})
-    [card] = [p for p in get(api, "goal-proposals")["proposals"] if p["id"] == card["id"]]
+    [card] = [p for p in get(api, "proposals")["proposals"] if p["id"] == card["id"]]
     assert card["closed_goals"] == [goals[0]["id"]]
-    out = post(
-        api, f"goal-proposals/{card['id']}/decide", {"decision": "confirm", "moves": {goals[0]["id"]: "retire"}}
-    )["proposal"]
+    out = post(api, f"proposals/{card['id']}/decide", {"decision": "confirm", "moves": {goals[0]["id"]: "retire"}})[
+        "proposal"
+    ]
     assert out["result"]["goals"] == {goals[0]["id"]: "closed", goals[1]["id"]: "kept"}
     assert get(api, f"goals/{goals[0]['id']}")["goal"]["status"] == "done"
     assert closing_note(api, task["id"]) == "Resolved: the goals stay as they are."
@@ -574,7 +578,7 @@ def test_hub_sql_shows_strategy_proposals_only_to_the_owner_and_the_bot_that_pro
     publish(api, "Second")  # files a strategy_realign card
     post(
         api,
-        "goal-proposals",
+        "proposals",
         {"kind": "strategy_draft", "reason": "r", "payload": {"sections": {"not": "Unannounced: no franchise deals."}}},
         token=strategy_token,
     )

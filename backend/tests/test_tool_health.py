@@ -1,7 +1,8 @@
-"""A tool's health from what really happens (backend/api_tools.py `status`, `call_health`, `due`): only a 401 says a key
-is rejected, a 403 is a key that works with a limited scope, a proxied tool's real calls outrank its check, computer
-tools are checked too, a known service lends its check path; and ids stored as keys (POSTHOG_PROJECT_ID,
-TWILIO_ACCOUNT_SID) never sit behind the proxy (backend/tool_settings.py `is_setting`, `repair_ids_once`)."""
+"""A tool's health from what really happens (backend/api_tools.py `status`, `call_health`, `due`): only a 401 that does not
+say a permission is missing says a key is rejected, a 403 or such a 401 is a key that works with a limited scope, a
+proxied tool's real calls outrank its check, computer tools are checked too, a known service lends its check path; ids
+stored as keys (POSTHOG_PROJECT_ID, TWILIO_ACCOUNT_SID) are never checked as keys and never sit behind the proxy
+(backend/tool_settings.py `is_setting`, `repair_ids_once`), and an old check that would not run today says nothing."""
 
 import pytest
 
@@ -16,12 +17,13 @@ SECRET = "acme-synthetic-health-key-0011223344"
 SID = "AC" + "0123456789abcdef" * 2
 
 
-def answer(monkeypatch, code):
+def answer(monkeypatch, code, missing_scope=False):
+    """The vendor's answer to every check: `code`, and for a 401 whether its reply says the key lacks a permission."""
     sent = []
 
     def send(url, hdrs, params):
         sent.append(url)
-        return send.code
+        return api_tools.Reply(send.code, send.code == 401 and missing_scope)
 
     send.code = code
     monkeypatch.setattr(api_tools, "send_check", send)
@@ -29,14 +31,16 @@ def answer(monkeypatch, code):
 
 
 def calls(api, tid, codes, hours_ago=1):
-    """Real calls through the proxy, oldest first, `hours_ago` back."""
+    """Real calls through the proxy, oldest first, `hours_ago` back. A code of "scoped" is a 401 whose reply names a
+    missing scope, as the proxy records it."""
     with api.app.state.store.transaction() as c:
         start = H.shift(H.now(), hours=-hours_ago)
         for i, code in enumerate(codes):
+            status, detail = (401, api_tools.MISSING_SCOPE) if code == "scoped" else (code, "")
             c.execute(
                 "INSERT INTO tool_calls(id,tool_id,credential_id,actor,bot,access_level,method,path,status_code,result,"
-                "detail,duration_ms,created_at) VALUES(?,?,NULL,'bot:ops','ops','read_write','GET','/x',?,'sent','',1,?)",
-                (H.new_id(), tid, code, H.shift(start, seconds=i)),
+                "detail,duration_ms,created_at) VALUES(?,?,NULL,'bot:ops','ops','read_write','GET','/x',?,'sent',?,1,?)",
+                (H.new_id(), tid, status, detail, H.shift(start, seconds=i)),
             )
 
 
@@ -237,3 +241,94 @@ def test_the_one_time_repair_moves_ids_off_the_proxy_so_bots_get_their_values(ap
     assert after["AWS_ACCESS_KEY_ID"]["value"].startswith("tpx1.")
     names = get(api, "runner-credential-grants", machine["token"])["bots"]["ops"]
     assert {"POSTHOG_PROJECT_ID", "TWILIO_ACCOUNT_SID"} <= set(names)
+
+
+def legacy_id_tool(api, value):
+    """A PostHog tool holding its project id as its key, as before the id rule: proxied, at PostHog's address."""
+    tid = made(api, "PostHog project", "posthog", "POSTHOG_PROJECT_ID", value)
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "UPDATE tools SET delivery='proxy', base_url='https://us.posthog.com', "
+            "check_path='/api/users/@me/' WHERE id=?",
+            (tid,),
+        )
+    return tid
+
+
+@pytest.mark.parametrize("value", ["4242", "sk-acme-synthetic-0011223344"])
+def test_an_id_held_as_a_key_is_never_checked_and_an_old_401_for_it_says_nothing(api, monkeypatch, value):
+    setup(api)
+    store = api.app.state.store
+    tid = legacy_id_tool(api, value)
+    _, sent = answer(monkeypatch, 401)
+    with store.transaction() as c:  # the 401 an older check recorded when it sent the id as the bearer
+        kid = c.execute("SELECT id FROM credentials WHERE tool_id=?", (tid,)).fetchone()[0]
+        c.execute(
+            "INSERT INTO tool_checks(id,tool_id,credential_id,ok,status_code,detail,checked_at) "
+            "VALUES('stale-check',?,?,0,401,'Key rejected',?)",
+            (tid, kid, H.now()),
+        )
+    assert shown(api, tid) == ("Not checked", "idle", False)
+    r = api.post(f"/api/v2/api-tools/{tid}/check", json={}, headers=headers())
+    assert r.status_code == 409 and "holds only ids" in r.text
+    assert sent == []
+    with store.transaction() as c:  # the repair left it as a computer tool with no address: still nothing to say
+        c.execute("UPDATE tools SET delivery='computer', base_url='', check_path='' WHERE id=?", (tid,))
+    assert shown(api, tid) == ("Not checked", "idle", False)
+    assert sent == []
+
+
+def test_a_401_whose_reply_says_a_permission_is_missing_is_limited_for_any_service(api, monkeypatch):
+    setup(api)
+    eleven = tool(api, "ElevenLabs")["id"]  # its check path /v1/user needs user_read, which a restricted key lacks
+    key(api, eleven, SECRET)
+    answer(monkeypatch, 401, missing_scope=True)
+    got = post(api, f"api-tools/{eleven}/check", {})
+    assert (got["ok"], got["status_code"], got["detail"]) == (True, 401, "Works (limited)")
+    assert shown(api, eleven) == ("Works (limited)", "ok", False)
+    assert get(api, f"api-tools/{eleven}")["checks"][0]["detail"] == "Works (limited)"
+    other = tool(api, "Acme API", base_url="https://api.acme.example", check_path="/me")["id"]
+    key(api, other, SECRET)
+    assert post(api, f"api-tools/{other}/check", {})["detail"] == "Works (limited)"
+    assert shown(api, other) == ("Works (limited)", "ok", False)
+
+
+@pytest.mark.parametrize(
+    "reply, headers_, scoped",
+    [
+        (
+            b'{"detail":{"status":"missing_permissions","message":"missing the permission user_read"}}',
+            {},
+            True,
+        ),
+        (b'{"error":"insufficient_scope"}', {}, True),
+        (b"", {"WWW-Authenticate": 'Bearer error="insufficient_scope"'}, True),
+        (b'{"detail":"Invalid API key"}', {}, False),
+        (b"", {"WWW-Authenticate": 'Bearer error="invalid_token"'}, False),
+    ],
+)
+def test_only_a_401_that_names_a_missing_permission_is_a_scope(reply, headers_, scoped):
+    import httpx
+
+    assert api_tools._missing_scope(httpx.Response(401, content=reply, headers=headers_)) is scoped
+
+
+def test_a_401_reply_is_read_only_up_to_its_first_bytes():
+    import httpx
+
+    late = b"x" * (api_tools.SCOPE_READ + 10) + b"missing_permissions"
+    assert api_tools._missing_scope(httpx.Response(401, content=late)) is False
+
+
+def test_out_of_scope_401s_are_no_rejection_and_a_newer_one_ends_an_older_run(api, monkeypatch):
+    setup(api)
+    tid = tool(api, "ElevenLabs")["id"]  # its check path /v1/user needs user_read, which a restricted key lacks
+    key(api, tid, SECRET)
+    answer(monkeypatch, 401, missing_scope=True)
+    post(api, f"api-tools/{tid}/check", {})
+    calls(api, tid, ["scoped"] * 3)
+    assert shown(api, tid) == ("Works (limited)", "ok", False)
+    calls(api, tid, [401] * 3, hours_ago=2)  # older plain 401s, behind newer scoped ones: the key is known now
+    assert shown(api, tid) == ("Works (limited)", "ok", False)
+    calls(api, tid, [401] * 3, hours_ago=0)  # three plain 401s since: rejected
+    assert shown(api, tid) == ("Key rejected", "fail", True)
