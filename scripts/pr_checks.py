@@ -1707,20 +1707,26 @@ def smoke_check(root=ROOT):
     return problems
 
 
-def collect(root=ROOT):
+def start_collect(root=ROOT):
+    """The default collection as a background process. On a hosted runner it takes about a minute, about as long as the
+    dependency map the plan builds meanwhile on another core, so a plan that builds the map starts this first."""
+    command = [sys.executable, "-m", "pytest", "--collect-only", "-q", "-n", "0"]
+    return subprocess.Popen(command, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+
+def collect(root=ROOT, started=None):
     # Reuse the plan's existing collection as the sharding coverage guard: no extra collection or CI job.
     # Direct script execution puts scripts/ on sys.path; package imports (including tests) use the relative form.
     if __package__:
         from .release_checks import validate_shard_coverage
     else:
         from release_checks import validate_shard_coverage
-    result = subprocess.run(
-        [sys.executable, "-m", "pytest", "--collect-only", "-q", "-n", "0"], cwd=root, capture_output=True, text=True
-    )
-    if result.returncode:
-        raise RuntimeError("Default collection failed:\n" + result.stdout[-4000:] + result.stderr[-4000:])
+    process = started or start_collect(root)
+    stdout, stderr = process.communicate()
+    if process.returncode:
+        raise RuntimeError("Default collection failed:\n" + stdout[-4000:] + stderr[-4000:])
     counts = Counter(
-        line.split("::", 1)[0] for line in result.stdout.splitlines() if "::" in line and not line.startswith(" ")
+        line.split("::", 1)[0] for line in stdout.splitlines() if "::" in line and not line.startswith(" ")
     )
     if not counts:
         raise RuntimeError("Default suite collected no tests")
@@ -2063,10 +2069,11 @@ def narrow_summary(record):
     return "\n".join(lines) + "\n"
 
 
-def prepare(event, base, output, timings_path=None, head="HEAD", light=False):
+def prepare(event, base, output, timings_path=None, head="HEAD", light=False, prefetch=False):
     """`head` is the commit under test: the checkout for a pull request, the queue group's merge commit for a
     merge_group. A group's base is its own base sha, so it needs no merge_parent. `light` narrows the
-    plan for an event in NARROW; any other event ignores it."""
+    plan for an event in NARROW; any other event ignores it. `prefetch` (the CLI's plan) starts the test collection
+    before the dependency map, so the two run side by side."""
     if event == "pull_request":
         base = merge_parent(base)
     changed = changed_files(base, head) if base else []
@@ -2075,13 +2082,21 @@ def prepare(event, base, output, timings_path=None, head="HEAD", light=False):
         changed = sorted(set(changed) | set(script_changes(base, head, changed)))
     light = light and event in NARROW
     # One map for the selection and the narrowing; selection builds none for a change it answers without one.
-    graph = DependencyMap(ROOT) if light and any(not unread(n) for n in changed) else None
+    mapped = light and any(not unread(n) for n in changed)
+    started = start_collect() if prefetch and mapped else None
+    graph = DependencyMap(ROOT) if mapped else None
     picked = selection(changed, event, base=base, added=added, graph=graph, head=head)
     if light:
         picked = narrow(picked, changed, event, added=added, graph=graph)
     if picked["python"] is not None and not picked["caddy"]:
         image_checks(changed)
-    counts = collect() if picked["python"] != [] else Counter()
+    if picked["python"] != []:
+        counts = collect(started=started) if started else collect()
+    else:
+        if started:
+            started.kill()
+            started.wait()
+        counts = Counter()
     if picked["python"] is not None:
         # A selected file with no default test (a changed test whose tests are all slow, which the release gate runs;
         # a test helper the map follows) has nothing to run here.
@@ -2091,8 +2106,13 @@ def prepare(event, base, output, timings_path=None, head="HEAD", light=False):
     if timings_path:
         source = Path(timings_path)
         paths = sorted(source.rglob("durations.json")) if source.is_dir() else ([source] if source.is_file() else [])
+        # Several measured runs (the last green queue groups) average per file: one run's seconds for a file swing by 2x.
+        measured = defaultdict(list)
         for path in paths:
-            timings.update(json.loads(path.read_text()))
+            for name, seconds in json.loads(path.read_text()).items():
+                if isinstance(seconds, (int, float)) and math.isfinite(seconds) and seconds >= 0:
+                    measured[name].append(float(seconds))
+        timings = {name: sum(values) / len(values) for name, values in measured.items()}
     record = picked.pop("narrow", None)
     if record is not None:
         # A light plan caps and packs with the same seconds: the run's measured timings over the committed table.
@@ -2628,7 +2648,7 @@ def main():
         )
         return 2
     if args.action == "plan":
-        prepare(args.event, args.base, args.output, args.timings, args.head, light=args.light)
+        prepare(args.event, args.base, args.output, args.timings, args.head, light=args.light, prefetch=True)
     elif args.action == "run":
         return run(args.plan, args.suite, Path(args.root), quarantine=args.quarantine)
     elif args.action == "junit-ran":
