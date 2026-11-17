@@ -4,7 +4,7 @@
 // belongs leaves, and the 2-minute refresh catches up with a changed_after delta from the list's cursor.
 //  - a bot's page: its Open rows and its filter tabs (Assigned to others), decided by each tab's rows client-side;
 //  - a person's page: the tasks they own, open, snoozed and finished;
-//  - My dashboard: My tasks from the reader's task events, Needs you from the list the app holds, Unread threads from
+//  - Company: My tasks from the reader's task events, Needs you from the list the app holds, Unread threads from
 //    read and activity events; the place is not read again for any of them;
 //  - a read that lands late (Codex review 1): a first read or a catch-up held back by a slow server, a removal coming
 //    while it is out, then the older answer: the row stays gone.
@@ -44,7 +44,7 @@ put(task('t3', 'Pick the release day', 'spec', {owner_id: 'bot:pm', requester_id
 // What backend/events.py _tasks sends for one task: its id, the change's kind(s) and the task as the viewer reads it, or
 // `gone` when it was deleted.
 const event = (x: Task, kind = 'update') => ({id: x.id, kind, kinds: [kind], task: put(x)});
-// My dashboard as backend/cards.py draws it for Ana: My tasks (all of hers shown), Needs you, Unread threads.
+// Company as backend/cards.py draws it for Ana: My tasks (all of hers shown), Needs you, Unread threads.
 const dashCard = (template: string, heading: string, data: unknown, settings = {}) => ({id: null, item: null, size: 'medium', made_by: null,
   card: {id: null, template, title: '', heading, name: heading, settings: {team: '', ...settings}, team_name: '', hidden: false, made_by: null, data}});
 const HOME_PLACE = {place: 'person:ana', kind: 'person', saved: false, can_edit: true, pins: [
@@ -200,7 +200,7 @@ const holdNext = (match: Held['match']): Held => {
   assert.deepEqual(reads.changed, ['12.a']);
   assert.equal(reads.tasks, personListed, 'the refresh reads no whole task list');
 
-  // ---- My dashboard
+  // ---- Company
   await page.evaluate(() => { location.hash = '#/home'; });
   const pin = (name: string) => page.locator('.dash-pin', {has: page.locator('h2', {hasText: name})});
   await pin('My tasks').locator('li', {hasText: 'Sign the lease'}).waitFor({timeout: t(8000)});
@@ -290,7 +290,7 @@ const holdNext = (match: Held['match']): Held => {
   await page.locator('#t-open', {hasText: 'Plan the launch call'}).waitFor({timeout: t(8000)});
   assert.doesNotMatch(await text('#t-open'), /Write the launch post/, "a bot's task removed while the first read was out stays removed");
   assert.doesNotMatch(await text('#t-open'), /Price the launch bundle/, 'a task Ana lost while the first read was out stays off');
-  // My dashboard read again on coming back: a task of Ana's finished while the read is out stays off My tasks.
+  // Company read again on coming back: a task of Ana's finished while the read is out stays off My tasks.
   await page.evaluate(() => { location.hash = '#/person/sam'; });
   await page.locator('#person-tasks', {hasText: 'Book the bus'}).waitFor();
   slow = holdNext(p => decodeURIComponent(p) === '/api/v2/places/person:me');
