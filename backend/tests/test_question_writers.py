@@ -1,12 +1,11 @@
 """Every writer asks a question as a message marked ❓ (backend/question_marks.py): the engine refuses a question ask, a
-bot's OK shows what it approves, and a question still open from before becomes a ❓ (backend/old_questions.py). Synthetic rows only: the
-fictional company's people and bots (backend/tests/helpers/engine.py)."""
+bot's OK shows what it approves, and a question still open from before is taken back and its bot woken to ask again
+(backend/old_questions.py). Synthetic rows only: the fictional company's people and bots (backend/tests/helpers/engine.py)."""
 
 import json
 
 import pytest
 
-from backend import never_stuck as NS
 from backend import old_questions as OQ
 from backend import question_marks as Q
 from backend import task_engine as E
@@ -113,41 +112,50 @@ def _withdrawn(c, rid):
     return c.execute("SELECT withdrawn_at FROM requirements WHERE id=?", (rid,)).fetchone()[0]
 
 
-def test_an_open_question_from_before_becomes_the_bots_question_mark_and_the_rest_stay(c, general):
+def _wakes(c, task_id):
+    """The bodies of the wakes the take-back left on a task, oldest first."""
+    return [
+        row[0]
+        for row in c.execute(
+            "SELECT body FROM messages WHERE json_extract(refs, '$.task')=? AND body LIKE 'Your question on this task%' "
+            "ORDER BY created_at, rowid",
+            (task_id,),
+        )
+    ]
+
+
+def test_an_open_question_from_before_is_taken_back_and_its_bot_woken_to_ask_again(c, general):
     asked = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
-    open_rid, visit = _old_question(c, asked)
+    open_rid, _ = _old_question(c, asked)
     answered = X.new_task(c, ANA, "Pick the colour", assignee=BUILDER)
     done_rid, _ = _old_question(c, answered["id"])
     X.answer(c, answered, done_rid, "A", ANA)
     closed = X.new_task(c, ANA, "Order the paper", assignee=BUILDER)["id"]
     _old_question(c, closed)
     H.task_close(c, ANA, closed, "Not needed.", _seen(c, closed))
+    X.settled(c)
 
-    assert OQ.carry_over(c) == {"marked": 1, "taken_back": 0}
+    assert OQ.carry_over(c) == 1
 
     assert _withdrawn(c, open_rid) and not _withdrawn(c, done_rid)
-    took = "SELECT count(*) FROM history_events WHERE subject_id=? AND note IN (?, ?)"
-    assert c.execute(took, (closed, OQ.NOTE, OQ.NOTE_AGAIN)).fetchone()[0] == 0 and Q.on_task(c, closed) == []
-    [mark] = Q.on_task(c, asked)
-    assert (mark["bot_id"], mark["person_id"], mark["line"]) == (BUILDER, ANA, "Which tone?")
-    said = c.execute("SELECT sender_id, body FROM messages WHERE id=?", (mark["message_id"],)).fetchone()
-    assert (said[0], said[1]) == (BUILDER, "Which tone?\n- A\n- B")
+    took = "SELECT count(*) FROM history_events WHERE subject_id=? AND note=?"
+    assert c.execute(took, (closed, OQ.NOTE)).fetchone()[0] == 0 and _wakes(c, closed) == []
+    assert Q.on_task(c, asked) == [], "nothing is converted: the bot asks again"
     note = c.execute(
         "SELECT actor_id, old, note FROM history_events WHERE subject_id=? AND kind='requirement_withdrawn'", (asked,)
     ).fetchall()
     assert [(row[0], row[1], row[2]) for row in note] == [(H.KEEPER, open_rid, OQ.NOTE)]
-    assert [n["kind"] for n in W.needs(c, ANA) if n.get("task_id") == asked] == ["question"]
+    [wake] = _wakes(c, asked)
+    assert "Which tone?\n- A\n- B\n" in wake and f"tico task ask {asked}" in wake
+    assert [tuple(r) for r in _queued(c, asked)] == [("builder",)]
+    assert [n for n in W.needs(c, ANA) if n.get("task_id") == asked] == []
 
     before = c.execute("SELECT count(*) FROM history_events").fetchone()[0]
-    assert OQ.carry_over(c) == {"marked": 0, "taken_back": 0}, "a second run changes nothing"
+    assert OQ.carry_over(c) == 0, "a second run changes nothing"
     assert c.execute("SELECT count(*) FROM history_events").fetchone()[0] == before
 
 
-def test_a_question_carried_over_on_a_by_hand_stage_or_under_the_bots_snooze_is_still_answered(c, general):
-    # Neither a by-hand stage nor the bot's own snooze runs the ladder: the ❓ in Needs you is how it goes on, and the
-    # reply wakes the bot.
-    for slug in ("builder", "manager"):
-        X.bot(c, slug)
+def test_the_wake_is_direct_on_a_by_hand_stage_or_under_the_bots_snooze_and_a_persons_snooze_stays(c, general):
     X.pipeline(
         c,
         pid="manual",
@@ -158,42 +166,47 @@ def test_a_question_carried_over_on_a_by_hand_stage_or_under_the_bots_snooze_is_
     manual = X.new_task(c, ANA, "Choose what to review", pipeline_id="manual", assignee=BUILDER)["id"]
     _old_question(c, manual)
     snoozed = X.new_task(c, ANA, "Wait for the answer", assignee=BUILDER)["id"]
-    _old_question(c, snoozed)
-    E.snooze(c, snoozed, BUILDER, "Waiting for Ana", None, seen_version=_seen(c, snoozed))
-    X.settled(c)
-    assert OQ.carry_over(c) == {"marked": 2, "taken_back": 0}
-    NS.check(c, now=H.shift(H.now(), days=365))
-    for task_id in (manual, snoozed):
-        assert [n["kind"] for n in W.needs(c, ANA) if n.get("task_id") == task_id] == ["question"], task_id
-        H.task_comment(c, ANA, task_id, "Tone A.")
-        assert Q.on_task(c, task_id) == [], task_id
-        assert ("builder",) in [tuple(r) for r in _queued(c, task_id)], task_id
-    assert not E.task(c, snoozed).get("snooze"), "the reply ends the bot's own snooze"
-
-
-def test_a_question_that_cannot_be_a_question_mark_is_taken_back_and_its_bot_woken_whatever_holds_it(c, general):
-    X.pipeline(
-        c,
-        pid="manual",
-        name="Manual review",
-        manager="bot:manager",
-        stages=[{"name": "Review", "owner": "assignee", "by_hand": True, "requirements": [{"kind": "owner_done"}]}],
-    )
-    manual = X.new_task(c, ANA, "Choose what to review", pipeline_id="manual", assignee=BUILDER)["id"]
-    rid, _ = _old_question(c, manual, person="bot:reviewer")  # a bot was asked: a ❓ is for a person
-    by_person = X.new_task(c, ANA, "Plan the launch", assignee=BUILDER)["id"]
-    person_rid, _ = _old_question(c, by_person, by=BEN)
-    snoozed = X.new_task(c, ANA, "Wait for the reviewer", assignee=BUILDER)["id"]
     _old_question(c, snoozed, person="bot:reviewer")
     E.snooze(c, snoozed, BUILDER, "Waiting for the reviewer", None, seen_version=_seen(c, snoozed))
+    held = X.new_task(c, ANA, "Hold until Monday", assignee=BUILDER)["id"]
+    _old_question(c, held)
+    E.snooze(c, held, ANA, "Monday", H.shift(H.now(), days=3), seen_version=_seen(c, held))
     X.settled(c)
-    assert OQ.carry_over(c) == {"marked": 0, "taken_back": 3}
-    assert [tuple(r) for r in _queued(c, snoozed)] == [("builder",)], "the bot's own snooze does not hold the wake"
-    assert _withdrawn(c, rid) and _withdrawn(c, person_rid)
-    assert Q.on_task(c, manual) == [] and [tuple(r) for r in _queued(c, manual)] == [("builder",)]
-    assert _queued(c, by_person) == [], "a person's own question has no bot to ask again"
-    note = "SELECT note FROM history_events WHERE subject_id=? AND kind='requirement_withdrawn'"
-    assert c.execute(note, (manual,)).fetchone()[0] == OQ.NOTE_AGAIN
+
+    assert OQ.carry_over(c) == 3
+
+    for task_id in (manual, snoozed):
+        assert [tuple(r) for r in _queued(c, task_id)] == [("builder",)], task_id
+        assert len(_wakes(c, task_id)) == 1, task_id
+    assert len(_wakes(c, held)) == 1
+    assert E.task(c, held).get("snooze"), "a snooze a person set stays"
+
+
+def test_a_persons_old_question_is_taken_back_with_no_bot_to_wake_and_a_long_one_is_cut(c, general):
+    by_person = X.new_task(c, ANA, "Plan the launch", assignee=BUILDER)["id"]
+    person_rid, _ = _old_question(c, by_person, by=BEN)
+    gone = X.new_task(c, ANA, "Ask a bot that left", assignee=BUILDER)["id"]
+    gone_rid, _ = _old_question(c, gone, by="bot:left-already")
+    long = X.new_task(c, ANA, "Name the release", assignee=BUILDER)["id"]
+    long_rid, _ = _old_question(c, long)
+    c.execute(
+        "UPDATE requirements SET line=?, choices=? WHERE id=?",
+        ("Which name? " + "x" * 2000, json.dumps(["y" * 500] * 20), long_rid),
+    )
+    X.settled(c)
+
+    assert OQ.carry_over(c) == 3
+
+    assert _withdrawn(c, person_rid) and _withdrawn(c, gone_rid)
+    assert _queued(c, by_person) == [] and _wakes(c, by_person) == [], "a person's own question has no bot to ask again"
+    assert _wakes(c, gone) == [], "a bot that no longer exists is not woken"
+    [wake] = _wakes(c, long)
+    lines = wake.splitlines()
+    assert lines[1].startswith("Which name? ") and len(lines[1]) == OQ.LINE_MAX
+    picks = [row for row in lines if row.startswith("- ")]
+    assert len(picks) == OQ.CHOICES_MAX + 1 and picks[-1] == f"- (and {20 - OQ.CHOICES_MAX} more)"
+    assert all(len(row) <= OQ.CHOICE_MAX + 2 for row in picks)
+    assert len(wake) < 2000
 
 
 def test_the_open_questions_read_their_answers_by_visit(c, general):
