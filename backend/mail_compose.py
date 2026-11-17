@@ -121,9 +121,52 @@ def answered_in(mailbox, messages):
     return (theirs or ordered)[-1] if ordered else None
 
 
-def ensure_draft(c, mailbox, raw, thread_id, mid):
-    """The Gmail draft under Message-ID `mid`: the one already there, else a new one. {id, message, thread, created}."""
-    found = gmail_live.draft_find(c, mailbox, mid)
-    if found:
-        return {**found, "created": False}
-    return {**gmail_live.draft_create(c, mailbox, raw, thread_id), "created": True}
+CLAIM_SECONDS = 120  # a claim older than this was left by a request that stopped: another may take it over
+
+
+def ensure_draft(store, mailbox, raw, thread_id, mid):
+    """The Gmail draft under Message-ID `mid`: the one already made, else a new one. {id, message, thread, created}.
+
+    The request claims the Message-ID in `mail_drafts` before it asks Gmail, so two requests for the same draft at once
+    make one: the second is told to try again (409, retryable) while the first works. A draft made before is checked
+    in Gmail by its id (a person may have deleted it), and found by its Message-ID when no id was kept. Gmail is
+    called under no write lock."""
+    from .store import H
+
+    with store.transaction() as c:
+        row = c.execute("SELECT * FROM mail_drafts WHERE message_id=?", (mid,)).fetchone()
+        now = H.now()
+        if row and not row["draft_id"] and row["claimed_at"] > H.shift(now, seconds=-CLAIM_SECONDS):
+            raise Problem("draft_busy", "This draft is being written now; try again in a moment", 409, retryable=True)
+        kept = row["draft_id"] if row else None
+        if not kept:
+            c.execute(
+                "INSERT INTO mail_drafts(message_id,mailbox,claimed_at) VALUES(?,?,?) ON CONFLICT(message_id) "
+                "DO UPDATE SET claimed_at=excluded.claimed_at",
+                (mid, mailbox, now),
+            )
+    if kept:
+        with store.read() as c:
+            found = gmail_live.draft_get(c, mailbox, kept)
+        if found:
+            return {**found, "created": False}
+        with store.transaction() as c:  # deleted in Gmail since: it is made again
+            c.execute("UPDATE mail_drafts SET draft_id=NULL,claimed_at=? WHERE message_id=?", (now, mid))
+    try:
+        with store.read() as c:
+            found = gmail_live.draft_find(c, mailbox, mid)
+            made = (
+                {**found, "created": False}
+                if found
+                else {**gmail_live.draft_create(c, mailbox, raw, thread_id), "created": True}
+            )
+    except BaseException:
+        with store.transaction() as c:  # nothing was made: the next request may try at once
+            c.execute("DELETE FROM mail_drafts WHERE message_id=? AND draft_id IS NULL AND claimed_at=?", (mid, now))
+        raise
+    with store.transaction() as c:
+        c.execute(
+            "UPDATE mail_drafts SET draft_id=?,message=?,thread=? WHERE message_id=?",
+            (made["id"], made["message"], made["thread"], mid),
+        )
+    return made

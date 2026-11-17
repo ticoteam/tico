@@ -489,7 +489,7 @@ def install_mail(app, store, auth):
                     )
                 ask = SimpleNamespace(reply_to_id=original["id"] if original else "", thread_id=thread, approval_id="")
                 review = ES.review_context(c, auth, bot, ask, addr, snap)
-            made = mail_compose.ensure_draft(c, addr, raw, thread, mid)
+        made = mail_compose.ensure_draft(store, addr, raw, thread, mid)
         verdict = ES.classify(app, store, snap, review)["review"] if bot else None
         with store.transaction() as c:
             H.event(

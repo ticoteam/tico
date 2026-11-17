@@ -3014,6 +3014,25 @@ def _send_off(c, row):
     return ("draft" if row["action"] == "send" else "forward"), {**result, "send_off": True}
 
 
+def _computer_lease_ran_out(c, row):
+    """An action a computer of an older release held when its lease ran out: that computer may already have made the
+    draft or sent the request, so one that does not repeat safely fails here and is never run again. True when it
+    did; a repeatable one (archive, label, leave) is the caller's to queue again."""
+    if row["state"] != "claimed" or row["claimed_by"] == SERVER_MAIL or row["action"] in REPEATABLE_MAIL:
+        return False
+    _mail_report(
+        c,
+        row,
+        "failed",
+        {
+            **json.loads(row["result"] or "{}"),
+            "ok": False,
+            "detail": "the lease ran out on a computer, which may already have carried it out; not run again",
+        },
+    )
+    return True
+
+
 def _claim_workspace_mail(store, mid):
     """Lease one action in a short write; another drain cannot also claim it."""
     with store.transaction() as c:
@@ -3022,7 +3041,7 @@ def _claim_workspace_mail(store, mid):
             "SELECT * FROM automation_mail_actions WHERE id=:id AND " + _MAIL_DUE,
             {"id": mid, "cutoff": H.shift(now, minutes=-MAIL_LEASE_MINUTES)},
         ).fetchone()
-        if not row:
+        if not row or _computer_lease_ran_out(c, row):
             return None
         if _requeue(c, row) == "canceled":
             _mail_report(c, row, "canceled", {"ok": False, "detail": "canceled: the run failed"})
@@ -3275,19 +3294,9 @@ def tick(store, at=None, drain=True):
             (H.shift(now, minutes=-MAIL_LEASE_MINUTES),),
         ).fetchall():
             result = json.loads(row["result"] or "{}")
-            if row["claimed_by"] != SERVER_MAIL and row["action"] not in REPEATABLE_MAIL:
-                _mail_report(
-                    c,
-                    row,
-                    "failed",
-                    {
-                        **result,
-                        "ok": False,
-                        "detail": "the lease ran out on a computer, which may already have carried it out; "
-                        "not run again",
-                    },
-                )
-            elif row["attempts"] >= MAIL_TRIES:
+            if _computer_lease_ran_out(c, row):
+                continue
+            if row["attempts"] >= MAIL_TRIES:
                 _mail_report(c, row, "failed", {**result, "ok": False, "detail": f"no result after {MAIL_TRIES} tries"})
             elif _requeue(c, row) == "canceled":
                 _mail_report(c, row, "canceled", {**result, "ok": False, "detail": "canceled: the run failed"})

@@ -11,3 +11,15 @@ CREATE TABLE IF NOT EXISTS mail_unsubscribes (
   created_at TEXT NOT NULL,
   finished_at TEXT
 );
+
+-- The Gmail drafts the server wrote, by the Message-ID Tico gave each (backend/mail_compose.py `ensure_draft`): claimed
+-- before Gmail is asked, so two requests for the same draft at once make one, and the draft's id once it exists. Ids
+-- only: the draft's text stays in Gmail.
+CREATE TABLE IF NOT EXISTS mail_drafts (
+  message_id TEXT PRIMARY KEY,
+  mailbox TEXT NOT NULL,
+  draft_id TEXT,
+  message TEXT,
+  thread TEXT,
+  claimed_at TEXT NOT NULL
+);

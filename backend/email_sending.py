@@ -1424,7 +1424,13 @@ def install(app, store, auth, mutate):
             found = gmail_live.draft_raw(c, mailbox, body.draft_id)
         if len(found["raw"]) > MAX_RAW * 4 // 3 + 8:
             raise Problem("raw", "This draft is too large to send through Tico; send it from Gmail", 413)
-        return body.model_copy(update={"raw": found["raw"], "thread_id": body.thread_id or found["thread"]})
+        # Gmail files every draft in a thread, a new email in a thread of its own: only a draft that answers a message
+        # (In-Reply-To or References) is sent in its thread.
+        snap = snapshot(found["raw"], mailbox)
+        answers = snap["in_reply_to"] or snap["references"]
+        return body.model_copy(
+            update={"raw": found["raw"], "thread_id": body.thread_id or (found["thread"] if answers else "")}
+        )
 
     @app.post("/api/v2/email/sends")
     def queue(request: Request, body: Enqueue):

@@ -32,8 +32,9 @@ A spec says only what differs:
 - A field is omitted when its flag is left out. `default=False` sends false; `NULL` as a flag's const sends null.
 - `Command.tool_for(fields)` picks another tool by the arguments (`rules read` without `--from` reads one rule); every
   tool it may pick is in `tools`, whose properties the command takes too.
-- `Command.run(client, fields)` is what the command line does where it cannot call the tool: `page publish` sends a
-  file's bytes, the tool its text. The flags are still the tool's, and so is the help.
+- `Command.run(client, fields, **local)` is what the command line does where it cannot call the tool: `page publish`
+  sends a file's bytes, the tool its text; `email attachment` writes the file its local `--out` names. The flags are
+  still the tool's (the local ones arrive as keywords), and so is the help.
 - `Command.render(args, result)` prints text in place of JSON; such a command also takes `--json`.
 - `Group.default` is the leaf a group runs when no word follows (`tico rules due` lists, as `tico rules due list`).
 
@@ -178,7 +179,10 @@ class Command:
         from clients import hubtools
 
         tool, fields = self.prepare(args)
-        return self.run(client, fields) if self.run else hubtools.BY_NAME[tool]["fn"](client, fields)
+        if self.run:
+            # A local flag reaches `run` as a keyword: it shapes what runs on this computer, never what is sent.
+            return self.run(client, fields, **{a.name: getattr(args, a.name, None) for a in self.args if a.local})
+        return hubtools.BY_NAME[tool]["fn"](client, fields)
 
     def prepare(self, args):
         """(the tool to run, its arguments) for a parsed line: the flags given, converted, with the tool `tool_for`

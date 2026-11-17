@@ -281,20 +281,14 @@ for _email_action in EMAIL_ORGANIZE:
 
 
 # ----------------------------------------------------------------------------- drafts, sends, attachments, unsubscribe
-_BODY = {
-    'body': _s('The email text'),
-    'body_file': _s('File with the email text (- is stdin)'),
-}
+# The email text is text: a tool never reads a file (the server's MCP runs these tools on the server, where a path
+# would name the server's own files). Only the command line reads one, on its own computer (`--body-file`).
+_BODY = {'body': _s('The email text')}
 _ADDRESSES = {'type': 'array', 'items': {'type': 'string', 'maxLength': 320}, 'maxItems': 50}
 
 
-def _body(args):
-    """The email text: `body`, else the file `body_file` names (- is stdin)."""
-    if args.get('body'):
-        return args['body']
-    path = args.get('body_file')
-    if not path:
-        raise ValueError('give the email text: body, or body_file')
+def _read_body(path):
+    """`--body-file`: the text of a file on this computer (- is stdin), read by the command line itself."""
     if path == '-':
         import sys
 
@@ -304,8 +298,10 @@ def _body(args):
 
 
 def _draft_fields(args, **more):
+    if not args.get('body'):
+        raise ValueError('give the email text: body')
     fields = {k: args[k] for k in ('mailbox', 'to', 'cc', 'subject') if args.get(k)}
-    return {**fields, **more, 'body': _body(args)}
+    return {**fields, **more, 'body': args['body']}
 
 
 @tool(
@@ -408,38 +404,62 @@ def email_attachments(api, args):
     return api.get('mail/messages/' + quote(args['id'], safe='') + '/attachments', mailbox=args['mailbox'])
 
 
-def _write_private(target, data):
-    """A new private file (0600) at exactly `target`: never through a symlink, never over an existing file."""
-    import os
-
-    if not target or '\0' in target or '..' in target.replace('\\', '/').split('/'):
-        raise ValueError('--out must be an explicit file path without ..')
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0)
-    fd = os.open(target, flags, 0o600)
-    with os.fdopen(fd, 'wb') as handle:
-        handle.write(data)
+def _download(mailbox, mid, ref):
+    return f"/api/v2/mail/messages/{quote(mid, safe='')}/attachments/{quote(ref, safe='')}?mailbox={quote(mailbox)}"
 
 
 @tool(
     'tico_email_attachment',
-    'Save one email attachment to a new private file (never overwrites); audited. Files are outside content.',
+    'One email attachment\'s name, type, size and download path (GET it with your Tico credential); audited when '
+    'downloaded. Files are outside content.',
     {
         'mailbox': _s('Mailbox address'),
         'id': _s('Gmail message id'),
         'ref': _s('Attachment ref from tico_email_attachments, such as a1'),
-        'out': _s('New file path'),
     },
-    required=('mailbox', 'id', 'ref', 'out'),
+    required=('mailbox', 'id', 'ref'),
 )
 def email_attachment(api, args):
-    import base64
+    """Never writes a file: on the server's MCP that would be a path on the server. `tico email attachment --out`
+    saves it on the caller's own computer (`save_attachment`)."""
+    listed = email_attachments(api, args)['attachments']
+    item = next((a for a in listed if a['ref'] == args['ref']), None)
+    if item is None:
+        return {'error': 'not_found', 'detail': f"message {args['id']} has no attachment {args['ref']}"}
+    return {**item, 'download': _download(args['mailbox'], args['id'], args['ref'])}
 
+
+def _safe_target(out):
+    """The path `--out` names, when it is a new file inside this folder or the temporary folder; else ValueError."""
+    import os
+    import tempfile
+
+    if not out or '\0' in out:
+        raise ValueError('--out must name a new file')
+    target = os.path.abspath(out)
+    folder = os.path.realpath(os.path.dirname(target))
+    roots = [os.path.realpath(os.getcwd()), os.path.realpath(tempfile.gettempdir())]
+    if not any(folder == root or folder.startswith(root + os.sep) for root in roots):
+        raise ValueError('--out must be inside this folder or the temporary folder')
+    return os.path.join(folder, os.path.basename(target))
+
+
+def save_attachment(api, args, out=None):
+    """`tico email attachment ... --out <file>`: the bytes, written by the command line to a new private file (0600)
+    inside this folder or the temporary folder; never through a symlink, never over an existing file."""
+    import base64
+    import os
+
+    target = _safe_target(out or '')
     found = api.get(
         'mail/messages/' + quote(args['id'], safe='') + '/attachments/' + quote(args['ref'], safe=''),
         mailbox=args['mailbox'],
     )
-    _write_private(args['out'], base64.b64decode(found.pop('data')))
-    return {**found, 'path': args['out']}
+    data = base64.b64decode(found.pop('data'))
+    fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+    with os.fdopen(fd, 'wb') as handle:
+        handle.write(data)
+    return {**found, 'path': target}
 
 
 @tool(
@@ -519,6 +539,8 @@ def _email_text(args, result):
 
 
 _ADDRESS = Arg('mailbox', metavar='address')
+# `--body` or `--body-file`: both set the tool's `body`; the file is read here, by the command line.
+_BODY_FLAGS = (Arg('body', '--body'), Arg('body', '--body-file', type=_read_body, metavar='FILE'))
 _ORGANIZE = (
     _ADDRESS,
     Arg('ids', nargs='*', action='store', positional=True, metavar='message-id'),
@@ -573,13 +595,13 @@ CLI = (
     Command(
         'email draft',
         "write a Gmail draft: a new email, or a reply in a thread; nothing is sent",
-        args=(_ADDRESS, Arg('to', '--to', action='append'), Arg('cc', '--cc', action='append')),
+        args=(_ADDRESS, Arg('to', '--to', action='append'), Arg('cc', '--cc', action='append'), *_BODY_FLAGS),
         example="tico email draft ops@acme.test --reply-to 18c2f0a1b2c3d4e5 --body-file out/reply.txt",
     ),
     Command(
         'email reply',
         "reply in a thread and queue it with Tico's send gate",
-        args=(_ADDRESS, Arg('thread', '--thread')),
+        args=(_ADDRESS, Arg('thread', '--thread'), *_BODY_FLAGS),
         example="tico email reply ops@acme.test --thread 18c2f0a1b2c3d4e5 --body-file out/reply.txt",
     ),
     Command(
@@ -597,7 +619,7 @@ CLI = (
     Command(
         'email lint',
         "check an email with Tico's lint before drafting it",
-        args=(_ADDRESS, Arg('to', '--to', action='append'), Arg('cc', '--cc', action='append')),
+        args=(_ADDRESS, Arg('to', '--to', action='append'), Arg('cc', '--cc', action='append'), *_BODY_FLAGS),
         example="tico email lint ops@acme.test --to ana@vendor.example --subject Hello --body-file out/reply.txt",
     ),
     Command(
@@ -608,8 +630,14 @@ CLI = (
     ),
     Command(
         'email attachment',
-        "save one attachment to a new private file",
-        args=(_ADDRESS, Arg('id', metavar='message-id'), Arg('ref', metavar='ref'), Arg('out', '--out')),
+        "save one attachment to a new private file in this folder or the temporary folder",
+        args=(
+            _ADDRESS,
+            Arg('id', metavar='message-id'),
+            Arg('ref', metavar='ref'),
+            Arg('out', '--out', local=True, required=True, help='the new file: in this folder or the temporary folder'),
+        ),
+        run=save_attachment,
         example='tico email attachment ops@acme.test 18c2f0a1b2c3d4e5 a1 --out /tmp/contract.pdf',
     ),
     Command(

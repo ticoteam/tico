@@ -49,7 +49,7 @@ def perform(store, row, actor, app=None):
             if not text.strip():
                 raise Problem("body", f"a {'reply' if kind == 'send' else 'draft'} needs a body", 422)
             raw, thread, _to, _subject = mail_compose.reply(box, original, text, message_id, to=args.get("to") or ())
-        draft = mail_compose.ensure_draft(c, box, raw, thread, message_id)
+    draft = mail_compose.ensure_draft(store, box, raw, thread, message_id)
     # A reply stays in its original's thread; a forward is a new message, whatever thread Gmail filed its draft in.
     if kind == "draft" or send_off:
         return {"ok": True, "detail": "drafted", "draft": draft["id"], "thread": thread}

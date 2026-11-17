@@ -115,17 +115,9 @@ ASSISTANT_WRITES = {
 ASSISTANT_WRITES.update('tico_email_' + action for action in EMAIL_ORGANIZE)
 
 
+# The email reads are everyone's: a person, the Assistant and a bot, at the mailbox level the server checks
+# (backend/mail.py), so they take the default audience.
 AUDIENCE = {
-    **{
-        name: HUMANS_AND_ASSISTANT
-        for name in (
-            "tico_email_mailboxes",
-            "tico_email_inbox",
-            "tico_email_search",
-            "tico_email_thread",
-            "tico_email_message",
-        )
-    },
     **{
         name: PEOPLE
         for name in (

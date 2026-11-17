@@ -5,6 +5,7 @@ their own mailbox level."""
 import base64
 import ipaddress
 import json
+from pathlib import Path
 
 import httpx
 import pytest
@@ -208,30 +209,50 @@ def test_an_unsubscribe_tico_may_not_send_is_refused(api, box, web, case):
     assert len(web["requests"]) == (1 if case == "redirect" else 0)  # a redirect is never followed
 
 
-def signed(results, h="from:list-unsubscribe:list-unsubscribe-post", b="AbCdEf12345"):
-    top = "".join(f"Authentication-Results: {r}\r\n" for r in results)
-    return (
-        top + f"DKIM-Signature: v=1; a=rsa-sha256; d=vendor.example; h={h};\r\n b={b[:6]}\r\n {b[6:]}\r\n"
-        f"From: {SENDER}\r\nList-Unsubscribe: <{LIST}>\r\nList-Unsubscribe-Post: List-Unsubscribe=One-Click\r\n\r\nNews."
-    ).encode()
+# Messages signed by dkimpy (an independent implementation), with their public keys: relaxed and simple RSA, and
+# ed25519. From news@vendor.example; the signatures cover From and both unsubscribe headers.
+VECTORS = json.loads((Path(__file__).parent / "fixtures/dkim_vectors.json").read_text())
 
 
-GMAIL_PASS = "mx.google.com; dkim=pass header.i=@vendor.example header.s=s1 header.b=AbCdEf12; spf=pass"
+@pytest.fixture
+def keys(monkeypatch):
+    published = {"s1": f"v=DKIM1; k=rsa; p={VECTORS['pub']}", "s2": f"v=DKIM1; k=ed25519; p={VECTORS['ed_pub']}"}
+    monkeypatch.setattr(
+        U, "dkim_key", lambda selector, domain: published.get(selector, "") if domain == "vendor.example" else ""
+    )
+
+
+def vector(name):
+    return base64.b64decode(VECTORS[name])
+
+
+@pytest.mark.parametrize("name", ["relaxed/relaxed", "simple/simple", "ed25519"])
+def test_a_signature_over_the_unsubscribe_headers_verifies(keys, name):
+    assert U.verify_dkim(vector(name)) is True
 
 
 @pytest.mark.parametrize(
-    "raw,trusted",
+    "change",
     [
-        (signed([GMAIL_PASS]), True),
-        (signed([GMAIL_PASS], h="from:subject"), False),  # the signature leaves the unsubscribe headers unsigned
-        (signed([GMAIL_PASS.replace("AbCdEf12", "Other999")]), False),  # Gmail passed some other signature
-        (signed(["mx.google.com; dkim=fail header.b=AbCdEf12"]), False),
-        (signed(["evil.example; dkim=pass header.b=AbCdEf12", GMAIL_PASS]), False),  # not Gmail's, on top
-        (signed([]), False),
+        (b"https://lists.vendor.example/u/token-123", b"https://victim.example/u/token-123"),  # the link swapped
+        (b"More news.", b"More newz."),  # the body changed
+        (b"From: Lists <news@vendor.example>", b"From: Bank <alerts@bank.example>"),  # another sender's From
     ],
 )
-def test_the_unsubscribe_link_is_trusted_only_when_gmail_passed_a_signature_over_it(raw, trusted):
-    assert U.verify_dkim(raw) is trusted
+def test_a_changed_message_does_not_verify(keys, change):
+    assert U.verify_dkim(vector("relaxed/relaxed").replace(*change)) is False
+
+
+def test_a_forged_signature_carrying_a_passing_b_tag_is_not_trusted(keys):
+    """A real signature's b= copied into a signature that claims to sign the unsubscribe headers it never signed."""
+    raw = vector("relaxed/relaxed")
+    forged = raw.replace(b"h=from : subject :", b"h=from :")
+    assert forged != raw and U.verify_dkim(forged) is False
+
+
+def test_without_the_signers_key_nothing_verifies(monkeypatch):
+    monkeypatch.setattr(U, "dkim_key", lambda selector, domain: "")
+    assert U.verify_dkim(vector("relaxed/relaxed")) is False
 
 
 # ------------------------------------------------------------------------------------------------- bots and people
@@ -313,3 +334,113 @@ def test_the_email_commands_run_against_the_server(api, box, monkeypatch, tmp_pa
         kinds = [json.loads(r[0])["kind"] for r in c.execute("SELECT detail FROM events WHERE action='mail.read'")]
     assert kinds == ["attachments", "attachment"]
     assert base64.b64decode(get(api, f"mail/messages/m1/attachments/a1?mailbox={BOX}")["data"]) == b"%PDF1"
+
+
+# ------------------------------------------------------------------------------------------------- review findings
+def test_the_servers_mcp_never_reads_a_file_into_a_draft(api, box, tmp_path):
+    """A file path given to the server's MCP is refused: only the local CLI reads a local file."""
+    from backend.tests.helpers.mcp import call
+
+    secret = tmp_path / "server-secret.txt"
+    secret.write_text("SERVER PRIVATE KEY")
+    failed, answer = call(api, "tico_email_draft", {"mailbox": BOX, "to": [SENDER], "body_file": str(secret)})
+    assert failed and all(b"SERVER PRIVATE KEY" not in mime for mime in box.drafts(BOX).values())
+
+
+def test_the_servers_mcp_never_writes_an_attachment_to_a_path(api, box, tmp_path):
+    from backend.tests.helpers.mcp import call
+
+    box.box(BOX)["messages"]["m1"]["payload"]["parts"].append(
+        {"filename": "invoice.pdf", "mimeType": "application/pdf", "body": {"attachmentId": "att1", "size": 5}}
+    )
+    box.box(BOX)["attachments"][("m1", "att1")] = b"%PDF1"
+    target = tmp_path / "written-by-the-server.pdf"
+    failed, answer = call(api, "tico_email_attachment", {"mailbox": BOX, "id": "m1", "ref": "a1", "out": str(target)})
+    assert not target.exists()
+    failed, answer = call(api, "tico_email_attachment", {"mailbox": BOX, "id": "m1", "ref": "a1"})
+    assert not failed and answer["name"] == "invoice.pdf" and "a1" in answer["download"]
+
+
+def test_the_cli_saves_an_attachment_only_under_a_safe_folder(api, box, monkeypatch, tmp_path, capsys):
+    from backend.tests.helpers.automation_cli import Client
+    from clients import hubcli, remotecli
+
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example")
+    monkeypatch.setenv("HUB_TOKEN", "ana-test")
+    monkeypatch.setattr(remotecli, "Client", lambda url, token, **kwargs: Client(api, token))
+    box.box(BOX)["messages"]["m1"]["payload"]["parts"].append(
+        {"filename": "invoice.pdf", "mimeType": "application/pdf", "body": {"attachmentId": "att1", "size": 5}}
+    )
+    box.box(BOX)["attachments"][("m1", "att1")] = b"%PDF1"
+    work = tmp_path / "work"
+    work.mkdir()
+    monkeypatch.chdir(work)
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path / "no-temp"))
+    outside = tmp_path / "elsewhere.pdf"
+    assert hubcli.main(["email", "attachment", BOX, "m1", "a1", "--out", str(outside)]) != 0
+    assert not outside.exists()
+    capsys.readouterr()
+    assert hubcli.main(["email", "attachment", BOX, "m1", "a1", "--out", "invoice.pdf"]) == 0
+    assert (work / "invoice.pdf").read_bytes() == b"%PDF1"
+
+
+def test_a_new_draft_is_sent_without_a_thread_it_does_not_answer(api, box):
+    autonomous(api)
+    made = post(api, "mail/drafts", {"mailbox": BOX, "to": ["books@vendor.example"], "subject": "Books", "body": "Hi."})
+    queued = post(api, "email/sends", {"mailbox": BOX, "draft_id": made["draft"]})["send"]
+    assert queued["state"] == "pending"
+
+
+def test_two_requests_for_the_same_draft_at_once_make_one(api, box, monkeypatch):
+    """The second asks while the first is between Gmail's "no such draft" and making it: it is told to try again."""
+    from backend import gmail_live, mail_compose
+    from backend.store import Problem
+
+    store, mid = api.app.state.store, mail_compose.message_id("draft", "same", BOX)
+    raw = mail_compose.build([SENDER], "Hi", "Hello there.", from_addr=BOX, message_id=mid)
+    real, second = gmail_live.draft_find, []
+
+    def find_while_another_asks(c, mailbox, message_id):
+        found = real(c, mailbox, message_id)
+        if not second:
+            with pytest.raises(Problem) as busy:
+                mail_compose.ensure_draft(store, BOX, raw, "", mid)
+            second.append(busy.value)
+        return found
+
+    monkeypatch.setattr(gmail_live, "draft_find", find_while_another_asks)
+    first = mail_compose.ensure_draft(store, BOX, raw, "", mid)
+    assert first["created"] and second[0].status == 409 and second[0].retryable
+    assert len(box.drafts(BOX)) == 1
+    again = mail_compose.ensure_draft(store, BOX, raw, "", mid)
+    assert again["id"] == first["id"] and not again["created"]
+
+
+def test_the_drain_never_reruns_a_draft_an_older_computer_let_run_out(api, box):
+    machine_id = "runner-old"
+    with api.app.state.store.transaction() as c:
+        owned_by_ana(c, "auto_mail")
+        mid = A._queue_mail(
+            c,
+            {"id": "auto_mail", "flow": {"owner": "person:ana"}},
+            "run_mail",
+            "draft",
+            {"mailbox": BOX, "id": "m1"},
+            {"body": "Thanks."},
+        )["mail_action"]
+        c.execute(
+            "UPDATE automation_mail_actions SET state='claimed',claimed_by=?,claimed_at=?,attempts=1 WHERE id=?",
+            (machine_id, H.shift(H.now(), minutes=-M.MAIL_LEASE_MINUTES - 1), mid),
+        )
+    M.drain_workspace_mail(api.app.state.store)  # the drain alone, before any tick
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT state,result FROM automation_mail_actions WHERE id=?", (mid,)).fetchone()
+    assert row["state"] == "failed" and "not run again" in row["result"] and box.drafts(BOX) == {}
+
+
+def test_bots_are_offered_the_mail_read_tools():
+    from clients import hubtools
+
+    offered = {t["name"] for t in hubtools.listing(kind="bot")}
+    assert {"tico_email_mailboxes", "tico_email_inbox", "tico_email_search", "tico_email_thread"} <= offered
+    assert "tico_email_message" in offered

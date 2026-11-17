@@ -480,6 +480,17 @@ def draft_find(c, mailbox, message_id):
     return _draft(rows[0]) if rows else None
 
 
+def draft_get(c, mailbox, draft_id):
+    """The draft with this id as {id, message, thread}, or None when Gmail no longer has it."""
+    try:
+        found = _get(mailbox, "drafts/" + urllib.parse.quote(draft_id, safe=""), _token(c, mailbox), format="minimal")
+    except Problem as missing:
+        if missing.code == "not_found":
+            return None
+        raise
+    return _draft(found)
+
+
 def draft_create(c, mailbox, raw, thread_id=""):
     """A new Gmail draft of this MIME (base64url), in `thread_id` when it answers one: {id, message, thread}."""
     if len(raw) > INLINE_RAW_MAX:
