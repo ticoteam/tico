@@ -1,5 +1,4 @@
-//! GitHub credentials for a turn (`runner_support/git_credentials.py`, `runner_support/credential_socket.py`,
-//! `runner_support/credential_bin/gh`).
+//! GitHub credentials for a turn. This module owns them: the Python turn helper and gh wrapper it replaced are gone.
 //!
 //! The hub mints a repository-scoped GitHub App token that lasts an hour; a turn can run longer, so git
 //! does not keep one. Its credential helper is `tico-runner git-credential`, which asks this runner's

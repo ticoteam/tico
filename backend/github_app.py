@@ -2633,7 +2633,7 @@ def install_github_app(app, settings, store):
             "configured": True,
             "token": value,
             "expires_at": expires,
-            # The runner publishes the bot's history to this one (git_credentials.publish_history): none when withheld.
+            # The runner publishes the bot's history to this one (runner-rs/src/execute.rs publish_history): none when withheld.
             "repository": "" if own_unused else repo,
             "repositories": repos,
             **({"history": R.HOME_WORDS[own_unused]} if own_unused else {}),

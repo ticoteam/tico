@@ -112,8 +112,7 @@ def machine_environment(source=None):
     import subprocess
 
     env = clean_environment(source)
-    wrapper = str(Path(__file__).parent / 'credential_bin')
-    env['PATH'] = os.pathsep.join(p for p in env.get('PATH', os.defpath).split(os.pathsep) if p != wrapper)
+    env.setdefault('PATH', os.defpath)
     trusted = process_environment(source)
     trusted['PATH'] = env['PATH']
     # Read outside all checkouts, without includes or repository config. Preserve
@@ -157,12 +156,12 @@ def machine_environment(source=None):
 
 
 def environment(source=None):
-    from . import git_credentials
+    from . import credential_socket, git_credentials
 
     source = os.environ if source is None else source
     env = clean_environment(source) if 'GIT_CONFIG_COUNT' in source else machine_environment(source)
     # These are the per-repository helper settings, never vault grants or the runner token.
-    keys = set(git_credentials.environment('')) | {git_credentials.credential_socket.SOCKET_ENV, 'HUB_TOKEN'}
+    keys = set(git_credentials.environment('')) | {credential_socket.SOCKET_ENV, 'HUB_TOKEN'}
     keys.update(k for k in source if k.startswith('TICO_GITHUB_'))
     keys.update(k for k in source if k.startswith(('GIT_CONFIG_KEY_', 'GIT_CONFIG_VALUE_')))
     keys.add('GIT_SSH_COMMAND')
