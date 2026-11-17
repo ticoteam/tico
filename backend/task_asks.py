@@ -54,9 +54,9 @@ SYSTEM: str = _core.KEEPER
 
 WAITING, OK, SENT_BACK, WITHDRAWN, USED = "waiting", "ok", "sent_back", "withdrawn", "used"
 STANDINGS = (WAITING, OK, SENT_BACK, WITHDRAWN, USED)
-# How a visit ends that takes its asks with it: the task moved back, closed, was reopened from that stage, or moved to
-# another pipeline.
-ENDS_ASKS = ("back", "closed", "reopened", "moved")
+# How a visit ends that takes its asks with it: the task moved back, through a side stage, to another pipeline, or was
+# closed or reopened.
+ENDS_ASKS = ("back", "side", "closed", "reopened", "moved")
 FROM_PREVIEW = "OK this from its preview in Tico."
 
 # Each module's step is imported by name inside a small function: lazily, so task_asks imports none of them at load
@@ -375,7 +375,7 @@ def _task_status(conn: "sqlite3.Connection", task_id: object) -> str | None:
 
 
 def _taken_back(conn: "sqlite3.Connection", visit: Row) -> bool:
-    """Whether the task was moved back, closed or reopened since this visit ended: what it moved on with is undone."""
+    """Whether a move since this visit ended took back the asks the task moved on with."""
     found = conn.execute(
         f"SELECT 1 FROM visits WHERE task_id=? AND left_at>=? AND how IN ({','.join('?' for _ in ENDS_ASKS)}) LIMIT 1",
         (visit["task_id"], visit["left_at"], *ENDS_ASKS),
@@ -415,7 +415,8 @@ def _state(conn: "sqlite3.Connection", row: Row) -> tuple[str, Row | None, Row |
 
 def standing(conn: "sqlite3.Connection", requirement_id: str) -> str:
     """How an OK stands: waiting (on its person), ok (given from its preview, not used yet), sent_back, withdrawn (it
-    is not asked any more: withdrawn, replaced, its task moved back, closed, deleted or pushed past it), or used."""
+    is not asked any more: withdrawn, replaced, its task diverted, moved back, closed, deleted or pushed past it),
+    or used."""
     row = grant(conn, requirement_id)
     if not row:
         return WITHDRAWN

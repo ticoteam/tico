@@ -278,7 +278,7 @@ def filing(c, owner):
     if not found:
         return None, None
     last = c.execute(
-        "SELECT id, owner FROM stages WHERE pipeline_id=? AND kind='work' AND retired_at IS NULL "
+        "SELECT id, owner FROM stages WHERE pipeline_id=? AND kind='work' AND side=0 AND retired_at IS NULL "
         "ORDER BY position DESC LIMIT 1",
         (found[0],),
     ).fetchone()

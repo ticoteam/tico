@@ -1015,8 +1015,8 @@ def _needs_why(conn, tid, to):
     here = row["stage"]
     if target["kind"] == "closed" or here["kind"] != "work":
         return True  # a close, or a reopen into a work stage
-    work = [s["id"] for s in order if s["kind"] == "work"]
-    return target["kind"] == "work" and work.index(target["id"]) < work.index(here["id"])
+    work = [s["id"] for s in E.main_work(order)]
+    return E.is_main_work(target) and E.is_main_work(here) and work.index(target["id"]) < work.index(here["id"])
 
 
 def _move(conn, tid, params, said):

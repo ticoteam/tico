@@ -59,6 +59,7 @@ def _ops(**fields):
                 "name": "Intake",
                 "purpose": "Sort what came in",
                 "owner": "bot:builder",
+                "side": False,
                 "by_hand": False,
                 "requests_move_on": False,
                 "task_limit": None,
@@ -82,6 +83,7 @@ def _ops(**fields):
                 "name": "Sign off",
                 "purpose": "",
                 "owner": "assignee",
+                "side": False,
                 "by_hand": False,
                 "requests_move_on": False,
                 "task_limit": 2,
@@ -276,6 +278,43 @@ def test_check_names_each_problem_in_a_sentence_and_save_refuses_it(c):
         with _refused("task_settings"):
             PS.save(c, ANA, record)
     assert c.execute("SELECT COUNT(*) FROM pipelines").fetchone()[0] == 1
+
+
+def test_a_stage_action_must_be_removed_before_turning_side_on(c):
+    record = _ops()
+    action = {"act": "github.queue"}
+    _stage(record, 1).update(name="Merge", on_enter=action, requirements=[])
+    saved = PS.save(c, ANA, record)
+    problem = "Remove the stage's action before making it a side stage (Merge)."
+    for requested in (action, {}, None):
+        changed = copy.deepcopy(saved)
+        stage = _stage(changed, 1)
+        stage["side"] = True
+        if requested is None:
+            del stage["on_enter"]
+        else:
+            stage["on_enter"] = requested
+        assert PS.check(c, changed) == [problem]
+        with _refused("task_settings", "Remove the stage's action"):
+            PS.save(c, ANA, changed)
+        stage = _stage(PS.read(c, saved["id"]), 1)
+        assert (stage["side"], stage["on_enter"]) == (False, action)
+
+    _stage(saved, 1)["on_enter"] = {}
+    cleared = PS.save(c, ANA, saved)
+    _stage(cleared, 1)["side"] = True
+    assert _stage(PS.save(c, ANA, cleared), 1)["side"] is True
+
+
+@pytest.mark.parametrize("owner", ["pick", "bot:builder"])
+def test_a_side_stage_cannot_pick_from_a_bot_pool(c, owner):
+    record = _ops()
+    _stage(record, 1).update(
+        side=True, owner=owner, pick={"bots": ["bot:builder", "bot:reviewer"], "limit_each": 1}, requirements=[]
+    )
+    assert PS.check(c, record) == ["A side stage cannot pick from a bot pool (Sign off)."]
+    with _refused("task_settings", "cannot pick from a bot pool"):
+        PS.save(c, ANA, record)
 
 
 def test_a_requirement_id_is_listed_once_in_the_whole_record(c):

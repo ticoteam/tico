@@ -350,6 +350,7 @@ def register(
             "moveTask",
             "Move a task: to is next (with a why, past what is not met), done, closed, reopen, or a stage's id or name. With to_pipeline (another pipeline's id or name) it moves there, to the stage to names (its first when left out), keeping its number, label and history; a Done or Closed task lands in that pipeline's Done or Closed. A refusal is 409 with error, detail, missing, next and version (task_turn_running while a bot's turn on it runs)",
             "TaskResult",
+            description="Within a pipeline, moves between a side stage and another work stage or Done need no why and count no requirements as skipped. Next from a side stage goes to the next main stage, or to Done when there is none.",
         ),
     )
     def task_move(request: Request, tid: str, body: M.TaskMove):
