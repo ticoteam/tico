@@ -393,6 +393,22 @@ const levels = (page: Page, sel: string) => page.locator(sel).evaluateAll(els =>
       assert.deepEqual(errors, []);
       await close();
     }
+    // On a phone a line runs down: joined lines name each pipeline over its first stage, and the marks sit on the rail.
+    for (const [floor, name] of [[HANDOFFS, 'floor-handoffs-phone'], [MOVES, 'floor-moves-phone']] as const) {
+      const hub: Hub = {floor, fail: false, reads: []};
+      const {page, errors, close} = await open(390, 844, hub, '#/home', true);
+      await page.locator('.cf-hall').first().waitFor();
+      if (floor === HANDOFFS) {
+        assert.deepEqual(await page.locator('[data-cf-line="leads"] .cf-sub').allInnerTexts(), ['Leads', 'Deals']);
+      } else {
+        const mark = await page.locator('[data-cf-line="features"] .cf-chev.cf-from').evaluate(el => ({
+          shown: getComputedStyle(el).display !== 'none', x: el.getBoundingClientRect().left - el.closest('.cf-line')!.getBoundingClientRect().left}));
+        assert.ok(mark.shown && mark.x < 12, 'From Backlog, on the rail at the line\'s left: ' + JSON.stringify(mark));
+      }
+      await shot(page, name);
+      assert.deepEqual(errors, []);
+      await close();
+    }
     // Company was tabs: an old link to the Dashboard, Floor, Campus, Graph or Factories, query and all, lands on Company.
     {
       const hub = fresh();
@@ -455,6 +471,10 @@ const levels = (page: Page, sel: string) => page.locator(sel).evaluateAll(els =>
       assert.ok(g.tops[1]! >= g.tops[0]! + g.heights[0]!, 'one under the other');
       assert.equal(g.small, 0, 'every stack, mark and rate is a 44px target');
       await shot(page, 'floor-phone');
+      // A line runs down the screen: a stage a row, its name beside its boxes.
+      const rows = await page.locator('[data-cf-line="features"] .cf-stack').evaluateAll(els => els.map(el => el.getBoundingClientRect().top));
+      assert.ok(rows.every((t, i) => i === 0 || t > rows[i - 1]!), 'stages run down: ' + JSON.stringify(rows));
+      assert.equal(await page.locator('[data-cf-line="features"] .cf-stack[data-cf-stage="spec"] .cf-stname').innerText(), 'Spec');
       await page.locator('[data-cf-line="features"] .cf-stack[data-cf-stage="spec"]').tap();
       const card = page.locator('#cf-card');
       await card.locator('.cf-row').first().waitFor();
