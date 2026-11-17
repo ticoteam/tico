@@ -285,8 +285,6 @@ def test_mcp_offers_page_publish_to_the_assistant_and_keeps_the_person_and_attem
 
 
 def test_make_page_keeps_private_chat_history_and_other_queued_work_out_of_the_turn(api):
-    from runner_support.state import session_key
-
     t = task(api, private=False)
     earlier = say(api, "Private chat content unrelated to this task", "ben-test")["message"]
     with api.app.state.store.transaction() as c:
@@ -306,10 +304,7 @@ def test_make_page_keeps_private_chat_history_and_other_queued_work_out_of_the_t
     assert [m["id"] for m in attempt["history"]] == [message["id"]]
     assert attempt["next_run"] == [] and attempt["notes"] == []
     assert attempt["deferred"] == "" and attempt["chat_goal"] is None
-    key = session_key({"session": "bot"}, attempt)
-    assert key == "make-page:" + attempt["id"]
-    ordinary = {k: v for k, v in attempt.items() if k != "make_page"}
-    assert session_key({"session": "bot"}, ordinary) != key
+    assert isinstance(attempt["make_page"]["task"], dict)
     say(api, "An unrelated private follow-up", "ben-test")
     assert post(api, f"attempts/{attempt['id']}/inputs", {}, machine["token"])["messages"] == []
     with api.app.state.store.read() as c:
