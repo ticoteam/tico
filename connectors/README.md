@@ -5,8 +5,8 @@ service for the whole company, one file that enforces the rules.
 
 **Bots use these tools. Never call the Slack, Gmail or Google Calendar API directly** - not with
 curl, not with a vendor SDK, not from an employee's own `software/`. The policy checks, the audit
-log, and the retry handling live in here; a direct call skips all three and is a policy violation,
-not a shortcut.
+log, and the retry handling live in the tools (for mail and calendar, on the server); a direct call
+skips all three and is a policy violation, not a shortcut.
 
 - `slack.py` - read and post to Slack, and DM the team. Token: `SLACK_BOT_TOKEN`, from the
   Tools credential granted to the bot.
@@ -14,10 +14,10 @@ not a shortcut.
   `slack.py` and the server's Slack gateway use, Socket Mode on, and the events the gateway
   subscribes to (`app_mention`, `message.im`, `message.channels`, `message.groups`, `link_shared`). The gateway itself is `backend/slack_gateway.py`
   on the API host (`docs/slack-gateway.md`); it is the one other thing that holds the token.
-- `mail/` - read, file, draft and send email as ana@acme.example or legal@acme.example. Bots and people
-  use it through `tico email` and `tico calendar`, never directly. One Google service account with domain-wide delegation,
-  key at `secrets/google-sa.json`, never in a bot's environment. Employee guide: `docs/mail.md`;
-  developer notes and the owner's Google setup: `connectors/mail/README.md`.
+- Mail and calendar are not here: they run on the Tico server (`backend/gmail_live.py`, `backend/gcal_live.py`,
+  `backend/gmail_watch.py`, shared helpers in `backend/mail_lib/`). Bots and people use them through `tico email` and
+  `tico calendar`. The Google key and each person's Connect Google grant stay sealed on the server, so no computer
+  holds one. Employee guide and the owner's Google setup: `docs/mail.md`.
 
 - `browser.py` - the company browser, which is Aside (aside.com): a Chromium browser with its
   own agent and password manager, signed in by the owner once per site. `repl --as <slug> "<js>"`

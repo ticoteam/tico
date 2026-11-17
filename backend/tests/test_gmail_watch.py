@@ -162,7 +162,6 @@ def test_bounces_known_sender_and_the_directory_are_fed_and_no_row_keeps_a_body(
         assert c.execute("SELECT count(*) FROM automation_runs WHERE finished_at IS NULL").fetchone()[0] == 0
         for row in c.execute("SELECT saved_state FROM automation_runs"):
             assert "SECRET CONTRACT TERMS" not in (row[0] or "")
-        assert c.execute("SELECT count(*) FROM mail_messages").fetchone()[0] == 0
     assert sorted(heard(api, aid)) == ["bounce", "jane", "wrote-before"]
 
 

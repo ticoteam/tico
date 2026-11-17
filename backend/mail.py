@@ -7,8 +7,7 @@ chose, so the same draft asked for again is found, not made twice (backend/mail_
 the lint first, and the second reviewer reads it. Sending a draft is the send gate's (`POST /api/v2/email/sends` with
 its `draft_id`). `tico email ...` (clients/commands/mail.py) is a thin call to each route.
 
-`GET /api/v2/mail/access` is the mail CLI's question (connectors/mail/access.py): what the caller, a person or a bot's
-turn, may do on each mailbox it holds.
+`GET /api/v2/mail/access` answers what the caller, a person or a bot's turn, may do on each mailbox it holds.
 """
 
 import base64
@@ -351,7 +350,7 @@ def install_mail(app, store, auth):
     @app.get("/api/v2/mail/access")
     def mail_access(request: Request, mailbox: str = ""):
         """What the caller may do: on every mailbox it holds, and on `mailbox` when named. A person (their Assistant
-        included, which is them) or a bot's turn; a computer asks /api/v2/connectors/mail/targets instead."""
+        included, which is them) or a bot's turn; a computer holds no mailbox."""
         who = request.state.identity
         if who.role not in ("owner", "human", "bot"):
             raise Problem("identity", "Mail access is answered for a person or a bot's turn", 403)
@@ -555,7 +554,7 @@ def install_mail(app, store, auth):
         return {"mailbox": addr, "ok": not found["errors"], "errors": found["errors"], "warnings": found["warnings"]}
 
     def _attachments(c, addr, mid):
-        from connectors.mail import gmail as gm
+        from .mail_lib import gmail as gm
 
         return gm.attachment_refs((gmail_live.payload(c, addr, mid) or {}).get("payload") or {})
 
@@ -578,8 +577,8 @@ def install_mail(app, store, auth):
     def attachment(request: Request, msg_id: str, ref: str, mailbox: str = ""):
         """One attachment's bytes (base64), at most gmail_live.ATTACHMENT_MAX_BYTES; `tico email attachment` writes
         them to a private file."""
-        from connectors.mail import Failure
-        from connectors.mail import gmail as gm
+        from .mail_lib import Failure
+        from .mail_lib import gmail as gm
 
         who = request.state.identity
         reader(who)

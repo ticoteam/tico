@@ -401,10 +401,10 @@ def own_write(
 
 def settle_stale_actions(c: sqlite3.Connection) -> int:
     """Appointments the route started and never settled (the server stopped mid-call) become `unknown`, never retried:
-    Google may have made the event. A computer's own claims (runner_id set) keep their own upkeep."""
+    Google may have made the event."""
     cutoff = H.shift(H.now(), minutes=-ACTION_MINUTES)
     rows = c.execute(
-        "SELECT id,requested_by FROM calendar_actions WHERE status='running' AND runner_id IS NULL AND started_at<?",
+        "SELECT id,requested_by FROM calendar_actions WHERE status='running' AND started_at<?",
         (cutoff,),
     ).fetchall()
     for row in rows:
@@ -426,7 +426,7 @@ def tick(store: Any, budget: Any = None) -> int:
     left = cast("Callable[[Any], bool]", _drains.left)
     with store.read() as c:
         stale = c.execute(
-            "SELECT 1 FROM calendar_actions WHERE status='running' AND runner_id IS NULL AND started_at<? LIMIT 1",
+            "SELECT 1 FROM calendar_actions WHERE status='running' AND started_at<? LIMIT 1",
             (H.shift(H.now(), minutes=-ACTION_MINUTES),),
         ).fetchone()
     if stale:

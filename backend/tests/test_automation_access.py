@@ -98,8 +98,6 @@ def test_find_mail_reads_only_the_owners_mailboxes_from_gmail_and_moves_past_wha
     assert [q.split(" after:")[0] for q in searched] == ["Invoice"] and not any(
         "ben@" in path for path, _, _ in fake_gmail.calls
     )
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM mail_messages").fetchone()[0] == 0
     out = post(api, f"automations/{aid}/run", {})["run"]["steps"][0]["outputs"]
     assert out["count"] == 0  # the watermark moved past it: the next search starts after its time
 

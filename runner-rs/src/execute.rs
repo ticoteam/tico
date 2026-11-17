@@ -2089,7 +2089,6 @@ impl Runner {
                     Some(client) => s.register_as(&token, &bot, client.clone()),
                     None => s.register(&token, &bot),
                 }
-                s.set_mailboxes(&token, crate::mail_key::mailboxes(&attempt));
                 s.path.clone()
             });
             if let Some(p) = &socket_path {

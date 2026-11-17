@@ -5,7 +5,7 @@ kind: mail
 summary: Read, file, draft and (with approval) send email as a company mailbox, and read or book calendars, through the one shared mail service.
 access: "`tico email` and `tico calendar` (the server's mail and calendar routes) — never the Gmail or Calendar API, an SDK or curl"
 credentials:
-  - GOOGLE_SA_KEY — the Google service account with domain-wide delegation, key file secrets/google-sa.json on the runner computer, or a person's own connected Google account (google-oauth.json beside it, read-only, from Tools > Settings > Email > Connect Google; docs/mail.md, Connect your Google account); the mail service reads it by path and it is never loaded into a bot's environment
+  - GOOGLE_SA_KEY — the Google service account with domain-wide delegation (Tools > Settings > Email > Whole Workspace), or a person's own connected Google account (Tools > Settings > Email > Connect Google; docs/mail.md, Connect your Google account); both stay sealed on the Tico server, never on a computer or in a bot's environment
 declared_as: |
   - service: gmail
     identity: owner@example.com          # the mailbox it acts as
@@ -23,10 +23,10 @@ aliases: [gmail, google-calendar]
 
 ## What it is
 
-Two thin commands, `tico email` and `tico calendar`, over the server's routes; the Google code is in
-`connectors/mail/` on the server side. Each runs as its caller (a bot's turn token, a person's own Tico login) at that
-caller's own mailbox level, and names the mailbox; a bot's `tools:` block in `bot.yaml` only narrows that
-(`policies/access.md`), never a prompt. Company calendar access is the standing fleet-wide exception: every bot may
+Two thin commands, `tico email` and `tico calendar`, over the server's routes; the Google code runs on the server
+(`backend/gmail_live.py`, `backend/gcal_live.py`, `backend/mail_lib/`). Each runs as its caller (a bot's turn token, a
+person's own Tico login) at that caller's own mailbox level, and names the mailbox. Who holds which level is Tico's
+answer (`policies/access.md`), never a prompt's. Company calendar access is the standing fleet-wide exception: every bot may
 read and create events on every roster address with `tico calendar` or the Hub tools, even when its Gmail access is
 read-only or absent. Every read of a body and every label, archive, star, draft, send and calendar change is
 recorded with who did it. A direct API call skips the checks and is a policy violation, not a shortcut (and would not
@@ -86,14 +86,14 @@ Each filing command prints an undo line. Add `--json` for the API response.
 
 ## Rules
 
-- `read` also allows labelling, archiving, mark-read and starring on your own mailbox, and downloading its
-  attachments. `draft` is needed for `draft` and `reply`; `send` on top of that for anything to leave;
-  `unsubscribe` is its own verb.
+- Read lets you list, search, open and download attachments. Read and write also lets you label, archive, mark read,
+  star, draft, unsubscribe and queue sends, as far as the company's What Tico may do allows. A message bot's `can:`
+  verbs only set the level it starts with: Read and write when they include `draft` or `send`, else Read.
 - Calendar read/create is available to every bot for every address in `registry/people.yaml`
   without an `bot.yaml` mail grant. Scheduling is idempotent and audited. Invitation delivery is part of that calendar
   action, not a grant to the generic mail send command.
-- A `read_only: true` entry (a review-only bot on `owner@example.com`) refuses filing, labels,
-  mark-read, star, drafts and sends whatever else is listed.
+- A bot with Read on a mailbox (a review-only bot on `owner@example.com`, or a `read_only: true` entry) is refused
+  filing, labels, mark-read, star, drafts and sends.
 - Sending is set in Tico, never in `bot.yaml`: **Settings > Bots > <bot> > Email sending**, or the company or inbox
   sending policy. The modes are **On their own**, **Ask first** and **Never**.
 - Every send goes through Tico's send queue, which decides it: the sending policy, blocked recipients, the people the
@@ -128,11 +128,8 @@ Each filing command prints an undo line. Add `--json` for the API response.
 ## Gotchas
 
 - Lists carry headers and snippets only; `thread` and `message` carry bodies, so read one thread at a time.
-- Scheduling on the owner's behalf: 30-minute meetings, at least 20 hours' notice, weekdays
-  excluding holidays, business hours in the owner's timezone, 30-minute buffers both sides,
-  every calendar on the mailbox counts as busy. Those are the scoped inbox workflow's automatic
-  slot-selection rules; an explicit `tico calendar schedule` call uses the exact future interval
-  the calling bot supplies.
+- `tico calendar schedule` books the exact future interval the calling bot supplies; pick it with
+  `tico calendar free`, which counts every calendar the people named can see as busy.
 - A calendar action in `pending` or `running` is not a created appointment. Report success only
   after `tico calendar status` returns `succeeded`; inspect `unknown` before retrying.
 - A refused `send` is not an error: the answer is `blocked` with Tico's reason, and the draft stays in Drafts. Check

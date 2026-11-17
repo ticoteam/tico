@@ -16,16 +16,12 @@ Implicit levels, with no row:
 - a person's Assistant: exactly that person's access (backend/auth.py `assistant_principal` makes its turns that person).
 Everyone else needs an explicit `mailbox_accesses` row. Managers and admins get nothing automatic on a personal mailbox,
 and the owner holds no bypass. Nobody reshares: only a personal mailbox's person, or an admin for a shared inbox, may
-grant or revoke on it.
-
-The mail connector (a computer's own sync and the actions the server leases to it) is the `connector` principal: read
-on the mailboxes this computer may act for (/api/v2/connectors/mail/targets) and nothing else here; its writes are only
-the actions the server leased it, each checked against the automation owner's level when leased.
+grant or revoke on it. A computer is nobody here: the server reads and acts on mail itself.
 """
 
 import json
 import sqlite3
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from .store import H, Problem
 
@@ -42,12 +38,10 @@ MIGRATION = "migration"
 
 @dataclass(frozen=True)
 class Principal:
-    """Who is asking: a person (`id` their person id), a bot (`id` its bot id), the mail connector (`targets` the
-    addresses its computer may act for) or nobody."""
+    """Who is asking: a person (`id` their person id), a bot (`id` its bot id) or nobody."""
 
     kind: str
     id: str = ""
-    targets: frozenset = field(default_factory=frozenset)
 
     @property
     def ref(self):
@@ -61,27 +55,10 @@ def _addr(value):
     return str(value or "").strip().lower()
 
 
-def connector(targets):
-    """The mail connector of one computer: read on `targets` (addresses, or target dicts with an `address`)."""
-    out = set()
-    for target in targets or ():
-        out.add(_addr(target.get("address") if isinstance(target, dict) else target))
-    out.discard("")
-    return Principal("connector", "", frozenset(out))
-
-
-def connector_for(c, runner_id, named, owned=None):
-    """The connector principal of computer `runner_id`: the mailboxes it may act for, as
-    /api/v2/connectors/mail/targets lists them (`named`: it is a publisher)."""
-    from . import google_rights
-
-    return connector(google_rights.visible(c, runner_id, named, owned=owned))
-
-
 def principal(c, who):
     """The principal behind an auth Identity, an actor string (`person:<id>`, `human:<id>`, `bot:<id or slug>`) or a
     Principal. A person's Assistant arrives as that person already (backend/auth.py `assistant_principal`). A runner
-    or a service key is nobody here: the connector is made with `connector_for`, from the targets."""
+    or a service key is nobody here."""
     if isinstance(who, Principal):
         return who
     if who is None:
@@ -265,8 +242,6 @@ def _level(facts, p, address, row):
     address = _addr(address)
     if not address or "@" not in address:
         return "none"
-    if p.kind == "connector":
-        return "read" if address in p.targets else "none"
     if row and row["status"] != "active":
         return "none"
     if p.kind == "person":
@@ -336,10 +311,7 @@ def mailboxes_for(c, who, min_level="read"):
             candidates[address] = row if row is not None else _row(c, address)
 
     try:
-        if p.kind == "connector":
-            for address in sorted(p.targets):
-                add(address)
-        elif p.kind == "person":
+        if p.kind == "person":
             person = facts.person(p.id)
             if person:
                 add(person.get("email"))
@@ -407,7 +379,7 @@ ACTION_NEEDS = {
 
 
 def action_refusal(c, owner, mailbox, action, args=None, *, queued=False):
-    """Why an automation of `owner` may not have the connector carry out `action` on `mailbox`, or None when it may.
+    """Why an automation of `owner` may not have Tico carry out `action` on `mailbox`, or None when it may.
     `queued`: asked when the action is queued, when a send or forward still becomes a draft if sending is off at the
     claim, so a draft is enough then. An action this does not know needs what a send needs."""
     need = ACTION_NEEDS.get(action, "send")

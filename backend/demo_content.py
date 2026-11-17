@@ -4338,35 +4338,10 @@ MARKET_PAGES = [
     ),
 ]
 
-# The shared inbox: the address it reads, what its bot is told, and the mail that is already there:
-# (subject, body, labels, from, to).
-INBOX = "ben@acme.example"
+# What the shared inbox's bot is told. The demo holds no mail: mail is read from Gmail, and the demo connects none.
 INBOX_INSTRUCTIONS = (
     "# Instructions\n\nTriage mail and draft replies for review. Never send; file a draft for a person."
 )
-MAIL = [
-    (
-        "Projector will not pair after calibration",
-        "Our projector stops at step 4 of the calibration. Can you help us this afternoon?",
-        ["INBOX", "hub/needs-owner"],
-        "kim@homes.example",
-        INBOX,
-    ),
-    (
-        "Re: Projector will not pair after calibration",
-        "Draft: Hold the lens cap off, power the projector down for ten seconds, then start calibration again. Tell us which step fails.",
-        ["DRAFT", "hub/drafted"],
-        INBOX,
-        "kim@homes.example",
-    ),
-    (
-        "Second kit for the family room",
-        "Thanks for the walk-through. We are ready to order a second Home Pro kit.",
-        ["INBOX"],
-        "owner@homes.example",
-        INBOX,
-    ),
-]
 # The support channel the Slack connection reads: its name, a note, the thread already in it, and the bot's reply.
 SLACK = {
     "channel": "support",
