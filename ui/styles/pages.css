@@ -106,6 +106,17 @@
 .tp-make button{flex:none;font-size:var(--t-sm)}
 .tp-making{padding:20px 12px;border:1px solid var(--line);border-radius:8px;color:var(--muted);font-size:var(--t-sm)}
 .tp-error{margin:0;font-size:var(--t-sm)}
+/* New page (task-pages.ts): a title and a text, in a small dialog; not shown to a reader who may not comment. */
+dialog.tft-new{box-sizing:border-box;width:min(560px,calc(100vw - 32px));margin:auto;padding:var(--s4);border:1px solid var(--line);border-radius:var(--r-pop);background:var(--surface);color:var(--ink);box-shadow:0 20px 60px rgba(0,0,0,.35)}
+dialog.tft-new::backdrop{background:rgba(0,0,0,.45)}
+.tft-new-form{display:flex;flex-direction:column;gap:var(--s3)}
+.tft-field{display:flex;flex-direction:column;gap:var(--s1);color:var(--muted);font-size:var(--t-sm)}
+.tft-field input,.tft-field textarea{width:100%;min-width:0;padding:var(--s2);border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--bg);color:var(--ink);font:inherit;font-size:var(--t-base)}
+.tft-field textarea{min-height:200px;resize:vertical}
+.tft-new-err{margin:0;font-size:var(--t-sm)}
+.tft-new-err[hidden]{display:none}
+.tft-new-acts{display:flex;justify-content:flex-end;gap:var(--s2)}
+html.view-only [data-tft-new]{display:none!important}
 
 /* Library › Files: a table across the page on a computer (name, kind, made by, team, updated) and two lines a row on a
    phone. The search and the filter button share the top row; the filters sit in a popover (the Tasks popover's classes)

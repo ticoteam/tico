@@ -10,6 +10,16 @@
 .doc-tab:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 .doc-tab-t{max-width:14em;overflow:hidden;text-overflow:ellipsis}
 .doc-tab .tw-dot{width:6px;height:6px;border-radius:50%;background:var(--wait)}
+/* The Spec cards under a task's title: one card a Spec page, which opens it; a dot when the task was OK'd on an older version. */
+.task-specs{display:flex;flex-direction:column;gap:var(--s1);margin:0 var(--s4) var(--s2);min-width:0}
+.task-spec{display:flex;align-items:center;gap:var(--s3);min-width:0;padding:var(--s2) var(--s3);border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface);color:var(--ink);text-decoration:none}
+.task-spec:hover{background:var(--surface2)}
+.task-spec:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
+.task-spec-ic{flex:none;width:20px;height:20px;font-size:20px;color:var(--muted)}
+.task-spec-main{display:flex;flex-direction:column;flex:1;min-width:0}
+.task-spec-t{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.task-spec-m{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--t-sm)}
+.task-spec-dot{flex:none;width:8px;height:8px;border-radius:50%;background:var(--wait)}
 
 /* One document open: the version line, the version list when it is open, then the version itself. */
 .doc-view{display:flex;flex-direction:column;height:100%;min-height:0}
