@@ -186,6 +186,12 @@ def arguments(argv=None):
         "--keep-free", type=int, default=10 * GIB, metavar="BYTES", help="bytes to leave free (default: 10 GiB)"
     )
     parser.add_argument(
+        "--code",
+        type=Path,
+        metavar="DIR",
+        help="a checkout whose backend/ replaces the image's, read-only: replays migrations not yet in an image",
+    )
+    parser.add_argument(
         "--allow-loss", action="append", default=[], metavar="TABLE", help="allow fewer rows in this table; repeatable"
     )
     args = parser.parse_args(argv)
@@ -195,7 +201,21 @@ def arguments(argv=None):
         parser.error("--container and --image must be nonempty names, not options")
     if any(not name.strip() for name in args.allow_loss):
         parser.error("--allow-loss must name a table")
+    if args.code is not None:
+        args.code = args.code.resolve()
+        if not (args.code / "backend" / "migrations").is_dir():
+            parser.error("--code must be a checkout with backend/migrations")
     return args
+
+
+def code_mount(image, code):
+    """The `-v` arguments that put a checkout's backend/ over the image's, at the image's working directory."""
+    if code is None:
+        return []
+    workdir = docker("image", "inspect", "--format", "{{.Config.WorkingDir}}", image).decode().strip()
+    if not workdir.startswith("/"):
+        raise ReplayError("the image has no absolute working directory")
+    return ["-v", f"{code / 'backend'}:{workdir}/backend:ro"]
 
 
 def replay(args):
@@ -210,6 +230,7 @@ def replay(args):
         if not result["disk"]["ok"]:
             raise ReplayError("insufficient disk space")
         phase = "snapshot"
+        mounts = code_mount(args.image, args.code)
         with tempfile.TemporaryDirectory(prefix="tico-replay-", dir=base) as scratch:
             name = "tico-replay-" + uuid.uuid4().hex
 
@@ -229,6 +250,7 @@ def replay(args):
                     f"{os.getuid()}:{os.getgid()}",
                     "-v",
                     f"{scratch}:/replay:rw",
+                    *mounts,
                     args.image,
                     "python3",
                     "-c",

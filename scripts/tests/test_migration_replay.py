@@ -246,3 +246,18 @@ def test_scratch_inside_live_mount_is_refused(live_database, monkeypatch):
     result = replay.replay(replay.arguments(["--container", "server", "--image", "candidate"]))
     assert result["failures"] == ["host scratch directory must be outside the /data mount"]
     assert not list(live_database.parent.glob("tico-replay-*"))
+
+
+def test_code_puts_a_checkouts_backend_over_the_images_read_only(tmp_path, monkeypatch):
+    (tmp_path / "backend" / "migrations").mkdir(parents=True)
+    args = replay.arguments(["--container", "server", "--image", "candidate", "--code", str(tmp_path)])
+    calls = []
+    monkeypatch.setattr(replay, "docker", lambda *a: calls.append(a) or b"/opt/tico\n")
+    assert replay.code_mount(args.image, args.code) == ["-v", f"{tmp_path.resolve()}/backend:/opt/tico/backend:ro"]
+    assert calls == [("image", "inspect", "--format", "{{.Config.WorkingDir}}", "candidate")]
+    assert replay.code_mount("candidate", None) == []
+
+
+def test_code_must_be_a_checkout_with_migrations(tmp_path):
+    with pytest.raises(SystemExit):
+        replay.arguments(["--container", "server", "--image", "candidate", "--code", str(tmp_path)])
