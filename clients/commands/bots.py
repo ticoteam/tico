@@ -158,8 +158,9 @@ def bot_register(api, args):
 @tool(
     "tico_bot_access",
     "Show, or set, who may see, read and write to a bot, as the person who asked you (they must "
-    "own the bot). Each of see, read and write is `everyone`, or a comma list of person ids, `group:<id>` and "
-    "`bot:<slug>`. Anyone who may read or write can also see it. Levels you leave out stay as they are.",
+    "own the bot). Each of see, read and write is `everyone`, or a comma list of person ids, "
+    "`group:<id>` and `bot:<slug>`. Anyone who may read or write can also see it. Levels you "
+    "leave out stay as they are.",
     {
         "slug": _s("The bot"),
         "see": _s("everyone, or ben,group:legal,bot:analyst"),
@@ -711,9 +712,9 @@ COMPACT_SIZES = (
 
 @tool(
     "tico_bot_model",
-    "Show the models a bot may run on, or change its model or where its conversation compacts (`compact_at`), as "
-    "the person who asked you. A model change waits for a run in progress to end. A manager bot may change its "
-    "direct report's model.",
+    "Show the models a bot may run on, or change its model or where its conversation compacts "
+    "(`compact_at`), as the person who asked you. A model change waits for a run in progress to "
+    "end. A manager bot may change its direct report's model.",
     {
         "bot": _s("The bot's slug"),
         "model": _s("A model id or name from the list; leave out to list them"),
@@ -884,10 +885,10 @@ def status_set(api, args):
 
 @tool(
     "tico_bot_recent",
-    "The bots you (a person) have been working with lately, most recent first: each "
-    "with its live status and what it is working on, the last thing you said and the last thing it "
-    "said, the conversation id to read on with tico_conversation_show, your open tasks together, and what it "
-    "needs from you. Start here to pick up where you left off.",
+    "The bots you (a person) have been working with lately, most recent first: each with its live "
+    "status and current work, the last thing you and it said, the conversation id to read on with "
+    "tico_conversation_show, your open tasks together, and what it needs from you. Start here to "
+    "pick up where you left off.",
     {
         "days": {"type": "integer", "minimum": 1, "maximum": 90, "description": "How far back (default 7)"},
         "limit": {"type": "integer", "minimum": 1, "maximum": 30, "description": "At most this many bots (default 10)"},

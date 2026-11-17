@@ -324,6 +324,10 @@ COUNSEL_TOOLS = frozenset(
 # The tools whose route the Assistant's own turn may never make (backend/assistant.py `NEVER`): a credential, a key, a
 # sign-in, a support report, SQL, a message's redaction. The server refuses them on a turn whatever is offered; they are
 # not offered to the Assistant either, so the live Assistant is shown what its gate admits and nothing else.
+# Size: the Assistant's listing is asserted under 200,000 bytes (backend/tests/test_assistant_acts_as_you.py). It is
+# kept under by compacting the text at source (short descriptions, shared strings such as `operation_id` and
+# `SETUP_NOTE`) and by `listing()` dropping `additionalProperties: false` from its copy (`_advertised`), not by hiding
+# more here. Never hide a tool the Assistant template runs to make room; a tool added here is one the Assistant may not run.
 ASSISTANT_HIDDEN = frozenset(
     {
         # Contacts schema and field history: a person's Assistant reads entities (get, find, rules, self).
@@ -535,10 +539,21 @@ def listing(local=False, kind=None, profile=None):
     name, so the order never depends on where a tool is defined (and `tico_<noun>_<verb>` names keep a noun's tools
     together)."""
     return [
-        {"name": t["name"], "description": t["description"], "inputSchema": t["inputSchema"]}
+        {"name": t["name"], "description": t["description"], "inputSchema": _advertised(t["inputSchema"])}
         for t in sorted(TOOLS, key=lambda t: t["name"])
         if t["name"] not in UNLISTED
         and (local or not t.get("local"))
         and (kind is None or kind in offered_to(t))
         and (profile not in PROFILES or t["name"] in PROFILES[profile])
     ]
+
+
+def _advertised(schema):
+    """A copy of a tool's input schema without `additionalProperties: false`, which is about 8.5 KB of the Assistant's
+    listing. Only the listing drops it: TOOLS keeps the full schema, and `_mcp.argument_error` still refuses an unknown
+    argument on every call, so a client that sends one is refused as before."""
+    if isinstance(schema, dict):
+        return {k: _advertised(v) for k, v in schema.items() if not (k == "additionalProperties" and v is False)}
+    if isinstance(schema, list):
+        return [_advertised(v) for v in schema]
+    return schema
