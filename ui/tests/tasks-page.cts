@@ -415,7 +415,7 @@ async function youOwnTasks(browser: Browser) {
     assert.deepEqual(await groups(page), ['Answer', 'Review', 'Do']);
     assert.deepEqual(await rowTitles(page), ['Signup plans', 'Checkout flow', 'Rounding in the API', 'Book the team offsite', 'Call the landlord'],
       'Needs you first, then her own tasks at the end of Do; a snoozed one is not here');
-    assert.deepEqual(await page.locator('#task-body .tk-row').evaluateAll(els => els.map(e => (e as HTMLElement).dataset.need || 'task:' + (e as HTMLElement).dataset.task)),
+    assert.deepEqual(await page.locator('#task-body .tk-row').evaluateAll(els => els.map(e => { const d = (e as HTMLElement).dataset; return d['need'] || 'task:' + d['task']; })),
       ['r2', 'r1', 'task:t-4', 'task:t-3', 'task:t-8'], 'an own task is a task row, not a Needs you item');
     assert.equal(await page.locator('#task-body [data-task="t-3"] .tk-mark').count(), 0, 'your own row has no mark');
     // Needs you, its count and ▶ stay what someone asks of her.
