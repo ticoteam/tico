@@ -188,7 +188,7 @@ def test_page_show_keeps_its_json_output_with_links_and_writers(monkeypatch, cap
     }
     monkeypatch.setattr(remotecli, "run", lambda *_: result)
     for argv in (["page", "show", "file-1"], ["page", "show", "file-1", "--json"]):
-        assert remotecli.main(hubcli.parser().parse_args(argv)) == 0
+        assert remotecli.main(hubcli.parse(hubcli.parser(), argv)) == 0
         assert json.loads(capsys.readouterr().out) == result
 
 

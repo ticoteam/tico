@@ -238,6 +238,8 @@ def test_links_never_widen_private_page_or_reveal_private_targets(api):
 
 
 def test_page_writers_can_continue_after_the_storage_bot_is_archived(api):
+    from backend.settings_admin import archive_bot
+
     ops, finance = bot(api, 'ops'), bot(api, 'finance')
     t = task(api)
     made = publish_page(api, ops, task=t['id'])
@@ -246,7 +248,7 @@ def test_page_writers_can_continue_after_the_storage_bot_is_archived(api):
     assert add_link(api, fid, 'human:ben', 'writer').status_code == 200
     assert add_link(api, fid, 'bot:finance', 'writer').status_code == 200
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bots SET state='archived' WHERE id='ops'")
+        archive_bot(c, 'human:ana', 'ops', successor='finance')
     for version, actor in enumerate(('ben-test', finance), 2):
         read = api.get('/api/v2/pages/' + fid, headers=headers(actor))
         assert read.status_code == 200 and read.json()['page']['may_write']

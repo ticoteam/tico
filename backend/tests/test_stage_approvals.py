@@ -362,6 +362,12 @@ def test_a_shared_spec_has_separate_task_oks_and_changes_since_each(api):
         assert TD.approved_versions(c, a["id"]) == TD.approved_versions(c, b["id"]) == {written["file_id"]: 1}
         assert TD.approved_tasks(c, written["file_id"], "Spec") == {a["id"]: 1, b["id"]: 1}
         assert len(P.current_pages(c, a["visit"]["id"], requirement_id)) == 1
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET private=1,visibility='private' WHERE id=?", (b["id"],))
+    visible = get(api, "pages/" + written["file_id"], "cara-test")["page"]
+    assert [(link["target"], link["approval"]) for link in visible["links"] if link["role"] == "Spec"] == [
+        ("task:" + a["id"], {"version": 1})
+    ]
 
 
 def test_unlinking_a_spec_removes_it_from_the_approval_set(api):
