@@ -557,11 +557,15 @@ function kpiEditForm(k: GkKpi) {
     <div class="goal-actions"><span class="spacer"></span><button class="ghost" type="button" data-cancel>Cancel</button><button class="primary" type="submit">Save</button></div></form>`;
 }
 
+// The click handler of the one button `sel` finds in `root`: a dialog's close or a form's cancel.
+function onClickOf(root: ParentNode, sel: string, fn: () => unknown) {
+  root.querySelector<HTMLElement>(sel)!.onclick = () => { fn(); };
+}
 function kpiPanelBind(dlg: HTMLDialogElement, d: GkKpiDetail) {
   const k = d.kpi, body = dlg.querySelector<GkBody>('.kpi-body')!;
   // A reply can land after the person has left this KPI (back, closed, another goal): redraw it only while it shows.
   const again = async () => { if (dlg.open && dlg.dataset.kpi === k.id) await kpiOpen(k.id); if (typeof goalsRefresh === 'function') { await goalsRefresh(); if (GOALS_ST && $('#goal-body')) goalsRender(GOALS_ST); } };
-  dlg.querySelector<HTMLElement>('[data-kpi-close]')!.onclick = () => dlg.close();
+  onClickOf(dlg, '[data-kpi-close]', () => dlg.close());
   bindProposals(body, again);
   const inPanel = dlg.id === 'goal-panel' && GOALS_ST;
   for (const b of body.querySelectorAll<GkEl<'kpiGoalOpen'>>('[data-kpi-goal-open]')) b.onclick = () => {
@@ -588,7 +592,7 @@ function kpiPanelBind(dlg: HTMLDialogElement, d: GkKpiDetail) {
     host.innerHTML = kpiTargetForm(link);
     const form = host.querySelector<GkTargetForm>('form')!;
     kpiTargetKinds(form);
-    form.querySelector<HTMLElement>('[data-cancel]')!.onclick = () => { host.innerHTML = ''; };
+    onClickOf(form, '[data-cancel]', () => { host.innerHTML = ''; });
     form.onsubmit = async ev => {
       ev.preventDefault();
       try { await post(`/v2/goals/${encodeURIComponent(link.goal_id)}/kpis/${encodeURIComponent(k.id)}`, kpiTargetBody(form)); await again(); }
@@ -614,15 +618,16 @@ function kpiPanelBind(dlg: HTMLDialogElement, d: GkKpiDetail) {
   const log = body.querySelector<GkLogForm>('[data-kpi-log]');
   if (log) {
     let correcting = '';
+    const cancel = log.querySelector<HTMLElement>('[data-correct-cancel]')!;
     const mode = (id: string, text: string) => {
       correcting = id;
       log.querySelector<HTMLElement>('.kpi-correcting')!.hidden = !id; log.querySelector('.kpi-correcting')!.textContent = id ? `Correcting ${text}` : '';
-      log.querySelector<HTMLElement>('.kpi-note-f')!.hidden = !id; log.querySelector<HTMLElement>('[data-correct-cancel]')!.hidden = !id;
+      log.querySelector<HTMLElement>('.kpi-note-f')!.hidden = !id; cancel.hidden = !id;
       log.querySelector('[type=submit]')!.textContent = id ? 'Log correction' : 'Log reading';
       if (id) log.elements.value.focus();
     };
     body._mode = mode; correctable();
-    log.querySelector<HTMLElement>('[data-correct-cancel]')!.onclick = () => mode('', '');
+    cancel.onclick = () => mode('', '');
     log.onsubmit = async ev => {
       ev.preventDefault();
       if (log.elements.value.value === '') { log.elements.value.focus(); return; }
@@ -640,7 +645,7 @@ function kpiPanelBind(dlg: HTMLDialogElement, d: GkKpiDetail) {
     const host = edit.parentElement!;
     host.innerHTML = kpiEditForm(k);
     const form = host.querySelector<GkEditForm>('form')!;
-    form.querySelector<HTMLElement>('[data-cancel]')!.onclick = () => again();
+    onClickOf(form, '[data-cancel]', () => again());
     form.onsubmit = async ev => {
       ev.preventDefault();
       const payload: Record<string, string> = {};
@@ -673,7 +678,7 @@ async function kpiOpen(id: string): Promise<void> {
   if (!dlg.open) { dlg.innerHTML = '<div class="tmodal-body"><p class="muted">Loading…</p></div>'; dlg.showModal(); }
   const data = await v2Get('/v2/kpis/' + encodeURIComponent(id));
   if (dlg.dataset.kpi !== id || !dlg.open) return;
-  if (!data) { dlg.innerHTML = '<div class="tmodal-head"><span class="spacer"></span><button class="ghost tmodal-x" type="button" data-kpi-close aria-label="Close">✕</button></div><div class="tmodal-body"><p class="err">Could not load the KPI.</p></div>'; dlg.querySelector<HTMLElement>('[data-kpi-close]')!.onclick = () => dlg.close(); return; }
+  if (!data) { dlg.innerHTML = '<div class="tmodal-head"><span class="spacer"></span><button class="ghost tmodal-x" type="button" data-kpi-close aria-label="Close">✕</button></div><div class="tmodal-body"><p class="err">Could not load the KPI.</p></div>'; onClickOf(dlg, '[data-kpi-close]', () => dlg.close()); return; }
   if (inPage) {
     const panel = GOALS_ST?.panel;   // read after the await: the page may have re-rendered meanwhile
     if (!panel) throw new Error('The goal panel is not open');
@@ -707,7 +712,7 @@ function kpiAddHtml(goal: GkGoal | null, forOwner = '') {
 async function kpiAddBind(form: GkAddForm, goal: GkGoal | null, done: (ok: boolean) => unknown) {
   const pick = form.elements.pick, fresh = form.querySelector<HTMLElement>('[data-new]')!;
   form.onkeydown = ev => { if (ev.key === 'Escape') { ev.preventDefault(); done(false); } };
-  form.querySelector<HTMLElement>('[data-cancel]')!.onclick = () => done(false);
+  onClickOf(form, '[data-cancel]', () => done(false));
   if (form.elements.kind) kpiTargetKinds(form);
   if (pick) {
     if (!goal) return;
