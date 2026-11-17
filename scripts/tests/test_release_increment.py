@@ -446,7 +446,8 @@ def test_a_plan_that_cannot_tell_native_files_keeps_every_python_vm_waiting_for_
 def test_the_planner_finds_native_test_files_in_the_candidates_checkout(tmp_path):
     tests = tmp_path / "backend/tests"
     tests.mkdir(parents=True)
-    (tests / "test_native.py").write_text('BIN = "runner-rs/target/release/tico-runner"\n')
+    # Split so this file itself names no native binary (release_checks.NATIVE_TEST would make it a native test).
+    (tests / "test_native.py").write_text('BIN = "runner-rs/target/' + 'release/tico-runner"\n')
     (tests / "test_plain.py").write_text("def test_a():\n    pass\n")
     names = ["backend/tests/test_native.py", "backend/tests/test_plain.py"]
     assert ri.native_test_files(names, tmp_path) == {"backend/tests/test_native.py"}
