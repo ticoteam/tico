@@ -535,7 +535,8 @@ function dashDraw(state: DashState) {
   grid.innerHTML = v.pins.length ? '' : `<p class="empty">${v.can_edit ? 'Add a card or a page' : 'Nothing pinned'}</p>`;
   v.pins.forEach((pin, i) => {
     const el = document.createElement('article');
-    el.className = 'dash-pin' + (pin.card ? '' : ' dash-pin-page'); el.dataset.size = pin.size || 'medium'; el.dataset.at = String(i);
+    // A page, and the Floor (its halls are the boxes), have no frame or title of their own outside edit mode.
+    el.className = 'dash-pin' + (!pin.card || pin.card.template === 'floor' ? ' dash-pin-page' : ''); el.dataset.size = pin.size || 'medium'; el.dataset.at = String(i);
     el.innerHTML = `<header class="dash-pin-head">
         ${v.can_edit ? `<button type="button" class="dash-grip" data-dash-grip aria-label="Move ${esc(dashPinTitle(pin, v))}" title="Move">${BOT_SVG.grip}</button>` : ''}
         <h2>${pin.card ? esc(dashHeading(pin.card)) : ''}${pin.card && dashTeamShown(pin.card, v) ? ` <span class="muted">· ${esc(pin.card.team_name)}</span>` : ''}</h2>${pin.card ? dashHeadN(pin.card) : ''}
