@@ -72,8 +72,9 @@ def tool(name, description, properties, required=(), *, writes=False, local=Fals
         schema["required"] = list(required)
     if writes:
         schema["properties"]["operation_id"] = _s(
-            "Stable id so a retry lands once. "
-            + ("This tool requires the id." if "operation_id" in schema.get("required", []) else "Omit for a fresh id.")
+            "Retry-safe id; required."
+            if "operation_id" in schema.get("required", [])
+            else "Retry-safe id; omit for a fresh one."
         )
 
     def register(fn):

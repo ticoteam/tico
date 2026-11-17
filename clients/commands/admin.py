@@ -333,7 +333,8 @@ def setup_invite(api, args):
 @tool(
     "tico_group_list",
     "The groups: sub-teams of the team, each with its id, name, parent group (groups nest), the "
-    "humans in it (ids) and the bots in it (slugs) you may see. A teammate, human or bot, is in one group at a time.",
+    "humans in it (ids) and the bots in it (slugs) you may see. A teammate, human or bot, is in "
+    "one group at a time.",
     {},
 )
 def group_list(api, args):
@@ -342,10 +343,10 @@ def group_list(api, args):
 
 @tool(
     "tico_group_update",
-    "Create, rename, move, lead or fill a group, as the person who asked you (the owner or an "
-    "admin; a group's lead within the groups it leads). Leave `group` out to create one from `name`. `parent` nests it "
-    "under another group (an empty one moves it to the top). Adding a teammate to a group takes it out of the one it "
-    "was in; built-in bots stay outside groups. Answers with the group.",
+    "Create, rename, move, lead or fill a group, as the person who asked (the owner or an admin; "
+    "a group's lead within the groups it leads). Leave `group` out to create one from `name`. "
+    "`parent` nests it under another group (empty moves it to the top). Adding a teammate takes "
+    "them out of their old group; built-in bots stay outside groups. Answers with the group.",
     {
         "group": _s("The group's id; leave out to create a new one"),
         "name": _s("Its name"),
@@ -492,10 +493,11 @@ def _pointer(data, pointer):
 
 @tool(
     "tico_settings_find",
-    "Find a control in Settings by its words: each one's `key`, plain `name`, `where` it sits in "
-    "Settings, who may change it, its `class` (direct: runs at once as the person; confirm: BotOps acting for a "
-    "person gets a Confirm card for them; person: only the person, in Settings; a `class_when` names the body that makes a direct one confirm or "
-    "person), the route and body it writes, and the `card` link. Then `tico_settings_show` or `tico_settings_set` with its key.",
+    "Find a control in Settings by its words: each one's `key`, `name`, `where` it sits, who may "
+    "change it, its `class` (direct: runs at once as the person; confirm: BotOps acting for a "
+    "person gets a Confirm card for them; person: only the person, in Settings; `class_when` "
+    "names what makes a direct one confirm or person), the route and body it writes, and the "
+    "`card` link. Then `tico_settings_show` or `tico_settings_set` with its key.",
     {"words": _s("What the setting is about, e.g. sql, budget, release time")},
     required=("words",),
 )
@@ -525,11 +527,11 @@ def settings_show(api, args):
 @tool(
     "tico_settings_set",
     "Change one setting from `tico_settings_find`, as the person who asked (BotOps, the "
-    "Assistant) or yourself. direct: it changes and the answer has the new `value`; confirm, from BotOps or the "
-    "Assistant: a Confirm card in the person's chat (`needs_confirm`), nothing changed yet; person: refused with the "
-    "one-line reason and the card's `link`. A refusal names who may change it. The Assistant cites the person's words "
-    "(`on_behalf_of`) for a direct one; without them, or while the owner's \"Assistant acts without asking\" is off, "
-    "it is a card too.",
+    "Assistant) or yourself. direct: it changes now and the answer has the new `value`; confirm, "
+    "from BotOps or the Assistant: a Confirm card in the person's chat (`needs_confirm`), nothing "
+    "changed yet; person: refused with a one-line reason that names who may change it, and the "
+    "card's `link`. The Assistant cites the person's words (`on_behalf_of`) for a direct change; "
+    "without them, or while the owner's \"Assistant acts without asking\" is off, it is a card.",
     {
         "key": _s("The setting's key"),
         "value": {"description": "The new value: on/off, a number, text, a list or JSON, as `tico_settings_show` says"},
@@ -597,9 +599,9 @@ def audit(api, args):
 
 @tool(
     "tico_team_show",
-    "The Team chart: who each person is, how to reach them (email, Slack, "
-    "phone), what they own, their goals, and which bots hang under them. Use this to find who "
-    "handles a kind of work before you file a task or ping someone.",
+    "The Team chart: who each person is, how to reach them (email, Slack, phone), what they own, "
+    "their goals, and which bots hang under them. Use this to find who handles a kind of work "
+    "before you file a task or ping someone.",
     {
         "person": _s("Optional person id: that person and everyone under them"),
         "team": _s("Optional group id: that group and the groups in it, like engineering or sales"),
@@ -645,9 +647,10 @@ def live_stats(api, args):
 @tool(
     "tico_origin_show",
     "Why an item is on the person's list: the task, the bot's question or the approval it names. "
-    "Answers who made it, its cause (the automation that opened it, the org rule that asked for it, the parent task, or "
-    "the bot that filed it), how many items that cause made this week and how many are still open, and up to three "
-    "ready-to-run commands that would stop the source. Read-only; a ref the person cannot read is not found.",
+    "Answers who made it and its cause (the automation that opened it, the org rule that asked "
+    "for it, the parent task, or the bot that filed it), how many items that cause made this week "
+    "and how many are open, and up to three commands that would stop the source. Read-only; a ref "
+    "the person cannot read is not found.",
     {"ref": _s("A task id (or 8+ leading characters), a message id (a bot's question) or an approval id")},
     required=("ref",),
 )
