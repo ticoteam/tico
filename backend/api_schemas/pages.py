@@ -81,7 +81,12 @@ SCHEMAS.update(
             required=["page"],
         ),
         "PagePublished": obj(
-            {"page": ref("Page"), "unembedded": items({"type": "string"}), "created": "b"},
+            {
+                "page": ref("Page"),
+                "links": items(ref("PageLinkView")),
+                "unembedded": items({"type": "string"}),
+                "created": "b",
+            },
             required=["page", "unembedded"],
         ),
         "PageList": obj({"pages": items(ref("Page")), "has_more": "b", "next_cursor": "n"}, required=["pages"]),

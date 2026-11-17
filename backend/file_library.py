@@ -409,7 +409,12 @@ class Library:
         )
         if page:
             links = page_links.links_of(c, self.auth, who, r["id"])
-            value.update(links=links[:5], links_more=max(0, len(links) - 5))
+            value.update(
+                links=links[:5],
+                links_more=max(0, len(links) - 5),
+                writers=page_links.writers_of(c, r["id"]),
+                may_write=page_links.may_write(c, self.auth, who, r),
+            )
         for key in ("poster_blob_id", "thumb_blob_id"):
             value.pop(key, None)
         return value

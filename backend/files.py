@@ -1397,7 +1397,8 @@ class Files:
         existing_row=None,
     ):
         """One publish of bytes already in the blob store: a new file, a new version, or a no-op touch. `fid` names a new
-        file's id (for a caller that writes the file's id somewhere before the file exists). `modified` is when the
+        file's id (for a caller that writes the file's id somewhere before the file exists). `existing_row` continues
+        a page by its authorized id, independently of its storage bot and filename. `modified` is when the
         content last changed at its source (content_time): the file's activity time when it is new or changed, so a
         repository published for the first time lists by when each file was written, not by when it was copied. An
         unchanged publish is no activity: it leaves the time alone, except that it may move a time that only says when

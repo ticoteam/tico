@@ -71,7 +71,9 @@ def test_context_is_bounded_metadata_newest_first_and_claims_include_it(api):
     assert [r['id'] for r in result['pages']] == page_ids[:1:-1]
     assert [r['id'] for r in result['meetings']] == [f'meeting-{i:02}' for i in range(11, 1, -1)]
     assert all(len(r['title']) == 200 for rows in result.values() for r in rows)
-    assert all(set(r) == {'id', 'title', 'version', 'updated_at'} for r in result['pages'])
+    assert all(
+        set(r) == {'id', 'title', 'version', 'updated_at', 'links', 'writers', 'may_write'} for r in result['pages']
+    )
     assert all(set(r) == {'id', 'title', 'date'} for r in result['meetings'])
     assert 'Never include' not in json.dumps(result)
     assert len(json.dumps(result).encode()) < 24000

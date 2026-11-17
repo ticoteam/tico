@@ -264,3 +264,44 @@ def test_page_list_uses_fixed_number_of_queries(api):
 
     small, large = count(ids[:1]), count(ids)
     assert len(large) <= len(small) + 2, (len(small), len(large), large)
+
+
+def test_publish_submits_each_linked_document_requirement(api):
+    from backend.tests.helpers import engine as X
+    from backend import task_engine as E
+
+    with api.app.state.store.transaction() as c:
+        X.pipeline(
+            c,
+            "page-publish",
+            "Publish",
+            (
+                {
+                    "name": "Spec",
+                    "owner": "bot:ops",
+                    "requirements": [
+                        {"kind": "page", "line": "Spec", "settings": {"document": "Spec"}, "who_oks": "none"}
+                    ],
+                },
+            ),
+            manager="human:ana",
+        )
+        t = X.new_task(c, X.ANA, "Publish the spec", "page-publish", assignee="bot:ops")
+    made = publish_page(api, 'ana-test', task=t['id'], **{'as': 'Spec'})
+    assert made.status_code == 200, made.text
+    fid = made.json()['page']['file_id']
+    with api.app.state.store.read() as c:
+        current = E.task(c, t['id'])
+        submitted = c.execute(
+            "SELECT file_id,version FROM requirement_pages WHERE visit_id=? AND replaced_at IS NULL",
+            (current['visit']['id'],),
+        ).fetchall()
+        assert [(r['file_id'], r['version']) for r in submitted] == [(fid, 1)]
+    revised = publish_page(api, 'ana-test', 'Revised', page=fid)
+    assert revised.status_code == 200, revised.text
+    with api.app.state.store.read() as c:
+        submitted = c.execute(
+            "SELECT file_id,version FROM requirement_pages WHERE visit_id=? AND replaced_at IS NULL",
+            (current['visit']['id'],),
+        ).fetchall()
+        assert [(r['file_id'], r['version']) for r in submitted] == [(fid, 2)]

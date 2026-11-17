@@ -1,4 +1,4 @@
-"""Pages: HTML files a bot keeps up to date to show people what it did and found (docs/pages.md).
+"""Pages: versioned HTML shared by people and bots (docs/pages.md).
 
 A page is a bot file (backend/files.py) with a `pages` row beside it: how often the bot means to update it, the date
 its data is from, the page that replaced it and whether it is archived. Versions, visibility and storage are the
@@ -333,8 +333,7 @@ class Pages:
 
     # ------------------------------------------------------------------ writes
     def publish(self, request, who, fields, data):
-        """A bot publishes a page: cleaned HTML stored as a version of its file, and the page row beside it, in one
-        transaction. The same path (or name) again is a new version of the same page."""
+        """Publish cleaned HTML and links atomically; a page id continues its versions across writers."""
         importing = any(k in fields for k in ("written_by", "written_at"))
         if importing and who.role != "owner":
             raise Problem("forbidden", "Only the owner may import writer or time", 403)
@@ -423,6 +422,17 @@ class Pages:
                 self.auth.task(c, editor, linked_task)
                 role = page_links.role_name(str(fields.get("as") or ("Spec" if spec else "related")))
                 page_links.link(c, row["id"], "task:" + linked_task, role, actor)
+            from . import task_pages
+
+            # Each task evaluates this version independently, including edits made directly by page id.
+            for document_link in c.execute(
+                "SELECT target,role FROM page_links WHERE page_id=? AND target LIKE 'task:%' "
+                "AND role NOT IN ('writer','related')",
+                (row["id"],),
+            ).fetchall():
+                task_pages.submit(
+                    c, document_link["target"][5:], document_link["role"], row["id"], row["current_version"], actor
+                )
             if audience_set:
                 self.set_audience(c, editor, row, checked_audience(c, audience))
             if replaces:
@@ -453,17 +463,15 @@ class Pages:
                 ):
                     self.require_pin_space(c, task)
                 self.pin_to_task(c, row, task, actor=who.actor if who.via == "assistant" else None)
-            return {
-                "page": self.view(
-                    c,
-                    who,
-                    row,
-                    c.execute("SELECT * FROM pages WHERE file_id=?", (row["id"],)).fetchone(),
-                    {},
-                    include_audience=True,
-                ),
-                "unembedded": unembedded,
-            }
+            shown = self.view(
+                c,
+                who,
+                row,
+                c.execute("SELECT * FROM pages WHERE file_id=?", (row["id"],)).fetchone(),
+                {},
+                include_audience=True,
+            )
+            return {"page": shown, "links": shown["links"], "unembedded": unembedded}
 
         return self.files.publish(
             request,
@@ -666,13 +674,13 @@ def install_pages(app, store, auth, files):
         **api_v2(
             "Pages",
             "publishPage",
-            "A bot publishes an .html page (raw with fields in the query, or JSON); scripts and outside loads are removed",
+            "Publish an HTML page or a new version by page id (raw or JSON); scripts and outside loads are removed",
             "PagePublished",
             openapi_extra=publish_doc,
         ),
     )
     async def publish(request: Request):
-        """A bot (or the computer running its turn) publishes a page: an .html file, raw with its fields in the
+        """A person, bot or its computer publishes a page: an .html file, raw with its fields in the
         query, or JSON with text or content_base64. Scripts and anything that would load from elsewhere are removed
         (`unembedded` lists what was). Up to 10 MB."""
         fields, data = files.read_input(

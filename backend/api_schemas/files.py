@@ -109,6 +109,8 @@ SCHEMAS.update(
                 "pins": {"type": "array", "description": "Where the file is pinned, when pins exist"},
                 "links": {**items(ref("PageLinkView")), "maxItems": 5},
                 "links_more": "i",
+                "writers": items(ref("PageWriter")),
+                "may_write": "b",
             },
             required=["id", "bot", "title", "kind", "library_kind", "version", "last_activity_at"],
         ),
