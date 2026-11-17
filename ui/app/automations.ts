@@ -84,7 +84,7 @@ const AU_REPEATS: Array<[string, string]> = [['once', 'Once'], ['weekly', 'Weekl
 const auCap = (s: unknown) => String(s || '').charAt(0).toUpperCase() + String(s || '').slice(1);
 // An event trigger's event in a few words: the catalog's (backend/event_catalog.py) and the built-ins'
 // tico.builtin.*. The dotted name is only ever a chip's tooltip.
-const AU_EVENTS: Record<string, string> = {'task.created': 'Task created', 'task.assigned': 'Task assigned', 'task.step_changed': 'Task stage changed', 'task.moved': 'Task moved to another pipeline',
+const AU_EVENTS: Record<string, string> = {'task.created': 'Task created', 'task.assigned': 'Task assigned', 'task.step_changed': 'Task stage changed', 'task.moved': 'Task changed pipeline',
   'task.commented': 'Task comment', 'task.done': 'Task finished', 'task.closed': 'Task closed', 'task.reopened': 'Task reopened',
   'thread.created': 'Thread started', 'message.created': 'Message sent', 'message.held': 'Message held',
   'bot.run_failed': 'Bot run failed', 'bot.held': 'Bot held', 'bot.released': 'Bot released', 'org_rule.retired': 'Rule retired',

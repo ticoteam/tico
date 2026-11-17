@@ -85,7 +85,7 @@ def _build():
     add(
         "task.moved",
         "A task moved to another pipeline: the same task, with its number and history.",
-        "Task moved to another pipeline",
+        "Task changed pipeline",
         _task(
             actor="human:ana",
             pipeline="backlog",
