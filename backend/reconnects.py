@@ -197,34 +197,25 @@ def open(c, task_id, bot, key, service, label, person, fix, message_id=None, own
     )
     H._recount(c, row["owner_id"])
     if key.startswith("login:"):
-        _fold_hold(c, bot)
+        # A bot already held for failed sign-ins has a Needs-you item of its own; this card asks for the same fix, so
+        # that item closes and the card stands for both. The hold stays until the fix (`_release_sign_in_holds`), and
+        # the item comes back if the card is retired first (`_unfold_hold`).
+        from . import run_failures
+
+        run_failures.fold_item(c, bot)
     H.event(c, H.KEEPER, "task.reconnect_wait", task_id, {"key": key, "bot": bot, "person": person})
     return record
 
 
-def _fold_hold(c, bot):
-    """A bot already held for failed sign-ins has a Needs-you item of its own; this login card asks for the same fix,
-    so that item closes and the card stands for both. The hold stays until the fix (`_release_sign_in_holds`), and
-    the item comes back if the card is retired first (`_unfold_hold`)."""
-    if not _H()._has_table(c, "run_backoff"):
-        return
-    from . import bot_stops, run_backoff
-
-    state = run_backoff.get(c, bot)
-    if state.get("held_at") and state.get("error_class") == run_backoff.SIGN_IN and state.get("task_id"):
-        c.execute("UPDATE run_backoff SET task_id=NULL WHERE bot=?", (bot,))
-        bot_stops.close_item(c, state["task_id"], "A reconnect card on its task asks for the same fix.")
-
-
 def _unfold_hold(c, bot):
     """The last live login card of a bot still held for failed sign-ins went away unfixed: its own item is back."""
-    if not _H()._has_table(c, "run_backoff") or bot_open(c, bot, "login:"):
+    if bot_open(c, bot, "login:"):
         return
-    from . import run_backoff
+    from . import run_failures
 
-    state = run_backoff.get(c, bot)
-    if state.get("held_at") and state.get("error_class") == run_backoff.SIGN_IN and not state.get("task_id"):
-        run_backoff.raise_hold_item(c, None, bot)
+    hold = run_failures.get(c, bot)
+    if hold.get("details", {}).get("error_class") == run_failures.SIGN_IN:
+        run_failures.raise_hold_item(c, None, bot)
 
 
 def _reads(c, row):
@@ -495,14 +486,12 @@ def fold_into(c, task_row, body, refs):
 
 def _release_sign_in_holds(c, bots):
     """A bot held for failed runs whose cause was the sign-in just fixed goes again now, not at its next try."""
-    if not bots or not _H()._has_table(c, "run_backoff"):
-        return
-    from . import run_backoff
+    from . import run_failures
 
-    for bot in sorted(bots):
-        state = run_backoff.get(c, bot)
-        if state.get("held_at") and state.get("error_class") == run_backoff.SIGN_IN:
-            run_backoff.release(c, _H().KEEPER, bot)
+    for bot in sorted(bots or ()):
+        hold = run_failures.get(c, bot)
+        if run_failures.is_held(hold) and hold["details"].get("error_class") == run_failures.SIGN_IN:
+            run_failures.release(c, _H().KEEPER, bot)
 
 
 def moved(c, task_id, field, old, new):

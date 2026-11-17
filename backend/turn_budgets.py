@@ -247,10 +247,10 @@ def release(c, actor, bot, how=None):
 # ---------------------------------------------------------------------------------------------------- the settings
 def view(c, bot, config):
     """The bot's budget as the API and the tools show it: in force, its own, the team's, the runs so far and the holds."""
-    from . import run_backoff
+    from . import run_failures
 
     declared = _declared(config["config"])
-    state, failing = get(c, bot), run_backoff.get(c, bot)
+    state, failing = get(c, bot), run_failures.get(c, bot)
     now = H.now()
     return {
         "bot": bot,
@@ -271,13 +271,13 @@ def view(c, bot, config):
         ),
         "run_hold": (
             {
-                "fails": failing["fails"],
-                "error_class": failing["error_class"],
-                "since": failing["held_at"],
-                "next_try": run_backoff.probe_at(failing),
-                "words": run_backoff.words(c, bot),
+                "fails": failing["streak"],
+                "error_class": failing["details"].get("error_class"),
+                "since": failing["details"].get("held_at"),
+                "next_try": failing["probe_at"],
+                "words": run_failures.words(c, bot),
             }
-            if failing.get("held_at")
+            if run_failures.is_held(failing)
             else None
         ),
         "revision": config["revision"],
