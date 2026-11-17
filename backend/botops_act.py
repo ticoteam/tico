@@ -718,6 +718,7 @@ SUMMARIES = [
     ("PATCH", AUDIENCE, "Turn on a Company page audience"),
     ("DELETE", re.compile(API + rf"automations/{_S}"), "Delete an automation"),
     ("POST", re.compile(API + rf"automations/{_S}/delete"), "Delete an automation"),
+    ("POST", re.compile(API + r"support/tickets"), "Report a bug to Tico support"),
 ]
 
 

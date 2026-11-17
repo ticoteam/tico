@@ -78,6 +78,9 @@ interface Window {
 .asst-card>.asst-raw{font-size:inherit;margin:0 0 6px}.asst-card>.asst-raw>:not(summary){font-size:12.5px}
 .asst-card>.asst-raw>summary{display:flex;align-items:flex-start;gap:2px;color:inherit;width:auto;list-style:none}
 .asst-card>.asst-raw>summary::-webkit-details-marker{display:none}
+.asst-long>summary{list-style:none;cursor:pointer}
+.asst-long>summary::-webkit-details-marker{display:none}
+.asst-long>summary>span{color:var(--muted)}
 .asst-card>.asst-raw>summary .nav-icon{flex:none;width:18px;height:18px;font-size:18px}
 .asst-card>.asst-raw[open]>summary .nav-icon{transform:rotate(180deg)}
 .asst-card>.asst-raw:not([open]) [data-what]{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}
