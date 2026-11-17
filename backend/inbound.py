@@ -28,7 +28,7 @@ from .auth import validate_identity
 from . import outbound_tls
 from .models import Contract
 from .store import H, Problem, encode
-from .api_contract import api_v2
+from .api_contract import ERROR, KEYLESS, api_v2
 
 TRANSPORT = None  # tests' fake HQ, never a live company database
 RETENTION = 90 * 86400  # bodies and codes; metadata stays
@@ -804,6 +804,37 @@ class Inbound:
                 pass
 
 
+COMPANY_CONNECTION_BODY = {
+    'required': True,
+    'content': {
+        'application/json': {
+            'schema': {
+                'type': 'object',
+                'additionalProperties': False,
+                'required': ['action', 'code'],
+                'properties': {
+                    'action': {'type': 'string', 'enum': ['preview', 'connect']},
+                    'code': {
+                        'type': 'string',
+                        'minLength': 43,
+                        'maxLength': 43,
+                        'pattern': '^[A-Za-z0-9_-]{43}$',
+                        'writeOnly': True,
+                    },
+                },
+            }
+        }
+    },
+}
+COMPANY_CONNECTION_DESCRIPTION = (
+    'Direct signed-in human owner/admin only; no personal tokens, support or delegated agents. '
+    'Preview shows the target company before explicit consent to share Inbox in both directions. '
+    'The server supplies its private key and existing reported installation identity; neither belongs in this body. '
+    'Requests are limited to 2 KiB; code validation errors never echo supplied values. '
+    'Disconnect in the portal stops future access, preserving merged history and existing local copies.'
+)
+
+
 def install(app, store, settings, auth):
     service = Inbound(store, settings, auth)
     service.judge = lambda: getattr(app.state, 'judge', None)
@@ -819,6 +850,17 @@ def install(app, store, settings, auth):
             "connectInboundCompany",
             "A direct human owner or admin previews and connects Inbox to a portal company",
             "InboundCompanyConnection",
+            description=COMPANY_CONNECTION_DESCRIPTION,
+            request_body=COMPANY_CONNECTION_BODY,
+            responses={
+                code: {**ERROR, 'description': detail}
+                for code, detail in [
+                    ('403', 'Direct human management or portal authorization required'),
+                    ('409', 'Missing saved identity, expired code or conflicting connection'),
+                    ('503', 'Inbox connection unavailable; reconcile the same code in its original lifetime'),
+                ]
+            },
+            idempotency='Optional. Retry the same action and code; HQ rechecks the current grant, role, session and original expiry without readoption.',
         ),
     )
     async def company_connection(request: Request):
@@ -872,6 +914,7 @@ def install(app, store, settings, auth):
             "setInboundInboxAudience",
             "An owner or admin sets who reads an inbox: company, or team with group_id (that group and the groups under it)",
             "InboundInbox",
+            idempotency=KEYLESS,
         ),
     )
     def audience(request: Request, ident: str, body: InboxAudience):

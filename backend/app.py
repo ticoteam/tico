@@ -127,7 +127,7 @@ from . import (
     fleet_runner_routes,
     ui_bundle_routes,
 )
-from .api_contract import api_v2
+from .api_contract import ASK_REFUSED, api_v2
 
 
 # Gateway image calls in flight per process (each holds a thread up to 130 s); more answer 429 with Retry-After.
@@ -2022,7 +2022,7 @@ def create_app(settings=None):
         with store.read() as c:
             c.execute("SELECT 1 FROM schema_migrations").fetchone()
 
-    @app.get("/healthz", **api_v2("Health", "getLiveness", "Is the server up (no sign-in)"))
+    @app.get("/healthz", **api_v2("Health", "getLiveness", "Is the server up (no sign-in)", security=[]))
     async def health():
         await anyio.to_thread.run_sync(health_check, limiter=health_threads)
         return {
@@ -2763,7 +2763,14 @@ def create_app(settings=None):
         return rc, (None if org_rule_check.holds(rc) or retry else message_ingest(who, body))
 
     @app.post(
-        "/api/v2/messages", **api_v2("Conversations", "sendMessage", "Send a message to a person or bot", "Message")
+        "/api/v2/messages",
+        **api_v2(
+            "Conversations",
+            "sendMessage",
+            "Send a message to a person or bot",
+            "Message",
+            responses={"422": ASK_REFUSED},
+        ),
     )
     def say(request: Request, body: M.MessageCreate):
         who = request.state.identity
@@ -3787,7 +3794,9 @@ def create_app(settings=None):
         with store.read() as c:
             return store.saved(c, who, request.url.path, request.headers.get("idempotency-key"))
 
-    @app.post("/api/v2/tasks", **api_v2("Tasks", "createTask", "Create a task", "TaskResult"))
+    @app.post(
+        "/api/v2/tasks", **api_v2("Tasks", "createTask", "Create a task", "TaskResult", responses={"422": ASK_REFUSED})
+    )
     def create_task(request: Request, body: M.TaskCreate):
         who = request.state.identity
         if who.via == "botops" and who.role == "bot" and H.is_bot(who.task_actor) and who.task_actor != who.actor:
@@ -3916,6 +3925,7 @@ def create_app(settings=None):
             "updateTask",
             "Edit a task's fields (title, body, due, labels, privacy, goal, note). A bot sends the version it was shown (409 task_changed otherwise); a person may leave it out. Where it is and who has it change by done, move and owner",
             "TaskResult",
+            responses={"422": ASK_REFUSED},
         ),
     )
     def update_task(request: Request, tid: str, body: M.TaskUpdate):

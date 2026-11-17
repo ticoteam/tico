@@ -11,7 +11,7 @@ from . import org_rule_check
 import re
 from . import updates
 from . import views
-from .api_contract import api_v2
+from .api_contract import ASK_REFUSED, api_v2
 
 
 def register(
@@ -402,7 +402,13 @@ def register(
 
     @app.post(
         "/api/v2/conversations/{cid}/messages",
-        **api_v2("Conversations", "replyInConversation", "Send a message in a conversation", "MessageResult"),
+        **api_v2(
+            "Conversations",
+            "replyInConversation",
+            "Send a message in a conversation",
+            "MessageResult",
+            responses={"422": ASK_REFUSED},
+        ),
     )
     def reply(request: Request, cid: str, body: M.ChatCreate):
         who = request.state.identity

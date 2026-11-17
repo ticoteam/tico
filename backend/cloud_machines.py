@@ -116,7 +116,7 @@ from clients.gateway import user_agent
 from . import cloud_access, outbound_tls, releases, runner_online
 from .store import H, Problem, digest, encode
 from . import bot_settings as BS
-from .api_contract import api_v2
+from .api_contract import ERROR, api_v2
 
 log = logging.getLogger(__name__)
 
@@ -3094,6 +3094,21 @@ class CloudSupportView(BaseModel):
     machines: list[CloudSupportMachine] = Field(max_length=1000)
 
 
+CLOUD_SUPPORT_DESCRIPTION = (
+    "HQ is the source of the switch and helper states; no local copy is kept. "
+    "GET returns available false, on null and an empty machines list off Tico Cloud "
+    "or when HQ answers 404 not_cloud. Demo and rehearsal never contact HQ. "
+    "PUT accepts a boolean on, needs the owner and refuses support sessions. "
+    "Core assigns an increasing revision and keeps it for retries of the same "
+    "Idempotency-Key. A 409 stale_revision is final and carries HQ's current boolean "
+    "on in the error. After an uncertain PUT, read HQ again before showing a saved state."
+)
+CLOUD_SUPPORT_ERRORS = {
+    "403": {"description": "People only; changing the switch needs the owner", **ERROR},
+    "502": {"description": "Didn't reach Tico HQ, or HQ's answer could not be used", **ERROR},
+}
+
+
 def install(app, settings, store, auth, execution, mutate):
     service = Manager(store, settings, execution)
     service.vault_of = lambda: getattr(app.state, "vault", None)
@@ -3129,6 +3144,8 @@ def install(app, settings, store, auth, execution, mutate):
             "Computers",
             "getCloudMachineSupport",
             "Read Tico support's cloud-machine switch and helper states from HQ; unavailable off Tico Cloud",
+            description=CLOUD_SUPPORT_DESCRIPTION,
+            responses=CLOUD_SUPPORT_ERRORS,
         ),
     )
     def cloud_machine_support(request: Request):
@@ -3147,6 +3164,11 @@ def install(app, settings, store, auth, execution, mutate):
             "Computers",
             "setCloudMachineSupport",
             "Let Tico support reach the company's cloud machines, or stop it; owner only",
+            description=CLOUD_SUPPORT_DESCRIPTION,
+            responses={
+                **CLOUD_SUPPORT_ERRORS,
+                "404": {"description": "not_cloud: cloud-machine support is not available", **ERROR},
+            },
         ),
     )
     def cloud_machine_support_set(request: Request, body: CloudSupportChange):

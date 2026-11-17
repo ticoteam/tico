@@ -23,7 +23,7 @@ from . import gmail_live, google_tokens, google_workspace, mail_compose, mailbox
 from .models import Contract
 from .store import H, Problem
 from .views import human_only, roster
-from .api_contract import api_v2
+from .api_contract import ERROR, api_v2, ref
 
 LIMIT_DEFAULT, LIMIT_MAX = 50, 100
 DURATION = {"d": 86400, "h": 3600, "m": 60}
@@ -286,6 +286,8 @@ def install_mail(app, store, auth):
             "organizeMailMessages",
             "Organize up to 500 messages live in Whole Workspace Gmail; requires organize access; never deletes",
             "MailOrganizeResult",
+            request_body={"required": True, "content": {"application/json": {"schema": ref("MailOrganizeBody")}}},
+            responses={"403": {"description": "Organize access or the company organize switch is off", **ERROR}},
         ),
     )
     def organize(request: Request, body: dict):

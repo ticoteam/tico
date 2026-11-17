@@ -39,7 +39,7 @@ from .health import GITHUB_HEALTH, note_github_token
 from .store import Problem, digest, encode
 from . import bot_settings as BS
 from . import brand_icons
-from .api_contract import api_v2
+from .api_contract import KEYLESS, api_v2
 
 log = logging.getLogger("tico.github_app")
 
@@ -2676,7 +2676,9 @@ def install_github_app(app, settings, store):
 
     @app.put(
         "/api/v2/bots/{bot}/github-repos",
-        **api_v2("Repositories", "setExtraRepositories", "Set chosen write repositories (legacy alias)"),
+        **api_v2(
+            "Repositories", "setExtraRepositories", "Set chosen write repositories (legacy alias)", idempotency=KEYLESS
+        ),
     )
     def extra_put(request: Request, bot: str, body: ExtraRepos):
         with store.read() as c:

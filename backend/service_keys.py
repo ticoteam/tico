@@ -274,6 +274,8 @@ def install_service_keys(app, store, auth, mutate):
             "upsertInboundTask",
             "Another system's work as it is now, by its own key: files, updates, closes or reopens one task (service key only; docs/service-keys.md)",
             "InboundTaskResult",
+            security=[{"serviceKey": []}],
+            idempotency="Not needed: the pair (service key, `key`) makes a repeated call harmless, and the header is ignored.",
         ),
     )
     def inbound_task(request: Request, body: M.InboundTask):
