@@ -209,7 +209,14 @@ async function openStrategy(browser: Browser, {viewport = PHONE, hash = '#/strat
     if (p === '/api/company-docs') return json({documents: []});
     if (p === '/api/v2/librarian/setup') return json({market: db.market.setup ? {answers: {}, can_answer: true, skipped: false, step: 0, task: null} : null});
     // The Strategy Owner beside the tabs, and Goals.
-    if (p === '/api/v2/strategy') return json({current: null, bets: [], may_edit: true});
+    // The strategy: the owner has a draft to edit and no published version yet; a member reads the published one.
+    if (p === '/api/v2/strategy') {
+      const doc = {summary: 'Acme cleans homes in Austin at half the price.', vision: '', sections: {serve: 'Busy households.', extra: {}}, bets: [], note: '', guide: 'default'};
+      const view = {bets: [], label: 'Bets', label_one: 'Bet', goals_by_bet: {}, live_by_bet: {}, health_by_bet: {}};
+      return me.role === 'owner'
+        ? json({...view, draft: {...doc, id: 'v-d', n: null, status: 'draft', revision: 1}, current: null, may_edit: true})
+        : json({...view, current: {...doc, id: 'v-1', n: 1, status: 'published', revision: 1}, may_edit: false});
+    }
     if (p === '/api/v2/conversations') return json({conversations: []});
     if (p === '/api/v2/bots/strategy-owner/routines') return json({routines: []});
     if (p === '/api/v2/goals/tree') return json({goals: db.goals, owners: {}, other_kpis: [], proposals: []});

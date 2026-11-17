@@ -193,7 +193,9 @@ async function onePage(page: Page, tag: string) {
       await page.locator('[data-mkt-size] input[name="description"]').fill('Release tooling for small teams');
       await page.locator('[data-mkt-size] [type="submit"]').click();
       await page.locator('[data-mkt-researching]').waitFor();
-      assert.equal(await page.locator(mark).count(), 0, tag + ': sizing started, so no mark on the section or the tab');
+      assert.equal(await page.locator(`#mkt-q-money h3 ${mark}`).count(), 0, tag + ': sizing started, so the section is no longer marked');
+      assert.equal(await page.locator(`.strat-tabs [data-strat-tab="market"] ${mark}`).count(), 0, tag + ': and Market\'s tab is not');
+      assert.equal(await page.locator(`.strat-tabs [data-strat-tab="strategy"] ${mark}`).count(), 1, tag + ': Strategy keeps its mark, its brand is still unset');
       assert.deepEqual(writes.filter(w => w.method === 'POST').map(w => [w.path, w.body]), [['/api/v2/market/spend/research', {description: 'Release tooling for small teams'}]], tag + ': the sizing is filed once');
       db.market.sized = true;
       await page.reload();
