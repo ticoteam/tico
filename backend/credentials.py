@@ -568,6 +568,17 @@ class Vault:
     def admins(self):
         return self.store.settings.credential_admins
 
+    def admins_now(self, c):
+        """The credential administrators in force, read in `c`: a request's own (`Auth.sync_access`, which adopts a
+        transfer or a change to the Admins) with the app's sign-in, else the same rule from the database
+        (backend/auth.py `credential_admins`), never the settings a worker was started with."""
+        from . import auth
+
+        if self.auth is not None:
+            self.auth.sync_access(c)
+            return self.admins
+        return auth.credential_admins(c, self.store.settings)
+
     def change(self, who, operation, key, body, authorize, fn):
         if not key or len(key) > 200:
             raise Problem('idempotency_key', 'Provide an Idempotency-Key', 422)

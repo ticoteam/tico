@@ -600,11 +600,14 @@ def _identity(c: sqlite3.Connection, actor: str) -> Any:
     """The vault's view of `actor` (backend/auth.py `Identity`), with no more rights than they hold: a bot as itself,
     a person rebuilt the way deferred work rebuilds them (`Auth.identity_for_actor`). None for anyone else, or a
     person who has left or whose sign-in is off."""
-    from ... import auth
+    from ... import access, auth
 
     A: Any = auth
     if actor.startswith("bot:"):
-        return A.Identity(actor, "bot")
+        try:  # as bot auth resolves it: an archived or paused bot, or one with no current credential, is no one
+            return A.bot_identity(c, actor)
+        except A.Problem:
+            return None
     if not actor.startswith("human:"):
         return None
     signed: Any = getattr(_VAULT[0], "auth", None)
@@ -613,12 +616,13 @@ def _identity(c: sqlite3.Connection, actor: str) -> Any:
             return signed.identity_for_actor(c, actor)
         except A.Problem:
             return None
-    # A vault registered without the app's sign-in (a worker or a test): the same rebuild, the owner by the stored
-    # owner's email as Auth.identity_for_actor does (never a lookup of every person by email).
+    # A vault registered without the app's sign-in (a worker or a test): the same rebuild, the owner in force by email
+    # as Auth.identity_for_actor does (backend/access.py load_owner, which follows a transfer).
     if A.standing(c, actor.partition(":")[2]):
         return None
     email = person_email(c, actor)
-    return A.Identity(actor, "owner" if email and email == _owner_email(c) else "human", email=email)
+    owner = str(cast(Any, access).load_owner(c, _VAULT[0].store.settings)["email"])
+    return A.Identity(actor, "owner" if email and email == owner else "human", email=email)
 
 
 def may_use_credential(c: sqlite3.Connection, actor: str, credential_id: str) -> bool:
@@ -630,7 +634,10 @@ def may_use_credential(c: sqlite3.Connection, actor: str, credential_id: str) ->
     if not _VAULT:
         return False
     who = _identity(c, actor)
-    return who is not None and bool(cast(Any, credentials).usable(c, who, credential_id, _VAULT[0].admins))
+    if who is None:
+        return False
+    vault: Any = _VAULT[0]
+    return bool(cast(Any, credentials).usable(c, who, credential_id, vault.admins_now(c)))
 
 
 def credential_exists(c: sqlite3.Connection, credential_id: str) -> bool:

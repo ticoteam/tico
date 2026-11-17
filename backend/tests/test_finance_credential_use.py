@@ -3,6 +3,7 @@ vault's own list follows): the connect route refuses before its probe sends the 
 on every path (the route and the generic actions route alike, a bot by its own grants), and a sync refuses, logged, a
 connection whose creator may no longer use its key, without reading it."""
 
+import json
 import logging
 from typing import Any
 
@@ -134,6 +135,22 @@ def test_a_bot_never_sends_a_default_read_key_it_holds_no_grant_to(books: Store)
         assert FT.may_use_credential(c, BOT, "cred-stripe")
 
 
+def test_with_no_sign_in_the_credential_administrators_follow_an_ownership_transfer(books: Store):
+    assert books.settings.credential_admins_follow_owner
+    with books.transaction() as c:
+        ana, cara = FT.person_email(c, OWNER), FT.person_email(c, CARA)
+        assert books.settings.credential_admins == (ana,)
+        assert FT.may_use_credential(c, OWNER, "cred-stripe") and not FT.may_use_credential(c, CARA, "cred-stripe")
+        # The transfer is stored (backend/access.py transfer); the settings this worker started with still name Ana.
+        c.execute(
+            "INSERT OR REPLACE INTO registry_metadata(key,value) VALUES('owner',?)",
+            (json.dumps({"email": cara, "revision": 2, "source": "transfer"}),),
+        )
+        assert books.settings.credential_admins == (ana,)
+        assert FT.may_use_credential(c, CARA, "cred-stripe")
+        assert not FT.may_use_credential(c, OWNER, "cred-stripe")
+
+
 def _sealed(c: Any, cid: str, value: str) -> None:
     ciphertext, nonce = FT._VAULT[0].cipher.encrypt(c, cid, value)
     c.execute(
@@ -192,5 +209,26 @@ def test_a_stripe_or_brex_sync_refuses_a_key_its_connector_may_not_use(books: St
 
     def make(_token: str) -> Any:
         pytest.fail("a key its connector may not use was read")
+
+    assert sync.connection(books, FT._VAULT[0], cid, make=make, at=AT) == "refused"
+
+
+def test_an_archived_bot_may_use_no_key_and_its_connection_stops_syncing(books: Store):
+    with books.transaction() as c:
+        _sealed(c, "cred-bot", "stripe-secret-0001")
+        grant(c, "cred-bot", BOT)
+        assert FT.may_use_credential(c, BOT, "cred-bot")
+        cid = H.new_id()
+        c.execute(
+            "INSERT INTO fin_connections(id,provider,purpose,credential_ref,status,created_at,created_by) "
+            "VALUES(?,'stripe','bank','cred-bot','active',?,?)",
+            (cid, AT, BOT),
+        )
+        # Archiving keeps the bot's grants: bot auth (backend/auth.py bot_identity) is what refuses it.
+        c.execute("UPDATE bots SET state='archived' WHERE id=?", (H.actor_id(BOT),))
+        assert not FT.may_use_credential(c, BOT, "cred-bot")
+
+    def make(_token: str) -> Any:
+        pytest.fail("an archived bot's key reached Stripe")
 
     assert sync.connection(books, FT._VAULT[0], cid, make=make, at=AT) == "refused"
