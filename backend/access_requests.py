@@ -32,7 +32,6 @@ that carries one is refused (hubdb.check_message_refs).
 """
 
 import contextvars
-import importlib
 import json
 import re
 import statistics
@@ -55,7 +54,31 @@ Row = dict[str, Any]
 
 def _mod(name: str) -> Any:
     """A neighbour module, imported when used (most import much of the backend) and typed as Any at the door."""
-    return importlib.import_module("." + name, __package__)
+    # Every name is a literal import: a computed import would make this module, and every module that imports it, depend
+    # on the whole backend in the PR test selection (scripts/pr_checks.py DependencyMap).
+    if name == "api_tools":
+        from . import api_tools as found
+    elif name == "auth":
+        from . import auth as found
+    elif name == "credentials":
+        from . import credentials as found
+    elif name == "default_read":
+        from . import default_read as found
+    elif name == "page_owners":
+        from . import page_owners as found
+    elif name == "reconnects":
+        from . import reconnects as found
+    elif name == "repositories":
+        from . import repositories as found
+    elif name == "rooms":
+        from . import rooms as found
+    elif name == "threads":
+        from . import threads as found
+    elif name == "tool_access":
+        from . import tool_access as found
+    else:
+        raise ValueError(name)
+    return found
 
 
 CARD = "access_request"
