@@ -141,7 +141,8 @@ const shot = async (page: Page, name: string) => {
       // 5. A phone: the ⋯ sits beside the stage tabs, 44 px, for the stage shown; its menu is the same.
       const phone = await open(browser, {viewport: {width: 390, height: 844}, theme});
       await phone.page.locator('.pv-phone .tk-card').first().waitFor();
-      const pm = phone.page.locator('.pv-phone-head .pv-col-more');
+      const pm = phone.page.locator('.pv-phone-head [data-pv-col-menu]');
+      await pm.waitFor();
       const box = (await pm.boundingBox())!;
       assert.ok(box.width >= 44 && box.height >= 44, `44 px: ${box.width}x${box.height}`);
       assert.ok(box.x + box.width <= 390, 'on screen');
