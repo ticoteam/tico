@@ -214,7 +214,7 @@ function pageFullDraw(state: PageFullState) {
   root.innerHTML = `<header class="pg-head"></header>${row}<div class="pg-body"></div>${pinned ? `<p class="pg-pinned">Pinned to ${pinned}</p>` : ''}`;
   root.onkeydown = pageMenuKeys;
   pageFullHead(state);
-  const links = root.querySelector<HTMLElement>('.pg-links');
+  const links = root.querySelector('.pg-links') as HTMLElement | null;
   if (links) pageLinksWire(state, links);
   pageFullLinks(state);
   pageFullBody(state);
@@ -567,7 +567,7 @@ async function pageEditSave(state: PageFullState) {
   // The copy is what is saved: the editor's own markup comes out of a clone, so a failed save leaves the editor as it was.
   const copy = doc.documentElement.cloneNode(true) as HTMLElement;
   copy.querySelector('body')?.removeAttribute('contenteditable');
-  copy.querySelectorAll('[data-tico-edit]').forEach(el => el.remove());
+  copy.querySelectorAll('[data-tico-edit]').forEach(el => { el.remove(); });
   const text = (doc.doctype ? '<!DOCTYPE html>' : '') + copy.outerHTML;
   const note = (document.querySelector<HTMLInputElement>('#pg-view .pg-edit-note')?.value || '').trim();
   if (save) save.disabled = true;
