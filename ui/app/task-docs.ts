@@ -1,12 +1,14 @@
-/* ui/app/task-docs.ts — A task's documents (Spec, QA report, Release report, Invoice, Email; backend/task_documents.py):
+/* ui/app/task-docs.ts — A task's documents (Spec, QA report, Release report, Invoice, Email, and its Markdown files;
+   backend/task_documents.py):
    the tab row beside the task's title, and one document open with its one version line. The task window
    (ui/app/task-modal.ts) and Flow on a phone (ui/app/decide.ts) draw both from here, so they look and work the same.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-// A document as GET /v2/tasks/{id} lists it (`task.documents`), newest change first, its versions newest first.
+// A document as GET /v2/tasks/{id} lists it (`task.documents`), newest change first, its versions newest first. `kind`
+// markdown is one of the task's .md files, read as Markdown; any other is HTML, opened sandboxed as a page is.
 interface TaskDocVersion { n: number; by: string; at: string; note?: string | null; }
-interface TaskDoc { name: string; file_id: string; version: number; by: string; at: string; versions: TaskDocVersion[]; }
+interface TaskDoc { name: string; file_id: string; kind?: 'html' | 'markdown'; version: number; by: string; at: string; versions: TaskDocVersion[]; }
 // One tab: Chat, a document, or (Flow) what an approval shows when it is no document of the task.
 interface DocTab { key: string; label: string; dot?: boolean; }
 
@@ -76,7 +78,7 @@ function docLook(): string {
 function docViewsRetheme() {
   for (const view of document.querySelectorAll<HTMLElement>('.doc-view')) {
     const host = view.parentElement, st = host ? DOC_VIEWS.get(host) : undefined;
-    if (host && st && !st.compare) void docViewBody(host, st);
+    if (host && st && !st.compare && st.doc.kind !== 'markdown') void docViewBody(host, st);
   }
 }
 new MutationObserver(docViewsRetheme).observe(document.documentElement, {attributes: true, attributeFilter: ['data-theme']});
@@ -159,20 +161,24 @@ function docViewBind(host: HTMLElement) {
     void docViewBody(host, st);
   });
 }
-/** The version shown, or, comparing, the line diff of the two versions' text (pageText), in the reading font. */
+/** The version shown, or, comparing, the line diff of the two versions' text (pageText; a Markdown one's own lines),
+    in the reading font. A Markdown document reads as Markdown, in the app's own type. */
 async function docViewBody(host: HTMLElement, st: DocViewState) {
   const box = host.querySelector<HTMLElement>('.doc-body');
   if (!box) return;
   const seq = ++st.seq, fid = st.doc.file_id, stale = () => st.seq !== seq || DOC_VIEWS.get(host) !== st || !box.isConnected;
+  const md = st.doc.kind === 'markdown', fallback = md ? 'document.md' : 'document.html';
+  const read = async (n: number) => (await viewFile(fid, fallback, n)).blob.text();
   try {
     if (st.compare) {
-      const [a, b] = await Promise.all(st.compare.map(async n => pageText(await (await viewFile(fid, 'document.html', n)).blob.text())));
+      const [a, b] = await Promise.all(st.compare.map(async n => md ? read(n) : pageText(await read(n))));
       if (stale()) return;
       box.innerHTML = `<div class="doc-diff">${tfDiffHTML(a ?? '', b ?? '')}</div>`;
       return;
     }
-    const text = await (await viewFile(fid, 'document.html', st.shown)).blob.text();
+    const text = await read(st.shown);
     if (stale()) return;
-    box.replaceChildren(htmlPreviewFrame(text, `${st.doc.name} v${st.shown}`, docLook()));
+    if (md) box.innerHTML = `<div class="doc-md md">${safeMd(text)}</div>`;
+    else box.replaceChildren(htmlPreviewFrame(text, `${st.doc.name} v${st.shown}`, docLook()));
   } catch (e) { if (!stale()) box.innerHTML = `<p class="muted doc-err">${esc(errorMessage(e, ''))}</p>`; }
 }

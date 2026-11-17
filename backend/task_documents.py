@@ -5,8 +5,10 @@ one, when, its note (`task_file_reviews`) and its HTML, cleaned as a page is (ba
 sandboxed like any page. `task_documents` only names which task file is which document.
 
 A bot writes one with `tico task attach <id> spec.html --doc Spec` (the `document` field of POST
-/api/v2/tasks/{id}/files). The task's read lists them newest change first (`listing`); the task window shows a tab per
-document beside Chat, and none at all when there are none (ui/app/task-docs.ts)."""
+/api/v2/tasks/{id}/files). The task's read lists them newest change first (`listing`), with the task's Markdown files
+beside them (`kind` markdown: a bot's write-up as a .md file, attached or published from its reports/ folder, is as much
+a document as an HTML one); the task window shows a tab per document beside Chat, and none at all when there are none
+(ui/app/task-docs.ts)."""
 
 from __future__ import annotations
 
@@ -91,45 +93,90 @@ def record(c: Any, task_id: str, name: str, file_id: str) -> None:
     )
 
 
+def markdown_name(file_name: str) -> str:
+    """A Markdown file's tab: its name without the extension, and without the date a dated copy starts with
+    (`2026-11-17-how-ui-works-today.md` is `How ui works today`)."""
+    stem = re.sub(r"\.(md|markdown)$", "", file_name.strip(), flags=re.IGNORECASE)
+    stem = re.sub(r"^\d{4}-\d{2}-\d{2}[-_ ]+", "", stem)
+    said = " ".join((stem if " " in stem else re.sub(r"[-_]+", " ", stem)).split())
+    return (said[:1].upper() + said[1:])[:80] or file_name
+
+
+def _is_markdown(name: str, mime: str) -> bool:
+    return mime == "text/markdown" or name.lower().endswith((".md", ".markdown"))
+
+
 def listing(c: Any, files: Any, who: Any, task_id: str) -> list[dict[str, Any]]:
-    """The task's documents `who` may open, newest change first, each with its versions newest first."""
+    """The task's documents `who` may open, newest change first, each with its versions newest first: its HTML
+    documents, then its Markdown files (each content once, as the task's files list them), MOST in all."""
     from . import task_privacy as privacy
     from . import files as file_store
 
     actor_of = cast(Callable[[Any], Any], privacy.actor)
     review = cast(Callable[..., dict[str, Any]], file_store.version_review)
+    once = cast(Callable[[list[Any]], list[Any]], file_store.once_per_content)
+    actor = actor_of(who)
+
+    def versions_of(file_id: str) -> list[dict[str, Any]]:
+        return [
+            {
+                "n": v["version"],
+                "by": v["actor"],
+                "at": v["created_at"],
+                "note": review(c, file_id, v["version"], actor=actor)["note"],
+            }
+            for v in c.execute(
+                "SELECT version, actor, created_at FROM bot_file_versions WHERE file_id=? ORDER BY version DESC LIMIT ?",
+                (file_id, VERSIONS_SHOWN),
+            )
+        ]
+
+    def entry(name: str, file_id: str, kind: str) -> dict[str, Any] | None:
+        versions = versions_of(file_id)
+        if not versions:
+            return None
+        return {
+            "name": name,
+            "file_id": file_id,
+            "kind": kind,
+            "version": versions[0]["n"],
+            "by": versions[0]["by"],
+            "at": versions[0]["at"],
+            "versions": versions,
+        }
+
     out: list[dict[str, Any]] = []
     rows: list[Any] = c.execute(
         "SELECT d.name, f.* FROM task_documents d JOIN bot_files f ON f.id=d.file_id "
         "WHERE d.task_id=? AND f.archived=0 AND f.current_version>0 ORDER BY d.updated_at DESC, d.name",
         (task_id,),
     ).fetchall()
-    actor = actor_of(who)
     for row in rows:
-        if not files.visible(c, who, row, {}):
-            continue
-        versions: list[dict[str, Any]] = [
-            {
-                "n": v["version"],
-                "by": v["actor"],
-                "at": v["created_at"],
-                "note": review(c, row["id"], v["version"], actor=actor)["note"],
-            }
-            for v in c.execute(
-                "SELECT version, actor, created_at FROM bot_file_versions WHERE file_id=? ORDER BY version DESC LIMIT ?",
-                (row["id"], VERSIONS_SHOWN),
-            )
+        if files.visible(c, who, row, {}) and (found := entry(row["name"], row["id"], "html")):
+            out.append(found)
+    # The task's Markdown files: every other file it holds now (bot_files_task), its current version's name and bytes.
+    held: list[Any] = c.execute(
+        "SELECT f.*, v.name AS shown, v.mime AS shown_mime, v.digest AS shown_digest FROM bot_files f "
+        "JOIN bot_file_versions v ON v.file_id=f.id AND v.version=f.current_version "
+        "WHERE f.task_id=? AND f.archived=0 AND f.locator='tico_blob' AND f.current_version>0 "
+        "AND NOT EXISTS (SELECT 1 FROM task_documents d WHERE d.file_id=f.id) ORDER BY f.last_activity_at DESC",
+        (task_id,),
+    ).fetchall()
+    shown = once(
+        [
+            (row, row["shown_digest"], row)
+            for row in held
+            if _is_markdown(str(row["shown"]), str(row["shown_mime"])) and files.visible(c, who, row, {})
         ]
-        if not versions:
+    )
+    taken = {_key(d["name"]) for d in out}
+    # Two of the same name are one tab: an HTML document's, else the file attached by name (a dated copy gives way).
+    for row in sorted(shown, key=lambda r: not str(r["identity"]).startswith("task-file:")):
+        name = markdown_name(str(row["shown"]))
+        if len(out) >= MOST or _key(name) in taken:
             continue
-        out.append(
-            {
-                "name": row["name"],
-                "file_id": row["id"],
-                "version": versions[0]["n"],
-                "by": versions[0]["by"],
-                "at": versions[0]["at"],
-                "versions": versions,
-            }
-        )
+        if found := entry(name, row["id"], "markdown"):
+            taken.add(_key(name))
+            out.append(found)
+    out.sort(key=lambda d: str(d["at"]), reverse=True)
     return out

@@ -17,7 +17,6 @@
 .cal-nx .cal-nm{overflow:hidden;text-overflow:ellipsis;min-width:0}
 .cal-nx .cal-tm{flex:none;font-variant-numeric:tabular-nums}
 a.cal-nx:hover{color:var(--accent);text-decoration:underline}
-.cal-nx.cal-none{display:block;padding:0;opacity:.6}
 .cal-step{flex:none;display:inline-flex;align-items:center;justify-content:center;width:14px;height:24px;padding:0;border:0;border-radius:4px;background:none;color:var(--ink);font:inherit;font-size:var(--t-md);line-height:1;cursor:pointer}
 .cal-step:hover{background:var(--surface2)}
 .cal-step:focus-visible{outline:var(--focus-ring);outline-offset:-1px}

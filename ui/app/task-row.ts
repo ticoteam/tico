@@ -93,18 +93,17 @@ interface TaskRowOptions {
   noMark?: boolean;
 }
 /** One row, one line (S1). A row in your own list has no mark and no mark space; snoozed and finished rows are dimmed,
-    with a date and no avatar. */
+    with a date and no avatar. The avatar is the task's owner, on every list: the mark and the line say whose turn it is. */
 function taskRowHTML(t: TaskAny, {look = 'list', text = '', after = '', key = '', tail = '', noMark = false}: TaskRowOptions = {}): string {
   const id = esc(key || t.id), title = esc(text || t.title || '');
-  const line = taskLine(t);
-  const tip = esc([taskHolder(t) ? actorLabel(taskHolder(t)) : '', line].filter(Boolean).join(' · '));
+  const line = taskLine(t), holder = t.owner_id || taskHolder(t);
+  const tip = esc([holder ? actorLabel(holder) : '', line].filter(Boolean).join(' · '));
   if (look === 'archive' || t.status !== 'open' || ('snoozed' in t && t.snoozed && look !== 'you')) {
     // A snoozed one shows the day it wakes; a finished one how long ago it finished, as an open row shows its age.
     const when = t.status === 'open' ? shortDate(('snooze' in t ? t.snooze?.until : null) || t.turn?.until) : taskFinishedAge(t);
     return `<div class="tk-row tk-row-dim" data-task="${id}" role="button" tabindex="0">`
       + `<span class="tk-title">${title}</span><span class="tk-age">${esc(when)}</span></div>`;
   }
-  const holder = taskHolder(t);
   return `<div class="tk-row" data-task="${id}" role="button" tabindex="0"${tip ? ` data-tip="${tip}"` : ''}>`
     + (look === 'you' ? '' : taskMarkHTML(noMark ? null : t))
     + `<span class="tk-title">${title}</span>${lateTagHTML(t)}${blocksTagHTML(t)}`

@@ -21,9 +21,9 @@
 #task-modal .tw-head .tmodal-age{padding:0 var(--s2);font-size:var(--t-sm);white-space:nowrap}
 #task-modal .tw-head .tmodal-sep{width:1px;height:18px;margin:0 var(--s1);background:var(--line)}
 #task-modal .tw-head>.tthread-back{flex:none;margin-top:0}
-/* The documents' tabs sit on the title row; the title gives way first (one line, then an ellipsis), then the row
-   scrolls. Details is an icon, pressed while it shows; its number is what still blocks the stage. */
-#task-modal .tw-head:has(>.tw-tabs) .tmodal-title{-webkit-line-clamp:1;line-clamp:1;min-width:4em}
+/* The documents' tabs sit on the title row. The title keeps 40% of it and its two lines, as on a phone; the tabs take
+   the rest and scroll. Details is an icon, pressed while it shows; its number is what still blocks the stage. */
+#task-modal .tw-head:has(>.tw-tabs) .tmodal-title{flex:1 0 40%;min-width:40%}
 #task-modal .tw-head>.tw-tabs{max-width:min(60%,420px)}
 #task-modal .tw-head .tw-details{position:relative}
 #task-modal .tw-head .tw-details[aria-pressed="true"]{color:var(--ink);background:var(--surface2)}
