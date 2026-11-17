@@ -2315,7 +2315,6 @@ def test_a_bots_ask_a_rule_covers_is_refused_with_the_rules_words(ruled):
             "kind": "ok",
             "show": X.shown_on(api),
             "version": task["version"],
-            "why": "It sets what goes out on launch day.",
         },
         headers=headers("ops-test"),
     )
@@ -2334,7 +2333,6 @@ def test_a_bots_ask_a_rule_covers_is_refused_with_the_rules_words(ruled):
             "kind": "ok",
             "show": X.shown_on(api),
             "version": task["version"],
-            "why": "It sets what goes out on launch day.",
         },
         headers=headers("ops-test"),
     )

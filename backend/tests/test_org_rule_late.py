@@ -156,7 +156,6 @@ def test_a_bots_ask_is_still_checked_before_it_is_saved(ruled):
         json={
             "to": "ana",
             "line": "Is our favorite color is red okay?",
-            "why": "The launch note needs one color before it goes out.",
             "kind": "ok",
             "show": X.shown_on(api),
             "version": task["version"],

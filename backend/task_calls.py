@@ -855,6 +855,7 @@ def prime_views(conn: "sqlite3.Connection", task_ids: Iterable[str], viewer: str
     from . import read_cache
     from . import task_engine as E
     from . import task_relations
+    from . import task_requirements as R
     from . import waiting_on as W
 
     TR: Any = task_relations

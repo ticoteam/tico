@@ -249,7 +249,7 @@ def register(app, auth, settings, settings_admin, store):
         on that task the bot waits on, the viewer's own first ("Builder 3 is waiting for your OK", with `open_ask`, the
         one button, opening it), else whose it is, else who is still making it. The task is named and linked only to
         a viewer who may open it. None when no task is making it (its go-live waits on the repository)."""
-        from . import setup_live, task_engine as E, waiting_on as WO
+        from . import question_marks, setup_live, task_engine as E, waiting_on as WO
 
         task_id = setup_live.making_task(c, bot)
         row = E.task(c, task_id) if task_id else None
@@ -260,15 +260,16 @@ def register(app, auth, settings, settings_admin, store):
         ask = next((w for w in asks if w.who == who.actor), None) or (asks[0] if asks else None)
         task = {"id": row["id"], "title": row.get("title") or ""} if privacy.task_readable(c, who, row) else None
         if ask:
-            # A person's ask is an OK (a question is a ❓ message, not an ask the task waits on).
+            # A ❓ on the task's chat waits for an answer (question_marks.wait_id), any other ask for an OK.
+            what = "answer" if question_marks.mark_id(ask.requirement_id) else "OK"
             mine = ask.who == who.actor
             whose = "your" if mine else H.actor_name(c, ask.who) + "'s"
             out = {
-                "cause": f"{name} is waiting for {whose} OK",
+                "cause": f"{name} is waiting for {whose} {what}",
                 "fix": "open_ask" if mine and task else None,
                 # Its words only to a viewer who may open the task they are on.
                 "ask": {
-                    "kind": "ok",
+                    "kind": "ok" if what == "OK" else "answer",
                     "mine": mine,
                     **({"line": ask.line} if task else {}),
                 },

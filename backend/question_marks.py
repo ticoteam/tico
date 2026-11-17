@@ -20,7 +20,6 @@ The open mark is mirrored on its message as refs.question {id, to} (the migratio
 draws its glyph from the message alone and a change reaches open pages through the messages trigger.
 """
 
-import importlib
 import sqlite3
 from collections.abc import Iterable, Mapping
 from typing import Any, cast
@@ -31,11 +30,6 @@ from . import hubdb as _hubdb
 H: Any = _hubdb  # untyped module, through Any as in ask_quality.py
 
 Row = dict[str, Any]
-
-
-def _mod(name: str) -> Any:
-    """An untyped module of the backend, imported where it is used (several of them import this one)."""
-    return importlib.import_module("." + name, __package__)
 
 
 PREFIX = "qmark:"  # a ❓'s wait and Needs-you item id: "qmark:<mark id>"
@@ -84,7 +78,9 @@ def open_rows(conn: sqlite3.Connection) -> list[Row]:
     """Every open ❓ its person can still answer (`answerable`), oldest first, read once per snapshot (read_cache):
     Needs you and the ladder read them for many tasks in one pass. One whose person left or lost the chat waits on
     nobody, so its bot is not held, even before `clear_gone` clears it. Shared: never change a row."""
-    read_cache = _mod("read_cache")
+    from . import read_cache as _read_cache
+
+    read_cache = cast(Any, _read_cache)
 
     def build() -> list[Row]:
         rows = [dict(r) for r in conn.execute(_OPEN)]
@@ -92,7 +88,9 @@ def open_rows(conn: sqlite3.Connection) -> list[Row]:
             return []
         # Their messages, chats and tasks in a few reads for all of them, never a few per mark (a never-stuck pass).
         stored = H.prime_messages(conn, {m["message_id"] for m in rows})
-        _mod("task_privacy").prime_messages(conn, stored.values())
+        from . import task_privacy as _task_privacy
+
+        cast(Any, _task_privacy).prime_messages(conn, stored.values())
         H.prime_tasks(conn, {m["task_id"] for m in rows if m["task_id"]}, with_tags=False)
         chats = chat_rows(conn, {m["conversation_id"] for m in stored.values()})
         return [m for m in rows if answerable(conn, m, chats)]
@@ -116,7 +114,9 @@ def chat_rows(conn: sqlite3.Connection, ids: Iterable[object]) -> dict[str, Row]
 def answerable(conn: sqlite3.Connection, mark: Mapping[str, Any], chats: Mapping[str, Row] | None = None) -> bool:
     """Whether the person an open ❓ names can still answer it: still here and able to act (task_requirements
     .active_person), and able to read the marked message. `chats` holds chat rows already read, by id."""
-    R = _mod("task_requirements")
+    from . import task_requirements as _task_requirements
+
+    R = cast(Any, _task_requirements)
 
     if not R.active_person(conn, mark["person_id"]):
         return False
@@ -157,8 +157,12 @@ def clear_gone(conn: sqlite3.Connection, task_id: object = None) -> list[str]:
 
 def _tell_gone(conn: sqlite3.Connection, mark: Row) -> None:
     """Wake the bot on the task: its ❓ went nowhere, so it asks someone who can, or goes on without the answer."""
-    E = _mod("task_engine")
-    task_wakes = _mod("task_wakes")
+    from . import task_engine as _task_engine
+
+    E = cast(Any, _task_engine)
+    from . import task_wakes as _task_wakes
+
+    task_wakes = cast(Any, _task_wakes)
 
     row: Row | None = E.task(conn, mark["task_id"])
     if not row or row.get("status") != "open" or not row.get("visit"):
@@ -188,7 +192,9 @@ REPLIED_SQL = "SELECT task_id, COUNT(*) FROM question_marks WHERE cleared_messag
 def replies(conn: sqlite3.Connection, task_id: object) -> int:
     """How many ❓ on the task a person replied to (task_engine.progress_mark): one read per snapshot for every task
     (read_cache; a write reads again), so a never-stuck pass over many tasks never reads them one task at a time."""
-    read_cache = _mod("read_cache")
+    from . import read_cache as _read_cache
+
+    read_cache = cast(Any, _read_cache)
 
     def build() -> dict[str, int]:
         return {str(tid): int(n) for tid, n in conn.execute(REPLIED_SQL)}
@@ -228,7 +234,9 @@ def readable(conn: sqlite3.Connection, person: str, message: Row, chat: Row | No
     """Whether `person` may read the marked message: the thread's members and the message's own check. `chat`, the
     message's chat row, and `viewer`, the person's threads.actor_viewer, when the caller has read them for many ❓s,
     save reading them again for each."""
-    threads = _mod("threads")
+    from . import threads as _threads
+
+    threads = cast(Any, _threads)
 
     viewer = viewer if viewer is not None else threads.actor_viewer(conn, person)
     if viewer is None:
@@ -251,13 +259,17 @@ def _addressee(
         H.refuse(conn, actor, "reach", f"{H.actor_name(conn, target)} is a bot: a ❓ is for a person's reply")
     task = None
     if task_id:
-        E = _mod("task_engine")
+        from . import task_engine as _task_engine
+
+        E = cast(Any, _task_engine)
 
         task = E.task(conn, task_id)
     if checked and H.is_bot(actor):
         from types import SimpleNamespace
 
-        reach = _mod("reach")
+        from . import reach as _reach
+
+        reach = cast(Any, _reach)
 
         who = SimpleNamespace(role="bot", actor=actor)
         if task_id:
@@ -265,7 +277,9 @@ def _addressee(
         else:
             reach.check(conn, who, target, "chat", conversation_id=(message or {}).get("conversation_id"))
     if task is not None:
-        task_calls = _mod("task_calls")
+        from . import task_calls as _task_calls
+
+        task_calls = cast(Any, _task_calls)
 
         task_calls.bring_in(conn, actor, task, target)
     if message is not None and not readable(conn, target, message):
@@ -286,7 +300,9 @@ def _check(
         H.refuse(conn, bot, "identity", "Only a bot marks a message ❓")
     row = None
     if task_id:
-        engine = _mod("task_engine")
+        from . import task_engine as _task_engine
+
+        engine = cast(Any, _task_engine)
 
         status = conn.execute("SELECT status FROM tasks WHERE id=?", (task_id,)).fetchone()
         if not status or status[0] != "open":
@@ -297,13 +313,19 @@ def _check(
     if shape:
         H.refuse(conn, bot, "lint", shape)
     if checked and row:
-        engine = _mod("task_engine")
-        R = _mod("task_requirements")
+        from . import task_engine as _task_engine
+
+        engine = cast(Any, _task_engine)
+        from . import task_requirements as _task_requirements
+
+        R = cast(Any, _task_requirements)
 
         page = engine.people_page(conn, row, [body], question=True) if row.get("visit") else None
         if page:
             engine._refuse(conn, bot, "task_requirement", f"{page} is a person's OK already. {R.PAGE_OK_HINT}", task_id)
-        _mod("validate_gate").check_question(conn, row, bot, target)
+        from . import validate_gate as _validate_gate
+
+        cast(Any, _validate_gate).check_question(conn, row, bot, target)
     return target
 
 
@@ -441,8 +463,12 @@ def after_reply(conn: sqlite3.Connection, task_id: object, by: str, why: str = "
     goes to its builder now."""
     if not task_id:
         return
-    pr_conflicts = _mod("pr_conflicts")
-    E = _mod("task_engine")
+    from . import pr_conflicts as _pr_conflicts
+
+    pr_conflicts = cast(Any, _pr_conflicts)
+    from . import task_engine as _task_engine
+
+    E = cast(Any, _task_engine)
 
     tid = str(task_id)
     row: Row = E.task(conn, tid) or {}
