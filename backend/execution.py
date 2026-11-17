@@ -3132,6 +3132,32 @@ def quiet_recheck(c, aid, body, task, msg):
     )
 
 
+def told_only(c, aid, msg, text, task, conv, actor):
+    """Whether turn `aid`, woken by Tico's notice `msg` on `task` (H.run_notice), ends with words for nobody: the notice
+    is not the task's request (its first wake, refs.news "assignment", whose answer is the requester's), no person's act
+    is behind it, no person's message was folded into the turn, the turn did not finish the task, and the text names
+    no one. Its text is then the bot's own account of its turn, kept on the run (attempts.final_text), not a message in
+    the room: the chat is for people and bots talking."""
+    from . import threads, wake_rules
+
+    refs = msg.get("refs") if isinstance(msg.get("refs"), dict) else H._json(msg.get("refs"), {}) or {}
+    if refs.get("news") == "assignment" or str(refs.get(wake_rules.CAUSED_BY) or "").startswith("human:"):
+        return False
+    if c.execute(
+        "SELECT 1 FROM attempt_inputs i JOIN messages m ON m.id=i.message_id WHERE i.attempt_id=? "
+        f"AND m.deleted_at IS NULL AND ({H.in_person_name_sql()} "
+        f"OR json_extract(m.refs,'$.{wake_rules.CAUSED_BY}') LIKE 'human:%') LIMIT 1",
+        (aid,),
+    ).fetchone():
+        return False
+    started = c.execute("SELECT coalesce(started_at, created_at) FROM attempts WHERE id=?", (aid,)).fetchone()
+    finished = max(task.get("done_at") or "", task.get("closed_at") or "")
+    if task["status"] in ("done", "closed") and started and finished >= str(started[0] or ""):
+        return False  # its last word on the task: what it did
+    thread = threads.thread_row(c, conv["id"]) if "@" in str(text or "") else None
+    return not (thread and threads.mentions(c, thread, text, author=actor))
+
+
 # How long a queued job waits before it is claimed ahead of task rank, oldest first. Rank alone let a job with no
 # task (a plain message to the bot) wait behind every newer task job: on Nov 13 a bot at its turns-at-once limit left
 # four such messages queued 97+ minutes while task work kept arriving.
@@ -6873,6 +6899,16 @@ class Execution:
                             "reply.withheld",
                             aid,
                             {"bot": row["bot_id"], "task": task["id"], "to": target, "reason": "no_change"},
+                        )
+                    # Woken by Tico's notice alone, a turn whose text is for nobody (told_only) keeps it on the run.
+                    elif posting and replyable and told_only(c, aid, msg, text, task, conv, actor):
+                        replyable = False
+                        H.event(
+                            c,
+                            H.KEEPER,
+                            "reply.withheld",
+                            aid,
+                            {"bot": row["bot_id"], "task": task["id"], "to": target, "reason": "notice_only"},
                         )
                 # A turn a Stop reached after its task was closed (end_task_work) files its answer on the run
                 # instead: the closed room takes no more posts from work that was stopped.

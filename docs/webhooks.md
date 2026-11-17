@@ -187,7 +187,7 @@ call. A rule can match only on these two things, never on a field inside the bod
 
 **Then.** Four actions are available:
 
-- `wake_bot {bot, text}` leaves a notice in the bot's room and wakes it. The notice is your `text`, then the call's content
+- `wake_bot {bot, text}` wakes the bot with a notice its run starts from (no chat shows it; the run's log does). The notice is your `text`, then the call's content
   (fenced as data), then, when the body was cut, the line `The rest: tico trigger delivery ... --part 2`.
 - `send_webhook {webhook, type, data}` posts an event to one of your [outgoing endpoints](#outgoing). `type` should be a
   `custom.*` name.

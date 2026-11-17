@@ -461,7 +461,9 @@ def test_meeting_context_read_does_not_allow_unscoped_room_writes(live, visibili
         ).fetchone()
         cid, source_id = source["conversation_id"], source["id"]
         before = c.execute("SELECT count(*) FROM messages").fetchone()[0]
-    assert get(live, f"conversations/{cid}/messages", token="ben-test")[0]["id"] == source_id
+    # Ben reads the room; the turn Tico wrote ops is ops's run input, in no person's read of it.
+    seen = [m["id"] for m in get(live, f"conversations/{cid}/messages", token="ben-test")]
+    assert source_id not in seen
 
     requests = [
         ("messages", {"to": "ops", "text": "Synthetic ordinary write", "conversation_id": cid}),
@@ -472,7 +474,7 @@ def test_meeting_context_read_does_not_allow_unscoped_room_writes(live, visibili
     assert [r.status_code for r in responses] == [403] * len(requests), [(r.status_code, r.text) for r in responses]
     with live.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM messages").fetchone()[0] == before
-    assert get(live, f"conversations/{cid}/messages", token="ben-test")[0]["id"] == source_id
+    assert [m["id"] for m in get(live, f"conversations/{cid}/messages", token="ben-test")] == seen
 
 
 @pytest.mark.parametrize("surface", ["comment", "file_link"])

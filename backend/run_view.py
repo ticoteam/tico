@@ -17,6 +17,7 @@ from . import login_holds, run_diagnostics, runs, start_places, task_privacy as 
 from .turns import TOOL_START, TOOL_BACKGROUNDED, clip, seconds
 
 ATTEMPT_LIMIT, NODE_LIMIT, SUMMARY_CHARS = 20, 50, 120
+TOLD_CHARS = 2000  # a notice's words on its run, at most
 SCAN_LIMIT = 500  # the most of a task's newest runs read to fill one reader's page
 LIVE = ("leased", "running")
 # What a person or the hub decided about a stopped attempt, and the lease events that kept or lost it.
@@ -261,6 +262,17 @@ def moved(c, aid):
     return clip(text, 280) if isinstance(text, str) and text.strip() else f"Ran this turn on {clip(fallback, 80)}"
 
 
+def told(c, actor, r):
+    """The words of Tico's notice that started run `r` (H.run_notice), for a reader who may read it; else None."""
+    if not H.run_notice(r["sender_id"], r["recipient_id"]):
+        return None
+    message = H.message(c, r["message_id"])
+    if not message or not privacy.message_readable(c, actor, message):
+        return None
+    text = str(message.get("body") or "").strip()
+    return (text if len(text) <= TOLD_CHARS else text[: TOLD_CHARS - 1] + "…") or None
+
+
 def run_view(c, auth, who, tid):
     actor = privacy.actor(who)
     # A task party who cannot read the bot sees none of its runs, as on the bot's steps and failed attempts.
@@ -281,7 +293,8 @@ def run_view(c, auth, who, tid):
     turns = []
     for row in c.execute(
         "SELECT a.id,a.bot_id AS bot,a.exit,a.job_id,a.state,a.created_at,a.started_at,a.finished_at,a.lease_until,"
-        "a.result,a.stop_requested_at,a.wake,a.cached_tokens,a.cache_write_tokens,m.conversation_id,p.wait_reason FROM attempts a JOIN jobs j ON j.id=a.job_id "
+        "a.result,a.stop_requested_at,a.wake,a.cached_tokens,a.cache_write_tokens,m.conversation_id,p.wait_reason,"
+        "m.id AS message_id,m.sender_id,m.recipient_id FROM attempts a JOIN jobs j ON j.id=a.job_id "
         "JOIN messages m ON m.id=j.message_id LEFT JOIN start_places p ON p.attempt_id=a.id "
         "WHERE a.task_id=? ORDER BY a.created_at DESC LIMIT ?",
         (tid, SCAN_LIMIT),
@@ -390,6 +403,9 @@ def run_view(c, auth, who, tid):
                 # What woke the turn, and for a job the release policy let go, warm or cold, fork or fresh and its wait
                 # (backend/wake_presets.py record); runs from before presets have none, older runs keep their preset.
                 "wake": H._json(r["wake"]),
+                # What Tico told the bot, when its notice woke the turn: it is in no chat, so here is where a person
+                # reads why the bot acted.
+                "told": told(c, actor, r),
                 # The run's cache read and cache write tokens (#251), for its run record.
                 "cache_read_tokens": r["cached_tokens"],
                 "cache_write_tokens": r["cache_write_tokens"],

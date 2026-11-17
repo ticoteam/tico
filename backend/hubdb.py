@@ -86,6 +86,7 @@ from .hubdb_core import (
     actor_id,
     is_bot,
     is_human,
+    run_notice,
 )
 from .hubdb_text import (
     LINT_MAX_WORDS,  # noqa: F401
@@ -2212,7 +2213,10 @@ def _write_message(
     from .enqueue import enqueue
 
     enqueue(conn, row)  # the job it starts, in this transaction (backend/enqueue.py)
-    conn.execute("UPDATE conversations SET last_message_at=? WHERE id=?", (row["created_at"], conv["id"]))
+    if not run_notice(actor, target):  # Tico's word to a bot is its run's, not news in the room
+        conn.execute(
+            "UPDATE conversations SET last_message_at=? WHERE id=?", (row["created_at"], row["conversation_id"])
+        )
     # A mention outside the audience grants nothing and warns the author (contract §2): carried on the result.
     mention_warnings = (threads.record(conn, message(conn, row["id"]), conv) or {}).get("warnings") or []
     event(conn, actor, f"message.{kind}", row["id"], {"to": target, "conversation": conv["id"]})

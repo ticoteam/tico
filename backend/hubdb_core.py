@@ -37,3 +37,10 @@ def is_bot(actor):
 
 def is_human(actor):
     return actor_kind(actor) == "human"
+
+
+def run_notice(sender, recipient):
+    """Whether a message is Tico telling a bot something: its run's input, never a line in a chat a person reads. The
+    stamp trigger gives it no seq (migration 20261116234549_run_notices_out_of_chats), so no timeline or unread count
+    holds it; the bot reads it as the message its run starts from and in its own reads of the room."""
+    return sender == KEEPER and is_bot(recipient)
