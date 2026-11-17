@@ -277,8 +277,10 @@ const msg = (id: string, from: string, body: string, at: string) => ({id, seq: N
     assert.equal(await taskTab.innerText(), 'Spec');
     if (process.env.TICO_SHOTS) {
       await dialog.locator('.dc-start').waitFor({state: 'detached'});
+      await page.waitForTimeout(450);   // past a phone's calm (decideCalm): Approve as it is to tap
       for (const theme of ['dark', 'light']) {
         await page.evaluate(t => (window as unknown as {ticoTheme?: {set(t: string): void}}).ticoTheme?.set(t), theme);
+        await page.waitForTimeout(100);
         await page.screenshot({path: path.join(process.env.TICO_SHOTS, `flow-approval-on-its-document-phone-${theme}.png`)});
       }
       await page.evaluate(() => (window as unknown as {ticoTheme?: {set(t: string): void}}).ticoTheme?.set('dark'));

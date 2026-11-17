@@ -93,14 +93,18 @@ function docViewPaint(host: HTMLElement, st: DocViewState, body = true) {
     line.innerHTML = `<span class="doc-cmp-line">${pick('data-doc-from', st.compare[0])}<span aria-hidden="true">→</span>${pick('data-doc-to', st.compare[1])}</span>`
       + `<button type="button" class="doc-ic" data-doc-compare-off aria-label="Close compare" title="Close compare">${icon('close')}</button>`;
   } else {
-    // Open, the line is only its mark: the list under it says each version once, the one shown in bold.
-    line.innerHTML = `<button type="button" class="doc-ver-line" data-doc-ver aria-expanded="${st.open}" title="Versions"${st.open ? ' aria-label="Versions"' : ''}>`
-      + `${st.open ? '' : `<span class="doc-ver-t">${esc(v ? docVersionSaid(v) : '')}</span>`}${icon('expand_more')}</button>`
-      + (st.open && many ? `<button type="button" class="doc-ic" data-doc-compare aria-label="Compare versions" title="Compare">${icon('swap_horiz')}</button>` : '');
+    line.innerHTML = st.open ? '' : `<button type="button" class="doc-ver-line" data-doc-ver aria-expanded="false" title="Versions">`
+      + `<span class="doc-ver-t">${esc(v ? docVersionSaid(v) : '')}</span>${icon('expand_more')}</button>`;
   }
+  // Open, the list says each version once: the one shown, in bold, is the line itself (tapped again, the list shuts),
+  // with Compare at its right end; each other version shows when picked.
+  line.hidden = st.open && !st.compare;
   list.hidden = !st.open || !!st.compare;
-  list.innerHTML = st.open ? st.doc.versions.map(x => `<button type="button" class="doc-v" data-doc-v="${x.n}" aria-current="${x.n === st.shown}">`
-    + `<span class="doc-v-said">${esc(docVersionSaid(x))}</span>${x.note ? `<span class="doc-v-note">${esc(x.note)}</span>` : ''}</button>`).join('') : '';
+  const said = (x: TaskDocVersion) => `<span class="doc-v-said">${esc(docVersionSaid(x))}</span>${x.note ? `<span class="doc-v-note">${esc(x.note)}</span>` : ''}`;
+  list.innerHTML = st.open ? st.doc.versions.map(x => x === v
+    ? `<div class="doc-v-cur"><button type="button" class="doc-v" data-doc-ver aria-expanded="true" aria-current="true" title="Versions">${said(x)}</button>`
+      + (many ? `<button type="button" class="doc-ic" data-doc-compare aria-label="Compare versions" title="Compare">${icon('swap_horiz')}</button>` : '') + '</div>'
+    : `<button type="button" class="doc-v" data-doc-v="${x.n}" aria-current="false">${said(x)}</button>`).join('') : '';
   if (body) void docViewBody(host, st);
 }
 function docViewBind(host: HTMLElement) {

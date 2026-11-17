@@ -23,7 +23,10 @@
 .doc-cmp-line{display:inline-flex;align-items:center;gap:6px;color:var(--muted);font-size:var(--t-xs)}
 .doc-pick{min-height:24px;padding:0 4px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);font:inherit;font-size:var(--t-xs)}
 .doc-vers{flex:none;display:flex;flex-direction:column;max-height:40%;overflow-y:auto;padding:0 var(--s4) var(--s1)}
-.doc-vers[hidden]{display:none}
+.doc-vers[hidden],.doc-ver[hidden]{display:none}
+.doc-ver[hidden]+.doc-vers{padding-top:var(--s1)}
+.doc-v-cur{display:flex;align-items:center;gap:2px;min-width:0}
+.doc-v-cur>.doc-v{flex:1 1 auto}
 .doc-v{display:flex;align-items:baseline;gap:var(--s2);min-width:0;padding:3px 4px;margin-left:-4px;border:0;border-radius:6px;background:none;color:var(--muted);font:inherit;font-size:var(--t-xs);text-align:left;cursor:pointer}
 .doc-v:hover{background:var(--surface2)}
 .doc-v[aria-current="true"]{color:var(--ink);font-weight:600}

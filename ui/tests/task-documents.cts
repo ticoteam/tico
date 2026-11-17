@@ -95,13 +95,17 @@ const texts = (page: Page) => page.locator('#task-modal[open] [role="tab"]').eva
       assert.equal(paper, app, `the document's background is the app's (${paper} vs ${app})`);
       await line.click();
       assert.equal(await line.getAttribute('aria-expanded'), 'true');
-      assert.equal((await line.innerText()).replace(/expand_more/, '').trim(), '', 'open, the line is only its mark: no version said twice');
+      assert.equal(await view.locator('.doc-ver').isVisible(), false, 'open: no row of its own over the list, no version said twice');
+      assert.equal(await view.locator('.doc-v-cur [data-doc-compare]').count(), 1, 'Compare at the end of the version shown');
       assert.equal(await view.locator('.doc-v[aria-current="true"]').evaluate(e => Number(getComputedStyle(e).fontWeight)), 600, 'the one shown, in bold');
       const vs = await view.locator('.doc-v').evaluateAll(els => els.map(e => [...e.children].map(c => (c.textContent || '').trim())));
       assert.equal(vs.length, 2);
       assert.match(vs[0]!.join(' | '), /^v2 · Writer · 2h \| Adds the empty state$/);
       assert.match(vs[1]!.join(' | '), /^v1 · You · \S.* \| First draft$/, 'your own version says You');
       await shot(page, `spec-versions-desktop-${theme}`);
+      await line.click();
+      assert.equal(await view.locator('.doc-v').count(), 0, 'the version line tapped again shuts the list');
+      await line.click();
 
       // Compare: the two versions' text, line by line.
       await view.locator('[data-doc-compare]').click();
