@@ -710,10 +710,10 @@ def after_turn(
     a lane leased before the limit says nothing about the login now. `hopped` is the bot's fallback (execution.fallback_mark)
     when it met the limit and could not start the turn (execution.hop_failed): the bot waits out its own hold rather than
     being sent there again, until it names another fallback. `subscriptions_only` (a check's turn) holds or clears only
-    the company subscriptions the turn signed in with: one is a login shared by every computer given it, while the
-    check keeps its own schedule (execution.complete) and the computer's own logins are left as they are.
-    The Gateway is the login (GATEWAY) of a step whose notice is the Gateway's (`gateway_notice`), of the bot's own model
-    when that is a Tico model (`primary_gateway`), and of the last step when a Tico model ended the turn
+    the company subscriptions and the Gateway the turn signed in with: each is a login shared by every computer, while
+    the check keeps its own schedule (execution.complete) and the computer's own logins are left as they are.
+    The Gateway is the login (GATEWAY) of a step whose notice is the Gateway's (`gateway_notice`), of the first step when
+    the claim handed the turn a Tico model (`primary_gateway`), and of the last step when a Tico model ended the turn
     (`ended_gateway`, gateway_connection.ran_tico): a Gateway wait never holds the computer's own login."""
     # Sent away from its held login, no fallback ran it (none was ready, or it failed before it acknowledged the
     # turn): the turn ran nowhere, so no login met a limit; the hop its notes name only failed to start.
@@ -734,7 +734,7 @@ def after_turn(
         given = handed(c, attempt_id, rt)
         last = n == len(steps) - 1
         on_gateway = gateway_notice(notice) or (n == 0 and primary_gateway) or (last and ended_gateway)
-        if subscriptions_only and not given:
+        if subscriptions_only and not given and not on_gateway:
             continue
         if on_gateway:
             login, rt = GATEWAY, GATEWAY_RUNTIME

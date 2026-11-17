@@ -240,7 +240,9 @@ def test_a_held_gateway_is_never_handed_out_as_a_fallback_and_a_fallback_turn_is
     done(api, machine, first)
     tick(api, monkeypatch, H.shift(HIT, seconds=61), machine)
     probe = claim(api, machine, "ops")
-    assert probe["config"]["fallback"] == {"harness": "pi", "model": "tico-medium-1.0"} and handed(api, probe)
+    named = probe["config"]["fallback"]
+    assert (named.get("harness"), named.get("model"), named.get("off")) == ("pi", "tico-medium-1.0", None)
+    assert handed(api, probe)
     assert gateway_hold(api)["probe_job"] == probe["job_id"], "a turn that may hop to the Gateway is its one probe"
     other = claim(api, machine, "ops")
     assert other and other["config"]["fallback"].get("off") and not handed(api, other)
@@ -345,7 +347,7 @@ def test_an_older_servers_gateway_waits_become_the_gateways_hold(api, monkeypatc
             "INSERT INTO registry_metadata VALUES('gateway-unavailable:finance',?)",
             (json.dumps({"since": HIT, "until": H.shift(HIT, seconds=60)}),),
         )
-        importlib.import_module("backend.migrations.20261117015737_gateway_waits_to_login_hold").up(c)
+        importlib.import_module("backend.migrations.20261117015737_gateway_waits_to_login_hold").up(c, H.parse_ts(HIT))
         assert not c.execute("SELECT 1 FROM registry_metadata WHERE key LIKE 'gateway-unavailable:%'").fetchone()
     hold = gateway_hold(api)
     # The cap's month, not the outage's minute: the later wait wins, and the month is weeks away.

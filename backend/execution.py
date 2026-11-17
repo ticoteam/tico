@@ -2132,6 +2132,24 @@ def cooling_off(c, settings, bot, loads=None):
     return bool(login_refusal(c, settings, place["runner_id"], bot, config, loads=loads))
 
 
+def gateway_admit(c, runner_id, config, job_id):
+    """`config` with the Gateway as a fallback (`gateway_fallback`, or a Tico model the bot names as its fallback) only
+    when the Gateway may take a turn: the runner hops there mid-turn with the credentials the claim hands it
+    (gateway_connection.hand_out), and an older runner reads no Gateway hold, so the claim decides. While the Gateway
+    is held, or another job's probe is out on it, the turn gets no Gateway fallback (a named one is turned off); after
+    a hold ends, the first turn handed one is the Gateway's one probe, whether or not it hops."""
+    named = config.get("fallback") if isinstance(config.get("fallback"), dict) else {}
+    tico_named = bool(named.get("harness")) and not named.get("off") and gateway_connection.is_tico(named.get("model"))
+    if gateway_connection.is_tico(config.get("model")) or not (config.get("gateway_fallback") or tico_named):
+        return config  # on the Gateway itself (admitted by its own login), or no Gateway to hop to
+    gw, rt = login_holds.GATEWAY, login_holds.GATEWAY_RUNTIME
+    if login_holds.holding(c, runner_id, gw, rt, job_id):
+        config = {k: v for k, v in config.items() if k != "gateway_fallback"}
+        return {**config, "fallback": {"off": True}} if tico_named else config
+    login_holds.take_probe(c, runner_id, gw, rt, job_id)
+    return config
+
+
 def gateway_waits(c, settings, runner, config, loads=None):
     """Whether the claim runs the bot's next turn on the Gateway because its subscription is not signed in on `runner`
     yet (models_preset.waiting), and its plans there have not run out: _claim_refusal's `waits`."""
@@ -2655,8 +2673,11 @@ def login_key(c, settings, runner_id, bot, config, ctx=None, loads=None):
     if gateway_connection.is_tico(model):
         return runner_id, login_holds.GATEWAY, login_holds.GATEWAY_RUNTIME
     login = login_holds.canonical(c, runner_id, "", runtime, loads=loads)
-    # A held plan passed over for a computer login that is not signed in: the turn waits on the plan's hold.
-    return runner_id, (login or model_subscriptions.held_plan(c, runner_id, runtime, loads) or ""), runtime
+    if not login.startswith(login_holds.SUBSCRIPTION):
+        # A held plan passed over for a computer login (its own, or the default home it names) that is not signed in:
+        # the turn waits on the plan's hold.
+        login = model_subscriptions.held_plan(c, runner_id, runtime, loads, profile=login) or login
+    return runner_id, login, runtime
 
 
 def unfenced_sql():
@@ -2801,6 +2822,13 @@ def job_refusal(c, job, followed, ready, busy, live=frozenset(), *, runner=None)
         return "check_model"
     if wanted and not H.in_person_name(message) and check_models.dropped(c, task_id):
         return "check_model"  # hold_unrunnable cancels it on the scheduler's next tick
+    if (
+        wanted
+        and runner is not None
+        and gateway_connection.is_tico(wanted.get("model"))
+        and login_holds.holding(c, runner["id"], login_holds.GATEWAY, login_holds.GATEWAY_RUNTIME, job["id"])
+    ):
+        return "cooling_off"  # a check on a Tico model waits on the Gateway's hold and its one probe
     config = check_models.apply(followed, wanted)
     if (
         (job["bot_id"], job_lane(c, job["bot_id"], config, message, conversation)) in busy
@@ -5123,9 +5151,11 @@ class Execution:
             tier,
             falls_back=models_preset.computer_falls_back(c, runner["id"]),
         )
-        if config.get("waiting_for_sign_in"):
-            # Moved to the Gateway for this turn: after a hold on it ends, this is the Gateway's one probe.
+        if config.get("waiting_for_sign_in") or check and gateway_connection.is_tico(check.get("model")):
+            # Moved to the Gateway for this turn, or a check on a Tico model: after a hold on it ends, this is the
+            # Gateway's one probe.
             login_holds.take_probe(c, runner["id"], login_holds.GATEWAY, login_holds.GATEWAY_RUNTIME, row["id"])
+        config = gateway_admit(c, runner["id"], config, row["id"])
         config = models_preset.with_gateway_inputs(config)
         # Where it compacts: its own size, or its model's default when none is saved (providers.compact_default).
         config = providers.with_compact_default(config)
@@ -7158,8 +7188,11 @@ class Execution:
             tico_error = next((error for error in limit_errors(c, aid) if gateway.run_code(error)), "")
             if tico_error and gateway_connection.ran_tico(gateway_connection.handed(c, aid), body):
                 tico_code = gateway.run_code(tico_error)
-        # Whether a Tico model ended the turn: its limit, or its success, is the Gateway login's (login_holds.after_turn).
-        ran_gateway = gateway_connection.ran_tico(gateway_connection.handed(c, aid), body)
+        # What the claim handed the turn, not what the bot is set to now: whether it started on a Tico model, and
+        # whether a Tico model ended it. Its limit, or its success, is the Gateway login's (login_holds.after_turn).
+        gateway_handed = gateway_connection.handed(c, aid)
+        started_gateway = gateway_connection.is_tico(gateway_handed.get("model"))
+        ran_gateway = gateway_connection.ran_tico(gateway_handed, body)
         gateway_connection.forget(c, aid)
         silent = False
         # A continuation already acted in its earlier turn: a quiet missing-session failure is held, never retried.
@@ -7457,7 +7490,7 @@ class Execution:
                 aid,
                 H.now(),
                 hopped=fallback_mark(json.loads(config[0] or "{}") if config else {}) if hopped else None,
-                primary_gateway=gateway_connection.is_tico(model),
+                primary_gateway=started_gateway,
                 ended_gateway=ran_gateway,
             )
         elif check and not stopped and (limited or body.outcome == "completed"):
@@ -7465,7 +7498,17 @@ class Execution:
             # with is one login on every computer given it: its limit holds it there too, and a check that worked on it
             # clears it.
             login_holds.after_turn(
-                c, row["runner_id"], row["bot_id"], "", runtime, body, aid, H.now(), subscriptions_only=True
+                c,
+                row["runner_id"],
+                row["bot_id"],
+                "",
+                runtime,
+                body,
+                aid,
+                H.now(),
+                subscriptions_only=True,
+                primary_gateway=started_gateway,
+                ended_gateway=ran_gateway,
             )
         if reset_wait or unstarted and body.primary_held and body.limited and not body.fallback:
             # The primary's hold keeps the bot off that fallback until it ends (`failed_fallback`, `stuck`).
