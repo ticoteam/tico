@@ -18,7 +18,7 @@ use tokio::sync::mpsc;
 use tokio::time::Instant;
 
 use super::{
-    event, failed, hub_mcp_server, is_auth_retryable, is_limit, shell_outside_actions,
+    event, failed, hub_mcp_server_by_name, is_auth_retryable, is_limit, shell_outside_actions,
     shell_reads_only, tool_summary, Events, HostError, Settings,
 };
 use crate::util::{iso, log, py_dumps, text_of};
@@ -784,7 +784,9 @@ impl ClaudeHost {
         argv.push("-p".into());
         argv.extend(STREAM_ARGS.iter().map(|s| s.to_string()));
         let mut servers = crate::mcp::claude_config(&t.settings.mcp_servers);
-        if let Some(hub) = hub_mcp_server(&t.settings.env) {
+        // `--mcp-config` is on the command line, which any user on the computer can read: the hub's token and other
+        // values go as `${VAR}`, which Claude expands from the turn's environment (`turn_env`).
+        if let Some(hub) = hub_mcp_server_by_name(&t.settings.env) {
             servers.insert("tico".into(), hub);
         }
         // Only the hub, the bot's declared servers and the bot repo's own `.mcp.json`, for every bot:
@@ -2559,6 +2561,61 @@ mod tests {
             .env
             .insert("CLAUDE_CODE_DISABLE_AUTO_MEMORY".into(), "0".into());
         assert_eq!(turn_env(&settings)["CLAUDE_CODE_DISABLE_AUTO_MEMORY"], "1");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn no_secret_value_is_on_the_claude_command_line() {
+        // Synthetic values only: any process on the computer can read a command line.
+        let token = "synthetic-run-token-0f3a9c";
+        let header = "synthetic-header-secret-7b21";
+        let dir =
+            std::env::temp_dir().join(format!("claude-argv-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec!["claude".into()], tx);
+        let mut settings = Settings {
+            cwd: dir.display().to_string(),
+            mcp_servers: vec![json!({"name": "linear", "transport": "http",
+                "url": "https://mcp.invalid/mcp", "headers": {"Authorization": "Bearer ${LINEAR_KEY}"}})],
+            ..Default::default()
+        };
+        for (k, v) in [
+            ("HUB_API_URL", "http://hub.invalid"),
+            ("HUB_TOKEN", token),
+            ("HUB_BOT", "acme"),
+            ("HUB_EMPLOYEE", "acme"),
+            ("HUB_DIR", "/hub.invalid"),
+            ("LINEAR_KEY", header),
+        ] {
+            settings.env.insert(k.into(), v.into());
+        }
+        // Every kind of Claude turn builds its command line here: a fresh, a resumed and a forked one.
+        let fresh = host.start_thread(&settings);
+        let forked = host.start_thread_forked(&settings, "old-session");
+        for thread in [&fresh, &forked] {
+            let argv = host.argv(thread, &host.inner().threads[thread].clone(), Some("high"));
+            for arg in &argv {
+                assert!(!arg.contains(token), "run token in {arg}");
+                assert!(!arg.contains(header), "header secret in {arg}");
+            }
+            let config: Value = serde_json::from_str(
+                &argv[argv.iter().position(|a| a == "--mcp-config").unwrap() + 1],
+            )
+            .unwrap();
+            let tico = &config["mcpServers"]["tico"];
+            for k in crate::hosts::HUB_MCP_ENV {
+                assert_eq!(tico["env"][*k], format!("${{{k}}}"));
+            }
+            assert_eq!(
+                config["mcpServers"]["linear"]["headers"]["Authorization"],
+                "Bearer ${LINEAR_KEY}"
+            );
+        }
+        // Claude expands the placeholders from the turn's own environment, which keeps the values.
+        let env = turn_env(&settings);
+        assert_eq!(env["HUB_TOKEN"], token);
+        assert_eq!(env["LINEAR_KEY"], header);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

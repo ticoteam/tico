@@ -263,6 +263,20 @@ pub fn hub_mcp_server(env: &Env) -> Option<Value> {
     )
 }
 
+/// `hub_mcp_server` with each env value as its `${VAR}` placeholder, for a host that expands placeholders from the
+/// turn's own environment: the run token and the other HUB_* values never go on a command line.
+pub fn hub_mcp_server_by_name(env: &Env) -> Option<Value> {
+    let mut hub = hub_mcp_server(env)?;
+    let vars: Map<String, Value> = hub["env"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .map(|(k, _)| (k.clone(), json!(format!("${{{k}}}"))))
+        .collect();
+    hub["env"] = Value::Object(vars);
+    Some(hub)
+}
+
 /// An event dict: `kind`, `thread_id`, `turn_id`, then its own fields.
 pub fn event(kind: &str, thread: Option<&str>, turn: Option<&str>, fields: Value) -> Value {
     let mut ev = Map::new();
