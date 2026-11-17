@@ -44,6 +44,9 @@ const LIMIT_SETTLE: Duration = if cfg!(test) {
     Duration::from_secs(20)
 };
 const STEER_MIN_VERSION: (u64, u64, u64) = (2, 1, 296);
+/// The first Claude Code with `--effort`; an older one refuses the whole command for an unknown option. Every other
+/// flag `argv` passes is as old as the manifest's `[version] minimum` (runner-rs/harnesses/claude-code.toml).
+const EFFORT_MIN_VERSION: (u64, u64, u64) = (2, 1, 38);
 /// The tools that start a subagent: `Agent`, called `Task` by older Claude Code.
 const AGENT_TOOLS: &[&str] = &["Agent", "Task"];
 /// The tools whose every call keeps running in the background.
@@ -54,6 +57,17 @@ pub const RESTORING: &str =
 pub fn version_tuple(text: &str) -> Option<(u64, u64, u64)> {
     static R: OnceLock<regex::Regex> = OnceLock::new();
     let r = R.get_or_init(|| regex::Regex::new(r"(\d+)\.(\d+)\.(\d+)").unwrap());
+    let c = r.captures(text)?;
+    Some((c[1].parse().ok()?, c[2].parse().ok()?, c[3].parse().ok()?))
+}
+
+/// The version on Claude Code's own `--version` line, `2.1.326 (Claude Code)`, and nothing else: a launcher or wrapper
+/// in front of it (`npx`, `op run --`) that answers with its own number never decides which flags a turn passes.
+pub fn own_version(text: &str) -> Option<(u64, u64, u64)> {
+    static R: OnceLock<regex::Regex> = OnceLock::new();
+    let r = R.get_or_init(|| {
+        regex::Regex::new(r"(?mi)(?:^|\s)(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?[ \t]+\(Claude Code\)").unwrap()
+    });
     let c = r.captures(text)?;
     Some((c[1].parse().ok()?, c[2].parse().ok()?, c[3].parse().ok()?))
 }
@@ -501,6 +515,7 @@ struct Shared {
     cmd: Vec<String>,
     tx: Events,
     steer: std::sync::atomic::AtomicBool,
+    effort: std::sync::atomic::AtomicBool,
     inner: Mutex<Inner>,
     capture: Mutex<Option<Arc<crate::capture::Capture>>>,
 }
@@ -513,6 +528,8 @@ pub struct ClaudeHost(Arc<Shared>);
 struct Features {
     version: String,
     steer: bool,
+    /// `--effort` (EFFORT_MIN_VERSION), read from Claude Code's own version line only; unknown leaves it out.
+    effort: bool,
 }
 
 fn features() -> &'static Mutex<HashMap<Vec<String>, Features>> {
@@ -525,6 +542,7 @@ fn read_features(version: &str) -> Features {
     Features {
         version: version.to_string(),
         steer: version_tuple(version).unwrap_or((0, 0, 0)) >= STEER_MIN_VERSION,
+        effort: own_version(version).is_some_and(|v| v >= EFFORT_MIN_VERSION),
     }
 }
 
@@ -554,6 +572,7 @@ impl ClaudeHost {
             cmd,
             tx,
             steer: false.into(),
+            effort: false.into(),
             inner: Mutex::new(Inner::default()),
             capture: Mutex::new(None),
         }))
@@ -601,6 +620,9 @@ impl ClaudeHost {
         self.0
             .steer
             .store(known.steer, std::sync::atomic::Ordering::Relaxed);
+        self.0
+            .effort
+            .store(known.effort, std::sync::atomic::Ordering::Relaxed);
         self.inner().up = true;
         Ok(())
     }
@@ -773,7 +795,10 @@ impl ClaudeHost {
         if let Some(m) = model_for(t.settings.model.as_deref()) {
             argv.extend(["--model".into(), m]);
         }
-        if let Some(e) = effort_for(effort.or(t.settings.effort.as_deref())) {
+        // Only to a Claude Code that has the flag (start): an older one would refuse the turn, so it runs at its default.
+        if let Some(e) = effort_for(effort.or(t.settings.effort.as_deref()))
+            .filter(|_| self.0.effort.load(std::sync::atomic::Ordering::Relaxed))
+        {
             argv.extend(["--effort".into(), e]);
         }
         // Where it compacts is the turn's "Compact at", handed over in the environment (turn_env). Its auto memory is
@@ -3473,10 +3498,14 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn a_bots_model_and_effort_reach_claude_code() {
+    /// `--model` and `--effort` of a turn on a Claude Code whose `--version` the probe read as `version`.
+    async fn model_and_effort(version: &str) -> (Option<String>, Option<String>) {
         let (tx, _rx) = mpsc::unbounded_channel();
-        let host = ClaudeHost::new("acme", vec!["claude".into()], tx);
+        // A command of its own, so the features noted here are this case's alone.
+        let cmd = vec![format!("claude-{}", uuid::Uuid::new_v4().simple())];
+        note_version(&cmd, version).await;
+        let host = ClaudeHost::new("acme", cmd, tx);
+        host.start().await.unwrap();
         let settings = Settings {
             model: Some("claude-haiku-5-5".into()),
             effort: Some("xhigh".into()),
@@ -3487,12 +3516,42 @@ mod tests {
         let after = |flag: &str| {
             argv.iter()
                 .position(|a| a == flag)
-                .map(|i| argv[i + 1].as_str())
+                .map(|i| argv[i + 1].clone())
         };
+        (after("--model"), after("--effort"))
+    }
+
+    #[tokio::test]
+    async fn a_bots_model_and_effort_reach_a_claude_code_that_has_the_flag() {
+        let both = (Some("claude-haiku-5-5".into()), Some("xhigh".into()));
+        assert_eq!(model_and_effort("2.1.38 (Claude Code)").await, both);
+        assert_eq!(model_and_effort("2.1.326 (Claude Code)").await, both);
+        // Older than `--effort`: the turn runs at Claude Code's default rather than failing on an unknown option.
+        let model_only = (Some("claude-haiku-5-5".into()), None);
+        assert_eq!(model_and_effort("2.1.37 (Claude Code)").await, model_only);
+        // A wrapper's own number is not Claude Code's version: unknown, so the flag stays out.
+        assert_eq!(model_and_effort("2.1.999").await, model_only);
+    }
+
+    #[test]
+    fn only_claude_codes_own_version_line_counts() {
+        assert_eq!(own_version("2.1.326 (Claude Code)"), Some((2, 1, 326)));
+        assert_eq!(own_version("  2.1.38 (claude code)\n"), Some((2, 1, 38)));
+        assert_eq!(own_version("2.1.40-beta.1 (Claude Code)"), Some((2, 1, 40)));
+        // A launcher that prints its own version first, then Claude Code's line.
         assert_eq!(
-            (after("--model"), after("--effort")),
-            (Some("claude-haiku-5-5"), Some("xhigh"))
+            own_version("op 2.30.0\n2.1.300 (Claude Code)"),
+            Some((2, 1, 300))
         );
+        for other in [
+            "2.1.326",
+            "npx 10.9.2",
+            "v2.1.326 (Claude Code)",
+            "codex-cli 0.169.0",
+            "",
+        ] {
+            assert_eq!(own_version(other), None, "{other:?}");
+        }
     }
 
     #[test]
