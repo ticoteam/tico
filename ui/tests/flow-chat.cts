@@ -274,7 +274,7 @@ const msg = (id: string, from: string, body: string, at: string) => ({id, seq: N
     // Its task has a Spec and a QA report: Chat, then them, newest change first. What this OK shows is no file of
     // theirs, so it has its own tab, named for what it shows, and opens there; the Spec stays the Spec.
     const tabs = dialog.locator('.dc-tabs [role="tab"]');
-    const frameText = async () => (await dialog.locator('.dc-side > .dc-doc iframe.html-view').contentFrame().locator('body').innerText()).trim();
+    const frameText = async () => (await dialog.locator('.dc-side > .dc-docpane iframe.html-view').contentFrame().locator('body').innerText()).trim();
     await page.waitForFunction(() => document.querySelectorAll('.decide .dc-tabs [role="tab"]').length === 4);
     assert.deepEqual(await tabs.allInnerTexts(), ['Chat', 'Launch email', 'QA report', 'Spec']);
     assert.equal(await taskTab.getAttribute('aria-selected'), 'true', 'an OK opens on what it shows');
@@ -292,9 +292,9 @@ const msg = (id: string, from: string, body: string, at: string) => ({id, seq: N
     const specTab = dialog.locator('[data-dc-tab="doc:Spec"]');
     await specTab.click();
     assert.equal(await dialog.locator('.dc-thing').isVisible(), false, 'the Spec tab is the Spec, not the approval');
-    await dialog.locator('.dc-side > .dc-doc iframe.html-view').contentFrame().locator('body', {hasText: 'Spec v3'}).waitFor();
+    await dialog.locator('.dc-side > .dc-docpane iframe.html-view').contentFrame().locator('body', {hasText: 'Spec v3'}).waitFor();
     assert.match(await frameText(), /Spec v3/, 'the Spec document, newest version');
-    assert.match(await dialog.locator('.dc-side > .dc-doc [data-doc-ver]').innerText(), /^v3 · Tasks Product Owner/);
+    assert.match(await dialog.locator('.dc-side > .dc-docpane [data-doc-ver]').innerText(), /^v3 · Tasks Product Owner/);
     await taskTab.click();
     // An OK whose page is the Spec's own file opens on the Spec tab: the document itself, with its version line.
     needs = [{...bound, id: 'v4:r3', ask: {...(bound['ask'] as object), page: {file_id: 'f-spec', ref: 'f-spec@3', version: 3}}}];
@@ -304,9 +304,9 @@ const msg = (id: string, from: string, body: string, at: string) => ({id, seq: N
     await page.waitForFunction(() => document.querySelector('.decide [data-dc-tab="doc:Spec"]')?.getAttribute('aria-selected') === 'true');
     assert.deepEqual(await tabs.allInnerTexts(), ['Chat', 'QA report', 'Spec']);
     assert.equal(await taskTab.count(), 0, 'no second tab for the same file');
-    await dialog.locator('.dc-side > .dc-doc iframe.html-view').contentFrame().locator('body', {hasText: 'Spec v3'}).waitFor();
+    await dialog.locator('.dc-side > .dc-docpane iframe.html-view').contentFrame().locator('body', {hasText: 'Spec v3'}).waitFor();
     assert.match(await frameText(), /Spec v3/);
-    assert.match(await dialog.locator('.dc-side > .dc-doc [data-doc-ver]').innerText(), /^v3 · /);
+    assert.match(await dialog.locator('.dc-side > .dc-docpane [data-doc-ver]').innerText(), /^v3 · /);
     await approve.and(page.locator(':not([disabled])')).waitFor();
     if (process.env.TICO_SHOTS) {
       await dialog.locator('.dc-start').waitFor({state: 'detached'});
@@ -320,8 +320,8 @@ const msg = (id: string, from: string, body: string, at: string) => ({id, seq: N
     }
     // Another document: its one version line over it.
     await dialog.locator('[data-dc-tab="doc:QA report"]').click();
-    await dialog.locator('.dc-doc iframe.html-view').waitFor();
-    assert.match(await dialog.locator('.dc-doc [data-doc-ver]').innerText(), /^v1 · Tasks Product Owner · 20m/);
+    await dialog.locator('.dc-docpane iframe.html-view').waitFor();
+    assert.match(await dialog.locator('.dc-docpane [data-doc-ver]').innerText(), /^v1 · Tasks Product Owner · 20m/);
     assert.equal(await dialog.locator('.dc-thing').isVisible(), false);
     await chatTab.click();
     await composer.fill('Send it Monday');

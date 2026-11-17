@@ -8,7 +8,7 @@ import type {Locator, Page, Route} from 'playwright';
 //   it onto ⋯;
 // - the composer's arrow sends a reply named for the question and leaves it with the bot (snoozed for the person);
 //   a person's question takes the words as its answer;
-// - the task, open (no chevron): on the left on a wide screen; in the Task tab on a phone, which opens on Chat;
+// - the task, open (no chevron), on the left on a wide screen; on a phone, with no documents, no tabs: just the chat;
 // - nothing is said twice: the question and the task's title each show once.
 // FLOW_SHOTS_DIR=build/flow-shots writes question-phone.png and question-desktop.png.
 const {chromium} = require('playwright') as typeof import('playwright');
@@ -126,15 +126,11 @@ const times = (all: string, part: string) => all.split(part).length - 1;
       const end = await box(dialog.locator('.dc-side [data-key] > .dc-acts'));
       assert.ok(row[0]!.x < row[1]!.x && end.x + end.width - (row[1]!.x + row[1]!.width) <= 20, `${label}: Snooze · ⋯, ⋯ last`);
 
-      // The task: on the left, open, on a wide screen; on a phone in the Task tab, open, no chevron.
+      // The task: on the left, open, on a wide screen. On a phone a task with no documents has no tabs, not even
+      // Chat (ui/app/task-docs.ts): the question opens on its chat, the task behind its #N.
       if (phone) {
-        assert.equal(await dialog.locator('.dc-thing').isVisible(), false, `${label}: it opens on the Chat tab`);
-        await dialog.locator('[data-dc="tab"][data-dc-tab="task"]').click();
-        assert.equal(await bg.locator('.dc-bg-t').innerText(), TITLES[0], label);
-        assert.equal(await dialog.locator('.dc-thing details, .dc-thing summary').count(), 0, `${label}: the task open, no chevron`);
-        await bg.locator('.dc-md').waitFor();
-        assert.match(await bg.locator('.dc-md').innerText(), /Needs from the owner/, `${label}: it opens to the task's text`);
-        await dialog.locator('[data-dc="tab"][data-dc-tab="chat"]').click();
+        assert.equal(await dialog.locator('[data-dc="tab"]').count(), 0, `${label}: no documents, no tabs`);
+        assert.equal(await dialog.locator('.dc-thing').isVisible(), false, `${label}: it opens on its chat`);
       } else {
         const thing = await box(dialog.locator('.dc-thing')), side = await box(dialog.locator('.dc-side'));
         assert.ok(await bg.locator('.dc-md').isVisible(), `${label}: open on the left, no chevron`);

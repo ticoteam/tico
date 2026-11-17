@@ -260,7 +260,7 @@ button.dc-jev{cursor:pointer}
 .dc-chat>.thv-list{padding:20px;overflow-y:auto}
 .decide.dc-chatmode .dc-side>[data-key]{flex:none;gap:8px;padding:8px 20px 16px}
 .decide.dc-chatmode .dc-side>[data-key]>.dc-acts{flex-wrap:nowrap}
-.dc-side>.dc-tabs,.dc-side>.dc-doc{display:none}
+.dc-side>.dc-tabs,.dc-side>.dc-docpane{display:none}
 
 .dc-msg-ask{margin:12px 0 4px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--surface2)}
 .dc-msg-ask .dc-msg-by{display:flex;flex-wrap:nowrap;align-items:center;gap:0 6px;margin:0 0 6px;min-height:0;font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
@@ -357,7 +357,7 @@ button.dc-jev{cursor:pointer}
      the document; the row stays at the bottom */
   .decide.dc-chatmode:not(.dc-on-task) .dc-thing{display:none}
   .decide.dc-chatmode:is(.dc-on-task,.dc-on-doc) .dc-side>.dc-chat{display:none}
-  .decide.dc-chatmode.dc-on-doc .dc-side>.dc-doc{display:flex;flex-direction:column;flex:1 1 auto;min-height:0;overflow-y:auto}
+  .decide.dc-chatmode.dc-on-doc .dc-side>.dc-docpane{display:flex;flex-direction:column;flex:1 1 auto;min-height:0;overflow-y:auto}
   .decide.dc-chatmode .dc-side{order:1;flex:1 1 auto;border-top:0}
   .decide.dc-chatmode.dc-on-task .dc-side{display:contents}
   .decide.dc-chatmode.dc-on-task .dc-side>.dc-tabs{order:0}

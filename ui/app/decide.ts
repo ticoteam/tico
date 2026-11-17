@@ -1592,7 +1592,7 @@ function decideChatMount(st: DecState, it: NeedsEntry, host: HTMLElement, card: 
     decideChatStop();
     // A phone's title row and tabs (decide.css, decideTabsPaint): the task's chat, its documents, what an OK shows.
     const title = decideAboutOf(it)?.task?.title || it.task?.title || '';
-    host.innerHTML = `<div class="dc-tabs"><h3 class="dc-tabs-t">${esc(title)}</h3></div><div class="dc-chat"></div><div class="dc-doc"></div>`;
+    host.innerHTML = `<div class="dc-tabs"><h3 class="dc-tabs-t">${esc(title)}</h3></div><div class="dc-chat"></div><div class="dc-docpane"></div>`;
     const el = host.querySelector<HTMLElement>('.dc-chat')!;
     DEC_CHAT = {item: it.id, cid, view: null, typed};
     if (cid) {
@@ -1650,7 +1650,7 @@ function decideTabsPaint(st: DecState, it: NeedsEntry, host: HTMLElement) {
 /** Shows a tab: the chat, what the OK shows (the task open, with its page), or a document with its version line. */
 function decideTabShow(it: NeedsEntry, key: string) {
   DEC_TAB = key;
-  const root = $('.decide'), doc = docOf(decideAboutOf(it)?.task?.documents, key), pane = $('.decide .dc-side > .dc-doc');
+  const root = $('.decide'), doc = docOf(decideAboutOf(it)?.task?.documents, key), pane = $('.decide .dc-side > .dc-docpane');
   root?.classList.toggle('dc-on-task', key === 'task');
   root?.classList.toggle('dc-on-doc', !!doc);
   const bar = $('.decide .dc-side > .dc-tabs');
