@@ -18,14 +18,16 @@ def test_backfill_is_idempotent_and_adopts_documents_and_people():
         CREATE TABLE requirement_pages(visit_id TEXT, requirement_id TEXT, file_id TEXT, replaced_at TEXT, created_at TEXT);
         CREATE TABLE bot_files(id TEXT PRIMARY KEY,bot_id TEXT,task_id TEXT);
         CREATE TABLE pages(file_id TEXT PRIMARY KEY,cadence TEXT,created_at TEXT,updated_at TEXT,spec TEXT);
-        CREATE TABLE pins(place TEXT,item TEXT,made_by TEXT,created_at TEXT);
+        CREATE TABLE pins(id TEXT,place TEXT,item TEXT,made_by TEXT,created_at TEXT);
         CREATE TABLE task_documents(file_id TEXT,task_id TEXT,name TEXT,created_at TEXT,updated_at TEXT);
         CREATE TABLE bot_file_versions(file_id TEXT,actor TEXT,created_at TEXT);
         INSERT INTO bot_files VALUES('p','ops','private'),('q','finance',NULL),('doc','ops','t');
         INSERT INTO pages VALUES('p','weekly','2026-01-01','2026-01-02','yes'),
                                 ('q','none','2026-01-01','2026-01-01',NULL);
-        INSERT INTO pins VALUES('task:public','page:p','human:ana','2026-01-02');
+        INSERT INTO pins VALUES('test-pin','task:public','page:p','human:ana','2026-01-02');
         INSERT INTO task_documents VALUES('doc','t','QA report','2026-01-01','2026-01-02');
+        INSERT INTO task_documents VALUES('doc','t','RELATED','2026-01-01','2026-01-02'),
+                                         ('doc','t','WrItEr','2026-01-01','2026-01-02');
         INSERT INTO bot_file_versions VALUES('p','human:ben','2026-01-02'),('doc','human:ana','2026-01-02');
     ''')
     for _ in range(2):
@@ -36,11 +38,14 @@ def test_backfill_is_idempotent_and_adopts_documents_and_people():
         ('p', 'task:private', 'Spec'),
         ('p', 'task:public', 'related'),
         ('doc', 'task:t', 'QA report'),
+        ('doc', 'task:t', 'Related document'),
+        ('doc', 'task:t', 'Writer document'),
         ('doc', 'task:t', 'related'),
         ('doc', 'bot:ops', 'writer'),
         ('p', 'human:ben', 'writer'),
         ('doc', 'human:ana', 'writer'),
     }
+    assert c.execute("SELECT id FROM page_links WHERE target='task:public'").fetchone()[0] == "pin:test-pin"
     assert c.execute("SELECT cadence FROM pages WHERE file_id='doc'").fetchone()[0] == 'none'
     c.execute(
         "INSERT INTO requirement_pages(visit_id,requirement_id,file_id,replaced_at) VALUES('v','r','p',NULL),('v','r','q',NULL)"
@@ -56,6 +61,10 @@ def test_backfill_is_idempotent_and_adopts_documents_and_people():
     for target, role in [('goal:g', 'Spec'), ('task:t', 'writer'), ('wrong:id', 'related')]:
         with pytest.raises(Problem):
             L.link(c, 'p', target, role, 'human:ana')
+
+    for reserved in ("wRiter", " RELATED "):
+        with pytest.raises(Problem):
+            L.task_documents.canonical(reserved)
 
 
 from backend.auth import Identity
@@ -421,3 +430,83 @@ def test_runner_updates_page_as_the_bot_of_its_own_turn(api):
     assert p['file_id'] == fid and p['version'] == 2 and p['updated_by'] == 'bot:finance' and p['may_write']
     fields.pop('attempt')
     assert api.post('/api/v2/pages', json=fields, headers=headers(machine['token'])).status_code == 403
+
+
+def test_relationship_filters_cannot_find_hidden_targets(api):
+    from backend.tests.helpers.api import restrict
+
+    ops = bot(api, 'ops')
+    secret = task(api, private=True, token='ben-test')
+    public = task(api)
+    page = publish_page(api, ops, 'orbitalspec', task=public['id'], title='OrbitalSpec')
+    assert page.status_code == 200, page.text
+    fid = page.json()['page']['file_id']
+    target = 'task:' + secret['id']
+    assert add_link(api, fid, target, 'Spec', token='ben-test').status_code == 200
+    assert add_link(api, fid, 'bot:finance', 'writer').status_code == 200
+    with api.app.state.store.transaction() as c:
+        restrict(c, 'finance', see={'people': ['ben']}, read={'people': ['ben']}, write={'people': ['ben']})
+
+    for path, key, extra in (
+        ('pages', 'pages', {}),
+        ('files', 'files', {}),
+        ('files/search', 'results', {'q': 'orbitalspec'}),
+    ):
+        for filters in (
+            {'linked': target},
+            {'role': 'Spec'},
+            {'linked': target, 'role': 'Spec'},
+            {'writer': 'bot:finance'},
+        ):
+            visible = api.get('/api/v2/' + path, params={**extra, **filters}, headers=headers('ben-test'))
+            assert visible.status_code == 200, visible.text
+            assert [r.get('id', r.get('file_id')) for r in visible.json()[key]] == [fid]
+            hidden = api.get('/api/v2/' + path, params={**extra, **filters}, headers=headers('cara-test'))
+            assert hidden.status_code == 200 and hidden.json()[key] == [], hidden.text
+            assert not hidden.json().get('next_cursor')
+
+
+def test_task_files_and_context_follow_live_and_backfilled_pins(api):
+    from backend import live_blocks
+
+    ops = bot(api, 'ops')
+    source, destination = task(api), task(api, title='Pinned pages')
+    page = publish_page(api, ops, task=source['id'])
+    assert page.status_code == 200, page.text
+    fid = page.json()['page']['file_id']
+    tid = destination['id']
+    target = 'task:' + tid
+
+    def membership():
+        files = api.get(f'/api/v2/tasks/{tid}/files?all=1', headers=headers()).json()['files']
+        context = api.get(f'/api/v2/tasks/{tid}/context', headers=headers()).json()['pages']
+        pages = api.get('/api/v2/pages', params={'task': tid}, headers=headers()).json()['pages']
+        app = api.app.state
+        with app.store.read_transaction() as c:
+            live = live_blocks.fill(
+                f'<tico-files task="{tid}"></tico-files>',
+                c,
+                app.auth.identity_for_actor(c, 'human:ana'),
+                app.auth,
+                app.files,
+            )
+        return [[r.get('id', r.get('file_id')) for r in group] for group in (files, context, pages)] + [
+            [fid] if f"#/page/{fid}" in live else []
+        ]
+
+    assert membership() == [[], [], [], []]
+    pin = post(api, 'pins', {'place': target, 'item': 'page:' + fid})
+    assert membership() == [[fid], [fid], [fid], [fid]]
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO page_links SELECT 'pin:' || id,?,place,'related',made_by,created_at FROM pins WHERE id=?",
+            (fid, pin['id']),
+        )
+    assert membership() == [[fid], [fid], [fid], [fid]]
+    assert api.delete('/api/v2/pins/' + pin['id'], headers=headers()).status_code == 200
+    assert membership() == [[], [], [], []]
+
+    assert add_link(api, fid, target).status_code == 200
+    pin = post(api, 'pins', {'place': target, 'item': 'page:' + fid})
+    assert api.delete('/api/v2/pins/' + pin['id'], headers=headers()).status_code == 200
+    assert membership() == [[fid], [fid], [fid], [fid]]

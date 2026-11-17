@@ -221,12 +221,12 @@ Stable v2 (`GET /api/v2/openapi.json`, tag **Pages**):
 | `GET /api/v2/pages?ids=a,b` | Up to 50 pages in that order, leaving out any the caller may not read |
 | `GET /api/v2/pages?bot=&task=&linked=&role=&writer=` | Pages newest first, paged with `limit` and `cursor`, all filters optional. `task` and `bot` include pages linked to them in any role, and pages filed or stored there; `linked` is a target in any role; `role` is a link's role; `writer` is an actor who wrote a version |
 | `GET /api/v2/files` and `GET /api/v2/files/search` | Both take `linked`, `role` and `writer`. Page rows and hits include writers, up to five links and a count of the remaining visible links |
-| `GET /api/v2/tasks/{id}/files?all=1` | Task files and linked pages, with links on page rows |
+| `GET /api/v2/tasks/{id}/files?all=1` | Up to 200 readable task files and linked or pinned pages, with links on page rows and up to 50 versions per file |
 | `PATCH /api/v2/pages/{file_id}` | `cadence`, `as_of`, `replaced_by`, `archived`, `audience` (null clears it) |
 
 `src` is a fresh address to frame the current version, or `null` when this install cannot show pages inline. A page
 the caller may not read is a 404. `replaced_by` is `null` when the caller may not read the newer page. Lists carry no
-totals, so a count never says what a reader cannot see. On task reads, page document entries include `page_id`,
+totals, so a count never says what a reader cannot see. Task reads list up to 50 readable documents. Page document entries include `page_id`,
 `links`, and `changed_since_ok`.
 
 The owner can import a version with `written_by` and `written_at` in the publish request. Both fields are audited.

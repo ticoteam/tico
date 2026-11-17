@@ -448,3 +448,46 @@ def test_a_pages_spec_ok_does_not_approve_its_other_document_role(api):
         "Spec": {"version": 1},
         "QA report": None,
     }
+
+
+def test_stale_approval_requires_answer_authority_and_visibility_of_every_page(api):
+    from backend.tests.helpers.api import as_member
+
+    as_member(api, "ben@acme.example")
+    _, row = _flow(api)
+    first = _write(api, row["id"], SPEC, "ana-test")
+    second = _attach_second_spec(api, row)
+    _all_verdicts(api, row["id"])
+    entry = _entry(api, row["id"])
+    rid, fid = entry["requirement_id"], second["file_id"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE requirements SET person_id='human:ben' WHERE id=?", (rid,))
+    restricted = api.patch(f"/api/v2/pages/{fid}", json={"audience": {"people": ["ana"]}}, headers=headers())
+    assert restricted.status_code == 200, restricted.text
+    assert api.get(f"/api/v2/pages/{fid}", headers=headers("ben-test")).status_code == 404
+    assert get(api, "tasks/" + row["id"], "ben-test")["task"]["id"] == row["id"]
+    path = f"/api/v2/tasks/{row['id']}/asks/{rid}/answer"
+    payload = {"value": "ok", "page_version": f"{first['file_id']}@999", "visit_id": row["visit"]["id"]}
+    refused = api.post(path, json=payload, headers=headers("ben-test"))
+    assert refused.status_code >= 400 and "approval" not in refused.json(), refused.text
+    assert all(p["file_id"] not in refused.text for p in (first, second))
+    exact = api.post(
+        path,
+        json={"value": "ok", "page_version": entry["approval"]["page_version"], "visit_id": row["visit"]["id"]},
+        headers=headers("ben-test"),
+    )
+    assert exact.status_code >= 400 and "approval" not in exact.json(), exact.text
+    allowed = api.patch(f"/api/v2/pages/{fid}", json={"audience": None}, headers=headers())
+    assert allowed.status_code == 200, allowed.text
+    unauthorized = _approve(api, row["id"], entry, 999, token="cara-test")
+    assert unauthorized.status_code >= 400 and "approval" not in unauthorized.json(), unauthorized.text
+    assert all(p["file_id"] not in unauthorized.text for p in (first, second))
+    request_headers = headers("ben-test")
+    stale = api.post(path, json=payload, headers=request_headers)
+    assert stale.status_code == 409, stale.text
+    assert {p["file_id"] for p in stale.json()["approval"]["pages"]} == {first["file_id"], fid}
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE requirements SET person_id='human:cara' WHERE id=?", (rid,))
+    replay = api.post(path, json=payload, headers=request_headers)
+    assert replay.status_code >= 400 and "approval" not in replay.json(), replay.text
+    assert all(p["file_id"] not in replay.text for p in (first, second))

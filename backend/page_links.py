@@ -3,13 +3,20 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Generator, Iterable
+from contextlib import contextmanager
+from functools import cache
 from typing import Any, cast
 
 from . import names, read_cache, task_documents, task_reads
 from .store import H, Problem
 
 LINKS_SQL = "SELECT * FROM page_links WHERE page_id=? ORDER BY created_at,id"
+TASK_FILE_IDS = (
+    "SELECT id FROM bot_files WHERE task_id=? UNION "
+    "SELECT page_id FROM page_links WHERE target=? UNION "
+    "SELECT substr(item,6) FROM pins WHERE place=? AND item LIKE 'page:%'"
+)
 WRITERS_SQL = (
     "SELECT actor,count(*) AS versions,max(created_at) AS last_at "
     "FROM bot_file_versions WHERE file_id=? GROUP BY actor ORDER BY last_at DESC,actor"
@@ -162,47 +169,11 @@ def links_of(c: Any, auth: Any, who: Any, page_id: str) -> list[dict[str, Any]]:
     known = _names(c, {t for t in targets if t.startswith(("bot:", "human:"))})
     out: list[dict[str, Any]] = []
     approvals: dict[str, dict[str, int]] = {}
-    from . import files
-
     for r in rows:
         target = str(r["target"])
         kind, _, ident = target.partition(":")
-        name = ident
-        try:
-            if kind == "task":
-                task = auth.task(c, who, ident)
-                name = (f"D-{task['number']} " if task.get("number") else "") + task["title"]
-            elif kind == "bot":
-                if not auth.bot_access(c, who, ident)["see"]:
-                    continue
-                name = known.get(target, ident)
-            elif kind == "human":
-                if target not in known:
-                    continue
-                name = known[target]
-            elif kind == "goal":
-                goal: Any = read_cache.one(c, "SELECT * FROM goals WHERE id=?", (ident,))
-                if not goal:
-                    continue
-                from . import goal_routes
-
-                if not cast(Callable[..., Any], goal_routes.readable_goals)(c, auth, who, [goal]):
-                    continue
-                name = goal["title"]
-            elif kind == "page":
-                page: Any = read_cache.one(c, "SELECT * FROM bot_files WHERE id=?", (ident,))
-                if (
-                    not page
-                    or page["state"] == "deleted"
-                    or not cast(Callable[..., bool], files.file_visible)(c, auth, who, page, {})
-                ):
-                    continue
-                name = page["title"]
-            else:
-                continue
-        except Problem as exc:
-            if exc.status not in (403, 404):
-                raise
+        name = _target_name(c, auth, who, target, known)
+        if name is None:
             continue
         role = str(r["role"])
         link: dict[str, Any] = {
@@ -219,6 +190,39 @@ def links_of(c: Any, auth: Any, who: Any, page_id: str) -> list[dict[str, Any]]:
                 link["approval"] = {"version": approvals[role][ident]}
         out.append(link)
     return out
+
+
+def _target_name(c: Any, auth: Any, who: Any, target: str, known: dict[str, str]) -> str | None:
+    """The name of a link target the viewer may see."""
+    kind, _, ident = target.partition(":")
+    try:
+        if kind == "task":
+            task = auth.task(c, who, ident)
+            return (f"D-{task['number']} " if task.get("number") else "") + str(task["title"])
+        if kind == "bot" and auth.bot_access(c, who, ident)["see"]:
+            return known.get(target, ident)
+        if kind == "human":
+            return known.get(target)
+        if kind == "goal":
+            from . import goal_routes
+
+            goal: Any = read_cache.one(c, "SELECT * FROM goals WHERE id=?", (ident,))
+            if goal and cast(Callable[..., Any], goal_routes.readable_goals)(c, auth, who, [goal]):
+                return str(goal["title"])
+        if kind == "page":
+            from . import files
+
+            page: Any = read_cache.one(c, "SELECT * FROM bot_files WHERE id=?", (ident,))
+            if (
+                page
+                and page["state"] != "deleted"
+                and cast(Callable[..., bool], files.file_visible)(c, auth, who, page, {})
+            ):
+                return str(page["title"])
+    except Problem as exc:
+        if exc.status not in (403, 404):
+            raise
+    return None
 
 
 def may_write(c: Any, auth: Any, who: Any, row: Any) -> bool:
@@ -260,7 +264,9 @@ def may_write(c: Any, auth: Any, who: Any, row: Any) -> bool:
     return False
 
 
-def filters(linked: str = "", role: str = "", writer: str = "") -> tuple[list[str], list[str]]:
+def filters(
+    linked: str = "", role: str = "", writer: str = "", *, check_role_target: bool = False
+) -> tuple[list[str], list[str]]:
     """Indexed page-id sets shared by Pages and Library lists (bot_files is aliased f)."""
     where: list[str] = []
     args: list[str] = []
@@ -273,9 +279,36 @@ def filters(linked: str = "", role: str = "", writer: str = "") -> tuple[list[st
         if role:
             clauses.append("role=?")
             args.append(role_name(role))
+            if check_role_target:
+                clauses.append("page_link_target_readable(target)")
         where.append("f.id IN (SELECT page_id FROM page_links WHERE " + " AND ".join(clauses) + ")")
     if writer:
         _target(writer, "writer")
         where.append("f.id IN (SELECT page_id FROM page_links WHERE target=? AND role='writer')")
         args.append(writer)
     return where, args
+
+
+@contextmanager
+def visible_filters(
+    c: Any, auth: Any, who: Any, linked: str, role: str, writer: str
+) -> Generator[tuple[list[str], list[str]]]:
+    """Apply target visibility before limiting, ranking or creating a cursor for a result set."""
+    role_only = bool(role and not linked)
+    where, args = filters(linked, role, writer, check_role_target=role_only)
+
+    @cache
+    def readable(target: str) -> bool:
+        known = _names(c, {target}) if target.startswith("human:") else {}
+        return _target_name(c, auth, who, target, known) is not None
+
+    if any(not readable(target) for target in (linked, writer) if target):
+        yield ["0"], []
+    elif role_only:
+        c.create_function("page_link_target_readable", 1, readable)
+        try:
+            yield where, args
+        finally:
+            c.create_function("page_link_target_readable", 1, None)
+    else:
+        yield where, args

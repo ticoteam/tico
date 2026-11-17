@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from itertools import islice
 from typing import Any, cast
 
 from clients import bot_files as BF
@@ -20,6 +21,7 @@ from .store import H, Problem
 # The names a stage approves; spelled as here whatever case or dashes a writer uses.
 NAMES: tuple[str, ...] = BF.DOCUMENTS
 MOST = 20  # documents on one task
+LIST_MAX = 50
 VERSIONS_SHOWN = 50  # newest first; a document rewritten more often than this lists its newest
 
 
@@ -212,94 +214,83 @@ def markdown_name(file_name: str) -> str:
     return (said[:1].upper() + said[1:])[:80] or file_name
 
 
-def _is_markdown(name: str, mime: str) -> bool:
-    return mime == "text/markdown" or name.lower().endswith((".md", ".markdown"))
+TASK_DOCUMENTS_SQL = (
+    "SELECT l.role AS name, f.* FROM page_links l JOIN bot_files f ON f.id=l.page_id "
+    "JOIN pages p ON p.file_id=f.id WHERE l.target=? AND l.role NOT IN ('writer','related') "
+    "AND f.archived=0 AND f.state<>'deleted' AND p.archived=0 AND p.deleted_at IS NULL AND f.current_version>0 "
+    "ORDER BY f.last_activity_at DESC, l.role, f.id"
+)
+TASK_MARKDOWN_SQL = (
+    "SELECT f.*,v.name AS shown,v.digest AS shown_digest FROM bot_files f "
+    "JOIN bot_file_versions v ON v.file_id=f.id AND v.version=f.current_version "
+    "WHERE f.task_id=? AND f.archived=0 AND f.state<>'deleted' AND f.locator='tico_blob' AND f.current_version>0 "
+    "AND (v.mime='text/markdown' OR lower(v.name) LIKE '%.md' OR lower(v.name) LIKE '%.markdown') "
+    "AND NOT EXISTS (SELECT 1 FROM pages p WHERE p.file_id=f.id) "
+    "ORDER BY (f.identity NOT LIKE 'task-file:%'), f.last_activity_at DESC, f.id DESC"
+)
 
 
 def listing(c: Any, files: Any, who: Any, task_id: str) -> list[dict[str, Any]]:
-    """The task's readable page documents and Markdown files, each with its versions newest first."""
+    """The task's readable page documents and Markdown files, each with its newest versions."""
     from . import task_privacy as privacy
     from . import page_links as L
     from . import files as file_store
 
     actor_of = cast(Callable[[Any], Any], privacy.actor)
-    review = cast(Callable[..., dict[str, Any]], file_store.version_review)
-    once = cast(Callable[[list[Any]], list[Any]], file_store.once_per_content)
-    actor = actor_of(who)
+    candidates = cast(Callable[..., Iterator[Any]], file_store.visible_rows)
+    batch_versions = cast(Callable[..., dict[str, list[dict[str, Any]]]], file_store.task_file_versions)
+    html = list(islice(candidates(c, files.auth, who, TASK_DOCUMENTS_SQL, ("task:" + task_id,)), LIST_MAX))
+    taken = {_key(str(row["name"])) for row in html}
+    digests: set[str] = set()
+    markdown: list[tuple[str, Any]] = []
+    remaining = max(0, MOST - len(html))
+    if remaining:
+        for row in candidates(c, files.auth, who, TASK_MARKDOWN_SQL, (task_id,)):
+            digest = str(row["shown_digest"])
+            if digest in digests:
+                continue
+            digests.add(digest)
+            name = markdown_name(str(row["shown"]))
+            if _key(name) not in taken:
+                taken.add(_key(name))
+                markdown.append((name, row))
+                if len(markdown) == remaining:
+                    break
 
-    def versions_of(file_id: str) -> list[dict[str, Any]]:
-        return [
-            {
-                "n": v["version"],
-                "by": v["actor"],
-                "at": v["created_at"],
-                "note": review(c, file_id, v["version"], actor=actor)["note"],
-            }
-            for v in c.execute(
-                "SELECT version, actor, created_at FROM bot_file_versions WHERE file_id=? ORDER BY version DESC LIMIT ?",
-                (file_id, VERSIONS_SHOWN),
-            )
+    history = batch_versions(
+        c, actor_of(who), [row["id"] for row in html] + [row["id"] for _, row in markdown], limit=VERSIONS_SHOWN
+    )
+    L.prime(c, html)
+    approved = approved_documents(c, task_id) if html else {}
+    out: list[dict[str, Any]] = []
+    for name, row, kind in [(r["name"], r, "html") for r in html] + [(n, r, "markdown") for n, r in markdown]:
+        fid = row["id"]
+        versions = [
+            {"n": v["version"], "by": v["actor"], "at": v["created_at"], "note": v["note"]}
+            for v in history.get(fid, [])
         ]
-
-    def entry(name: str, file_id: str, kind: str) -> dict[str, Any] | None:
-        versions = versions_of(file_id)
         if not versions:
-            return None
-        return {
+            continue
+        latest = versions[0]
+        entry = {
             "name": name,
-            "file_id": file_id,
+            "file_id": fid,
             "kind": kind,
-            "version": versions[0]["n"],
-            "by": versions[0]["by"],
-            "at": versions[0]["at"],
+            "version": latest["n"],
+            "by": latest["by"],
+            "at": latest["at"],
             "versions": versions,
         }
-
-    out: list[dict[str, Any]] = []
-    rows: list[Any] = c.execute(
-        "SELECT l.role AS name, f.* FROM page_links l JOIN bot_files f ON f.id=l.page_id "
-        "JOIN pages p ON p.file_id=f.id WHERE l.target=? AND l.role NOT IN ('writer','related') "
-        "AND f.archived=0 AND p.archived=0 AND p.deleted_at IS NULL AND f.current_version>0 "
-        "ORDER BY f.last_activity_at DESC, l.role, f.id",
-        ("task:" + task_id,),
-    ).fetchall()
-    approved = approved_documents(c, task_id)
-    L.prime(c, rows)
-    for row in rows:
-        if files.visible(c, who, row, {}) and (found := entry(row["name"], row["id"], "html")):
-            approved_version = approved.get((row["id"], row["name"]))
-            found.update(
-                page_id=row["id"],
+        if kind == "html":
+            approved_version = approved.get((fid, name))
+            entry.update(
+                page_id=fid,
                 title=row["title"],
-                links=L.links_of(c, files.auth, who, row["id"]),
-                changed_since_ok=approved_version is not None and approved_version < found["version"],
+                links=L.links_of(c, files.auth, who, fid),
+                changed_since_ok=approved_version is not None and approved_version < latest["n"],
             )
             if approved_version is not None:
-                found["approved_version"] = approved_version
-            out.append(found)
-    # The task's Markdown files: every other file it holds now (bot_files_task), its current version's name and bytes.
-    held: list[Any] = c.execute(
-        "SELECT f.*, v.name AS shown, v.mime AS shown_mime, v.digest AS shown_digest FROM bot_files f "
-        "JOIN bot_file_versions v ON v.file_id=f.id AND v.version=f.current_version "
-        "WHERE f.task_id=? AND f.archived=0 AND f.locator='tico_blob' AND f.current_version>0 "
-        "AND NOT EXISTS (SELECT 1 FROM pages p WHERE p.file_id=f.id) ORDER BY f.last_activity_at DESC",
-        (task_id,),
-    ).fetchall()
-    shown = once(
-        [
-            (row, row["shown_digest"], row)
-            for row in held
-            if _is_markdown(str(row["shown"]), str(row["shown_mime"])) and files.visible(c, who, row, {})
-        ]
-    )
-    taken = {_key(d["name"]) for d in out}
-    # Two of the same name are one tab: an HTML document's, else the file attached by name (a dated copy gives way).
-    for row in sorted(shown, key=lambda r: not str(r["identity"]).startswith("task-file:")):
-        name = markdown_name(str(row["shown"]))
-        if len(out) >= MOST or _key(name) in taken:
-            continue
-        if found := entry(name, row["id"], "markdown"):
-            taken.add(_key(name))
-            out.append(found)
+                entry["approved_version"] = approved_version
+        out.append(entry)
     out.sort(key=lambda d: str(d["at"]), reverse=True)
     return out

@@ -850,6 +850,11 @@ def register(
         return [("Note", body.note)]
 
     def answer_call(c: Any, who: Any, task_id: str, body: Any, gate: Any, params: Any, ingest: Any) -> Any:
+        from . import files
+
+        def page_reader(refs: list[str]) -> bool:
+            return files.page_refs_readable(c, auth, who, refs)  # pyright: ignore[reportUnknownMemberType]
+
         asked = requirement_on(c, task_id, params["requirement_id"])
         refused = task_asks.refuses_ok_by(c, who, asked, body.value)
         if refused:
@@ -869,6 +874,7 @@ def register(
             page_version=body.page_version,
             visit_id=body.visit_id,
             keyed=True,
+            page_reader=page_reader,
         )
         return {"answer_id": done.get("answer_id")}
 

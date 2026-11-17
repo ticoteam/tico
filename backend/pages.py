@@ -304,30 +304,24 @@ class Pages:
         if task:
             with self.store.read() as c:
                 task = self.auth.resolve_task(c, who, task)
-            where.append(
-                "f.id IN (SELECT id FROM bot_files WHERE task_id=? UNION "
-                "SELECT page_id FROM page_links WHERE target=? UNION "
-                "SELECT substr(item,6) FROM pins WHERE place=? AND item LIKE 'page:%')"
-            )
+            where.append("f.id IN (" + page_links.TASK_FILE_IDS + ")")
             params += [task, "task:" + task, "task:" + task]
-        sql, args = page_links.filters(linked, role, writer)
-        where.extend(sql)
-        params.extend(args)
         with self.store.read_transaction() as c:
             if task:
                 self.auth.task(c, who, task)
             cache = {}
-            found, nxt = scan(
-                c,
-                "SELECT f.*,p.cadence,p.as_of,p.replaced_by_id,p.audience,p.archived AS page_archived FROM pages p "
-                "JOIN bot_files f ON f.id=p.file_id",
-                where,
-                params,
-                limit,
-                cursor,
-                lambda r: self.files.visible(c, who, r, cache),
-                cursor_key=visuals.key_for(self.app, self.store.settings),
-            )
+            with page_links.visible_filters(c, self.auth, who, linked, role, writer) as (sql, args):
+                found, nxt = scan(
+                    c,
+                    "SELECT f.*,p.cadence,p.as_of,p.replaced_by_id,p.audience,p.archived AS page_archived FROM pages p "
+                    "JOIN bot_files f ON f.id=p.file_id",
+                    [*where, *sql],
+                    [*params, *args],
+                    limit,
+                    cursor,
+                    lambda r: self.files.visible(c, who, r, cache),
+                    cursor_key=visuals.key_for(self.app, self.store.settings),
+                )
             prime_views(c, found)
             known = names.lookup(c, {"bot:" + r["bot_id"] for r in found} | self._authors(c, found))
             return {
