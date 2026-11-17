@@ -423,7 +423,6 @@
    "strategy-page.ts",
    "lenses-page.ts",
    "goals-kpis.ts",
-   "app/company-floor.ts",
    "app/org-factories.ts",
    "app/goals.ts",
    "app/strategy-budget.ts",
@@ -443,7 +442,6 @@
   "pages": [
    "pageBudget",
    "pageCompanyPage",
-   "pageFloorFactory",
    "pageGoals",
    "pageLenses",
    "pageMarket",
@@ -455,7 +453,6 @@
   "calls": [
    "bindGoalEditor",
    "botRulesLoad",
-   "floorMount",
    "goalFinishedMount",
    "goalSheetOpen",
    "goalsRefresh",
