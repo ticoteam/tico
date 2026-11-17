@@ -17,7 +17,6 @@ psycopg[binary]>=3.2,<4
 PyMySQL>=1.1,<2
 pymongo>=4.10,<5
 dnspython>=2.7,<3           # SRV lookups for mongodb+srv:// (Atlas); pymongo depends on it, pinned here so it is never dropped
-dkimpy>=1.1.8,<2            # the DKIM check before a one-click unsubscribe (backend/mail_unsubscribe.py); uses dnspython
 pypdf>=6.21.4,<7
 reportlab>=4.4,<5
 

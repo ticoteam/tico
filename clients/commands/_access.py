@@ -360,6 +360,10 @@ ASSISTANT_HIDDEN = frozenset(
         "tico_task_readers_list",  # tico_task_show has the readers; the Assistant's listing is near its size cliff
         "tico_tool_check",  # tico_tool_index has each tool's status; Check now is on the tool's page. Same cliff.
         "tico_tool_level",  # a Tools change the Assistant hands the Tools Owner (playbooks/acting-for-them.md)
+        # A message's attachments: the person opens them in Gmail; the Assistant reads the message. Same cliff.
+        "tico_email_attachments",
+        "tico_email_attachment",
+        "tico_email_lint",  # tico_email_draft runs the same lint; same cliff
     }
 )
 

@@ -13,6 +13,7 @@ from backend.store import sweep_mail
 from backend.tests.helpers.api import assign, get, headers, post, ready, runner  # noqa: F401
 from backend.tests.helpers.automation_turns import finish
 from backend.tests.helpers.connectors import mail_message
+from backend.tests.helpers.fake_gmail import fake_gmail  # noqa: F401
 
 WAKE = {"id": "tell", "type": "action", "do": "wake_bot", "args": {"bot": "ops", "text": "{{task.title}}"}}
 
@@ -110,7 +111,7 @@ def test_a_paused_automation_starts_nothing(api):
 
 
 # ---------------------------------------------------------------------------------------------- mail and the send switch
-def test_mail_runs_the_inboxs_automation_and_queues_mail_actions_for_its_computer(api):
+def test_mail_runs_the_inboxs_automation_and_the_server_carries_out_its_mail_actions(api, fake_gmail):
     archive = {
         "id": "gate",
         "type": "filter",
@@ -121,10 +122,10 @@ def test_mail_runs_the_inboxs_automation_and_queues_mail_actions_for_its_compute
     aid = make(api, {"type": "message", "inbox": "ana@acme.example"}, [archive])
     assert len(fire(api, automations.on_mail, "ANA@acme.example", mail())) == 1
     assert fire(api, automations.on_mail, "ben@acme.example", mail("m2")) == []
-    assert runs(api, aid)["runs"][0]["status"] == "waiting"  # until the mail computer reports the archive
+    assert runs(api, aid)["runs"][0]["status"] == "ok"  # the server archived it in Gmail
     with api.app.state.store.read() as c:
         queued = [dict(r) for r in c.execute("SELECT mailbox, msg_id, action, state FROM automation_mail_actions")]
-    assert queued == [{"mailbox": "ana@acme.example", "msg_id": "m1", "action": "archive", "state": "queued"}]
+    assert queued == [{"mailbox": "ana@acme.example", "msg_id": "m1", "action": "archive", "state": "done"}]
 
 
 def test_send_reply_follows_the_inbox_send_switch(api):
@@ -229,8 +230,8 @@ def test_a_new_schedule_runs_at_the_next_run_it_showed_even_if_the_first_pass_co
     assert len(done) == 1 and done[0]["trigger_ref"] == "schedule:2026-10-21T07:00:00.000000Z"
 
 
-def test_a_batched_inbox_filters_on_receipt_and_runs_the_rest_at_the_batch_time(api):
-    gate = {"id": "gate", "type": "filter", "rules": [{"when": [], "then": [{"do": "label"}]}]}
+def test_a_batched_inbox_filters_on_receipt_and_runs_the_rest_at_the_batch_time(api, fake_gmail):
+    gate = {"id": "gate", "type": "filter", "rules": [{"when": [], "then": [{"do": "label", "args": {"name": "x"}}]}]}
     with time_machine.travel(datetime(2026, 10, 28, 9, 0, tzinfo=timezone.utc), tick=False):
         aid = make(
             api,
@@ -244,9 +245,9 @@ def test_a_batched_inbox_filters_on_receipt_and_runs_the_rest_at_the_batch_time(
     with time_machine.travel(datetime(2026, 10, 28, 13, 0, 5, tzinfo=timezone.utc), tick=False):
         automations.tick(api.app.state.store)
         done = runs(api, aid)["runs"][0]
-    # Every step ran; the run still waits for the mail computer to report the label.
-    assert [(s["id"], s["status"]) for s in done["steps"]] == [("gate", "waiting"), ("tell", "ok")]
-    assert done["status"] == "waiting"
+    # Every step ran, and the server labelled the message in Gmail.
+    assert [(s["id"], s["status"]) for s in done["steps"]] == [("gate", "ok"), ("tell", "ok")]
+    assert done["status"] == "ok"
 
 
 # ---------------------------------------------------------------------------------------------- retention

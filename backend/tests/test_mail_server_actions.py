@@ -208,6 +208,32 @@ def test_an_unsubscribe_tico_may_not_send_is_refused(api, box, web, case):
     assert len(web["requests"]) == (1 if case == "redirect" else 0)  # a redirect is never followed
 
 
+def signed(results, h="from:list-unsubscribe:list-unsubscribe-post", b="AbCdEf12345"):
+    top = "".join(f"Authentication-Results: {r}\r\n" for r in results)
+    return (
+        top + f"DKIM-Signature: v=1; a=rsa-sha256; d=vendor.example; h={h};\r\n b={b[:6]}\r\n {b[6:]}\r\n"
+        f"From: {SENDER}\r\nList-Unsubscribe: <{LIST}>\r\nList-Unsubscribe-Post: List-Unsubscribe=One-Click\r\n\r\nNews."
+    ).encode()
+
+
+GMAIL_PASS = "mx.google.com; dkim=pass header.i=@vendor.example header.s=s1 header.b=AbCdEf12; spf=pass"
+
+
+@pytest.mark.parametrize(
+    "raw,trusted",
+    [
+        (signed([GMAIL_PASS]), True),
+        (signed([GMAIL_PASS], h="from:subject"), False),  # the signature leaves the unsubscribe headers unsigned
+        (signed([GMAIL_PASS.replace("AbCdEf12", "Other999")]), False),  # Gmail passed some other signature
+        (signed(["mx.google.com; dkim=fail header.b=AbCdEf12"]), False),
+        (signed(["evil.example; dkim=pass header.b=AbCdEf12", GMAIL_PASS]), False),  # not Gmail's, on top
+        (signed([]), False),
+    ],
+)
+def test_the_unsubscribe_link_is_trusted_only_when_gmail_passed_a_signature_over_it(raw, trusted):
+    assert U.verify_dkim(raw) is trusted
+
+
 # ------------------------------------------------------------------------------------------------- bots and people
 def grant(api, bot, level):
     with api.app.state.store.transaction() as c:

@@ -1,8 +1,8 @@
 """One-click unsubscribe (RFC 8058) from the server, for an automation's action or a bot's or person's own request.
 
 The link is the message's own List-Unsubscribe header, used only when the message carries exactly one https link,
-asks for one-click (List-Unsubscribe-Post) and a DKIM signature over From and both headers verifies (`endpoint`): mail
-cannot name an address for Tico to call by saying so. The request goes out through backend/egress.py (https to a public
+asks for one-click (List-Unsubscribe-Post) and a DKIM signature over From and both headers passed Gmail's check
+(`endpoint`, `verify_dkim`): mail cannot name an address for Tico to call by saying so. The request goes out through backend/egress.py (https to a public
 address only, no redirect followed, no proxy), and it is claimed in `mail_unsubscribes` before it goes, so a retry after
 an unclear answer sends nothing: it answers what the first one did. A sender who answers with a redirect or an error has
 not confirmed; nothing more is tried.
@@ -31,23 +31,28 @@ class Unsupported(ValueError):
     """The message offers no one-click unsubscribe Tico may use: a person unsubscribes by hand."""
 
 
+def _tags(value):
+    return {k.strip().lower(): re.sub(r"\s+", "", v) for k, v in re.findall(r"([A-Za-z.]+)\s*=\s*([^;]+)", value)}
+
+
 def verify_dkim(raw):
-    """Whether a DKIM signature that covers From and both unsubscribe headers verifies. Tests replace this."""
-    try:
-        import dkim
-    except ImportError as missing:
-        raise Unsupported("This server cannot check DKIM signatures; unsubscribe by hand.") from missing
-    msg = BytesParser(policy=policy.default).parsebytes(raw)
-    verifier = dkim.DKIM(raw, timeout=5)
-    for index, signature in enumerate(msg.get_all("DKIM-Signature", [])[:5]):
-        fields = dict(re.findall(r"(\w+)\s*=\s*([^;]+)", str(signature)))
-        if not SIGNED <= {name.strip().lower().encode() for name in fields.get("h", "").split(":")}:
-            continue
-        try:
-            if verifier.verify(idx=index):
-                return True
-        except Exception:  # noqa: BLE001 - a signature that cannot be checked does not verify
-            continue
+    """Whether Gmail verified a DKIM signature that covers From and both unsubscribe headers. Gmail checks every
+    signature when the mail arrives and puts its answer on top of the message (`Authentication-Results:
+    mx.google.com; dkim=pass ... header.b=<the signature's first characters>`); a sender can only add such headers
+    below it. The passing signature, found by its `b=`, must name the three headers in its own signed `h=` list.
+    Tests replace this."""
+    msg = BytesParser(policy=policy.compat32).parsebytes(raw)
+    results = msg.get_all("Authentication-Results", [])
+    if not results or not str(results[0]).strip().lower().startswith("mx.google.com"):
+        return False
+    passed = [
+        found.group(1) for found in re.finditer(r"dkim=pass[^;]*?header\.b=([A-Za-z0-9+/=]+)", str(results[0]), re.I)
+    ]
+    for signature in msg.get_all("DKIM-Signature", [])[:10]:
+        tags = _tags(str(signature))
+        names = {name.strip().lower().encode() for name in tags.get("h", "").split(":")}
+        if SIGNED <= names and any(prefix and tags.get("b", "").startswith(prefix) for prefix in passed):
+            return True
     return False
 
 

@@ -2999,7 +2999,9 @@ def _send_off(c, row):
     from .google_workspace import permissions
 
     result = json.loads(row["result"] or "{}")
-    if row["action"] not in ("send", "forward") or (A.send_on(c, row["mailbox"]) and permissions(c)["send_mail"]):
+    if row["action"] not in ("send", "forward") or result.get("send_off"):
+        return row["action"], result  # nothing to send, or already turned into a draft at an earlier claim
+    if A.send_on(c, row["mailbox"]) and permissions(c)["send_mail"]:
         return row["action"], result
     owner = c.execute("SELECT owner_id FROM automations WHERE id=?", (row["automation_id"],)).fetchone()
     H.event(
