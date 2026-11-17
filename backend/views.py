@@ -1088,7 +1088,35 @@ def operation_issues(c, who, auth):
 
     # Whether a computer has stopped is the shared rule over all its queued work, not only what this viewer may read.
     silent = {x["id"] for x in silent_computers(c)} if offline else set()
+    # Machines Tico stopped because the company is out of credit are one account-wide cause with one fix, Add credit:
+    # one card for all of them, never restart advice that cannot help (task #423).
+    frozen = cloud_machines.credit_stopped(c) & set(offline) if offline else set()
+    if frozen:
+        stopped = [offline[r] for r in offline if r in frozen]
+        labels = [x["label"] for x in stopped]
+        named = labels[0] if len(labels) == 1 else ", ".join(labels[:-1]) + " and " + labels[-1]
+        waiting_bots = sum(len(x["bots"]) for x in stopped)
+        queued_total = sum(x["queued"] for x in stopped)
+        add(
+            "cloud_credit",
+            "Out of credit",
+            f"{len(stopped)} cloud machine{'s' if len(stopped) != 1 else ''} stopped · "
+            f"{waiting_bots} bot{'s' if waiting_bots != 1 else ''} waiting",
+            needs_person=who.role == "owner",
+            more=f"Tico stopped {named} because the company is out of credit."
+            + (
+                f" {queued_total} saved request{'s are' if queued_total != 1 else ' is'} waiting."
+                if queued_total
+                else ""
+            )
+            + " Add credit and they start again; restarting them does not help.",
+            machines=sorted(frozen),
+            action="Add credit.",
+        )
+        issues[-1]["bots"] = [slug for x in stopped for slug in x["slugs"]]
     for runner_id, entry in offline.items():
+        if runner_id in frozen:
+            continue
         names = entry["bots"]
         listed = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
         cannot = "cannot run until it reconnects"
@@ -1107,15 +1135,21 @@ def operation_issues(c, who, auth):
             mine = who.actor == "human:" + operator or (
                 who.role == "owner" and (not person or bool(person.get("hidden")))
             )
+            count = len(names)
+            action = (
+                f"Wake {entry['label']} and check that {auth.settings.app_name} runs there: "
+                "`tico-computer status` says what stopped, `tico-computer restart` starts it again."
+            )
+            # One line on the card; the bots, the requests and the restart steps are its tooltip (`more`).
             add(
                 "machine",
-                entry["label"] + " stopped checking in",
-                f"No word from it for {quiet} minutes. {listed} {cannot}.{waiting}",
+                entry["label"] + " offline",
+                f"{count} bot{'s' if count != 1 else ''} waiting · {quiet} min",
                 machine=runner_id,
                 since=entry["since"],
                 needs_person=mine and quiet >= NEEDS_YOU_MINUTES,
-                action=f"Wake {entry['label']} and check that {auth.settings.app_name} runs there: "
-                "`tico-computer status` says what stopped, `tico-computer restart` starts it again.",
+                action=action,
+                more=f"No word from it for {quiet} minutes. {listed} {cannot}.{waiting} {action}",
             )
         else:
             # A computer offline for a moment (asleep, a restart) clears itself when it reconnects.

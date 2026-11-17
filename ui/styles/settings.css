@@ -361,6 +361,7 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .stopped-run h3{margin:0 0 4px}.stopped-run p{margin:4px 0}.stopped-run [data-details]{margin-top:8px}.stopped-run+.stopped-run{border-top:1px solid var(--line);margin-top:14px;padding-top:14px}
 .settings-issue:last-child{border-bottom:0}.settings-issue p{margin:2px 0 0;color:var(--muted);font-size:var(--t-sm)}
 .settings-issue .tag{font-size:var(--t-xs);text-transform:uppercase;letter-spacing:var(--track-caps);color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:1px 6px;vertical-align:middle}
+.settings-issue-more summary{margin:2px 0 0;color:var(--muted);font-size:var(--t-sm);cursor:help;list-style:none;text-decoration:underline dotted;text-underline-offset:3px}.settings-issue-more summary::-webkit-details-marker{display:none}.settings-issue-more[open] summary{color:var(--ink)}
 .machine-status{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;font-size:var(--t-base)}.machine-status .dot.ok{background:var(--ok)}
 .machine-bots{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .machine-head{display:flex;align-items:center;gap:10px}
