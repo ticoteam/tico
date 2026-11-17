@@ -1913,6 +1913,7 @@ def prime_bot_rows(c, slugs):
             found = {row[column]: row for row in c.execute(f"SELECT * FROM {table} WHERE {column} IN ({marks})", part)}
             prime(c, statement, {(s,): found.get(s) for s in part})
         holds.prime(c, holds.RUNAWAY, "bot", part)
+        holds.prime(c, holds.QUARANTINE, "bot", part)
         holds.prime(c, holds.FAILING, "bot", part)
 
 
@@ -1989,16 +1990,10 @@ def status_line(c, who, slug, default=None, inputs=None, auth=None):
     if row["bot_state"] == "quarantined":
         # A refusal-count quarantine lifts itself after the cooldown; any other needs a person.
         row["quarantine"] = H.quarantine_resumes(c, row["bot"])
-        from .quarantine_display import builder_notice, explanation
-
-        row["quarantine"]["why"] = explanation(c, row["bot"], who, auth)
-        row["quarantine"]["builder_notice"] = builder_notice(row["quarantine"])
-        auto = row["quarantine"]["auto"]
-        if (
-            not auto
-            and auth is not None
-            and (auth.operator(c, who, row["bot"]) or auth.bot_manager(c, who, row["bot"]))
-        ):
+        manages = auth is not None and (auth.operator(c, who, row["bot"]) or auth.bot_manager(c, who, row["bot"]))
+        row["quarantine"]["why"] = H.quarantine_words(c, row["bot"], manages)
+        row["quarantine"]["builder_notice"] = H.builder_notice(row["quarantine"])
+        if not row["quarantine"]["auto"] and manages:
             review = dict(H.quarantine_review(c, row["bot"]) or {})
             task = H.task(c, review["task"]) if review.get("task") else None
             # The task is named only to someone who may read it; the refused words are theirs to review.

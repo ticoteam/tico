@@ -58,10 +58,7 @@ def _cant_start(api, c, rig):
 
 
 def _task_quarantine(api, c, rig):
-    c.execute(
-        "INSERT INTO quarantine_holds(bot_id,task_id,reason,refusal,created_at) VALUES('ops',?,'refusals','x',?)",
-        (rig["task_id"], NOW),
-    )
+    holds.put(c, holds.QUARANTINE, "task", rig["task_id"], actor=H.KEEPER, bot_id="ops", reason="refusals")
 
 
 def _claim_held(api, c, rig):

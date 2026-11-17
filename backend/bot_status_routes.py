@@ -118,7 +118,7 @@ def register(app, auth, delegated_identity, mutate, settings_admin, store, reset
 
             quarantined = (H.bot(c, bot) or {}).get("state") == "quarantined"
             held = c.execute(
-                "SELECT 1 FROM quarantine_holds WHERE bot_id=? AND released_at IS NULL LIMIT 1", (bot,)
+                "SELECT 1 FROM holds WHERE kind='quarantine' AND bot_id=? AND released_at IS NULL LIMIT 1", (bot,)
             ).fetchone()
             if not quarantined and not held:
                 raise Problem("quarantined", "This bot is not quarantined", 409)

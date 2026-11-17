@@ -10,6 +10,7 @@ from backend.task_calls import SYSTEM
 from backend.tests.helpers.roadmaps import public_setup as roadmap_public_setup  # noqa: F401
 from backend.tests.helpers.tasks_board import api, get, headers, post  # noqa: F401
 from backend.tests.helpers.tasks_board import bot_token as board_bot_token  # noqa: F401
+from backend.tests.helpers.task_quarantine import OPEN_SQL
 
 
 def public_setup(api):
@@ -169,9 +170,7 @@ def _a_repeated_label_refusal_counts_once_per_task_an_hour_but_other_repeats_sti
         assert r.status_code == 403, r.text
     assert state(api, "cpo") == "active"
     with api.app.state.store.read() as c:
-        hold = c.execute(
-            "SELECT task_id,conversation_id,reason FROM quarantine_holds WHERE released_at IS NULL"
-        ).fetchone()
+        hold = c.execute(OPEN_SQL).fetchone()
         assert hold["task_id"] is None and hold["conversation_id"]
         assert hold["reason"] == f"{H.QUARANTINE_AT} repeated refusals today"
 
@@ -344,7 +343,7 @@ def _fresh(api):
     pipelines(api)
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM refusals")
-        c.execute("UPDATE quarantine_holds SET released_at=? WHERE released_at IS NULL", (H.now(),))
+        c.execute("UPDATE holds SET released_at=? WHERE kind='quarantine' AND released_at IS NULL", (H.now(),))
         c.execute("UPDATE bots SET state='active' WHERE slug IN ('ops','cpo','cmo')")
         for (tid,) in c.execute("SELECT id FROM tasks WHERE status='open'").fetchall():
             H.task_close(c, SYSTEM, tid, "A fresh start for the next check.")
