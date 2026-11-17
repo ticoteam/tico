@@ -121,8 +121,8 @@ def _queue_mail(c, auto, run_id, action, message, args, result=None, step=None, 
     )
     after, state = (prev["id"] if prev else None), "queued"
     if not refused and mailbox:
-        # The owner's level on the mailbox now (backend/mailbox_access.py); each executor checks it again. A message with
-        # no mailbox (a test run's sample) names nothing a computer can claim, so it waits as it always did.
+        # The owner's level on the mailbox now (backend/mailbox_access.py); the server's drain checks it again. A message
+        # with no mailbox (a test run's sample) skips this check, and the drain fails it with why: no credential covers it.
         from . import mailbox_access
 
         refused = mailbox_access.action_refusal(
