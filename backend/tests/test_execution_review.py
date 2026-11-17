@@ -115,16 +115,16 @@ def test_subscription_quota_holds_until_the_provider_reset_and_try_now_can_lift_
     ready(api, machine, ["ops"])
     assert claim(api, machine) is None
     with api.app.state.store.read() as c:
-        assert cooling_off(c, "ops")
+        assert cooling_off(c, api.app.state.store.settings, "ops")
         assert reset[:10] in H.status(c, "ops")["focus"]
     monkeypatch.setattr(H, "now", lambda: H.shift(reset, seconds=2))
     with api.app.state.store.read() as c:
-        assert not cooling_off(c, "ops")
+        assert not cooling_off(c, api.app.state.store.settings, "ops")
     monkeypatch.setattr(H, "now", lambda: H.shift(now, hours=3))
     ready(api, machine, ["ops"])
     post(api, "bots/ops/limit/retry", {})
     with api.app.state.store.read() as c:
-        assert not cooling_off(c, "ops")
+        assert not cooling_off(c, api.app.state.store.settings, "ops")
 
 
 def test_a_reported_reset_holds_the_bot_until_then_and_the_tick_releases_it(api, monkeypatch):
@@ -153,12 +153,12 @@ def test_a_reported_reset_holds_the_bot_until_then_and_the_tick_releases_it(api,
     scheduler = Scheduler(api.app.state.store, api.app.state.execution)
     scheduler.tick()
     with api.app.state.store.read() as c:
-        assert cooling_off(c, "ops") and H.status(c, "ops")["state"] == "limited"
+        assert cooling_off(c, api.app.state.store.settings, "ops") and H.status(c, "ops")["state"] == "limited"
         seq = c.execute("SELECT coalesce(max(seq),0) FROM changes").fetchone()[0]
     monkeypatch.setattr(H, "now", lambda: H.shift(reset, seconds=2))
     scheduler.tick()
     with api.app.state.store.read() as c:
-        assert H.status(c, "ops")["state"] == "idle" and not cooling_off(c, "ops")
+        assert H.status(c, "ops")["state"] == "idle" and not cooling_off(c, api.app.state.store.settings, "ops")
         assert c.execute("SELECT state FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0] == "queued"
         # The computer is told to ask for work now, not at its next backup poll.
         assert c.execute(
@@ -213,7 +213,11 @@ def test_an_api_key_quota_refusal_holds_the_bot_and_says_billing_not_subscriptio
     with api.app.state.store.read() as c:
         assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'queued'
         status = H.status(c, 'ops')
-        assert status['state'] == 'limited' and 'billing' in status['focus'] and cooling_off(c, 'ops')
+        assert (
+            status['state'] == 'limited'
+            and 'billing' in status['focus']
+            and cooling_off(c, api.app.state.store.settings, 'ops')
+        )
     assert claim(api, machine) is None
     issue = next(
         i

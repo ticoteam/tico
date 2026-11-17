@@ -199,7 +199,7 @@ def test_a_usage_limit_with_a_known_reset_waits_for_it(api, monkeypatch):
     monkeypatch.setattr(H, "now", lambda: H.shift(reset, seconds=2))
     scheduler.tick()
     with api.app.state.store.read() as c:
-        assert not cooling_off(c, "ops")
+        assert not cooling_off(c, api.app.state.store.settings, "ops")
         assert c.execute("SELECT count(*) FROM attempts WHERE job_id=?", (attempt["job_id"],)).fetchone()[0] == 1
         assert c.execute("SELECT state FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0] == "queued"
 
