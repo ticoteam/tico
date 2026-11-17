@@ -842,12 +842,17 @@ def detail(c, who, tool_id, admins, auth=None):
     return out
 
 
-def activity(c, who, tool_id, admins, auth, cursor="", limit=50, result=""):
+def activity(c, who, tool_id, admins, auth, cursor="", limit=50, result="", since=""):
     """Calls through the proxy and, for a tool whose key goes to computers, the newest time each caller's run took a
     key (credential_uses keeps one row a caller), newest first. A proxied tool's uses are its calls, already listed, so
-    its use rows are left out. `cursor` is the last row's `<at>|<id>`."""
+    its use rows are left out. `cursor` is the last row's `<at>|<id>`; `since` (an ISO time or 24h / 7d) leaves out
+    older rows. A credential administrator and the Tools page's owner bot (`tools_reader`, which learns from how tools
+    are used) see every caller's rows; anyone else their own and those of the bots they may see."""
+    from .views import since_time
+
     proxied = _readable(c, who, tool_id, admins, auth)["delivery"] == "proxy"
-    admin = _admin(c, who, admins)
+    admin = _admin(c, who, admins) or tools_reader(c, who)
+    floor = since_time(since) if since else None
     at, _, last = str(cursor or "").partition("|")
     if cursor and not last:
         raise Problem("invalid_request", "cursor is the `next` of the page before", 422)
@@ -859,6 +864,8 @@ def activity(c, who, tool_id, admins, auth, cursor="", limit=50, result=""):
         sql, args = "SELECT * FROM tool_calls WHERE tool_id=?", [tool_id]
         if result:
             sql, args = sql + " AND result=?", args + [result]
+        if floor:
+            sql, args = sql + " AND created_at>=?", args + [floor]
         if cursor:
             sql, args = sql + " AND (created_at<? OR (created_at=? AND id<?))", args + [at, at, last]
         for row in c.execute(sql + " ORDER BY created_at DESC, id DESC LIMIT ?", (*args, ACTIVITY_MAX * 2)):
@@ -871,6 +878,8 @@ def activity(c, who, tool_id, admins, auth, cursor="", limit=50, result=""):
             for row in c.execute(f"SELECT * FROM credential_uses WHERE credential_id IN ({marks})", list(keys)):
                 ident = f"use:{row['credential_id']}:{row['actor']}:{row['bot']}"
                 if cursor and (row["used_at"], ident) >= (at, last):
+                    continue
+                if floor and row["used_at"] < floor:
                     continue
                 probe = {"actor": row["actor"], "bot": row["bot"]}
                 if not _call_visible(c, who, auth, admin, probe):
@@ -2146,6 +2155,7 @@ def install(app, store, auth, settings):
         cursor: str = Query(default="", max_length=200),
         limit: int = Query(default=50, ge=1, le=ACTIVITY_MAX),
         result: str = Query(default="", max_length=20),
+        since: str = Query(default="", max_length=40),
     ):
         with store.read_transaction() as c:
-            return activity(c, request.state.identity, tool_id, vault().admins, auth, cursor, limit, result)
+            return activity(c, request.state.identity, tool_id, vault().admins, auth, cursor, limit, result, since)

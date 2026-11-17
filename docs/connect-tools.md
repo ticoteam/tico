@@ -324,6 +324,14 @@ value that looks like one (a key shape, a URL with a password or a token in it) 
 SECRET, PASSWORD or API_KEY in it belongs under Keys. A key the run holds under the same variable wins. Tico checks each tool with a check path every 30 minutes, on the proxy or on computers; `tico tool check
 <id>` (MCP `tico_tool_check`) checks now. Checks and calls older than 90 days are deleted.
 
+A tool's **Activity** (`GET /api/v2/api-tools/<id>/activity?since=&result=&limit=&cursor=`) lists its calls through the
+proxy (who, method, path with the query's keys only, status, result: `sent` reached the vendor, `refused` was stopped
+by Tico, `failed` never reached it) and, for keys on computers, each caller's last use, newest first, never a value.
+`since` is `24h`, `7d` or an ISO time. A credential administrator and the Tools page's owner bot see every caller;
+anyone else sees their own rows and those of the bots they may see. CLI: `tico tool activity <id> [--since 24h]
+[--result refused]`; MCP: `tico_tool_activity`, which adds a summary of repeated calls and errors (ids in paths folded
+to `:id`) and who added the tool's keys. The Tools Owner reads it daily to learn how each tool is used.
+
 ## Every Tools change from the CLI and MCP
 
 Nothing on the Tools page needs the page: each change is a `tico` command and a Tico MCP tool of the same name
@@ -364,6 +372,7 @@ write route has no command, or a command calls another route.
 | Propose where dropped keys go | `POST tools-chat/proposals` | `tico tool propose-grant` | `tico_tools_propose_grant` |
 | A bot's `bot.yaml` tool notes | `POST bots/{bot}/tools`, `…/update`, `…/delete` | `tico tool add`, `update`, `remove` | `tico_tool_add`, `tico_tool_update`, `tico_tool_remove` |
 | Learnings | `POST tools/{service}/learnings`, `…/{id}/delete` | `tico tool learn`, `tico tool forget` | `tico_tool_learn`, `tico_tool_forget` |
+| A tool's calls and last uses | `GET api-tools/{id}/activity` | `tico tool activity` | `tico_tool_activity` |
 
 Only a person does these, in the app: reveal a value (`POST credentials/{id}/reveal`), type a value into a key card
 (`…/save`), tap Grant on a key card (`POST tools-chat/proposals/{id}/grant`), and watch or drive a website sign-in's live

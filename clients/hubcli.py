@@ -1300,6 +1300,16 @@ def parser():
     s = tools.add_parser("check", help="check an API tool's keys now")
     s.add_argument("id", help="the API tool id (`tico tool index`)")
     s.set_defaults(fn="tool check")
+    s = tools.add_parser(
+        "activity",
+        help="an API tool's recent calls and key uses, with repeated calls and errors summed up; never a value",
+    )
+    s.add_argument("id", metavar="tool", help="the API tool id (`tico tool index`)")
+    s.add_argument("--since", help="only rows from this window on: 24h, 7d or an ISO time")
+    s.add_argument("--result", choices=("sent", "refused", "failed", "use"), help="only rows with this result")
+    s.add_argument("--limit", type=int, help="rows on the page (default 50, at most 200)")
+    s.add_argument("--cursor", help="the previous page's next")
+    s.set_defaults(fn="tool activity")
     s = tools.add_parser("level", help="set a bot's level on an API tool: read, read_write or none")
     s.add_argument("id", help="the API tool id (`tico tool index`)")
     s.add_argument("bot", help="the bot's slug")

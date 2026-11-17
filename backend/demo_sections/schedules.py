@@ -54,6 +54,11 @@ EXTRA_SUMMARIES = {
         "Checked twelve tools; the Stripe key expires in nine days, so a card is open for Ben.",
         "Checked twelve tools; two keys for one PostHog project, proposed as one.",
     ),
+    "tools-owner:learn-from-use": (
+        "Read five tools' use; nothing new since yesterday.",
+        "The Sales bot's Close lead lookups answer 404 on archived leads; told it to search first.",
+        "Nobody has used the Geocodio tool in 30 days; asked Ben whether to remove it.",
+    ),
     "botops:task-sweep": (
         "Swept every bot: two stuck tasks handed to their owners.",
         "No stuck tasks on either computer.",

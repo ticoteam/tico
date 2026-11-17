@@ -412,7 +412,7 @@ def run(args, who=None):
 
     if fn in hubtools_connections.COMMANDS:
         return hubtools_connections.run_command(client, args)
-    if args.cmd == "alerts" or fn in ("tool index", "tool check", "tool level"):
+    if args.cmd == "alerts" or fn in ("tool index", "tool check", "tool activity", "tool level"):
         return via_tool(client, args)
     if args.cmd == "contacts":
         return via_tool(client, _contacts_args(args))

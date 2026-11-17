@@ -2,9 +2,11 @@
 
 import sqlite3
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 import time_machine
+import yaml
 from fastapi.testclient import TestClient
 
 from backend import demo, demo_content as D
@@ -13,6 +15,9 @@ from backend.demo_sections.schedules import SETTLE
 from backend.scheduler import next_due
 
 NOW = datetime(2026, 9, 25, 18, 30, tzinfo=timezone.utc)
+# The routines the Tools Owner starts with: each is an enabled schedule in the demo, named by its title.
+TOOLS_OWNER_BOT = Path(__file__).resolve().parents[2] / "templates" / "catalog" / "tools-owner" / "bot.yaml"
+TOOLS_OWNER_ROUTINES = [entry["title"] for entry in yaml.safe_load(TOOLS_OWNER_BOT.read_text())["routines"]]
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -185,9 +190,10 @@ def _every_enabled_schedule_ran_at_its_times_this_week_and_is_next_in_the_future
         enabled = {row["name"]: row["enabled"] for row in rows}
         assert enabled["Weekday inbox sweep"] is False
         schedules = [row for row in rows if row["enabled"] and row["trigger"]["type"] == "schedule"]
-        # 16 on main, the Assistant's daily sweep (backend/onboarding.py) and the Tools Owner's weekly review, which the
-        # start's complete_company makes with the Tools Owner (onboarding.ensure_tools_owner).
-        assert len(schedules) == 18
+        # 16 on main and the Assistant's daily sweep (backend/onboarding.py), then each of the Tools Owner's routines,
+        # which the start's complete_company makes with the Tools Owner (onboarding.ensure_tools_owner).
+        assert set(TOOLS_OWNER_ROUTINES) <= {row["name"] for row in schedules}
+        assert len(schedules) == 16 + 1 + len(TOOLS_OWNER_ROUTINES)
         sweep = sweep_automation_id(settings)
         week_start = NOW - timedelta(days=7)
         for row in schedules:

@@ -5,14 +5,20 @@ reads: []                            # other bot repositories this one may clone
 
 max_run_minutes: 30
 
-# The routine this bot starts with. The server seeds it once, when the Tools Owner is built in; from then on it is an
-# Automation (docs/routines.md). Set the timezone to the team's own.
+# The routines this bot starts with. The server seeds each once, when the Tools Owner is built in (a key it never had also at a
+# later start); from then on each is an Automation (docs/routines.md). Set the timezone to the team's own.
 routines:
   - id: review-the-tools
     title: Review the tools
     cron: "0 9 * * 1"
     timezone: America/Los_Angeles
     template: playbooks/review-the-tools.md
+    labels: [priority:p3]
+  - id: learn-from-use
+    title: Learn from how tools are used
+    cron: "30 8 * * *"
+    timezone: America/Los_Angeles
+    template: playbooks/learn-from-use.md
     labels: [priority:p3]
 
 # It holds no tool or credential of its own: keys go to the bots that use them (docs/credential-vault.md).
