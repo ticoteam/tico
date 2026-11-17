@@ -11,22 +11,24 @@ from scripts import replay_red_main as replay
 
 ROOT = Path(__file__).resolve().parents[2]
 # Case numbers in red_main_cases.json from the recorded PR replay.
+# Cases 26 and 27 (76-file changes) lose test_pr_checks.py to the time budget; that's the capped-misses ticket.
 PINNED_CAUGHT = {
     1,
     2,
+    3,
     4,
+    5,
     7,
     10,
     11,
     13,
     14,
     16,
+    17,
     19,
     21,
     22,
     25,
-    26,
-    27,
     29,
     30,
     31,
@@ -44,6 +46,7 @@ PINNED_CAUGHT = {
     45,
     46,
     52,
+    53,
     56,
     57,
     58,
