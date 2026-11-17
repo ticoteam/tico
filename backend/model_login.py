@@ -628,7 +628,7 @@ def shared_choices(c, runtime):
             "name": row["name"],
             "env": row["env"],
             "preview": row["preview"],
-            "every": computer_keys.every(c, row["id"]),
+            "every": False,  # no key covers every computer any more (D11-5 drops the field)
         }
         for row in sorted(computer_keys.shared_keys(c, runtime), key=lambda r: (r["name"].lower(), r["id"]))
     ]
@@ -1019,7 +1019,7 @@ def key_info(c, who, rid, runtime, auth=None, vault=None):
             }
             for row in _shared_users(c, runner, runtime)
         ]
-        out["shared"] = {"env": shared["env"], "every": computer_keys.every(c, shared["id"])}
+        out["shared"] = {"env": shared["env"], "every": False}
         if key_admin:
             out["shared"].update(id=shared["id"], name=shared["name"])
         out["can_replace_all"] = key_admin

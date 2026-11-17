@@ -8,7 +8,7 @@ from backend.tests.helpers.computer_signin import computer_asks, new_computer, s
 from backend.tests.helpers.getting_started import add_bot
 from backend.tests.helpers.onboarding import environment, signed_in  # noqa: F401
 from backend import bot_settings as BS
-from backend.tests.helpers.model_logout import CAPABLE, beat, online, pending, report
+from backend.tests.helpers.model_logout import CAPABLE, ON_SHARED, beat, online, pending, report
 
 
 def as_computer(api, token, path, body):
@@ -97,7 +97,7 @@ def test_a_signed_out_computer_is_not_given_the_shared_key_until_a_person_says_s
     vault(api)
     machine = new_computer(api)
     rid, token = machine["runner_id"], machine["token"]
-    beat(api, token, auth={"Authorization": "Bearer " + token})
+    beat(api, token, auth={"Authorization": "Bearer " + token}, readiness=ON_SHARED)
     shared_before(api, store(api, "OPENAI_API_KEY", "sk-team-key-0123456789"))
     assert computer_asks(api, token).json()["credentials"]
     r = api.post(f"/api/v2/computers/{rid}/logouts", json={"runtime": "codex"}, headers=signed_in())
@@ -189,7 +189,7 @@ def test_switch_to_subscription_keeps_the_key_until_the_subscription_works_then_
     machine = new_computer(api)
     rid, token = machine["runner_id"], machine["token"]
     auth = {"Authorization": "Bearer " + token}
-    beat(api, token, SWITCHES_TYPE, auth=auth)
+    beat(api, token, SWITCHES_TYPE, auth=auth, readiness=ON_SHARED)
     shared_before(api, store(api, "OPENAI_API_KEY", "sk-team-key-0123456789"))
     start = lambda body, who=None: api.post(f"/api/v2/computers/{rid}/logins", json=body, headers=who or signed_in())
     has_key = lambda: computer_asks(api, token).json()["credentials"][0]["value"] == "sk-team-key-0123456789"

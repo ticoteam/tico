@@ -6,6 +6,11 @@ from backend.tests.helpers.computer_keys import shared_before
 from backend.tests.helpers.computer_signin import computer_asks, grant, new_computer, store, vault
 
 
+def on_shared(name):
+    """A runtime the computer reported signing in with the company's shared key `name`."""
+    return {"installed": True, "authenticated": "ready", "key": {"name": name, "source": "shared"}}
+
+
 def test_a_computer_gets_the_team_model_key_and_nothing_a_bot_holds(environment):
     api = environment()
     vault(api)
@@ -16,7 +21,9 @@ def test_a_computer_gets_the_team_model_key_and_nothing_a_bot_holds(environment)
     grant(api, private, "bot:mailer")
     grant(api, other, "bot:mailer")
     machine = new_computer(api)
-    shared_before(api, team)  # shared with every computer in Credentials before keys became subscriptions
+    # Shared with every computer in Credentials before keys became subscriptions, and the computer said it ran on it.
+    heartbeat(api, machine["runner_id"], runtimes={"codex": on_shared("OPENAI_API_KEY")})
+    shared_before(api, team)
     got = computer_asks(api, machine["token"])
     assert got.status_code == 200
     assert got.json() == {
@@ -50,6 +57,7 @@ def test_a_model_key_goes_to_computers_from_settings_models_not_a_grant(environm
     assert refused["error"]["detail"] == "Give model keys to computers in Settings > Models"
     assert computer_asks(api, machine["token"], "claude").json() == {"credentials": []}
     # Moved from a grant made before: taking it off the computer in Settings > Models takes the key back.
+    heartbeat(api, machine["runner_id"], runtimes={"claude": on_shared("ANTHROPIC_API_KEY")})
     shared_before(api, cid)
     assert computer_asks(api, machine["token"], "claude").json()["credentials"][0]["env"] == "ANTHROPIC_API_KEY"
     took = api.put(

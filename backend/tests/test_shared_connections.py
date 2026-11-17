@@ -84,9 +84,9 @@ def _a_key_shared_with_two_computers_shows_on_both_and_lists_both(api):
 
 
 def test_the_every_computer_key_is_a_shared_connection_on_every_computer(environment):
-    """Acceptance 21: an "Every computer" key in Credentials, moved by the upgrade, shows on every computer that ran
-    on it, a computer whose tool has not reported yet included; one signing in with its own terminal key, or its own
-    account, does not claim it, and "every" now says it is given to every computer, which it is not."""
+    """Acceptance 21: an "Every computer" key in Credentials, moved by the upgrade, shows on every computer that said it
+    ran on it. One whose tool has not said yet, one signing in with its own terminal key, or its own account, is not
+    given it (nobody is billed differently), and "every" never says it is given to every computer."""
     api = setup(environment)
     ready = computer(api, "Alpha", source="shared")
     fresh = computer(api, "Bravo")  # reports codex installed, not signed in yet
@@ -100,17 +100,16 @@ def test_the_every_computer_key_is_a_shared_connection_on_every_computer(environ
             (account["runner_id"],),
         )
     shared_before(api)
-    for machine in (ready, fresh):
-        row = listed(api, machine)["shared_with"]["codex"]
-        assert row["every"] is False and labels(row) == ["Alpha", "Bravo"]
-    assert listed(api, own)["shared_with"] == {} and listed(api, account)["shared_with"] == {}
-    # Bravo's own report still says what its tool did: the page shows the key, not a reading it has not taken.
-    assert listed(api, fresh)["readiness"]["runtimes"]["codex"]["authenticated"] == "missing"
+    row = listed(api, ready)["shared_with"]["codex"]
+    assert row["every"] is False and labels(row) == ["Alpha"]
+    for machine in (fresh, own, account):
+        assert listed(api, machine)["shared_with"] == {}
+        assert fetch(api, machine)["credentials"] == []
 
 
 def test_a_key_shared_by_name_comes_before_the_every_computer_key(environment):
     api = setup(environment)
-    one, two = computer(api, "Alpha"), computer(api, "Bravo")
+    one, two = computer(api, "Alpha", source="shared"), computer(api, "Bravo", source="shared")
     shared_before(api)
     call(
         api,
@@ -310,7 +309,7 @@ def _a_cleared_computer_given_a_shared_key_is_told_to_take_it_again(api):
 def _the_shared_key_picked_for_a_computer_is_the_one_it_runs_on(api):
     """Two shared keys of the same kind: the one picked in Add connection replaces the other on that computer,
     whichever is older, in what the dialog says, the computers listed and what the computer fetches."""
-    one, two, three = (computer(api, label) for label in ("Alpha", "Bravo", "Charlie"))
+    one, two, three = (computer(api, label, source="shared") for label in ("Alpha", "Bravo", "Charlie"))
     # The key Charlie has sorts first, so credential order alone would keep it.
     value = {store(api, "OPENAI_API_KEY", key): key for key in (SHARED, PASTED)}
     old, picked = sorted(value)

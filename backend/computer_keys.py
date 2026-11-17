@@ -189,33 +189,34 @@ def confirm(c, runner_id, login_id, settings=None):
     runtime, cid, now = row["runtime"], row["credential_id"], H.now()
     c.execute("DELETE FROM computer_keys WHERE credential_id=?", (cid,))
     current = _given(c, runner_id, runtime)
-    own = current is not None and current["source"] == OWN + runner_id
-    # Its own key given in Settings > Models to other computers too stays theirs as it is: the new value is this
-    # computer's alone, a subscription of its own.
-    alone = (
-        own
+    # Its own key before, unless it is given in Settings > Models to other computers too: that stays theirs as it is,
+    # and the new value is this computer's alone, a subscription of its own.
+    old = None
+    if (
+        current is not None
+        and current["source"] == OWN + runner_id
         and not c.execute(
             "SELECT 1 FROM computer_subscriptions WHERE subscription_id=? AND NOT (runner_id=? AND runtime=? AND person='')",
             (current["subscription_id"], runner_id, runtime),
         ).fetchone()
-    )
-    if alone and MS.KEY_KINDS.get(row["env"]) == (MS.row(c, current["subscription_id"]) or {}).get("kind"):
+    ):
+        old = current
+    if old is not None and MS.KEY_KINDS.get(row["env"]) == (MS.row(c, old["subscription_id"]) or {}).get("kind"):
         c.execute(
             "UPDATE model_subscriptions SET credential_id=?,preview=?,revision=revision+1,status='new',"
             "status_detail='',status_at=?,updated_at=?,credential_at=? WHERE id=?",
-            (cid, row["preview"], now, now, now, current["subscription_id"]),
+            (cid, row["preview"], now, now, now, old["subscription_id"]),
         )
-        drop_credential(c, current["id"])
+        drop_credential(c, old["id"])
     else:
         label = (c.execute("SELECT label FROM runners WHERE id=?", (runner_id,)).fetchone() or {"label": ""})["label"]
         kind = MS.KEY_KINDS[row["env"]]
         credential = {"id": cid, "env": row["env"], "preview": row["preview"], "name": ""}
         sid = subscription_for(c, credential, row["created_by"], f"{MS.KINDS[kind]['name']} · {label}")
         if not _models_plan(c, runner_id, runtime):
-            old = current["subscription_id"] if alone else None
             assign(c, runner_id, runtime, sid, row["created_by"], settings)
-            if old:
-                _drop(c, old)
+            if old is not None:
+                _drop(c, old["subscription_id"])
     # In use again: a key added after a clear, or after a switch to a subscription (Switch to API key included), signs
     # it in.
     for table in ("model_login_cleared", "model_login_key_off"):
