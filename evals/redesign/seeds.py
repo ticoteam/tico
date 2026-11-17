@@ -543,7 +543,7 @@ def tools(world):
 
     def check(url, headers, params):
         egress.check(url)  # what the real send refuses, this one refuses too
-        return _vendor(httpx.Request("GET", url, headers=headers, params=params)).status_code
+        return api_tools.Reply(_vendor(httpx.Request("GET", url, headers=headers, params=params)).status_code)
 
     world.patch(api_tools, "send_check", lambda _real: check)
     world.app.state.tool_proxy_transport = httpx.MockTransport(_vendor)
