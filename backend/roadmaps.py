@@ -15,6 +15,7 @@ from . import hubdb as H
 from .models import Contract
 from .store import Problem
 from . import bot_settings as BS
+from .api_contract import api_v2
 
 # Anonymous suggestions waiting at Suggested, across every visitor: the per-address limit alone lets many
 # addresses queue unbounded work for the bot that receives them (the same overall cap as waiting pairings).
@@ -317,7 +318,10 @@ def install_internal(app, store, auth, mutate, mover):
             _mine(c, who.actor, row, mover(c, who))
         return row
 
-    @app.get('/api/v2/tasks/{tid}/requesters')
+    @app.get(
+        '/api/v2/tasks/{tid}/requesters',
+        **api_v2("Roadmaps", "listTaskRequesters", "Internal requester contacts, paged and byte-capped"),
+    )
     def requesters(request: Request, tid: str, limit: int = 100, offset: int = 0):
         with store.read() as c:
             row = task(c, request.state.identity, tid)
@@ -345,7 +349,10 @@ def install_internal(app, store, auth, mutate, mover):
                 **stats(c, [row['id']]).get(row['id'], {}),
             }
 
-    @app.post('/api/v2/tasks/{tid}/requesters')
+    @app.post(
+        '/api/v2/tasks/{tid}/requesters',
+        **api_v2("Roadmaps", "addTaskRequester", "Record a requester; returns a removal token once"),
+    )
     def create_requester(request: Request, tid: str, body: RequesterInput):
         def work(c):
             who = request.state.identity
@@ -375,7 +382,9 @@ def install_internal(app, store, auth, mutate, mover):
 
         return mutate(request, body, work)
 
-    @app.post('/api/v2/tasks/{tid}/requesters/{rid}/delete')
+    @app.post(
+        '/api/v2/tasks/{tid}/requesters/{rid}/delete', **api_v2("Roadmaps", "deleteTaskRequester", "Remove a requester")
+    )
     def delete_requester(request: Request, tid: str, rid: str, body: Contract):
         def work(c):
             who = request.state.identity
@@ -398,7 +407,10 @@ def install_internal(app, store, auth, mutate, mover):
 
         return mutate(request, body, work)
 
-    @app.post('/api/v2/tasks/{tid}/requesters/{rid}')
+    @app.post(
+        '/api/v2/tasks/{tid}/requesters/{rid}',
+        **api_v2("Roadmaps", "updateTaskRequester", "Replace internal requester details"),
+    )
     def update_requester(request: Request, tid: str, rid: str, body: RequesterInput):
         def work(c):
             who = request.state.identity
@@ -427,13 +439,19 @@ def install_internal(app, store, auth, mutate, mover):
 
         return mutate(request, body, work)
 
-    @app.post('/api/v2/tasks/{tid}/publication-preview')
+    @app.post(
+        '/api/v2/tasks/{tid}/publication-preview',
+        **api_v2("Roadmaps", "previewTaskPublication", "Exact publish approval payload for public edits or replies"),
+    )
     def preview(request: Request, tid: str, body: PublicationInput):
         """Not available yet, like the public routes: no route asks a publish OK (task_asks has no ask path for the
         `publish:` subject, and the generic OK route refuses it), so a preview would lead nowhere."""
         raise Problem('not_found', NOT_YET, 404)
 
-    @app.post('/api/v2/tasks/{tid}/comments/{mid}/moderate')
+    @app.post(
+        '/api/v2/tasks/{tid}/comments/{mid}/moderate',
+        **api_v2("Roadmaps", "moderateTaskComment", "Hide, restore or delete a public comment"),
+    )
     def moderate(request: Request, tid: str, mid: str, body: Moderate):
         def work(c):
             who = request.state.identity

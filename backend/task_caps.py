@@ -21,6 +21,7 @@ from pydantic import Field
 from . import audit_log
 from .models import ID, Contract
 from .store import H, Problem
+from .api_contract import api_v2
 
 MAX = 100_000
 
@@ -396,7 +397,15 @@ def install(app, store, auth, mutate):
         apply(c, who.actor, sender, receiver, per_day)
         return {"cap": {"sender": ref(sender), "receiver": ref(receiver), "per_day": per_day}}
 
-    @app.get("/api/v2/task-caps")
+    @app.get(
+        "/api/v2/task-caps",
+        **api_v2(
+            "Tasks",
+            "getTaskCaps",
+            "Task caps with today's count and the tasks closed before the receiver acted, per pair; for the owner and admins, the changes bots asked for, waiting as approvals",
+            "TaskCaps",
+        ),
+    )
     def caps_list(request: Request):
         """The task caps, and for the owner and admins the proposals a person has yet to decide."""
         who = request.state.identity
@@ -404,7 +413,15 @@ def install(app, store, auth, mutate):
         with store.read() as c:
             return _listing(c, auth, who)
 
-    @app.put("/api/v2/task-caps")
+    @app.put(
+        "/api/v2/task-caps",
+        **api_v2(
+            "Tasks",
+            "setTaskCap",
+            "Cap the tasks one teammate sends another a day (0 blocks, null removes). The receiver must be a manager above the sender. A bot's own change comes back as a pending approval a person decides",
+            "TaskCapWrite",
+        ),
+    )
     def caps_put(request: Request, body: TaskCap):
         """Cap the tasks one teammate sends another a day (0 blocks the pair; null removes the cap). The receiver must be
         a manager above the sender. A bot's own cap comes back as a pending proposal."""
@@ -416,7 +433,15 @@ def install(app, store, auth, mutate):
 
         return mutate(request, body, work)
 
-    @app.delete("/api/v2/task-caps")
+    @app.delete(
+        "/api/v2/task-caps",
+        **api_v2(
+            "Tasks",
+            "removeTaskCap",
+            "Remove the cap between two teammates (?sender=&receiver=); a bot's removal is an approval too",
+            "TaskCapWrite",
+        ),
+    )
     def caps_delete(request: Request, sender: str, receiver: str):
         """Remove the cap between two teammates (`?sender=&receiver=`). The same rules as setting it: a bot's removal is a
         proposal too."""

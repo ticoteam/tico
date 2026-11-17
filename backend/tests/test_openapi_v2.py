@@ -52,8 +52,8 @@ def test_served_to_the_signed_in_only_and_limited_to_the_stable_resources(api):
                 assert "Idempotency-Key" in [p["name"] for p in ops[method]["parameters"]], (method, path)
 
 
-def test_a_route_declares_its_place_in_the_contract_once(monkeypatch):
-    """api_v2(...) on a decorator puts the route in the document; the same operation in STABLE too, or a tag the
+def test_a_route_declares_its_place_in_the_contract_once():
+    """api_v2(...) on a decorator puts the route in the document; an operationId or method declared twice, or a tag the
     document does not describe, is refused rather than published twice or untagged."""
     from fastapi import FastAPI
 
@@ -65,7 +65,6 @@ def test_a_route_declares_its_place_in_the_contract_once(monkeypatch):
     def thing(tid: str):
         return {"id": tid}
 
-    monkeypatch.setattr(openapi_v2, "STABLE", [])
     assert openapi_v2.operations(app) == [("/api/v2/things/{tid}", "get", "Tasks", "getThing", "One thing", "Task")]
     assert openapi_v2.stable_path(app).fullmatch("/api/v2/things/t1")
     assert not openapi_v2.stable_path(app).fullmatch("/api/v2/things")
@@ -74,17 +73,22 @@ def test_a_route_declares_its_place_in_the_contract_once(monkeypatch):
     assert "x-tico-v2" not in op and op["responses"]["200"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/Task"
     }
-    monkeypatch.setattr(openapi_v2, "STABLE", [("/api/v2/things/{tid}", "get", "Tasks", "getThing", "One", None)])
-    with pytest.raises(RuntimeError, match="both in STABLE and on its route"):
-        openapi_v2.operations(app)
 
-    @app.get("/api/v2/other", **api_v2("No such tag", "getOther", "Other"))
-    def other():
+    @app.get("/api/v2/things/{tid}/copy", **api_v2("Tasks", "getThing", "Same name"))
+    def copy(tid: str):
         return {}
 
-    monkeypatch.setattr(openapi_v2, "STABLE", [])
-    with pytest.raises(RuntimeError, match="not in TAGS"):
+    with pytest.raises(RuntimeError, match="declared twice"):
         openapi_v2.operations(app)
+
+    other = FastAPI()
+
+    @other.get("/api/v2/other", **api_v2("No such tag", "getOther", "Other"))
+    def untagged():
+        return {}
+
+    with pytest.raises(RuntimeError, match="not in TAGS"):
+        openapi_v2.operations(other)
 
 
 def test_a_put_that_needs_an_idempotency_key_says_so():

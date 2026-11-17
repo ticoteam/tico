@@ -310,6 +310,37 @@ def test_reassign_gives_the_task_to_its_new_owner_and_tells_the_automations_once
         H.task_reassign(c, ANA, row["id"], "bot:nobody")
 
 
+def test_reassign_keeps_the_tasks_place_in_its_stage(c):
+    """Seen on TIDY (D-20021): a person put a task at the top of On Deck (rank 1.0, the next at 556 and 564). Giving it
+    to someone else set its rank to the end of the new owner's queue (200225.0), so it dropped to the bottom of the
+    stage. A reassignment keeps the task in its stage, so it keeps its rank and its place there."""
+    top, second, third = (
+        _new(c, title="Top of the stage"),
+        _new(c, title="Second"),
+        _new(c, owner=HELPER, title="Third"),
+    )
+    for task_id, rank in ((top["id"], 1.0), (second["id"], 556.0), (third["id"], 564.0)):
+        c.execute("UPDATE tasks SET rank=? WHERE id=?", (rank, task_id))
+    for n in range(3):  # the new owner's queue already ends far below the stage's top
+        c.execute("UPDATE tasks SET rank=? WHERE id=?", (200224.0 - n, _new(c, owner=HELPER, title=f"Later {n}")["id"]))
+    X.settled(c)
+
+    def stage_order():
+        return [t["id"] for t in H.tasks(c, status="open") if t["stage_id"] == top["stage_id"]]
+
+    assert stage_order()[:3] == [top["id"], second["id"], third["id"]]
+    out = H.task_reassign(c, ANA, top["id"], HELPER, "Helper has the numbers.", _version(c, top["id"]))
+    assert (out["owner_id"], out["stage_id"], out["rank"]) == (HELPER, top["stage_id"], 1.0)
+    assert stage_order()[:3] == [top["id"], second["id"], third["id"]]
+    assert [t["id"] for t in H.tasks(c, owner=HELPER, status="open")][0] == top["id"]  # first in its new owner's queue
+
+    # A task with no rank yet still takes the end of the new owner's queue.
+    unranked = _new(c, title="Never ranked")
+    c.execute("UPDATE tasks SET rank=NULL WHERE id=?", (unranked["id"],))
+    out = H.task_reassign(c, ANA, unranked["id"], HELPER, "Helper has the numbers.", _version(c, unranked["id"]))
+    assert out["rank"] == 200225.0
+
+
 def _pr(c, task_id, number, repo="acme/app"):
     c.execute(
         "INSERT INTO task_links(id,task_id,kind,url,repo,number,created_at) VALUES(?,?,'pr',?,?,?,?)",

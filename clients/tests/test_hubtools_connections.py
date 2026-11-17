@@ -6,6 +6,7 @@ import json
 import pytest
 
 from clients import hubcli, hubtools, remotecli
+from clients.cli_spec import Command
 from clients.commands import connections as hubtools_connections
 from clients.tico import APIError
 
@@ -83,7 +84,9 @@ def cli(monkeypatch, api, *argv):
 
 def test_every_connection_tool_is_registered_with_a_command_and_offered_to_people_not_the_assistant():
     names = {t["name"] for t in hubtools_connections.MINE}
-    commands = {*hubtools_connections.COMMANDS, "health ready"}  # `tico health ready` is a spec (computers.HEALTH)
+    specs = (*hubtools_connections.GITHUB, *hubtools_connections.GITHUB_AFTER_CONNECT, *hubtools_connections.REPO)
+    # `tico health ready` is a spec too (computers.HEALTH); `github connect` is the one the parser still builds.
+    commands = {*hubtools_connections.COMMANDS, "health ready", *(c.fn for c in specs if isinstance(c, Command))}
     assert names == {remotecli.tool_name(fn) for fn in commands}
     for name in names:
         entry = hubtools.BY_NAME[name]

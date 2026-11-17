@@ -318,18 +318,19 @@ def test_the_top_of_the_ladder_is_the_first_person_above_the_manager_bot_on_the_
 
 def test_priming_bots_reads_their_run_back_off_once_for_all_of_them(c, general):
     # Perf I38: `prime_bots` read each bot's state, settings, computer and onboarding together, but `cannot_run` still
-    # read each bot's run_backoff row on its own (about 300 point reads a pass). One read for all now, misses included,
+    # read each bot's failed-runs hold on its own (about 300 point reads a pass). One read for all now, misses included,
     # and a bot held for failing runs still says so.
-    from backend import run_backoff, task_wakes
+    from backend import task_wakes
+    from backend.tests.helpers.run_failures import failing
 
     bots = [X.bot(c, f"worker-{k}") for k in range(8)]
-    c.execute("INSERT INTO run_backoff(bot, fails, held_at) VALUES('worker-3', 5, ?)", (X.H.now(),))
+    failing(c, "worker-3", 5, held_at=X.H.now())
     reads = []
-    c.set_trace_callback(lambda sql: reads.append(sql) if "FROM run_backoff" in sql else None)
+    c.set_trace_callback(lambda sql: reads.append(sql) if "FROM holds" in sql else None)
     try:
         task_wakes.prime_bots(c, bots)
         causes = [task_wakes.cannot_run(c, b) for b in bots]
     finally:
         c.set_trace_callback(None)
     assert causes == [task_wakes.RUNS_FAILING if b == "bot:worker-3" else None for b in bots]
-    assert len(reads) == 1, reads  # eight before: one a bot
+    assert len(reads) == 2, reads  # one for failed runs, one for run budgets: eight before, one a bot

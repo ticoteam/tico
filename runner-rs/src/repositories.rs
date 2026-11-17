@@ -2283,7 +2283,6 @@ pub async fn worktree_base(
     env: &Env,
 ) -> Result<(PathBuf, String), String> {
     let machine_git = crate::util::truthy(repo.get("machine_git"));
-    let source_env = env.clone();
     let name = repo.get("full_name").map(text_of).unwrap_or_default();
     if !valid_repository(&name) || (!machine_git && !valid_name(&name)) {
         return Err("Invalid repository name".into());
@@ -2474,14 +2473,9 @@ pub async fn worktree_base(
     }
     if !mirror_url.is_empty() {
         let mirror = uri_path(&mirror_url);
+        // Without a refresh the caller asked for (the runner has no turn socket to ask with, and a turn's request can
+        // fail), the mirror is used as the last fetch left it.
         if refreshed.is_none() {
-            repo.remove("fetch_warning");
-        }
-        // The runner itself has no turn socket to ask for a refresh: the mirror is used as the last fetch left it.
-        if source_env
-            .get(crate::gitcred::SOCKET_ENV)
-            .is_none_or(|s| s.is_empty())
-        {
             repo.insert("fetch_warning".into(), json!(mirror_warning(&mirror)));
         }
     }

@@ -10,14 +10,14 @@ class Loads:
     `runners` is {id: runners row}; `holds` is every open hold, by (kind, holdable_type, holdable_id, bot_id or ''),
     so a missing key is no hold."""
 
-    def __init__(self, record, plain, access, given, runners, limits, backoff, held, holds, company=None):
+    def __init__(self, record, plain, access, given, runners, limits, failing, held, holds, company=None):
         self.record = record  # providers.load(c, settings): the company's choice, the environment's seed included
         self.plain = plain  # providers.load(c): the same without the seed (for_claim reads it so); None if unread
         self.access = access  # cloud_access.access(c)
         self.given = given  # model_subscriptions._given(c): {(runner_id, runtime): subscription}
         self.runners = runners
         self.limits = limits  # {bot: own usage limits, as usage_limits.own returns them}
-        self.backoff = backoff  # {bot: run_backoff row as a dict, {} when none}
+        self.failing = failing  # {bot: its open `failing` hold, None when none} (run_failures.get reads it)
         self.held = held  # {bot: turns it holds on every computer}
         self.holds = holds  # {(kind, holdable_type, holdable_id, bot_id or ''): open holds row}
         self.company = company  # company_pause.record(c): the company's pause on record, None while it runs
@@ -46,13 +46,6 @@ class Loads:
 
         return usage_limits.own(c, bot)
 
-    def backoff_of(self, c, bot):
-        if bot in self.backoff:
-            return self.backoff[bot]
-        from . import run_backoff
-
-        return run_backoff.get(c, bot)
-
     def held_of(self, c, bot):
         if bot in self.held:
             return self.held[bot]
@@ -64,7 +57,7 @@ class Loads:
 def read(c, settings, runners, bots):
     """The Loads for `bots` (their ids) and `runners` ({id: runners row}), in fixed set queries: the company's values
     once, then each bot's rows in chunks of 500 bots (one statement while there are fewer)."""
-    from . import providers, cloud_access, usage_limits, run_backoff, start_places
+    from . import providers, cloud_access, usage_limits, start_places
     from . import model_subscriptions, company_pause
 
     bots = list(dict.fromkeys(bots))
@@ -72,6 +65,7 @@ def read(c, settings, runners, bots):
     given = model_subscriptions._given(c)
     plain = providers.load(c) if given else None
     access = cloud_access.access(c)
+    holds = open_holds(c)
     return Loads(
         record,
         plain,
@@ -79,9 +73,9 @@ def read(c, settings, runners, bots):
         given,
         dict(runners),
         usage_limits.own_many(c, bots),
-        run_backoff.get_many(c, bots),
+        {bot: holds.get(("failing", "bot", bot, bot)) for bot in bots},  # its open `failing` hold (run_failures)
         start_places.held_counts(c, bots),
-        open_holds(c),
+        holds,
         company_pause.record(c),
     )
 

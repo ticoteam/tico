@@ -13,18 +13,18 @@ def setup_sources(api, tmp_path):
     seed_org(api)
     registry = Path(tmp_path) / "registry"
     registry.mkdir()
-    (registry / "slack-channels.yaml").write_text("""channels:
-  - id: CCHANNEL1
-    name: release_notes
-    purpose: Product changes
-    post: false
-    readers: [doc-updater]
-  - id: CCHANNEL2
-    name: uncovered
-    purpose: Nobody reads this
-    post: false
-""")
     api.app.state.store.settings.registry_dir = registry
+    with api.app.state.store.transaction() as c:
+        now = H.now()
+        for cid, name, note, readers in (
+            ("CCHANNEL1", "release_notes", "Product changes", ["doc-updater"]),
+            ("CCHANNEL2", "uncovered", "Nobody reads this", []),
+        ):
+            c.execute(
+                "INSERT INTO slack_channels(key,channel_id,name,readers,post,note,created_at,updated_at) "
+                "VALUES(?,?,?,?,0,?,?,?)",
+                (cid, cid, name, encode(readers), note, now, now),
+            )
     put_mail(
         api,
         "ana@acme.example",

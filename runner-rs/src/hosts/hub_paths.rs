@@ -730,7 +730,6 @@ pub(super) const HUB_PATHS: &[&str] = &[
     "slack",
     "slack channel",
     "slack channel add",
-    "slack channel import",
     "slack channel list",
     "slack channel remove",
     "sleep",

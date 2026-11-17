@@ -20,6 +20,7 @@ from . import models as M
 from . import rooms
 from .assistant import Internal
 from .store import H, Problem
+from .api_contract import api_v2
 
 LIBRARIAN = "librarian"
 NAME = "Librarian"
@@ -168,26 +169,54 @@ def person(request):
 
 
 def install(app, store, auth, mutate, onboarding):
-    @app.get("/api/v2/librarian")
+    @app.get(
+        "/api/v2/librarian",
+        **api_v2(
+            "Docs", "getLibrarian", "Whether the Librarian is on, and whether the caller can turn it on", "Librarian"
+        ),
+    )
     def librarian(request: Request):
         who = person(request)
         with store.read() as c:
             return availability(c, who)
 
-    @app.post("/api/v2/librarian/turn-on")
+    @app.post(
+        "/api/v2/librarian/turn-on",
+        **api_v2(
+            "Docs",
+            "turnOnLibrarian",
+            "Owner only: add the Librarian from the catalog (or wake a planned one) and activate it",
+        ),
+    )
     def turn_on(request: Request, body: M.Empty):
         who = person(request)
         if who.role != "owner":
             raise Problem("forbidden", "Only the owner turns the " + NAME + " on", 403)
         return mutate(request, body, lambda c: onboarding.turn_on_librarian(c, who))
 
-    @app.post("/api/v2/librarian/research")
+    @app.post(
+        "/api/v2/librarian/research",
+        **api_v2(
+            "Docs",
+            "requestLibrarianResearch",
+            "Ask the Librarian to research the web and add what it finds, cited, to one doc, market page or market entity (`target`), optionally one `section` of it; it files one task to the Librarian",
+            "LibrarianResearchFiled",
+        ),
+    )
     def research_request(request: Request, body: M.LibrarianResearch):
         who = person(request)
         auth.domain(who)
         return mutate(request, body, lambda c: research(c, auth, who, body))
 
-    @app.get("/api/v2/librarian/conversations")
+    @app.get(
+        "/api/v2/librarian/conversations",
+        **api_v2(
+            "Docs",
+            "listDocsConversations",
+            "The caller's private Docs conversations, including archived ones; limit and offset page back",
+            "DocsConversations",
+        ),
+    )
     def conversations(request: Request, limit: int = 20, offset: int = 0):
         who = person(request)
         auth.domain(who)
@@ -206,7 +235,15 @@ def install(app, store, auth, mutate, onboarding):
                 "next_offset": offset + limit if len(rows) > limit else None,
             }
 
-    @app.post("/api/v2/librarian/conversations/{cid}/reopen")
+    @app.post(
+        "/api/v2/librarian/conversations/{cid}/reopen",
+        **api_v2(
+            "Docs",
+            "reopenDocsConversation",
+            "Make the caller's own Docs conversation current, archiving their current one; 409 busy while it is answering",
+            "DocsReopened",
+        ),
+    )
     def reopen(request: Request, cid: str, body: M.Empty):
         who = person(request)
 
@@ -260,7 +297,15 @@ def install(app, store, auth, mutate, onboarding):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/docs/ask")
+    @app.post(
+        "/api/v2/docs/ask",
+        **api_v2(
+            "Docs",
+            "askDocs",
+            "Ask the Librarian a question about the team's docs. It goes to the caller's own private docs conversation; `results` is the instant search (same shape as docs/search) and the answer streams on GET /api/v2/events?topics=messages,runs&conversation={cid}",
+            "DocsAsked",
+        ),
+    )
     async def ask(request: Request, body: M.DocsAsk):
         who = person(request)
         results = await _search(request, body.question)

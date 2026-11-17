@@ -321,6 +321,15 @@
   "calls": [],
   "idle": []
  },
+ "task-docs": {
+  "files": [
+   "app/task-docs.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [],
+  "idle": []
+ },
  "decide": {
   "files": [
    "app/decide.ts",
@@ -328,7 +337,8 @@
    "app/decide-content.ts"
   ],
   "deps": [
-   "browser-view"
+   "browser-view",
+   "task-docs"
   ],
   "pages": [],
   "calls": [
@@ -372,6 +382,7 @@
   ],
   "deps": [
    "task-files",
+   "task-docs",
    "decide",
    "tags",
    "stage-rules"

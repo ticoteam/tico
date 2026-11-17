@@ -60,8 +60,8 @@ const BODY = ['Two drafts for review.', '',
     await page.goto('https://tico-ui.test/#/bot/finance/dm');
     await page.getByRole('link',{name:'the drafts'}).click();
     const desc=page.locator('#task-modal[open] .tdesc.md').first();
-    // The task's request is on its Description tab.
-    const info=page.locator('#task-modal[open] [data-task-tab="desc"]');
+    // The task's request heads its Details.
+    const info=page.locator('#task-modal[open] [data-task-tab="details"]');
     await info.waitFor();
     await info.click();
     await desc.waitFor();

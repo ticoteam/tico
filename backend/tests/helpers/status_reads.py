@@ -2,7 +2,7 @@
 
 from backend.store import H
 from backend.tests.helpers.api import claim, post, ready
-from backend.tests.helpers.run_backoff import setup
+from backend.tests.helpers.run_failures import setup
 from backend import bot_settings as BS
 
 

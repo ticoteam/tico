@@ -53,6 +53,11 @@ def test_login_hold_reads_search_the_open_holds_indexes_even_with_stale_stats(tm
     reads = sorted({s for s in seen if s.startswith(("SELECT", "UPDATE holds")) and " holds " in s})
     assert len(reads) >= 6 and any(s.startswith("UPDATE holds") for s in reads), reads
     for sql in reads:
-        plan = " | ".join(r[3] for r in c.execute("EXPLAIN QUERY PLAN " + sql, ("x",) * sql.count("?")))
-        assert "holds_open" in plan or "holds_bot" in plan, (sql, plan)
-        assert "SCAN holds" not in plan or "USING INDEX holds_bot" in plan, (sql, plan)
+        plan = [r[3] for r in c.execute("EXPLAIN QUERY PLAN " + sql, ("x",) * sql.count("?"))]
+        # Each step on holds walks a partial index of the open holds (a SEARCH, or a SCAN of those few rows on an
+        # older SQLite), never the table and its history.
+        on_holds = [step for step in plan if step.startswith(("SCAN holds", "SEARCH holds"))]
+        assert on_holds and all("INDEX holds_open" in step or "INDEX holds_bot" in step for step in on_holds), (
+            sql,
+            plan,
+        )

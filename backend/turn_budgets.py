@@ -23,6 +23,7 @@ from .batch_work import shared_check
 from .models import Contract
 from .store import H, Problem
 from . import bot_settings as BS, holds
+from .api_contract import api_v2
 
 MAX = 100_000
 KEYS = ("turns_per_hour", "turns_per_day")
@@ -246,10 +247,10 @@ def release(c, actor, bot, how=None):
 # ---------------------------------------------------------------------------------------------------- the settings
 def view(c, bot, config):
     """The bot's budget as the API and the tools show it: in force, its own, the team's, the runs so far and the holds."""
-    from . import run_backoff
+    from . import run_failures
 
     declared = _declared(config["config"])
-    state, failing = get(c, bot), run_backoff.get(c, bot)
+    state, failing = get(c, bot), run_failures.get(c, bot)
     now = H.now()
     return {
         "bot": bot,
@@ -270,13 +271,13 @@ def view(c, bot, config):
         ),
         "run_hold": (
             {
-                "fails": failing["fails"],
-                "error_class": failing["error_class"],
-                "since": failing["held_at"],
-                "next_try": run_backoff.probe_at(failing),
-                "words": run_backoff.words(c, bot),
+                "fails": failing["streak"],
+                "error_class": failing["details"].get("error_class"),
+                "since": failing["details"].get("held_at"),
+                "next_try": failing["probe_at"],
+                "words": run_failures.words(c, bot),
             }
-            if failing.get("held_at")
+            if run_failures.is_held(failing)
             else None
         ),
         "revision": config["revision"],
@@ -359,7 +360,15 @@ def install(app, store, auth, mutate, settings_admin):
             raise Problem("not_found", "Bot not found", 404)
         auth.require_see(c, who, bot)
 
-    @app.get("/api/v2/bots/{bot}/budget")
+    @app.get(
+        "/api/v2/bots/{bot}/budget",
+        **api_v2(
+            "Bots",
+            "getBotBudget",
+            "A bot's run budget (runs per hour and per day), the team default, its runs so far and any hold; for the people who manage it",
+            "BotBudgetState",
+        ),
+    )
     def bot_budget(request: Request, bot: str):
         """A bot's run budget: in force, its own and the team's, its runs so far and any hold. For the people who
         manage it."""
@@ -370,7 +379,15 @@ def install(app, store, auth, mutate, settings_admin):
             settings_admin._manager(c, who, bot, botops=True)
             return view(c, bot, settings_admin._config(c, bot))
 
-    @app.post("/api/v2/bots/{bot}/budget")
+    @app.post(
+        "/api/v2/bots/{bot}/budget",
+        **api_v2(
+            "Bots",
+            "setBotBudget",
+            "Set the bot's own runs per hour and per day: null follows the team, 0 is no limit; raising it above the runs that held the bot releases it",
+            "BotBudgetState",
+        ),
+    )
     def bot_budget_set(request: Request, bot: str, body: BotBudget):
         """Set the bot's own runs per hour and per day; null follows the team, 0 is no limit. Raising it above the
         runs that held the bot releases it."""
@@ -384,7 +401,15 @@ def install(app, store, auth, mutate, settings_admin):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/bots/{bot}/release")
+    @app.post(
+        "/api/v2/bots/{bot}/release",
+        **api_v2(
+            "Bots",
+            "releaseBot",
+            "Release a bot Tico stopped for failed runs or too many runs, or for queued runs it could not start; its queued work starts again",
+            "BotReleased",
+        ),
+    )
     def bot_release(request: Request, bot: str, body: ReleaseBot):
         """Release a bot Tico stopped, for failed runs or for too many runs. Its queued work starts again."""
         who = request.state.identity
@@ -405,14 +430,30 @@ def install(app, store, auth, mutate, settings_admin):
         if not auth.bot_admin(who):
             raise Problem("forbidden", "Only an owner or an admin " + what, 403)
 
-    @app.get("/api/v2/settings/turn-budgets")
+    @app.get(
+        "/api/v2/settings/turn-budgets",
+        **api_v2(
+            "Bots",
+            "getTeamBudgets",
+            "The team default runs per hour and per day for bots with no budget of their own (owner and admins)",
+            "TeamBudgetState",
+        ),
+    )
     def team_budgets(request: Request):
         """The team defaults for each bot's runs per hour and per day."""
         admin_only(request.state.identity, "sees the team's run budgets")
         with store.read() as c:
             return {**team(c), "defaults": DEFAULTS}
 
-    @app.post("/api/v2/settings/turn-budgets")
+    @app.post(
+        "/api/v2/settings/turn-budgets",
+        **api_v2(
+            "Bots",
+            "setTeamBudgets",
+            "Set the team default runs per hour and per day; 0 is no limit (owner and admins)",
+            "TeamBudgetState",
+        ),
+    )
     def team_budgets_set(request: Request, body: TeamBudgets):
         """Set the team defaults; bots with no budget of their own follow them. 0 is no limit."""
         if not body.model_fields_set & set(KEYS):

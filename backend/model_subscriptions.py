@@ -77,6 +77,7 @@ from . import bot_settings as BS
 from . import hubdb as H
 from .models import Contract, ID
 from .store import Problem, readiness_document
+from .api_contract import api_v2
 
 STATUSES = ("new", "working", "needs_reconnect")
 MAX_SUBSCRIPTIONS = 200
@@ -2014,7 +2015,15 @@ def install(app, store, auth, mutate, settings):
 
     vault = app.state.vault
 
-    @app.get("/api/v2/model-subscriptions")
+    @app.get(
+        "/api/v2/model-subscriptions",
+        **api_v2(
+            "Model subscriptions",
+            "listModelSubscriptions",
+            "Saved subscriptions and the kinds that can be added",
+            "ModelSubscriptionList",
+        ),
+    )
     def list_subscriptions(request: Request):
         who = request.state.identity
         auth.domain(who)
@@ -2022,7 +2031,15 @@ def install(app, store, auth, mutate, settings):
         with store.read() as c:
             return {"subscriptions": listed(c), "kinds": kinds(), "connect": connect_ready(c)}
 
-    @app.post("/api/v2/model-subscriptions")
+    @app.post(
+        "/api/v2/model-subscriptions",
+        **api_v2(
+            "Model subscriptions",
+            "addModelSubscription",
+            "Add a subscription: a kind, a name, the pasted value and, for a plan, optionally its owner, a person (default: you; an API key has none; owners and admins)",
+            "ModelSubscription",
+        ),
+    )
     def add(request: Request, body: SubscriptionWrite):
         who = request.state.identity
         _admin(auth, who, secret=True)
@@ -2042,7 +2059,15 @@ def install(app, store, auth, mutate, settings):
         _admin(auth, who, secret=True)
         return mutate(request, body, lambda c: connect(c, settings, who, body))
 
-    @app.post("/api/v2/model-subscriptions/{sid}")
+    @app.post(
+        "/api/v2/model-subscriptions/{sid}",
+        **api_v2(
+            "Model subscriptions",
+            "changeModelSubscription",
+            "Rename a subscription, change a plan owner and/or reconnect it with a new value (owners and admins); a reconnect answers 409 `confirm_restart` while runs would stop unless `confirm` is true",
+            "ModelSubscription",
+        ),
+    )
     def change(request: Request, sid: str, body: SubscriptionWrite):
         who = request.state.identity
         _admin(auth, who, secret=body.secret is not None)
@@ -2055,7 +2080,15 @@ def install(app, store, auth, mutate, settings):
             lambda c: save(c, vault, settings, who, body, sid),
         )
 
-    @app.delete("/api/v2/model-subscriptions/{sid}")
+    @app.delete(
+        "/api/v2/model-subscriptions/{sid}",
+        **api_v2(
+            "Model subscriptions",
+            "removeModelSubscription",
+            "Remove a subscription and take it off every computer; 409 `confirm_restart` while runs would stop unless `confirm=1`",
+            "ModelSubscriptionDeleted",
+        ),
+    )
     def delete(request: Request, sid: str, confirm: bool = False):
         who = request.state.identity
 
@@ -2080,7 +2113,15 @@ def install(app, store, auth, mutate, settings):
 
         return mutate(request, Empty(), work)
 
-    @app.get("/api/v2/computer-subscriptions")
+    @app.get(
+        "/api/v2/computer-subscriptions",
+        **api_v2(
+            "Model subscriptions",
+            "listComputerSubscriptions",
+            "Which subscription each computer uses per runtime (for a person's plans: the plan in use and why), the people who own plans per runtime, and the computers that can take one",
+            "ComputerSubscriptionList",
+        ),
+    )
     def computer_subscriptions(request: Request):
         who = request.state.identity
         auth.domain(who)
@@ -2088,7 +2129,15 @@ def install(app, store, auth, mutate, settings):
         with store.read() as c:
             return assignments(c)
 
-    @app.put("/api/v2/computer-subscriptions")
+    @app.put(
+        "/api/v2/computer-subscriptions",
+        **api_v2(
+            "Model subscriptions",
+            "setComputerSubscription",
+            "Give a computer a subscription for one runtime, or a person's plans for it (`person`: used in turn, the soonest weekly reset with usage left first), switch it, or clear it (null); 409 `confirm_restart` while live runs would stop unless `confirm` is true",
+            "ComputerSubscriptionResult",
+        ),
+    )
     def set_computer_subscription(request: Request, body: ComputerSubscription):
         who = request.state.identity
 

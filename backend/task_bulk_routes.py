@@ -8,6 +8,7 @@ import json
 from . import task_privacy as privacy
 from .store import refused
 from . import org_rule_check, task_rule_gate
+from .api_contract import api_v2
 
 
 def register(app, auth, mover, mutate, store, task_filters, task_idents, task_view):
@@ -102,7 +103,15 @@ def register(app, auth, mover, mutate, store, task_filters, task_idents, task_vi
             H.task_update(c, who.actor, row["id"], labels=changed, mover=moves)
         return True
 
-    @app.post("/api/v2/task-bulk")
+    @app.post(
+        "/api/v2/task-bulk",
+        **api_v2(
+            "Tasks",
+            "bulkChangeTasks",
+            "One change to every task a filter selects (filter takes the listTasks filters, ids, and exclude_owner: everything not that owner's); action is move (to), owner, tags (add, remove) or close, with a why. People only. Each task changes by the call a single change makes: a task the caller may not change is skipped with its reason, the rest still change. At most 200 tasks: a filter matching more is refused (422 too_many). dry_run makes every change and undoes it, so its counts are the real ones",
+            "TaskBulkResult",
+        ),
+    )
     def task_bulk(request: Request, body: M.TaskBulk):
         """One change to every task a filter selects (the filters of `GET /api/v2/tasks`), each made by the task call
         a single change would make: a task the caller may not change is skipped with the reason, the rest still

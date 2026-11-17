@@ -28,6 +28,7 @@ from . import pipeline_settings as _pipeline_settings
 from . import stage_rules as _stage_rules
 from .models import Contract
 from .store import Problem
+from .api_contract import api_v2
 
 # Modules not yet strict: read through Any, as backend/stage_rules.py does.
 H: Any = _hubdb
@@ -298,7 +299,14 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
         with store.read() as c:
             return view(c, who.actor, _row(c, rule_id))
 
-    @app.get("/api/v2/rule-groups")
+    @app.get(
+        "/api/v2/rule-groups",
+        **api_v2(
+            "Rules",
+            "getRuleGroups",
+            "The Rules page's groups with a count each (Company, Outside, Pipelines and stages, Due, Wakes, Automations on tasks, Built in, Suggested), and the Wakes, Automations on tasks and Built in rows",
+        ),
+    )
     def rule_groups(request: Request) -> Row:  # pyright: ignore[reportUnusedFunction]
         """The Rules page's groups with a count each: Company, Outside, Pipelines and stages, Due, Wakes, Automations
         on tasks, Built in and Suggested; and the Wakes, Automations on tasks and Built in rows."""
@@ -307,7 +315,14 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
         with store.read() as c:
             return groups(c, auth, who)
 
-    @app.get("/api/v2/stage-rules")
+    @app.get(
+        "/api/v2/stage-rules",
+        **api_v2(
+            "Rules",
+            "listStageRules",
+            "Stage rules; with pipeline (and stage) the ones that apply there, most specific first, and the built-in behaviours (read-only). status active, suggested, retired or any; mine: the caller's own",
+        ),
+    )
     def stage_rules_list(
         request: Request,
         pipeline: str | None = None,
@@ -323,7 +338,7 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
         with store.read() as c:
             return listing(c, who.actor, pipeline, stage, status, mine)
 
-    @app.get("/api/v2/stage-rules/{rule_id}")
+    @app.get("/api/v2/stage-rules/{rule_id}", **api_v2("Rules", "getStageRule", "One stage rule, with its cost"))
     def stage_rules_show(request: Request, rule_id: str) -> Row:  # pyright: ignore[reportUnusedFunction]
         """One stage rule: On, When, If, Then, what it costs, and whether the caller may change it."""
         who: Any = request.state.identity
@@ -331,7 +346,14 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
         with store.read() as c:
             return view(c, who.actor, _row(c, rule_id))
 
-    @app.post("/api/v2/stage-rules")
+    @app.post(
+        "/api/v2/stage-rules",
+        **api_v2(
+            "Rules",
+            "addStageRule",
+            "Add a stage rule (On, When, If, Then); a bot's is a suggestion a person accepts or skips",
+        ),
+    )
     def stage_rules_add(request: Request, body: StageRuleFields) -> Row:  # pyright: ignore[reportUnusedFunction]
         """Add a stage rule. A person who may change the pipeline adds it in force; a bot's is a suggestion that a
         person accepts or skips."""
@@ -351,7 +373,12 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
         made: Row = mutate(request, body, work)
         return fresh(who, made["id"])
 
-    @app.post("/api/v2/stage-rules/{rule_id}")
+    @app.post(
+        "/api/v2/stage-rules/{rule_id}",
+        **api_v2(
+            "Rules", "editStageRule", "Change a stage rule against the revision read; a bot's change is a suggestion"
+        ),
+    )
     def stage_rules_edit(request: Request, rule_id: str, body: StageRuleEdit) -> Row:  # pyright: ignore[reportUnusedFunction]
         """Change a stage rule: only the fields sent, against the `revision` read. A bot's change is a suggestion that
         replaces the rule once a person accepts it."""
@@ -415,18 +442,26 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
         done: Row = mutate(request, body, work)
         return fresh(who, done["id"])
 
-    @app.post("/api/v2/stage-rules/{rule_id}/retire")
+    @app.post(
+        "/api/v2/stage-rules/{rule_id}/retire", **api_v2("Rules", "retireStageRule", "Retire a stage rule in force")
+    )
     def stage_rules_retire(request: Request, rule_id: str, body: StageRuleDecide) -> Row:  # pyright: ignore[reportUnusedFunction]
         """Retire a stage rule in force: it stops applying, and stays readable with status=retired. A bot's retire is
         a suggestion to retire it, which a person accepts or skips."""
         return decide(request, rule_id, body, "retire")
 
-    @app.post("/api/v2/stage-rules/{rule_id}/accept")
+    @app.post(
+        "/api/v2/stage-rules/{rule_id}/accept",
+        **api_v2("Rules", "acceptStageRule", "A person accepts a bot's suggested stage rule or change"),
+    )
     def stage_rules_accept(request: Request, rule_id: str, body: StageRuleDecide) -> Row:  # pyright: ignore[reportUnusedFunction]
         """A person accepts a bot's suggestion: a new rule comes into force, a change replaces the rule it names."""
         return decide(request, rule_id, body, "accept")
 
-    @app.post("/api/v2/stage-rules/{rule_id}/skip")
+    @app.post(
+        "/api/v2/stage-rules/{rule_id}/skip",
+        **api_v2("Rules", "skipStageRule", "A person skips a suggested stage rule"),
+    )
     def stage_rules_skip(request: Request, rule_id: str, body: StageRuleDecide) -> Row:  # pyright: ignore[reportUnusedFunction]
         """A person skips a bot's suggestion: it is set aside and nothing changes."""
         return decide(request, rule_id, body, "skip")

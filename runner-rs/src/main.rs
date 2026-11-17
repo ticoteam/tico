@@ -181,6 +181,33 @@ enum Command {
         /// git's verb: only `get` answers.
         action: Option<String>,
     },
+    /// A task worktree inside a turn (`tico task worktree`; prints JSON, reads the turn's environment).
+    Worktree {
+        #[command(subcommand)]
+        action: WorktreeAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum WorktreeAction {
+    /// Make (or resume, or verify) the task's worktree of a repository and run its setup.
+    Add {
+        repo: String,
+        #[arg(long)]
+        task: Option<String>,
+    },
+    /// Register a Git worktree already inside the team workspace.
+    Attach {
+        path: String,
+        #[arg(long)]
+        task: Option<String>,
+    },
+    /// Run (or retry) the setup of the task's worktree of a repository.
+    Setup {
+        repo: String,
+        #[arg(long)]
+        task: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -384,6 +411,14 @@ fn main() {
             std::process::exit(0);
         }
         std::process::exit(gitcred::git_credential_main(socket.clone()));
+    }
+    if let Command::Worktree { action } = &cli.command {
+        let (operation, value, task) = match action {
+            WorktreeAction::Add { repo, task } => ("add", repo, task),
+            WorktreeAction::Attach { path, task } => ("attach", path, task),
+            WorktreeAction::Setup { repo, task } => ("setup", repo, task),
+        };
+        std::process::exit(worktrees::cli::main(operation, value, task.as_deref()));
     }
     util::start_clock();
     if let Command::Flight {

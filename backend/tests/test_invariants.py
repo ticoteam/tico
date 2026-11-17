@@ -12,6 +12,7 @@ from backend import invariants as I
 from backend.scheduler import Scheduler
 from backend.store import H
 from backend.tests.helpers.api import get, post, setup_attempt  # noqa: F401
+from backend.tests.helpers.run_failures import failing
 
 NOW = datetime.now(timezone.utc)
 EPOCH = int(NOW.timestamp())
@@ -115,14 +116,9 @@ def test_the_same_rule_refusing_one_bot_more_than_twenty_times_in_a_day_fires(ap
 def test_a_bot_held_for_a_provider_sign_in_failure_fires_and_other_holds_do_not(api):
     store = api.app.state.store
     with store.transaction() as c:
-        c.execute(
-            "INSERT INTO run_backoff(bot,fails,held_at,error_class,error) VALUES('ops',5,?,'sign_in','401')",
-            (ago(minutes=3),),
-        )
-        c.execute(
-            "INSERT INTO run_backoff(bot,fails,held_at,error_class,error) VALUES('cpo',5,?,'other','boom')",
-            (ago(minutes=3),),
-        )
+        failing(c, "ops", 5, held_at=ago(minutes=3), error_class="sign_in", error="401")
+        failing(c, "cpo", 5, held_at=ago(minutes=3), error_class="other", error="boom")
+        failing(c, "finance", 2, until_at=ago(minutes=-3), error_class="sign_in", error="401")  # waits, not held
     assert sweep(api)["sign_in_held"] == 1
 
 

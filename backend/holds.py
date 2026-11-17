@@ -10,14 +10,14 @@ kind at a time, written by `put` and ended by `release`:
 | `quarantined`     | bot     | `bots.state='quarantined'`                             | the cooldown, or a person          |
 | `company_paused`  | company | company_pause.KEY                                      | the owner or an admin resumes      |
 | `cloud_locked`    | company | Tico Cloud access (cloud_access)                       | Tico HQ unlocks the company        |
-| `run_hold`        | bot     | `run_backoff.held_at` (failed runs)                    | a try completes, or a release      |
+| `run_hold`        | bot     | `holds`, kind `failing`, held: no until_at             | a try completes, or a release      |
 | `budget`          | bot     | `holds`, kind `runaway` (runaway runs)                 | a release, or a raised budget      |
 | `cooling_off`     | login   | `holds`, kind `usage_limit` (login_holds)              | the reset, then one probe; Try now |
 | `cant_start`      | task    | `task.cant_start` events with BotOps's open task       | BotOps closes its task             |
 | `task_quarantine` | task    | `quarantine_holds`                                     | the cooldown, or a person          |
 | `claim_held`      | job     | `jobs.hold_reason` (claim_holds)                       | its wait, a start, or a release    |
 | `handed_back`     | job     | the run's expired attempts (execution)                 | its wait                           |
-| `backoff`         | bot     | `run_backoff.wait_until`                               | its wait (seconds)                 |
+| `backoff`         | bot     | `holds`, kind `failing`: its until_at                  | its wait (seconds)                 |
 
 `why` walks them in this order and answers the first that holds the work it is asked about, by the kind's name: the
 claim's refusal reason, Health's reason key and the task card's cause all use the same names. A caller names the kinds
@@ -27,7 +27,7 @@ task card adds what holds the bot on that task (ON_TASK); a run's "Saved - waiti
 
 A person's message passes a budget hold (it only stops work nobody asked for), and one a person typed since the last
 failure passes a back-off wait (it goes with the next try), as before: a queued run's own message is judged by the
-claim's rules (turn_budgets.refusal, run_backoff.job_refusal); `human` speaks only for new work, sent now. No other hold
+claim's rules (turn_budgets.refusal, run_failures.typed_since); `human` speaks only for new work, sent now. No other hold
 lets it through. `words` is the sentence the pages show for a kind.
 """
 
@@ -87,6 +87,7 @@ STATE_SQL = "SELECT state FROM bots WHERE id=?"
 # ---------------------------------------------------------------------------------------------- the holds table
 # A kind the `holds` table stores (its CHECK allows every kind; each moves into it in its own change).
 RUNAWAY = "runaway"  # a bot over its run budget (turn_budgets): BUDGET to the pages and the claim
+FAILING = "failing"  # a bot whose runs fail at once (run_failures): BACKOFF while it waits, RUN_HOLD once held
 LOGIN_LIMIT = "usage_limit"  # a login over its provider's usage limit (login_holds): USAGE_LIMIT to the pages
 # Pinned to the partial indexes of open holds: released holds stay as history, and stats taken while the table was small
 # plan a scan of all of it (test_holds_usage_limit_plan).
@@ -94,6 +95,50 @@ OPEN_SQL = (
     "SELECT * FROM holds INDEXED BY holds_open WHERE kind=? AND holdable_type=? AND holdable_id=? "
     "AND coalesce(bot_id,'')=? AND released_at IS NULL"
 )
+
+
+@dataclass(frozen=True)
+class Backoff:
+    """How a kind waits after failures in a row: `first` seconds after the first, doubling for each more up to `cap`.
+    After `held_after` in a row it is held, and one try (its probe) is let through `probe_first` later, the gap
+    doubling for each try that fails, up to `cap`."""
+
+    first: int
+    cap: int
+    held_after: int
+    probe_first: int
+
+
+KINDS: dict[str, Backoff] = {FAILING: Backoff(first=15, cap=8 * 3600, held_after=5, probe_first=30 * 60)}
+LIVE_RUN_SQL = "SELECT 1 FROM attempts WHERE bot_id=? AND state IN ('leased','running') LIMIT 1"
+
+
+def wait(kind: str, streak: int) -> int:
+    """The one backoff: seconds a hold of `kind` waits after `streak` failures in a row. Before it is held, the wait
+    before the next run; once held, the gap before its next try."""
+    k = KINDS[kind]
+    if streak < k.held_after:
+        return min(k.first * 2 ** max(streak - 1, 0), k.cap)
+    return min(k.probe_first * 2 ** (streak - k.held_after), k.cap)
+
+
+def probe_due(c: Any, hold: Mapping[str, Any], now: str | None = None) -> bool:
+    """Whether a held hold's one try may start now: its probe_at has come, and no run of its bot is out."""
+    at = str(hold.get("probe_at") or "")
+    return bool(at) and at <= (now or str(H.now())) and not c.execute(LIVE_RUN_SQL, (hold["bot_id"],)).fetchone()
+
+
+def take_probe(c: Any, hold: Mapping[str, Any], job: str) -> bool:
+    """The one probe: called by the claim, in its write transaction, with the job it is about to hand out while `hold`
+    holds it. True when the try is due and `job` takes it: the next one is pushed out at once, as if this one failed,
+    so a second claim in the same window, another lane or computer, and a try whose runner vanished all wait the
+    longer gap."""
+    if not probe_due(c, hold):
+        return False
+    now = str(H.now())
+    after = H.shift(now, seconds=wait(str(hold["kind"]), int(hold["streak"]) + 1))
+    c.execute("UPDATE holds SET probe_at=?,probe_job_id=?,updated_at=? WHERE id=?", (after, job, now, hold["id"]))
+    return True
 
 
 def _held_bot(holdable_type: str, holdable_id: str, bot_id: str | None) -> str | None:
@@ -143,8 +188,8 @@ def put(
     details: Mapping[str, Any] | None = None,
     streak: int = 0,
     until_at: str | None = None,
-    upkeep_task_id: str | None = None,
     probe_at: str | None = None,
+    upkeep_task_id: str | None = None,
     probe_job_id: str | None = None,
 ) -> dict[str, Any]:
     """The one writer: open a hold of `kind` on the holdable, or update the one open already (holds_open). Answers
@@ -152,11 +197,11 @@ def put(
     `probe_at`."""
     now = str(H.now())
     found = c.execute(
-        "INSERT INTO holds(id,kind,holdable_type,holdable_id,bot_id,reason,details,streak,until_at,upkeep_task_id,"
-        "probe_at,probe_job_id,created_by_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+        "INSERT INTO holds(id,kind,holdable_type,holdable_id,bot_id,reason,details,streak,until_at,probe_at,"
+        "upkeep_task_id,probe_job_id,created_by_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
         "ON CONFLICT(kind,holdable_type,holdable_id,coalesce(bot_id,'')) WHERE released_at IS NULL DO UPDATE SET "
         "reason=excluded.reason,details=excluded.details,streak=excluded.streak,until_at=excluded.until_at,"
-        "upkeep_task_id=excluded.upkeep_task_id,probe_at=excluded.probe_at,probe_job_id=excluded.probe_job_id,"
+        "probe_at=excluded.probe_at,upkeep_task_id=excluded.upkeep_task_id,probe_job_id=excluded.probe_job_id,"
         "updated_at=excluded.updated_at RETURNING *",
         (
             H.new_id(),
@@ -168,8 +213,8 @@ def put(
             json.dumps(dict(details or {})),
             streak,
             until_at,
-            upkeep_task_id,
             probe_at,
+            upkeep_task_id,
             probe_job_id,
             actor,
             now,
@@ -304,20 +349,17 @@ class _Ask:
         return self._state
 
     def backoff(self) -> str | None:
-        """The bot's failed runs, read once: "run_hold" while it is held, "backoff" while it waits, else None. The
-        claim asks run_backoff.refusal, which lets a held bot's one try through when it is due; to every page the bot
-        stays held until that try completes."""
+        """The bot's failed runs (its `failing` hold), read once: "run_hold" while it is held, "backoff" while it waits,
+        else None. The claim lets a held bot's one try through when it is due (probe_due); to every page the bot stays
+        held until that try completes."""
         if not self._backoff_read:
-            from . import run_backoff
+            from . import run_failures
 
-            RB: Any = run_backoff
-            row: Any = self.loads.backoff_of(self.c, self.bot) if self.loads is not None else RB.get(self.c, self.bot)
-            if self.claim:
-                self._backoff = RB.refusal(self.c, self.bot, row)
-            elif row.get("held_at"):
-                self._backoff = RUN_HOLD
-            else:
-                self._backoff = BACKOFF if (row.get("wait_until") or "") > H.now() else None
+            hold: dict[str, Any] = cast(Any, run_failures).get(self.c, self.bot, self.loads)
+            if hold and hold["until_at"] is None:
+                self._backoff = None if self.claim and probe_due(self.c, hold) else RUN_HOLD
+            elif hold and str(hold["until_at"]) > str(H.now()):
+                self._backoff = BACKOFF
             self._backoff_read = True
         return self._backoff
 
@@ -417,15 +459,15 @@ def _handed_back(a: _Ask) -> bool:
 def _backoff(a: _Ask) -> bool:
     if a.backoff() != BACKOFF:
         return False
-    from . import run_backoff
+    from . import run_failures
 
-    RB: Any = run_backoff
+    RF: Any = run_failures
     if a.claim and a.message is None and a.job is None:
-        return not RB.person_waiting(a.c, a.bot)  # the whole queue: a person's message waiting goes with the next try
+        return not RF.person_waiting(a.c, a.bot)  # the whole queue: a person's message waiting goes with the next try
     message = a.work()
     if message is not None:
         # The claim's own rule for one job: only a message a person typed since the failure goes with the next try.
-        return RB.job_refusal(a.c, a.bot, message) == BACKOFF
+        return not RF.typed_since(a.c, a.bot, message)
     # New work, sent now: after any failure, so a person's own message goes with the next try.
     return not a.human
 
@@ -476,9 +518,9 @@ def why(
 def words(c: Any, bot: str, kind: str, job: Row | None = None) -> str:
     """The sentence the pages show for `kind` holding `bot` (and `job`, for a run's own hold)."""
     if kind in (RUN_HOLD, BACKOFF):
-        from . import run_backoff
+        from . import run_failures
 
-        return str(cast(Any, run_backoff).words(c, bot))
+        return str(cast(Any, run_failures).words(c, bot))
     if kind == BUDGET:
         from . import turn_budgets
 

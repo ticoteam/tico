@@ -17,6 +17,7 @@ from backend.tests.helpers.api import assign, claim, get, headers, post, put, ru
 from backend.tests.helpers.credentials import FakeKMS  # noqa: F401
 from backend.tests.helpers.decide_gateway import answer_all  # noqa: F401
 from backend.tests.helpers.judge import QUESTIONS  # noqa: F401
+from backend.tests.helpers.run_failures import wait_over
 from clients import gateway as G
 from backend import bot_settings as BS
 
@@ -1094,7 +1095,7 @@ def test_a_refusal_for_want_of_isolation_is_shown_only_to_who_may_read_its_run(a
     post(api, "tasks", {"owner": "ops", "title": "Ana only", "body": "Private work.", "private": True})
     ready(api, machine, ["ops"])
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE run_backoff SET wait_until=NULL")  # the fast failure's wait is over
+        wait_over(c)  # the fast failure's wait is over
     refused = claim(api, machine, "ops")
     assert refused and refused["id"] != ordinary["id"]
     error = (

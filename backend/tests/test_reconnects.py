@@ -106,7 +106,7 @@ def drain(api):
             H.task_close(c, H.KEEPER, row["id"], "Done with this step")
         c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")  # a failed run's retry is still queued
         c.execute("UPDATE attempts SET state='completed' WHERE state NOT IN ('completed','failed','canceled')")
-        c.execute("DELETE FROM run_backoff WHERE bot='ops'")
+        c.execute("DELETE FROM holds WHERE kind='failing' AND holdable_id='ops'")
 
 
 def refused(api, machine, attempt, profile=None):
@@ -125,9 +125,9 @@ def refused(api, machine, attempt, profile=None):
 
 
 def next_turn(api, machine):
-    """The bot's next claim, past the short retry wait its failed run started (backend/run_backoff.py)."""
+    """The bot's next claim, past the short retry wait its failed run started (backend/run_failures.py)."""
     with api.app.state.store.transaction() as c:
-        c.execute("DELETE FROM run_backoff WHERE bot='ops'")
+        c.execute("DELETE FROM holds WHERE kind='failing' AND holdable_id='ops'")
     return claim(api, machine)
 
 
@@ -240,15 +240,16 @@ def make_private(api, t):
 
 
 def hold_item(api, bot="ops"):
-    from backend import run_backoff
+    """Fast sign-in failures in a row hold the bot: its Needs-you item, None when a login card stands for it."""
+    from types import SimpleNamespace
 
+    from backend import run_failures
+
+    run = {"bot_id": bot, "started_at": H.now(), "created_at": H.now()}
     with api.app.state.store.transaction() as c:
-        c.execute(
-            "INSERT INTO run_backoff(bot,fails,error_class,error) VALUES(?,5,?,?) ON CONFLICT(bot) DO NOTHING",
-            (bot, run_backoff.SIGN_IN, "401 unauthorized"),
-        )
-        run_backoff.hold(c, api.app.state.store.settings, bot, 5, run_backoff.SIGN_IN, "401 unauthorized", H.now())
-        return run_backoff.get(c, bot).get("task_id")
+        for _ in range(run_failures.HOLD_AFTER):
+            run_failures.failed(c, api.app.state.store.settings, run, SimpleNamespace(text="401 unauthorized"), "a")
+        return run_failures.get(c, bot).get("upkeep_task_id")
 
 
 def login_card(api, t, runner_id="r1"):
@@ -264,17 +265,17 @@ def test_only_a_standing_login_card_stands_for_the_sign_in_hold_item(api):
     t = task(api)
     open_card(api, t)  # a Google card is another cause
     assert hold_item(api)
-    from backend import run_backoff
+    from backend import run_failures
 
     with api.app.state.store.transaction() as c:
-        run_backoff.release(c, H.KEEPER, "ops")
+        run_failures.release(c, H.KEEPER, "ops")
     second = task(api, "Book the Acme call")
     assert login_card(api, second)
     assert hold_item(api) is None  # its card is the item
     with api.app.state.store.transaction() as c:
         H.task_close(c, "human:ana", second["id"], "Not needed")
         assert not R.bot_open(c, "ops", "login:")
-        assert run_backoff.get(c, "ops").get("task_id")  # the card went unfixed: the hold's own item is back
+        assert run_failures.get(c, "ops").get("upkeep_task_id")  # the card went unfixed: the hold's own item is back
     assert [c["status"] for c in cards(api, second)] == ["retired"]
 
 

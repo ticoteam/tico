@@ -544,6 +544,13 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
   if (more) more.onclick = () => {
     const r = taskPropRights(task), items: PropMenuAction[] = [], cur = (d.liveTask || task) as PropTask;
     const phone = matchMedia('(max-width:600px)').matches;
+    // A phone's head with document tabs holds only the title, the tabs, ⋯ and ✕ (task-code.css): Details, Done and
+    // Archive are here, first, and press the head's own.
+    for (const [sel, text, icon] of [['[data-task-tab="details"]', 'Details', 'fact_check'], ['[data-task-finish="done"]', 'Done', 'task_alt'],
+      ['[data-task-finish="close"]', 'Archive', 'archive']] as const) {
+      const b = $(`.tw-head ${sel}`, d) as HTMLElement | null;
+      if (phone && b && !b.offsetParent) items.push({text, icon, ...(b.hasAttribute('aria-pressed') ? {checked: b.getAttribute('aria-pressed') === 'true', read: true} : {}), run: () => b.click()});
+    }
     // The owning bot's screen (computer-screen.ts), where its session can be watched.
     const screen = !taskFinished(task) ? botScreenComputer(actorSlug(task.owner_id)) : '';
     if (screen) items.push({text: 'Watch the session', icon: 'computer', read: true, run: () => { location.hash = screenHref(screen); }});
@@ -564,6 +571,9 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
     if (task.pipeline_id) items.push({text: 'Move to…', icon: 'swap_horiz', run: () => setTimeout(() => void taskMoveToMenu(d, more, {
       pipeline: task.pipeline_id ?? null, stage: task.stage_id ?? null,
       run: (p, st, why) => void save('stage', {move: String(st.id), pipeline: p.id, where: `${p.name} › ${st.name}`, ...(why ? {why} : {})})}))});
+    // Ask someone: To leave's +, whose section shows nothing while the stage has nothing to leave by (task-code.css).
+    const ask = $('.task-requirements.tsec-empty [data-req-ask]', d) as HTMLElement | null;
+    if (ask) items.push({text: 'Ask someone…', icon: 'person_search', run: () => { taskTabShow(taskModalOf(d), 'details'); ask.click(); }});
     if (r.edit) items.push({text: 'Reassign…', icon: 'person', run: () => setTimeout(() => { taskTabShow(taskModalOf(d), 'details'); ($('[data-prop="owner"]', d) as HTMLElement | null)?.click(); })});
     // Empty facts wait hidden in Details (a passed wake time counts as no due date); these show one and open its editor.
     const waiting = (key: string) => !!$(`[data-prop-row="${key}"][hidden]`, d);
