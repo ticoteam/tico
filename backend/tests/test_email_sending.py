@@ -8,7 +8,7 @@ import pytest
 
 from backend import email_sending as S
 from backend import task_asks
-from backend.store import H
+from backend.store import H, Problem
 from backend.tests.helpers.api import headers, post, runner, setup_attempt  # noqa: F401
 from backend.tests.helpers.fake_gmail import fake_gmail  # noqa: F401
 from backend.tests.helpers.email_sending import (
@@ -432,6 +432,43 @@ def test_never_refuses_and_names_the_setting(inbox):
     assert "never (bot setting)" in detail
 
 
+def test_a_gmail_hiccup_reading_the_thread_stops_a_bots_send_as_retryable(inbox, monkeypatch):
+    """The second reviewer reads the thread the email answers; if Gmail cannot answer now, nothing is queued."""
+    from backend import gmail_live
+
+    autonomous(inbox, second_review=True)
+
+    def down(c, mailbox, thread_id):
+        raise Problem("gmail_unavailable", "Gmail did not answer; try again", 502, retryable=True)
+
+    monkeypatch.setattr(gmail_live, "thread", down)
+    monkeypatch.setattr(S, "classify", lambda *a, **k: pytest.fail("reviewed without its thread"))
+    message = {"mailbox": BOX, "raw": mime(In_Reply_To="<inbound@vendor.example>"), "thread_id": "thread"}
+    response = inbox.post("/api/v2/email/sends", json=message, headers=headers("ops-test"))
+    assert response.status_code == 502 and response.json()["error"]["retryable"], response.text
+    with inbox.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM email_sends").fetchone()[0] == 0
+
+
+def test_a_mailbox_no_server_credential_reads_is_reviewed_on_the_email_alone(inbox, monkeypatch):
+    from backend import gmail_live, gmail_watch
+
+    autonomous(inbox, second_review=True)
+    monkeypatch.setattr(gmail_watch, "watched", lambda c, mailbox: False)
+    monkeypatch.setattr(gmail_live, "thread", lambda *a: pytest.fail("read a thread no credential covers"))
+    seen = []
+    monkeypatch.setattr(
+        S,
+        "classify",
+        lambda app, store, snap, review=None: (
+            seen.append(review) or {"legal_or_money": False, "review": True, "status": "classified"}
+        ),
+    )
+    message = {"mailbox": BOX, "raw": mime(In_Reply_To="<inbound@vendor.example>"), "thread_id": "thread"}
+    post(inbox, "email/sends", message, token="ops-test")
+    assert seen and seen[0]["thread"] == ""
+
+
 def workspace(monkeypatch, answer):
     """The inbox as a Workspace key covers it, and a fake Gmail that answers `answer` to every send."""
     from backend import gmail_live, google_tokens, google_workspace as GW
@@ -461,8 +498,8 @@ def test_the_server_sends_a_workspace_inboxs_mail_itself_once(inbox, monkeypatch
     calls = workspace(monkeypatch, answer)
     queued = queue(inbox, reply_to_id="inbound", thread_id="thread")
     machine = runner(inbox)
-    # No computer leases mail: a 0.6 computer that still asks finds no route (405 from the static mount).
-    post(inbox, "connectors/email/sends/claim", {"mailbox": BOX}, token=machine["token"], expected=405)
+    # No computer leases mail: a 0.6 computer that still asks is handed nothing (backend/connectors_floor.py).
+    assert post(inbox, "connectors/email/sends/claim", {"mailbox": BOX}, token=machine["token"]) == {"send": None}
     store, auth = inbox.app.state.store, inbox.app.state.auth
     assert S.drain(store, auth) == int(state == "sent")
     [call] = calls
@@ -537,7 +574,7 @@ def test_the_server_sends_a_personal_grant_s_mail_from_its_own_grant(inbox, monk
     google, calls = own_grant(inbox, monkeypatch, GC.READ_SCOPES + [GC.G + "gmail.modify"])
     queued = queue(inbox, reply_to_id="inbound", thread_id="thread")
     machine = runner(inbox)
-    post(inbox, "connectors/email/sends/claim", {"mailbox": BOX}, token=machine["token"], expected=405)
+    assert post(inbox, "connectors/email/sends/claim", {"mailbox": BOX}, token=machine["token"]) == {"send": None}
     store, auth = inbox.app.state.store, inbox.app.state.auth
     assert S.drain(store, auth) == 1
     assert [call["token"] for call in calls] == ["ya29.own"]

@@ -1,8 +1,8 @@
 """Mail spec v1.1 PR 5: no computer syncs, books or holds mail, and the server keeps no copy of it.
 
-The copy tables are gone from a new database and from `tico sql`; the computer routes are gone (a GET answers 404, which
-a 0.6 runner's side jobs take as "no connectors to run", and a POST meets the UI's static mount, which answers 405: a
-0.6 job still running logs the error and stops nothing else); no code imports the retired mail CLI; and the migration that drops the
+The copy tables are gone from a new database and from `tico sql`. Each route a 0.6 computer's connectors job still
+polls answers "nothing to do" (backend/connectors_floor.py), so that job idles until the computer updates; the routes it
+reaches only after claiming work are gone. No code imports the retired mail CLI, and the migration that drops the
 copies settles the appointments a computer was asked to book, once.
 """
 
@@ -12,28 +12,42 @@ from pathlib import Path
 
 import pytest
 
-from backend.tests.helpers.api import get, post, runner  # noqa: F401
+from backend.tests.helpers.api import get, headers, post, runner  # noqa: F401
 from backend.tests.helpers.sql import column, query
 
 MIGRATION = importlib.import_module("backend.migrations.20261117062123_drop_mail_copies")
 ROOT = Path(__file__).resolve().parents[2]
 COPIES = ("mail_fts", "mail_messages", "mail_mailboxes", "connector_snapshots", "connector_reports")
-# What 0.6 computers still ask: sidejobs' connector list, the sync, the sends and mail actions they leased, the
-# calendar bookings they claimed, and their health and token questions.
-GETS = ("runners/connectors", "connectors/mail/targets", "connectors/calendar/targets")
-POSTS = (
-    "connectors/mail/messages",
-    "connectors/calendar/snapshots",
-    "connectors/calendar/actions/claim",
-    "connectors/calendar/actions/act-1/result",
-    "connectors/email/sends/claim",
+BOX = "ana@acme.example"
+# What a 0.6 computer's connectors job asks every 45 seconds (runner_support/connectors.py at v0.6.0-rc.1 and v0.6.19),
+# with the bodies it sends, and the answer its client reads as "nothing to do".
+POLLS = (
+    ("GET", "runners/connectors", None, {"connectors": []}),
+    ("GET", "connectors/calendar/targets", None, {"people": [], "hours": 24}),
+    ("GET", "connectors/mail/targets", None, {"mailboxes": [], "acts_for": []}),
+    ("POST", "connectors/mail/google/claim", {"holds_mail": True}, {"connect": None}),
+    ("POST", "connectors/calendar/actions/claim", {}, {"action": None}),
+    ("POST", "automations/mail-actions/claim", {"mailbox": BOX}, {"actions": []}),
+    ("POST", "connectors/email/sends/claim", {"mailbox": BOX}, {"send": None}),
+)
+OK = {"ok": True}
+REPORTS = (
+    ("connectors/mail/google/gc-1/result", {"status": "failed", "kind": "error", "message": "x", "hint": "y"}),
+    (
+        "connectors/calendar/actions/act-1/result",
+        {"status": "unknown", "event_id": "", "meeting_url": "", "error": "x"},
+    ),
+    ("automations/mail-actions/ma-1/result", {"ok": False, "detail": "x", "retry": True}),
+    ("connectors/email/sends/es-1/result", {"status": "unknown", "detail": "x", "lease_id": "l-1"}),
+    ("connectors/calendar/snapshots", {"snapshots": [{"email": BOX, "events": []}], "ok_accounts": [BOX]}),
+    ("connectors/health", {"service": "mail", "failing": [], "ok_accounts": [BOX]}),
+    ("connectors/mail/messages", {"mailbox": BOX, "messages": [], "deleted": [], "synced_at": "2026-11-17T00:00:00Z"}),
+)
+# Reached only with work a claim handed out, which none now does.
+GONE = (
     "connectors/email/sends/preflight",
     "connectors/email/sends/es-1/dispatch",
-    "connectors/email/sends/es-1/result",
     "connectors/mail/workspace/token",
-    "connectors/health",
-    "automations/mail-actions/claim",
-    "automations/mail-actions/ma-1/result",
 )
 
 
@@ -51,12 +65,22 @@ def test_a_new_database_has_no_mail_copy_and_tico_sql_lists_none(api):
         assert query(api, f"SELECT * FROM {table}", expected=422)["error"]["code"] == "sql"
 
 
-def test_the_computer_mail_and_calendar_routes_are_gone(api):
+def test_a_0_6_computers_connectors_job_is_told_there_is_nothing_to_do(api):
     machine = runner(api)
-    for path in GETS:
-        get(api, path, machine["token"], expected=404)
-    for path in POSTS:
-        post(api, path, {"mailbox": "ana@acme.example"}, machine["token"], expected=405)
+    for method, path, body, nothing in POLLS:
+        r = api.request(method, "/api/v2/" + path, json=body, headers=headers(machine["token"]))
+        assert r.status_code == 200 and r.json() == nothing, (path, r.status_code, r.text)
+    with api.app.state.store.read() as c:
+        before = c.execute("SELECT count(*) FROM calendar_actions").fetchone()[0]
+    for path, body in REPORTS:
+        assert post(api, path, body, machine["token"]) == OK, path
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM calendar_actions").fetchone()[0] == before  # a report changes nothing
+    for path in GONE:
+        post(api, path, {"mailbox": BOX}, machine["token"], expected=405)
+    # A person or a bot is not a computer: refused, as the old routes refused them.
+    get(api, "connectors/mail/targets", "ana-test", expected=403)
+    post(api, "connectors/email/sends/claim", {"mailbox": BOX}, "ana-test", expected=403)
 
 
 def test_no_code_imports_the_retired_mail_cli():

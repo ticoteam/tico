@@ -832,13 +832,15 @@ def lint_errors(c, actor, mailbox, snap, reply_id):
 def review_context(c, auth, actor, body, mailbox, snap):
     """What the second reviewer reads beside the email: the thread it answers, read from Gmail now, and the approver's
     instruction, when the send names a person's message that may approve it. Both bounded."""
-    from . import gmail_live
+    from . import gmail_live, gmail_watch
 
     _reply, thread_id = resolve_reply(c, mailbox, snap, body.reply_to_id, body.thread_id)
-    try:
-        found = gmail_live.thread(c, mailbox, thread_id)[-5:] if thread_id else []
-    except Problem:
-        found = []  # no server credential reads the inbox: the reviewer reads the email alone
+    # No server credential reads this inbox: the reviewer reads the email alone. Any other Gmail failure propagates, so
+    # the send is refused as retryable instead of being reviewed against a thread it never saw.
+    if thread_id and gmail_watch.watched(c, mailbox):
+        found = gmail_live.thread(c, mailbox, thread_id)[-5:]
+    else:
+        found = []
     rows = [
         {"from_addr": r["from"], "subject": r["subject"], "body": r["body"], "snippet": r["snippet"]} for r in found
     ]
