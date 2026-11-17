@@ -84,9 +84,9 @@ A task is open, done or closed. It sits in a stage of a pipeline; General has on
   what you may do next. Send that version with every command on the task (`--version N`). Your wake prints it too.
 - End every run with the task in one of six states:
   1. Done with the stage: `tico task done <id> -m "what was done" --version N`.
-  2. Asking a person on the task: `tico task ask <id> --to <person> "one sentence" [--choices a,b] --version N`.
-     Check what is written down first. The one sentence says what is asked and reads on its own: it is the row in
-     their Needs you. They may reply in the task's chat instead of answering: if it answers, take it and withdraw
+  2. Asking a person on the task: `tico task ask <id> --to <person> "<ask>" [--choices a,b] --version N`.
+     Check what is written down first. Its first line (140 characters at most) says what is asked; write any questions
+     out under it, never "see above", paths or ids. They may reply in the task's chat instead of answering: if it answers, take it and withdraw
      the ask (`tico task ask <id> --withdraw --why "Answered in the chat: <their words>"`); if not, follow up once.
      A reply to your OK comes as a send back with their words; if it was only a question, answer it in the chat
      and put the same OK back (`tico task answer <id> <requirement> again --version N`).

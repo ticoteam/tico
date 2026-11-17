@@ -72,7 +72,7 @@ STAGE_FIELDS = {
     "cond": {
         "type": "object",
         "description": "Stage rule: If, fixed conditions such as owner_on_team or owner_not_on_team (a team id; "
-        "empty: the manager's team), owner_kind, label, requester_person, sent_back, snooze_hours_over, turn",
+        "empty: the manager's team), owner_kind, label, requester_person, snooze_hours_over, turn (timers only)",
     },
     "jev": _s("Stage rule: one question Jev answers (one Jev call per event); empty for none"),
     "then": {
