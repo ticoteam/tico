@@ -1939,11 +1939,16 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
     # A bot's ❓ for the reader (backend/question_marks.py): its bot and its line, on a task's chat or in a direct chat.
     # It stands for its message, so the same message is not listed again as an @.
     marked = set()
+    # Their messages and chats in one read each, not one per ❓.
+    stored = H.prime_messages(c, {it["message_id"] for it in questions})
+    chats = question_marks.chat_rows(c, {m["conversation_id"] for m in stored.values()})
     for it in questions:
         if it.get("task_id") and it["task_id"] not in readable:
             continue
         message = H.message(c, it["message_id"])
-        if not message or not question_marks.readable(c, who.actor, message):
+        if not message or not question_marks.readable(
+            c, who.actor, message, chats.get(str(message["conversation_id"]))
+        ):
             continue
         marked.add(it["message_id"])
         items.append(

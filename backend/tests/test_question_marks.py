@@ -376,12 +376,11 @@ def test_a_reviewer_waiting_on_its_own_question_is_not_chased(c, general):
     assert "bot:reviewer" in W.turns(c, row, W.of(c, row))  # the answer brings its review back
 
 
-def test_progress_reads_its_replied_marks_by_index(c):
-    plan = c.execute(
-        "EXPLAIN QUERY PLAN SELECT COUNT(*) FROM question_marks WHERE task_id=? AND cleared_message_id IS NOT NULL",
-        ("a-task",),
-    ).fetchall()
-    assert not any("SCAN question_marks" in str(r[-1]) for r in plan), [tuple(r) for r in plan]
+def test_progress_reads_its_replied_marks_for_every_task_at_once_from_an_index(c):
+    """A never-stuck pass reads the replied ❓ of every task in one statement (Q.replies, read_cache), from the partial
+    index that holds only them, never the table and never once per task."""
+    plan = c.execute("EXPLAIN QUERY PLAN " + Q.REPLIED_SQL).fetchall()
+    assert any("question_marks_replied_task" in str(r[-1]) for r in plan), [tuple(r) for r in plan]
 
 
 def test_a_direct_chat_question_counts_as_waiting_on_a_person(c, general):
@@ -447,3 +446,25 @@ def test_a_chat_started_task_posts_no_end_of_turn_text_after_its_turn_wrote(api)
     post(api, f"tasks/{task['id']}/comments", {"text": "Halfway through the packet."}, attempt["token"])
     assert not _finish(api, machine, attempt, "Done with the first half.")
     assert _said(api, "Done with the first half.") == 0
+
+
+def test_open_marks_are_checked_in_as_many_reads_for_eight_as_for_two(c, general):
+    """A never-stuck pass checks every open ❓ (Q.clear_gone, then each task's marks): its messages, chats and tasks
+    are read together, so more marks are not more statements."""
+
+    def reads(tag, n):
+        ids = [X.new_task(c, ANA, f"Mark check {tag} {i}", assignee=BUILDER)["id"] for i in range(n)]
+        for task_id in ids:
+            _ask(c, task_id)
+        seen = []
+        c.set_trace_callback(seen.append)
+        try:
+            Q.clear_gone(c)
+            Q.on_task(c, ids[0])
+        finally:
+            c.set_trace_callback(None)
+        c.execute("UPDATE question_marks SET cleared_at=?", (H.now(),))
+        return seen
+
+    two, eight = reads("a", 2), reads("b", 8)
+    assert len(eight) == len(two), eight

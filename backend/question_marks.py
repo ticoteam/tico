@@ -84,20 +84,43 @@ def open_rows(conn: sqlite3.Connection) -> list[Row]:
     read_cache = _mod("read_cache")
 
     def build() -> list[Row]:
-        return [m for m in (dict(r) for r in conn.execute(_OPEN)) if answerable(conn, m)]
+        rows = [dict(r) for r in conn.execute(_OPEN)]
+        if not rows:
+            return []
+        # Their messages, chats and tasks in a few reads for all of them, never a few per mark (a never-stuck pass).
+        stored = H.prime_messages(conn, {m["message_id"] for m in rows})
+        _mod("task_privacy").prime_messages(conn, stored.values())
+        H.prime_tasks(conn, {m["task_id"] for m in rows if m["task_id"]}, with_tags=False)
+        chats = chat_rows(conn, {m["conversation_id"] for m in stored.values()})
+        return [m for m in rows if answerable(conn, m, chats)]
 
     return read_cache.value(conn, ("question_marks_open",), build, shared=True)
 
 
-def answerable(conn: sqlite3.Connection, mark: Mapping[str, Any]) -> bool:
+def chat_rows(conn: sqlite3.Connection, ids: Iterable[object]) -> dict[str, Row]:
+    """These chats' rows by id, in one read: for `readable` over many marks."""
+    wanted = sorted({str(i) for i in ids if i})
+    if not wanted:
+        return {}
+    return {
+        str(r["id"]): dict(r)
+        for r in conn.execute(
+            "SELECT * FROM conversations WHERE id IN (SELECT value FROM json_each(?))", (H._dump(wanted),)
+        )
+    }
+
+
+def answerable(conn: sqlite3.Connection, mark: Mapping[str, Any], chats: Mapping[str, Row] | None = None) -> bool:
     """Whether the person an open ❓ names can still answer it: still here and able to act (task_requirements
-    .active_person), and able to read the marked message."""
+    .active_person), and able to read the marked message. `chats` holds chat rows already read, by id."""
     R = _mod("task_requirements")
 
     if not R.active_person(conn, mark["person_id"]):
         return False
     message = H.message(conn, mark["message_id"])
-    return bool(message) and readable(conn, str(mark["person_id"]), message)
+    if not message:
+        return False
+    return readable(conn, str(mark["person_id"]), message, (chats or {}).get(str(message["conversation_id"])))
 
 
 def clear_gone(conn: sqlite3.Connection, task_id: object = None) -> list[str]:
@@ -107,10 +130,10 @@ def clear_gone(conn: sqlite3.Connection, task_id: object = None) -> list[str]:
     a task's readers change, and on each never-stuck pass for anything else. Returns the cleared marks' ids."""
     if task_id:
         found = conn.execute("SELECT * FROM question_marks WHERE cleared_at IS NULL AND task_id=?", (str(task_id),))
-    else:
-        found = conn.execute(_OPEN)
-    rows = [dict(r) for r in found]
-    gone = [m for m in rows if not answerable(conn, m)]
+        gone = [m for m in (dict(r) for r in found) if not answerable(conn, m)]
+    else:  # every open mark: those open_rows leaves out, so a never-stuck pass checks each mark once
+        kept = {m["id"] for m in open_rows(conn)}
+        gone = [m for m in (dict(r) for r in conn.execute(_OPEN)) if m["id"] not in kept]
     if not gone:
         return []
     at = H.now()
@@ -156,6 +179,20 @@ def on_task(conn: sqlite3.Connection, task_id: object) -> list[Row]:
     return [m for m in open_rows(conn) if m["task_id"] and m["task_id"] == str(task_id)]
 
 
+REPLIED_SQL = "SELECT task_id, COUNT(*) FROM question_marks WHERE cleared_message_id IS NOT NULL AND task_id <> '' GROUP BY task_id"
+
+
+def replies(conn: sqlite3.Connection, task_id: object) -> int:
+    """How many ❓ on the task a person replied to (task_engine.progress_mark): one read per snapshot for every task
+    (read_cache; a write reads again), so a never-stuck pass over many tasks never reads them one task at a time."""
+    read_cache = _mod("read_cache")
+
+    def build() -> dict[str, int]:
+        return {str(tid): int(n) for tid, n in conn.execute(REPLIED_SQL)}
+
+    return read_cache.value(conn, ("question_marks_replied",), build, shared=True).get(str(task_id), 0)
+
+
 def for_person(conn: sqlite3.Connection, person: str) -> list[Row]:
     return [m for m in open_rows(conn) if m["person_id"] == person]
 
@@ -184,12 +221,19 @@ def _message_task(conn: sqlite3.Connection, message: Row, conv: Row) -> str:
     return str(task_id) if task_id else ""
 
 
-def readable(conn: sqlite3.Connection, person: str, message: Row) -> bool:
-    """Whether `person` may read the marked message: the thread's members and the message's own check."""
+def readable(conn: sqlite3.Connection, person: str, message: Row, chat: Row | None = None) -> bool:
+    """Whether `person` may read the marked message: the thread's members and the message's own check. `chat`, the
+    message's chat row when the caller has read it, saves reading it again."""
     threads = _mod("threads")
 
     viewer = threads.actor_viewer(conn, person)
-    return viewer is not None and threads.message_readable(conn, viewer, message)
+    if viewer is None:
+        return False
+    if chat is not None:
+        return threads.thread_readable(conn, viewer, chat) and threads.message_readable(
+            conn, viewer, message, thread_checked=True
+        )
+    return threads.message_readable(conn, viewer, message)
 
 
 def _addressee(conn: sqlite3.Connection, actor: str, person: str, message: Row, task_id: str) -> str:
