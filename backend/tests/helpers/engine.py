@@ -215,6 +215,16 @@ def new_task(c, by, title, pipeline_id="general", assignee=None, parent=None):
     return E.task(c, row["id"])
 
 
+def old_question(c, task_id, by, person, line, choices=None, **settings):
+    """A question as the engine wrote one before a question was a message marked ❓ (backend/question_marks.py): a
+    `requirements` row of kind `answer` on the task's visit, which the task waits on until it is answered. Nothing
+    writes one now (task_engine.add_requirement refuses it); a company's older rows are read and answered as before.
+    `settings`: shows, brief, title, ends (ends_with_task). A person named without a kind is a person ("ben" is
+    "human:ben"). Returns the task with `requirement_id`."""
+    person = person if ":" in str(person) else "human:" + str(person)
+    return E._write_ask(c, E.task(c, task_id), by, "answer", person, line, choices=choices, **settings)
+
+
 def say_done(c, row, by=None):
     """The owner says the stage's work is finished: one `done` answer on the stage's owner_done requirement. The task is
     not moved; call `task_engine.advance` for that."""
