@@ -147,6 +147,8 @@ def test_tico_task_attach_doc_sends_the_html_with_its_pictures(monkeypatch, tmp_
     (tmp_path / "notes.md").write_text("# Notes")
     with pytest.raises(ValueError, match="html"):
         hubtools.task_attach(Client(), {"id": "T-1", "document": "Spec", "path": "notes.md"})
+    with pytest.raises(ValueError):  # outside the checkout: refused before anything is read
+        hubtools.task_attach(Client(), {"id": "T-1", "document": "Spec", "path": "../outside.html"})
 
 
 def test_an_ordinary_upload_named_like_a_document_starts_its_own_file(api):
