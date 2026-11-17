@@ -15,6 +15,7 @@ import pytest
 from backend import (
     batch_work,
     bot_stops,
+    delivery,
     execution,
     gateway_connection,
     health,
@@ -324,6 +325,56 @@ def test_release_frees_a_held_job_another_path_canceled_and_closes_its_item(api,
     assert post(api, "bots/ops/release", {})["released"]["claim"] == 0
     assert item_status(api, held["hold_task_id"]) not in H.ACTIVE_STATUSES
     assert [(job["state"], job["held"]) for job in task_jobs(api, task_id)] == [("canceled", 0)]
+
+
+def _cancel_by_suppress_notice(c, job_id, task_id):
+    execution.suppress_notice(c, dict(c.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()), task_id, "x")
+
+
+def _cancel_by_drop_jobs(c, job_id, task_id):
+    delivery._drop_jobs(c, H, [job_id], "Its deadline passed.")
+
+
+@pytest.mark.parametrize("cancel", [_cancel_by_suppress_notice, _cancel_by_drop_jobs], ids=["suppress", "drop_jobs"])
+def test_a_held_run_canceled_as_no_longer_needed_closes_its_needs_you_item(api, monkeypatch, cancel):
+    """Each caller cancels the job before it clears the claim: the run's end released the hold already
+    (holds_job_ends), and the item still closes."""
+    machine, task_id = held_refresh(api, monkeypatch)
+    held = task_jobs(api, task_id)[0]
+    assert item_status(api, held["hold_task_id"]) == "open"
+    with api.app.state.store.transaction() as c:
+        cancel(c, held["id"], task_id)
+        ended = c.execute("SELECT released_how FROM holds WHERE kind='claim_error' AND holdable_id=?", (held["id"],))
+        assert [r[0] for r in ended] == ["moot"]
+    assert item_status(api, held["hold_task_id"]) not in H.ACTIVE_STATUSES
+    assert [(job["state"], job["held"]) for job in task_jobs(api, task_id)] == [("canceled", 0)]
+
+
+def test_a_canceled_run_keeps_its_bots_item_open_while_another_held_run_names_it(api, monkeypatch):
+    machine, task_id = held_refresh(api, monkeypatch)
+    with api.app.state.store.transaction() as c:
+        other = H.task_create(c, H.KEEPER, "Refresh the log", "Refresh it.", H.bot_actor("ops"), lint=False)["id"]
+    assert claim(api, machine) is None  # its job raises too: held, naming the same item
+    first, second = task_jobs(api, task_id)[0], task_jobs(api, other)[0]
+    assert first["hold_task_id"] == second["hold_task_id"]
+    with api.app.state.store.transaction() as c:
+        _cancel_by_drop_jobs(c, first["id"], task_id)
+    assert item_status(api, first["hold_task_id"]) == "open"
+
+
+def test_a_held_run_that_starts_and_finishes_leaves_no_hold_and_its_item_closed(api, monkeypatch):
+    machine, task_id = held_refresh(api, monkeypatch)
+    [job] = task_jobs(api, task_id)
+    monkeypatch.undo()  # the job's checks work again
+    wait_ends(api, monkeypatch, job["id"])
+    attempt = claim(api, machine)
+    assert attempt["job_id"] == job["id"]
+    complete(api, machine, attempt)
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (job["id"],)).fetchone()[0] == "completed"
+        ended = c.execute("SELECT released_how FROM holds WHERE kind='claim_error' AND holdable_id=?", (job["id"],))
+        assert [r[0] for r in ended] == ["probe_passed"]
+    assert item_status(api, job["hold_task_id"]) not in H.ACTIVE_STATUSES
 
 
 def test_a_start_retry_never_hands_out_an_obsolete_notice(api, monkeypatch):

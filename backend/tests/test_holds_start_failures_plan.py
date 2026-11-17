@@ -49,7 +49,7 @@ def plan(c, sql):
 
 
 def seeks(steps, alias, index, columns):
-    found = [p for p in steps if re.match(rf"SEARCH {alias} USING INDEX {index} \({re.escape(columns)}", p)]
+    found = [p for p in steps if re.match(rf"SEARCH {alias} USING (COVERING )?INDEX {index} \({re.escape(columns)}", p)]
     assert found, steps
 
 
@@ -111,6 +111,13 @@ def test_the_bots_needs_you_item_seeks_its_open_holds(c):
 def test_the_triggers_that_end_the_holds_seek_the_open_ones(c, trigger):
     steps = plan(c, trigger_update(trigger))
     seeks(steps, "holds", "holds_open", "kind=? AND holdable_type=?")
+    no_scan(steps)
+
+
+def test_a_jobs_claim_error_open_or_last_released_is_one_seek_of_each_partial_index(c):
+    steps = plan(c, bot_stops.JOB_CLAIM_SQL.replace("?1", "?"))
+    seeks(steps, "holds", "holds_open", "kind=? AND holdable_type=? AND holdable_id=?")
+    seeks(steps, "holds", "holds_released", "holdable_type=? AND holdable_id=? AND kind=?")
     no_scan(steps)
 
 

@@ -154,21 +154,29 @@ def _claim_item(c, settings, bot):
 
 
 def clear_job(c, hold, note, how="moot"):
-    """A claim's held run stops being held (`hold`, its open claim_error row): it started (`how` probe_passed), or the
-    claim dropped it as no longer needed. Its Needs-you item closes once no other held run of its bot names it."""
-    holds.release(c, holds.CLAIM_ERROR, "job", hold["holdable_id"], actor=H.KEEPER, how=how, bot_id=hold["bot_id"])
+    """A claim's held run stops being held (`hold`, its claim_error row): it started (`how` probe_passed), or it is no
+    longer needed. An open hold is released; one its run's end released already (holds_job_ends) is not. Either way its
+    Needs-you item closes once no other held run of its bot names it."""
+    if hold["released_at"] is None:
+        holds.release(c, holds.CLAIM_ERROR, "job", hold["holdable_id"], actor=H.KEEPER, how=how, bot_id=hold["bot_id"])
     item = hold["upkeep_task_id"]
     if item and item not in {r[0] for r in c.execute(CLAIM_ITEM_SQL, (hold["bot_id"],)).fetchall()}:
         close_item(c, item, note)
 
 
+# A job's claim_error hold: its open one, else its last released one (a run that ends releases its hold before its
+# caller clears it: holds_job_ends). One statement, a seek of each partial index; none when the job never had one.
+JOB_CLAIM_SQL = (
+    "SELECT * FROM (SELECT * FROM holds INDEXED BY holds_open WHERE kind='claim_error' AND holdable_type='job' "
+    "AND holdable_id=?1 AND released_at IS NULL) UNION ALL SELECT * FROM (SELECT * FROM holds INDEXED BY holds_released "
+    "WHERE holdable_type='job' AND holdable_id=?1 AND kind='claim_error' AND released_at IS NOT NULL "
+    "ORDER BY released_at DESC LIMIT 1) LIMIT 1"
+)
+
+
 def clear_claim(c, job_id, note):
-    """`clear_job` for a job dropped by id, when it holds a claim_error: one read when it does not."""
-    row = c.execute(
-        "SELECT * FROM holds INDEXED BY holds_open WHERE kind='claim_error' AND holdable_type='job' AND holdable_id=? "
-        "AND released_at IS NULL",
-        (job_id,),
-    ).fetchone()
+    """`clear_job` for a job dropped by id, before or after it ended, when it held a claim_error: one read when not."""
+    row = c.execute(JOB_CLAIM_SQL, (job_id,)).fetchone()
     if row:
         clear_job(c, row, note)
 
