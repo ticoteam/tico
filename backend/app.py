@@ -3931,7 +3931,7 @@ def create_app(settings=None):
         **api_v2(
             "Tasks",
             "updateTask",
-            "Edit a task's fields (title, body, due, labels, privacy, goal, note). A bot sends the version it was shown (409 task_changed otherwise); a person may leave it out. Where it is and who has it change by done, move and owner",
+            "Edit a task's fields (title, due, labels, privacy, goal, note); a task has no description. A bot sends the version it was shown (409 task_changed otherwise); a person may leave it out. Where it is and who has it change by done, move and owner",
             "TaskResult",
             responses={"422": ASK_REFUSED},
         ),
