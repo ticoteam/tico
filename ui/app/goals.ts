@@ -166,7 +166,7 @@ function goalColourHtml(g: GoalDraft) {
 function goalNoteHtml(g: GkGoal, may: boolean) {
   const byHand = g.status_source === 'person' && ['red', 'yellow', 'green'].includes(String(g.status));
   const plain = goalNoMeasure(g) ? String(g.status_note).slice(GOAL_NO_MEASURE.length).replace(/^:\s*/, '') : g.status_note || '';
-  const said = byHand ? `Set by ${goalActorName(g.status_by_id)}${g.status_note ? ': ' + g.status_note : ''}` : plain && plain[0].toUpperCase() + plain.slice(1);
+  const said = byHand ? `Set by ${goalActorName(g.status_by_id)}${g.status_note ? ': ' + g.status_note : ''}` : plain.charAt(0).toUpperCase() + plain.slice(1);
   const suggest = byHand && g.suggest_status
     ? `<div class="goal-note goal-suggest">Suggested: <b>${esc(g.suggest_status)}</b>${g.suggest_note ? ', ' + esc(g.suggest_note) : ''}${may ? ' <button class="linkish" type="button" data-goal-auto="' + esc(g.id) + '">Let the Assistant set it</button>' : ''}</div>` : '';
   return (said ? `<div class="goal-note">${esc(said)}</div>` : '') + suggest;
