@@ -10,8 +10,8 @@
   connectors/slack.py inbox --since 24h --format md --mark
   connectors/slack.py file --as qa-triage --id F0123ABCD
 
-One Slack app serves the whole company. The token is `SLACK_BOT_TOKEN` in the run's environment
-(the runner loads it from <projects>/secrets/_shared.env). Install: see connectors/README.md.
+One Slack app serves the whole company. The token is `SLACK_BOT_TOKEN` in the run's environment,
+from the Tools credential granted to the bot. Install: see connectors/README.md.
 
 Posting is gated in code, not in prompts:
   - the employee's bot.yaml (older: emp-<slug>/employee.yaml) must declare tools: service slack with `post` in `can`
@@ -84,7 +84,7 @@ FILES_DIR = Path(tempfile.gettempdir()) / (f"slack-files-{os.getuid()}" if hasat
 MAX_NAME_BYTES = 200  # file systems refuse a name over 255 bytes
 DEFAULT_TZ = "America/Los_Angeles"
 API = "https://slack.com/api/"
-SECRETS_HINT = "<projects>/secrets/_shared.env"
+SECRETS_HINT = "Tools > Credentials (SLACK_BOT_TOKEN, granted to this bot)"
 NOISE_SUBTYPES = {"channel_join", "channel_leave", "group_join", "group_leave"}
 
 JSON_ERRORS = False  # set by --json / --format json
@@ -185,7 +185,7 @@ def token_or_die():
         raise Failure(
             "SLACK_BOT_TOKEN is not set in this run's environment.",
             "The owner installs the company Slack app once and puts "
-            f"SLACK_BOT_TOKEN=xoxb-... into {SECRETS_HINT} (chmod 600). "
+            f"SLACK_BOT_TOKEN=xoxb-... into {SECRETS_HINT}. "
             "See connectors/README.md. Open a needs-human Issue rather than improvising.",
         )
     return tok
