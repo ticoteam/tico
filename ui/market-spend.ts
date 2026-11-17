@@ -68,7 +68,7 @@ interface MktDefinition {
   params?: unknown;
 }
 /** What the open Size the market task waits on the reader for (backend/market_spend.py sizing). */
-interface MktAsk { requirement_id: string; kind?: string | null; line?: string | null; choices?: string[] | null; }
+interface MktAsk { requirement_id?: string | null; mark_id?: string | null; kind?: string | null; line?: string | null; choices?: string[] | null; }
 /** The open Size the market task: whose turn it is, and the reader's question when it waits on them. */
 interface MktSizing { id: string; version?: number | null; turn?: string | null; ask?: MktAsk | null; }
 interface MktSpend {
@@ -234,9 +234,10 @@ const mktGrowthPts = (tree: MktTree): MktGrowthGroup[] => tree.drawn.filter((g):
 // ------------------------------------------------------------------ Where is the money going?
 
 // The sizing card: the open Size the market task as the server has it (GET /v2/market/spend `sizing`), so a reload shows
-// the same. Working: a spinner and the task. Waiting on the reader: the Librarian's question, answered here (POST
-// /v2/tasks/{id}/asks/{requirement_id}/answer). With `form` (nothing sized yet, the owner), the sentence that defines the
-// market, sent with POST /v2/market/spend/research: a new sentence changes the market and goes to the open task. On a
+// the same. Working: a spinner and the task. Waiting on the reader: the Librarian's question, answered here (a ❓ by a
+// comment on the task, POST /v2/tasks/{id}/comments; an older question by POST /v2/tasks/{id}/asks/{requirement_id}/answer).
+// With `form` (nothing sized yet, the owner), the sentence that defines the market, sent with POST
+// /v2/market/spend/research: a new sentence changes the market and goes to the open task. On a
 // sized market the sentence is a line of text, and its pencil turns it into the form.
 // It follows the task live (liveFollowTask) and Needs you; when the sizes arrive the page is drawn again. `needs` is
 // told whether the card waits on the reader.
@@ -247,7 +248,7 @@ const mktTaskLink = (s: MktSizing): string => `<a href="#/task/${esc(s.id)}">Vie
 function mktSizingHtml(s: MktSizing | null): string {
   if (!s) return '';
   const ask = s.ask;
-  if (ask?.kind === 'answer') {
+  if (ask?.kind === 'answer' || ask?.kind === 'question') {
     return `<div class="mkt-card mkt-asked" data-mkt-asked role="status"><p class="mkt-q-line">${esc(ask.line || '')}</p>
       ${(ask.choices || []).length ? `<div class="mkt-chips">${(ask.choices || []).map(c => `<button class="mkt-pick" type="button" data-mkt-choice="${esc(c)}">${esc(c)}</button>`).join('')}</div>` : ''}
       <form class="mkt-cite" data-mkt-reply novalidate><input name="value" type="text" maxlength="2000" autocomplete="off" aria-label="Reply">
@@ -313,7 +314,10 @@ function mktSizing(host: HTMLElement, first: MktSpend | null | undefined, opts: 
     const s = sizing, ask = s?.ask;
     if (!s || !ask || !value) return;
     from.querySelectorAll<HTMLInputElement | HTMLButtonElement>('input, button').forEach(el => { el.disabled = true; });
-    try { await taskAnswer(s.id, ask.requirement_id, value, s.version ?? null); }
+    try {
+      if (ask.kind === 'question') await post(`/v2/tasks/${encodeURIComponent(s.id)}/comments`, {text: value});
+      else if (ask.requirement_id) await taskAnswer(s.id, ask.requirement_id, value, s.version ?? null);
+    }
     catch (error) { toast(errorMessage(error, 'That did not go through.'), true); }
     await refresh();
     from.querySelectorAll<HTMLInputElement | HTMLButtonElement>('input, button').forEach(el => { el.disabled = false; });
