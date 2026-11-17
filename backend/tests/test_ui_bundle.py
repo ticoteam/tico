@@ -131,9 +131,7 @@ def test_a_typescript_file_outside_the_bundle_is_served_compiled_with_its_map(ap
     m = api.get("/tico/ui/app/core.js.map", headers=AUTH)
     assert m.status_code == 200 and m.json()["sources"] == ["core.ts"]
     assert m.json()["sourcesContent"] == [(UI / "app/core.ts").read_text()]
-    assert (
-        api.get("/tico/ui/app/core.ts", headers={**AUTH, "If-None-Match": r.headers["etag"]}).status_code == 304
-    )
+    assert api.get("/tico/ui/app/core.ts", headers={**AUTH, "If-None-Match": r.headers["etag"]}).status_code == 304
     assert api.get("/tico/ui/app/core.ts").status_code == 401
     assert api.get("/tico/ui/app/no-such-file.ts", headers=AUTH).status_code == 404
     assert api.get("/tico/ui/app/no-such-file.js.map", headers=AUTH).status_code == 404
