@@ -1,13 +1,13 @@
 """Decisions as a Tico tool: `POST /api/v2/decisions`, the door behind `tico_decision_ask` and `tico decision ask`
 (the route, the `judge.call` audit events and this module keep their old name, `judge`).
 
-Every decision is Jev's, and only Jev's: no other model answers in its place, and there is no setting or picker for
-the model. The server asks Jev in this order, the second only when the first fails:
-1. the Tico AI Gateway as `tico-decide-low` (Jev), with the gateway key (`TICO_GATEWAY_KEY` or `TICO_GATEWAY_SECRET_ARN`, at
+The server asks its decision providers in this order:
+1. the Tico AI Gateway as `tico-decide-low`, using the tier's current model and the gateway key
+   (`TICO_GATEWAY_KEY` or `TICO_GATEWAY_SECRET_ARN`, at
    `TICO_GATEWAY_URL`, Tico HQ's decisions endpoint by default), else the key and URL saved in Settings > Computers
    (backend/gateway_connection.py), read at each call;
 2. a customer's own TypeSafe key (`TYPESAFE_API_KEY` or `TICO_TYPESAFE_SECRET_ARN`) for Jev direct, never set by default;
-3. off: with neither it is unconfigured, and callers carry on without it. When Jev fails or times out the call fails
+3. off: with neither it is unconfigured, and callers carry on without it. When the configured providers fail or time out the call fails
    (`J.JudgeError`), and each caller treats that as no answer: a person decides, or the item waits. A bot or a person
    sends a JSON state and typed questions with their own credential and gets calibrated answers back; no bot ever
    carries the key, and nothing here decides anything with the answers. The contract and the validation are
@@ -23,7 +23,7 @@ A budget per actor and day, so a loop cannot spend the key: the cap is on calls,
 the events, and a call over it is a 429 that says when to try again. And a spend cap for the team per UTC month
 (`TICO_DECISIONS_MONTHLY_USD`, $50 by default), summed from each call's `cost_usd` in the audit: at the cap every
 server-side caller (this route, listening, learnings, live meetings, the Slack gateway) carries on as if Decide were
-off. Each of them gets its model from `server_engine`, so every one of them asks Jev and nothing else. The caps per role are settings
+off. Each of them gets its model from `server_engine`, and shares the same provider order. The caps per role are settings
 (`TICO_DECISIONS_DAILY_CALLS_OWNER`, `_HUMAN`, `_BOT`); the Slack gateway's routing counts against the
 sender's, and the market ask (`market.ask` events) has its own count under the same caps.
 
@@ -34,9 +34,7 @@ against what was done with them. Only the caller that asked records it, and a se
 first. Short words only, never the state. Decisions Tico makes on the server (stale suggestions, listening, live
 meetings, topic change, idea triage) keep their own outcome records.
 
-`GET /api/v2/decisions/readout` reads the audit back per question set: calls, cost, Jev or another model (rows written before
-every decision was Jev's), answer spread
-and the month's spend against the cap (backend/decide_readout.py).
+`GET /api/v2/decisions/readout` reads the audit back per question set: calls, cost, decision model usage, answer spread and the month's spend against the cap (backend/decide_readout.py).
 """
 
 import json
@@ -62,7 +60,7 @@ LOG = logging.getLogger("tico.judge")
 ROLES = ("owner", "human", "bot")
 # The defaults; a server's own caps are `daily_cap(settings, role)`.
 DAILY_CALLS = {role: getattr(Settings, "decisions_daily_calls_" + role) for role in ROLES}
-# The Gateway and TypeSafe each get one short try at Jev from the server; when the Gateway is slow, down or refuses the
+# The Gateway and TypeSafe each get one short try from the server; when the Gateway is slow, down or refuses the
 # key, TypeSafe is asked, so a caller never waits through several long attempts only to receive a 503.
 JEV_TIMEOUT = 8
 # The most one chain takes, both tries together: each is asked with what is left (`J.within`), so the server answers
@@ -142,7 +140,7 @@ MAX_OUTPUT_TOKENS = J.MAX_OUTPUT_TOKENS
 def priced(settings, model):
     """Whether `model` has a known price: a Tico model at `GATEWAY_USD_PER_MTOK`, Jev at the settings' rates, any other
     at `providers.PRICES`."""
-    if model in J.GATEWAY_MODELS:
+    if J.is_gateway_decision_model(model):
         return True
     if str(model or "").lower().startswith("jev"):
         return bool(settings.decisions_jev_usd_per_mtok_input or settings.decisions_jev_usd_per_mtok_output)
@@ -159,8 +157,8 @@ def cost_usd(settings, model, usage):
         if _count(value):
             return round(float(value), 6)
     fresh, cached, out = tokens(usage)
-    if model in J.GATEWAY_MODELS:
-        # Every Decide level has a catalog price (Low is Jev's); the flat rate covers an id the catalog lacks. Cached
+    if J.is_gateway_decision_model(model):
+        # Every Decide tier has a catalog price. The flat rate covers an id the catalog lacks. Cached
         # input is billed at the catalog's cached rate, as `providers.estimate` bills every other model's.
         if (listed := providers.price_of(model)) is None:
             listed = (GATEWAY_USD_PER_MTOK[0], GATEWAY_USD_PER_MTOK[0], GATEWAY_USD_PER_MTOK[1])
@@ -513,7 +511,7 @@ def primary_engine(settings, store=None, vault=None):
 def server_engine(store, c, primary=None):
     """The decision model every server-side caller uses, or None for "carry on as if Decide were off": rehearsal, no
     model at all, a demo, or the month's spend at the cap. `primary` is Jev (`primary_engine(settings)`, or the test's
-    fake), and nothing else is asked: when Jev is slow, down or refused, the call raises `J.JudgeError` and the caller
+    fake). If all configured decision providers fail, the call raises `J.JudgeError` and the caller
     treats it as no answer. Each call goes through `metered`, so a batch that reuses one engine (listening, learnings)
     stops at the cap call by call; each result carries `cost_usd`."""
     settings = store.settings

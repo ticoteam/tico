@@ -54,7 +54,7 @@ PICKED, NONE, FAILED = "picked", "none", "failed"
 # The engine a test sets: (state, questions, label) -> {"answers": {...}, ...}. None asks the server's Jev.
 ENGINE: "Callable[[Row, Row, str], Row] | None" = None
 ASK = (
-    'Related input: Jev picked you for "{title}" ({score}): it touches your area. Read the task\'s chat and its '
+    'Related input: The decision model picked you for "{title}" ({score}): it touches your area. Read the task\'s chat and its '
     "documents, then comment on the task once from your area: what it changes for you, risks, and anything to add or change. "
     'tico task comment {task} "<your comment>". One round only: don\'t move, take or edit the task.'
 )

@@ -555,3 +555,29 @@ def test_the_eval_scores_the_servers_unsure_even_where_its_p_would_band_as_met()
     assert run.verdict(0.5, "spec") == "met", "the case this test is about: p alone would read as met"
     row = run.score("j", lambda c: (0.5, 0.0, 5, "unsure"), [case], pause=lambda s: None)
     assert row["false_met"] == 0 and row["rows"][0]["got"] == "unsure"
+
+
+def test_openrouter_comparison_checks_paid_pinned_typed_answers(monkeypatch):
+    import httpx
+
+    model = "acme/decision-v1-20261117"
+    fixture = {"type": "score", "score": 0.9, "confidence": 0.9, "probabilities": {"1": 0.9, "0": 0.1}}
+    questions = {"score": {"type": "score", "instructions": "How urgent?", "criteria": ["No rush", "Today"]}}
+    payload = {"model": model, "answers": {"score": fixture}, "usage": {"cost": 0.0001}}
+
+    def post(url, **kwargs):
+        assert url == adapter.ROUTER_DECISIONS
+        assert kwargs["json"]["provider"] == {"only": ["acme/us"], "allow_fallbacks": False}
+        assert kwargs["json"]["model"] == model
+        return httpx.Response(200, json=payload, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(httpx, "post", post)
+    ask = adapter.openrouter("eval-key", model, "acme/us")
+    assert ask("today", questions)["answers"]["score"]["probabilities"] == {0: 0.1, 1: 0.9}
+    payload["model"] = "acme/another-version"
+    with pytest.raises(J.JudgeError, match="pinned"):
+        ask("today", questions)
+    payload["model"] = model
+    payload["usage"]["cost"] = 0
+    with pytest.raises(J.JudgeError, match="paid"):
+        ask("today", questions)
