@@ -3560,6 +3560,7 @@ def create_app(settings=None):
             unassigned=unassigned,
             wake_refs=wake_refs,
             human_id=body.human,
+            asks=owner if asks_person else None,
         )
         c.execute("UPDATE tasks SET acceptance=? WHERE id=?", (encode(body.acceptance_criteria), row["id"]))
         if asks_person:

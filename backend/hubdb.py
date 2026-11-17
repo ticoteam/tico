@@ -4431,8 +4431,10 @@ def task_create(
     readers_check=None,
     unassigned=False,
     human_id=None,
+    asks=None,
 ):
-    """Rule 5. Anyone may open a task for any active owner; a human owner's General task is linted (rule 7).
+    """Rule 5. Anyone may open a task for any active owner; a human owner's General task is linted (rule 7), and so is
+    a bot's own task that asks a person (`asks`: the person its question is for, backend/person_asks.py).
 
     The task is made and put into the first stage of its pipeline in one step (`task_engine.enter`): `pipeline` is a
     pipeline's id, General when none is given. `owner` is who the task is given to (its assignee); the stage says who
@@ -4568,13 +4570,12 @@ def task_create(
     # pipeline writes them, not as an ask.
     if not title:
         refuse(conn, actor, "lint", "give it a title that says what you are asking for")
-    if is_bot(actor) and is_human(target) and lint and general:
+    asked = target if is_human(target) else asks if is_human(asks) else None
+    if is_bot(actor) and asked and lint and general:
         # A bot giving a person work opens the body with the ask: their card leads with it (lint_person_ask).
-        require_person_ask(conn, actor, target, person_ask_of_body(body, title), "assign")
+        require_person_ask(conn, actor, asked, person_ask_of_body(body, title), "assign")
     warnings = (
-        style_problems(conn, actor, lint_human_item(body, title=title), severity)
-        if is_human(target) and lint and general
-        else []
+        style_problems(conn, actor, lint_human_item(body, title=title), severity) if asked and lint and general else []
     )
     # A task in another pipeline keeps that pipeline's own references ("#18945", "(B/F)") in its title.
     plain = lint_title(title) if is_bot(actor) and TITLE_LINT != "off" and general else []

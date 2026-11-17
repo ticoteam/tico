@@ -33,6 +33,13 @@ def seen(api, row, attempt):
     return get(api, "tasks/" + row["id"], attempt["token"])["task"]["version"]
 
 
+def answer_ask(api, task, words, token="ben-test"):
+    """Ben answers the question the bot's subtask asks him (backend/person_asks.py)."""
+    [ask] = [i for i in get(api, "needs-you", token)["items"] if i["kind"] == "ask" and i["task_id"] == task["id"]]
+    version = get(api, "tasks/" + task["id"], token)["task"]["version"]
+    post(api, f"tasks/{task['id']}/asks/{ask['requirement_id']}/answer", {"value": words, "version": version}, token)
+
+
 def sql_sees(api, token, words):
     r = api.post("/api/v2/sql", json={"sql": "SELECT id,title,body FROM tasks"}, headers=headers(token))
     assert r.status_code == 200, r.text
@@ -51,7 +58,9 @@ def test_private_bot_task_reaches_one_named_person_and_nobody_else(api, requeste
     # Dry-run says what the create does: no privacy refusal, then the create goes through.
     assert not [p for p in dry_run(api, body, attempt["token"]) if "rivate" in p]
     child = post(api, "tasks", body, attempt["token"])
-    assert child["private"] and child["owner_id"] == "human:ben" and child["requester_id"] == "bot:ops"
+    # The bot's own subtask, with its question to Ben (backend/person_asks.py).
+    assert child["private"] and child["owner_id"] == "bot:ops" and child["requester_id"] == "bot:ops"
+    assert child["id"] in {i["task_id"] for i in get(api, "needs-you", "ben-test")["items"] if i["kind"] == "ask"}
 
     # Ben, and only Ben, now reads the task and the subtask; its history says who it reached.
     assert get(api, "tasks/" + row["id"], "ben-test")["task"]["readers"] == ["human:ben"]
@@ -81,23 +90,14 @@ def test_the_readers_answer_comes_back_to_the_task_and_nowhere_wider(api):
     row = task(api, "bot:cpo", "bot:ops", "Zip triage")
     attempt = run_on(api)
     child = post(api, "tasks", subtask(row["id"], "ben"), attempt["token"])
-    done = post(
-        api,
-        "tasks/" + child["id"] + "/done",
-        {"version": child["version"], "note": "Approved: go with the plan."},
-        "ben-test",
-    )
-    assert (done.get("task") or done)["status"] == "done"
-    # Ben's answer wakes the bot that owns the task, which can act on its task with it: its turn on the task again.
+    answer_ask(api, child, "Approved: go with the plan.")
+    # Ben's answer wakes the bot that owns the subtask, which can act on its task with it: its turn on it again.
     with api.app.state.store.read() as c:
         queued = c.execute(
             "SELECT m.refs FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id='ops' AND j.state='queued'"
         ).fetchall()
-    assert any(
-        json.loads(r[0] or "{}").get("task") == row["id"] and json.loads(r[0] or "{}").get("wake") == "task_turn"
-        for r in queued
-    ), queued
-    answer = run_on(api)
+    assert any(json.loads(r[0] or "{}").get("task") == child["id"] for r in queued), queued
+    answer = attempt  # the run that asked him, still going
     post(api, f"tasks/{row['id']}/comments", {"text": "Ben approved; going ahead."}, answer["token"])
     # ...but not past the task's own readers.
     r = api.post(
@@ -124,8 +124,8 @@ def test_refused_hand_offs_match_their_dry_run(api):
 def test_only_the_owning_bot_brings_a_person_in(api):
     row = task(api, "bot:cpo", "bot:ops", "Zip triage")
     child = post(api, "tasks", subtask(row["id"], "ben"), bot_token(api, "cpo"))
-    assert child["owner_id"] == "human:ben"
-    # The requester bot's hand-off goes on as before (the subtask alone), and makes nobody a reader.
+    assert child["owner_id"] == "bot:cpo"  # its own subtask, with its question to Ben
+    # The requester bot's hand-off goes on as before (the subtask alone), and makes nobody a reader of the task.
     assert readers(api, row["id"]) == set()
 
 
@@ -198,7 +198,16 @@ def test_the_readers_answer_clears_the_wait(api):
 
     with api.app.state.store.read() as c:
         assert [(w.state, w.who) for w in waiting_on(c, row["id"])][:1] == [("tasks", card["id"])]
-    post(api, "tasks/" + card["id"] + "/done", {"version": card["version"], "note": "Approved."}, "ben-test")
+    answer_ask(api, card, "Approved.")
+    with api.app.state.store.read() as c:
+        # The subtask is the bot's: Ben's answer reaches it, and the bot closes its subtask, which ends the wait.
+        assert [(w.state, w.who) for w in waiting_on(c, card["id"])][:1] == [("bot", "bot:ops")]
+    post(
+        api,
+        "tasks/" + card["id"] + "/done",
+        {"version": get(api, "tasks/" + card["id"], attempt["token"])["task"]["version"], "note": "Ben approved."},
+        attempt["token"],
+    )
     with api.app.state.store.read() as c:
         assert card["id"] not in {w.who for w in waiting_on(c, row["id"])}
         assert H.task(c, row["id"])["status"] == "open"
