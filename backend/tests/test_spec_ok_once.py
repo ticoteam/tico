@@ -102,7 +102,7 @@ def test_a_spec_jev_passes_leaves_spec_without_a_person(c, store):
     PS.ensure_presets(c)
     task = _in_spec_with_a_met_page(c, store)
     (standing,) = R.standings(c, E.task(c, task["id"]))
-    assert (standing.state, standing.line) == (R.MET, "Jev passed it")
+    assert (standing.state, standing.line) == (R.MET, "Decision model passed it")
     _beat(c)
     assert E.task(c, task["id"])["stage_id"] == "product-related"
 
@@ -112,7 +112,9 @@ def test_the_migration_takes_the_person_off_a_reshaped_pair_spec_and_its_waiting
     _reshaped(c)
     task = _in_spec_with_a_met_page(c, store)
     (standing,) = R.standings(c, E.task(c, task["id"]))
-    assert (standing.state, standing.on) == (R.WAITING, ANA), "before: Jev passed it, yet it waits on Ana in Spec"
+    assert (standing.state, standing.on) == (R.WAITING, ANA), (
+        "before: Decision model passed it, yet it waits on Ana in Spec"
+    )
     version = PS.read(c, "product")["settings_version"]
     ok_spec = _spec_page(c, stage="product-ok-spec")
 

@@ -48,7 +48,7 @@ PAGE = "Checked in production page"
 FIRST = "Make the Checked in production page first."
 OWN_TASK = "Ask it as its own task, or as an OK for that action."
 ASK_OK = "Ask their OK of the Checked in production page instead: the card shows the page, with OK and Not validated."
-HELD = "Waits for Jev to pass the Checked in production page"
+HELD = "Waits for the Decision model to pass the Checked in production page"
 NOT_VALIDATED = "Not validated"
 SWEPT = "validate-proof-sweep"
 

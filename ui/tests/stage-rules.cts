@@ -72,7 +72,7 @@ async function serve(page: Page, errors: string[], mayChange: boolean): Promise<
       suggests: 'sr_quiet', retire_why: 'Covered by the Late rule.'},
   ];
   const view = (r: Rule) => ({...r, scope: !r.pipeline_id ? 'company' : r.stages.length ? 'stage' : 'pipeline', pipeline_name: r.pipeline_id ? 'Engineering' : '',
-    stage_names: r.stages.map(s => s === 'build' ? 'Build' : 'Spec'), cost: r.jev ? 'one Jev call per event' : 'free', can_edit: mayChange,
+    stage_names: r.stages.map(s => s === 'build' ? 'Build' : 'Spec'), cost: r.jev ? 'one Decision model call per event' : 'free', can_edit: mayChange,
     // As backend/stage_rules.py not_acting: Tell or Move back on an action When never acts in step 1.
     not_acting: r.event !== 'timer' && r.then !== 'block' ? NEEDS_TIMER : ''});
   const order = ['stage', 'pipeline', 'company'];
@@ -273,7 +273,7 @@ const waitCount = (page: Page, sid: string, n: string) => page.waitForFunction((
     assert.equal(await desk.locator(`${SEC()} :is(.sr-cost, .pill)`).count(), 0, 'no pill');
     assert.equal(await desk.locator(`${SEC()} [data-sr-rule="sr_owner"] [data-sr-cost]`).count(), 0, 'a free rule has no mark');
     assert.deepEqual(await desk.locator(`${SEC()} [data-sr-rule="sr_snooze"] [data-sr-cost]`).evaluate(el => [el.getAttribute('role'), el.getAttribute('aria-label'), el.textContent]),
-      ['img', 'One Jev call per event', 'bolt']);
+      ['img', 'One Decision model call per event', 'bolt']);
     // A shared rule wears one quiet mark saying where else it applies; the stage's own wears none.
     assert.deepEqual(await desk.locator(`${SEC()} [data-sr-rule]`).evaluateAll(els => els.map(e => `${(e as HTMLElement).dataset['srRule']}: ${e.querySelector('[data-sr-shared]')?.getAttribute('aria-label') ?? ''}`)),
       ['sr_quiet: In every stage of Engineering', 'sr_owner: ', 'sr_snooze: In every pipeline']);

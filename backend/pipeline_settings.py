@@ -863,7 +863,7 @@ def _check_settings(req: Row, label: str, problems: list[str]) -> None:
         elif key == "body_max" and (not isinstance(value, int) or isinstance(value, bool) or value < 1):
             problems.append(f"The most characters of the task's body on {label} is a whole number above zero.")
         elif key == "rubric" and not isinstance(value, str):
-            problems.append(f"What Jev checks on {label} must be text.")
+            problems.append(f"What the Decision model checks on {label} must be text.")
         elif key == "release_repo" and (
             not isinstance(value, str) or (value.strip() and not REPO.match(value.strip()))
         ):

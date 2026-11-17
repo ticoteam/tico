@@ -25,7 +25,7 @@ const comments = [...Array.from({length: 60}, (_, i) => say(i + 1)), {...say(99)
 const ev = (id: string, min: number, field: string, x: Record<string, string | null> = {}) => ({id, created_at: at(min), field, actor: 'keeper', old: null, new: null, note: null, ...x});
 const events = [
   ev('e1', 601, 'page_attached', {actor: 'bot:writer', new: 'page:file-spec@3'}),
-  ev('e2', 602, 'jev_verdict', {new: 'met', note: 'Jev found it meets the check (p 0.79)'}),
+  ev('e2', 602, 'jev_verdict', {new: 'met', note: 'Decision model found it meets the check (p 0.79)'}),
   ev('e3', 603, 'answer', {actor: 'human:ana', new: 'no', note: 'The chat should be higher\nand the rest smaller'}),
   ev('e4', 610, 'labels', {actor: 'human:ana', new: '["ui"]'}),
   ev('e5', 611, 'github', {new: 'tico#12 open', note: 'GitHub: tico#12 open (state)'}),

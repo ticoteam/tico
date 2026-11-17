@@ -50,7 +50,7 @@ const STAGE_RULES = [
   {id: 'sr-1', name: 'Owner on the team', pipeline_id: 'eng', pipeline_name: 'Engineering', stages: ['build', 'fix2'], stage_names: ['Build', 'Fixes 2'],
     event: 'enters', then: 'block', scope: 'stage', revision: 1, status: 'active', cost: 'free', can_edit: true},
   {id: 'sr-2', name: 'Snooze only for a real wait', pipeline_id: '', stages: [], event: 'bot_snoozes', jev: 'Is it a real wait?', then: 'block', scope: 'company', revision: 1,
-    status: 'active', cost: 'One Jev call per event', can_edit: true},
+    status: 'active', cost: 'One Decision model call per event', can_edit: true},
 ];
 // The checks line's read (GET /v2/rules/stats), changed by a test before it opens the page.
 const stats = {on: true, checks_today: 12, unchecked_today: 0, usd_left: 48, people_usd: 0};

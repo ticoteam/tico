@@ -73,7 +73,7 @@ def idea_to_done(r: SoftRig) -> None:
     spec = r.page(PM, "Spec: export to CSV")
     r.attach(p, spec, PM)
     expect([s for s, _ in r.waits(p)] == ["jev"], f"after the attach it waits on {r.waits(p)}, not Jev")
-    r.says(p, "Jev is checking")
+    r.says(p, "Decision model is checking")
     r.jev()
     r.check()
     person = r.person_on(p)
@@ -200,7 +200,7 @@ def idea_to_done(r: SoftRig) -> None:
     r.attach(p, older, PM)
     r.jev()
     r.check()
-    r.says(p, "Jev sent it back")
+    r.says(p, "Decision model sent it back")
     expect(r.waits(p) == [("bot", PM)], f"Jev's not yet waits on {r.waits(p)}")
     expect(r.filed(p) == [e], f"a not yet filed {r.filed(p)[1:]}")
     until = S._h().shift(r.w.now(), seconds=3600)
@@ -790,7 +790,7 @@ def conflict_in_review(r: SoftRig) -> None:
     r.attach(e, r.page(REVIEWER_2, "Review 2: bulk export", verdict=NOT_MET), REVIEWER_2)
     r.jev()
     r.check()
-    r.says(e, "Jev sent it back")
+    r.says(e, "Decision model sent it back")
 
     # The PR conflicts (Acme, Nov 11): the Builder is woken at once; the reviewer, who cannot push, gets a quiet line.
     before = len(r.wakes(e, REVIEWER_2))

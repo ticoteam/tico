@@ -518,7 +518,7 @@ def of(
         out.append(Wait(BY_HAND, stage["id"], f"Leaves {stage['name']} by hand", None, entered))
     elif not unmet and idea_checks.holds(conn, row):
         # An idea in Product's Ideas: Jev's duplicate check comes first, for two minutes at most (idea_checks).
-        out.append(Wait(JEV, None, "Jev is checking it against open ideas", None, entered))
+        out.append(Wait(JEV, None, "Decision model is checking it against open ideas", None, entered))
     elif not unmet:
         # Everything is met. It waits for a slot in the next stage; with room, the engine takes it on its next pass.
         ahead = E.next_stage(conn, row)
