@@ -34,7 +34,7 @@ recipes, gotchas, and the learnings bots add): `tico tool show slack`, `tico too
 `tico tool show aside`, or the **Integrations** page. Other outside systems the company uses
 get pages in its own config (`integrations/README.md`).
 
-Which channels bots may use is the list under Settings > Tools > Slack (`tico slack channel list`), kept in Tico's database; a bot may post to any of them unless an owner or admin turned posting off for it. A run reads the list from the hub; `registry/slack-channels.yaml` is only read until someone imports it there.
+Which channels bots may use is the list under Settings > Tools > Slack (`tico slack channel list`), kept in Tico's database; a bot may post to any of them unless an owner or admin turned posting off for it. A run reads the list from the hub.
 What the mail rules do to new messages is `registry/mail-rules.yaml`. Which employee may post at
 all, and which mailbox it may act as, is the `access:` block in its own `employee.yaml`
 (`policies/access.md`). All of it is checked in code on every call.

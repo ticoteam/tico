@@ -204,7 +204,7 @@ def _bot_of(api, args):
 @tool(
     "tico_slack_channel_list",
     "The Slack channels bots may read and post in: each one's name and id, which bots read it, "
-    "whether bots may post there, and its note. Also whether an old registry/slack-channels.yaml is still waiting to be imported.",
+    "whether bots may post there, and its note.",
     {},
 )
 def slack_channel_list(api, args):
@@ -257,17 +257,6 @@ def slack_channel_add(api, args):
 def slack_channel_remove(api, args):
     body = {k: args[k] for k in ("channel", "reader") if args.get(k)}
     return _as_person(api).post("slack/channels/remove", body, key=_key(args))
-
-
-@tool(
-    "tico_slack_channel_import",
-    "Store the channels an old registry/slack-channels.yaml lists in the team's list, once, as the "
-    "person who asked you (an owner or an admin). The file is ignored afterwards.",
-    {},
-    writes=True,
-)
-def slack_channel_import(api, args):
-    return _as_person(api).post("slack/channels/import", {}, key=_key(args))
 
 
 @tool(

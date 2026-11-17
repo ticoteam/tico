@@ -577,11 +577,6 @@ def channel_event_from(payload, bot_user_id):
     return {**head, **row}, None
 
 
-def registry_channels(registry_dir):
-    """The channels the old `registry/slack-channels.yaml` lists, by id (the list now lives in the database)."""
-    return SC.file_channels(registry_dir)
-
-
 def channel_link(team_url, channel):
     return f"{(team_url or 'https://slack.com/').rstrip('/')}/archives/{channel}"
 
