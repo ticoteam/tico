@@ -633,13 +633,13 @@ WORKTREE_RESERVED = "is waiting for its worktree to be set up"
 # task (execution.unfenced_sql), so it is Paused, not the bot's turn: never a silent hold (Nov 12: a Codex reviewer
 # stopped partway and its task still said it was the reviewer's turn for the 15 minutes before `job.held`).
 RUN_HELD = "stopped partway: waiting on a person to run it again"
-# Or its computer handed back its runs on the task before starting them, start_holds.SAME times for the same reason, and
-# BotOps has a task to find why (backend/start_holds.py). Paused until BotOps closes it: never a silent "Queued" loop.
+# Or its computer handed back its runs on the task before starting them, run_diagnostics.SAME times for the same reason,
+# and BotOps has a task to find why (bot_stops.cant_start). Paused until BotOps closes it: never a silent "Queued" loop.
 CANT_START = "can't start its runs here: BotOps is checking why"
 # Or a refusal-count quarantine holds it on this task alone (backend/task_quarantine.py): it lifts after the cooldown,
 # or when a person clears the quarantine.
 TASK_QUARANTINED = "is quarantined on this task"
-# Or its claim could not start its run on the task and holds that run for a wait (backend/claim_holds.py): Tico tries it
+# Or its claim could not start its run on the task and holds that run for a wait (bot_stops.hold_job): Tico tries it
 # again by itself, and the operator already has the item about it.
 CLAIM_HELD = "couldn't start its run here: Tico tries it again"
 # Each hold on the bot's work on one task (backend/holds.py ON_TASK) as its cause. None asks a person: BotOps has the

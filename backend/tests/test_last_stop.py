@@ -3,10 +3,11 @@ red Crashed for a run its computer took and never started, with nothing lost and
 
 import pytest
 
-from backend import start_holds
+from backend import run_diagnostics as RD
 from backend.tests.helpers.api import claim, expire, get, post, ready, setup_attempt  # noqa: F401 (fixture)
 from backend.store import H
 from backend.tests.helpers.execution_review import interrupted
+from backend.tests.helpers.held_runs import start_wait_over
 
 
 def lapse(api, attempt):
@@ -48,9 +49,9 @@ def test_a_run_whose_lease_lapsed_before_it_started_is_a_soft_line_not_a_crash(a
         "run_id": lapsed["id"],
     }
     assert "lease ran out" in line["last_stop"]["reason"]
-    # Its wait before the next try (execution.handed_back_until) has passed.
+    # Its wait before the next try (execution.wait_unstarted) has passed.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE attempts SET finished_at=? WHERE id=?", (H.shift(H.now(), seconds=-301), lapsed["id"]))
+        start_wait_over(c)
     again = claim(api, machine)
     assert again["job_id"] == lapsed["job_id"]
     assert status(api)["last_stop"] is None  # running again: nothing to explain
@@ -89,7 +90,7 @@ def test_covering_a_queued_notice_clears_its_status_and_notifies_open_headers(ap
 
 
 def test_a_computer_hands_back_a_run_it_could_not_start_at_once(api):
-    from backend.execution import HAND_BACK_WAIT, HANDED_BACK
+    from backend.execution import HANDED_BACK
 
     machine, _, attempt = setup_attempt(api)
     post(
@@ -126,17 +127,14 @@ def test_a_computer_hands_back_a_run_it_could_not_start_at_once(api):
     ready(api, machine, ["ops"])
     assert claim(api, machine) is None
     with api.app.state.store.transaction() as c:
-        c.execute(
-            "UPDATE attempts SET finished_at=? WHERE id=?",
-            (H.shift(H.now(), seconds=-HAND_BACK_WAIT - 1), attempt["id"]),
-        )
+        start_wait_over(c)
     assert claim(api, machine)["job_id"] == attempt["job_id"]
 
 
 def test_quick_hand_backs_wait_between_tries_and_do_not_fail_the_run(api, monkeypatch):
     """A runner claims every quarter second: a step that fails fast before every start must not spend every pre-start
     try in a few seconds and fail the run."""
-    from backend import execution
+    from backend import execution, holds
 
     monkeypatch.setattr(execution, "PRE_START_TRIES", 3)
     machine, _, attempt = setup_attempt(api)
@@ -154,19 +152,15 @@ def test_quick_hand_backs_wait_between_tries_and_do_not_fail_the_run(api, monkey
         assert c.execute("SELECT count(*) FROM attempts").fetchone()[0] == 1
         job = c.execute("SELECT id,state FROM jobs").fetchone()
         assert job["state"] == "queued"
+        first = holds.KINDS[holds.CANT_START].first
         waits = []
         for n in (1, 2, 3):  # the wait doubles with each hand-back, up to its cap
-            c.execute("UPDATE attempts SET finished_at=? WHERE job_id=?", (H.now(), job["id"]))
-            until = execution.handed_back_until(c, dict(c.execute("SELECT * FROM jobs").fetchone()))
-            waits.append(round((H.parse_ts(until) - H.parse_ts(H.now())).total_seconds()))
-            if n < 3:
-                c.execute(
-                    "INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,"
-                    "finished_at,final_text) SELECT ?,job_id,bot_id,runner_id,generation,?,state,lease_until,created_at,"
-                    "finished_at,final_text FROM attempts WHERE job_id=? LIMIT 1",
-                    (f"x{n}", f"h{n}", job["id"]),
-                )
-    assert [w - waits[0] for w in waits] == [0, execution.HAND_BACK_WAIT, 3 * execution.HAND_BACK_WAIT]
+            if n > 1:
+                execution.wait_unstarted(c, job["id"], "ops", f"x{n}")
+            hold = c.execute(holds.OPEN_SQL, (holds.CANT_START, "job", job["id"], "ops")).fetchone()
+            assert hold["streak"] == n
+            waits.append(round((H.parse_ts(hold["until_at"]) - H.parse_ts(H.now())).total_seconds()))
+    assert waits == [first, 2 * first, 4 * first]
 
 
 def test_a_stop_before_the_start_and_a_completed_report_are_not_hand_backs(api):
@@ -224,8 +218,8 @@ def test_ten_failed_starts_within_a_day_fail_the_job_across_server_restarts(api,
     store = api.app.state.store
     who = Identity("runner:" + machine["runner_id"], "runner", runner_id=machine["runner_id"])
     job_id = attempt["job_id"]
-    # Hand-backs that give no reason use the whole budget; silent lapses stop at start_holds.SAME in a row.
-    tries = 10 if handed_back else start_holds.SAME
+    # Hand-backs that give no reason use the whole budget; silent lapses stop at RD.SAME in a row.
+    tries = 10 if handed_back else RD.SAME
     for _ in range(tries):
         # A new server reads the same durable jobs and attempts after each failed start.
         restarted = execution.Execution(store, api.app.state.execution.auth)
@@ -235,10 +229,7 @@ def test_ten_failed_starts_within_a_day_fail_the_job_across_server_restarts(api,
             else:
                 c.execute("UPDATE attempts SET lease_until=? WHERE id=?", (H.shift(H.now(), seconds=-1), attempt["id"]))
                 restarted.expire(c)
-            c.execute(
-                "UPDATE attempts SET finished_at=? WHERE id=?",
-                (H.shift(H.now(), seconds=-execution.HAND_BACK_MAX - 1), attempt["id"]),
-            )
+            start_wait_over(c)
         ready(api, machine, ["ops"])
         attempt = claim(api, machine)
     assert attempt is None
@@ -249,7 +240,7 @@ def test_ten_failed_starts_within_a_day_fail_the_job_across_server_restarts(api,
     assert [m["body"] for m in replies if m["sender_id"] == "bot:ops"] == [
         "Your ops couldn't start on Test Mac; check that Computer"
         if handed_back
-        else f"Your ops couldn't start on Test Mac: {start_holds.LAPSED_WHY}; check that Computer"
+        else f"Your ops couldn't start on Test Mac: {RD.LAPSED_WHY}; check that Computer"
     ]
 
 
@@ -269,12 +260,9 @@ def test_failed_starts_older_than_a_day_do_not_use_the_retry_budget(api, monkeyp
                 "failed" if n == 2 else "queued"
             )
             # Only the first miss ages out; the two recent misses must still exhaust the budget.
-            finished = (
-                H.shift(H.now(), hours=-execution.PRE_START_WINDOW_HOURS, seconds=-1)
-                if n == 0
-                else H.shift(H.now(), seconds=-execution.HAND_BACK_MAX - 1)
-            )
+            finished = H.shift(H.now(), hours=-execution.PRE_START_WINDOW_HOURS, seconds=-1) if n == 0 else H.now()
             c.execute("UPDATE attempts SET finished_at=? WHERE id=?", (finished, attempt["id"]))
+            start_wait_over(c)
         if n < 2:
             ready(api, machine, ["ops"])
             attempt = claim(api, machine)
@@ -300,10 +288,7 @@ def test_hub_cut_expiries_do_not_use_the_retry_budget(api, monkeypatch, cause, h
             assert c.execute("SELECT state FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0] == (
                 "failed" if n == 3 else "queued"
             )
-            c.execute(
-                "UPDATE attempts SET finished_at=? WHERE id=?",
-                (H.shift(H.now(), seconds=-execution.HAND_BACK_MAX - 1), attempt["id"]),
-            )
+            start_wait_over(c)
         if n < 3:
             ready(api, machine, ["ops"])
             attempt = claim(api, machine)

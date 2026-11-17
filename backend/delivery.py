@@ -201,7 +201,7 @@ def _drop_spent(conn, H, attempt_id, job, note):
 
 def _drop_jobs(conn, H, jobs, note, attempt_id=None):
     """Cancel queued deadline runs with no deferred items left to carry."""
-    from . import claim_holds
+    from . import bot_stops
 
     for spent_job in jobs:
         if conn.execute(
@@ -209,7 +209,7 @@ def _drop_jobs(conn, H, jobs, note, attempt_id=None):
             "SELECT 1 FROM deferrals WHERE fired_job=? AND settled_at IS NULL)",
             (spent_job, spent_job),
         ).rowcount:
-            claim_holds.clear(conn, spent_job, note)
+            bot_stops.clear_claim(conn, spent_job, note)
             H.event(conn, H.KEEPER, "delivery.deferred.spent", spent_job, {"attempt": attempt_id})
 
 

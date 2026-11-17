@@ -93,7 +93,7 @@ def test_a_hold_survives_a_runner_restart_and_a_lost_probe_is_retried_as_the_sam
     # may start on the login again; a second job would be a second turn in the same window.
     expire(api, probe["id"])
     ready(api, machine, ["ops"])
-    # The lapsed probe waits before it goes out again (execution.handed_back_until), and no other job takes its place.
+    # The lapsed probe waits before it goes out again (execution.wait_unstarted), and no other job takes its place.
     assert claim(api, machine) is None
     at(monkeypatch, "2026-10-19T02:17:16.000000Z", api)
     ready(api, machine, ["ops"])
@@ -367,7 +367,7 @@ def test_a_fallback_login_whose_hold_ends_gets_one_probe_not_every_waiting_job(a
     assert claim(api, machine) is None  # the rest wait for Codex's probe
     expire(api, probe["id"])  # the runner restarts before it begins
     signed_in(api, machine, ["ops", "finance"], ["codex"])
-    # The lapsed probe waits before it goes out again (execution.handed_back_until), and no other job takes its place.
+    # The lapsed probe waits before it goes out again (execution.wait_unstarted), and no other job takes its place.
     assert claim(api, machine) is None
     at(monkeypatch, "2026-10-19T02:21:16.000000Z", api)
     signed_in(api, machine, ["ops", "finance"], ["codex"])

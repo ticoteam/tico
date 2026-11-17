@@ -64,6 +64,7 @@ QUEUE_WAITS = (
     "task_wait",
     "task_turn_out",
     "handed_back",
+    "claim_held",
     "scoped",
     "task_quarantine",
     "company_limit",
@@ -785,7 +786,7 @@ def _fenced_queue_reason(row, refused, first, person):
 
 def _claimable(c, settings, runner_id, slug, limits, **kw):
     """execution.bot_claimable, or None when a check of the claim raised. The claim passes such a bot over or holds the
-    job, and Health names it (claim_holds.check_failures, the held job's item), so the bot is not explained here and
+    job, and Health names it (bot_stops.claim_holds, the held job's item), so the bot is not explained here and
     the page still renders. A storage error still fails the read."""
     from .execution import bot_claimable
 
@@ -1234,6 +1235,8 @@ HELD = {
         RUNS,
     ),
     "handed_back": ("{computer} handed its last try back before starting it: it tries again in a moment", RUNS),
+    # Its claim raised while preparing it (bot_stops.hold_job): Health names the error in its own finding.
+    "claim_held": ("Tico couldn't start it: an error happened while preparing it. It tries again by itself", RUNS),
     "uncertain": ("An interrupted run on the same task or chat waits for review in Runs", RUNS),
     "task_quarantine": ("Held after repeated refusals; resumes after cooldown or quarantine clear", RUNS),
     # A person limited the bot's claims to one task (execution.scoped_sql): the rest waits for the scope's release.

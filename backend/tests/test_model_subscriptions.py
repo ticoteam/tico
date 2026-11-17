@@ -666,7 +666,7 @@ def test_a_computer_with_only_a_codex_subscription_runs_codex_checks_and_their_l
 
 def limited_on(api, m, sid, bot="ops"):
     """A turn of `bot` on computer `m`, signed in with subscription `sid`, meets a usage limit that names its reset: the
-    bot is limited and its queued work is held until the reset (`quota-reset`)."""
+    bot is limited and its queued work waits on the login's hold until the reset."""
     give(api, m, "claude", sid)
     post(api, f"chat/{bot}", {"text": "Summarize the Acme account."})
     turn = claim(api, m)
@@ -699,14 +699,6 @@ def waits(api, bot="ops"):
         place = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchone()
         settings = api.app.state.store.settings
         return [why for _, why in execution.queued_reasons(c, settings, place["runner_id"], bot)]
-
-
-def queued_holds(api, bot="ops"):
-    with api.app.state.store.read() as c:
-        return [
-            tuple(r)
-            for r in c.execute("SELECT held,wake_class FROM jobs WHERE bot_id=? AND state='queued' ORDER BY id", (bot,))
-        ]
 
 
 def signed_with(api, turn):
@@ -749,21 +741,10 @@ def hold_own_login(api, m, until="2999-01-01T00:00:00.000000Z", runtime="claude"
         )
 
 
-def hold_queued(api, bot="ops", until="2999-01-01T00:00:00.000000Z"):
-    """The bot is limited and its queued work waits until `until`, as a limit with a named reset leaves it."""
+def limit(api, bot="ops"):
+    """The bot is limited, as a limit with a named reset leaves it."""
     with api.app.state.store.transaction() as c:
-        c.execute(
-            "UPDATE jobs SET held=1,hold_until=?,wake_class='quota-reset' WHERE bot_id=? AND state='queued'",
-            (until, bot),
-        )
         H.status_set(c, H.KEEPER, bot, state="limited", focus="Usage limit", reason="test")
-
-
-def queued_until(api, bot="ops"):
-    with api.app.state.store.read() as c:
-        return [
-            tuple(r) for r in c.execute("SELECT held,hold_until FROM jobs WHERE bot_id=? AND state='queued'", (bot,))
-        ]
 
 
 def test_switching_a_computer_to_another_plan_frees_a_bot_limited_on_the_old_one(api):
@@ -941,7 +922,7 @@ def test_a_switch_re_judges_a_bot_whose_named_fallback_runs_the_runtime_and_keep
     give(api, m, "claude", plan_a)
     post(api, "chat/ops", {"text": "Summarize the Acme account."})
     hold_own_login(api, m, runtime="codex")  # the primary is held
-    hold_queued(api)
+    limit(api)
     # Plan B is held and the computer's own Claude login is held too: the fallback cannot take the turn, so it stays.
     hold_plan(api, plan_b)
     hold_own_login(api, m)
@@ -965,12 +946,10 @@ def test_a_held_own_login_keeps_the_bot_limited_and_its_job_waits_for_that_login
     limited_on(api, m, plan_a)
     plan_end, own_end = "2999-01-01T20:00:00.000000Z", "2999-01-01T19:00:00.000000Z"
     hold_plan(api, plan_a, until=plan_end)
-    hold_queued(api, until=plan_end)  # as an older server held the job for the plan's reset
     hold_own_login(api, m, until=own_end)
     give(api, m, "claude", None)  # plan A taken off; the computer's own login is held until 19:00
-    # The job waits on the login it runs on now, through that login's hold: the old per-job hold is let go.
+    # The job waits on the login it runs on now, through that login's hold.
     assert status(api)["state"] == "limited" and waits(api) == ["cooling_off"]
-    assert queued_until(api) == [(0, None)]
     with api.app.state.store.read() as c:
         assert own_login_hold(c, api.app.state.store.settings, "ops")["until"] == own_end
 
@@ -990,9 +969,9 @@ def test_a_branch_runs_its_originals_runtime_now_not_the_runtime_it_stored(api):
         BS.write(c, 'ops', {**config, 'shared_from': 'cpo'})
     give(api, m, "claude", plan_a)
     post(api, "chat/ops", {"text": "Summarize the Acme account."})
-    hold_queued(api)
+    limit(api)
     give(api, m, "claude", plan_b)
-    assert status(api)["state"] == "limited" and queued_holds(api) == [(1, "quota-reset")]
+    assert status(api)["state"] == "limited"
 
 
 def test_try_now_on_an_idle_branch_ends_the_hold_on_the_login_its_original_runs_on(api):
