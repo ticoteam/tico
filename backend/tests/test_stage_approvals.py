@@ -340,6 +340,7 @@ def test_a_shared_spec_has_separate_task_oks_and_changes_since_each(api):
         )
     with api.app.state.store.read() as c:
         assert TD.approved_versions(c, a["id"]) == TD.approved_versions(c, b["id"]) == {written["file_id"]: 1}
+        assert TD.approved_tasks(c, written["file_id"], "Spec") == {a["id"]: 1, b["id"]: 1}
         assert len(P.current_pages(c, a["visit"]["id"], requirement_id)) == 1
 
 
@@ -392,3 +393,21 @@ def test_a_report_cannot_borrow_another_pages_decision_model_round(api):
         _say(c, dict(page), "not_met")
     standing = _standing(api, row["id"])
     assert (standing.state, standing.on) == (R.NOT_MET, OPS)
+
+
+def test_a_pages_spec_ok_does_not_approve_its_other_document_role(api):
+    from backend import page_links as L
+    from backend import task_documents as TD
+
+    _, row = _flow(api)
+    written = _write(api, row["id"], SPEC, "ana-test")
+    _all_verdicts(api, row["id"])
+    assert _approve(api, row["id"], _entry(api, row["id"]), 1).status_code == 200
+    with api.app.state.store.transaction() as c:
+        L.link(c, written["file_id"], "task:" + row["id"], "QA report", ANA)
+    with api.app.state.store.read() as c:
+        assert TD.approved_tasks(c, written["file_id"], "Spec") == {row["id"]: 1}
+        assert TD.approved_tasks(c, written["file_id"], "QA report") == {}
+    documents = {d["name"]: d for d in get(api, "tasks/" + row["id"])["task"]["documents"]}
+    assert documents["Spec"]["approved_version"] == 1
+    assert "approved_version" not in documents["QA report"]

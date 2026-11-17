@@ -154,7 +154,7 @@ def _handoff_body(conn: "sqlite3.Connection", task: Row) -> str:
     if specs:
         from . import task_documents as TD
 
-        approved = TD.approved_versions(conn, task["id"])
+        approved = TD.approved_versions(conn, task["id"], "Spec")
         parts.extend(f"Spec: page:{p['id']}@{approved.get(p['id'], p['current_version'])}" for p in specs)
     elif page:
         from . import task_requirements as R
