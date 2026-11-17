@@ -207,7 +207,7 @@ def test_direct_attempt_keeps_moved_meeting_sources_and_fresh_membership(live, d
         message = H.say(c, "human:ana", "human:ben", "Synthetic public input", conversation_id=room["id"])
         c.execute("UPDATE jobs SET message_id=? WHERE id=?", (message["id"], attempt["job_id"]))
         detail = {"message_id": attempt["message"]["id"]} if source == "message" else {"live_meetings": [mid]}
-        H.event(c, H.KEEPER, task_privacy.INPUT_MOVED, aid, detail)
+        H.event(c, H.TICO_ACTOR, task_privacy.INPUT_MOVED, aid, detail)
 
     def allowed():
         with store.read() as c:
@@ -757,7 +757,7 @@ def test_existing_provenance_clock_upgrades_meeting_sources(live, derived):
     with store.transaction() as c:
         c.execute(
             "UPDATE messages SET sender_id=?,recipient_id='bot:finance' WHERE id=?",
-            (H.KEEPER, attempt["message"]["id"]),
+            (H.TICO_ACTOR, attempt["message"]["id"]),
         )
     assert source() == set()
     with store.transaction() as c:
@@ -768,7 +768,7 @@ def test_existing_provenance_clock_upgrades_meeting_sources(live, derived):
     assert source() == {"missing-meeting"}
 
 
-def test_ordinary_api_reads_do_not_scan_unrelated_keeper_history(api, monkeypatch):
+def test_ordinary_api_reads_do_not_scan_unrelated_tico_history(api, monkeypatch):
     task = post(
         api,
         "tasks",
@@ -850,7 +850,7 @@ def test_settled_run_unsettles_when_a_moved_input_room_joins_a_private_meeting(l
         # As task_privacy.record_moved_input writes it before any meeting provenance exists.
         H.event(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             task_privacy.INPUT_MOVED,
             aid,
             {"message_id": moved["id"], "to_attempt": "synthetic-later-run", "tasks": [], "live_meetings": []},
@@ -907,7 +907,7 @@ def test_settled_run_unsettles_when_a_moved_input_room_joins_a_private_meeting(l
 
 
 def test_meeting_turn_writes_unsettle_only_the_rooms_naming_the_turn(live, derived):
-    """A turn makes a legacy room a meeting room through the keeper input naming it: adding the turn unsettles the rows
+    """A turn makes a legacy room a meeting room through Tico input naming it: adding the turn unsettles the rows
     that read that room, here a reply elsewhere to a message in it (refused to non-members before any new sweep), and
     nothing else; a claim, reply or skip unsettles nothing."""
     from backend import read_deps
@@ -920,12 +920,12 @@ def test_meeting_turn_writes_unsettle_only_the_rooms_naming_the_turn(live, deriv
         "conversation_id"
     ]
     with store.transaction() as c:
-        # The run's keeper input stays in a room with no stored meeting binding: only the turn row makes it one.
+        # The run's Tico input stays in a room with no stored meeting binding: only the turn row makes it one.
         c.execute("UPDATE conversations SET room_key=NULL WHERE id=?", (attempt["message"]["conversation_id"],))
         turn = dict(c.execute("SELECT * FROM live_meeting_turns WHERE meeting_id=?", (mid,)).fetchone())
         c.execute("DELETE FROM live_meeting_turns WHERE id=?", (turn["id"],))
         unrelated = H.say(c, "human:ana", "human:ben", "Synthetic unrelated request", conversation_id=root_room)
-        # The keeper input names the meeting itself; a plain message beside it reads the meeting only through its room.
+        # Tico input names the meeting itself; a plain message beside it reads the meeting only through its room.
         beside = H.say(
             c, "bot:ops", "human:ana", "Synthetic plain note", conversation_id=attempt["message"]["conversation_id"]
         )

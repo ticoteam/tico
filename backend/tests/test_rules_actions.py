@@ -27,7 +27,7 @@ def task(c, by=ANA, owner="bot:cpo", title="Plan the launch", **kw):
 
 def carry(c, row, outcome, params=None, by=ANA, body="Step news"):
     decision = R.Decision(outcome, "rule_x", None, {"action": None, **(params or {})}, by)
-    return R.carry_out(c, decision, H.KEEPER, row["owner_id"], "notice", {"task": row["id"]}, body, None)
+    return R.carry_out(c, decision, H.TICO_ACTOR, row["owner_id"], "notice", {"task": row["id"]}, body, None)
 
 
 def asks(c, tid):
@@ -81,7 +81,7 @@ def test_an_action_rule_asks_a_named_person(c):
 def no_task(c, decision_by=ANA, room="room-1", body="Can someone check the Acme invoice?"):
     """An ask rule's decision on a message to cpo that names no task, in thread `room`."""
     decision = R.Decision(R.ASK, "rule_x", None, {}, decision_by)
-    return R.carry_out(c, decision, H.KEEPER, "bot:cpo", "notice", {}, body, {"id": room} if room else None)
+    return R.carry_out(c, decision, H.TICO_ACTOR, "bot:cpo", "notice", {}, body, {"id": room} if room else None)
 
 
 def rule_tasks(c):

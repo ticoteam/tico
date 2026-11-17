@@ -320,7 +320,7 @@ def _spend(store, label, attempts, state, questions):
             total += cost
             H.event(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 SPEND_ACTION,
                 label or "",
                 {
@@ -423,7 +423,7 @@ def strict_engine(store, c, level=STRICT_LEVEL, timeout=STRICT_SECONDS, vault=No
             with store.transaction() as t:
                 H.event(
                     t,
-                    H.KEEPER,
+                    H.TICO_ACTOR,
                     "judge.call",
                     label or "",
                     {
@@ -436,7 +436,7 @@ def strict_engine(store, c, level=STRICT_LEVEL, timeout=STRICT_SECONDS, vault=No
         with store.transaction() as t:
             H.event(
                 t,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 "judge.call",
                 label or "",
                 {**detail, **audit_detail(result), "answers": J.summary(result["answers"])},
@@ -600,19 +600,19 @@ class Ask(Contract):
     label: str | None = Field(default=None, max_length=J.MAX_LABEL)
 
 
-# The keeper's rule-check calls (backend/org_rule_check.py) have their own daily cap: they count only against it, and
-# every other keeper call (ask ingest, triage, postal) only against the decisions cap, so neither starves the other.
+# Tico's rule-check calls (backend/org_rule_check.py) have their own daily cap: they count only against it, and
+# every other Tico call (ask ingest, triage, postal) only against the decisions cap, so neither starves the other.
 RULES_TARGET = "rule-check@%"
 
 
 def used_today(c, actor, at=None, action="judge.call", target=None):
-    """Today's `action` rows by `actor`. `target`: only those whose target is LIKE it. The keeper's own judge calls
+    """Today's `action` rows by `actor`. `target`: only those whose target is LIKE it. Tico's own judge calls
     leave out the rule checks unless `target` asks for them."""
     day = (at or H.now())[:10]
     where, args = "", [actor, action, day + "T00:00:00"]
     if target:
         where, args = " AND target LIKE ?", [*args, target]
-    elif actor == H.KEEPER and action == "judge.call":
+    elif actor == H.TICO_ACTOR and action == "judge.call":
         where, args = " AND target NOT LIKE ?", [*args, RULES_TARGET]
     # The actor's own rows, counted in the index (events_task_origin), not every actor's today (events_action_ts).
     return c.execute(

@@ -119,7 +119,7 @@ def carried(conn, notes, at):
 
 
 def continue_backlog(conn, bot, skip=()):
-    """More held messages wait than one run carries (H.notes_waiting's limit): one keeper notice starts the run
+    """More held messages wait than one run carries (H.notes_waiting's limit): one Tico notice starts the run
     that carries the next ones, so none is left without a run to deliver it. Called after this run's notes are
     marked carried; at most one such notice waits at a time. `skip`: notes that wait for a run in their own thread
     (threads.wake_note_threads), which another run here would not carry."""
@@ -144,7 +144,7 @@ def continue_backlog(conn, bot, skip=()):
         return None
     return H.say(
         conn,
-        H.KEEPER,
+        H.TICO_ACTOR,
         "bot:" + bot,
         "More bot messages waited than one run carries; this run carries the next ones.",
         kind="notice",

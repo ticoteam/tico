@@ -221,7 +221,7 @@ def failure_item(c, link_id, code):
 
         created = person_asks.task_for(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             title,
             body,
             row["linked_by"],
@@ -375,7 +375,7 @@ def _unlink(c, core, who, row):
     if row["channel_id"]:
         _sweep(core, c, row["channel_id"])
         for node in _subtree(c, row["thread_id"]):
-            core.remove_outside_member(c, H.KEEPER, node, outside_recipient(row["channel_id"]))
+            core.remove_outside_member(c, H.TICO_ACTOR, node, outside_recipient(row["channel_id"]))
     H.event(c, who.actor, "slack.unlink", row["id"], {"channel": row["channel_id"]})
     _audit(c, who, row["id"], {"state": row["state"]}, {"state": "unlinked"})
 
@@ -484,7 +484,7 @@ def add_readers(c, who, key, name, channel_id, bots):
         if viewer is None:
             continue
         if not core.readable(c, viewer, link["thread_id"]):
-            core.add_member(c, H.KEEPER, link["thread_id"], actor)
+            core.add_member(c, H.TICO_ACTOR, link["thread_id"], actor)
         core.follow(c, viewer, link["thread_id"], notify="digest")
     return link
 
@@ -494,7 +494,7 @@ def remove_reader(c, who, link, bot):
     with its last reader."""
     core, actor = _core(), "bot:" + bot
     if link["read_only"]:
-        core.remove_member(c, H.KEEPER, link["thread_id"], actor)
+        core.remove_member(c, H.TICO_ACTOR, link["thread_id"], actor)
         if not c.execute(
             "SELECT 1 FROM thread_followers WHERE thread_id=? AND following=1 AND notify='digest' AND actor LIKE 'bot:%'",
             (link["thread_id"],),
@@ -718,7 +718,7 @@ class Bridge:
                 "WHERE id=? AND state='requested'",
                 (str(why)[:300], H.now(), link["id"]),
             )
-            H.event(c, H.KEEPER, "slack.link.refused", link["id"], {"reason": str(why)[:300]})
+            H.event(c, H.TICO_ACTOR, "slack.link.refused", link["id"], {"reason": str(why)[:300]})
         return "refused"
 
     def _activate(self, link, info, persons, need):
@@ -751,7 +751,9 @@ class Bridge:
                 if not link.get("read_only"):
                     for node in _subtree(c, link["thread_id"]):  # the sub-threads made before the link too
                         self.core().add_outside_delivery(c, node, outside_recipient(info["id"]))
-                H.event(c, H.KEEPER, "slack.link.active", link["id"], {"channel": info["id"], "members": len(persons)})
+                H.event(
+                    c, H.TICO_ACTOR, "slack.link.active", link["id"], {"channel": info["id"], "members": len(persons)}
+                )
             return "active"
         except Problem as exc:
             return self._refuse(link, exc.detail)
@@ -769,7 +771,7 @@ class Bridge:
             "UPDATE slack_thread_links SET state='suspended', reason=?, updated_at=? WHERE id=?",
             (reason, H.now(), link_id),
         )
-        H.event(c, H.KEEPER, "slack.suspend", link_id, {"reason": reason})
+        H.event(c, H.TICO_ACTOR, "slack.suspend", link_id, {"reason": reason})
         task = H.task(c, row["needs_task_id"]) if row["needs_task_id"] else None
         if task and task["status"] in H.ACTIVE_STATUSES:
             return
@@ -784,7 +786,7 @@ class Bridge:
 
             created = person_asks.task_for(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 title,
                 body,
                 row["linked_by"],
@@ -1033,7 +1035,7 @@ class Bridge:
                     c, link["id"], f"a message came from someone who doesn't map to a roster person ({reason})"
                 )
             return "denied"  # the event stays queued until the link is checked again
-        actor = H.KEEPER if app or person is None else H.human_actor(person["id"])
+        actor = H.TICO_ACTOR if app or person is None else H.human_actor(person["id"])
         text = self.body_for(event["text"])
         if app:
             text = f"*{event.get('author_name') or event['user_id']}*: {text}"  # who posted it, as the thread shows it
@@ -1052,7 +1054,7 @@ class Bridge:
         refs = {"slack": {"channel": channel, "ts": ts, "team": self.gw.team_id}}
         if event.get("author") == "bot" and event.get("author_name"):
             refs["slack"]["name"] = event["author_name"]  # an app's post: the name it posts under
-        if actor == H.KEEPER:
+        if actor == H.TICO_ACTOR:
             refs["slack"]["app"] = event.get("user_id") or True  # another app's post: a plain line, not a system one
         if carry_import:
             refs["import"] = True

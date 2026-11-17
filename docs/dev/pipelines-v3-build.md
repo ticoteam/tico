@@ -17,7 +17,7 @@ touched by anything in this file.
 
 ## Names
 
-- Actors are the strings the hub already uses: `bot:<id>`, `human:<id>`. The engine's own actor is `hubdb_core.KEEPER`,
+- Actors are the strings the hub already uses: `bot:<id>`, `human:<id>`. The engine's own actor is `hubdb_core.TICO_ACTOR`,
   imported as `SYSTEM` in `task_engine`.
 - Stage owner: an actor string, the word `assignee`, or NULL (the manager bot is woken to pick one, C25).
 - Module names are the spec's, except `requirements.py`, which is `task_requirements.py` (the backend folder already has

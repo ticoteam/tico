@@ -180,7 +180,7 @@ def _filer(conn: "sqlite3.Connection", task: Row, by: str) -> str:
     for actor in candidates:
         if actor and (H.is_bot(actor) or H.is_human(actor)) and H._actor_exists(conn, actor):
             return str(actor)
-    return str(H.KEEPER)
+    return str(H.TICO_ACTOR)
 
 
 def _file(conn: "sqlite3.Connection", task: Row, target: str, by: str) -> tuple[str | None, str]:
@@ -194,7 +194,7 @@ def _file(conn: "sqlite3.Connection", task: Row, target: str, by: str) -> tuple[
     # A task given to someone in General is theirs, as on any General task; elsewhere nobody picks an owner where the
     # target has no manager. In both, the filer stays the assignee.
     unassigned = target != "general" and bool((task_engine.pipeline(conn, target) or {}).get("manager_id"))
-    for actor in dict.fromkeys((filer, str(H.KEEPER))):
+    for actor in dict.fromkeys((filer, str(H.TICO_ACTOR))):
         conn.execute("SAVEPOINT stage_effects_file")
         try:
             made = H.task_create(

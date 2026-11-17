@@ -151,7 +151,7 @@ def test_a_person_says_a_bots_task_is_done_and_tico_finishing_one_needs_no_push(
     one = _new(c)
     assert H.task_done(c, BEN, one["id"], "Saw it live.", mover=True)["status"] == "done"
     two = _new(c, title="File the receipts")
-    assert H.task_done(c, H.KEEPER, two["id"], "The bot was archived.")["status"] == "done"
+    assert H.task_done(c, H.TICO_ACTOR, two["id"], "The bot was archived.")["status"] == "done"
 
 
 # ----------------------------------------------------------------------------- ask and answer

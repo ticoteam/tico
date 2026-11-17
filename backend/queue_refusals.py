@@ -134,7 +134,7 @@ def apply(c, change):
     ):
         H.event(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             EVENT,
             value.get('job') or previous['job'],
             {'reason': value.get('reason'), 'since': value.get('since')},

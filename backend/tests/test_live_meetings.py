@@ -478,7 +478,7 @@ def test_joined_human_can_attach_visible_bots_but_nonmember_cannot(live):
     assert hidden_bot.status_code == 403
 
 
-def test_attachment_requires_write_and_keeper_delivery_keeps_human_contact_policy(live):
+def test_attachment_requires_write_and_tico_delivery_keeps_human_contact_policy(live):
     with live.app.state.store.transaction() as c:
         restrict(
             c,

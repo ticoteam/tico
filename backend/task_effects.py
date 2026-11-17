@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
 Row = dict[str, Any]
 _core: Any = hubdb_core
-SYSTEM: str = _core.KEEPER
+SYSTEM: str = _core.TICO_ACTOR
 
 # Whose act made the engine move a task: the owner who said the work is done, the person who gave the last OK. The
 # engine moves as SYSTEM; what the move causes is theirs (a routine's day counts as done by its owner, not by nobody).

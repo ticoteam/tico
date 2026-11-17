@@ -673,7 +673,7 @@ class Sources:
                 ),
             )
         c.execute('DELETE FROM doc_source_jobs WHERE source_id=?', (job['source_id'],))
-        H.event(c, H.KEEPER, 'docs.source_refreshed', job['source_id'], {'unchanged': unchanged})
+        H.event(c, H.TICO_ACTOR, 'docs.source_refreshed', job['source_id'], {'unchanged': unchanged})
 
     def tick(self):
         """One pass of Document sync (Settings > Routines, Automations): one run per pass; an idle pass folds."""
@@ -712,7 +712,7 @@ class Sources:
                     'UPDATE doc_source_jobs SET lease=\'\',lease_until=0,next_try_at=? WHERE source_id=?',
                     (time.time() + failure.retry, job['source_id']),
                 )
-                H.event(c, H.KEEPER, 'docs.source_failed', job['source_id'], {'code': failure.code})
+                H.event(c, H.TICO_ACTOR, 'docs.source_failed', job['source_id'], {'code': failure.code})
                 c.execute(
                     'UPDATE doc_sources SET status=?,error_code=?,next_check_at=? WHERE source_id=?',
                     (

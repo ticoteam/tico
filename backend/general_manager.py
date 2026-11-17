@@ -370,7 +370,7 @@ def _open_report(c, name):
         c,
         "SELECT * FROM tasks WHERE owner_id=? AND requester_id=? AND title LIKE ? ESCAPE '\\' "
         "AND status='open' ORDER BY created_at DESC LIMIT 1",
-        (ACTOR, H.KEEPER, like),
+        (ACTOR, H.TICO_ACTOR, like),
     )
 
 
@@ -385,7 +385,7 @@ def deliver(c, auth, name, body, count):
 
         if task_wakes.instructions(c, open_task["id"]) == body.strip():
             return open_task["id"], "unchanged"
-        H.task_update(c, H.KEEPER, open_task["id"], title=title)
+        H.task_update(c, H.TICO_ACTOR, open_task["id"], title=title)
         after = H.task(c, open_task["id"])
         # The new report replaces the old as the bot's instructions, in its run: a task has no description to rewrite.
         H._wake(
@@ -398,10 +398,10 @@ def deliver(c, auth, name, body, count):
             source=EVENT,
         )
         return open_task["id"], "updated"
-    conversation = rooms.task_conversation_id(c, auth, ACTOR, H.KEEPER) if auth is not None else None
+    conversation = rooms.task_conversation_id(c, auth, ACTOR, H.TICO_ACTOR) if auth is not None else None
     made = H.task_create(
         c,
-        H.KEEPER,
+        H.TICO_ACTOR,
         title,
         body,
         ACTOR,
@@ -470,7 +470,11 @@ def report(c, auth, settings, at):
     c.execute("DELETE FROM task_manager_seen WHERE seen_at<?", (H.shift(at, days=-KEEP_DAYS),))
     if made:
         H.event(
-            c, H.KEEPER, "task_manager.report", SLUG, {"departments": [m["department"] for m in made], "items": total}
+            c,
+            H.TICO_ACTOR,
+            "task_manager.report",
+            SLUG,
+            {"departments": [m["department"] for m in made], "items": total},
         )
     words = (
         f"{len(made)} department{'s' if len(made) != 1 else ''}, {total} item{'s' if total != 1 else ''}"

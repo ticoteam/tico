@@ -470,7 +470,7 @@ def _pin(
         E._event(  # pyright: ignore[reportPrivateUsage]
             conn,
             task_id,
-            core.KEEPER,
+            core.TICO_ACTOR,
             "ok_kept",
             None,
             f"{name}'s OK (version {was_version}) carried to version {version}: same commits",

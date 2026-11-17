@@ -808,12 +808,17 @@ class Builder:
                 )
                 if routine:
                     task = hubdb.task_create(
-                        c, hubdb.KEEPER, routine["title"], summary, "bot:" + bot, deduplicate=False
+                        c, hubdb.TICO_ACTOR, routine["title"], summary, "bot:" + bot, deduplicate=False
                     )
                 # The run's note is the bot's own words, never a message from a person; Runs finds the run by it.
                 note = hubdb.say(c, "bot:" + bot, "human:ana", summary, refs={"task": task["id"]} if task else {})
                 turn = hubdb.turn_start(
-                    c, hubdb.KEEPER, bot, trigger=trigger, message_id=note["id"], task_id=task["id"] if task else None
+                    c,
+                    hubdb.TICO_ACTOR,
+                    bot,
+                    trigger=trigger,
+                    message_id=note["id"],
+                    task_id=task["id"] if task else None,
                 )
                 self.clock.at += timedelta(minutes=4)
                 model, provider, billing = D.USAGE[bot]
@@ -821,7 +826,7 @@ class Builder:
                 cached = tokens_in * 2 // 3
                 hubdb.turn_finish(
                     c,
-                    hubdb.KEEPER,
+                    hubdb.TICO_ACTOR,
                     turn["id"],
                     "completed",
                     summary,
@@ -845,18 +850,18 @@ class Builder:
                         "UPDATE schedules SET last_fired_at=max(coalesce(last_fired_at,''),?) WHERE id=?",
                         (turn["started_at"], routine["id"]),
                     )
-                hubdb.status_result(c, hubdb.KEEPER, bot, last_result=summary, last_turn_at=H.now())
+                hubdb.status_result(c, hubdb.TICO_ACTOR, bot, last_result=summary, last_turn_at=H.now())
             # A change's reason is written on the row it closes, so each step's why goes in with the next one.
             for bot, steps in D.STATUS_STEPS.items():
                 why = ""
                 for hours, state, focus, next_why in steps:
                     self.at(hours=hours)
-                    hubdb.status_set(c, hubdb.KEEPER, bot, state=state, focus=focus, reason=why)
+                    hubdb.status_set(c, hubdb.TICO_ACTOR, bot, state=state, focus=focus, reason=why)
                     why = next_why
             self.at(hours=1)
             for bot, focus in D.FOCUS.items():
                 if bot not in D.STATUS_STEPS:
-                    hubdb.status_set(c, hubdb.KEEPER, bot, state="idle", focus=focus)
+                    hubdb.status_set(c, hubdb.TICO_ACTOR, bot, state="idle", focus=focus)
 
         self.write(work)
 
@@ -870,7 +875,7 @@ class Builder:
         for bot, _key, title, cron, _text, quiet in D.ROUTINES:
             at = start
             while (at := next_due(cron, at, "America/Los_Angeles")) < end:
-                work.append((at, bot, title, hubdb.KEEPER, "routine", quiet[len(work) % len(quiet)]))
+                work.append((at, bot, title, hubdb.TICO_ACTOR, "routine", quiet[len(work) % len(quiet)]))
         for day in range(D.PAST_WEEKS * 7):
             for index, (bot, title) in enumerate(D.PAST_DAILY):
                 work.append(
@@ -878,7 +883,7 @@ class Builder:
                         start + timedelta(days=day, hours=13, minutes=20 * index),
                         bot,
                         title,
-                        hubdb.KEEPER,
+                        hubdb.TICO_ACTOR,
                         "routine",
                         "Done; nothing needs a person.",
                     )
@@ -927,7 +932,7 @@ class Builder:
                     if title
                     else None
                 )
-                turn = hubdb.turn_start(c, hubdb.KEEPER, bot, trigger=trigger, task_id=task["id"] if task else None)
+                turn = hubdb.turn_start(c, hubdb.TICO_ACTOR, bot, trigger=trigger, task_id=task["id"] if task else None)
                 self.clock.at += timedelta(minutes=3 + index % 9)
                 model, provider, billing = D.USAGE.get(bot, ("claude-haiku-5-5", "anthropic", "api"))
                 if trigger == "routine":
@@ -941,7 +946,7 @@ class Builder:
                 cached = tokens_in * 2 // 3
                 hubdb.turn_finish(
                     c,
-                    hubdb.KEEPER,
+                    hubdb.TICO_ACTOR,
                     turn["id"],
                     "completed",
                     note,
@@ -1008,7 +1013,12 @@ class Builder:
                     ),
                 )
             conv = H.open_conversation(
-                c, H.KEEPER, [H.KEEPER, "bot:support-owner"], kind="chat", subject=D.SLACK["subject"], scope="direct"
+                c,
+                H.TICO_ACTOR,
+                [H.TICO_ACTOR, "bot:support-owner"],
+                kind="chat",
+                subject=D.SLACK["subject"],
+                scope="direct",
             )
             message = H.feed(c, "bot:support-owner", D.SLACK["feed"], conv)
             c.execute(

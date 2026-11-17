@@ -55,7 +55,7 @@ const messages = () => [
     source: {kind: 'automation', name: 'Weekly digest', link: '#/automations/au-1'}}),
   msg('b2', 11, 'bot:ops', 'Anything else?', 10, {recipient_id: 'human:ana'}),
 ];
-const KEEPER = ['k1', 'k2', 'k3', 'k4', 'r1', 's1', 'n1', 'f1', 'au1'];
+const TICO_LINES = ['k1', 'k2', 'k3', 'k4', 'r1', 's1', 'n1', 'f1', 'au1'];
 
 async function open(browser: Browser, {phone = false}: {phone?: boolean} = {}) {
   const page = await browser.newPage({viewport: phone ? {width: 390, height: 844} : {width: 1280, height: 800}, serviceWorkers: 'block', reducedMotion: 'reduce',
@@ -113,7 +113,7 @@ let browser: Browser | null = null;
     assert.equal(await line(page, 'k4').evaluate(el => !!el.closest('details')), false, 'a lone update is not folded');
     assert.match(await line(page, 'k4').innerText(), /Blocked: Book the launch venue/);
     // No keeper row is a message with a sender, except the Assistant's relay.
-    for (const id of KEEPER.filter(id => id !== 'r1')) {
+    for (const id of TICO_LINES.filter(id => id !== 'r1')) {
       assert.equal(await msgRow(page, id).count(), 0, id + ' is not a message row');
       assert.equal(await line(page, id).locator('.th-who, .th-av').count(), 0, id + ' has no sender row or avatar');
     }

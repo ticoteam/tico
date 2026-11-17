@@ -107,8 +107,8 @@ def transcript(c, viewer, thread, scope, me):
             continue
         through = max(through, row["seq"] or 0)
         author = known.name(row["sender_id"], row["conversation_id"])
-        if row["sender_id"] == H.KEEPER:  # a keeper line says what made it, as the chat does (backend/sources.py)
-            label = SRC.message_source({}, {"sender_id": H.KEEPER, "refs": refs})["name"] or "System"
+        if row["sender_id"] == H.TICO_ACTOR:  # a Tico line says what made it, as the chat does (backend/sources.py)
+            label = SRC.message_source({}, {"sender_id": H.TICO_ACTOR, "refs": refs})["name"] or "System"
         else:
             label = _name(c, author, names)
         line = f"{label}: {_clip(row['body'], LINE_CHARS)}"

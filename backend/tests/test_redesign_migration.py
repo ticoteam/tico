@@ -223,7 +223,7 @@ def test_what_cannot_move_stays_as_it_was_and_the_owner_is_told_once(api, monkey
 def test_a_new_install_moves_team_rules_and_tells_the_owner_once_someone_owns_it(api, monkeypatch):
     rule(api, "rule_team", "comment", "note", scope=("team", ""))
     routine(api, "sch_a")
-    monkeypatch.setattr(M, "system_who", lambda c: M._System(M.H.KEEPER, "keeper"))  # nobody at the top yet
+    monkeypatch.setattr(M, "system_who", lambda c: M._System(M.H.TICO_ACTOR, "keeper"))  # nobody at the top yet
     done = first_start(api)
     assert done["waiting"] == 1 and not done["told"]
     assert ("wake_rule", "rule_team") not in marks(api) and rows(api, "SELECT id FROM rules WHERE id='rule_team'")

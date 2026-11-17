@@ -858,7 +858,10 @@ def _unmake(c, actor, task, item, since, note):
         note(f"{TASK}, which it made, was changed since by {_name(c, who)}, so it stays open")
         return None
     H.task_close(
-        c, H.KEEPER, task["id"], f"Undone by {_name(c, actor)}: the {strategy_bot.name(c)} made this task on its own"
+        c,
+        H.TICO_ACTOR,
+        task["id"],
+        f"Undone by {_name(c, actor)}: the {strategy_bot.name(c)} made this task on its own",
     )
     return f"Closed {TASK}, which it made"
 
@@ -884,7 +887,7 @@ def _restore(c, actor, task, item, since, note):
             return None
     left = _followers(c, task)
     # A task private since the decision (moved under a private task) is not the owner's to write: Tico puts it back.
-    writer = H.KEEPER if H.task_private(c, task) else actor
+    writer = H.TICO_ACTOR if H.task_private(c, task) else actor
     why = f"Undone by {_name(c, actor)}: the {strategy_bot.name(c)} did this on its own"
     if "status" in back:
         # A decision only closes a task, so its status goes back by reopening it. Reopened, it goes to its stage's

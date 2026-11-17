@@ -518,8 +518,8 @@ def test_an_upgrade_names_it_moves_its_settings_and_leaves_an_older_release_its_
             for r in c.execute("SELECT id, decision_note, decided_by FROM goal_proposals WHERE kind='recovery'")
         }
     assert notes == {
-        "old-passive": (strategy_suggest.WITHDRAWN, H.KEEPER),
-        "old-level-1": (strategy_suggest.WITHDRAWN, H.KEEPER),
+        "old-passive": (strategy_suggest.WITHDRAWN, H.TICO_ACTOR),
+        "old-level-1": (strategy_suggest.WITHDRAWN, H.TICO_ACTOR),
         "declined": ("Declined: not this quarter", "human:ana"),
     }
     # the name an older release gave it becomes the strategy bot

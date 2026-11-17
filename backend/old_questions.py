@@ -67,7 +67,7 @@ def carry_over(conn: Any) -> int:
     taken = 0
     for qid, task_id, by, line, choices in conn.execute(OPEN).fetchall():
         conn.execute("DELETE FROM old_questions WHERE id=?", (qid,))
-        E._event(conn, task_id, H.KEEPER, "requirement_withdrawn", qid, None, NOTE)
+        E._event(conn, task_id, H.TICO_ACTOR, "requirement_withdrawn", qid, None, NOTE)
         taken += 1
         if not (H.is_bot(by) and H.bot(conn, H.actor_id(str(by)))):
             continue

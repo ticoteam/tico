@@ -223,7 +223,7 @@ def _save(c, hold):
         holds.LOGIN_LIMIT,
         "login",
         _login(hold["runner_id"], hold["profile"], hold["runtime"]),
-        actor=H.KEEPER,
+        actor=H.TICO_ACTOR,
         details={name: value for name, value in hold.items() if name not in COLUMNS},
         streak=int(hold.get("streak") or 0),
         until_at=hold.get("until"),
@@ -360,7 +360,7 @@ def record(
 def clear(c, runner_id, profile, runtime):
     """A turn worked on the login: it is no longer held (kept as history)."""
     holds.release(
-        c, holds.LOGIN_LIMIT, "login", _login(runner_id, profile, runtime), actor=H.KEEPER, how="probe_passed"
+        c, holds.LOGIN_LIMIT, "login", _login(runner_id, profile, runtime), actor=H.TICO_ACTOR, how="probe_passed"
     )
 
 
@@ -639,11 +639,11 @@ def recorded(c, attempt_id, result, runtime):
     runtime its limit event named at the time, so a later settings change does not rename the provider."""
     if isinstance(result.get("limit_source"), dict):
         return result["limit_source"]
-    # Keeper's events by action and target: the events_task_origin index.
+    # Tico's events by action and target: the events_task_origin index.
     row = c.execute(
         "SELECT json_extract(detail,'$.runtime') FROM events WHERE actor=? AND action='attempt.limited' "
         "AND target=? LIMIT 1",
-        (H.KEEPER, attempt_id),
+        (H.TICO_ACTOR, attempt_id),
     ).fetchone()
     return source(c, attempt_id, (row and row[0]) or runtime or "primary", result)
 

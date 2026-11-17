@@ -57,7 +57,7 @@ def write_state(api):
 def handed(c, task_id, actor, to, at):
     """`actor` gives the task to `to` at `at`: the engine's reassign (made here by Tico, as the engine writes every owner
     change), with its history row dated and signed as the handoff the replay reads."""
-    H.task_reassign(c, H.KEEPER, task_id, to, "Handed on")
+    H.task_reassign(c, H.TICO_ACTOR, task_id, to, "Handed on")
     c.execute(
         "UPDATE history_events SET created_at=?, actor_id=? WHERE rowid=(SELECT max(rowid) FROM history_events "
         "WHERE subject_type='task' AND subject_id=? AND kind='reassign')",
@@ -442,7 +442,7 @@ def test_an_item_lost_between_judgment_and_write_names_no_source(gate, how):
                 c.execute("UPDATE tasks SET private=1 WHERE id=?", (first,))
         elif how == "plate":  # still open and readable, but no longer the person's: handed to Ana
             with api.app.state.store.transaction() as c:
-                H.task_reassign(c, H.KEEPER, first, "human:ana", "Handed to Ana")
+                H.task_reassign(c, H.TICO_ACTOR, first, "human:ana", "Handed to Ana")
         else:
             restrict(api, "cmo")
 
@@ -933,7 +933,7 @@ def test_the_readout_reconciles_every_call_to_a_row_or_a_named_reason(gate):
 def test_a_call_with_neither_a_row_nor_a_reason_is_shown_as_unexplained(gate):
     api, model, token = gate
     with api.app.state.store.transaction() as c:
-        H.event(c, H.KEEPER, "judge.call", "person-ask-ingest@2", {"label": "person-ask-ingest@2", "mode": "on"})
+        H.event(c, H.TICO_ACTOR, "judge.call", "person-ask-ingest@2", {"label": "person-ask-ingest@2", "mode": "on"})
     row = next(r for r in get(api, "decisions/readout")["sets"] if r["set"] == A.QUESTION_SET)
     assert row["reconcile"]["unexplained"] == 1 and row["reconcile"]["calls"] == 1
 

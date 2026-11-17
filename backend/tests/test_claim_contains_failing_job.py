@@ -127,7 +127,9 @@ def held_refresh(api, monkeypatch):
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
     with api.app.state.store.transaction() as c:
-        task_id = H.task_create(c, H.KEEPER, "Refresh the export", "Refresh it.", H.bot_actor("ops"), lint=False)["id"]
+        task_id = H.task_create(c, H.TICO_ACTOR, "Refresh the export", "Refresh it.", H.bot_actor("ops"), lint=False)[
+            "id"
+        ]
     raising_for_ops(monkeypatch)
     assert claim(api, machine) is None
     return machine, task_id
@@ -224,8 +226,8 @@ def test_a_moved_input_that_failed_on_the_old_upsert_is_held_and_other_bots_stil
             "AND j.state='queued' AND m.body LIKE 'VERDICT:%'"
         ).fetchone()[0]
         c.execute("INSERT INTO attempt_inputs VALUES(?,?,?)", (attempt["id"], verdict, H.now()))
-        cpo_task = H.task_create(c, H.KEEPER, "Price list", "Check the list.", H.bot_actor("cpo"), lint=False)["id"]
-        H.task_comment(c, H.KEEPER, cpo_task, "The pricing numbers are in.")
+        cpo_task = H.task_create(c, H.TICO_ACTOR, "Price list", "Check the list.", H.bot_actor("cpo"), lint=False)["id"]
+        H.task_comment(c, H.TICO_ACTOR, cpo_task, "The pricing numbers are in.")
     with store.read() as conn:
         read_deps.sweep(conn)
     post(
@@ -353,7 +355,7 @@ def test_a_held_run_canceled_as_no_longer_needed_closes_its_needs_you_item(api, 
 def test_a_canceled_run_keeps_its_bots_item_open_while_another_held_run_names_it(api, monkeypatch):
     machine, task_id = held_refresh(api, monkeypatch)
     with api.app.state.store.transaction() as c:
-        other = H.task_create(c, H.KEEPER, "Refresh the log", "Refresh it.", H.bot_actor("ops"), lint=False)["id"]
+        other = H.task_create(c, H.TICO_ACTOR, "Refresh the log", "Refresh it.", H.bot_actor("ops"), lint=False)["id"]
     assert claim(api, machine) is None  # its job raises too: held, naming the same item
     first, second = task_jobs(api, task_id)[0], task_jobs(api, other)[0]
     assert first["hold_task_id"] == second["hold_task_id"]
@@ -389,15 +391,15 @@ def test_a_start_retry_never_hands_out_an_obsolete_notice(api, monkeypatch):
             "WHERE j.bot_id='ops' AND m.sender_id LIKE 'human:%'"
         ).fetchone()[0]
     with store.transaction() as c:
-        done = H.task_create(c, H.KEEPER, "Finished export", "Done.", H.bot_actor("ops"), lint=False)["id"]
-        H.task_done(c, H.KEEPER, done, "Exported.")
+        done = H.task_create(c, H.TICO_ACTOR, "Finished export", "Done.", H.bot_actor("ops"), lint=False)["id"]
+        H.task_done(c, H.TICO_ACTOR, done, "Exported.")
         c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops' AND state='queued' AND id<>?", (person_job,))
         conversation = H.task(c, done)["conversation_id"]
         # A claim's obsolete pass cancels a page of CLAIM_MAINTENANCE notices, so one is left queued for the retry.
         for n in range(execution.CLAIM_MAINTENANCE + 1):
             H.say(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 "bot:ops",
                 f"PR #{n} checks passed",
                 kind="notice",
@@ -621,14 +623,14 @@ def test_a_claim_passes_over_at_most_claim_picks_obsolete_notices(api, monkeypat
     ready(api, machine, ["ops"])
     store = api.app.state.store
     with store.transaction() as c:
-        done = H.task_create(c, H.KEEPER, "Finished export", "Done.", H.bot_actor("ops"), lint=False)["id"]
-        H.task_done(c, H.KEEPER, done, "Exported.")
+        done = H.task_create(c, H.TICO_ACTOR, "Finished export", "Done.", H.bot_actor("ops"), lint=False)["id"]
+        H.task_done(c, H.TICO_ACTOR, done, "Exported.")
         c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops' AND state='queued'")
         conversation = H.task(c, done)["conversation_id"]
         for n in range(execution.CLAIM_MAINTENANCE + obsolete_ahead):
             H.say(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 "bot:ops",
                 f"PR #{n} checks passed",
                 kind="notice",
@@ -640,7 +642,7 @@ def test_a_claim_passes_over_at_most_claim_picks_obsolete_notices(api, monkeypat
             0
         ] == (execution.CLAIM_MAINTENANCE + obsolete_ahead)
     with store.transaction() as c:
-        open_task = H.task_create(c, H.KEEPER, "Open export", "Do it.", H.bot_actor("ops"), lint=False)["id"]
+        open_task = H.task_create(c, H.TICO_ACTOR, "Open export", "Do it.", H.bot_actor("ops"), lint=False)["id"]
     [open_job] = task_jobs(api, open_task)
 
     if obsolete_ahead < execution.CLAIM_PICKS - 1:
@@ -782,7 +784,7 @@ def wake_notice(api, task_id, body):
 
 def batch_task(api, title):
     with api.app.state.store.transaction() as c:
-        return H.task_create(c, H.KEEPER, title, "Done.", H.bot_actor("ops"), lint=False)["id"]
+        return H.task_create(c, H.TICO_ACTOR, title, "Done.", H.bot_actor("ops"), lint=False)["id"]
 
 
 def batch_hold(api, job_id):

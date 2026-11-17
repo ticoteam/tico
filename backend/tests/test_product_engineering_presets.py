@@ -576,7 +576,7 @@ def test_a_handoff_the_product_owner_cannot_file_is_filed_by_the_engine(c):
     E.move(c, row["id"], "product-in-development", ANA, "The spec is OK'd")
     filed = _filed(c, row["id"])
     assert len(filed) == 1
-    assert E.task(c, filed[0][0])["requester_id"] == H.KEEPER
+    assert E.task(c, filed[0][0])["requester_id"] == H.TICO_ACTOR
 
 
 def test_a_handoff_nobody_can_file_files_nothing_and_the_move_goes_through(c):

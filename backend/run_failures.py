@@ -153,7 +153,7 @@ def fresh_session(c, settings, bot, conversation_id, aid, task_id=None):
     clear_chat_session(
         c,
         settings,
-        H.KEEPER,
+        H.TICO_ACTOR,
         bot,
         conversation_id,
         {"reason": AFTER_COMPACT, "attempt": aid, "task": task_id, "bot": bot},
@@ -178,7 +178,7 @@ def too_long(c, settings, row, conversation_id, aid):
         "ON CONFLICT(bot,conversation_id) DO UPDATE SET marked_at=excluded.marked_at,taken_by=NULL",
         (bot, conversation_id, H.now()),
     )
-    H.event(c, H.KEEPER, "session.compact_first", conversation_id, {"bot": bot, "attempt": aid})
+    H.event(c, H.TICO_ACTOR, "session.compact_first", conversation_id, {"bot": bot, "attempt": aid})
 
 
 def take_compact(c, bot, conversation_id, aid):
@@ -264,7 +264,7 @@ def typed_since(c, bot, message):
 def _put(c, bot, hold, **change):
     """Write the bot's hold: what it holds now, with `change` over it."""
     kept = {k: hold.get(k) for k in ("reason", "details", "streak", "until_at", "probe_at", "upkeep_task_id")}
-    return holds.put(c, FAILING, "bot", bot, actor=H.KEEPER, **{**kept, "reason": kept["reason"] or "", **change})
+    return holds.put(c, FAILING, "bot", bot, actor=H.TICO_ACTOR, **{**kept, "reason": kept["reason"] or "", **change})
 
 
 def reset(c, bot):
@@ -274,7 +274,7 @@ def reset(c, bot):
     if not hold:
         return
     held = is_held(hold)
-    holds.release(c, FAILING, "bot", bot, actor=H.KEEPER, how="probe_passed" if held else "expired")
+    holds.release(c, FAILING, "bot", bot, actor=H.TICO_ACTOR, how="probe_passed" if held else "expired")
     if held:
         from . import bot_stops
 
@@ -283,7 +283,7 @@ def reset(c, bot):
         )
         H.event(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "bot.run_recovered",
             bot,
             {"fails": hold["streak"], "error_class": hold["details"].get("error_class")},
@@ -331,13 +331,13 @@ def failed(c, settings, row, body, aid, now=None):
         upkeep_task_id=task_id,
     )
     if newly:
-        H.event(c, H.KEEPER, "bot.run_held", bot, {"fails": fails, "error_class": kind, "task": task_id})
+        H.event(c, H.TICO_ACTOR, "bot.run_held", bot, {"fails": fails, "error_class": kind, "task": task_id})
         H.hook(
             c,
             "bot.held",
             bot,
             lambda: {"bot": bot, "reason": "failed_runs", "fails": fails, "error_class": kind, "task": task_id},
-            H.KEEPER,
+            H.TICO_ACTOR,
             revision=now,
         )
 

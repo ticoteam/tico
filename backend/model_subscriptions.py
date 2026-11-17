@@ -1161,7 +1161,7 @@ def _restart(c, settings, runner_id, runtime):
     line = _restart_line(c, runner_id, runtime)
     stopped = sum(quarantine_stops.restart(c, a, line) for a in _live(c, runner_id, runtime))
     reset = _reset(c, settings, runner_id, runtime)
-    lift_limited_on_computer(c, settings, H.KEEPER, runner_id, runtime)
+    lift_limited_on_computer(c, settings, H.TICO_ACTOR, runner_id, runtime)
     return {"stopped": stopped, "sessions_reset": reset}
 
 
@@ -1519,7 +1519,7 @@ def settle(c, settings, runner_id, chosen):
         reset = _reset(c, settings, runner_id, runtime)
         H.event(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "subscription.set_moved",
             sub["id"],
             {
@@ -1985,7 +1985,7 @@ def refreshed(c, vault, who, body):
     if (
         given["state"] not in ("leased", "running")
         or (given["lease_until"] or "") <= H.now()
-        or given["stop_requested_at"] == H.KEEPER
+        or given["stop_requested_at"] == H.TICO_ACTOR
         or not still_given(c, who.runner_id, given["runtime"], sub["id"])
     ):
         raise Problem("stale_lease", "That run has ended or no longer signs in with this subscription", 409)
@@ -2039,10 +2039,10 @@ def turn_rejected(c, settings, attempt_id, bot, runtime, reason, task_id):
     if sub["status"] != "needs_reconnect" and sub["revision"] == found["revision"]:
         _status(c, sub["id"], "needs_reconnect", reason or "The provider refused it")
         _effect_changed(c, settings, sub["id"])
-        _follow(c, settings, H.KEEPER)
+        _follow(c, settings, H.TICO_ACTOR)
     H.event(
         c,
-        H.KEEPER,
+        H.TICO_ACTOR,
         "subscription.rejected",
         sub["id"],
         {"attempt": attempt_id, "runtime": runtime, "bot": bot, "task": task_id or ""},

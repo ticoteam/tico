@@ -69,10 +69,10 @@ def live(task):
 
 def _open(c, auth, bot, title, body, owner=None, *, incident=False):
     owner = owner or "bot:" + bot
-    conversation = rooms.task_conversation_id(c, auth, owner, H.KEEPER)
+    conversation = rooms.task_conversation_id(c, auth, owner, H.TICO_ACTOR)
     return H.task_create(
         c,
-        H.KEEPER,
+        H.TICO_ACTOR,
         defang(title, c).strip()[:300] or "From a watcher",
         defang(body, c),
         owner,
@@ -86,7 +86,7 @@ def _open(c, auth, bot, title, body, owner=None, *, incident=False):
 def _wake(c, bot, task, text, why):
     H.say(
         c,
-        H.KEEPER,
+        H.TICO_ACTOR,
         "bot:" + bot,
         defang(text, c) or "Something changed.",
         kind="notice",
@@ -99,7 +99,7 @@ def _wake(c, bot, task, text, why):
 
 def _note(c, task, text):
     """A note on a held support ticket's task, for the person holding it: the bot is not woken."""
-    H.task_comment(c, H.KEEPER, task["id"], defang(text, c) or "Something changed.", wake=False)
+    H.task_comment(c, H.TICO_ACTOR, task["id"], defang(text, c) or "Something changed.", wake=False)
     return task["id"]
 
 

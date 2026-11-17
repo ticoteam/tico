@@ -117,7 +117,7 @@ def _occurrence(c, task_id):
     """A schedule's notice to the bot that the next occurrence was absorbed into this open task
     (automations.absorb_into_open_task): automatic, about the task, and not one of the engine's wakes."""
     said = H.notice(
-        c, H.KEEPER, BUILDER, "Scheduled occurrence absorbed.", refs={"task": task_id, "wake": "occurrence"}
+        c, H.TICO_ACTOR, BUILDER, "Scheduled occurrence absorbed.", refs={"task": task_id, "wake": "occurrence"}
     )
     assert _state(c, said["id"]) == "queued"
     return said["id"]
@@ -155,7 +155,7 @@ def test_every_automatic_start_about_a_task_is_held_by_its_turn_and_its_seven_ru
 @pytest.mark.parametrize("via", ["assistant", "botops", "token"])
 def test_only_words_a_person_typed_themselves_start_a_run_past_the_seven(c, general, via):
     """The 7 runs hold "until a person acts": a message the Assistant or BotOps writes in a person's name, or one sent
-    with a personal token, is no person's act, and neither is the keeper's carrier of one. A message typed in Slack is
+    with a personal token, is no person's act, and neither is Tico's carrier of one. A message typed in Slack is
     the person's own."""
     from backend import threads
 
@@ -190,7 +190,7 @@ def test_a_quiet_message_whose_job_was_queued_is_held_like_any_other(c, general)
     c.execute(
         "INSERT INTO messages (id, conversation_id, sender_id, recipient_id, kind, body, refs, created_at) "
         "VALUES (?,?,?,?,'notice','The build went green.',?,?)",
-        (quiet, row["conversation_id"], H.KEEPER, BUILDER, H._dump({"task": row["id"], "quiet": True}), H.now()),
+        (quiet, row["conversation_id"], H.TICO_ACTOR, BUILDER, H._dump({"task": row["id"], "quiet": True}), H.now()),
     )
     c.execute("INSERT INTO jobs(id,message_id,bot_id,created_at) VALUES(?,?,?,?)", (quiet, quiet, "builder", H.now()))
     assert not task_wakes.may_start(c, quiet) and _state(c, quiet) == "canceled"  # an eighth run never starts
@@ -198,7 +198,7 @@ def test_a_quiet_message_whose_job_was_queued_is_held_like_any_other(c, general)
 
 @pytest.mark.parametrize("via", ["", "assistant"])
 def test_a_persons_own_message_on_a_snoozed_task_starts_a_run(c, general, monkeypatch, via):
-    """A person wrote on a snoozed task, or the Assistant did in their name, and the keeper carries it to the bot:
+    """A person wrote on a snoozed task, or the Assistant did in their name, and Tico carries it to the bot:
     their words get an answer, at the claim's first check (execution.job_refusal) as in may_start. Only the seven
     runs need a person's own hand; lifting a snooze is theirs in their name too."""
     from backend import execution
@@ -220,9 +220,9 @@ def test_a_persons_own_message_on_a_snoozed_task_starts_a_run(c, general, monkey
     c.execute(
         "INSERT INTO messages (id, conversation_id, sender_id, recipient_id, kind, body, refs, created_at) "
         "VALUES (?,?,?,?,'notice','Is the note ready?',?,?)",
-        (carrier, row["conversation_id"], H.KEEPER, BUILDER, refs, H.now()),
+        (carrier, row["conversation_id"], H.TICO_ACTOR, BUILDER, refs, H.now()),
     )
-    enqueue(c, {"id": carrier, "sender_id": H.KEEPER, "recipient_id": BUILDER, "refs": refs, "created_at": H.now()})
+    enqueue(c, {"id": carrier, "sender_id": H.TICO_ACTOR, "recipient_id": BUILDER, "refs": refs, "created_at": H.now()})
     job = dict(c.execute("SELECT * FROM jobs WHERE id=?", (carrier,)).fetchone())
     assert task_wakes.may_start(c, carrier)
     assert execution.job_refusal(c, job, {}, set(), set()) is None
@@ -270,7 +270,7 @@ def test_a_claim_starts_no_run_the_engine_holds_and_the_check_takes_the_task_on(
 
 
 def _carrier(c, task_id, bot, by):
-    """A bot's post in a chat naming the task, and the keeper's carrier of it to `bot` (threads._carrier): the carrier
+    """A bot's post in a chat naming the task, and Tico's carrier of it to `bot` (threads._carrier): the carrier
     names no task itself, only the message it carries, and its chat is no task's."""
     from backend.enqueue import enqueue
 
@@ -285,9 +285,9 @@ def _carrier(c, task_id, bot, by):
     c.execute(
         "INSERT INTO messages (id, conversation_id, sender_id, recipient_id, kind, body, refs, created_at) "
         "VALUES (?,?,?,?,'notice','The launch note needs a footer.',?,?)",
-        (carrier, chat, H.KEEPER, bot, refs, H.now()),
+        (carrier, chat, H.TICO_ACTOR, bot, refs, H.now()),
     )
-    enqueue(c, {"id": carrier, "sender_id": H.KEEPER, "recipient_id": bot, "refs": refs, "created_at": H.now()})
+    enqueue(c, {"id": carrier, "sender_id": H.TICO_ACTOR, "recipient_id": bot, "refs": refs, "created_at": H.now()})
     assert _state(c, carrier) == "queued" and H.conversation(c, chat).get("task_id") is None
     return carrier
 
@@ -324,7 +324,7 @@ def test_a_carriers_run_is_about_the_task_of_the_message_it_carries_and_counts_f
 
 
 def _carrier_in(c, conversation_id, about, bot, by):
-    """A bot's post in task A's conversation that names task B, and the keeper's carrier of it to `bot`."""
+    """A bot's post in task A's conversation that names task B, and Tico's carrier of it to `bot`."""
     from backend.enqueue import enqueue
 
     post_id, carrier = H.new_id(), H.new_id()
@@ -337,9 +337,9 @@ def _carrier_in(c, conversation_id, about, bot, by):
     c.execute(
         "INSERT INTO messages (id, conversation_id, sender_id, recipient_id, kind, body, refs, created_at) "
         "VALUES (?,?,?,?,'notice','The footer task needs a look.',?,?)",
-        (carrier, conversation_id, H.KEEPER, bot, refs, H.now()),
+        (carrier, conversation_id, H.TICO_ACTOR, bot, refs, H.now()),
     )
-    enqueue(c, {"id": carrier, "sender_id": H.KEEPER, "recipient_id": bot, "refs": refs, "created_at": H.now()})
+    enqueue(c, {"id": carrier, "sender_id": H.TICO_ACTOR, "recipient_id": bot, "refs": refs, "created_at": H.now()})
     return carrier
 
 
@@ -520,13 +520,13 @@ def test_a_live_run_that_names_the_task_from_another_conversation_is_on_the_task
     counts for it, and is the bot being on it, read from the pass's one read of live runs."""
     row = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)
     c.execute("UPDATE jobs SET state='canceled' WHERE state='queued'")
-    chat = H._pair_conversation(c, H.KEEPER, BUILDER, "chat")["id"]
+    chat = H._pair_conversation(c, H.TICO_ACTOR, BUILDER, "chat")["id"]
     assert chat != row["conversation_id"]
     notice, run = H.new_id(), H.new_id()
     c.execute(
         "INSERT INTO messages (id, conversation_id, sender_id, recipient_id, kind, body, refs, created_at) "
         "VALUES (?,?,?,?,'notice','Scheduled occurrence absorbed.',?,?)",
-        (notice, chat, H.KEEPER, BUILDER, H._dump({"task": row["id"], "wake": "occurrence"}), H.now()),
+        (notice, chat, H.TICO_ACTOR, BUILDER, H._dump({"task": row["id"], "wake": "occurrence"}), H.now()),
     )
     c.execute(
         "INSERT INTO jobs(id,message_id,bot_id,created_at,state) VALUES(?,?,?,?,'running')",

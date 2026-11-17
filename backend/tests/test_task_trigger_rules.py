@@ -191,7 +191,7 @@ def test_a_missing_bot_and_a_throwing_action_keep_the_task_and_mark_the_row(c, m
     broken = rule(c, "task.done", params={"text": "Must roll back"})
 
     def failing(conn, tid, params, said):
-        H.task_update(conn, H.KEEPER, tid, note="Must roll back")
+        H.task_update(conn, H.TICO_ACTOR, tid, note="Must roll back")
         raise RuntimeError("private content must never enter shared rule settings")
 
     monkeypatch.setitem(R.TASK_RUNNERS, "note", failing)

@@ -50,7 +50,7 @@ def test_an_ok_with_no_task_files_one_for_whoever_asked_and_waits_on_the_person_
 
 
 def test_the_engine_asking_files_the_task_for_the_person(c):
-    asked = _ask(c, by=H.KEEPER, title="Pay the March invoices")
+    asked = _ask(c, by=H.TICO_ACTOR, title="Pay the March invoices")
     task = H.task(c, asked["task_id"])
     assert (task["owner_id"], task["title"]) == (ANA, "Pay the March invoices")
 

@@ -412,7 +412,7 @@ def task_dry_run(c, auth, who, body):
     target = who.actor if unassigned else H.resolve_actor(c, body.owner)
     if target and H.is_bot(target) and not auth.bot_access(c, who, H.actor_id(target))["see"]:
         target = None  # a bot the caller cannot see is not one they can name
-    if not target or target == H.KEEPER:
+    if not target or target == H.TICO_ACTOR:
         problems.append(f"{body.owner} is not a bot or a person on the roster")
     else:
         from . import reach

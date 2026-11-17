@@ -66,7 +66,7 @@ class ReadIndex:
             }
             self.meeting_rooms = set(self.bound_rooms)
             if c.execute("SELECT 1 FROM live_meeting_turns LIMIT 1").fetchone():
-                # The legacy keeper inputs live_privacy.Sources reads room by room, for every room at once.
+                # The legacy Tico inputs live_privacy.Sources reads room by room, for every room at once.
                 self.meeting_rooms.update(
                     row[0]
                     for row in c.execute(
@@ -74,7 +74,7 @@ class ReadIndex:
                         "ON t.id=json_extract(m.refs,'$.live_meeting.turn_id') "
                         "AND t.meeting_id=json_extract(m.refs,'$.live_meeting.meeting_id') "
                         "WHERE m.sender_id=? AND m.recipient_id='bot:'||t.bot",
-                        (H.KEEPER,),
+                        (H.TICO_ACTOR,),
                     )
                 )
 

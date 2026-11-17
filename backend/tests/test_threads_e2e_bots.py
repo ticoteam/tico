@@ -40,7 +40,7 @@ def test_a_bot_answers_in_the_sub_thread_it_was_asked_in_and_nowhere_else(api):
     asked = say(api, "ana-test", t["id"], "@cpo list the risks", parent_message_id=m["id"])
     attempt = claim(api, r, "cpo")
     assert attempt is not None, "a mention in a sub-thread wakes the bot"
-    # A mention without `to` wakes the bot through a keeper carrier that names the message (contract 4.4): the run
+    # A mention without `to` wakes the bot through a Tico carrier that names the message (contract 4.4): the run
     # starts from the carrier, and the carrier carries the asked message.
     woke = attempt["message"]
     assert ((woke.get("refs") or {}).get("carries") or woke["id"]) == asked["id"], woke

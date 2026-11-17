@@ -161,7 +161,7 @@ def test_task_completion_replay_requires_current_runner_ownership_and_private_ac
 @pytest.mark.parametrize("notice", ["current", "listed-private"])
 def test_routine_reply_in_a_personal_room_is_not_lost_to_an_unrelated_private_task(api, notice):
     # A routine's task lands in the person's room with the bot while the bot holds a private
-    # task from the keeper (nightly learnings). The new-task notice used to list that private
+    # task from Tico (nightly learnings). The new-task notice used to list that private
     # task as related work, which made the whole run private and refused its reply.
     runner, origin, attempt = setup_attempt(api)
     start(api, runner, attempt)
@@ -171,11 +171,11 @@ def test_routine_reply_in_a_personal_room_is_not_lost_to_an_unrelated_private_ta
     with api.app.state.store.transaction() as c:
         unrelated_task_managers(c)
     with api.app.state.store.transaction() as c:
-        hidden = H.task_create(c, H.KEEPER, "Nightly learnings", "Read the day's runs", "bot:ops", private=True)
+        hidden = H.task_create(c, H.TICO_ACTOR, "Nightly learnings", "Read the day's runs", "bot:ops", private=True)
         c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
         task = H.task_create(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "Refresh the map of the docs",
             "Refresh it",
             "bot:ops",
@@ -213,7 +213,7 @@ def test_routine_reply_in_a_personal_room_is_not_lost_to_an_unrelated_private_ta
     else:
         # The reply stays off the room; the person is told, and nothing of the private task is shown.
         assert reply is None
-        told = [m for m in shown if m["sender_id"] == H.KEEPER and (m.get("refs") or {}).get("withheld")]
+        told = [m for m in shown if m["sender_id"] == H.TICO_ACTOR and (m.get("refs") or {}).get("withheld")]
         assert len(told) == 1 and told[0]["recipient_id"] == "human:ana"
         assert not any("Map refreshed." in m["body"] or "Nightly" in m["body"] for m in shown)
 

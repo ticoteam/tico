@@ -309,11 +309,11 @@ def session_task_id(c, bot, config, task_id):
 
 
 def reply_target(message, conversation, task):
-    """Whom a turn's reply goes to: the message's sender, or for the keeper's wake on a task, the personal room's
+    """Whom a turn's reply goes to: the message's sender, or for Tico's wake on a task, the personal room's
     owner, else its first person, else the task's requester. The completion posts to it; the org rule check
     (backend/org_rule_check.py) checks the reply against it before the completion's write."""
     target = message["sender_id"]
-    if target == H.KEEPER and task:
+    if target == H.TICO_ACTOR and task:
         humans = [p for p in conversation.get("participants") or [] if str(p).startswith("human:")]
         target = (
             (conversation.get("owner_id") if conversation.get("scope") == "personal" else None)
@@ -324,13 +324,13 @@ def reply_target(message, conversation, task):
 
 
 def reply_source(c, message):
-    """The message a turn's reply answers. A turn woken through a carrier (a keeper notice that starts a further
+    """The message a turn's reply answers. A turn woken through a carrier (a Tico notice that starts a further
     bot's run, backend/threads.py `_carrier`) answers the message it carries, which sits in the carrier's own thread;
     any other turn answers its own message. None when the carried message is gone or was moved elsewhere: there is
-    nothing left to answer. Only the keeper writes carriers, so a `carries` ref on anyone else's message is ignored."""
+    nothing left to answer. Only Tico writes carriers, so a `carries` ref on anyone else's message is ignored."""
     refs = message.get("refs") if isinstance(message.get("refs"), dict) else H._json(message.get("refs"), {})
     carried = (refs or {}).get("carries")
-    if not carried or message.get("sender_id") != H.KEEPER:
+    if not carried or message.get("sender_id") != H.TICO_ACTOR:
         return message
     found = H.message(c, str(carried), include_deleted=True)
     if not found or found["conversation_id"] != message["conversation_id"]:
@@ -608,7 +608,7 @@ def settle_status(c, bot, state, focus, claimed=None, task_id=None, stop=None):
             "SELECT 1 FROM attempts WHERE bot_id=? AND state IN ('leased','running') LIMIT 1", (bot,)
         ).fetchone():
             # No count and no task: the other turns may be on private tasks this status's readers cannot see.
-            H.status_set(c, H.KEEPER, bot, state="running", focus="Working on other tasks", task_id="")
+            H.status_set(c, H.TICO_ACTOR, bot, state="running", focus="Working on other tasks", task_id="")
             return
     if stop:
         from .repositories import save_metadata
@@ -616,7 +616,9 @@ def settle_status(c, bot, state, focus, claimed=None, task_id=None, stop=None):
         save_metadata(c, LAST_STOP + bot, {"attempt_id": stop, "at": H.now()})
     else:
         c.execute("DELETE FROM registry_metadata WHERE key=?", (LAST_STOP + bot,))
-    H.status_set(c, H.KEEPER, bot, state=state, focus=focus, **({"task_id": task_id} if task_id is not None else {}))
+    H.status_set(
+        c, H.TICO_ACTOR, bot, state=state, focus=focus, **({"task_id": task_id} if task_id is not None else {})
+    )
 
 
 # The run a bot's status line explains (last_stop) until the bot's next run settles.
@@ -908,7 +910,7 @@ def flag_cut(c, cause, update=None):
     for row in fresh:
         H.event(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             UPDATE_CUT,
             row['id'],
             {'bot': row['bot_id'], 'job_id': row['job_id'], 'cause': cause, **({'update': update} if update else {})},
@@ -1348,7 +1350,7 @@ def _readable_held_for(c, who, auth, bots):
             "SELECT m.*,j.attempt_id,j.id AS job_id,j.bot_id AS held_bot FROM jobs j JOIN messages m ON m.id=j.message_id "
             f"WHERE j.bot_id IN ({marks}) AND j.state='uncertain' AND NOT EXISTS(SELECT 1 FROM job_recovery r "
             "WHERE r.job_id=j.id AND r.attempt_id=j.attempt_id AND r.actor=?) ORDER BY j.created_at",
-            [*bots, H.KEEPER],
+            [*bots, H.TICO_ACTOR],
         )
     )
     shown = {m["id"] for m in privacy.readable_messages(c, actor, rows)}
@@ -1434,7 +1436,7 @@ def _tico_chosen_for(c, who, bots):
                 "SELECT m.*,j.attempt_id,j.bot_id AS held_bot FROM jobs j JOIN messages m ON m.id=j.message_id "
                 "JOIN job_recovery r ON r.job_id=j.id AND r.attempt_id=j.attempt_id "
                 f"WHERE j.bot_id IN ({','.join('?' * len(part))}) AND j.state='uncertain' AND r.actor=?",
-                (*part, H.KEEPER),
+                (*part, H.TICO_ACTOR),
             )
         )
     shown = {m["id"] for m in privacy.readable_messages(c, actor, rows)} if rows else set()
@@ -1673,9 +1675,9 @@ def unreviewed(c, who, bot):
     return count, hours
 
 
-def left_by_keeper(c, who, bot):
+def left_by_tico(c, who, bot):
     """How many of the bot's runs saved for later that `who` may read rode on a stopped run whose own request the
-    keeper already settled (auto_reconcile): it decided that one and could not decide these safely, so nobody else
+    Tico already settled (auto_reconcile): it decided that one and could not decide these safely, so nobody else
     was going to look at them."""
     actor = privacy.actor(who)
     rows = list(
@@ -1686,7 +1688,7 @@ def left_by_keeper(c, who, bot):
             "WHERE j.bot_id=? AND j.state='uncertain' AND j.id<>a.job_id AND r.actor=? "
             # One Tico chose for itself too (an update cut behind live work) waits for nobody.
             "AND NOT EXISTS(SELECT 1 FROM job_recovery o WHERE o.job_id=j.id AND o.attempt_id=j.attempt_id AND o.actor=?)",
-            (bot, H.KEEPER, H.KEEPER),
+            (bot, H.TICO_ACTOR, H.TICO_ACTOR),
         )
     )
     # One privacy prime (status/operations used to call message_readable per row here).
@@ -1919,7 +1921,7 @@ def start_refused(c, aid):
     does next. Read on the events index by actor, action and target."""
     return bool(
         c.execute(
-            "SELECT 1 FROM events WHERE actor=? AND action=? AND target=? LIMIT 1", (H.KEEPER, START_REFUSED, aid)
+            "SELECT 1 FROM events WHERE actor=? AND action=? AND target=? LIMIT 1", (H.TICO_ACTOR, START_REFUSED, aid)
         ).fetchone()
     )
 
@@ -1930,7 +1932,9 @@ def refuse_start(c, row, detail):
     interrupted settles as skipped (held_before_start), even once the task wants a run again: a fresh wake, on a new
     lease, is what runs. Returns the answer the route turns into a 409 `start_wait` after the write commits."""
     if not start_refused(c, row["id"]):
-        H.event(c, H.KEEPER, START_REFUSED, row["id"], {"bot": row["bot_id"], "job_id": row["job_id"], "why": detail})
+        H.event(
+            c, H.TICO_ACTOR, START_REFUSED, row["id"], {"bot": row["bot_id"], "job_id": row["job_id"], "why": detail}
+        )
     c.execute("UPDATE start_places SET start_until=NULL WHERE attempt_id=?", (row["id"],))
     return {"started": False, "refused": {"code": "start_wait", "detail": detail}}
 
@@ -1962,9 +1966,9 @@ def release_limits(c, settings):
     status change tells its computer to ask for the queued work now rather than at its next backup poll."""
     for row in c.execute("SELECT bot,changed_at FROM bot_status WHERE state='limited'").fetchall():
         if relieve(
-            c, settings, H.KEEPER, row["bot"], "Usage limit lifted", free="Usage limit lifted; queued work resumes"
+            c, settings, H.TICO_ACTOR, row["bot"], "Usage limit lifted", free="Usage limit lifted; queued work resumes"
         ):
-            H.event(c, H.KEEPER, "limit.released", row["bot"], {"since": row["changed_at"]})
+            H.event(c, H.TICO_ACTOR, "limit.released", row["bot"], {"since": row["changed_at"]})
 
 
 def hop_failed(c, attempt_id, result, began, ended):
@@ -2054,10 +2058,10 @@ def note_reset_wait(c, row, hold, reason):
     c.execute("UPDATE attempts SET result=json_set(result,'$.limit_resets_at',?) WHERE id=?", (until, row['id']))
     H.event(
         c,
-        H.KEEPER,
+        H.TICO_ACTOR,
         'job.reset_wait',
         row['job_id'],
-        {'attempt_id': row['id'], 'owner': H.KEEPER, 'until': until, 'reason': reason},
+        {'attempt_id': row['id'], 'owner': H.TICO_ACTOR, 'until': until, 'reason': reason},
     )
     return hold
 
@@ -2102,7 +2106,7 @@ def person_wrote_since(c, bot, since):
     who writes to a limited bot has often just renewed the plan, so the bot tries once now; a
     run that hits the limit again finishes after the message and the cooldown holds."""
     last = c.execute("SELECT max(finished_at) FROM attempts WHERE bot_id=?", (bot,)).fetchone()[0]
-    # A carrier is a keeper notice; it counts as the person's own message, the notices a person did not send do not.
+    # A carrier is a Tico notice; it counts as the person's own message, the notices a person did not send do not.
     return (
         c.execute(
             "SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=? AND j.state='queued' "
@@ -2804,9 +2808,14 @@ def job_refusal(c, job, followed, ready, busy, live=frozenset(), *, runner=None,
             return why  # over its run budget or waiting out failed runs: except for a person's message
     conversation = H.conversation(c, message["conversation_id"])
     task_id = work_task_id(message, conversation)
-    if task_id and message.get("sender_id") == H.KEEPER and not H.in_person_name(message) and task_snoozed(c, task_id):
+    if (
+        task_id
+        and message.get("sender_id") == H.TICO_ACTOR
+        and not H.in_person_name(message)
+        and task_snoozed(c, task_id)
+    ):
         # Tico wakes no bot about a snoozed task (docs/dev/pipelines-v3.md, rule 7); a person still can, through the
-        # keeper's carrier of their own message too (task_wakes.may_start).
+        # Tico's carrier of their own message too (task_wakes.may_start).
         return "task_wait"
     refs = message.get("refs") or {}
     # Whose turn a task is the engine's to say: it writes a task's wake only for the bot whose turn it is and cancels
@@ -2913,13 +2922,13 @@ def obsolete_notices_sql(c):
 
 
 def suppress_notice(c, job, task_id, reason):
-    """Cancel one queued keeper notice nothing needs any more: its job, its claim hold, its delivery mark, the status a
+    """Cancel one queued Tico notice nothing needs any more: its job, its claim hold, its delivery mark, the status a
     stop left on its bot, and a job.suppress event. The claim does this for obsolete_notices_sql."""
     c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (job['id'],))
     bot_stops.clear_claim(c, job['id'], "Its run is no longer needed.")
     c.execute("UPDATE messages SET delivered_at=coalesce(delivered_at,?) WHERE id=?", (H.now(), job['message_id']))
     clear_stop_status(c, job)
-    H.event(c, H.KEEPER, 'job.suppress', job['id'], {'reason': reason, 'task_id': task_id})
+    H.event(c, H.TICO_ACTOR, 'job.suppress', job['id'], {'reason': reason, 'task_id': task_id})
 
 
 def clear_stop_status(c, job):
@@ -3053,7 +3062,7 @@ def wait_unstarted(c, job_id, bot, attempt_id):
         holds.CANT_START,
         "job",
         job_id,
-        actor=H.KEEPER,
+        actor=H.TICO_ACTOR,
         bot_id=bot,
         reason="Its computer did not start its last run",
         details={"attempt": attempt_id},
@@ -3168,7 +3177,7 @@ def filer_live(c, message):
     filed_in = (message.get("refs") or {}).get("filed_in")
     return (
         bool(filed_in)
-        and message["sender_id"] == H.KEEPER
+        and message["sender_id"] == H.TICO_ACTOR
         and message["created_at"] > H.shift(H.now(), seconds=-FILER_HOLD_S)
         and c.execute("SELECT 1 FROM attempts WHERE id=? AND state IN ('leased','running')", (filed_in,)).fetchone()
         is not None
@@ -3412,9 +3421,9 @@ def job_reason(c, settings, runner, job, followed, ready, busy, live, loads):
 
 
 # Stop and redirect (Execution._redirect_job) reads the caller's own job in this turn's conversation. jobs.message_id is
-# UNIQUE, so each lookup is one index read. A Home or thread message reaches its bot as a keeper carrier, a job of its
+# UNIQUE, so each lookup is one index read. A Home or thread message reaches its bot as a Tico carrier, a job of its
 # own: the carrier is found through its delivery to the bot (message_deliveries.carrier_id, indexed by recipient and
-# message_id), then checked: a keeper notice that carries the message and is from the caller.
+# message_id), then checked: a Tico notice that carries the message and is from the caller.
 REDIRECT_TURN = (
     "AND (m.conversation_id=(SELECT om.conversation_id FROM jobs oj JOIN messages om "
     "ON om.id=oj.message_id JOIN attempts oa ON oa.job_id=oj.id WHERE oa.id=?) OR m.conversation_id IN "
@@ -3483,7 +3492,7 @@ class Execution:
     def readable(self, c, who, conv):
         """Whether this person may read the conversation, not whether they may act on it.
 
-        A leftover keeper-and-bot thread has no person in it, so there is no one's privacy
+        A leftover Tico-and-bot thread has no person in it, so there is no one's privacy
         to protect and the operator check is the whole authority. A conversation a person
         is in stays theirs.
         """
@@ -3950,7 +3959,7 @@ class Execution:
                     c.execute("UPDATE attempts SET lease_until=? WHERE id=?", (until, row["id"]))
                     H.event(
                         c,
-                        H.KEEPER,
+                        H.TICO_ACTOR,
                         "attempt.lease-grace",
                         row["id"],
                         {"bot": row["bot_id"], "lapsed": row["lease_until"], "lease_until": until},
@@ -4064,7 +4073,7 @@ class Execution:
                     c.execute("UPDATE attempts SET lease_until=? WHERE id=?", (until, row["id"]))
                     H.event(
                         c,
-                        H.KEEPER,
+                        H.TICO_ACTOR,
                         "attempt.lease-held",
                         row["id"],
                         {"bot": row["bot_id"], "lapsed": row["lease_until"], "heard_at": heard, "lease_until": until},
@@ -4076,7 +4085,7 @@ class Execution:
                     c.execute("UPDATE attempts SET lease_until=? WHERE id=?", (until, row["id"]))
                     H.event(
                         c,
-                        H.KEEPER,
+                        H.TICO_ACTOR,
                         "attempt.lease-grace",
                         row["id"],
                         {
@@ -4186,7 +4195,7 @@ class Execution:
                             if H.is_human(msg["sender_id"]):
                                 H.say(
                                     c,
-                                    "bot:" + row["bot_id"] if bot else H.KEEPER,
+                                    "bot:" + row["bot_id"] if bot else H.TICO_ACTOR,
                                     msg["sender_id"],
                                     reason,
                                     kind="notice",
@@ -4203,7 +4212,7 @@ class Execution:
                         quarantine_stops.requeue(c, {"id": row["id"], "job_id": job["id"]}, H.now()[11:16])
                 H.turn_finish(
                     c,
-                    H.KEEPER,
+                    H.TICO_ACTOR,
                     row["id"],
                     exit_code="failed" if state == "failed" else "interrupted",
                     summary=reason if state == "failed" else "Runner lease expired",
@@ -4264,7 +4273,7 @@ class Execution:
                         self.tell_held(c, row, facts)
                 H.event(
                     c,
-                    H.KEEPER,
+                    H.TICO_ACTOR,
                     "attempt.expired",
                     row["id"],
                     {"job_state": state, **({"cause": UNSTARTED_CATEGORIES[LAPSED]} if silent else {})},
@@ -4351,7 +4360,7 @@ class Execution:
                 if H.is_human(msg["sender_id"]):
                     H.say(
                         c,
-                        "bot:" + row["bot_id"] if bot else H.KEEPER,
+                        "bot:" + row["bot_id"] if bot else H.TICO_ACTOR,
                         msg["sender_id"],
                         reason,
                         kind="notice",
@@ -4367,7 +4376,7 @@ class Execution:
             wait_unstarted(c, job["id"], row["bot_id"], row["id"])
         H.turn_finish(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             row["id"],
             exit_code="failed" if state == "failed" else "interrupted",
             summary=reason if state == "failed" else summary,
@@ -4384,7 +4393,7 @@ class Execution:
         detail = {"bot": row["bot_id"], "job_id": row["job_id"], "job_state": state}
         if event == "attempt.returned":
             detail["cause"] = UNSTARTED_CATEGORIES[HANDED_BACK]
-        H.event(c, H.KEEPER, event, row["id"], detail)
+        H.event(c, H.TICO_ACTOR, event, row["id"], detail)
         return state
 
     def hand_back(self, c, row, body):
@@ -4720,7 +4729,7 @@ class Execution:
             or runner["last_seen_at"] <= H.shift(now, seconds=-CONTACT_EVERY)
         ):
             return None
-        if c.execute("SELECT 1 " + obsolete_notices_sql(c) + " LIMIT 1", (who.runner_id, H.KEEPER, now)).fetchone():
+        if c.execute("SELECT 1 " + obsolete_notices_sql(c) + " LIMIT 1", (who.runner_id, H.TICO_ACTOR, now)).fetchone():
             return None
         company = org_turns.admission(c)
         if org_turns.needs_observation(c, company):
@@ -4761,7 +4770,7 @@ class Execution:
         if awake_since != runner["awake_since"]:
             H.event(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 "runner.waking",
                 who.runner_id,
                 {"last_seen_at": runner["last_seen_at"], "awake_since": awake_since},
@@ -4833,15 +4842,15 @@ class Execution:
         # this was recorded, the next wake compared itself against a heartbeat from before the
         # sleep, read the gap as one long stretch of presence, and took the work.
         awake_since = self.stamp(c, who, runner, now)
-        # Any keeper notice can sit queued after its task finishes. Suppress obsolete automatic
+        # Any Tico notice can sit queued after its task finishes. Suppress obsolete automatic
         # wakes of every kind, while preserving people's messages and explicitly resumed jobs.
-        # A keeper notice of a person's own act still owes that person its answer (H._write_message).
+        # A Tico notice of a person's own act still owes that person its answer (H._write_message).
         # A self-filed task left parked when its filing turn ended waits for its actual trigger instead.
         obsolete = c.execute(
             "SELECT j.id,j.bot_id,j.attempt_id,j.message_id,t.id AS task_id "
             + obsolete_notices_sql(c)
             + " ORDER BY j.created_at,j.id LIMIT ?",
-            (who.runner_id, H.KEEPER, now, CLAIM_MAINTENANCE),
+            (who.runner_id, H.TICO_ACTOR, now, CLAIM_MAINTENANCE),
         ).fetchall()
         for old in obsolete:
             if not prepared:
@@ -4955,7 +4964,7 @@ class Execution:
                 if hold := failed.open_holds.get((holds.CLAIM_ERROR, "job", row["id"], bot)):
                     bot_stops.clear_job(c, hold, "Its held run started.", how="probe_passed")
                 if failed.open_holds.get((holds.CLAIM_ERROR, "bot", bot, bot)):
-                    holds.release(c, holds.CLAIM_ERROR, "bot", bot, actor=H.KEEPER, how="probe_passed")
+                    holds.release(c, holds.CLAIM_ERROR, "bot", bot, actor=H.TICO_ACTOR, how="probe_passed")
             return answer
 
     def start_claimed(self, c, who, body, runner, row):
@@ -4972,7 +4981,7 @@ class Execution:
             c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (row["id"],))
             threads.moot_delivery(c, msg, "bot:" + row["bot_id"])
             threads.replace_note_wake(c, msg, "bot:" + row["bot_id"])
-            H.event(c, H.KEEPER, "job.suppress", row["id"], {"reason": "unreadable"})
+            H.event(c, H.TICO_ACTOR, "job.suppress", row["id"], {"reason": "unreadable"})
             return {"attempt": None, "dropped": True}
         from . import task_wakes
 
@@ -4981,7 +4990,7 @@ class Execution:
             # it last changed. Under this write lock, so two claims never both take the seventh. The never-stuck check
             # writes a lost wake again for a bot that still has a turn, and hands a task at 7 runs to a person.
             clear_stop_status(c, row)
-            H.event(c, H.KEEPER, "job.suppress", row["id"], {"reason": "no_turn_or_runs"})
+            H.event(c, H.TICO_ACTOR, "job.suppress", row["id"], {"reason": "no_turn_or_runs"})
             return {"attempt": None, "dropped": True}
         # The bot's budget and back-off: an error in them passes the bot over, and holds no run.
         with shared_check():
@@ -4994,7 +5003,7 @@ class Execution:
         live_ref = (msg.get("refs") or {}).get("live_meeting")
         if (
             isinstance(live_ref, dict)
-            and msg.get("sender_id") == H.KEEPER
+            and msg.get("sender_id") == H.TICO_ACTOR
             and msg.get("recipient_id") == "bot:" + row["bot_id"]
         ):
             from .live_meetings import claim_runner_turn
@@ -5059,7 +5068,7 @@ class Execution:
         woke, source = run_triggers.of_message(msg)
         turn = H.turn_start(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             row["bot_id"],
             trigger="task" if task else msg["kind"],
             message_id=msg["id"],
@@ -5364,7 +5373,7 @@ class Execution:
             if waiting:
                 bot_to_bot.continue_backlog(c, row["bot_id"], skip=[item["id"] for item in left])
             if notes:
-                H.event(c, H.KEEPER, "note.carried", aid, {"bot": row["bot_id"], "notes": [n["id"] for n in notes]})
+                H.event(c, H.TICO_ACTOR, "note.carried", aid, {"bot": row["bot_id"], "notes": [n["id"] for n in notes]})
         # What was deferred to this turn (backend/delivery.py): the session's comments and messages, written out in the
         # prompt since the history page may not reach them, and the deferred notes above. Their deadlines are met.
         from . import delivery
@@ -5521,18 +5530,18 @@ class Execution:
             (H.now(), H.now(), REFUSED_RUN, aid),
         )
         c.execute("UPDATE jobs SET state='failed',attempt_id=? WHERE id=?", (aid, row["id"]))
-        H.turn_finish(c, H.KEEPER, aid, exit_code="failed", summary=REFUSED_RUN)
-        H.event(c, H.KEEPER, "attempt.refused", aid, {"bot": row["bot_id"], "job_id": row["id"]})
+        H.turn_finish(c, H.TICO_ACTOR, aid, exit_code="failed", summary=REFUSED_RUN)
+        H.event(c, H.TICO_ACTOR, "attempt.refused", aid, {"bot": row["bot_id"], "job_id": row["id"]})
         return True
 
     @staticmethod
     def obsolete_notice(c, who, job_id, now):
-        """Whether a queued job is an obsolete keeper notice (obsolete_notices_sql), which a claim cancels and never
+        """Whether a queued job is an obsolete Tico notice (obsolete_notices_sql), which a claim cancels and never
         hands out."""
         return (
             c.execute(
                 "SELECT 1 FROM (SELECT j.id AS id " + obsolete_notices_sql(c) + ") o WHERE o.id=? LIMIT 1",
-                (who.runner_id, H.KEEPER, now, job_id),
+                (who.runner_id, H.TICO_ACTOR, now, job_id),
             ).fetchone()
             is not None
         )
@@ -5663,7 +5672,7 @@ class Execution:
         )
         H.event(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "attempt.lease-restored",
             row["id"],
             {"bot": row["bot_id"], "job_id": row["job_id"], "lapsed": row["finished_at"], "lease_until": until},
@@ -5848,7 +5857,7 @@ class Execution:
         run_triggers.session(c, row["id"], body.session)
         H.turn_finish(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             row["id"],
             exit_code=body.outcome,
             summary=body.text[:2000],
@@ -5857,7 +5866,7 @@ class Execution:
         )
         H.event(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "attempt.late-result",
             row["id"],
             {"bot": row["bot_id"], "job_id": row["job_id"], "outcome": body.outcome},
@@ -5880,7 +5889,7 @@ class Execution:
             c,
             lambda: H.say(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 "bot:" + row["bot_id"],
                 said,
                 conversation_id=conversation_id,
@@ -5891,7 +5900,7 @@ class Execution:
         reason = "restart" if benched and quarantine_stops.restarted(c, row) else "quarantine"
         H.event(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "attempt.stopped",
             row["id"],
             {
@@ -5961,7 +5970,7 @@ class Execution:
 
     def _redirect_job(self, c, bot, redirect, attempt_id, actor):
         """The job a Stop and redirect names, when it is the caller's own: their message's job in this turn's conversation,
-        or the keeper carrier of that message. The queued one first, else the message's own job; None when there is none.
+        or Tico carrier of that message. The queued one first, else the message's own job; None when there is none.
         A carrier is found through its delivery to the bot, so no job is scanned."""
         direct = c.execute(REDIRECT_OWN_JOB, (redirect, bot, actor, attempt_id, attempt_id)).fetchone()
         found = [direct] if direct else []
@@ -6024,7 +6033,7 @@ class Execution:
             )
         row = rows[0]
         if redirect:
-            # A Home or thread message reaches the bot through its keeper carrier (threads._carrier): the queued job is
+            # A Home or thread message reaches the bot through its Tico carrier (threads._carrier): the queued job is
             # the carrier, found through its delivery to the bot (_redirect_job).
             job = self._redirect_job(c, bot, redirect, row["id"], who.actor)
             if job is None:
@@ -6089,7 +6098,7 @@ class Execution:
         run_diagnostics.touch(c, aid, "started")
         c.execute("UPDATE jobs SET state='running' WHERE id=?", (row["job_id"],))
         msg = self.record_thread(c, who, row, body.thread_id)
-        H.mark_delivered(c, H.KEEPER, msg)
+        H.mark_delivered(c, H.TICO_ACTOR, msg)
         settle_status(
             c,
             row["bot_id"],
@@ -6182,12 +6191,12 @@ class Execution:
             c.execute("INSERT OR IGNORE INTO attempt_conversations VALUES(?,?)", (aid, queued["conversation_id"]))
             thread_bot_digest.grant(c, aid, dict(queued))
             c.execute("UPDATE jobs SET state='input',attempt_id=? WHERE id=?", (aid, queued["job_id"]))
-            H.mark_delivered(c, H.KEEPER, queued["id"])
+            H.mark_delivered(c, H.TICO_ACTOR, queued["id"])
             text = str(queued["body"] or "")
-            # A keeper line reads by what made it ("Task update", "Stuck check"), never as the keeper.
+            # A Tico line reads by what made it ("Task update", "Stuck check"), never as Tico.
             who = (
                 (SRC.message_source({}, dict(queued))["name"] or "System")
-                if queued["sender_id"] == H.KEEPER
+                if queued["sender_id"] == H.TICO_ACTOR
                 else f"From {queued['sender_id']}"
             )
             lines.append(
@@ -6197,7 +6206,7 @@ class Execution:
             folded.append(queued["job_id"])
         if not folded:
             return msg
-        H.event(c, H.KEEPER, "job.fold_behind", aid, {"job_id": row["id"], "jobs": folded})
+        H.event(c, H.TICO_ACTOR, "job.fold_behind", aid, {"job_id": row["id"], "jobs": folded})
         return {
             **msg,
             "body": msg["body"] + "\n\nQueued on this task while this run was held, now part of this "
@@ -6459,7 +6468,7 @@ class Execution:
                 c.execute("UPDATE jobs SET attempt_id=NULL WHERE id=?", (job["id"],))
                 continue
             c.execute("UPDATE jobs SET state='queued',attempt_id=NULL WHERE message_id=? AND attempt_id=?", (mid, aid))
-            H.event(c, H.KEEPER, "job.input_returned", aid, {"message_id": mid})
+            H.event(c, H.TICO_ACTOR, "job.input_returned", aid, {"message_id": mid})
 
     def acknowledge_input(self, c, who, aid, mid):
         self.attempt(c, who, aid)
@@ -6470,7 +6479,7 @@ class Execution:
             "UPDATE attempt_inputs SET acked_at=coalesce(acked_at,?) WHERE attempt_id=? AND message_id=?",
             (H.now(), aid, mid),
         )
-        H.mark_delivered(c, H.KEEPER, mid)
+        H.mark_delivered(c, H.TICO_ACTOR, mid)
         return {"acknowledged": True}
 
     def events(self, c, who, aid, body):
@@ -6568,7 +6577,7 @@ class Execution:
             refs = {"task": task["id"]} if task else {}
             H.say(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 "bot:" + row["bot_id"],
                 defang(text, c),
                 kind="notice",
@@ -6577,7 +6586,7 @@ class Execution:
             )
         H.event(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "attempt.background-done",
             aid,
             {
@@ -6611,7 +6620,7 @@ class Execution:
             (conversation_id, H.now()),
         )
         bump_bot_session_epoch(c, row["bot_id"])
-        H.event(c, H.KEEPER, "reply.held", aid, {"bot": row["bot_id"]})
+        H.event(c, H.TICO_ACTOR, "reply.held", aid, {"bot": row["bot_id"]})
 
     def forget_late_reply(self, c, row, rule_check):
         """A late result's reply that the org rule check would hold (a Block or Escalate rule it breaks) is filed as its
@@ -6688,7 +6697,7 @@ class Execution:
                 raise
             H.event(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 "reply.withheld",
                 aid,
                 {"bot": actor.split(":", 1)[1], "to": target, "reason": refusal.code},
@@ -6790,7 +6799,7 @@ class Execution:
         if late:
             H.event(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 "attempt.late-settled",
                 aid,
                 {"bot": row["bot_id"], "job_id": row["job_id"], "outcome": body.outcome},
@@ -6860,7 +6869,7 @@ class Execution:
                     or carried
                     or (bool(source_refs.get("needs_action")) and not source_refs.get("comment"))
                 )
-                if target == H.KEEPER and task:
+                if target == H.TICO_ACTOR and task:
                     target = reply_target(source, conv, task)
                     # A task in the bot's chat room always delivers, and so does one filed from a chat into
                     # its own room (H.task_from_chat). Any other dedicated task thread hears its owner's turn: on
@@ -6876,7 +6885,7 @@ class Execution:
                     if conv.get("kind") == "chat" or (
                         conv.get("task_id") == task["id"] and H.task_from_chat(c, task["id"])
                     ):
-                        replyable = target not in (H.KEEPER, actor) and not wrote
+                        replyable = target not in (H.TICO_ACTOR, actor) and not wrote
                     else:
                         replyable = actor == task["owner_id"] and (
                             task["status"] == "done"
@@ -6889,7 +6898,7 @@ class Execution:
                         replyable = False
                         H.event(
                             c,
-                            H.KEEPER,
+                            H.TICO_ACTOR,
                             "reply.withheld",
                             aid,
                             {"bot": row["bot_id"], "task": task["id"], "to": target, "reason": "no_change"},
@@ -6899,7 +6908,7 @@ class Execution:
                         replyable = False
                         H.event(
                             c,
-                            H.KEEPER,
+                            H.TICO_ACTOR,
                             "reply.withheld",
                             aid,
                             {"bot": row["bot_id"], "task": task["id"], "to": target, "reason": "notice_only"},
@@ -6911,7 +6920,7 @@ class Execution:
                 # A reply the turn already sent is not posted again, but the person waiting still hears of a hold.
                 reaches = replyable
                 replyable = replyable and posting
-                if target not in (H.KEEPER, actor):
+                if target not in (H.TICO_ACTOR, actor):
                     refs = {
                         "turn_id": aid,
                         **({"task": task["id"]} if task else {}),
@@ -6933,7 +6942,7 @@ class Execution:
                         if H.is_human(target):
                             H._write_message(
                                 c,
-                                H.KEEPER,
+                                H.TICO_ACTOR,
                                 target,
                                 f"{(H.bot(c, row['bot_id']) or {}).get('slug', row['bot_id'])} finished, but its reply drew on "
                                 "a private task you can't read, so it was not posted here.",
@@ -6963,7 +6972,7 @@ class Execution:
                         if H.is_human(target) and reaches:
                             H._write_message(
                                 c,
-                                H.KEEPER,
+                                H.TICO_ACTOR,
                                 target,
                                 note,
                                 conv,
@@ -6997,7 +7006,7 @@ class Execution:
                         if full:
                             H.event(
                                 c,
-                                H.KEEPER,
+                                H.TICO_ACTOR,
                                 "reply.withheld",
                                 aid,
                                 {
@@ -7104,7 +7113,7 @@ class Execution:
                     "run_id": aid,
                     "error_class": failure if isinstance(failure, str) else None,
                 },
-                H.KEEPER,
+                H.TICO_ACTOR,
                 revision=aid,
             )
         limited = body.outcome != "completed" and body.limited and not stopped
@@ -7292,11 +7301,11 @@ class Execution:
         if tico_code == gateway.NOT_ISOLATED and not requeue:
             # Held as it is: never started, so `auto_reconcile` would resume it onto the same runner each sweep. It
             # waits for a person to move the bot or change its model, then retry or dismiss it.
-            H.event(c, H.KEEPER, "job.held", aid, {"job_id": row["job_id"], "tools": [], "reason": tico_code})
+            H.event(c, H.TICO_ACTOR, "job.held", aid, {"job_id": row["job_id"], "tools": [], "reason": tico_code})
         live_ref = (msg.get("refs") or {}).get("live_meeting")
         if (
             isinstance(live_ref, dict)
-            and msg.get("sender_id") == H.KEEPER
+            and msg.get("sender_id") == H.TICO_ACTOR
             and msg.get("recipient_id") == "bot:" + row["bot_id"]
         ):
             from .live_meetings import complete_runner_turn
@@ -7375,8 +7384,8 @@ class Execution:
                 if work_task_id(H.message(c, extra["message_id"]), conv) != turn_task:
                     continue
                 c.execute("UPDATE jobs SET state='completed',attempt_id=? WHERE id=?", (aid, extra["id"]))
-                H.mark_delivered(c, H.KEEPER, extra["message_id"])
-                H.event(c, H.KEEPER, "job.coalesce", extra["id"], {"attempt_id": aid, "job_id": row["job_id"]})
+                H.mark_delivered(c, H.TICO_ACTOR, extra["message_id"])
+                H.event(c, H.TICO_ACTOR, "job.coalesce", extra["id"], {"attempt_id": aid, "job_id": row["job_id"]})
         # A push from the task's worktrees is the run acting too, though only its runner saw it.
         run_triggers.pushed(c, aid, row["runner_id"], body.pushes)
         run_triggers.rotation(c, aid, body.rotated)
@@ -7384,7 +7393,7 @@ class Execution:
         # The runner's notices (a file left out of the commit) are shown beside the reply, not as the turn's summary.
         H.turn_finish(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             aid,
             exit_code=body.outcome,
             summary=split_runner_notices(body.text)[0][:2000],
@@ -7570,7 +7579,7 @@ class Execution:
                 )
             H.event(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 "attempt.auth_rejected",
                 aid,
                 {
@@ -7605,7 +7614,7 @@ class Execution:
             fallback_ran = (body.usage.segments or [body.usage])[-1] if body.usage else None
             H.event(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 "attempt.fallback",
                 aid,
                 {
@@ -7621,7 +7630,7 @@ class Execution:
         what = login_holds.CAPACITY_KIND if busy else "usage limit"
         if skipped:
             settle_status(c, row["bot_id"], "idle", "", claimed=row["created_at"])
-            H.event(c, H.KEEPER, "attempt.skipped", aid, {"bot": row["bot_id"], "job_id": row["job_id"]})
+            H.event(c, H.TICO_ACTOR, "attempt.skipped", aid, {"bot": row["bot_id"], "job_id": row["job_id"]})
         elif stopped:
             self.stopped(c, row, conv["id"], held=held_back)
         elif (
@@ -7648,7 +7657,7 @@ class Execution:
             )
             H.event(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 "attempt.check_moved",
                 aid,
                 {
@@ -7675,7 +7684,7 @@ class Execution:
             )
             H.event(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 "attempt.check_limited",
                 aid,
                 {
@@ -7703,7 +7712,7 @@ class Execution:
             )
             H.event(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 "attempt.task_model_limited",
                 aid,
                 {"bot": row["bot_id"], "job_id": row["job_id"], "runtime": runtime, "retry_after": retry},
@@ -7721,7 +7730,7 @@ class Execution:
                 )
             H.event(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 "attempt.limited_superseded",
                 aid,
                 {
@@ -7803,12 +7812,12 @@ class Execution:
                         + (", third in a row" if third else "")
                         + f"; retrying after {retry[:10]} {retry[11:16]} UTC"
                     )
-            H.status_set(c, H.KEEPER, row["bot_id"], state="limited", focus=focus)
+            H.status_set(c, H.TICO_ACTOR, row["bot_id"], state="limited", focus=focus)
             # Every limit restarts the cooldown; status_set keeps `since` while the state stays the same.
             c.execute("UPDATE bot_status SET changed_at=? WHERE bot=?", (hit, row["bot_id"]))
             H.event(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 "attempt.limited",
                 aid,
                 {
@@ -7825,7 +7834,7 @@ class Execution:
             # A computer given a person's plans moves on to the next plan with usage left: the work this limit held
             # until the spent plan's reset runs now, on that plan (its claim moves the set, model_subscriptions.settle).
             if model_subscriptions.moves_on(c, row["runner_id"], runtime):
-                lift_limited_on_computer(c, self.store.settings, H.KEEPER, row["runner_id"], runtime)
+                lift_limited_on_computer(c, self.store.settings, H.TICO_ACTOR, row["runner_id"], runtime)
         elif busy_acted or repeated_capacity:
             when = "again on its continued thread" if repeated_capacity else "after the run had acted"
             settle_status(
@@ -7887,7 +7896,7 @@ class Execution:
             )
             H.event(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 "attempt.no_effect_retry",
                 aid,
                 {"bot": row["bot_id"], "job_id": row["job_id"], "runtime": runtime, "retry_after": retry},
@@ -7904,7 +7913,7 @@ class Execution:
             )
             H.event(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 "attempt.no_effect_retry",
                 aid,
                 {"bot": row["bot_id"], "job_id": row["job_id"], "runtime": runtime},
@@ -7941,7 +7950,7 @@ class Execution:
             )
             H.event(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 "attempt.sign_in_retry",
                 aid,
                 {"bot": row["bot_id"], "job_id": row["job_id"], "runtime": runtime},
@@ -8189,7 +8198,8 @@ class Execution:
         # A deferred choice keeps the job uncertain; state alone cannot fence another open dialog. Tico's own saved
         # choice for an update cut gives way to a person's.
         if c.execute(
-            "SELECT 1 FROM job_recovery WHERE job_id=? AND attempt_id=? AND actor<>?", (job_id, body.run_id, H.KEEPER)
+            "SELECT 1 FROM job_recovery WHERE job_id=? AND attempt_id=? AND actor<>?",
+            (job_id, body.run_id, H.TICO_ACTOR),
         ).fetchone():
             raise Problem("uncertain", "A choice is already saved for this run. Refresh to see it.", 409)
         note = body.note.strip()
@@ -8217,7 +8227,7 @@ class Execution:
             f"WHERE j.bot_id=? AND j.state='uncertain' AND j.attempt_id IS NOT NULL AND {H.MESSAGE_TASK_SQL}=? "
             "AND NOT EXISTS(SELECT 1 FROM job_recovery r WHERE r.job_id=j.id AND r.attempt_id=j.attempt_id "
             "AND r.actor<>?) ORDER BY j.created_at",
-            (bot, task['id'], H.KEEPER),
+            (bot, task['id'], H.TICO_ACTOR),
         ).fetchall()
         if not rows:
             return 0
@@ -8252,7 +8262,7 @@ class Execution:
                 H.attempt(
                     c,
                     H.task_done,
-                    H.KEEPER,
+                    H.TICO_ACTOR,
                     task['id'],
                     'Recovery decisions saved. Tico applies deferred choices when the lane frees.',
                 )
@@ -8346,7 +8356,7 @@ class Execution:
                 c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (job_id,))
                 H.event(
                     c,
-                    H.KEEPER,
+                    H.TICO_ACTOR,
                     "job.suppress",
                     job_id,
                     {"reason": "Bot has no machine; a newer notice about the same task stays queued"},
@@ -8358,7 +8368,7 @@ class Execution:
         ).fetchall():
             with isolated(c, "hold_unrunnable", row["id"]):
                 c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (row["id"],))
-                H.event(c, H.KEEPER, "job.suppress", row["id"], {"reason": "Bot is archived"})
+                H.event(c, H.TICO_ACTOR, "job.suppress", row["id"], {"reason": "Bot is archived"})
                 held.append(row["id"])
         # A check its model's usage limit held, whose task is done or closed, would go on retrying after
         # every reset and run once on a finished task: its owner's queued turns on it are let go. A person's message
@@ -8380,7 +8390,7 @@ class Execution:
                 c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (row["id"],))
                 H.event(
                     c,
-                    H.KEEPER,
+                    H.TICO_ACTOR,
                     "job.suppress",
                     row["id"],
                     {
@@ -8415,7 +8425,7 @@ class Execution:
                 from . import threads
 
                 threads.replace_note_wake(c, H.message(c, row["message_id"]), "bot:" + row["bot_id"])
-                H.event(c, H.KEEPER, "job.suppress", row["id"], {"reason": "unreadable"})
+                H.event(c, H.TICO_ACTOR, "job.suppress", row["id"], {"reason": "unreadable"})
                 dropped.append(row["id"])
         return dropped
 
@@ -8459,7 +8469,7 @@ class Execution:
                 release = (json.loads(drained['detail'] or '{}') or {}).get('release')
                 H.event(
                     c,
-                    H.KEEPER,
+                    H.TICO_ACTOR,
                     'operator.deployment-undrain',
                     row['id'],
                     {'release': release, 'reason': 'stale deploy drain', 'drained_at': drained['created_at']},
@@ -8569,12 +8579,12 @@ class Execution:
                 if row['blocking_attempt']:
                     detail = {
                         'job_id': row['id'],
-                        'owner': H.KEEPER,
+                        'owner': H.TICO_ACTOR,
                         'blocking_attempt': row['blocking_attempt'],
                         'reason': 'Tico is waiting for live work on the same task or session lane and re-evaluates when it ends.',
                     }
                     if not prior or prior['action'] != 'job.recovery_wait' or json.loads(prior['detail']) != detail:
-                        H.event(c, H.KEEPER, 'job.recovery_wait', row['attempt_id'], detail)
+                        H.event(c, H.TICO_ACTOR, 'job.recovery_wait', row['attempt_id'], detail)
                     if not row['pending_decision'] and cut_by_update(c, row['attempt_id']):
                         # Tico's own choice for an update cut, saved now so nobody is asked meanwhile; once the lane
                         # frees, the sweep judges the run again rather than applying it blindly.
@@ -8586,7 +8596,7 @@ class Execution:
                                     row,
                                     row['attempt_id'],
                                     *self._update_choice(c, row, facts),
-                                    H.KEEPER,
+                                    H.TICO_ACTOR,
                                     action='job.auto_reconcile',
                                     deferred=True,
                                     cause='update',
@@ -8597,19 +8607,19 @@ class Execution:
                 if freed:
                     H.event(
                         c,
-                        H.KEEPER,
+                        H.TICO_ACTOR,
                         'job.recovery_ready',
                         row['attempt_id'],
                         {
                             'job_id': row['id'],
-                            'owner': H.KEEPER,
+                            'owner': H.TICO_ACTOR,
                             'reason': 'Live task or session lane is free; Tico is re-evaluating recovery.',
                         },
                     )
-                if row['pending_decision'] and row['reviewer'] == H.KEEPER:
+                if row['pending_decision'] and row['reviewer'] == H.TICO_ACTOR:
                     # Tico's own saved choice is only a placeholder while the lane was busy: the rules below judge the
                     # run afresh, so a Stop, a quarantine, a finished task or a day's wait since it was saved counts.
-                    c.execute("DELETE FROM job_recovery WHERE job_id=? AND actor=?", (row['id'], H.KEEPER))
+                    c.execute("DELETE FROM job_recovery WHERE job_id=? AND actor=?", (row['id'], H.TICO_ACTOR))
                 elif row['pending_decision']:
                     decided.append(
                         self._decide(
@@ -8656,7 +8666,7 @@ class Execution:
                             row['attempt_id'],
                             'dismiss',
                             'Task access was revoked.',
-                            H.KEEPER,
+                            H.TICO_ACTOR,
                             action='job.auto_reconcile',
                         )
                     )
@@ -8679,7 +8689,7 @@ class Execution:
                             row['attempt_id'],
                             'dismiss',
                             f"Stopped by {stopper(c, row['stop_requested_at'])}; not resumed.",
-                            H.KEEPER,
+                            H.TICO_ACTOR,
                             action='job.auto_reconcile',
                         )
                     )
@@ -8691,7 +8701,9 @@ class Execution:
                         "when the interrupted delivery was reviewed, so there was nothing left to deliver."
                     )
                     decided.append(
-                        self._decide(c, row, row['attempt_id'], 'dismiss', note, H.KEEPER, action='job.auto_reconcile')
+                        self._decide(
+                            c, row, row['attempt_id'], 'dismiss', note, H.TICO_ACTOR, action='job.auto_reconcile'
+                        )
                     )
                     continue
                 if row['attempt_id'] and hop_failed(
@@ -8708,7 +8720,7 @@ class Execution:
                         )
                         decided.append(
                             self._decide(
-                                c, row, row['attempt_id'], 'dismiss', note, H.KEEPER, action='job.auto_reconcile'
+                                c, row, row['attempt_id'], 'dismiss', note, H.TICO_ACTOR, action='job.auto_reconcile'
                             )
                         )
                         said['dismiss'] += 1
@@ -8726,7 +8738,7 @@ class Execution:
                         )
                         decided.append(
                             self._decide(
-                                c, row, row['attempt_id'], 'resume', note, H.KEEPER, action='job.auto_reconcile'
+                                c, row, row['attempt_id'], 'resume', note, H.TICO_ACTOR, action='job.auto_reconcile'
                             )
                         )
                         said['resume'] += 1
@@ -8740,7 +8752,7 @@ class Execution:
                             row,
                             row['attempt_id'],
                             *self._update_choice(c, row, facts),
-                            H.KEEPER,
+                            H.TICO_ACTOR,
                             action='job.auto_reconcile',
                             cause='update',
                         )
@@ -8756,7 +8768,7 @@ class Execution:
                             row['attempt_id'],
                             'resume',
                             self._cut_off_note(row, facts),
-                            H.KEEPER,
+                            H.TICO_ACTOR,
                             action='job.auto_reconcile',
                             cause='died',
                         )
@@ -8777,7 +8789,7 @@ class Execution:
                     if not held:
                         H.event(
                             c,
-                            H.KEEPER,
+                            H.TICO_ACTOR,
                             'job.held',
                             row['attempt_id'],
                             {
@@ -8797,7 +8809,7 @@ class Execution:
                         "again. BotOps is looking into why."
                     )
                     decision = self._decide(
-                        c, row, row['attempt_id'], 'dismiss', note, H.KEEPER, action='job.auto_reconcile'
+                        c, row, row['attempt_id'], 'dismiss', note, H.TICO_ACTOR, action='job.auto_reconcile'
                     )
                     if privacy.message_readable(c, 'bot:' + H.FLEET_MAINTAINER, msg):
                         self._tell_maintainer(c, row, msg)
@@ -8827,7 +8839,7 @@ class Execution:
                             row['attempt_id'],
                             'resume',
                             quarantine_stops.resume_note(at),
-                            H.KEEPER,
+                            H.TICO_ACTOR,
                             action='job.auto_reconcile',
                         )
                     )
@@ -8852,14 +8864,14 @@ class Execution:
                                 row['attempt_id'],
                                 decision,
                                 note,
-                                H.KEEPER,
+                                H.TICO_ACTOR,
                                 action='job.auto_reconcile',
                                 cause='held',
                             )
                         )
                         if decision == 'dismiss' and task:
                             try:
-                                H.task_comment(c, H.KEEPER, task['id'], note, wake=False)
+                                H.task_comment(c, H.TICO_ACTOR, task['id'], note, wake=False)
                             except H.Refused:
                                 pass
                         continue
@@ -8868,7 +8880,7 @@ class Execution:
                     if not held and row['attempt_id']:
                         H.event(
                             c,
-                            H.KEEPER,
+                            H.TICO_ACTOR,
                             'job.held',
                             row['attempt_id'],
                             {
@@ -8953,9 +8965,9 @@ class Execution:
                     if task and task.get('note'):
                         note += '\n\nHand-off note on the task:\n' + task['note']
                     if task:
-                        H.task_comment(c, H.KEEPER, task['id'], line, wake=False)
+                        H.task_comment(c, H.TICO_ACTOR, task['id'], line, wake=False)
                 decided.append(
-                    self._decide(c, row, row['attempt_id'], 'resume', note, H.KEEPER, action='job.auto_reconcile')
+                    self._decide(c, row, row['attempt_id'], 'resume', note, H.TICO_ACTOR, action='job.auto_reconcile')
                 )
         for bot, said in limit_said.items():
             with isolated(c, "auto_reconcile", bot):
@@ -9092,8 +9104,8 @@ class Execution:
         status = H.status(c, bot) or {}
         if status.get("state") == "limited" and status.get("focus"):
             line = f"{status['focus'].split('. Tico ')[0]}. {line}"
-        H.status_set(c, H.KEEPER, bot, focus=line, reason="Held runs settled")
-        H.event(c, H.KEEPER, "limit.held_settled", bot, dict(said))
+        H.status_set(c, H.TICO_ACTOR, bot, focus=line, reason="Held runs settled")
+        H.event(c, H.TICO_ACTOR, "limit.held_settled", bot, dict(said))
 
     def _hand_to_maintainer(self, c, row, msg, task, acted, again=False, *, reason=None):
         """One open BotOps task per bot to review its held runs: BotOps, not a person, recovers a stopped run.
@@ -9111,12 +9123,12 @@ class Execution:
         if review:
             if review['status'] in ('done', 'closed'):
                 why = "Stopped runs are still held with no recovery decision."
-                if H.attempt(c, H.task_move, H.KEEPER, review['id'], H.TASK_REOPEN, why) is None:
+                if H.attempt(c, H.task_move, H.TICO_ACTOR, review['id'], H.TASK_REOPEN, why) is None:
                     return
                 try:
                     H.task_comment(
                         c,
-                        H.KEEPER,
+                        H.TICO_ACTOR,
                         review['id'],
                         "Reopened: stopped runs are still held with no recovery decision. "
                         "Check each held run before closing this review.",
@@ -9137,7 +9149,7 @@ class Execution:
             try:
                 H.task_comment(
                     c,
-                    H.KEEPER,
+                    H.TICO_ACTOR,
                     review['id'],
                     f"Another run of {label}{about} (job {row['id']}) stopped after it {did}, so Tico "
                     "holds it too. Review it with the others: check what already happened, then resume or "
@@ -9145,7 +9157,7 @@ class Execution:
                 )
             except H.Refused:
                 return
-            H.event(c, H.KEEPER, 'job.held_named', row['id'], {'task': review['id'], 'bot': row['bot_id']})
+            H.event(c, H.TICO_ACTOR, 'job.held_named', row['id'], {'task': review['id'], 'bot': row['bot_id']})
             return
         held = c.execute(
             "SELECT count(*) FROM jobs j WHERE j.bot_id=? AND j.state='uncertain' AND NOT EXISTS("
@@ -9163,7 +9175,7 @@ class Execution:
         try:
             H.task_create(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 title,
                 f"A run of {label}{about} (job {row['id']}) stopped after it {did}, so Tico holds it "
                 f"rather than repeat a possible outside action.{still}\n"
@@ -9214,7 +9226,7 @@ class Execution:
 
             person_asks.task_for(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 title,
                 boundary + job_line + "\n\n" + named + "\n" + by_id,
                 owner,
@@ -9240,7 +9252,7 @@ class Execution:
         try:
             H.task_create(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 title,
                 f"Job {row['id']} stopped partway twice and was dismissed.\n"
                 f"Read its attempts (`tico sql`), fix the cause, and send the request again if it still matters.\n\n"

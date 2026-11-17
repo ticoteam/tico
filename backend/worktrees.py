@@ -381,7 +381,7 @@ def released_event(c, row, detail):
         data['wip_branch'] = 'wip/' + row['task_id'][:8] + '-' + row['id'][:6]  # runner-rs/src/worktrees.rs wip_branch
     if detail.get('stale_push_cleared'):
         data['reason'] += f" (stale push {detail['stale_push_cleared'][:12]} cleared)"
-    H.event(c, H.KEEPER, 'worktree.released', row['task_id'], data)
+    H.event(c, H.TICO_ACTOR, 'worktree.released', row['task_id'], data)
 
 
 def cancel_pending(c, row, detail, reason):

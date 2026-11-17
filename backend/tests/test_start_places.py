@@ -358,7 +358,7 @@ def test_delayed_managed_status_events_cannot_release_a_new_start_grant(api):
 
 def test_overload_rechecks_even_a_previously_granted_start(api):
     computer = waiters(api, n=1, running=0)
-    sent_by(api, 'message-0', H.KEEPER)
+    sent_by(api, 'message-0', H.TICO_ACTOR)
     grant = post(api, 'attempts/attempt-0/start-place', {}, computer['token'])
     assert grant['reserved']
     overload(api, computer)
@@ -371,10 +371,10 @@ def test_overload_rechecks_even_a_previously_granted_start(api):
 
 def test_a_persons_own_message_starts_on_an_overloaded_computer_and_nothing_else_does(api):
     """Bots' own load held every start, a person's chat to a bot included, behind a hundred bot turns. A person's
-    message still starts, ahead of the turns waiting there; a keeper notice (routine, sweep, rule wake) or a bot's
+    message still starts, ahead of the turns waiting there; a Tico notice (routine, sweep, rule wake) or a bot's
     message still waits."""
     computer = waiters(api, n=3, running=0)
-    sent_by(api, 'message-0', H.KEEPER)
+    sent_by(api, 'message-0', H.TICO_ACTOR)
     sent_by(api, 'message-1', 'bot:finance')
     overload(api, computer)
     for i in (0, 1):
@@ -421,7 +421,7 @@ def test_an_overloaded_computer_hands_out_a_persons_chat_but_not_a_bots_message(
             ).fetchone()[0]
             == 'queued'
         )
-    # A person's @mention in a thread with product-design reaches it as a keeper carrier, which counts as the person's.
+    # A person's @mention in a thread with product-design reaches it as a Tico carrier, which counts as the person's.
     assign(api, computer, 'product-design')
     ready(api, computer, ['ops', 'finance', 'cpo', 'product-design'])
     thread = post(api, 'threads', {'title': 'Layout', 'members': ['bot:product-design']})
@@ -433,7 +433,7 @@ def test_an_overloaded_computer_hands_out_a_persons_chat_but_not_a_bots_message(
 
 
 def test_a_persons_thread_message_to_a_bot_starts_before_the_bots_older_queued_work(api):
-    """A person's @mention in a thread with a bot reaches the bot as a keeper carrier, which counts as the person's
+    """A person's @mention in a thread with a bot reaches the bot as a Tico carrier, which counts as the person's
     message. The claim takes it ahead of the bot's older queued work (a 1:1 DM message is the bot's direct job)."""
     machine = runner(api)
     assign(api, machine, 'ops')

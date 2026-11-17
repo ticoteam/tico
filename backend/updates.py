@@ -8,7 +8,7 @@ sensitive so it can take a while."
 - `update_queue`: one request per enabled bot per day, sent one at a time (the next only once the
   last has posted or its run ended), so updates never crowd out real work on a Mac. Quietest bots
   first; a bot busy with a run is passed over and asked again later that day. A request is a
-  keeper notice to the bot, which queues its run like any message; the facts it needs ride along.
+  Tico notice to the bot, which queues its run like any message; the facts it needs ride along.
   A bot with nothing real to report skips instead of posting (`skip`): the request finishes `skipped` with
   "nothing new to report", and is never retried or marked missed.
 - `updates`: what a bot posted (one per bot, day and kind; a second post replaces the first).
@@ -900,7 +900,7 @@ def draft_facts(c, author, kind, day):
         "(SELECT a.actor_id || ' ' || a.kind || ' ' || coalesce(a.new, '') FROM history_events a "
         "WHERE a.subject_type='task' AND a.subject_id=e.subject_id AND a.rowid<e.rowid ORDER BY a.rowid DESC LIMIT 1)"
         f"=? || ' answer done') AND {shared_tasks_sql(hidden, 't.')} ORDER BY e.created_at DESC LIMIT ?",
-        (since, author, H.KEEPER, author, DRAFT_LIST_MAX),
+        (since, author, H.TICO_ACTOR, author, DRAFT_LIST_MAX),
     ).fetchall()
     # ...their answers to asks on shared tasks (the engine's answers, the newest of each ask and not taken back)...
     answers = [
@@ -1184,7 +1184,7 @@ def send_request(c, row, assistant=None, delivery=False):
         refs["release"] = shipped_release(row["kind"])
     message = H.say(
         c,
-        H.KEEPER,
+        H.TICO_ACTOR,
         H.bot_actor(row["bot"]),
         request_text(
             c,
@@ -1767,7 +1767,7 @@ def purge_rejected(c):
             "message_id=NULL, sent_at=NULL, done_at=NULL, reason='asked again: the last one broke the update rules'",
             (H.new_id(), row["bot"], row["kind"], row["day"], last + 1),
         )
-        H.event(c, H.KEEPER, "update.rejected", row["id"], {"bot": row["bot"]})
+        H.event(c, H.TICO_ACTOR, "update.rejected", row["id"], {"bot": row["bot"]})
         removed.append(row["bot"])
     # The ones #635 deleted as "not given" (too long) are asked again the same way.
     for row in c.execute(

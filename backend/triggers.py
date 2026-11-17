@@ -644,7 +644,7 @@ def _judge(c, ctx, event=RECEIVED):
     except Exception as exc:
         c.execute("ROLLBACK TO trigger_rules")
         c.execute("RELEASE trigger_rules")
-        H.event(c, H.KEEPER, "trigger.rules_error", ctx["trigger"], {"error": type(exc).__name__})
+        H.event(c, H.TICO_ACTOR, "trigger.rules_error", ctx["trigger"], {"error": type(exc).__name__})
         return []
     c.execute("RELEASE trigger_rules")
     return out
@@ -719,7 +719,7 @@ def _unheard(c, found, delivery, type_):
     what = f"{found['name']} ({type_})" if type_ else found["name"]
     H.notice(
         c,
-        H.KEEPER,
+        H.TICO_ACTOR,
         found["created_by"],
         f"A call to the webhook {what} reached no routine or rule. Add a routine on {event_of(found['id'])} "
         f"or a rule on {RECEIVED}. Call {delivery}.",
@@ -1010,7 +1010,7 @@ def given_to(c, bot, trigger_id, base):
     if c.execute(
         "SELECT 1 FROM messages m JOIN automation_runs r ON r.id=json_extract(m.refs,'$.automation_run') "
         "WHERE m.recipient_id=? AND m.sender_id=? AND " + on + " LIMIT 1",
-        (bot, H.KEEPER, *params),
+        (bot, H.TICO_ACTOR, *params),
     ).fetchone():
         return True
     on, params = _delivery_match("json_extract(refs,'$.delivery')", base)
@@ -1020,7 +1020,7 @@ def given_to(c, bot, trigger_id, base):
             "SELECT 1 FROM messages WHERE recipient_id=? AND sender_id=? AND json_extract(refs,'$.trigger')=? AND "
             + on
             + " LIMIT 1",
-            (bot, H.KEEPER, trigger_id, *params),
+            (bot, H.TICO_ACTOR, trigger_id, *params),
         ).fetchone()
     )
 

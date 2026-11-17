@@ -119,10 +119,10 @@ def ensure(c):
     c.execute(
         "INSERT INTO strategy_versions (id, n, status, guide, summary, vision, sections, bets, note, revision, "
         "updated_at, updated_by) VALUES (?,NULL,'draft',?,'',?,?,'[]','',0,?,?)",
-        (H.new_id(), DEFAULT_GUIDE, vision, dumps(sections), now, H.KEEPER),
+        (H.new_id(), DEFAULT_GUIDE, vision, dumps(sections), now, H.TICO_ACTOR),
     )
     if vision or description:
-        _event(c, H.KEEPER, "migrated", {"new": {"vision": vision, "sell": description}})
+        _event(c, H.TICO_ACTOR, "migrated", {"new": {"vision": vision, "sell": description}})
     return True
 
 
@@ -927,7 +927,7 @@ def catch_up(c):
     is. Every start; a no-op once the draft is live."""
     row = draft(c)
     if row and row["revision"]:
-        go_live(c, row["updated_by"] or H.KEEPER, quiet=True)
+        go_live(c, row["updated_by"] or H.TICO_ACTOR, quiet=True)
 
 
 def publish(c, actor, note="", revision=None, words=None):
@@ -990,7 +990,7 @@ def realign(c, owner, before, after):
     payload = {"n": after["n"], "goals": goals, "bets": active}
     proposal = G.propose(
         c,
-        H.KEEPER,
+        H.TICO_ACTOR,
         REALIGN,
         payload=payload,
         reason=f"strategy v{after['n']} retired or rewrote the bets these goals serve",
@@ -1007,7 +1007,7 @@ def file_card(c, owner, proposal):
 
     if c.execute("SELECT 1 FROM goal_asks WHERE kind='proposal' AND ref=?", (proposal["id"],)).fetchone():
         return None
-    requester = G.AUTO_ACTOR if GA.manager_ready(c) else H.KEEPER
+    requester = G.AUTO_ACTOR if GA.manager_ready(c) else H.TICO_ACTOR
     title, body = GA._ask(c, {"kind": "proposal", "proposal": proposal})
     # A realign card is urgent (goal_asks.urgent): past the daily cap, so a save never rolls back on it.
     if H.is_human(owner):
@@ -1357,7 +1357,7 @@ def watch(c, kpi_id=None, market_id=None, today=None):
                 f"wrong-if (a strategy_draft proposal with source bet_tripped)."
             )
             try:
-                task = H.task_create(c, H.KEEPER, f"Bet {number}: may be wrong", body, G.AUTO_ACTOR, lint=False)
+                task = H.task_create(c, H.TICO_ACTOR, f"Bet {number}: may be wrong", body, G.AUTO_ACTOR, lint=False)
             except H.Refused as exc:
                 if exc.rule != "duplicate":
                     raise
@@ -1366,7 +1366,7 @@ def watch(c, kpi_id=None, market_id=None, today=None):
                 continue
             _event(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 TRIPPED,
                 {
                     "bet_id": item["id"],
@@ -1376,7 +1376,7 @@ def watch(c, kpi_id=None, market_id=None, today=None):
                     "task_id": task["id"],
                 },
             )
-            H.event(c, H.KEEPER, "strategy.bet_tripped", item["id"], {"n": row["n"]})
+            H.event(c, H.TICO_ACTOR, "strategy.bet_tripped", item["id"], {"n": row["n"]})
             tripped.append(item["id"])
     return tripped
 

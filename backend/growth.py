@@ -575,7 +575,7 @@ def ask_owners(c, month=None):
         shown = "; ".join(lines[:5]) + (f"; and {len(lines) - 5} more" if len(lines) > 5 else "")
         H.notice(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             ch["owner_ref"],
             f"Growth: numbers typed as actual for {ch['name']} differ from the ones computed from customers: {shown}. "
             "Keep the typed number or the computed one on the Growth page.",
@@ -744,7 +744,7 @@ def _owner_ref(c, value):
     if value in (None, ""):
         return None
     actor = H.resolve_actor(c, value)
-    if not actor or actor == H.KEEPER:
+    if not actor or actor == H.TICO_ACTOR:
         raise Problem("not_found", f"No person or bot {value}", 404)
     return actor
 
@@ -1381,7 +1381,7 @@ def install(app, store, auth, mutate):
                     text = raw.decode("utf-8-sig")
                 except UnicodeDecodeError:
                     raise Problem("validation", "The file is not UTF-8 text", 422) from None
-                return GS.run(c, row.get("owner_ref") or H.KEEPER, row, csv_text=text)
+                return GS.run(c, row.get("owner_ref") or H.TICO_ACTOR, row, csv_text=text)
 
         return await asyncio.to_thread(take)
 
