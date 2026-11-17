@@ -117,7 +117,7 @@ function cfStackHTML(p: FloorPipe, s: FloorStage, sub = ''): string {
   return `<div class="cf-slot">${sub}${s.needs_you > 0 ? cfFlowHTML(p, s, 12) : ''}`
     + `<button type="button" class="cf-stack" data-cf-pipeline="${esc(p.id)}" data-cf-stage="${esc(s.id)}" data-cf-actor=""`
     + ` data-cf-who="${esc(s.owners.map(o => o.actor).join(' '))}" aria-haspopup="dialog" aria-label="${esc(s.name)}, ${s.count}"`
-    + ` style="--n:${n || 1}">${boxes}</button></div>`;
+    + ` style="--n:${n || 1}"><span class="cf-stname">${esc(s.name)}</span>${boxes}</button></div>`;
 }
 /** What the Floor knows of the flows between pipelines: every name the reader sees, by id, and for each pipeline the
  *  ones that send it work (a stage's handoff, `into`, or tasks moved over lately, `moved_into`). */
