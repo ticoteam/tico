@@ -16,6 +16,7 @@ Names and signatures are in docs/dev/pipelines-v3-build.md.
 import hashlib
 import json
 import logging
+import re
 from collections.abc import Callable, Iterable, Sequence
 from typing import TYPE_CHECKING, Any, NoReturn, cast
 
@@ -2336,9 +2337,9 @@ def add_requirement(
             _refuse(conn, by, "task_requirement", f"{page} is a person's OK already. {R.PAGE_OK_HINT}", task_id)
     if not for_action:
         shows = validate_gate.check_ask(conn, row, by, person, kind, shows, choices)
-        if is_bot(by) and not shows:
-            # A bot's OK that is not bound to an action approves something it shows: a page or a file. A bare "OK?"
-            # is a question.
+        if is_bot(by) and not shows_a_file(conn, by, shows):
+            # A bot's OK that is not bound to an action approves something it shows: a page or a file it may read. A
+            # bare "OK?", or one that shows only a link, is a question.
             _refuse(conn, by, "task_requirement", OK_SHOWS, task_id)
     _may_name(conn, by, person, task_id)
     unshared = not_shared(conn, row, str(person))
@@ -2449,6 +2450,35 @@ OK_SHOWS = (
     "An OK approves what it shows: add --show page:<id> or file:<id>@<version>. "
     'For anything else, mark a ❓ instead: tico task ask <id> --to <person> "<question>".'
 )
+
+
+# What a bot's OK may approve (`shows_a_file`): a page, at a version or its current one, or a file at a version.
+SHOWN = re.compile(r"page:(?P<page>[^@\s]+)(?:@(?P<at>[0-9]+))?|file:(?P<file>[^@\s]+)@(?P<version>[0-9]+)")
+
+
+def shows_a_file(conn: "sqlite3.Connection", by: str, shows: object) -> bool:
+    """Whether what an OK shows names at least one page (`page:<id>`, `page:<id>@<version>`) or file version
+    (`file:<id>@<version>`) that is there and that `by` may read: its page audience, and the task it lives on. A link or
+    any other text approves nothing Tico holds."""
+    from . import task_privacy
+
+    H = _h()
+    for ref in cast("list[object]", shows) if isinstance(shows, list) else [shows] if shows else []:
+        found = SHOWN.fullmatch(str(ref).strip())
+        if not found:
+            continue
+        fid = found["page"] or found["file"]
+        row = conn.execute("SELECT task_id, current_version, archived FROM bot_files WHERE id=?", (fid,)).fetchone()
+        if not row or row["archived"]:
+            continue
+        number = int(found["at"] or found["version"] or row["current_version"] or 0)
+        if not conn.execute("SELECT 1 FROM bot_file_versions WHERE file_id=? AND version=?", (fid, number)).fetchone():
+            continue
+        if row["task_id"] and not H.task_private_readable(conn, by, H.task(conn, row["task_id"])):
+            continue
+        if task_privacy.page_content_readable(conn, by, [f"page:{fid}"]):
+            return True
+    return False
 
 
 def _replace_open(conn: "sqlite3.Connection", task_id: str, visit_id: str, by: str, ts: str) -> None:
