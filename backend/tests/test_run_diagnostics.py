@@ -499,3 +499,8 @@ def test_a_clean_stop_reports_its_saved_diagnostic_even_with_no_reply(api):
     )
     post(api, f"attempts/{a['id']}/complete", {'outcome': 'interrupted', 'text': '', 'last_seq': 1}, machine['token'])
     assert listed(api, a['id'])['end_reason'] == 'Runner stopped during execution'
+
+
+def test_slack_tokens_are_scrubbed():
+    for token in ("xoxb-1234567-abcdefg", "xoxp-12-34-abcdef", "xapp-1-A01-123-abcdef"):
+        assert run_diagnostics.scrub(f"auth failed for {token} now") == "auth failed for [redacted] now"
