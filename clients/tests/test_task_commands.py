@@ -112,9 +112,9 @@ COMMANDS = [
             "T1",
             "--to",
             "chris",
-            "Which plan?",
-            "--choices",
-            "a,b",
+            "OK the plan?",
+            "--kind",
+            "ok",
             "--show",
             "page:12",
             "--version",
@@ -125,8 +125,8 @@ COMMANDS = [
             {
                 "id": "T1",
                 "to": "chris",
-                "line": "Which plan?",
-                "choices": ["a", "b"],
+                "line": "OK the plan?",
+                "kind": "ok",
                 "show": ["page:12"],
                 "version": 3,
             },
@@ -134,7 +134,7 @@ COMMANDS = [
         (
             "POST",
             "tasks/T1/asks",
-            {"to": "chris", "line": "Which plan?", "version": 3, "choices": ["a", "b"], "show": ["page:12"]},
+            {"to": "chris", "line": "OK the plan?", "version": 3, "kind": "ok", "show": ["page:12"]},
         ),
     ),
     (
@@ -418,51 +418,20 @@ def test_an_ask_names_who_and_the_line_before_anything_is_sent():
     assert api.calls == []
 
 
-def test_a_bots_question_to_a_person_sends_its_why_each_choice_with_what_happens_and_the_recommendation():
-    """`tico task ask --why ... --choice "Label|what happens" --recommend Label` (asks-not-todos, For the engineer)."""
-    argv = [
-        "task",
-        "ask",
-        "T1",
-        "Which tone?",
-        "--to",
-        "chris",
-        "--why",
-        "It goes out Friday.",
-        "--choice",
-        "Plain|Safe for customers",
-        "--choice",
-        "Playful | Stands out",
-        "--recommend",
-        "Plain",
-        "--version",
-        "3",
-    ]
+def test_a_question_with_choices_or_why_is_refused_before_anything_is_sent():
+    """A question is a message marked ❓: its options, pick and why are words in it (backend/question_marks.py)."""
+    argv = ["task", "ask", "T1", "Which tone?", "--to", "chris", "--why", "It goes out Friday.", "--version", "3"]
     args = {k: v for k, v in vars(hubcli.parser().parse_args(argv)).items() if k != "fn" and v is not None}
-    api = Recorder()
-    hubtools.task_ask(api, args)
-    assert api.writes() == [
-        (
-            "POST",
-            "tasks/T1/asks",
-            {
-                "to": "chris",
-                "line": "Which tone?",
-                "version": 3,
-                "why": "It goes out Friday.",
-                "recommend": "Plain",
-                "choices": ["Plain", "Playful"],
-                "details": ["Safe for customers", "Stands out"],
-            },
-        )
-    ]
-    with pytest.raises(ValueError, match="not both"):
-        hubtools.task_ask(Recorder(), {**args, "choices": ["A", "B"]})
+    for extra in ({}, {"choices": ["Plain", "Playful"]}, {"recommend": "Plain"}, {"kind": "answer"}):
+        api = Recorder()
+        with pytest.raises(ValueError, match="A question is a message"):
+            hubtools.task_ask(api, {**args, **extra})
+        assert api.calls == []
 
 
 def test_an_asks_short_title_is_sent_and_an_ask_without_one_sends_none():
     """`tico task ask ... --title "<at most 60 characters>"`: the decision view's heading (task #390)."""
-    argv = ["task", "ask", "T1", "Which tone should the launch note take?", "--to", "chris", "--version", "3"]
+    argv = ["task", "ask", "T1", "OK the launch note's tone?", "--to", "chris", "--kind", "ok", "--version", "3"]
     args = {k: v for k, v in vars(hubcli.parser().parse_args([*argv, "--title", "Launch note tone"])).items()}
     args = {k: v for k, v in args.items() if k != "fn" and v is not None}
     api = Recorder()

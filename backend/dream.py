@@ -242,6 +242,15 @@ def _ask(c, row):
     return next((w for w in waits if w.state == "person" and w.ask and w.who == row["requester_id"]), None)
 
 
+def _asked(c, ask):
+    """What the ❓ asks: its whole message, the numbered questions (INSTRUCTIONS), not only its first line."""
+    from . import question_marks
+
+    mark = question_marks.get(c, ask.requirement_id.removeprefix(question_marks.PREFIX))
+    said = mark and c.execute("SELECT body FROM messages WHERE id=?", (mark["message_id"],)).fetchone()
+    return (said[0] if said else "") or ask.line
+
+
 def view(c, who, row):
     """{dream: ...} as GET answers it; a dream's question shows only to whoever may read it."""
     if not row:
@@ -275,7 +284,7 @@ def view(c, who, row):
             questions = {
                 "task_id": row["id"],
                 "requirement_id": ask.requirement_id,
-                "text": ask.line[:MAX_TEXT],
+                "text": _asked(c, ask)[:MAX_TEXT],
                 "mine": ask.who == who.actor,
             }
         elif row["status"] == "open" and not _started(c, row):

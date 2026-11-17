@@ -1,31 +1,26 @@
-"""Dream (backend/dream.py, docs/learnings.md): a person starts one cleanup task for a bot, its one ask reaches them
-without ask ingest, their answer wakes the bot, and the commit it makes is that dream's."""
+"""Dream (backend/dream.py, docs/learnings.md): a person starts one cleanup task for a bot, its ❓ reaches them, their
+reply wakes the bot, and the commit it makes is that dream's."""
 
 import json
 
 from backend import bot_settings as BS
 from backend import dream as dream_module
 from backend import hubdb as H
+from backend import question_marks as Q
 from backend.tests.helpers import ask_ingest as ingest
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, restrict, runner  # noqa: F401
 from backend.tests.helpers.ask_ingest import gate, plate  # noqa: F401  (the ask ingest fixture)
 
-# Two numbered questions in one ask: what dream.INSTRUCTIONS asked for before v3, which the one-decision ask rule refuses.
+# The dream's questions, numbered, in one message marked ❓ (dream.INSTRUCTIONS).
 QUESTIONS = (
     "1. Should weekly reports go to Ana or the team? Suggested: the team\n2. Drop the old deploy rule? Suggested: yes"
 )
-# One question, which the v3 ask rule takes (one decision per ask).
 QUESTION = "Should weekly reports go to Ana or the team?"
 
 
-def ask(api, tid, token, line=QUESTION, to="human:ben"):
-    """The bot asks a person on the task, with the version it was shown."""
-    version = api.get(f"/api/v2/tasks/{tid}", headers=headers(token)).json()["task"]["version"]
-    return api.post(
-        f"/api/v2/tasks/{tid}/asks",
-        json={"to": to, "line": line, "version": version, "why": "It sets what goes out on launch day."},
-        headers=headers(token),
-    )
+def ask(api, tid, token, line=QUESTION, to="ben"):
+    """The bot asks a person on the task with a ❓ (`tico task ask <id> --to <person> "<question>"`)."""
+    return api.post(f"/api/v2/tasks/{tid}/questions", json={"to": to, "text": line}, headers=headers(token))
 
 
 def dream(api, token="ben-test", bot="ops", expected=200):
@@ -99,7 +94,7 @@ def test_a_dreams_ask_skips_ask_ingest_and_reaches_the_person(gate):
         and ingest.items(api) == []
     )
     seen = current(api)
-    assert seen["state"] == "asking" and seen["questions"]["requirement_id"]
+    assert seen["state"] == "asking" and seen["questions"]["requirement_id"].startswith("qmark:")
     with api.app.state.store.read() as c:
         waits = H.task_waits(c, [tid])[tid]
         assert any(w.state == "person" and w.ask and w.who == "human:ben" for w in waits)  # the dream waits on Ben
@@ -124,14 +119,9 @@ def test_asking_answering_and_the_dreams_own_commit(api):
         token=machine["token"],
     )
 
-    # The person answers the ask, as Needs you does: the bot is woken on the dream.
+    # The person replies on the dream's chat, as the Learnings panel does: the bot is woken on the dream.
     asked = seen["questions"]
-    post(
-        api,
-        f"tasks/{asked['task_id']}/asks/{asked['requirement_id']}/answer",
-        {"value": "The team"},
-        token="ben-test",
-    )
+    post(api, f"tasks/{asked['task_id']}/comments", {"text": "The team"}, token="ben-test")
     assert current(api)["state"] == "dreaming"
     second = claim(api, machine, "ops")
     assert second and second["id"] != first["id"]
@@ -161,42 +151,26 @@ def test_asking_answering_and_the_dreams_own_commit(api):
         assert done["closed_at"][:10] in H.task(c, again["task"])["body"]
 
 
-def test_the_dream_asks_one_question_per_ask_and_waits_for_each_answer(api):
-    """The v3 ask rule takes one decision per ask, and a bot has one open ask on a task (C15): the dream's instructions
-    say both, numbered questions in one ask are refused, and each question asked in turn is taken and shown."""
+def test_the_dream_asks_its_questions_in_one_message_and_a_reply_clears_it(api):
+    """A watched dream asks on its own chat with a ❓ and waits; an auto dream files each question to the person's Flow
+    (skills/add-to-flow), never on the dream, whose body is these instructions, and finishes without waiting."""
     text = dream_module.instructions("Ben", "Oct 20")
-    assert "one question per ask" in text and "one ask at a time" in text and "At most 3 questions" in text
-    assert "in ONE" not in text and "Number them" not in text
-    # Nobody watches an auto dream: its questions are their own tasks in Ben's Flow (skills/add-to-flow), never on the
-    # dream, whose body is these instructions; it finishes without waiting.
+    assert "tico_task_ask" in text and "At most 3 questions" in text and "wait for the reply" in text
     auto = dream_module.instructions("Ben", "Oct 20", auto=True)
-    assert "skills/add-to-flow/SKILL.md" in auto and "never on this task" in auto and "At most 3 questions" in auto
-    assert "Do not wait for answers" in auto and "one ask at a time" not in auto
+    assert "skills/add-to-flow/SKILL.md" in auto and "never on this task" in auto and "Do not wait for answers" in auto
     tid = dream(api)["dream"]["task"]
     with api.app.state.store.transaction() as c:
-        try:
-            H.task_ask(c, "bot:ops", tid, "human:ben", QUESTIONS, seen_version=H.task(c, tid)["version"])
-            raise AssertionError("an ask with two questions was taken")
-        except H.Refused:
-            pass
-    for line in (QUESTION, "Drop the old deploy rule? Suggested: yes"):
-        with api.app.state.store.transaction() as c:
-            H.task_ask(c, "bot:ops", tid, "human:ben", line, seen_version=H.task(c, tid)["version"])
-        shown = current(api)["questions"]
-        assert shown["text"] == line
-        r = api.post(
-            f"/api/v2/tasks/{tid}/asks/{shown['requirement_id']}/answer",
-            json={"value": "Yes"},
-            headers=headers("ben-test"),
-        )
-        assert r.status_code == 200, r.text
-        assert current(api)["questions"] is None
+        Q.ask(c, "bot:ops", tid, "human:ben", QUESTIONS)
+    shown = current(api)["questions"]
+    assert shown["text"] == QUESTIONS and shown["mine"]
+    post(api, f"tasks/{tid}/comments", {"text": "1. The team\n2. Yes"}, token="ben-test")
+    assert current(api)["questions"] is None
 
 
 def test_someone_who_may_give_work_but_not_read_never_gets_another_persons_open_dream(api):
     tid = dream(api)["dream"]["task"]
     with api.app.state.store.transaction() as c:
-        H.task_ask(c, "bot:ops", tid, "human:ben", QUESTION, seen_version=H.task(c, tid)["version"])
+        Q.ask(c, "bot:ops", tid, "human:ben", QUESTION)
         restrict(
             c,
             "ops",
