@@ -13,6 +13,8 @@ the rest are summed in `more`.
 - `needs_you`: of those, the ones in the reader's own Needs you (the asks, tasks and @s a stage's Flow walks).
 - `into`: the pipeline a stage files a linked task into (its `on_enter.file_into`, a handoff), when the reader sees
   that pipeline here; else null. The Floor joins a pipeline to the one it hands off to only where this is set.
+- `moved_into`: the pipelines the reader sees here that tasks the reader may read were moved into from this one (Move to
+  another pipeline) in the last MOVES_DAYS days, the most moved first: a flow nobody configured but that happens.
 - `manager_id`: the pipeline's manager, which a factory with no manager of its own is drawn under.
 - `in`, `out`: tasks that entered the pipeline (a first visit, `entered_how='new'`, or an open one moved in from another
   pipeline) and tasks that reached a Done stage (not one moved there already done), in the last 24 hours (`day`) and 7
@@ -36,6 +38,7 @@ TA: Any = _teammate_access
 V: Any = _views
 
 OWNERS_MAX = 12  # holders listed per stage; the rest are summed in `more`
+MOVES_DAYS = 30  # how far back a move between pipelines counts as a flow between them
 # A visit that brought a task into the pipeline (`in`), and one that finished it there (`out`). A task moved from another
 # pipeline (task_engine.refile) comes in when it is open; one moved already done was not finished here.
 CAME_IN = "(v.entered_how='new' OR (v.entered_how='moved' AND s.kind='work'))"
@@ -81,6 +84,26 @@ def _rates(c: Any, pipeline_ids: list[str], visible_sql: str) -> dict[str, dict[
     for pid, in_day, in_week, out_day, out_week in rows:
         if pid in out:
             out[pid] = {"in": {"day": in_day, "week": in_week}, "out": {"day": out_day, "week": out_week}}
+    return out
+
+
+def _moves(c: Any, visible_sql: str, drawn: set[str]) -> dict[str, list[str]]:
+    """{pipeline: the drawn pipelines its tasks were moved into lately, the most moved first}. A move ends one visit and
+    opens the next `moved` at the same moment (task_engine.refile)."""
+    rows = c.execute(
+        "SELECT a.pipeline_id, b.pipeline_id, COUNT(DISTINCT nv.task_id) AS n "
+        "FROM visits nv JOIN stages b ON b.id=nv.stage_id "
+        "JOIN visits ov ON ov.task_id=nv.task_id AND ov.how='moved' AND ov.left_at=nv.entered_at "
+        "JOIN stages a ON a.id=ov.stage_id "
+        "WHERE nv.entered_how='moved' AND nv.entered_at>=? AND a.pipeline_id<>b.pipeline_id "
+        f"AND EXISTS (SELECT 1 FROM tasks WHERE tasks.id=nv.task_id AND ({visible_sql})) "
+        "GROUP BY a.pipeline_id, b.pipeline_id ORDER BY n DESC, b.pipeline_id",
+        (H.shift(H.now(), days=-MOVES_DAYS),),
+    ).fetchall()
+    out: dict[str, list[str]] = {}
+    for src, dst, _n in rows:
+        if src in drawn and dst in drawn:
+            out.setdefault(str(src), []).append(str(dst))
     return out
 
 
@@ -160,6 +183,7 @@ def floor(c: Any, auth: Any, who: Any) -> dict[str, Any]:
         other_reads = other_reads or p[2] is None and reads_some
     rates = _rates(c, [p[0] for p in shown], visible_sql)
     seen = {str(p[0]) for p in shown}
+    moves = _moves(c, visible_sql, seen)
     for p in shown:
         (other if p[2] is None else by_factory[p[2]])["pipelines"].append(
             {
@@ -167,6 +191,7 @@ def floor(c: Any, auth: Any, who: Any) -> dict[str, Any]:
                 "name": p[1],
                 "manager_id": p[4],
                 **rates[p[0]],
+                "moved_into": moves.get(str(p[0]), []),
                 "stages": [_stage(s, held.get(s[0], []), unknown, seen) for s in stages.get(p[0], [])],
             }
         )
