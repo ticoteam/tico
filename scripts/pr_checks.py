@@ -351,6 +351,24 @@ CONTENT = {
 }
 
 
+def imported_roots(tree):
+    """Collect absolute import roots, including imports nested in any statement suite."""
+    suites = [tree.body]
+    roots = set()
+    while suites:
+        for node in suites.pop():
+            if isinstance(node, ast.Import):
+                roots.update(alias.name.partition(".")[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and not node.level and node.module:
+                roots.add(node.module.partition(".")[0])
+            # Imports are statements. Expressions, annotations and patterns cannot contain one.
+            for field in ("body", "orelse", "finalbody", "handlers", "cases"):
+                children = getattr(node, field, None)
+                if isinstance(children, list) and children:
+                    suites.append(children)
+    return roots
+
+
 class DependencyMap:
     """What each tracked file runs and reads, measured statically, so a change selects every test that can reach it.
 
@@ -394,12 +412,7 @@ class DependencyMap:
         for path in self.files:
             if path.endswith(".py") and (tree := self.parse(path)) is not None:
                 parsed.append(path)
-                for node in ast.walk(tree):
-                    # Top-level names imported through sys.path (`import hubcli` with clients/ on the path).
-                    if isinstance(node, ast.Import):
-                        self.bare.update(a.name.split(".")[0] for a in node.names)
-                    elif isinstance(node, ast.ImportFrom) and not node.level and node.module:
-                        self.bare.add(node.module.split(".")[0])
+                self.bare.update(imported_roots(tree))
         self.bare = {
             name for name in self.bare - set(self.modules) if any(m.endswith("." + name) for m in self.modules)
         }

@@ -1,5 +1,6 @@
 """CI selection cannot omit uncertain work or turn an empty/red test run green."""
 
+import ast
 from collections import Counter
 from functools import partial
 import json
@@ -21,6 +22,24 @@ from scripts import flake_quarantine as quarantine
 from scripts import pr_checks as checks
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_import_roots_include_nested_suites_and_exclude_relative_imports():
+    tree = ast.parse("""
+class Worker:
+    async def run(self, event):
+        try:
+            match event:
+                case True:
+                    import example.one as one, another
+        except Exception:
+            from recovery.handlers import retry
+        else:
+            from .relative import helper
+        finally:
+            from cleanup import finish
+""")
+    assert checks.imported_roots(tree) == {"example", "another", "recovery", "cleanup"}
 
 
 @pytest.fixture(scope="module")
