@@ -407,3 +407,46 @@ def test_a_large_contracts_lane_splits_into_timed_vms_and_a_small_one_keeps_its_
     assert all(job["part"] == "python" for job in jobs)
     small = ri.build_jobs([], [], files[:2], False, [], False, False, tables)
     assert [job["name"] for job in small] == ["contracts"]
+
+
+def test_only_the_python_vms_holding_native_test_files_wait_for_the_release_binaries():
+    # ci.yml waits for native-linux on every VM without binaries "no"; as in the full matrix (shards 1-2), only the VMs
+    # with a file that runs the runner or relay binaries wait, and those files are packed on their own VMs.
+    files = [f"backend/tests/test_p{i}.py" for i in range(6)]
+    native = {"runner_support/tests/test_engine.py"}
+    tables = {"seconds": {name: 400.0 for name in [*files, *native]}, "browser": {}, "slow_only": set()}
+    jobs = ri.build_jobs(
+        sorted([*files, *native]), [], [], False, [], False, False, tables, native=lambda names: native & set(names)
+    )
+    waiting = [job for job in jobs if "binaries" not in job]
+    assert [job["files"] for job in waiting] == [sorted(native)]
+    assert all(job["binaries"] == "no" for job in jobs if job not in waiting)
+    assert sorted(sum((job["files"] for job in jobs), [])) == sorted([*files, *native])  # the same tests run
+    assert [job["name"] for job in jobs] == [f"python-{i}" for i in range(1, len(jobs) + 1)]
+    include = ri.matrix_of(json.dumps({"jobs": jobs}))["include"]
+    assert [entry.get("binaries", "") for entry in include] == [job.get("binaries", "") for job in jobs]
+
+
+def test_a_contracts_vm_waits_for_the_binaries_only_when_it_holds_a_native_test_file():
+    native = {"backend/tests/test_s0.py"}
+    files = [f"backend/tests/test_s{i}.py" for i in range(20)]
+    tables = {"seconds": {name: 100.0 for name in files}, "browser": {}, "slow_only": set()}
+    jobs = ri.build_jobs([], [], files, False, [], False, False, tables, native=lambda names: native & set(names))
+    assert [("binaries" not in job) for job in jobs] == [bool(native & set(job["files"])) for job in jobs]
+    assert any(job.get("binaries") == "no" for job in jobs)
+
+
+def test_a_plan_that_cannot_tell_native_files_keeps_every_python_vm_waiting_for_the_binaries():
+    plan = plan_of(selected(python=["backend/tests/test_a.py"]), smoke=(), gone=())
+    assert [job for job in plan["jobs"] if job["part"] == "python" and "binaries" in job] == []
+    told = plan_of(selected(python=["backend/tests/test_a.py"]), smoke=(), gone=(), native=lambda names: set())
+    assert [job["binaries"] for job in told["jobs"] if job["name"].startswith("python-")] == ["no"]
+
+
+def test_the_planner_finds_native_test_files_in_the_candidates_checkout(tmp_path):
+    tests = tmp_path / "backend/tests"
+    tests.mkdir(parents=True)
+    (tests / "test_native.py").write_text('BIN = "runner-rs/target/release/tico-runner"\n')
+    (tests / "test_plain.py").write_text("def test_a():\n    pass\n")
+    names = ["backend/tests/test_native.py", "backend/tests/test_plain.py"]
+    assert ri.native_test_files(names, tmp_path) == {"backend/tests/test_native.py"}

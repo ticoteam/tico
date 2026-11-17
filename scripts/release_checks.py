@@ -337,16 +337,18 @@ TEST_IMPORT = re.compile(
 )
 
 
-def native_test_files(names):
+def native_test_files(names, root=None):
     """The files of `names` that run the native binaries: they name them, or import a test module that does. Only the
     named files and the test modules they import are read (no folder listing: PR checks' selector would take one as
-    reading every test, and run the whole suite for any test change)."""
+    reading every test, and run the whole suite for any test change). `root`: the checkout they are read from (this
+    one when None; the incremental plan reads the candidate's)."""
+    root = ROOT if root is None else Path(root)
     texts, verdicts = {}, {}
 
     def text(name):
         if name not in texts:
             try:
-                texts[name] = (ROOT / name).read_text(errors='replace')
+                texts[name] = (root / name).read_text(errors='replace')
             except OSError:  # not a file here (a test's stand-in name, a package): nothing to run natively
                 texts[name] = ''
         return texts[name]
