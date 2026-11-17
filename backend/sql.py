@@ -1073,6 +1073,7 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement=""):
             "letter_outbox_grants",
             "agents",
             "ok_grants",  # an event about a bound OK reads only to its parties (task_asks.event_hidden)
+            "holds",  # a bot's row says `quarantined` while a quarantine hold is open (hubdb.BOT_SQL)
         }
 
         class Source:
