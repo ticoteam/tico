@@ -8,14 +8,23 @@
 // and the filter button share the top row; the filters sit in a popover (the Tasks popover's classes) and show as chips
 // under the row. Every filter rides in the address, so a view can be shared.
 const LF_DATES = [['', 'Any time'], ['7', 'Past week'], ['30', 'Past month'], ['365', 'Past year']];
-const LF_FILTERS = ['q', 'kind', 'bot', 'team', 'task', 'days', 'pinned', 'archived'];
-const LF_COUNTED = ['kind', 'bot', 'team', 'task', 'days', 'pinned', 'archived'];   // the filter button's count and the chips (not the search)
+const LF_ROLES: [string, string][] = [['', 'Any role'], ['Spec', 'Spec'], ['QA report', 'QA report'], ['Release report', 'Release report'], ['Invoice', 'Invoice']];
+const LF_FILTERS = ['q', 'kind', 'role', 'bot', 'writer', 'linked', 'team', 'task', 'days', 'pinned', 'archived'];
+const LF_COUNTED = ['kind', 'role', 'bot', 'writer', 'linked', 'team', 'task', 'days', 'pinned', 'archived'];   // the filter button's count and the chips (not the search)
 interface LfGroup { id: string; name: string }
-// Every filter is always present: '' (or false) when off. lfQuery writes them to the address and back.
-interface LfFilter { q: string; kind: string; bot: string; team: string; task: string; days: string; pinned: boolean; archived: boolean; [k: string]: string | boolean | undefined }
+// Every filter is always present: '' (or false) when off. lfQuery writes them to the address and back. role, linked (a
+// target: task:, bot:, human: or goal:) and writer (bot: or human:) are the page filters the contract adds.
+interface LfFilter { q: string; kind: string; role: string; bot: string; writer: string; linked: string; team: string; task: string; days: string; pinned: boolean; archived: boolean; [k: string]: string | boolean | undefined }
+// What a page is written for (a link to a task, bot, person, goal or page) and who wrote it, as the page read sends them.
+interface LfLink { target: string; role?: string; name?: string }
+interface LfWriter { actor: string; name?: string }
 // A file row of the Files list or a search hit, as the rows read it (`hit` marks a search hit).
-type LfRow = { id: string; title: string; name?: string; library_kind?: string; bot?: string; bot_name?: string; locator?: string; hit?: boolean; url?: string | null; open?: {url?: string} | null; last_activity_at?: string | null; updated_at?: string; pins?: unknown[]; archived?: boolean; excerpt?: string; };
+type LfRow = { id: string; title: string; name?: string; library_kind?: string; bot?: string; bot_name?: string; locator?: string; hit?: boolean; url?: string | null; open?: {url?: string} | null; last_activity_at?: string | null; updated_at?: string; pins?: unknown[]; archived?: boolean; excerpt?: string; links?: LfLink[]; links_more?: number; writers?: LfWriter[]; };
 interface LfState { root: HTMLElement; pop: HTMLElement; filter: LfFilter; rows: LfRow[]; cursor: string | null; seq: number; groups: LfGroup[] }
+// The names the Linked to picker and its chip show: a target's name as it was picked or fetched, and the goal list.
+const LF_NAMES = new Map<string, string>();
+let LF_GOALS: {id: string; title: string}[] = [];
+let LF_FIND = 0;   // the newest Linked to search: an answer to an older one is dropped
 const lfTeamName = (id: string | undefined) => id ? (LF?.groups || []).find((g: LfGroup) => g.id === id)?.name || teamLabel(id) : '';
 function lfQuery(filter: LfFilter) {
   const q = new URLSearchParams();
@@ -25,7 +34,7 @@ function lfQuery(filter: LfFilter) {
 }
 function lfApiQuery(f: LfFilter, cursor?: string | null) {
   const q = new URLSearchParams({limit: '50'});
-  for (const k of ['kind', 'bot', 'team', 'task']) if (f[k]) q.set(k, String(f[k]));
+  for (const k of ['kind', 'role', 'bot', 'writer', 'linked', 'team', 'task']) if (f[k]) q.set(k, String(f[k]));
   if (f.days) q.set('since', new Date(Date.now() - Number(f.days) * 864e5).toISOString());
   if (f.pinned) q.set('pinned', 'true');
   if (f.archived) q.set('archived', 'true');
@@ -50,9 +59,17 @@ async function pageLibraryFiles() {
     LF = {root: $('#lf-root'), pop: $('#lf-filter-pop'), filter, rows: [], cursor: null, seq: 0, groups: []};
     lfWire();
     get('/v2/groups').then(g => { if (!LF) return; LF.groups = Array.isArray(g) ? g : g?.groups || []; lfControls(); }).catch(() => {});
+    void lfGoalsLoad();
   } else if (LF) LF.filter = filter;
   lfControls();
   await lfLoad();
+}
+// The goals the Linked to picker names by their titles.
+async function lfGoalsLoad() {
+  try {
+    const r = await get<import('../types/api').GoalList | null>('/v2/goals?all=1');
+    LF_GOALS = (r?.goals || []).map(g => ({id: g.id, title: g.title || g.id}));
+  } catch { /* the picker names a goal by its id */ }
 }
 // The count, the chips and the popover's ticks follow the filters; the search box keeps what is being typed.
 function lfControls() {
@@ -67,6 +84,7 @@ function lfControls() {
   btn.setAttribute('aria-label', n ? `Filters, ${n} active` : 'Filters');
   lfBarPaint();
   lfPopSync();
+  if (f.linked.startsWith('task:') && !LF_NAMES.has(f.linked)) lfNameTask(f.linked);
 }
 function lfBarPaint() {
   const state = LF;
@@ -80,7 +98,10 @@ function lfBarPaint() {
     + `<button type="button" class="tl-chip-x" data-lf-clear="${key}" aria-label="${esc(`Remove ${label || value} filter`)}">${TL_ICON.x}</button></span>`;
   const chips = [
     f.kind && chip('kind', 'Kind', LF_KINDS.find(([v]) => v === f.kind)?.[1] || f.kind),
+    f.role && chip('role', 'Role', LF_ROLES.find(([v]) => v === f.role)?.[1] || f.role),
     f.bot && chip('bot', 'Bot', botDisplayName(f.bot)),
+    f.writer && chip('writer', 'Written by', lfTargetName(f.writer)),
+    f.linked && chip('linked', 'Linked to', lfTargetName(f.linked)),
     f.team && chip('team', 'Team', lfTeamName(f.team)),
     f.days && chip('days', 'Updated', LF_DATES.find(([v]) => v === f.days)?.[1] || f.days),
     f.task && chip('task', 'Task', 'One task'),
@@ -105,7 +126,7 @@ function lfWire() {
     if (eventElement(ev)?.closest<HTMLElement>('[data-lf-clear-all]')) { for (const k of LF_COUNTED) state.filter[k] = ''; lfChanged(); return; }
     if (eventElement(ev)?.closest<HTMLElement>('[data-lf-more]')) { void lfLoad(true); return; }
     // A row is one target (style guide, "Rows, pills and counts"): a click anywhere on it is a click on its name's link,
-    // and ⌘ or Ctrl opens that link in a new tab, as the link itself would.
+    // and ⌘ or Ctrl opens that link in a new tab, as the link itself would. A link in the meta line is a link of its own.
     const cell = eventElement(ev);
     const open = !cell?.closest('a, button') ? cell?.closest('tr.lf-row')?.querySelector<HTMLAnchorElement>('a.lf-open') : null;
     if (open) {
@@ -118,13 +139,19 @@ function lfWire() {
   pop.onclick = (ev: MouseEvent) => {
     const pick = eventElement(ev)?.closest<HTMLElement>('[data-lf-set], [data-lf-toggle]');
     if (!pick) return;
-    if (pick.dataset.lfSet) state.filter[pick.dataset.lfSet] = pick.dataset.lfValue;
-    else state.filter[String(pick.dataset.lfToggle)] = !state.filter[String(pick.dataset.lfToggle)];
+    const key = pick.dataset.lfSet, value = pick.dataset.lfValue || '';
+    if (key) {
+      state.filter[key] = value;
+      // A target picked in a menu keeps its name for the chip (a task's title is not in the address).
+      if (value && pick.dataset.lfName && (key === 'linked' || key === 'writer')) LF_NAMES.set(value, pick.dataset.lfName);
+    } else if (pick.dataset.lfToggle) state.filter[pick.dataset.lfToggle] = !state.filter[pick.dataset.lfToggle];
     lfChanged();
   };
-  // A long bot list has a find box: it hides the items that do not match, within its own section.
+  // A long bot list has a find box: it hides the items that do not match, within its own section. The Linked to find box
+  // asks the bots, people, goals and tasks for its matches instead.
   pop.oninput = (ev: Event) => {
     const find = eventElement(ev)?.closest<HTMLInputElement>('.tl-menu-q'); if (!find) return;
+    if (find.classList.contains('lf-find')) { void lfFindLinked(find); return; }
     const words = find.value.trim().toLowerCase();
     const section = find.closest<HTMLElement>('.lf-sec');
     if (!section) return;
@@ -161,43 +188,103 @@ function lfMenuPlace(pop: HTMLElement, anchor: Element) {
   pop.style.top = `${Math.max(8, Math.min(r.bottom + 6, innerHeight - pop.offsetHeight - 8))}px`;
   pop.style.left = `${Math.max(8, Math.min(r.right - pop.offsetWidth, innerWidth - pop.offsetWidth - 8))}px`;
 }
+// The pieces of a filter menu: a pill (one of a row), a pick (a radio item with its name for a chip), a check (a toggle).
+const lfPill = (f: LfFilter, key: string, value: string, label: string) => `<button type="button" class="tl-mi lf-pill" role="menuitemradio" aria-checked="${f[key] === value}"`
+  + ` data-lf-set="${key}" data-lf-value="${esc(value)}">${esc(label)}</button>`;
+function lfItem(f: LfFilter, key: string, value: string, label: string, face: string, find: string) {
+  return `<button type="button" class="tl-mi" role="menuitemradio" aria-checked="${f[key] === value}"`
+    + ` data-lf-set="${key}" data-lf-value="${esc(value)}" data-lf-name="${esc(label)}" data-label="${esc(find.toLowerCase())}">${face ? `<span class="tl-opt-face">${face}</span>` : ''}`
+    + `<span class="lf-mi-name">${esc(label)}</span><span class="tl-mi-on" aria-hidden="true">✓</span></button>`;
+}
+const lfCheck = (f: LfFilter, key: string, label: string) => `<button type="button" class="tl-mi" role="menuitemcheckbox" aria-checked="${!!f[key]}" data-lf-toggle="${key}">`
+  + `<span class="lf-mi-name">${label}</span><span class="tl-mi-on" aria-hidden="true">✓</span></button>`;
 function lfPopHTML() {
   const state = LF;
   if (!state) return '';
   const f = state.filter;
-  const pill = (key: string, value: string, label: string) => `<button type="button" class="tl-mi lf-pill" role="menuitemradio" aria-checked="${f[key] === value}"`
-    + ` data-lf-set="${key}" data-lf-value="${esc(value)}">${esc(label)}</button>`;
-  const item = (key: string, value: string, label: string, face: string, find: string) => `<button type="button" class="tl-mi" role="menuitemradio" aria-checked="${f[key] === value}"`
-    + ` data-lf-set="${key}" data-lf-value="${esc(value)}" data-label="${esc(find.toLowerCase())}">${face ? `<span class="tl-opt-face">${face}</span>` : ''}`
-    + `<span class="lf-mi-name">${esc(label)}</span><span class="tl-mi-on" aria-hidden="true">✓</span></button>`;
-  const toggle = (key: string, label: string) => `<button type="button" class="tl-mi" role="menuitemcheckbox" aria-checked="${!!f[key]}" data-lf-toggle="${key}">`
-    + `<span class="lf-mi-name">${label}</span><span class="tl-mi-on" aria-hidden="true">✓</span></button>`;
   const bots = (S.emps || []).filter(e => e.status !== 'archived').map(e => ({id: e.id, name: botDisplayName(e.id)}))
     .sort((a, b) => a.name.localeCompare(b.name, undefined, {numeric: true}));
+  const people = (S.people || []).filter(p => !p.left && !p.hidden);
   const groups = state.groups || [];
   return `<div class="tl-menu lf-menu" role="group" aria-label="Filters">
     <div class="lf-sec" role="group" aria-label="Kind"><div class="tl-menu-h" aria-hidden="true">Kind</div>
-      <div class="lf-pills">${LF_KINDS.map(([v, l]) => pill('kind', String(v), String(l))).join('')}</div></div>
+      <div class="lf-pills">${LF_KINDS.map(([v, l]) => lfPill(f, 'kind', String(v), String(l))).join('')}</div>
+      <div class="tl-menu-h" aria-hidden="true">Role</div>
+      <div class="lf-pills">${LF_ROLES.map(([v, l]) => lfPill(f, 'role', v, l)).join('')}</div></div>
     <div class="lf-sec" role="group" aria-label="Updated"><div class="tl-menu-h" aria-hidden="true">Updated</div>
-      <div class="lf-pills">${LF_DATES.map(([v, l]) => pill('days', String(v), String(l))).join('')}</div></div>
+      <div class="lf-pills">${LF_DATES.map(([v, l]) => lfPill(f, 'days', String(v), String(l))).join('')}</div></div>
     <div class="lf-sec" role="group" aria-label="Bot"><div class="tl-menu-h" aria-hidden="true">Bot</div>
       ${bots.length > 7 ? '<input type="search" class="tl-menu-q" placeholder="Find a bot" aria-label="Find a bot" autocomplete="off" spellcheck="false">' : ''}
-      <div class="tl-menu-list">${item('bot', '', 'All bots', '', 'all bots')}${bots.map(b => item('bot', b.id, b.name, avatar(b.id, 16), `${b.name} ${b.id}`)).join('')}</div></div>
+      <div class="tl-menu-list">${lfItem(f, 'bot', '', 'All bots', '', 'all bots')}${bots.map(b => lfItem(f, 'bot', b.id, b.name, avatar(b.id, 16), `${b.name} ${b.id}`)).join('')}</div></div>
     ${groups.length ? `<div class="lf-sec" role="group" aria-label="Team"><div class="tl-menu-h" aria-hidden="true">Team</div>
-      <div class="tl-menu-list">${item('team', '', 'All teams', '', 'all teams')}${groups.map((g: LfGroup) => item('team', g.id, g.name, '', g.name)).join('')}</div></div>` : ''}
+      <div class="tl-menu-list">${lfItem(f, 'team', '', 'All teams', '', 'all teams')}${groups.map((g: LfGroup) => lfItem(f, 'team', g.id, g.name, '', g.name)).join('')}</div></div>` : ''}
+    <div class="lf-sec" role="group" aria-label="Linked to" data-lf-sec="linked"><div class="tl-menu-h" aria-hidden="true">Linked to</div>
+      <input type="search" class="tl-menu-q lf-find" placeholder="Find a task, bot, person or goal" aria-label="Find a task, bot, person or goal" autocomplete="off" spellcheck="false">
+      <div class="tl-menu-list">${lfItem(f, 'linked', '', 'Any link', '', 'any')}${f.linked ? lfItem(f, 'linked', f.linked, lfTargetName(f.linked), '', lfTargetName(f.linked)) : ''}</div></div>
+    <div class="lf-sec" role="group" aria-label="Written by"><div class="tl-menu-h" aria-hidden="true">Written by</div>
+      <input type="search" class="tl-menu-q" placeholder="Find a person or bot" aria-label="Find a person or bot" autocomplete="off" spellcheck="false">
+      <div class="tl-menu-list">${lfItem(f, 'writer', '', 'Anyone', '', 'anyone')}${bots.map(b => lfItem(f, 'writer', `bot:${b.id}`, b.name, avatar(b.id, 16), `${b.name} ${b.id}`)).join('')}${people.map(p => lfItem(f, 'writer', `human:${p.id}`, p.name || p.id, personAvatar(p, 16), String(p.name || p.id))).join('')}</div></div>
     <div class="tl-menu-sep" role="separator"></div>
-    <div class="lf-sec" role="group" aria-label="Show">${toggle('pinned', 'Pinned')}${toggle('archived', 'Archived')}</div>
+    <div class="lf-sec" role="group" aria-label="Show">${lfCheck(f, 'pinned', 'Pinned')}${lfCheck(f, 'archived', 'Archived')}</div>
   </div>`;
 }
-// The ticks follow a change while the popover stays open (its find box keeps what was typed).
+// The ticks follow a change while the popover stays open (its find boxes keep what was typed).
 function lfPopSync() {
   const state = LF;
   if (!state?.pop?.matches(':popover-open')) return;
   for (const el of state.pop.querySelectorAll<HTMLElement>('[data-lf-set]')) el.setAttribute('aria-checked', String(state.filter[String(el.dataset.lfSet)] === el.dataset.lfValue));
   for (const el of state.pop.querySelectorAll<HTMLElement>('[data-lf-toggle]')) el.setAttribute('aria-checked', String(!!state.filter[String(el.dataset.lfToggle)]));
 }
-// Search (the box) asks GET /api/v2/files/search and narrows its hits by kind and bot here; the list asks
-// GET /api/v2/files with every filter, a page at a time.
+// The name a target shows: the one picked or fetched (LF_NAMES), else a bot's or person's name, a goal's title, or the id.
+function lfTargetName(t: string): string {
+  if (LF_NAMES.has(t)) return LF_NAMES.get(t) || t;
+  const i = t.indexOf(':'), kind = t.slice(0, i), id = t.slice(i + 1);
+  if (kind === 'bot') return botDisplayName(id);
+  if (kind === 'human') return (S.people || []).find(p => p.id === id)?.name || id;
+  if (kind === 'goal') return LF_GOALS.find(g => g.id === id)?.title || id;
+  return id;
+}
+// A link target's route: a task, bot, person, goal or page (the contract's target forms).
+function lfTargetHref(t: string): string {
+  const i = t.indexOf(':'), kind = t.slice(0, i), raw = t.slice(i + 1), id = encodeURIComponent(raw);
+  if (kind === 'task') return '#/task/' + id;
+  if (kind === 'bot') return '#/bot/' + id;
+  if (kind === 'human') return '#/person/' + id;
+  if (kind === 'goal') return '#/goals/' + id;
+  return kind === 'page' ? pageHref(raw) : '#';
+}
+// A task a link names (not picked here) gets its title once, for the chip; until it comes the chip shows its id.
+function lfNameTask(target: string) {
+  const id = target.slice(target.indexOf(':') + 1);
+  LF_NAMES.set(target, id);
+  taskBriefsPage({ids: [id], limit: 1}).then(r => {
+    const t = r.tasks[0];
+    if (t) LF_NAMES.set(target, t.title || id);
+    if (LF) lfBarPaint();
+  }).catch(() => {});
+}
+// The Linked to find box: the bots, people and goals whose names match, then the tasks the Tasks search finds (two
+// letters or more). Its Any link item stays first; a late task answer for an older search is dropped.
+async function lfFindLinked(find: HTMLInputElement) {
+  const state = LF, list = find.closest<HTMLElement>('.lf-sec')?.querySelector<HTMLElement>('.tl-menu-list');
+  if (!state || !list) return;
+  const words = find.value.trim().toLowerCase(), seq = ++LF_FIND, f = state.filter;
+  const hit = (s: string) => s.toLowerCase().includes(words);
+  const bots = (S.emps || []).filter(e => e.status !== 'archived' && hit(`${botDisplayName(e.id)} ${e.id}`)).slice(0, 6)
+    .map(e => lfItem(f, 'linked', `bot:${e.id}`, botDisplayName(e.id), avatar(e.id, 16), `${botDisplayName(e.id)} ${e.id}`));
+  const people = (S.people || []).filter(p => !p.left && !p.hidden && hit(String(p.name || p.id))).slice(0, 6)
+    .map(p => lfItem(f, 'linked', `human:${p.id}`, p.name || p.id, personAvatar(p, 16), String(p.name || p.id)));
+  const goals = LF_GOALS.filter(g => hit(g.title)).slice(0, 6).map(g => lfItem(f, 'linked', `goal:${g.id}`, g.title, '', g.title));
+  list.innerHTML = lfItem(f, 'linked', '', 'Any link', '', 'any') + (words ? [...bots, ...people, ...goals].join('') : '');
+  if (words.length < 2) return;
+  try {
+    const r = await taskBriefsPage({search: words, limit: 8});
+    if (seq !== LF_FIND || !list.isConnected) return;
+    list.insertAdjacentHTML('beforeend', r.tasks.map(t => lfItem(f, 'linked', `task:${t.id}`, t.title || t.id, '', t.title || t.id)).join(''));
+  } catch { /* the bots, people and goals above still show */ }
+}
+// Search (the box) asks GET /api/v2/files/search with the role, linked and writer filters and narrows its hits by kind and
+// bot here; the list asks GET /api/v2/files with every filter, a page at a time.
 async function lfLoad(more = false) {
   const state = LF;
   if (!state) return;
@@ -206,7 +293,9 @@ async function lfLoad(more = false) {
   if (!more) list.innerHTML = skelRows(6);
   try {
     if (f.q) {
-      const r = await get<import('../types/api').FileSearch>(`/v2/files/search?q=${encodeURIComponent(f.q)}&limit=50`, {fresh: true});
+      const sq = new URLSearchParams({q: f.q, limit: '50'});
+      for (const k of ['role', 'linked', 'writer']) if (f[k]) sq.set(k, String(f[k]));
+      const r = await get<import('../types/api').FileSearch>(`/v2/files/search?${sq}`, {fresh: true});
       if (LF !== state || seq !== state.seq) return;
       state.rows = (r.results || []).filter(h => (!f.kind || h.library_kind === f.kind) && (!f.bot || h.bot === f.bot))
         .map(h => ({...h, last_activity_at: h.updated_at, hit: true}));
@@ -237,10 +326,23 @@ function lfName(f: LfRow): string {
   const pathLike = parts.every(p => p && !/\s/.test(p)) && /\.[a-z0-9]{1,8}$/i.test(parts.at(-1) || '');
   return pathLike ? parts.at(-1) || title : title;
 }
-// One row of the shared table (.tt-list, ui/styles/tools.css, as Contacts and Skills draw theirs). The name cell is the
-// row's link and holds the two-line form a phone shows: the name, then Kind · Bot · time, then the search excerpt; a
-// computer shows the excerpt on the name's line and the columns beside it. A click elsewhere on the row is a click on
-// that link (lfWire).
+// A page's links for its meta line: "Spec of D-18463, D-19385 +2", each target a link to its route. The contract sends five
+// links and a count of the rest (links_more). A link with no role is named alone.
+function lfPageLinks(f: LfRow): string {
+  const groups: [string, LfLink[]][] = [];
+  for (const l of f.links || []) {
+    const role = l.role || '', g = groups.find(([r]) => r === role);
+    if (g) g[1].push(l); else groups.push([role, [l]]);
+  }
+  const names = groups.map(([role, ls]) => (role && role !== 'related' ? `${esc(role)} of ` : '')
+    + ls.map(l => `<a href="${esc(lfTargetHref(l.target))}">${esc(l.name || l.target)}</a>`).join(', ')).join(' · ');
+  return names ? names + (f.links_more ? ` +${Number(f.links_more)}` : '') : '';
+}
+// One row of the shared table (.tt-list, ui/styles/tools.css, as Contacts and Skills draw theirs). The name cell holds the
+// row's link (its icon and title) and, beside it, the meta line and the search excerpt: the two-line form a phone shows
+// (the name, then the meta, then the excerpt); a computer shows the excerpt on the name's line and the columns beside it.
+// A click elsewhere on the row is a click on that link (lfWire). A page's meta names its links and its writers (or its
+// bot when none is known).
 function lfRowHTML(f: LfRow) {
   const kind = f.library_kind || 'other';
   const page = kind === 'page', link = f.locator === 'remote_link' || (f.hit && f.url);
@@ -251,6 +353,8 @@ function lfRowHTML(f: LfRow) {
     : ` data-lf-open="tico" data-id="${esc(f.id)}" data-name="${esc(f.name || f.title)}"`;
   const kindName = (LF_KINDS.find(([v]) => v === kind)?.[1] || 'Other').replace(/s$/, '');
   const bot = pageBotName(f), when = ago(f.last_activity_at), team = lfTeamName(botRow(f.bot)?.team) || '';
+  const who = page && f.writers?.length ? f.writers.map(w => w.name || w.actor.replace(/^[a-z]+:/, '')).join(', ') : bot;
+  const first = page ? lfPageLinks(f) || esc(kindName) : esc(kindName);
   // Pinned and archived are marks, not pills (style guide: a pill only when something is wrong); the mark says where
   // it is pinned on hover and to a screen reader.
   const pinned = f.pins || [];
@@ -259,12 +363,12 @@ function lfRowHTML(f: LfRow) {
   const archived = f.archived ? '<span class="lf-mark lf-arch nav-icon" role="img" aria-label="Archived" title="Archived">archive</span>' : '';
   const excerpt = f.excerpt ? `<span class="lf-excerpt">${esc(f.excerpt)}</span>` : '';
   const name = lfName(f);
-  return `<tr class="lf-row"><td class="lf-name"><a class="lf-open" href="${esc(url)}"${attrs}>
+  return `<tr class="lf-row"><td class="lf-name"><div class="lf-cell"><a class="lf-open" href="${esc(url)}"${attrs}>
       <span class="nav-icon lf-ico" aria-hidden="true">${link ? 'link' : LF_ICON[kind] || 'inventory_2'}</span>
-      <span class="lf-text"><span class="lf-line"><span class="lf-title" title="${esc(f.title)}">${esc(name)}</span>${pins}${archived}</span>
-        <span class="lf-meta">${esc(kindName)} · ${esc(bot)} · ${esc(when)}</span>${excerpt}</span></a></td>
+      <span class="lf-text"><span class="lf-line"><span class="lf-title" title="${esc(f.title)}">${esc(name)}</span>${pins}${archived}</span></span></a>
+      <span class="lf-meta">${first} · ${esc(who)} · ${esc(when)}</span>${excerpt}</div></td>
     <td class="lf-kind">${esc(kindName)}</td>
-    <td class="lf-by"><span class="lf-by-in">${f.bot ? avatar(f.bot, 16) : ''}<span class="lf-by-n">${esc(bot)}</span></span></td>
+    <td class="lf-by"><span class="lf-by-in">${page && f.writers?.length ? '' : f.bot ? avatar(f.bot, 16) : ''}<span class="lf-by-n">${esc(who)}</span></span></td>
     <td class="lf-team">${esc(team)}</td>
     <td class="lf-when" title="${esc(fmt(f.last_activity_at))}">${esc(when)}</td></tr>`;
 }
