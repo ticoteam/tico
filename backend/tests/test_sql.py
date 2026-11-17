@@ -324,9 +324,10 @@ def test_a_person_sees_the_company_but_not_private_bots_or_other_rooms(api, worl
     assert column(api, "SELECT bot FROM bot_status", ben) == sorted(
         b for b in column(api, "SELECT bot FROM bot_status") if b != "inbox"
     )
-    # Their own room, and the own rooms of the public tasks; not Ana's room or its "Started task" line, nor the notices
-    # Tico gives a bot about a task (where it stands): those are the bot's run input, in no person's timeline.
-    assert firsts(column(api, "SELECT body FROM messages", ben)) == ["Ben private context."]
+    # Their own room, and the own rooms of the public tasks with each one's request; not Ana's room or its "Started
+    # task" line, nor the notices Tico gives a bot about a task (where it stands): those are the bot's run input, in no
+    # person's timeline.
+    assert firsts(column(api, "SELECT body FROM messages", ben)) == ["Ben private context.", "For finance.", "For ops."]
     assert column(api, "SELECT id FROM conversations", ben) == sorted(
         [world["steven_room"], world["coo_task"]["conversation_id"], world["finance_task"]["conversation_id"]]
     )
@@ -350,10 +351,12 @@ def test_a_bot_reads_ordinary_tasks_but_only_its_granted_rooms_and_no_private_da
     token = world["attempt"]["token"]
     assert query(api, "SELECT 1", token)["rows"] == [[1]]
     bodies = column(api, "SELECT body FROM messages", token)
-    # Its granted room, and the own rooms of the ordinary tasks it may read.
+    # Its granted room, and the own rooms of the ordinary tasks it may read, each with its request.
     assert firsts(bodies) == [
         "Ana private context.",
         "Close the books is in To do (General).",
+        "For finance.",
+        "For ops.",
         "Started task: Summarize the week",
         "Summarize the week is in To do (General).",
     ]

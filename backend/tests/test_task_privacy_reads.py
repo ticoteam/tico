@@ -419,7 +419,9 @@ def test_deleted_comment_receipt_is_canonical_empty_and_currently_authorized(api
     original = post(api, path, {"text": "Withdrawn private comment"}, "ben-test", key="withdrawn-comment")
     mid = original["comment"]["id"]
     deleted = post(api, f"{path}/{mid}/delete", {}, "ben-test")
-    assert deleted["comment"]["body"] == "" and deleted["comments"] == []
+    with api.app.state.store.read() as c:  # what is left is the task's request
+        asked = H.task_request(c, row["id"])["id"]
+    assert deleted["comment"]["body"] == "" and [m["id"] for m in deleted["comments"]] == [asked]
     retried = post(api, path, {"text": "Withdrawn private comment"}, "ben-test", key="withdrawn-comment")
     assert retried["comment"] == deleted["comment"]
     get(api, "messages/" + mid, "ben-test", expected=404)

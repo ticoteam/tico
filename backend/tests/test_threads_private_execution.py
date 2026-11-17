@@ -289,8 +289,10 @@ ROUTE_WRITES = [
 
 
 def test_a_private_run_is_refused_on_every_route_that_writes_text_into_a_company_thread(api):
-    _, attempt = private_run(api)
+    row, attempt = private_run(api)
     ctx = _route_context(api, attempt)
+    with api.app.state.store.read() as c:  # the private task's own request, in its own chat
+        asked = H.task_request(c, row["id"])["id"]
     codes = set()
     for method, path, body in ROUTE_WRITES:
         url = path.format(thread=ctx["thread"], message=ctx["message"])
@@ -302,6 +304,11 @@ def test_a_private_run_is_refused_on_every_route_that_writes_text_into_a_company
         assert response.status_code == 403, f"{method} {path}: {response.status_code} {response.text}"
         codes.add(response.json()["error"]["code"])
         with api.app.state.store.read() as c:
-            assert c.execute("SELECT COUNT(*) FROM messages WHERE body LIKE 'Confidential%'").fetchone()[0] == 0, path
+            assert (
+                c.execute(
+                    "SELECT COUNT(*) FROM messages WHERE body LIKE 'Confidential%' AND id<>?", (asked,)
+                ).fetchone()[0]
+                == 0
+            ), path
     # Every route is refused for the same reason, so the run was never quarantined partway through the table.
     assert len(codes) == 1, codes

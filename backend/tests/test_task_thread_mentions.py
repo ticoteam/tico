@@ -29,9 +29,10 @@ def bot_say(api, thread_id, body, to="human:ben"):
 
 def test_a_bot_say_in_a_task_thread_without_a_mention_reaches_only_its_live_followers(api):
     thread_id = task_thread(api)
+    before = unread_for(api, "human:ana", thread_id)  # Ben's request, a person's message, is hers to read
     said = bot_say(api, thread_id, "The budget draft is in the doc; the total still needs a check.", to="human:ana")
     assert rows(api, "SELECT conversation_id FROM messages WHERE id=?", said["id"]) == [{"conversation_id": thread_id}]
-    assert delivery(api, said["id"], "human:ana") is None and unread_for(api, "human:ana", thread_id) == 0
+    assert delivery(api, said["id"], "human:ana") is None and unread_for(api, "human:ana", thread_id) == before
     assert delivery(api, said["id"], "human:ben")["reason"] == "follower"
     assert unread_for(api, "human:ben", thread_id) == 1
 
@@ -62,6 +63,7 @@ def test_a_person_comment_in_a_task_thread_is_still_unread_for_another_member(ap
 
 def test_an_old_bot_delivery_in_a_task_thread_no_longer_counts_as_unread(api):
     thread_id = task_thread(api)
+    before = unread_for(api, "human:ana", thread_id)  # Ben's request, a person's message, is hers to read
     said = bot_say(api, thread_id, "The budget draft is in the doc.", to="human:ana")
     with api.app.state.store.transaction() as c:
         # The row the trigger wrote before the rule: an 'addressed' delivery to Ana (who does not follow) for the post.
@@ -73,7 +75,7 @@ def test_an_old_bot_delivery_in_a_task_thread_no_longer_counts_as_unread(api):
             (said["id"],),
         )
     assert delivery(api, said["id"], "human:ana")["state"] == "pending"
-    assert unread_for(api, "human:ana", thread_id) == 0
+    assert unread_for(api, "human:ana", thread_id) == before
 
 
 def test_a_bots_ask_for_a_person_who_stopped_following_still_needs_them(api):

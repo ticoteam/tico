@@ -216,7 +216,7 @@ def s_hold_release(org, items, judge):
         {"Idempotency-Key": "in-1"},
     )
     org.store.automations.drain()
-    held_turn = org.sql("SELECT id,title,body,owner_id,version FROM tasks WHERE title='Held: Intake work'")
+    held_turn = [X.task_row(org, r["id"]) for r in org.sql("SELECT id FROM tasks WHERE title='Held: Intake work'")]
     held_task = X.find_task(org, "Held: Intake in-1")
     out.append(
         (

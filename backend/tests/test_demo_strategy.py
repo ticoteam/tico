@@ -143,7 +143,9 @@ def _the_owners_card_for_the_proposal_was_filed_when_it_was_proposed_and_closed_
         row = db.execute(
             "SELECT t.owner_id, t.status, t.created_at, p.proposed_at, p.decided_at FROM goal_proposals p "
             "JOIN tasks t ON t.title = 'Decide a suggested change to your strategy' "
-            "AND t.body LIKE '%from this week''s market briefing%' "
+            # What it was filed with is on its chat now (its request, or Tico's instructions to its bot).
+            "AND EXISTS (SELECT 1 FROM messages m WHERE json_extract(m.refs, '$.task') = t.id "
+            "AND m.body LIKE '%from this week''s market briefing%') "
             "WHERE p.kind = 'strategy_draft' AND p.status = 'confirmed'"
         ).fetchone()
         assert not db.execute("SELECT 1 FROM goal_asks WHERE kind = 'proposal'").fetchone()

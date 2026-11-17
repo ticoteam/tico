@@ -89,7 +89,8 @@ def test_schema_rejects_forged_actor_and_missing_fields(api):
         {"owner": "assistant", "title": "Create something", "body": "Do it", "requester": "human:ben"},
         expected=422,
     )
-    post(api, "tasks", {"owner": "assistant", "title": "Missing body"}, expected=422)
+    # A task is a title and a chat: a title alone is a task with no request yet.
+    assert post(api, "tasks", {"owner": "assistant", "title": "Title alone"})["request"] is None
     r = api.post(
         "/api/v2/tasks",
         json={"owner": "assistant", "title": "Create report", "body": "A report"},

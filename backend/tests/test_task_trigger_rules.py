@@ -214,7 +214,7 @@ def test_a_private_task_is_read_with_the_authors_view_and_its_copy_is_private(c)
     assert not H.task_private_readable(c, "human:ben", task)
     H.task_done(c, ANA, task["id"])
     copy = dict(c.execute("SELECT * FROM tasks WHERE title='Private copy'").fetchone())
-    assert copy["private"] and copy["body"] == "Synthetic body"
+    assert copy["private"] and H.task_words(c, copy["id"]) == "Synthetic body"
     assert not H.task_private_readable(c, "human:cara", copy)
     assert not c.execute("SELECT 1 FROM tasks WHERE title='Must not copy'").fetchone()
     assert T.state(c, denied["id"])["last_error_at"]
