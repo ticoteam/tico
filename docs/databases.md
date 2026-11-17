@@ -82,7 +82,7 @@ SQLite: nothing to create; give the owner's user read access to the file. `tico 
 ### 2. Store a Credential and grant it
 
 The variable name is `DB_<NAME>_URL` for a database you will call `<name>` (`warehouse` gives
-`DB_WAREHOUSE_URL`; a `-` becomes `_`). In **Tools → Credentials → Add credential**, choose
+`DB_WAREHOUSE_URL`; a `-` becomes `_`). In **Tools → Add → Key**, choose
 **connection**, set **Bot variable name** to `DB_WAREHOUSE_URL`, and paste the read-only connection
 string into **Value**. Save, then use **Access → Grant access to** to grant it to each bot that needs it.
 BotOps can open the Credential card and grant it for you. Never paste the value into ordinary chat,
@@ -227,7 +227,7 @@ Network access, in one of two ways:
 In **Atlas, Database, Connect, Drivers**, copy the `mongodb+srv://` string and add the password, the
 database name in the path and `authSource=admin`:
 
-Store that string as a **connection** Credential in **Tools → Credentials**, set **Bot variable name**
+Store that string as a **connection** Credential in **Tools → Add → Key**, set **Bot variable name**
 to `DB_ATLAS_URL`, and grant it to each bot that needs Atlas (the same steps as SQL step 2).
 Its shape is `mongodb+srv://tico_readonly:<password>@<cluster-host>/app?authSource=admin&retryWrites=false`;
 put the actual value only in the Credential card.
@@ -336,7 +336,7 @@ audit records the entry with `{"$param": ...}` left in and the parameter names, 
 - **The statement checks are not a sandbox.** They catch the common mistake; a database
   function with side effects is only stopped by the role and the read-only session.
 - **Never share a writable URL** with a bot, and do not put the connection string in a repository,
-  a task or a chat. Rotate the password in the database and update the stored Credential's value in **Tools → Credentials**
+  a task or a chat. Rotate the password in the database and update the stored Credential's value (Tools, under the **Keys** filter)
   (step 2). Keep its name and grants; the next run receives the new value.
 
 ## Troubleshooting

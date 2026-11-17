@@ -820,7 +820,7 @@ Setup, once:
   same command; `--chosen` replaces them), or the same in the bot's settings ([Repositories](repositories.md)).
 - **An update key per install.** The owner of each install, the team's own included, runs
   `tico service-key create --label "<team> Release Owner" --scope update` there ([Service keys](service-keys.md#update-keys)).
-  Each key is stored in Tools → Credentials on the Release Owner's install, granted to the bot, with the variable
+  Each key is stored as a key in Tools (Tools → Add → Key) on the Release Owner's install, granted to the bot, with the variable
   named in its config.
 - **The list of installs.** `knowledge/rollout.json` in the bot's repository: the repository, and each install's
   `name`, `url`, `key_env` and whether it is the `canary` (see `knowledge/rollout.example.json`).

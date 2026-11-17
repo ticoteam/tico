@@ -135,7 +135,7 @@ action items), **Docs**,
 and, for the owner and admins, **SQL**. Tasks has You and a view of each pipeline (columns or list), with Snoozed, Done
 and Closed behind
 the archive button; Routines and wake rules are **Automations**.
-Credentials are in **Tools → Credentials**. See [Navigation](navigation.md). A bot's page has **Chat**,
+Credentials are under the **Keys** filter in **Tools**. See [Navigation](navigation.md). A bot's page has **Chat**,
 **Tasks**, **Docs** and **More**. The assistant (Tico, `assistant`), BotOps, the Librarian, the Strategy Owner, the General Manager, the Finance Owner and the Design Owner are built in and cannot be archived or deleted (`409 system_bot`); the assistant
 and the Librarian work in the background and are not listed for humans. Each human has one private **Assistant** DM, opened by **Tico Assistant** (or a page's **Ask**) from any page except its own and setup, even while the signed-out banner shows
 (`#/assistant`, also the first tab on their own page, is the same chat in full): it looks things up at once, does low-risk things as that human, and
@@ -170,8 +170,8 @@ queued mail and books calendars ([Message bots](mail.md#how-tico-hears-new-mail)
 
 Logs are `~/.config/tico/logs/tico-{bot,close-calls,importers}.log`. The runner makes outbound
 HTTPS calls only; nothing listens on the Mac. Model subscriptions (Codex, Claude, Gemini, Grok
-Build) are signed in on the Mac and never leave it. Bot Credentials are stored in
-**Tools → Credentials**, granted to each bot and delivered only for its run. Existing own files,
+Build) are signed in on the Mac and never leave it. Bot Credentials are stored as keys in
+**Tools** (the **Keys** filter), granted to each bot and delivered only for its run. Existing own files,
 `_shared.env` and declared profiles migrate into grants on upgrade; new runs do not load those files.
 Model API keys stored in Tico are separate from local subscription logins.
 Each run gets a scoped credential in `HUB_API_URL`/`HUB_TOKEN`; the bot talks to hub.acme.example

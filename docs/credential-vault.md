@@ -26,7 +26,7 @@ Four words, used the same way everywhere:
 
 ## Tico's Credentials
 
-Tools → Credentials lists team credentials, usernames and masked previews. The owner and admins administer the vault. Each credential has its own grants. A member who stored a credential for their bot sees it listed (name, variable, grants; no **Reveal** unless it is also granted to them) and gives it to, or takes it from, bots they own or manage, while it is still theirs ([permissions.md](permissions.md#bot-owners)); giving it to someone else's bot is refused with who to ask. A granted human may reveal/copy it or attach it to bots they manage; a direct bot grant works on its assigned computer during an active run. Revoking the parent grant removes delegated bot access. Changing a bot owner invalidates delegation from its former owner.
+The **Keys** filter in Tools lists team credentials, usernames and masked previews. The owner and admins administer the vault. Each credential has its own grants. A member who stored a credential for their bot sees it listed (name, variable, grants; no **Reveal** unless it is also granted to them) and gives it to, or takes it from, bots they own or manage, while it is still theirs ([permissions.md](permissions.md#bot-owners)); giving it to someone else's bot is refused with who to ask. A granted human may reveal/copy it or attach it to bots they manage; a direct bot grant works on its assigned computer during an active run. Revoking the parent grant removes delegated bot access. Changing a bot owner invalidates delegation from its former owner.
 
 Credentials use AES-256-GCM with per-write random nonces and credential-bound authenticated data. Reveal operations are audited; credential values are excluded from audit and idempotency receipts. Restoring a snapshot revokes restored grants to avoid resurrecting permissions.
 
@@ -170,9 +170,10 @@ pasted token only) the address is the server's own and the variable holds the to
 this way: they stay a bot.yaml `tools:` entry.
 
 Model credentials named `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` or `CURSOR_API_KEY` infer
-that variable when the optional variable field is blank. An explicit variable always wins. For a stored API key or token,
-**Manage access > Every computer** lets computers sign their models in. It gives no bot access: grant a bot separately.
-Older name-only model credentials also offer this choice; granting them fills the missing variable without changing the secret.
+that variable when the optional variable field is blank. An explicit variable always wins. Older name-only model
+credentials gain the variable when they are granted, without changing the secret. A key that signs computers' models in
+is added in **Settings > Models** and given to computers there ([Computers](computers.md#api-keys-on-a-computer)); a grant
+here to every computer is refused with that address. A key there gives no bot access: grant a bot separately.
 
 ## Website logins
 
@@ -260,7 +261,7 @@ If saving fails, check the container's AWS credentials, region and key permissio
 
 ## Store a new Credential
 
-Open **Tools → Credentials → Add credential**. Set the type, value and **Bot variable name**
+Open **Tools → Add → Key**. Set the type, value and **Bot variable name**
 (the exact variable its Tool needs), then save. In the Credential's **Access** dialog, choose
 the bot under **Grant access to** and press **Grant access**. Storing alone does not grant it.
 BotOps can instead request a Credential card in a thread and store and grant it with your rights; the Tools Owner
@@ -283,8 +284,8 @@ and then tries the connection as the bot:
    bot's name or slug; the credential is named by its name or its variable.) The second bot has it, as that variable, from its next run.
 3. To take it away: `tico credential revoke "JIRA_BASIC_AUTH" --from engineering-monitor`.
 
-The same three steps are the tools `tico_credential_import`, `tico_credential_grant` and `tico_credential_revoke`, and Tools → Credentials
-does the grant and revoke by hand. A grant to a person, or to every computer, still asks for the person's own click when it comes through BotOps.
+The same three steps are the tools `tico_credential_import`, `tico_credential_grant` and `tico_credential_revoke`, and a key opened under the Keys filter in Tools
+does the grant and revoke by hand. A grant to a person still asks for the person's own click when it comes through BotOps.
 
 ## The local credential key and backups
 
@@ -474,7 +475,7 @@ breaks the `op://` form; reference it by its item id.
   server added in Tools needs the grant alone). Changing `tools:` is a task for the owner.
 - A granted value exists only for that run; do not copy it anywhere that outlives the run.
 - Each bot can have only one active granted Credential for a variable. Revoke its previous grant before replacing it.
-- `can:` describes intended operations; restrict the vendor key or endpoint to enforce read-only access. Tico does not filter a vendor's MCP tools by `can`.
+- `can:` describes intended operations; restrict the vendor key or endpoint to enforce read-only access. Tico does not filter a bot.yaml server's MCP tools by `can`; a bot at Read on an MCP server added in Tools may call only the tools the server marks `readOnlyHint`.
 - Store new values in Credentials and grant them to the bot; a shell export does not grant access.
 
 ## Delete a Credential
@@ -483,7 +484,7 @@ A Credential administrator can choose **Delete** in Credentials, use `tico crede
 `DELETE /api/v2/credentials/<id>`. Deletion erases the encrypted value and all grants together. History records names and
 variable names only. Revocation removes access while keeping the stored value; deletion removes the Credential itself.
 
-**Every computer (signs models in)** is available only for stored model API keys and tokens whose explicit or inferred variable is
-`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` or `CURSOR_API_KEY`. Those names infer a blank variable;
-older name-only keys fill the field when granted. This signs the model software in; tool Credentials still need a grant per bot.
-`tico_credential_grant` targets one bot; use Credentials to grant a model key to Every computer.
+Model keys for computers are not granted here: add them in **Settings > Models** and give them to computers there. The
+names `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` and `CURSOR_API_KEY` still infer a blank variable
+on a stored Credential; older name-only keys fill the field when granted. Tool Credentials still need a grant per bot;
+`tico_credential_grant` targets one bot.

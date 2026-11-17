@@ -25,7 +25,7 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 | Sign a computer in to an AI tool | Settings → Computers → open a computer → Connections ([Computers](computers.md)) |
 | Change company turn limits | Settings → Models → Limits |
 | Check problems and recovery | Settings → General → Health → Details (`#/settings/health`) |
-| Store a Credential and grant it | Tools → Credentials → Add credential; then Access → Grant access |
+| Store a Credential and grant it | Tools → Add → Key; then open it under the Keys filter → Access → Grant access |
 | Connect or review a Tool | Tools; Slack channels are under Tools → Slack channels |
 | Add or manage people and member rules | Settings → People |
 | Connect your Google account, or the whole Workspace (admins) | Tools > Settings > Email: pick One account at a time or Whole Workspace |
