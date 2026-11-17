@@ -9,7 +9,7 @@
 //    "Where chat lives") (AC-2);
 //  - List/Columns and New task sit on the row whenever there is room: the search shrinks to its icon first (900), New
 //    task goes into ⋯ only on the phone's row (Chris, round 2 C);
-//  - ⋯ holds Archived and Edit pipeline on a computer, and New task too on a phone; each does what its button did; C
+//  - ⋯ holds Archived, Select and Edit pipeline on a computer, and New task too on a phone; each does what its button did; C
 //    still makes a task; closed, ⋯ is aria-expanded="false" (AC-3);
 //  - Flow on a pipeline walks the pipeline; with nothing waiting it is quiet, keeps its width and says
 //    "Nothing waits on you in Product" without walking anything (AC-10);
@@ -85,8 +85,8 @@ async function menu(page: Page): Promise<string[]> {
       assert.deepEqual((await rowControls(page)).map(c => c.id), ['task-scope', 'tl-search', 'task-filter', 'task-play', 'task-menu'],
         'the picker, Search, Filter, Flow and ⋯, in that order');
       assert.equal(await page.locator('#task-play').getAttribute('aria-label'), 'Flow, 2');
-      // ⋯ on a phone: New task, Archived, Edit pipeline; no List/Columns (a phone shows one stage at a time).
-      assert.deepEqual(await menu(page), ['New task', 'Archived', 'Edit pipeline']);
+      // ⋯ on a phone: New task, Archived, Select, Edit pipeline; no List/Columns (a phone shows one stage at a time).
+      assert.deepEqual(await menu(page), ['New task', 'Archived', 'Select', 'Edit pipeline']);
       await page.keyboard.press('Escape');
       await page.waitForFunction(() => document.querySelector('#task-menu')?.getAttribute('aria-expanded') === 'false');
 
@@ -132,7 +132,7 @@ async function menu(page: Page): Promise<string[]> {
           return {over: el.scrollWidth > el.clientWidth, how: getComputedStyle(el).textOverflow, eight: el.clientWidth >= range.getBoundingClientRect().width};
         });
         assert.deepEqual(cut, {over: true, how: 'ellipsis', eight: true}, 'the name ends in …, after at least eight letters');
-        assert.deepEqual(await menu(page), ['Search', 'New task', 'Archived', 'Edit pipeline']);
+        assert.deepEqual(await menu(page), ['Search', 'New task', 'Archived', 'Select', 'Edit pipeline']);
         await page.locator('#task-mi-search').click();
         await page.waitForFunction(() => document.activeElement?.id === 'task-q');
         const field = await box(page, '#main header.ph .tl-search'), row = await box(page, '#main header.ph');
@@ -198,10 +198,10 @@ async function menu(page: Page): Promise<string[]> {
         await page.waitForFunction(() => document.querySelector<HTMLElement>('aside.pgc')!.hidden);
         assert.equal(await page.locator('body > .pgc-edge:not([hidden]) .pgc-tab').getAttribute('aria-label'), 'Chat with PM');
 
-        // List/Columns on the row, the current one pressed; ⋯ keeps Archived and Edit pipeline.
+        // List/Columns on the row, the current one pressed; ⋯ keeps Archived, Select and Edit pipeline.
         const pressed = () => page.locator('#task-mi-layout [aria-pressed="true"]').getAttribute('data-layout');
         assert.equal(await pressed(), 'list');
-        assert.deepEqual(await menu(page), ['Archived', 'Edit pipeline']);
+        assert.deepEqual(await menu(page), ['Archived', 'Select', 'Edit pipeline']);
         await page.keyboard.press('Escape');
         await page.waitForFunction(() => document.querySelector('#task-menu')?.getAttribute('aria-expanded') === 'false');
         await page.locator('#task-mi-layout [data-layout="columns"]').click();
@@ -249,7 +249,7 @@ async function menu(page: Page): Promise<string[]> {
           ['task-scope', 'tl-search', 'task-filter', 'task-play', 'task-mi-layout', 'task-new', 'task-menu']);
         const icon = (await box(narrow.page, '#main header.ph .tl-search')).width;
         assert.ok(icon < 50, `the search folds to its icon first: ${icon}px`);
-        assert.deepEqual(await menu(narrow.page), ['Archived', 'Edit pipeline']);
+        assert.deepEqual(await menu(narrow.page), ['Archived', 'Select', 'Edit pipeline']);
         assert.deepEqual(narrow.errors, []);
         await narrow.page.close();
       } finally { (product as {manager_id: string | null}).manager_id = null; }

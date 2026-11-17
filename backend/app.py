@@ -1622,8 +1622,9 @@ def create_app(settings=None):
             privacy.require_payload(c, request.state.identity, result)
         return result
 
-    # The columns of a task's row that are the server's own, never in a view.
-    SERVER_COLUMNS = ("checkpoint_state", "work_revision", "occurrence_step", "rule_due_id")
+    # The columns of a task's row that are the server's own, never in a view. `prefix` is read as the task's label
+    # (hubdb.ticket_refs); a list of 500 rows carries no copy of it.
+    SERVER_COLUMNS = ("checkpoint_state", "work_revision", "occurrence_step", "rule_due_id", "prefix")
 
     def plain_view(row, c=None):
         """A task's plain fields, as every view of it starts: the row, without the server's own columns."""

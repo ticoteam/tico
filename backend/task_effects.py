@@ -133,15 +133,32 @@ def moved(
     by: str,
     why: str | None = None,
     revision: str | None = None,
+    *,
+    batch: str | None = None,
 ) -> None:
-    """A task moved: `kind` is forward, back, done, closed or reopen. `before` and `after` are `task_engine.task()`'s
-    shape; `revision` is the id of the move's history row."""
+    """A task moved: `kind` is forward, back, done, closed, reopen or moved (to another pipeline). `before` and `after`
+    are `task_engine.task()`'s shape; `revision` is the id of the move's history row; `batch` is the bulk move it is
+    part of."""
     H = _h()
     actor = cause(by)
     old, new = str(before.get("status")), str(after.get("status"))
     if before.get("stage_id") != after.get("stage_id"):
+        # The old stage's "leaves" and the new stage's "enters" read this one event: its from and its to.
         change: Row = {"field": "stage", "from": before.get("stage_id"), "to": after.get("stage_id"), "move": kind}
         _publish(conn, "task.step_changed", after, actor, change, revision)
+    if before.get("pipeline_id") != after.get("pipeline_id"):
+        moved: Row = {
+            "field": "pipeline",
+            "from": before.get("pipeline_id"),
+            "to": after.get("pipeline_id"),
+            "from_pipeline": before.get("pipeline_id"),
+            "from_stage": before.get("stage_id"),
+            "to_pipeline": after.get("pipeline_id"),
+            "to_stage": after.get("stage_id"),
+            "by": actor,
+            "batch_id": batch,
+        }
+        _publish(conn, "task.moved", after, actor, moved, revision)
     if before.get("owner_id") != after.get("owner_id"):
         # The next stage has another owner. What follows the owner already happened (`owner_moved`).
         _publish_owner(conn, before, after, actor, revision)

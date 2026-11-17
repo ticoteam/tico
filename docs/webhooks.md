@@ -280,7 +280,7 @@ description and an example (`--group task` narrows it). A few:
 
 | Group | Events |
 |---|---|
-| `task` | `task.created`, `assigned`, `step_changed` (moved to another stage, Done and Closed included), `commented`, `done`, `closed`, `reopened` |
+| `task` | `task.created`, `assigned`, `step_changed` (moved to another stage, Done and Closed included), `moved` (to another pipeline: `change` has from_pipeline, from_stage, to_pipeline, to_stage, by, batch_id), `commented`, `done`, `closed`, `reopened` |
 | `bot` | `bot.run_failed`, `held`, `released` |
 | `thread` | `thread.created`, `message.created` (outgoing webhooks only), `message.held` ([Threads](threads.md)) |
 | other | `meeting.ready`, `strategy.published`, `market.insight.urgent`, `market.briefing`, `inbound.received`, `health.finding` |

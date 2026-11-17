@@ -54,8 +54,9 @@ SYSTEM: str = _core.KEEPER
 
 WAITING, OK, SENT_BACK, WITHDRAWN, USED = "waiting", "ok", "sent_back", "withdrawn", "used"
 STANDINGS = (WAITING, OK, SENT_BACK, WITHDRAWN, USED)
-# How a visit ends that takes its asks with it: the task moved back, closed, or was reopened from that stage.
-ENDS_ASKS = ("back", "closed", "reopened")
+# How a visit ends that takes its asks with it: the task moved back, closed, was reopened from that stage, or moved to
+# another pipeline.
+ENDS_ASKS = ("back", "closed", "reopened", "moved")
 FROM_PREVIEW = "OK this from its preview in Tico."
 
 # Each module's step is imported by name inside a small function: lazily, so task_asks imports none of them at load

@@ -241,12 +241,6 @@ function sourceGroupToggle(set: Set<string> | null | undefined, el: EventTarget 
   if (!set || !(el instanceof HTMLDetailsElement) || !el?.matches?.('details.src-group')) return;
   for (const row of el.querySelectorAll<HTMLElement>('[data-message]')) set[el.open ? 'add' : 'delete'](row.dataset.message!);
 }
-const actorChip = (a: unknown) => {
-  const slug = actorSlug(a);
-  return slug && botRow(slug)
-    ? `<a class="chip" href="#/bot/${encodeURIComponent(slug)}">${avatar(slug, 16)}<span>${empName(slug)}</span></a>`
-    : `<span class="chip">${personCircle(actorLabel(a), 16)}<span>${esc(actorLabel(a))}</span></span>`;
-};
 const v2Firstline = (body: unknown) => String(body || '').split('\n').map(s => s.trim()).find(Boolean) || '';
 const myActor = () => S.me?.id ? `human:${S.me.id}` : '';
 // The person on a chat bubble is the local part of their address: jo@example.com is "jo".

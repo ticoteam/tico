@@ -82,6 +82,27 @@ def _build():
         "Task moved",
         _change("stage", "general-todo", "general-done", "done", status="done", stage="general-done"),
     )
+    add(
+        "task.moved",
+        "A task moved to another pipeline: the same task, with its number and history.",
+        "Task changed pipeline",
+        _task(
+            actor="human:ana",
+            pipeline="backlog",
+            stage="backlog-on-ice",
+            change={
+                "field": "pipeline",
+                "from": "general",
+                "to": "backlog",
+                "from_pipeline": "general",
+                "from_stage": "general-todo",
+                "to_pipeline": "backlog",
+                "to_stage": "backlog-on-ice",
+                "by": "human:ana",
+                "batch_id": None,
+            },
+        ),
+    )
     add("task.commented", "Someone commented on a task.", "Task commented", _task(actor="human:ana", comment_id="c1"))
     add(
         "task.done",

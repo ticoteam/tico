@@ -121,6 +121,10 @@ def enter(conn, task_id, pipeline_id, by, *, assignee=None, parent=None, link="s
 def move(conn, task_id, to, by, why=None, seen_version=None, *, cascade=False) -> dict
     # Forward, push past, back, done, close, reopen. `to` is a stage id or a stage name, or NEXT, DONE, CLOSED, REOPEN.
     # `cascade` is the engine closing a task with the one that filed it.
+def refile(conn, task_id, to_pipeline, to, by, why=None, seen_version=None, *, batch=None, turn_check=True) -> dict
+    # Move to another pipeline: the same task (number, label, history) into the work stage `to` names there (None: the
+    # first); a Done or Closed one into its Done or Closed. The old visit ends `moved`; a normal entry into the new one.
+    # Refused task_turn_running while another bot's turn on the task runs, task_stage_full into a full stage.
 def advance(conn, task_id) -> dict | None
     # Forward, by the engine: moves the task on if everything is met and there is room. None when it stays.
 def fill_open_slots(conn, stage_ids=None) -> list[str]
@@ -663,8 +667,8 @@ With many PRs the first unmet one, in link order, gives the line.
   when its save would remove a people-only OK or its stage, move it to another stage, change its kind, open it to
   bots, name a bot on it, put a later stage before it, add or change an on-enter action at or before it, or replace
   the stages wholesale (`pipeline_settings._loosens_people_only`); and when it retires a pipeline that has one. A
-  forward move counts every jumped stage as not met, so no bot jumps one; a task never moves into another pipeline;
-  and a bot never files a task straight into a stage past one (`task_engine.enter`'s `start`). The rubric, the push-
+  forward move counts every jumped stage as not met, so no bot jumps one; a bot never moves a task into another
+  pipeline past one (`task_engine.refile`); and a bot never files a task straight into a stage past one (`task_engine.enter`'s `start`). The rubric, the push-
   past switch and the stages after it stay a bot's to change. An untouched preset made before is tightened by `_fill`.
 - **Closing a Product task** closes the Engineering tasks it filed, except one whose PR merged: its work is in the code,
   so it stays open to reach a release or be closed by its owner (`stage_effects.merged_work`, scenario 24). Undoing a

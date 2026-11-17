@@ -384,22 +384,44 @@ def task_done(api, args):
 
 @tool(
     "tico_task_move",
-    "Move a task: `next` (forward; with a why, past what is not met), back to an earlier stage by "
-    "name or id, `done`, `closed` or `reopen`. Forward with something unmet and no why is "
-    "refused, with what is missing and the commands you may run. A bot gives a why for every move "
-    "but forward; reopen needs a why from everyone. A bot does not reopen what a person closed.",
+    "Move a task: `next`, back to a stage, `done`, `closed` or `reopen`. A bot gives a why for all but `next`; reopen "
+    "needs one from everyone; a bot never reopens what a person closed. `to_pipeline` moves it to another pipeline, "
+    "number and history kept. `from_pipeline` + `from_stage` instead of `id`: all that stage's open tasks.",
     {
         "id": TASK_ID,
         "to": _s("next, done, closed, reopen, or a stage's name or id"),
+        "to_pipeline": _s("Another pipeline's name or id"),
+        "from_pipeline": _s("Its pipeline"),
+        "from_stage": _s("A stage"),
         "why": WHY,
         "version": VERSION,
         "on_behalf_of": ASKED,
     },
-    required=("id", "to"),
     writes=True,
 )
 def task_move(api, args):
-    body = {"to": args["to"], "version": _seen(args), **_why(args)}
+    if args.get("from_pipeline") or args.get("from_stage"):
+        if not (args.get("from_pipeline") and args.get("from_stage") and args.get("to_pipeline")):
+            raise ValueError("Moving a stage's tasks needs from_pipeline, from_stage and to_pipeline")
+        if args.get("id"):
+            raise ValueError("Give id, or from_pipeline and from_stage, not both")
+        body = {
+            "from": {"pipeline": args["from_pipeline"], "stage": args["from_stage"]},
+            "to_pipeline": args["to_pipeline"],
+            **({"to": args["to"]} if args.get("to") else {}),
+            **_why(args),
+        }
+        return _asked(api, args).post("tasks/move", body, key=_key(args))
+    if not args.get("id"):
+        raise ValueError("Say which task: id (or from_pipeline and from_stage for a whole stage)")
+    if not args.get("to") and not args.get("to_pipeline"):
+        raise ValueError("Say where it goes: to, or to_pipeline")
+    body = {
+        **({"to": args["to"]} if args.get("to") else {}),
+        **({"to_pipeline": args["to_pipeline"]} if args.get("to_pipeline") else {}),
+        "version": _seen(args),
+        **_why(args),
+    }
     links = s3links.apply(api, body, ("why",))
     return s3links.annotate(_asked(api, args).post(f"tasks/{args['id']}/move", body, key=_key(args)), links)
 
@@ -1073,6 +1095,36 @@ def _via(name):
     return run
 
 
+def _place(text):
+    """ "Backlog/On ice" as (pipeline, stage); "Backlog" alone is (pipeline, None)."""
+    pipeline, _, stage = str(text).partition("/")
+    return pipeline.strip(), stage.strip() or None
+
+
+def _move(client, fields, to_place=None, from_place=None):
+    """`tico task move` with --to "Pipeline/Stage" (another pipeline) or --from "Pipeline/Stage" (a stage's open
+    tasks): the tool's to_pipeline, to, from_pipeline and from_stage."""
+    from clients.tico import APIError
+
+    if to_place:
+        if fields.get("to"):
+            raise APIError("validation", 'Give the stage in --to "Pipeline/Stage", not as well after the task', 422)
+        fields["to_pipeline"], to = _place(to_place)
+        if to:
+            fields["to"] = to
+    if from_place:
+        if not to_place:
+            raise APIError("validation", '--from moves to another pipeline: add --to "Pipeline/Stage"', 422)
+        if fields.get("id"):
+            raise APIError("validation", "Give a task, or --from, not both", 422)
+        fields["from_pipeline"], fields["from_stage"] = _place(from_place)
+        if not fields["from_stage"]:
+            raise APIError("validation", '--from names a stage: "Pipeline/Stage"', 422)
+    elif not fields.get("id"):
+        raise APIError("validation", 'Say which task, or --from "Pipeline/Stage"', 422)
+    return _call(client, "tico_task_move", {k: v for k, v in fields.items() if v is not None}, unwrapped=True)
+
+
 def _show(client, fields, **_local):
     """`tico task show ID ...`: one task, or several in one read (tico_task_show_many). `--json` is local: it shapes
     what prints (remotecli), so it is taken here and never sent."""
@@ -1302,10 +1354,31 @@ TASK = (
     ),
     Command(
         "task move",
-        "move a task to another stage of its pipeline",
-        args=(Arg("why", "-m"), Arg("why", "--why")),
+        "move a task: next (with -m, past what is not met), back to a stage, done, closed or reopen; "
+        '--to "Pipeline/Stage" moves it to another pipeline, --from "Pipeline/Stage" moves every open task there',
+        args=(
+            Arg("id", positional=True, nargs="?"),
+            Arg("to", positional=True, nargs="?"),
+            Arg(
+                "to_place",
+                "--to",
+                local=True,
+                metavar="PIPELINE/STAGE",
+                help="another pipeline, and its stage after a / (its first when left out): the task keeps its label",
+            ),
+            Arg(
+                "from_place",
+                "--from",
+                local=True,
+                metavar="PIPELINE/STAGE",
+                help="every open task in this stage, in place of an id",
+            ),
+            Arg("why", "-m"),
+            Arg("why", "--why"),
+        ),
+        omit=("to_pipeline", "from_pipeline", "from_stage"),
         example="tico task move T1 review -m 'Ready for review'",
-        run=_via("tico_task_move"),
+        run=_move,
     ),
     Command(
         "task close",

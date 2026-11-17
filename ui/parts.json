@@ -345,6 +345,7 @@
    "taskCommentsRender",
    "taskModalOpen",
    "taskModalShow",
+   "taskMoveToMenu",
    "taskPropsMsgPaint",
    "taskRunCatalog",
    "taskThreadOpen"
@@ -354,6 +355,17 @@
    "taskChatStop",
    "taskModalRouteClose"
   ]
+ },
+ "task-pick": {
+  "files": [
+   "app/task-pick.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [
+   "pvPick"
+  ],
+  "idle": []
  },
  "bot": {
   "files": [

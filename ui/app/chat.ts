@@ -1308,7 +1308,6 @@ function v2ChatStream(state: ChatState, loaded = false) {
 }
 
 const ICON_CHAT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4c-4.7 0-8.5 3.1-8.5 7 0 2 1 3.8 2.6 5.1L5 20.5l4.3-1.6c.9.2 1.8.4 2.7.4 4.7 0 8.5-3.1 8.5-7S16.7 4 12 4z"/></svg>';
-const taskConversationButton = (task: string) => `<button class="chat-btn" type="button" data-task-conversation="${esc(task)}" aria-label="Open task conversation" title="Open task conversation">${ICON_CHAT}</button>`;
 document.addEventListener('click', async ev => {
   const button = eventElement(ev)?.closest<HTMLElement>('[data-task-conversation]'); if (!button) return;
   ev.preventDefault(); ev.stopPropagation();

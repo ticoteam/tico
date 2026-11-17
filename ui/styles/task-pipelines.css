@@ -89,6 +89,11 @@ body.board-holding .pv-cols{align-items:stretch}
 /* A refused move: the engine's line, or "Move to X without Y?" with a why. */
 .pv-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;background:var(--wait-bg);color:var(--wait-ink)}
 .pv-bar-text{flex:1 1 240px;min-width:0}
+/* Picking many (⋯ › Select): the bar is quiet, not a warning; a picked card or row carries the accent ring. */
+.pv-bar.pv-sel{background:var(--hover);color:var(--ink)}
+.pv-sel .pv-bar-text{flex:0 1 auto}
+.pv-selecting [data-task]{cursor:pointer}
+.pv [data-task].pv-picked{box-shadow:0 0 0 2px var(--accent);background:var(--hover)}
 .pv-bar input{flex:1 1 180px;min-width:0;height:30px;box-sizing:border-box;padding:0 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);font:inherit}
 
 /* The board's bots on a phone and the chat they open over the board (ui/app/pipeline-ask.ts). The face is the header's

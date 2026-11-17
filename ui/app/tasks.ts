@@ -101,12 +101,6 @@ function actorFace(actor: string | null | undefined, size = 18) {
 }
 // The goal a task serves is a link with the goal's title; the row only carries the id.
 const GOAL_TITLES: Record<string, string> = {};
-async function taskGoalTitle(root: ParentNode) {
-  const a = root.querySelector<HTMLAnchorElement>('a.task-goal[data-goal-title]'); if (!a) return;
-  const id = String(a.dataset.goalTitle);
-  if (!GOAL_TITLES[id]) { const r: {goal?: GoalOption | null} | null = await v2Get('/v2/goals/' + encodeURIComponent(id)); GOAL_TITLES[id] = r?.goal?.title || ''; }
-  if (GOAL_TITLES[id] && a.isConnected) a.textContent = 'serves: ' + GOAL_TITLES[id];
-}
 // Live goals for the "Serves" pick on a new task; fetched once a page, never blocks the form.
 let GOAL_OPTIONS: GoalOption[] | null = null;
 async function goalOptions() {

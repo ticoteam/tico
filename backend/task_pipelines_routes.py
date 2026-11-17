@@ -8,7 +8,7 @@ team reads every pipeline record, a private one too: its tasks are private (back
 
 import re
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from fastapi import Request
 
@@ -65,7 +65,22 @@ def register(app: "FastAPI", auth: Any, mutate: "Callable[..., Any]", store: Any
             given = body.model_dump()
             seen = given.pop("settings_version", None)
             given.pop("may_change", None)
-            pipeline_settings.save(c, who.actor, {**given, "id": pipeline_id}, seen)
+            raw: Any = given.pop("move_tasks_to", None)
+            given = {**given, "id": pipeline_id}
+            move_to = cast("dict[str, Any] | None", raw) if raw is None or isinstance(raw, dict) else None
+            if raw is not None and not (move_to and move_to.get("pipeline")):
+                raise Problem("move_tasks_to", "move_tasks_to names a pipeline and a stage", 422)
+            gone = pipeline_settings.holding(c, given)
+            if gone and not move_to:
+                # A stage that holds tasks goes once they have somewhere to go: the editor asks, then sends move_tasks_to.
+                names = ", ".join(f"{g['name']} ({g['tasks']})" for g in gone)
+                raise Problem(
+                    "stage_has_tasks",
+                    f"Say where the tasks of {names} go",
+                    409,
+                    extra={"stages": gone, "move_to": pipeline_settings.move_to_hint(c, given)},
+                )
+            pipeline_settings.save(c, who.actor, given, seen, move_to)
             return {"pipeline": record(c, who, pipeline_id)}
 
         return mutate(request, body, write)
@@ -92,7 +107,9 @@ def register(app: "FastAPI", auth: Any, mutate: "Callable[..., Any]", store: Any
         auth.domain(who)
 
         def write(c: Any) -> dict[str, Any]:
-            pipeline_settings.retire(c, who.actor, pipeline_id, body.settings_version)
+            place = body.move_tasks_to
+            to = {"pipeline": place.pipeline, "stage": place.stage} if place else None
+            pipeline_settings.retire(c, who.actor, pipeline_id, body.settings_version, to)
             return {"pipeline": record(c, who, pipeline_id)}
 
         return mutate(request, body, write)

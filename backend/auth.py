@@ -1383,6 +1383,23 @@ class Auth:
                 return rows[0]["id"]
             raise Problem("not_found", "No task %s" % ident, 404)
 
+        # A task's label (`D18450`, or `D-18450`): the prefix it was made with and its number, wherever it is now.
+        label = re.fullmatch(r"([A-Za-z]{1,2})-?(\d{1,18})", ident)
+        if label:
+            rows = readable(
+                H._rows(
+                    c.execute(
+                        "SELECT id,title,owner_id,requester_id FROM tasks WHERE number=? AND upper(COALESCE(prefix, "
+                        "(SELECT p.prefix FROM pipelines p WHERE p.id = tasks.pipeline_id), ''))=? AND ("
+                        + visible
+                        + ")",
+                        (int(label.group(2)), label.group(1).upper()),
+                    )
+                )
+            )
+            if rows:
+                return rows[0]["id"]
+
         if TASK_PREFIX_MIN <= len(ident) < 36:
             rows = readable(
                 H._rows(
