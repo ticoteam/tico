@@ -204,6 +204,7 @@ EMPTY = (
     "google_connects",
     "slack_credentials",
     "slack_posts",
+    "slack_requests",  # bots' Slack reads waiting on the gateway (backend/slack_requests.py): a copy answers none
     "slack_events",
     "slack_threads",
     # Tools > Settings > Email: the Workspace key (sealed), setup codes and the OAuth client secret (sealed). A copy holds

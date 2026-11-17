@@ -46,7 +46,7 @@ list in Tico's database, not a file:
 
 A reader gets what is new in the channel about once an hour, as a message in its own thread
 ([slack-gateway.md](slack-gateway.md)). A bot's own `history` reads through `connectors/slack.py` follow the same
-list and its `tools:` entry. Channels shared outside the workspace are always refused, whatever the list says.
+list and its `tools:` entry, checked by Tico and answered by the gateway. Channels shared outside the workspace are always refused, whatever the list says.
 
 ## Link a channel to a thread
 

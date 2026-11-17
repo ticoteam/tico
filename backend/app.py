@@ -5818,6 +5818,10 @@ def create_app(settings=None):
     from .slack_channels import install as install_slack_channels
 
     install_slack_channels(app, settings, store, auth)
+    # Bots read and post in Slack through the gateway, never with a token of their own (connectors/slack.py).
+    from .slack_bots import install as install_slack_bots
+
+    install_slack_bots(app, settings, store, auth, checked_write, say)
     from .slack_threads import install as install_slack_threads
 
     install_slack_threads(app, settings, store, auth)
