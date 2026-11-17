@@ -653,7 +653,7 @@ const peRowEl = (si: number, key: string): HTMLElement | null => document.queryS
  * type) draws again; a stage's name is written in place (its row, or one stage's dialog title). */
 function peInput(state: PeState, el: HTMLInputElement | HTMLSelectElement): void {
   const value = el.value, checked = el instanceof HTMLInputElement && el.type === 'checkbox' ? el.checked : false;
-  if (el.hasAttribute('data-pe-move-to')) { if (state.moveOut) state.moveOut.to = value; return; }
+  if (el.dataset['peMoveTo'] !== undefined) { if (state.moveOut) state.moveOut.to = value; return; }
   const d = state.draft;
   const pf = el.dataset['pePf'];
   if (pf) {
