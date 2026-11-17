@@ -375,7 +375,7 @@ function recruitFor({department, briefing, share}: {department: string; briefing
         org_groups: record.completed ? CHART_GROUPS : []});
       if (p === '/api/v2/operations') return json({machines: [], services: [], issues: [], scheduler_enabled: true});
       if (p === '/api/v2/models') return json({models: [{id: 'gpt-6-sol', label: 'Sol', runtime: 'codex', efforts: ['high', 'xhigh'], default_effort: 'high'}], harnesses});
-      if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
+      if (p === '/api/v2/settings/history') return json({changes: []});
       if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));

@@ -65,7 +65,7 @@ const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'I
       if (p === '/api/humans') return json({people});
       if (p === '/api/v2/models') return json({models: [], harnesses: [], enabled_providers: [], default: {}});
       if (p === '/api/v2/operations') return json({machines: [], services: [], issues: [], scheduler_enabled: true});
-      if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
+      if (p === '/api/v2/settings/history') return json({changes: []});
       if (p === '/api/v2/access' && method === 'GET') return json(access());
       if (p === '/api/v2/directory' && method === 'GET') return json(directory);
       if (p === '/api/v2/directory' && method === 'PUT') {

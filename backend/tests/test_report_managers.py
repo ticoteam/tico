@@ -160,7 +160,7 @@ def test_a_person_who_manages_the_report_sees_and_undoes_the_managers_change(api
     counsel = bot_id(api, "counsel")
     [row] = [c for c in get(api, "settings/history", token="ben-test")["changes"] if c["bot"] == counsel]
     assert row["via"] == "report_manager" and row["can_undo"] is True
-    assert get(api, "settings/history", token="ben-test")["transitions"] == []
+    assert "transitions" not in get(api, "settings/history", token="ben-test")
     assert get(api, "settings/history", token="cara-test")["changes"] == []
     undo = f"settings/history/{row['id']}/undo"
     post(api, undo, {"expected_revision": revision(api, "counsel")}, token="cara-test", expected=403)
