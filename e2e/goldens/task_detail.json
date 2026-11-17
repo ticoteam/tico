@@ -159,6 +159,7 @@
       "conversation_id": "<id1>",
       "cover": null,
       "created_at": "<time>",
+      "documents": [],
       "done_at": "<time>",
       "due_at": null,
       "external_requesters": 0,

@@ -723,6 +723,8 @@ def run(args, who=None):
         if sub in ("relate", "unrelate"):
             return via_tool(client, args)  # the tool says what to do instead of blocks and blocked_by
         if sub == "attach":
+            if getattr(args, "doc", None):
+                return via_tool(client, args, document=args.doc, path=args.file)
             if getattr(args, "req", None):
                 return via_tool(client, args, page=args.file)
             path = Path(args.file)

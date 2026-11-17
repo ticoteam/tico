@@ -183,8 +183,7 @@ const ready = (page: Page) => page.waitForFunction(() => {
     // A task window: no Follow, no page +, no answer buttons, no box; the box is a grey "Read-only view" line.
     await page.locator('#task-body .tk-row', {hasText: OWN}).click();
     await page.locator('.tmodal[open]').waitFor({timeout: t(15000)});
-    // A task with nothing said yet opens on its Description; the box is on the Chat tab.
-    await page.locator('.tmodal[open] [data-task-tab="chat"]').click();
+    // A task opens on its chat, where the box is.
     await page.locator('.tmodal[open] .view-only-line').waitFor({timeout: t(15000)});
     assert.equal(await page.locator('.tmodal[open] .view-only-line').innerText(), 'Read-only view');
     assert.deepEqual(await writesShown(page), [], 'the task window offers nothing that writes');
@@ -203,7 +202,7 @@ const ready = (page: Page) => page.waitForFunction(() => {
       .filter(h => { const sec = h.closest('section'); return !!sec && ![...sec.children].some(c => c !== h && (c as HTMLElement).offsetWidth > 0); }).map(h => (h as HTMLElement).innerText)),
     [], 'no heading with nothing under it');
     assert.equal(await page.locator('.tmodal[open] [data-task-activity] > .rail-h').isVisible(), true, 'Activity and links heads its Sessions');
-    await page.locator('.tmodal[open] [data-task-tab="desc"]').click();
+    // What the task is heads Details.
     assert.equal(await page.locator('.tmodal[open] [data-task-body-edit]').isVisible(), false, 'no Edit on the description');
 
     // The reads work in a view, not only show. ⋯ holds only Copy link, and it copies.
@@ -217,7 +216,7 @@ const ready = (page: Page) => page.waitForFunction(() => {
     await page.waitForFunction(() => (window as unknown as {copied: string[]}).copied.length === 1, null, {timeout: t(15000)});
     assert.match((await copied())[0]!, new RegExp(`/#/task/${own}$`), 'Copy link copied the task');
     // A long message shows in full, with no Show more: nothing of it is cut off below its last step.
-    await win.locator('[data-task-tab="chat"]').click();
+    await win.locator('[data-task-tab="details"]').click();   // Details closes back to the chat
     const long = win.locator('.th-body', {hasText: 'Step 30 of the plan.'}).first();
     await long.waitFor({timeout: t(15000)});
     assert.equal(await long.evaluate(el => el.scrollHeight <= el.clientHeight + 2), true, 'the whole long message is drawn');

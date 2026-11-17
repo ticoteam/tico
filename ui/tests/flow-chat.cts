@@ -7,8 +7,10 @@ import type {Route} from 'playwright';
 //   for the person (POST /needs-you/snooze) and moves on; a tapped choice answers;
 // - an OK: Approve alone, "Approve with comments" while the composer has words, which go with the approval as its
 //   note; the arrow sends it back with the words as the note (answer no); ⋯ holds Close task and Give to…;
-// - on a phone two tabs in one tight row, Chat (where each item opens) and Task (the task open, no chevron); the ask's
-//   byline stays one line, the name cut first; Flow's chat has the day divider only, no "New" line.
+// - on a phone two tabs in one tight row, Chat (where each item opens) and Task (the task open, no chevron); a question
+//   on a task with no documents has no tabs at all; an OK whose task has documents (ui/app/task-docs.ts) lists Chat,
+//   then them, and opens on the one it approves; the ask's byline stays one line, the name cut first; Flow's chat has
+//   the day divider only, no "New" line.
 // FLOW_SHOTS=<folder> saves a question, an OK empty and with words, after a reply, and ⋯ open, desktop and phone.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
@@ -33,6 +35,12 @@ const ok = (): Item => ({kind: 'ask', id: 'v2:r2', task_id: 't2', requirement_id
   task: brief(2, 'Pipeline boards show where work waits', 'bot:tpo'),
   ask: {requirement_id: 'r2', kind: 'ok', line: 'OK the spec?', who: 'human:ana', asked_by: 'bot:tpo', choices: null, may: ['ok', 'no'],
     met: false, shows: [], standing: 'waiting', answer: null, brief: {why: 'v2 covers your 12 points; one line under each stage name.'}}});
+const ago = (min: number) => new Date(Date.now() - min * 60000).toISOString();
+// t3's documents, as GET /v2/tasks/{id} lists them: newest change first.
+const documents = () => [
+  {name: 'QA report', file_id: 'f-qa', version: 1, by: 'bot:tpo', at: ago(20), versions: [{n: 1, by: 'bot:tpo', at: ago(20), note: 'All checks pass'}]},
+  {name: 'Spec', file_id: 'f-spec', version: 3, by: 'bot:tpo', at: ago(125), versions: [{n: 3, by: 'bot:tpo', at: ago(125)}, {n: 2, by: 'human:ana', at: ago(60 * 26)}, {n: 1, by: 'bot:tpo', at: ago(60 * 50)}]},
+];
 const msg = (id: string, from: string, body: string, at: string) => ({id, seq: Number(id.slice(1)), sender_id: from, body, kind: 'say', created_at: at, conversation_id: 'c1'});
 
 (async () => {
@@ -53,6 +61,7 @@ const msg = (id: string, from: string, body: string, at: string) => ({id, seq: N
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (ui && fs.existsSync(uiFile(ui[1]!))) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
+      if (p.startsWith('/vendor/fonts/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile(p.slice(1)))});
       if (p === '/api/me') return json({...me, config});
       if (p === '/api/v2/config') return json(config);
       if (p === '/api/employees') return json([{slug: 'asp', id: 'asp', display_name: 'Agent Services Product Owner', status: 'active'},
@@ -65,7 +74,9 @@ const msg = (id: string, from: string, body: string, at: string) => ({id, seq: N
       if (p === '/api/v2/flow/opinions') return json({opinions: []});
       const t = p.match(/^\/api\/v2\/tasks\/(t\d)$/);
       if (t && r.method() === 'GET') return json({task: {...(t[1] === 't1' ? question() : ok()).task as object, body: 'Your area and its products.',
-        created_at: '2026-11-15T09:00:00Z', attachments: [], links: [], conversation_id: t[1] === 't1' ? 'c1' : 'c2'}});
+        created_at: '2026-11-15T09:00:00Z', attachments: [], links: [], conversation_id: t[1] === 't1' ? 'c1' : 'c2', documents: t[1] === 't3' ? documents() : []}});
+      if (p.startsWith('/api/v2/files/f-')) return route.fulfill({contentType: 'text/html', body: p.startsWith('/api/v2/files/f-spec')
+        ? `<h1>Spec</h1><p>Spec v${url.searchParams.get('v')}</p>` : '<h1>QA report</h1><p>Boards show stuck counts ✓</p>'});
       const th = p.match(/^\/api\/v2\/threads\/(c\d)\/timeline$/);
       if (th) return json({thread: {id: th[1], title: th[1] === 'c1' ? 'Set up: Agent Services' : 'Pipeline boards', me: {can_post: true}}, messages: th[1] === 'c1'
         ? [msg('m1', 'bot:asp', 'Seven things I could not find written down: 1. Who counts as a user of Search? … 7. Which products are hosted?', '2026-11-15T09:02:00Z')]
@@ -178,7 +189,7 @@ const msg = (id: string, from: string, body: string, at: string) => ({id, seq: N
     await page.evaluate('v2Refresh()');
     await page.evaluate('decideFlow(document.body)');
     await chat.locator('.dc-q', {hasText: 'seven setup questions'}).waitFor();
-    assert.equal(await chatTab.getAttribute('aria-selected'), 'true', 'a question opens on Chat');
+    assert.equal(await dialog.locator('[data-dc="tab"][role="tab"]').count(), 0, 'a question on a task with no documents: no tabs, not even Chat');
     assert.equal(await chat.locator('.p-foot, .p-reach').count(), 0, 'no "To <name>" line under the box');
     const [tabsRow, icons, pill] = [await dialog.locator('.dc-tabs').boundingBox(), await dialog.locator('.dc-side [data-key]').boundingBox(), await chat.locator('.p-pill').boundingBox()];
     assert.ok(tabsRow && icons && icons.y >= tabsRow.y - 1 && icons.y + icons.height <= tabsRow.y + tabsRow.height + 1, `Snooze and ⋯ sit in the tabs row (${JSON.stringify([tabsRow, icons])})`);
@@ -260,7 +271,59 @@ const msg = (id: string, from: string, body: string, at: string) => ({id, seq: N
     await page.evaluate('v2Refresh()');
     await page.evaluate('decideFlow(document.body)');
     await approve.and(page.locator(':not([disabled])')).waitFor();
-    await chatTab.click();   // an OK opens on its document
+    // Its task has a Spec and a QA report: Chat, then them, newest change first. What this OK shows is no file of
+    // theirs, so it has its own tab, named for what it shows, and opens there; the Spec stays the Spec.
+    const tabs = dialog.locator('.dc-tabs [role="tab"]');
+    const frameText = async () => (await dialog.locator('.dc-side > .dc-docpane iframe.html-view').contentFrame().locator('body').innerText()).trim();
+    await page.waitForFunction(() => document.querySelectorAll('.decide .dc-tabs [role="tab"]').length === 4);
+    assert.deepEqual(await tabs.allInnerTexts(), ['Chat', 'Launch email', 'QA report', 'Spec']);
+    assert.equal(await taskTab.getAttribute('aria-selected'), 'true', 'an OK opens on what it shows');
+    assert.match(await dialog.locator('.dc-thing').innerText(), /Hello\./, 'its own tab shows what it approves');
+    if (process.env.TICO_SHOTS) {
+      await dialog.locator('.dc-start').waitFor({state: 'detached'});
+      await page.waitForTimeout(450);   // past a phone's calm (decideCalm)
+      for (const theme of ['dark', 'light']) {
+        await page.evaluate(t => (window as unknown as {ticoTheme?: {set(t: string): void}}).ticoTheme?.set(t), theme);
+        await page.waitForTimeout(100);
+        await page.screenshot({path: path.join(process.env.TICO_SHOTS, `flow-approval-own-tab-phone-${theme}.png`)});
+      }
+      await page.evaluate(() => (window as unknown as {ticoTheme?: {set(t: string): void}}).ticoTheme?.set('dark'));
+    }
+    const specTab = dialog.locator('[data-dc-tab="doc:Spec"]');
+    await specTab.click();
+    assert.equal(await dialog.locator('.dc-thing').isVisible(), false, 'the Spec tab is the Spec, not the approval');
+    await dialog.locator('.dc-side > .dc-docpane iframe.html-view').contentFrame().locator('body', {hasText: 'Spec v3'}).waitFor();
+    assert.match(await frameText(), /Spec v3/, 'the Spec document, newest version');
+    assert.match(await dialog.locator('.dc-side > .dc-docpane [data-doc-ver]').innerText(), /^v3 · Tasks Product Owner/);
+    await taskTab.click();
+    // An OK whose page is the Spec's own file opens on the Spec tab: the document itself, with its version line.
+    needs = [{...bound, id: 'v4:r3', ask: {...(bound['ask'] as object), page: {file_id: 'f-spec', ref: 'f-spec@3', version: 3}}}];
+    await dialog.locator('[data-dc="close"]').first().click();
+    await page.evaluate('v2Refresh()');
+    await page.evaluate('decideFlow(document.body)');
+    await page.waitForFunction(() => document.querySelector('.decide [data-dc-tab="doc:Spec"]')?.getAttribute('aria-selected') === 'true');
+    assert.deepEqual(await tabs.allInnerTexts(), ['Chat', 'QA report', 'Spec']);
+    assert.equal(await taskTab.count(), 0, 'no second tab for the same file');
+    await dialog.locator('.dc-side > .dc-docpane iframe.html-view').contentFrame().locator('body', {hasText: 'Spec v3'}).waitFor();
+    assert.match(await frameText(), /Spec v3/);
+    assert.match(await dialog.locator('.dc-side > .dc-docpane [data-doc-ver]').innerText(), /^v3 · /);
+    await approve.and(page.locator(':not([disabled])')).waitFor();
+    if (process.env.TICO_SHOTS) {
+      await dialog.locator('.dc-start').waitFor({state: 'detached'});
+      await page.waitForTimeout(450);   // past a phone's calm (decideCalm): Approve as it is to tap
+      for (const theme of ['dark', 'light']) {
+        await page.evaluate(t => (window as unknown as {ticoTheme?: {set(t: string): void}}).ticoTheme?.set(t), theme);
+        await page.waitForTimeout(100);
+        await page.screenshot({path: path.join(process.env.TICO_SHOTS, `flow-approval-on-its-document-phone-${theme}.png`)});
+      }
+      await page.evaluate(() => (window as unknown as {ticoTheme?: {set(t: string): void}}).ticoTheme?.set('dark'));
+    }
+    // Another document: its one version line over it.
+    await dialog.locator('[data-dc-tab="doc:QA report"]').click();
+    await dialog.locator('.dc-docpane iframe.html-view').waitFor();
+    assert.match(await dialog.locator('.dc-docpane [data-doc-ver]').innerText(), /^v1 · Tasks Product Owner · 20m/);
+    assert.equal(await dialog.locator('.dc-thing').isVisible(), false);
+    await chatTab.click();
     await composer.fill('Send it Monday');
     await page.waitForTimeout(450);
     const k = writes.length;

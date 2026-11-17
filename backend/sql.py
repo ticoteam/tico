@@ -562,6 +562,7 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         "task_requesters": by_task,
         "task_reminders": by_task,
         "task_assets": by_task,
+        "task_documents": by_task,
         "task_links": by_task,
         "task_roles": by_task,
         # A relation is read only when the caller may read both of its tasks.
@@ -732,6 +733,7 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         rules[table] = "(" + rules[table] + ") AND " + content_gate(cols)
     rules["task_assets"] += " AND " + function("blob") + "(blob_id)"
     rules["task_file_reviews"] = "file_id IN (SELECT id FROM bot_files) OR file_id IN (SELECT id FROM blobs)"
+    rules["task_documents"] += " AND file_id IN (SELECT id FROM bot_files)"
     rules["bot_file_activity"] += (
         " AND (task_id IS NULL OR " + by_task + ") AND (attempt_id IS NULL OR " + by_attempt + ")"
     )
