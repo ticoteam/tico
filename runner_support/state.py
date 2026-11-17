@@ -1,4 +1,5 @@
-"""Durable local event outbox and session references; never a shared task database."""
+"""The runner's local SQLite file, shared with the Rust runner (runner-rs/src/state.rs, which owns turns and
+sessions): the side jobs' import cursors and pending closes here; never a shared task database."""
 
 import os
 import sqlite3
