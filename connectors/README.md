@@ -14,8 +14,8 @@ not a shortcut.
   `slack.py` and the server's Slack gateway use, Socket Mode on, and the events the gateway
   subscribes to (`app_mention`, `message.im`, `message.channels`, `message.groups`, `link_shared`). The gateway itself is `backend/slack_gateway.py`
   on the API host (`docs/slack-gateway.md`); it is the one other thing that holds the token.
-- `mail/` - read and file email as ana@acme.example or legal@acme.example, and the deterministic inbox
-  rules. Run it as `scripts/mail.sh`. One Google service account with domain-wide delegation,
+- `mail/` - read, file, draft and send email as ana@acme.example or legal@acme.example. Bots and people
+  use it through `tico email` and `tico calendar`, never directly. One Google service account with domain-wide delegation,
   key at `secrets/google-sa.json`, never in a bot's environment. Employee guide: `docs/mail.md`;
   developer notes and the owner's Google setup: `connectors/mail/README.md`.
 
@@ -35,7 +35,7 @@ recipes, gotchas, and the learnings bots add): `tico tool show slack`, `tico too
 get pages in its own config (`integrations/README.md`).
 
 Which channels bots may use is the list under Settings > Tools > Slack (`tico slack channel list`), kept in Tico's database; a bot may post to any of them unless an owner or admin turned posting off for it. A run reads the list from the hub; `registry/slack-channels.yaml` is only read until someone imports it there.
-What the mail rules do to new messages is `registry/mail-rules.yaml`. Which employee may post at
+What happens to a new message is its inbox's Message automation (`docs/routines.md`). Which employee may post at
 all, and which mailbox it may act as, is the `access:` block in its own `employee.yaml`
 (`policies/access.md`). All of it is checked in code on every call.
 

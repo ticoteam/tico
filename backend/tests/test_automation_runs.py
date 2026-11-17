@@ -652,11 +652,12 @@ def test_a_manual_mail_sample_inherits_the_inbox_and_keeps_an_explicit_mailbox(a
         message["mailbox"] = mailbox
     run = post(api, f"automations/{aid}/run", {"input": {"message": message}})["run"]
     expected = mailbox or "ana@acme.example"
-    assert run_row(api, run["id"])["state"]["payload"]["message"] == {**message, "mailbox": expected}
-    assert run["status"] == "waiting" and run["steps"][0]["status"] == "waiting"
-    assert sql(api, "SELECT mailbox, state FROM automation_mail_actions WHERE run_id=?", (run["id"],)) == [
-        {"mailbox": expected, "state": "queued"}
-    ]
+    # The run has ended, so the message's body is gone from what it keeps.
+    kept = {k: v for k, v in message.items() if k != "body"}
+    assert run_row(api, run["id"])["state"]["payload"]["message"] == {**kept, "mailbox": expected}
+    # The sample names no Gmail message, so the server changes nothing and says so.
+    (action,) = sql(api, "SELECT mailbox, state, result FROM automation_mail_actions WHERE run_id=?", (run["id"],))
+    assert (action["mailbox"], action["state"]) == (expected, "failed") and "names no message" in action["result"]
 
 
 def test_an_inherited_sample_mailbox_still_requires_the_owners_access(api):

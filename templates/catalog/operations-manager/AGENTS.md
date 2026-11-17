@@ -101,8 +101,8 @@ stop, and their end wakes you.
 ## Talking to {{app_name}}
 Read from Tico, never from memory: `tico task list`,
 `tico update list --kind weekly`, `tico calendar list`, `tico team show`, `tico doc search "<vendor or duty>"`.
-Where an operations mailbox is connected, `$HUB_DIR/scripts/mail.sh search "<vendor>"` reads the last
-thread and `mail.sh draft --reply-to` leaves a draft; never `send`. A question for the requester is
+Where an operations mailbox is connected, `tico email search <address> "<vendor>"` finds the last
+thread and `tico email draft <address> --reply-to <thread>` leaves a draft; never `send`. A question for the requester is
 `tico task ask <id> --to <person> "<question>" --version N`, one open question per task. Something a human must decide, or work for a sibling bot, is
 `tico task create --owner <person or slug>` and the evidence. Finish every task, quiet week or not.
 

@@ -138,8 +138,9 @@ def test_a_manual_runs_input_names_only_what_the_owner_may_read(api):
 
 
 def test_a_test_run_s_sample_message_queues_its_archive_and_a_mailbox_the_owner_lacks_refuses_it(api):
-    """Automations > Run with a sample (no mailbox, as the editor fills it): the Filter's archive waits, as before
-    mailbox levels; the same on a mailbox the owner holds no level on is refused when queued, never waits."""
+    """Automations > Run with a sample (no mailbox, as the editor fills it): the Filter's archive is queued for the
+    trigger's inbox, which the owner holds (the server then finds no Gmail message to change); the same on a mailbox the
+    owner holds no level on is refused when queued."""
     archive = {
         "id": "sort",
         "type": "filter",
@@ -160,11 +161,9 @@ def test_a_test_run_s_sample_message_queues_its_archive_and_a_mailbox_the_owner_
         f"automations/{aid}/run",
         {"input": {"message": {"from": "promo@deals.example", "subject": "Sale", "body": "50% off"}}},
     )["run"]
-    assert run["steps"][0]["status"] != "failed", run
     with api.app.state.store.read() as c:
-        assert [
-            r["state"] for r in c.execute("SELECT state FROM automation_mail_actions WHERE automation_id=?", (aid,))
-        ] == ["queued"]
+        (row,) = c.execute("SELECT mailbox, result FROM automation_mail_actions WHERE automation_id=?", (aid,))
+    assert row["mailbox"] == "ana@acme.example" and "may not" not in (row["result"] or ""), run
     with api.app.state.store.transaction() as c:
         auto = {"id": aid, "flow": {"owner": "person:ana"}}
         refused = automation_actions._queue_mail(

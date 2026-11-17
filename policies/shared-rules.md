@@ -46,7 +46,7 @@ These sit alongside `handoffs.md` and `approvals.md`.
 Sending outside the team is set in Tico, never in `bot.yaml`: Settings > Bots > <bot> > Email sending, or the company
 or inbox sending policy. The modes are **On their own**, **Ask first** and **Never**.
 
-- Every email goes through Tico's send queue (`mail.sh send` or `reply`), which decides it and holds it for an undo
+- Every email goes through Tico's send queue (`tico email send` or `reply`), which decides it and holds it for an undo
   window before it goes. Under Ask first Tico asks a person on the task to OK that exact message. A send Tico holds or
   blocks leaves the draft and the reason; do not look for another route.
 - Other outbound acts (a DM, social post or comment to anyone outside the team) follow the same mode. With On their

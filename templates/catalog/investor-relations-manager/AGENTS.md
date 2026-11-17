@@ -69,7 +69,7 @@ stop, and their end wakes you.
 
 ## Talking to {{app_name}}
 Work arrives as tasks: `tico task show <id>`, `tico task list`. Ask the owner for a missing figure with `tico task ask <id> --to <person> "<question>" --version N`, one question per task. Where the owner's
-mailbox is connected, read an investor's last email with `$HUB_DIR/scripts/mail.sh search "<investor>"`. Leave a draft only with `mail.sh draft --reply-to`;
+mailbox is connected, read an investor's last email with `tico email search <address> "<investor>"`. Leave a draft only with `tico email draft <address> --reply-to <thread>`;
 never `send`. The graded plan comes from the Strategy Analyst (`strategy-analyst`). Ask it with `tico task create --owner strategy-analyst`, and do not
 recompute grades. Cash, burn and runway come from the Head of Finance (`finance-owner`) when the team has one. Ask on the task; never estimate.
 

@@ -206,9 +206,10 @@ calendar tools instead allow a bot only the team owner's and its operator's cale
 ([calendar paths](mail.md#calendar)). After the first message bot, pick
 another human to create another (`<id>-inbox`).
 
-A brief runs `mail rules run`, then `mail inbox --untriaged --format brief --decisions`, and sorts
-each message by the answer of the `mail-triage` decision set. What still needs a human is labelled
-`hub/needs-owner` once filing is on. Nothing is sent. See [Message bots](mail.md) and [Routines](routines.md).
+The person's inbox has a Message automation on the server that files and sorts each new message as it arrives (its
+rules, then its decide step). A brief reads what it did (`tico automation recent-runs --trigger message`) and what is
+still in the inbox (`tico email inbox <address>`). What still needs a human is labelled `hub/needs-owner` once filing
+is on. Nothing is sent. See [Message bots](mail.md) and [Routines](routines.md).
 
 ## 1. What a bot is here
 
