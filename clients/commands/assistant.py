@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 from urllib.parse import quote
 
+from clients.cli_spec import Arg, Command, Group
 from clients.commands._registry import tool
 from clients.commands._schemas import _key, _s
 
@@ -662,3 +663,44 @@ def assistant_change_list(api, args):
 )
 def assistant_change_restore(api, args):
     return api.post(f"assistant/changes/{args['id']}/restore", {}, key=_key(args))
+
+
+# `tico needs-you ...` (clients/cli_spec.py): the walk through what needs the person, one bot's batch at a time. The
+# CLI takes the server's decisions (ok, send_back, ...), not the tool's schema words (approve, decline), as it always has.
+NEEDS_YOU = (
+    Group("needs-you", "a person's walk through what needs them: respond, commit (backend/batch.py)"),
+    Command(
+        "needs-you start",
+        "start the batch of the bot that most needs you, or resume the one in progress",
+        example="tico needs-you start --bot ana",
+    ),
+    Command(
+        "needs-you next",
+        "the next item; at the end, the summary to read back",
+        example="tico needs-you next b1",
+    ),
+    Command(
+        "needs-you respond",
+        "record a response to the current item; nothing applies until commit",
+        args=(
+            Arg("text", default=""),
+            Arg("decision", choices=("ok", "send_back", "done", "close", "answer")),
+        ),
+        example="tico needs-you respond b1 decide --decision ok",
+    ),
+    Command(
+        "needs-you commit",
+        "apply every recorded response",
+        example="tico needs-you commit b1",
+    ),
+    Command(
+        "needs-you abandon",
+        "drop the batch without applying anything",
+        example="tico needs-you abandon b1",
+    ),
+    Command(
+        "needs-you show",
+        "what needs you: the count per kind and the items, oldest first",
+        example="tico needs-you show --kind ask --limit 5",
+    ),
+)

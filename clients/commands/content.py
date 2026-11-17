@@ -6,6 +6,8 @@ import hashlib
 import json
 import os
 import re
+import sys
+from pathlib import Path
 from urllib.parse import quote
 from clients.cli_spec import Arg, Command, Group
 from clients.tico import APIError
@@ -994,4 +996,122 @@ PIN = (
     Command("pin add", "pin page:<file id> or card:<id> at a place", example="tico pin add dashboard card:c1"),
     Command("pin update", "resize or move a pin", example="tico pin update p1 --size large"),
     Command("pin remove", "unpin", example="tico pin remove p1"),
+)
+
+
+def doc_write_body(client, fields):
+    """`tico doc write`: the body is the --body-file's text, or standard input (read here, not by the parser)."""
+    from clients import hubtools
+
+    body = fields.get("body")
+    fields["body"] = sys.stdin.read() if not body or body == "-" else Path(body).read_text(encoding="utf-8-sig")
+    return hubtools.BY_NAME["tico_doc_write"]["fn"](client, fields)
+
+
+# `tico file ...` (clients/cli_spec.py): what the person publishes for people. `file publish` sends the checkout file's
+# bytes (files_publish_path), so the file's name and text are not flags.
+FILE = (
+    Group("file", "what you publish for people: reports, documents, imported objects"),
+    Command("file archive", "archive a File with your rights", example="tico file archive f1"),
+    Command("file list", "the files on your page, newest activity first", example="tico file list --limit 10"),
+    Command(
+        "file publish",
+        "upload a file from this checkout (reports/x.md); again adds a version",
+        args=(Arg("path", positional=True),),
+        omit=("name", "text", "content_base64"),  # the file's own, read from `path`
+        run=files_publish_path,
+        example="tico file publish reports/weekly.md --title 'Weekly review'",
+    ),
+    Command(
+        "file link",
+        "list a Google Doc, Notion page, Figma file or any https link",
+        example="tico file link https://docs.google.com/document/d/abc --title 'Plan'",
+    ),
+    Command(
+        "file touch",
+        "you edited a linked document again: move it to the top",
+        example="tico file touch f1",
+    ),
+    Command(
+        "file import",
+        "copy an s3:// object with this computer's credentials into Tico",
+        example="tico file import s3://bucket/report.pdf",
+    ),
+    Command(
+        "file search",
+        "every file you may read, by title and text",
+        example="tico file search 'pipeline review' --kind document",
+    ),
+    Command(
+        "file read",
+        "one version of a file you may read, as text, in full (default: the current one)",
+        example="tico file read f1 --version 2",
+    ),
+    Command("file delete", "the owner deletes a file for good: its bytes leave storage", example="tico file delete f1"),
+    Command(
+        "file approved",
+        "exit 0 when a person approved this exact version on a review question, 1 when not, 2 on bad input",
+        example="tico file approved reports/weekly.md --by bot:ana",
+    ),
+    Command(
+        "file review",
+        "approve or ask for changes on another bot's file version, on a task you read",
+        args=(
+            Arg("verdict", flag="--approve", action="store_const", const="approve"),
+            Arg("verdict", flag="--changes", action="store_const", const="changes"),
+            Arg("task", flag="--task"),
+        ),
+        one_of=(("verdict",),),
+        example="tico file review f1@2 --approve --task T1",
+    ),
+)
+
+# `tico doc ...` (clients/cli_spec.py) except `fetch`, which runs on this computer and is built by the hand parser.
+DOC = (
+    Group("doc", "read and search team docs and external sources, write internal docs, ask the Librarian"),
+    Command("doc archive", "archive an internal Doc with your rights", example="tico doc archive sales/plan"),
+    Command("doc list", "internal docs by path", example="tico doc list --prefix sales/ --limit 20"),
+    Command(
+        "doc read",
+        "one internal or indexed external doc in full",
+        example="tico doc read sales/plan",
+    ),
+    Command(
+        "doc search",
+        "search internal, indexed external and linked docs, then the Tico manual",
+        args=(
+            Arg("collection", flag="--manual", action="store_const", const="manual"),
+            Arg("collection", flag="--team", action="store_const", const="team"),
+            Arg("market", default=None),
+        ),
+        example="tico doc search 'refund policy' --team",
+    ),
+    Command(
+        "doc write",
+        "create or replace an internal doc at a path",
+        args=(
+            Arg("body", flag="--body-file", required=False),  # the file's text, or stdin: doc_write_body
+            Arg("append", default=None),
+        ),
+        run=doc_write_body,
+        example="tico doc write sales/plan --body-file plan.md --title 'Sales plan'",
+    ),
+    Command("doc history", "the versions of a doc", example="tico doc history sales/plan"),
+    Command(
+        "doc link-list",
+        "the linked docs: where the company's other docs live",
+        example="tico doc link-list",
+    ),
+    Command(
+        "doc ask",
+        "ask the Librarian about the team's docs and wait for the answer",
+        args=(Arg("wait_s", flag="--wait", type=float, default=120, metavar="WAIT"),),
+        example="tico doc ask 'Who approves refunds?' --wait 60",
+    ),
+    Command(
+        "doc ask-status",
+        "collect the same Librarian answer without sending another question",
+        args=(Arg("wait_s", flag="--wait", type=float, default=0, metavar="WAIT"),),
+        example="tico doc ask-status c1 m1 --wait 20",
+    ),
 )

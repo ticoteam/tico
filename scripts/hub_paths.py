@@ -11,7 +11,8 @@ running this.
   HAND_READ_PATHS, which shrinks as they move to specs. Left out on purpose: reads that mark something (`inbox`,
   `message list`, `update read`, `changelog list`, and the MARKS commands such as `growth setup`), reads with a writing
   flag (`rules read --from`), paid lookups
-  (`gateway search`, `doc fetch`), checks, and every group or alias of a group (`status`, `org`, `docs`).
+  (`gateway search`, `doc fetch`), checks, spec'd reads not yet decided (UNDECIDED), and every group or alias of a
+  group (`status`, `org`, `docs`).
 """
 
 import argparse
@@ -27,7 +28,6 @@ RUST = ROOT / "runner-rs" / "src" / "hosts" / "hub_paths.rs"
 
 HAND_READ_PATHS = (
     "agent pair show",
-    "alerts show",
     "assistant change list",
     "automation guide",
     "automation list",
@@ -59,29 +59,13 @@ HAND_READ_PATHS = (
     "calendar search",
     "calendar status",
     "calendar upcoming",
-    "call list",
-    "call show",
     "catalog",
     "computers",
-    "contacts describe",
-    "contacts find",
-    "contacts get",
-    "contacts history",
-    "contacts rules",
-    "contacts self",
-    "contacts types",
     "context search",
     "context show",
     "conversation show",
     "credential list",
-    "doc history",
-    "doc list",
-    "doc read",
-    "doc search",
     "docs links",
-    "file list",
-    "file read",
-    "file search",
     "goal checkin list",
     "goals",
     "group list",
@@ -95,7 +79,6 @@ HAND_READ_PATHS = (
     "meeting granola status",
     "meeting read",
     "meeting search",
-    "needs-you show",
     "note list",
     "notes",
     "origin show",
@@ -174,13 +157,29 @@ PAID = ("gateway search", "gateway fetch", "gateway digest", "market ask", "feed
 # Spec'd reads that also mark something: their first call records a team date (`growth setup` records the first open and
 # the step dates, backend/growth_setup.py), so the runner asks before running them.
 MARKS = ("growth setup",)
+# Spec'd reads the runner did not run without asking before they became specs, so the hand list left them out. They stay
+# out so the runner list does not widen; each one needs its own decision. `call token` mints a token, a POST that its
+# tool does not mark as a write; `file approved` reads a checkout file's bytes; the automation reads (and their
+# `automations` spellings) were never in the hand list; the others are Librarian and link reads.
+UNDECIDED = (
+    "call token",
+    "doc ask-status",
+    "doc link-list",
+    "file approved",
+    "automation question-sets",
+    "automation recent-runs",
+    "automation template",
+    "automations question-sets",
+    "automations recent-runs",
+    "automations template",
+)
 
 
 def read_paths():
     reads = set(HAND_READ_PATHS)
     for path, command in spec_paths().items():
         tools = [hubtools.BY_NAME[name] for name in (command.tool, *command.tools)]
-        if path in PAID or path in MARKS:
+        if path in PAID or path in MARKS or path in UNDECIDED:
             continue
         if not any(tool["writes"] or tool["local"] for tool in tools):
             reads.add(path)
