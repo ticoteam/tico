@@ -9,7 +9,7 @@ import json
 
 import pytest
 
-from backend import api_tools
+from backend import api_tools, tool_access
 from backend.auth import Identity
 from backend.store import Problem
 from backend.tests.helpers.api import get, headers, post, put  # noqa: F401  (fixture)
@@ -237,7 +237,10 @@ def test_support_staff_never_see_a_private_tool(api):
         tool_row = c.execute("SELECT * FROM tools WHERE id=?", (tid,)).fetchone()
         assert api_tools.visible(c, ana, tool_row, api.app.state.vault.admins) is True
         assert api_tools.visible(c, support, tool_row, api.app.state.vault.admins) is False
-        assert api_tools.may_set_audience(c, support, tool_row, api.app.state.vault.admins) is False
+        admins = api.app.state.vault.admins
+        assert not tool_access.may_change_access(
+            c, support, tool_access.tool(tool_row), action="audience", admins=admins
+        )
 
 
 def test_level_writes_by_the_owner_still_work_on_a_private_tool(api):

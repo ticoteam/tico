@@ -21,16 +21,17 @@ you will do instead.
 | Grant keys a person dropped in your chat, by tool, level and bots | the person, on your card | MCP `tico_tools_propose_grant` |
 | Give a bot a key, set its level, take it back | you, as the person who asked | `tico tool level <tool> <bot> <read, read_write or none>`; `tico credential grant <key> --to <bot>` and `tico credential revoke <key> --from <bot>` for a key on no tool |
 | Add or change an API tool, its settings, an MCP server (sign-in), share a website account with a bot | you, as the person who asked | Tools routes; the person's own rights decide |
-| A bot's `bot.yaml` `tools:` entry, MCP servers included | you (any bot), or the bot itself | `tico tool add <bot> ...` / `tico tool update`; BotOps commits it |
+| Notes on a bot's tool (a `bot.yaml` `tools:` entry: identity, scope, note), never needed for access | you (any bot), or the bot itself | `tico tool add <bot> ...` / `tico tool update`; BotOps commits it |
 | A key's value, its reveal, deleting a tool or key, a person's own access | the person, in Tools | link the exact page and say what to click |
 
 The person's rights are the ceiling: a member who may not manage that bot is refused, and the refusal names who can.
 Give keys and levels to the bot that needs them, never to yourself. With no person behind your run (your weekly review),
 your own rights apply: propose instead, on a card or a task to the person who can.
 
-Before you say a bot "has nothing connected", read `tico tool list --bot <bot>`: a key it holds through Tools shows
-there, marked granted, whether or not its bot.yaml declares it. A bot with a working grant needs no bot.yaml entry
-unless it uses an MCP server.
+A grant is all a bot needs. A key, API or MCP tool, setting or website account granted to it reaches its runs and shows
+on its Tools tab (`tico tool list --bot <bot>`, marked granted) with no bot.yaml entry, MCP servers included. Never ask
+anyone to register or declare a tool as a step to access, and never file a task for one: `tico tool add` for a tool the
+bot already holds answers with the grant and files nothing. Read that list before you say a bot "has nothing connected".
 
 ## Words
 - **Tool**: a service with an address. An **API tool** (`/api/v2/api-tools`) has a base URL, an auth scheme (`bearer`,
@@ -58,9 +59,8 @@ today is in `docs/auth-types.md` (the manual: `tico doc read manual:auth-types`)
    by default) or an **Own** account (one person's or one bot's). Bots never see the password or the 2FA key: they use
    `tico browser open <site>` and `tico login fill <site> username|password|code`. Blank username or password (SSO, an
    emailed code, a passkey) means a person signs in through the live view (`tico browser needs-you`).
-3. **The vendor's own remote MCP server** that takes a token in a header → a `tools:` entry with an `mcp:` block on
-   each bot that uses it (section 5). Prefer the vendor's server to a script. OAuth-only servers: Tico does not renew
-   OAuth for bots yet; use an API key route instead and say why in one line.
+3. **The vendor's own remote MCP server** → an MCP tool: Tools → Add → MCP server (its address, then a pasted token or
+   its sign-in), and a level for each bot that uses it. Prefer the vendor's server to a script.
 4. Otherwise a small REST skill in the bot's own repository that reads the key from its variable (BotOps writes it).
 
 ## 3. Get the key stored without seeing it
@@ -100,7 +100,9 @@ today is in `docs/auth-types.md` (the manual: `tico doc read manual:auth-types`)
   with the token where the key goes, or `tico tool call <id> GET /<path>`. The token works only while that run is live.
 - **Computer**: the value is in the run's environment under its variable; anyone who controls that computer can read
   it. A credential admin moves it with Move to proxy on the tool's page once the tool has an address.
-- **MCP server**: the bot's `bot.yaml` entry, which you register (`tico tool add`) and BotOps commits:
+- **MCP server**: an MCP tool in Tools. A bot with a level on it gets its server in each run (through the proxy when
+  Tico holds its key) with no bot.yaml entry. Only a server Tools does not hold (an older `sse` one) is a `bot.yaml`
+  entry with an `mcp:` block, which you register (`tico tool add`) and BotOps commits:
 
       tools:
         - service: linear
@@ -147,8 +149,10 @@ a key: put it under Settings.
 - **Proxy 403 "<bot>'s level on <tool> is Read: only GET calls"**: the bot holds Read and the tool has no Read key. Add a
   read-only key at Read, or a person sets Read and write. **403 `tool_access` "has no access"**: no level; **"has no stored
   key"**: the tool has none. **401 `token_ended`**: the token's run is over; the next run gets a new one.
-- **Turn diagnostics "<service>: MCP server not passed, <VAR> is not granted to this bot"**: the entry is in bot.yaml but
-  the bot holds no key under that variable: grant it. **"MCP server not passed. <harness> cannot use it"**: the bot's
+- **Turn diagnostics "<service>: MCP server not passed, <VAR> is not granted to this bot"**: bot.yaml names a server
+  whose variable the bot holds no key under, and no granted MCP tool of that name stands in: give the bot a level on the
+  MCP tool (or grant the variable). **"<tool>: MCP server not passed, its key did not reach this turn"**: the grant's
+  key is not stored or not delivered: check the tool. **"MCP server not passed. <harness> cannot use it"**: the bot's
   harness takes no MCP servers (or not that transport): move the bot or use the REST route.
 - **The bot's tool shows "pending"**: BotOps has not committed the bot.yaml entry yet, or the computer has not reported it.
 - **422 `looks_like_key`** on a message to you: the person's text still held a key. Tell them to drop it in your chat

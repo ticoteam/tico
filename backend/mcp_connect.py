@@ -46,6 +46,7 @@ from pydantic import Field, SecretStr
 
 from . import egress, mcp_client, outbound_tls
 from . import store as _store
+from . import tool_access as TA
 from . import tool_services as _tool_services
 from .models import Contract
 from .store import Problem, encode
@@ -670,9 +671,9 @@ class McpCreate(Contract):
 
 def create(c: Any, who: Any, vault: Any, body: McpCreate, found: Json, meta: Json | None) -> Json:
     """The tool, on the proxy, with its key when it is a token. An OAuth tool's sign-in comes after (`start`)."""
-    api_tools = _api()
-    api_tools.require_admin(c, who, vault.admins)
+    TA.require(c, who, TA.tool(), action=TA.CREATE, admins=vault.admins, auth=vault.auth)
     name = body.name.strip()
+    api_tools = _api()
     tid = api_tools._unique_id(c, TS.slug(name))
     service = TS.match(name=name) or ""
     header = body.header.strip()
@@ -763,7 +764,7 @@ def start(store: Any, vault: Any, settings: Any, who: Any, tool_id: str) -> dict
 
     with store.read() as c:
         validate_identity(c, who)
-        api_tools.require_admin(c, who, vault.admins)
+        TA.require(c, who, TA.tool(), action=TA.EDIT, admins=vault.admins, auth=vault.auth)
         tool = api_tools._readable(c, who, tool_id, vault.admins)
     if not tool["mcp_url"] or not _meta(tool):
         raise Problem("sign_in", f"{tool['name']} has no sign-in. Add a token in Tools > {tool['name']} > Keys", 409)
@@ -845,12 +846,10 @@ def install(app: Any, store: Any) -> None:
     def admin(request: Request) -> Any:
         validate_identity: Any = _auth().validate_identity
 
-        api_tools = _api()
-
         who = request.state.identity
         with store.read() as c:
             validate_identity(c, who)
-            api_tools.require_admin(c, who, vault().admins)
+            TA.require(c, who, TA.tool(), action=TA.EDIT, admins=vault().admins, auth=vault().auth)
         return who
 
     @app.post("/api/v2/mcp-tools/probe")

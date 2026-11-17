@@ -632,8 +632,8 @@ STABLE = [
         "get",
         "Bots",
         "listBotTools",
-        "The tools a bot uses, for the row at the top of its page: its model and harness, its repository and each "
-        "declared `access:` entry, with its status; names and verbs, never a secret",
+        "The tools a bot uses, for the row at the top of its page: its model and harness, its repository, each "
+        "declared `tools:` entry and each tool granted to it in Tools, with its status; names and verbs, never a secret",
         "BotTools",
     ),
     (
@@ -641,8 +641,9 @@ STABLE = [
         "post",
         "Bots",
         "registerBotTool",
-        "Register a tool for a bot you manage: validated, kept as a pending request and handed to BotOps as a task with the "
-        "exact `access:` entry. Never a credential: `env` is a variable's name",
+        "Add a note entry for a bot you manage: validated, kept as a pending request and handed to BotOps as a task with the "
+        "exact `tools:` entry. One that only names a tool the bot already holds through a grant opens no task. Never a "
+        "credential: `env` is a variable's name",
         "BotToolRegistered",
     ),
     (
@@ -3392,7 +3393,14 @@ SCHEMAS = {
             "`status` from the runner's cheap check (reachable, auth_failed, unreachable, unchecked). Never the headers",
         },
     ),
-    "BotToolRegistered": obj({"tool": ref("BotTool"), "task_id": "s", "yaml": "s", "credentials": "s"}),
+    "BotToolRegistered": obj(
+        {"tool": ref("BotTool"), "task_id": "n", "yaml": "s", "credentials": "s"},
+        granted={
+            "type": "boolean",
+            "description": "The bot already holds this tool through a grant in Tools: no entry is needed, so no task "
+            "was opened (`task_id` null) and `tool` is the granted row",
+        },
+    ),
     "BotToolUpdated": obj(
         {"task_id": "s", "yaml": "s", "credentials": "s"},
         required=["task_id"],

@@ -10,6 +10,10 @@ the Tools Owner named on the delegation (`by`). The Assistant already writes as 
 the Tools changes its turn may make on the person's cited words (`assistant.admits_on_turn`), where the rest of the
 credential routes stay on its NEVER list. Neither ever reads, stores or repeats a value: a body that carries one is
 refused (`botops_act.secret_in_request`), and a value reaches the vault only through the person's own key card.
+
+This module says which calls are lent and to whom; whether the change itself is allowed is the one rule every Tools
+write follows (backend/tool_access.py `may_change_access`), with the person's rights and `via` as its inputs: the
+built-in that acted is never given a key itself, and through the Tools Owner a person's own access stays their tap.
 """
 
 import re
@@ -81,15 +85,6 @@ def for_bots_only(method: str, path: str, body: Body) -> bool:
     if re.fullmatch(API + rf"credentials/{_S}/grants", path):
         return subject.startswith("bot:")
     return True
-
-
-def to_itself(c: Any, agent: str, path: str, body: Body) -> bool:
-    """Whether a grant or level change is for `agent` itself: the Tools Owner connects keys for others and holds none."""
-    subject = subject_of(path, body)
-    if not subject.startswith("bot:"):
-        return False
-    found: Any = H.resolve_bot(c, subject) or {}
-    return "bot:" + str(found.get("id") or H.actor_id(subject)) == agent
 
 
 def tools_owner(c: Any) -> str | None:

@@ -36,6 +36,7 @@ from pydantic import ConfigDict, Field, SecretStr
 
 from . import api_tools as api_tools_module
 from . import credentials as credentials_module
+from . import tool_access as TA
 from . import tool_services as TS
 from . import totp as T
 from .models import ID, AccessAudience, Contract
@@ -239,8 +240,21 @@ def _admin(c: Any, who: Any, admins: Iterable[str] | None = None) -> bool:
 
 
 def _require_admin(c: Any, who: Any, admins: Iterable[str]) -> None:
-    if not _admin(c, who, admins):
-        raise Problem("forbidden", "Ask a credential administrator to make this change in Tools.", 403)
+    """Changing a website tool, or a group's access: the one rule (backend/tool_access.py), in this page's words."""
+    TA.require(
+        c,
+        who,
+        TA.tool(),
+        action=TA.EDIT,
+        admins=admins,
+        refused="Ask a credential administrator to make this change in Tools.",
+    )
+
+
+def _may_manage(c: Any, who: Any, account: Any, admins: Iterable[str] | None = None, auth: Any = None) -> bool:
+    """Replace or remove this account (backend/tool_access.py): a credential administrator, or its holder (a person, or
+    a person who manages the bot that holds it)."""
+    return TA.may_change_access(c, who, TA.account(account), action=TA.EDIT, admins=_admins(admins), auth=_auth(auth))
 
 
 def _person(who: Any) -> bool:
@@ -399,13 +413,6 @@ def _manages(c: Any, who: Any, subject: str, auth: Any = None) -> bool:
     )
 
 
-def can_manage(c: Any, who: Any, account: Any, admins: Iterable[str] | None = None, auth: Any = None) -> bool:
-    """A credential administrator, or (an own account) its holder or a person who manages the bot that holds it."""
-    if _admin(c, who, admins):
-        return True
-    return bool(account["holder"]) and _manages(c, who, account["holder"], auth)
-
-
 def _bot_user_managed(c: Any, who: Any, account: Any, auth: Any = None) -> bool:
     """`who` manages a bot that uses the account, directly, through a granted group or through All bots."""
     users = set(_users(c, account))
@@ -517,7 +524,7 @@ def picked_account(
     account = _account(conn, tool_id, account_id)
     if not (
         can_use(conn, who.actor, account)
-        or can_manage(conn, who, account, admins, auth)
+        or _may_manage(conn, who, account, admins, auth)
         or (_bot_user_managed(conn, who, account, auth) and _asked(conn, who.actor, tool["id"], account["id"]))
     ):
         raise Problem(
@@ -752,7 +759,7 @@ def _account_view(
 ) -> dict[str, Any] | None:
     """An account as the caller may see it, or None: a non-admin sees only the accounts they use or manage."""
     uses = can_use(c, who.actor, account)
-    manages = can_manage(c, who, account, admins, auth)
+    manages = _may_manage(c, who, account, admins, auth)
     if not (admin or uses or manages):
         return None
     holder = account["holder"] or None
@@ -890,7 +897,7 @@ def detail(c: Any, who: Any, tool_id: str, admins: Iterable[str] | None = None, 
         "private": tool["audience"] is not None,
         "can_set_audience": False,
     }
-    if api_tools.may_set_audience(c, who, tool, list(_admins(admins)), auth):
+    if TA.may_change_access(c, who, TA.tool(tool), action=TA.AUDIENCE, admins=list(_admins(admins)), auth=auth):
         out.update(
             can_set_audience=True,
             audience=api_tools.audience_of(tool),
@@ -1099,12 +1106,15 @@ def add_account(
     themselves or a bot they manage. One own account per holder per tool."""
     tool = _readable(c, who, tool_id, admins, auth)
     holder = _holder(c, body.holder)
-    if not (_admin(c, who, admins) or (holder and _manages(c, who, holder, auth))):
-        raise Problem(
-            "forbidden",
-            "Ask a credential administrator to add a shared account, or add your own account or one for a bot you manage.",
-            403,
-        )
+    TA.require(
+        c,
+        who,
+        TA.Resource(TA.ACCOUNT, "", {"holder": holder}),
+        action=TA.CREATE,
+        admins=admins,
+        auth=_auth(auth),
+        refused="Ask a credential administrator to add a shared account, or add your own account or one for a bot you manage.",
+    )
     if (
         holder
         and c.execute(
@@ -1161,8 +1171,15 @@ def update_account(
     Whoever may manage the account."""
     tool = _readable(c, who, tool_id, admins, auth)
     account = _account(c, tool["id"], account_id)
-    if not can_manage(c, who, account, admins, auth):
-        raise Problem("forbidden", "Ask a credential administrator or the account's holder to replace this login.", 403)
+    TA.require(
+        c,
+        who,
+        TA.account(account),
+        action=TA.EDIT,
+        admins=admins,
+        auth=_auth(auth),
+        refused="Ask a credential administrator or the account's holder to replace this login.",
+    )
     totp_set = "totp" in body.model_fields_set
     changed_secret = body.password is not None or totp_set
     username = account["username"] if body.username is None else body.username.strip()
@@ -1207,10 +1224,15 @@ def update_account(
 def delete_account(c: Any, who: Any, tool_id: str, account_id: str, admins: Iterable[str], auth: Any) -> dict[str, Any]:
     tool = _readable(c, who, tool_id, admins, auth)
     account = _account(c, tool["id"], account_id)
-    if not can_manage(c, who, account, admins, auth):
-        raise Problem(
-            "forbidden", "Ask a credential administrator or the account's holder to remove this account.", 403
-        )
+    TA.require(
+        c,
+        who,
+        TA.account(account),
+        action=TA.DELETE,
+        admins=admins,
+        auth=_auth(auth),
+        refused="Ask a credential administrator or the account's holder to remove this account.",
+    )
     api_tools._drop_key(c, who, account["id"])
     _close(str(account["id"]))
     with _spent_lock:
@@ -1239,16 +1261,30 @@ def set_access(
             409,
         )
     if subject == vaults.BOTS:
-        if not _admin(c, who, admins):
-            raise Problem("forbidden", "Ask a credential administrator to change All bots access.", 403)
+        TA.require(
+            c,
+            who,
+            TA.account(account),
+            subject,
+            TA.GRANT,
+            admins=admins,
+            refused="Ask a credential administrator to change All bots access.",
+        )
     else:
         subject = str(api_tools.subject_of(c, subject))
     if subject != vaults.BOTS and not subject.startswith(("human:", "bot:", GROUP)):
         raise Problem("subject", "Choose a registered person, bot or group.", 422)
     if subject.startswith(GROUP):
         # Only a credential administrator gives a group a login or takes it away, either way before anything changes.
-        if not _admin(c, who, admins):
-            raise Problem("forbidden", "Ask a credential administrator to change access to this account.", 403)
+        TA.require(
+            c,
+            who,
+            TA.account(account),
+            subject,
+            TA.GRANT,
+            admins=admins,
+            refused="Ask a credential administrator to change access to this account.",
+        )
         if subject[len(GROUP) :] not in _org_groups(c):
             raise Problem("subject", "Choose a registered person, bot or group.", 422)
     if not on and subject.startswith("bot:") and all_bots(c, account):
@@ -1262,7 +1298,7 @@ def set_access(
                 (account["id"], subject),
             ).fetchall()
             for grant in grants:
-                vault.revoke_authority(c, who, account["id"], grant)
+                TA.require(c, who, TA.key(account["id"], grant), action=TA.REVOKE, admins=admins, auth=_auth(auth))
             api_tools._revoke(c, who, account["id"], subject)
             if grants:
                 _close(str(account["id"]))

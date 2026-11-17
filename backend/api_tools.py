@@ -71,7 +71,8 @@ from pydantic import ConfigDict, Field, SecretStr
 from . import mcp_connect
 from . import tool_services as TS
 from . import tool_settings
-from .credentials import CredentialWrite, administrator, effective_grant, owned, require_admin
+from . import tool_access as TA
+from .credentials import CredentialWrite, administrator, effective_grant, owned
 from .models import AccessAudience, Contract
 from .store import H, Problem, encode
 
@@ -478,13 +479,6 @@ def _readable(c, who, tool_id, admins, auth=None, kind="api"):
     return tool
 
 
-def may_set_audience(c, who, tool, admins, auth=None):
-    """The owner, or a credential administrator who can see the tool now."""
-    if getattr(who, "role", "") == "owner" and not getattr(who, "support", None):
-        return True
-    return _admin(c, who, admins) and visible(c, who, tool, admins, auth)
-
-
 def _initials(name):
     words = [w for w in re.split(r"[\s._@-]+", str(name or "")) if w]
     return "".join(w[0] for w in words[:2]).upper() or "?"
@@ -763,7 +757,7 @@ def detail(c, who, tool_id, admins, auth=None):
         "can_set_audience": False,
         "mcp": mcp_connect.view(c, tool, keys) if _field(tool, "mcp_url") else None,
     }
-    if may_set_audience(c, who, tool, admins, auth):
+    if TA.may_change_access(c, who, TA.tool(tool), action=TA.AUDIENCE, admins=admins, auth=auth):
         out.update(can_set_audience=True, audience=audience_of(tool), seen_by=seen_by(c, tool, auth))
     return out
 
@@ -1094,7 +1088,7 @@ def _clean(fields):
 
 
 def create_tool(c, who, body, admins):
-    require_admin(c, who, admins)
+    TA.require(c, who, TA.tool(), action=TA.CREATE, admins=admins)
     fields = _clean(body.model_dump())
     service = TS.match(service=fields["service"], name=fields["name"])
     known = TS.defaults(service)
@@ -1126,7 +1120,7 @@ def update_tool(c, who, tool_id, body, admins, auth=None):
     asked = body.model_dump(exclude_none=True, exclude={"audience"})
     audience_set = "audience" in body.model_fields_set
     if asked or not audience_set or getattr(who, "role", "") != "owner":
-        require_admin(c, who, admins)
+        TA.require(c, who, TA.tool(), action=TA.EDIT, admins=admins, auth=auth)
     tool = dict(_readable(c, who, tool_id, admins, auth))
     if audience_set:
         set_audience(c, who, tool, body.audience.model_dump() if body.audience is not None else None, admins, auth)
@@ -1208,12 +1202,7 @@ def set_audience(c, who, tool, value, admins, auth=None):
     `tool.audience_changed` with the before and after."""
     from . import teammate_access
 
-    if not may_set_audience(c, who, tool, admins, auth):
-        raise Problem(
-            "forbidden",
-            f"Only the owner, or a credential administrator who can see it, changes who can see {tool['name']}",
-            403,
-        )
+    TA.require(c, who, TA.tool(tool), action=TA.AUDIENCE, admins=admins, auth=auth)
     stored = None
     if value is not None:
         level = teammate_access.parse_audience(c, value)
@@ -1253,7 +1242,7 @@ def forget_audience_member(c, actor, field, ident):
 def delete_tool(c, who, tool_id, admins, kind="api"):
     """The tool, its checks and calls, and its keys with their grants: a key belongs to its tool (a website tool's
     accounts too)."""
-    require_admin(c, who, admins)
+    TA.require(c, who, TA.tool(), action=TA.DELETE, admins=admins)
     tool = _readable(c, who, tool_id, admins, kind=kind)
     keys = [k["id"] for k in _keys(c, tool_id)]
     refuse_finance_key(c, keys)  # before anything goes
@@ -1284,7 +1273,7 @@ def _taken(tool, level):
 
 def add_key(c, who, vault, tool_id, body):
     """A new key for the tool at its level, stored by the vault under the tool's variable."""
-    require_admin(c, who, vault.admins)
+    TA.require(c, who, TA.tool(tool_id=tool_id), action=TA.EDIT, admins=vault.admins, auth=vault.auth)
     tool = _readable(c, who, tool_id, vault.admins)
     if _key_at(c, tool_id, body.access_level):
         raise _taken(tool, body.access_level)
@@ -1388,7 +1377,7 @@ def _tool_key(c, tool_id, key_id):
 
 
 def update_key(c, who, vault, tool_id, key_id, body):
-    require_admin(c, who, vault.admins)
+    TA.require(c, who, TA.tool(tool_id=tool_id), action=TA.EDIT, admins=vault.admins, auth=vault.auth)
     tool = _readable(c, who, tool_id, vault.admins)
     key = _tool_key(c, tool_id, key_id)
     if (
@@ -1427,7 +1416,7 @@ def update_key(c, who, vault, tool_id, key_id, body):
 
 
 def delete_key(c, who, vault, tool_id, key_id):
-    require_admin(c, who, vault.admins)
+    TA.require(c, who, TA.tool(tool_id=tool_id), action=TA.EDIT, admins=vault.admins, auth=vault.auth)
     _readable(c, who, tool_id, vault.admins)
     key = _tool_key(c, tool_id, key_id)
     _drop_key(c, who, key["id"])
@@ -1446,8 +1435,17 @@ def _revoke(c, who, key_id, subject):
 
 def set_level(c, who, vault, tool_id, subject, level):
     """Give `subject` Read, Read and write or no access: grant the one key that level uses, at that level, and take the
-    subject's grants on the tool's other keys away first (one value per variable per run)."""
-    require_admin(c, who, vault.admins)
+    subject's grants on the tool's other keys away first (one value per variable per run). One rule
+    (backend/tool_access.py): an administrator's, and through the Tools Owner never a person's own access."""
+    TA.require(
+        c,
+        who,
+        TA.tool(tool_id=tool_id),
+        subject,
+        TA.GRANT if level != "none" else TA.EDIT,
+        admins=vault.admins,
+        auth=vault.auth,
+    )
     tool = _readable(c, who, tool_id, vault.admins)
     subject = subject_of(c, subject)
     if not subject.startswith(("bot:", "human:")):
@@ -1827,7 +1825,7 @@ def install(app, store, auth, settings):
         )
 
     def manager(c, w):
-        require_admin(c, w, vault().admins)
+        TA.require(c, w, TA.tool(), action=TA.EDIT, admins=vault().admins, auth=auth)
 
     @app.get("/api/v2/tool-index")
     def tool_index(
@@ -1858,7 +1856,7 @@ def install(app, store, auth, settings):
 
     def setter(c, w):
         if w.role != "owner":  # the owner may change Who can see it (update_tool says what else)
-            require_admin(c, w, vault().admins)
+            TA.require(c, w, TA.tool(), action=TA.EDIT, admins=vault().admins, auth=auth)
 
     @app.patch("/api/v2/api-tools/{tool_id}")
     def update_api_tool(request: Request, tool_id: str, body: ToolUpdate):

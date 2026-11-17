@@ -94,10 +94,11 @@ def tools_report(api, args):
 
 @tool(
     "tico_tool_add",
-    "Register a tool for yourself, or (the Tools Owner, BotOps, a credential admin, a person who manages it) for any bot: a `tools:` entry for its bot.yaml. The server checks "
-    "it and opens a task with the exact YAML for BotOps, or for an External agent profile to configure itself. The tool stays pending until a tool report lists "
-    "it. Names and verbs only: never a Credential value. `env` names a stored Credential granted to the bot. To give the bot a vendor's remote MCP server, add `mcp_url`, `transport` and `headers` (the "
-    "credential is a ${VAR} placeholder for `env`).",
+    "Add a note on a tool for yourself, or (the Tools Owner, BotOps, a credential admin, a person who manages it) for any bot: a `tools:` entry for its bot.yaml. "
+    "A tool granted in Tools already reaches the bot's runs and shows on its Tools tab with no entry: an entry that only names one is answered with the grant and "
+    "opens no task. Otherwise the server checks it and opens a task with the exact YAML for BotOps, or for an External agent profile to configure itself; it stays "
+    "pending until a tool report lists it. Names and verbs only: never a Credential value. To give the bot a vendor's remote MCP server Tools does not hold, add "
+    "`mcp_url`, `transport` and `headers` (the credential is a ${VAR} placeholder for `env`).",
     {
         "bot": _s("The bot's slug"),
         "service": _s("A short name such as posthog or google-calendar"),

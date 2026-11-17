@@ -423,6 +423,22 @@ pub fn granted(items: &Value, server: &str, held: &BTreeSet<String>) -> (Vec<Val
     (servers, problems)
 }
 
+/// `problems` without the bot.yaml servers left out for a variable the bot does not hold whose name a granted MCP
+/// tool's server takes: `merge` passes the granted one, so a grant alone is enough and nothing is missing.
+pub fn drop_covered(problems: Vec<String>, tools: &Value, granted: &[Value]) -> Vec<String> {
+    let names: HashSet<String> = granted.iter().map(|s| text_of(&s["name"])).collect();
+    let covered: Vec<String> = declared(tools)
+        .iter()
+        .map(|(entry, _)| service_of(entry))
+        .filter(|service| names.contains(&server_name(service)))
+        .map(|service| format!("{service}: MCP server not passed, "))
+        .collect();
+    problems
+        .into_iter()
+        .filter(|p| !covered.iter().any(|c| p.starts_with(c.as_str())))
+        .collect()
+}
+
 /// bot.yaml's servers, then each granted one whose name bot.yaml does not already use: bot.yaml wins on a name.
 pub fn merge(mut servers: Vec<Value>, granted: &[Value]) -> Vec<Value> {
     for s in granted {
