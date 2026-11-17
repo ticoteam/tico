@@ -31,7 +31,7 @@ from typing import Any
 
 from pydantic import SecretStr
 
-from . import hubdb
+from . import hubdb, task_engine
 from . import reconnects as _reconnects
 from .store import Problem as _Problem
 
@@ -288,11 +288,11 @@ def close(c: Any, tool_id: str, why: str, done: bool = True) -> Row:
     if not task:
         return None
     RC.settle(c, task["id"], key_of(tool_id), "fixed" if done else "retired")
+    if done and (task_engine.stage(c, task["stage_id"]) or {}).get("side"):
+        return None
     try:
         if done:
-            after = H.task_done(c, H.KEEPER, task["id"], why)
-            if after["stage"].get("side"):
-                return None
+            H.task_done(c, H.KEEPER, task["id"], why)
         else:
             H.task_close(c, H.KEEPER, task["id"], why)
     except H.Refused:

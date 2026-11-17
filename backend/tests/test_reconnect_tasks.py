@@ -146,6 +146,8 @@ def test_the_working_health_check_leaves_a_reconnect_task_in_its_side_stage(api,
 
     answer.reply = api_tools.Reply(200)
     assert post(api, f"api-tools/{tid}/check", {})["detail"] == "Working"
+    wait, updated_request = card(api, task["id"])
+    assert (wait["ended"], updated_request["id"], updated_request["status"]) == ("fixed", request["id"], "saved")
     with api.app.state.store.read() as c:
         after = E.task(c, task["id"])
         assert (after["status"], after["visit"]["id"], after["version"]) == (
@@ -153,10 +155,10 @@ def test_the_working_health_check_leaves_a_reconnect_task_in_its_side_stage(api,
             held["visit"]["id"],
             held["version"],
         )
-        assert c.execute("SELECT status FROM credential_requests WHERE id=?", (request["id"],)).fetchone()[0] == "saved"
         assert not c.execute(
             "SELECT 1 FROM events WHERE action='tool.reconnect_task_closed' AND target=?", (tid,)
         ).fetchone()
+        assert not c.execute("SELECT 1 FROM refusals WHERE rule='task_side_stage'").fetchone()
 
 
 def test_proxied_calls_open_it_after_rejections_in_a_row_and_a_2xx_ends_it(api):

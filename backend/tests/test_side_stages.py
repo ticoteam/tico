@@ -165,12 +165,13 @@ def test_next_from_a_side_stage_goes_to_the_first_main_stage_after_it(c):
     assert _move(c, row["id"], E.NEXT, ANA)["stage"]["name"] == "Release ready"
 
 
-def test_done_and_advance_leave_a_side_stage_in_place_but_a_rule_can_move_it(c):
+def test_done_refuses_and_advance_leaves_a_side_stage_in_place_but_a_rule_can_move_it(c):
     _pipeline(c)
     task_id = X.new_task(c, ANA, "Build the importer", "eng")["id"]
     held = _move(c, task_id, "Rejected", BUILDER)
 
-    assert H.task_done(c, H.KEEPER, task_id) == held
+    with pytest.raises(H.Refused, match="task_side_stage"):
+        H.task_done(c, REVIEWER, task_id, seen_version=held["version"])
     assert E.advance(c, task_id) is None
     assert E.task(c, task_id) == held
 

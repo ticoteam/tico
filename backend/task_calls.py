@@ -203,7 +203,7 @@ def task_done(
     "owner says done" and that is not met, whoever may say so (the owner, the pipeline's manager, a person, the
     engine) answers it, and the engine moves the task on once everything else is met: in the last stage, to Done.
     Otherwise it is a forward move with no reason, refused with what is missing while anything is. To go on anyway is
-    `task_move(NEXT, why=...)`. A task in a side stage stays there until an explicit move."""
+    `task_move(NEXT, why=...)`. A side stage refuses this call and requires an explicit move."""
     from . import task_engine as E
     from . import answers as A
     from . import task_requirements as R
@@ -212,9 +212,18 @@ def task_done(
     row = E.task(conn, task_id)
     if not row:
         _refuse(conn, actor, "not-found", "No such task")
-    if row["status"] == "done" or (row["status"] == "open" and row["stage"].get("side")):
+    if row["status"] == "done":
         return row
     if row["status"] == "open":
+        if row["stage"].get("side"):
+            _refuse(
+                conn,
+                actor,
+                "task_side_stage",
+                f"This task is in a side stage ({row['stage']['name']}). Move it with "
+                f'`tico task move {task_id} --to "{row["pipeline_id"]}/<stage>" --version {row["version"]}`.',
+                task_id,
+            )
         from . import question_marks
 
         question_marks.refuse_ending(conn, actor, task_id)  # a bot's own open ❓ here waits for its reply
