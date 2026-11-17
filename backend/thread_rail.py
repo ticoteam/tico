@@ -34,7 +34,6 @@ CATCH_UP_CLIP = 500  # a message too big for what is left of the page goes witho
 CATCH_UP_READS = 5  # batches of candidate messages one item reads whole, at most
 CATCH_UP_HIDDEN = 2000  # messages that can hide, read whole in one walk to prove each root has a new one to show
 CATCH_UP_COUNTED = 2000  # messages that can hide, read whole to count the new messages of the items one load shows
-WALK_ROUNDS = (1, 5, 21)  # a root still unproved has its hidden messages checked up to these places, a round each
 COUNT_ROUNDS = 4  # rounds `_count_exact` shares CATCH_UP_COUNTED over, at most
 CATCH_UP_SCAN = 1000  # roots one Catch up looks at, over all its pages
 CATCH_UP_BATCH = 100  # roots read and checked together
@@ -738,37 +737,64 @@ def _hidden_window(c, v, hidden, low, high, most):
     return [(root_of[r["id"]], r) for r in rows]
 
 
-def _readable_new(c, v, roots, left):
+def _after_round(waiting, low, rows, found=()):
+    """`waiting` ({root id: {thread id: messages that can hide}}) after a round that read `rows` from place `low` on:
+    the threads that still hold unread places, under the roots not yet `found`, and whether every thread read its whole
+    share (False when the round's budget cut it short)."""
+    got = {}
+    for _, r in rows:
+        got[r["conversation_id"]] = got.get(r["conversation_id"], 0) + 1
+    out = {}
+    for root, ts in waiting.items():
+        if root in found:
+            continue
+        rest = {t: n for t, n in ts.items() if n > low + got.get(t, 0)}
+        if rest:
+            out[root] = rest
+    return out, got
+
+
+def _readable_new(c, v, roots, left, later=0):
     """{root id: (new messages the reader may read, at least; whether that is every one)} for Catch up's walk, which
-    only asks whether a root has one. A root with a plain new message has it; any other is checked a message at a time
-    (oldest first, in rounds of 1, then 4, then 16 a thread, every root getting its turn before any gets more), until one
-    passes. `left` ([checks left]) is the walk's budget, CATCH_UP_HIDDEN over all its batches; a root still unproved when
-    it runs out is left out and logged (`catch_up_unchecked`)."""
+    only asks whether a root has one. A root with a plain new message has it; any other is checked a message at a time,
+    oldest first, in rounds of 1, 4, 16, ... places a sub-thread, every root having its turn before any has more, until
+    one passes or every message that can hide has been checked. `left` ([checks left]) is the walk's budget,
+    CATCH_UP_HIDDEN over all its batches, and `later` the roots a later batch could still bring: past a root's first check
+    one check each is kept for them, so every root of the walk gets its first check before any root gets more. A root still unproved when the budget runs out is left
+    out and recorded (`catch_up_unchecked`, in the flight recorder's events)."""
     sure, hidden = _unread_groups(c, v, roots)
     out = {r: (n, r not in hidden) for r, n in sure.items()}
-    waiting = {r: t for r, t in hidden.items() if not sure.get(r)}
-    found, low = {}, 0
-    for high in WALK_ROUNDS:
-        if not waiting or left[0] <= 0:
+    waiting = {r: dict(t) for r, t in hidden.items() if not sure.get(r)}
+    found, low, size = set(), 0, 1
+    while waiting:
+        # A root's first check always goes; a further round keeps one check for each root a later batch could bring.
+        spend = left[0] - (later if low else 0)
+        if spend <= 0:
             break
-        rows = _hidden_window(c, v, waiting, low, high, left[0])
+        rows = _hidden_window(c, v, waiting, low, low + size, spend)
         left[0] -= len(rows)
         for root, r in rows:
             if root not in found and T.message_readable(c, v, r, thread_checked=True):
-                found[root] = 1
-        waiting = {r: t for r, t in waiting.items() if r not in found}
-        low = high
+                found.add(root)
+        if len(rows) >= spend:  # the budget ran out inside this round: what is still waiting stays unproved
+            waiting = {r: t for r, t in waiting.items() if r not in found}
+            break
+        waiting, _ = _after_round(waiting, low, rows, found)
+        low, size = low + size, size * 4
     for root in found:
         out[root] = (1, sum(hidden[root].values()) == 1)
-    if waiting and left[0] <= 0:
+    if waiting:
         log.warning("catch_up_unchecked reader=%s roots=%d", v.actor, len(waiting))
+        from . import flight
+
+        flight.note(c, "catch_up_unchecked", {"reader": v.actor, "roots": len(waiting)})
     return out
 
 
 def _count_exact(c, v, items):
     """Give these Catch up items (the cards on a page, the rail's Unread rows) their whole count: every new message of
     the subtree the reader may read, each message that can hide read whole for its check, CATCH_UP_COUNTED in all,
-    shared out evenly over the threads. An item whose count stops there keeps what was found and `partial` true."""
+    shared out evenly over the threads. An item whose count stops there keeps what was found and `exact` false."""
     todo = {it["row"]["id"]: it for it in items if not it.get("exact", True)}
     if not todo:
         return
@@ -777,21 +803,17 @@ def _count_exact(c, v, items):
     waiting = {r: dict(t) for r, t in hidden.items()}
     while waiting and left > 0 and rounds < COUNT_ROUNDS:
         rounds += 1
-        threads = sum(len(t) for t in waiting.values())
-        high = low + max(1, left // threads)
+        high = low + max(1, left // sum(len(t) for t in waiting.values()))
         rows = _hidden_window(c, v, waiting, low, high, left)
-        cut, left = len(rows) >= left, left - len(rows)
+        left -= len(rows)
         for root, r in rows:
             if T.message_readable(c, v, r, thread_checked=True):
                 counts[root] = counts.get(root, 0) + 1
-        if cut:
-            break  # the budget ran out inside this round: every thread still waiting stops short
-        # A thread is done once its places up to `high` hold every message that can hide in it.
-        waiting = {
-            r: {t: n for t, n in ts.items() if n > high}
-            for r, ts in waiting.items()
-            if any(n > high for n in ts.values())
-        }
+        before = waiting
+        waiting, got = _after_round(waiting, low, rows)
+        # A thread the budget cut short read fewer than its share: the round's places are not all read, so stop.
+        if any(got.get(t, 0) < min(n, high) - low for ts in before.values() for t, n in ts.items()):
+            break
         low = high
     for root, it in todo.items():
         n = counts.get(root, 0)
@@ -856,7 +878,8 @@ def _walk(c, v, flags, after=None):
             # A bot's Home counts only `_home_replies`, already checked: counting its messages again would spend the
             # per-message checks (and CATCH_UP_HIDDEN) on a number that is never used.
             bot_homes = {r["id"] for r in found if r and _is_bot_home(r, v)}
-            counts = _readable_new(c, v, [i for i in readable if i not in history and i not in bot_homes], left)
+            later = max(0, CATCH_UP_SCAN - scanned - len(found))  # roots a later batch could still bring
+            counts = _readable_new(c, v, [i for i in readable if i not in history and i not in bot_homes], left, later)
             for r in found:
                 scanned += 1
                 position = [int(r["activity"] or 0), r["id"]]
@@ -953,6 +976,8 @@ def catch_up(c, v, *, cursor=None, limit=CATCH_UP_LIMIT):
         if items and not messages and rest:
             more = True
             break
+        if head["new_count_partial"]:  # a count cut short is at least the messages the card shows
+            head["new_count"] = max(head["new_count"], len(messages))
         items.append({**head, "messages": messages, "more": rest})
         budget -= head_size + used
         tail = it
