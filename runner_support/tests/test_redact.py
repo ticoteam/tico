@@ -46,6 +46,8 @@ if __name__ == "__main__":
 
 # ---------------------------------------------------------------- git's own reason, safe to show
 APP_TOKEN = "ghs_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"
+# GitHub's stateless installation token (`ghs_<app id>_<JWT>`, the default since Oct 2026), synthetic.
+STATELESS_TOKEN = "ghs_4242_eyJhbGciOiJSUzI1NiJ9.eyJpaWQiOjc3LCJub25jZSI6InN5bnRoZXRpYyJ9." + "S1g-n_aTuRe" * 30
 
 
 @pytest.mark.parametrize(
@@ -97,6 +99,7 @@ def test_git_failure_masks_every_credential_shape_and_is_bounded():
         [
             f"fatal: unable to access 'https://user:{granted}@example.com/x.git/': The requested URL returned error: 403",
             f"error: {APP_TOKEN} and ghp_{'z' * 36} and {pat} were refused",
+            f"error: {STATELESS_TOKEN} was refused",
             "error: > Authorization: Basic eC1hY2Nlc3MtdG9rZW46c2VjcmV0c2VjcmV0",
             "error: helper said password=hunter2hunter2 and token=abc123def456",
         ]
@@ -105,6 +108,8 @@ def test_git_failure_masks_every_credential_shape_and_is_bounded():
     for secret in (
         granted,
         APP_TOKEN,
+        STATELESS_TOKEN,
+        STATELESS_TOKEN.split(".")[-1],
         pat,
         "ghp_" + "z" * 36,
         "eC1hY2Nlc3MtdG9rZW46c2VjcmV0c2VjcmV0",
