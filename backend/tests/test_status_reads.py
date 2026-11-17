@@ -218,7 +218,8 @@ def test_status_task_reads_skip_finished_tasks_come_back_as_one_row_and_keep_pri
             )
             E.move(c, task["id"], E.DONE if n % 2 else E.CLOSED, H.KEEPER, "Finished")
     after, more = read()
-    assert after == before and more == steps and steps
+    # Seeks move a step or two with the random ids of new rows; reading the 40 finished tasks costs far more than 5.
+    assert after == before and abs(more - steps) <= 5 and steps
 
     # Tico Team: the status task read stepped 1,100 rows a page (850 of them private tasks), each step the GIL given up
     # and taken back; with other requests running Python it took 100 ms to 1 s for 2 ms of SQLite work. The rows now
