@@ -6,6 +6,8 @@ with and a title (backend/app.py attach_visuals). Readers get a fresh `src` on /
 reader, the file, the version and an expiry, and every request on it (each range request too) checks again that the
 reader can still open the file. Nothing on that route reads or sets the app's cookies."""
 
+from fastapi import Request
+
 import base64
 import errno
 import hashlib
@@ -888,3 +890,35 @@ def _headers(rule, how="inline"):
         "Cache-Control": "private, no-cache, no-transform",
         "Content-Disposition": how,
     }
+
+
+def register(app, auth, settings, store):
+    def visual_view(c, who, rows):
+        """Messages with each visual as this reader sees it now: fresh addresses on /visuals (backend/visuals.py), on the
+        visual address or, in the fallback, the app's own (pictures, video and audio only)."""
+        return for_reader(app, settings, c, who, rows)
+
+    def visual_key():
+        return key_for(app, settings)
+
+    def visual_ancestors():
+        return ancestors(settings)
+
+    @app.api_route("/visuals/{token}", methods=["GET", "HEAD"], include_in_schema=False)
+    def visual(request: Request, token: str):
+        """A visual for inline display, apart from the app's sign-in: the signed token is the only credential, and
+        the reader it names is checked again on every request (each range request too)."""
+        return serve(
+            request,
+            store,
+            auth,
+            app.state.files,
+            app.state.blobs,
+            visual_key(),
+            visual_ancestors(),
+            token,
+            full=mode(settings) == "full",
+            visual_origin=settings.visual_origin,
+        )
+
+    return visual_view

@@ -8,6 +8,21 @@ checked as operation `threads` (a held one writes nothing but its hold, and Send
 operation), an edit as `threads_edit`. Every list is paged and byte-capped by the service function that makes it.
 """
 
+from . import views
+from . import ask_shape, question_marks
+from . import ask_ingest, strategy_bot
+from . import bot_home_merge
+from . import recipients as recipient_gate
+from . import holds
+from . import topic_change, usage_limits, bot_to_bot, visuals
+from . import task_privacy as privacy
+from . import models as M
+from . import rooms
+from . import updates
+from .store import encode
+from . import updates_routes
+from .api_contract import ASK_REFUSED
+
 import asyncio
 import json
 from typing import Annotated, Literal
@@ -516,7 +531,7 @@ def install(app, store, auth, mutate, rule_check):
         with store.read_transaction() as c:
             if with_actor:
                 return _shared(c, v, with_actor, cursor=cursor, limit=limit)
-            return threads.sidebar(c, v, cursor=cursor, limit=limit, sort=sort)
+            return threads.sidebar(c, v, cursor=cursor, limit=limit or 50, sort=sort)
 
     @app.get(
         "/api/v2/threads/search",
@@ -569,7 +584,7 @@ def install(app, store, auth, mutate, rule_check):
         Following one (PUT .../follow) puts it in the rail."""
         v = threads.viewer(auth, request.state.identity)
         with store.read_transaction() as c:
-            return thread_rail.browse(c, v, q=q, cursor=cursor, limit=limit)
+            return thread_rail.browse(c, v, q=q, cursor=cursor, limit=limit or thread_rail.BROWSE_LIMIT)
 
     @app.get(
         "/api/v2/threads/match",
@@ -618,7 +633,7 @@ def install(app, store, auth, mutate, rule_check):
         new messages in tree order. `count` (at most 99) is the badge. POST .../read-all reads one."""
         v = threads.viewer(auth, request.state.identity)
         with store.read_transaction() as c:
-            return thread_rail.catch_up(c, v, cursor=cursor, limit=limit)
+            return thread_rail.catch_up(c, v, cursor=cursor, limit=limit or thread_rail.CATCH_UP_LIMIT)
 
     @app.get(
         "/api/v2/threads/home/{actor}",
@@ -647,6 +662,7 @@ def install(app, store, auth, mutate, rule_check):
         with store.transaction() as c:
             _read_or_404(c, v, actor)
             row = threads.home(c, _home_owner(actor))
+            assert row is not None  # home() makes the Home when create is on
             return threads.get(c, v, row["id"])
 
     @app.get(
@@ -713,7 +729,7 @@ def install(app, store, auth, mutate, rule_check):
                 threads.viewer(auth, request.state.identity),
                 thread_id,
                 cursor=cursor,
-                limit=limit,
+                limit=limit or 50,
                 max_bytes=max_bytes,
                 flat=bool(flat),
             )
@@ -736,6 +752,7 @@ def install(app, store, auth, mutate, rule_check):
             v = threads.viewer(auth, request.state.identity)
             row = threads.require(c, v, thread_id)
             root = threads.root_of(c, row)
+            assert root is not None  # a thread's root is always one of its rows
             if root["id"] != row["id"]:
                 root = threads.require(c, v, root["id"])
             return {"bots": thread_bot_status.status(c, v, root)}
@@ -775,7 +792,7 @@ def install(app, store, auth, mutate, rule_check):
     def members(request: Request, thread_id: str, cursor: str | None = None, limit: int | None = None):
         with store.read() as c:
             return threads.members(
-                c, threads.viewer(auth, request.state.identity), thread_id, cursor=cursor, limit=limit
+                c, threads.viewer(auth, request.state.identity), thread_id, cursor=cursor, limit=limit or 100
             )
 
     @app.post(
@@ -1004,6 +1021,7 @@ def install(app, store, auth, mutate, rule_check):
                 return org_rule_check.held_answer(c, who, gate, auth=auth)
             reach.check_edit(c, who, message_id, body.text, viewer)
             edited = threads.edit_message(c, viewer, message_id, body.text)
+            assert edited is not None  # the message just edited
             return {**_thread_message(edited), **org_rule_check.answer(gate)}
 
         return mutate(request, body, work)
@@ -1042,7 +1060,7 @@ def install(app, store, auth, mutate, rule_check):
     def read_all(request: Request, thread_id: str, body: ReadAll | None = None):
         """Read up to now in the thread and every sub-thread under it (`ago_ms`: up to that long ago)."""
         who = request.state.identity
-        body = body or ReadAll()
+        body = body or ReadAll(ago_ms=None)
         return mutate(
             request, body, lambda c: threads.mark_all_read(c, threads.viewer(auth, who), thread_id, ago_ms=body.ago_ms)
         )
@@ -1294,6 +1312,7 @@ def install(app, store, auth, mutate, rule_check):
             if "id" not in posted:  # held: its files are in the hold's replay, linked when it is released
                 return posted
             message = _thread_message(H.message(c, posted["id"]))
+            assert message is not None  # the message just posted
             message["reply_to"] = threads.reply_quotes(c, v, [message]).get(message["id"])
             if way:
                 message = {**message, "sent_as": _sent_as(c, way, posted)}
@@ -1313,3 +1332,527 @@ def install(app, store, auth, mutate, rule_check):
 
     search_index()
     app.state.thread_index = search_index  # context search asks for the index before it reads
+
+
+def message_sender(app, auth, may_reference, routed_message, visual_view):
+    def check_refs(c, who, refs):
+        # Validate referenced objects rather than trusting an arbitrary ID in a payload.
+        H.check_message_refs(refs)
+        for kind, values in refs.items():
+            if kind in ("task", "task_id"):
+                # One task id, or a list of them (bots send `task:<id>` as a list); each must be one the caller can read.
+                # Anything else is refused here, before a SQL bind of it could fail.
+                items = values if isinstance(values, list) else [values]
+                if any(value and not isinstance(value, str) for value in items):
+                    raise Problem("reference", "A task reference is a task id or a list of task ids", 422)
+                for value in items:
+                    if value:
+                        auth.task(c, who, value)
+            elif kind == "live":
+                # A committed batch hands each bot its questions and instructions (backend/batch.py).
+                if not isinstance(values, dict) or values.get("kind") != "batch":
+                    raise Problem("reference", "A live reference on a chat message must be a batch", 422)
+            elif kind == "voice":
+                # Said aloud in a bot's voice mode: the runner asks for a short spoken answer first.
+                if values is not True:
+                    raise Problem("reference", "voice is true or absent", 422)
+            elif kind == "quiet":
+                # A batch's record for a bot (what was decided, nothing to act on) is read in the
+                # room, not run: no job is queued for it.
+                if values is not True or (refs.get("live") or {}).get("kind") != "batch":
+                    raise Problem("reference", "Only a batch record may be quiet", 422)
+            elif kind == "update":
+                # A reply to a bot's update (backend/updates.py): the update must exist.
+                if not isinstance(values, str) or not updates.one(c, values):
+                    raise Problem("reference", "Unknown update", 422)
+            elif kind == "automation":
+                # A chat about one automation (BotOps edits the one a person has open): the caller must be able to see it.
+                if not may_reference(c, who, values):
+                    raise Problem("reference", "Unknown automation", 422)
+            elif kind == "automations_filter":
+                # What the Automations page shows (range, tab, filters), so BotOps answers about that view; only words
+                # the asker typed or picked, never another person's data.
+                if not isinstance(values, dict) or len(json.dumps(values)) > 2000:
+                    raise Problem("reference", "automations_filter is a small object", 422)
+            elif kind != "turn_id":
+                raise Problem("reference", f"Unsupported reference kind: {kind}", 422)
+
+    def named_destination(c, who, body, create=True):
+        return recipient_gate.named_destination(c, who, body, auth, create=create)
+
+    def send(c, who, body):
+        body = routed_message(c, who, body)
+        check_refs(c, who, body.refs)
+        body = recipient_gate.require_recipient(c, who, body.to, body=body, auth=auth)
+        to, refs, conversation_id, way = body.to, body.refs, body.conversation_id, body.delivery
+        # Ride-along: a defer while the bot has a turn going in this chat goes in right after that turn.
+        if (
+            way == "defer"
+            and to.startswith("bot:")
+            and who.role != "bot"
+            and conversation_id
+            and delivery.running_in_session(c, H.actor_id(to), [conversation_id])
+        ):
+            way = "queue"
+        if to.startswith("bot:") and way == "queue":
+            refs["delivery"] = "queue"  # after the bot's running turn, not into it (execution.inputs)
+        if to.startswith("bot:") and way == "defer":
+            refs["quiet"] = True  # no job: the session's next turn, or its deadline, takes it
+        message = H.say(
+            c,
+            who.actor,
+            to,
+            body.text,
+            conversation_id=conversation_id,
+            kind=body.kind,
+            refs=refs,
+            in_reply_to=body.in_reply_to,
+            wait_s=body.wait_s,
+        )
+        recipient_gate.require_recipient(c, who, to, body=body, auth=auth, delivered=message)
+        due = None
+        if to.startswith("bot:") and way == "defer":
+            if who.role == "bot":
+                # A bot's deferred message rides with the recipient's next run of any kind, as a waiting
+                # bot-to-bot message does: its own DM may not see another turn.
+                task_ref = H._task_ref(refs.get("task"))
+                held_note = bot_to_bot.hold(c, message, H.task(c, task_ref) if task_ref else None)
+                due = delivery.defer(c, to, "note", held_note["id"], defer_for=body.defer_for)
+            else:
+                due = delivery.defer(
+                    c,
+                    to,
+                    "message",
+                    message["id"],
+                    conversation_id=message["conversation_id"],
+                    defer_for=body.defer_for,
+                )
+        from .chat_goals import current as current_chat_goal
+
+        goal = current_chat_goal(c, message["conversation_id"])
+        # Added to the stored references, so the marks H.say set (a bot_to_bot hold, quiet) stay (Dev 328).
+        if goal and goal["status"] == "active":
+            stored = {
+                **(message.get("refs") or {}),
+                "goal_context": {"id": goal["id"], "updated_at": goal["updated_at"]},
+            }
+            c.execute("UPDATE messages SET refs=? WHERE id=?", (encode(stored), message["id"]))
+            message = H.message(c, message["id"])
+            assert message is not None  # the message just stored
+        if body.attachments:
+            # The visuals go on the message it was sent as: versions of files in this conversation (backend/visuals.py).
+            attached, report = visuals.attach(
+                c, who, app.state.files, app.state.blobs, body.attachments, conversation_id=message["conversation_id"]
+            )
+            stored = {**(message.get("refs") or {}), "attachments": attached}
+            c.execute("UPDATE messages SET refs=? WHERE id=?", (encode(stored), message["id"]))
+            message = {**visual_view(c, who, [H.message(c, message["id"])])[0], "visuals": report}
+        if (goal and goal["status"] == "active") or body.attachments:
+            H.held_queue_recheck(c, message["id"])
+        # An onboarding bot starts only a person's message or its manager's; anyone else's waits for it to be Active.
+        if note := (
+            H.held_note(c, to)
+            or usage_limits.warning(c, to)
+            or holds.warning(c, to)
+            or (None if H.is_human(who.actor) else H.setup_hold(c, to, who.actor))
+        ):
+            message = {**message, "warning": note}
+        if held := bot_to_bot.held_reason(message):
+            message = {**message, "woke": False, "held": held}
+            way = "defer"
+        if to.startswith("bot:"):
+            message = {**message, "sent_as": delivery.sent_as(way or "steer", due)}
+        return message
+
+    return named_destination, send
+
+
+def register_messages(
+    app,
+    auth,
+    chat_place,
+    home_place,
+    may_edit_routines,
+    mutate,
+    named_destination,
+    onboarding,
+    owner_only,
+    rule_check,
+    rule_message_audience,
+    rule_message_place,
+    saved_retry,
+    send,
+    settings,
+    store,
+    task_view,
+    visual_view,
+):
+    def message_ingest(who, body):
+        """Ask ingest judges a task for a person (backend/ask_ingest.py), never a message: a message no longer asks
+        anything (step 6c), so there is nothing to judge here."""
+        return None
+
+    def routed_message(c, who, body):
+        return body.model_copy(deep=True)
+
+    def message_write(c, who, body, rc=None, ingest=None, files=None):
+        """One message, as every route that sends one writes it (`/messages`, a conversation's `/messages`) and Send
+        anyway replays it: the org rule check's verdict, then ask ingest's, then the send. A hold names the audience the
+        check read, so the audience is read again here, inside the write: a caller who lost access gets 404, and an
+        audience that moved since the check is checked again (409)."""
+        body = routed_message(c, who, body)
+        body.conversation_id = named_destination(c, who, body)
+        audience = rule_message_audience(c, who, body) if rc is not None else None
+        replay = {"body": body.model_dump(mode="json", by_alias=True), **({"files": files} if files else {})}
+        rule = org_rule_check.apply(c, rc, body.text, replay, audience_now=audience)
+        if rule and rule.get("moved"):
+            raise Problem(
+                "moved", "The conversation changed while the message was checked; send it again", 409, retryable=True
+            )
+        if rule and rule.get("held"):
+            if ingest:
+                ask_ingest.skipped(c, ingest, "held")
+            return org_rule_check.held_answer(c, who, rule, auth=auth)
+        sent = body.model_copy(update={"text": org_rule_check.warned_text(rule, body.text)}) if rule else body
+        message = send(c, who, sent)
+        return {**message, **org_rule_check.answer(rule)}
+
+    def message_checks(who, body, retry=False, place=None, operation="message"):
+        """Both checks of one message, outside the write: the rule check, then ask ingest (a held one skips it, and so
+        does a saved retry, `retry`: `mutate` replays its answer without the write). `place`: the message's place when
+        the route does not name a conversation (`rule_message_place`)."""
+        if retry:
+            return None, None
+        with store.read() as c:
+            body = routed_message(c, who, body)
+        if body.conversation_id:
+            # A reply to a room that moved names its Home for every check below (backend/bot_home_merge.py); the sender's
+            # attempt, a private run's, still decides what the Home allows. A room whose Home is archived gets the bot's
+            # Home made here, before the checks, as the implicit path does, so the checks see where the words would land.
+            with store.read() as c:
+                make = bot_home_merge.home_missing(c, body.conversation_id)
+                if not make:
+                    body.conversation_id = named_destination(c, who, body, create=False)
+            if make:
+                with store.transaction() as c:
+                    body.conversation_id = named_destination(c, who, body)
+        elif not H.is_human(who.actor):
+            # A bot's message to a person that names no room goes to the person's chat Home (hubdb.chat_home). The checks
+            # must see that Home: it is made here if the bot has none open (an archived one), so a private run's words
+            # cannot reach a Home the checks never named.
+            with store.transaction() as c:
+                body.conversation_id = named_destination(c, who, body)
+        elif str(body.to).lower() != "assistant":
+            # A person's message to a bot that names no room is written to the bot's personal room (rooms.chat_room), which
+            # is the chat's Home once the bot's chats have moved (rooms.personal_room). The recipient is resolved as the
+            # write resolves it (auth.target: `bot:<slug>`, a bare slug or an id), so every spelling of one bot gets the same
+            # Home. The checks name that Home too, so `where: thread:<home>` sees it, and it is made first when archived, as
+            # the write would make it. A shared bot's shared room is not a Home: a member's message there is checked where it
+            # is written. The Assistant's own room is not a Home either (send routes it apart).
+            from .shared_bots import route as shared_route
+
+            with store.read() as c:
+                to = auth.target(c, who, body.to)
+                target = H.actor_id(shared_route(c, who.actor, to)) if to.startswith("bot:") else ""
+                personal = (
+                    bool(target)
+                    and target != settings.assistant_bot
+                    and not (
+                        rooms.thread_mode(c, target) == rooms.SHARED and rooms.shared_member(c, auth, who.actor, target)
+                    )
+                )
+                make = personal and bot_home_merge.chat_home_missing(c, who.actor, target)
+                home = (
+                    None if make or not personal else bot_home_merge.home_for_chat(c, who.actor, target, create=False)
+                )
+            if make:
+                with store.transaction() as c:
+                    home = bot_home_merge.home_for_chat(c, who.actor, target)
+            if home and place is None:
+                place = home_place(home)
+        reach.precheck(
+            store,
+            who,
+            lambda c: reach.check(
+                c,
+                who,
+                auth.target(c, who, body.to),
+                "chat",
+                conversation_id=body.conversation_id,
+                task_id=H.refs_task_id(body.refs),
+                in_reply_to=body.in_reply_to,
+            ),
+        )
+        rc = rule_check(
+            who,
+            operation,
+            body.text,
+            lambda c: rule_message_audience(c, who, body),
+            place=place or rule_message_place(who, body),
+        )
+        return rc, (None if org_rule_check.holds(rc) or retry else message_ingest(who, body))
+
+    @app.post(
+        "/api/v2/messages",
+        **api_v2(
+            "Conversations",
+            "sendMessage",
+            "Send a message to a person or bot",
+            "Message",
+            responses={"422": ASK_REFUSED},
+        ),
+    )
+    def say(request: Request, body: M.MessageCreate):
+        who = request.state.identity
+        rc, ingest = message_checks(who, body, retry=saved_retry(request, who))
+
+        def legacy_body(c, receipt):
+            # Older checks hashed a bot's resolved Home. Use its saved destination:
+            # a retry must not create a Home or follow today's recipient routing.
+            if (
+                (H.is_human(who.actor) and not body.conversation_id)
+                or not isinstance(receipt, dict)
+                or receipt.get("sender_id") != who.actor
+                or not receipt.get("conversation_id")
+            ):
+                return None
+            cid = receipt["conversation_id"]
+            if body.conversation_id and named_destination(c, who, body, create=False) != cid:
+                return None
+            return {**body.model_dump(), "conversation_id": cid}
+
+        return ask_ingest.judged(
+            store,
+            ingest,
+            lambda: mutate(request, body, lambda c: message_write(c, who, body, rc, ingest), retry_body=legacy_body),
+        )
+
+    @app.post(
+        "/api/v2/questions",
+        **api_v2(
+            "Conversations",
+            "askInChat",
+            "A bot's ❓ in a direct chat: send `text` to `to` (in `conversation_id`, or the bot's chat with them) and "
+            "mark it as needing their reply, until they reply there. Bots only",
+        ),
+    )
+    def chat_question(request: Request, body: M.ChatQuestion):
+        """A bot's ❓ in a direct chat (backend/question_marks.py): its message to `to`, marked as needing their reply,
+        in one step. Checked as any message is, and as a question to a person (the org rules' `kind:ask`). No task is
+        filed and nothing is sent for it beyond the message."""
+        who = request.state.identity
+        if who.role != "bot":
+            raise Problem("forbidden", "Only a bot marks a message ❓", 403)
+        if shape := ask_shape.line_refusal(body.text):  # in plain code, before the rule check's call
+            mutate(request, body, lambda c: H.refuse(c, who.actor, "task_ask_shape", shape))
+        sent = M.MessageCreate(to=body.to, text=body.text, conversation_id=body.conversation_id)
+        asking = question_marks.Asking(
+            lambda c, author, recipients: rule_message_place(who, sent)(c, author, recipients)
+        )
+        rc, ingest = message_checks(who, sent, retry=saved_retry(request, who), place=asking, operation="chat_question")
+        return ask_ingest.judged(
+            store, ingest, lambda: mutate(request, body, lambda c: chat_question_write(c, who, sent, rc, ingest))
+        )
+
+    def chat_question_write(c, who, sent, rc, ingest):
+        """A ❓ in a direct chat, as the route writes it and Send anyway replays it: the message, then its mark, in one
+        transaction. Held by a rule, nothing is written and nothing is marked."""
+        message = message_write(c, who, sent, rc, ingest)
+        if not message.get("id"):
+            return message
+        mark = question_marks.mark(c, who.actor, str(message["id"]), sent.to)
+        return question_marks.with_warning({**message, "question": question_marks.public(mark)}, mark)
+
+    @app.post(
+        "/api/v2/questions/{mid}/give",
+        **api_v2(
+            "Needs you", "giveQuestion", "Give to: an open ❓ is for `to` now. Its person or the bot that marked it"
+        ),
+    )
+    def question_give(request: Request, mid: str, body: M.QuestionGive):
+        """Give to: an open ❓ is for someone else now. Its person, or the bot that marked it, may move it."""
+        who = request.state.identity
+
+        def write(c):
+            to = auth.target(c, who, body.to)
+            return {
+                "question": question_marks.public(
+                    question_marks.give(c, question_marks.mark_id(mid) or mid, to, who.actor)
+                )
+            }
+
+        return mutate(request, body, write)
+
+    def rule_prepare_message(store_, bot, replay):
+        return message_ingest(bot, M.MessageCreate.model_validate(replay["body"]))
+
+    @org_rule_check.replayer("message", prepare=rule_prepare_message)
+    def rule_replay_message(c, bot, hold, replay, ingest, gate=None):
+        # `send` checks the destination as the bot and its run (task_privacy.require_destination).
+        return message_write(
+            c, bot, M.MessageCreate.model_validate(replay["body"]), org_rule_check.decided(gate), ingest
+        )
+
+    @org_rule_check.replayer("chat_question", prepare=rule_prepare_message)
+    def rule_replay_chat_question(c, bot, hold, replay, ingest, gate=None):
+        """Send anyway of a held ❓ in a direct chat: the message and its mark, as the route writes them."""
+        sent = M.MessageCreate.model_validate(replay["body"])
+        return chat_question_write(c, bot, sent, org_rule_check.decided(gate), ingest)
+
+    def chat_upload_checks(request, who, bot, sent):
+        """The checks of a person's chat message with files, outside the write: `message_checks` under its own operation,
+        so Send anyway replays the files with the message (`chat_upload_write`)."""
+        return message_checks(
+            who, sent, retry=saved_retry(request, who), place=chat_place(who, bot), operation="chat_upload"
+        )
+
+    def chat_upload_write(c, who, bot, sent, rc, ingest, uploads, titles):
+        """One chat message with files, as the route and Send anyway write it: the message (`message_write`: the verdict,
+        ask ingest, the send), then its files on it. Held, the message and its files wait in the hold; `uploads` are the
+        files' digests, sizes and names, whose bytes were kept before the check."""
+        message = message_write(c, who, sent, rc, ingest, {"uploads": uploads, "titles": list(titles or [])})
+        if "id" not in message:
+            return message
+        extra = {k: message.pop(k) for k in ("rule_warning", "ingest") if k in message}
+        return {
+            "conversation": H.conversation(c, message["conversation_id"]),
+            "message": app.state.uploads.attach(c, who, bot, message, uploads, titles),
+            **extra,
+        }
+
+    def rule_prepare_chat_upload(store_, who, replay):
+        return message_ingest(who, M.MessageCreate.model_validate(replay["body"]))
+
+    def rule_chat_upload_audience(c, who, replay):
+        return rule_message_audience(c, who, M.MessageCreate.model_validate(replay["body"]))
+
+    @org_rule_check.replayer("chat_upload", prepare=rule_prepare_chat_upload, audience=rule_chat_upload_audience)
+    def rule_replay_chat_upload(c, who, hold, replay, ingest, gate=None):
+        sent = M.MessageCreate.model_validate(replay["body"])
+        files = replay.get("files") or {}
+        return chat_upload_write(
+            c,
+            who,
+            sent.to.removeprefix("bot:"),
+            sent,
+            org_rule_check.decided(gate),
+            ingest,
+            files.get("uploads") or [],
+            files.get("titles") or [],
+        )
+
+    def checked_write(request, body, who, operation, output, audience, write, replay, obj="", context=None):
+        """A bot's write through the org rule check (backend/org_rule_check.py), for routes with no checks of their
+        own: the check outside the transaction, its verdict inside. `write(c, gate)` is the normal write (a warned
+        one puts `org_rule_check.warned_text(gate, text)` on the recipient's copy); held, nothing is written."""
+        rc = rule_check(who, operation, output, audience, obj, context)
+
+        def work(c):
+            gate = org_rule_check.apply(c, rc, output, replay)
+            if gate and gate.get("held"):
+                return org_rule_check.answer(gate)
+            out = write(c, gate)
+            return {**out, **org_rule_check.answer(gate)} if isinstance(out, dict) else out
+
+        return mutate(request, body, work)
+
+    @app.get("/api/v2/messages/{mid}", **api_v2("Conversations", "getMessage", "One message", "Message"))
+    def message(request: Request, mid: str):
+        with store.read() as c:
+            row = H.message(c, mid)
+            if not row or row.get("deleted_at"):
+                raise Problem("not_found", "Message not found", 404)
+            who = request.state.identity
+            privacy.require_message(c, who, row)
+            # A native thread's readers decide first: a bot removed from it loses its addressed messages too. A legacy
+            # conversation keeps the sender/addressee shortcut as it was.
+            native = bool((H.conversation(c, row["conversation_id"]) or {}).get("audience"))
+            party = row.get("recipient_id") == who.actor or row.get("sender_id") == who.actor
+            if not (who.role == "bot" and party and not native):
+                auth.conversation(c, who, row["conversation_id"])
+            from .mail_settings import message_sender_can_approve_send
+
+            row["sender_can_approve_send"] = message_sender_can_approve_send(c, auth, row)
+            return visual_view(c, who, [row])[0]
+
+    @app.post(
+        "/api/v2/chat/{bot}",
+        **api_v2("Conversations", "chatWithBot", "Send a message to a bot (opens the chat if needed)", "ChatResult"),
+    )
+    def chat(request: Request, bot: str, body: M.ChatCreate):
+        who = request.state.identity
+        with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
+        # A person's message in their direct chat: a new topic clears the session first (backend/topic_change.py).
+        topic = topic_check(request, who, bot, body)
+        sent = M.MessageCreate(
+            to="bot:" + bot,
+            text=body.text,
+            refs=body.refs,
+            command=body.command,
+            attachments=body.attachments,
+            delivery=body.delivery,
+            defer_for=body.defer_for,
+        )
+        # A bot's message here is a message like any other: the same checks and write as `/messages`, held or warned
+        # the same way, and replayed by Send anyway as one.
+        rc, ingest = message_checks(who, sent, retry=saved_retry(request, who), place=chat_place(who, bot))
+
+        def work(c):
+            cleared = topic_change.apply(c, settings, who, bot, topic)
+            message = message_write(c, who, sent, rc, ingest)
+            if "id" not in message:
+                return message  # held by an org rule: the answer is the hold alone, and nothing was sent
+            # What the checks tell the sender (a warning, ask ingest's word) rides beside the message, not in it.
+            extra = {k: message.pop(k) for k in ("rule_warning", "ingest") if k in message}
+            if cleared:
+                message = topic_change.record(c, who, message, topic)
+                assert message is not None  # the message the topic change recorded
+            onboarding.start_setup(c, who, bot)
+            return {"conversation": H.conversation(c, message["conversation_id"]), "message": message, **extra}
+
+        return ask_ingest.judged(store, ingest, lambda: mutate(request, body, work))
+
+    def topic_check(request, who, bot, body):
+        """The topic check's outcome for a person's chat message, or None: not a person, a retried request (its first
+        try already decided), a bot whose chat is another's (a shared or the Assistant's), or a send the check never
+        looks at (`topic_change.considered`: a command, a task chat's, or one carrying files)."""
+        if who.role not in ("owner", "human") or who.via:
+            return None
+        key, path = request.headers.get("idempotency-key"), request.url.path
+        if not key:
+            return None
+
+        def admit(c):  # read with the gate, inside the check's time budget
+            from .shared_bots import route
+
+            if c.execute(
+                "SELECT 1 FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
+                (who.actor, path, key),
+            ).fetchone():
+                return False
+            target = H.actor_id(route(c, who.actor, "bot:" + bot))
+            return (
+                target == bot
+                and bot not in (settings.assistant_bot, strategy_bot.SLUG)
+                and views.may_chat(c, auth, who, bot)
+            )
+
+        return topic_change.check(store, app.state.judge, who, bot, body, admit, uploads=())
+
+    updates_routes.register(
+        app,
+        auth,
+        may_edit_routines,
+        message_checks,
+        message_write,
+        mutate,
+        owner_only,
+        rule_check,
+        rule_message_audience,
+        send,
+        settings,
+        store,
+        task_view,
+    )
+    return chat_upload_checks, chat_upload_write, checked_write, routed_message, say

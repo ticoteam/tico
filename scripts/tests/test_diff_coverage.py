@@ -175,3 +175,33 @@ def test_a_measured_job_keeps_the_environment_its_job_sets(tmp_path, monkeypatch
     ((command, env),) = envs
     assert "--cov=backend" in command and env["NO_SUCH_SWEEP"] == "1"
     assert env["COVERAGE_FILE"].endswith("coverage-contracts.data") and env["COVERAGE_CORE"] == "sysmon"
+
+
+def test_code_a_change_only_moves_is_not_new_but_a_copy_still_counts(tmp_path, monkeypatch):
+    def git(*args):
+        return subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@example.test", *args],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+    git("init", "-q")
+    (tmp_path / "backend").mkdir()
+    (tmp_path / "backend/app.py").write_text(
+        "def create():\n    def route():\n        return load(1)\n    return route\n"
+    )
+    git("add", "-A")
+    git("commit", "-q", "-m", "base")
+    base = git("rev-parse", "HEAD")
+    # The nested route moves to its own module, dedented; a second copy of its body and one new line are added too.
+    (tmp_path / "backend/app.py").write_text("from .routes import route\n\n\ndef create():\n    return route\n")
+    (tmp_path / "backend/routes.py").write_text(
+        "def route():\n    return load(1)\n\n\ndef again():\n    return load(1)\n\n\nfresh = 2\n"
+    )
+    git("add", "-A")
+    git("commit", "-q", "-m", "move")
+    head = git("rev-parse", "HEAD")
+    monkeypatch.setattr(dc, "ROOT", tmp_path)
+    assert dc.plan_coverage(base, head, tmp_path) == {"lines": {"backend/app.py": [1], "backend/routes.py": [5, 6, 9]}}
