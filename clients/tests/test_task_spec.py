@@ -3,7 +3,7 @@ what the hand parser it replaced sent (clients/hubcli.py and clients/remotecli.p
 
 import pytest
 
-from clients.tests.test_cli_fixtures import run_line
+from clients.tests.helpers.cli_fixtures import run_line
 
 
 def test_show_several_is_one_read(monkeypatch):
