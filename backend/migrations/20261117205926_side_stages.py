@@ -4,20 +4,25 @@ import re
 
 FOREIGN_KEYS_OFF = True
 
-_CHECKS = (
-    re.compile(r"(\bentered_how\s+IN\s*\()([^)]*)(\))", re.IGNORECASE),
-    re.compile(r"(\bhow\s+IN\s*\()([^)]*)(\))", re.IGNORECASE),
-)
+_CHECKS = {
+    "entered_how": re.compile(r"(\bentered_how\s+IN\s*\()([^)]*)(\))", re.IGNORECASE),
+    "how": re.compile(r"(\bhow\s+IN\s*\()([^)]*)(\))", re.IGNORECASE),
+}
 
 
 def up(conn):
     if "side" not in {row[1] for row in conn.execute("PRAGMA table_info(stages)")}:
         conn.execute("ALTER TABLE stages ADD COLUMN side INTEGER NOT NULL DEFAULT 0 CHECK (side IN (0,1))")
 
-    sql = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='visits'").fetchone()[0]
+    table = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='visits'").fetchone()
+    if table is None or not isinstance(table[0], str):
+        raise RuntimeError("The side-stage migration could not read the visits table definition.")
+    sql = table[0]
     updated = sql
-    for check in _CHECKS:
+    for column, check in _CHECKS.items():
         match = check.search(updated)
+        if match is None:
+            raise RuntimeError(f"The side-stage migration could not find the visits CHECK for {column}.")
         if "'side'" not in match[2]:
             updated = updated[: match.start(2)] + f"{match[2].rstrip()}, 'side'" + updated[match.end(2) :]
     if updated == sql:

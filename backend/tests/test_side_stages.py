@@ -119,6 +119,17 @@ def test_rejected_moves_to_bot_qa_or_in_progress_as_plain_moves_with_no_why(c):
     assert _visits(c, to_build["id"])[-1] == ("In progress", None, "side")
 
 
+def test_a_bot_cannot_move_from_a_side_stage_into_a_pr_queue(c):
+    _pipeline(c, (IN_PROGRESS, REJECTED, {"name": "Merge", "on_enter": {"act": "github.queue"}}))
+    task_id = X.new_task(c, ANA, "Build the importer", "eng")["id"]
+    held = _move(c, task_id, "Rejected", BUILDER)
+
+    with pytest.raises(H.Refused, match="task_stage"):
+        _move(c, task_id, "Merge", REVIEWER)
+    assert E.task(c, task_id)["stage_id"] == held["stage_id"]
+    assert _move(c, task_id, "Merge", ANA)["stage"]["name"] == "Merge"
+
+
 def test_an_enters_block_rule_refuses_the_proposed_owner_in_both_directions(c):
     pipe = _pipeline(c)
     rejected, qa = (pipe["stages"][name] for name in ("Rejected", "Bot QA"))
@@ -263,6 +274,15 @@ def test_a_side_stage_is_by_hand_and_never_asks_to_move_on_whatever_the_record_s
 def test_the_first_work_stage_of_a_pipeline_cannot_be_a_side_stage(c):
     record = _record(_stage("Rejected", side=True, owner=REVIEWER), _stage("In progress"))
     assert any("cannot be a side stage" in p for p in PS.check(c, record))
+    with pytest.raises(H.Refused, match="task_settings"):
+        PS.save(c, ANA, record)
+
+
+def test_only_work_stages_can_be_side_stages(c):
+    record = _record(_stage("In progress"), _stage("Rejected", side=True, kind="closed"))
+    record["done"] = {"side": True}
+
+    assert len(PS.check(c, record)) == 2
     with pytest.raises(H.Refused, match="task_settings"):
         PS.save(c, ANA, record)
 
