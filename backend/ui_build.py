@@ -7,8 +7,9 @@ content, with its source map and a gzip copy beside it); build/ui/<path>.js is e
 (the overview's modules, the service worker). build/ui/manifest.json holds the build's id (`build`, which the config
 carries as `ui_build` so an open page can tell it is out of date), the files a cold open runs (`shell`) and the sha256 of
 every file under ui/ the build read (`inputs`): a build whose inputs differ from ui/ is stale. A server refuses to start
-on a stale build (`prepare` builds it first when this checkout has Node (`node()`: PATH, then the usual install folders) and `npm ci`'s esbuild); the image
-builds the UI in its own stage (Dockerfile `ui-build`) and checks it with `python -m backend.ui_build --check`.
+on a stale build (`prepare` builds it first when this checkout has a Node, `node()`: PATH's, else one in the usual
+install folders, and `npm ci`'s esbuild); the image builds the UI in its own stage (Dockerfile `ui-build`) and checks it
+with `python -m backend.ui_build --check`.
 
 `python -m backend.ui_build --shell-size` prints what a cold open of Home downloads; `--where app.bundle.<hash>.js:1:4567`
 reads a Sentry frame (file, line, column) back to its source with the build's maps (build the release's commit first).
