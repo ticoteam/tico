@@ -162,7 +162,7 @@ def test_a_question_that_stands_on_its_own_is_asked_and_a_list_may_follow_its_fi
 
 @pytest.mark.parametrize("text", ["x", "❓", "42", "x\nShould the launch note go out on Friday?"])
 def test_a_placeholder_question_is_refused_and_nothing_is_marked(ruled, text):
-    """A line of a character or two, a lone ❓ or a number asks nothing: a ❓ on it would sit in a Needs you as "x"."""
+    """A line of one letter, a lone ❓ or a number asks nothing: a ❓ on it would sit in a Needs you as "x"."""
     api, judge = ruled
     task = task_for_ops(api)
     r = question(api, task, text)
