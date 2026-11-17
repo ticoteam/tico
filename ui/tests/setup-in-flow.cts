@@ -2,8 +2,8 @@
 // mark for each setup area GET /v2/setup/gaps says waits on the owner (Market while the market is empty, Strategy while
 // the brand is). A tap on a mark stays on the page, pings that area's bot (POST /v2/flow/ping, scope setup, the area)
 // and opens Flow on that bot alone, where its ❓ lands as its chat; an empty Market's one button does the same. The `setup` event a filling write rings reads the
-// gaps again, and the mark goes. A member is shown none. A computer, then a phone; screenshots (TICO_UI_SHOTS) of each
-// in light and dark.
+// gaps again, and the mark goes. A member is shown none. On that bot alone the chat's title row leaves its name out (the
+// crumb names it); All mine puts the name back. A computer, then a phone; screenshots (TICO_UI_SHOTS) of each in light and dark.
 import type {Page} from 'playwright';
 import type * as StrategyFakeSupport from './support/strategy-fake.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
@@ -25,6 +25,7 @@ const themed = async (page: Page, name: string) => {
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
+    const soloTitles: [string, string | null][] = [];   // each width's title row while Flow is on Librarian alone
     for (const [name, viewport] of [['desktop', DESKTOP], ['phone', PHONE]] as const) {
       const tag = name;
       const {page, errors, writes, db} = await openStrategy(browser, {viewport, hash: '#/strategy', market: false});
@@ -61,7 +62,16 @@ const themed = async (page: Page, name: string) => {
         await q.waitFor();
         assert.ok(await q.isVisible(), tag + ': the bot\'s ❓ is in view');
         assert.match(await page.locator('#need-card[open] .dc-crumb').innerText(), /Librarian/, tag + ': Flow on the Librarian');
+        // The crumb names Librarian, so the chat's title row leaves the name out (checked after both widths, so both
+        // widths' screens are kept whatever the title says).
+        soloTitles.push([tag, await page.locator('#need-card[open] .dc-tabs-t').textContent()]);
         await themed(page, `setup-flow-${name}`);
+        // All mine, from the crumb's menu: the same ❓ with its name back in the title row.
+        await page.locator('#need-card[open] .dc-crumb').click();
+        await page.locator('#need-card[open] .dc-menu [role="menuitemradio"]', {hasText: 'All mine'}).click();
+        await page.waitForFunction(() => !document.querySelector('#need-card[open] .dc-crumb')?.textContent?.includes('Librarian'));
+        assert.equal(await page.locator('#need-card[open] .dc-tabs-t').textContent(), 'Librarian', tag + ': All mine keeps the name');
+        await themed(page, `setup-flow-all-mine-${name}`);
         await page.keyboard.press('Escape');
         await page.waitForFunction(() => !document.querySelector('#need-card[open]'));
 
@@ -79,6 +89,7 @@ const themed = async (page: Page, name: string) => {
         assert.deepEqual(errors, [], tag + ': no page errors');
       } finally { await page.close(); }
     }
+    for (const [tag, title] of soloTitles) assert.equal(title, '', tag + ': on Librarian alone the title row leaves its name out');
     // A member is not waited on: no mark on any tab.
     {
       const {page, errors} = await openStrategy(browser, {viewport: DESKTOP, hash: '#/strategy', market: false, viewer: 'ben'});
