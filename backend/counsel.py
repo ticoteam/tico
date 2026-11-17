@@ -282,8 +282,6 @@ OUTWARD = tuple(
         r"^/api/send$",
         r"^/api/meetings/[^/]+/send$",
         r"^/api/v2/updates/[^/]+/reply$",
-        r"^/api/v2/automations/mail-actions/claim$",  # a mail action to send
-        r"^/api/v2/connectors/calendar/actions/claim$",
         r"^/api/v2/slack/",  # Slack, every write (a read is a GET)
         r"^/api/v2/webhooks",  # outbound webhooks: create, send, replay
         r"^/api/v2/triggers/[^/]+/relay",

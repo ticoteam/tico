@@ -179,8 +179,6 @@ pub fn select_token(granted: &Value, repository: Option<&str>) -> String {
 
 struct Registered {
     bot: String,
-    /// The mailboxes the hub named for this attempt (crate::mail_key::answer).
-    mailboxes: std::collections::BTreeSet<String>,
     issued: Vec<String>,
     redactor: Option<Arc<Redactor>>,
     /// A turn that asks for its GitHub tokens with its own token, and its own cache (register_as).
@@ -339,7 +337,6 @@ impl CredentialSocket {
             attempt_token.into(),
             Registered {
                 bot: bot.into(),
-                mailboxes: Default::default(),
                 issued: vec![],
                 redactor: None,
                 own: None,
@@ -352,7 +349,6 @@ impl CredentialSocket {
     pub fn register_as(&self, attempt_token: &str, bot: &str, own: Client) {
         let entry = Registered {
             bot: bot.into(),
-            mailboxes: Default::default(),
             issued: vec![],
             redactor: None,
             own: Some((own, Arc::new(TokenCache::new()))),
@@ -361,17 +357,6 @@ impl CredentialSocket {
             .lock()
             .unwrap()
             .insert(attempt_token.into(), entry);
-    }
-
-    /// The mailboxes this attempt may ask a mail token for.
-    pub fn set_mailboxes(
-        &self,
-        attempt_token: &str,
-        mailboxes: std::collections::BTreeSet<String>,
-    ) {
-        if let Some(r) = self.attempts.lock().unwrap().get_mut(attempt_token) {
-            r.mailboxes = mailboxes;
-        }
     }
 
     pub fn set_redactor(&self, attempt_token: &str, redactor: Arc<Redactor>) {
@@ -415,15 +400,16 @@ async fn answer(
         .lock()
         .unwrap()
         .get(token)
-        .map(|r| (r.bot.clone(), r.mailboxes.clone(), r.own.clone()));
-    let Some((bot, mailboxes, own)) = known else {
+        .map(|r| (r.bot.clone(), r.own.clone()));
+    let Some((bot, own)) = known else {
         return json!({"error": "unknown attempt"});
     };
     let (client, cache) = own
         .as_ref()
         .map_or((client, cache), |(c, k)| (c, k.as_ref()));
-    if let Some(mail) = asked.get("mail") {
-        return crate::mail_key::answer(&mailboxes, mail).await;
+    // Mail and calendar run on the server (docs/mail.md): a mail request never falls through to a GitHub token.
+    if asked.get("mail").is_some() {
+        return json!({"error": "mail access is on the server: use tico email"});
     }
     let repository = match asked.get("repository") {
         None | Some(Value::Null) => None,

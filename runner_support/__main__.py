@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from clients.tico import Client
-from . import importers, mail_key
+from . import importers
 
 
 # The Rust runner's own commands: `python -m runner_support <one>` execs it with the same arguments (engine.py), so
@@ -30,6 +30,17 @@ def binary_command(argv):
     return "", None
 
 
+def park(block=signal.pthread_sigmask, wait=signal.sigwait):
+    """The retired `connectors` job. A launchd job or systemd unit a computer set up earlier may still start it, and
+    both start a job that exits again at once: so it waits, idle, until it is stopped. An update removes the job
+    (runner_support/release_update.py `retire_helpers`), and the runner deletes the computer's mail copy and Google
+    files on start (runner-rs/src/mail_retire.rs)."""
+    print("connectors: retired, mail and calendar run on the server; waiting until stopped", flush=True)
+    stop = {signal.SIGTERM, signal.SIGINT}
+    block(signal.SIG_BLOCK, stop)  # taken by `wait`, not by a handler: the job ends quietly
+    wait(stop)
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     command, config_path = binary_command(argv)
@@ -45,8 +56,7 @@ def main(argv=None):
     sub.add_parser(
         "catalog", help="Set up or refresh built-in bots from the catalog (JSON on stdin; for the Rust runner)"
     )
-    sub.add_parser("connectors", help="Publish bounded app connector snapshots from this machine")
-    sub.add_parser("connectors-doctor", help="Check local app connector prerequisites without provider calls")
+    sub.add_parser("connectors", help="Retired: mail and calendar run on the server; waits idle until stopped")
     p = sub.add_parser("close-calls", help="Sync Close call and Notetaker transcripts from this machine")
     p.add_argument(
         "--backfill-days",
@@ -69,27 +79,11 @@ def main(argv=None):
     for name in ("close-calls", "importers"):
         if args.command == name and args.backfill_days is not None and not 1 <= args.backfill_days <= 365:
             parser.error("--backfill-days must be between 1 and 365")
+    if args.command == "connectors":
+        return park()
     config = json.loads(args.config.read_text())
     config.setdefault("state_dir", str(args.config.parent / ("state-" + config["runner_id"])))
-    mail_key.carry_protected(config, args.config)
     client = Client(config["url"], config["token"])
-    if args.command == "connectors-doctor":
-        from .connectors import ConnectorPublisher
-
-        publisher = ConnectorPublisher(config)
-        publisher.ready()
-        print(
-            json.dumps(
-                {
-                    "local_prerequisites": "present",
-                    "calendar_script": str(publisher.script),
-                    "mail_script": str(publisher.script),
-                    "mail_credential": ("present, not remotely verified" if publisher.mail_secret() else "missing"),
-                    "note": "No provider call was made. Run the connector worker for an authenticated refresh.",
-                }
-            )
-        )
-        return
     if args.command == "importers-doctor":
         from .importers.service import doctor
 
@@ -132,11 +126,7 @@ def main(argv=None):
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             parser.error("A runner process already holds this registration")
-        if args.command == "connectors":
-            from .connectors import ConnectorPublisher
-
-            service = ConnectorPublisher(config)
-        elif args.command == "close-calls":
+        if args.command == "close-calls":
             from .close_calls import CloseCallImporter
 
             service = CloseCallImporter(config, state_dir, backfill_days=args.backfill_days)

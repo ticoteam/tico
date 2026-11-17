@@ -205,7 +205,7 @@ def queue_email(
     from pathlib import Path
     from ...auth import Auth
     from ... import email_sending
-    from connectors.mail import compose
+    from ...mail_lib import compose
     from ...store import Problem
 
     sending: Any = email_sending

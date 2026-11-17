@@ -239,7 +239,7 @@ pub fn reported_entries(access: &Value) -> Vec<&Value> {
 }
 
 /// The report rows for one bot's tools; [] when absent or malformed. `held` names variables this computer keeps
-/// for its bots instead of putting them in a run (the Google key on a Docker runner): present, marked `held`.
+/// for its bots instead of putting them in a run (its vault grants' names): present, marked `held`.
 pub fn declared_tools(access: &Value, environment: &Env, held: &[String]) -> Vec<Value> {
     let mut rows = vec![];
     for entry in reported_entries(access) {

@@ -5,27 +5,13 @@ from email.message import EmailMessage
 import pytest
 from backend import email_sending as S, mailbox_access as MA
 from backend.store import H
-from backend.tests.helpers.api import give_ok, headers, post as api_post
+from backend.tests.helpers.api import give_ok, headers
 
 
 BOX = "ana@acme.example"
 
 
 CONTACT = "contact@vendor.example"
-
-
-def post(api, path, body, **kwargs):
-    if (
-        path.startswith("connectors/email/sends/")
-        and not path.endswith("/claim")
-        and isinstance(body, dict)
-        and "lease_id" not in body
-    ):
-        with api.app.state.store.read() as c:
-            row = c.execute("SELECT lease_id FROM email_sends WHERE id=?", (path.split("/")[-2],)).fetchone()
-        if row:
-            body = {**body, "lease_id": row["lease_id"]}
-    return api_post(api, path, body, **kwargs)
 
 
 def mime(body="Thanks for the update.", to=None, files=False, subject="Update", **headers):

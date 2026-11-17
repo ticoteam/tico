@@ -189,7 +189,7 @@ def test_an_update_by_the_old_scripts_tico_restarts_through_the_dispatcher_and_l
     out = update('-e', 'acme')
     assert 'updated ' in out
     # No job is installed here, so tico-computer's restart says so for each: it ran, with the environment.
-    for kind in ('bot', 'connectors', 'close-calls', 'importers'):
+    for kind in ('bot', 'close-calls', 'importers'):
         assert f'{kind}: not installed' in out
     assert (checkout / 'scripts' / 'tico-computer').is_file()
     link = home / '.local' / 'bin' / 'tico-computer'

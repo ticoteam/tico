@@ -1692,7 +1692,7 @@ def _mail_category(labels):
 
 
 def _calendar_invite(attachments):
-    """A calendar part or an .ics file. The connector posts each attachment with its MIME type (connectors/mail/gmail.py),
+    """A calendar part or an .ics file. Each attachment comes with its MIME type (backend/mail_lib/gmail.py),
     so the type is read as well as the name; a bare name (no type) is read as the name alone."""
     for a in attachments:
         if isinstance(a, dict):
@@ -3083,10 +3083,9 @@ def _claim_workspace_mail(store, mid):
 def _workspace_mail(store, row):
     """Recheck the owner's current rights, then change Gmail under a read connection, never a write lock. Archive,
     label and leave are done here; a draft, send, forward or unsubscribe by backend/mail_actions.py."""
-    from connectors.mail import Refused
-    from connectors.mail.actions import label_name
-    from connectors.mail.labels import NEEDS_OWNER
     from . import gmail_live, mail_actions, mailbox_access
+    from .mail_lib import Refused
+    from .mail_lib.labels import NEEDS_OWNER, label_name
 
     with store.read() as c:
         if store.settings.rehearsal or store.settings.demo:
@@ -3131,7 +3130,7 @@ def drain_workspace_mail(store, limit=200, budget=None):
     Each row is tried at most once per pass. Candidates include chained rows; their predecessor is checked at the
     lease, so a successful first action allows the next in this pass, while a retry leaves its successors waiting.
     """
-    from connectors.mail import Refused
+    from .mail_lib import Refused
 
     with store.read() as c:
         candidates, picked = [], set()
@@ -4435,97 +4434,3 @@ def install(app, store, auth, mutate):
             ):
                 raise Problem("not_found", "No such person", 404)
             return {"bot": hub.settings.assistant_bot if assistant.find_room(c, "human:" + person) else None}
-
-    # The computer that reads a mailbox carries out the mail actions queued for it (runner_support/connectors.py).
-    def mail_computer(c, who, mailbox):
-        """Only the computer that may act for this mailbox claims and reports its actions (google_rights.refusal: the
-        computer hosting a Google Workspace mailbox's message bot, the one holding a person's grant, else a publisher),
-        and, for a mailbox a computer still syncs, only once it has been published and only by the runner that did
-        (`mail_mailboxes.runner_id`, its last sync's)."""
-        from . import google_rights
-        from .connectors import human_of
-
-        from . import gmail_watch
-
-        runner = google_rights.runner_of(app.state.execution, c, who)
-        google_rights.check(c, runner["id"], google_rights.publishes(store, app.state.execution, c, runner), mailbox)
-        if gmail_watch.watched(c, mailbox):
-            # No computer syncs it, so none publishes it: the computer it is `acts_for` (the check above) acts.
-            if not human_of(c, mailbox):
-                raise Problem("forbidden", "This mailbox is not on the roster", 403)
-            return runner
-        box = c.execute("SELECT runner_id FROM mail_mailboxes WHERE address=?", (mailbox,)).fetchone()
-        if not box:  # not published yet: no computer has shown it reads this mailbox
-            raise Problem("forbidden", "No computer has published this mailbox yet", 403)
-        if not human_of(c, mailbox) or (box["runner_id"] and box["runner_id"] != runner["id"]):
-            raise Problem("forbidden", "Another computer reads this mailbox", 403)
-        return runner
-
-    @app.post("/api/v2/automations/mail-actions/claim")
-    def automation_mail_claim(request: Request, body: MailClaim):
-        """A computer of an older release still asks for its mailbox's actions. The server carries out every mail
-        action itself (drain_workspace_mail), so there is never one to lease."""
-        who = request.state.identity
-
-        def work(c):
-            mail_computer(c, who, body.mailbox.strip().lower())
-            return {"actions": [], "lease_seconds": MAIL_LEASE_MINUTES * 60}
-
-        return mutate(request, body, work)
-
-    @app.post("/api/v2/automations/mail-actions/{mid}/result")
-    def automation_mail_result(request: Request, mid: str, body: MailResult):
-        """What the computer did. Idempotent by action id: once done or failed, a repeat (a lost answer, a late
-        report after the lease ran out) changes nothing. A failure it may retry goes back to the queue until
-        MAIL_TRIES claims; a late success counts, so the action is never carried out again."""
-        who = request.state.identity
-
-        def work(c):
-            row = c.execute("SELECT * FROM automation_mail_actions WHERE id=?", (mid,)).fetchone()
-            if not row:
-                raise Problem("not_found", "No such mail action", 404)
-            # The computer whose lease this is reports it, even after its mailbox moved (plan v4 R): a finished action is
-            # never retried. Any other computer must pass the gate.
-            from . import google_rights
-
-            if row["claimed_by"] != google_rights.runner_of(app.state.execution, c, who)["id"]:
-                mail_computer(c, who, row["mailbox"])
-            if row["state"] in ("done", "failed", "canceled"):
-                return {"id": mid, "state": row["state"]}
-            if body.send_queue_id:
-                queued = c.execute(
-                    "SELECT state FROM email_sends WHERE id=? AND automation_action_id=?", (body.send_queue_id, mid)
-                ).fetchone()
-                if not queued:
-                    raise Problem("queue", "No durable send belongs to this action", 409)
-                if queued["state"] in ("pending", "waiting_approval", "dispatching"):
-                    c.execute(
-                        "UPDATE automation_mail_actions SET state='waiting_send',result=? WHERE id=?",
-                        (json.dumps({"send_queue_id": body.send_queue_id}), mid),
-                    )
-                    return {"id": mid, "state": "waiting_send"}
-            state = "done" if body.ok else _requeue(c, row) if body.retry and row["attempts"] < MAIL_TRIES else "failed"
-            result = {
-                **json.loads(row["result"] or "{}"),
-                "ok": body.ok,
-                "detail": body.detail,
-                **{k: v for k, v in (("message", body.message), ("draft", body.draft), ("thread", body.thread)) if v},
-            }
-            _mail_report(c, row, state, result)
-            return {"id": mid, "state": state}
-
-        return mutate(request, body, work)
-
-
-class MailClaim(Contract):
-    mailbox: str = Field(min_length=3, max_length=320)
-
-
-class MailResult(Contract):
-    ok: bool
-    detail: str = Field(default="", max_length=1000)
-    retry: bool = True  # a failure worth another claim (not: no such message)
-    message: str = Field(default="", max_length=200)  # the Gmail message sent
-    draft: str = Field(default="", max_length=200)  # the Gmail draft made
-    thread: str = Field(default="", max_length=200)
-    send_queue_id: str = Field(default="", max_length=100)

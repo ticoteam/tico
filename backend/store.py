@@ -96,7 +96,6 @@ def replayed_refusal(c, principal, result):
 # request's response forever: most of the database file. Operation bindings share the table
 # (binding is not NULL) and are never swept: an ambiguous external call is never repeated.
 IDEMPOTENCY_RETENTION_HOURS = 48
-MAIL_RETENTION_DAYS = 180
 
 
 # Polls carry nothing a retry could double: a replayed heartbeat or lease renewal just
@@ -551,43 +550,6 @@ def reclaim_free_pages(store, step=VACUUM_STEP_PAGES, floor=VACUUM_FLOOR_PAGES, 
         if not removed:
             break
     return returned
-
-
-def sweep_mail(store, now=None, batch=5000):
-    """Delete mail older than the retention window, including matching FTS rows.
-
-    Same short-transaction batches as `sweep_idempotency` so API writers never wait
-    for the whole mailbox.
-    """
-    days = getattr(store.settings, "mail_retention_days", None) or MAIL_RETENTION_DAYS
-    at = H.parse_ts(now or H.now())
-    cutoff = int(at.timestamp()) - int(days) * 86400
-    deleted, touched = 0, set()
-    while True:
-        with store.transaction() as c:
-            rows = c.execute(
-                "SELECT mailbox,msg_id FROM mail_messages WHERE epoch>0 AND epoch<? LIMIT ?", (cutoff, batch)
-            ).fetchall()
-            for row in rows:
-                touched.add(row["mailbox"])
-                c.execute("DELETE FROM mail_fts WHERE mailbox=? AND msg_id=?", (row["mailbox"], row["msg_id"]))
-                c.execute("DELETE FROM mail_messages WHERE mailbox=? AND msg_id=?", (row["mailbox"], row["msg_id"]))
-            deleted += len(rows)
-        if len(rows) < batch:
-            break
-    # The counters the Mail page reads must not outlive the mail they describe: a mailbox whose
-    # oldest month just aged out would otherwise keep claiming it until the next publish.
-    for address in sorted(touched):
-        with store.transaction() as c:
-            c.execute(
-                "UPDATE mail_mailboxes SET "
-                "message_count=(SELECT count(*) FROM mail_messages WHERE mailbox=? AND deleted_at IS NULL),"
-                "oldest_epoch=(SELECT min(epoch) FROM mail_messages WHERE mailbox=? AND deleted_at IS NULL),"
-                "newest_epoch=(SELECT max(epoch) FROM mail_messages WHERE mailbox=? AND deleted_at IS NULL) "
-                "WHERE address=?",
-                (address, address, address, address),
-            )
-    return deleted
 
 
 def readiness_document(value):

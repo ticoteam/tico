@@ -92,8 +92,6 @@ def test_steven_sees_only_his_mailbox_a_bot_without_a_level_sees_none_and_runner
     assert msg["body"] == "Standup notes for product." and msg["subject"] == "Ben standup"
     machine = runner(api)
     get(api, "mail/messages", machine["token"], expected=403)
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM mail_messages").fetchone()[0] == 0
     _, _, attempt = setup_attempt(api)
     assert get(api, "mail/mailboxes", attempt["token"])["mailboxes"] == []  # a bot holds no level on any of them
     get(api, "mail/messages/c1?mailbox=ana@acme.example", attempt["token"], expected=403)

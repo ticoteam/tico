@@ -37,7 +37,7 @@ from . import file_library
 from . import read_cache
 from . import task_privacy as privacy
 from . import task_wakes
-from .api_contract import ERROR, api_v2
+from .api_contract import api_v2, error
 from clients import bot_files as BF
 
 LOG = logging.getLogger("tico.files")
@@ -2640,7 +2640,7 @@ def install_files(app, store, auth, blobs, mutate):
                 "trimmed, a repeat counts once, and one over 300 characters is ignored. Before matching, "
                 "\\ becomes / and a leading ./ is dropped; the answer keeps the value as sent (trimmed)"
             },
-            responses={"404": {**ERROR, "description": "not_found: no such bot, or one the caller may not see"}},
+            responses={"404": error("not_found: no such bot, or one the caller may not see")},
         ),
     )
     def bot_file_mentions(

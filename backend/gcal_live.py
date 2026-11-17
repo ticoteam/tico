@@ -19,9 +19,8 @@ from collections.abc import Callable
 from datetime import date, datetime, timezone
 from typing import Any, NoReturn, cast
 
-from connectors.mail import calendar as mail_calendar
-
 from . import google_connect, google_tokens, google_workspace
+from .mail_lib.calendar import meeting_url as _meeting_url
 from .store import Problem
 
 Json = dict[str, Any]
@@ -29,7 +28,6 @@ Conn = sqlite3.Connection | None
 When = datetime | str
 
 # The untyped modules this one leans on, with the shapes it uses. Looked up on each call, so tests can replace them.
-_meeting_url = cast("Callable[[Json], str]", mail_calendar._meeting_url)  # pyright: ignore[reportPrivateUsage]
 
 
 def _token(c: Conn, mailbox: str, write: bool) -> str:

@@ -5604,9 +5604,10 @@ def create_app(settings=None):
     from .meeting_task_links import install as install_meeting_task_links
 
     install_meeting_task_links(app, store, auth, mutate)
-    from .connectors import install_connectors
+    from . import connectors, google_connect
 
-    install_connectors(app, store, execution, mutate)
+    google_connect.install(app, store, mutate)
+    connectors.install(app, store, execution, mutate)
     from .calendar_api import install_calendar
 
     install_calendar(app, store, mutate)

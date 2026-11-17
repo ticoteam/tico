@@ -709,9 +709,6 @@ impl Runner {
                     .unwrap_or_default());
             capabilities.push("computer_logins_v1");
         }
-        if crate::mail_key::status(&self.config) == Some("exposed") {
-            readiness_doc["mail_key"] = json!("exposed"); // Health warns while bots can read the company's mail key
-        }
         if let Some(screen) = crate::screen::readiness() {
             readiness_doc["screen"] = screen; // only while turned on here (crate::screen)
         }

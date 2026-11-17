@@ -307,7 +307,6 @@ class Settings:
     # {bucket: https base} from TICO_S3_VIEW_URLS (clients/s3links.py): where people open a bucket's objects.
     s3_view_urls: dict = field(default_factory=dict)
     processing_operators: tuple[str, ...] = ()
-    mail_retention_days: int = 180
     release_id: str = ""
     # The commit and repository the running release was built from (a release-manifest.json
     # at the repository root, when one is present); what marks a merged product task shipped.
@@ -644,7 +643,6 @@ class Settings:
             upload_max_bytes=int(os.environ.get("TICO_UPLOAD_MAX_BYTES") or 2 * 1024**3),
             s3_view_urls=os.environ.get("TICO_S3_VIEW_URLS", ""),
             processing_operators=tuple(filter(None, os.environ.get("TICO_PROCESSING_OPERATORS", "").split(","))),
-            mail_retention_days=max(1, int(os.environ.get("TICO_MAIL_RETENTION_DAYS", "180") or "180")),
             release_id=os.environ.get("TICO_RELEASE", ""),
             **_release_origin(),
             github_webhook_secret=os.environ.get("TICO_GITHUB_WEBHOOK_SECRET", "").strip(),

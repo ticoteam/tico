@@ -198,9 +198,7 @@ EMPTY = (
     "email_legacy_automations",
     "mail_unsubscribes",  # one-click unsubscribes sent from the source: a copy sends none
     "mail_drafts",  # ids of the source's Gmail drafts
-    # mail, Slack, GitHub, Granola, meeting bots, support; the old copies of mail (read live from Gmail now) stay behind
-    "mail_mailboxes",
-    "mail_messages",
+    # mail, Slack, GitHub, Granola, meeting bots, support
     "mailboxes",
     "mailbox_accesses",
     "google_connects",
@@ -208,12 +206,11 @@ EMPTY = (
     "slack_posts",
     "slack_events",
     "slack_threads",
-    # Tools > Settings > Email: the Workspace key (sealed), setup codes and the OAuth client secret (sealed), and the health each
-    # computer reported. A copy holds none of them (google_connects.client_id goes with its table).
+    # Tools > Settings > Email: the Workspace key (sealed), setup codes and the OAuth client secret (sealed). A copy holds
+    # none of them (google_connects.client_id goes with its table).
     "google_workspaces",
     "google_setup_codes",
     "google_oauth_clients",
-    "connector_reports",
     "github_app",
     "github_app_states",
     # The owner's GitHub user token (sealed, for a personal account) and its single-use states: a copy holds neither.
@@ -425,7 +422,6 @@ KEEP = (
             "chat_goals",
             "schema_migrations",
             "company_profile",
-            "connector_snapshots",
             "conversations",
             "doc_sources",
             "doc_versions",

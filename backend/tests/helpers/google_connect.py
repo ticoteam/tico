@@ -10,7 +10,6 @@ from backend import google_connect, google_tokens
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.helpers.api import headers, post
-from connectors.mail import oauth
 
 
 CLIENT = "1234-tico.apps.googleusercontent.com"
@@ -76,7 +75,8 @@ class FakeGoogle:
                 uri, self.status, "Refused", {}, io.BytesIO(json.dumps({"error": self.error}).encode())
             )
         return dict(
-            self.answer or {"access_token": "ya29.fresh", "expires_in": 3599, "scope": oauth.G + "gmail.readonly"}
+            self.answer
+            or {"access_token": "ya29.fresh", "expires_in": 3599, "scope": google_connect.G + "gmail.readonly"}
         )
 
 
