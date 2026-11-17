@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS page_links (
 );
 CREATE INDEX IF NOT EXISTS page_links_target ON page_links(target, role);
 CREATE INDEX IF NOT EXISTS page_links_page ON page_links(page_id);
+CREATE INDEX IF NOT EXISTS page_links_role ON page_links(role, page_id);
 
 INSERT OR IGNORE INTO page_links
 SELECT lower(hex(randomblob(16))), p.file_id, 'bot:' || f.bot_id, 'writer',

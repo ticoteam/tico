@@ -12,7 +12,7 @@ from email.parser import BytesParser
 from email.policy import HTTP
 from types import SimpleNamespace
 
-from fastapi import Request
+from fastapi import Query, Request
 
 from pydantic import Field, ValidationError
 
@@ -772,10 +772,10 @@ def install_media(
     @app.get(
         "/api/v2/tasks/{tid}/files", **api_v2("Tasks", "listTaskFiles", "Files and versions on a task", "TaskFileList")
     )
-    def task_files(request: Request, tid: str):
+    def task_files(request: Request, tid: str, all_pages: bool = Query(default=False, alias="all")):
         with store.read() as c:
             task_id = auth.resolve_task(c, request.state.identity, tid)
-            return files.task_listing(c, request.state.identity, task_id)
+            return files.task_listing(c, request.state.identity, task_id, all_pages=all_pages)
 
     @app.post(
         "/api/v2/tasks/{tid}/files",

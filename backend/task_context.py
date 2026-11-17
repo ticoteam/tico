@@ -2,8 +2,8 @@
 
 from fastapi import Request
 
-from . import context_search
-from .files import file_visible
+from . import context_search, page_links
+from .files import file_visible, prime_visible
 from .store import Problem
 from .api_contract import api_v2
 
@@ -13,19 +13,26 @@ MAX_ITEMS = 10
 def listing(c, auth, who, tid):
     task = auth.task(c, who, auth.resolve_task(c, who, tid))
     pages, linked, cache = [], [], {}
-    for row in c.execute(
+    rows = c.execute(
         "SELECT f.*,p.audience,coalesce(v.created_at,f.last_activity_at) AS context_updated_at "
         "FROM pages p JOIN bot_files f ON f.id=p.file_id LEFT JOIN bot_file_versions v "
         "ON v.file_id=f.id AND v.version=f.current_version WHERE p.archived=0 "
         "AND f.archived=0 AND f.state<>'deleted' AND (f.task_id=? OR f.scope=? OR EXISTS "
-        "(SELECT 1 FROM pins WHERE place=? AND item='page:' || f.id)) "
+        "(SELECT 1 FROM pins WHERE place=? AND item='page:' || f.id) "
+        "OR f.id IN (SELECT page_id FROM page_links WHERE target=?)) "
         "ORDER BY context_updated_at DESC,f.id DESC",
-        (task["id"], "task:" + task["id"], "task:" + task["id"]),
-    ):
+        (task["id"], "task:" + task["id"], "task:" + task["id"], "task:" + task["id"]),
+    ).fetchall()
+    prime_visible(c, rows)
+    page_links.prime(c, rows)
+    for row in rows:
         if file_visible(c, auth, who, row, cache):
             pages.append(
                 {
                     "id": row["id"],
+                    "links": page_links.links_of(c, auth, who, row["id"]),
+                    "writers": page_links.writers_of(c, row["id"]),
+                    "may_write": page_links.may_write(c, auth, who, row),
                     "title": row["title"][:200],
                     "version": row["current_version"],
                     "updated_at": row["context_updated_at"],

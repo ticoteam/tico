@@ -497,6 +497,7 @@ SCHEMAS.update(
                 "mime": "s",
                 "current_version": "i",
                 "archived": "b",
+                "links": items(ref("PageLinkView")),
                 "versions": items(ref("TaskFileVersion")),
             }
         ),
@@ -610,7 +611,17 @@ SCHEMAS.update(
             }
         ),
         'TaskMeetings': obj({'meetings': items(ref('TaskMeeting')), 'next_cursor': 'n'}),
-        'TaskContextPage': obj({'id': 's', 'title': 's', 'version': 'i', 'updated_at': 's'}),
+        'TaskContextPage': obj(
+            {
+                'id': 's',
+                'title': 's',
+                'version': 'i',
+                'updated_at': 's',
+                'links': items(ref('PageLinkView')),
+                'writers': items(ref('PageWriter')),
+                'may_write': 'b',
+            }
+        ),
         'TaskContextMeeting': obj({'id': 's', 'title': 's', 'date': 's'}),
         'TaskContext': obj(
             {

@@ -91,7 +91,7 @@ def prime(c: Any, rows: Iterable[Any]) -> None:
     _prime_targets(c, targets)
     actors = targets | {str(v["actor"]) for found in writers.values() for v in found}
     known: dict[str, str] = cast(Callable[..., dict[str, str]], names.lookup)(c, actors)
-    read_cache.prime(c, "SELECT page_link_name FROM names WHERE actor=?", {(a,): n for a, n in known.items()})
+    read_cache.prime(c, "SELECT page_link_name FROM names WHERE actor=?", {(a,): known.get(a) for a in actors})
 
 
 def _prime_targets(c: Any, targets: set[str]) -> None:
@@ -117,7 +117,11 @@ def _names(c: Any, actors: set[str]) -> dict[str, str]:
     if values is not None and all(
         ("one", "SELECT page_link_name FROM names WHERE actor=?", (a,)) in values for a in actors
     ):
-        return {a: values[("one", "SELECT page_link_name FROM names WHERE actor=?", (a,))] for a in actors}
+        return {
+            a: n
+            for a in actors
+            if (n := values[("one", "SELECT page_link_name FROM names WHERE actor=?", (a,))]) is not None
+        }
     return cast(Callable[..., dict[str, str]], names.lookup)(c, actors)
 
 
@@ -163,7 +167,10 @@ def links_of(c: Any, auth: Any, who: Any, page_id: str) -> list[dict[str, Any]]:
                 goal: Any = read_cache.one(c, "SELECT * FROM goals WHERE id=?", (ident,))
                 if not goal:
                     continue
-                auth.domain(who)
+                from . import goal_routes
+
+                if not cast(Callable[..., Any], goal_routes.readable_goals)(c, auth, who, [goal]):
+                    continue
                 name = goal["title"]
             elif kind == "page":
                 page: Any = read_cache.one(c, "SELECT * FROM bot_files WHERE id=?", (ident,))
@@ -204,9 +211,40 @@ def may_write(c: Any, auth: Any, who: Any, row: Any) -> bool:
         if not r["target"].startswith("task:") or r["role"] == "writer":
             continue
         try:
-            cast(Callable[..., Any], task_reads.comment_rights)(c, auth, who, r["target"][5:])
-            return True
+
+            def allowed(task_id: str = r["target"][5:]) -> bool:
+                cast(Callable[..., Any], task_reads.comment_rights)(c, auth, who, task_id)
+                return True
+
+            if read_cache.value(
+                c,
+                ("page_comment", who.actor, who.role, who.attempt_id, getattr(who, "task_actor", ""), r["target"]),
+                allowed,
+                shared=True,
+            ):
+                return True
         except Problem as exc:
             if exc.status not in (403, 404, 409):
                 raise
     return False
+
+
+def filters(linked: str = "", role: str = "", writer: str = "") -> tuple[list[str], list[str]]:
+    """Indexed page-id sets shared by Pages and Library lists (bot_files is aliased f)."""
+    where: list[str] = []
+    args: list[str] = []
+    if linked or role:
+        clauses: list[str] = []
+        if linked:
+            _target(linked, "related")
+            clauses.append("target=?")
+            args.append(linked)
+        if role:
+            clauses.append("role=?")
+            args.append(role_name(role))
+        where.append("f.id IN (SELECT page_id FROM page_links WHERE " + " AND ".join(clauses) + ")")
+    if writer:
+        _target(writer, "writer")
+        where.append("f.id IN (SELECT page_id FROM page_links WHERE target=? AND role='writer')")
+        args.append(writer)
+    return where, args

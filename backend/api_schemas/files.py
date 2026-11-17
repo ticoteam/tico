@@ -107,6 +107,8 @@ SCHEMAS.update(
                 "archived": "b",
                 "page": {"type": ["object", "null"], "description": "{cadence, archived} for a page"},
                 "pins": {"type": "array", "description": "Where the file is pinned, when pins exist"},
+                "links": {**items(ref("PageLinkView")), "maxItems": 5},
+                "links_more": "i",
             },
             required=["id", "bot", "title", "kind", "library_kind", "version", "last_activity_at"],
         ),

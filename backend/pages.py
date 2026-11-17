@@ -20,6 +20,7 @@ from . import cards
 from . import models as M
 from . import names
 from . import read_cache
+from . import page_links
 from . import visuals
 from .store import H, Problem
 from . import visual_specs
@@ -32,6 +33,11 @@ STALE_FACTOR = 1.5
 LIST_MAX = 50
 IDS_MAX = 50
 AS_OF = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+class PageLink(M.Contract):
+    target: str = Field(min_length=1, max_length=200)
+    role: str = Field(default="related", min_length=1, max_length=40)
 
 
 class PageEdit(M.Contract):
@@ -82,6 +88,7 @@ def prime_views(c, rows):
     Pages.view reads for each, so a page list takes no version statement of its own."""
     if read_cache.cache(c) is None or not rows:
         return
+    page_links.prime(c, rows)
     current = {row["id"]: row["current_version"] for row in rows}
     found = {}
     for part in H.chunks(sorted(current)):
@@ -193,6 +200,9 @@ class Pages:
         manager = self.may_manage(c, who, row)
         names_ = names_ if names_ is not None else names.lookup(c, {"bot:" + row["bot_id"], *([by] if by else [])})
         return {
+            "links": page_links.links_of(c, self.auth, who, row["id"]),
+            "writers": page_links.writers_of(c, row["id"]),
+            "may_write": page_links.may_write(c, self.auth, who, row),
             "file_id": row["id"],
             "title": row["title"],
             "bot_id": row["bot_id"],
@@ -259,6 +269,7 @@ class Pages:
             prime_visible(c, list(found.values()))
             cache = {}
             shown = [found[i] for i in wanted if i in found and self.files.visible(c, who, found[i], cache)]
+            prime_views(c, shown)
             known = names.lookup(c, {"bot:" + r["bot_id"] for r in shown} | self._authors(c, shown))
             return {"pages": [self.view(c, who, r, self.page_of(r), cache, known) for r in shown]}
 
@@ -266,14 +277,12 @@ class Pages:
     def _authors(c, rows):
         out = set()
         for r in rows:
-            v = c.execute(
-                "SELECT actor FROM bot_file_versions WHERE file_id=? AND version=?", (r["id"], r["current_version"])
-            ).fetchone()
+            v = read_cache.one(c, VIEW_VERSION_SQL, (r["id"], r["current_version"]))
             if v:
                 out.add(v["actor"])
         return out
 
-    def listing(self, who, *, bot="", task="", archived=False, limit=20, cursor=""):
+    def listing(self, who, *, bot="", task="", linked="", role="", writer="", archived=False, limit=20, cursor=""):
         """Pages `who` may read, newest first; archived ones only when asked. Paged; no totals, so a count never
         says what the reader may not see."""
         from .file_library import scan
@@ -286,11 +295,19 @@ class Pages:
         if bot:
             with self.store.read() as c:
                 bot = (H.resolve_bot(c, H.actor_id(bot)) or {}).get("id", H.actor_id(bot))
-            where.append("f.bot_id=?")
-            params.append(bot)
+            where.append("(f.bot_id=? OR f.id IN (SELECT page_id FROM page_links WHERE target=?))")
+            params += [bot, "bot:" + bot]
         if task:
-            where.append("(f.task_id=? OR EXISTS (SELECT 1 FROM pins WHERE place=? AND item='page:' || f.id))")
-            params += [task, "task:" + task]
+            with self.store.read() as c:
+                task = self.auth.resolve_task(c, who, task)
+            where.append(
+                "(f.task_id=? OR f.id IN (SELECT page_id FROM page_links WHERE target=?) "
+                "OR EXISTS (SELECT 1 FROM pins WHERE place=? AND item='page:' || f.id))"
+            )
+            params += [task, "task:" + task, "task:" + task]
+        sql, args = page_links.filters(linked, role, writer)
+        where.extend(sql)
+        params.extend(args)
         with self.store.read() as c:
             if task:
                 self.auth.task(c, who, task)
@@ -306,6 +323,7 @@ class Pages:
                 lambda r: self.files.visible(c, who, r, cache),
                 cursor_key=visuals.key_for(self.app, self.store.settings),
             )
+            prime_views(c, found)
             known = names.lookup(c, {"bot:" + r["bot_id"] for r in found} | self._authors(c, found))
             return {
                 "pages": [self.view(c, who, r, self.page_of(r), cache, known) for r in found],
@@ -317,11 +335,24 @@ class Pages:
     def publish(self, request, who, fields, data):
         """A bot publishes a page: cleaned HTML stored as a version of its file, and the page row beside it, in one
         transaction. The same path (or name) again is a new version of the same page."""
+        importing = any(k in fields for k in ("written_by", "written_at"))
+        if importing and who.role != "owner":
+            raise Problem("forbidden", "Only the owner may import writer or time", 403)
+        written_by = str(fields.get("written_by") or "")
+        written_at = str(fields.get("written_at") or "")
+        if written_by and (not written_by.startswith(("human:", "bot:")) or not written_by.partition(":")[2]):
+            raise Problem("validation", "written_by is a bot or person actor", 422)
+        if written_at and H.parse_ts(written_at) is None:
+            raise Problem("validation", "written_at is an ISO timestamp", 422)
         audience_set, audience = "audience" in fields, fields.get("audience")
         if who.via == "assistant":
             audience_set = False  # a Make page turn keeps the page's default audience; only managers set it
         fields = {k: (v if isinstance(v, (str, int, bool)) else "") for k, v in fields.items() if k != "audience"}
-        name = str(fields.get("name") or str(fields.get("path") or "").rsplit("/", 1)[-1] or "")
+        name = str(
+            fields.get("name")
+            or str(fields.get("path") or "").rsplit("/", 1)[-1]
+            or ("page.html" if fields.get("page") or fields.get("as") else "")
+        )
         if not name.lower().endswith((".html", ".htm")):
             raise Problem("file_refused", "A page is an .html file", 422)
         try:
@@ -369,6 +400,29 @@ class Pages:
                     int(bool(changed)),
                 ),
             )
+            actor = self.files.actor_of(who, row["bot_id"])
+            page_links.link(c, row["id"], actor, "writer", actor)
+            if importing:
+                from . import audit_log
+
+                before = dict(
+                    c.execute(
+                        "SELECT actor,created_at FROM bot_file_versions WHERE file_id=? AND version=?",
+                        (row["id"], row["current_version"]),
+                    ).fetchone()
+                )
+                after = {"actor": written_by or before["actor"], "created_at": written_at or before["created_at"]}
+                c.execute(
+                    "UPDATE bot_file_versions SET actor=?,created_at=? WHERE file_id=? AND version=?",
+                    (after["actor"], after["created_at"], row["id"], row["current_version"]),
+                )
+                page_links.link(c, row["id"], after["actor"], "writer", actor)
+                audit_log.write(c, who.actor, "page:" + row["id"] + ":import", before, after)
+            if task:
+                linked_task = self.auth.resolve_task(c, editor, task)
+                self.auth.task(c, editor, linked_task)
+                role = page_links.role_name(str(fields.get("as") or ("Spec" if spec else "related")))
+                page_links.link(c, row["id"], "task:" + linked_task, role, actor)
             if audience_set:
                 self.set_audience(c, editor, row, checked_audience(c, audience))
             if replaces:
@@ -377,15 +431,14 @@ class Pages:
                 ).fetchone()
                 if (
                     not old
-                    or old["bot_id"] != row["bot_id"]
                     or old["state"] == "deleted"
                     or who.via == "assistant"
                     and old["task_id"] != row["task_id"]
                     or not self.files.visible(c, editor, old, {})
                 ):
                     raise Problem("not_found", "replaces names a page of this bot's", 404)
-                if not self.may_manage(c, editor, old):
-                    raise Problem("forbidden", "Only page managers replace a page", 403)
+                if not page_links.may_write(c, self.auth, editor, old):
+                    raise Problem("forbidden", "Only page writers replace a page", 403)
                 if old["id"] == row["id"]:
                     raise Problem("validation", "A page cannot replace itself", 422)
                 H._writer(c, editor.actor, task_id=old["task_id"])
@@ -418,13 +471,63 @@ class Pages:
             fields,
             cleaned,
             extra=extra,
+            page_publish=True,
             extra_body={
                 "cadence": cadence or "",
                 "as_of": as_of or "",
                 "replaces": replaces,
+                **{k: fields.get(k, "") for k in ("page", "as", "written_by", "written_at")},
                 **({"audience": audience} if audience_set else {}),
             },
         )
+
+    def change_link(self, request, fid, target, role, *, remove=False):
+        who = request.state.identity
+
+        def work(c):
+            row = self.rows(c, [fid]).get(fid)
+            if not row or not self.files.visible(c, who, row, {}):
+                raise Problem("not_found", "Page not found", 404)
+            if not page_links.may_write(c, self.auth, who, row):
+                raise Problem("forbidden", "Only page writers change its links", 403)
+            selected = target
+            kind, _, ident = selected.partition(":")
+            chosen_role = page_links.role_name(role)
+            if kind == "task":
+                ident = self.auth.resolve_task(c, who, ident)
+                if not remove:
+                    self.auth.task(c, who, ident)
+                selected = "task:" + ident
+                if not remove and chosen_role not in ("writer", "related"):
+                    from .task_reads import comment_rights
+
+                    comment_rights(c, self.auth, who, ident)
+            elif not remove:
+                if kind == "bot":
+                    bot = H.resolve_bot(c, ident)
+                    if not bot or not self.auth.bot_access(c, who, bot["id"])["see"]:
+                        raise Problem("not_found", "Bot not found", 404)
+                    selected = "bot:" + bot["id"]
+                elif kind == "human":
+                    if not c.execute("SELECT 1 FROM humans WHERE id=?", (ident,)).fetchone():
+                        raise Problem("not_found", "Person not found", 404)
+                elif kind == "goal":
+                    if not c.execute("SELECT 1 FROM goals WHERE id=?", (ident,)).fetchone():
+                        raise Problem("not_found", "Goal not found", 404)
+                elif kind == "page":
+                    other = self.rows(c, [ident]).get(ident)
+                    if not other or not self.files.visible(c, who, other, {}):
+                        raise Problem("not_found", "Page not found", 404)
+            if remove:
+                page_links.unlink(c, fid, selected, chosen_role, who.actor)
+            else:
+                page_links.link(c, fid, selected, chosen_role, who.actor)
+            H.event(
+                c, who.actor, "page.unlink" if remove else "page.link", fid, {"target": selected, "role": chosen_role}
+            )
+            return {"page": self.view(c, who, row, self.page_of(row), {}, include_audience=True)}
+
+        return self.files.write(request, who, {"id": fid, "target": target, "role": role}, work)
 
     @staticmethod
     def require_pin_space(c, task):
@@ -478,8 +581,9 @@ class Pages:
             r = self.rows(c, [fid]).get(fid)
             if not r or not self.files.visible(c, who, r, {}):
                 raise Problem("not_found", "Page not found", 404)
-            if not self.may_manage(c, who, r):
-                raise Problem("forbidden", "Only the page's bot, its managers, the owner and admins change a page", 403)
+            archive_only = body.model_fields_set <= {"archived"}
+            if not self.may_manage(c, who, r) and not (archive_only and page_links.may_write(c, self.auth, who, r)):
+                raise Problem("forbidden", "Only page managers change page settings; writers may archive", 403)
             H._writer(c, who.actor, task_id=r["task_id"])
             if "audience" in body.model_fields_set:
                 value = body.audience.model_dump() if body.audience is not None else None
@@ -541,6 +645,10 @@ def install_pages(app, store, auth, files):
                             "cadence": {"enum": list(CADENCES)},
                             "as_of": {"type": "string"},
                             "task": {"type": "string"},
+                            "page": {"type": "string"},
+                            "as": {"type": "string"},
+                            "written_by": {"type": "string"},
+                            "written_at": {"type": "string", "format": "date-time"},
                             "replaces": {"type": "string"},
                             "path": {"type": "string"},
                             "scope": {"enum": ["task", "bot"]},
@@ -586,6 +694,9 @@ def install_pages(app, store, auth, files):
         ids: str = "",
         bot: str = "",
         task: str = "",
+        linked: str = "",
+        role: str = "",
+        writer: str = "",
         archived: bool = False,
         limit: int = 20,
         cursor: str = "",
@@ -596,7 +707,15 @@ def install_pages(app, store, auth, files):
         if ids:
             return pages.many(who, [i.strip() for i in ids.split(",")])
         return pages.listing(
-            who, bot=bot, task=task, archived=archived, limit=max(1, min(limit, LIST_MAX)), cursor=cursor
+            who,
+            bot=bot,
+            task=task,
+            linked=linked,
+            role=role,
+            writer=writer,
+            archived=archived,
+            limit=max(1, min(limit, LIST_MAX)),
+            cursor=cursor,
         )
 
     @app.get(
@@ -605,6 +724,20 @@ def install_pages(app, store, auth, files):
     )
     def read(request: Request, fid: str):
         return pages.read(request.state.identity, fid)
+
+    @app.post(
+        "/api/v2/pages/{fid}/links",
+        **api_v2("Pages", "linkPage", "Link a page to a task, bot, person, goal or page", "PageShown"),
+    )
+    def link_page(request: Request, fid: str, body: PageLink):
+        return pages.change_link(request, fid, body.target, body.role)
+
+    @app.delete(
+        "/api/v2/pages/{fid}/links",
+        **api_v2("Pages", "unlinkPage", "Remove a page link, keeping at least one writer", "PageShown"),
+    )
+    def unlink_page(request: Request, fid: str, target: str, role: str = "related"):
+        return pages.change_link(request, fid, target, role, remove=True)
 
     @app.patch(
         "/api/v2/pages/{fid}",

@@ -7,6 +7,8 @@ from ._base import SCHEMAS, items, obj
 SCHEMAS.update(
     {
         # Pages and Library › Files (backend/pages.py, backend/file_library.py).
+        "PageLinkView": obj({"target": "s", "role": "s", "name": "s", "by": "s", "at": "s"}),
+        "PageWriter": obj({"actor": "s", "name": "s", "versions": "i", "last_at": "s"}),
         "Page": obj(
             {
                 "audience": {
@@ -17,6 +19,9 @@ SCHEMAS.update(
                     "type": "boolean",
                     "description": "Only returned to managers, including on lists and cards",
                 },
+                "links": items(ref("PageLinkView")),
+                "writers": items(ref("PageWriter")),
+                "may_write": "b",
                 "file_id": "s",
                 "title": "s",
                 "bot_id": "s",

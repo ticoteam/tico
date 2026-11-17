@@ -29,6 +29,7 @@ from html.parser import HTMLParser
 from fastapi import Request
 
 from . import manual
+from . import page_links
 from . import names
 from . import visuals
 from .store import H, Problem
@@ -406,6 +407,9 @@ class Library:
             archived=bool(r["archived"] or (page and r["page_archived"])),
             pins=self._pins(c, who, r["id"], caches["task"]),
         )
+        if page:
+            links = page_links.links_of(c, self.auth, who, r["id"])
+            value.update(links=links[:5], links_more=max(0, len(links) - 5))
         for key in ("poster_blob_id", "thumb_blob_id"):
             value.pop(key, None)
         return value
@@ -418,6 +422,9 @@ class Library:
         bot="",
         team="",
         task="",
+        linked="",
+        role="",
+        writer="",
         since="",
         until="",
         pinned=False,
@@ -442,6 +449,9 @@ class Library:
         if task:
             where.append("f.task_id=?")
             params.append(task)
+        link_where, link_args = page_links.filters(linked, role, writer)
+        where.extend(link_where)
+        params.extend(link_args)
         if since:
             where.append("f.last_activity_at>=?")
             params.append(since)
@@ -481,6 +491,7 @@ class Library:
                 budget,
                 cursor_key=visuals.key_for(self.app, self.store.settings),
             )
+            page_links.prime(c, rows)
             known = names.lookup(c, {"bot:" + r["bot_id"] for r in rows})
             files = [self.row_view(c, who, r, caches, known) for r in rows]
             known.update(names.lookup(c, {f["actor"] for f in files if f.get("actor")}))
@@ -831,6 +842,9 @@ def install_library(app, store, auth, files):
         bot: str = "",
         team: str = "",
         task: str = "",
+        linked: str = "",
+        role: str = "",
+        writer: str = "",
         since: str = "",
         until: str = "",
         pinned: bool = False,
@@ -845,6 +859,9 @@ def install_library(app, store, auth, files):
             bot=bot,
             team=team,
             task=task,
+            linked=linked,
+            role=role,
+            writer=writer,
             since=since,
             until=until,
             pinned=pinned,
