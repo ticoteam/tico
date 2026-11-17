@@ -24,6 +24,8 @@ interface ModalTask extends TaskRow {
   quiet?: ModalDeferred | null;
   goal_id?: string | null;
   conversation_id?: string;
+  /** On its own read: its label, the letters it was made with and its number ("O561"); null without a number. */
+  label?: string | null;
 }
 // The task dialog with what the page keeps on it: the opening a redraw belongs to, where Back returns, the draw and save
 // counters, the rail, the page cards' slot (ui/app/pages.ts) and the live edit (ui/app/task-live.ts).
@@ -71,10 +73,13 @@ interface ModalDetail {
 // The ways this reader may send a comment (`comment_delivery`), and who it reaches (`comment_to`).
 interface ModalDelivery { default?: string | null; default_for?: string; steer?: boolean; queue?: boolean; defer?: boolean; goal?: boolean; }
 interface ModalCommentTo { bot?: string; wakes?: boolean; mention?: string[]; }
-// The run answering the thread (`execution`): the bot's chat's pending run, with whose it is and its steps so far.
-interface ModalExecution extends ChatExecution { bot?: string; from_person?: boolean; parts?: {text: string}[]; }
+// The run answering the thread (`execution`): the bot's chat's pending run, with whose it is (`bot_id`, the bot's id as
+// backend/views.py conversation_execution sends it) and its steps so far.
+interface ModalExecution extends ChatExecution { bot_id?: string; from_person?: boolean; parts?: {text: string}[]; }
 // A change in the task's history, a comment, and one line of the conversation (either).
-interface ModalEvent { id?: string; created_at: string; field: string; old?: string | null; new?: string | null; note?: string | null; actor?: string; via?: string; }
+interface ModalEvent { id?: string; created_at: string; field: string; old?: string | null; new?: string | null; note?: string | null; actor?: string; via?: string;
+  /** On a `number` line: the task's label ("O561"), laid on by taskCommentsRender. */
+  label?: string | null; }
 interface ModalReconnectFix { runtime?: string; runner?: string; machine?: string; }
 interface ModalReconnect { fix?: ModalReconnectFix; status?: string; person?: string; service?: string; key?: string; }
 type ModalRefs = NonNullable<TfMessage['refs']> & {via?: string; quiet?: boolean; turn_id?: string; reconnect?: ModalReconnect | null; credential_request?: string};
@@ -808,7 +813,7 @@ const TASK_EVENT_WORDS: Record<string, (v: string | null | undefined, x: ModalEv
   snooze: v => v ? `snoozed it to ${new Date(String(v)).toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric'})}` : 'snoozed it',
   unsnooze: () => 'woke it', snooze_refused: () => 'was refused a snooze', woken_again: () => 'woke it again', late: () => 'marked it late',
   handoff_filed: () => 'filed a hand-off task', pick: v => `gave the turn to ${actorLabel(v)}`, give: v => `gave it to ${actorLabel(v)}`,
-  github: v => `GitHub: ${v || ''}`, number: v => `numbered it #${v}`, pr_queued: v => `queued ${v} to merge`, pr_dequeued: () => 'took it out of the merge queue',
+  github: v => `GitHub: ${v || ''}`, number: (v, x) => `numbered ${x.label || `#${v}`}`, pr_queued: v => `queued ${v} to merge`, pr_dequeued: () => 'took it out of the merge queue',
   pr_queue_removed: v => `dropped ${v || 'it'} from the merge queue`, merge_queue_failed: () => 'the merge queue sent it back',
   session: () => 'started a new session', task_model: v => `ran on ${v}`, before: () => 'set the order', after: () => 'set the order', work: () => 'stopped its work',
   title: () => 'renamed it', body: () => 'edited the request', goal_id: v => v ? 'tied it to a goal' : 'took it off its goal', human_id: v => v ? `made ${actorLabel(v)} its Human` : 'took its Human off',
@@ -822,6 +827,10 @@ const TASK_EVENT_WORDS: Record<string, (v: string | null | undefined, x: ModalEv
 // change (who filed, numbered, moved, handed over or snoozed it, tags, GitHub) folds when two or more come in a row
 // (taskCommentsRender).
 const TASK_EVENT_MILESTONES = new Set(['page_attached', 'ok_kept', 'jev_verdict', 'answer', 'merge_queue_failed']);
+// The history lines Tico writes itself, whoever's action set them off: the number a numbered pipeline gives, a stage
+// rule's Block, Tell or Move back, and the hand-off task a stage files. They read as a quiet line with no name
+// ("Numbered O561"), never as the person or bot who moved or filed the task.
+const TASK_EVENT_SYSTEM = new Set(['number', 'stage_rule', 'handoff_filed']);
 // A page attached is a chip that opens that version of the page: `page:<file id>@<version>`.
 function taskEventChipHTML(x: ModalLine) {
   if (x.kind !== 'event' || x.field !== 'page_attached') return '';
@@ -859,7 +868,7 @@ function commentLineHTML(x: ModalLine, i: number, all: ModalLine[] | null | unde
     // A result mirrored into a comment keeps its full text there; the event still records the status move.
     const mirrored = x.note && all?.some(y => y.kind === 'comment' && y.message?.sender_id === x.actor
       && String(y.message.body || '').trim() === String(x.note).trim() && Math.abs(Date.parse(y.ts) - Date.parse(x.ts)) < 5000);
-    const src = rowSource(x, x.actor), who = commentAuthor(x.actor, x.via, src);
+    const src = rowSource(x, x.actor), who = TASK_EVENT_SYSTEM.has(x.field) ? '' : commentAuthor(x.actor, x.via, src);
     // A change the server made with no name to give it (a system line) reads as a sentence of its own.
     const said = who ? say : say.charAt(0).toUpperCase() + say.slice(1);
     const note = x.field !== 'note' && !mirrored ? taskEventNote(x) : '';
@@ -980,10 +989,12 @@ function taskLiveHTML(x: ModalExecution | null | undefined, stopping = '', sent 
   const working = !!x && ['leased', 'running'].includes(x.state);
   const run = working || x?.from_person && v2RunLive(x) ? x : null;
   if (!run && !sent) return '';
-  const t = pendingRunText(run, run?.bot);
+  // The bot at work, by its id (`bot_id`): never the reader, whoever sent the message the run answers.
+  const slug = String(run?.bot_id || '').replace(/^bot:/, '');
+  const t = pendingRunText(run, slug || undefined);
   // The chat's status row (styles/threads.css .th-status): the bot at work, its state in a word, then its newest step.
   // Several bots may answer on a task, so the row names the one at work.
-  const bot = run?.bot ? (String(run.bot).includes(':') ? String(run.bot) : 'bot:' + run.bot) : '';
+  const bot = slug ? 'bot:' + slug : '';
   // Its state in a word: working, starting, up next, sent; a run that ended badly (Reply failed) can't reply.
   const state = !run ? 'sent' : run.state === 'running' && !run.waiting ? 'working' : run.state === 'leased' && !run.waiting ? 'starting'
     : run.state === 'queued' || run.waiting ? 'up next' : "can't reply";
@@ -991,8 +1002,8 @@ function taskLiveHTML(x: ModalExecution | null | undefined, stopping = '', sent 
   const step = part ? clipLine(part.text.replace(/\s+/g, ' ').trim(), 120) : '';
   const said = step || (t.word && t.word.toLowerCase() !== state ? t.word : '') || (state === 'sent' ? '' : t.tip);
   const line = said ? `${working ? '<span class="th-status-dot" aria-hidden="true"></span>' : ''}<span class="task-live-step">${esc(said)}</span>` : '';
-  const stop = working && x && x.run_id && settingsCanManageBot(botRow(x.bot))
-    ? `<button type="button" class="ghost small th-status-act task-live-stop" data-task-stop="${esc(x.run_id)}" data-bot="${esc(x.bot)}" ${
+  const stop = working && x && x.run_id && slug && settingsCanManageBot(botRow(slug))
+    ? `<button type="button" class="ghost small th-status-act task-live-stop" data-task-stop="${esc(x.run_id)}" data-bot="${esc(slug)}" ${
       stopping === x.run_id ? 'title="Stopping…" disabled>Stopping…' : 'title="Stop this run">Stop'}</button>` : '';
   const detail = working && x?.run_id ? taskStepsFold(x.run_id, line || esc(state), true) : line;
   return `<div class="th-status th-status-${working ? 'working' : state === "can't reply" ? 'cant_reply' : 'up_next'} task-live" role="status" aria-label="${esc(t.tip)}${step ? ': ' + esc(step) : ''}">
@@ -1020,12 +1031,14 @@ function taskStateHTML(state: TaskChatState, data: ModalDetail, sent = '') {
   const yours = !!turn?.ask && !!turn.requirement_id && !!me && turn.who === me && !!turn.line && !myQmark;
   const owner = String(t?.owner_id || '');
   // A row names whoever it is about, face first; with nobody to name it has no face, and a word alone leads it
-  // ("Waiting on you").
-  const row = (who: string, word: string, line: string, cls: string, extra = '', act = '') => {
+  // ("Waiting on you"). A line about another task (`open`: one it depends on or filed) opens that task.
+  const row = (who: string, word: string, line: string, cls: string, extra = '', act = '', open = '') => {
     const head = who ? `<span class="th-who">${esc(who === me ? 'You' : actorLabel(who))}</span>${word ? `<span class="th-status-word">${esc(word)}</span>` : ''}`
       : word ? `<span class="th-status-word th-status-lead">${esc(word.charAt(0).toUpperCase() + word.slice(1))}</span>` : '';
+    const said = open ? `<a class="task-state-line" href="#/task/${encodeURIComponent(open)}" data-task-wait-open="${esc(open)}">${esc(line)}</a>`
+      : `<span class="task-state-line">${esc(line)}</span>`;
     return `<div class="th-status ${cls}${who ? '' : ' th-status-bare'}" role="status">${who ? `<div class="th-av">${actorAvatar(who, 28)}</div>` : ''}<div class="th-main">${
-      head ? `<div class="th-head">${head}</div>` : ''}${line ? `<div class="th-status-detail"><span class="task-state-line">${esc(line)}</span>${extra}</div>` : extra}</div>${act}</div>`;
+      head ? `<div class="th-head">${head}</div>` : ''}${line ? `<div class="th-status-detail">${said}${extra}</div>` : extra}</div>${act}</div>`;
   };
   let now = live;
   if (!now && data.waiting_for) now = row(owner.startsWith('bot:') ? owner : '', 'up next', data.waiting_for, 'th-status-up_next task-wait',
@@ -1038,7 +1051,7 @@ function taskStateHTML(state: TaskChatState, data: ModalDetail, sent = '') {
     const other = turn.state === 'tasks' && turn.who ? String(turn.who) : '';
     const who = String(turn.who || '').includes(':') ? String(turn.who) : other ? taskWaitHolder(data, t, other) : '';
     const word = who && turn.ask ? 'to answer' : who && turn.state === 'bot' && turn.running ? 'working' : other && !who ? 'waiting on a task' : '';
-    now = row(who, word, clipLine(turn.line, 400), 'th-status-turn task-wait', taskCauseLinkHTML(turn.href));
+    now = row(who, word, clipLine(turn.line, 400), 'th-status-turn task-wait', taskCauseLinkHTML(turn.href), '', other);
   }
   const q = t && !taskFinished(t) ? t.deferred || t.quiet : null;
   let deferred = '';
@@ -1183,7 +1196,9 @@ function taskCommentsRender(state: TaskChatState, data: ModalDetail, sent = '') 
   const comments = (data.comments || data.messages || []).filter(m => ['say', 'ask', 'answer'].includes(m.kind));
   const lines: ModalLine[] = [
     ...comments.map((m): ModalLine => ({kind: 'comment', ts: m.created_at, message: m})),
-    ...(data.events || []).map((e): ModalLine => ({kind: 'event', ts: e.created_at, ...e})),
+    // A number reads as the task's label ("O561"), which its own read carries.
+    ...(data.events || []).map((e): ModalLine => ({kind: 'event', ts: e.created_at, ...e,
+      ...(e.field === 'number' && data.task?.label && String(data.task.number) === String(e.new) ? {label: data.task.label} : {})})),
     // Each finished bot run is one line: "Builder 2 worked 14 min".
     ...(data.runs || []).filter(r => r.started_at && r.finished_at && r.bot).map((r): ModalLine => ({kind: 'run', ts: String(r.finished_at), run: r})),
   ].sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
@@ -1242,7 +1257,10 @@ function taskCommentsRender(state: TaskChatState, data: ModalDetail, sent = '') 
       const stop = eventElement(ev)?.closest<HTMLButtonElement>('[data-task-stop]');
       if (stop && taskChatCurrent(state)) { void taskRunStop(state, stop); return; }
       const answer = eventElement(ev)?.closest<HTMLButtonElement>('[data-task-answer]');
-      if (answer && taskChatCurrent(state)) void taskAnswerOpen(state, answer);
+      if (answer && taskChatCurrent(state)) { void taskAnswerOpen(state, answer); return; }
+      // The task this one waits on, named in the last row: it opens in this window, as a related task does.
+      const open = eventElement(ev)?.closest<HTMLElement>('[data-task-wait-open]');
+      if (open && taskChatCurrent(state)) { ev.preventDefault(); void taskModalOpen(open.dataset.taskWaitOpen!, state.dialog); }
     });
   }
   state.data = data;

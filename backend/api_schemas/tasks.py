@@ -81,6 +81,11 @@ SCHEMAS.update(
                 "oneOf": [obj({"id": "s", "name": "s"}), {"type": "null"}],
                 "description": "On the task's own read: the pipeline it is in",
             },
+            label={
+                "type": ["string", "null"],
+                "description": "On the task's own read: its label, the letters it was made with and its number (\"O561\"); "
+                "null when it has no number",
+            },
             stage={
                 "oneOf": [
                     obj({"id": "s", "name": "s", "kind": {"enum": ["work", "done", "closed"]}, "by_hand": "b"}),
@@ -92,12 +97,20 @@ SCHEMAS.update(
                 "type": "boolean",
                 "description": "On a list row: it entered its stage pushed past a requirement",
             },
-            blocked_by=items(obj({"id": "n", "number": {"type": ["integer", "null"]}}))
+            blocked_by=items(
+                obj(
+                    {"id": "n", "number": {"type": ["integer", "null"]}, "label": "n", "title": "n"},
+                    required=["id", "number"],
+                )
+            )
             | {
-                "description": "On a list row with a dependency: the open tasks it depends on (\"Blocked by #304\"), oldest "
-                "first; one the reader may not open has a null id and number. Absent when there are none"
+                "description": "On a list row with a dependency: the open tasks it depends on (\"Blocked by E304\"), oldest "
+                "first, each with its label (null with no number) and the start of its title; one the reader may not open "
+                "has a null id, number, label and title. Absent when there are none"
             },
-            blocks=items(obj({"id": "s", "number": {"type": ["integer", "null"]}}))
+            blocks=items(
+                obj({"id": "s", "number": {"type": ["integer", "null"]}, "label": "n"}, required=["id", "number"])
+            )
             | {
                 "description": "On a list row: the open tasks that depend on it and the reader may open (\"Blocks #307\"). "
                 "Absent when there are none"

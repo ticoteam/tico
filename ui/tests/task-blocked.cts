@@ -14,7 +14,7 @@ type Route = import('playwright').Route;
   try {
     const tasks = Array.from({length: 12}, (_, i) => task(`t-${300 + i}`, `Errand ${300 + i}`, 'spec', {owner_id: 'human:ana', relations: {}}));
     const by = (n: number) => tasks.find(t => t.number === n)!;
-    const since = '2026-11-13T05:00:00Z';
+    const since = '2026-11-13T12:00:00Z'; // noon UTC: Nov 13 in every zone from UTC-11 to UTC+11
     const dep = (n: number, direction: string, stage = 'Build') => ({id: by(n).id, title: by(n).title, status: 'open', owner_id: 'bot:builder',
       direction, number: n, stage, since});
     by(304).title = 'Growth <b>synced</b> sources part 1';

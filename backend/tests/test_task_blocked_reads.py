@@ -5,7 +5,6 @@ Snoozed for a blocked task."""
 
 import pytest
 
-from backend import task_depends as D
 from backend import task_engine as E
 from backend import task_reads
 from backend import task_relations as TR
@@ -42,19 +41,15 @@ def rows(c, *ids, visible_sql="1"):
     return {row["id"]: row for row in task_reads.brief(c, found, visible_sql)}
 
 
-def ref(c, task_id):
-    return D.ref(E.task(c, task_id))
-
-
 def test_a_board_row_names_the_tasks_that_block_it_and_those_it_blocks(c):
     build(c)
     blocker, blocked, other = task(c, "Part 1"), task(c, "Part 2"), task(c, "Part 3")
     TR.relate(c, X.ANA, blocked, blocker, "depends_on")
     read = rows(c, blocker, blocked, other)
     number = E.task(c, blocker)["number"]
-    assert read[blocked].get("blocked_by", []) == [{"id": blocker, "number": number}]
+    assert read[blocked].get("blocked_by", []) == [{"id": blocker, "number": number, "label": None, "title": "Part 1"}]
     assert read[blocked].get("blocks", []) == []
-    assert read[blocker].get("blocks", []) == [{"id": blocked, "number": E.task(c, blocked)["number"]}]
+    assert read[blocker].get("blocks", []) == [{"id": blocked, "number": E.task(c, blocked)["number"], "label": None}]
     assert read[blocker].get("blocked_by", []) == []
     # A row with no dependency carries neither field: a 500-row list stays inside its byte budget.
     assert "blocked_by" not in read[other] and "blocks" not in read[other]
@@ -72,7 +67,8 @@ def test_a_reader_who_may_not_open_the_other_end_is_not_told_which_task_it_is(c)
     TR.relate(c, X.ANA, blocked, blocker, "depends_on")
     hidden = f"id <> '{blocker}'"
     read = rows(c, blocked, visible_sql=hidden)
-    assert read[blocked].get("blocked_by", []) == [{"id": None, "number": None}]  # still blocked: the mark stays
+    hidden_row = {"id": None, "number": None, "label": None, "title": None}
+    assert read[blocked].get("blocked_by", []) == [hidden_row]  # still blocked: the mark stays, nothing names it
     read = rows(c, blocker, visible_sql=f"id <> '{blocked}'")
     assert read[blocker].get("blocks", []) == []
 
@@ -123,9 +119,35 @@ def test_a_blocked_task_a_bot_snoozed_is_listed_as_blocked_never_snoozed(c):
     assert read[asleep]["snoozed"] is True
     # Its line is the dependency's, in the row and in the task's own read, never the snooze's why.
     turn = read[blocked]["turn"]
-    assert (turn["state"], turn["line"]) == (W.TASKS, f"Blocked by {ref(c, blocker)} Part 1, in Build")
+    assert (turn["state"], turn["line"]) == (W.TASKS, "Blocked by Part 1, in Build")
     assert [w.state for w in W.waiting_on(c, blocked)] == [W.TASKS]
     # Once the blocker ends, the snooze that is still open sets it aside again.
     E.move(c, blocker, E.DONE, X.ANA, "Finished")
     assert blocked in listed("only") and rows(c, blocked)[blocked]["snoozed"] is True
     assert W.waiting_on(c, blocked)[0].state == W.SNOOZED
+
+
+def test_a_blocker_is_named_by_its_label_or_by_its_title_never_by_its_id(c):
+    """A person reads "Blocked by O561 Write the launch post" or, for a task with no number, its title alone: a raw id
+    ("7a0009f1") says nothing to them. The row carries the label and title for the card's link to the blocker."""
+    build(c)
+    c.execute("UPDATE pipelines SET prefix='O' WHERE id='eng'")
+    numbered = task(c, "Write the launch post")
+    plain = task(c, "Call the printer", "general", assignee=X.ANA)
+    blocked = task(c, "Ship the launch")
+    TR.relate(c, X.ANA, blocked, numbered, "depends_on")
+    TR.relate(c, X.ANA, blocked, plain, "depends_on")
+    label = f"O{E.task(c, numbered)['number']}"
+    assert [w.line for w in W.waiting_on(c, blocked)] == [
+        f"Blocked by {label} Write the launch post, in Build",
+        "Blocked by Call the printer, in To do",
+    ]
+    assert not any(plain[:8] in w.line for w in W.waiting_on(c, blocked))
+    read = rows(c, blocked, numbered)
+    assert [(d["label"], d["title"]) for d in read[blocked]["blocked_by"]] == [
+        (label, "Write the launch post"),
+        (None, "Call the printer"),
+    ]
+    assert read[numbered]["blocks"] == [
+        {"id": blocked, "number": E.task(c, blocked)["number"], "label": f"O{E.task(c, blocked)['number']}"}
+    ]

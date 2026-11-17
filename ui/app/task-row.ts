@@ -30,15 +30,19 @@ function taskMarkHTML(t: TaskAny | null | undefined, {space = true}: {space?: bo
 }
 const taskLate = (t: TaskAny | null | undefined) => !!t && t.status === 'open' && !!t.late;
 const lateTagHTML = (t: TaskAny | null | undefined) => taskLate(t) ? '<span class="tk-late">Late</span>' : '';
-/** One end of a dependency on a list row (backend/task_reads._dependencies): a task the reader may not open has no number. */
-interface TaskDepRef { id?: string | null; number?: number | null }
-/** The open tasks a list row depends on ("Blocked by #304"); [] for a full task or one that is not open. */
+/** One end of a dependency on a list row (backend/task_reads._dependencies): its label ("E304") and the start of its
+ * title; a task the reader may not open has neither, nor an id or a number. */
+interface TaskDepRef { id?: string | null; number?: number | null; label?: string | null; title?: string | null }
+/** The open tasks a list row depends on ("Blocked by E304"); [] for a full task or one that is not open. */
 const taskBlockedBy = (t: TaskAny | null | undefined): TaskDepRef[] =>
   t && t.status === 'open' && 'blocked_by' in t ? t.blocked_by || [] : [];
 /** The open tasks that depend on a list row ("Blocks #307"). */
 const taskBlocks = (t: TaskAny | null | undefined): TaskDepRef[] =>
   t && t.status === 'open' && 'blocks' in t ? t.blocks || [] : [];
-const taskDepRef = (r: TaskDepRef): string => r.number != null ? `#${r.number}` : '';
+const taskDepRef = (r: TaskDepRef): string => r.label || (r.number != null ? `#${r.number}` : '');
+/** How a row names a task it waits for: its label ("E304"), else its title (the row shows a few words of it); never
+ * its id. '' for one the reader may not open. */
+const taskDepName = (r: TaskDepRef): string => taskDepRef(r) || (r.id && r.title ? r.title.replace(/\s+/g, ' ').trim() : '');
 /** "Blocks #307", "Blocks #307, #308", and past two, or when one has no number, "Blocks 4 tasks". */
 function taskBlocksText(rows: TaskDepRef[]): string {
   const refs = rows.map(taskDepRef);

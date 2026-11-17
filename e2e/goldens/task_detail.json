@@ -256,6 +256,7 @@
       "important_requesters": 0,
       "inputs": [],
       "internal_requesters": 0,
+      "label": null,
       "labels": [],
       "lane": "company",
       "late": null,
