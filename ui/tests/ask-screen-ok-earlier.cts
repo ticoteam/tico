@@ -67,7 +67,7 @@ const QA = '<h1>QA: saved carts</h1><p>Before and after: the cart is kept when t
         if (p === `/api/v2/oks/${RID}`) return json({error: 'not_found'}, 404);     // a stage's OK: no grant
         if (p === '/api/v2/files/pq' && url.searchParams.get('v') === '2')
           return route.fulfill({contentType: 'text/html', headers: {'content-disposition': 'inline; filename="page.html"'}, body: QA});
-        if (p === '/api/v2/tasks/t-73') return json({task: {...brief('t-73', 'Dark mode toggle', 73), body: 'A toggle in Settings for dark mode.'}});
+        if (p === '/api/v2/tasks/t-73') return json({task: {...brief('t-73', 'Dark mode toggle', 73), request: {text: 'A toggle in Settings for dark mode.'}}});
         if (r.method() === 'POST' && p.startsWith('/api/v2/')) {
           writes.push({p, body: JSON.parse(r.postData() || '{}') as Record<string, unknown>});
           const m = /^\/api\/v2\/tasks\/(t-7[23])\/asks\/([^/]+)\/answer$/.exec(p);

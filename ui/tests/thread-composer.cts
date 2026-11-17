@@ -565,7 +565,7 @@ async function slash(browser: Browser) {
   await box.fill('/task Write the pricing brief');
   await page.locator('#bot-thread .p-send').click();
   await page.locator('.toast').filter({hasText: 'Task for'}).waitFor();
-  assert.deepEqual(api.tasks, [{title: 'Write the pricing brief', body: 'Write the pricing brief', owner: BOT}]);
+  assert.deepEqual(api.tasks, [{title: 'Write the pricing brief', message: 'Write the pricing brief', owner: BOT}]);
   await box.fill('/goal Ship the Acme pricing page');
   await page.locator('#bot-thread .p-send').click();
   await page.locator('#bot-thread .thv-goal .cg-text').waitFor();

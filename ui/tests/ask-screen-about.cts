@@ -18,7 +18,7 @@ const LONG = 'Can you confirm the p95 latency budget for the checkout API is sti
 /** Ana's questions and OK (tasks-page.cts needsOf, without its task of her own): t-2's question is long. */
 function world(over: {title?: string; body?: string} = {}) {
   const tasks = fixtures();
-  tasks.find(t => t.id === 't-2')!.body = over.body ?? 'Perf I31 compares the cache change against the **load test**.';
+  Object.assign(tasks.find(t => t.id === 't-2')!, {request: {text: over.body ?? 'Perf I31 compares the cache change against the **load test**.'}});
   const needs = needsOf(tasks).filter(n => n.kind !== 'task');
   const q = needs.find(n => n.id === 'r2')!;
   q.line = LONG; q.ask = {...q.ask!, line: LONG, choices: null, ...(over.title ? {title: over.title} : {})};

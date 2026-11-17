@@ -73,7 +73,7 @@ const msg = (id: string, from: string, body: string, at: string) => ({id, seq: N
       if (p === '/api/v2/oks/r3') return json({requirement_id: 'r3', subject: 'spec:3', content: {title: 'Launch email', body: 'Hello.'}, shown_hash: 'e'.repeat(64), standing: 'waiting', task_id: 't3'});
       if (p === '/api/v2/flow/opinions') return json({opinions: []});
       const t = p.match(/^\/api\/v2\/tasks\/(t\d)$/);
-      if (t && r.method() === 'GET') return json({task: {...(t[1] === 't1' ? question() : ok()).task as object, body: 'Your area and its products.',
+      if (t && r.method() === 'GET') return json({task: {...(t[1] === 't1' ? question() : ok()).task as object, request: {text: 'Your area and its products.'},
         created_at: '2026-11-15T09:00:00Z', attachments: [], links: [], conversation_id: t[1] === 't1' ? 'c1' : 'c2', documents: t[1] === 't3' ? documents() : []}});
       if (p.startsWith('/api/v2/files/f-')) return route.fulfill({contentType: 'text/html', body: p.startsWith('/api/v2/files/f-spec')
         ? `<h1>Spec</h1><p>Spec v${url.searchParams.get('v')}</p>` : '<h1>QA report</h1><p>Boards show stuck counts ✓</p>'});
