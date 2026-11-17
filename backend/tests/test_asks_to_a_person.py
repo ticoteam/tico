@@ -27,12 +27,15 @@ from backend.tests.helpers.org_rule_check import (  # noqa: F401 - fixtures
 )
 
 LINE = "Which tone should the launch note take?"
-SHOWN = "https://example.com/launch-note"  # what a bot's OK approves: it names what it shows
-OK = {"line": "OK the launch note?", "kind": "ok", "show": [SHOWN]}
+OK = {"line": "OK the launch note?", "kind": "ok"}
 
 
 def ask(api, task, body, to="ana", token="ops-test"):
-    """An ask on the task (POST /asks): an OK."""
+    """An ask on the task (POST /asks): an OK. One that names nothing shows a page of ops' (a bot's OK approves what
+    it shows)."""
+    if body.get("kind") == "ok" and "show" not in body:
+        file_id, _ = store_file(api, "The launch note, both tones.", title="Launch note")
+        body = {**body, "show": [f"page:{file_id}"]}
     return api.post(
         f"/api/v2/tasks/{task['id']}/asks",
         json={"to": to, "version": task["version"], **body},
@@ -70,14 +73,23 @@ def refusal_of(r):
 
 
 @pytest.mark.parametrize(
-    "ref", ["page:{file}", "page:{file}@1", "file:{file}@1", "task:{task}", "https://example.com/a"]
+    ("ref", "ok"),
+    [
+        ("page:{file}", True),
+        ("page:{file}@1", True),
+        ("file:{file}@1", True),
+        ("task:{task}", False),
+        ("https://example.com/a", False),
+        ("page:{file}@9", False),
+    ],
 )
-def test_an_ok_may_show_a_page_a_file_a_task_or_a_web_address(ruled, ref):
+def test_a_bots_ok_shows_a_page_or_a_file_version_not_a_task_or_a_web_address(ruled, ref, ok):
     api, _ = ruled
     task = task_for_ops(api)
     file_id, _ = store_file(api, "The launch note, both tones.", title="Launch note drafts")
     r = ask(api, task, {**OK, "show": [ref.format(file=file_id, task=task["id"])]})
-    assert r.status_code == 200, r.text
+    assert r.status_code == (200 if ok else 409), r.text
+    assert ok or r.json()["error"] == "task_requirement"
 
 
 # ---- an ask's short title (decision view part 2, task #390) --------------------------------------------------------
@@ -181,7 +193,7 @@ def test_an_ok_that_breaks_its_shape_is_refused_with_the_fix_before_any_call(rul
     api, judge = ruled
     color_rule(api)  # a rule in force, so a call would be made if the ask got that far
     task = task_for_ops(api)
-    r = ask(api, task, {"line": "See above: OK to send?", "kind": "ok", "show": [SHOWN]})
+    r = ask(api, task, {"line": "See above: OK to send?", "kind": "ok"})
     assert r.status_code == 409, r.text
     assert r.json()["error"] == "task_ask_shape" and '"See above"' in r.json()["detail"], r.text
     assert judge.calls == [], "refused in plain code: no model call"

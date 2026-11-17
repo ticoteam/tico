@@ -19,7 +19,6 @@ from backend.tests.helpers import engine as X
 ANA, BEN = "human:ana", "human:ben"
 BUILDER, HELPER, MANAGER = "bot:builder", "bot:helper", "bot:manager"
 BODY = "What to do and how to tell it is done."
-NOTE = ["https://example.com/launch-note"]  # what a bot's OK shows
 
 
 @pytest.fixture
@@ -53,7 +52,7 @@ def _visits(c, task_id):
     return c.execute("SELECT COUNT(*), SUM(left_at IS NULL) FROM visits WHERE task_id=?", (task_id,)).fetchone()
 
 
-def _ok(c, task_id, person=ANA, line="OK the launch note?", by=BUILDER, shows=NOTE):
+def _ok(c, task_id, person=ANA, line="OK the launch note?", by=BUILDER, shows=X.shown(c)):
     """A bot's OK of a person on the task, showing what it approves: the task waits on it."""
     return H.task_ask(c, by, task_id, person, line, kind="ok", shows=shows, seen_version=_version(c, task_id))
 
@@ -697,10 +696,10 @@ def test_a_bots_new_ask_keeps_what_was_decided_and_replaces_only_its_open_ask(c)
     row = _new(c, by=BEN, owner=BUILDER)
     question = X.old_question(c, row["id"], BUILDER, BEN, "Which CRM?")  # a question row the engine wrote before
     H.task_answer(c, BEN, row["id"], question["requirement_id"], "New CRM")
-    ok = _ok(c, row["id"], BEN, "OK the budget?", shows=["https://example.com/budget"])
+    ok = _ok(c, row["id"], BEN, "OK the budget?", shows=X.shown(c))
     H.task_answer(c, BEN, row["id"], ok["requirement_id"], "ok")
-    open_one = _ok(c, row["id"], BEN, "OK the launch day?", shows=["https://example.com/launch-day"])
-    last = _ok(c, row["id"], BEN, "OK the launch week?", shows=["https://example.com/launch-week"])
+    open_one = _ok(c, row["id"], BEN, "OK the launch day?", shows=X.shown(c))
+    last = _ok(c, row["id"], BEN, "OK the launch week?", shows=X.shown(c))
     shown = {r["requirement_id"]: r for r in H.task_view(c, row["id"], BEN)["to_leave"]}
     assert open_one["requirement_id"] not in shown  # it was still open: replaced
     assert (
@@ -758,7 +757,7 @@ def test_an_ask_on_a_private_task_makes_nobody_a_reader_and_says_how_to_share_it
     for ask in (
         lambda: H.task_ask(c, BUILDER, row["id"], BEN, "Which vendor?", seen_version=_version(c, row["id"])),
         lambda: E.add_requirement(
-            c, row["id"], BUILDER, "ok", BEN, "OK the vendor?", shows=NOTE, seen_version=_version(c, row["id"])
+            c, row["id"], BUILDER, "ok", BEN, "OK the vendor?", shows=X.shown(c), seen_version=_version(c, row["id"])
         ),
     ):
         with _refused("private") as refused:

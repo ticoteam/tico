@@ -12,18 +12,17 @@ from types import SimpleNamespace
 
 import pytest
 
+from backend import bot_settings as BS
 from backend import call_slots as CS
 from backend import org_rule_check as K
-from backend import thread_attention
-from backend import threads
-from backend import updates
+from backend import thread_attention, threads, updates
 from backend.auth import Identity
 from backend.names import SUPPORT_ACTOR, SUPPORT_NAME
 from backend.store import H, Problem
+from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import claim, get, headers, post, setup_attempt  # noqa: F401
-from backend.tests.helpers.org_rules import as_bot, edit, org, rule  # noqa: F401
 from backend.tests.helpers.org_rule_check import LAUNCH, hand_over
-from backend import bot_settings as BS
+from backend.tests.helpers.org_rules import as_bot, edit, org, rule  # noqa: F401
 
 
 @pytest.fixture(autouse=True)
@@ -933,9 +932,9 @@ def test_no_engine_call_happens_under_the_write_lock(ruled):
 
 
 def test_hub_rules_check_and_appeal_over_the_cli_and_mcp(ruled):
+    from backend.tests.helpers.automation_cli import Client  # noqa: F401
     from backend.tests.helpers.org_rules_surfaces import cli, mcp  # noqa: F401
     from clients import cli_spec, hubcli
-    from backend.tests.helpers.automation_cli import Client  # noqa: F401
 
     api, judge = ruled
     color_rule(api, reviewer="ben")
@@ -2227,7 +2226,8 @@ def test_a_warned_automation_update_passes_refusing_writing_checks(ruled, monkey
 
 
 def test_the_market_pointer_keeps_a_warned_daily_line_on_top(ruled, monkeypatch):
-    from backend import automation_actions as AA, hubdb
+    from backend import automation_actions as AA
+    from backend import hubdb
 
     api, _ = ruled
     color_rule(api, if_broken="warn")
@@ -2243,7 +2243,9 @@ def test_the_market_pointer_keeps_a_warned_daily_line_on_top(ruled, monkeypatch)
 def test_the_send_queue_checks_a_bots_own_email_against_the_rules(ruled, monkeypatch, if_broken):
     # The mail CLI only queues: POST email/sends runs the org rule check itself (backend/email_sending.py rule_gate).
     import base64
-    from backend import email_sending as S, mailbox_access as MA
+
+    from backend import email_sending as S
+    from backend import mailbox_access as MA
     from backend.tests.helpers.email_sending import BOX, mime  # noqa: F401
 
     api, judge = ruled
@@ -2273,9 +2275,8 @@ def test_the_send_queue_checks_a_bots_own_email_against_the_rules(ruled, monkeyp
 
 
 def test_a_rule_check_whose_jev_fails_is_unchecked_and_never_asks_the_company_model(ruled, monkeypatch):
-    from clients import judge as J
-
     from backend import judge as B
+    from clients import judge as J
 
     api, judge = ruled
     color_rule(api)
@@ -2312,7 +2313,7 @@ def test_a_bots_ask_a_rule_covers_is_refused_with_the_rules_words(ruled):
             "to": "ana",
             "line": "May I say our favorite color is blue?",
             "kind": "ok",
-            "show": ["https://example.com/launch-note"],
+            "show": X.shown_on(api),
             "version": task["version"],
             "why": "It sets what goes out on launch day.",
         },
@@ -2331,7 +2332,7 @@ def test_a_bots_ask_a_rule_covers_is_refused_with_the_rules_words(ruled):
             "to": "ana",
             "line": "May I say our favorite color is green?",
             "kind": "ok",
-            "show": ["https://example.com/launch-note"],
+            "show": X.shown_on(api),
             "version": task["version"],
             "why": "It sets what goes out on launch day.",
         },

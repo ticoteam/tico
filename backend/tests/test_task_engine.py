@@ -392,7 +392,7 @@ def test_a_requirement_added_to_one_task_holds_it_until_answered_withdrawn_or_th
     E.fill_open_slots(c)
     row = E.task(c, row["id"])
     seen = row["version"]
-    plan = ["https://example.com/retry-plan"]  # what the bot's OK shows
+    plan = X.shown(c)  # what the bot's OK shows
     with _refused("task_changed"):
         E.add_requirement(c, row["id"], "bot:builder", "ok", ANA, "OK the retry plan", shows=plan)
     with _refused("task_requirement"):

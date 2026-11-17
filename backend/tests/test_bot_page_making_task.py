@@ -4,6 +4,7 @@ for anyone else, else who is still making it. Never a Finish setup button that o
 
 from backend import question_marks
 from backend.store import H
+from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import claim, get
 from backend.tests.helpers.member_bots import botops, call  # noqa: F401  (fixture)
 
@@ -76,7 +77,7 @@ def test_a_start_ok_reads_as_an_ok_with_its_button(api, botops):  # noqa: F811
             "human:ana",
             ASK,
             kind="ok",
-            shows=["https://example.com/builder-3-machine"],
+            shows=X.shown(c),
             seen_version=H.task(c, task_id)["version"],
         )
     line = top_line(api)

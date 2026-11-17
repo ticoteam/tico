@@ -5,8 +5,9 @@ from fastapi.routing import APIRoute
 
 from backend import meetings
 from backend.store import H
-from backend.tests.old_asks import old_ask
+from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import headers, post  # noqa: F401
+from backend.tests.old_asks import old_ask
 
 
 @pytest.fixture
@@ -32,7 +33,7 @@ def named_data(api):
             'human:ben',
             'OK the review date',
             kind='ok',
-            shows=['https://example.com/review-plan'],
+            shows=X.shown(c),
             seen_version=H.task(c, task['id'])['version'],
         )
         notice = H.notice(c, 'bot:ops', 'human:ana', 'New task from bot:ops: Review the plan')

@@ -22,7 +22,6 @@ NOTES = (
     {"name": "Check", "owner": "assignee", "requirements": [{"kind": "ok", "person": "bot:helper", "line": "OK it"}]},
 )
 SHIP = ({"name": "Ship", "owner": "bot:builder", "requirements": [X.github("pr_open")]},)
-SHOWS = ["https://example.com/draft"]  # what a bot's OK approves
 
 
 @pytest.fixture
@@ -73,7 +72,7 @@ def test_each_persons_list_is_the_one_every_persons_pass_gives_them(c):
     E.add_requirement(c, his["id"], BEN, "ok", ANA, "OK the bank")
     asked = X.new_task(c, ANA, "Write the launch note", "eng", assignee="bot:builder")
     E.add_requirement(
-        c, asked["id"], "bot:builder", "ok", BEN, "OK the headline", seen_version=asked["version"], shows=SHOWS
+        c, asked["id"], "bot:builder", "ok", BEN, "OK the headline", seen_version=asked["version"], shows=X.shown(c)
     )
     # Ben's bots: one Paused, holding up a task of Ana's (AC-6); one asked to OK something and Paused too.
     X.new_task(c, ANA, "Check the facts", assignee="bot:reviewer")
@@ -82,20 +81,20 @@ def test_each_persons_list_is_the_one_every_persons_pass_gives_them(c):
     # A bot snoozed a task with Ben's OK on it: the OK stays in his list. Ana set one aside: it is not listed.
     held = X.new_task(c, ANA, "Chase the vendor", assignee="bot:builder")
     E.add_requirement(
-        c, held["id"], "bot:builder", "ok", BEN, "OK the reply", seen_version=held["version"], shows=SHOWS
+        c, held["id"], "bot:builder", "ok", BEN, "OK the reply", seen_version=held["version"], shows=X.shown(c)
     )
     held = E.task(c, held["id"])
     E.snooze(c, held["id"], "bot:builder", "Vendor replies by Nov 14", "2026-11-14T00:00:00.000000Z", held["version"])
     aside = X.new_task(c, ANA, "Plan the offsite", assignee="bot:builder")
     E.add_requirement(
-        c, aside["id"], "bot:builder", "ok", BEN, "OK the dates", seen_version=aside["version"], shows=SHOWS
+        c, aside["id"], "bot:builder", "ok", BEN, "OK the dates", seen_version=aside["version"], shows=X.shown(c)
     )
     aside = E.task(c, aside["id"])
     E.snooze(c, aside["id"], ANA, "After the launch", "2026-11-20T00:00:00.000000Z", aside["version"])
     # A task made private after it asked Cara, who may not read it now: whoever has it shares it first.
     secret = X.new_task(c, ANA, "Price the merger", assignee="bot:builder")
     E.add_requirement(
-        c, secret["id"], "bot:builder", "ok", CARA, "OK the price", seen_version=secret["version"], shows=SHOWS
+        c, secret["id"], "bot:builder", "ok", CARA, "OK the price", seen_version=secret["version"], shows=X.shown(c)
     )
     c.execute("UPDATE tasks SET private=1 WHERE id=?", (secret["id"],))
     # Falls to a person: nobody owns it and its pipeline has no manager; the ladder reached a person; an OK names nobody.
@@ -104,7 +103,7 @@ def test_each_persons_list_is_the_one_every_persons_pass_gives_them(c):
     c.execute("UPDATE visits SET level='person' WHERE id=?", (stuck["visit"]["id"],))
     nobody = X.new_task(c, ANA, "Pick a logo", assignee="bot:builder")
     E.add_requirement(
-        c, nobody["id"], "bot:builder", "ok", BEN, "OK a logo", seen_version=nobody["version"], shows=SHOWS
+        c, nobody["id"], "bot:builder", "ok", BEN, "OK a logo", seen_version=nobody["version"], shows=X.shown(c)
     )
     c.execute("UPDATE requirements SET person_id=NULL WHERE line='OK a logo'")
     # Connect GitHub: the Owner fixes it first, once for every task it holds up (`Wait.fix`).
@@ -153,7 +152,7 @@ def test_two_people_reading_together_each_get_their_own_list(c):
     X.pipeline(c, manager=None)
     secret = X.new_task(c, BEN, "Price the merger", assignee="bot:builder")
     E.add_requirement(
-        c, secret["id"], "bot:builder", "ok", CARA, "OK the bank", seen_version=secret["version"], shows=SHOWS
+        c, secret["id"], "bot:builder", "ok", CARA, "OK the bank", seen_version=secret["version"], shows=X.shown(c)
     )
     c.execute("UPDATE tasks SET private=1 WHERE id=?", (secret["id"],))
     alone = {person: W.needs(c, person) for person in PEOPLE}
@@ -171,7 +170,7 @@ def test_a_new_wait_is_in_the_next_read(c):
     row = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
     assert W.needs(c, BEN) == []
     E.add_requirement(
-        c, row["id"], "bot:builder", "ok", BEN, "OK the headline", seen_version=row["version"], shows=SHOWS
+        c, row["id"], "bot:builder", "ok", BEN, "OK the headline", seen_version=row["version"], shows=X.shown(c)
     )
     assert [(n["kind"], n["task_id"]) for n in W.needs(c, BEN)] == [("ask", row["id"])]
     _same_for_everyone(c)

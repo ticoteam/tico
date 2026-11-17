@@ -18,7 +18,6 @@ from backend.tests.helpers.api import get, headers
 # bots made here (as_bot), so he may OK it.
 FORUM = "hq_reply:note-1"
 POST = {"text": "We ship on Friday."}
-SHOWN = "https://example.com/launch-note"  # what a bot's plain OK approves: it names what it shows
 
 
 def as_bot(api, slug="ops"):
@@ -256,7 +255,7 @@ def test_the_assistant_and_botops_never_answer_ok_to_an_ok_even_a_plain_one(api)
     tid = bots_task(api, "ops-bot-test")
     with api.app.state.store.transaction() as c:
         version = H.task(c, tid)["version"]
-        rid = H.task_ask(c, "bot:ops", tid, "human:ana", "OK?", kind="ok", shows=[SHOWN], seen_version=version)[
+        rid = H.task_ask(c, "bot:ops", tid, "human:ana", "OK?", kind="ok", shows=X.shown(c), seen_version=version)[
             "requirement_id"
         ]
     for token in ("ana-assistant", "ana-assistant-confirmed", "ana-botops", assistant):
@@ -283,7 +282,7 @@ def test_a_personal_token_never_gives_an_ok_on_anyones_ask_but_sends_back_and_he
     with api.app.state.store.transaction() as c:
         for by in ("bot:ops", "human:ben"):
             version = H.task(c, tid)["version"]
-            asked = H.task_ask(c, by, tid, "human:ana", "OK?", kind="ok", shows=[SHOWN], seen_version=version)
+            asked = H.task_ask(c, by, tid, "human:ana", "OK?", kind="ok", shows=X.shown(c), seen_version=version)
             asks.append(asked["requirement_id"])
     for rid in asks:
         status, code, detail, _ = call(api, "POST", f"tasks/{tid}/asks/{rid}/answer", "ana-token", {"value": "ok"})
@@ -545,7 +544,7 @@ def test_the_assistant_never_answers_ok_with_space_or_case_around_it(api, value)
     tid = bots_task(api, "ops-bot-test")
     with api.app.state.store.transaction() as c:
         version = H.task(c, tid)["version"]
-        rid = H.task_ask(c, "bot:ops", tid, "human:ana", "OK?", kind="ok", shows=[SHOWN], seen_version=version)[
+        rid = H.task_ask(c, "bot:ops", tid, "human:ana", "OK?", kind="ok", shows=X.shown(c), seen_version=version)[
             "requirement_id"
         ]
     status, code, _, _ = call(

@@ -10,12 +10,13 @@ from types import SimpleNamespace
 import pytest
 
 from backend import assistant
-from clients import hubtools
 from backend import hubdb as H
+from backend.store import Problem
+from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import as_member, get, headers, post, setup_attempt  # noqa: F401
 from backend.tests.helpers.assistant import assistant_turn, say
 from backend.tests.helpers.automation_access import flow
-from backend.store import Problem
+from clients import hubtools
 
 
 def set_rule(api, **rules):
@@ -145,7 +146,7 @@ def test_a_batch_commit_never_oks_on_an_assistant_walk(api):
             "human:ana",
             "Spend $1,200?",
             kind="ok",
-            shows=["https://example.com/linkedin-ads-plan"],
+            shows=X.shown(c),
             seen_version=made["version"],
         )
     tid, rid = made["id"], asked["requirement_id"]
@@ -243,7 +244,7 @@ def test_a_background_card_never_approves_and_is_capped_per_person_per_day(api):
             "human:ana",
             "Spend $500 on ads?",
             kind="ok",
-            shows=["https://example.com/ads-plan"],
+            shows=X.shown(c),
             seen_version=ads["version"],
         )
     give = f"/api/v2/tasks/{ads['id']}/asks/{ok['requirement_id']}/ok"
@@ -491,6 +492,7 @@ def _template_tools():
     """Every command the Assistant template tells it to run, as the tool it runs: the hubcli command tree walked for each
     `hub ...` span (clients/remotecli.tool_name names the tool), not a pattern."""
     import argparse
+
     from clients import hubcli, remotecli
 
     def fn_of(words):

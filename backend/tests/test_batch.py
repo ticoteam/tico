@@ -12,7 +12,6 @@ from backend.tests.helpers import engine as X
 
 ANA = Identity("human:ana", "human")
 FINANCE = "bot:finance"
-SHOWS = ["https://example.com/q4-ads-budget"]  # what the bot's OK approves: a bot's OK names what it shows
 
 
 @pytest.fixture
@@ -53,7 +52,7 @@ def test_a_batch_holds_what_bots_ask_and_commit_applies_it_through_the_task_call
         "human:ana",
         "Spend the Q4 ads budget?",
         kind="ok",
-        shows=SHOWS,
+        shows=X.shown(c),
         seen_version=ads["version"],
     )
     other = _work(c, "Pick the launch day")
@@ -89,7 +88,7 @@ def test_send_back_needs_notes_and_an_ok_or_a_close_only_fits_its_kind(c):
         "human:ana",
         "Spend the Q4 ads budget?",
         kind="ok",
-        shows=SHOWS,
+        shows=X.shown(c),
         seen_version=ads["version"],
     )
     batch = _start(c)
@@ -149,7 +148,7 @@ def test_an_assistant_walking_the_list_may_send_back_but_never_ok(c):
         "human:ana",
         "Spend the Q4 ads budget?",
         kind="ok",
-        shows=SHOWS,
+        shows=X.shown(c),
         seen_version=ads["version"],
     )
     batch = _start(c)
@@ -171,7 +170,7 @@ def test_a_batch_belongs_to_a_person_and_later_keeps_an_item_out_for_a_day(c):
         "human:ana",
         "Spend the Q4 ads budget?",
         kind="ok",
-        shows=SHOWS,
+        shows=X.shown(c),
         seen_version=ads["version"],
     )
     batch = _start(c)

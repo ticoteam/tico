@@ -2,6 +2,7 @@
 the task as JSON; a refusal is flat, with what is missing, the commands allowed next and the version."""
 
 from backend.auth import Identity
+from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import get, headers, post
 
 
@@ -364,7 +365,7 @@ def test_a_reader_who_was_not_asked_cannot_send_a_bots_ask_back(api):
     bot = as_bot(api)
     made = task(api, owner="ops")
     tid = made["id"]
-    rid = ask(api, tid, line="OK the offsite plan?", token=bot, shows=["https://example.com/offsite-plan"])
+    rid = ask(api, tid, line="OK the offsite plan?", token=bot, shows=X.shown_on(api))
     own = next(r for r in show(api, tid)["to_leave"] if r["kind"] == "owner_done")["requirement_id"]
     version = show(api, tid)["version"]
     done = api.post(

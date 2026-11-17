@@ -225,9 +225,11 @@ def old_question(c, task_id, by, person, line, choices=None, **settings):
     return E._write_ask(c, E.task(c, task_id), by, "answer", person, line, choices=choices, **settings)
 
 
-def shown(c, title="Launch note", bot="writer", task_id=None):
-    """A page a bot's OK can show (task_engine.shows_a_file): one version of a bot-wide file, or a task's when `task_id`
-    is given. Rows only, no bytes. Returns `["page:<id>"]`, as an OK's shows."""
+def shown(c, title="Launch note", bot=None, task_id=None):
+    """A page a bot's OK can show (task_engine.shows_a_file): one version of a file of `bot`'s (its slug or actor; else
+    the company's first bot), bot-wide, or a task's when `task_id` is given. Rows only, no bytes. Returns
+    `["page:<id>"]`, as an OK's shows."""
+    bot = H.actor_id(bot) if bot else c.execute("SELECT id FROM bots ORDER BY id LIMIT 1").fetchone()[0]
     now, blob = H.now(), H.new_id()
     fid = "file-" + blob.replace("-", "")[:24]
     c.execute(
@@ -315,3 +317,9 @@ def no_sign_in(c, actor):
 
 def guard_closed(c):
     return c.execute("SELECT open FROM task_move_guards WHERE id=1").fetchone()[0] == 0
+
+
+def shown_on(api, title="Launch note", bot=None):
+    """`shown` on an app's database, for a test that asks through the API: `["page:<id>"]`."""
+    with api.app.state.store.transaction() as c:
+        return shown(c, title, bot=bot)

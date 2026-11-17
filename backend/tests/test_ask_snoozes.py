@@ -82,7 +82,7 @@ def test_the_task_and_its_bot_are_untouched(api):
             BEN,
             "OK the headline?",
             kind="ok",
-            shows=["https://example.com/launch-note"],
+            shows=X.shown(c),
             seen_version=task["version"],
         )
         before = E.task(c, task["id"])
@@ -234,7 +234,7 @@ def test_never_stuck_counts_a_snoozed_ask_as_listed(store):
             "ok",
             BEN,
             "OK the headline",
-            shows=["https://example.com/launch-note"],
+            shows=X.shown(c),
             seen_version=task["version"],
         )
         (item,) = [i for i in W.needs(c, BEN) if i["kind"] == "ask"]

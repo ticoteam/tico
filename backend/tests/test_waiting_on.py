@@ -11,7 +11,6 @@ from backend import waiting_on as W
 from backend.tests.helpers import engine as X
 
 ANA = X.ANA
-NOTE = ["https://example.com/launch-note"]  # what a bot's OK shows
 BUILD = (
     {"name": "Ideas", "by_hand": True, "requests_move_on": True},
     {"name": "On deck"},
@@ -172,7 +171,7 @@ def test_needs_you_lists_what_is_asked_of_a_person_oldest_first_and_leaves_out_s
     mine = X.new_task(c, ANA, "Call the bank", assignee=ANA)
     bots = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
     asked = E.add_requirement(
-        c, bots["id"], "bot:builder", "ok", ANA, "OK the headline", shows=NOTE, seen_version=bots["version"]
+        c, bots["id"], "bot:builder", "ok", ANA, "OK the headline", shows=X.shown(c), seen_version=bots["version"]
     )
     set_aside = X.new_task(c, ANA, "Renew the lease", assignee=ANA)
     E.snooze(c, set_aside["id"], ANA)
@@ -201,7 +200,7 @@ def test_a_person_who_left_or_was_removed_is_never_chosen(c, general):
     his = X.new_task(c, ANA, "Call the bank", assignee=ben)["id"]
     asked = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
     E.add_requirement(
-        c, asked["id"], "bot:builder", "ok", ben, "OK the headline", shows=NOTE, seen_version=asked["version"]
+        c, asked["id"], "bot:builder", "ok", ben, "OK the headline", shows=X.shown(c), seen_version=asked["version"]
     )
     stuck = X.new_task(c, ANA, "Fix the footer", assignee="bot:builder")["id"]
     c.execute("UPDATE visits SET level='person', person_id='human:nobody' WHERE task_id=?", (stuck,))  # removed
@@ -228,7 +227,7 @@ def test_every_persons_needs_you_comes_from_one_pass_over_the_tasks(c, general, 
     hers = X.new_task(c, ANA, "Renew the lease", assignee=ANA)["id"]
     asked = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
     E.add_requirement(
-        c, asked["id"], "bot:builder", "ok", ben, "OK the headline", shows=NOTE, seen_version=asked["version"]
+        c, asked["id"], "bot:builder", "ok", ben, "OK the headline", shows=X.shown(c), seen_version=asked["version"]
     )
     E.add_requirement(c, his, ANA, "ok", ANA, "OK the bank")  # a person's OK of her own: no shows
     paused = X.new_task(c, ANA, "Check the facts", assignee="bot:reviewer")["id"]

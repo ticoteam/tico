@@ -8,8 +8,8 @@ import threading
 import time
 
 from backend import org_rule_check as K
+from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import headers, post
-from backend.tests.helpers.org_rules import rule
 from backend.tests.helpers.org_rule_check import (  # noqa: F401 - fixtures
     COLOR,
     color_rule,
@@ -19,6 +19,7 @@ from backend.tests.helpers.org_rule_check import (  # noqa: F401 - fixtures
     sql,
     task_for_ops,
 )
+from backend.tests.helpers.org_rules import rule
 
 EVERYONE = {"everyone": True}
 SAFE = "Draft is in progress."
@@ -157,7 +158,7 @@ def test_a_bots_ask_is_still_checked_before_it_is_saved(ruled):
             "line": "Is our favorite color is red okay?",
             "why": "The launch note needs one color before it goes out.",
             "kind": "ok",
-            "show": ["https://example.com/launch-note"],
+            "show": X.shown_on(api),
             "version": task["version"],
         },
         headers=headers("ops-test"),

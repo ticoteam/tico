@@ -497,7 +497,7 @@ def test_a_bot_takes_back_only_an_ask_a_bot_added(c, general, later):
         "ok",
         ANA,
         "OK the launch note",
-        shows=["https://example.com/launch-note"],
+        shows=X.shown(c),
         seen_version=E.task(c, task_id)["version"],
     )
     E.withdraw_requirement(c, asked["requirement_id"], MANAGER, "Found it in the docs")  # a bot's ask: a bot may
@@ -1038,7 +1038,7 @@ def test_each_rule_that_breaks_is_named(c, general, later, monkeypatch):
         "ok",
         ANA,
         "OK the letter to the bank",
-        shows=["https://example.com/bank-letter"],
+        shows=X.shown(c),
         seen_version=E.task(c, mine)["version"],
     )
     monkeypatch.setattr(NS.W, "needs_by_person", lambda conn: {})
