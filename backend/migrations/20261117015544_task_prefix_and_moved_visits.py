@@ -6,6 +6,10 @@
   Every other part of the table, its rows and its indexes are kept as they are: the two lists of ways are read from the
   table and have `moved` added.
 
+An install may still have 20261113224214_task_human pending, and pending files run in any order: this adds its
+`human_id` first, with the same definition, so the columns end in one order whichever runs first (that migration skips a
+column already there).
+
 Running it again changes nothing.
 """
 
@@ -68,6 +72,8 @@ def _prefix(conn):
     have = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
     if not have:
         return
+    if "human_id" not in have:
+        conn.execute("ALTER TABLE tasks ADD COLUMN human_id TEXT")
     if "prefix" not in have:
         conn.execute("ALTER TABLE tasks ADD COLUMN prefix TEXT")
     conn.execute(
