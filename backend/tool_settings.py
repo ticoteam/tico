@@ -364,7 +364,8 @@ def _grantees(c: Any, cid: Any) -> Any:
 def _move_one(c: Any, vault: Any, row: Any) -> Any:
     """One stored key that is a setting, moved to a tool every one of its holders gets it from; False when none is."""
     api_tools: Any = _api_tools()
-    granted: Any = _credentials().granted
+    # Explicit grants only: a default read can be switched off, and then the variable would be gone.
+    granted: Any = _credentials().explicitly_granted
 
     try:
         value = vault.cipher.decrypt(c, row)

@@ -3383,8 +3383,9 @@ SCHEMAS = {
         granted={
             "type": "object",
             "description": "The bot can use this tool through a grant in Tools: `level` (read or read_write), `kind` "
-            "(api, mcp, website, or key for a key on no tool), `href` (where it opens in Tools) and `tool_id`. A tool "
-            "both declared in bot.yaml and granted is one row with this set",
+            "(api, mcp, website, or key for a key on no tool), `href` (where it opens in Tools), `tool_id`, and `default` "
+            "true when it reads the tool because Everyone can read, with no grant of its own. A tool both declared in "
+            "bot.yaml and granted is one row with this set",
         },
         kind={"enum": ["mcp"], "description": "`mcp` when the tool is a remote MCP server (see `mcp`)"},
         mcp={
@@ -8249,6 +8250,10 @@ SCHEMAS['ApiToolSettings'] = obj(
         'check_path': 's',
         'delivery': {'enum': ['proxy', 'computer']},
         'private': 'b',
+        'everyone_reads': {
+            'type': 'boolean',
+            'description': 'Everyone can read: every bot reads it with no grant, where Read can be held to reads',
+        },
     }
 )
 SCHEMAS['ApiTool'] = obj(
@@ -8333,6 +8338,11 @@ SCHEMAS['ApiTool'] = obj(
             ],
             'description': 'A remote MCP server (Tools > Add > MCP server): its address, how it signs in, who signed '
             'in, and the tools its last check listed; null for an API tool',
+        },
+        'everyone_reads': obj({'on': 'b', 'enforceable': 'b'})
+        | {
+            'description': 'Every bot reads the tool with no grant while `on` (backend/default_read.py); never where '
+            'Read cannot be held to reads (`enforceable` false), whatever the switch says'
         },
     },
     required=['tool', 'keys', 'access', 'checks', 'recent', 'status', 'can_manage', 'private', 'can_set_audience'],

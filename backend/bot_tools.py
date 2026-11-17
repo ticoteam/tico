@@ -635,11 +635,12 @@ def _granted_tools(c, bot):
     its highest level), each key on no tool, and each website tool with an account it may use. Names and levels only,
     never a value. A bot holding a working key is never shown as having nothing connected."""
     from . import api_tools, website_tools
-    from .credentials import granted as held_ids
+    from .credentials import explicitly_granted, granted as held_ids
     from .read_cache import one, rows
 
     subject = "bot:" + bot
     held = held_ids(c, subject)
+    by_default = held - explicitly_granted(c, subject)  # read by default (backend/default_read.py)
     levels = {r["credential_id"]: r["access_level"] for r in rows(c, GRANT_LEVELS_SQL, (subject,))}
     found = {}
     for key in rows(c, GRANT_KEYS_SQL):
@@ -647,12 +648,16 @@ def _granted_tools(c, bot):
             if not (key["holder"] == subject or (not key["holder"] and website_tools.can_use(c, subject, key))):
                 continue
             level = "read_write"
+        elif key["id"] in by_default:
+            level = "read"
         elif key["id"] in held:
             level = "read" if key["access_level"] == "read" or levels.get(key["id"]) == "read" else "read_write"
         else:
             continue
         group = key["tool_id"] or "key:" + key["id"]
-        item = found.setdefault(group, {"key": key, "level": level, "stored": False, "envs": []})
+        item = found.setdefault(
+            group, {"key": key, "level": level, "stored": False, "envs": [], "default": key["id"] in by_default}
+        )
         if level == "read_write":
             item["level"] = "read_write"
         item["stored"] = item["stored"] or bool(key["stored"])
@@ -689,8 +694,14 @@ def _granted_tools(c, bot):
             "env": ", ".join(item["envs"]),
             "note": "",
             "status": status,
-            "detail": "Granted in Tools: " + LEVEL_WORDS[level],
-            "granted": {"level": level, "kind": kind, "href": href, **({"tool_id": tool_id} if tool_id else {})},
+            "detail": "Everyone can read" if item["default"] else "Granted in Tools: " + LEVEL_WORDS[level],
+            "granted": {
+                "level": level,
+                "kind": kind,
+                "href": href,
+                **({"tool_id": tool_id} if tool_id else {}),
+                **({"default": True} if item["default"] else {}),
+            },
         }
         if kind == "mcp":
             row["kind"] = "mcp"

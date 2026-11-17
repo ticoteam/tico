@@ -87,6 +87,10 @@ today is in `docs/auth-types.md` (the manual: `tico doc read manual:auth-types`)
   rotated, and open a card (or point them to your Tools chat) for the new value.
 
 ## 4. Grant by level
+- **Everyone can read** (the Everyone row on Who can use it, on by default): every bot already reads the tool at Read,
+  with no grant, wherever Read is held to reads (a Read key, or the proxy). A bot needs a grant only for Read and write,
+  for a tool switched off, an Only listed tool, or one whose Read cannot be enforced (no Everyone row). Never ask anyone
+  for a Read grant on a tool every bot already reads.
 - One shared key per value, granted to many bots. Never a copy per bot, never the same value stored twice.
 - One value per variable per bot: a bot can hold only one key under `LINEAR_API_KEY`.
 - Read unless the bot's job writes and a person agrees to Read and write. With no Read key, a Read bot's proxied calls

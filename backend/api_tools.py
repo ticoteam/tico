@@ -71,6 +71,7 @@ from pydantic import ConfigDict, Field, SecretStr
 from . import mcp_connect
 from . import tool_services as TS
 from . import tool_settings
+from . import default_read
 from . import tool_access as TA
 from .credentials import CredentialWrite, administrator, effective_grant, owned
 from .models import AccessAudience, Contract
@@ -128,13 +129,18 @@ def _keys(c, tool_id):
 
 
 def _held(c, tool_id, subject):
-    """[(key row, level)] for each of the tool's keys `subject` holds an effective grant to."""
+    """[(key row, level)] for each of the tool's keys `subject` holds an effective grant to; with none, the key a bot
+    reads the tool with by default, at Read (backend/default_read.py)."""
     out = []
-    for key in _keys(c, tool_id):
+    keys = _keys(c, tool_id)
+    for key in keys:
         grant = effective_grant(c, key["id"], subject)
         if grant is not None:
             level = "read" if key["access_level"] == "read" or grant["access_level"] == "read" else "read_write"
             out.append((key, level))
+    if not out and str(subject).startswith("bot:"):
+        default = default_read.key_of(c, tool_id, subject)
+        out = [(key, "read") for key in keys if key["id"] == default]
     return out
 
 
@@ -688,6 +694,7 @@ def _tool_view(tool):
         **{k: tool[k] for k in ("id", "name", "service", "base_url", "auth_scheme", "check_path", "delivery")},
         "vendor": TS.vendor_of(tool["service"], tool["name"], host=tool["base_url"] or _field(tool, "mcp_url") or ""),
         "private": _field(tool, "audience") is not None,
+        "everyone_reads": bool(_field(tool, "everyone_reads")),
     }
 
 
@@ -756,6 +763,11 @@ def detail(c, who, tool_id, admins, auth=None):
         "private": _field(tool, "audience") is not None,
         "can_set_audience": False,
         "mcp": mcp_connect.view(c, tool, keys) if _field(tool, "mcp_url") else None,
+        # Every bot reads it with no grant while `on` and Read can be held to reads (backend/default_read.py).
+        "everyone_reads": {
+            "on": bool(_field(tool, "everyone_reads")),
+            "enforceable": default_read.enforceable(c, tool_id),
+        },
     }
     if TA.may_change_access(c, who, TA.tool(tool), action=TA.AUDIENCE, admins=admins, auth=auth):
         out.update(can_set_audience=True, audience=audience_of(tool), seen_by=seen_by(c, tool, auth))
@@ -1007,6 +1019,8 @@ class ToolUpdate(Contract):
     auth_scheme: str | None = Field(default=None, max_length=80)
     check_path: str | None = Field(default=None, max_length=300)
     delivery: str | None = Field(default=None, pattern=r"^(proxy|computer)$")
+    # "Everyone can read" (backend/default_read.py): every bot reads the tool with no grant while it is on.
+    everyone_reads: bool | None = None
     # Who can see it: null is Everyone, an audience Only listed (`set_audience`). Left out, it stays as it is.
     audience: AccessAudience | None = None
 
@@ -1117,13 +1131,25 @@ def create_tool(c, who, body, admins):
 
 def update_tool(c, who, tool_id, body, admins, auth=None):
     """A tool's settings, and its Who can see it (`audience`, which the owner may change too)."""
-    asked = body.model_dump(exclude_none=True, exclude={"audience"})
+    asked = body.model_dump(exclude_none=True, exclude={"audience", "everyone_reads"})
     audience_set = "audience" in body.model_fields_set
     if asked or not audience_set or getattr(who, "role", "") != "owner":
         TA.require(c, who, TA.tool(), action=TA.EDIT, admins=admins, auth=auth)
     tool = dict(_readable(c, who, tool_id, admins, auth))
     if audience_set:
         set_audience(c, who, tool, body.audience.model_dump() if body.audience is not None else None, admins, auth)
+        tool = dict(tool_row(c, tool_id))
+    if body.everyone_reads is not None and body.everyone_reads != bool(tool["everyone_reads"]):
+        c.execute(
+            "UPDATE tools SET everyone_reads=?,updated_at=? WHERE id=?", (int(body.everyone_reads), H.now(), tool_id)
+        )
+        H.event(
+            c,
+            who.actor,
+            "tool.everyone_reads_changed",
+            tool_id,
+            {"before": not body.everyone_reads, "after": body.everyone_reads},
+        )
         tool = dict(tool_row(c, tool_id))
     fields = {k: v for k, v in _clean(asked).items()}
     merged = tool | fields

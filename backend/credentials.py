@@ -110,6 +110,22 @@ def effective_grant(c, credential, subject):
 
 
 def granted(c, subject):
+    """The credential ids `subject` uses: its explicit grants (`explicitly_granted`) and, for a bot, the keys of the
+    tools it reads by default (backend/default_read.py), which reach its runs as a grant at Read does."""
+    from . import default_read, read_cache
+
+    values = read_cache.cache(c)
+    key = ("credential_granted", subject)
+    if values is not None and key in values:
+        return values[key]
+    explicit = explicitly_granted(c, subject)
+    found = explicit | frozenset(default_read.reads(c, subject, explicit)) if subject.startswith('bot:') else explicit
+    if values is not None:
+        values[key] = found
+    return found
+
+
+def explicitly_granted(c, subject):
     """The credential ids `subject` holds an effective grant to, in one query: `effective_grant` for each of them.
     The runner endpoints poll every few seconds for every bot, so one query per credential was most of a server's SQL.
 
@@ -119,7 +135,7 @@ def granted(c, subject):
     from . import read_cache
 
     values = read_cache.cache(c)
-    key = ("credential_granted", subject)
+    key = ("credential_granted_explicit", subject)
     if values is not None and key in values:
         return values[key]
     found = frozenset(
@@ -140,14 +156,14 @@ def granted(c, subject):
 
 
 def prime_granted(c, subjects):
-    """`granted` for many subjects in one read per 500, seeded into the snapshot so each later `granted(c, subject)`
-    reads nothing. Outside a snapshot nothing is kept."""
+    """`explicitly_granted` for many subjects in one read per 500, seeded into the snapshot so each later
+    `granted(c, subject)` reads no grant again. Outside a snapshot nothing is kept."""
     from . import read_cache
 
     values = read_cache.cache(c)
     if values is None:
         return
-    wanted = sorted({s for s in subjects if ("credential_granted", s) not in values})
+    wanted = sorted({s for s in subjects if ("credential_granted_explicit", s) not in values})
     found = {s: set() for s in wanted}
     for part in H.chunks(wanted):
         for subject, credential in c.execute(
@@ -161,7 +177,7 @@ def prime_granted(c, subjects):
         ):
             found[subject].add(credential)
     for subject in wanted:
-        values[("credential_granted", subject)] = frozenset(found[subject])
+        values[("credential_granted_explicit", subject)] = frozenset(found[subject])
 
 
 def key_hidden(c, who, credential, admins):
@@ -1310,7 +1326,7 @@ def install_credentials(app, store, delegate=None, propose=None):
         with store.transaction() as c:
             validate_identity(c, who)
             values = []
-            held = granted(c, who.actor)
+            held, explicit = granted(c, who.actor), explicitly_granted(c, who.actor)
             # A proxied tool's key stays here: the run gets a token for the proxy instead (backend/tool_proxy.py).
             from . import tool_proxy
 
@@ -1343,14 +1359,22 @@ def install_credentials(app, store, delegate=None, propose=None):
                             windowed=bool(who.attempt_id),
                         )
                         continue
+                    if row['id'] in explicit:
+                        value = vault.reveal(c, who, row['id'])
+                    else:
+                        # A key the bot reads by default (backend/default_read.py) is a Read key: its value goes to
+                        # the run as a granted one's does, and never to a reveal.
+                        value = {'id': row['id'], 'value': vault.cipher.decrypt(c, row)}
+                        record_use(
+                            c,
+                            who.actor,
+                            'credential.revealed',
+                            row['id'],
+                            {'attempt': who.attempt_id or None, 'default_read': True},
+                            windowed=bool(who.attempt_id),
+                        )
                     values.append(
-                        {
-                            'id': row['id'],
-                            'name': row['name'],
-                            'env': row['env'],
-                            'kind': row['kind'],
-                            **vault.reveal(c, who, row['id']),
-                        }
+                        {'id': row['id'], 'name': row['name'], 'env': row['env'], 'kind': row['kind'], **value}
                     )
             # Never the Tico AI Gateway's key: a run reaches it through its runner (runner-gateway-credentials below).
             # The company subscriptions its claim handed it, for this run only (backend/model_subscriptions.py).
