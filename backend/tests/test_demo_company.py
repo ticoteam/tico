@@ -24,7 +24,6 @@ DAY = {"from": "2026-10-31", "to": "2026-11-06"}
 PER_INSTALL = {
     "credential_keys",
     "granola_connections",
-    "slack_credentials",
 }  # this machine's keys and the secrets they seal
 # Bytes this machine's keys produce: a sealed secret (AES-GCM, a fresh nonce), and an idempotency fingerprint keyed
 # with the cipher key. Each install differs there by design, so they are compared as a mark, not as bytes.

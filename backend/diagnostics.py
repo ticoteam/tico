@@ -542,7 +542,7 @@ def build(store, settings, auth, who, census, github=None, config=None, performa
     person attaching diagnostics chooses `performance_hours` (0 leaves performance out). `shell` is the desktop app the
     page runs in ({version, lines, mac}: support.AppShell), whose version and log go in labelled `app`. `report` is what
     the person reports (support.Report), redacted with the rest."""
-    from . import beta, health, onboarding, replication, runner_versions, setup_failures
+    from . import beta, health, onboarding, replication, runner_versions, setup_failures, slack_app
     from . import runner_online
     from .views import roster
 
@@ -566,10 +566,7 @@ def build(store, settings, auth, who, census, github=None, config=None, performa
         routines = c.execute("SELECT count(*) FROM schedules").fetchone()[0]
         migration = c.execute("SELECT max(version) FROM schema_migrations").fetchone()[0]
         backup = replication.status()
-        slack = bool(
-            c.execute("SELECT 1 FROM sqlite_master WHERE name='slack_credentials'").fetchone()
-            and c.execute("SELECT 1 FROM slack_credentials WHERE id='app'").fetchone()
-        )
+        slack = slack_app.status(c)["configured"]
         assistant = H.bot(c, settings.assistant_bot)
         librarian = H.bot(c, "librarian")
         github_on = bool(github and github.row(c) and github.row(c)["installation_id"])

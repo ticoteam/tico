@@ -961,20 +961,15 @@ def test_secrets_sealed_before_kms_was_set_open_with_github_app_key_and_are_rese
             "app": bytes(state.github_app.row(c)["ciphertext"]),
             "entra": bytes(c.execute("SELECT ciphertext FROM directory_credentials").fetchone()[0]),
         }
-    from backend import health, slack_app
+    from backend import health
 
-    slack_app.save(
-        state.store, state.store.settings, "human:ana", "xoxb-synthetic-0000000000", "xapp-synthetic-0000000000"
-    )
     enable_kms(api)
     with state.store.read() as c:
         state.vault.cipher.key(c)  # the vault's KMS data key, as the first save under KMS makes it
-        # Nothing is lost (github-app.key and slack.key still open them), but Health says which files are still needed.
+        # Nothing is lost (github-app.key still opens them), but Health says which files are still needed.
         check = health._sealed_secrets(c, state.store.settings, state.github_app)
         assert check["status"] == "info", check
-        assert (
-            "2 secrets still need github-app.key" in check["summary"] and "1 still needs slack.key" in check["summary"]
-        )
+        assert "2 secrets still need github-app.key" in check["summary"]
         assert "keep" in check["summary"].lower()
         assert bytes(state.github_app.row(c)["ciphertext"]) == before["app"]  # Health only looks
     caplog.set_level("INFO")
@@ -996,14 +991,6 @@ def test_secrets_sealed_before_kms_was_set_open_with_github_app_key_and_are_rese
         assert state.github_app.private_key(c, state.github_app.row(c)) == PEM
     assert not [r for r in caplog.records if "re-sealed" in r.getMessage().lower()]
     assert state.github_app.key_file().read_bytes() == legacy  # left as it was, for an older backup's rows
-    with state.store.read() as c:
-        check = health._sealed_secrets(c, state.store.settings, state.github_app)
-    assert (
-        check["status"] == "info"
-        and "github-app.key" not in check["summary"]
-        and "1 secret still needs slack.key" in check["summary"]
-    )
-    assert slack_app.load(state.store, state.store.settings, state.vault)["bot_token"] == "xoxb-synthetic-0000000000"
     with state.store.read() as c:
         assert health._sealed_secrets(c, state.store.settings, state.github_app) is None  # every one re-sealed: clear
 

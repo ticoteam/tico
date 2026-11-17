@@ -761,7 +761,7 @@ def check_destination(source, dest, force):
     holding key files, or a folder git would track."""
     if dest == source or (dest.exists() and os.path.samefile(dest, source)):
         raise SystemExit("devcopy: the destination is the source database")
-    for name in backup.KEY_FILES:
+    for name in backup.KEY_FILES + backup.OLD_KEY_FILES:
         if (dest.parent / name).exists():
             raise SystemExit(f"devcopy: {dest.parent} holds {name}; put the copy in a folder of its own")
     if not ignored_by_git(dest.parent):
