@@ -79,8 +79,12 @@ def marks(api):
 
 
 def told(api, mid):
-    """What the owner got for one migration: tasks and notices that name it."""
-    tasks = rows(api, "SELECT id, title, body FROM tasks WHERE title LIKE '%Automations%'")
+    """What the owner got for one migration: tasks (with the words they were filed with) and notices that name it."""
+    with db(api).read() as c:
+        tasks = [
+            {"id": r[0], "title": r[1], "body": H.task_words(c, r[0])}
+            for r in c.execute("SELECT id, title FROM tasks WHERE title LIKE '%Automations%'").fetchall()
+        ]
     notes = [r for r in rows(api, "SELECT id, refs FROM messages WHERE refs LIKE ?", (f"%{mid}%",))]
     return tasks, notes
 

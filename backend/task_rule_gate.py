@@ -14,8 +14,8 @@ applied inside it.
 - The check cannot run (an error here, not the judge being out): nothing is written (fail closed).
 
 The hold's text is what the write says. A hand-off also says the task to its new owner, so the judge reads the task's
-title and body too; the hold keeps them only when the task is not private, so a hold never shows a private task's text
-to a reviewer who may not read it.
+title and what it asks (its first message and Tico's instructions) too; the hold keeps them only when the task is not
+private, so a hold never shows a private task's text to a reviewer who may not read it.
 """
 
 import logging
@@ -57,15 +57,16 @@ org_rule_check.OPERATIONS.setdefault("batch_note", "a note to a bot on its item"
 org_rule_check.OPERATIONS.setdefault("task_bulk", "a change to many tasks")
 
 
-def said_text(row: Row | None, said: Said, hands_over: bool = False, hide_task: bool = False) -> str:
+def said_text(row: Row | None, said: Said, hands_over: bool = False, hide_task: bool = False, words: str = "") -> str:
     """What a write says, as the check reads it: each (label, text) it carries, and the task itself when it hands the
-    task to a new owner. `hide_task`: the task's own words are left out (a private task's, on its hold)."""
+    task to a new owner: its title and `words` (what it asks, `H.task_words`). `hide_task`: the task's own words are
+    left out (a private task's, on its hold)."""
     parts = [f"{label}: {value}" for label, value in said if value]
     if hands_over and row:
         if hide_task:
             parts.append("Assigned: a private task")
         else:
-            parts.append(f"Assigned: {row['title']}")
+            parts.append(f"Assigned: {row['title']}\n\n{words}".rstrip())
     return "\n\n".join(parts)
 
 
@@ -270,7 +271,8 @@ class TaskRules:
                     row: Row = self.auth.task(c, who, self.auth.resolve_task(c, who, tid))
                 except Problem as exc:
                     return org_rule_check.refused(exc)
-            text = said_text(row, said, hands_over)
+                words = str(H.task_words(c, row["id"])) if hands_over else ""
+            text = said_text(row, said, hands_over, words=words)
             if not text:
                 return None
 
@@ -330,8 +332,9 @@ class TaskRules:
         # anyway's recheck alone (`judged`).
         # Nor its people: everyone the write reaches is reached through the private task.
         private = bool(row and H.task_private(c, row))
+        words = str(H.task_words(c, row["id"])) if hands_over and row else ""
         payload = said_text(row, said, hands_over, hide_task=private)
-        judged = said_text(row, said, hands_over)
+        judged = said_text(row, said, hands_over, words=words)
         private_to = {row["id"]: list(verdict.get("recipients") or [])} if private and row else None
         gate = org_rule_check.apply(
             c,

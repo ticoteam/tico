@@ -79,9 +79,9 @@ def model(api, **kw):
 def all_tasks(api):
     with api.app.state.store.read() as c:
         return [
-            dict(t)
+            {**dict(t), "body": H.task_words(c, t["id"])}  # what it was filed with: no description any more
             for t in c.execute(
-                "SELECT id,title,body,owner_id,status FROM tasks WHERE title LIKE 'Support%' ORDER BY created_at"
+                "SELECT id,title,owner_id,status FROM tasks WHERE title LIKE 'Support%' ORDER BY created_at"
             )
         ]
 
@@ -266,7 +266,7 @@ def notes_on(api, task_id):
             dict(m)
             for m in c.execute(
                 "SELECT body,recipient_id FROM messages WHERE json_extract(refs,'$.task')=? "
-                "AND json_extract(refs,'$.comment')=1 ORDER BY rowid",
+                "AND json_extract(refs,'$.comment')=1 AND json_extract(refs,'$.request') IS NULL ORDER BY rowid",
                 (task_id,),
             )
         ]

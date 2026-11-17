@@ -227,10 +227,17 @@ def task(api, task_id):
         return H.task(c, task_id)
 
 
+def words(api, task_id):
+    """What the task was filed with: its first message (and any instructions Tico gave its bot)."""
+    with api.app.state.store.read() as c:
+        return H.task_words(c, task_id)
+
+
 def proposals(api):
+    """The decision's proposals to the owner, each with `words`: what it was filed with."""
     with api.app.state.store.read() as c:
         return [
-            dict(r)
+            {**dict(r), "words": H.task_words(c, r["id"])}
             for r in c.execute(
                 # Its question to the owner, on its own task (backend/person_asks.py).
                 "SELECT * FROM tasks t WHERE requester_id=? AND title LIKE 'Decide %' AND EXISTS (SELECT 1 FROM visits v "
@@ -322,7 +329,7 @@ def test_a_change_a_bot_offline_or_a_person_would_take_becomes_one_proposal_neve
     assert made["state"] == "done" and len(made["done"]) == 1 and len(made["left"]) == 2
     asked = proposals(api)
     assert len(asked) == 1 and asked[0]["id"] == made["proposal_task"]
-    assert "is paused right now" in asked[0]["body"] and "a task for a person stays the person's" in asked[0]["body"]
+    assert "is paused right now" in asked[0]["words"] and "a task for a person stays the person's" in asked[0]["words"]
 
 
 def test_everything_on_the_owners_list_is_refused_on_the_server_and_proposed_instead(api):
@@ -777,7 +784,8 @@ def test_a_bot_the_strategy_bot_cant_see_is_answered_as_a_bot_that_isnt_there(ap
             ],
         )
         assert made["state"] == "proposed" and not made["done"], made
-        body = task(api, made["proposal_task"])["body"]
+        body = words(api, made["proposal_task"])
+        assert body
         return made, [(x["text"], x["why"]) for x in made["left"]], body
 
     hidden, hidden_left, hidden_body = left("finance")

@@ -79,10 +79,14 @@ def no_task(c, decision_by=ANA, room="room-1", body="Can someone check the Acme 
 
 
 def rule_tasks(c):
-    return c.execute(
-        "SELECT t.id, t.owner_id, t.status, t.title, t.body FROM events e JOIN tasks t ON t.id=e.target "
-        "WHERE e.action='rule.ask' ORDER BY e.rowid"
-    ).fetchall()
+    """The tasks the rule's asks filed; `body` is what each was filed with (a task has no description)."""
+    return [
+        {**dict(t), "body": H.task_words(c, t["id"])}
+        for t in c.execute(
+            "SELECT t.id, t.owner_id, t.status, t.title FROM events e JOIN tasks t ON t.id=e.target "
+            "WHERE e.action='rule.ask' ORDER BY e.rowid"
+        )
+    ]
 
 
 def test_an_ask_with_no_task_files_one_open_task_for_the_bots_operator_per_thread(c):

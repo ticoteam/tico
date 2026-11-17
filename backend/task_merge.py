@@ -174,7 +174,10 @@ def set_parent(conn: Any, actor: str, task_id: str, parent_id: str, *, mover: An
 
 # ----------------------------------------------------------------------------- merge: what moves
 def _comments(conn: Any, task_id: str) -> int:
-    return sum(1 for m in _h().task_comments(conn, task_id) if m.get("kind") == "say")
+    """The comments left on A: its said messages, not its request (that comes over to B under "From #A")."""
+    H = _h()
+    asked = (H.task_request(conn, task_id) or {}).get("id")
+    return sum(1 for m in H.task_comments(conn, task_id) if m.get("kind") == "say" and m.get("id") != asked)
 
 
 def _asks(conn: Any, task_id: str) -> list[Row]:

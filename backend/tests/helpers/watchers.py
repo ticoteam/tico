@@ -1,5 +1,6 @@
 """Helpers that other tests share, moved out of test_watchers.py so they import no test file."""
 
+from backend.store import H
 from backend.tests.helpers.api import assign, post, ready, runner
 
 
@@ -31,11 +32,13 @@ def hosted(api, bot="ops"):
 
 
 def tasks(api, bot="ops"):
+    """The bot's tasks; `body` is what each was filed with (H.task_words: a task has no description, so its first
+    message and the instructions Tico gave the bot)."""
     with api.app.state.store.read() as c:
         return [
-            dict(t)
+            {**dict(t), "body": H.task_words(c, t["id"])}
             for t in c.execute(
-                "SELECT id,title,body,status,conversation_id FROM tasks WHERE owner_id=? ORDER BY created_at",
+                "SELECT id,title,status,conversation_id FROM tasks WHERE owner_id=? ORDER BY created_at",
                 ("bot:" + bot,),
             )
         ]

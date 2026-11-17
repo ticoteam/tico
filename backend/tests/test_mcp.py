@@ -198,15 +198,15 @@ def test_tools_write_through_the_same_rules_as_http(api):
 
     # A person's task opens with a plain ask, or it is refused with the rule and an example the bot can act on.
     wordy = " ".join(["word"] * 150)
-    err, out = call(api, "tico_task_create", {"owner": "ana", "title": "The thing", "body": wordy}, token=token)
+    err, out = call(api, "tico_task_create", {"owner": "ana", "title": "The thing", "message": wordy}, token=token)
     assert err and "Your ask to ana is 150 words" in json.dumps(out) and "Example:" in json.dumps(out)
     # Other writing problems on it are warnings: the task is made and the bot told how to improve.
     wordy = "Approve the thing? If yes, I'll ship it.\n\n" + wordy
     err, out = call(
-        api, "tico_task_create", {"owner": "ana", "title": "The thing", "body": wordy, "dry_run": True}, token=token
+        api, "tico_task_create", {"owner": "ana", "title": "The thing", "message": wordy, "dry_run": True}, token=token
     )
     assert not err and out["ok"] is True and any("verb" in w for w in out["warnings"])
-    err, out = call(api, "tico_task_create", {"owner": "ana", "title": "The thing", "body": wordy}, token=token)
+    err, out = call(api, "tico_task_create", {"owner": "ana", "title": "The thing", "message": wordy}, token=token)
     # The bot's own task, with its question to Ana (backend/person_asks.py).
     assert not err and out["task"]["owner_id"] == "bot:ops" and any("words outside" in w for w in out["warnings"])
     wordy_task = out["task"]["id"]
@@ -219,14 +219,14 @@ def test_tools_write_through_the_same_rules_as_http(api):
     err, task = call(
         api,
         "tico_task_create",
-        {"owner": "cpo", "title": "Review the runtime", "body": "Please.", "operation_id": "op-1"},
+        {"owner": "cpo", "title": "Review the runtime", "message": "Please.", "operation_id": "op-1"},
         token=token,
     )
     assert not err and task["task"]["owner_id"] == "bot:cpo"
     err, again = call(
         api,
         "tico_task_create",
-        {"owner": "cpo", "title": "Review the runtime", "body": "Please.", "operation_id": "op-1"},
+        {"owner": "cpo", "title": "Review the runtime", "message": "Please.", "operation_id": "op-1"},
         token=token,
     )
     assert not err and again["task"]["id"] == task["task"]["id"]

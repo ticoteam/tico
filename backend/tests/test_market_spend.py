@@ -316,7 +316,10 @@ def test_an_accepted_size_change_on_a_cited_segment_trips_the_bet_once_and_a_pro
     post(api, f"market/sizes/{one['id']}/accept", {})
     post(api, f"market/sizes/{two['id']}/accept", {})
     with api.app.state.store.read() as c:
-        tasks = H._rows(c.execute("SELECT title, owner_id, body FROM tasks WHERE title LIKE 'Bet %'"))
+        tasks = [
+            {**row, "body": H.task_words(c, row["id"])}
+            for row in H._rows(c.execute("SELECT id, title, owner_id FROM tasks WHERE title LIKE 'Bet %'"))
+        ]
     assert [(t["title"], t["owner_id"]) for t in tasks] == [("Bet 1: may be wrong", "bot:strategy-owner")]
     assert first in tasks[0]["body"]
 
@@ -359,7 +362,10 @@ def test_asking_for_the_market_to_be_sized_files_one_task_and_asking_again_retur
     # The answer carries the task as the spend view has it, so the card shows it without another read.
     assert first["sizing"]["id"] == first["task_id"] and first["sizing"]["ask"] is None
     with api.app.state.store.read() as c:
-        rows = H._rows(c.execute("SELECT owner_id, title, body FROM tasks WHERE title LIKE 'Size the market%'"))
+        rows = [
+            {**row, "body": H.task_words(c, row["id"])}
+            for row in H._rows(c.execute("SELECT id, owner_id, title FROM tasks WHERE title LIKE 'Size the market%'"))
+        ]
         said = [m["body"] or "" for m in H.task_comments(c, first["task_id"])]
     assert len(rows) == 1 and rows[0]["owner_id"] == "bot:librarian" and "size-the-market.md" in rows[0]["body"]
     assert not any("The market is now" in t for t in said)  # the same sentence changes nothing
@@ -449,7 +455,7 @@ def test_asking_for_the_market_names_the_places_the_company_serves(api):
     )
     post(api, "market/spend/research", {"description": "Kit sales"})
     with api.app.state.store.read() as c:
-        body = c.execute("SELECT body FROM tasks WHERE title LIKE 'Size the market%'").fetchone()[0]
+        body = H.task_words(c, c.execute("SELECT id FROM tasks WHERE title LIKE 'Size the market%'").fetchone()[0])
     assert "Serves: Texas; Ohio. Size the market for these places." in body
 
 

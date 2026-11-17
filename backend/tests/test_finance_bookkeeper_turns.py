@@ -221,7 +221,7 @@ def test_receipts_are_found_by_the_hourly_check(api):
         first = BK.check(c, api.app.state.auth, H.now())
     assert first["task"] and first["items"] >= 1, first
     with store.read() as c:
-        body = c.execute("SELECT body FROM tasks WHERE id=?", (first["task"],)).fetchone()[0]
+        body = H.task_words(c, first["task"])  # what the check filed for the Bookkeeper: its instructions
     assert "missing_receipt (1)" in body and "Acme Cloud" in body, body
     with store.transaction() as c:
         quiet = BK.check(c, api.app.state.auth, H.now())

@@ -322,7 +322,7 @@ const lastInLine = (page: Page) => page.locator('#bot-top').evaluate(top => [...
       assert.equal(await dlg.locator('.tmodal-head .tmodal-x .nav-icon').innerText(), 'close');
       assert.deepEqual(await dlg.locator('.tmodal-foot button').allInnerTexts(), ['Cancel', 'Create task']);
       await shot(page, `person-task-${phone ? 390 : 1440}`);
-      await dlg.locator('[name=body]').fill('The signed copy, please.');
+      await dlg.locator('[name=message]').fill('The signed copy, please.');
       await dlg.locator('[name=title]').fill('Send the signed form');
       await dlg.locator('[name=title]').press('Enter');
       await page.waitForFunction(() => !(document.querySelector('#person-task-modal') as HTMLDialogElement | null)?.open);

@@ -357,22 +357,29 @@ def between_check_and_write(monkeypatch, change):
     monkeypatch.setattr(task_rule_gate.TaskRules, "check", check)
 
 
-def test_a_hand_off_checked_safe_then_given_a_forbidden_body_is_not_delivered(ruled, monkeypatch):
+def given_words(c, task_id, text):
+    """The task's request now says `text`, its version bumped as an edit would."""
+    c.execute(
+        "UPDATE messages SET body=? WHERE json_extract(refs, '$.task')=? AND json_extract(refs, '$.request')=1",
+        (text, task_id),
+    )
+    c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (task_id,))
+
+
+def test_a_hand_off_checked_safe_then_given_a_forbidden_request_is_not_delivered(ruled, monkeypatch):
     api, judge = ruled
     color_rule(api)
     task = task_for_ops(api)
     between_check_and_write(
         monkeypatch,
-        lambda c: c.execute(
-            "UPDATE tasks SET body='Our favorite color is red.', version=version+1 WHERE id=?", (task["id"],)
-        ),
+        lambda c: given_words(c, task["id"], "Our favorite color is red."),
     )
     # A person hands it on (no ask ingest, which has its own check of the task).
     rule(api, {"kind": "internal", "text": COLOR, "who": {"everyone": True}})
     r = api.post(f"/api/v2/tasks/{task['id']}/owner", json={"owner": "ben"}, headers=headers("ana-test"))
     assert r.status_code == 409 and problem(r.json())[0] == "task_changed", r.text
     assert row(api, task["id"])["owner_id"] == "bot:ops"
-    # Sent again, it is checked again, on the body as it is now.
+    # Sent again, it is checked again, on the request as it is now.
     r = api.post(f"/api/v2/tasks/{task['id']}/owner", json={"owner": "ben"}, headers=headers("ana-test"))
     assert r.status_code == 200 and r.json()["held"], r.text
     assert row(api, task["id"])["owner_id"] == "bot:ops"
@@ -455,7 +462,7 @@ def test_send_anyway_of_a_private_hand_off_rechecks_a_new_rule_on_the_whole_task
     held = got["held"]
     stored = json.loads(hold_row(api, held["id"])["payload"])
     assert "launch date" not in stored["text"] and "launch date" in stored["input"]["text"]
-    # A rule added since the hold covers the private task's body, which the reviewer never saw.
+    # A rule added since the hold covers the private task's request, which the reviewer never saw.
     rule(api, {"kind": "internal", "text": LAUNCH, "who": {"bots": ["ops"]}})
     judge.needles[LAUNCH] = "launch date is"
     view = get(api, f"rule-holds/{held['id']}", token="ben-test")
@@ -571,8 +578,9 @@ def test_a_warned_strategy_bot_decision_carries_the_line_on_what_it_writes(ruled
     change = {"do": "create", "owner": "ops", "title": "Repaint the site", "body": "Our favorite color is red."}
     made = post(api, "strategy-bot/decisions", {"reason": "The brand.", "changes": [change]}, token=token)
     assert made["rule_warning"] and len(made["done"]) == 1, made
-    body = sql(api, "SELECT body FROM tasks WHERE id=?", (made["done"][0]["task_id"],))[0]["body"]
-    assert body.startswith("Warning:"), body
+    with api.app.state.store.read() as c:
+        words = H.task_words(c, made["done"][0]["task_id"])
+    assert words.startswith("Warning:"), words
 
 
 def batch_with_an_ask(api):

@@ -2615,9 +2615,10 @@ def create_app(settings=None):
             *(org_rule_check.company(c) if rule_publishes(body, row) else []),
         )
 
-    def rule_update_text(body, row):
-        """What a task change says, as the rule check reads it: its text fields, the task itself when it is handed to
-        a new owner, and the public text already written when the change alone makes the task public."""
+    def rule_update_text(c, body, row):
+        """What a task change says, as the rule check reads it: its text fields, the task itself (its title and what it
+        asks, `H.task_words`) when it is handed to a new owner, and the public text already written when the change
+        alone makes the task public."""
         parts = [
             f"{label}: {value}"
             for key, label in (
@@ -2635,7 +2636,7 @@ def create_app(settings=None):
                 if row.get(key) and getattr(body, key, None) is None
             ]  # an explicit "" clears it: no text
         if getattr(body, "owner", None):
-            parts.append(f"Assigned: {row['title']}")
+            parts.append(f"Assigned: {row['title']}\n\n{H.task_words(c, row['id'])}".rstrip())
         return "\n\n".join(parts)
 
     def rule_update_check(who, tid, body, row=None):
@@ -2648,7 +2649,8 @@ def create_app(settings=None):
                     row = auth.task(c, who, auth.resolve_task(c, who, tid))
                 except Problem as exc:
                     return org_rule_check.refused(exc)
-        text = rule_update_text(body, row)
+        with store.read() as c:
+            text = rule_update_text(c, body, row)
         if not text:
             return None
         only_owner = getattr(body, "owner", None) and not any(
@@ -3891,7 +3893,7 @@ def create_app(settings=None):
             org_rule_check.apply(
                 c,
                 rule,
-                rule_update_text(body, row),
+                rule_update_text(c, body, row),
                 {"task": task_id, "body": body.model_dump(mode="json", by_alias=True)},
             )
             if rule

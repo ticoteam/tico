@@ -206,7 +206,6 @@ COMMANDS = [
             {
                 "owner": "ana",
                 "title": "Sign the FCC filing",
-                "body": "Sign the FCC filing",
                 "due": None,
                 "goal_id": None,
                 "pipeline": "general",

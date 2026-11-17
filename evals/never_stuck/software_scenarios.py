@@ -89,7 +89,7 @@ def idea_to_done(r: SoftRig) -> None:
     row = r.row(e)
     expect(row["pipeline_id"] == ENGINEERING, f"filed into {row['pipeline_id']}")
     expect(row["title"] == "Export to CSV", f"the filed task is {row['title']!r}")
-    expect(spec.ref in str(row.get("body") or ""), f"the filed task's body does not name {spec.ref}")
+    expect(spec.ref in r.words(e), f"the filed task's first message does not name {spec.ref}")
     expect(any(ev["kind"] == "handoff_filed" for ev in r.events(p)), "no handoff_filed in the history")
     expect(r.waits(p) == [("tasks", e)], f"the Product task waits on {r.waits(p)}")
     r.check()

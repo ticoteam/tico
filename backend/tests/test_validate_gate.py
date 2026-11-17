@@ -209,7 +209,7 @@ def test_not_validated_moves_the_task_back_with_the_note_and_files_new_engineeri
     ).fetchall()
     work = E.task(c, filed[0])
     assert work["pipeline_id"] == "engineering" and work["status"] == "open"
-    assert "Sent back from Validate: Not validated: The row is still clipped at 390 px." in work["body"]
+    assert "Sent back from Validate: Not validated: The row is still clipped at 390 px." in H.task_words(c, work["id"])
 
 
 def test_a_passed_page_with_no_ask_goes_to_done_with_no_person(c):

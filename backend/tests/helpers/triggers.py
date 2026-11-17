@@ -58,9 +58,13 @@ def rule_row(
 
 
 def turns(api, name="New order"):
-    """The tasks an automation's Bot turns opened: each is titled with its automation's name."""
+    """The tasks an automation's Bot turns opened: each is titled with its automation's name. `body` is what each was
+    filed with (H.task_words: a task has no description, so its first message and the instructions its bot got)."""
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT * FROM tasks WHERE title=? ORDER BY created_at, id", (name,))]
+        return [
+            {**dict(r), "body": H.task_words(c, r["id"])}
+            for r in c.execute("SELECT * FROM tasks WHERE title=? ORDER BY created_at, id", (name,))
+        ]
 
 
 def sig(key, body):

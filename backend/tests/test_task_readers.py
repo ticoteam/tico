@@ -41,9 +41,14 @@ def answer_ask(api, task, words, token="ben-test"):
 
 
 def sql_sees(api, token, words):
-    r = api.post("/api/v2/sql", json={"sql": "SELECT id,title,body FROM tasks"}, headers=headers(token))
-    assert r.status_code == 200, r.text
-    return words in r.text
+    """Whether `words` reach this person through SQL: a task's title, or its chat, where what it asks is the first
+    message."""
+    seen = ""
+    for sql in ("SELECT id,title FROM tasks", "SELECT body FROM messages"):
+        r = api.post("/api/v2/sql", json={"sql": sql}, headers=headers(token))
+        assert r.status_code == 200, r.text
+        seen += r.text
+    return words in seen
 
 
 @pytest.mark.parametrize("requester", ["bot:cpo", "bot:ops"])  # another bot's task, and a bot's task to itself

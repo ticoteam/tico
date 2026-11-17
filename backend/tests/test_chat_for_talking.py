@@ -220,7 +220,7 @@ def _shown(c, room):
 def test_the_migration_takes_notices_and_bare_answers_out_of_peoples_timelines(company):
     """Given a task room written the old way (every notice with a seq, the bot's answers to them posted), when the
     migration runs, then the notices and the answer that named nobody leave Ana's timeline and the unread mark, and
-    every answer that was for her stays: the one to the task's request, one naming her, one the bot sent itself, one
+    her own request stays, and every answer that was for her: the one to the task's request, one naming her, one the bot sent itself, one
     to her own act, the one that finished the task. A notice written after it has no seq. Running it again changes nothing."""
     with company.transaction() as c:
         X.bot(c, "cpo")
@@ -251,6 +251,7 @@ def test_the_migration_takes_notices_and_bare_answers_out_of_peoples_timelines(c
 
         kept = [m for m in _shown(c, room) if m]
         assert kept == [
+            "What to do and how to tell it is done.",  # Ana's own request, the task's first message
             "Which page?",
             "@ana the old reports page or the new one?",
             "I sent this one myself.",

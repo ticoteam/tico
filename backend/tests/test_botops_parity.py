@@ -510,8 +510,10 @@ def test_generated_template_task_keeps_requester_rights_and_reaches_go_live(api,
     )
     assert not err and made["setup_task_id"], made
     task = get(api, "tasks/" + made["setup_task_id"], person)["task"]
-    assert task["title"].startswith("QA Set up") and "Read fixtures only; no outside sends." in task["body"]
-    assert "# Reviewed Instructions" in task["body"]
+    with api.app.state.store.read() as c:  # what the setup asks of BotOps (a task has no description)
+        said = H.task_words(c, task["id"])
+    assert task["title"].startswith("QA Set up") and "Read fixtures only; no outside sends." in said
+    assert "# Reviewed Instructions" in said
     attempt = claim(api, botops, "botops")
     assert act(api, attempt, "GET", "bots/qa-custom/access").status_code == 200
     credentials = act(api, attempt, "GET", "credentials")

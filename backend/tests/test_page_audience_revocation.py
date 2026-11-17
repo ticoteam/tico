@@ -26,7 +26,7 @@ def test_counsel_copy_revoked_after_ask(api, running, removed):
     edit(api, fid, {"people": ["cara"], "bots": [H.RULES_OWNER]})
     task = post(api, "rules/read", {"file_id": fid, "source_id": source(api)}, token="cara-test")["task_id"]
     before = get(api, "tasks/" + task, token="cara-test")
-    assert "42 deals" in before["task"]["body"]
+    assert "42 deals" in before["task"]["request"]["text"]
     attempt = counsel_run(api)[1] if running else None
     edit(
         api,

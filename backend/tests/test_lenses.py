@@ -360,7 +360,10 @@ def test_asking_the_librarian_to_sharpen_files_one_task_per_ask(api, model):
     assert second["task_id"] != filed["task_id"] and second["run"]["sharpen_tasks"].keys() == {"0", "1"}
     post(api, f"lenses/runs/{run['id']}/sharpen/2", {}, expected=422)
     with api.app.state.store.read() as c:
-        tasks = [dict(r) for r in c.execute("SELECT title, body FROM tasks WHERE owner_id='bot:librarian'")]
+        tasks = [
+            {"title": r[1], "body": H.task_words(c, r[0])}
+            for r in c.execute("SELECT id, title FROM tasks WHERE owner_id='bot:librarian' ORDER BY created_at, rowid")
+        ]
     assert len(tasks) == 2 and "Globex pricing and plan limits" in tasks[0]["body"] and "Blue Ocean" in tasks[0]["body"]
     assert "market/open-questions" in tasks[0]["body"]
 

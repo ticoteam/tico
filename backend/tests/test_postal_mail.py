@@ -164,8 +164,12 @@ def scan(api, row, token="ana-test"):
 
 
 def task(api, task_id):
+    """The task row; `body` is what it was filed with (H.task_words: Tico's first message to the owner)."""
     with api.app.state.store.read() as c:
-        return dict(c.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone())
+        return {
+            **dict(c.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()),
+            "body": H.task_words(c, task_id),
+        }
 
 
 def test_a_letter_is_kept_once_and_legal_mail_asks_the_owner_with_its_deadline(api, hq, mail):

@@ -93,19 +93,21 @@ def test_what_the_strategy_owner_saves_on_the_owners_words_is_live_and_the_note_
     assert r.json()["n"] == latest["n"] and len(get(api, "strategy/versions")) == 1
 
 
-def test_a_task_body_never_counts_as_the_owners_words(api):
-    """A body is text the owning bot can write or rewrite (filed "for" the owner, or edited after), so it proves
-    nothing: only the owner's own comments and answers on the task do."""
+def test_a_first_message_counts_only_as_the_words_of_whoever_wrote_it(api):
+    """A task has no description a bot could write or rewrite for the owner: what it asks is its first message, from
+    whoever wrote it. The bot's own words, even quoting the owner, prove nothing; only the owner's own messages and
+    answers on the task do, and nobody can put words in the task some other way."""
     goal_manager(api, level=2)
     as_bot(api, "strategy-owner")
     with api.app.state.store.transaction() as c:
-        filed = H.task_create(c, "human:ana", "Update who we serve", SAID, G.AUTO_ACTOR, lint=False)
-        empty = H.task_create(c, "human:ana", "Question", "", G.AUTO_ACTOR, lint=False)
+        filed = H.task_create(c, G.AUTO_ACTOR, "Update who we serve", SAID, G.AUTO_ACTOR, lint=False)
+        empty = H.task_create(c, G.AUTO_ACTOR, "Question", "", G.AUTO_ACTOR, lint=False)
+        assert H.task_request(c, filed["id"])["from"] == G.AUTO_ACTOR
     assert (
         draft(api, {"sections": {"serve": "Small landlords."}, "task": filed["id"]}, 422)["error"]["code"] == "invalid"
     )
     r = api.post(f"/api/v2/tasks/{empty['id']}", json={"body": SAID, "version": empty["version"]}, headers=headers(BOT))
-    assert r.status_code == 200, r.text
+    assert r.status_code == 422, r.text
     assert (
         draft(api, {"sections": {"serve": "Small landlords."}, "task": empty["id"]}, 422)["error"]["code"] == "invalid"
     )

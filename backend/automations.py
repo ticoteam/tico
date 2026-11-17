@@ -2416,8 +2416,8 @@ class HubServices:
 
     def _rule_text(self, c, do, args, values, hide_private=False):
         """What a step says, as the rule check reads it, and the argument a warning line goes on. A task handed to a
-        new owner (`assign`) says its title and body to them, with or without a note. `hide_private`: a private
-        task's title and body are left out (a hold's reviewer may not read the task)."""
+        new owner (`assign`) says its title and what it asks (`H.task_words`) to them, with or without a note.
+        `hide_private`: a private task's title and words are left out (a hold's reviewer may not read the task)."""
         keys = RULE_CHECKED.get(do)
         if not keys:
             return "", None
@@ -2433,7 +2433,7 @@ class HubServices:
                 said = (
                     "Assigned: a private task"
                     if hide_private and H.task_private(c, task)
-                    else f"Assigned: {task['title']}"
+                    else f"Assigned: {task['title']}\n\n{H.task_words(c, task['id'])}".rstrip()
                 )
                 text = "\n\n".join(filter(None, (text, said)))
         return text, _rule_key(do, args)

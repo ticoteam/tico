@@ -154,12 +154,12 @@ def test_the_strategy_bots_task_uses_the_cards_words_and_an_old_one_is_reworded_
     for task in tasks.values():
         assert "Confirm or reject" not in task["title"] + task["body"] and "existing KPI" not in task["body"]
         assert task["body"].endswith("Decide it under Needs you on the Goals page.")
-    # A task filed before, in the old words, takes the card's words on the next pass, once.
+    # A task filed before, in the old words, takes the card's words on the next pass, once: its title (what it said
+    # on its chat stays as said).
     ref, task = next(iter(tasks.items()))
     with api.app.state.store.transaction() as c:
         c.execute(
-            "UPDATE tasks SET title=?, body=? WHERE id=?",
-            ("Confirm or reject a new KPI for Raise activation", "Confirm or reject it.", task["id"]),
+            "UPDATE tasks SET title=? WHERE id=?", ("Confirm or reject a new KPI for Raise activation", task["id"])
         )
     sync(api)
     again = next(a for a in asks(api) if a["ref"] == ref)

@@ -151,7 +151,11 @@ def test_a_webhook_turn_reads_the_call_as_data_and_one_without_braces_is_left_al
     )
     hook(api, made["url"], b'{"kind": "order.created", "order": 42, "note": "{{webhook.name}}"}', {"Webhook-Id": "t1"})
     with api.app.state.store.read() as c:
-        bodies = {r["title"]: r["body"] for r in c.execute("SELECT title, body FROM tasks WHERE owner_id='bot:ops'")}
+        # What each turn's task was filed with: a task has no description (its first message, or its bot's instructions).
+        bodies = {
+            r["title"]: H.task_words(c, r["id"])
+            for r in c.execute("SELECT id, title FROM tasks WHERE owner_id='bot:ops'")
+        }
     assert bodies["Plain"] == "Ship it."
     filled = bodies["Filled"]
     # The author's words point at quoted data blocks; the call's own braces stay text and are never filled in.
@@ -197,8 +201,9 @@ def test_create_task_files_a_templated_task_once_in_the_rule_makers_name(api):
     assert judge(api) == []  # the same call, once
     tasks = [t for t in get(api, "tasks?owner=bot:cpo")["tasks"] if t["title"].startswith("Order 42")]
     assert len(tasks) == 1 and tasks[0]["title"] == "Order 42 for Buyer"
-    body = get(api, "tasks/" + tasks[0]["id"])["task"]["body"]
-    assert body == "Look at order.created."  # nothing was cut: no line about the rest
+    said = get(api, "tasks/" + tasks[0]["id"])["task"]["request"]
+    assert said["text"] == "Look at order.created."  # nothing was cut: no line about the rest
+    assert said["from"] == "human:ben"  # the first message is the rule maker's
     assert get(api, "tasks/" + tasks[0]["id"])["task"]["requester_id"] == "human:ben"  # in the rule maker's name
 
 

@@ -337,7 +337,8 @@ def test_retiring_a_bet_with_goals_files_one_realign_card_for_the_owner(api):
         and task["title"] == f"Choose what happens to 1 goal after strategy v{n}"
     )
     assert task["id"] in {i.get("task_id") for i in get(api, "needs-you")["items"]}
-    assert "Keep as it is, Retire goal, or Move to a bet" in task["body"] and "Confirm" not in task["body"]
+    said = words(api, task["id"])
+    assert "Keep as it is, Retire goal, or Move to a bet" in said and "Confirm" not in said
     payload = json.loads(proposal["payload"])
     assert [g["goal_id"] for g in payload["goals"]] == [goal["id"]] and payload["bets"][0]["id"] == two["id"]
     post(api, f"proposals/{proposal['id']}/decide", {"decision": "confirm", "moves": {goal["id"]: two["id"]}})
@@ -347,6 +348,12 @@ def test_retiring_a_bet_with_goals_files_one_realign_card_for_the_owner(api):
         assert closed["status"] == "closed"
         assert not H._one(c, "SELECT 1 AS x FROM goal_asks WHERE ref=?", (proposal["id"],))
     assert closing_note(api, task["id"]) == "Resolved: the goals were realigned with the strategy."
+
+
+def words(api, tid):
+    """What the task was filed with: its first message and the instructions Tico gave its bot."""
+    with api.app.state.store.read() as c:
+        return H.task_words(c, tid)
 
 
 def closing_note(api, tid):
@@ -384,7 +391,9 @@ def test_a_reworded_bet_carries_its_earlier_wording_and_keeping_every_goal_says_
     assert card["closed_goals"] == []
     n = card["payload"]["n"]
     assert n == get(api, "strategy")["current"]["n"]
-    assert task["title"] == f"Choose what happens to 2 goals after strategy v{n}" and "reworded" in task["body"]
+    assert task["title"] == f"Choose what happens to 2 goals after strategy v{n}" and "reworded" in words(
+        api, task["id"]
+    )
     post(api, f"proposals/{card['id']}/decide", {"decision": "confirm", "moves": {g["id"]: "keep" for g in goals}})
     assert all(get(api, f"goals/{g['id']}")["goal"]["bet_id"] == card["payload"]["goals"][0]["bet_id"] for g in goals)
     assert closing_note(api, task["id"]) == "Resolved: the goals stay as they are."
@@ -414,12 +423,12 @@ def test_a_kpi_reading_past_the_wrong_if_trips_the_bet_once_per_wrong_if(api):
     def trips():
         with api.app.state.store.read() as c:
             return H._rows(
-                c.execute("SELECT id, title, owner_id, body FROM tasks WHERE title LIKE 'Bet %' ORDER BY created_at")
+                c.execute("SELECT id, title, owner_id FROM tasks WHERE title LIKE 'Bet %' ORDER BY created_at")
             )
 
     tasks = trips()
     assert [(t["title"], t["owner_id"]) for t in tasks] == [("Bet 1: may be wrong", "bot:strategy-owner")]
-    assert "Evidence:" in tasks[0]["body"]
+    assert "Evidence:" in words(api, tasks[0]["id"])
     # Its task closed, a save that leaves the wrong-if as it was (a new version) trips nothing again.
     with api.app.state.store.transaction() as c:
         E.move(c, tasks[0]["id"], E.DONE, "human:ana", "Keeping it")
