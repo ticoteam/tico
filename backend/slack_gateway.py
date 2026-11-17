@@ -266,6 +266,65 @@ class SlackAPI:
             (data.get("response_metadata") or {}).get("next_cursor") or ""
         ).strip()
 
+    def replies_page(self, channel, thread_ts, cursor=""):
+        """One page of a thread (the root first on the first page) and the cursor for the next ("" at the end): a bot's
+        history read with threads (backend/slack_requests.py), which pages to the end."""
+        data = self.call(
+            "conversations.replies",
+            {"channel": channel, "ts": thread_ts, "limit": HISTORY_PAGE, "cursor": cursor or None},
+        )
+        return list(data.get("messages") or []), str(
+            (data.get("response_metadata") or {}).get("next_cursor") or ""
+        ).strip()
+
+    def history_range(self, channel, oldest, latest, cursor=""):
+        """One page of a channel's top-level messages from `oldest` to `latest` (both kept), and the next cursor: a bot's
+        history read (backend/slack_requests.py)."""
+        data = self.call(
+            "conversations.history",
+            {
+                "channel": channel,
+                "oldest": oldest,
+                "latest": latest,
+                "inclusive": "true",
+                "limit": HISTORY_PAGE,
+                "cursor": cursor,
+            },
+        )
+        return list(data.get("messages") or []), str(
+            (data.get("response_metadata") or {}).get("next_cursor") or ""
+        ).strip()
+
+    def files_info(self, file_id):
+        return self.call("files.info", {"file": file_id}).get("file") or {}
+
+    def download(self, url, limit):
+        """(status, content type, bytes) of a file on Slack's file host, with the bot token and no redirect followed:
+        a redirect is Slack's sign-in page, and the token never goes anywhere else. Over `limit` bytes is refused."""
+
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, *args, **kwargs):
+                return None
+
+        request = urllib.request.Request(
+            url, headers={"Authorization": "Bearer " + self.bot_token, "User-Agent": "tico-slack-gateway/1"}
+        )
+        try:
+            with urllib.request.build_opener(NoRedirect).open(request, timeout=60) as response:
+                status, kind, raw = (
+                    response.status,
+                    response.headers.get("Content-Type") or "",
+                    response.read(limit + 1),
+                )
+        except urllib.error.HTTPError as exc:
+            with exc:
+                return exc.code, "", b""
+        except Exception as exc:  # URLError, socket timeout, TLS
+            raise SlackUnreachable(f"Slack file download: {type(exc).__name__}") from exc
+        if len(raw) > limit:
+            raise SlackError("files.download", "file_too_large")
+        return status, kind, raw
+
     def history_metadata_page(self, channel, oldest, cursor=""):
         """One page of messages newer than `oldest` with their metadata, and the cursor for the next ("" at the end): where
         an uncertain send's delivery id is looked for."""
@@ -1866,7 +1925,9 @@ class Gateway:
         name = bot.get("display_name") or bot.get("slug") or post["bot"]
         config = entries(c).get(post["bot"]) or {}
         text = str(post["text"] or "").strip()
-        if len(text) > POST_CHARS:
+        # A mirrored reply is cut here, with its link to Tico. A bot's own post never is: the route refuses one longer
+        # than POST_CHARS (backend/slack_bots.py), and an org rule warning added after that check is kept whole.
+        if len(text) > POST_CHARS and "slack_post" not in (message.get("refs") or {}):
             text = text[:POST_CHARS].rstrip() + " …"
         # A reply about a task names it and links to it, so the DM makes sense on its own.
         task = H.task(c, about) if about else None
@@ -1903,6 +1964,27 @@ class Gateway:
         viewer = threads.actor_viewer(c, to)
         return viewer is not None and threads.readable(c, viewer, message)
 
+    def outside_workspace(self, post):
+        """Why a bot's own post (backend/slack_bots.py) may not go to its channel, "" when it may, None when Slack could
+        not be asked now (unreachable, or rate limited: the next pass asks again). A channel shared outside the
+        workspace (Slack Connect) is refused whatever the channel list says. Slack is asked on every post, never from a
+        cache, since sharing can start at any time. Other posts (replies, automations) are not asked about."""
+        if str(post["channel"] or "").startswith("D"):
+            return ""
+        with self.store.read() as c:
+            refs = (H.message(c, post["message_id"]) or {}).get("refs") or {}
+        if "slack_post" not in refs:
+            return ""
+        try:
+            outside = is_external(self.slack.conversations_info(post["channel"]))
+        except SlackError as exc:
+            if exc.code == "ratelimited":
+                return None
+            return f"Slack could not say whether the channel is shared outside the workspace ({exc.code})"
+        except SlackUnreachable:
+            return None
+        return "Slack Connect channel: bots never post outside the workspace" if outside else ""
+
     def deliver(self):
         """Post what is ready, one attempt each. A crash between send and record is uncertain."""
         now = self.clock()
@@ -1919,7 +2001,17 @@ class Gateway:
         for post in due:
             if not post["bot"] and not self.settings.slack_gateway_enabled:
                 continue
+            outside = self.outside_workspace(post)
+            if outside is None:
+                continue  # Slack could not be asked: the next pass tries again
             with self.store.transaction() as c:
+                if outside:
+                    c.execute(
+                        "UPDATE slack_posts SET state='canceled',error=?,updated_at=? "
+                        "WHERE message_id=? AND state IN ('ready','rate_limited')",
+                        (outside, self.clock(), post["message_id"]),
+                    )
+                    continue
                 message = H.message(c, post["message_id"])
                 if not privacy.public_message(c, message):
                     c.execute(
@@ -2425,6 +2517,11 @@ class Gateway:
         return {"events": out, "posts": posts, "digests": digests, "threads": threads}
 
     def run(self):
+        from . import slack_requests
+
+        # Bots' history reads and file downloads (backend/slack_bots.py) are answered on their own thread: a tick can
+        # wait on the decision model, and a bot's read must not.
+        threading.Thread(target=slack_requests.serve_forever, args=(self,), name="slack-requests", daemon=True).start()
         while not self.stop.is_set():
             try:
                 self.tick()
