@@ -49,7 +49,7 @@ def company_editor(who, tap=False):
 
 
 def strategy_visible(who, proposal, auth=None):
-    """A strategy proposal carries unpublished draft text (strategy_draft) or every affected goal's title
+    """A strategy proposal carries text the owner has not confirmed (strategy_draft) or every affected goal's title
     (strategy_realign): the owner reads it, and the bot that proposed it; no one else. A brand draft proposal
     (backend/brand.py) is the same for the owner and the admins, who write that draft."""
     if proposal["kind"] in DRAFT_PAGE_KINDS:
@@ -394,7 +394,7 @@ def install(app, store, auth, mutate, settings):
             )
 
     def company_view(c, who):
-        # The vision has one source, the strategy: the owner reads the draft's, everyone else the published one.
+        # The vision has one source, the strategy: the owner reads the draft's, everyone else the live one (the same).
         record = {**C.profile(c), "vision": S.vision(c, editor=company_editor(who))}
         by = record.get("updated_by")
         known = N.lookup(c, {by}) if by else {}

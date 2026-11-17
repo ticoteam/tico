@@ -286,7 +286,7 @@ def test_a_strategy_bot_run_files_exactly_one_strategy_draft_proposal_and_never_
     sync(api)
     [ask] = [a for a in asks(api) if a["kind"] == "proposal"]
     assert ask["title"] == "Decide a suggested change to your strategy from the Blue Ocean lens"
-    assert "because" not in ask["body"] and "Add to draft writes it to your draft" in ask["body"]
+    assert "because" not in ask["body"] and "Add to strategy makes it live" in ask["body"]
     # No change, no proposal; an owner's run never files one.
     model["result"] = result(first["id"])
     assert start(api, token=strategy_token)["proposal_id"] is None
@@ -323,13 +323,12 @@ def test_the_owner_applies_each_change_once_against_the_draft_revision(api, mode
     )
     run = start(api)
     revision = draft(api)["revision"]
+    live = get(api, "strategy")["current"]["n"]
     post(api, f"lenses/runs/{run['id']}/apply", {"index": 0, "revision": revision - 1}, expected=409)
     assert run_row(api, run["id"])["applied"] == "[]"
     done = post(api, f"lenses/runs/{run['id']}/apply", {"index": 0, "revision": revision})
     assert done["run"]["applied"] == [0] and done["strategy"]["draft"]["sections"]["not"] == "No per-seat pricing."
-    assert (
-        done["strategy"]["draft"]["revision"] > revision and done["strategy"]["current"]["n"] == 1
-    )  # nothing published
+    assert done["strategy"]["draft"]["revision"] > revision and done["strategy"]["current"]["n"] == live + 1
     again = post(api, f"lenses/runs/{run['id']}/apply", {"index": 0, "revision": draft(api)["revision"]}, expected=409)
     assert again["error"]["code"] == "applied"
     post(api, f"lenses/runs/{run['id']}/apply", {"index": 5, "revision": draft(api)["revision"]}, expected=422)
@@ -408,7 +407,7 @@ def test_a_retried_start_runs_the_model_once_and_a_failing_model_leaves_a_failed
     assert failed["status"] == "failed" and failed["error"]["code"] == "failed" and failed["result"] is None
 
 
-def test_the_prompt_is_capped_and_carries_the_published_strategy_not_the_draft(api, model):
+def test_the_prompt_is_capped_and_carries_the_live_strategy(api, model):
     first, _ = two_bets(api)
     write(
         api,
@@ -419,13 +418,8 @@ def test_the_prompt_is_capped_and_carries_the_published_strategy_not_the_draft(a
     run = start(api, answers={"rivals": ["r" * 200] * 12, "errc": "e" * 2000})
     assert run["status"] == "done"
     assert all(len(json.dumps(s)) <= L.PROMPT_CHARS for s in model["sent"])
-    assert "Unannounced" not in json.dumps(model["sent"][-1]["strategy"])
+    assert "Unannounced" in json.dumps(model["sent"][-1]["strategy"])
     assert [b["id"] for b in model["sent"][-1]["strategy"]["bets"]][0] == first["id"]
-    start(api, on="draft")
-    assert (
-        "Unannounced" in json.dumps(model["sent"][-1]["strategy"])
-        and len(json.dumps(model["sent"][-1])) <= L.PROMPT_CHARS
-    )
 
 
 def test_a_draft_whose_guide_file_moved_falls_back_to_the_default_guide(api):

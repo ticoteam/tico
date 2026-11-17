@@ -98,8 +98,8 @@ def _about(answers):
 
 def strategy_bets(c, who=None):
     """The bets that are not retired, in rank order; none on a database from before Strategy. The draft's for the
-    owner (and for setup itself, `who` None); for anyone else, as a bot administrator, the published version's: the
-    draft is the owner's until they publish it."""
+    owner (and for setup itself, `who` None); for anyone else, as a bot administrator, the live version's (the
+    same, since every save is live)."""
     from . import goal_routes
     from . import strategy as S
 

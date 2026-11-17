@@ -2,7 +2,7 @@
 
 A task titled "Bet N: may be wrong". The server files it when an active bet's wrong-if trips: a KPI crossed its
 threshold, a market entity the bet cites changed, or a sentence bet's check-by date passed. It files one per bet per
-published version, at every level, Passive included: the server detected the trip, so your only job is the words.
+wrong-if, at every level, Passive included: the server detected the trip, so your only job is the words.
 The outcome is one proposal for the owner that says what happened and what you would do. Budget 15 minutes.
 
 Inputs: the trip task (the bet id, the wrong-if that tripped and the evidence), `tico strategy show`, and the reading or market item it cites.
@@ -32,7 +32,7 @@ number**: the evidence is the reading, the market change or the date in the task
 One `strategy_draft` proposal that does one of three things to this bet:
 
 - **retire** it: `{"bets": [{"id": "<bet id>", "status": "retired"}]}`. Its goals stay;
-  the owner's realignment ask on publish lists them;
+  the owner's realignment ask, once it is live, lists them;
 - **rewrite** it: a new statement, why, rules out or wrong-if, with the same `id`;
 - **keep** it with a new wrong-if: the same statement and a `wrong_if` the evidence has not already crossed, with a
   new `check_by`.

@@ -11,7 +11,7 @@ Gather what changed since yesterday:
 
 - `tico market delta --since 1d`: the graph's changes, grouped by entity, each with its source.
   What Listening sent you is in there too, once you filed it as an insight and applied it.
-- `tico strategy show`: the published bets, each with its `why` and `wrong_if`. An item about an entity a bet cites
+- `tico strategy show`: the live bets, each with its `why` and `wrong_if`. An item about an entity a bet cites
   matters most, and goes first.
 
 ## 2. Write the items

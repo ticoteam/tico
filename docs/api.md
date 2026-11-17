@@ -69,7 +69,7 @@ tag, run `python3 scripts/build_api_docs.py`; `--check` verifies the guide match
 | Roadmaps | Company roadmap settings and internal requesters ([guide](roadmaps.md)). |
 | Support | Reports to Tico support ([guide](support.md)). |
 | Rules | Org rules: what teammates follow (internal) and what someone outside requires (external), with their due dates and sources. |
-| Strategy | The team's strategy: a draft the owner edits, numbered published versions, and the bets goals serve. |
+| Strategy | The team's strategy: numbered versions, each save live at once, and the bets goals serve. |
 | Inbound | Shared company inbound email and SMS for people and agents; reads never consume messages. |
 | Triggers | Webhook triggers: an address any sender can post to, how its calls are verified, kept and run again. |
 | Tools | Every way the company reaches the outside world in one list, and API tools: their keys per level, who can use each, its checks and calls. |

@@ -750,7 +750,6 @@ pub(super) const HUB_PATHS: &[&str] = &[
     "strategy bet update",
     "strategy diff",
     "strategy draft",
-    "strategy publish",
     "strategy show",
     "strategy summary",
     "strategy versions",

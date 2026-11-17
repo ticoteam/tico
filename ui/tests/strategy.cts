@@ -4,8 +4,8 @@
 // summary and each bet's statement in place with the draft's revision, adds a bet with + Bet (active), removes one with
 // × and restores it, moves one by its number (arrow keys or a drag), and is told when the draft changed elsewhere (409);
 // a click on a segment makes it Us, then Next, then neither, × removes one and one can be added by name; competitors are
-// removed and added by name or site; Publish stays off with its reason until one bet is active and What we won't do is
-// written; a member reads only the published version; old #/market links land on the Market tab keeping their query;
+// removed and added by name or site; there is no Publish: each save is live at once as the next version; a member
+// reads the live version; old #/market links land on the Market tab keeping their query;
 // the Goals page's Bet picker saves bet_id and its chip opens the bet; a team group's row has no Bet flag.
 // TICO_SCREENSHOT_DIR=<dir> saves review screenshots (desktop in both themes, and a phone).
 const {chromium} = require('playwright') as typeof import('playwright');
@@ -100,7 +100,7 @@ async function open(browser: Browser, {role = 'owner', route = '#/strategy', vie
   const page = await browser.newPage({viewport, serviceWorkers: 'block', locale: 'en-GB', hasTouch: touch, isMobile: touch});  // dates read "24 Oct"
   const errors: string[] = [], sent: Sent[] = [];
   page.on('pageerror', e => errors.push(e.message));
-  // fresh: nothing published yet, one proposed bet with no Rules out, and What we won't do unwritten.
+  // fresh: nothing saved yet, one proposed bet with no Rules out, and What we won't do unwritten.
   const st: State = fresh
     ? {draft: {id: 'v-d', n: null, status: 'draft', guide: 'default', summary: 'Acme cleans homes in Austin at half the price.', vision: '',
         sections: {serve: 'Busy households.', extra: {}}, bets: [], note: '', revision: 1}, current: null,
@@ -120,6 +120,11 @@ async function open(browser: Browser, {role = 'owner', route = '#/strategy', vie
     // goals_by_bet is the first 20 a bet has; this counts all of its live ones.
     live_by_bet: {'b-price': 21, 'b-offices': 1},
     health_by_bet: {'b-price': 'green', 'b-offices': 'red', 'b-weekly': 'gray'}});
+  // Every save is live at once as the next version, as the server's go_live makes it.
+  const live = () => {
+    st.current = {...st.draft, n: (st.current?.n || 0) + 1, status: 'published', note: '', bets: st.bets.filter(b => b.status !== 'retired').map(b => ({...b})),
+      published_at: new Date().toISOString(), published_by: 'human:ana'};
+  };
   await page.route('**/*', async (route: Route) => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
     const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
@@ -149,20 +154,13 @@ async function open(browser: Browser, {role = 'owner', route = '#/strategy', vie
         const merged: Draft['sections'] = {...now, ...(change.sections || {}), extra: {...now.extra, ...(change.sections?.extra || {})}};
         for (const k of Object.keys(merged)) if (merged[k] === '') delete merged[k];
         for (const k of Object.keys(merged.extra)) if (merged.extra[k] === '') delete merged.extra[k];
-        st.draft = {...st.draft, ...change, sections: merged, revision: revision + 1}; return json(st.draft);
-      }
-      if (p === '/api/v2/strategy/publish') {
-        const n = (st.current?.n || 0) + 1;
-        st.current = {...st.draft, n, status: 'published', note: body.note, bets: st.bets.filter(b => b.status !== 'retired').map(b => ({...b})),
-          published_at: new Date().toISOString(), published_by: 'human:ana'};
-        st.draft = {...st.draft, revision: st.draft.revision + 1};
-        return json(st.current);
+        st.draft = {...st.draft, ...change, sections: merged, revision: revision + 1}; live(); return json(st.draft);
       }
       const one = p.match(/^\/api\/v2\/strategy\/bets\/([^/]+)$/);
       // The server's rule (strategy._wrong_if): a sentence wrong-if has a Check by.
       if (body.wrong_if?.kind === 'text' && !body.wrong_if.check_by) return json({error: {code: 'lint', detail: 'a wrong-if in words needs a check_by date: the day to look again'}}, 422);
-      if (one) { const c = st.bets.find(x => x.id === one[1])!; Object.assign(c, body); return json({bet: c, revision: ++st.draft.revision}); }
-      if (p === '/api/v2/strategy/bets') { const c = {id: 'b-new', since_n: null, until_n: null, rank: st.bets.length, status: 'proposed', why: '', rules_out: '', wrong_if: null, cites: [], ...body}; st.bets.push(c); return json({bet: c, revision: ++st.draft.revision}); }
+      if (one) { const c = st.bets.find(x => x.id === one[1])!; Object.assign(c, body); ++st.draft.revision; live(); return json({bet: c, revision: st.draft.revision}); }
+      if (p === '/api/v2/strategy/bets') { const c = {id: 'b-new', since_n: null, until_n: null, rank: st.bets.length, status: 'proposed', why: '', rules_out: '', wrong_if: null, cites: [], ...body}; st.bets.push(c); ++st.draft.revision; live(); return json({bet: c, revision: st.draft.revision}); }
     }
     if (p === '/api/v2/strategy/versions') return json([{n: 1, note: 'First version', published_at: v1.published_at, published_by: 'human:ana'}]);
     if (p === '/api/v2/strategy/versions/1') return json(v1);
@@ -228,39 +226,22 @@ const sectionTitles = (page: Page) => page.locator('[data-section] .strat-sec-he
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
-    // Nothing publishable yet: Publish is off with its reason; the Proposed pill makes a bet active, Rules out and
-    // Wrong if or not.
+    // No Publish: a new strategy has no Publish and no draft status, and each save is live at once as the next version;
+    // the Proposed pill makes a bet active.
     {
       const {page, errors, sent} = await open(browser, {fresh: true});
       await page.locator('li[data-bet="b-price"]').waitFor();
-      assert.equal(await page.locator('[data-strat-status]').innerText(), 'Not published');
-      const publish = page.locator('[data-strat-publish]');
-      assert.equal(await publish.isDisabled(), true);
-      // Why it is off is a (?) beside Publish, not a line of helper text.
-      assert.equal(await page.locator('[data-strat-why-not]').getAttribute('aria-label'), 'Needs an active bet');
-      assert.equal(await page.locator('[data-strat-why-not]').innerText(), '?');
-      assert.doesNotMatch(await page.locator('#main').innerText(), /Needs an active bet/, 'no helper line');
-      await page.locator('[data-strat-why-not]').focus();
-      assert.equal(await page.locator('[data-strat-why-not] [role="tooltip"]').isVisible(), true, 'the words show on focus');
-      const pop = (await page.locator('[data-strat-why-not] [role="tooltip"]').boundingBox())!;
-      assert.ok(pop.y >= 0 && pop.x >= 0 && pop.x + pop.width <= DESKTOP.width, 'the words open on screen');
-      await shot(page, 'publish-off', ['dark']);
-      await page.setViewportSize(PHONE);
-      await page.locator('[data-strat-why-not]').focus();
-      const phonePop = (await page.locator('[data-strat-why-not] [role="tooltip"]').boundingBox())!;
-      assert.ok(phonePop.x >= 0 && phonePop.x + phonePop.width <= PHONE.width, 'the words open on a phone screen');
-      await shot(page, 'publish-off-phone', ['dark']);
-      await page.setViewportSize(DESKTOP);
+      assert.equal(await page.locator('[data-strat-publish], [data-strat-status], [data-strat-why-not]').count(), 0);
       await page.locator('li[data-bet="b-price"] [data-bet-activate]').click();
       await page.locator('li[data-bet="b-price"].strat-active').waitFor();
       assert.deepEqual(sent.find(x => x[1] === '/bets/b-price'), ['POST', '/bets/b-price', {status: 'active', revision: 1}]);
-      await page.locator(`[data-strat-why-not][aria-label="Needs What we won't do"]`).waitFor();
-      assert.equal(await publish.isDisabled(), true);
+      await page.locator('.strat-meta', {hasText: /^v1 · /}).waitFor();
       await page.locator('[data-section="not"] [data-section-edit]').click();
       await page.locator('[data-section-form] textarea').fill('No deep cleans.');
       await page.locator('[data-section-form] button[type="submit"]').click();
-      await page.locator('[data-strat-publish]:not([disabled])').waitFor();
-      assert.equal(await page.locator('[data-strat-why-not]').count(), 0);
+      await page.locator('.strat-meta', {hasText: /^v2 · /}).waitFor();
+      assert.doesNotMatch(await page.locator('.strat-meta').innerText(), /publish/i);
+      assert.equal(await page.locator('[data-strat-publish]').count(), 0);
       assert.deepEqual(errors, []);
       await page.close();
     }
@@ -447,15 +428,14 @@ const sectionTitles = (page: Page) => page.locator('[data-section] .strat-sec-he
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // A member reads the published version only: no draft, no status, no fields, no Publish.
+    // A member reads the live version: no fields.
     {
       const {page, errors} = await open(browser, {role: 'member'});
       await page.locator('.strat-summary .strat-text').waitFor();
       assert.equal(await page.locator('.strat-summary .strat-text').innerText(), v1.summary);
-      assert.equal(await page.locator('textarea, [data-strat-publish], [data-bet-edit], [data-section-edit], [data-section-add], [data-strat-status]').count(), 0);
-      assert.equal(await page.locator('li[data-bet="b-weekly"]').count(), 0, 'a proposed bet is not in the published version');
+      assert.equal(await page.locator('textarea, [data-bet-edit], [data-section-edit], [data-section-add]').count(), 0);
+      assert.equal(await page.locator('li[data-bet="b-weekly"]').count(), 0, 'a bet not in the live version is not shown');
       assert.equal(await page.locator('.strat-retired').count(), 0);
-      assert.doesNotMatch(await page.locator('.strat-meta').innerText(), /Draft|Not published/);
       // The market cards read only: no ×, no add rows, no tile to click; no news for one who is not routed any.
       await page.locator('#strat-where .strat-map').waitFor();
       await page.locator('#strat-news .strat-none-s').waitFor();
@@ -579,7 +559,7 @@ const sectionTitles = (page: Page) => page.locator('[data-section] .strat-sec-he
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // The header (style guide, "Top bars: one line"): ⋯ last at the far right, after Publish; Lenses and Versions are in
+    // The header (style guide, "Top bars: one line"): ⋯ last at the far right; Lenses and Versions are in
     // it, not on the bar. Card titles are card titles, not the uppercase label. Every action row is Cancel, then the
     // action, last; Versions closes with ✕, never a "Close" word.
     {
@@ -603,10 +583,7 @@ const sectionTitles = (page: Page) => page.locator('[data-section] .strat-sec-he
       assert.deepEqual(title, {size: '15px', caps: 'none'}, 'a card title is 15px, in sentence case');
       // Adding a bet is the card's quiet mini button, like a section's Edit.
       assert.match(await page.locator('[data-bet-add]').getAttribute('class') || '', /\bghost\b.*\bstrat-mini\b/);
-      // The publish form, a section's form and the bet form: Cancel, then the action, last.
-      await page.locator('[data-strat-publish]:not([disabled])').click();
-      assert.deepEqual(await page.locator('[data-strat-publish-form] button').allInnerTexts(), ['Cancel', 'Publish']);
-      await page.locator('[data-strat-publish-cancel]').click();
+      // A section's form and the bet form: Cancel, then the action, last.
       await page.locator('[data-section="not"] [data-section-edit]').click();
       assert.deepEqual(await page.locator('[data-section-form] .goal-actions button').allInnerTexts(), ['Cancel', 'Save']);
       assert.deepEqual(errors, []);
@@ -658,8 +635,8 @@ const sectionTitles = (page: Page) => page.locator('[data-section] .strat-sec-he
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // A lens's long section is cut to four lines with one Show all; a change the draft already holds is "Got it", which
-    // sets it aside; "No, leave it" rejects; with nothing published the line says so.
+    // A lens's long section is cut to four lines with one Show all; a change the strategy already holds is "Got it",
+    // which sets it aside; "No, leave it" rejects; with no strategy yet, Now reads Empty.
     {
       const long = Array.from({length: 8}, (_, i) => `Line ${i + 1} of who we serve.`).join('\n');
       const card = (id: string, payload: Record<string, unknown>, extra: Record<string, unknown> = {}) => ({kind: 'proposal', ref: id, owner_id: 'human:ana', proposal: {id, kind: 'strategy_draft', goal_id: null, kpi_id: null,
@@ -672,7 +649,7 @@ const sectionTitles = (page: Page) => page.locator('[data-section] .strat-sec-he
       // A section renamed with its text unchanged is a change, not "already says this".
       const rename = page.locator('#goal-needs [data-proposal="p-rename"]');
       assert.equal((await rename.locator('.strat-prop-list').innerText()).replace(/\s+/g, ' ').trim(), 'Positioning · Title Now Brand Proposed Positioning');
-      assert.deepEqual(await rename.locator('.kpi-prop-do button').allInnerTexts(), ['No, leave it', 'Add to draft']);
+      assert.deepEqual(await rename.locator('.kpi-prop-do button').allInnerTexts(), ['No, leave it', 'Add to strategy']);
       await lens.waitFor();
       assert.match(await lens.locator('.kpi-prop-head').innerText(), /^Strategy Owner suggests a change to your strategy from the Blue Ocean lens/);
       const values = lens.locator('.prop-np-v');
@@ -683,9 +660,9 @@ const sectionTitles = (page: Page) => page.locator('[data-section] .strat-sec-he
       await lens.locator('[data-np-all]').click();
       assert.deepEqual(await tall(), [false, false], 'one Show all opens both');
       assert.match(await same.locator('.kpi-prop-head').innerText(), /from this week's market briefing/);
-      assert.equal(await same.locator('.kpi-prop-detail').innerText(), 'Your draft already says this.');
+      assert.equal(await same.locator('.kpi-prop-detail').innerText(), 'Your strategy already says this.');
       assert.deepEqual(await same.locator('.kpi-prop-do button').allInnerTexts(), ['Got it']);
-      assert.deepEqual(await lens.locator('.kpi-prop-do button').allInnerTexts(), ['No, leave it', 'Add to draft']);
+      assert.deepEqual(await lens.locator('.kpi-prop-do button').allInnerTexts(), ['No, leave it', 'Add to strategy']);
       await same.locator('[data-prop-yes]').click();
       await same.waitFor({state: 'detached'});
       assert.deepEqual(sent.find(x => x[1] === '/proposals/p-same'), ['POST', '/proposals/p-same', {decision: 'reject'}]);
@@ -701,12 +678,12 @@ const sectionTitles = (page: Page) => page.locator('[data-section] .strat-sec-he
       const fresh = await open(browser, {route: '#/goals', fresh: true, needs: [card('p-new', {vision: 'Every home in Austin.'})]});
       const first = fresh.page.locator('#goal-needs [data-proposal="p-new"]');
       await first.waitFor();
-      assert.equal(await first.locator('.kpi-prop-line').innerText(), 'Nothing is published until you publish it on the Strategy page.');
+      assert.equal(await first.locator('.kpi-prop-line').count(), 0);
       assert.equal((await first.locator('.strat-prop-list').innerText()).replace(/\s+/g, ' ').trim(), 'Vision Now Empty Proposed Every home in Austin.');
       assert.deepEqual(fresh.errors, []);
       await fresh.page.close();
     }
-    // A goal serving a bet this person can't see (retired, or not published) keeps it when saved for something else.
+    // A goal serving a bet this person can't see (retired) keeps it when saved for something else.
     {
       const old = {id: 'g-old', title: 'Win the office park', owner_id: 'bot:cmo', parent_id: null, status: 'green', status_source: 'auto', rank: 1, kpis: [], why: '', bet_id: 'b-gone'};
       const {page, errors, sent} = await open(browser, {route: '#/goals', more: [old]});
@@ -716,7 +693,7 @@ const sectionTitles = (page: Page) => page.locator('[data-section] .strat-sec-he
       await panel.locator('[data-gp-edit="g-old"]').click();
       const picker = panel.locator('select[name="bet"]');
       assert.equal(await picker.inputValue(), 'b-gone');
-      assert.equal(await picker.locator('option:checked').innerText(), 'Retired or unpublished');
+      assert.equal(await picker.locator('option:checked').innerText(), 'Retired');
       await panel.locator('input[name="title"]').fill('Win both office parks');
       await panel.locator('button[type="submit"]').click();
       await page.waitForFunction(() => !document.querySelector('#goal-panel [data-goal-form]'));
@@ -750,7 +727,7 @@ const sectionTitles = (page: Page) => page.locator('[data-section] .strat-sec-he
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // After a publish retired or reworded bets: each of their goals is kept, retired or moved, sent together by one button
+    // After a save retired or reworded bets: each of their goals is kept, retired or moved, sent together by one button
     // that counts what changes (no Reject); a reworded bet shows its wording before and now (Dev 533).
     {
       const realign = (closed: string[] = [], old: boolean = false) => ({id: 'p-realign', kind: 'strategy_realign', goal_id: null, kpi_id: null, status: 'pending', proposed_by: 'keeper',

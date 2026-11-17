@@ -890,9 +890,8 @@ class MarketAsk(Contract):
     question: str = Field(min_length=1, max_length=2000)
 
 
-# The team's strategy (backend/strategy.py): the draft is edited a field at a time against the revision the writer
-# read, the bets one by one, and publishing takes a one-line note. Lengths and shapes are checked there, where the
-# refusal is recorded.
+# The team's strategy (backend/strategy.py): it is edited a field at a time against the revision the writer read, the
+# bets one by one, and every save is live. Lengths and shapes are checked there, where the refusal is recorded.
 class StrategyDraft(Contract):
     revision: int
     guide: str | None = Field(default=None, max_length=40)
@@ -911,8 +910,10 @@ class StrategyVision(Contract):
 
 
 class StrategyPublish(Contract):
+    """Kept for older callers (backend/strategy.py publish): every save is live already."""
+
     note: str = Field(default="", max_length=2000)
-    revision: int
+    revision: int | None = None
     task: str | None = Field(default=None, max_length=128)  # the Strategy Owner's: the task holding the owner's words
 
 

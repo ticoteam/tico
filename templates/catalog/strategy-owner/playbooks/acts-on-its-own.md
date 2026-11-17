@@ -82,7 +82,7 @@ waking more often) or changes a bot's instructions stays the owner's: the server
 BotOps says so on the task.
 
 ## What stays the owner's
-At every level: anything that raises cost, publishing (except the strategy on the owner's own words, naming the task they
+At every level: anything that raises cost, publishing, the strategy (except the owner's own words, naming the task they
 said them on: `playbooks/owner-chat.md`), sending outside the company, adding or removing bots,
 changing a goal or a KPI target, the vision or the description, a bot's instructions or settings, and work for a
 person. A change to a goal's words, a KPI or a target is a proposal you file (`tico proposal create`,

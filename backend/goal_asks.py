@@ -252,8 +252,8 @@ def _change(p, kpi_name):
 
 
 def urgent(item):
-    """A card a tripped bet or a publish brought: filed now, at every level, outside the Strategy Owner's 5 a day. Trips
-    are rare (once per bet per version) and a wrong bet should not wait a day."""
+    """A card a tripped bet or a strategy save brought: filed now, at every level, outside the Strategy Owner's 5 a
+    day. Trips are rare (once per bet per wrong-if) and a wrong bet should not wait a day."""
     p = item.get("proposal") or {}
     return item.get("kind") == "proposal" and (
         p.get("kind") == S.REALIGN
@@ -347,7 +347,7 @@ def _ask(conn, item, manager=strategy_bot.NAME):
         count = len(payload["goals"])
         title = f"Choose what happens to {count} goal{'s' if count != 1 else ''} after strategy v{payload['n']}"
         body = (
-            f"{title}. Publishing v{payload['n']} retired or reworded the bets these goals serve:\n{lines}\n"
+            f"{title}. Strategy v{payload['n']} retired or reworded the bets these goals serve:\n{lines}\n"
             f"For each one choose Keep as it is, Retire goal, or Move to a bet, then press the one button under "
             f"Needs you on the Goals page. Nothing changes until you press it. {closes}it is decided."
         )
@@ -360,9 +360,8 @@ def _ask(conn, item, manager=strategy_bot.NAME):
             f"{title}. {H.actor_name(conn, p['proposed_by'])} proposed it"
             + (" from this week's market briefing" if (p.get("payload") or {}).get("source") == "briefing" else "")
             + (f" because {p['reason'].rstrip('.')}" if p.get("reason") and not lens else "")
-            + f": {_change(p, name)}. Add to draft writes it to your draft; publishing stays your click on the "
-            f"Strategy page (#/strategy). No, leave it changes nothing. Decide it under Needs you on the Goals "
-            f"page. {closes}it is decided."
+            + f": {_change(p, name)}. Add to strategy makes it live on the Strategy page (#/strategy). No, leave it "
+            f"changes nothing. Decide it under Needs you on the Goals page. {closes}it is decided."
         )
         return title, body
     said = f" because {p['reason'].rstrip('.')}" if p.get("reason") else ""

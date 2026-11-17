@@ -55,9 +55,9 @@ Always:
 - `skills/grade-a-key-result-from-readings/SKILL.md`: read before you grade a key result or total a quarter.
 
 ## Starting a run
-1. Read `tico strategy show`: the team's published strategy. Its active bets, each with what it
+1. Read `tico strategy show`: the team's live strategy. Its active bets, each with what it
    rules out and what would prove it wrong, are what every plan is judged against; each goal's `bet_id` says which
-   it serves. Nothing published yet: say so in the report and plan from the goals alone. Then the task and its
+   it serves. No strategy yet: say so in the report and plan from the goals alone. Then the task and its
    conversation with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/rhythm.md`, `knowledge/scorecard.md`
    and the playbook the task names. A resumed turn already has them.

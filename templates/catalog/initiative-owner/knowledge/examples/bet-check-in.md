@@ -8,7 +8,7 @@ Sample output for Harbor Dental, a fictional clinic. Nothing in the Strategy pag
 **Call: watch. The 90-day rebooking rate fell to 41 percent, one point above its line of 40, and the booking screen
 milestone is done. The front-desk script is the next thing to move, and it is blocked on a person.**
 
-## The bet, as the Strategy page has it (version 4, published 2026-10-02)
+## The bet, as the Strategy page has it (version 4, 2026-10-02)
 
 - Statement: "Returning patients can book their next visit the same day they check out."
 - Rules out: "Same-day slots for new patients for the next two quarters."

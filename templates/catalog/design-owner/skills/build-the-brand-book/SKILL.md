@@ -89,7 +89,7 @@ never loses work.
 
 ## Stage 0: Read first (desk)
 
-Read everything before the first question, and cite each item in brackets when you use it: the published strategy
+Read everything before the first question, and cite each item in brackets when you use it: the live strategy
 (`tico strategy show`), bets and Market page, the current Brand card (`tico brand show`), docs (`tico doc search "brand"`,
 `"style guide"`, the home page); live copy (site incl. CSS,
 listings, emails, support macros, sales emails, social, app copy and errors, the founder's own writing); customer

@@ -1,7 +1,7 @@
 /* Lenses are the Strategy section's second tab (ui/strategy-page.ts): thought exercises run against the strategy, such as
    Blue Ocean or Scenarios (backend/lenses.py). The list shows each lens and the past runs; Run asks the lens's steps one at a
    time in a panel and goes to the run page, which draws the result: a summary, a chart in hand-written SVG, sections, how the
-   result bears on the bets, and changes the owner may add to the draft. Nothing here publishes. */
+   result bears on the bets, and changes the owner may add to the strategy, live at once. */
 'use strict';
 // The API shapes this page reads (backend/lenses.py and the strategy it reads). Fields the page checks for are optional.
 interface LensStep {
@@ -168,7 +168,7 @@ async function lensFlowOpen(lens: LensDef | undefined, button: HTMLButtonElement
   if (!lens) return;
   if (button) button.disabled = true;
   let published = true;
-  // Whether a version is published decides what a strategy lens may run on; a market lens ignores it.
+  // Whether there is a version decides what a strategy lens may run on; a market lens ignores it.
   try { published = !!(await get<LensStrategy>('/v2/strategy', {fresh: true}))?.current; }
   catch (error) { toast(errorMessage(error, 'Could not open it'), true); if (button) button.disabled = false; return; }
   if (button) button.disabled = false;
@@ -339,7 +339,7 @@ async function lensFlowRun(dlg: HTMLDialogElement, flow: LensFlow): Promise<void
   catch (error) {
     if (LENS_FLOW !== flow) return;
     // Nothing published yet: the owner may run it on the draft instead.
-    if (errorCode(error) === 'no_published') { flow.published = false; flow.on = 'draft'; flow.notice = 'Nothing is published yet. Run on the draft?'; lensFlowRender(); return; }
+    if (errorCode(error) === 'no_published') { flow.published = false; flow.on = 'draft'; flow.notice = 'No strategy yet. Run on the draft?'; lensFlowRender(); return; }
     buttons.forEach(b => { b.disabled = false; });
     lensesNeed<HTMLButtonElement>('[data-lens-back]', dlg).disabled = flow.i === 0;  // the dialog still holds the Back button lensFlowRender rendered.
     toast(errorMessage(error, 'Could not run it'), true);
@@ -428,7 +428,7 @@ function lensResultHtml(run: LensRun, result: LensResult, owner: boolean, page: 
   }).join('');
   const applied = new Set(run.applied || []);
   const changes = (result.changes || []).map((c, i) => `<li class="lens-change" data-lens-change="${i}"><span class="lens-ctext">${esc(c.label)}</span>${
-    applied.has(i) ? '<span class="lens-done muted">Added</span>' : owner && !run.proposal_id ? `<button class="ghost strat-mini" type="button" data-lens-apply="${i}">Add to draft</button>` : ''}</li>`).join('');
+    applied.has(i) ? '<span class="lens-done muted">Added</span>' : owner && !run.proposal_id ? `<button class="ghost strat-mini" type="button" data-lens-apply="${i}">Add to strategy</button>` : ''}</li>`).join('');
   const tasks = run.sharpen_tasks || {};
   const sharpen = (result.sharpen || []).map((s, i) => {
     const text = typeof s === 'string' ? s : s?.text || '', task = tasks[String(i)];
@@ -445,7 +445,7 @@ function lensResultHtml(run: LensRun, result: LensResult, owner: boolean, page: 
     ${sec('sharpen', 'Sharpen', sharpen ? `<ul class="lens-items">${sharpen}</ul>` : '')}`;
 }
 
-// Adds a change to the draft as the owner. The revision is the draft's as it is now.
+// Adds a change to the strategy as the owner. The revision is the draft's as it is now.
 async function lensApply(run: LensRun, index: number, button: HTMLButtonElement): Promise<void> {
   const state = LENS;
   button.disabled = true;
@@ -453,12 +453,12 @@ async function lensApply(run: LensRun, index: number, button: HTMLButtonElement)
     const strategy = await get<LensStrategy>('/v2/strategy', {fresh: true});
     const out: { run: LensRun } = await post(`/v2/lenses/runs/${encodeURIComponent(run.id)}/apply`, {index, revision: strategy?.draft?.revision ?? null});
     if (LENS !== state) return;
-    toast('Added to the draft');
+    toast('Added to the strategy');
     lensRunRender(out.run);
   } catch (error) {
     if (LENS !== state) return;
     if (errorStatus(error) === 409) {
-      toast(errorCode(error) === 'applied' ? 'Already added' : 'The draft changed, reloaded', true);
+      toast(errorCode(error) === 'applied' ? 'Already added' : 'The strategy changed, reloaded', true);
       try { lensRunRender(await get<LensRun>('/v2/lenses/runs/' + encodeURIComponent(run.id), {fresh: true})); } catch { button.disabled = false; }
       return;
     }

@@ -341,8 +341,8 @@ function stratPropWrongText(w: unknown) {
 }
 // One changed thing on a strategy card: its name, then Now / Proposed (or only what is proposed without a draft to read).
 const stratPropRow = (k: string, block: string) => `<li><span class="strat-prop-k">${k}</span><div class="strat-prop-v">${block}</div></li>`;
-// A change to the strategy draft (backend/strategy.py proposal_error): who suggests it and why, each change as Now /
-// Proposed against the draft as it is now, then "Add to draft" / "No, leave it". Nothing it does is published.
+// A change to the strategy (backend/strategy.py proposal_error): who suggests it and why, each change as Now /
+// Proposed against the strategy as it is now, then "Add to strategy" (live at once) / "No, leave it".
 function strategyDraftPropHtml(p: GkProposal) {
   const pl = p.payload || {}, st = GOALS_ST?.strategy || null, d = st?.draft || null, one = stratPropOne();
   const rows: string[] = [], by = goalActorName(p.proposed_by);
@@ -380,7 +380,7 @@ function strategyDraftPropHtml(p: GkProposal) {
       // Every live goal, not goals_by_bet: that list stops at 20 and may hold only closed goals.
       const serve = (st?.live_by_bet || {})[b.id] || 0;
       rows.push(stratPropRow(`Retire ${esc(stratPropBetName(b.id))}`, `<span class="strat-prop-st">${esc(was?.statement || b.statement || '')}</span>${serve
-        ? `<p class="muted strat-prop-note">${serve} goal${serve === 1 ? ' serves' : 's serve'} it. When you publish, you'll be asked what happens to ${serve === 1 ? 'it' : 'them'}.</p>` : ''}`));
+        ? `<p class="muted strat-prop-note">${serve} goal${serve === 1 ? ' serves' : 's serve'} it.</p>` : ''}`));
     } else {
       const changed = fields.filter(([k]) => k in b && !(was && same(value(k, was[k]), value(k, b[k]))))
         .map(([k, label]) => ({label, now: was ? value(k, was[k]) : '', proposed: value(k, b[k])}));
@@ -398,13 +398,11 @@ function strategyDraftPropHtml(p: GkProposal) {
   const from = lens ? ` from the <b>${esc(lens)}</b> lens` : pl.source === 'briefing' ? " from this week's market briefing"
     : tripped ? ` because <b>${esc(stratPropBetName((pl.bets || []).find(b => b.id)?.id))}</b> may be wrong${p.reason ? `: ${esc(p.reason)}` : ''}` : '';
   const empty = !rows.length;
-  const line = st?.current?.n ? `Yes adds this to your strategy draft. Bots keep reading v${st.current.n} until you publish it on the Strategy page.`
-    : 'Nothing is published until you publish it on the Strategy page.';
   return `<li class="kpi-prop strat-prop" data-proposal="${esc(p.id)}" data-strategy-draft><div class="kpi-prop-main">
       <span class="kpi-prop-head"><b>${esc(by)}</b> suggests a change to your strategy${from} <a class="strat-prop-open" href="${STRATEGY}">Open Strategy</a></span>
-      ${empty ? '<span class="kpi-prop-detail">Your draft already says this.</span>' : `<ul class="strat-prop-list">${rows.join('')}</ul>`}
+      ${empty ? '<span class="kpi-prop-detail">Your strategy already says this.</span>' : `<ul class="strat-prop-list">${rows.join('')}</ul>`}
       ${p.reason && !tripped ? `<span class="muted kpi-prop-why">${esc(p.reason)}</span>` : ''}</div>
-    ${empty ? propDoHtml(p, {yes: 'Got it', no: null, decide: 'reject'}) : propDoHtml(p, {yes: 'Add to draft', line})}</li>`;
+    ${empty ? propDoHtml(p, {yes: 'Got it', no: null, decide: 'reject'}) : propDoHtml(p, {yes: 'Add to strategy'})}</li>`;
 }
 // What the realign card's one button says: what the choices change, or that every goal stays.
 function stratRealignYes(open: number, retire: number, move: number) {
@@ -416,7 +414,7 @@ function stratRealignYes(open: number, retire: number, move: number) {
   const out = parts.join(', ');
   return out[0]!.toUpperCase() + out.slice(1);
 }
-// The goals of bets a publish retired or reworded (backend/strategy.py realign): per goal Keep as it is, Retire goal or
+// The goals of bets a save retired or reworded (backend/strategy.py realign): per goal Keep as it is, Retire goal or
 // Move to one of the active bets, sent together as `moves` by one button that says what they change. No Reject: every
 // goal on Keep is the no. A goal finished or dropped since (`closed_goals`) reads Already closed, with no choice.
 function strategyRealignPropHtml(p: GkProposal) {
