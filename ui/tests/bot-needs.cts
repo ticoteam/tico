@@ -246,12 +246,13 @@ const LAYOUT: Layout[] = [{builtin: 'needs', name: 'Needs you'}, {builtin: 'acti
       'Send the announcement', 'Turn on the screen default', 'Ship the release notes']);
     assert.equal(await rail.locator('#bot-needs').isHidden(), true);
 
-    // Blocked: its open tasks whose turn is someone else's (not its own, not Ana's); each row's line says what it waits on.
+    // Blocked: its open tasks whose turn is someone else's (not its own, not Ana's); each row names its owner (task-row.ts)
+    // and its line says what it waits on.
     await show('blocked');
     assert.deepEqual(await titles('#t-blocked'), ['Renew the domain', 'Merge the export fix']);
     const tips = await rail.locator('#t-blocked .tk-row').evaluateAll(els => els.map(el => (el as HTMLElement).dataset.tip || ''));
     assert.match(tips[0]!, /Waiting for the vendor's invoice\.$/, tips[0]);
-    assert.match(tips[1]!, /^QA Engineer · Waits on QA Engineer$/, tips[1]);
+    assert.match(tips[1]!, /^Head of Engineering · Waits on QA Engineer$/, tips[1]);
 
     // Done recently: finished in the last 14 days; the one from three weeks ago is not listed. It is drawn only once its
     // tab opens, 50 rows at a time (paging, at the end).

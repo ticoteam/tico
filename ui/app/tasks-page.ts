@@ -247,7 +247,11 @@ function tasksShow(state: TasksPageState, change: Partial<Pick<TasksPageState, '
   state.more = false; state.edge = null; state.after = ''; state.stalled = false;
   state.loading = true;
   tasksKept(state);
-  void tasksLoad(state);
+  // A task's window choosing what is behind it (`write` false) keeps the pipelines already read: opening a task reads
+  // them once (ui/tests/live-first-open.cts). A read still on its way is joined (api.ts get).
+  const kept = state.pipelines.length ? state.pipelines : TASK_PIPELINES;
+  if (!write && kept?.length) state.pipelines = kept;
+  void tasksLoad(state, write || !state.pipelines.length);
   tasksRender(state);
 }
 // A view seen before draws its last read at once while the new one is out; the app's own Needs you list wins for You.
