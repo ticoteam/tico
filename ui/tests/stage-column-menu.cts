@@ -98,7 +98,8 @@ const shot = async (page: Page, name: string) => {
       await page.keyboard.press('Enter');
       await page.locator('.prop-pop:popover-open').waitFor();
       assert.deepEqual((await menuItems(page)).map(t => t.replace(/^\w+ /, '')), ['Move all to…', 'Close all', 'Assign all to…', 'Snooze all…', 'Edit stage']);
-      assert.equal(await more.getAttribute('aria-expanded'), 'true');
+      // a live draw may land just after the menu opens: it draws the ⋯ still expanded (PV_COL_OPEN), so wait for that
+      await page.locator('[data-pv-col-menu="ideas"][aria-expanded="true"]').waitFor({timeout: 2000});
       // The first item has the focus (propMenu moves it there once the menu is shown).
       await page.waitForFunction(() => document.activeElement?.textContent?.trim() === 'swap_horizMove all to…');
       await shot(page, `menu-desktop-${theme}`);
