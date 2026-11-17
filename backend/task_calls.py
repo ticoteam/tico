@@ -925,6 +925,20 @@ def prime_views(conn: "sqlite3.Connection", task_ids: Iterable[str], viewer: str
         for key, found in _keyed(conn, sql, unread).items():
             values.setdefault((sql, key), found)
     E.prime_stages(conn, [str(row["pipeline_id"]) for row in rows.values() if row.get("pipeline_id")])
+    # The check rows of the page each OK shows (`_page_checks`), from the requirements W.prime read.
+    from . import page_verdicts
+
+    page_verdicts.prime_checks(
+        conn,
+        [
+            ref
+            for row in rows.values()
+            if row.get("visit")
+            for requirement in R.for_visit(conn, row["visit"])
+            if requirement["kind"] == "ok"
+            for ref in (requirement.get("shows") or [])[:1]
+        ],
+    )
     R.prime_values(conn, ids)
     TR.prime_ancestry(conn, ids)
     if viewer:
