@@ -228,6 +228,17 @@ function pvColMenuHTML(state: PvState, stage: PipelineStageRec): string {
     + ` aria-label="${esc(`More, ${stage.name}`)}" title="More"><span class="nav-icon" aria-hidden="true">more_horiz</span></button>`;
 }
 
+/** Redraw `el` and give the focus back to the same control if it held it: a live change that redraws a stage's header
+ * must not take the focus off its ▶, rules mark or ⋯ (a keyboard user would lose their place, and Enter would go nowhere). */
+function pvKeepFocus(el: HTMLElement, draw: () => void): void {
+  const had = document.activeElement instanceof HTMLElement && el.contains(document.activeElement) ? document.activeElement : null;
+  const key = had && ['data-pv-play', 'data-pv-col-menu', 'data-sr-open'].find(a => had.hasAttribute(a));
+  draw();
+  if (!had || !key) return;
+  const again = [...el.querySelectorAll<HTMLElement>(`[${key}]`)].find(e => e.getAttribute(key) === had.getAttribute(key));
+  again?.focus({preventScroll: true});
+}
+
 /** A column's header and cards, apart: the board draws again only the parts that changed (pvPaint). */
 const pvColHeadHTML = (state: PvState, stage: PipelineStageRec): string =>
   `${pvStageHeadHTML(state, stage)}${pvPlayHTML(stage)}${stageRulesButtonHTML(state.rec.id, stage)}${pvColMenuHTML(state, stage)}`;
@@ -329,7 +340,7 @@ function pvPaint(state: PvState, root: HTMLElement): void {
       }
       for (const {stage, head, body} of found) {
         const kept = was.cols.get(stage.id ?? '')!, h = pvColHeadHTML(state, stage), b = pvColBodyHTML(state, stage);
-        if (h !== kept.head) { head!.innerHTML = h; kept.head = h; }
+        if (h !== kept.head) { pvKeepFocus(head!, () => { head!.innerHTML = h; }); kept.head = h; }
         if (b !== kept.body) { body!.innerHTML = b; kept.body = b; }
       }
       state.whole = false;
