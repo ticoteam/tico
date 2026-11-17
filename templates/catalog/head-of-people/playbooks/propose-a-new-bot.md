@@ -33,6 +33,6 @@ task below directly. Ask only if the role or scope is missing.
 
 ## 4. Carry out the requested hire
 
-    tico task create --owner botops --title "Set up <template>" --body "<why, the evidence, its first routine, reports to head-of-people>"
+    tico task create --owner botops --title "Set up <template>" --message "<why, the evidence, its first routine, reports to head-of-people>"
 
 Record the decision in `memory/decisions.md`. On a no, record why, so the same proposal is not made again next week.

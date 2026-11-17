@@ -55,7 +55,7 @@ meaning unless the task changes it.
 - `skills/audit-one-name-per-thing/SKILL.md`: read for the monthly flow audit or when a review finds two names for one thing.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/glossary.md`,
    `knowledge/error-rules.md` and the playbook. A resumed turn already has them.
 3. Set `tico bot status set` to one line naming the review or screen in progress.

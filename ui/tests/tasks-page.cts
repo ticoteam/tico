@@ -27,7 +27,7 @@ interface Stage {id: string; name: string; kind: 'work' | 'done' | 'closed'; by_
 export interface Task {
   id: string;
   title: string;
-  body?: string;
+  note?: string;
   status?: 'open' | 'done' | 'closed';
   number?: number | null;
   pipeline_id?: string | null;
@@ -185,7 +185,7 @@ const turn = (state: Wait['state'], who: string | null, line: string, more: Part
 /** A task in a stage ('done' and 'closed' finish it), as GET /api/v2/tasks/{id} sends it. */
 function task(id: string, title: string, at_: string, over: Partial<Task> = {}): Task {
   const where = STAGES.get(at_), finished = at_ === 'done' || at_ === 'closed';
-  return {id, title, body: 'Details.', number: Number(id.replace(/\D/g, '')) || null, status: finished ? at_ as 'done' | 'closed' : 'open',
+  return {id, title, number: Number(id.replace(/\D/g, '')) || null, status: finished ? at_ as 'done' | 'closed' : 'open',
     pipeline_id: where?.pipeline.id ?? 'product', pipeline: where ? {id: where.pipeline.id, name: where.pipeline.name} : {id: 'product', name: 'Product'},
     stage_id: where?.stage.id ?? at_, stage: where?.stage ?? (at_ === 'done' ? DONE : CLOSED), owner_id: 'bot:pm', requester_id: 'human:ana',
     assignee_id: null, due_at: null, late: null, snoozed: false, snooze: null, turn: finished ? null : turn('bot', 'bot:pm', 'PM is on it'),

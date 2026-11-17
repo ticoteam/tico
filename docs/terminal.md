@@ -45,7 +45,7 @@ tico needs-you show               # everything that waits on you, in one list
    stage. Note the `id` and `version` it prints.
 
    ```sh
-   tico task request product "Add a negate(x) function" --body "Why, and what done looks like"
+   tico task request product "Add a negate(x) function" --message "Why, and what done looks like"
    ```
 
    A stage held by "whoever the task is for" (General's To do) needs `--owner <bot or person>`.
@@ -63,8 +63,8 @@ tico needs-you show               # everything that waits on you, in one list
    tico task wait <id> --needs-me --timeout 2h
    ```
 
-   The last line says what waits on you under `yours`. Read the task and its page with `tico task show <id>` (To leave
-   lists each requirement, met or not, and the page attached).
+   The last line says what waits on you under `yours`. Read the task's chat and its page with
+   `tico task show <id>` (To leave lists each requirement, met or not, and the page attached).
 
 4. **Approve it or send it back.** `approve` finds the one requirement waiting for your OK and gives it for the page
    version attached now; with more than one, add `--requirement <id>`.

@@ -70,7 +70,7 @@ Always:
   rule and the owner's decision on file.
 
 ## Starting a run
-1. Read the task with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/controls.md`,
    `knowledge/evidence-method.md` and the playbook the task names. A resumed turn already has them.
 

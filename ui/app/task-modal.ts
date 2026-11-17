@@ -81,9 +81,7 @@ type ModalRefs = NonNullable<TfMessage['refs']> & {via?: string; quiet?: boolean
 interface ModalRunCount { steps?: number; tool_calls?: number; took_s?: number | null; }
 interface ModalComment extends TfMessage { kind: string; created_at: string; edited_at?: string | null; run?: ModalRunCount; refs: ModalRefs; }
 type ModalLine = {kind: 'comment'; ts: string; message: ModalComment} | ({kind: 'event'; ts: string; message?: undefined} & ModalEvent)
-  | {kind: 'run'; ts: string; message?: undefined; run: ModalRun}
-  // The task's request, the chat's first message: who asked, when, and the words (taskRequestLine).
-  | {kind: 'request'; ts: string; message?: undefined; who: string; label: string; body: string; id: string};
+  | {kind: 'run'; ts: string; message?: undefined; run: ModalRun};
 // A bot's run on this task (`runs` in the task detail): its bot, when it started and finished.
 interface ModalRun { run: string; bot?: string | null; started_at?: string | null; finished_at?: string | null; outcome?: string | null; }
 // "worked 14 min": a finished run's length in words; under a minute is said so.
@@ -642,7 +640,7 @@ function taskDependsHTML(t: ModalTask) {
     const where = [k.status === 'open' ? k.stage || '' : k.status, k.since ? `since ${lowerDay(shortDate(k.since))}` : ''].filter(Boolean).join(' · ');
     return `<span class="tlink task"><button type="button" class="linkish" data-open-task="${esc(k.id)}" aria-label="Open ${esc(k.title)}">${esc(ref)} ${esc(clipLine(k.title, 60))}</button>`
       + `${where ? ` · <span class="tchip-note">${esc(where)}</span>` : ''}`
-      + `<button type="button" class="x" data-drop-rel="depends_on ${dir} ${esc(k.id)}" aria-label="Remove ${esc(label)}: ${esc(k.title)}">×</button></span>`;
+      + `<button type="button" class="x tap-mark" data-drop-rel="depends_on ${dir} ${esc(k.id)}" aria-label="Remove ${esc(label)}: ${esc(k.title)}">×</button></span>`;
   };
   const on = taskRels(t, 'depends_on', 'out'), of = taskRels(t, 'depends_on', 'in');
   const blocked = on.length ? `<div class="trel task-depends"><span class="trel-k">Blocked by</span><div class="tlinks">${on.map(k => row(k, 'out', 'blocked by')).join('')}`
@@ -654,7 +652,7 @@ function taskRelHTML(t: ModalTask) {
   const groups = TASK_REL_GROUPS.map(([kind, dir, label]): [string, string, string, TaskRelRow[]] => [kind, dir, label, taskRels(t, kind, dir)]).filter(g => g[3].length);
   const milestones = taskDependsHTML(t) + taskMilestoneHTML(t) + taskOrderHTML(t);
   return `<section class="tsec task-related${groups.length || milestones ? '' : ' tsec-empty'}"><h3 class="rail-h">Related<button type="button" class="prop-add" data-related-add aria-haspopup="menu" aria-label="Relate a task" title="Relate a task">${TL_ICON.plus}</button></h3>
-    ${groups.map(([kind, dir, label, rows]) => `<div class="trel"><span class="trel-k">${esc(label)}</span><div class="tlinks">${rows.map(k => `<span class="tlink task"><button type="button" class="linkish" data-open-task="${esc(k.id)}" aria-label="Open ${esc(k.title)}">${taskStatusText(k)} ${esc(clipLine(k.title, 70))}</button><button type="button" class="x" data-drop-rel="${esc(kind)} ${esc(dir)} ${esc(k.id)}" aria-label="Remove ${esc(label.toLowerCase())}: ${esc(k.title)}">×</button></span>`).join('')}</div></div>`).join('')}${milestones}</section>`;
+    ${groups.map(([kind, dir, label, rows]) => `<div class="trel"><span class="trel-k">${esc(label)}</span><div class="tlinks">${rows.map(k => `<span class="tlink task"><button type="button" class="linkish" data-open-task="${esc(k.id)}" aria-label="Open ${esc(k.title)}">${taskStatusText(k)} ${esc(clipLine(k.title, 70))}</button><button type="button" class="x tap-mark" data-drop-rel="${esc(kind)} ${esc(dir)} ${esc(k.id)}" aria-label="Remove ${esc(label.toLowerCase())}: ${esc(k.title)}">×</button></span>`).join('')}</div></div>`).join('')}${milestones}</section>`;
 }
 // ---- saving a task's properties. One save at a time per dialog, each with the version the last one returned, so a
 // quick second edit never trips over the first. The dialog redraws at once with the task the server sent back; the
@@ -833,12 +831,6 @@ function taskEventChipHTML(x: ModalLine) {
 const taskEventNote = (x: ModalLine) => x.kind === 'event' && x.field !== 'github' ? String(x.note || '').trim().split('\n')[0] || '' : '';
 // `files`: the task's files (ui/app/task-files.ts), for the files a comment carried.
 function commentLineHTML(x: ModalLine, i: number, all: ModalLine[] | null | undefined, files: TfFile[] = [], taskId: string | number = '') {
-  if (x.kind === 'request') {
-    const said = messageMd('th-body md', x.body, x.who);
-    return `<div class="th-msg tcomment tmsg th-request${x.who && x.who === myActor() ? ' th-mine' : ''}" data-message="${esc(x.id)}"><div class="th-av">${actorAvatar(x.who || x.label, 28)}</div>
-    <div class="th-main"><div class="th-head">${x.who ? taskMsgWho({sender_id: x.who, refs: {}} as unknown as ModalComment) : `<span class="th-who">${esc(x.label)}</span>`}<time datetime="${esc(x.ts)}" title="${esc(fmt(x.ts))}">${esc(ago(x.ts))}</time></div>
-    <div class="th-body-wrap">${said}</div></div></div>`;
-  }
   if (x.kind === 'run') {
     const bot = String(x.run.bot || ''), words = taskRunLineWords(x.run);
     return `<div class="tcomment sys tmark trun" data-run-line="${esc(x.run.run)}"><span class="tcomment-who">${esc(actorLabel(bot.includes(':') ? bot : 'bot:' + bot))}</span> <span class="muted">${esc(words)}</span>
@@ -889,15 +881,6 @@ function commentLineHTML(x: ModalLine, i: number, all: ModalLine[] | null | unde
       m.refs?.quiet ? '<span class="th-state muted" title="Saved for the bot\'s next run on this task">saved</span>' : ''}</div>
     ${taskStepsHTML(m)}<div class="th-body-wrap"${fb ? ` data-fb-press="${esc(fb)}"` : ''}>${body ? messageMd('th-body md', body, m.sender_id) : ''}
     ${tfCommentFilesHTML(m, files)}${ask ? askHTML(ask, m.answers, m.sender_id, files) : ''}${fbRowHTML(fb, m.body || '')}</div></div></div>`;
-}
-// The task's request as the chat's first message: who asked, when, the words. Left out when the task has no words
-// beyond its title, or when its first message already says them.
-function taskRequestLine(t: ModalTask | null | undefined, said: ModalComment[]): ModalLine[] {
-  if (!t) return [];
-  const body = taskBody(t).trim();
-  if (!body || body === String(t.title || '').trim() || said.some(m => String(m.body || '').trim() === body)) return [];
-  const who = String(taskAsker(t) || '');
-  return [{kind: 'request', ts: String(t.created_at || ''), who: who.includes(':') ? who : '', label: taskAskerLabel(t) || 'Request', body, id: 'request:' + t.id}];
 }
 // A message's face and name, as the chat shows them: the Assistant passing on a person's words is that person's
 // Assistant; yours reads "You"; a bot's or a person's name opens their page.
@@ -1193,7 +1176,6 @@ function taskCommentsRender(state: TaskChatState, data: ModalDetail, sent = '') 
   const host = state.host;
   const comments = (data.comments || data.messages || []).filter(m => ['say', 'ask', 'answer'].includes(m.kind));
   const lines: ModalLine[] = [
-    ...taskRequestLine(data.task || state.dialog.liveTask, comments),
     ...comments.map((m): ModalLine => ({kind: 'comment', ts: m.created_at, message: m})),
     ...(data.events || []).map((e): ModalLine => ({kind: 'event', ts: e.created_at, ...e})),
     // Each finished bot run is one line: "Builder 2 worked 14 min".
@@ -1285,7 +1267,7 @@ function taskCommentsRender(state: TaskChatState, data: ModalDetail, sent = '') 
   // The newest lines are drawn first; scrolling to the top (or its "earlier" line) draws older ones, back to the first.
   const older = Math.max(0, said.length - state.shown);
   const earlier = older ? `<button type="button" class="linkish task-earlier" data-task-earlier>↑ ${older} earlier message${older === 1 ? '' : 's'} and moves</button>` : '';
-  const groupKey = (run: ModalLine[]) => { const x = run[0]; return 'g:' + String(!x ? '' : x.kind === 'event' ? x.id : x.kind === 'run' ? x.run.run : x.kind === 'request' ? x.id : x.message.id); };
+  const groupKey = (run: ModalLine[]) => { const x = run[0]; return 'g:' + String(!x ? '' : x.kind === 'event' ? x.id : x.kind === 'run' ? x.run.run : x.message.id); };
   const html = (earlier + sourceRunsHTML(said.slice(older), {isUpdate, min: 2, noun: 'updates',
     open: (run: ModalLine[]) => openLines.has(groupKey(run)) || run.some(x => !!x.message && openLines.has(x.message.id)),
     line: (x: ModalLine) => commentLineHTML(x, 0, lines, files, state.id), draw: (x: ModalLine) => commentLineHTML(x, 0, lines, files, state.id)}) || '<p class="muted">Nothing said yet.</p>') + wait;
@@ -1563,7 +1545,6 @@ function taskDetailsButtonHTML(t: ModalTask) {
 // the chat, the document open, and Details (what the task is first). What is happening now (the turn, Answer, a deferred hand-over, a working run) is the chat's last row
 // (taskCommentsRender), not a line under the title.
 function hubModalHTML(t: ModalTask, opts: {thread?: boolean; docs?: TaskDoc[]; tab?: TaskTab | undefined} = {}) {
-  const original = taskBody(t).trim() === String(t.title || '').trim() ? '' : taskBody(t);   // a quick subtask's details are its title
   const owner = String(t.owner_id || ''), note = String(t.note || '').trim();
   const links = (t.links || []).filter(l => !['pr', 'worktree', 'session'].includes(l.kind));   // Code is a fact; Sessions below
   const mover = canMove();
@@ -1580,7 +1561,7 @@ function hubModalHTML(t: ModalTask, opts: {thread?: boolean; docs?: TaskDoc[]; t
       <section class="task-chat" id="task-pane-chat" role="tabpanel" aria-label="Chat"><p class="muted" role="status">Loading the conversation…</p></section>
       <section class="task-doc" role="tabpanel" aria-label="Document"></section>
       <aside class="task-side" id="task-pane-details" role="region" aria-label="Details">
-        <section class="task-desc">${taskEditBodyHTML(t, original)}${criteria}${latest}</section>
+        ${criteria || latest ? `<section class="task-desc">${criteria}${latest}</section>` : ''}
         ${githubNudgeTaskHostHTML(t)}
         <section class="task-pages" data-task-pages aria-label="Pages" hidden></section>
         ${taskRequirementsHTML(t)}
@@ -1589,7 +1570,7 @@ function hubModalHTML(t: ModalTask, opts: {thread?: boolean; docs?: TaskDoc[]; t
         <section class="tsec task-files" data-task-files aria-label="Files" hidden></section>
         <section class="task-activity" data-task-activity aria-label="Activity and links"><h3 class="tw-h rail-h">Activity and links</h3>
           <section class="tsec task-links${links.length ? '' : ' tsec-empty'}"><h3 class="rail-h">Links<button type="button" class="prop-add" data-link-add aria-label="Add a link" title="Add a link">${TL_ICON.plus}</button></h3>
-            ${links.length ? `<div class="tlinks">${links.map(l => `<span class="tlink ${esc(l.kind)} ${esc(l.state || '')}"><a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.title || l.url)}</a>${l.state && l.state !== 'open' ? ` · ${esc(l.state)}` : ''}${mover ? `<button type="button" class="x" data-drop-link="${esc(l.id)}" aria-label="Remove link">×</button>` : ''}</span>`).join('')}</div>` : ''}
+            ${links.length ? `<div class="tlinks">${links.map(l => `<span class="tlink ${esc(l.kind)} ${esc(l.state || '')}"><a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.title || l.url)}</a>${l.state && l.state !== 'open' ? ` · ${esc(l.state)}` : ''}${mover ? `<button type="button" class="x tap-mark" data-drop-link="${esc(l.id)}" aria-label="Remove link">×</button>` : ''}</span>`).join('')}</div>` : ''}
             <form class="inline task-link-add" data-modal-link hidden><input type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://…" aria-label="Add a link"></form></section>
           ${roadmapTaskHTML(t)}
           ${taskSessionsHTML(t)}

@@ -375,9 +375,10 @@ def test_finishing_setup_with_a_website_files_the_librarians_market_task_once(en
     for _ in range(2):
         assert api.post("/api/v2/setup/complete", json={}, headers=signed_in()).status_code == 200
     with api.app.state.store.read() as c:
-        tasks = [dict(r) for r in c.execute("SELECT title, body FROM tasks WHERE owner_id='bot:librarian'")]
+        tasks = [dict(r) for r in c.execute("SELECT id, title FROM tasks WHERE owner_id='bot:librarian'")]
+        said = H.task_words(c, tasks[0]["id"]) if tasks else ""
     assert [t["title"] for t in tasks] == ["Set up the market map"]
-    assert "https://acme.example" in tasks[0]["body"] and "Bots that run small rentals." in tasks[0]["body"]
+    assert "https://acme.example" in said and "Bots that run small rentals." in said
     market = api.get("/api/v2/librarian/setup", headers=signed_in()).json()["market"]
     assert market["task"]["id"] and market["answers"]["sell"].startswith("https://acme.example")
 

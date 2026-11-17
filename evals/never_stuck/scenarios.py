@@ -55,6 +55,10 @@ class Rig:
         expect(found, f"task {task} is missing")
         return found or {}
 
+    def words(self, task: str) -> str:
+        """What a task was filed with: its first message and the instructions given to its bot."""
+        return str(self.w.read(lambda c: _h().task_words(c, task)) or "")
+
     def visit(self, task: str) -> dict[str, Any]:
         return self.row(task).get("visit") or {}
 

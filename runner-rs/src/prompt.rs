@@ -527,7 +527,7 @@ fn parts(
         put(&mut lines, Part::Turn, "Spoken turn: the person said this aloud and your reply is read aloud to them. Answer first, in one to three short plain sentences, before reading files or running tools. No preamble about what you will read or do, no ids, paths, code or markdown. If it needs work, say in one sentence what you will do, then do it, and end with one short spoken sentence on the result.".into());
     }
     if truthy(&attempt["routine"]) {
-        put(&mut lines, Part::Standing, "Scheduled routine: the assigned task's body is the routine's standing text, not a person's message. Do what it says for this occurrence.".into());
+        put(&mut lines, Part::Standing, "Scheduled routine: its instructions are the routine's standing text, not a person's message. Do what they say for this occurrence.".into());
         if truthy(&attempt["_stale_playbook"]) {
             put(&mut lines, Part::Turn, s(&attempt["_stale_playbook"])); // an older copy of a playbook (crate::playbook)
         }
@@ -1298,8 +1298,8 @@ mod tests {
         )
         .text
         .contains(STANDING_SEEN));
-        // Only the task's clock moved (above): one line. Its body changed: the task in full, the standing lines still one.
-        next["task"]["body"] = json!("Fix the login step and the payment step.");
+        // Only the task's clock moved (above): one line. Its request changed: the task in full, the standing lines still one.
+        next["task"]["request"] = json!({"from": "human:ana@acme.example", "text": "Fix the login step and the payment step."});
         let task = build(
             &next,
             &names,

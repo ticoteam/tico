@@ -84,7 +84,7 @@ function roadmapTaskHTML(t: PropTask): string {
       ${edit ? `<button type="button" class="prop-add" data-requester-add aria-label="Add requester" title="Add requester">${TL_ICON.plus}</button>` : ''}</h3>
       <div data-requester-list></div></section>
     <section class="tsec roadmap-publication"><h3 class="rail-h">Public text</h3>
-      <small>${t.visibility === 'public' ? 'Shown on the public roadmap.' : 'Written separately from the internal title and body; a public title is needed to publish.'}</small>
+      <small>${t.visibility === 'public' ? 'Shown on the public roadmap.' : 'Written separately from the task\'s title; a public title is needed to publish.'}</small>
       <label>Title<input data-public-field="public_title" data-task-field="public_title" aria-label="Public title" maxlength="300" value="${esc(t.public_title ?? '')}" placeholder="Needed to publish" ${edit ? '' : 'readonly'}></label>
       <label>Summary<textarea data-public-field="public_summary" data-task-field="public_summary" aria-label="Public summary" rows="2" maxlength="8000" placeholder="Optional" ${edit ? '' : 'readonly'}>${esc(t.public_summary ?? '')}</textarea></label>
     </section>`;

@@ -34,7 +34,7 @@ someone: an open ask of yours on the same thing stays as it is.
 Each question is its own new task, yours, with one ask on it:
 
 ```
-tico task create --title "<the decision, in a few words>" --body "<what you will do with the answer>"
+tico task create --title "<the decision, in a few words>" --message "<what you will do with the answer>"
 tico task ask <id> --to <person> "<the question>" -m "<what you will do with the answer>" --version N
 ```
 

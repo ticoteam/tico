@@ -62,7 +62,7 @@ Always:
   write nothing further about it.
 
 ## Starting a run
-1. Read the task with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/review-cycle.md`,
    `knowledge/probation.md` and the playbook. A resumed turn already has them.
 3. Read the org: `tico team show` for reporting lines; `tico goal list --all` for goals a review can point at.

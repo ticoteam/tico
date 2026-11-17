@@ -85,7 +85,7 @@ Always:
 - `knowledge/conversion-method.md` holds the standing rules these skills use, with sources.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/channel-playbook.md`,
    `knowledge/conversion-method.md`, `knowledge/funnel.md`, `knowledge/leaks.md` and `knowledge/pages.md`. A resumed
    turn already has them.

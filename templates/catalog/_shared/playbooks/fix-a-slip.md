@@ -23,12 +23,12 @@ range was wrong.
 A fix that puts the kept thing back the way a person OK'd it is upkeep: do it within your granted Tools, or file the
 exact change for the person your playbook names and wait for it:
 
-    tico task create --owner <your manager> --parent <id> --title "Apply: <the fix>" --body-file <body file>
+    tico task create --owner <your manager> --parent <id> --title "Apply: <the fix>" --message-file <message file>
 
 The first owner is your Manager, the bot your line in `tico team show` reports to: it checks the task once and
 passes it to the person. A task filed straight to the person is refused.
 
-Write the body to a file first. Its first paragraph is what the person reads first: one or two plain sentences, under 40
+Write the message to a file first. Its first paragraph is what the person reads first: one or two plain sentences, under 40
 words, saying what to change and where, with no links, ids or file paths. Below it, after a blank line: exactly what to
 change, where, and why. If the command is refused, nothing was filed: fix what the refusal says and run it again, in
 this run. Say you filed it only once the command printed the new task's id.
@@ -46,7 +46,7 @@ on a Slipping task: done ends the watch. A kept thing either goes back to Watchi
 
 When it cannot be fixed, or a better bet should take its place, file the idea first:
 
-    tico task create --owner me --pipeline growth-experiments --label <your channel tag> --title "<what to try instead>" --body "<why, in one line>. Replaces <this task>."
+    tico task create --owner me --pipeline growth-experiments --label <your channel tag> --title "<what to try instead>" --message "<why, in one line>. Replaces <this task>."
 
 Then close this task with the reason: replaced by a better bet, or stopped.
 

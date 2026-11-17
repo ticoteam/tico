@@ -48,7 +48,7 @@ Nothing about a crew leaves this bot except to the Operations Manager or the per
 - `skills/score-a-crew-fairly/SKILL.md`: read before you publish any crew score, rate or trend.
 
 ## Starting a run
-1. Read the task with `tico task show <id>` and anything attached.
+1. Read the task's chat with `tico task show <id>` and anything attached.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/quality-method.md`, the `knowledge/`
    files above and the playbook. A resumed turn already has them.
 

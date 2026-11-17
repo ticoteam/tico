@@ -50,7 +50,7 @@ Words are defined in the [Glossary](glossary.md).
   Record states: `active`, `paused`, `planned`, `quarantined`. Live status while it works:
   `idle`, `running`, `waiting_human`, `waiting_bot`, `blocked`, `limited`, `crashed`, `paused`,
   `quarantined`.
-- **Task** — a unit of work with a requester, an owner (bot or human), a title, a body and a
+- **Task** — a unit of work with a requester, an owner (bot or human), a title, a first message and a
   note; a pipeline and a stage in it, a `rank` in its owner's queue, labels, links (a pull request first), the tasks
   it filed, and relations to other tasks (related, duplicates, follow-ups). Status: `open`, `done` or `closed`; what
   an open task waits on is read, never stored ([Whose turn it is](tasks.md#whose-turn-it-is)). The owner says

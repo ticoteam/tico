@@ -8,6 +8,7 @@ words before its own, and the first is canceled, so one run starts and nothing s
 was folded into it (`refs.parts`), so taking one of them back (`cancel`) takes out its words alone.
 """
 
+import hashlib
 import json
 import logging
 from collections.abc import Callable, Collection
@@ -51,6 +52,105 @@ def key(task_id: str, visit_id: str, level: str = "owner", try_n: int = 0) -> st
 def filed_under(wake_key: str, task_id: str) -> bool:
     """Whether `wake_key` starts with `task_id`, the part `message_task` reads as its run's task."""
     return wake_key.split(":", 1)[0] == task_id
+
+
+# A routine's or a setup's working instructions for the bot that owns a new task (hubdb.task_create `instructions`):
+# they reach the bot through its run, in the wake it starts from, under this line, and never the task's chat. The
+# wake's refs carry `instructions: true`, so a later run of the task is given them again (`instructions`).
+INSTRUCTIONS = "instructions"
+INSTRUCTIONS_HEAD = "Your instructions for this task (from its routine or setup, not from a person):"
+
+
+def split_instructions(refs: Row | None) -> tuple[Row, str]:
+    """A new task's wake refs without its instructions, and the instructions ("" when none)."""
+    rest: Row = dict(refs or {})
+    text = str(rest.pop(INSTRUCTIONS, "") or "").strip()
+    return rest, text
+
+
+def with_instructions(text: str, instructions: str) -> str:
+    """A wake's words with the task's instructions after them."""
+    return f"{text}\n\n{INSTRUCTIONS_HEAD}\n{instructions}" if instructions else text
+
+
+def keep_instructions(conn: "sqlite3.Connection", task: Row, instructions: str) -> str | None:
+    """Instructions no wake carried (nobody had the turn yet): a quiet note to the owner bot on the task, in its own
+    reads of the room only, which starts no run; its runs are given them (`instructions`)."""
+    owner = task.get("owner_id")
+    visit: Row = task.get("visit") or {}
+    if not instructions or not _h().is_bot(owner) or not visit.get("id"):
+        return None
+    return add(
+        conn,
+        task,
+        str(owner),
+        visit,
+        with_instructions(f"{task.get('title') or 'A task'} is yours.", instructions),
+        wake_key=f"{task['id']}:{visit['id']}:{INSTRUCTIONS}",
+        quiet=True,
+        refs={INSTRUCTIONS: True},
+    )
+
+
+def tell(conn: "sqlite3.Connection", task: Row, text: str, *, quiet: bool = True) -> str | None:
+    """Tico's further instructions for a task it filed (what editing its description used to do): to an owner bot, a
+    note on the task its runs are given (`instructions`), quiet unless asked to wake it; to a person, Tico's message on
+    the task's chat. Once per text."""
+    H = _h()
+    text = str(text or "").strip()
+    owner = task.get("owner_id")
+    if not text:
+        return None
+    if not H.is_bot(owner):
+        return H.task_comment(conn, H.KEEPER, task["id"], text, extra_refs={INSTRUCTIONS: True})["id"]
+    visit: Row = (
+        task.get("visit")
+        or H._one(conn, "SELECT * FROM visits WHERE task_id=? AND left_at IS NULL", (task["id"],))
+        or {}
+    )
+    if not visit.get("id"):
+        return None
+    said = hashlib.sha1(text.encode()).hexdigest()[:12]
+    return add(
+        conn,
+        task,
+        str(owner),
+        visit,
+        with_instructions(f"More on {task.get('title') or 'this task'}.", text),
+        wake_key=f"{task['id']}:{visit['id']}:{INSTRUCTIONS}:{said}",
+        quiet=quiet,
+        refs={INSTRUCTIONS: True},
+    )
+
+
+# A wake whose instructions replace all the task had before (refs `instructions: "all"`): a report Tico files again.
+REPLACE = "all"
+
+
+def replace_refs(text: str) -> Row:
+    """The wake refs that give a task `text` as its whole instructions (`instructions`), for H._wake."""
+    return {INSTRUCTIONS: REPLACE} if str(text or "").strip() else {}
+
+
+def instructions(conn: "sqlite3.Connection", task_id: str) -> str:
+    """The instructions a task was given (`with_instructions`: made with, and any `tell` since, in order, from the
+    newest that replaced them all), "" when none: Tico's own words to its bot, found by the task's messages
+    (messages_refs_task)."""
+    rows = conn.execute(
+        "SELECT body, json_extract(refs, '$.instructions') FROM messages WHERE json_extract(refs, '$.task')=? "
+        "AND sender_id='keeper' AND json_extract(refs, '$.instructions') IN (1, 'all') ORDER BY created_at, rowid",
+        (task_id,),
+    ).fetchall()
+    out: list[str] = []
+    for row in rows:
+        # Tico's message on a person's task (`tell`) is all instructions; a bot's wake carries them under the line.
+        _, head, rest = str(row[0] or "").partition(INSTRUCTIONS_HEAD + "\n")
+        said = (rest if head else str(row[0] or "")).strip()
+        if row[1] == REPLACE:
+            out = []
+        if said and said not in out:
+            out.append(said)
+    return "\n\n".join(out)
 
 
 # The task's Human (tasks.human_id): the person its questions and OKs go to, whoever owns it (one sentence).

@@ -42,7 +42,7 @@ Draft messages to outsiders until a person turns mail sending on for this bot in
 - `skills/explain-a-variance/SKILL.md`: read before you report a balance or category that moved beyond the review limit.
 
 ## Starting a run
-1. Read the task with `tico task show <id>` and anything attached.
+1. Read the task's chat with `tico task show <id>` and anything attached.
 2. In a new session or after a compaction, read `memory/learnings.md`, the `knowledge/` files above and the playbook. A
    resumed turn already has them.
 

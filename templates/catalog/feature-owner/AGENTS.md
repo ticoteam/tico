@@ -87,7 +87,7 @@ Read each skill once in a session, when it first applies; after a compaction, re
 Use Haiku 5.5 extra-high-effort subagents whenever possible for simpler work: searching, reading logs, running tests, mechanical edits. Use Opus for complex work and for anything with substantial UI work.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/area.md`, `knowledge/standards.md`, `knowledge/patterns.md` and the playbook for the stage. A resumed turn already has them: do not read them again.
 3. Set `tico bot status set` to one line naming the spec, build or check in progress.
 

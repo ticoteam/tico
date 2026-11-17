@@ -1608,8 +1608,9 @@ def create_app(settings=None):
         return result
 
     # The columns of a task's row that are the server's own, never in a view. `prefix` is read as the task's label
-    # (hubdb.ticket_refs); a list of 500 rows carries no copy of it.
-    SERVER_COLUMNS = ("checkpoint_state", "work_revision", "occurrence_step", "rule_due_id", "prefix")
+    # (hubdb.ticket_refs); a list of 500 rows carries no copy of it. `body` is the description tasks no longer have:
+    # what was asked is the first message on the task's chat.
+    SERVER_COLUMNS = ("checkpoint_state", "work_revision", "occurrence_step", "rule_due_id", "prefix", "body")
 
     def plain_view(row, c=None):
         """A task's plain fields, as every view of it starts: the row, without the server's own columns."""
@@ -1658,6 +1659,7 @@ def create_app(settings=None):
         if routine:
             value.update(routine_id=routine["schedule_id"])
         value["origin_actor"] = H.task_origin(c, row)
+        value["request"] = H.task_request(c, row["id"])
         if filed := SRC.filers(c, [row["id"]]).get(row["id"]):
             value["filer"] = filed
         if who is not None and visible_sql != "1":
@@ -2533,7 +2535,8 @@ def create_app(settings=None):
         )
 
     def rule_create_text(body):
-        """What a new task says, as the rule check reads it: its title and body, and its public title and summary."""
+        """What a new task says, as the rule check reads it: its title and first message, and its public title and
+        summary."""
         return "\n\n".join(
             filter(
                 None,
@@ -2604,14 +2607,14 @@ def create_app(settings=None):
             *(org_rule_check.company(c) if rule_publishes(body, row) else []),
         )
 
-    def rule_update_text(body, row):
-        """What a task change says, as the rule check reads it: its text fields, the task itself when it is handed to
-        a new owner, and the public text already written when the change alone makes the task public."""
+    def rule_update_text(c, body, row):
+        """What a task change says, as the rule check reads it: its text fields, the task itself (its title and what it
+        asks, `H.task_words`) when it is handed to a new owner, and the public text already written when the change
+        alone makes the task public."""
         parts = [
             f"{label}: {value}"
             for key, label in (
                 ("title", "Title"),
-                ("body", "Body"),
                 ("note", "Note"),
                 ("public_title", "Public title"),
                 ("public_summary", "Public summary"),
@@ -2625,7 +2628,7 @@ def create_app(settings=None):
                 if row.get(key) and getattr(body, key, None) is None
             ]  # an explicit "" clears it: no text
         if getattr(body, "owner", None):
-            parts.append(f"Assigned: {row['title']}\n\n{row.get('body') or ''}".rstrip())
+            parts.append(f"Assigned: {row['title']}\n\n{H.task_words(c, row['id'])}".rstrip())
         return "\n\n".join(parts)
 
     def rule_update_check(who, tid, body, row=None):
@@ -2638,11 +2641,12 @@ def create_app(settings=None):
                     row = auth.task(c, who, auth.resolve_task(c, who, tid))
                 except Problem as exc:
                     return org_rule_check.refused(exc)
-        text = rule_update_text(body, row)
+        with store.read() as c:
+            text = rule_update_text(c, body, row)
         if not text:
             return None
         only_owner = getattr(body, "owner", None) and not any(
-            getattr(body, k, None) for k in ("title", "body", "note", "public_title", "public_summary")
+            getattr(body, k, None) for k in ("title", "note", "public_title", "public_summary")
         )
         return rule_check(
             who,
@@ -3881,7 +3885,7 @@ def create_app(settings=None):
             org_rule_check.apply(
                 c,
                 rule,
-                rule_update_text(body, row),
+                rule_update_text(c, body, row),
                 {"task": task_id, "body": body.model_dump(mode="json", by_alias=True)},
             )
             if rule
@@ -3919,7 +3923,7 @@ def create_app(settings=None):
         **api_v2(
             "Tasks",
             "updateTask",
-            "Edit a task's fields (title, body, due, labels, privacy, goal, note). A bot sends the version it was shown (409 task_changed otherwise); a person may leave it out. Where it is and who has it change by done, move and owner",
+            "Edit a task's fields (title, due, labels, privacy, goal, note); a task has no description. A bot sends the version it was shown (409 task_changed otherwise); a person may leave it out. Where it is and who has it change by done, move and owner",
             "TaskResult",
             responses={"422": ASK_REFUSED},
         ),
@@ -3941,13 +3945,15 @@ def create_app(settings=None):
 
     def handoff_preflight(caller, row, owner, note=None):
         """Ask ingest for a bot handing its own task `row` to `owner`: judged like a task filed for them."""
+        with store.read() as c:
+            asked = H.task_request_text(c, row["id"])
         return ask_ingest.preflight(
             store,
             app.state.judge,
             caller,
             owner,
             row["title"],
-            "\n\n".join(filter(None, (row.get("body"), note))),
+            "\n\n".join(filter(None, (asked, note))),
             kind="task",
         )
 
@@ -4723,7 +4729,7 @@ def create_app(settings=None):
             if (
                 not ref
                 or not person
-                or set(body) - {"title", "body", "owner", "parent", "due", "private", "on_behalf_of"}
+                or set(body) - {"title", "message", "body", "owner", "parent", "due", "private", "on_behalf_of"}
             ):
                 return False
         else:

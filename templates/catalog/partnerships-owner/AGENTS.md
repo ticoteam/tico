@@ -76,7 +76,7 @@ how often it came up and what it cost or risked, and send the note to `corporate
 - `skills/find-a-route-to-a-partner-target/SKILL.md`: read before a partner outreach or a one-page brief on a named firm or person.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/rules-of-engagement.md` and the
    playbook the task names. A resumed turn already has them.
 3. Open the partner's file before writing, so you update rather than duplicate.

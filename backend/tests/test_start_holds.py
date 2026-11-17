@@ -54,7 +54,10 @@ def job_state(api, job_id):
 
 def botops_tasks(api):
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT id,title,body,status FROM tasks WHERE owner_id='bot:botops'")]
+        return [
+            {**dict(r), "body": H.task_words(c, r["id"])}  # what Tico gave BotOps: its instructions
+            for r in c.execute("SELECT id,title,status FROM tasks WHERE owner_id='bot:botops'")
+        ]
 
 
 def test_three_hand_backs_for_the_same_reason_go_to_botops_and_pause_the_task(api):

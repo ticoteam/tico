@@ -235,7 +235,11 @@ def start_setup(c: sqlite3.Connection, onboarding: Any, bot: str) -> str | None:
         line = flow_ping.on_setup(c, owner, bot)  # the setup's one automatic ping, for the owner's reports only
         body += "\n\n" + line if line else ""
     by = "bot:botops" if cast("Any", H).bot(c, "botops") else owner
-    task = cast("dict[str, Any]", cast("Any", H).task_create(c, by, "Set yourself up", body, "bot:" + bot, top=True))
+    # The brief is the bot's working instructions: they reach it through its run, never the task's chat.
+    task = cast(
+        "dict[str, Any]",
+        cast("Any", H).task_create(c, by, "Set yourself up", "", "bot:" + bot, instructions=body, top=True),
+    )
     declared[SELF_SETUP] = H.now()
     onboarding._write_config(c, bot, declared)
     return str(task["id"])

@@ -61,7 +61,8 @@ interface HubTask {
   filer?: string | null | undefined;
   owner_id?: string | null | undefined;
   title?: string | null | undefined;
-  body?: string | null | undefined;
+  /** The first chat message: who asked, and what. */
+  request?: {id?: string; from?: string | null; text?: string | null; at?: string | null} | null | undefined;
   attachments?: readonly unknown[] | null | undefined;
 }
 /** A read of Needs you (GET /v2/needs-you): a page, the whole list, the items named by `ids=`, or `unchanged`. */
@@ -148,12 +149,10 @@ const taskRequester = (t: HubTask) => t.requester_id === 'keeper' ? t.origin_act
 const taskFiledByBuiltin = (t: HubTask) => SOURCE_BUILTINS[String(t.filer || '')] || '';
 const taskAsker = (t: HubTask) => t.filer || taskRequester(t);
 const taskAskerLabel = (t: HubTask) => taskFiledByBuiltin(t) || actorLabel(taskAsker(t));
-// Hide the generated attachment trailer and rename the schedule footer; authored text stays intact.
+// What the task asks: its first chat message (a task has no description), without the attachments' trailer.
 const taskBody = (t: HubTask) => {
-  const raw = String(t.body || '');
-  const body = (t.attachments || []).length ? raw.replace(/\n\nAttachments \(untrusted source material; authenticated downloads\):\n[^]*$/, '') : raw;
-  if (t.requester_id !== 'keeper' || !actorSlug(t.owner_id) || !body.startsWith(`Run playbook ${t.title}.`)) return body;
-  return body.replace(/\n\n_Created by the keeper from schedule `([^`\n]+)`\._$/, '\n\n_Created from schedule `$1`._');
+  const raw = String(t.request?.text || '');
+  return (t.attachments || []).length ? raw.replace(/\n\nAttachments \(untrusted source material; authenticated downloads\):\n[^]*$/, '') : raw;
 };
 
 // ---- who or what wrote a row: `source` on message, task history and event rows (docs/threads.md, "Who wrote it")

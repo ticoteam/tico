@@ -183,7 +183,7 @@ def subject(c, auth, who, subject_type, subject_id):
             "revision": task.get("version"),
             "note_message_id": _latest_message(c, task.get("conversation_id")),
             "link": "/#/task/" + quote(task["id"], safe=""),
-            "text": f"{task.get('title') or ''}\n\n{task.get('body') or ''}".strip(),
+            "text": f"{task.get('title') or ''}\n\n{H.task_request_text(c, task['id'])}".strip(),
         }
     if subject_type == "ask":
         # Rated through backend/answers.py, never through give(); read back here for a removal, a rule draft and the

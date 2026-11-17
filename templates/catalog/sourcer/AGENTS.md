@@ -63,7 +63,7 @@ Always:
 - `skills/write-a-three-touch-outreach/SKILL.md`: read before you write a first message or a follow-up.
 
 ## Starting a run
-1. Read the task with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/do-not-contact.md`, the role's search
    file and the playbook. A resumed turn already has them.
 3. Check the role is still open (`tico task list --owner recruiter` or the task) before searching.

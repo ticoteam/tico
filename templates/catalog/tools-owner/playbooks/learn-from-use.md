@@ -31,7 +31,7 @@ Done when: usage.md is updated and committed, each new finding below has its one
      ask the person who can give it on a task of yours (`tico task ask`), naming the bot, the tool and the level.
    - **One bot keeps getting the same vendor 4xx on one endpoint** (3 or more in a day, no 2xx on it since): tell
      that bot how to call it right. Find the cause in the vendor's guide or the vendor's docs, then file it to the bot
-     (`tico task create --owner <bot> --title "<tool>: <method> <endpoint> answers <status>" --body "<the cause and
+     (`tico task create --owner <bot> --title "<tool>: <method> <endpoint> answers <status>" --message "<the cause and
      the right call>"`). A 403 that is a missing scope on the key is a key problem, not the bot's: ask the person who
      added the key (the `added_by` of the activity) for a key with that scope.
    - **Nobody used a tool for 30 days** (no rows and no level holder's use you know of): propose removing it, or its

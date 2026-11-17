@@ -21,7 +21,7 @@ const {unrouted} = require('./support/routes.cts') as import('./support/routes.c
 const me = {id: 'ana', name: 'Ana', email: 'ana@acme.example', role: 'owner', mover: true, cloud: true};
 const config = {version: '0.1.0', app_name: 'Tico', local: true};
 const TITLES = ['Hosted usage count', 'Growth setup', 'Launch page'];
-// The Tico Team task's body, as bots write to each other.
+// The Tico Team task's first message, as bots write to each other.
 const BODY = 'Growth Owner → Setup: gather the channel list before the first plan. **Needs from the owner**: every '
   + 'channel the company sells on, where ad spend is reported, and where customer numbers live (CRM, sheet, Stripe).\n\n'
   + '- Strategy Owner reads it next\n- Due before Monday\'s planning';
@@ -85,7 +85,7 @@ const times = (all: string, part: string) => all.split(part).length - 1;
             : {id, state: 'none', pick: '', line: '', note: '', score: null})});
         }
         const read = r.method() === 'GET' ? p.match(/^\/api\/v2\/tasks\/t(\d)$/) : null;
-        if (read) return json({task: {...brief(Number(read[1])), body: read[1] === '3' ? '' : BODY, requester_id: 'human:ana', conversation_id: 'c' + read[1]}});
+        if (read) return json({task: {...brief(Number(read[1])), request: read[1] === '3' ? null : {text: BODY}, requester_id: 'human:ana', conversation_id: 'c' + read[1]}});
         if (r.method() !== 'GET' && p.startsWith('/api/') && !p.startsWith('/api/v2/threads/')) {
           writes.push({p, body: JSON.parse(r.postData() || '{}') as Record<string, unknown>});
           if (p === '/api/v2/needs-you/snooze') { const id = (JSON.parse(r.postData() || '{}') as {id: string}).id; needs = needs.filter(n => n.id !== id); return json({id}); }

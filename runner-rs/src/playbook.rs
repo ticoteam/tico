@@ -60,12 +60,30 @@ pub fn stale_playbook(repo: &Path, text: &str) -> Option<String> {
     best.map(|(p, _)| p)
 }
 
+/// The line a task's wake puts before its routine's or setup's instructions (backend/task_wakes.py INSTRUCTIONS_HEAD).
+pub const INSTRUCTIONS_HEAD: &str =
+    "Your instructions for this task (from its routine or setup, not from a person):";
+
+/// A routine's instructions for this run: the task's `instructions` (a later run of it), else the part of the wake
+/// that woke it after INSTRUCTIONS_HEAD, else an older server's task body.
+pub fn routine_text(attempt: &Value) -> String {
+    let told = text_of(&attempt["task"]["instructions"]);
+    if !told.is_empty() {
+        return told;
+    }
+    let woke = text_of(&attempt["message"]["body"]);
+    if let Some((_, rest)) = woke.split_once(INSTRUCTIONS_HEAD) {
+        return rest.trim().to_string();
+    }
+    text_of(&attempt["task"]["body"])
+}
+
 /// What to tell a routine whose text is an older copy of one of the bot's playbooks, or "".
 pub fn note(repo: &Path, attempt: &Value) -> String {
     if !crate::util::truthy(Some(&attempt["routine"])) {
         return String::new();
     }
-    let Some(path) = stale_playbook(repo, &text_of(&attempt["task"]["body"])) else {
+    let Some(path) = stale_playbook(repo, &routine_text(attempt)) else {
         return String::new();
     };
     // Routines are automations now (`tico automation`): one that moved names its automation; its text is the prompt of
@@ -76,7 +94,7 @@ pub fn note(repo: &Path, attempt: &Value) -> String {
         .find(|i| !i.is_empty())
         .unwrap_or_else(|| "<id>".into());
     format!(
-        "This routine's text is an older copy of `{path}`, which has changed since the routine was saved. Follow the current `{path}` in your repository, not the task text. Then point the routine at the file so it cannot go stale again: read it with `tico automation show {id}`, set its bot_turn step's prompt to `Run {path}`, and save the steps with `tico automation update {id} --file <flow.json>`."
+        "This routine's text is an older copy of `{path}`, which has changed since the routine was saved. Follow the current `{path}` in your repository, not the routine's text. Then point the routine at the file so it cannot go stale again: read it with `tico automation show {id}`, set its bot_turn step's prompt to `Run {path}`, and save the steps with `tico automation update {id} --file <flow.json>`."
     )
 }
 
@@ -184,7 +202,7 @@ mod tests {
         )
         .unwrap();
         let old = "# Daily checks\n\nLook at the queue and report.\n";
-        let attempt = json!({"routine": {"id": "r1"}, "task": {"body": old}});
+        let attempt = json!({"routine": {"id": "r1"}, "task": {"instructions": old}});
         let told = note(&dir, &attempt);
         assert!(
             told.contains("tico automation show r1")
@@ -193,12 +211,12 @@ mod tests {
         );
         assert!(told.contains("tico automation update r1 --file"), "{told}");
         // a routine that moved to an automation is changed there
-        let moved = json!({"routine": {"id": "r1", "automation": "auto_1"}, "task": {"body": old}});
+        let moved = json!({"routine": {"id": "r1", "automation": "auto_1"}, "task": {}, "message": {"body": format!("Daily checks is in Review.\n\n{INSTRUCTIONS_HEAD}\n{old}")}});
         assert!(note(&dir, &moved).contains("tico automation update auto_1 --file"));
         assert_eq!(
             note(
                 &dir,
-                &json!({"routine": {"id": "r1"}, "task": {"body": "Run playbooks/checks.md"}})
+                &json!({"routine": {"id": "r1"}, "task": {"instructions": "Run playbooks/checks.md"}})
             ),
             ""
         );
@@ -206,7 +224,7 @@ mod tests {
         assert_eq!(
             note(
                 &dir,
-                &json!({"routine": {"id": "r1"}, "task": {"body": current}})
+                &json!({"routine": {"id": "r1"}, "task": {"instructions": current}})
             ),
             ""
         );

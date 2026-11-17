@@ -53,7 +53,7 @@ These need the task to ask for them and a granted Tool to allow them. Otherwise 
 Never copy a requester's email, address, id document or the data itself into a file or report.
 
 ## Starting a run
-1. Read the task with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/requests.md` and the playbook for the
    work. A resumed turn already has them.
 3. Check every open request's deadline before anything else: a deadline beats every other job.

@@ -52,7 +52,7 @@ def _page_job(case):
     text, cut = P.text_of_bytes("text/markdown", data, len(data))
     task = {
         "title": w.get("title") or "",
-        "body": w.get("spec") or "",
+        "request": w.get("spec") or "",
         "version": int(w["work_version"]),
         "pipeline": {"goal": w.get("goal") or ""},
         "pipeline_id": None,

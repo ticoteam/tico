@@ -56,7 +56,7 @@ Always:
 - `skills/set-a-pay-range-for-a-job-post/SKILL.md`: read before you give a range for a job post.
 
 ## Starting a run
-1. Read the task with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/philosophy.md`, `knowledge/bands.md`,
    `knowledge/pay-practice.md` and the playbook. A resumed turn already has them.
 3. Read the team with `tico team show` for roles and levels; open roles from the hiring tasks.

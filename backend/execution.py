@@ -5200,8 +5200,19 @@ class Execution:
         routine = None
         github_repository = None
         if task:
-            # The routine this task came from, so the bot knows the text is a standing
-            # instruction and not a person's ask. What it says is already the task body.
+            # A task has no description: what was asked is its first message (from whoever wrote it), and a routine's
+            # or a setup's working instructions reach its bot through the run, never the chat. A run started by the
+            # wake that carries them reads them there; any later run is given them with the task.
+            from . import task_wakes
+
+            task = {k: v for k, v in task.items() if k != "body"}
+            if asked := H.task_request(c, task["id"]):
+                task["request"] = {"from": asked["from"], "text": asked["text"]}
+            told = task_wakes.instructions(c, task["id"])
+            if told and task_wakes.INSTRUCTIONS_HEAD not in str(msg.get("body") or ""):
+                task["instructions"] = told
+            # The routine this task came from, so the bot knows its instructions are a standing text and not a
+            # person's ask.
             saved = c.execute(
                 'SELECT s.id,s.title FROM schedule_occurrences o JOIN schedules s ON s.id=o.schedule_id '
                 'WHERE o.task_id=?',
@@ -9185,11 +9196,11 @@ class Execution:
             existing = tasks[0]
             missing = [part for part in (boundary, named, by_id) if part not in str(existing['body'] or '')]
             if missing:
-                body = "\n\n".join([str(existing['body'] or '').rstrip(), *missing]).strip()
-                try:
-                    H.task_update(c, H.KEEPER, existing['id'], body=body, quiet=True)
-                except H.Refused:
-                    pass
+                from . import task_engine, task_wakes
+
+                engine_row = task_engine.task(c, existing['id'])
+                if engine_row:
+                    task_wakes.tell(c, engine_row, "\n\n".join(missing))
             return
         job_line = f" Held job: {row['id']}." if row['id'] else ""
         if again:

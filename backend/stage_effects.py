@@ -133,10 +133,10 @@ def _sent_back(conn: "sqlite3.Connection", task: Row) -> str:
 
 
 def _handoff_body(conn: "sqlite3.Connection", task: Row) -> str:
-    """The filed task's body: the filing task's, why it came back when it did (`_sent_back`), the `Spec:` line, and what each person said with their OK of the
+    """The filed task's first message: the filing task's request (its first message), why it came back when it did (`_sent_back`), the `Spec:` line, and what each person said with their OK of the
     spec, marked as theirs, so whoever builds it does not ask again what was already answered there."""
     H = _h()
-    parts = [str(task.get("body") or "").rstrip()]
+    parts = [H.task_request_text(conn, task["id"]).rstrip()]
     back = _sent_back(conn, task)
     if back:
         parts.append(back)

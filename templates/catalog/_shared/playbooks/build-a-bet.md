@@ -25,7 +25,7 @@ Make it exactly as it will go live: the new title and copy, the post, the email,
 drafts in this repository and attach them to the task. Work another teammate does is a sub-task, and the task stays
 yours: writing to the Content Owner, design to the Design Owner.
 
-    tico task file "<what you need>" --parent <id> --owner <their slug> --body "<what, by when, and where it goes>"
+    tico task file "<what you need>" --parent <id> --owner <their slug> --message "<what, by when, and where it goes>"
 
 ## 3. Pass the brand check
 
@@ -35,7 +35,7 @@ and say so on the Go-live page (step 4).
 Otherwise run `tico brand check -` on every outward word and fix each hit. Check each claim against
 `tico brand show --section claims`. Then ask the Design Owner for the brand check:
 
-    tico task file "Brand check: <title>" --parent <id> --owner design-owner --body "<what goes live, where, and the links to the drafts>"
+    tico task file "Brand check: <title>" --parent <id> --owner design-owner --message "<what goes live, where, and the links to the drafts>"
 
 The task waits on it. Fix what it sends back. Write that the brand check passed only once the Design Owner's task says
 so.

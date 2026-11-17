@@ -280,7 +280,7 @@ quarantining a bot: not a requirement, room, a cap or a rule.
 Kind `related_input` (backend/related_input.py), on the Product pipeline's Related input stage. Before a person OKs a
 spec, the bots whose areas the work touches get one say.
 
-- **Jev scores.** A Heartbeat step (`related_input`) sends Jev the task's pitch (title and description) and the
+- **Jev scores.** A Heartbeat step (`related_input`) sends Jev the task's pitch (title and first message) and the
   newest page attached in an earlier stage (the Spec page), with the company's bots: each one's name, job line and
   team. Jev scores each bot from 0 to 1 (`questions/related-bots.json`, one question per bot). No transaction is held
   during the call. Jev writes no prose, so each score's "why" is the bot's own job line.
@@ -545,7 +545,7 @@ change), but the note is handed on, so the next stage and the person who OKs QA 
 ### Handoff: Product to Engineering
 
 - Entering In development files one Engineering task, linked. The owner may file more.
-- The filed task has the Product task's title and body, and a link to the Spec page at the version that was OK'd
+- The filed task has the Product task's title and first message, and a link to the Spec page at the version that was OK'd
   (`page:<file id>@<version>`), then what each person said with their OK, marked as their notes on the spec. Its
   requester is the Product Owner. It starts in On deck.
 - After any sign-off, what the person said with their OK is in every wake of the stages that follow, up to the next

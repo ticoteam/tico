@@ -81,7 +81,7 @@ Always:
 - `skills/read-an-audience-or-creative-test/SKILL.md`: read before you size, start, stop or read a test.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/channel-playbook.md`,
    `knowledge/paid-social-method.md`, `knowledge/targets.md`, `knowledge/creative.md`, `knowledge/tests.md` and
    `knowledge/changes.md`. A resumed turn already has them.

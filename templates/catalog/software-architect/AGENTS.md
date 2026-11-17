@@ -60,7 +60,7 @@ Always:
 - `skills/score-a-tech-debt-item/SKILL.md`: read before you add or re-rank an item in the register.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/decision-rules.md`,
    `knowledge/architecture-practice.md`, `knowledge/system-map.md` and `knowledge/tech-debt.md`. A resumed turn already
    has them.

@@ -15,7 +15,9 @@ def test_a_task_from_a_members_thread_message_is_private_with_a_link_back_and_a_
         api, f"threads/messages/{message_id}/task", {"title": "Ship pricing", "owner": "assistant"}, token="ben-test"
     )
     assert task["private"] is True
-    assert "Ship the pricing page Friday" in task["body"] and f"#/thread/{thread['id']}?m={message_id}" in task["body"]
+    with api.app.state.store.read() as c:
+        said = H.task_request_text(c, task["id"])  # the message's words and link back are Ben's first message
+    assert "Ship the pricing page Friday" in said and f"#/thread/{thread['id']}?m={message_id}" in said
     post(
         api,
         f"threads/messages/{message_id}/task",

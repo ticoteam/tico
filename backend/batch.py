@@ -92,8 +92,8 @@ def _row(c, entry):
     elif entry["kind"] == "task":
         frm = task.get("requester_id")
         row = {"key": "task:" + entry["task_id"], "kind": "task", "title": _clip(task.get("title"), 160)}
-        if task.get("body"):
-            row["body"] = _clip(task["body"], 800)
+        if asked := H.task_request_text(c, task["id"]):  # what it asks: its first message
+            row["body"] = _clip(asked, 800)
         if entry.get("missing"):
             row["missing"] = entry["missing"]
     else:

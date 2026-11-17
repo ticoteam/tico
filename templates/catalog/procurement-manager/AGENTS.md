@@ -71,7 +71,7 @@ Always:
   `knowledge/vendors.md` before any shortlist.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/criteria.md`, `knowledge/vendors.md`
    and the playbook the task names. A resumed turn already has them.
 3. Read `knowledge/purchasing-practice.md` before the first comparison of a session.

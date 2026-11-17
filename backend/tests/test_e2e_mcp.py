@@ -229,7 +229,11 @@ def test_a_scripted_task_runs_over_mcp_from_create_to_done(api):
     is_error, made = call(
         api,
         "tico_task_create",
-        {"owner": "ben", "title": "Smoke: scripted MCP task", "body": "Check the release notes and say what changed."},
+        {
+            "owner": "ben",
+            "title": "Smoke: scripted MCP task",
+            "message": "Check the release notes and say what changed.",
+        },
     )
     assert not is_error, made
     task_id = made["task"]["id"]

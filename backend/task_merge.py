@@ -174,7 +174,11 @@ def set_parent(conn: Any, actor: str, task_id: str, parent_id: str, *, mover: An
 
 # ----------------------------------------------------------------------------- merge: what moves
 def _comments(conn: Any, task_id: str) -> int:
-    return sum(1 for m in _h().task_comments(conn, task_id) if m.get("kind") == "say")
+    """The comments left on A: its said messages, not its request (that comes over to B under "From #A")."""
+    H = _h()
+    request: Row | None = H.task_request(conn, task_id)
+    asked = request["id"] if request else None
+    return sum(1 for m in H.task_comments(conn, task_id) if m.get("kind") == "say" and m.get("id") != asked)
 
 
 def _asks(conn: Any, task_id: str) -> list[Row]:
@@ -326,7 +330,7 @@ def moves(conn: Any, a: Row, b: Row) -> Row:
         "requesters": len(_requesters(conn, a, b)),
         "labels": len(_labels(a, b)) - len(H.task_labels(b)),
         "links": len(_relations(conn, a, b)) + len(_links(conn, a, b)),
-        "description": bool(str(a.get("body") or "").strip()),
+        "description": bool(H.task_request_text(conn, a["id"]).strip()),
         "due": a.get("due_at"),
     }
 
@@ -366,10 +370,11 @@ def duplicate_note(b: Row) -> str:
     return f"Archiving this one as a duplicate of {_num(b)}; its details were added there."
 
 
-def _from_section(a: Row, files: list[Row]) -> str:
-    """What B's description gains: A's under "From #A", with its title, and links to A's files and pages."""
+def _from_section(a: Row, files: list[Row], asked: str = "") -> str:
+    """What the merge note on B carries: A's request (`asked`, its first message) under "From #A", with its title, and
+    links to A's files and pages."""
     lines = [f"## From {_num(a)}: {a.get('title') or ''}".rstrip()]
-    body = str(a.get("body") or "").strip()
+    body = str(asked or "").strip()
     if body:
         lines += ["", body]
     if files:
@@ -415,9 +420,10 @@ def merge(
     followers, requesters = _followers(conn, a, b), _requesters(conn, a, b)
     relations, links, labels = _relations(conn, a, b), _links(conn, a, b), _labels(a, b)
     added_labels = labels[len(H.task_labels(b)) :]
-    # B: A's description and files under "From #A", and A's labels.
-    body = "\n\n".join(part for part in (str(b.get("body") or "").rstrip(), _from_section(a, files)) if part)
-    H.task_update(conn, actor, b["id"], body=body, labels=labels if added_labels else None, mover=mover)
+    # B: A's labels; A's request and files go in the merge note on B's chat (a task has no description).
+    asked = H.task_request_text(conn, a["id"]).strip()
+    if added_labels:
+        H.task_update(conn, actor, b["id"], labels=labels, mover=mover)
     from . import roadmaps as _roadmaps
 
     roadmaps: Any = _roadmaps
@@ -449,7 +455,7 @@ def merge(
     H.task_close(conn, actor, a["id"], note, mover=mover)
     H.task_comment(conn, actor, a["id"], note, wake=False)
     # The note on B: what came in, the comments left on A and each question that ended with it.
-    came = [f'its description under "From {_num(a)}"'] if str(a.get("body") or "").strip() else []
+    came = [f'its request under "From {_num(a)}"'] if asked else []
     came += [f"{len(files)} of its files and pages, linked"] if files else []
     came += [_plural(len(added_labels), "label")] if added_labels else []
     came += [_plural(len(followers), "follower")] if followers else []
@@ -470,6 +476,8 @@ def merge(
     if a.get("due_at"):
         lines.append(f"{_num(a)} was due {str(a['due_at'])[:10]}.")
     text = "\n".join(lines)
+    if asked or files:
+        text += "\n\n" + _from_section(a, files, asked)
     H.task_comment(conn, actor, b["id"], text, wake=False)
     E.tell_owner(conn, b["id"], text, f"merged:{a['id']}")
     H.event(conn, actor, "task.merge", a["id"], {"into": b["id"], "subtasks": moved, "owner": owner})

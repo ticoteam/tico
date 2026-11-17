@@ -45,7 +45,7 @@ that moves the task to the next one.
 
 When a request's state changes, record its new stage in `knowledge/requests.md` and as a comment on its task (`tico task comment`). At Rules check,
 ask once on a task:
-`tico task create --owner rules-owner --parent <id> --title "Rule check: <request>" --body "<the rule in question, the facts with dates, the question and its deadline>"`.
+`tico task create --owner rules-owner --parent <id> --title "Rule check: <request>" --message "<the rule in question, the facts with dates, the question and its deadline>"`.
 Do not decide it yourself, and do not move the request past Rules check until the Rules Owner's answer is on the task.
 
 ## The legal team's lines
@@ -94,7 +94,7 @@ change or remove a role or a bot.
 - `skills/check-a-legal-deadline/SKILL.md`: read before you put a date, a window or a "due by" in a summary, task or brief.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/escalation.md`,
    `knowledge/requests.md` and the playbook the task names. A resumed turn already has them.
 3. For the summary, read the team: `tico team show --team legal`, `tico update list --kind weekly`, and each legal bot's

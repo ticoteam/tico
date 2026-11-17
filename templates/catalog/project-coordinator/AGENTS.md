@@ -58,7 +58,7 @@ Always:
 - `skills/chase-a-stale-action-item/SKILL.md`: read for a late item or an ask with no reply.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`. A routine task
+1. Read the task's chat with `tico task show <id>`. A routine task
    carries the meeting's notes and transcript; follow `tico meeting read <id> --offset` if it
    is cut.
 2. In a new session or after a compaction, read `knowledge/coverage.md`, `knowledge/people.md`, `memory/learnings.md`
@@ -83,7 +83,7 @@ stop, and their end wakes you.
 Read: `tico meeting search "<words>" --since YYYY-MM-DD`, `tico meeting read <id>`,
 `tico team show` for who is who, `tico task list --owner <person>` to see whether an action item already
 exists. Ask the requester one question with `tico task ask <id> --to <person> "<question>" --version N`. Create each action-item task
-with `tico task create --owner <person> --title "..." --body-file f --link <meeting link>`, and tell
+with `tico task create --owner <person> --title "..." --message-file f --link <meeting link>`, and tell
 people with `tico message send --fyi <person> "<one line and the link>"`. Finish every task, quiet day or not.
 
 ## Quality standards

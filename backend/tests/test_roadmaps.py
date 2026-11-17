@@ -105,7 +105,7 @@ def test_visibility_defaults_do_not_rewrite_tasks_and_private_never_publishes(ap
         'Better search',
         'Find more',
     )
-    changed = post(api, 'tasks/' + task['id'], {'version': task['version'], 'body': 'Internal revision'})
+    changed = post(api, 'tasks/' + task['id'], {'version': task['version'], 'title': 'Research search again'})
     assert changed['public_summary'] == 'Find more'
     private = post(api, 'tasks', {'owner': 'cpo', 'title': 'Sensitive research', 'body': 'Secret', 'private': True})
     post(api, 'tasks/' + private['id'], {'version': private['version'], 'visibility': 'public'}, expected=422)

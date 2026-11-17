@@ -20,7 +20,7 @@ def test_old_and_deleted_words_leave_retries_sql_events_and_bot_context(api):
     retry = api.post("/api/v2/" + path, json={"text": "Withdrawn original words"}, headers=original_headers)
     assert retry.json()["comment"]["body"] == "Replacement words"
     deleted = post(api, f"{path}/{mid}/delete", {})
-    assert deleted["comment"]["body"] == "" and deleted["comments"] == []
+    assert deleted["comment"]["body"] == "" and [m["body"] for m in deleted["comments"]] == ["Please review."]
     for route, body, request_headers in (
         (path, {"text": "Withdrawn original words"}, original_headers),
         (f"{path}/{mid}", {"text": "Replacement words"}, edited_headers),

@@ -56,7 +56,7 @@ Always:
 - `skills/write-a-customer-update/SKILL.md`: read before you draft any update to a customer.
 
 ## Starting a run
-1. Read the task with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/escalation-rules.md` and
    `knowledge/register.md`. A resumed turn already has them.
 3. Check for new escalations: `tico task list` for tasks labelled or titled as escalations.

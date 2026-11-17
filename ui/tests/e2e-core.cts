@@ -95,7 +95,7 @@ const tasks = (() => {
     assert.ok(await form.locator('input[name=owner]').inputValue(), `${where}: an owner is picked`);
     await form.locator(`select[name=pipeline] option[value="${pipeline}"]`).waitFor({state: 'attached', timeout: t(20000)});
     assert.equal(await form.locator('select[name=pipeline]').inputValue(), pipeline, `${where}: the form files it in the pipeline shown`);
-    await form.locator('textarea[name=body]').fill('Write the note and send it to the list.');
+    await form.locator('textarea[name=message]').fill('Write the note and send it to the list.');
     await form.locator('button[type=submit]').click();
     let d = await sheet(page, TITLE);
     const id = d.id;
@@ -268,7 +268,7 @@ const newBot = (() => {
     await page.keyboard.press('Enter');
     await page.locator('.gv-pop').waitFor({state: 'detached'});
     assert.equal(await form.locator('input[name=owner]').inputValue(), bot, `${where}: the owner choice is the bot's id`);
-    await form.locator('textarea[name=body]').fill('The sheet is in Files; send it with a short note.');
+    await form.locator('textarea[name=message]').fill('The sheet is in Files; send it with a short note.');
     await form.locator('button[type=submit]').click();
     // The new task opens once made.
     await page.waitForFunction(text => (document.querySelector('#task-modal') as HTMLDialogElement | null)?.open

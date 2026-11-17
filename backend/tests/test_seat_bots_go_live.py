@@ -117,6 +117,12 @@ def test_every_seat_bot_goes_live_by_itself_once_its_computer_has_the_repository
     assert work and work["task"]["title"] == "Set yourself up", work
 
 
+def _words(api, task_id):
+    """What the task was filed with: its first message and any instructions Tico gave its bot."""
+    with api.app.state.store.read() as c:
+        return H.task_words(c, task_id)
+
+
 def test_botops_building_a_seat_bot_without_its_slug_gets_that_bot_and_hires_no_second_one(environment):
     """Tico Team on rc.7: BotOps ran `tico bot create --template growth-manager --name "Growth Manager"` on the Growth
     Manager's own "Set up" task, without the slug. The server picked `growth-manager-2`, made a second bot with the
@@ -128,7 +134,7 @@ def test_botops_building_a_seat_bot_without_its_slug_gets_that_bot_and_hires_no_
     task = attempt["task"]["id"]
     bot, slug = next((bot, slug) for bot, (slug, setup) in seats.items() if setup == task)
     template = rows(api, "SELECT template FROM bot_settings WHERE bot_id=?", (bot,))[0]["template"]
-    assert f"`tico bot create {slug} --template {template}`" in attempt["task"]["body"]
+    assert f"`tico bot create {slug} --template {template}`" in _words(api, task)
     before = rows(api, "SELECT id FROM bots ORDER BY id")
     name = rows(api, "SELECT display_name FROM bots WHERE id=?", (bot,))[0]["display_name"]
     made = act(api, attempt, "POST", "bots/register", {"template": template, "display_name": name})
@@ -508,13 +514,14 @@ def test_each_seat_bot_runs_its_template_setup_by_itself_with_no_person_once_liv
         task = task[0]
         assert task["status"] == "open" and task["owner_id"].endswith(row["id"]), (row["slug"], task)
         assert task["requester_id"].endswith("botops"), task["requester_id"]
+        said = _words(api, task["id"])
         for name in expected:
-            assert f"`{name}`" in task["body"], (row["slug"], name)
-        assert "ask nothing" in task["body"] and "Not yet told:" in task["body"]
+            assert f"`{name}`" in said, (row["slug"], name)
+        assert "ask nothing" in said and "Not yet told:" in said
         assert _turn(api, task["id"])["state"] == "bot", row["slug"]
     # Product's stages a feature owner holds are its tasks' assignee's: its manager is told it manages it.
     pm = next(row for row in found if row["slug"] == "product-manager")
-    assert "Product (you manage it" in rows(api, "SELECT body FROM tasks WHERE id=?", (pm["task"],))[0]["body"]
+    assert "Product (you manage it" in _words(api, pm["task"])
 
     assert not rows(api, "SELECT 1 FROM events WHERE action='bot.needs_onboarding'")
     assert not rows(api, "SELECT 1 FROM messages WHERE body LIKE '%set you up%'")
@@ -548,11 +555,12 @@ def test_only_a_seat_bot_that_reports_to_the_owner_ends_its_setup_with_the_one_p
     )
     for slug in ("product-manager", "feature-owner"):
         act(api, attempt, "POST", f"bots/{slug}/go-live", {})
-    [own] = rows(api, "SELECT body FROM tasks WHERE owner_id=? AND title='Set yourself up'", ("bot:" + manager,))
-    assert own["body"].rstrip().endswith("ask them, not your manager.") and "skills/add-to-flow/SKILL.md" in own["body"]
+    [own] = rows(api, "SELECT id FROM tasks WHERE owner_id=? AND title='Set yourself up'", ("bot:" + manager,))
+    own = _words(api, own["id"])
+    assert own.rstrip().endswith("ask them, not your manager.") and "skills/add-to-flow/SKILL.md" in own
     [ping] = rows(api, query, ("bot:" + manager,))
     assert ping["sender_id"] == "human:owner" and ping["quiet"]
-    [builds] = rows(api, "SELECT body FROM tasks WHERE owner_id=? AND title='Set yourself up'", ("bot:" + builder,))
-    assert "add-to-flow" not in builds["body"] and not rows(api, query, ("bot:" + builder,))
+    [builds] = rows(api, "SELECT id FROM tasks WHERE owner_id=? AND title='Set yourself up'", ("bot:" + builder,))
+    assert "add-to-flow" not in _words(api, builds["id"]) and not rows(api, query, ("bot:" + builder,))
     act(api, attempt, "POST", "bots/product-manager/go-live", {})
     assert len(rows(api, query, ("bot:" + manager,))) == 1

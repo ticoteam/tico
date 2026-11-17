@@ -11,7 +11,7 @@ interface GiveToEntry { value: string; actor: string; name: string; slug: string
 interface GiveToTask {
   requester_id?: string | null;
   title?: string | null;
-  body?: string | null;
+  request?: {text?: string | null} | null;
   tags?: readonly {owner?: string | null}[] | null;
 }
 interface GiveToOptions {

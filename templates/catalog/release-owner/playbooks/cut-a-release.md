@@ -12,7 +12,7 @@ task is the same: ask once for a task in Release, then close the hour's task. Wh
 
 ---
 
-## 1. Read the task
+## 1. Read the task's chat
 
     tico task show <id>
 

@@ -81,7 +81,7 @@ Always:
 - `skills/handle-a-detector-score/SKILL.md`: read when a team's AI-text detector scores a draft.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/channel-playbook.md`,
    `knowledge/voice.md`, `knowledge/series.md` and `knowledge/content-practice.md`. A resumed turn already has them.
 3. Find the playbook for the task: a routine names its own; a Growth task's stage names one in "Your pipelines";

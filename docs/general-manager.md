@@ -32,7 +32,7 @@ A task in a pipeline whose manager is another active bot is that manager's, so i
 A task belongs to its owner's department, one of the nine on the org chart (a group inside it counts as it). A task
 whose owner is in none, such as BotOps or the Assistant, is listed under **Company**. Each department lists at most 30
 items, and each report body is capped at 12,000 bytes. If either cap leaves items out, the report says how many are in
-the next report. Only items included in the body are left out for a day unless their task changes, so items omitted by
+the next report. Only items included in the report are left out for a day unless their task changes, so items omitted by
 either cap remain eligible for the next report.
 
 A private task, or one of a bot the General Manager has no access to, never appears in a report, and the bot cannot read
@@ -44,8 +44,8 @@ or write it: it meets the same privacy fence as any other bot.
 - **Something to report:** one task per department, owned by the General Manager, titled `Task check: <department> (<n>)`.
   Each item has the task id, its title, its owner, why it is listed and the `tico` command that would fix it. The run
   record says "3 departments, 7 items".
-- **A check task is still open:** the next report replaces its body and wakes the bot only if the body changed, so
-  reports never pile up. Once the bot marks it done, the next report opens a new one.
+- **A check task is still open:** the next report replaces the last as the bot's instructions (Tico's message to it,
+  not in the task's chat) and wakes the bot only if the report changed, so reports never pile up. Once the bot marks it done, the next report opens a new one.
 
 The wake is the routine's own (`trigger=schedule`, `refs.wake=task_manager_report`).
 

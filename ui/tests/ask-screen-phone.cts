@@ -83,10 +83,10 @@ const box = async (page: Page, sel: string): Promise<Box | null> => page.locator
       if (okRead) return json({requirement_id: okRead[1], subject: `spec:${okRead[1]}`, content: long(Q[Number(okRead[1]!.slice(1)) - 1]!),
         shown_hash: okRead[1]!.slice(1).repeat(64), standing: 'waiting', task_id: okRead[1]!.replace('r', 't')});
       // The question's task has no text of its own: nothing to show.
-      if (p === '/api/v2/tasks/t3') return json({task: {...brief('t3', 'Task 3'), body: '', conversation_id: 'c3'}});
+      if (p === '/api/v2/tasks/t3') return json({task: {...brief('t3', 'Task 3'), request: null, conversation_id: 'c3'}});
       // The bare OK's task: the pitch is its text.
-      if (p === '/api/v2/tasks/t5') return json({task: {...brief('t5', 'Pitch: a weekly digest'), body: 'Send each person one email on Monday with what changed.', conversation_id: 'c5'}});
-      if (p === '/api/v2/tasks/t6') return json({task: {...brief('t6', 'Task 6'), body: 'Task six text.', conversation_id: 'c6'}});
+      if (p === '/api/v2/tasks/t5') return json({task: {...brief('t5', 'Pitch: a weekly digest'), request: {text: 'Send each person one email on Monday with what changed.'}, conversation_id: 'c5'}});
+      if (p === '/api/v2/tasks/t6') return json({task: {...brief('t6', 'Task 6'), request: {text: 'Task six text.'}, conversation_id: 'c6'}});
       const own = r.method() === 'GET' ? p.match(/^\/api\/v2\/tasks\/(t\d)$/) : null;
       if (own) return json({task: {...brief(own[1]!, 'Task'), conversation_id: 'c' + own[1]!.slice(1)}});
       if (p === '/api/v2/flow/opinions') return json({opinions: []});   // Tico has none: Flow as without it

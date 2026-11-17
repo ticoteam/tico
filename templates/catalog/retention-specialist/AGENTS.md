@@ -62,7 +62,7 @@ Always:
 - `skills/check-the-cancel-path/SKILL.md`: read before any reply that answers a cancellation goes on the task.
 
 ## Starting a run
-1. Read the task with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/save-policy.md` and the open lines in
    `knowledge/reasons.md`. A resumed turn already has them.
 

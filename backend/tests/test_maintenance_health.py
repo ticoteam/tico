@@ -132,7 +132,7 @@ def botops_tasks(api):
         return [
             dict(r)
             for r in c.execute(
-                "SELECT id,title,body,owner_id,status FROM tasks WHERE title LIKE 'Health:%' ORDER BY created_at"
+                "SELECT id,title,owner_id,status FROM tasks WHERE title LIKE 'Health:%' ORDER BY created_at"
             )
         ]
 
@@ -1358,8 +1358,8 @@ def _part_warning(api, runner, monkeypatch, hq=None, comments=None, clock=None):
     run(api)
     run(api)
     (task,) = botops_tasks(api)
-    assert task["title"] == "Health: Disk space" and "Free space" in task["body"]
     with api.app.state.store.read() as c:
+        assert task["title"] == "Health: Disk space" and "Free space" in H.task_words(c, task["id"])
         rows = c.execute(
             "SELECT key FROM health_findings WHERE present=1 AND pending=0 AND key LIKE 'page:%'"
         ).fetchall()

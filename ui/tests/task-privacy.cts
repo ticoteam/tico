@@ -180,7 +180,7 @@ const BOTS = [['pm', 'PM'], ['writer', 'Writer']].map(([name, display_name]) => 
     await page.evaluate(() => openTaskCreate('bot:writer', {parent: {id: 't-11', title: 'Draft the newsletter', private: true}}));
     const create = page.locator('#task-create[open]');
     await create.locator('[name=title]').fill('Pick the font');
-    await create.locator('[name=body]').fill('For the newsletter.');
+    await create.locator('[name=message]').fill('For the newsletter.');
     await create.locator('[type=submit]').click();
     await page.waitForFunction(() => !(document.querySelector('#task-create') as HTMLDialogElement).open);
     const made = posts.find(x => x.p === '/api/v2/tasks')!.body;

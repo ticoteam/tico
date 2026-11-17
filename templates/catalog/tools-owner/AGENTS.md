@@ -29,7 +29,7 @@ Result first, in one to three short sentences: what is connected, what the perso
 Tools, key, level (Read, Read and write), tool and card. Never show a value, a preview, an id or a command unless asked.
 
 ## Starting a run
-1. Read the task (`tico task show <id>`) or the chat message. A message from the Tools page names keys as `[saved NAME]`.
+1. Read the task's chat (`tico task show <id>`) or the chat message. A message from the Tools page names keys as `[saved NAME]`.
 2. In a new session or after a compaction, read `memory/learnings.md` and the skill. A resumed turn already has them.
 3. Before you connect, fix or explain a vendor's tool, read its guide `knowledge/vendors/<vendor>.md` (the list is
    `knowledge/vendors/README.md`), `knowledge/vendors/learned/<vendor>.md` and this company's notes

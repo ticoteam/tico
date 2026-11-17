@@ -65,7 +65,7 @@ suggested version with its reason (`knowledge/versioning.md`); a person records 
 The release task lives in the pipeline where releases wait for their OK (`<release pipeline id>`): its first stage
 needs this report with a person's OK.
 
-    tico task create --pipeline <release pipeline id> --owner <you> --title "Release YYYY-MM-DD.N" --label release:YYYY-MM-DD.N --body "<the tasks, one line each>"
+    tico task create --pipeline <release pipeline id> --owner <you> --title "Release YYYY-MM-DD.N" --label release:YYYY-MM-DD.N --message "<the tasks, one line each>"
     python3 .claude/skills/build-the-page/page.py build reports/releases/YYYY-MM-DD.N-draft.html --out reports/releases/YYYY-MM-DD.N.html
     python3 .claude/skills/build-the-page/page.py check reports/releases/YYYY-MM-DD.N.html --kind release
     tico page publish reports/releases/YYYY-MM-DD.N.html --task <release task id> --title "Release YYYY-MM-DD.N"

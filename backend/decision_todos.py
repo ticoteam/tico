@@ -69,7 +69,7 @@ def _save(c: Any, value: dict[str, Any]) -> None:
 def candidates(c: Any, since: str) -> list[dict[str, Any]]:
     """The open to-dos a bot filed for a person before `since` that no pass has judged, oldest first."""
     rows = c.execute(
-        "SELECT t.id, t.title, t.body, t.requester_id, t.owner_id FROM tasks t "
+        "SELECT t.id, t.title, t.requester_id, t.owner_id FROM tasks t "
         "WHERE t.status='open' AND t.pipeline_id=? AND t.requester_id LIKE 'bot:%' AND t.owner_id LIKE 'human:%' "
         "AND t.created_at<? "
         "AND NOT EXISTS (SELECT 1 FROM goal_asks g WHERE g.task_id=t.id) "
@@ -80,6 +80,7 @@ def candidates(c: Any, since: str) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for row in rows:
         task = {k: row[k] for k in row.keys()}
+        task["body"] = H.task_request_text(c, task["id"])  # what it asks: its first message
         if H.human(c, H.actor_id(task["owner_id"])):
             out.append(task)
     return out

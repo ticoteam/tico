@@ -177,6 +177,7 @@ def _job(conn: "sqlite3.Connection", row: Row, page: Row) -> tuple[Row, Row]:
 
     requirement = R.get(conn, page["requirement_id"]) or {"id": page["requirement_id"], "kind": "page"}
     task = E.task(conn, page["task_id"]) or {}
+    task["request"] = _h().task_request_text(conn, page["task_id"]) if task else ""
     judged: Row = json.loads(page.get("judged_against") or "{}")
     version = _one(
         conn,
@@ -210,7 +211,7 @@ def _job(conn: "sqlite3.Connection", row: Row, page: Row) -> tuple[Row, Row]:
 def job_of(
     requirement: Row, task: Row, page: Row, text: str | None, cut: bool, judged: Row, link: Row | None = None
 ) -> tuple[Row, Row]:
-    """`_job` with nothing read: the requirement (its id and name), the task (title, body, version, pipeline), the page
+    """`_job` with nothing read: the requirement (its id and name), the task (title, request, version, pipeline), the page
     (file_id, version, digest), its text and whether it was cut, what it is judged against (`judged_against`: the
     rubric and the context), and the task's PR link (repo, number, detail) when it links one. The eval
     (evals/pipeline_judge) builds its page cases through this, so the judge is shown there exactly what it is shown
@@ -236,7 +237,7 @@ def job_of(
         "text": text,
         "truncated": cut,
         "task_title": task.get("title") or "",
-        "task_spec": task.get("body") or "",
+        "task_spec": task.get("request") or "",  # what was asked: the task's first message
         "task_work_version": task.get("version") or 0,
         # The page is made for the work as it is now: without this Jev is shown evidence for version 0 of work at
         # version N, and hedges on a page that is right (live rc.4, Nov 11).

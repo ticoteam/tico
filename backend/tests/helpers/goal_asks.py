@@ -31,12 +31,20 @@ def raise_level(api, level):
             strategy_bot.set_level(c, "human:ana", level)
 
 
+def said(c, task_id):
+    """What the Strategy Owner's task says now: its last word on the task's chat (a relisted ask says the new list
+    there), else what it was filed with. A task has no description."""
+    words = [m["body"] for m in H.task_comments(c, task_id) if m.get("sender_id") == MANAGER and m.get("body")]
+    return words[-1] if words else H.task_words(c, task_id)
+
+
 def asks(api, owner=None):
+    """The Strategy Owner's asks (for `owner`), each with `body`: what its task says now (`said`)."""
     with api.app.state.store.read() as c:
         return [
-            dict(r)
+            {**dict(r), "body": said(c, r["id"])}
             for r in c.execute(
-                "SELECT t.id, t.title, t.body, t.owner_id, t.status, a.kind, a.ref, a.owner AS asked FROM goal_asks a JOIN tasks t ON t.id=a.task_id "
+                "SELECT t.id, t.title, t.owner_id, t.status, a.kind, a.ref, a.owner AS asked FROM goal_asks a JOIN tasks t ON t.id=a.task_id "
                 "WHERE t.requester_id=?" + (" AND a.owner=?" if owner else "") + " ORDER BY t.created_at",
                 (MANAGER, owner) if owner else (MANAGER,),
             )

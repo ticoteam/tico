@@ -84,9 +84,10 @@ def out(obj):
 
 
 def body_of(args):
-    if getattr(args, "body_file", None):
-        return Path(args.body_file).read_text()
-    return args.body or ""
+    """A new task's first message, as `task create --message` (or --message-file) gave it."""
+    if getattr(args, "message_file", None):
+        return Path(args.message_file).read_text()
+    return getattr(args, "message", None) or ""
 
 
 # ----------------------------------------------------------------------------- dry run
@@ -655,8 +656,10 @@ def parser():
         help="with --for: the id of the message that person asked in (you must be able to read it)",
     )
     s.add_argument("--title", required=True)
-    s.add_argument("--body", default="")
-    s.add_argument("--body-file", dest="body_file")
+    s.add_argument(
+        "--message", "--body", dest="message", default="", help="the first message on its chat: what you ask"
+    )
+    s.add_argument("--message-file", "--body-file", dest="message_file", help="the first message, from a file")
     s.add_argument("--due")
     s.add_argument("--parent", help="the task that files it: it waits until this one ends")
     s.add_argument("--pipeline", help="the pipeline's id; default general")

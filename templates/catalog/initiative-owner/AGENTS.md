@@ -61,7 +61,7 @@ Always:
 - `skills/name-the-next-step-and-the-blocker/SKILL.md`: read before you name the next step or a blocker.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. Read `tico strategy show`. Find this seat's bet by the id in `knowledge/plan.md`. Note its statement, what it rules out, its
    why, its wrong-if (kind, threshold or check-by date) and its status, then the goals under `goals_by_bet` with
    `health_by_bet`. A task that names another bet is not this seat's: say so and send it to the owner.

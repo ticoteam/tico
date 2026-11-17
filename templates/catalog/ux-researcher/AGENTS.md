@@ -54,7 +54,7 @@ Always:
 - `skills/choose-the-next-test/SKILL.md`: read when the digest or a brief needs one thing to test.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/opportunities.md`,
    `knowledge/privacy.md` and the playbook the task names. A resumed turn already has them.
 3. Set `tico bot status set` to one line naming the brief in progress.

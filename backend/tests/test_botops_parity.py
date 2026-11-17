@@ -160,10 +160,11 @@ def test_an_mcp_placeholder_header_registers_as_the_requester_and_a_secret_still
         rows = c.execute("SELECT * FROM bot_tool_requests WHERE bot='ops'").fetchall()
         assert len(rows) == 1 and rows[0]["state"] == "pending" and rows[0]["requested_by"] == "human:ana"
         task = H.task(c, made.json()["task_id"])
+        words = H.task_words(c, task["id"])
         assert c.execute("SELECT count(*) FROM tasks WHERE owner_id='bot:botops'").fetchone()[0] == before + 1
     # The task carries the placeholder exactly, for BotOps to write into bot.yaml; no value is anywhere in it.
-    assert task["owner_id"] == "bot:botops" and "Authorization: 'Bearer ${OPS_ADMIN_MCP_TOKEN}'" in task["body"]
-    assert "env: OPS_ADMIN_MCP_TOKEN" in task["body"]
+    assert task["owner_id"] == "bot:botops" and "Authorization: 'Bearer ${OPS_ADMIN_MCP_TOKEN}'" in words
+    assert "env: OPS_ADMIN_MCP_TOKEN" in words
     # The route's own parser still pairs the header with the entry's env when BotOps changes the server later.
     assert (
         botops_act.secret_in_request(
@@ -510,8 +511,10 @@ def test_generated_template_task_keeps_requester_rights_and_reaches_go_live(api,
     )
     assert not err and made["setup_task_id"], made
     task = get(api, "tasks/" + made["setup_task_id"], person)["task"]
-    assert task["title"].startswith("QA Set up") and "Read fixtures only; no outside sends." in task["body"]
-    assert "# Reviewed Instructions" in task["body"]
+    with api.app.state.store.read() as c:  # what the setup asks of BotOps (a task has no description)
+        said = H.task_words(c, task["id"])
+    assert task["title"].startswith("QA Set up") and "Read fixtures only; no outside sends." in said
+    assert "# Reviewed Instructions" in said
     attempt = claim(api, botops, "botops")
     assert act(api, attempt, "GET", "bots/qa-custom/access").status_code == 200
     credentials = act(api, attempt, "GET", "credentials")

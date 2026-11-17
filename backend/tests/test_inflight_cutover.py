@@ -46,6 +46,8 @@ def test_a_rule_condition_saved_under_the_old_owner_and_requester_names_still_ma
 
 def test_a_task_received_automation_still_hears_the_requester_after_the_rename(monkeypatch):
     monkeypatch.setattr(renames, "COLUMNS", renames.COLUMNS + (("tasks", "requester", "requester_id", "3"),))
-    row = {"id": "task-1", "title": "Ship", "body": "b", "status": "open", "requester_id": "human:ana", "step_id": None}
-    heard = AU._received_task(row, "bot:cmo")
+    monkeypatch.setattr(H, "task_request_text", lambda _c, _task_id: "b")  # its first message
+    row = {"id": "task-1", "title": "Ship", "status": "open", "requester_id": "human:ana", "step_id": None}
+    heard = AU._received_task(None, row, "bot:cmo")
     assert heard["requester"] == "human:ana" and heard["owner"] == "bot:cmo" and heard["title"] == "Ship"
+    assert heard["body"] == "b"

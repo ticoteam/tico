@@ -29,7 +29,7 @@ def _reader_merges_edits_and_send_applies_final_fields_once(api):
     assert len({r.json()['item']['result_ref'] for r in results}) == 1
     tid = next(r.json()['item']['result_ref'] for r in results if r.status_code == 200)
     task = get(api, 'tasks/' + tid)['task']
-    assert task['title'] == 'Final words' and 'Final details' in task['body']
+    assert task['title'] == 'Final words' and 'Final details' in task['request']['text']
     change(api, rid, item, {'text': 'Too late'}, expected=409)
     change(api, rid, item, {'detail': {'owner': 'human:cara'}}, expected=409)
     change(api, rid, item, {'status': 'dismissed'}, expected=409)

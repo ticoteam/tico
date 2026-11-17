@@ -12,7 +12,8 @@ SCHEMAS.update(
                 "private": "b",
                 "id": "s",
                 "title": "s",
-                "body": "s",
+                # A task is a title and a chat: its request is the first message on its chat, on a full read only.
+                "request": {"oneOf": [obj({"id": "s", "from": "s", "text": "s", "at": "s"}), {"type": "null"}]},
                 "requester_id": "s",
                 "owner_id": "n",
                 "assignee_id": "n",

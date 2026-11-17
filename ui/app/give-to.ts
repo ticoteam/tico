@@ -44,7 +44,7 @@ function giveToNamedAt(text: string, e: GiveToEntry): number {
   return at;
 }
 
-/** Suggested, in order: who asked for the task, the bots it names (title, then body), the owner of its area tag, then
+/** Suggested, in order: who asked for the task, the bots it names (title, then its first message), the owner of its area tag, then
     the last picks on this device. No one twice, at most 8; only people and bots that may be picked. */
 function giveToSuggest(entries: readonly GiveToEntry[], task: GiveToTask | null | undefined, recent: readonly string[]): GiveToSuggestion[] {
   const out: GiveToSuggestion[] = [], seen = new Set<string>();
@@ -55,7 +55,7 @@ function giveToSuggest(entries: readonly GiveToEntry[], task: GiveToTask | null 
   };
   if (task) {
     add(task.requester_id, 'Asked for it');
-    const text = `${task.title || ''}\n${task.body || ''}`;
+    const text = `${task.title || ''}\n${task.request?.text || ''}`;
     const named = entries.filter(e => e.kind === 'bot').map(e => ({e, at: giveToNamedAt(text, e)})).filter(x => x.at >= 0);
     for (const x of named.sort((a, b) => a.at - b.at)) add(x.e.actor, 'Named in the task');
     for (const tag of task.tags || []) add(tag?.owner, 'Owns its area');

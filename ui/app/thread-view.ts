@@ -1480,7 +1480,7 @@ async function thvComposerCommand(view: ThvView, text: string) {
 async function thvComposerTask(view: ThvView, text: string) {
   const C = view.composer, slug = C.slug, files = C.files.slice();
   try {
-    await cloudCompose('/v2/tasks', {title: text.split('\n')[0]!.trim().slice(0, 80), body: text, owner: slug}, files);
+    await cloudCompose('/v2/tasks', {title: text.split('\n')[0]!.trim().slice(0, 80), message: text, owner: slug}, files);
     C.files = C.files.filter(f => !files.includes(f));
     thvComposerClear(view); thvChips(view);
     toast(`Task for ${empName(slug)} created`);

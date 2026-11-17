@@ -1284,8 +1284,9 @@ def research(conn, auth, who, description):
         conn,
         who.actor,
         _free_title(conn, who.actor),
-        text,
+        description,  # the owner's own words are the request; the steps reach the Librarian through its run
         "bot:librarian",
+        instructions=text,
         allow_planned=True,
         conversation_id=rooms.task_conversation_id(conn, auth, "bot:librarian", who.actor),
     )

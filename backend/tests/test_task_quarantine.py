@@ -981,7 +981,7 @@ def _task_mutation(api, token, mutation, n):
             body = {} if mutation == "delete_comment" else {"text": "Checked the report."}
         elif mutation == "update":
             suffix = ""
-            body = {"version": get(api, "tasks/" + tid)["task"]["version"], "body": "Check the export again."}
+            body = {"version": get(api, "tasks/" + tid)["task"]["version"], "title": task["title"] + " again"}
         requests.append((f"tasks/{tid}" + ("/" + suffix if suffix else ""), body))
     with api.app.state.store.transaction() as c:
         Q.hold(c, H.actor_id(tasks[0]["owner_id"]), "task:" + tasks[0]["id"], "Repeated refusals", {"rule": "identity"})
@@ -1034,7 +1034,7 @@ def _held_notes(api, machine, source, n):
     if not source.startswith("chat"):
         row = get(api, "tasks/" + task["id"])["task"]
         result = post(
-            api, "tasks/" + task["id"], {"version": row["version"], "body": "Check it."}, attempt["token"], expected=403
+            api, "tasks/" + task["id"], {"version": row["version"], "title": "Check it"}, attempt["token"], expected=403
         )
         assert result["error"]["code"] == "quarantined"
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": attempt["lane"]}, machine["token"])

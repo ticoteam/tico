@@ -43,5 +43,5 @@ on leave). Fix any rule that treats them differently without a reason.
 
 Attach the policy, the decisions list and the counsel questions to the task. Ask only about unresolved facts, with
 `tico task ask <id> --to <person> "<question>" --version N`. Record the change in `knowledge/policies.md`. Once the owner asks for it to be published, send it to the
-Librarian: `tico task create --owner librarian --title "Publish policy: <topic>" --body "<text, effective date, owner>"`.
+Librarian: `tico task create --owner librarian --title "Publish policy: <topic>" --message "<text, effective date, owner>"`.
 Announce it to the intended teammates only when the task asks and a granted Tool allows it.

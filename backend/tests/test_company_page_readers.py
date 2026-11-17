@@ -817,7 +817,10 @@ def test_a_reply_reaches_the_owner_as_untrusted_text_and_wakes_no_bot(site, monk
     message = site.rows("SELECT * FROM reader_messages")[0]
     assert message["kind"] == "reply" and message["edition_id"] == made.edition and message["body"] == hostile
     with site.store.read() as c:
-        task = H.task(c, message["task_id"])
+        task = {
+            **H.task(c, message["task_id"]),
+            "body": H.task_request_text(c, message["task_id"]),
+        }  # its first message
         requester = dict(c.execute("SELECT * FROM task_requesters WHERE task_id=?", (task["id"],)).fetchone())
     assert task["owner_id"].startswith("human:") and task["private"] == 1
     assert "pat@other.example" not in task["title"] + task["body"]
@@ -849,7 +852,7 @@ def test_a_warned_message_says_so_to_the_owner(site, monkeypatch):
     message = site.rows("SELECT * FROM reader_messages")[0]
     assert message["kind"] == "can_help" and message["ask_id"] == "ask-1" and message["body"] == "I can help."
     with site.store.read() as c:
-        assert "looks like a prompt injection" in H.task(c, message["task_id"])["body"]
+        assert "looks like a prompt injection" in H.task_request_text(c, message["task_id"])
 
 
 def test_replies_are_capped_at_ten_a_day_and_in_length(site):

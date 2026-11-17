@@ -150,7 +150,7 @@ def file(c: Any, row: Any, why: str, computer: str, lapses: int = 0) -> str | No
         f"time saying: {why}"
     )
     review = c.execute(
-        "SELECT id FROM tasks WHERE owner_id=? AND requester_id=? AND title=? AND status='open' AND instr(body,?)>0 "
+        f"SELECT id FROM tasks WHERE owner_id=? AND requester_id=? AND title=? AND status='open' AND {H.TASK_SAYS_SQL} "
         "ORDER BY created_at DESC LIMIT 1",
         (owner, H.KEEPER, title, H.BOT_REVIEW_ID.format(id=bot)),
     ).fetchone()

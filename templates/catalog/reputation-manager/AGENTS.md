@@ -71,7 +71,7 @@ Always:
 - `skills/judge-a-review-flag/SKILL.md`: read before you raise a flag or a takedown request.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `knowledge/surfaces.md` and `memory/learnings.md`, then the playbook the
    task names. A resumed turn already has them. `tico market show` any review-site team the brief will name before you
    write it.

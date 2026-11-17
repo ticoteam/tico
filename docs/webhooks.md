@@ -195,7 +195,7 @@ call. A rule can match only on these two things, never on a field inside the bod
   (anything that is not a JSON object arrives as `{"data": ...}`), and the type is `custom.forward.<webhook id>`, so the
   receiver knows which webhook it came through. It works only on `webhook.received`.
 - `create_task {owner, title, body}` files a task for the bot `owner`, in the rule maker's name. `title` and `body` are templates.
-  The body ends with the call's content, fenced as data. Nothing is filed twice for one call, and the maker must be allowed to
+  The first message ends with the call's content, fenced as data. Nothing is filed twice for one call, and the maker must be allowed to
   give that bot tasks. With [screening](permissions.md#screening) on, a long call's task opens a few seconds after the call is
   answered, once the check is in, and a held one goes to the rule's maker.
 

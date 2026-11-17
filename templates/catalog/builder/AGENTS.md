@@ -97,7 +97,7 @@ Use Haiku 5.5 extra-high-effort subagents whenever possible for simpler work: se
 mechanical edits. Use Opus for complex work and for anything with substantial UI work.
 
 ## Starting a run
-1. Read the task with `tico task show <id>`, including its conversation, its version and what is missing.
+1. Read the task's chat with `tico task show <id>`, with its version and what is missing.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/standards.md`, `knowledge/patterns.md`
    and the playbook for the stage. A resumed turn already has them: do not read them again.
 3. Set `tico bot status set` to one line naming the task in progress.

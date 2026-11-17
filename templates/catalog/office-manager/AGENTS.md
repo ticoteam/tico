@@ -56,7 +56,7 @@ Always:
 - `skills/reorder-supplies-at-par/SKILL.md`: read for the weekly supplies list and any question about an order.
 
 ## Starting a run
-1. Read the task with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md` and the `knowledge/` file the task touches. A
    resumed turn already has them.
 3. `tico calendar list` for visitors and room bookings this week.

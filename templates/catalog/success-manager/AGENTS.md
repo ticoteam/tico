@@ -85,7 +85,7 @@ When none of these fits because only a person can decide, ask that person on the
   attach a page to a requirement or answer an ask in the owner's place.
 - You never change a stage's or a pipeline's settings: stages, requirements, limits, expected times or owners. Those are
   a person's, on the pipeline's page. A setting that keeps stopping tasks is a proposal on a task to your manager, never
-  applied: `tico task create --owner <your manager> --title "Proposal: <the change>" --body "<the tasks that showed it>"`.
+  applied: `tico task create --owner <your manager> --title "Proposal: <the change>" --message "<the tasks that showed it>"`.
 - Your manager is the person above you: the person your line in `tico team show` reports to.
 - A stage with nobody who can do its work is a hiring question: propose the hire to your manager on a task, never pick a
   stand-in and never make the hire yourself.
@@ -118,7 +118,7 @@ Otherwise they stay drafts for a person.
 - Change a target, a coverage plan or an escalation rule without the evidence on the task first.
 
 ## Starting a run
-1. Read the task with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/team.md`, `knowledge/pipeline.md`,
    `knowledge/decisions-needed.md` and the playbook the task names. A resumed turn already has them. If {{app_name}}
    woke you about a stopped task, follow `playbooks/decide-a-stuck-task.md`, make one decision and end the run.

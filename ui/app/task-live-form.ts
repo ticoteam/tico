@@ -62,16 +62,6 @@ function taskFormRestore(root: Element, kept: TaskFormCapture) {
     }
   }
 }
-// The Description tab's request: who asked and when, Edit for whoever may change it, then the words.
-function taskEditBodyHTML(t: PropTask, original: string) {
-  const may = taskPropRights(t).edit, who = taskAskerLabel(t);
-  const preview = `<div class="tdesc md" data-task-body-preview>${original ? safeMd(original) : '<p class="muted">No details.</p>'}</div>`;
-  // "Fri, Nov 13, 2:21 PM" (format.ts timeWords: month first, 12-hour, the year when it is not this one).
-  const at = t.created_at ? timeWords(t.created_at) : '';
-  const head = `<div class="task-desc-h"><span class="muted">${esc([who, at].filter(Boolean).join(' · '))}</span>${
-    may ? '<button type="button" class="linkish" data-task-body-edit aria-label="Edit details">Edit</button>' : ''}</div>`;
-  return `<section data-task-edit-body>${head}${preview}</section>`;
-}
 function taskLiveBind(d: TaskDialog, task: PropTask) {
   const id = String(task.id);
   if (d.taskLive?.id !== id) taskLiveStop(d);
@@ -82,9 +72,9 @@ function taskLiveBind(d: TaskDialog, task: PropTask) {
   TASK_EDIT_DRAFTS.set(id, draft);
   if (!draft.base || Number(task.version) >= Number(draft.base.version)) draft.base = task;
   // These nodes move into each redraw. No focused editor is destroyed and recreated by an invalidation or save.
-  for (const selector of ['.tmodal-title', '[data-task-edit-body]', '[data-task-field="public_title"]', '[data-task-field="public_summary"]', '[data-task-field="due"]', '[data-task-field="size"]']) {
+  for (const selector of ['.tmodal-title', '[data-task-field="public_title"]', '[data-task-field="public_summary"]', '[data-task-field="due"]', '[data-task-field="size"]']) {
     const slot = $(selector, d), kept = live.nodes[selector];
-    if (slot && kept && slot !== kept && slot.readOnly === kept.readOnly && slot.disabled === kept.disabled && !!slot.querySelector('[data-task-body-edit]') === !!kept.querySelector('[data-task-body-edit]')) {
+    if (slot && kept && slot !== kept && slot.readOnly === kept.readOnly && slot.disabled === kept.disabled) {
       slot.replaceWith(kept);
     }
     else if (slot) live.nodes[selector] = slot;
@@ -104,14 +94,6 @@ function taskLiveBind(d: TaskDialog, task: PropTask) {
     delete title.dataset.taskField; title.removeAttribute('role'); title.removeAttribute('aria-label');
     title.oninput = title.onblur = title.onkeydown = null;
   }
-  let details = $('[data-task-field="body"]', d);
-  if (!details && may && 'body' in draft.dirty) {
-    details = document.createElement('textarea'); details.dataset.taskField = 'body'; details.setAttribute('aria-label', 'Details');
-    $('.task-desc-h', d)?.after(details);
-    const preview = $('[data-task-body-preview]', d); if (preview) preview.hidden = true;
-  }
-  const edit = $('[data-task-body-edit]', d);
-  if (details) details.disabled = !may;
   const wireField = (field: TaskField) => {
     taskLiveWireField(d, live, field);
     if (field === title) {
@@ -125,18 +107,6 @@ function taskLiveBind(d: TaskDialog, task: PropTask) {
     }
   };
   d.querySelectorAll<TaskField>('[data-task-field]').forEach(wireField);
-  if (edit) {
-    edit.hidden = !may;
-    edit.onclick = () => {
-      if (!may) return;
-      if (!details) {
-        details = document.createElement('textarea'); details.dataset.taskField = 'body'; details.setAttribute('aria-label', 'Details');
-        (edit.closest('.task-desc-h') || edit).after(details); wireField(details);
-      }
-      $('[data-task-body-preview]', d).hidden = true;
-      taskLivePaint(d, live); details.focus();
-    };
-  }
   $('[data-task-edit-retry]', d).onclick = () => taskLiveSave(d, live);
   taskLivePaint(d, live);
   // Restored debounce drafts use their kept revision; failed drafts still wait for Retry.

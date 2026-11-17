@@ -52,7 +52,7 @@ with its first touch. Enrolling it in a live sequence is a send act: it waits fo
 ## 6. Hand over meetings
 
 For each meeting booked: write a short note on the account (who, the role, the first line that worked, what they asked, the open
-questions), then `tico task create --owner <who takes calls> --title "<account> meeting booked" --body-file <note>`. The calendar invitation is a
+questions), then `tico task create --owner <who takes calls> --title "<account> meeting booked" --message-file <note>`. The calendar invitation is a
 person's act.
 
 ## 7. Finish

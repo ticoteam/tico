@@ -45,7 +45,7 @@ gap as a gap. Never fill it.
 ## 5. Hand over booked calls
 
 When a lead accepts a time, write a one-page note: who they are, why now, what they asked, the timing signal, and the
-open questions. Then run `tico task create --owner <who takes calls> --title "<lead> call booked" --body-file <note>`. The calendar
+open questions. Then run `tico task create --owner <who takes calls> --title "<lead> call booked" --message-file <note>`. The calendar
 invitation to the lead is a person's act.
 
 ## 6. Finish

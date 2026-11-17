@@ -63,7 +63,7 @@ Always:
 - `skills/review-an-affiliate-application/SKILL.md`: read before an application gets a proposed decision.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/program-terms.md`,
    `knowledge/program-method.md` and `knowledge/fraud-signals.md`, then last week's review. A resumed turn already has
    them.

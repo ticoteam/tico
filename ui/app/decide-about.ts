@@ -15,7 +15,7 @@
 interface DecAboutTask {
   id: string;
   title?: string;
-  body?: string | null;
+  request?: {id?: string; from?: string | null; text?: string | null; at?: string | null} | null;
   requester_id?: string | null;
   created_at?: string | null;
   attachments?: {id: string; name?: string | null}[] | null;

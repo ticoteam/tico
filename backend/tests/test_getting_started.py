@@ -1,5 +1,6 @@
 """Getting started: every tick is computed from live state, and each person keeps their own choices."""
 
+from backend.store import H
 from backend.tests.helpers.onboarding import as_person, environment, signed_in
 from backend.tests.helpers import model_subscriptions as subs
 from backend.tests.helpers.api import headers as bearer, post
@@ -82,7 +83,9 @@ def test_the_market_box_is_a_task_for_the_librarian(environment):
     assert made.status_code == 200, made.text
     assert made.json()["bot"] == "librarian"
     task = api.get("/api/v2/tasks", params={"owner": "librarian"}, headers=signed_in()).json()["tasks"][0]
-    assert task["id"] == made.json()["task_id"] and "https://northwind.example" in task["body"]
+    with api.app.state.store.read() as c:  # what the owner asked the Librarian (a task has no description)
+        said = H.task_words(c, task["id"])
+    assert task["id"] == made.json()["task_id"] and "https://northwind.example" in said
     # Only the owner asks, and the box may not be empty.
     assert (
         api.post("/api/v2/setup/getting-started/market", json=ask, headers=as_person(api, "quinn")).status_code == 403

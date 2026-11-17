@@ -47,7 +47,6 @@
 #task-modal .task-desc{font-size:var(--t-md);line-height:1.55}
 #task-modal .task-desc:not(:has(*)){display:none}
 #task-modal .task-desc>*{max-width:680px}
-#task-modal .task-desc-h{display:flex;align-items:center;justify-content:space-between;gap:var(--s3);margin-bottom:var(--s1);font-size:var(--t-sm);line-height:var(--lh)}
 #task-modal .task-desc .tdesc{margin:0;padding:0;background:none;font-size:inherit;line-height:inherit;max-height:none;white-space:normal}
 #task-modal .task-desc .tdesc>:first-child{margin-top:0}
 #task-modal .task-desc textarea[data-task-field="body"]{min-height:220px;font-size:var(--t-md)}
@@ -293,5 +292,5 @@ button.ghost.code-retry{padding:1px 8px;font-size:var(--t-sm);line-height:18px}
    action: the way back for a finished task, Pages' upload line, every + (Sessions, Links, Files, Followers, Related…),
    every × that takes something off (a link, a session, a relation, an ask, a page), Edit on the description and the
    roadmap's "I want this". A section left with only its heading goes too: Pages with no page, an empty To leave. */
-html.view-only #task-modal :is([data-task-reopen],[data-tp-drop],.prop-add,.prop-x,[data-drop-link],[data-drop-rel],[data-req-withdraw],[data-tp-unlink],[data-depends-add],[data-task-body-edit],[data-requester-self]){display:none!important}
+html.view-only #task-modal :is([data-task-reopen],[data-tp-drop],.prop-add,.prop-x,[data-drop-link],[data-drop-rel],[data-req-withdraw],[data-tp-unlink],[data-depends-add],[data-requester-self]){display:none!important}
 html.view-only #task-modal .task-side :is(.tsec-empty,.task-pages:not(:has(.tp-page))){display:none!important}

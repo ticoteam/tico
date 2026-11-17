@@ -65,7 +65,7 @@ Always:
   task carries one, do not copy it; say it is there and work without it. Delete what a task no longer needs.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/hand-offs.md` and the playbook the
    task names. A resumed turn already has them.
 3. For a policy question, ask the Librarian with `tico doc ask`, then open the page it cites (`tico doc read <path>`) and read it whole.

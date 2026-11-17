@@ -26,7 +26,7 @@ Nothing in the product repositories changes in this run.
    seat each one's failures are handed to. Cite the Infrastructure Owner's failure figures and the QA Owner's flake figures; do not recount them.
 4. **Sort the deploys and releases.** Follow `skills/sort-a-failed-or-rolled-back-deploy/SKILL.md`: each deploy run as succeeded,
    failed, cancelled by a person or rolled back. Count each rollback once, and the release cadence from the deploy record.
-5. **Hand each finding to its seat.** One task per hand-off, with the evidence in its body:
+5. **Hand each finding to its seat.** One task per hand-off, with the evidence in its first message:
    - failing gating checks to the Infrastructure Owner, and flaky tests to the QA Owner, with the run ids and the check name;
    - delivery timings that span repositories to the Feature Owner;
    - a real product bug a failed deploy exposed to issue triage, with the deploy's run id.

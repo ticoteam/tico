@@ -6,6 +6,7 @@ import json
 from backend import bot_settings as BS
 from backend import dream as dream_module
 from backend import hubdb as H
+from backend import task_wakes
 from backend.tests.helpers import ask_ingest as ingest
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, restrict, runner  # noqa: F401
 from backend.tests.helpers.ask_ingest import gate, plate  # noqa: F401  (the ask ingest fixture)
@@ -158,7 +159,7 @@ def test_asking_answering_and_the_dreams_own_commit(api):
     again = dream(api)["dream"]
     assert again["task"] != tid and again["state"] == "starting"
     with api.app.state.store.read() as c:
-        assert done["closed_at"][:10] in H.task(c, again["task"])["body"]
+        assert done["closed_at"][:10] in task_wakes.instructions(c, again["task"])
 
 
 def test_the_dream_asks_one_question_per_ask_and_waits_for_each_answer(api):
@@ -168,7 +169,7 @@ def test_the_dream_asks_one_question_per_ask_and_waits_for_each_answer(api):
     assert "one question per ask" in text and "one ask at a time" in text and "At most 3 questions" in text
     assert "in ONE" not in text and "Number them" not in text
     # Nobody watches an auto dream: its questions are their own tasks in Ben's Flow (skills/add-to-flow), never on the
-    # dream, whose body is these instructions; it finishes without waiting.
+    # dream, whose instructions these are; it finishes without waiting.
     auto = dream_module.instructions("Ben", "Oct 20", auto=True)
     assert "skills/add-to-flow/SKILL.md" in auto and "never on this task" in auto and "At most 3 questions" in auto
     assert "Do not wait for answers" in auto and "one ask at a time" not in auto

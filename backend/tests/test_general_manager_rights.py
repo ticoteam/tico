@@ -76,7 +76,6 @@ def _manager_updates_every_field_and_is_named_in_history(api, manager):
     for fields, field in [
         ({'due': '2027-01-01T00:00:00Z'}, 'due_at'),
         ({'title': 'Check the revised packet'}, 'title'),
-        ({'body': 'Review the revised packet.'}, 'body'),
         ({'rank': 12}, 'rank'),
     ]:
         task = make(api)
