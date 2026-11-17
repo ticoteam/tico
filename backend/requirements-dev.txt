@@ -61,7 +61,7 @@ cryptography==50.0.2
     #   -c requirements.txt
     #   -r requirements.in
     #   pyjwt
-dnspython==2.9.0
+dnspython==2.9.2
     # via
     #   -c requirements.txt
     #   -r requirements.in
