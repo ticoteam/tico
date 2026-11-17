@@ -15,7 +15,7 @@
 /* ---- a hall: the factory's name set large and faint, its org chart small and dim at the top right */
 .cf-hall{position:relative;min-width:0;border:1px solid var(--line);border-radius:4px;background:var(--surface);padding:var(--s4) var(--s4) var(--s5)}
 .cf-hall-head{display:flex;align-items:flex-start;justify-content:space-between;gap:var(--s4);min-width:0}
-.cf-hall-name{display:block;min-width:0;font-size:var(--t-2xl);font-weight:600;line-height:var(--lh-display);
+.cf-hall-name{display:block;min-width:0;font-size:var(--t-lg);font-weight:600;line-height:1.3;
   letter-spacing:var(--track-tight);color:var(--g4);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 a.cf-hall-name:hover{color:var(--g5)}
 a.cf-hall-name:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
