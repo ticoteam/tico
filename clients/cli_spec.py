@@ -275,9 +275,10 @@ def of(args):
     return command if isinstance(command, Command) else None
 
 
-def add(sub, specs: Iterable[Group | Command]):
-    """Add the groups and commands of `specs`, in their order, under the CLI's top-level subcommands `sub`."""
-    subs, groups, commands = {(): sub}, {}, {}
+def add(sub, specs: Iterable[Group | Command], parents=None):
+    """Add the groups and commands of `specs`, in their order, under the CLI's top-level subcommands `sub`. `parents`
+    maps a group the hand parser still builds (`("tool",)`) to its subcommands, so a spec adds leaves to it."""
+    subs, groups, commands = {(): sub, **(parents or {})}, {}, {}
     for spec in specs:
         words = tuple(spec.path.split())
         parent = subs[words[:-1]]
