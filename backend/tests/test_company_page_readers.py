@@ -752,10 +752,10 @@ def test_only_owners_and_admins_manage_readers_and_the_list_pages(site):
 def test_the_assistant_gets_no_reader_data_without_the_persons_click():
     calls = []
     app = SimpleNamespace(
-        get=lambda path: lambda fn: calls.append(fn) or fn,
-        post=lambda path: lambda fn: fn,
-        patch=lambda path: lambda fn: fn,
-        delete=lambda path: lambda fn: fn,
+        get=lambda path, **_: lambda fn: calls.append(fn) or fn,
+        post=lambda path, **_: lambda fn: fn,
+        patch=lambda path, **_: lambda fn: fn,
+        delete=lambda path, **_: lambda fn: fn,
     )
     from backend.company_page import api_readers
     from backend.store import Problem
