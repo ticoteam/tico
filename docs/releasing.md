@@ -820,8 +820,8 @@ Setup, once:
 - **The list of installs.** `knowledge/rollout.json` in the bot's repository: the repository, and each install's
   `name`, `url`, `key_env` and whether it is the `canary` (see `knowledge/rollout.example.json`).
 
-A bot created before this template change does not get these files on its own: copy `playbooks/rollout.md`,
-`software/rollout.py` and the `.claude/settings.json` line that allows it from `templates/catalog/release-notes-writer`.
+A bot created before this template change does not get these files on its own: copy `playbooks/rollout.md`
+and `software/rollout.py` from `templates/catalog/release-notes-writer`.
 
 ## What installations do
 

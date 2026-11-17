@@ -12,6 +12,7 @@ from . import (
     budgets,
     directory,
     finance,
+    floor,
     growth,
     meeting_links,
     pages,
@@ -46,6 +47,7 @@ SECTIONS = (
     skills,
     directory,
     software,
+    floor,
 )
 
 

@@ -1030,8 +1030,8 @@ Success Monitoring. Who manages a pipeline is that pipeline's setting, and a per
   template: `seo-owner`, `content-owner` (blog and social posts), `email-owner`, `cro-owner`, `search-ads-owner`,
   `social-ads-owner`. A pack is the same in every channel:
   - **The stage playbooks** (`playbooks/watch.md`, `find-ideas.md`, `build-a-bet.md`, `run-and-measure.md`,
-    `fix-a-slip.md`) and AGENTS.md's "Your pipelines" are one text in all six; `backend/tests/test_growth_packs.py`
-    fails when a copy differs. Change all six together.
+    `fix-a-slip.md`) are one copy in `templates/catalog/_shared/playbooks/` that all six cards name (`shared_files`).
+    AGENTS.md's "Your pipelines" is the same text in all six: change all six together.
   - **The channel playbook** (`knowledge/channel-playbook.md`) is what differs: the channel tag, the KPI, what Watch
     checks, where ideas come from, the upkeep the Owner does by itself and what needs a person. The Owner publishes it at
     setup as the page "<Channel> playbook" (`tico page publish --scope bot`); a person changes it by asking on a task.

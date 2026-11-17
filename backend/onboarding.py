@@ -1404,13 +1404,18 @@ class Onboarding:
 
     def _template_routines(self, c, template):
         """The template's `routines:` (older: `schedules:`) as validated routines, or [] when it declares none."""
+        from clients import catalog
         from clients.routines import validate_schedules
 
         folder = Path(self.settings.catalog_dir) / template
         try:
             declared = routines_of(yaml.safe_load(manifest_path(folder).read_text()) or {})
             names = display_names(self.settings, load(c))
-            return validate_schedules(declared, lambda rel: fill((folder / rel).read_text(), names))
+            try:  # a routine's playbook may be one the template shares (templates/catalog/_shared), not its own
+                given = catalog.files(template, self.settings.catalog_dir)
+            except ValueError:
+                given = {}
+            return validate_schedules(declared, lambda rel: fill(given.get(rel, folder / rel).read_text(), names))
         except (OSError, ValueError, TypeError, yaml.YAMLError):
             return []
 

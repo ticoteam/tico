@@ -365,6 +365,57 @@ def test_a_start_never_sweeps_open_snoozes_with_the_depends_on_question(company,
     assert jev.calls == []
 
 
+QUIET = {"event": "timer", "timer": {"kind": "quiet", "hours": 6}}
+
+
+@pytest.mark.parametrize(
+    "fields,said",
+    [
+        ({**QUIET, "cond": {"sent_back": 1}, "then": "tell_manager"}, SR.UNREAD["sent_back"]),
+        ({"event": "bot_snoozes", "cond": {"sent_back": 1}, "then": "block"}, SR.UNREAD["sent_back"]),
+        ({"event": "enters", "cond": {"turn": "bot"}, "then": "block"}, SR.TIMERS_ONLY["turn"]),
+        ({"event": "owner_changes,bot_snoozes", "cond": {"turn": "person"}, "then": "block"}, SR.TIMERS_ONLY["turn"]),
+    ],
+)
+def test_a_condition_nothing_reads_on_its_when_is_refused_when_the_rule_is_saved(c, fields, said):
+    # sent_back is read by nothing, so it would hold for every task; turn is read by timers alone.
+    with pytest.raises(Problem) as refused:
+        SR.add(c, ANA, {"name": "Never as written", **fields})
+    assert refused.value.status == 422 and str(refused.value.detail) == said
+    with pytest.raises(Problem):
+        SR.add(c, "bot:ops", {"name": "Never as written", **fields})
+    # A timer reads turn: the built-in quiet rule and a new one act.
+    made = SR.add(c, ANA, {"name": "Quiet on a person", **QUIET, "cond": {"turn": "person"}, "then": "tell_owner"})
+    assert made["not_acting"] == "" and SR.get(c, SR.QUIET_BOT_TASKS)["not_acting"] == ""
+
+
+def _saved(c, rule_id, event, cond, then="block"):
+    """A rule as a release before these checks saved it."""
+    ts = H.now()
+    c.execute(
+        "INSERT INTO stage_rules (id, name, pipeline_id, stages, event, timer, cond, jev, then_do, then_params, reason, "
+        "status, suggests, created_by, created_at, updated_at) VALUES (?, 'Old', '', '[]', ?, ?, ?, '', ?, '{}', "
+        "'Not now.', 'active', '', ?, ?, ?)",
+        (rule_id, event, '{"kind": "quiet", "hours": 6}' if event == "timer" else "{}", cond, then, ANA, ts, ts),
+    )
+
+
+def test_a_saved_rule_with_a_condition_nothing_reads_is_not_acting_and_never_holds(c, jev):
+    _saved(c, "sr_sent_back", "bot_snoozes", '{"sent_back": 1}')
+    _saved(c, "sr_turn", "bot_snoozes", '{"turn": "bot"}')
+    _saved(c, "sr_sent_back_timer", "timer", '{"sent_back": 1}', then="tell_manager")
+    listed = {r["id"]: r for r in SR.listed(c)}
+    assert listed["sr_sent_back"]["not_acting"] == SR.UNREAD["sent_back"]
+    assert listed["sr_turn"]["not_acting"] == SR.TIMERS_ONLY["turn"]
+    assert listed["sr_sent_back_timer"]["not_acting"] == SR.UNREAD["sent_back"]
+    row = _task(c)
+    # Neither Block refuses the bot's snooze, and the timer does not tell anyone about every task.
+    assert E.snooze(c, row["id"], "bot:ops", "Back later", "2099-01-05T08:00:00.000000Z", row["version"]).get("snooze")
+    assert SR.matches(c, SR.get(c, "sr_sent_back_timer"), row) == (False, "")
+    # A person takes the condition out and the rule acts again.
+    assert SR.edit(c, ANA, "sr_turn", {"cond": {}})["not_acting"] == ""
+
+
 def test_a_timer_never_asks_the_decision_model(c):
     with pytest.raises(Problem) as refused:
         SR.add(

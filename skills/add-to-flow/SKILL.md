@@ -25,8 +25,8 @@ someone: an open ask of yours on the same thing stays as it is.
 - Only what would change what you do next. If nothing clears that bar, ask nothing and say so in one line; that is a
   good result.
 - At most three, the most valuable first.
-- Each question is one decision, in one plain sentence that says what is asked and reads on its own (it is the row in
-  their Needs you), plus one line on what you will do with the answer. Leave it free-form: `--choices` only when it is a real pick between named options.
+- Each ask's first line (140 characters at most) says what is asked and reads on its own, never "see above"; no paths
+  or ids. `-m` is one line on what you will do with the answer. `--choices` only for a real pick between named options.
 - If a person has corrected you on the same thing several times, a good question is whether to make it a standing
   rule; on yes, write it at the top of `memory/learnings.md`, and if it should bind the whole stage, say so to whoever
   edits that stage.
