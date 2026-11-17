@@ -66,7 +66,7 @@ task gives. Only then change the code.
 ## 4. Change
 
 Make the smallest change that makes the test pass. A refactor you noticed on the way goes into a note on the task,
-for the next pitch, not into this pull request. If the change fixes a failure the repository's tests list as known (an
+for the next feature, not into this pull request. If the change fixes a failure the repository's tests list as known (an
 exception or baseline entry), delete that entry in this pull request: a stale entry fails the merge queue.
 
 ## 5. Check on your computer

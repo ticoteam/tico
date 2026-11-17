@@ -12,6 +12,7 @@ from backend import flow_opinions as F
 from backend import pipeline_settings as PS
 from backend import task_calls as TC
 from backend import task_engine as E
+from backend import task_requirements as R
 from backend import updates
 from backend.store import H
 from backend.tests.helpers import engine as X
@@ -225,24 +226,19 @@ def test_a_page_with_its_own_audience_stays_out_of_the_shared_opinion(api, monke
 
 
 # ---- the default Product pipeline ----------------------------------------------------------------------------------
-def test_product_ok_release_shows_the_qa_page_through_the_fallback(company):
-    """A stage's requirement cannot name a page (`shows` is not one of its fields: pipeline_settings.REQUIREMENT_FIELDS,
-    and the page it would name does not exist until QA makes it), so the default template is unchanged and every
-    company's OK release shows its QA page through the fallback, with no data migration."""
+def test_product_ok_release_approves_the_release_report_and_names_no_page(company):
+    """A stage's requirement cannot name a page (`shows` is not one of its fields: pipeline_settings.REQUIREMENT_FIELDS).
+    Product's OK release approves the Release report, a task document: the QA report is a tab beside it on the task, so
+    nothing falls back to an earlier stage's page."""
     assert "shows" not in PS.REQUIREMENT_FIELDS
     with company.transaction() as c:
         _team(c)
         _answers(c, software="yes")
         PS.ensure_presets(c)
         ok = next(s for s in PS.read(c, "product")["stages"] if s["id"] == "product-ok-release")
-        assert [r["kind"] for r in ok["requirements"]] == ["ok"] and not ok["requirements"][0].get("shows")
-        row = H.task_create(c, ANA, "Saved carts", "Keep the cart.", "bot:pm", pipeline="product", lint=False)
-        E.move(c, row["id"], "product-qa", ANA, "On for this test")
-        _attach(c, row["id"], "f-qa", 2)
-        E.move(c, row["id"], "product-ok-release", ANA, "QA is done")
-        view = TC.task_view(c, row["id"], ANA)
-        entry = next(e for e in view["to_leave"] if e["kind"] == "ok")
-        assert entry["earlier"]["ref"] == "page:f-qa@2" and entry["earlier"]["stage"] == "QA"
+        assert [(r["kind"], R.document_of(r), r.get("shows")) for r in ok["requirements"]] == [
+            ("page", "Release report", None)
+        ]
 
 
 def _listed(api):

@@ -146,6 +146,12 @@ def _page(line: str, rubric: str, **settings: bool) -> Row:
     return {"kind": "page", "line": line, "settings": {"rubric": rubric, **settings}}
 
 
+def _approval(document: str, rubric: str) -> Row:
+    """A stage's document a person approves (task_requirements.APPROVED): the bot writing it in the stage submits it,
+    the decision model checks it, then any person approves that version."""
+    return {"kind": "page", "line": document, "settings": {"document": document, "rubric": rubric}}
+
+
 def _people_only(requirement: Row) -> Row:
     """A person's OK no bot can give or push past: the two person sign-offs, on the spec and before release."""
     return {**requirement, "who_oks": "people_only"}
@@ -204,6 +210,11 @@ VALIDATE_RUBRIC = (
     "Names the version production runs and shows the change working in that version: what was run or looked at there, "
     "and what it gave. If that version is older than the release that holds this work, it is not yet."
 )
+# The Release report a person approves before the PRs merge: what is shipping, judged from the report alone.
+RELEASE_RUBRIC = (
+    "Says what is shipping: the change in a few plain lines, the PRs it merges at their newest commits, and anything a "
+    "person should know before it merges (a migration, a setting, what is left out)."
+)
 QA_STAGE = "engineering-qa"  # where a person approves the change before it ships (`_add_qa` brings it to a company)
 # The Product and Engineering presets (docs/dev/pipelines-v3.md "Default pipelines"). Made only for a company that builds
 # software (a blank answer is yes), once its setup is finished (ensure_presets).
@@ -259,14 +270,14 @@ PRESETS["engineering"] = {
         _stage(
             QA_STAGE,
             "QA",
-            "Build the QA page: what changed, before and after screenshots of the running app (or the output that "
-            "proves a change with nothing to see), the checks at the newest commit and what both reviewers found. A "
-            "person approves it to ship. To change it, attach the new version; Tico asks the person again when there "
-            "are new commits or it is another page. Never ask your own OK of it.",
+            "Write the QA report: what changed, before and after screenshots of the running app (or the output that "
+            "proves a change with nothing to see), the checks at the newest commit and what both reviewers found. "
+            "Writing it here submits it; a person approves it to ship. To change it, write the next version; Tico asks "
+            "the person again when there are new commits.",
             240,
             [
                 github("checks_pass"),
-                _people_only(_page("QA page", QA_RUBRIC)),
+                _people_only(_approval("QA report", QA_RUBRIC)),
             ],
         ),
         _stage(
@@ -316,7 +327,7 @@ PRESETS["product"] = {
             "Spec",
             "A spec a builder can build from.",
             2880,
-            [_people_only(_page("Spec page", SPEC_RUBRIC))],
+            [_people_only(_approval("Spec", SPEC_RUBRIC))],
             task_limit=20,  # room for every owner; a spec waiting only on a person's OK holds no slot (has_room)
         ),
         _stage(
@@ -338,13 +349,13 @@ PRESETS["product"] = {
     "done": {"id": "product-done"},
     "closed": {"id": "product-closed"},
 }
-# Product (Nov 14, docs/dev/pipelines-v3.md "Product"): one pipeline from pitch to production, the default for a company that
-# builds software from 0.6 on. It replaces the Product and Engineering pair (LEGACY), which stay defined for the
-# companies that have them. One feature owner, the task's assignee, holds it from Pitch to Validate in one task and one
-# session; the reviewers, the QA Owner and the Release Owner hold their stages as on Engineering. Any person clears
-# the pitch, spec and release gates (people only, nobody named), and a bot never does.
-IDEAS_STAGE = "product-ideas"  # Pitch keeps the id of the pair's Ideas, as Tico Team's Product does (idea_checks)
-PITCH_MAX = 280  # the task's body is the pitch: a person is asked to OK it only once it is this short or shorter
+# Product (Nov 14, docs/dev/pipelines-v3.md "Product"): one pipeline from the Spec to production, the default for a
+# company that builds software from 0.6 on. It replaces the Product and Engineering pair (LEGACY), which stay defined for
+# the companies that have them. One feature owner, the task's assignee, holds it from Spec to Validate in one task and
+# one session; the reviewers, the QA Owner and the Release Owner hold their stages as on Engineering. A feature starts as
+# a chat and its first approval is the Spec (no pitch, Nov 16). Any person approves the Spec and the Release report
+# (people only, nobody named), and a bot never does.
+IDEAS_STAGE = "product-ideas"  # the pair's Ideas, and the Pitch stage Product had until Nov 16 (idea_checks)
 # Related input (backend/related_input.py): Jev picks 1 to 2 bots over the bar, each adds one round of comments to the
 # spec page; it never blocks and moves on after 4 hours.
 RELATED_INPUT = "related_input"
@@ -352,7 +363,7 @@ PRODUCT = "features"  # the preset's key and `preset` column: "product" is the P
 PRESETS[PRODUCT] = {
     "id": "product",
     "name": "Product",
-    "goal": "From a pitch to something checked in production",
+    "goal": "From a spec to something checked in production",
     "prefix": "P",
     "manager_id": None,
     "owner_id": None,
@@ -361,20 +372,12 @@ PRESETS[PRODUCT] = {
     "preset": PRODUCT,
     "stages": [
         _stage(
-            IDEAS_STAGE,
-            "Pitch",
-            f"The task's body is the pitch: the problem, who has it and the fix, in up to {PITCH_MAX} characters "
-            "(skill write-a-pitch). Any person OKs it; a longer one is the owner's to shorten first.",
-            1440,
-            [_people_only({"kind": "ok", "line": "OK the pitch", "settings": {"body_max": PITCH_MAX}})],
-            owner=ASSIGNEE,
-        ),
-        _stage(
             "product-spec",
             "Spec",
-            "Write the spec page with the person who OK'd the pitch (skill write-a-spec).",
+            "A feature starts as a chat. Write the Spec from it (skill write-a-spec): tico task attach <id> spec.html "
+            "--doc Spec. The decision model checks it.",
             2880,
-            [_page("Spec page", SPEC_RUBRIC)],
+            [_approval("Spec", SPEC_RUBRIC)],
             owner=ASSIGNEE,
         ),
         _stage(
@@ -388,9 +391,10 @@ PRESETS[PRODUCT] = {
         _stage(
             "product-ok-spec",
             "OK spec",
-            "Attach the spec page with what the comments changed (skill write-a-spec). Any person OKs it.",
+            "Write the next version of the Spec with what the comments changed (skill write-a-spec): writing it here "
+            "submits it. Any person approves it.",
             2880,
-            [_people_only(_page("Spec page", SPEC_RUBRIC))],
+            [_people_only(_approval("Spec", SPEC_RUBRIC))],
             owner=ASSIGNEE,
         ),
         _stage(
@@ -436,19 +440,20 @@ PRESETS[PRODUCT] = {
         _stage(
             "product-qa",
             "QA",
-            "Build the QA page (skill make-the-qa-page): what changed, before and after screenshots of the running app (or the output that "
-            "proves a change with nothing to see), the checks at the newest commit and what both reviewers found. A "
-            "person approves it. To change it, attach the new version; Tico asks the person again when there are new "
-            "commits or it is another page. Never ask your own OK of it.",
+            "Write the QA report (skill make-the-qa-page): what changed, before and after screenshots of the running "
+            "app (or the output that proves a change with nothing to see), the checks at the newest commit and what "
+            "both reviewers found. Writing it here submits it; a person approves it. To change it, write the next "
+            "version; Tico asks the person again when there are new commits.",
             240,
-            [github("checks_pass"), _people_only(_page("QA page", QA_RUBRIC))],
+            [github("checks_pass"), _people_only(_approval("QA report", QA_RUBRIC))],
         ),
         _stage(
             "product-ok-release",
             "OK release",
-            "Any person OKs the release. Then it merges.",
+            "Write the Release report: what is shipping. Writing it here submits it; any person approves it. Then it "
+            "merges.",
             1440,
-            [_people_only({"kind": "ok", "line": "OK the release"})],
+            [_people_only(_approval("Release report", RELEASE_RUBRIC))],
             owner=ASSIGNEE,
         ),
         _stage(
@@ -527,8 +532,28 @@ EARLIER: dict[str, tuple[str, ...]] = {
         "Build the QA page: what changed, before and after screenshots of the running app (or the output that proves a "
         "change with nothing to see), the checks at the newest commit and what both reviewers found. A person approves "
         "it to ship. To change it, attach the new version; Tico asks the person. Never ask your own OK of it.",
+        "Build the QA page: what changed, before and after screenshots of the running app (or the output that proves a "
+        "change with nothing to see), the checks at the newest commit and what both reviewers found. A person approves "
+        "it to ship. To change it, attach the new version; Tico asks the person again when there are new commits or it "
+        "is another page. Never ask your own OK of it.",
     ),
-    "engineering-qa/page/line": ("Review page",),
+    # Nov 16: stage approvals name a document; Product has no pitch (a feature starts as a chat).
+    "product/goal": ("From a pitch to something checked in production",),
+    "product-spec/purpose": ("Write the spec page with the person who OK'd the pitch (skill write-a-spec).",),
+    "product-spec/page/line": ("Spec page",),
+    "product-ok-spec/purpose": (
+        "Attach the spec page with what the comments changed (skill write-a-spec). Any person OKs it.",
+    ),
+    "product-ok-spec/page/line": ("Spec page",),
+    "product-qa/purpose": (
+        "Build the QA page (skill make-the-qa-page): what changed, before and after screenshots of the running app (or "
+        "the output that proves a change with nothing to see), the checks at the newest commit and what both reviewers "
+        "found. A person approves it. To change it, attach the new version; Tico asks the person again when there are "
+        "new commits or it is another page. Never ask your own OK of it.",
+    ),
+    "product-qa/page/line": ("QA page",),
+    "product-ok-release/purpose": ("Any person OKs the release. Then it merges.",),
+    "engineering-qa/page/line": ("Review page", "QA page"),
     "engineering-qa/page/rubric": _FIXES_2_RUBRICS,
     "engineering-merge/purpose": (
         "The PRs are in the merge queue. If GitHub takes one out, queue it again, fix it on its branch, or send the "
@@ -587,7 +612,7 @@ ROLES[PRODUCT] = {
         "product-qa": S.QA_OWNER,
         "product-merge": S.RELEASE_MANAGER,
     },
-    "ok": ("product-qa",),  # the QA page's person, as on Engineering; the pitch, spec and release gates name nobody
+    "ok": ("product-qa",),  # the QA report's person, as on Engineering; the Spec and Release report name nobody
 }
 # Growth Experiments, Lead, Opportunity, Customer and Success Experiments, with their Growth and Success factories.
 PRESETS.update(more.PRESETS)
@@ -860,8 +885,8 @@ def _check_settings(req: Row, label: str, problems: list[str]) -> None:
             problems.append(f"{name} has no setting {key} (on {label}).")
         elif key in ("at_head", "with_release", "prereleases") and not isinstance(value, bool):
             problems.append(f"{key} on {label} is on or off.")
-        elif key == "body_max" and (not isinstance(value, int) or isinstance(value, bool) or value < 1):
-            problems.append(f"The most characters of the task's body on {label} is a whole number above zero.")
+        elif key == "document" and value not in R.APPROVED:
+            problems.append(f"The document approved on {label} is one of {', '.join(R.APPROVED)}.")
         elif key == "rubric" and not isinstance(value, str):
             problems.append(f"What the Decision model checks on {label} must be text.")
         elif key == "release_repo" and (
@@ -950,7 +975,7 @@ def _check_requirement(conn: "sqlite3.Connection", stage: Row, req: Row, problem
     elif person and not _actor_exists(conn, person):
         problems.append(f"{person} is not a person or a bot here (on {label}).")  # removed, or left
     elif kind == "ok" and not person and req["who_oks"] != "people_only":
-        # People only with nobody named is any person's OK, never a bot's (Product's pitch, spec and release gates).
+        # People only with nobody named is any person's OK, never a bot's.
         problems.append(f"An OK from someone on {label} names the person or bot who OKs it, or is people only.")
     if req["id"]:
         found = _h()._one(

@@ -605,6 +605,18 @@ SCHEMAS = {
             # An OK that shows a page first (Validate's): what Jev passed on that page, one short line per part of its
             # check (page_verdicts.checks_of). Absent until Jev passed it.
             "checks": items({"type": "string"}),
+            # A stage's document approval: its key (the visit and the version submitted, sent back with an OK) and
+            # `unchecked` when the decision model could not check this version. Absent on every other requirement.
+            "approval": obj(
+                {
+                    "document": "s",
+                    "visit_id": "s",
+                    "file_id": "n",
+                    "version": {"type": ["integer", "null"]},
+                    "unchecked": "b",
+                },
+                required=["document", "visit_id", "file_id", "version", "unchecked"],
+            ),
             "answer": {"oneOf": [obj({"id": "s", "value": "s", "note": "n", "by": "s", "at": "s"}), {"type": "null"}]},
             # A stage's answer: how it is named and what it takes. Absent on every other requirement.
             "typed": obj(
@@ -2856,7 +2868,7 @@ SCHEMAS["TaskDocument"] = obj(
     {
         "name": {
             "type": "string",
-            "description": ", ".join(DOCUMENT_NAMES) + " (the names a stage approves), or a bot's own",
+            "description": ", ".join(DOCUMENT_NAMES) + " (the names Tico knows), or a bot's own",
         },
         "file_id": "s",
         "version": "i",

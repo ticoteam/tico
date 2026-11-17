@@ -69,8 +69,8 @@ def filed_snooze(snooze: Row | None) -> bool:
 
 
 def asks_a_person(conn: "sqlite3.Connection", stage_id: object) -> bool:
-    """Whether the stage waits on a person's OK that no bot gives (Product's Pitch): a bot's idea there goes to a
-    person's Needs you, so it is never snoozed out of sight."""
+    """Whether the stage waits on a person's OK that no bot gives (a company's own Ideas stage may have one): a bot's
+    idea there goes to a person's Needs you, so it is never snoozed out of sight."""
     return (
         conn.execute(
             "SELECT 1 FROM requirements WHERE stage_id=? AND visit_id IS NULL AND withdrawn_at IS NULL AND kind='ok' "
@@ -84,7 +84,7 @@ def asks_a_person(conn: "sqlite3.Connection", stage_id: object) -> bool:
 def filed(conn: "sqlite3.Connection", row: Row, by: str, ts: str) -> None:
     """A task entered Ideas new (task_engine.enter): its duplicate check is owed, and when no person asked for it, it
     is snoozed with no end in the same write, marked `filed`; not where the stage asks a person's OK (`asks_a_person`):
-    a pitch waits for that OK in the person's list instead."""
+    the idea waits for that OK in the person's list instead."""
     H = _h()
     visit: Row = row["visit"]
     conn.execute(

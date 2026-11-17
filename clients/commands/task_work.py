@@ -618,7 +618,7 @@ def task_follow(api, args):
     "\"<point>: done|not done, <why>\"); never quote their note back to them. "
     "With document instead, the HTML in text or the .html file at path is that document's next version: one per name "
     "per task, shown as a tab beside the task's chat; put what changed in note. Spec, QA report (the proof), Release "
-    "report, Invoice and Email are the names a stage approves; name any other document as you like.",
+    "report and Invoice are the names a stage approves; name any other document as you like.",
     {
         "id": _s("Task id"),
         "document": {

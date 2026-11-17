@@ -239,7 +239,7 @@ const factories = (async () => {
   assert.match(kinds, /<span>Page<\/span><input data-pe-rf="line"/);
   assert.match(kinds, /data-pe-row-x="req:0"[^>]*>Remove</);
   // + Requirement's list, in plain words: an OK from anyone (by hand) first, In a release among them
-  assert.deepEqual(plain((vm.runInContext('PE_REQ_PICKS', ctx) as string[][]).map(k => k[0]).slice(0, 3)), ['by_hand', 'ok_person', 'ok_bot']);
+  assert.deepEqual(plain((vm.runInContext('PE_REQ_PICKS', ctx) as string[][]).map(k => k[0]).slice(0, 3)), ['by_hand', 'approval', 'ok_bot']);
   assert.ok((vm.runInContext('PE_REQ_PICKS', ctx) as string[][]).some(k => k[0] === 'in_release'));
   assert.match(kinds, /<span>Then OK from<\/span><select[^>]*><option value="">Nobody<\/option>/, 'a page needs no person');
   assert.match(kinds, /data-pe-rs="at_head"[^>]*> Newest commit only/);
@@ -248,6 +248,16 @@ const factories = (async () => {
   assert.match(release, /data-pe-rf="release_repo"/);
   assert.match(release, /data-pe-rf="release_with"[^>]*placeholder="workflow:release.yml or tag"/);
   assert.match(release, /data-pe-rs="prereleases"[^>]* checked> Pre-releases count/, 'omission renders the enabled default');
+  // An approval names its document and its approver (any person, or one), and has no page switches.
+  const approval = {kind: 'page', source: null, condition: null, settings: {document: 'QA report'}, can_push_past: true, who_oks: 'people_only',
+    person_id: null, line: 'QA report', choices: null};
+  const approves = ctx.peReqEdHTML(state, approval, 0, 1, 'ed-a') as string;
+  assert.match(approves, /<span>Document<\/span><select data-pe-rf="document"[^>]*>.*<option value="QA report" selected>QA report<\/option>/);
+  assert.match(approves, /<span>Approver<\/span><select data-pe-rf="approver"[^>]*><option value="">Any person<\/option>/);
+  assert.doesNotMatch(approves, /data-pe-rs="at_head"|data-pe-rf="line"/, 'no page switches, no title: the document is its name');
+  assert.equal(ctx.peReqText(approval), 'Approve QA report');
+  assert.deepEqual(plain(ctx.peReqNew(state, 'approval')), {kind: 'page', source: null, condition: null, settings: {document: 'Spec'},
+    can_push_past: true, who_oks: 'people_only', person_id: null, line: 'Spec', choices: null});
   assert.match(release, /data-pe-rf="can_push_past"[^>]*disabled/, 'In a release is never pushed past');
 
   const field = (kind: 'HTMLInputElement' | 'HTMLSelectElement', data: Record<string, string>, value = '', checked = false) =>

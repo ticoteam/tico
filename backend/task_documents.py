@@ -1,6 +1,6 @@
 # pyright: strict
-"""A task's documents: Spec, QA report (which holds the proof), Release report, Invoice and Email, the names a stage
-approves, and any other a bot names (Release notes, Research). A task has at most one of each name, and each is a task file (backend/files.py `attach_task`) whose versions are the document's: who wrote each
+"""A task's documents: Spec, QA report (which holds the proof), Release report and Invoice, the names a stage
+approves (task_requirements.APPROVED), and any other a bot names (Email, Release notes, Research). A task has at most one of each name, and each is a task file (backend/files.py `attach_task`) whose versions are the document's: who wrote each
 one, when, its note (`task_file_reviews`) and its HTML, cleaned as a page is (backend/visuals.py) so a reader opens it
 sandboxed like any page. `task_documents` only names which task file is which document.
 

@@ -1,5 +1,5 @@
-"""Product's Validate: no ask of a person without a passed Checked in production page, the card's OK and Not
-validated, and the one-time sweep of tasks already in Validate (backend/validate_gate.py).
+"""Product's Validate: no bot's OK of a person (the decision model passing the Checked in production page ends it), no
+check asked without that page, the OK and Not validated of an OK a bot asked before that rule, and the one-time sweep of tasks already in Validate (backend/validate_gate.py).
 
 Synthetic rows only (backend/tests/helpers/engine.py): the fictional company, where Ana owns it, and its role bots.
 """
@@ -62,6 +62,19 @@ def _ask(c, row, by, kind, person, line, **kw):
     return E.add_requirement(c, row["id"], by, kind, person, line, seen_version=seen, **kw)
 
 
+def _asked_before(c, row, monkeypatch, **kw):
+    """A bot's OK of Ana asked before Validate refused every bot's OK (NOBODY_ASKED), showing the page as such an OK
+    did: it is still answered."""
+
+    def then(conn, row, by, person, kind, shows, choices):
+        page, _ = G.page_of(conn, row)
+        return [G.ref(page)] if page else shows
+
+    with monkeypatch.context() as m:
+        m.setattr(G, "check_ask", then)
+        return _ask(c, row, PM, "ok", ANA, CHECKED, **kw)
+
+
 def _asks(c, row):
     return c.execute(
         "SELECT id FROM requirements WHERE visit_id=? AND by_bot=1 AND withdrawn_at IS NULL", (row["visit"]["id"],)
@@ -90,9 +103,12 @@ def test_with_no_passed_page_a_bots_check_of_a_person_is_refused_and_nothing_rea
             _ask(c, row, PM, kind, ANA, "Is the row 40 px on your phone?", choices=choices)
     with pytest.raises(H.Refused, match=re.escape(G.FIRST)):  # a free question is a check too
         _ask(c, row, PM, "answer", ANA, "How tall is the row on your phone?")
-    # A page Jev sent back is no proof either.
+    # With a page, sent back or passed, no bot asks an OK: the decision model passing it ends the stage.
     row = _jev(c, _attach(c, row), "not_met")
-    with pytest.raises(H.Refused, match=re.escape(G.FIRST)):
+    with pytest.raises(H.Refused, match=re.escape(G.NOBODY_ASKED)):
+        _ask(c, row, PM, "ok", ANA, CHECKED)
+    row = _jev(c, row)
+    with pytest.raises(H.Refused, match=re.escape(G.NOBODY_ASKED)):
         _ask(c, row, PM, "ok", ANA, CHECKED)
     assert _asks(c, row) == []
     assert _on_person(c, row["id"], ANA) == []
@@ -119,11 +135,9 @@ def test_a_person_asks_whatever_they_like(c):
     assert _standing(c, row["id"], out["requirement_id"]).on == BEN
 
 
-def test_the_ok_shows_the_page_waits_on_jev_and_reaches_the_person_only_once_jev_passes_it(c):
+def test_an_ok_asked_before_the_rule_waits_on_jev_and_reaches_the_person_only_once_jev_passes_it(c, monkeypatch):
     row = _attach(c, _in_validate(c))
-    out = _ask(c, row, PM, "ok", ANA, CHECKED, shows=["file:f-shot@2"])
-    rid = out["requirement_id"]
-    assert R.get(c, rid)["shows"] == ["page:f-check@1", "file:f-shot@2"]  # the card opens the page first
+    rid = _asked_before(c, row, monkeypatch)["requirement_id"]
     waiting = _standing(c, rid=rid, task_id=row["id"])
     assert (waiting.state, waiting.on) == (R.WAITING, R.JEV)
     assert _on_person(c, row["id"], ANA) == []
@@ -145,13 +159,13 @@ def test_the_ok_shows_the_page_waits_on_jev_and_reaches_the_person_only_once_jev
     assert E.task(c, row["id"])["status"] == "done"
 
 
-def test_the_oks_check_rows_are_what_the_decision_model_passed_on_the_page_not_the_bots_words(c):
+def test_the_oks_check_rows_are_what_the_decision_model_passed_on_the_page_not_the_bots_words(c, monkeypatch):
     """The Validate OK's verdict rows come from the page's passed check, so they stay when the ask carries no brief."""
     from backend import pipeline_judges as PJ
 
     row = _attach(c, _in_validate(c))
     brief = {"why": "Checked on rc.13.", "details": ["Row is 40 px"], "recommend": None}
-    rid = _ask(c, row, PM, "ok", ANA, CHECKED, brief=brief)["requirement_id"]
+    rid = _asked_before(c, row, monkeypatch, brief=brief)["requirement_id"]
 
     def entry():
         return next(r for r in H.task_view(c, row["id"], ANA)["to_leave"] if r["requirement_id"] == rid)
@@ -162,11 +176,11 @@ def test_the_oks_check_rows_are_what_the_decision_model_passed_on_the_page_not_t
     assert all(entry()["checks"])
 
 
-def test_a_new_page_that_jev_sends_back_takes_the_ok_from_the_person_again(c):
+def test_a_new_page_that_jev_sends_back_takes_the_ok_from_the_person_again(c, monkeypatch):
     row = _jev(c, _attach(c, _in_validate(c)))
     # Passed with an OK already asked (the bot asked while Jev was checking): the page passed, so it waits on Ana.
     c.execute("UPDATE page_verdicts SET verdict=NULL")
-    rid = _ask(c, row, PM, "ok", ANA, CHECKED)["requirement_id"]
+    rid = _asked_before(c, row, monkeypatch)["requirement_id"]
     _jev(c, row)
     assert _standing(c, row["id"], rid).on == ANA
     row = _jev(c, _attach(c, E.task(c, row["id"]), version=2), "not_met", version=2)
@@ -175,9 +189,9 @@ def test_a_new_page_that_jev_sends_back_takes_the_ok_from_the_person_again(c):
     assert _on_person(c, row["id"], ANA) == []
 
 
-def test_not_validated_moves_the_task_back_with_the_note_and_files_new_engineering_work(c):
+def test_not_validated_moves_the_task_back_with_the_note_and_files_new_engineering_work(c, monkeypatch):
     row = _attach(c, _in_validate(c))
-    rid = _ask(c, row, PM, "ok", ANA, CHECKED)["requirement_id"]
+    rid = _asked_before(c, row, monkeypatch)["requirement_id"]
     row = _jev(c, row)
     with pytest.raises(H.Refused, match="task_why"):
         A.answer(c, row["id"], rid, ANA, "no")

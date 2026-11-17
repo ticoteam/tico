@@ -805,9 +805,10 @@ def parser():
         "--doc",
         metavar="NAME",
         help="an .html file as the next version of the task's document NAME (a tab beside the task's chat): Spec, "
-        "QA report, Release report, Invoice and Email are the names a stage approves; say what changed with --note",
+        "QA report, Release report and Invoice are the names a stage approves, and writing one in that stage "
+        "submits it for approval; say what changed with --note",
     )
-    s.add_argument("--req", help='the page requirement it is for, e.g. "Spec page"')
+    s.add_argument("--req", help='the page requirement it is for, e.g. "Code review"')
     s.add_argument("--version", type=int, help=version_help)
     s.add_argument("--name", help="the name people see; defaults to the file's own")
     s.add_argument("--poster", help="a PNG or JPEG preview")

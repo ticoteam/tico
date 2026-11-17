@@ -10,10 +10,9 @@ on your phone"). So a bot's ask of a person on a task in Validate (`check_ask`, 
   OWN_TASK.
 - Any other question is a check: refused with FIRST, and with ASK_OK once the page passed. The person is never asked
   to test.
-- An OK is taken only once the page is attached and Jev has not sent it back. It shows that page, put first, so the
-  card opens it (ui/app/decide.ts). It waits on Jev until Jev passes the page (`held`, from task_requirements._ok),
-  so it reaches the person only with a passed page beside it: refused at the ask while there is no page, and held
-  behind Jev after, since Jev passing the page alone ends the stage.
+- An OK is refused too (NOBODY_ASKED): the decision model passing the page ends the stage, and no bot asks a person
+  for an OK. An OK a bot asked before that rule waits on Jev until Jev passes the page (`held`, from
+  task_requirements._ok), so it reaches the person only with a passed page beside it.
 - An OK bound to an action (task_asks.ask_ok: send, spend, publish) is that action's own and is never held here.
 
 A person who sends the OK back with a note (Not validated, `sends_back`) moves the task back to In development with
@@ -45,7 +44,8 @@ BACK_TO = "product-in-development"  # the pair's Product: entering it files new 
 PAGE = "Checked in production page"
 FIRST = "Make the Checked in production page first."
 OWN_TASK = "Ask it as its own task, or as an OK for that action."
-ASK_OK = "Ask their OK of the Checked in production page instead: the card shows the page, with OK and Not validated."
+ASK_OK = "The page passed: Validate ends on it, and nobody is asked."
+NOBODY_ASKED = "Validate ends when the decision model passes the Checked in production page: nobody is asked for an OK."
 HELD = "Waits for the Decision model to pass the Checked in production page"
 NOT_VALIDATED = "Not validated"
 
@@ -103,8 +103,8 @@ def check_ask(
     shows: object,
     choices: list[str] | None,
 ) -> object:
-    """Refuses a bot's ask of a person in Validate that is not an OK of its page (see the module). Returns what the
-    ask shows: for an OK, the page first, then anything else it named."""
+    """Refuses a bot's ask of a person in Validate (see the module): a decision is its own task, a check is the page's,
+    and an OK is nobody's. Returns what the ask shows, unchanged."""
     if not applies(row, by, person):
         return shows
     task_id = str(row["id"])
@@ -113,13 +113,8 @@ def check_ask(
     page, standing = page_of(conn, row)
     if kind == "answer":
         _refuse(conn, by, ASK_OK if standing and standing.met else FIRST, task_id)
-    from . import task_requirements as R
-
-    if not page or not standing or standing.state == R.NOT_MET:
-        _refuse(conn, by, FIRST, task_id)
-    assert page is not None
-    refs = cast("list[object]", shows) if isinstance(shows, list) else []
-    return [ref(page), *[one for one in refs if str(page["file_id"]) not in str(one)]]
+    _refuse(conn, by, NOBODY_ASKED if page else FIRST, task_id)
+    return shows
 
 
 def _bound(conn: "sqlite3.Connection", requirement_id: str) -> bool:

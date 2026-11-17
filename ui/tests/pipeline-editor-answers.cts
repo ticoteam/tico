@@ -90,7 +90,7 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
     await dialog.locator('[data-pe-req-add]').click();
     await pick.waitFor();
     assert.equal(await pick.locator('.tl-menu-h').count(), 0, 'no group headings');
-    assert.deepEqual((await pick.locator('[data-pe-req-kind]').allTextContents()).slice(0, 3), ['OK from anyone', 'OK from a person…', 'A page, checked by Decision model…'],
+    assert.deepEqual((await pick.locator('[data-pe-req-kind]').allTextContents()).slice(0, 3), ['OK from anyone', 'Approval…', 'A page, checked by Decision model…'],
       'by hand is an OK from anyone; a bot\'s OK only where there is a bot');
     assert.equal(await pick.locator('[data-pe-req-kind="answer"]').count(), 1);
     assert.equal(await pick.locator('[data-pe-req-kind="owner_done"]').count(), 0, 'one Owner says done is enough: not offered again');

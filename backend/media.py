@@ -60,8 +60,8 @@ class TaskFile(M.Contract):
     document: str | None = Field(
         default=None,
         max_length=40,
-        description="The task's document this is the next version of (HTML text): Spec, QA report, Release report, "
-        "Invoice and Email are the names a stage approves; any other name is a document no stage asks for",
+        description="The task's document this is the next version of (HTML text): Spec, QA report, Release report "
+        "and Invoice are the names a stage approves; any other name is a document no stage asks for",
     )
 
 
@@ -572,12 +572,13 @@ def finish_delivery(c, auth, who, rid):
 
 
 def write_upload(store, request, body, uploads, fn):
-    """One idempotent write whose payload includes the files already stored for it."""
+    """One idempotent write whose payload includes the files already stored for it. A multipart task file hashes
+    without `document` (it is never one), as its replay check does (replay_upload)."""
     result = store.mutate(
         request.state.identity,
         request.url.path,
         request.headers.get("idempotency-key"),
-        {**body.model_dump(), "uploads": uploads},
+        {**body.model_dump(exclude={"document"}), "uploads": uploads},
         fn,
     )
     if isinstance(result, dict) and "_refusal" in result:
@@ -901,7 +902,7 @@ def install_media(
             item = register(c, who, digest, size, name, content_type)
             bot_actor = next((a for a in (who.actor, task["owner_id"], task["requester_id"]) if H.is_bot(a)), None)
             bot = H.actor_id(bot_actor) if bot_actor else default_bot(c, store.settings)
-            document = None
+            document, submitted = None, None
             if body.document:
                 from . import task_documents as TD
 
@@ -925,12 +926,20 @@ def install_media(
                     "UPDATE bot_file_versions SET poster_blob_id=? WHERE file_id=? AND version=?",
                     (preview, fid, number),
                 )
+            if document:
+                from . import task_pages as TP
+
+                # Written while the task is in the stage that names it for approval, this version is the submission:
+                # no bot asks anyone for an OK. Anywhere else it is just a new version.
+                pinned = TP.submit(c, tid, document, fid, number, who.actor)
+                submitted = {"requirement": pinned["requirement_id"], "version": number} if pinned else None
             return {
                 "file": {**item, "file_id": fid, "version": number},
                 "file_id": fid,
                 "version": number,
                 "link": store.settings.public_url + f"/api/v2/files/{fid}?v={number}",
                 **({"document": document} if document else {}),
+                **({"submitted": submitted} if submitted else {}),
             }
 
         result = await asyncio.to_thread(
