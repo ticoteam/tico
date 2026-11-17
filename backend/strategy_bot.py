@@ -502,8 +502,9 @@ def day_start(at=None):
 
 
 def asked_today(c, person, at=None):
-    """How many tasks the Strategy Owner filed for this person today (UTC), closed ones included, merged items, and the
-    vision question (asked of them on a task it holds, backend/goal_asks.py). A merged item is a task filed for them
+    """How many tasks the Strategy Owner filed for this person today (UTC), closed ones included, merged items, the
+    vision question (asked of them on a task it holds, backend/goal_asks.py) and its other questions to them on tasks it
+    holds (`ASKED_ON_OWN`). A merged item is a task filed for them
     since step 6b; one filed before was the Strategy Owner's own."""
     since = day_start(at)
     return (
@@ -517,7 +518,21 @@ def asked_today(c, person, at=None):
             (person, since),
         ).fetchone()[0]
         + c.execute(VISION_ASKED + " AND g.owner=?", (since, person)).fetchone()[0]
+        + c.execute(
+            ASKED_ON_OWN.format(select="COUNT(DISTINCT t.id)", who="AND r.person_id=?", group=""),
+            ("bot:" + SLUG, "bot:" + SLUG, since, person),
+        ).fetchone()[0]
     )
+
+
+# A question asked of a person today on a task the Strategy Owner holds (backend/person_asks.py: its asks to a person),
+# the vision question and merged items aside (counted on their own).
+ASKED_ON_OWN = (
+    "SELECT {select} FROM tasks t JOIN visits v ON v.task_id=t.id JOIN requirements r ON r.visit_id=v.id "
+    "WHERE t.requester_id=? AND t.owner_id=r.added_by_id AND r.added_by_id=? AND t.created_at>=? {who} "
+    "AND NOT EXISTS (SELECT 1 FROM goal_asks g WHERE g.task_id=t.id AND g.kind='vision') "
+    "AND NOT EXISTS (SELECT 1 FROM strategy_merges m WHERE m.merged_into=t.id) {group}"
+)
 
 
 # The vision question asked of a person today, on a task the Strategy Owner holds (not one of theirs, counted above).
@@ -535,8 +550,14 @@ def asked_today_all(c, at=None):
         "SELECT owner_id, COUNT(*) FROM tasks WHERE requester_id=? AND owner_id LIKE 'human:%' AND created_at>=? GROUP BY owner_id "
         "UNION ALL SELECT m.person, COUNT(DISTINCT m.merged_into) FROM strategy_merges m JOIN tasks t "
         "ON t.id=m.merged_into WHERE m.created_at>=? AND t.owner_id<>m.person GROUP BY m.person "
-        "UNION ALL " + VISION_ASKED.replace("SELECT COUNT(*)", "SELECT g.owner, COUNT(*)") + " GROUP BY g.owner",
-        ("bot:" + SLUG, since, since, since),
+        "UNION ALL " + VISION_ASKED.replace("SELECT COUNT(*)", "SELECT g.owner, COUNT(*)") + " GROUP BY g.owner "
+        "UNION ALL "
+        + ASKED_ON_OWN.format(
+            select="r.person_id, COUNT(DISTINCT t.id)",
+            who="AND r.person_id LIKE 'human:%'",
+            group="GROUP BY r.person_id",
+        ),
+        ("bot:" + SLUG, since, since, since, "bot:" + SLUG, "bot:" + SLUG, since),
     ):
         out[who] = out.get(who, 0) + n
     return out

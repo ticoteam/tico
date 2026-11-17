@@ -78,7 +78,18 @@ def raise_item(c, settings, bot, title, body):
     if not person:
         return None
     try:
-        return H.task_create(c, H.KEEPER, title, body, H.human_actor(person["id"]), lint=False)["id"]
+        from . import person_asks
+
+        return person_asks.task_for(
+            c,
+            H.KEEPER,
+            title,
+            body,
+            H.human_actor(person["id"]),
+            question=f"Can you get {H.actor_name(c, H.bot_actor(bot))} running again?",
+            why=person_asks.first_sentence(body),
+            asker=person_asks.botops(),
+        )["id"]
     except H.Refused:
         log.warning("Could not file the Needs-you task for the stopped bot %s", bot)
         return None

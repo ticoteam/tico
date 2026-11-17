@@ -25,7 +25,7 @@ the bot on the org chart, as only a person decides one."""
 import logging
 
 from .batch_work import isolated
-from . import needs_shape, strategy_bot
+from . import needs_shape, person_asks, strategy_bot
 from . import goals as G
 from . import kpis as K
 from . import strategy as S
@@ -407,6 +407,17 @@ def _vision_question(conn, item, title, body):
     return made
 
 
+# Why each ask matters to the person, the line the ask checks want under its question (backend/ask_shape.py).
+WHYS = {
+    "kpi_red": "A measure on your goal is off track, and you own what happens next.",
+    "kpi_stale": "Goals are judged on their numbers, and these have no current reading.",
+    "proposal": "It changes a goal or a measure you decide.",
+    "why": "Each goal says why it matters, so everyone knows what it serves.",
+    "recovery": "Your goal has fallen behind, and this is how your bots could recover it.",
+}
+WHY_DEFAULT = "It keeps the team's goals current."
+
+
 def _old_vision(task):
     """A vision ask an older release filed as the person's own to-do: `sync` closes it and asks the question."""
     return bool(task) and task["owner_id"] != G.AUTO_ACTOR
@@ -603,6 +614,22 @@ def sync(conn, owner_id, at=None, reads=None):
                 continue
             if item["kind"] == "vision":
                 made = _vision_question(conn, item, title, body)
+            elif H.is_human(item["owner"]):
+                # A person's ask is the Strategy Owner's task with its question to them: Needs you holds only what is
+                # asked of a person (backend/person_asks.py).
+                mine = person_asks.owner_bot(conn, G.AUTO_ACTOR) or item["owner"]
+                made = person_asks.ask(
+                    conn,
+                    G.AUTO_ACTOR,
+                    item["owner"],
+                    _free_title(conn, mine, title),
+                    body,
+                    title,
+                    WHYS.get(item["kind"], WHY_DEFAULT),
+                    bot=G.AUTO_ACTOR,
+                    lane="company",
+                    private=True if item.get("private") else None,
+                )
             else:
                 made = H.task_create(
                     conn,

@@ -205,7 +205,17 @@ def failure_item(c, link_id, code):
         "Check the channel and the link in the thread's settings."
     )
     try:
-        created = H.task_create(c, H.KEEPER, title, body, row["linked_by"], lint=False)
+        from . import person_asks
+
+        created = person_asks.task_for(
+            c,
+            H.KEEPER,
+            title,
+            body,
+            row["linked_by"],
+            question=f"Can you check the Slack link for #{name}?",
+            why="Slack refused a message, and Tico stopped trying it.",
+        )
         c.execute("UPDATE slack_thread_links SET failure_task_id=? WHERE id=?", (created["id"], link_id))
     except H.Refused:
         LOG.warning("Could not file the Needs-you item for a failed Slack send")
@@ -671,7 +681,17 @@ class Bridge:
             "checks the link again in the thread's settings."
         )
         try:
-            created = H.task_create(c, H.KEEPER, title, body, row["linked_by"], lint=False)
+            from . import person_asks
+
+            created = person_asks.task_for(
+                c,
+                H.KEEPER,
+                title,
+                body,
+                row["linked_by"],
+                question=f"Can you check the Slack link for #{name} again?",
+                why="Nothing moves between the channel and the thread until an owner or admin checks it.",
+            )
             c.execute("UPDATE slack_thread_links SET needs_task_id=? WHERE id=?", (created["id"], link_id))
         except H.Refused:
             LOG.warning("Could not file the Needs-you item for a suspended Slack link")
