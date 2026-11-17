@@ -325,8 +325,7 @@ def access_request(api, args):
 
 @tool(
     "tico_access_stats",
-    "Access requests over the last days in numbers: how many were asked, how many reached a person, the share granted "
-    "at once, how many are open and the median minutes from asking to a person's grant, by kind. Read-only.",
+    "Access requests in numbers: asked, reached a person, share granted at once, open, median minutes to grant.",
     {"days": {"type": "integer", "minimum": 1, "maximum": 90, "description": "How many days back; 7 by default"}},
 )
 def access_stats(api, args):

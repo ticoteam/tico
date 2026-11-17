@@ -150,6 +150,9 @@ AUDIENCE = {
     # The Tools page's owner bot proposes key grants in its own chat (backend/key_grants.py refuses any other caller); a
     # person grants on the card. Never the Assistant.
     "tico_tools_propose_grant": ("bot", "botops"),
+    # Access requests' weekly numbers are the Tools Owner's review (backend/access_requests.py); the Assistant's listing
+    # stays small.
+    "tico_access_stats": PEOPLE + BOTS,
     # Org changes: the Strategy Owner's owner chat makes one the person asked for, citing their words (`on_behalf_of`).
     **{name: REQUESTER + ("assistant",) for name in ("tico_group_update", "tico_group_delete", "tico_org_reports_to")},
     # Maintenance: the owner or an admin changes it; the team reads it (backend/maintenance.py may_change).
