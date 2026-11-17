@@ -50,7 +50,7 @@ def _spec_page(conn: "sqlite3.Connection", task: Row) -> Row | None:
     (`requirement_pages` row: `file_id`, `version`, `visit_id`), or None when there is none."""
     from . import task_engine, task_pages
 
-    work = [s for s in task_engine.stages(conn, task["pipeline_id"]) if s["kind"] == "work"]
+    work = task_engine.main_work(task_engine.stages(conn, task["pipeline_id"]))
     at = next((i for i, s in enumerate(work) if s["id"] == task["stage_id"]), 0)
     for stage in reversed(work[:at]):
         if not conn.execute(

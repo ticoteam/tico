@@ -57,6 +57,7 @@ STAGE_FIELDS = (
     "name",
     "purpose",
     "owner",
+    "side",
     "by_hand",
     "requests_move_on",
     "task_limit",
@@ -662,6 +663,7 @@ def _stage_out(conn: "sqlite3.Connection", row: Row) -> Row:
         "name": row["name"],
         "purpose": row.get("purpose") or "",
         "owner": row.get("owner"),
+        "side": bool(row.get("side")),
         "by_hand": bool(row.get("by_hand")),
         "requests_move_on": bool(row.get("requests_move_on")),
         "task_limit": row.get("task_limit"),
@@ -699,7 +701,7 @@ def read(conn: "sqlite3.Connection", pipeline_id: str) -> Row | None:
     out["stages"] = [_stage_out(conn, s) for s in order if s["kind"] == "work"]
     for kind in BUILT_IN:
         found = next((s for s in order if s["kind"] == kind), None)
-        out[kind] = {"id": found["id"], "name": found["name"]} if found else None
+        out[kind] = {"id": found["id"], "name": found["name"], "side": False} if found else None
     return out
 
 
@@ -786,21 +788,29 @@ def _stage_in(raw: object, position: int, problems: list[str]) -> Row:
     item = _dict(raw, f"Stage {position + 1} is not a stage.", problems)
     name = _text(item.get("name"), f"Stage {position + 1}'s name", problems)
     label = name or f"stage {position + 1}"
+    side = _flag(item.get("side"), f"Side stage on {label}", problems)
+    if side and item.get("kind", "work") != "work":
+        problems.append(f"Only a work stage can be a side stage ({label}).")
     return {
         "id": _ref(item.get("id"), f"The id of {label}", problems),
         "name": name,
         "purpose": _text(item.get("purpose"), f"The purpose of {label}", problems),
         "owner": _ref(item.get("owner"), f"The owner of {label}", problems),
         "pick": item.get("pick"),  # checked with the owner (`_check_pick`)
-        "by_hand": _flag(item.get("by_hand"), f"Tasks leave by hand on {label}", problems),
-        "requests_move_on": _flag(item.get("requests_move_on"), f"A person's request moves on, on {label}", problems),
-        "task_limit": _count(item.get("task_limit"), f"The limit on {label} is a whole number above zero.", problems),
-        "expected_minutes": _count(
+        "side": side,
+        "by_hand": side or _flag(item.get("by_hand"), f"Tasks leave by hand on {label}", problems),
+        "requests_move_on": not side
+        and _flag(item.get("requests_move_on"), f"A person's request moves on, on {label}", problems),
+        "task_limit": None
+        if side
+        else _count(item.get("task_limit"), f"The limit on {label} is a whole number above zero.", problems),
+        "expected_minutes": None
+        if side
+        else _count(
             item.get("expected_minutes"), f"Expected time on {label} is a whole number of minutes above zero.", problems
         ),
-        "expected_bots_only": _flag(
-            item.get("expected_bots_only"), f"Expected time for bots only on {label}", problems
-        ),
+        "expected_bots_only": not side
+        and _flag(item.get("expected_bots_only"), f"Expected time for bots only on {label}", problems),
         "on_enter": _dict(
             item.get("on_enter"),
             f"On enter on {label} is nothing, file a linked task into a pipeline, or queue the PRs to merge.",
@@ -835,6 +845,8 @@ def _parse(record: object) -> tuple[Row, list[str]]:
     ]
     for kind in BUILT_IN:
         given = _as_dict(item.get(kind)) or {}
+        if _flag(given.get("side"), f"Side stage on {kind.title()}", problems):
+            problems.append(f"Only a work stage can be a side stage ({kind.title()}).")
         out[kind] = {"id": _ref(given.get("id"), f"The id of {kind}", problems)}
     return out, problems
 
@@ -1091,6 +1103,14 @@ def _problems(conn: "sqlite3.Connection", record: Row) -> list[str]:
             problems.append(f"The owner of {label} must be a bot, a person or the task's assignee, not {owner}.")
         else:
             stage["pick"] = None
+        if stage["side"]:
+            if position == 0:
+                problems.append(f"The first work stage of a pipeline cannot be a side stage ({label}).")
+            if stage["requirements"]:
+                problems.append(f"A side stage cannot have requirements ({label}).")
+            if stage["on_enter"]:
+                problems.append(f"A side stage cannot have an on-enter action ({label}).")
+            continue
         if position == 0 and stage["task_limit"]:
             problems.append(f"The first stage of a pipeline has no limit ({label}).")
         if stage["requests_move_on"] and not stage["by_hand"]:
@@ -1318,6 +1338,7 @@ def _write_stages(conn: "sqlite3.Connection", by: str, pid: str, record: Row, ts
             stage["name"],
             stage["purpose"],
             stage["owner"],
+            int(bool(stage.get("side"))),
             1 if stage["by_hand"] else 0,
             1 if stage["requests_move_on"] else 0,
             stage["task_limit"],
@@ -1330,7 +1351,7 @@ def _write_stages(conn: "sqlite3.Connection", by: str, pid: str, record: Row, ts
         old = old_rows.get(sid) if sid else None
         if old:
             conn.execute(
-                "UPDATE stages SET position=?, name=?, purpose=?, owner=?, by_hand=?, requests_move_on=?, "
+                "UPDATE stages SET position=?, name=?, purpose=?, owner=?, side=?, by_hand=?, requests_move_on=?, "
                 "task_limit=?, expected_minutes=?, expected_bots_only=?, on_enter=?, pick=?, updated_at=?, "
                 "retired_at=NULL WHERE id=?",
                 (*values, ts, sid),
@@ -1341,9 +1362,9 @@ def _write_stages(conn: "sqlite3.Connection", by: str, pid: str, record: Row, ts
         else:
             sid = sid or _free_stage_id(conn, f"{pid}-{_slug(stage['name'])}", taken)
             conn.execute(
-                "INSERT INTO stages (position, name, purpose, owner, by_hand, requests_move_on, task_limit, "
+                "INSERT INTO stages (position, name, purpose, owner, side, by_hand, requests_move_on, task_limit, "
                 "expected_minutes, expected_bots_only, on_enter, pick, id, pipeline_id, kind, created_at, updated_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'work',?,?)",
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'work',?,?)",
                 (*values, sid, pid, ts, ts),
             )
         loosened = _write_requirements(conn, by, sid, stage["requirements"], ts) or loosened
@@ -1461,8 +1482,9 @@ def move_to_hint(conn: "sqlite3.Connection", record: Row) -> Row | None:
     for stage in order:
         if stage["id"] not in kept:
             break
-        before = stage
-    found = before or next((s for s in order if s["id"] in kept), None)
+        if task_engine.is_main_work(stage):
+            before = stage
+    found = before or next((s for s in order if s["id"] in kept and task_engine.is_main_work(s)), None)
     return {"pipeline": pid, "stage": found["id"]} if found else None
 
 
@@ -1475,7 +1497,7 @@ def _move_out(conn: "sqlite3.Connection", by: str, pid: str, gone: list[Row], to
     leaving = {str(g["id"]) for g in gone} | {str(g["name"]).lower() for g in gone}
     if pipe["id"] == pid and (not target or target in leaving or target.lower() in leaving):
         # The first stage, when none is named, is one that stays: only a named one that goes is refused.
-        first = next((s for s in task_engine.stages(conn, pid) if s["kind"] == "work"), None)
+        first = next((s for s in task_engine.stages(conn, pid) if task_engine.is_main_work(s)), None)
         if target or (first and first["id"] in leaving):
             _refuse(conn, by, "task_settings", "Move the tasks to a stage that stays.")
     for stage in gone:

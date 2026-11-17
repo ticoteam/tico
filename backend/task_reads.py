@@ -206,6 +206,23 @@ def _could_read(c, visible_sql, tid, ref):
 
 
 # ----------------------------------------------------------------------------- the engine's part of a list row
+def came_from(c, ids):
+    """Each side-stage task's latest main work visit in its current pipeline, if it has one."""
+    return {
+        task: {"id": stage, "name": name}
+        for task, stage, name in c.execute(
+            "SELECT t.id, prior.id, prior.name FROM json_each(?) ids "
+            "JOIN tasks t ON t.id=ids.value JOIN stages here ON here.id=t.stage_id AND here.side=1 "
+            "JOIN visits previous ON previous.rowid=("
+            "SELECT v.rowid FROM visits v JOIN stages s ON s.id=v.stage_id "
+            "WHERE v.task_id=t.id AND s.pipeline_id=t.pipeline_id AND s.kind='work' AND s.side=0 "
+            "ORDER BY v.entered_at DESC, v.rowid DESC LIMIT 1) "
+            "JOIN stages prior ON prior.id=previous.stage_id",
+            (json.dumps(ids),),
+        )
+    }
+
+
 def brief(c, rows, visible_sql="1"):
     """The engine's fields of a list row (docs/dev/pipelines-v3-cutover.md, "The task as JSON", Brief), laid over each
     row in place: `turn` (the headline wait; `running` when a bot's turn is a run going now), `late`, `snoozed`,
@@ -227,6 +244,7 @@ def brief(c, rows, visible_sql="1"):
     ids = [row["id"] for row in rows]
     if not ids:
         return rows
+    origins = came_from(c, ids)
     waits = H.task_waits(c, ids)
     marks = json.dumps(ids)
     marked, pushed, entered, stuck = {}, set(), {}, set()
@@ -291,6 +309,7 @@ def brief(c, rows, visible_sql="1"):
             row["blocks"] = blocks[row["id"]]
         row["pushed_past"] = row["id"] in pushed
         row["stage_since"] = entered.get(row["id"]) or row.get("created_at")
+        row["came_from"] = origins.get(row["id"])
         row["on_person"] = row["id"] in person
     return rows
 

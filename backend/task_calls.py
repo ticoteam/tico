@@ -214,6 +214,9 @@ def task_done(
         _refuse(conn, actor, "not-found", "No such task")
     if row["status"] == "done":
         return row
+    if row["status"] == "open" and row["stage"].get("side"):
+        with task_effects.because(actor):
+            return E.move(conn, task_id, NEXT, actor, None, seen_version)
     if row["status"] == "open":
         from . import question_marks
 
@@ -290,7 +293,7 @@ def task_move_to(
     row = _open(conn, actor, task_id, mover, work=False)
     pipe = E.pipeline_named(conn, actor, to_pipeline, task_id)
     if pipe["id"] == row.get("pipeline_id"):
-        first = next((str(s["id"]) for s in E.stages(conn, str(pipe["id"])) if s["kind"] == "work"), "")
+        first = next((str(s["id"]) for s in E.stages(conn, str(pipe["id"])) if E.is_main_work(s)), "")
         return task_move(conn, actor, task_id, str(to or "").strip() or first, why, seen_version, mover=mover)
     with task_effects.because(actor):
         return E.refile(conn, task_id, str(pipe["id"]), to, actor, why, seen_version, batch=batch)
@@ -1109,6 +1112,7 @@ def task_view(
     `inputs`: also what earlier stages handed on (stage_inputs), for the task's own read; a list of many tasks
     (Needs you) leaves it out."""
     from . import task_engine as E
+    from . import task_reads
     from . import task_requirements as R
     from . import waiting_on as W
 
@@ -1172,7 +1176,9 @@ def task_view(
             "name": stage.get("name"),
             "kind": stage.get("kind"),
             "by_hand": bool(stage.get("by_hand")),
+            "side": bool(stage.get("side")),
         },
+        "came_from": task_reads.came_from(conn, [task_id]).get(task_id) if stage.get("side") else None,
         "owner_id": row.get("owner_id"),
         "assignee_id": row.get("assignee_id"),
         "turn": waits[0] if waits else None,

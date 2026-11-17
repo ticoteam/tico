@@ -24,6 +24,10 @@ SCHEMAS.update(
                 "version": "i",
                 "pipeline_id": "n",
                 "stage_id": "n",
+                "came_from": {
+                    "oneOf": [obj({"id": "s", "name": "s"}), {"type": "null"}],
+                    "description": "In a side stage, the last main work stage this task visited in this pipeline, if any",
+                },
                 "turn": {
                     "oneOf": [ref("TaskWait"), {"type": "null"}],
                     "description": "The headline wait: whose turn it is",
@@ -55,6 +59,7 @@ SCHEMAS.update(
                 "version",
                 "pipeline_id",
                 "stage_id",
+                "came_from",
                 "turn",
                 "late",
                 "lane",
@@ -88,7 +93,15 @@ SCHEMAS.update(
             },
             stage={
                 "oneOf": [
-                    obj({"id": "s", "name": "s", "kind": {"enum": ["work", "done", "closed"]}, "by_hand": "b"}),
+                    obj(
+                        {
+                            "id": "s",
+                            "name": "s",
+                            "kind": {"enum": ["work", "done", "closed"]},
+                            "by_hand": "b",
+                            "side": "b",
+                        }
+                    ),
                     {"type": "null"},
                 ],
                 "description": "On the task's own read: the stage it is in",

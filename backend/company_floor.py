@@ -167,7 +167,8 @@ def floor(c: Any, auth: Any, who: Any) -> dict[str, Any]:
     ]
     stages: dict[str, list[Any]] = {}
     for r in c.execute(
-        "SELECT id, pipeline_id, name, on_enter FROM stages WHERE retired_at IS NULL AND kind='work' ORDER BY pipeline_id, position"
+        "SELECT id, pipeline_id, name, on_enter, side FROM stages WHERE retired_at IS NULL AND kind='work' "
+        "ORDER BY pipeline_id, position"
     ):
         stages.setdefault(r[1], []).append(r)
     held = _holders(c, visible_sql, _needs_task_ids(c, auth, who))
@@ -192,7 +193,7 @@ def floor(c: Any, auth: Any, who: Any) -> dict[str, Any]:
                 "manager_id": p[4],
                 **rates[p[0]],
                 "moved_into": moves.get(str(p[0]), []),
-                "stages": [_stage(s, held.get(s[0], []), unknown, seen) for s in stages.get(p[0], [])],
+                "stages": [_stage(s, held.get(s[0], []), unknown, seen) for s in stages.get(p[0], []) if not s[4]],
             }
         )
     halls = [f for f in factories if f["pipelines"] or f["manager_id"] == me]

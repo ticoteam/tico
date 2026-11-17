@@ -530,6 +530,7 @@ def readers(auth):
             "acceptance_criteria": json.loads(row.get("acceptance") or "[]"),
             "labels": H.task_labels(row),
             "lane": row.get("lane") or "company",
+            "came_from": row.get("came_from"),
             "private": H.task_private(c, row),
             "cover": None,
         }

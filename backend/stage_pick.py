@@ -408,7 +408,9 @@ def first_picks(conn: "sqlite3.Connection", pipeline_id: str | None) -> bool:
     stage picks one as it arrives (a bot filing into Build). Naming an owner always wins."""
     from . import task_engine
 
-    first = next((s for s in task_engine.stages(conn, str(pipeline_id or "general")) if s["kind"] == "work"), None)
+    first = next(
+        (s for s in task_engine.stages(conn, str(pipeline_id or "general")) if task_engine.is_main_work(s)), None
+    )
     return config(first) is not None
 
 
