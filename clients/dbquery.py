@@ -8,8 +8,9 @@
 
 Queries execute beside the bot, never on the server. Tico stores the encrypted Credential and
 delivers it only to a granted bot for the run; database access also needs network reachability
-from that computer. The rules are enforced here, in layers: the bot must declare the database under
-`tools:` in `bot.yaml` (older: `access:` in `employee.yaml`); the statement must be one SELECT-like statement; the session is
+from that computer. The rules are enforced here, in layers: the run must hold the database's connection
+string, which is its grant (`DB_<NAME>_URL`, or the variable a `tools:` entry in `bot.yaml` names; the entry, older
+`access:` in `employee.yaml`, is optional and may refuse reads or set limits); the statement must be one SELECT-like statement; the session is
 opened read-only; a row cap and a timeout apply; credentials are scrubbed from every message;
 and each query is recorded in Tico (statement, row count, time, no result data) before its
 rows are shown. The database role's own permissions are still the first line of defence:
@@ -516,7 +517,8 @@ def kind_of(url):
     return SCHEMES[scheme]
 
 
-def employee_manifest(slug, environ=None):
+def employee_manifest(slug, environ=None, required=True):
+    """The bot's bot.yaml, or (`required` false) {} when there is none: its entries are optional notes."""
     import yaml
 
     environ = environ if environ is not None else os.environ
@@ -531,6 +533,8 @@ def employee_manifest(slug, environ=None):
             continue
         if isinstance(data, dict):
             return data
+    if not required:
+        return {}
     raise Refusal("grant", f"no bot.yaml found for {slug}; a bot declares its databases under `tools:` there")
 
 
@@ -553,24 +557,16 @@ def limit(entry, key, default, ceiling):
 def open_database(name, actor, environ=None):
     """The Database `actor` may use under `name`, with its credential from the environment.
 
-    A bot needs a declared `tools:` entry; a person running `tico db` on their own computer
-    needs the credential in their own environment, which is their grant."""
+    The credential in the environment is the grant: a bot's run holds only what was granted to it (or what its own
+    computer holds for it), and a person running `tico db` on their own computer holds their own. A bot's bot.yaml
+    entry for the database is optional: it names the variable and limits, and one without `read` refuses."""
     environ = environ if environ is not None else os.environ
     if not NAME.match(name) or name in RESERVED:
         raise Refusal("usage", f"`{name}` is not a database name (lower-case letters, digits, - and _)")
     entry = {}
     if actor.startswith("bot:"):
-        entries = declared(employee_manifest(actor[4:], environ))
-        if name not in entries:
-            have = ", ".join(sorted(entries)) or "none"
-            raise Refusal(
-                "grant",
-                f"{actor} does not declare database `{name}` (declared: {have}). Add a `tools:` entry with "
-                f"`service: postgres|mysql|mongodb|sqlite`, `database: {name}` and `can: [read]` to its bot.yaml; "
-                "that is the owner's call.",
-            )
-        entry = entries[name]
-        if "read" not in [str(v) for v in (entry.get("can") or [])]:
+        entry = declared(employee_manifest(actor[4:], environ, required=False)).get(name) or {}
+        if entry and "read" not in [str(v) for v in (entry.get("can") or [])]:
             raise Refusal("grant", f"{actor}'s entry for `{name}` does not carry `read` in `can:`")
     variable = str(entry.get("env") or env_name(name))
     url = str(environ.get(variable) or "").strip()
@@ -604,7 +600,14 @@ def listing(actor, environ=None):
             if re.fullmatch(r"DB_[A-Z0-9_]+_URL", key) and environ[key]
         ]
     rows = []
-    for name, entry in sorted(declared(employee_manifest(actor[4:], environ)).items()):
+    entries = declared(employee_manifest(actor[4:], environ, required=False))
+    # A granted connection string with no entry is a database too (`open_database`).
+    for key in sorted(environ):
+        found = re.fullmatch(r"DB_([A-Z0-9_]+)_URL", key)
+        name = found.group(1).lower().replace("_", "-") if found else ""
+        if found and environ[key] and name not in entries and env_name(name) == key and NAME.match(name):
+            entries[name] = {"service": "database", "database": name, "can": ["read"]}
+    for name, entry in sorted(entries.items()):
         variable = str(entry.get("env") or env_name(name))
         rows.append(
             {

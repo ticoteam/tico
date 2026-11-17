@@ -151,15 +151,10 @@ def store_for_bot(c, vault, who, env, bot, value, name="", kind="api_key", usern
     """The credential for `env` on `bot`, created or replaced, and granted to that bot alone. `who` is the person."""
     validate_identity(c, who)
     row = H.bot(c, bot)
-    admin = administrator(c, who, vault.admins)
-    if not admin and not (row and vault.member_stores(c, who, bot)):
-        names = admin_names(c, vault)
-        raise Problem(
-            "forbidden",
-            "Only a credential admin, or someone who manages this bot, can store credentials for it"
-            + (". Ask " + ", ".join(names[:3]) if names else ""),
-            403,
-        )
+    from . import tool_access as TA
+
+    TA.require(c, who, TA.key(), "bot:" + bot, TA.STORE, admins=vault.admins, auth=vault.auth)
+    admin = TA.admin(c, who, vault.admins)
     if not row:
         raise Problem("not_found", "Bot not found", 404)
     subject = "bot:" + bot
@@ -269,11 +264,14 @@ def redact_value(c, person, value, env, conversation_id="", attempt_id="", messa
 def install_credential_cards(app, store, vault, auth, botops, delegate, manager):
     """`botops` is the built-in bot's slug, `delegate(c, who, ref)` BotOps' acting-as-the-requester check, and
     `manager(c, person, bot)` the rule for who may manage a bot."""
+    from . import tool_access as TA
 
     def view(c, row, viewer):
         bot = H.bot(c, row["bot"]) or {}
         name = bot.get("display_name") or bot.get("slug") or row["bot"]
-        allowed = administrator(c, viewer, vault.admins) or vault.member_stores(c, viewer, row["bot"])
+        allowed = TA.may_change_access(
+            c, viewer, TA.key(), "bot:" + row["bot"], TA.STORE, admins=vault.admins, auth=vault.auth
+        )
         note = None
         if row["status"] == "pending" and not allowed:
             names = admin_names(c, vault)

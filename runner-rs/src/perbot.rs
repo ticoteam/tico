@@ -104,7 +104,7 @@ impl PerBot {
 /// The MCP servers one run passes to its harness: bot.yaml's, with every variable a server needs among the
 /// turn's granted ones, then the granted MCP tools' (`from_grants`, crate::mcp::granted) that bot.yaml does not
 /// name. Each server left out (no credential, or a transport the harness cannot take) is a line for the turn's
-/// diagnostics.
+/// diagnostics, except a bot.yaml server whose grant brings it anyway: a grant needs no bot.yaml entry.
 pub fn mcp_for_run(
     path: &Path,
     env: &Env,
@@ -122,7 +122,8 @@ pub fn mcp_for_run(
         .filter(|(k, _)| granted.contains(*k))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
-    let (servers, mut problems) = crate::mcp::servers_for_run(&tools, &visible, proxied);
+    let (servers, problems) = crate::mcp::servers_for_run(&tools, &visible, proxied);
+    let mut problems = crate::mcp::drop_covered(problems, &tools, from_grants);
     let servers = crate::mcp::merge(servers, from_grants);
     for (server, why) in crate::mcp::unsupported(&servers, runtime, harness) {
         problems.push(format!(
@@ -166,6 +167,48 @@ mod tests {
         assert!(problems[1].starts_with("docs: MCP server not passed. Codex cannot use it"));
         let (servers, _) = mcp_for_run(&dir, &env, &granted, "claude", "", &[], &[]);
         assert_eq!(servers.len(), 2);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_granted_mcp_tool_reaches_the_run_whatever_bot_yaml_says() {
+        let dir =
+            std::env::temp_dir().join(format!("tico-perbot-g-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // bot.yaml names notion under a variable the bot does not hold; Tools grants it the notion MCP tool.
+        std::fs::write(
+            dir.join("bot.yaml"),
+            "tools:\n  - service: notion\n    env: NOTION_KEY\n    mcp: {url: 'https://mcp.notion.com/mcp', headers: {Authorization: 'Bearer ${NOTION_KEY}'}}\n",
+        )
+        .unwrap();
+        let grants = [
+            json!({"name": "notion", "service": "notion", "url": "https://mcp.notion.com/mcp",
+                             "transport": "http", "headers": {"Authorization": "Bearer ${NOTION_TOKEN}"}, "env": "NOTION_TOKEN"}),
+        ];
+        let (servers, problems) = mcp_for_run(
+            &dir,
+            &Env::new(),
+            &BTreeSet::new(),
+            "claude",
+            "",
+            &[],
+            &grants,
+        );
+        assert_eq!(servers.len(), 1);
+        assert_eq!(text_of(&servers[0]["env"]), "NOTION_TOKEN");
+        assert!(problems.is_empty(), "{problems:?}");
+        // With no bot.yaml at all, the grant alone brings it.
+        let none = dir.join("none");
+        let (servers, problems) = mcp_for_run(
+            &none,
+            &Env::new(),
+            &BTreeSet::new(),
+            "claude",
+            "",
+            &[],
+            &grants,
+        );
+        assert_eq!((servers.len(), problems.len()), (1, 0));
         std::fs::remove_dir_all(dir).ok();
     }
 
