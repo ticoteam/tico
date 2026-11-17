@@ -110,6 +110,30 @@ def test_a_person_who_has_left_may_use_no_key(books: Store):
         assert not FT.may_use_credential(c, "system", "cred-stripe")
 
 
+def test_a_person_uses_a_key_they_stored_for_a_bot_until_someone_else_saves_it(books: Store):
+    with books.transaction() as c:
+        c.execute(
+            "INSERT INTO credentials(id,name,kind,member_stored,created_at,updated_at,updated_by,created_by) "
+            "VALUES('cred-cara','cred-cara','token',1,?,?,?,?)",
+            (AT, AT, CARA, CARA),
+        )
+        assert FT.may_use_credential(c, CARA, "cred-cara")  # `owned`, read for this one key
+        c.execute("UPDATE credentials SET updated_by=? WHERE id='cred-cara'", (OWNER,))
+        assert not FT.may_use_credential(c, CARA, "cred-cara")
+
+
+def test_a_bot_never_sends_a_default_read_key_it_holds_no_grant_to(books: Store):
+    with books.transaction() as c:
+        c.execute(
+            "INSERT INTO tools(id,name,everyone_reads,created_by,created_at,updated_at) VALUES('bank','Bank',1,?,?,?)",
+            (OWNER, AT, AT),
+        )
+        c.execute("UPDATE credentials SET tool_id='bank' WHERE id='cred-stripe'")
+        assert not FT.may_use_credential(c, BOT, "cred-stripe")  # the proxy holds a default read to reads
+        grant(c, "cred-stripe", BOT)
+        assert FT.may_use_credential(c, BOT, "cred-stripe")
+
+
 def _sealed(c: Any, cid: str, value: str) -> None:
     ciphertext, nonce = FT._VAULT[0].cipher.encrypt(c, cid, value)
     c.execute(

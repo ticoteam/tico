@@ -39,11 +39,16 @@ def _metadata(c: sqlite3.Connection, key: str) -> Any:
         return None
 
 
+def _owner_email(c: sqlite3.Connection) -> str:
+    """The stored owner record's email, in lower case."""
+    stored = _metadata(c, "owner")
+    return str(cast(dict[str, Any], stored).get("email") or "").strip().lower() if isinstance(stored, dict) else ""
+
+
 def owner_person(c: sqlite3.Connection, fallback: str = "") -> str:
     """The install owner as `human:<id>`: the stored owner record's person, else `fallback` (the person Finance was
     set up for). Admins are not owners."""
-    stored = _metadata(c, "owner")
-    email = str(cast(dict[str, Any], stored).get("email") or "").strip().lower() if isinstance(stored, dict) else ""
+    email = _owner_email(c)
     if email:
         row = c.execute("SELECT id FROM humans WHERE lower(email)=?", (email,)).fetchone()
         if row:
@@ -608,10 +613,12 @@ def _identity(c: sqlite3.Connection, actor: str) -> Any:
             return signed.identity_for_actor(c, actor)
         except A.Problem:
             return None
-    # A vault registered without the app's sign-in (a worker or a test): the same rebuild, from the stored owner.
+    # A vault registered without the app's sign-in (a worker or a test): the same rebuild, the owner by the stored
+    # owner's email as Auth.identity_for_actor does (never a lookup of every person by email).
     if A.standing(c, actor.partition(":")[2]):
         return None
-    return A.Identity(actor, "owner" if actor == owner_person(c) else "human", email=person_email(c, actor))
+    email = person_email(c, actor)
+    return A.Identity(actor, "owner" if email and email == _owner_email(c) else "human", email=email)
 
 
 def may_use_credential(c: sqlite3.Connection, actor: str, credential_id: str) -> bool:
