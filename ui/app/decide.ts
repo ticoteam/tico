@@ -771,8 +771,8 @@ function decidePaintBody(st: DecState) {
   } else if (decideTaskId(it)) {
     // Who asked and when, then the task's own text, its links, files and pages; the heading is on the right only.
     html = decideAboutHTML(it, kind);
-  } else if (kind === 'mention' && it.kind !== 'question') {
-    // (A ❓ in a direct chat has no task: its chat is the whole item, dc-solo.)
+  } else if (kind === 'mention' && !decideChatOf(it)) {
+    // (A ❓ or an @ in a chat with no task: its chat is the whole item, dc-solo.)
     html = `<blockquote class="dc-quote">${esc(it.line)}</blockquote>`;
   }
   // A website's browser the ask shows (`browser:<tool>/<account>`): the live view; an OK's comes in its shows.
@@ -929,12 +929,12 @@ function decidePaintSide(st: DecState) {
   // ⋯ is last on every item's row, after Snooze: Close task and Give to….
   const more = decideAskMoreHTML(st, it);
   if (more) host.querySelector<HTMLElement>('[data-key] > .dc-acts')?.insertAdjacentHTML('beforeend', more);
-  // A ❓ on a wide screen: Snooze and ⋯ go on the header row by ‹ ›, as a phone has them on its title row, so the
-  // composer ends the column.
+  // A ❓ or an @ on a wide screen: Snooze (an @'s Skip) and ⋯ go on the header row by ‹ ›, as a phone has them on its
+  // title row, so the composer ends the column.
   const headActs = $('.decide .dc-head-acts') as HTMLElement | null;
   if (headActs) {
-    const row = chat && it.kind === 'question' && !decidePhone() ? host.querySelector<HTMLElement>(':scope > [data-key] > .dc-acts') : null;
-    if (row && !row.querySelector(':scope > button')) headActs.replaceChildren(row); else headActs.replaceChildren();
+    const row = chat && (it.kind === 'question' || it.kind === 'mention') && !decidePhone() ? host.querySelector<HTMLElement>(':scope > [data-key] > .dc-acts') : null;
+    if (row && !row.querySelector(':scope > button:not(.dc-skip)')) headActs.replaceChildren(row); else headActs.replaceChildren();
   }
   const note = host.querySelector<HTMLTextAreaElement>('#dc-notes');
   if (note && heldNote) note.value = heldNote;
@@ -1046,7 +1046,8 @@ function decideAskMoreHTML(st: DecState, it: NeedsEntry): string {
   const items: [string, string][] = [];
   // Close task, on every item with a task the person may close (a stuck one has its own Close).
   if (decideKind(it) !== 'stuck' && decideMayClose(it)) items.push(['close-task', 'Close task']);
-  if (it.kind === 'question' || (decideChatOf(it) && decideMayClose(it))) items.push(['give', 'Give to…']);
+  // An @ is the person's own to answer: there is nothing of it to give.
+  if (it.kind === 'question' || (it.kind !== 'mention' && decideChatOf(it) && decideMayClose(it))) items.push(['give', 'Give to…']);
   if (!items.length) return '';
   const btn = `<button type="button" class="dc-icon dc-snz-b dc-more-b" data-dc="ask-more" aria-label="More" title="More" aria-haspopup="menu" aria-expanded="${open}"${busy}>⋯</button>`;
   const menu = open ? `<span class="dc-snz" role="menu" aria-label="More">${items.map(([k, l]) =>
@@ -1545,11 +1546,13 @@ function decideMayClose(it: NeedsEntry): boolean {
 // arrow sends a reply (decideChatSend). Under it only Approve on an OK, Snooze and ⋯. Underneath an ask stays an ask:
 // an OK's reply is its send back.
 let DEC_CHAT: {item: string; cid: string; view: ThvView | null; typed: string} | null = null;
-/** A bot's ❓: the chat it sits in (its task's, or a direct chat with the bot). */
-const decideMarkRoom = (it: NeedsEntry): string => it.kind === 'question' ? it.root_id || it.conversation_id || '' : '';
+/** The chat a message item sits in: a bot's ❓'s (its task's, or a direct chat with the bot), an @'s own conversation. */
+const decideMarkRoom = (it: NeedsEntry): string => it.kind === 'question' ? it.root_id || it.conversation_id || ''
+  : it.kind === 'mention' ? it.conversation_id || it.root_id || '' : '';
 function decideChatOf(it: NeedsEntry): boolean {
-  // A bot's ❓ is its chat: the marked message in view and the composer, whose reply clears it.
-  if (it.kind === 'question') return !!decideMarkRoom(it);
+  // A bot's ❓, or an @ of the person, is its chat: the message in view and the composer, whose reply clears it
+  // (backend/question_marks.py; open_mentions.py: the person posted there since).
+  if (it.kind === 'question' || it.kind === 'mention') return !!decideMarkRoom(it);
   return decideKind(it) === 'ok' && !!decideTaskId(it);
 }
 /** The chat's box as the task's window words it (task-modal.ts taskComposerToPaint): "Message <the task's owner>"
@@ -1806,9 +1809,9 @@ const decideHeldSaid = (held: RuleHold) => held.outcome === 'escalated' ? 'A rul
 async function decideChatSend(st: DecState, text: string, files: File[]): Promise<boolean> {
   const it = DEC === st ? decideCurrent(st) : null;
   if (!it || st.busy) return false;
-  if (it.kind === 'question') {
-    // A bot's ❓: the reply is a message of its chat like any other (a task's chat or a direct one), which clears the ❓
-    // (backend/question_marks.py); Flow moves on. Files go up with it, into that chat.
+  if (it.kind === 'question' || it.kind === 'mention') {
+    // A bot's ❓ or an @: the reply is a message of its chat like any other (a task's chat or a direct one), which clears
+    // it (backend/question_marks.py, open_mentions.py); Flow moves on. Files go up with it, into that chat.
     const room = decideMarkRoom(it);
     await decideDo(st, it, 'Sent', async () => {
       const body = {text};
