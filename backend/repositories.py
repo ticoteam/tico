@@ -183,16 +183,34 @@ def note_asked(c, repository):
         save_metadata(c, ASKED, asked)
 
 
+def _owner(c, default_owner=''):
+    """The owner a bare bot repo name is under: the App's organization, else the configured one."""
+    try:
+        row = c.execute("SELECT org FROM github_app WHERE id='app'").fetchone()
+    except sqlite3.OperationalError:
+        row = None
+    return (row['org'] if row else '') or default_owner
+
+
 def note_chosen(c, repo, default_owner=''):
     """A person pointed a bot at `repo` (a stored bot repo: name, owner/name or URL): Tico uses it from now on,
     even if someone else made it (home)."""
     from .github_app import repo_of
 
-    try:
-        row = c.execute("SELECT org FROM github_app WHERE id='app'").fetchone()
-    except sqlite3.OperationalError:
-        row = None
-    note_repository(c, CHOSEN, repo_of(repo, (row['org'] if row else '') or default_owner))
+    note_repository(c, CHOSEN, repo_of(repo, _owner(c, default_owner)))
+
+
+def note_named(c, repo, defaults, default_owner=''):
+    """A bot is made with `repo`. When it is not one of the names Tico gives a bot unasked (`defaults`, such as
+    `bot-<slug>`, which a form fills in by itself), someone named it, so it is chosen, as Settings > Bots records a
+    repository a person sets there. A default name is not: one GitHub had before the bot may be another company's
+    (Homes)."""
+    from .github_app import repo_of
+
+    owner = _owner(c, default_owner)
+    name = str(repo_of(repo, owner) or '').lower()
+    if '/' in name and name not in {str(repo_of(d, owner) or '').lower() for d in defaults if d}:
+        note_repository(c, CHOSEN, name)
 
 
 def made_here(c, repository):
