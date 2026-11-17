@@ -29,6 +29,8 @@ client certificate) and keeps that answer as `refused`. They use the standard li
 - `LOGIN <site>`: signs in to a website tool with the bot-side commands: `tico browser open`, `tico login fill` for
   the username, password and code, then `tico browser click` to submit.
 - `ECHO <ENV>`: says the value of $ENV in the reply, as a careless bot would, so the transcript's redaction is tested.
+- `STORE <ENV> <file>`: keeps a key the bot already holds in `file` as its own, under $ENV, with the bot-side command
+  `tico credential add <ENV> --env <ENV> --from-file <file>` (the value is never an argument).
 
 Each use appends one record to $FAKE_LOG (`{"use": ..., ...}`: status codes, the answer's body, the turn's whole
 environment) and adds one line to the reply. A prompt with no marker changes nothing."""
@@ -48,7 +50,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-MARKER = re.compile(r"^(CALL|FILE|MCPCALL|LOGIN|ECHO|SIGV4|OAUTH1|HAWK|MTLS|HMAC|IMAP|SESSION) +(.+)$")
+MARKER = re.compile(r"^(CALL|FILE|MCPCALL|LOGIN|ECHO|STORE|SIGV4|OAUTH1|HAWK|MTLS|HMAC|IMAP|SESSION) +(.+)$")
 AGENT = "acme-bot-fake/1"
 
 
@@ -379,6 +381,16 @@ def login(site):
     return {"use": "login", "site": site, "steps": out}
 
 
+def store(env, path):
+    argv = ["credential", "add", env, "--env", env, "--from-file", path]
+    try:
+        done = subprocess.run(["tico", *argv], capture_output=True, text=True, timeout=60)
+        step = {"argv": argv, "code": done.returncode, "stdout": done.stdout, "stderr": done.stderr}
+    except (OSError, subprocess.TimeoutExpired) as error:
+        step = {"argv": argv, "code": -1, "stderr": f"{type(error).__name__}: {error}"}
+    return {"use": "store", "env": env, "steps": [step]}
+
+
 def act(text, servers, record):
     """Every marker in the prompt, once each, in order: the reply's extra lines."""
     lines, done = [], set()
@@ -410,6 +422,8 @@ def act(text, servers, record):
             entry = session(*args)
         elif verb == "LOGIN" and len(args) == 1:
             entry = login(args[0])
+        elif verb == "STORE" and len(args) == 2:
+            entry = store(*args)
         elif verb == "ECHO" and len(args) == 1:
             entry = {"use": "echo", "env": args[0], "present": bool(os.environ.get(args[0]))}
             lines.append(f"The value of {args[0]} is {os.environ.get(args[0], '')}.")

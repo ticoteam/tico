@@ -18,6 +18,9 @@ The rule, in order:
 - Taking a grant back: an administrator, or whoever stored the key or made the grant, from a bot they manage.
 - Storing a value for a bot (its key card, `tico credential set --for-bot`): an administrator, or a member who manages
   the bot while the team rule "Members store credentials" is on, for a new key or one they stored.
+- A bot's own key (`_itself`): a bot acting as itself (no delegation) stores a value it already holds for itself alone,
+  as a new key or over one it stored itself, and gives it to itself; never over anyone else's key, never to anyone
+  else. The Tools page's owner holds no key, so it has none of its own.
 - A website account: an administrator, or its holder (a person, or a person who manages the bot that holds it).
 - A bot's bot.yaml `tools:` entries, which are notes (identity, scope, note) and never access: the bot itself,
   BotOps and the Tools page's owner on their own, an administrator, or anyone who manages the bot.
@@ -193,14 +196,28 @@ def decide(
     return Decision(is_admin, _ask(c, admins, "authorize this change"))
 
 
+def _itself(c: Any, who: Who, subject: str) -> bool:
+    """`who` is a bot acting as itself (no person's rights lent to it) and `subject` is that bot: its own key. Never
+    the Tools page's owner, which holds none of the keys it connects."""
+    page_owners: Any = importlib.import_module(".page_owners", __package__)
+
+    return (
+        getattr(who, "role", "") == "bot"
+        and not getattr(who, "via", "")
+        and bool(subject)
+        and subject == str(getattr(who, "actor", ""))
+        and subject != page_owners.owner(c, "tools", fallback=False)
+    )
+
+
 def _grant(c: Any, who: Who, resource: Resource, subject: str, is_admin: bool, admins: Any, auth: Any) -> Decision:
     if is_admin:
         return Decision(True)
     cid = resource.id
     if _creator(c, who, cid):
-        # The person who added a credential shares it with their own bots, as a direct grant; anyone else's bot or a
-        # person stays an administrator's call.
-        if manages(c, who, subject, auth):
+        # The person who added a credential shares it with their own bots, as a direct grant, and a bot gives the key
+        # it stored to itself; anyone else's bot or a person stays an administrator's call.
+        if manages(c, who, subject, auth) or _itself(c, who, subject):
             return Decision(True)
         named: Any = H.bot(c, H.actor_id(subject)) or {}
         slug = str(named.get("slug") or H.actor_id(subject))
@@ -243,6 +260,12 @@ def _store(c: Any, who: Who, resource: Resource, subject: str, is_admin: bool, a
 
     if is_admin:
         return Decision(True)
+    if _itself(c, who, subject):
+        # A bot keeps a value it already holds as its own key: a new one, or over one it stored itself.
+        return Decision(
+            not resource.id or _creator(c, who, resource.id),
+            "That key is not one you stored: store yours as a new key, or ask a credential admin to change it",
+        )
     member = (
         getattr(who, "role", "") in ("human", "owner")
         and team_rules.load(c)["members_store_credentials"]

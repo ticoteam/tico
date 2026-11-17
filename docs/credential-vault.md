@@ -14,7 +14,8 @@ Four words, used the same way everywhere:
 - A **human** signs in. The owner and the admins are the **credential administrators**: they store, delete and grant credentials
   (`TICO_CREDENTIAL_ADMINS` names a different list). A member is never one, but stores a credential for a bot they own or manage,
   granted to that bot, and shares it with their other bots (team rule **Members store credentials for their bots**, on by default).
-- A **bot** is a worker. It has the credentials it was given and nothing else. **A bot never uses a credential that was not
+- A **bot** is a worker. It has the credentials it was given, and keys it made itself and stored as its own
+  ([below](#a-key-a-bot-already-holds)), and nothing else. **A bot never uses a credential that was not
   granted to it**, and never another bot's: having one in its own file on its computer does not make it anyone else's.
   A bot can list the credentials granted to it (`GET /api/v2/credentials`) to check they reach its turns. Each entry has the
   credential's name, kind and variable name; it never has the value, a preview, or anyone else's grants.
@@ -351,6 +352,20 @@ Tools Owner) may ask for any bot's (`--for-bot`), the Tools owner never for itse
 card for the same variable stays (saving either saves both); canceling the card ends the pause and tells the bot.
 When the task finishes, changes hands, or is made private from the card's person, its card says Not needed and its
 request is canceled; a person who cannot read the task cannot open its request either.
+
+## A key a bot already holds
+
+A bot that made a key itself (through a vendor's API, or one already in a file on its computer) keeps it as its own,
+with no person and no page: `tico credential add <name> --from-env <VAR>` or `--from-file <path>` (MCP
+`tico_credential_add`; the value is read on that computer and is never an argument). It is stored under `--env` (by
+default the `--from-env` name), granted to that bot alone, and reaches its next run like any granted key. It goes on a
+new tool of its own under the vendor of `--tool` (or of its variable and name), its key on computers and **Everyone can
+read** off, so the tool others use and its keys are never changed and no other bot reads with it. Storing again replaces
+only a key the bot stored itself; a bot never overwrites anyone else's key, never gives its own to anyone else (a
+credential administrator does that in Tools, where the key shows like any other), and a variable it already gets from
+another key is refused (one value per variable). The run is scrubbed of the value, and the audit log records
+`credential.created`, `credential.granted` and `credential.set_for_bot` as the bot, never the value. The Tools Owner keeps
+no key of its own. The rule is `_itself` in `backend/tool_access.py`.
 
 If a human pastes a credential into a thread instead, BotOps stores it with `tico credential set <VARIABLE> --for-bot <bot>` (the value on standard input,
 never on the command line) as that human, and the server takes the pasted words out of their messages, the run's recorded events and the answers kept

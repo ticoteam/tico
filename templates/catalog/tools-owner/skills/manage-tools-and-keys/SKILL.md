@@ -53,7 +53,10 @@ person's rights; a refusal names who can. The MCP tools have the same names (`ti
 - Keys: `tico credential update <key> --level read` (or `--name`, `--expires-on`), `tico credential cancel <card>`. A key a
   bot already holds (one it made through the vendor's API) is stored with `tico credential add <name> --env <VAR>
   --from-env <SRC>` or `--from-file <path>`, plus `--tool <tool> --level read` and `--for-bot <bot>`: the value is read
-  on that computer and never typed. A person's own key always comes through a card.
+  on that computer and never typed. Any bot stores one it holds itself the same way, with no `--for-bot`: it becomes
+  that bot's own key, granted to it alone on a tool of its own under the vendor (Everyone can read off). Tell a bot that
+  made a key to do that rather than waiting on you; giving its key to others stays a person's call. A person's own key
+  always comes through a card.
 
 ## Words
 - **Tool**: a service with an address. An **API tool** (`/api/v2/api-tools`) has a base URL, an auth scheme (`bearer`,
