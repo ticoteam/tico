@@ -238,15 +238,17 @@ def test_plain_upload_does_not_overwrite_linked_document(api):
 def test_page_list_uses_fixed_number_of_queries(api):
     from backend.tests.helpers.cards import page as seed_page
 
-    ids = [seed_page(api, 'ops', title='Page ' + str(i)) for i in range(50)]
+    t = task(api)
+    ids = [seed_page(api, 'ops', title='Page ' + str(i), task=t['id']) for i in range(50)]
     store, pages = api.app.state.store, api.app.state.pages
     who = Identity('human:ana', 'owner', 'ana@acme.example')
     with store.transaction() as c:
         for fid in ids:
             L.link(c, fid, 'bot:ops', 'writer', who.actor)
             L.link(c, fid, 'human:ben', 'writer', who.actor)
+            L.link(c, fid, 'task:' + t['id'], 'related', who.actor)
 
-    def count(wanted):
+    def count(wanted, reader):
         with store.read_transaction() as c:
             statements = []
             c.set_trace_callback(statements.append)
@@ -259,14 +261,17 @@ def test_page_list_uses_fixed_number_of_queries(api):
             prime_views(c, rows)
             known = pages._authors(c, rows)
             assert known == set()
+            cache = {}
             for row in rows:
-                value = pages.view(c, who, row, pages.page_of(row), {}, {'bot:ops': 'Ops'})
-                assert len(value['links']) == 2
+                value = pages.view(c, reader, row, pages.page_of(row), cache, {'bot:ops': 'Ops'})
+                assert len(value['links']) == 3
+                assert value['may_write'] == (reader.role == 'owner')
             c.set_trace_callback(None)
         return [q for q in statements if q.lstrip().upper().startswith(('SELECT', 'WITH'))]
 
-    small, large = count(ids[:1]), count(ids)
-    assert len(large) <= len(small) + 2, (len(small), len(large), large)
+    for reader in (who, Identity('bot:finance', 'bot')):
+        small, large = count(ids[:1], reader), count(ids, reader)
+        assert len(large) <= len(small) + 2, (reader.actor, len(small), len(large), large)
 
 
 def test_publish_submits_each_linked_document_requirement(api):
@@ -354,3 +359,22 @@ def test_existing_page_writers_do_not_need_an_active_assistant(api):
     assert third.status_code == 200, third.text
     assert (third.json()['page']['file_id'], third.json()['page']['version']) == (fid, 3)
     assert publish_page(api, 'cara-test', task=t['id'], name='new.html').status_code == 409
+
+
+def test_runner_updates_page_as_the_bot_of_its_own_turn(api):
+    from backend.tests.helpers.files import turn
+
+    ops = bot(api, 'ops')
+    t = task(api)
+    made = publish_page(api, ops, task=t['id'])
+    assert made.status_code == 200, made.text
+    fid = made.json()['page']['file_id']
+    assert add_link(api, fid, 'bot:finance', 'writer').status_code == 200
+    machine, attempt = turn(api, bot='finance')
+    fields = {'name': 'revised.html', 'text': '<p>Revised</p>', 'page': fid, 'bot': 'finance', 'attempt': attempt['id']}
+    revised = api.post('/api/v2/pages', json=fields, headers=headers(machine['token']))
+    assert revised.status_code == 200, revised.text
+    p = revised.json()['page']
+    assert p['file_id'] == fid and p['version'] == 2 and p['updated_by'] == 'bot:finance' and p['may_write']
+    fields.pop('attempt')
+    assert api.post('/api/v2/pages', json=fields, headers=headers(machine['token'])).status_code == 403

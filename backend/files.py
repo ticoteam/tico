@@ -1872,13 +1872,20 @@ class Files:
 
         def work(c):
             existing_page = None
+            page_who = who
+            if page_publish and who.role == "runner":
+                run = str(fields.get("attempt") or "")
+                if not run:
+                    raise Problem("forbidden", "A computer publishes a page for one of its turns", 403)
+                self.turn_context(c, who, bot, run)
+                page_who = Identity("bot:" + bot, "bot", runner_id=who.runner_id, attempt_id=run)
             if page_publish:
                 from . import page_links
 
                 task_id = str(fields.get("task") or "")
                 if task_id:
-                    task_id = self.auth.resolve_task(c, who, task_id)
-                    self.auth.task(c, who, task_id)
+                    task_id = self.auth.resolve_task(c, page_who, task_id)
+                    self.auth.task(c, page_who, task_id)
                     fields["task"] = task_id
                 role = page_links.role_name(str(fields.get("as") or "")) if fields.get("as") else ""
                 if role and not task_id:
@@ -1886,7 +1893,7 @@ class Files:
                 if role:
                     from .task_reads import comment_rights
 
-                    comment_rights(c, self.auth, who, task_id)
+                    comment_rights(c, self.auth, page_who, task_id)
                 fid = str(fields.get("page") or "")
                 if not fid and role:
                     candidates = c.execute(
@@ -1894,7 +1901,7 @@ class Files:
                         "JOIN bot_files f ON f.id=p.file_id WHERE l.target=? AND l.role=? AND f.state<>'deleted'",
                         ("task:" + task_id, role),
                     ).fetchall()
-                    candidates = [r for r in candidates if self.visible(c, who, r, {})]
+                    candidates = [r for r in candidates if self.visible(c, page_who, r, {})]
                     if len(candidates) > 1:
                         raise Problem(
                             "ambiguous",
@@ -1911,10 +1918,10 @@ class Files:
                     if (
                         not existing_page
                         or existing_page["state"] == "deleted"
-                        or not self.visible(c, who, existing_page, {})
+                        or not self.visible(c, page_who, existing_page, {})
                     ):
                         raise Problem("not_found", "Page not found", 404)
-                    if not page_links.may_write(c, self.auth, who, existing_page):
+                    if not page_links.may_write(c, self.auth, page_who, existing_page):
                         raise Problem("forbidden", "Only page writers may write a version", 403)
             if existing_page is not None:
                 # Preserve the original file's privacy scope even when this version is written through another task.

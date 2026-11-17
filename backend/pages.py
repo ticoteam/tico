@@ -217,7 +217,9 @@ class Pages:
             "replaced_by_id": replaced,
             "replaced_by_title": replaced_title,
             "archived": bool(page["archived"] or row["archived"]),
-            "task_id": row["task_id"] if row["task_id"] and self.files.task_info(c, who, row["task_id"], {}) else None,
+            "task_id": row["task_id"]
+            if row["task_id"] and self.files.task_info(c, who, row["task_id"], cache)
+            else None,
             "src": self.src(c, who, row, row["current_version"]) if v else None,
             **({"restricted": page["audience"] is not None} if manager else {}),
             **({"audience": H._json(page["audience"], None)} if manager and include_audience else {}),
@@ -380,7 +382,8 @@ class Pages:
             if who.role == "runner":
                 from .auth import Identity
 
-                editor = Identity("bot:" + row["bot_id"], "bot")
+                writer_bot = self.files.writer_bot(c, who, str(fields.get("bot") or ""))
+                editor = Identity("bot:" + writer_bot, "bot")
             c.execute(
                 "INSERT INTO pages(file_id,cadence,as_of,created_at,updated_at,spec) VALUES(?,?,?,?,?,?) "
                 "ON CONFLICT(file_id) DO UPDATE SET cadence=COALESCE(?,cadence),as_of=?,updated_at=?,"
@@ -399,7 +402,7 @@ class Pages:
                     int(bool(changed)),
                 ),
             )
-            actor = self.files.actor_of(who, row["bot_id"])
+            actor = editor.actor
             page_links.link(c, row["id"], actor, "writer", actor)
             if importing:
                 from . import audit_log
@@ -462,7 +465,7 @@ class Pages:
                 self.pin_to_task(c, row, task, actor=who.actor if who.via == "assistant" else None)
             shown = self.view(
                 c,
-                who,
+                editor,
                 row,
                 c.execute("SELECT * FROM pages WHERE file_id=?", (row["id"],)).fetchone(),
                 {},

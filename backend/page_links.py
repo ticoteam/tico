@@ -210,22 +210,23 @@ def may_write(c: Any, auth: Any, who: Any, row: Any) -> bool:
     for r in links:
         if not r["target"].startswith("task:") or r["role"] == "writer":
             continue
-        try:
 
-            def allowed(task_id: str = r["target"][5:]) -> bool:
+        def allowed(task_id: str = r["target"][5:]) -> bool:
+            try:
                 cast(Callable[..., Any], task_reads.comment_rights)(c, auth, who, task_id)
-                return True
+            except Problem as exc:
+                if exc.status not in (403, 404, 409):
+                    raise
+                return False
+            return True
 
-            if read_cache.value(
-                c,
-                ("page_comment", who.actor, who.role, who.attempt_id, getattr(who, "task_actor", ""), r["target"]),
-                allowed,
-                shared=True,
-            ):
-                return True
-        except Problem as exc:
-            if exc.status not in (403, 404, 409):
-                raise
+        if read_cache.value(
+            c,
+            ("page_comment", who.actor, who.role, who.attempt_id, getattr(who, "task_actor", ""), r["target"]),
+            allowed,
+            shared=True,
+        ):
+            return True
     return False
 
 
