@@ -608,7 +608,10 @@ def pending(c, runner_id, swept=True):
     if swept:
         sweep(c)
     rows = c.execute(
-        f"SELECT * FROM model_logins WHERE runner_id=? AND {ACTIVE_SQL} ORDER BY created_at", (runner_id,)
+        f"SELECT l.*, s.kind AS subscription_kind FROM model_logins l LEFT JOIN subscription_connects s "
+        f"ON s.login_id=l.id WHERE l.runner_id=? AND l.{ACTIVE_SQL} "
+        "ORDER BY l.created_at",
+        (runner_id,),
     ).fetchall()
     return [
         {
@@ -618,6 +621,8 @@ def pending(c, runner_id, swept=True):
             "expires_at": r["expires_at"],
             **({"kind": r["kind"]} if r["kind"] != "sign_in" else {}),
             **({"code": r["pending_code"]} if r["pending_code"] else {}),
+            # A Connect of a full Claude login runs `auth login` and sends its files (backend/claude_login.py).
+            **({"subscription_kind": r["subscription_kind"]} if r["subscription_kind"] == "claude_login" else {}),
         }
         for r in rows
     ]

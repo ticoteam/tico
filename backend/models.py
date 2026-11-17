@@ -1656,6 +1656,7 @@ class Heartbeat(Contract):
             "browser_exit_v1",
             "model_subscription_activation_v1",
             "model_connect_v1",
+            "claude_login_v1",  # full Claude logins: their turns, refreshes and usage reads (backend/claude_login.py)
             "threads_v1",
             "memory_tidy_packets_v1",
             "harness_allocation_v1",

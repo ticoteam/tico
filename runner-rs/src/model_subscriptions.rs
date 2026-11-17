@@ -23,6 +23,14 @@
 //! list): a token whole, and a sign-in file whole and each secret string inside it (Codex's access, refresh and id
 //! tokens, its OPENAI_API_KEY), as handed, as kept here, as found in place, and as Codex refreshed it during the turn.
 //!
+//! A full Claude login (`claude_login`, backend/claude_login.py) is a home subscription too, with one difference: its
+//! file is Claude Code's `.credentials.json`, holding only a short-lived access token (never the refresh token), and its
+//! home is the process's CLAUDE_CONFIG_DIR rather than its HOME. Every other entry of the turn's own `~/.claude`
+//! (settings, skills, `projects` with the transcripts) is linked into that home, so the turn sees what it would see
+//! signed in as the computer, and its sessions stay where they always were. When the plan's token is refreshed (on
+//! this computer or another, claude_login.rs) the file in every home running on it is rewritten (`rewrite`) before the
+//! old token is revoked or, at worst, before the turn's next call.
+//!
 //! One computer is one trust group (SECURITY.md): every bot on it runs as the same OS user, so another bot's turn here
 //! could read a subscription's home while a turn runs on it, or a running turn's environment.
 
@@ -39,7 +47,12 @@ use crate::util::text_of;
 
 const MAX_VALUE: usize = 64 * 1024;
 /// The sign-in files a home subscription may hold; nothing else in its home is removed.
-const FILES: &[&str] = &["auth.json"];
+const FILES: &[&str] = &["auth.json", CREDENTIALS];
+/// Claude Code's sign-in file in its config directory.
+pub const CREDENTIALS: &str = ".credentials.json";
+/// What stays the subscription home's own in a full Claude login's config directory: everything else is linked to the
+/// turn's own `~/.claude`.
+const OWN: &[&str] = &[CREDENTIALS, ".claude.json"];
 /// Left by an older runner, which kept the file between turns.
 const LEGACY_REVISION_FILE: &str = ".tico-revision";
 /// The shortest string inside a sign-in file masked on its own (tokens and keys are far longer).
@@ -57,6 +70,9 @@ pub struct Delivered {
     pub env: Option<String>,
     /// The CLI's own home (CODEX_HOME) for a home subscription, and its sign-in file there.
     pub home: Option<PathBuf>,
+    /// The variable the home is set in when it is not the runtime's profile home (a full Claude login:
+    /// CLAUDE_CONFIG_DIR, while HOME stays the turn's).
+    pub home_env: Option<String>,
     pub file: Option<PathBuf>,
     /// As the server handed it.
     value: String,
@@ -144,6 +160,23 @@ pub fn secrets_in(text: &str) -> Vec<String> {
     out
 }
 
+/// What to mask for a full Claude login (its whole value or a turn's `.credentials.json`): the text whole and its
+/// tokens, not the account's email or plan names.
+pub fn claude_secrets(text: &str) -> Vec<String> {
+    let mut out = vec![text.to_string()];
+    if let Ok(v) = serde_json::from_str::<Value>(text) {
+        for key in ["accessToken", "refreshToken"] {
+            if let Some(t) = v["claudeAiOauth"][key]
+                .as_str()
+                .filter(|t| t.len() >= MIN_SECRET)
+            {
+                out.push(t.to_string());
+            }
+        }
+    }
+    out
+}
+
 /// Read each subscription the server handed this turn; none is put in place until its runtime starts (`start`).
 /// An environment one's runtime's other sign-in variables leave `env` and `keys` (the turn's vault variables) now.
 /// Every value joins `values`, the turn's redaction list, for the whole turn: a turn's two processes write to the
@@ -180,6 +213,7 @@ pub fn apply(
             billing: billing(&item["billing"]),
             env: None,
             home: None,
+            home_env: None,
             file: None,
             value: value.clone(),
             written: value.clone(),
@@ -200,17 +234,34 @@ pub fn apply(
             delivered.env = Some(env_name);
         } else {
             let name = text_of(&item["file"]);
-            if !FILES.contains(&name.as_str()) {
+            let home_env = text_of(&item["home_env"]);
+            let overrides = crate::harness_tools::caps(&runtime, "").profile_home_overrides;
+            if !FILES.contains(&name.as_str())
+                || (name == CREDENTIALS) == home_env.is_empty()
+                || (!home_env.is_empty() && !overrides.contains(&home_env))
+            {
                 crate::util::diagnostic(&format!(
                     "Tico runner: left a subscription out of this turn: {id} names no known file"
                 ));
                 continue;
             }
+            if !home_env.is_empty() {
+                // The CLI ranks a token in its environment above the file.
+                for other in crate::harness_tools::api_key_env(&runtime) {
+                    env.remove(&other);
+                    keys.remove(&other);
+                }
+                delivered.home_env = Some(home_env);
+            }
             let home = crate::isolation::bot_state(state_dir)
                 .join("subscriptions")
                 .join(&id)
                 .join(&runtime);
-            values.extend(secrets_in(&value));
+            values.extend(if name == CREDENTIALS {
+                claude_secrets(&value)
+            } else {
+                secrets_in(&value)
+            });
             if let Some((_, kept)) = homes().kept.get(&home) {
                 values.extend(secrets_in(kept));
             }
@@ -306,7 +357,11 @@ pub fn start(delivered: &mut Vec<Delivered>, runtime: &str, env: &mut Env) -> Ve
                 env.remove(name);
             }
         }
-        if let (Some(home), Some(var)) = (&d.home, crate::profiles::home_var(&d.runtime)) {
+        let var = d
+            .home_env
+            .clone()
+            .or_else(|| crate::profiles::home_var(&d.runtime));
+        if let (Some(home), Some(var)) = (&d.home, var) {
             if env.get(&var).is_some_and(|v| Path::new(v) == home) {
                 env.remove(&var);
             }
@@ -373,10 +428,24 @@ fn hold(d: &mut Delivered, env: &mut Env) -> Result<Vec<String>, String> {
             .unwrap_or_default();
         let written = place(&home, &name, &d.value, d.revision)?;
         if written != d.value {
-            secrets.extend(secrets_in(&written));
+            secrets.extend(if d.home_env.is_some() {
+                claude_secrets(&written)
+            } else {
+                secrets_in(&written)
+            });
         }
         d.written = written;
         d.held = true;
+    }
+    if let Some(var) = d.home_env.clone() {
+        for other in crate::harness_tools::api_key_env(&d.runtime) {
+            env.remove(&other);
+        }
+        if let Some(own) = env.get("HOME").filter(|h| !h.is_empty()) {
+            link_config(&home, &Path::new(own).join(".claude"));
+        }
+        env.insert(var, home.display().to_string());
+        return Ok(secrets);
     }
     if let Some(var) = crate::profiles::home_var(&d.runtime) {
         for key in crate::harness_tools::caps(&d.runtime, "").profile_home_overrides {
@@ -385,6 +454,95 @@ fn hold(d: &mut Delivered, env: &mut Env) -> Result<Vec<String>, String> {
         env.insert(var, home.display().to_string());
     }
     Ok(secrets)
+}
+
+/// A full Claude login's config directory sees the turn's own `~/.claude` (`own`): each entry there but the sign-in
+/// files is linked in, `projects` first made so the transcripts stay under HOME (hosts/claude.rs transcript). A link
+/// to another folder (the bot's HOME moved) is replaced; what Claude Code made in the home itself is left alone. A
+/// fresh home is marked as onboarded, as the computer's own is. Best effort: a turn whose links fail still runs.
+fn link_config(home: &Path, own: &Path) {
+    let _ = crate::isolation::mkdir(&own.join("projects"), 0o700);
+    for entry in std::fs::read_dir(own).into_iter().flatten().flatten() {
+        let name = entry.file_name();
+        let text = name.to_string_lossy();
+        if OWN.contains(&text.as_ref()) || text.contains(".tico-") {
+            continue;
+        }
+        let link = home.join(&name);
+        match std::fs::symlink_metadata(&link) {
+            Ok(m) if m.file_type().is_symlink() => {
+                if std::fs::read_link(&link).is_ok_and(|t| t == entry.path()) {
+                    continue;
+                }
+                let _ = std::fs::remove_file(&link);
+            }
+            Ok(_) => continue,
+            Err(_) => {}
+        }
+        let _ = std::os::unix::fs::symlink(entry.path(), &link);
+    }
+    let settings = home.join(".claude.json");
+    if !settings.exists() {
+        let _ = write_private(&settings, "{\"hasCompletedOnboarding\":true}");
+    }
+}
+
+/// A full Claude login's config directory with a turn running on it: the one CLAUDE_CONFIG_DIR a turn keeps
+/// (hosts/claude.rs turn_env).
+pub fn is_config_home(path: &str) -> bool {
+    let path = Path::new(path);
+    path.file_name().is_some_and(|n| n == "claude")
+        && homes()
+            .live
+            .get(path)
+            .is_some_and(|_| path.join(CREDENTIALS).is_file())
+}
+
+/// Each full Claude login a turn here runs on, with the revision its file has (claude_login.rs asks for newer ones).
+pub fn live_logins() -> Vec<(String, i64)> {
+    homes()
+        .live
+        .iter()
+        .filter(|(home, _)| home.join(CREDENTIALS).is_file())
+        .filter_map(|(home, live)| {
+            let id = home.parent()?.file_name()?.to_string_lossy().to_string();
+            Some((id, live.revision))
+        })
+        .collect()
+}
+
+/// A full Claude login's new access token (`value`, its `.credentials.json` at `revision`): written into every home
+/// of that plan a turn here still runs on at an older revision, and masked in every turn's output. Returns how many
+/// homes it rewrote.
+pub fn rewrite(id: &str, revision: i64, value: &str) -> usize {
+    if !safe_id(id) || value.is_empty() || value.len() > MAX_VALUE {
+        return 0;
+    }
+    for secret in claude_secrets(value) {
+        crate::redact::hide_everywhere(&secret, false);
+    }
+    let mut homes = homes();
+    let mut done = 0;
+    for (home, live) in homes.live.iter_mut() {
+        let file = home.join(CREDENTIALS);
+        let ours = home
+            .parent()
+            .and_then(|p| p.file_name())
+            .is_some_and(|n| n == id);
+        if !ours || live.revision >= revision || !file.is_file() {
+            continue;
+        }
+        match write_private(&file, value) {
+            Ok(()) => {
+                live.revision = revision;
+                done += 1;
+            }
+            Err(e) => crate::util::diagnostic(&format!(
+                "Tico runner: could not renew a Claude plan's sign-in: {e}"
+            )),
+        }
+    }
+    done
 }
 
 /// Hold `home/name` for one turn. The first turn on a home writes the file: the login Codex refreshed here at this
@@ -422,7 +580,7 @@ fn place(home: &Path, name: &str, value: &str, revision: i64) -> Result<String, 
     Ok(text)
 }
 
-fn write_private(path: &Path, value: &str) -> Result<(), String> {
+pub(crate) fn write_private(path: &Path, value: &str) -> Result<(), String> {
     let staged = path.with_extension(format!("tico-{}", uuid::Uuid::new_v4().simple()));
     let mut f = std::fs::OpenOptions::new()
         .write(true)

@@ -28,6 +28,8 @@ pub const CAPABILITIES: &[&str] = &[
     crate::login::REMOVE_CAPABILITY,
     crate::login::SWITCH_TO_KEY_CAPABILITY,
     crate::login::CONNECT_CAPABILITY,
+    // Full Claude logins: a turn's own credentials file, refreshes and usage reads (claude_login.rs).
+    crate::claude_login::CAPABILITY,
     "turns_at_once_v1",
     // Private live meetings run in their own lane and checkout (sessions.rs); the server hands them to no other runner.
     "private_lanes_v1",
@@ -193,6 +195,7 @@ pub fn refused_field(detail: &str, body: &Value) -> Option<String> {
             }
         }
         for name in [
+            crate::claude_login::CAPABILITY,
             crate::browser::CAPABILITY,
             FRESH_SESSION,
             FORK_SESSION,
@@ -410,7 +413,7 @@ mod tests {
         let older: Vec<&str> = CAPABILITIES
             .iter()
             .copied()
-            .filter(|c| *c != FRESH_SESSION)
+            .filter(|c| ![FRESH_SESSION, crate::claude_login::CAPABILITY].contains(c))
             .collect();
         assert_eq!(
             refused_field("body.capabilities: bad", &json!({"capabilities": older})).as_deref(),
@@ -434,8 +437,18 @@ mod tests {
     fn the_runner_offers_a_fresh_session_and_an_older_server_drops_only_that() {
         assert!(CAPABILITIES.contains(&FRESH_SESSION));
         let all = json!({"capabilities": CAPABILITIES});
+        // The newest goes first: full Claude logins, then a fresh session.
         assert_eq!(
             refused_field("body.capabilities: bad", &all).as_deref(),
+            Some(crate::claude_login::CAPABILITY)
+        );
+        let older: Vec<&str> = CAPABILITIES
+            .iter()
+            .copied()
+            .filter(|c| *c != crate::claude_login::CAPABILITY)
+            .collect();
+        assert_eq!(
+            refused_field("body.capabilities: bad", &json!({"capabilities": older})).as_deref(),
             Some(FRESH_SESSION)
         );
         let index = CAPABILITIES

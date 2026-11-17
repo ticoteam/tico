@@ -440,6 +440,9 @@ pub struct Session {
     kind: String,
     runtime: String,
     profile: String,
+    /// A Connect for a full Claude login (backend/claude_login.py): the CLI's own sign-in, run on the side, whose
+    /// login files are the result.
+    full: bool,
     inner: Mutex<Inner>,
     diag: Mutex<Diag>,
     canceled: AtomicBool,
@@ -457,6 +460,7 @@ impl Session {
                 .unwrap_or_else(|| "sign_in".into()),
             runtime: text_of(&work["runtime"]),
             profile: text_of(&work["profile"]),
+            full: work["subscription_kind"] == "claude_login",
             inner: Mutex::new(Inner {
                 state: "starting".into(),
                 dirty: true,
@@ -968,6 +972,29 @@ fn file_text(path: &std::path::Path, env: &Env) -> Option<String> {
     (out.status.success() && !text.trim().is_empty()).then_some(text)
 }
 
+/// Where Claude Code keeps its login under HOME, beside `.claude.json` (claude-code.toml `login.files`).
+const FULL_FILE: &str = ".credentials.json";
+
+/// A full Claude login signed in on the side (`side` was its HOME): its `.credentials.json` and the account
+/// `.claude.json` names, as one value (backend/claude_login.py parse). None when either is missing.
+fn full_login(side: &std::path::Path, env: &Env) -> Option<String> {
+    let creds: Value =
+        serde_json::from_str(&file_text(&side.join(".claude").join(FULL_FILE), env)?).ok()?;
+    let settings: Value =
+        serde_json::from_str(&file_text(&side.join(".claude.json"), env)?).ok()?;
+    let oauth = creds
+        .get("claudeAiOauth")
+        .filter(|o| o["refreshToken"].is_string())?;
+    let account = settings
+        .get("oauthAccount")
+        .filter(|a| a["emailAddress"].is_string())?;
+    let value = serde_json::json!({"claudeAiOauth": oauth, "oauthAccount": account}).to_string();
+    for secret in crate::model_subscriptions::claude_secrets(&value) {
+        crate::redact::hide_everywhere(&secret, false);
+    }
+    Some(value)
+}
+
 /// The folder `runtime`'s login lives in with `env`: its home variable (CODEX_HOME, HOME), or Codex's own default.
 fn login_home(runtime: &str, env: &Env) -> Option<std::path::PathBuf> {
     let var = crate::harness_tools::caps(runtime, "").profile_home;
@@ -1212,7 +1239,12 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
         return fail("failed", "Browser sign-in is not available");
     };
     let connect = s.kind == "connect";
-    if connect && login.connect.is_empty() {
+    // A full login signs in with the CLI's own login command, on the side, and keeps what it wrote there.
+    let full = connect && s.full;
+    if full && (login.command.is_empty() || !login.files.iter().any(|f| f.ends_with(FULL_FILE))) {
+        return fail("failed", "Connect is not available for this tool");
+    }
+    if connect && !full && login.connect.is_empty() {
         return fail("failed", "Connect is not available for this tool");
     }
     let (exe, mut env, profile) = match login_env(&s.runtime, &config, &s.profile) {
@@ -1233,19 +1265,27 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
         }
     }
     let to_subscription = s.kind == "to_subscription";
-    let switch =
-        if s.kind == "switch" || to_subscription || (connect && !login.connect_file.is_empty()) {
-            match begin_switch(&s.runtime, &s.id, &env) {
-                Ok((home, side)) => {
-                    let var = crate::harness_tools::caps(&s.runtime, "").profile_home;
-                    env.insert(var, side.display().to_string());
-                    Some((home, side))
+    let switch = if s.kind == "switch"
+        || to_subscription
+        || full
+        || (connect && !login.connect_file.is_empty())
+    {
+        match begin_switch(&s.runtime, &s.id, &env) {
+            Ok((home, side)) => {
+                let var = crate::harness_tools::caps(&s.runtime, "").profile_home;
+                env.insert(var, side.display().to_string());
+                if full {
+                    // The seeded settings name the computer's own account: the plan's must come from its sign-in.
+                    let seeded = side.join(".claude.json").display().to_string();
+                    let _ = file_command(&["rm", "-f", &seeded], &real_env);
                 }
-                Err(e) => return fail("failed", &e),
+                Some((home, side))
             }
-        } else {
-            None
-        };
+            Err(e) => return fail("failed", &e),
+        }
+    } else {
+        None
+    };
     let discard = |side: &std::path::Path| {
         if let Err(e) = file_command(&["rm", "-rf", &side.display().to_string()], &real_env) {
             log(&format!(
@@ -1255,12 +1295,12 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
             ));
         }
     };
-    let command = if connect {
+    let command = if connect && !full {
         &login.connect
     } else {
         &login.command
     };
-    let token_prefix = if connect {
+    let token_prefix = if connect && !full {
         login.connect_token.clone()
     } else {
         String::new()
@@ -1432,6 +1472,7 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
             let finished = child.wait().map(|st| st.success()).unwrap_or(false);
             let value = match &switch {
                 _ if !finished && !stopped_after_token => None,
+                Some((_, side)) if full => full_login(side, &real_env),
                 Some((_, side)) => file_text(&side.join(&login.connect_file), &real_env),
                 None => printed_token(&s.inner.lock().unwrap().raw, &token_prefix, true),
             };

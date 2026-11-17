@@ -15,7 +15,7 @@ interface SubsUsage {used_pct?: number | null; resets_at?: string | null; window
 type SubsComputer = string | {runner_id: string; label?: string};
 // `order`: where a plan comes in its owner's plans for its tool (the plan in use first, then the pick order; null when
 // held or waiting to be reconnected). `in_use_on`: the computers whose turns sign in with it now.
-interface SubsRow {id: string; name: string; kind: string; label?: string; runtime?: string; owner_id?: string; owner_name?: string; computers?: SubsComputer[]; status?: string; status_detail?: string; usage?: SubsUsage | null; usage_refresh?: {state?: string | null; requested_at?: string | null} | null; order?: number | null; place?: number | null; in_use_on?: string[]}
+interface SubsRow {id: string; name: string; kind: string; label?: string; runtime?: string; owner_id?: string; owner_name?: string; computers?: SubsComputer[]; status?: string; status_detail?: string; usage?: SubsUsage | null; usage_refresh?: {state?: string | null; requested_at?: string | null} | null; order?: number | null; place?: number | null; in_use_on?: string[]; reconnect_by?: string | null}
 // A computer given a person's plans: the plan in use (`on`) and why (backend model_subscriptions.set_state).
 interface SubsSetWhy {kind: 'soonest' | 'held' | 'reconnect' | 'all_held' | 'none' | string; plan?: string | null; until?: string | null}
 interface SubsSet {person: string; person_name: string; plans: number; on: string | null; on_name: string | null; why: SubsSetWhy}
@@ -56,7 +56,9 @@ const SUBS_KINDS: [SubsKindRow, ...SubsKindRow[]] = [
   {kind: 'anthropic_key', label: 'Anthropic API key', runtime: 'claude', secret_label: 'API key'},
   {kind: 'openai_key', label: 'OpenAI API key', runtime: 'codex', secret_label: 'API key'}];
 const subsToolName = (runtime: string | undefined) => harnessRow(runtime)?.name || harnessWords(runtime);
-const subsKind = (kind: string): SubsKindRow => SUBS.kinds.find(row => row.kind === kind) || SUBS_KINDS.find(row => row.kind === kind) || {kind, label: kind, runtime: ''};
+// A full Claude login (backend/claude_login.py) is listed as the Claude plan it is; it is never picked on its own.
+const subsKind = (kind: string): SubsKindRow => SUBS.kinds.find(row => row.kind === kind) || SUBS_KINDS.find(row => row.kind === kind)
+  || (kind === 'claude_login' ? {...SUBS_KINDS[0], kind, secret_label: 'Sign-in'} : {kind, label: kind, runtime: ''});
 // A plan has an owner; an API key has none.
 const subsOwned = (kind: string) => { const row = subsKind(kind); return 'owned' in row ? !!row.owned : !!SUBS_KINDS.find(k => k.kind === kind)?.owned; };
 const subsRuntime = (sub: SubsRow) => sub?.runtime || subsKind(sub?.kind).runtime;
@@ -128,19 +130,27 @@ function subsUsageHTML(sub: SubsRow) {
 // A Claude plan's week, read now: a small button beside its menu, for admins. Busy while the computer answers. A
 // ChatGPT plan has none: its week comes from its computers' runs.
 function subsRefreshHTML(sub: SubsRow) {
-  if (!subsMayEdit() || sub.kind !== 'claude_token' || sub.status === 'needs_reconnect') return '';
+  if (!subsMayEdit() || !['claude_token', 'claude_login'].includes(sub.kind) || sub.status === 'needs_reconnect') return '';
   const busy = sub.usage_refresh?.state === 'requested';
   const failed = ['failed', 'unavailable', 'expired'].includes(String(sub.usage_refresh?.state));
   const label = `Read usage for ${sub.name}`;
   return `<button type="button" class="ghost subs-refresh" data-subs-refresh="${esc(sub.id)}"${busy ? ' disabled aria-busy="true"' : ''} aria-label="${esc(label)}" title="${esc(failed ? 'No reading came back. Try again.' : 'Read this plan’s usage now')}">${busy ? '…' : '↻'}</button>`;
 }
-// The plan's own state, which stops any reading: its sign-in expired.
+// The plan's own state, which stops any reading: its sign-in expired. A full login's sign-in ends after about a month:
+// a few days before, a short mark says by when to reconnect it, beside its usage.
 function subsStatusHTML(sub: SubsRow) {
   if (sub.status !== 'needs_reconnect') return '';
   const title = sub.status_detail ? ` title="${esc(sub.status_detail)}"` : '';
   return subsMayEdit() ? `<span class="subs-diagnosis">Sign-in expired</span> <button type="button" class="pill waiting subs-reconnect" data-subs-reconnect="${esc(sub.id)}"${title}>Sign in again</button>`
     : `<span class="pill waiting"${title}>Sign-in expired. Ask an admin to sign in again.</span>`;
 }
+function subsReconnectByHTML(sub: SubsRow) {
+  const by = sub.reconnect_by ? subsWhenDay(sub.reconnect_by) : '';
+  if (!by) return '';
+  return subsMayEdit() ? ` <button type="button" class="pill waiting subs-mark" data-subs-reconnect="${esc(sub.id)}" data-subs-mark="reconnect-by" title="Sign in again before then">Reconnect by ${esc(by)}</button>`
+    : ` <span class="pill waiting subs-mark" data-subs-mark="reconnect-by">Reconnect by ${esc(by)}</span>`;
+}
+const subsWhenDay = (iso: string) => { const at = new Date(iso); return Number.isFinite(at.getTime()) ? at.toLocaleDateString(undefined, {month: 'short', day: 'numeric'}) : ''; };
 // A day and time for a hold's end, month first and 12-hour ("today, 3:00 PM", "Fri, Nov 14, 9:00 AM": ui/app/format.ts).
 const subsWhen = (iso: string | null | undefined) => Number.isFinite(Date.parse(iso || '')) ? timeSaid(iso) : '';
 // The computers a subscription is given to: directly, or (a plan) through its owner's plans for its tool, so a person's
@@ -187,7 +197,7 @@ function subsRowHTML(sub: SubsRow, next = false) {
     <td class="subs-name">${esc(sub.name)}${pick ? ` ${pick}` : ''}</td>
     <td class="muted subs-kind">${esc(subsKindLabel(sub))}</td>
     ${subsCountHTML(sub)}
-    <td class="subs-use">${subsStatusHTML(sub) || subsUsageHTML(sub)}</td>
+    <td class="subs-use">${subsStatusHTML(sub) || `${subsUsageHTML(sub)}${subsReconnectByHTML(sub)}`}</td>
     <td class="subs-more-cell">${subsRefreshHTML(sub)}${subsMayEdit() ?`<button type="button" class="ghost subs-more" data-subs-more="${esc(sub.id)}" aria-haspopup="menu" aria-expanded="false" aria-label="More for ${esc(sub.name)}">⋯</button>` : ''}</td></tr>`;
 }
 async function renderSettingsSubs() {

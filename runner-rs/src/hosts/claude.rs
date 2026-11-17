@@ -2221,7 +2221,8 @@ fn session_of(thread_id: &str, t: &Thread) -> String {
 
 /// This exact session's transcript: other bots' and people's transcripts stay private.
 fn transcript(settings: &Settings, session: &str) -> Option<std::path::PathBuf> {
-    // Where the turn's Claude keeps it: its HOME's .claude, as turn_env never lets CLAUDE_CONFIG_DIR through.
+    // Where the turn's Claude keeps it: its HOME's .claude, as turn_env lets no other CLAUDE_CONFIG_DIR through (a full
+    // login's links `projects` back there).
     let home = turn_env(settings).remove("HOME").unwrap_or_default();
     let dir = std::path::Path::new(&home).join(".claude");
     let name = format!("{session}.jsonl");
@@ -2297,8 +2298,15 @@ fn turn_env(settings: &Settings) -> crate::env::Env {
         }
     }
     // Claude reads CLAUDE_CONFIG_DIR ahead of HOME: one inherited from this process (or brought by a grant) would run
-    // the turn on some other folder's login, not the one its sign-in and readiness check wrote under HOME.
-    env.remove("CLAUDE_CONFIG_DIR");
+    // the turn on some other folder's login, not the one its sign-in and readiness check wrote under HOME. The one
+    // exception is the home of a full Claude login handed to this turn (model_subscriptions.rs), which links the rest
+    // of HOME's .claude in, `projects` among it.
+    if !env
+        .get("CLAUDE_CONFIG_DIR")
+        .is_some_and(|d| crate::model_subscriptions::is_config_home(d))
+    {
+        env.remove("CLAUDE_CONFIG_DIR");
+    }
     env
 }
 
