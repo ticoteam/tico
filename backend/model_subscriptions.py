@@ -347,8 +347,17 @@ def _present(c):
     return H._has_table(c, "model_subscriptions")
 
 
+# The plans as they are read: a full Claude login's account and times live beside its plan (`claude_logins`,
+# backend/claude_login.py) and are read with it, '' and NULL for any other plan.
+SUBS = (
+    "(SELECT s.*,coalesce(l.account,'') AS account,l.access_expires_at AS access_expires_at,"
+    "l.login_expires_at AS login_expires_at,l.refreshed_at AS refreshed_at "
+    "FROM model_subscriptions s LEFT JOIN claude_logins l ON l.subscription_id=s.id)"
+)
+
+
 def row(c, sid):
-    return H._one(c, "SELECT * FROM model_subscriptions WHERE id=?", (sid,)) if _present(c) else None
+    return H._one(c, f"SELECT * FROM {SUBS} WHERE id=?", (sid,)) if _present(c) else None
 
 
 def _given(c):
@@ -367,8 +376,9 @@ def _given(c):
         people = set()
         for r in c.execute(
             "SELECT g.runner_id AS runner_id,g.runtime AS runtime,g.person AS person,s.id,s.name,s.kind,s.revision,"
-            "s.status,s.access_expires_at FROM computer_subscriptions g LEFT JOIN model_subscriptions s "
-            "ON s.id=g.subscription_id WHERE (s.id IS NOT NULL OR g.person<>'') "
+            "s.status,l.access_expires_at AS access_expires_at FROM computer_subscriptions g "
+            "LEFT JOIN model_subscriptions s ON s.id=g.subscription_id "
+            "LEFT JOIN claude_logins l ON l.subscription_id=s.id WHERE (s.id IS NOT NULL OR g.person<>'') "
             # A computer's key follows its login: not while a person cleared it or signed it out there
             # (backend/model_login.py model_login_cleared), as GET runner-model-credentials does (`keys_for`).
             f"AND NOT ({KEPT_KEY.format('s.')} AND EXISTS (SELECT 1 FROM model_login_cleared m "
@@ -382,8 +392,10 @@ def _given(c):
         if people:
             members = {}
             for m in c.execute(
-                f"SELECT id,name,kind,revision,status,status_at,owner_id,created_at,access_expires_at FROM model_subscriptions "
-                f"WHERE owner_id IN ({','.join('?' * len(people))}) ORDER BY created_at, id",
+                "SELECT s.id,s.name,s.kind,s.revision,s.status,s.status_at,s.owner_id,s.created_at,"
+                "l.access_expires_at AS access_expires_at FROM model_subscriptions s "
+                "LEFT JOIN claude_logins l ON l.subscription_id=s.id "
+                f"WHERE s.owner_id IN ({','.join('?' * len(people))}) ORDER BY s.created_at, s.id",
                 sorted(people),
             ):
                 runtime = (KINDS.get(m["kind"]) or {}).get("runtime")
@@ -965,9 +977,7 @@ def listed(c):
     then by the soonest weekly reset (None when held or needing reconnecting)."""
     if not _present(c):
         return []
-    subs = H._rows(
-        c.execute("SELECT * FROM model_subscriptions ORDER BY lower(name), id LIMIT ?", (MAX_SUBSCRIPTIONS,))
-    )
+    subs = H._rows(c.execute(f"SELECT * FROM {SUBS} ORDER BY lower(name), id LIMIT ?", (MAX_SUBSCRIPTIONS,)))
     ctx = _listing(c) if subs else None
     views = [view(c, s, ctx) for s in subs]
     if ctx is None:
@@ -1405,7 +1415,6 @@ def save(c, vault, settings, who, body, sid=None, signed_on=""):
                 # and asked reads were the token's, and the login may be another account: they go.
                 c.execute("UPDATE model_subscriptions SET kind=? WHERE id=?", (body.kind, sid))
                 claude_login.reset_usage(c, sid)
-                claude_login.forget(c, sid)
                 H.event(c, who.actor, "subscription.converted", sid, {"from": sub["kind"], "to": body.kind})
             if kind == "claude_login" and _kept_key(sub):
                 # A key kept in the vault reaches older runners and bots' grants as a key (`keys_for`, `for_claim`):
@@ -1421,8 +1430,7 @@ def save(c, vault, settings, who, body, sid=None, signed_on=""):
             # reconnected value moves it; a rename, an owner change or a same-account refresh (`refreshed`) does not.
             c.execute(
                 "UPDATE model_subscriptions SET credential_id=?,sealed='',preview=?,revision=revision+1,status='new',"
-                "status_detail='',status_at=?,updated_at=?,credential_at=?,account='',access_expires_at=NULL,"
-                "login_expires_at=NULL,refreshed_at=NULL WHERE id=?",
+                "status_detail='',status_at=?,updated_at=?,credential_at=? WHERE id=?",
                 (_keep_value(c, vault, sub, value, preview, who.actor, now), preview, now, now, now, sid),
             )
             if retired:
@@ -1431,9 +1439,10 @@ def save(c, vault, settings, who, body, sid=None, signed_on=""):
                 for g in keyed:
                     mark_key_cleared(c, who, g["runner_id"], g["runtime"])
                 drop_credential(c, retired)
+            # A new value may be another account, or no longer a full login: the old one's account, times and lease go.
+            claude_login.drop(c, sid)
             if kind == "claude_login":
                 claude_login.stamp(c, sid, value)
-                claude_login.forget(c, sid)
             # A new value may be another account: its own usage-limit hold ends as Try now does, one probe turn tests it
             # (login_holds.try_now), before the bots are re-judged. As for a change, every computer given it stops its
             # live runs on that runtime (their work goes back in the queue; confirmed first) and starts its sessions
@@ -1513,7 +1522,7 @@ def remove(c, settings, who, sid, confirm=False):
     c.execute("DELETE FROM model_subscriptions WHERE id=?", (sid,))
     from . import claude_login
 
-    claude_login.forget(c, sid)
+    claude_login.drop(c, sid)
     if sub["credential_id"]:
         from .model_login import mark_key_cleared
 
@@ -1771,7 +1780,7 @@ def lend(c, runner_id, runtime, actor, shared, others, only=None):
     ]
     subs = H._rows(
         c.execute(
-            f"SELECT * FROM model_subscriptions WHERE kind IN ({','.join('?' * len(kinds))}) "
+            f"SELECT * FROM {SUBS} WHERE kind IN ({','.join('?' * len(kinds))}) "
             "AND status<>'needs_reconnect'" + (" AND id=?" if only else "") + " ORDER BY created_at DESC",
             [*kinds, *([only] if only else [])],
         )
@@ -1882,6 +1891,9 @@ def before_delete(c, who, credential_id):
     ).fetchall()
     c.execute("DELETE FROM computer_subscriptions WHERE subscription_id=? AND person=''", (sub["id"],))
     c.execute("DELETE FROM model_subscriptions WHERE id=?", (sub["id"],))
+    from . import claude_login
+
+    claude_login.drop(c, sub["id"])
     from .model_login import mark_key_cleared
 
     for g in given:

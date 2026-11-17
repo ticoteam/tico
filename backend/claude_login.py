@@ -146,7 +146,7 @@ def checked(text: str) -> tuple[str, str]:
 
 
 def facts(value: Any) -> Row:
-    """What the plan's row keeps of a login: its account, its email, and when its access token and login end."""
+    """What is kept of a login beside its plan (`claude_logins`): its account, and when its access token and login end."""
     if isinstance(value, str):
         value = json.loads(value)
     oauth, account = value["claudeAiOauth"], value["oauthAccount"]
@@ -166,20 +166,26 @@ def turn_file(text: str) -> str:
 
 
 def stamp(c: Any, sid: str, value: Any, refreshed: bool = False) -> None:
-    """Keep the login's account and times on the plan's row."""
+    """Keep the login's account and times beside the plan (`claude_logins`; model_subscriptions.SUBS reads them)."""
     known = facts(value)
+    now = H.now()
     c.execute(
-        "UPDATE model_subscriptions SET account=?,access_expires_at=?,login_expires_at=coalesce(?,login_expires_at),"
-        "refreshed_at=CASE WHEN ? THEN ? ELSE refreshed_at END WHERE id=?",
-        (known["account"], known["access_expires_at"], known["login_expires_at"], refreshed, H.now(), sid),
+        "INSERT INTO claude_logins(subscription_id,updated_at) VALUES(?,?) ON CONFLICT(subscription_id) DO NOTHING",
+        (sid, now),
+    )
+    c.execute(
+        "UPDATE claude_logins SET account=?,access_expires_at=?,login_expires_at=coalesce(?,login_expires_at),"
+        "refreshed_at=CASE WHEN ? THEN ? ELSE refreshed_at END,updated_at=? WHERE subscription_id=?",
+        (known["account"], known["access_expires_at"], known["login_expires_at"], refreshed, now, now, sid),
     )
 
 
 def same_account(c: Any, account: str, sid: str | None = None) -> Row | None:
-    """The plan already connected as `account` (another than `sid`), or None."""
+    """The plan already connected as `account` (another than `sid`): its id and name, or None."""
     return H._one(
         c,
-        "SELECT * FROM model_subscriptions WHERE account=? AND id<>?",
+        "SELECT s.id,s.name FROM claude_logins l JOIN model_subscriptions s ON s.id=l.subscription_id "
+        "WHERE l.account=? AND s.id<>?",
         (account, sid or ""),
     )
 
@@ -334,8 +340,19 @@ def _backoff(failures: int) -> int:
 
 
 def forget(c: Any, sid: str) -> None:
-    """A plan removed, reconnected or no longer a full login: its lease goes, and so does any wait on it. The leases it
+    """A plan reconnected: its lease goes, and so does any wait on it; its account and times stay. The leases it
     issued are remembered, so a late result is still known for whose it is."""
+    c.execute(
+        "UPDATE claude_logins SET lease_id='',lease_runner='',lease_revision=0,lease_until=NULL,failures=0,"
+        "retry_at=NULL,done_lease='',done_revision=0,updated_at=? WHERE subscription_id=?",
+        (H.now(), sid),
+    )
+    unpark(c, sid)
+
+
+def drop(c: Any, sid: str) -> None:
+    """A plan removed, or given a new value (another account, or no longer a full login): its row goes with its lease,
+    and any wait on it ends."""
     c.execute("DELETE FROM claude_logins WHERE subscription_id=?", (sid,))
     unpark(c, sid)
 
@@ -349,7 +366,7 @@ def _refreshes(c: Any, vault: Any, runner_id: str) -> list[Row]:
     out: list[Row] = []
     for sub in H._rows(
         c.execute(
-            "SELECT * FROM model_subscriptions WHERE kind=? AND status<>'needs_reconnect' "
+            f"SELECT * FROM {MS.SUBS} WHERE kind=? AND status<>'needs_reconnect' "
             "AND (access_expires_at IS NULL OR access_expires_at<=?)",
             (KIND, due),
         )
@@ -631,7 +648,7 @@ def _usage_jobs(c: Any, vault: Any, runner_id: str) -> list[Row]:
     out: list[Row] = []
     for sub in H._rows(
         c.execute(
-            "SELECT * FROM model_subscriptions WHERE kind=? AND status<>'needs_reconnect' AND access_expires_at>?",
+            f"SELECT * FROM {MS.SUBS} WHERE kind=? AND status<>'needs_reconnect' AND access_expires_at>?",
             (KIND, fresh),
         )
     ):

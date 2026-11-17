@@ -295,7 +295,7 @@ def test_a_lease_whose_computer_went_quiet_is_not_handed_over_while_the_old_toke
     assert poll(api, held)["refreshes"][0]["lease"] == lease  # its own lease comes back to it
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE claude_logins SET lease_until=? WHERE subscription_id=?", (at(minutes=-5), sid))
-        c.execute("UPDATE model_subscriptions SET access_expires_at=? WHERE id=?", (at(minutes=-1), sid))
+        c.execute("UPDATE claude_logins SET access_expires_at=? WHERE subscription_id=?", (at(minutes=-1), sid))
     # The old token is gone anyway: the other computer may try now.
     [taken] = poll(api, other)["refreshes"]
     assert taken["lease"] != lease
@@ -310,7 +310,7 @@ def test_a_lease_whose_computer_went_quiet_is_not_handed_over_while_the_old_toke
     assert value["claudeAiOauth"]["accessToken"] == access(2)
     # A login refused outright needs reconnecting; a plain failure only waits.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE model_subscriptions SET access_expires_at=? WHERE id=?", (at(minutes=10), sid))
+        c.execute("UPDATE claude_logins SET access_expires_at=? WHERE subscription_id=?", (at(minutes=10), sid))
         CL.forget(c, sid)
     jobs = [j for m in (first, second) for j in poll(api, m)["refreshes"]]
     [job] = jobs
@@ -436,7 +436,7 @@ def test_a_turn_refused_while_its_login_rotated_resumes_instead_of_failing(api):
     while second and second["id"] == turn["id"]:
         second = claim(api, m)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE model_subscriptions SET refreshed_at=? WHERE id=?", (at(minutes=-10), sid))
+        c.execute("UPDATE claude_logins SET refreshed_at=? WHERE subscription_id=?", (at(minutes=-10), sid))
     post(api, f"attempts/{second['id']}/started", {"thread_id": "t-gap-2"}, m["token"])
     post(
         api,
