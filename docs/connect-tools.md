@@ -5,11 +5,10 @@ MCP server to anything we write: the vendor keeps it current, and Tico passes it
 the Tools Owner in the Tools page's chat ("connect Linear to Atlas") and it does the steps below, with a card for the key and
 a person's click for each grant; BotOps writes the bot's `bot.yaml`. This page says what the steps are.
 
-**Tico renews the OAuth sign-in of an MCP server added in Tools.** **Tools → Add → MCP server** offers **Sign in** (OAuth
-with PKCE, registering itself with the server when it allows that) for a server that asks for one. The server keeps the
-tokens and refreshes them itself; when the provider refuses a refresh, the tool says **Sign in again** under Needs you
-([MCP servers](credential-vault.md#mcp-servers)). A server declared only in a bot's `bot.yaml` gets no renewal: give it
-an API credential instead, or use a REST skill with one.
+**An MCP server added in Tools → Add → MCP server by OAuth sign-in is renewed by Tico.** Tico keeps the sign-in's tokens
+and refreshes the access token on the server before it ends, one refresh at a time; when the vendor will not refresh it,
+the tool's check says **Sign in again**. An OAuth connection declared in `bot.yaml` (the older way) is not renewed by
+Tico: use a supported API credential there, or a REST skill.
 
 | Service | Vendor MCP server | API token or key in a header? | For a bot |
 |---|---|---|---|
@@ -71,20 +70,17 @@ servers in the operator's `~/.grok/config.toml` and plugins; Cursor reads `~/.cu
 
 ### When the vendor's server needs OAuth
 
-Add it in **Tools → Add → MCP server** and choose **Sign in**. The sign-in belongs to the company, Tico's server refreshes
-its tokens, and a signed-in tool always goes through Tico's proxy. If the provider ends the sign-in (it refuses a refresh,
-or asks for consent again), the tool shows **Sign in again** under Needs you and a bot's calls are refused with the same
-words until someone signs in. See [MCP servers](credential-vault.md#mcp-servers).
-
-The fallback is a `bot.yaml` `tools:` entry with an API credential in a header: Tico does not renew an OAuth login a
-bot.yaml server holds. [A REST skill](#a-rest-skill) below is the other API credential route.
+Add the server in **Tools → Add → MCP server** and choose the sign-in: Tico keeps the tokens and refreshes them, and a bot
+reaches the server through Tico's proxy. Some providers still require renewed human consent after a time; the tool's check
+then says **Sign in again**. A server declared in `bot.yaml` is not renewed by Tico: use a supported API Credential, or
+[a REST skill](#a-rest-skill) below.
 
 ## Jira and Confluence
 
 Atlassian's remote MCP server (Jira, Confluence, Bitbucket Cloud and more) is `https://mcp.atlassian.com/v2/mcp`, over
 HTTP. Use v2 for new connections; see [Atlassian's migration guidance](https://atlassian.github.io/atlassian-mcp-server/#how-it-works).
-To use its OAuth sign-in, add it in **Tools → Add → MCP server** and choose **Sign in** when it is offered; Tico renews it.
-For a `bot.yaml` entry, an **API token works instead, if an organization admin has turned it on**, with no consent screen:
+Added in Tools by sign-in, Tico renews its OAuth; declared in `bot.yaml`, it does not. An **API token works instead, if an organization admin has turned it on**, with no
+consent screen:
 
 ```yaml
 - service: jira
@@ -115,9 +111,10 @@ Settings, Security & access. `https://mcp.linear.app/mcp/readonly` is a read-onl
   env: LINEAR_API_KEY
 ```
 
-`can` declares intended operations; Tico does not filter a bot.yaml server's MCP tool list by it, so the endpoint or
-credential scopes must enforce read-only access. A server added in Tools is different: a bot given it at Read may call only
-the tools the server marks read-only (`readOnlyHint`). [Linear's official guide](https://linear.app/docs/mcp) describes both options.
+For a server held in Tools, a bot's level is enforced at Tico's proxy: with only a read-and-write key, a bot at **Read**
+may call only the tools the server's own tool list marks `readOnlyHint`, plus the session's set-up and listings. The `can`
+line in `bot.yaml` (the older way) declares intent only; Tico does not filter a vendor's MCP tools by it, so there the
+endpoint or credential scopes must enforce read-only access. [Linear's official guide](https://linear.app/docs/mcp) describes both options.
 
 If you want writes, choose the write endpoint and declare that intent separately:
 
@@ -215,9 +212,9 @@ they list different tools. Take the exact setup from TIDY's [MCP page](https://w
 Then prove it with one read-only call.
 
 Start with a question, such as "What cleanings are scheduled for our office this week?", and review the answer in
-Tico. Some TIDY tools can book a job, including one that takes a request in plain language, and `can:` does not stop it:
-Tico does not filter a bot.yaml server's tools by `can:` (a server added in Tools at Read allows only the tools it marks
-read-only). Use a read-only key or endpoint if TIDY offers one. Otherwise, have the
+Tico. Some TIDY tools can book a job, including one that takes a request in plain language, and in `bot.yaml`
+`can:` does not stop it. Added in Tools and granted at Read, the bot may call only the tools TIDY's server marks
+`readOnlyHint`, so a booking tool the server does not mark is refused. Use a read-only key or endpoint if TIDY offers one. Otherwise, have the
 bot ask a person to OK it (`tico task ask --kind ok`) and send a booking or anything that costs money only after the
 person OKs it, and write that rule in the bot's instructions and the tool's `note:`.
 
