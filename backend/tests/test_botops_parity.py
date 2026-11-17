@@ -160,10 +160,11 @@ def test_an_mcp_placeholder_header_registers_as_the_requester_and_a_secret_still
         rows = c.execute("SELECT * FROM bot_tool_requests WHERE bot='ops'").fetchall()
         assert len(rows) == 1 and rows[0]["state"] == "pending" and rows[0]["requested_by"] == "human:ana"
         task = H.task(c, made.json()["task_id"])
+        words = H.task_words(c, task["id"])
         assert c.execute("SELECT count(*) FROM tasks WHERE owner_id='bot:botops'").fetchone()[0] == before + 1
     # The task carries the placeholder exactly, for BotOps to write into bot.yaml; no value is anywhere in it.
-    assert task["owner_id"] == "bot:botops" and "Authorization: 'Bearer ${OPS_ADMIN_MCP_TOKEN}'" in task["body"]
-    assert "env: OPS_ADMIN_MCP_TOKEN" in task["body"]
+    assert task["owner_id"] == "bot:botops" and "Authorization: 'Bearer ${OPS_ADMIN_MCP_TOKEN}'" in words
+    assert "env: OPS_ADMIN_MCP_TOKEN" in words
     # The route's own parser still pairs the header with the entry's env when BotOps changes the server later.
     assert (
         botops_act.secret_in_request(
