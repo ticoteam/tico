@@ -645,39 +645,7 @@ def parser():
     s.add_argument("id")
     s.set_defaults(fn="note delete")
 
-    feedback = sub.add_parser(
-        "feedback", help="a person's 👍/👎 on a bot's work: give, list, make a rule"
-    ).add_subparsers(dest="sub")
-    s = feedback.add_parser("give", help="rate a message or task a bot made; again replaces it (an ask: task thumbs)")
-    s.add_argument("subject_type", choices=("message", "task"))
-    s.add_argument("subject_id")
-    s.add_argument("rating", choices=("up", "down"))
-    s.add_argument("--reason")
-    s.add_argument("--tell-bot", dest="tell_bot", action="store_true", help="a 👎 only: a note for the bot's next run")
-    s.set_defaults(fn="feedback give")
-    s = feedback.add_parser("remove", help="take back your feedback, and its note if no run carried it")
-    s.add_argument("id")
-    s.set_defaults(fn="feedback remove")
-    s = feedback.add_parser("markers", help="your feedback on these subjects and everyone's up/down counts")
-    s.add_argument("subject_type", choices=("message", "task", "ask"), help="an ask's id: <visit-id>:<requirement-id>")
-    s.add_argument("subject_ids", nargs="+")
-    s.set_defaults(fn="feedback markers")
-    s = feedback.add_parser("list", help="feedback newest first, a page at a time")
-    s.add_argument("--bot", dest="bot_id")
-    s.add_argument("--rating", choices=("up", "down"))
-    s.add_argument("--since", help="an ISO time, or 24h / 7d")
-    s.add_argument("--cursor")
-    s.add_argument("--limit", type=int)
-    s.set_defaults(fn="feedback list")
-    feedback.add_parser("reasons", help="your five latest distinct reasons").set_defaults(fn="feedback reasons")
-    s = feedback.add_parser("rule-draft", help="a one-sentence rule drafted from your 👎; stores nothing")
-    s.add_argument("id")
-    s.set_defaults(fn="feedback rule-draft")
-    s = feedback.add_parser("rule", help="your 👎 as an org rule: active if you manage the bot, else suggested")
-    s.add_argument("id")
-    s.add_argument("text")
-    s.add_argument("--all-bots", dest="all_bots", action="store_true")
-    s.set_defaults(fn="feedback rule")
+    cli_spec.add(sub, task_work_commands.FEEDBACK)  # tico feedback: clients/commands/task_work.py
 
     files = sub.add_parser(
         "file", help="what you publish for people: reports, documents, imported objects"
@@ -1664,27 +1632,7 @@ def parser():
     s.set_defaults(fn="ok use")
     cli_spec.add(sub, webhooks.NOTICE)
 
-    catalogue = sub.add_parser(
-        "settings", help="find, read and change a control in Settings by its words (docs/permissions.md)"
-    ).add_subparsers(dest="sub")
-    s = catalogue.add_parser("find", help="settings whose name, place or key hold these words")
-    s.add_argument("words")
-    s.set_defaults(fn="settings find")
-    for leaf, text in (
-        ("show", "one setting: its value, who may change it and its card"),
-        ("set", "change one setting as yourself, or BotOps or the Assistant as the person who asked"),
-    ):
-        s = catalogue.add_parser(leaf, help=text)
-        s.add_argument("key", help="the key `tico settings find` gives, e.g. team.rules.admin_sql")
-        if leaf == "set":
-            s.add_argument("value", help="on/off, a number, text, a comma-separated list or JSON")
-            s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
-        target = s.add_mutually_exclusive_group()
-        target.add_argument("--bot", help="the bot, for a setting set per bot")
-        target.add_argument("--computer", help="the computer, for a setting set per computer")
-        target.add_argument("--id", help="the one thing it sets: a trigger, webhook, rule, routine, repository...")
-        target.add_argument("--person", help="the person's id, for a setting set per person")
-        s.set_defaults(fn="settings " + leaf)
+    cli_spec.add(sub, admin_commands.SETTINGS)  # tico settings: clients/commands/admin.py
     cli_spec.add(sub, webhooks.RELEASE)
     cli_spec.add(sub, webhooks.WEBHOOK)
 

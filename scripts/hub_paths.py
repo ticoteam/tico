@@ -78,9 +78,6 @@ HAND_READ_PATHS = (
     "doc read",
     "doc search",
     "docs links",
-    "feedback list",
-    "feedback markers",
-    "feedback reasons",
     "file list",
     "file read",
     "file search",
@@ -106,8 +103,6 @@ HAND_READ_PATHS = (
     "repo list",
     "run list",
     "service-key list",
-    "settings find",
-    "settings show",
     "slack channel list",
     "task caps",
     "task context",
@@ -173,8 +168,8 @@ def spec_paths():
 
 
 # Spec'd commands whose tools neither write nor run on this computer, but spend: from the company's Gateway cap, or
-# (`market ask`) a model call on the server's key.
-PAID = ("gateway search", "gateway fetch", "gateway digest", "market ask")
+# (`market ask`, `feedback rule-draft`) a model call on the server's key.
+PAID = ("gateway search", "gateway fetch", "gateway digest", "market ask", "feedback rule-draft")
 
 
 def read_paths():
