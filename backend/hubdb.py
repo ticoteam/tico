@@ -4005,13 +4005,16 @@ def comment_way_refs(way, defer_for=None):
 def delegate_woken(conn, task_id, person, msg):
     """task_delegations: each bot a person's message on the task woke (its own run, or a steer or queue delivery
     pending for it) acts on the task with party rights for 24 hours."""
-    until = shift(now(), hours=24)
     for recipient, mid in _woken_bots(conn, msg):
-        conn.execute(
-            "INSERT OR IGNORE INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) "
-            "VALUES(?,?,?,?,?)",
-            (task_id, recipient, person, mid, until),
-        )
+        delegate(conn, task_id, recipient, person, mid)
+
+
+def delegate(conn, task_id, bot, person, message_id):
+    """`bot` acts on the task with party rights for 24 hours, lent by `person`'s message that woke it."""
+    conn.execute(
+        "INSERT OR IGNORE INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) VALUES(?,?,?,?,?)",
+        (task_id, bot, person, message_id, shift(now(), hours=24)),
+    )
 
 
 def _woken_bots(conn, msg):

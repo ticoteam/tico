@@ -106,9 +106,12 @@ def register(
         # queue wake the bots among them, so they take the right to direct the task (a bot's is its needs_action);
         # anyone may defer. Defer and goal wake none: a goal's own control does (set_goal below).
         bot = asker or comment_bot(c, row)
-        # The person a bot's question waits on may wake that bot with a reply to it, as they may answer it.
-        directs = who.role == "bot" or asked_me or may_direct(c, who, row)
-        if body.delivery in ("steer", "queue") and bot and not directs:
+        directs = who.role == "bot" or may_direct(c, who, row)
+        # The person a bot's ❓ waits on wakes that bot with their reply, as they may answer it, and that bot only: the
+        # comment reaches everyone else as a Defer never would, and only the asker takes the delegation. Unless they
+        # chose Defer for it too.
+        answers = asked_me and not directs and H.is_bot(asker) and body.delivery not in ("defer", "goal")
+        if body.delivery in ("steer", "queue") and bot and not directs and not answers:
             raise Problem("delivery", "Only someone on this task can wake its bots: send it with defer", 403)
         if body.delivery == "goal" and who.role != "bot" and not may_direct(c, who, row):
             raise Problem("delivery", "Only someone on this task can set its goal: send it with defer", 403)
@@ -123,6 +126,8 @@ def register(
             way, defer_for = "defer", delivery.NEVER
         else:
             way, defer_for = comment_way_for(c, who, row)
+        if answers:
+            way, defer_for = "defer", delivery.NEVER
         # A Defer never the reader did not choose (none named, or a defer with no deadline) binds the bots only:
         # people following are notified as their level says (threads.plan).
         people = way == "defer" and not directs and body.defer_for is None
@@ -166,6 +171,14 @@ def register(
             to=asker,
         )
         org_rule_check.late_on(c, rule, "message", message=msg["id"], task=task_id)
+        if answers and asker:
+            # The asker's own delivery was deferred with the rest: its run starts now and carries it.
+            delivery.now(c, asker, row["conversation_id"])
+            H.delegate(c, task_id, asker, who.actor, msg["id"])
+            if asker == row["owner_id"]:
+                from . import task_engine
+
+                task_engine.person_spoke(c, task_id, who.actor)
         due = None
         # The bot the comment went to first: the follower it was for, or the bot its @mention reached.
         reached = msg.get("recipient_id") if H.is_bot(msg.get("recipient_id")) else None
@@ -199,6 +212,8 @@ def register(
             way, due = "defer", None  # a bot's plain comment to a bot waits for its next run
         if body.delivery == "goal":
             way = None
+        if answers:
+            way, due = body.delivery or "steer", None  # how it reached the bot it answers
         return {
             "comment": msg,
             "comments": comments,
