@@ -209,7 +209,8 @@ def test_a_post_in_a_sub_thread_the_reader_may_not_read_does_not_bring_its_task_
     there after the finish brings the root back for Ana and not for him, with priming and without."""
     with api.app.state.store.transaction() as c:
         secret = H.task_create(c, "human:ana", "Private", "Secret", "human:ana", private=True, lint=False)
-        task = H.task_create(c, "human:ana", "Finished sub", "Done work", "human:ben", lint=False)
+        # No body: it would be a first chat message after the backdated finish (see seed_finished_task_replies).
+        task = H.task_create(c, "human:ana", "Finished sub", "", "human:ben", lint=False)
         [root] = c.execute(
             "SELECT id FROM conversations WHERE task_id=? AND parent_id IS NULL", (task["id"],)
         ).fetchone()
@@ -230,7 +231,7 @@ def test_a_post_in_a_sub_thread_the_reader_may_not_read_does_not_bring_its_task_
 def test_catch_up_counts_a_legacy_homes_plain_unread_messages(api):
     """Catch up reads every unread message of a migrated Home's thread for the whole check, plain ones included, since
     the Home's old readers decide them (the json_each half of its batched read). A person's Home that still holds
-    shared-room history and has three plain unread messages from a teammate shows all three, not none."""
+    shared-room history and has three plain unread messages from a bot shows all three, not none."""
     home = _home(api, "human:cara", token="cara-test")
     with api.app.state.store.transaction() as c:
         old = threads.post(c, "human:cara", home["id"], "From the shared room")

@@ -81,7 +81,8 @@ def seed_finished_task_replies(api, n, tag, *, owner="human:ben", private_input=
     with api.app.state.store.transaction() as c:
         for i in range(n):
             key = f"{tag}-{i}"
-            task = H.task_create(c, "human:ana", f"Finished {key}", "Done work", owner, lint=False)
+            # No body: a task's body is now its first chat message, which would land after the backdated finish.
+            task = H.task_create(c, "human:ana", f"Finished {key}", "", owner, lint=False)
             [thread_id] = c.execute(
                 "SELECT id FROM conversations WHERE task_id=? AND parent_id IS NULL", (task["id"],)
             ).fetchone()
