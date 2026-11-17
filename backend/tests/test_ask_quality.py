@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from backend import ask_quality as Q
 from backend import hubdb as H
+from backend.tests.helpers import engine as X
 from backend.tests.helpers.ask_ingest import gate  # noqa: F401
 from backend.tests.helpers.tasks_board import api, get  # noqa: F401
 
@@ -24,7 +25,7 @@ def ask(c, n):
         "human:ben",
         f"OK the pricing page for step {n}?",
         kind="ok",
-        shows=[f"https://example.com/pricing-{n}"],
+        shows=X.shown(c, f"Pricing step {n}", bot="ops"),
         seen_version=made["version"],
     )
     return made["id"], added["requirement_id"]
@@ -86,3 +87,23 @@ def test_a_thumbs_down_counts_in_the_window_its_badly_written_reason_was_given(g
     with api.app.state.store.read() as c:
         [row] = Q.per_bot(c, stamp(now - timedelta(days=7)), stamp(now + timedelta(minutes=1)))
     assert (row["asks"], row["badly_written"]) == (1, 1)
+
+
+def test_a_question_mark_is_an_ask_and_one_after_a_refusal_means_the_bot_is_not_stuck(gate):  # noqa: F811
+    """A question is a message marked ❓ now (backend/question_marks.py): it counts as the bot's ask, and as the ask that
+    got through after a refusal; a question asked as an ask before still counts."""
+    from backend import question_marks as QM
+
+    api, _, _ = gate
+    now = datetime.now(timezone.utc)
+    with api.app.state.store.transaction() as c:
+        made = H.task_create(c, "bot:ops", "Launch note", "", "bot:ops", lint=False)
+        refused(c, stamp(now - timedelta(days=2)))
+        mark = QM.ask(c, "bot:ops", made["id"], "human:ben", "Which tone should the launch note use?")
+        c.execute(
+            "UPDATE question_marks SET created_at=? WHERE id=?", (stamp(now - timedelta(days=2, hours=-1)), mark["id"])
+        )
+        X.old_question(c, made["id"], "bot:ops", "ben", "Which day should it go out?")
+    with api.app.state.store.read() as c:
+        [row] = Q.per_bot(c, stamp(now - timedelta(days=3)), stamp(now + timedelta(hours=1)))
+    assert (row["bot"], row["asks"], row["refused"], row["stuck"]) == ("bot:ops", 2, 1, 0)
