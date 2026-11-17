@@ -30,7 +30,7 @@ def _s(description, **extra):
 
 TASK_ID = {
     "type": "string",
-    "description": "Task id: the full id, or 8+ leading characters (`short_id` in `task list`)",
+    "description": "Task id: the full id, or 8+ leading characters (`short_id` in task list)",
 }
 
 
@@ -38,9 +38,10 @@ TASK_ID = {
 DELIVERY = {
     "type": "string",
     "enum": ["steer", "queue", "defer"],
-    "description": "To a bot: steer goes into its running turn now (right after it if its harness can't "
-    "steer), queue right after its current turn there (or now if idle), defer wakes nobody and "
-    "goes in with its next turn there, at the latest after defer_for",
+    "description": "To a bot: steer goes into its running turn now (right after it if its harness "
+    "can't steer), queue right after its current turn there (or now if idle), "
+    "defer wakes nobody and goes in with its next turn there, at the latest after "
+    "defer_for",
 }
 
 

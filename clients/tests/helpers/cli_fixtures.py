@@ -1,0 +1,272 @@
+"""The fake API and the one-command-line runner behind the `tico` fixtures (clients/tests/test_cli_fixtures.py) and
+the spec tests that reuse them."""
+
+import contextlib
+import io
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+from clients import hubcli, hubtools
+from clients.tico import APIError, Client
+
+HERE = Path(__file__).resolve().parents[1] / "cli_fixtures"
+REPO = str(Path(__file__).resolve().parents[3])  # printed as <repo>: a path in an error is the checkout's own
+RECORD = os.environ.get("TICO_CLI_FIXTURES_RECORD") == "1"
+ROOT_HELP = hubcli.parser().description
+
+# Growth's setup block (backend/growth_setup.py) for a bot: settings done, a channel next, which only people may add.
+_GROWTH_MAY = {"settings": False, "channels": False, "sources": False, "months": True}
+_GROWTH_SETUP = {
+    "done": False,
+    "steps": [
+        {"step": "settings", "done": True},
+        {"step": "channel", "done": False},
+        {"step": "source", "done": False},
+        {"step": "month", "done": False},
+    ],
+    "next": {
+        "step": "channel",
+        "number": 2,
+        "says": "Add your first channel: where customers come from (search ads, SEO, partners).",
+        "command": 'tico growth channel add <slug> --name "<name>"',
+        "tool": "tico_growth_channel_add",
+        "you_may": False,
+        "who_may": [{"ref": "human:ana", "name": "Ana"}],
+        "bots_may": False,
+    },
+}
+
+# What the fake API answers, by "METHOD path" with the query left off; anything else answers {"ok": true}.
+_TRIGGER = {"id": "stripe", "name": "Stripe events", "event": "webhook.stripe", "preset": "stripe", "hourly": 60}
+_RELAY = {"trigger": "stripe", "address": "https://gateway.example/r/stripe"}
+_MAIL = {
+    "mailbox": "ops@acme.test",
+    "msg_id": "m1",
+    "thread_id": "t1",
+    "subject": "Statement",
+    "from_header": "Bank <bank@example.com>",
+    "to": ["ops@acme.test"],
+    "date": "2026-11-01",
+    "labels": ["INBOX"],
+    "snippet": "Your statement",
+}
+_FILE = {"name": "statement.pdf", "type": "application/pdf", "size": 2048}
+_CHANNEL = {"slug": "google-search", "name": "Google search", "stage": "testing", "track": "performance"}
+_GOAL = {"id": "g1", "title": "Launch", "status": "green", "owner": "bot:ana", "kpis": []}
+_GOAL_CALLS = (("GET", ""), ("POST", ""), ("POST", "/status"))
+_CHECKIN = {"id": "c1", "goal_id": "g1", "text": "On track", "author": "bot:ana"}
+_SIZE = {"id": "s1", "segment": "smb", "method": "top_down", "low": 2.5, "high": 4.0, "status": "proposed"}
+ANSWERS = {
+    "GET triggers": {"triggers": [_TRIGGER]},
+    "POST triggers": {"trigger": _TRIGGER | {"url": "https://tico.example/hooks/stripe"}},
+    "GET triggers/stripe": {"trigger": _TRIGGER},
+    "POST triggers/stripe": {"trigger": _TRIGGER},
+    "POST triggers/stripe/rotate": {"trigger": _TRIGGER | {"url": "https://tico.example/hooks/stripe"}},
+    "POST triggers/stripe/signing": {"trigger": _TRIGGER | {"signed": True}},
+    "POST triggers/stripe/delete": {"trigger": {"id": "stripe", "deleted": True}},
+    "GET triggers/stripe/deliveries": {
+        "deliveries": [{"delivery": "d1", "type": "charge.paid", "outcome": "accepted"}]
+    },
+    "GET triggers/stripe/deliveries/d1": {"delivery": {"delivery": "d1", "part": 1, "parts": 2, "body": "{}"}},
+    "POST triggers/stripe/deliveries/d1/replay": {"replay": {"delivery": "d1:replay:1"}},
+    "POST triggers/stripe/recover": {"recover": {"found": 2, "recovered": 1, "duplicate": 1, "still_refused": 0}},
+    "POST triggers/stripe/relay": {"relay": _RELAY},
+    "POST triggers/stripe/relay/rotate": {"relay": _RELAY},
+    "POST triggers/stripe/relay/delete": {"relay": {"trigger": "stripe", "deleted": True}},
+    "POST triggers/stripe/relay/wake": {"relay": _RELAY | {"wake": True}},
+    "GET relay": {"relay": {"key": "connected", "relays": 1, "last_error": "", "pending": 0}},
+    "GET sleep": {"sleep": {"hosted": True, "hours": 4, "runners": True}},
+    "POST sleep": {"sleep": {"hosted": True, "hours": 2, "runners": False}},
+    "GET notices": {"notices": [{"kind": "info", "body": "Tico 0.6 is out", "source": "latest"}]},
+    "GET rules": {"rules": [{"id": "r1", "text": "Reply within a day", "version": 2}], "next_cursor": None},
+    "GET rules/missing": APIError("not_found", "No rule missing", 404),
+    "GET me": {"ok": True, "actor": "bot:ana"},
+    "GET mail/mailboxes": {"mailboxes": [{"address": "ops@acme.test"}, {"address": "billing@acme.test"}]},
+    "GET mail/messages": {"messages": [_MAIL], "next_cursor": "c2"},
+    "GET mail/threads/id-1": {"messages": [_MAIL | {"body": "Your statement is ready."}]},
+    "GET mail/messages/id-1": _MAIL | {"body": "Your statement is ready.", "attachments": [_FILE]},
+    "POST mail/messages/organize": {
+        "count": 2,
+        "mailbox": "ops@acme.test",
+        "ids": ["m1", "m2"],
+        "undo": {"action": "unlabel", "label": "Receipts", "ids": ["m1", "m2"]},
+    },
+    "GET growth/channels": {"channels": [_CHANNEL]},
+    "GET growth/sources": {
+        "sources": [
+            {"id": "s1", "truth_for": "ad spend", "system": "Google Ads", "reach_kind": "mcp", "reach_ref": "ads"},
+            {
+                "id": "s4",
+                "truth_for": "new customers",
+                "system": "Signups sheet",
+                "reach_kind": "person",
+                "fills": ["new_customers"],
+                "health": "failing",
+                "last_error": 'column "channel" not found',
+            },
+        ],
+        "conflicts": [{"truth_for": "bookings", "sources": ["s2", "s3"]}],
+    },
+    "POST growth/sources/s1/sync": {
+        "ok": True,
+        "written": 4,
+        "held": 1,
+        "not_written": [{"row": 4, "channel": "podcast", "month": "2026-10", "reason": "no such channel"}],
+        "not_written_count": 1,
+    },
+    "GET growth/finance-campaigns": {
+        "accounts": [
+            {"platform": "meta_ads", "account": "act_111", "label": "Meta Ads act_111", "name": "Paid rental"}
+        ],
+        "campaigns": [
+            {"key": "meta_ads:111:brand", "name": "Brand search", "last_month": "2026-10", "last_month_spend": 4210.5}
+        ],
+    },
+    "GET growth/cohorts": {"cohorts": [{"month": "2026-10", "channel": None, "spend": 900, "new_customers": 3}]},
+    "GET growth/economics": {
+        "month": "2026-10",
+        "rows": [{"name": "Google search", "spend": 900, "new_customers": 3, "cac": 300, "ltv": 1200, "ltv_cac": 4}],
+        "total": {"name": "total", "spend": 900, "new_customers": 3, "cac": 300},
+    },
+    "GET growth/kpis": {"kpis": [], "you_may": _GROWTH_MAY, "setup": _GROWTH_SETUP},
+    "GET growth/setup": {
+        **_GROWTH_SETUP,
+        "steps": [{**s, "at": "2026-11-13T09:00:00Z" if s["done"] else None} for s in _GROWTH_SETUP["steps"]],
+        "channel": None,
+        "you_may": _GROWTH_MAY,
+        "first_opened_at": "2026-11-13T08:55:00Z",
+        "numbers_seen_at": None,
+    },
+    "GET growth/computed": {
+        "by": "plan",
+        "grain": "month",
+        "min_cohort": 30,
+        "cac_note": "spend is not split by plan",
+        "keys_visible": False,
+        "cohorts": [
+            {
+                "period": "2026-09",
+                "value": "pro",
+                "too_few": False,
+                "new_customers": {"value": 71, "status": "ok"},
+                "kept_d30": {"value": 78.9, "status": "ok", "count": 56, "denominator": 71},
+                "kept_d90": {"value": None, "status": "not_yet", "fills_on": "2026-12-29"},
+                "kept_d180": {"value": None, "status": "not_yet", "fills_on": "2027-03-29"},
+                "ltv": {"value": 640, "status": "ok"},
+                "cac": {"value": None, "status": "not_split"},
+                "payback_months": {"value": None, "status": "not_split"},
+            },
+            {
+                "period": "2026-09",
+                "value": "solo",
+                "too_few": True,
+                "new_customers": {"value": 19, "status": "ok"},
+                "kept_d30": {"value": None, "status": "too_few", "count": 12, "denominator": 19},
+                "kept_d90": {"value": None, "status": "not_yet", "fills_on": "2026-12-29"},
+                "kept_d180": {"value": None, "status": "not_yet", "fills_on": "2027-03-29"},
+                "ltv": {"value": None, "status": "too_few"},
+                "cac": {"value": None, "status": "not_split"},
+                "payback_months": {"value": None, "status": "not_split"},
+            },
+        ],
+    },
+    "POST growth/customers": {
+        "customers": 120,
+        "spells": 121,
+        "removed": 2,
+        "unknown_channel": 4,
+        "new_by_month": [{"month": "2026-09", "channel": "google-search", "new_customers": 116}],
+    },
+    "GET goals": {"goals": [_GOAL]},
+    "POST goals": {"goal": _GOAL},
+    **{f"{verb} goals/{id}{tail}": {"goal": _GOAL} for id in ("id-1", "1") for verb, tail in _GOAL_CALLS},
+    **{f"POST goals/{id}/checkins": {"checkin": _CHECKIN} for id in ("id-1", "1")},
+    "POST market/sizes": {"size": _SIZE},
+    **{f"POST market/sizes/{id}/{d}": {"size": _SIZE} for id in ("id-1", "1") for d in ("accept", "reject")},
+    "GET market/spend": {
+        "year": 2026,
+        "total": {"spend_usd": 3e9, "low_usd": 2.5e9, "high_usd": 4e9},
+        "segments": [
+            {"id": "all", "name": "Office software", "depth": 0, "size": None, "estimates": []},
+            {
+                "id": "smb",
+                "name": "Small offices",
+                "depth": 1,
+                "estimates": [_SIZE],
+                "disagree": True,
+                "size": _SIZE | {"spend_usd": 3e9, "low_usd": 2.5e9, "high_usd": 4e9, "confidence": "medium"},
+            },
+        ],
+    },
+    "POST market/figures": {"figure": {"id": "f1", "entity": "acme", "segment": "smb", "value": 2.5}},
+    "PUT strategy/draft": {"draft": {"version": 3, "summary": "Win small offices first"}},
+}
+
+
+def portable(text):
+    """`text` without argparse's usage block (the `usage:` line and the lines indented under it), and its error line as
+    Python 3.12 words it on every version. The top-level help (a group typed with no command, `tico email`) is kept to
+    its first line: the rest lists every command, which a slice's fixtures must not freeze."""
+    text = re.sub(r", maybe you meant '[^']*'\?", "", text)
+    text = re.sub(r"\(choose from ([^)]*)\)", lambda m: "(choose from " + m.group(1).replace("'", "") + ")", text)
+    kept, in_usage = [], False
+    for line in text.splitlines():
+        if line.startswith("usage: "):
+            in_usage = True
+            continue
+        if in_usage and line.startswith(" "):
+            continue
+        in_usage = False
+        kept.append(line)
+    text = "\n".join(kept)
+    return ROOT_HELP if text.lstrip().startswith(ROOT_HELP) else text
+
+
+def run_line(argv, monkeypatch):
+    """One command line against the fake API: what it did and printed."""
+    tools, http = [], []
+
+    def request(self, method, path, body=None, key=None, **_):
+        http.append([method, path.removeprefix("/api/v2/"), body])
+        answer = ANSWERS.get(f"{method} {path.removeprefix('/api/v2/').split('?')[0]}", {"ok": True})
+        if isinstance(answer, Exception):
+            raise answer
+        return json.loads(json.dumps(answer))
+
+    def recording(name, fn, properties):
+        def call(api, args):
+            # Only the arguments the tool's schema names: what else a command line passes (the hand parser's `json`)
+            # the tool never reads, and a read of one would show in `http`.
+            given = {k: v for k, v in args.items() if k in properties or k == "operation_id"}
+            tools.append([name, json.loads(json.dumps(given, default=str, sort_keys=True))])  # order is noise
+            return fn(api, args)
+
+        return call
+
+    monkeypatch.setattr(Client, "request", request)
+    for name, entry in hubtools.BY_NAME.items():
+        monkeypatch.setitem(entry, "fn", recording(name, entry["fn"], entry["inputSchema"]["properties"]))
+    for key in ("HUB_BOT", "HUB_EMPLOYEE", "HUB_OPERATION_ID", "HUB_WORKSPACE", "TICO_PROFILE", "HUB_HUMAN"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("HUB_API_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("HUB_TOKEN", "fixture-token")
+    monkeypatch.setattr(sys, "stdin", io.StringIO("Plain words, no hype.\n"))  # what `-` reads (`brand check -`)
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        try:
+            code = hubcli.main(list(argv))
+        except SystemExit as exc:  # a check in remotecli that ends the process, as `python -m clients.hubcli` would
+            code = exc.code if isinstance(exc.code, int) else 1
+            if isinstance(exc.code, str):
+                print(exc.code, file=sys.stderr)
+    return {
+        "argv": list(argv),
+        "tools": tools,
+        "http": http,
+        "stdout": out.getvalue().replace(REPO, "<repo>"),
+        "stderr": portable(err.getvalue()).replace(REPO, "<repo>"),
+        "exit": code,
+    }

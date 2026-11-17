@@ -287,11 +287,13 @@ def task_run(api, args):
         "delivery": {
             "type": "string",
             "enum": ["steer", "queue", "defer", "goal"],
-            "description": "How the comment reaches the task's bot. steer: into its running turn now (right "
-            "after it if its harness can't steer). queue: right after its current turn on this task, or now. "
-            "defer: wakes nobody; its next turn on this task reads it, at the latest after defer_for (24h). "
-            "goal: make the text the goal of its task session (no attachments or visuals; not public, not a "
-            "question). Omitted, the task's default applies.",
+            "description": "How the comment reaches the task's bot. steer: into its running turn "
+            "now (right after it if its harness can't steer). queue: right after "
+            "its current turn on this task, or now. defer: wakes nobody; its next "
+            "turn on this task reads it, at the latest after defer_for (24h). "
+            "goal: makes the text the goal of its task session (no attachments or "
+            "visuals; not public, not a question). Omitted, the task's default "
+            "applies.",
         },
         "defer_for": DEFER_FOR,
     },
@@ -384,10 +386,11 @@ def task_restore(api, args):
 
 @tool(
     "tico_task_label",
-    "Add or remove labels on a task. A project is a label; so is a kind (bug, front-end). A bot "
-    "changes labels on a task it owns or asked for; goal:on/goal:off need a person. It only adds or takes off the "
-    "labels named, so the version is optional: given, a task that changed since you were shown it is refused; left "
-    "out, the labels are read and changed at the version read, and a change made in between is refused, never lost.",
+    "Add or remove labels on a task; it only adds or takes off the labels named. A project is a "
+    "label; so is a kind (bug, front-end). A bot changes labels on a task it owns or asked for; "
+    "goal:on and goal:off need a person. The version is optional: given, a task changed since you "
+    "were shown it is refused; left out, the labels are changed at the version read, and a change "
+    "made in between is refused, never lost.",
     {
         "id": TASK_ID,
         "add": {"type": "array", "items": {"type": "string"}, "description": "Labels to add"},
@@ -415,9 +418,9 @@ def task_label(api, args):
 
 @tool(
     "tico_task_link",
-    "Attach a link to a task: the pull request you opened, an issue, a document, a page. `kind: session` links "
-    "another session working the task (a thread URL, a resume command); it is tracked only, task chat "
-    "goes to the owning bot.",
+    "Attach a link to a task: the pull request you opened, an issue, a document, a page. `kind: "
+    "session` links another session working the task (a thread URL, a resume command); it is "
+    "tracked only, task chat goes to the owning bot.",
     {
         "id": TASK_ID,
         "url": _s("The URL; for a session also a resume command or a reference"),
@@ -425,9 +428,10 @@ def task_label(api, args):
         "kind": {"type": "string", "enum": ["session"], "description": "session: another session on this task"},
         "wake_once": {
             "type": "boolean",
-            "description": "A pull request: true wakes this task once when its checks "
-            "finish (pass or fail), it is approved or gets changes requested, or a release ships it, so "
-            "you can end the turn instead of polling. It never changes the task's status. false disarms it",
+            "description": "A pull request: true wakes this task once when its checks finish "
+            "(pass or fail), it is approved or gets changes requested, or a "
+            "release ships it, so you can end the turn instead of polling. It "
+            "never changes the task's status. false disarms it",
         },
         "on_behalf_of": ASKED,
     },
@@ -605,8 +609,9 @@ def task_attach(api, args):
 @tool(
     "tico_task_caps",
     "Read the task caps: how many tasks each teammate may create for another per day, with "
-    "today's count, the tasks closed before the receiver acted, and the refused creates. Also the changes bots asked "
-    "for, which a person approves or declines as approvals. A cap is off until someone sets one.",
+    "today's count, the tasks closed before the receiver acted, and the refused creates. Also the "
+    "changes bots asked for, which a person approves or declines as approvals. A cap is off until "
+    "someone sets one.",
     {},
 )
 def task_caps_read(api, args):
@@ -633,8 +638,9 @@ def task_cap_set(api, args):
 
 @tool(
     "tico_general_manager",
-    "The General Manager: whether the helper bot is on, the hourly report's switch and schedule, its last run "
-    "(\"3 departments, 7 items\" or \"Nothing to do\"), and each department's last check and open check task.",
+    "The General Manager: whether the helper bot is on, the hourly report's switch and schedule, "
+    "its last run (\"3 departments, 7 items\" or \"Nothing to do\"), and each department's last check "
+    "and open check task.",
     {},
 )
 def general_manager_status(api, args):
@@ -707,9 +713,9 @@ def _replay(api, args):
 @tool(
     "tico_replay_show",
     "What happened in a window, in time order, as you may see it: tasks made and moved, chat "
-    "messages and task comments, runs and what they said, bot status changes, goal colours. The input for a recap. "
-    "Returns {from, to, items: [{at, kind, who, task, text, ...}], truncated, next, start: {tasks, bots}, names}; "
-    "`names` maps every actor shown to a display name.",
+    "messages and task comments, runs and what they said, bot status changes, goal colours. The "
+    "input for a recap. Returns {from, to, items: [{at, kind, who, task, text, ...}], truncated, "
+    "next, start: {tasks, bots}, names}, where `names` maps each actor to a display name.",
     REPLAY_WINDOW,
 )
 def replay_show(api, args):

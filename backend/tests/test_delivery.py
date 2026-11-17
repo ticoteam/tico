@@ -7,7 +7,6 @@ import pytest
 from backend import delivery
 from backend.store import H
 from backend.tests.helpers.api import claim, headers, post
-from backend.tests.helpers.tasks_board import bot_token
 from backend.tests.helpers.delivery import fired, job_of, rows, setup, tick
 
 
@@ -222,8 +221,10 @@ def test_a_defer_rides_along_only_on_a_turn_in_its_own_session(api):
 
 
 def test_on_a_task_a_bot_filed_a_comment_reaches_it_only_by_an_at_mention(api):
-    token = bot_token(api, "ops")
-    task = post(api, "tasks", {"owner": "ben", "title": "Fix the sign-in check", "body": "x"}, token=token)
+    # Through the API a bot's task for a person is its own, asking them (backend/person_asks.py); one filed before
+    # that, or by Tico for the bot, is the person's.
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, "bot:ops", "Fix the sign-in check", "x", "human:ben", lint=False)
     plain = post(api, f"tasks/{task['id']}/comments", {"text": "On it today."}, token="ben-test")
     assert plain["woke"] is False and "sent_as" not in plain, "the filer does not follow: no bot gets it"
     named = post(api, f"tasks/{task['id']}/comments", {"text": "@ops which app is it?"}, token="ben-test")

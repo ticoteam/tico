@@ -1,9 +1,10 @@
 // Journeys 2-6 on one real hub per viewport (redesign TESTING.md §L3), and the Assistant's sweep and a Runs tab: what
 // were redesign-e2e-visibility, -automations, -paths and -build, automations-assistant-routine and e2e-automations'
-// Runs tab. They share the seeds (org, toured, automations; assistant adds the Assistant's sweep) and run in this
-// order on one hub and one browser, each step opening its own pages: visibility (read-only), automations (Inbox triage's
-// switch and Test runs), paths (Route mail's new path), build (a new automation and its versions), assistantRoutine
-// (the sweep: its row, header, Test run; Omar is refused), runsTab (a scheduled automation's Runs tab, made last).
+// Runs tab. They share the seeds (org, toured, automations; connected_inbox covers Dana's inbox with her Google grant;
+// assistant adds the Assistant's sweep) and run in this order on one hub and one browser, each step opening its own
+// pages: visibility (read-only), automations (Inbox triage's switch and Test runs), paths (Route mail's new path),
+// build (a new automation and its versions), assistantRoutine (the sweep: its row, header, Test run; Omar is refused),
+// runsTab (a scheduled automation's Runs tab, made last).
 // Each keeps its own assertions and names itself in a failure ("[paths, phone] ..."). Phone, then desktop.
 // redesign-e2e-bot (its own bot_proposal seed changes Inbox triage) stays a separate script.
 import type {Page} from 'playwright';
@@ -418,7 +419,7 @@ const runsTab = async ({hub, browser, phone, tag}: PassContext) => {
 
 const STEPS = {visibility, automations, paths, build, assistantRoutine, runsTab};
 
-run('redesign-e2e-automations', ['org', 'toured', 'automations', 'assistant', 'finance'], async ctx => {
+run('redesign-e2e-automations', ['org', 'toured', 'automations', 'connected_inbox', 'assistant', 'finance'], async ctx => {
   for (const [name, step] of Object.entries(STEPS)) {
     try { await step(ctx); }
     catch (error) { (error as Error).message = `[${name}, ${ctx.tag}] ${(error as Error).message}`; throw error; }

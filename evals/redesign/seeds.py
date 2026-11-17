@@ -203,6 +203,40 @@ def bot_proposal(world):
     )
 
 
+GOOGLE_CLIENT = ("e2e-google-client", "e2e-google-secret")  # made-up; Google never sees them
+
+
+@seed("connected_inbox")
+def connected_inbox(world):
+    """Dana's own Connect Google grant for dana@acme.example, the inbox the `automations` seed's mail automations
+    watch, kept as backend/google_connect.py keeps one: its refresh token sealed on the server, Gmail read and change.
+    A mail action needs a credential that covers its mailbox (backend/google_tokens.py); without one it fails with why.
+    Google is never reached: the grant's refresh (google_connect.post_token, the test seam) answers as an unreachable
+    Google, so a mail action on the inbox waits for the server's next try (backend/automations.py
+    drain_workspace_mail), as in a Google outage, and nothing leaves the machine. The patches go when the world does."""
+    from backend import google_connect, google_tokens
+    from backend.store import H
+    from .harness import DANA_ID
+
+    settings = world.app.state.auth.settings
+    world.patch(settings, "google_oauth_client_id", lambda _real: GOOGLE_CLIENT[0])
+    world.patch(settings, "google_oauth_client_secret", lambda _real: GOOGLE_CLIENT[1])
+
+    def unreachable(fields, uri=google_connect.TOKEN_URI):
+        raise OSError("Google is not reachable from the test hub")
+
+    world.patch(google_connect, "post_token", lambda _real: unreachable)
+    box, operation, g = "dana@acme.example", "gc_" + DANA_ID, google_connect.G
+    scopes = json.dumps(sorted(["openid", "email", g + "gmail.readonly", g + "gmail.modify"]))
+    with world.store.transaction() as c:
+        sealed = google_tokens.seal(c, DANA_ID, operation, box, "e2e-refresh-token")
+        c.execute(
+            "INSERT INTO google_connects(person_id,mailbox,status,operation_id,grant_operation_id,grant_sealed,"
+            "grant_scopes,client_id,created_at,updated_at) VALUES(?,?,'connected',?,?,?,?,?,?,?)",
+            (DANA_ID, box, operation, operation, sealed, scopes, GOOGLE_CLIENT[0], H.now(), H.now()),
+        )
+
+
 @seed("groups")
 def groups(world):
     """Two groups on the org chart, as Dana makes them: Engineering (Omar leads it: the Engineering Lead bot, the two

@@ -31,9 +31,9 @@ def assistant_send(api, args):
 # ----------------------------------------------------------------------------- updates
 @tool(
     "tico_changelog_list",
-    "Product announcements, with your own read state and full change bullets. "
-    "Use unread=true to catch up since your last look; reading does not mark anything read. "
-    "next_offset reads the next page; unread_count counts all unread product entries, independently of filters.",
+    "Product announcements, with your own read state and full change bullets. Use unread=true to "
+    "catch up since your last look; reading does not mark anything read. next_offset reads the "
+    "next page; unread_count counts all unread product entries, independently of filters.",
     {
         "kind": _s("product (default), activity, or all", enum=["product", "activity", "all"]),
         "unread": {"type": "boolean", "description": "Only product changes you have not acknowledged"},
@@ -55,9 +55,9 @@ def changelog_list(api, args):
 
 @tool(
     "tico_changelog_mark_read",
-    "Acknowledge only the product entry ids you have shown the user. "
-    "Read status belongs to the signed-in person and is shared with the web app; other people are unaffected. "
-    "Newer or unseen entries stay unread.",
+    "Acknowledge only the product entry ids you have shown the user. Read status belongs to the "
+    "signed-in person and is shared with the web app; other people are unaffected. Newer or "
+    "unseen entries stay unread.",
     {
         "ids": {
             "type": "array",
@@ -200,9 +200,9 @@ def update_redo(api, args):
 
 @tool(
     "tico_update_list",
-    "Updates from bots and people, newest first, with your read state: what each did, does "
-    "next and needs from you. `unread` for what you have not read; `missed` lists bots that did not report; "
-    "`scope` direct for only your direct reports on the org chart.",
+    "Updates from bots and people, newest first, with your read state: what each did, does next "
+    "and needs from you. `unread` for what you have not read; `missed` lists bots that did not "
+    "report; `scope` direct for only your direct reports on the org chart.",
     {
         "kind": _s("daily or weekly", enum=["daily", "weekly"]),
         "bot": _s("One author's updates: a bot slug or human:<id>"),
@@ -283,8 +283,9 @@ def update_settings(api, args):
 
 @tool(
     "tico_run_list",
-    "A bot's recent runs, failed and expired ones included, each with its `state` (run.state), end_reason, last_event_at, stalled, tokens and "
-    "estimated cost (`est_cost_usd`) and start/end load snapshots (`load_start`, `load_end`). Yours, and those of the bots that report to you.",
+    "A bot's recent runs, failed and expired ones included, each with its `state` (run.state), "
+    "end_reason, last_event_at, stalled, tokens and estimated cost (`est_cost_usd`) and start/end "
+    "load snapshots (`load_start`, `load_end`). Yours, and those of the bots that report to you.",
     {"bot": _s("Bot slug"), "since": _s("Window like `24h` or an ISO timestamp")},
     required=("bot",),
 )
@@ -295,8 +296,8 @@ def turns(api, args):
 @tool(
     "tico_run_export",
     "Owners and engineering bots: whether a run's raw provider stream was captured, and its size. "
-    "Write the replay fixture with `tico run export <run> --fixture`. A bounded stderr tail is available even without a stream; streams require capture_stream on, "
-    "kept a week.",
+    "Write the replay fixture with `tico run export <run> --fixture`. A bounded stderr tail is "
+    "available even without a stream; streams require capture_stream on, kept a week.",
     {"run": _s("The run id, from tico_run_list")},
     required=("run",),
 )
@@ -332,22 +333,21 @@ def write_fixture(found, parent):
 # ----------------------------------------------------------------------------- the Assistant
 @tool(
     "tico_assistant_propose",
-    "Assistant only: ask the person you are acting for to confirm something with "
-    "side effects that matter: approving a Needs-you item, anything that leaves the team, "
-    "spending, changing people, access or settings, archiving or deleting, activating a bot. Give the exact "
-    "API operation; it is shown to them as a Confirm / Cancel card and runs only when they click, as them. "
-    "Several actions go on ONE card, never one card each: path /api/v2/assistant/batch, body {\"actions\": "
-    "[{\"path\": \"/api/v2/tasks/<id>/move\", \"body\": {\"to\": \"closed\", \"why\": \"<reason>\", \"version\": N}}, "
-    "{\"path\": \"/api/v2/tasks/<id>/asks/<requirement_id>/answer\", \"body\": {\"value\": \"ok\" | \"no\" | "
-    "\"<answer>\", \"note\": \"<their words>\", \"version\": N}}, {\"path\": \"/api/v2/tasks/<id>/comments\", "
-    "\"body\": {\"text\": \"<their words>\"}}, ...]} (up to 100); N is the version tico_task_show printed. An OK goes "
-    "on a card only when the person's message names it (approve, merge, publish, send, spend); 'clear my queue' never "
-    "OKs anything. "
-    "The Strategy Owner may propose one owner-confirmed org-chart change as POST /api/v2/seats/batch with body "
-    "{\"seats\":[{\"title\":\"...\",\"description\":\"...\",\"reports_to\":\"...\",\"team\":\"...\"}]} . "
-    "Use tico_org_models for published recommendations; no seat is added before the owner confirms. "
-    "A task action or answer the person clearly asked for needs no card: pass on_behalf_of to that tool instead. "
-    "Nothing here runs until they confirm.",
+    "Assistant only: ask the person you are acting for to confirm a side effect that matters "
+    "(approving a Needs-you item, anything leaving the team, spending, changing people, access or "
+    "settings, archiving or deleting, activating a bot). Give the exact API operation: it shows "
+    "them a Confirm / Cancel card, and it runs only when they click, as them. Several actions "
+    "share ONE card: path /api/v2/assistant/batch, body {\"actions\": [{\"path\": "
+    "\"/api/v2/tasks/<id>/move\", \"body\": {\"to\": \"closed\", \"why\": \"...\", \"version\": N}}, {\"path\": "
+    "\"/api/v2/tasks/<id>/asks/<requirement_id>/answer\", \"body\": {\"value\", \"note\", \"version\"}}, "
+    "{\"path\": \"/api/v2/tasks/<id>/comments\", \"body\": {\"text\"}}, ...]} (up to 100; N is the "
+    "version tico_task_show printed). An OK goes on a card only when the person's message names "
+    "it (approve, merge, publish, send, spend); 'clear my queue' never OKs anything. The Strategy "
+    "Owner may propose one owner-confirmed org change as POST /api/v2/seats/batch with "
+    "{\"seats\":[{\"title\":\"..\",\"description\":\"..\",\"reports_to\":\"..\",\"team\":\"..\"}]}; use "
+    "tico_org_models for published recommendations, and no seat is added before the owner "
+    "confirms. A task action the person clearly asked for needs no card: pass on_behalf_of "
+    "instead.",
     {
         "summary": _s("One plain sentence saying what will happen if they confirm"),
         "method": {"enum": ["POST", "PUT", "PATCH", "DELETE"], "default": "POST"},
@@ -393,8 +393,9 @@ def assistant_morning(api, args):
 @tool(
     "tico_assistant_withdraw",
     "Take back a Confirm card that still waits for the person (its id from "
-    "tico_assistant_proposals): it is marked withdrawn and never runs, and the card owner's chat says who withdrew it, "
-    "with the reason if you give one. Any teammate may withdraw; only the card's owner can confirm it.",
+    "tico_assistant_proposals): it is marked withdrawn and never runs, and the card owner's chat "
+    "says who withdrew it, with the reason if you give one. Any teammate may withdraw; only the "
+    "card's owner can confirm it.",
     {
         "id": _s("The proposal's id"),
         "reason": _s("Why, in one short sentence (optional; the person reads it in their chat)"),
@@ -409,8 +410,8 @@ def assistant_withdraw(api, args):
 @tool(
     "tico_assistant_proposals",
     "The Confirm cards still waiting for their owner: id, owner, proposer, summary and what "
-    "confirming does. Filter by proposer (botops, assistant) and/or owner (a person's id). Use it to find a card's id "
-    "to withdraw it.",
+    "confirming does. Filter by proposer (botops, assistant) and/or owner (a person's id). Use it "
+    "to find a card's id to withdraw it.",
     {"proposer": _s("botops or assistant (optional)"), "owner": _s("The card owner's id, e.g. human:ana (optional)")},
 )
 def assistant_proposals(api, args):
@@ -420,11 +421,11 @@ def assistant_proposals(api, args):
 
 @tool(
     "tico_assistant_learn",
-    "In a person's own chat: save one thing they taught you about how they like things ranked "
-    "and summarised (\"launches matter more than hiring news\"), as one short line in their words, then tell them "
-    "what you saved. It is theirs alone and shows on What it has learned, "
-    "where they edit or delete it. The Strategy Owner "
-    "in the owner's chat saves what the owner teaches it about the company with layer company.",
+    "In a person's own chat: save one thing they taught you about how they like things ranked and "
+    "summarised (\"launches matter more than hiring news\"), as one short line in their words, then "
+    "tell them what you saved. It is theirs alone and shows on What it has learned, where they "
+    "can edit or delete it. The Strategy Owner, in the owner's chat, saves what the owner teaches "
+    "about the company (layer company).",
     {
         "text": _s("One short line, in their words"),
         "layer": {
@@ -483,11 +484,11 @@ def assistant_shared_read(api, args):
 # on commit (backend/batch.py). These are a person's tools: a bot calling them is refused.
 @tool(
     "tico_brief",
-    "Catch the person up in one call, for talking on the go: bots that are down "
-    "(`alerts`), who is waiting on them and how many items (`lineup`), how many bots replied to "
-    "something they said (`replies_waiting`), the latest things bots said to them (`said`, since "
-    "`since`, default 12 hours) and how many bot tasks are stuck. Call it first in a voice "
-    "session and again when they ask what's new; pass the previous reply's `now` as `since`.",
+    "Catch the person up in one call, for talking on the go: bots that are down (`alerts`), who "
+    "is waiting on them and how many items (`lineup`), how many bots replied to something they "
+    "said (`replies_waiting`), the latest things bots said to them (`said`, since `since`, "
+    "default 12 hours), and how many bot tasks are stuck (`stuck`). Call it first in a voice "
+    "session, and again when they ask what's new, passing the previous reply's `now` as `since`.",
     {"since": _s("ISO date-time with timezone; only what bots said after it")},
 )
 def live_brief(api, args):
@@ -592,8 +593,8 @@ def batch_respond(api, args):
 
 @tool(
     "tico_needs_you_commit",
-    "Apply every recorded response of the batch. Only after the person confirmed the "
-    "summary. Decisions apply as the person; questions, instructions and rules go to the bot each item "
+    "Apply every recorded response of the batch. Only after the person confirmed the summary. "
+    "Decisions apply as the person; questions, instructions and rules go to the bot each item "
     "came from, whose reply comes back on those items. Returns `up_next`: the next bot to offer.",
     {"batch": _s("The batch id")},
     required=("batch",),
@@ -617,10 +618,10 @@ def batch_abandon(api, args):
 
 @tool(
     "tico_needs_you_show",
-    "What is on the person's Needs you: the total, the number per kind (task: a private task they must let someone "
-    "see; ask: an OK or a "
-    "question with their name; paused: a bot that cannot run until they fix it; mention: an @ of them by a person), "
-    "and the items, oldest first, each with its task. Use it to see the pile before closing or stopping anything.",
+    "What is on the person's Needs you: the total, the number per kind (task: a private task they "
+    "must let someone see; ask: an OK or question with their name; paused: a bot that cannot run "
+    "until they fix it; mention: an @ of them by a person), and the items, oldest first, each "
+    "with its task. Use it to see the pile before closing or stopping anything.",
     {
         "kind": {"type": "string", "enum": ["task", "ask", "paused", "mention"], "description": "Only this kind"},
         "limit": {
@@ -644,10 +645,10 @@ def needs_you_show(api, args):
 
 @tool(
     "tico_assistant_change_list",
-    "What the person's Assistant did for them, newest first (last 30 days by default): "
-    "each change's `what` in one line, the `words` of the person it acted on, its `object` (task:, approval:, "
-    "automation:, org_rule:, message:), and `undoable` with `why_not` when it cannot be taken back. Use it when the "
-    "person asks what was done for them or wants something undone.",
+    "What the person's Assistant did for them, newest first (last 30 days by default): each "
+    "change's `what`, the `words` of the person it acted on, its `object` (task:, approval:, "
+    "automation:, org_rule:, message:), and `undoable` with `why_not` when it cannot be taken "
+    "back. Use it when the person asks what was done for them or wants something undone.",
     {
         "days": {"type": "integer", "minimum": 1, "maximum": 90, "description": "How far back (default 30)"},
         "limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": "Changes per page (default 50)"},
@@ -661,9 +662,9 @@ def assistant_change_list(api, args):
 @tool(
     "tico_assistant_change_restore",
     "Undo one change the person's Assistant made for them (its id from "
-    "tico_assistant_change_list): a task's status or owner goes back to what it was, an approval goes back to waiting "
-    "for the person, an automation goes back to its earlier version, an org rule it added is retired. A message sent "
-    "stays sent. Restoring one again changes nothing.",
+    "tico_assistant_change_list): a task's status or owner goes back, an approval goes back to "
+    "waiting for the person, an automation goes back to its earlier version, an org rule it added "
+    "is retired. A message sent stays sent. Restoring one again changes nothing.",
     {"id": _s("The change's id from tico_assistant_change_list")},
     required=("id",),
     writes=True,
