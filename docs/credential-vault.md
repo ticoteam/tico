@@ -208,10 +208,9 @@ How a bot uses one is [integrations/website.md](../integrations/website.md); the
 
 ## The key: nothing to set up
 
-During a server-first upgrade, the one-time import of legacy team `HUB_` variables waits for
-the Computer to report runner 0.2.31 or newer. An older or unreported runner cannot consume that
-step; existing grants keep working. The first import can finish on an older runner while this
-later step remains pending.
+During a server-first upgrade, every Computer is offered the one-time import of legacy team `HUB_`
+variables. No runner version is needed. Existing grants keep working. A Computer that is offline
+has not run the import yet, and it runs when it next connects.
 
 The vault works as soon as Tico starts. The AES-256 data key is 32 random bytes made once, the first time a credential is stored,
 and kept in `credential.key` (mode 0600, the server's user) in the data volume next to the database (`/data/credential.key` in the
@@ -401,9 +400,9 @@ On upgrade, each existing bot automatically gets grants for everything it could 
 every key in its computer's `_shared.env` (except the Codex sign-in key), the variables its Tools name, and the key used
 by its model runtime. The Computer encrypts those values into Credentials through its own signed-in
 channel. A bot created after the upgrade inherits no shared tool credentials. Migration is once per existing bot, and
-never restores a revoked grant. A pending one-time migration waits for a runner version that supports
-it; an older, pinned or offline runner does not consume the step. The `HUB_` migration needs a
-runner reporting 0.2.31 or newer. Legacy files stay available to operator tools, but are no longer a source for run environments.
+never restores a revoked grant. A pending one-time migration stays pending until the Computer runs it. An offline
+Computer runs it when it reconnects. The `HUB_` pass needs no particular runner version. Computers older than 0.6
+are not supported. Legacy files stay available to operator tools, but are no longer a source for run environments.
 A variable that is a setting rather than a key, a name ending in `_HOST`, `_REGION`, `_PROFILE`, `_PROJECT_ID`,
 `_BUCKET` or `_URL` whose value does not look like a credential (one line, no key shape, no user, password or token in a
 URL), comes in as a **Setting** on the tool of its vendor the bot holds a key of (`POSTHOG_HOST` beside `POSTHOG_API_KEY`

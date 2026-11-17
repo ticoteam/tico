@@ -308,7 +308,6 @@ def test_owner_sees_everything_but_other_peoples_rooms(api, world):
         "rules.asks_to_a_person",
         "stage_rules_snooze_sweep",
         "strategy-bot",
-        "task_session_default",
         "tool_settings.ids_repaired",
         "tool_settings.moved",
         "tool_templates.grouped",

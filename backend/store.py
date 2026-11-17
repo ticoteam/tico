@@ -1054,22 +1054,6 @@ class Store:
                     pending = [r[0] for r in c.execute("SELECT slug FROM bots")]
                     c.execute("INSERT INTO registry_metadata VALUES(?,?)", (FILE_MIGRATION, encode(pending)))
                     c.execute("INSERT OR IGNORE INTO registry_metadata VALUES(?,?)", (HUB_MIGRATION, encode([])))
-                elif not c.execute("SELECT 1 FROM registry_metadata WHERE key=?", (HUB_MIGRATION,)).fetchone():
-                    # Installs that ran 0.2.30's migration: every bot it already covered gets the HUB_ pass.
-                    done = set(
-                        json.loads(
-                            c.execute("SELECT value FROM registry_metadata WHERE key=?", (FILE_MIGRATION,)).fetchone()[
-                                0
-                            ]
-                        )
-                    )
-                    again = [r[0] for r in c.execute("SELECT slug FROM bots") if r[0] not in done]
-                    c.execute("INSERT INTO registry_metadata VALUES(?,?)", (HUB_MIGRATION, encode(again)))
-                # Every task is its own session by default now (clients/sessions.py). Older servers wrote
-                # `session: bot` into every bot as the default, so clear it once; a later explicit `bot` stays.
-                if not c.execute("SELECT 1 FROM registry_metadata WHERE key='task_session_default'").fetchone():
-                    c.execute("UPDATE bot_settings SET session=NULL WHERE session='bot'")
-                    c.execute("INSERT INTO registry_metadata VALUES('task_session_default','true')")
                 _docs.refresh_generated_docs(c)
                 record = c.execute("SELECT value FROM registry_metadata WHERE key='onboarding'").fetchone()
                 if record:
