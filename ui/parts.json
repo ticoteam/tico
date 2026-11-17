@@ -309,6 +309,21 @@
    "taskModalRouteClose"
   ]
  },
+ "task-pick": {
+  "files": [
+   "app/task-pick.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [
+   "pvPick",
+   "pvSelectAll",
+   "pvSelectEnd",
+   "pvSelectMove",
+   "pvSelectToggle"
+  ],
+  "idle": []
+ },
  "bot": {
   "files": [
    "bot-tools.ts",

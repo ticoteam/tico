@@ -302,14 +302,6 @@ const taskDone = (id: string, version: number | null, note?: string): Promise<Ta
 /** `to`: next, done, closed, reopen, or a stage's id or name. `why` pushes past what is missing. */
 const taskMove = (id: string, to: string, version: number | null, why?: string): Promise<TaskMoved> =>
   post(`${taskPath(id)}/move`, withVersion(version, why ? {to, why} : {to}), newRequestId());
-/** To a stage of another pipeline: the same task, its number and label kept. */
-const taskMoveTo = (id: string, pipeline: string, stage: string, version: number | null, why?: string): Promise<TaskMoved> =>
-  post(`${taskPath(id)}/move`, withVersion(version, {to_pipeline: pipeline, to: stage, ...(why ? {why} : {})}), newRequestId());
-/** What a move of many tasks did: the ones moved, and each one that stayed with its code. One the mover may not read is
-    counted (no id); `moved_unseen` counts the moved ones they no longer read. */
-interface TasksMoved { batch_id: string; moved: string[]; moved_unseen?: number; skipped: {id?: string; code: string; reason: string}[] }
-const tasksMoveTo = (ids: string[], pipeline: string, stage: string, why?: string): Promise<TasksMoved> =>
-  post('/v2/tasks/move', {ids, to_pipeline: pipeline, to: stage, ...(why ? {why} : {})}, newRequestId()) as Promise<TasksMoved>;
 /** A person lets `whom` see a private task and moves it on (the stuck card's one fix, task #392). Refused, adding
     nobody, when the task now waits on someone else. */
 const taskLetSee = (id: string, whom: string[], version: number | null): Promise<TaskMoved> =>

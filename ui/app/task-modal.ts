@@ -660,6 +660,10 @@ function taskSaveQueued(d: ModalDialog, id: string, body: PropBody, then?: boole
   const run = () => taskSave(d, id, body, then, field).finally(() => { d.saving!--; });
   return (d.saveQueue = (d.saveQueue || Promise.resolve()).then(run, run));
 }
+/** To a stage of another pipeline: the same task, its number and label kept. */
+const taskMoveTo = (id: string, pipeline: string, stage: string, version: number | null, why?: string): Promise<TaskMoved> =>
+  post(`${taskPath(id)}/move`, withVersion(version, {to_pipeline: pipeline, to: stage, ...(why ? {why} : {})}), newRequestId());
+
 // One save, by what it asks (task-api.ts): a move ({move: to, why?}, {close}, {done}), a new owner, a snooze, or the
 // task's own fields. `quiet` with a move: a refusal for what is missing is answered (the caller asks why) instead of shown.
 async function taskSaveSend(cur: ModalTask, body: PropPatch, note: string): Promise<TaskV3> {
