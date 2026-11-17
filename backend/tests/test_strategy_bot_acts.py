@@ -534,7 +534,7 @@ def test_a_private_task_never_reaches_the_strategy_bot_log_or_the_owners_proposa
     assert r.status_code == 422 and "Merge with Globex" not in r.text, r.text
 
 
-def test_undo_leaves_open_a_task_it_made_whose_title_or_body_was_edited_since(api):
+def test_undo_leaves_open_a_task_it_made_whose_title_or_due_date_was_edited_since(api):
     """A task the decision made and a person reworded since is theirs now: Undo keeps it open and says why."""
     strategy_token = with_strategy_bot(api)
     bot(api, "ops")
@@ -547,12 +547,12 @@ def test_undo_leaves_open_a_task_it_made_whose_title_or_body_was_edited_since(ap
             {"do": "create", "owner": "ops", "title": "Write the release note"},
         ],
     )
-    titled, bodied = (x["task_id"] for x in made["done"])
+    titled, dated = (x["task_id"] for x in made["done"])
     with api.app.state.store.transaction() as c:
         H.task_update(c, "bot:ops", titled, title="Fix the setup step and the signup form")
-        H.task_update(c, "bot:ops", bodied, body="Cover the new billing page too.")
+        H.task_update(c, "bot:ops", dated, due="2026-12-01")
     undone = post(api, f"strategy-bot/log/{made['id']}/undo", {})
-    assert task(api, titled)["status"] != "closed" and task(api, bodied)["status"] != "closed"
+    assert task(api, titled)["status"] != "closed" and task(api, dated)["status"] != "closed"
     assert undone["undo"]["text"].count("which it made, was changed since") == 2, undone["undo"]["text"]
 
 

@@ -639,7 +639,7 @@ def test_a_bots_result_accepted_edited_or_overridden_gives_its_run_one_outcome(a
                 H.task_done(c, "bot:ops", task["id"], "Rechecked.", H.task(c, task["id"])["version"])
         # Accepted: Done by someone else's act (the engine's effects say so for a move into Done that is not the bot's).
         H.task_done(c, ana, runs["accepted"][0], "Checked it myself.")
-        H.task_update(c, ana, runs["edited"][0], body="Before the deadline, with the March file.")
+        H.task_update(c, ana, runs["edited"][0], title="Recheck the cash warning with the March file")
         H.task_move(c, ana, runs["overridden"][0], H.TASK_REOPEN, "Not yet: the March file is missing.")
         H.task_reassign(c, ana, runs["given"][0], ana, "I will do this one.")
         got = {
