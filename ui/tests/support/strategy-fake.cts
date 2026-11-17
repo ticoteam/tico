@@ -61,6 +61,10 @@ export interface StrategyDb {
   market: {sized: boolean; setup: boolean; sizing?: Json | null};
   // Brand: the draft body, empty until the owner saves a section into it (PUT /api/v2/brand/draft merges it in).
   brand: {draft: Json | null; revision: number};
+  // Setup areas filled outside what this fake models (backend/setup_gaps.py); Market and Strategy follow `market` and
+  // the brand draft. A direct chat's messages by its conversation id (a setup ping's ❓ lands in one).
+  filled: Set<string>;
+  chats: Record<string, Json[]>;
 }
 
 export interface OpenStrategyOptions {
@@ -141,7 +145,24 @@ async function openStrategy(browser: Browser, {viewport = PHONE, hash = '#/strat
       kpis: [{id: 'k-cust', name: 'Paying customers', status: 'green', link: {kind: 'improve', baseline: 20, baseline_at: '2026-09-01', target: 100, deadline: '2026-12-31'}}]},
     {id: 'g-sales', title: 'Book 40 demos a month', owner_id: 'bot:growth-manager', parent_id: 'g-co', status: 'yellow', status_source: 'auto', rank: 1, kpis: []},
   ];
-  const db: StrategyDb = {people: fx.people, emps: fx.employees, groups: fx.groups, needs: [], goals, market: {sized, setup}, brand: {draft: null, revision: 0}};
+  const db: StrategyDb = {people: fx.people, emps: fx.employees, groups: fx.groups, needs: [], goals, market: {sized, setup}, brand: {draft: null, revision: 0},
+    filled: new Set(['goals', 'org', 'tools', 'budget']), chats: {}};
+  // GET /api/v2/setup/gaps: Market waits while the market is empty, Strategy while the brand is; only the owner is waited on.
+  const SETUP_BOTS: Record<string, [string, string]> = {market: ['librarian', 'Librarian'], strategy: ['strategy-owner', 'Strategy Owner'],
+    goals: ['strategy-owner', 'Strategy Owner'], org: ['botops', 'BotOps'], tools: ['botops', 'BotOps'], budget: ['botops', 'BotOps']};
+  const gapOpen = (area: string) => !db.filled.has(area) && (area === 'market' ? !market : area === 'strategy' ? !db.brand.draft : true);
+  const gaps = () => Object.entries(SETUP_BOTS).map(([area, [slug, name]]) => ({area, needs: me.role === 'owner' && gapOpen(area),
+    bot: {id: 'bot:' + slug, slug, name}, href: '#/strategy'}));
+  // A setup ping (POST /api/v2/flow/ping, scope setup): the area's bot asks its first ❓ in its direct chat with the person.
+  const SETUP_ASK: Record<string, string> = {strategy: 'Who is Acme for, in one line?', market: 'What do you sell, and who buys it?'};
+  const setupPing = (area: string) => {
+    const [slug] = SETUP_BOTS[area]!, cid = 'c-dm-' + slug, line = SETUP_ASK[area] || 'What should I set up first?';
+    const at = new Date().toISOString(), mark = 'q-' + area;
+    db.chats[cid] = [{id: 'm-' + mark, kind: 'say', sender_id: 'bot:' + slug, body: line, created_at: at, refs: {question: {id: mark, to: 'human:' + me.id}}}];
+    db.needs.push({kind: 'question', id: 'qmark:' + mark, mark_id: mark, task_id: null, message_id: 'm-' + mark, conversation_id: cid,
+      root_id: cid, from_id: 'bot:' + slug, requirement_id: null, line, since: at, task: null});
+    return {pinged: [{id: slug, name: SETUP_BOTS[area]![1]}], recent: []};
+  };
   const writes: StrategyWrite[] = [];
   // The Brand document as the owner reads it: an empty brand until a section is saved into its draft.
   const brandDoc = (): Json => ({may_edit: me.role === 'owner', published: null, versions: [],
@@ -181,6 +202,11 @@ async function openStrategy(browser: Browser, {viewport = PHONE, hash = '#/strat
     if (p === '/api/status') return json({active: [], employees: []});
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/needs-you') return json({items: db.needs, version: 'v' + writes.length, count: db.needs.length, next: null});
+    if (p === '/api/v2/setup/gaps') return json({areas: gaps()});
+    if (p === '/api/v2/flow/ping' && method === 'POST') return json(b.scope === 'setup' && typeof b.id === 'string' ? setupPing(b.id) : {pinged: [], recent: []});
+    const chat = p.match(/^\/api\/v2\/threads\/([^/]+)\/timeline$/), chatId = decodeURIComponent(chat?.[1] ?? '');
+    if (chat && db.chats[chatId]) return json({thread: {id: chatId, root_id: chatId, title: '', task_id: null, me: {can_post: true}, kind: 'dm',
+      dm_with: [{actor: String(db.chats[chatId]![0]!.sender_id)}]}, messages: db.chats[chatId]!.map((m, i) => ({seq: i + 1, conversation_id: chatId, ...m})), next_cursor: null});
 
     // Groups (CONTRACT §3): a bare list. The owner changes any group; a lead only adds a teammate whose group and the
     // target are both ones it leads or below them (backend/groups.py _lead_move); anyone else gets 403.

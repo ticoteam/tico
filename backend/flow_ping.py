@@ -9,6 +9,11 @@ so a double press asks once.
 
 Scopes: `reports` (the bots whose manager is the caller), `bot` (one bot) or `group` (a team's bots, the teams under it
 included). Only bots the caller may read, never BotOps or the Assistant, never an archived bot.
+
+`setup` (id: one area, or none for every open one) pings the bot that fills each open area of the company's setup
+(backend/setup_gaps.py), BotOps included, with the setup message instead: the bot asks one ❓ at a time until the area
+is filled (skills/setup-in-flow). Only for someone a setup gap waits on (the owner or an admin). A `reports` ping
+carries the same setup message to those bots too, so "Ping your bots" picks setup up where it was left.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -16,6 +21,7 @@ from typing import Any
 
 from . import hubdb as H_
 from . import reach as R_
+from . import setup_gaps as G_
 from . import views as views_
 from .store import Problem
 from .api_contract import api_v2
@@ -24,12 +30,14 @@ Row = dict[str, Any]
 # Untyped helpers, as Any so this strict module checks its own code (as backend/flow_opinions.py does).
 H: Any = H_
 R: Any = R_
+G: Any = G_
 views: Any = views_
 
 REF = "add_to_flow"
 SKILL = "skills/add-to-flow/SKILL.md"
+SETUP_SKILL = "skills/setup-in-flow/SKILL.md"
 COOLDOWN_MINUTES = 10
-SCOPES = ("reports", "bot", "group")
+SCOPES = ("reports", "bot", "group", "setup")
 
 
 def text(name: str) -> str:
@@ -38,6 +46,30 @@ def text(name: str) -> str:
         f"Any questions for me? Read Tico's {SKILL} (under HUB_DIR) and follow it. Ask me, {name}, not your "
         "manager: each question its own task, with a ❓ message to me. If nothing clears the bar, say so in one line."
     )
+
+
+def setup_text(name: str, areas: list[str]) -> str:
+    """The person's message to the bot that fills `areas` of the setup, most important first."""
+    names = ", ".join(G.NAMES[a] for a in areas)
+    return (
+        f"Help me set up {names}. Read Tico's {SETUP_SKILL} (under HUB_DIR) and follow it: ask me, {name}, one "
+        "short question at a time, marked ❓, and fill it in yourself."
+    )
+
+
+def setup_targets(c: Any, auth: Any, who: Any, area: str | None = None) -> list[tuple[Row, list[str]]]:
+    """Each bot an open setup area waits on, with its areas in order: only for someone a gap waits on."""
+    if area is not None and area not in G.AREAS:
+        raise Problem("not_found", "No such setup area", 404)
+    if not G.sets_up(auth, who):
+        return []
+    hidden = auth.unreadable_bots(c, who)
+    found: dict[str, tuple[Row, list[str]]] = {}
+    for gap in G.open_areas(c):
+        bot = G.owner(c, gap) if area in (None, gap) else None
+        if bot and bot["id"] not in hidden and bot.get("slug") not in hidden:
+            found.setdefault(bot["id"], (bot, []))[1].append(gap)
+    return list(found.values())
 
 
 def _skipped(bot: Row) -> bool:
@@ -53,6 +85,8 @@ def targets(c: Any, person: str, hidden: set[str], scope: str = "reports", ident
     """The bots a ping in `scope` reaches, by name: those the person may read (`hidden`: the bot ids they may not)."""
     if scope not in SCOPES:
         raise Problem("invalid", "Ping your reports, one bot or one team", 422)
+    if scope == "setup":
+        return []
     ctx: Any = R.context(c)
     rows: list[Row] = [b for b in ctx["bots"].values() if not _skipped(b) and b["id"] not in hidden]
     if scope == "bot":
@@ -82,17 +116,29 @@ def _recent(c: Any, person: str, bot: str) -> bool:
     )
 
 
-def ping(c: Any, person: str, hidden: set[str], scope: str = "reports", ident: str | None = None) -> Row:
-    """Message each bot in scope once; `pinged` and `recent` (skipped: pinged by this person a moment ago) by name."""
-    words = text(H.actor_name(c, person) or "me")
+def ping(
+    c: Any, person: str, hidden: set[str], scope: str = "reports", ident: str | None = None, setup: Any = ()
+) -> Row:
+    """Message each bot in scope once; `pinged` and `recent` (skipped: pinged by this person a moment ago) by name.
+    `setup`: setup_targets' (bot, areas) pairs, each sent the setup message (scope `setup` sends only those)."""
+    name = H.actor_name(c, person) or "me"
+    sends: list[tuple[Row, str, Row]] = [(b, text(name), {REF: True}) for b in targets(c, person, hidden, scope, ident)]
+    if scope == "setup":
+        sends = []
+    taken = {b["id"] for b, _, _ in sends}
+    for bot, areas in setup:
+        words, refs = setup_text(name, areas), {REF: True, "setup": areas}
+        sends = [(b, words, refs) if b["id"] == bot["id"] else (b, w, r) for b, w, r in sends]
+        if bot["id"] not in taken:
+            sends.append((bot, words, refs))
     out: Row = {"pinged": [], "recent": []}
-    for bot in targets(c, person, hidden, scope, ident):
+    for bot, words, refs in sends:
         actor = "bot:" + bot["id"]
         named = {"id": bot["id"], "name": bot.get("display_name") or bot.get("slug") or bot["id"]}
         if _recent(c, person, actor):
             out["recent"].append(named)
             continue
-        H.say(c, person, actor, words, refs={REF: True})
+        H.say(c, person, actor, words, refs=refs)
         out["pinged"].append(named)
     return out
 
@@ -125,7 +171,7 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
         **api_v2(
             "Needs you",
             "pingFlowBots",
-            "Ask bots for the questions they have for you (people only): `scope` `reports` (default: the bots you manage), `bot` (`id`: one bot) or `group` (`id`: a team's bots, the teams under it included). Only bots you may read; never BotOps or the Assistant. Each gets one message from you pointing at the add-to-flow skill; its questions come back as tasks of its own, each with one ask to you, in your Needs you. A bot you pinged in the last 10 minutes is listed in `recent` and not messaged again. Calls no model",
+            "Ask bots for the questions they have for you (people only): `scope` `reports` (default: the bots you manage), `bot` (`id`: one bot) or `group` (`id`: a team's bots, the teams under it included). Only bots you may read; never BotOps or the Assistant. Each gets one message from you pointing at the add-to-flow skill; its questions come back as tasks of its own, each with one ask to you, in your Needs you. `setup` (`id`: one area of `GET /api/v2/setup/gaps`, or none for every open one; the owner or an admin) pings the bot that fills each open setup area, BotOps included, which asks you one ❓ at a time and fills it in; `reports` pings those bots too. A bot you pinged in the last 10 minutes is listed in `recent` and not messaged again. Calls no model",
             "FlowPinged",
         ),
     )
@@ -135,6 +181,10 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
         views.human_only(who)
 
         def work(c: Any) -> Row:
-            return ping(c, who.actor, auth.unreadable_bots(c, who), body.scope, body.id)
+            hidden = auth.unreadable_bots(c, who)
+            setup = setup_targets(c, auth, who, body.id) if body.scope == "setup" else ()
+            if body.scope == "reports":
+                setup = setup_targets(c, auth, who)
+            return ping(c, who.actor, hidden, body.scope, body.id, setup)
 
         return mutate(request, body, work)

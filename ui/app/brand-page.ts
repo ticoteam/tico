@@ -246,7 +246,7 @@ function brandStripBody(d: BrandDoc | null | undefined): BrandBody | null | unde
   return body && Object.values(body).some(v => v && (typeof v !== 'object' || Object.keys(v).length)) ? body : null;
 }
 // With no brand yet, the owner's way in (the Strategy page's setup row); others see nothing.
-const brandSetupHtml = (d: BrandDoc | null | undefined) => d && grDocMay(d) && !brandStripBody(d) ? `<a class="ghost gr-btn" href="${BRAND_ROUTE}/edit">Set up brand</a>${needsMarkHTML(12)}` : '';
+const brandSetupHtml = (d: BrandDoc | null | undefined) => d && grDocMay(d) && !brandStripBody(d) ? `<a class="ghost gr-btn" href="${BRAND_ROUTE}/edit">Set up brand</a>${needsMarkHTML(12, 'strategy')}` : '';
 function brandStripHtml(d: BrandDoc | null | undefined) {
   const body = brandStripBody(d);
   if (!body) return '';

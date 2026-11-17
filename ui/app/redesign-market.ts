@@ -95,13 +95,12 @@ function rdqSection(key: string, title: string, answer: string | undefined, more
   return `<section class="mkt-q" id="mkt-q-${key}" aria-labelledby="mkt-qh-${key}">
     <div class="mkt-qh"><h3 id="mkt-qh-${key}">${title}${needs ? needsMarkHTML(14) : ''}</h3>${answer ? `<p class="mkt-ans">${esc(answer)}</p>` : ''}${more ? `<span class="mkt-more">${more}</span>` : ''}</div>${body}</section>`;
 }
-// Whether the sizing waits on the owner (nothing asked yet, or the Librarian's question): the section and Market's tab
-// say so, and stop once it is asked or answered.
+// Whether the sizing waits on the owner (nothing asked yet, or the Librarian's question): the section says so, and
+// stops once it is asked or answered. Market's tab carries the setup gap instead (setup-gaps.ts).
 function rdqSizingNeeds(shell: HTMLElement, needs: boolean): void {
   const head = shell.querySelector('#mkt-qh-money'), mark = head?.querySelector('.needs-mark');
   if (needs && head && !mark) head.insertAdjacentHTML('beforeend', needsMarkHTML(14));
   if (!needs) mark?.remove();
-  strategyTabNeeds('market', needs);
 }
 
 // The briefing's items, each with its kind and the bets it touches; with none, its headline.
@@ -218,7 +217,6 @@ async function mountMarketPage(shell: HTMLElement) {
   const tiles = rdqTilesHtml(offering, revenue);
   // One title: the Strategy header's. Open map and the market's Definition (which names the market) are in its ⋯.
   shell.innerHTML = `<div class="mkt-pg">${tiles}${sections.join('') || (tiles ? '' : '<p class="market-none">Nothing here yet.</p>')}</div>`;
-  strategyTabNeeds('market', needs);
   const moneyEl = shell.querySelector<HTMLElement>('#mkt-money');
   const money = sized && moneyEl ? mktSpend(moneyEl, {offering, buyer}) : null;
   // The header beside this shell, only while it is still in the page: a slow read that lands after the person left

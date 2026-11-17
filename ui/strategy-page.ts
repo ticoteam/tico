@@ -569,7 +569,6 @@ function strategyPaintMarket(key: string) {
   if (key === 'growth') {
     const g = STRAT_MKT.growth, setup = g ? brandSetupHtml(g.brand) : '';
     if ($('#strat-setup')) patchHTML($('#strat-setup'), setup);
-    strategyTabNeeds('strategy', !!setup);
     if ($('#strat-brand')) patchHTML($('#strat-brand'), g ? brandStripHtml(g.brand) : '');
     return;
   }
@@ -579,14 +578,14 @@ function strategyPaintMarket(key: string) {
   if (!el) return;
   patchHTML(el, key === 'spend' ? strategyWhereHtml(owner) : key === 'rivals' ? strategyRivalsHtml(owner) : strategyNewsHtml());
 }
-// The brand draft was saved (brand-page.ts): the setup row and its Strategy tab stop asking now, and the brand this page
-// paints from is the saved one, so a return to Strategy does not show the row it had before.
+// The brand draft was saved (brand-page.ts): the setup row stops asking now (the Strategy tab's mark goes with the
+// `setup` event, ui/app/setup-gaps.ts), and the brand this page paints from is the saved one, so a return to Strategy
+// does not show the row it had before.
 function strategyBrandSaved(brand: BrandDoc | null): void {
   STRAT_MKT.growth = {brand};
   const setup = brandSetupHtml(brand);
   if ($('#strat-setup')) patchHTML($('#strat-setup'), setup);
   if ($('#strat-brand')) patchHTML($('#strat-brand'), brandStripHtml(brand));
-  strategyTabNeeds('strategy', !!setup);
 }
 
 // ---------------------------------------------------------------- the sections

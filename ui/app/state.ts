@@ -229,7 +229,7 @@ function needsBotOf(it: NeedsEntry): string | null {
   const ask = it.ask as {asked_by?: string | null} | null | undefined;
   const options = it.kind === 'paused' ? (it.bots || []).slice(0, 1)
     : it.kind === 'ask' ? [ask?.asked_by, task?.owner_id, task?.requester_id]
-      : it.kind === 'task' ? [task?.requester_id] : [];
+      : it.kind === 'task' ? [task?.requester_id] : it.kind === 'question' ? [it.from_id] : [];
   return options.find((a): a is string => typeof a === 'string' && a.startsWith('bot:') && a !== me) || null;
 }
 // What needs you from that bot. The org tree's number is a fixed attention count matching the default Needs you tab,

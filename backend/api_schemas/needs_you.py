@@ -97,6 +97,23 @@ SCHEMAS.update(
                 )
             }
         ),
+        "SetupGaps": obj(
+            {
+                "areas": items(
+                    obj(
+                        {
+                            "area": {
+                                "type": "string",
+                                "enum": ["market", "strategy", "goals", "org", "tools", "budget"],
+                            },
+                            "needs": "b",
+                            "bot": {"oneOf": [obj({"id": "s", "slug": "s", "name": "s"}), {"type": "null"}]},
+                            "href": "s",
+                        }
+                    )
+                )
+            }
+        ),
         "FlowPinged": obj(
             {
                 "pinged": items(obj({"id": "s", "name": "s"})),

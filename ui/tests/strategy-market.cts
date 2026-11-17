@@ -12,6 +12,7 @@ const assert = require('node:assert/strict');
 const {openStrategy, DESKTOP, sideways, shot} = require('./support/strategy-fake.cts') as StrategyFakeSupport.Api;
 const fs = require('node:fs');
 const path = require('node:path');
+declare function liveEmit(topic: string, data: unknown): void;
 
 const texts = (page: Page, sel: string) => page.locator(sel).allInnerTexts().then(a => a.map(t => t.trim()));
 const QUESTIONS = ['What changed?', 'Where is the money going?', 'Who are we up against?', 'How does it reach buyers?', 'What are buyers saying?'];
@@ -175,28 +176,28 @@ async function onePage(page: Page, tag: string) {
       assert.deepEqual(errors, [], 'empty: no page errors');
       await page.close();
     }
-    // The Flow mark on the question still waiting on the owner: Where is the money going? before anything is sized, and
-    // Market's tab beside its name. Starting the sizing takes its form away, so the mark goes from both and stays gone
-    // once the sizes arrive. Strategy marks its tab while the owner has no brand, and Market's mark carries to the other
-    // tabs; a member sees none.
+    // The Flow mark on the question still waiting on the owner: Where is the money going? before anything is sized.
+    // Starting the sizing takes its form away, so the mark goes and stays gone once the sizes arrive. The tabs carry
+    // what GET /v2/setup/gaps says (ui/app/setup-gaps.ts): Strategy's while the brand is empty, on every tab, and
+    // none on Market's, whose market is set up; a member sees none.
     {
       const tag = 'marks', mark = '.needs-mark[aria-label="Needs you"]';
       const {page, errors, writes, db} = await openStrategy(browser, {viewport: DESKTOP, hash: '#/strategy/market', sized: false});
       await page.locator('#mkt-q-money [data-mkt-size]').waitFor();
+      await page.locator(`.strat-tabs [data-strat-tab="strategy"] ${mark}`).waitFor();
       assert.equal(await page.locator(`#mkt-q-money h3 ${mark}`).count(), 1, tag + ': the sizing question is marked');
-      assert.equal(await page.locator(`.strat-tabs [data-strat-tab="market"] ${mark}`).count(), 1, tag + ': Market\'s tab is marked');
+      assert.equal(await page.locator(`.strat-tabs [data-strat-tab="market"] ${mark}`).count(), 0, tag + ': Market is set up, so its tab is not marked');
       assert.equal(await page.locator(mark).count(), 2, tag + ': nothing else on the page is');
       await page.evaluate(() => { location.hash = '#/strategy'; });
       await page.locator('#strat-setup .needs-mark').waitFor();
       assert.equal(await page.locator(`.strat-tabs [data-strat-tab="strategy"] ${mark}`).count(), 1, tag + ': Strategy is marked while the owner has no brand');
-      assert.equal(await page.locator(`.strat-tabs [data-strat-tab="market"] ${mark}`).count(), 1, tag + ': Market\'s mark is kept on Strategy');
+      assert.equal(await page.locator(`.strat-tabs [data-strat-tab="market"] ${mark}`).count(), 0, tag + ': Market\'s tab is still not');
       await page.evaluate(() => { location.hash = '#/strategy/market'; });
       await page.locator('[data-mkt-size]').waitFor();
       await page.locator('[data-mkt-size] input[name="description"]').fill('Release tooling for small teams');
       await page.locator('[data-mkt-size] [type="submit"]').click();
       await page.locator('[data-mkt-researching]').waitFor();
       assert.equal(await page.locator(`#mkt-q-money h3 ${mark}`).count(), 0, tag + ': sizing started, so the section is no longer marked');
-      assert.equal(await page.locator(`.strat-tabs [data-strat-tab="market"] ${mark}`).count(), 0, tag + ': and Market\'s tab is not');
       assert.equal(await page.locator(`.strat-tabs [data-strat-tab="strategy"] ${mark}`).count(), 1, tag + ': Strategy keeps its mark, its brand is still unset');
       assert.deepEqual(writes.filter(w => w.method === 'POST').map(w => [w.path, w.body]), [['/api/v2/market/spend/research', {description: 'Release tooling for small teams'}]], tag + ': the sizing is filed once');
       // A reload keeps the open task: the server has it, not the page.
@@ -206,20 +207,25 @@ async function onePage(page: Page, tag: string) {
       db.market.sized = true; db.market.sizing = null;
       await page.reload();
       await page.locator('.mkt-map .mkt-box').first().waitFor();
-      assert.equal(await page.locator(mark).count(), 0, tag + ': sized, no mark');
+      await page.locator(`.strat-tabs [data-strat-tab="strategy"] ${mark}`).waitFor();
+      assert.equal(await page.locator(mark).count(), 1, tag + ': sized, no mark on the page, only Strategy\'s tab');
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
     }
-    // Saving the brand (the Set up brand button) clears the row's mark and the Strategy tab's as soon as it is saved, and a
-    // return to Strategy paints the saved brand: no row, no mark.
+    // Saving the brand (the Set up brand button) clears the row's mark as soon as it is saved and the Strategy tab's on the
+    // `setup` event the save rings (backend/events.py), and a return to Strategy paints the saved brand: no row, no mark.
     {
       const tag = 'brand', mark = '.needs-mark[aria-label="Needs you"]';
       const {page, errors, writes} = await openStrategy(browser, {viewport: DESKTOP, hash: '#/strategy'});
       await page.locator('#strat-setup .needs-mark').waitFor();
+      await page.locator(`.strat-tabs [data-strat-tab="strategy"] ${mark}`).waitFor();
       assert.equal(await page.locator(`.strat-tabs [data-strat-tab="strategy"] ${mark}`).count(), 1, tag + ': Strategy is marked before the save');
       await page.locator('#strat-setup a').click();
       await page.locator('form[data-sec="positioning"] input[name="positioning"]').fill('Plain tools for small teams');
+      const saved = page.waitForResponse(r => r.url().endsWith('/api/v2/brand/draft'));
       await page.locator('form[data-sec="positioning"] [type="submit"]').click();
+      await saved;
+      await page.evaluate(() => liveEmit('setup', {area: 'strategy'}));
       await page.waitForFunction(() => !document.querySelector('.strat-tabs [data-strat-tab="strategy"] .needs-mark'));
       assert.equal(await page.locator(`.strat-tabs [data-strat-tab="strategy"] ${mark}`).count(), 0, tag + ': the Strategy tab is unmarked once the brand is saved');
       const puts = writes.filter(w => w.method === 'PUT');
@@ -249,11 +255,12 @@ async function onePage(page: Page, tag: string) {
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
     }
-    // Market set up by the owner, not yet begun: its first question is the owner's to answer, so it and Market's tab are marked.
+    // Market not set up yet, its setup begun: its first question is the owner's to answer, so it and Market's tab are marked.
     {
       const mark = '.needs-mark[aria-label="Needs you"]';
       const {page, errors} = await openStrategy(browser, {viewport: DESKTOP, hash: '#/strategy/market', market: false, setup: true});
       await page.locator('[data-market-setup]').waitFor();
+      await page.locator(`.strat-tabs [data-strat-tab="market"] ${mark}`).waitFor();
       assert.equal(await page.locator(`[data-market-setup] h1 ${mark}`).count(), 1, 'the setup question is marked');
       assert.equal(await page.locator(`.strat-tabs [data-strat-tab="market"] ${mark}`).count(), 1, 'Market\'s tab is marked during setup');
       assert.deepEqual(errors, [], 'setup: no page errors');
