@@ -312,6 +312,10 @@ def test_two_specs_are_one_approval_with_both_submitted_versions(api, monkeypatc
     assert {
         p["file_id"]: next(link["approval"]["version"] for link in p["links"] if link["role"] == "Spec") for p in listed
     } == expected
+    calls.clear()
+    documents = get(api, "tasks/" + row["id"])["task"]["documents"]
+    assert calls == [[row["id"]]]
+    assert {doc["page_id"]: doc["approved_version"] for doc in documents} == expected
     with api.app.state.store.read() as c:
         answer = dict(
             c.execute("SELECT * FROM answers WHERE visit_id=? AND answer='ok'", (row["visit"]["id"],)).fetchone()
