@@ -823,10 +823,11 @@ def install_media(
                         "name": "poster",
                         "content_type": poster_type,
                     }
-                receipt = {**body.model_dump(exclude={"document"}), "digest": digest, "size": size, "poster": poster}
-                replay = await asyncio.to_thread(
-                    replay_upload, store, request, {**body.model_dump(exclude={"document"}), "uploads": [receipt]}
-                )
+                # Byte identity goes in the receipt without storing multipart bytes. The replay check and the write
+                # below hash this same payload: any difference turns every retry into an idempotency conflict.
+                described = body.model_dump(exclude={"document"})
+                payload = {**described, "uploads": [{**described, "digest": digest, "size": size, "poster": poster}]}
+                replay = await asyncio.to_thread(replay_upload, store, request, payload)
                 if replay is not None:
                     return replay
                 await asyncio.to_thread(blobs.put_staged, upload["stream"], digest, size, content_type)
@@ -920,18 +921,12 @@ def install_media(
                 **({"document": document} if document else {}),
             }
 
-        # Include byte identity in the receipt without storing multipart bytes.
-        receipt = {**body.model_dump(exclude={"document"}), "digest": digest, "size": size, "poster": poster}
-        if request.headers.get("content-type", "").lower().startswith("multipart/form-data"):
-            result = await asyncio.to_thread(write_upload, store, request, body, [receipt], work)
-        else:
-            # Preserve the pre-upgrade hash when an older runner replays its JSON receipt.
-            result = await asyncio.to_thread(
-                store.mutate, who, request.url.path, request.headers.get("idempotency-key"), payload, work
-            )
-            if isinstance(result, dict) and "_refusal" in result:
-                refusal = result["_refusal"]
-                raise Problem(refusal["code"], refusal["detail"], refusal["status"])
+        result = await asyncio.to_thread(
+            store.mutate, who, request.url.path, request.headers.get("idempotency-key"), payload, work
+        )
+        if isinstance(result, dict) and "_refusal" in result:
+            refusal = result["_refusal"]
+            raise Problem(refusal["code"], refusal["detail"], refusal["status"])
         app.state.file_metadata.wake.set()
         return result
 
