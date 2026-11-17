@@ -539,8 +539,22 @@ def _email_text(args, result):
 
 
 _ADDRESS = Arg('mailbox', metavar='address')
-# `--body` or `--body-file`: both set the tool's `body`; the file is read here, by the command line.
-_BODY_FLAGS = (Arg('body', '--body'), Arg('body', '--body-file', type=_read_body, metavar='FILE'))
+# `--body`, or `--body-file`: a flag of the command line alone, read here when the command runs (`_with_body_file`).
+_BODY_FLAGS = (
+    Arg('body', '--body'),
+    Arg('body_file', '--body-file', local=True, metavar='FILE', help='a file with the email text (- is stdin)'),
+)
+
+
+def _with_body_file(tool_fn):
+    """The command's `run`: the tool, with the text of `--body-file` as its body when one was given."""
+
+    def run(client, fields, body_file=None):
+        return tool_fn(client, {**fields, 'body': _read_body(body_file)} if body_file else fields)
+
+    return run
+
+
 _ORGANIZE = (
     _ADDRESS,
     Arg('ids', nargs='*', action='store', positional=True, metavar='message-id'),
@@ -596,12 +610,14 @@ CLI = (
         'email draft',
         "write a Gmail draft: a new email, or a reply in a thread; nothing is sent",
         args=(_ADDRESS, Arg('to', '--to', action='append'), Arg('cc', '--cc', action='append'), *_BODY_FLAGS),
+        run=_with_body_file(email_draft),
         example="tico email draft ops@acme.test --reply-to 18c2f0a1b2c3d4e5 --body-file out/reply.txt",
     ),
     Command(
         'email reply',
         "reply in a thread and queue it with Tico's send gate",
         args=(_ADDRESS, Arg('thread', '--thread'), *_BODY_FLAGS),
+        run=_with_body_file(email_reply),
         example="tico email reply ops@acme.test --thread 18c2f0a1b2c3d4e5 --body-file out/reply.txt",
     ),
     Command(
@@ -620,6 +636,7 @@ CLI = (
         'email lint',
         "check an email with Tico's lint before drafting it",
         args=(_ADDRESS, Arg('to', '--to', action='append'), Arg('cc', '--cc', action='append'), *_BODY_FLAGS),
+        run=_with_body_file(email_lint),
         example="tico email lint ops@acme.test --to ana@vendor.example --subject Hello --body-file out/reply.txt",
     ),
     Command(
