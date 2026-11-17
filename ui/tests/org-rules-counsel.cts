@@ -84,6 +84,12 @@ const suggest = (hub: RealHubSupport.Hub, read: ReadCtx, text: string, who: Who,
     assert.equal(await page.locator('[data-org="b:rules-owner"], #side a[href="#/bot/rules-owner"]').count(), 0, 'Counsel is not on the Team list');
     await go(page, '#/bot/rules-owner');
     await page.locator('#bot-thread .thv-scroll').waitFor({timeout: t(15000)});
+    // The Home is blank until its read lands, then draws its rows ("No messages yet", or the messages) and its composer
+    // with them: the check waits for those rows, or it passes or fails on whether the read beat it.
+    await page.waitForFunction(() => {
+      const host = document.querySelector('#bot-thread');
+      return !!host && (host.querySelector('.th-empty') !== null || (host.querySelector('.thv-list')?.children.length ?? 0) > 0);
+    }, null, {timeout: t(15000)});
     assert.equal(await page.locator('#bot-thread textarea').count(), 0, 'no composer on its page');
     assert.equal(await page.locator('#btabs [data-bt="dm"]').count(), 0, 'and no DM tab');
 

@@ -722,7 +722,8 @@ function botThreadShow(kind: string | undefined, picking = false) {
   const actor = 'bot:' + BOT.slug;
   // The thread's actions (call, Members, menu) sit in the page's top line beside the tabs, never a row of their own.
   // Both keep the bot chat's goal (chat-goal.js): the target in the composer, the pinned goal above the thread.
-  const acts = {header: 'compact', actsHost: $('#bot-top-acts'), goals: BOT.slug, menu: false};
+  // A helper's page has no composer (state.ts ASSISTANT_HELPERS): the server lets its owner write to its Home, so the page says no itself.
+  const acts = {header: 'compact', actsHost: $('#bot-top-acts'), goals: BOT.slug, menu: false, canPost: !isAssistantHelper(BOT.slug)};
   const view = threadMount(host, kind === 'home' ? {home: actor, ...acts} : {dm: actor, ...acts});
   BOT.thread = {kind, view};
   BOT_TALK_LAST.set(BOT.slug, kind);
