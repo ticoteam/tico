@@ -5,6 +5,30 @@
 -- Every run_backoff row moves: its open hold or wait, and its last release. Ids name the row's kind before the bot, so
 -- no two bots' rows share one. The older table is made empty first when it is gone, so running this again changes
 -- nothing.
+-- The holds table as 20261117061834_holds_runaway makes it, word for word: pending migrations run in any order.
+CREATE TABLE IF NOT EXISTS holds (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('paused','failing','runaway','claim_error','cant_start','quarantine','usage_limit')),
+  holdable_type TEXT NOT NULL CHECK (holdable_type IN ('company','login','bot','task','conversation','job','automation')),
+  holdable_id TEXT NOT NULL,
+  bot_id TEXT REFERENCES bots(id),
+  reason TEXT NOT NULL DEFAULT '',
+  details TEXT NOT NULL DEFAULT '{}',
+  streak INTEGER NOT NULL DEFAULT 0,
+  until_at TEXT,
+  probe_at TEXT, probe_job_id TEXT,
+  upkeep_task_id TEXT,
+  created_by_id TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  released_at TEXT, released_by_id TEXT,
+  released_how TEXT CHECK (released_how IN ('expired','probe_passed','person','botops','raised','moot','superseded'))
+);
+-- At most one open hold of a kind on one thing (holds.put upserts on it).
+CREATE UNIQUE INDEX IF NOT EXISTS holds_open ON holds(kind, holdable_type, holdable_id, coalesce(bot_id,''))
+  WHERE released_at IS NULL;
+CREATE INDEX IF NOT EXISTS holds_bot ON holds(bot_id) WHERE released_at IS NULL;
+-- The last release of a kind on one thing: a run budget counts runs from it, on every claim of a bot's own work.
+CREATE INDEX IF NOT EXISTS holds_released ON holds(holdable_type, holdable_id, kind, released_at)
+  WHERE released_at IS NOT NULL;
 CREATE TABLE IF NOT EXISTS run_backoff(bot TEXT PRIMARY KEY, fails INTEGER NOT NULL DEFAULT 0, wait_until TEXT,
   error_class TEXT, error TEXT, last_failed_at TEXT, held_at TEXT, task_id TEXT, released_at TEXT, released_by TEXT);
 -- A held bot's next try: the time kept, else 30 minutes after the hold began (a hold from before tries had none). A
