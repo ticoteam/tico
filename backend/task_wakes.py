@@ -520,7 +520,6 @@ def prime_bots(conn: "sqlite3.Connection", actors: Collection[str | None]) -> No
     # Most bots have no failed-runs or budget hold: the miss is kept too, or each would be read again.
     holds.prime(conn, holds.FAILING, "bot", bots)
     holds.prime(conn, holds.RUNAWAY, "bot", bots)
-    holds.prime(conn, holds.QUARANTINE, "bot", bots)
     cast("Any", reconnects).prime_open(conn, bots, "login:")
 
 
