@@ -60,7 +60,9 @@ def test_owners_and_admins_save_the_company_subscriptions_and_nobody_reads_a_val
     ]
     assert TOKEN not in json.dumps(body) and "r-1" not in json.dumps(body)
     with api.app.state.store.read() as c:
-        assert TOKEN not in c.execute("SELECT sealed FROM model_subscriptions WHERE id=?", (saved["id"],)).fetchone()[0]
+        sub = MS.row(c, saved["id"])  # the value is the vault's service row, never in the subscription's own row
+        assert sub["sealed"] == "" and sub["credential_id"] == MS.CREDENTIAL + saved["id"]
+        assert c.execute("SELECT kind FROM credentials WHERE id=?", (sub["credential_id"],)).fetchone()[0] == "service"
         assert not c.execute(
             "SELECT 1 FROM idempotency WHERE response LIKE ? OR request_hash LIKE ?", (f"%{TOKEN}%", f"%{TOKEN}%")
         ).fetchone()
@@ -471,10 +473,7 @@ def test_a_refreshed_chatgpt_login_comes_back_only_from_the_run_that_had_it(api)
     )  # stale: the stored one moved on
     with api.app.state.store.read() as c:
         sub = MS.row(c, sid)
-        assert (
-            json.loads(api.app.state.vault.cipher.unseal(c, MS._context(sid), sub["sealed"]))["tokens"]["refresh_token"]
-            == "r-2"
-        )
+        assert json.loads(MS.value_of(c, api.app.state.vault.cipher, sub))["tokens"]["refresh_token"] == "r-2"
         assert MS.handed(c, turn["id"], "codex")["revision"] == 2  # the run's record moved with its file
     post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-codex"}, m["token"])
     post(api, f"attempts/{turn['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Done."}, m["token"])
@@ -492,10 +491,7 @@ def test_a_refreshed_chatgpt_login_comes_back_only_from_the_run_that_had_it(api)
     assert "subscriptions" not in get(api, "credential-runtime", second["token"])
     with api.app.state.store.read() as c:
         assert (
-            json.loads(api.app.state.vault.cipher.unseal(c, MS._context(sid), MS.row(c, sid)["sealed"]))["tokens"][
-                "refresh_token"
-            ]
-            == "r-2"
+            json.loads(MS.value_of(c, api.app.state.vault.cipher, MS.row(c, sid)))["tokens"]["refresh_token"] == "r-2"
         )
 
 

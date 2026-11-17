@@ -1010,16 +1010,30 @@ RUNNER_TRIGGERS = [
         None,
         _tell("credentials", _ALL_RUNNERS),
     ),
-    ("changes_runner_credentials_insert", "INSERT", "credentials", None, _tell("credentials", _ALL_RUNNERS)),
+    # Not a service row (backend/credentials.py SERVICE): no computer is ever handed one, and a subscription's value
+    # (one, refreshed by a turn's Codex login) would otherwise send every computer to fetch its credentials again.
+    (
+        "changes_runner_credentials_insert",
+        "INSERT",
+        "credentials",
+        "NEW.kind<>'service'",
+        _tell("credentials", _ALL_RUNNERS),
+    ),
     (
         "changes_runner_credentials_update",
         "UPDATE",
         "credentials",
         # A new value too: a model key replaced for every computer is fetched again at once (runner-rs/src/signin.rs).
-        f"{_changed('env')} OR OLD.ciphertext IS NOT NEW.ciphertext",
+        f"NEW.kind<>'service' AND ({_changed('env')} OR OLD.ciphertext IS NOT NEW.ciphertext)",
         _tell("credentials", _ALL_RUNNERS),
     ),
-    ("changes_runner_credentials_delete", "DELETE", "credentials", None, _tell("credentials", _ALL_RUNNERS)),
+    (
+        "changes_runner_credentials_delete",
+        "DELETE",
+        "credentials",
+        "OLD.kind<>'service'",
+        _tell("credentials", _ALL_RUNNERS),
+    ),
     # The company's AI providers (backend/providers.py): a computer installs what is enabled.
     (
         "changes_runner_providers_insert",

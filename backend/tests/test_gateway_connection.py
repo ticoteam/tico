@@ -194,13 +194,13 @@ def test_one_key_saves_seals_and_clears_and_is_never_read_back(api, monkeypatch,
         assert saved["connected"] and saved["source"] == "settings" and saved["preview"] == "tgw…042"
         assert saved["state"] == "connected" and saved["working"] and saved["message"] == "Connected."
         assert fake.calls == [("/v1/gateway/key", KEY)]
-        # Never in a read, a stored row, an event, a receipt or a log line: only sealed, and only its preview shown.
+        # Never in a read, a stored row, an event, a receipt or a log line: only in the vault, and only its preview shown.
         assert KEY not in json.dumps(get(api, "providers/gateway")) and KEY not in json.dumps(saved)
         assert KEY not in everything(api) and KEY not in caplog.text
         with api.app.state.store.read() as c:
             from backend import gateway_connection
 
-            assert gateway_connection._row(c)["key"].startswith("sealed:v1:")
+            assert gateway_connection._row(c)["key"].startswith("vault:")  # a service row of the vault (D11-11)
             assert gateway_connection.key(c, api.app.state.vault) == KEY
         # The URL alone changes with the key kept; a stale editor is refused.
         again = put(api, "providers/gateway", {"url": fake.url, "expected_revision": _revision(api)})

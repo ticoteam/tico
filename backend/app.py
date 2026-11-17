@@ -151,6 +151,15 @@ def filed_for(c, who, person, message_id):
     return person
 
 
+def _vault_start(store, cipher):
+    """The KMS data key, outside any request; then any secret an earlier start could not move into the vault (KMS was
+    unreachable then: backend/migrations/20261117103033_one_encrypted_store.py)."""
+    import importlib
+
+    cipher.warm(store)
+    importlib.import_module("backend.migrations.20261117103033_one_encrypted_store").settle(store, cipher)
+
+
 def create_app(settings=None):
     settings = settings or Settings.from_env()
     SRC.set_assistant_name(settings.assistant_name)  # the labels of keeper lines (backend/sources.py)
@@ -196,7 +205,7 @@ def create_app(settings=None):
         finance_vault.use_vault(app.state.vault)
         cloud_access.current(store)  # a lock kept from before the restart holds from the first request
         asyncio.get_running_loop().run_in_executor(None, auth.warm)  # Cloudflare's keys, before anyone signs in
-        asyncio.get_running_loop().run_in_executor(None, app.state.vault.cipher.warm, store)  # the KMS data key
+        asyncio.get_running_loop().run_in_executor(None, _vault_start, store, app.state.vault.cipher)
         # The company file stays before serving: on a first start the first page shows the company it makes, and the
         # owner's first answer must not race it; on any later start it is a quick check.
         if settings.company_file_configured or settings.company_file_data:

@@ -32,9 +32,13 @@ LOGIN = 'login'
 # An MCP tool's OAuth sign-in (backend/mcp_connect.py): its tokens are sealed here, never revealed or edited, and reach a
 # run only as a proxy token.
 OAUTH = 'oauth'
-# A secret the server itself uses (the Slack app's tokens, backend/slack_app.py): sealed here, never listed, granted,
-# revealed or handed to a run (`Vault.row` answers 404 for one).
+# A secret the server itself uses: sealed here, never listed, granted, revealed or handed to a run (`Vault.row` answers
+# 404 for one). The Slack app's tokens (backend/slack_app.py), each Settings > Models subscription's value
+# (backend/model_subscriptions.py), the Tico AI Gateway key and install secret (backend/gateway_connection.py) and the
+# Tico company server key (backend/company_server.py).
 SERVICE = 'service'
+# What a record (a `registry_metadata` value) keeps in place of a secret it holds in a service row (`keep_service`).
+KEPT = 'vault:'
 # The credentials a run or a watcher may be handed: never a website account, and a sign-in only through the proxy.
 RUN_ROWS = (
     "SELECT * FROM credentials WHERE kind NOT IN ('login','service') AND (kind!='oauth' OR tool_id IN "
@@ -386,6 +390,37 @@ def open_or_reseal(c, key, legacy_path, nonce, ciphertext, aad, table, where, va
             Path(legacy_path).name,
         )
     return plain
+
+
+def keep_service(c, cipher, cid, name, value, actor, source, at=None):
+    """`value` sealed in the service row `cid`, made or replaced in place. Returns what a record keeps in its place:
+    KEPT and a fresh tag, so the reference changes with every save (a caller can tell one save from the next)."""
+    at = at or H.now()
+    ciphertext, nonce = cipher.encrypt(c, cid, value)
+    c.execute(
+        "INSERT INTO credentials(id,name,kind,ciphertext,nonce,source,created_at,updated_at,updated_by,created_by) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET ciphertext=excluded.ciphertext,"
+        "nonce=excluded.nonce,revision=credentials.revision+1,updated_at=excluded.updated_at,"
+        "updated_by=excluded.updated_by WHERE credentials.kind='service'",
+        (cid, name, SERVICE, ciphertext, nonce, source, at, at, actor, actor),
+    )
+    return KEPT + os.urandom(8).hex()
+
+
+def open_kept(c, cipher, cid, context, stored):
+    """The secret a record keeps for service row `cid`: the row's value when `stored` is KEPT ('' when the row is gone,
+    as in a dev copy), else, from before D11-11, the value sealed in the record itself (`CredentialCipher.seal` under
+    `context`). '' when `stored` is empty."""
+    if not stored:
+        return ''
+    if not stored.startswith(KEPT):
+        return cipher.unseal(c, context, stored)
+    row = c.execute('SELECT * FROM credentials WHERE id=? AND kind=?', (cid, SERVICE)).fetchone()
+    return cipher.open_service(c, row) if row else ''
+
+
+def drop_service(c, cid):
+    c.execute('DELETE FROM credentials WHERE id=? AND kind=?', (cid, SERVICE))
 
 
 class CredentialCipher:
