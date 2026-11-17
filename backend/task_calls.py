@@ -928,17 +928,13 @@ def prime_views(conn: "sqlite3.Connection", task_ids: Iterable[str], viewer: str
     # The check rows of the page each OK shows (`_page_checks`), from the requirements W.prime read.
     from . import page_verdicts
 
-    page_verdicts.prime_checks(
-        conn,
-        [
-            ref
-            for row in rows.values()
-            if row.get("visit")
-            for requirement in R.for_visit(conn, row["visit"])
-            if requirement["kind"] == "ok"
-            for ref in (requirement.get("shows") or [])[:1]
-        ],
-    )
+    firsts: list[object] = []
+    for row in rows.values():
+        for requirement in R.for_visit(conn, row["visit"]) if row.get("visit") else []:
+            shows: list[object] = requirement.get("shows") or []
+            if requirement["kind"] == "ok" and shows:
+                firsts.append(shows[0])
+    page_verdicts.prime_checks(conn, firsts)
     R.prime_values(conn, ids)
     TR.prime_ancestry(conn, ids)
     if viewer:
