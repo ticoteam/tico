@@ -4041,9 +4041,10 @@ def task_words(conn, task_id):
 
 
 # A task whose request or Tico's instructions say `?` (instr): what reading its body for a mark used to do. The
-# messages are found by their task (messages_refs_task).
+# messages are found by their task (messages_refs_task). `+tasks.id` drops the column's TEXT affinity, without which
+# SQLite cannot search that expression index from a correlated subquery and scans every message instead.
 TASK_SAYS_SQL = (
-    "EXISTS (SELECT 1 FROM messages m WHERE json_extract(m.refs, '$.task')=tasks.id AND m.deleted_at IS NULL "
+    "EXISTS (SELECT 1 FROM messages m WHERE json_extract(m.refs, '$.task')=+tasks.id AND m.deleted_at IS NULL "
     f"AND (json_extract(m.refs, '$.{REQUEST_REF}')=1 OR (m.sender_id='keeper' "
     "AND json_extract(m.refs, '$.instructions') IN (1, 'all'))) AND instr(m.body, ?)>0)"
 )
