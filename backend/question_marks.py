@@ -24,7 +24,7 @@ draws its glyph from the message alone and a change reaches open pages through t
 """
 
 import sqlite3
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Generator, Iterable, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any, cast
@@ -112,7 +112,7 @@ _SETTLED: ContextVar[bool] = ContextVar("question_marks_settled", default=False)
 
 
 @contextmanager
-def settled() -> Iterator[None]:
+def settled() -> Generator[None]:
     token = _SETTLED.set(True)
     try:
         yield
