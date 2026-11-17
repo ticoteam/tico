@@ -31,7 +31,7 @@ from . import task_engine as _task_engine
 from . import task_privacy as _task_privacy
 from .store import H as _H
 from .store import Problem
-from .store import refused as _refused
+from . import store as _store_module
 
 # Untyped modules, reached through Any in this strict module.
 H: Any = _H
@@ -46,7 +46,7 @@ task_rule_gate: Any = _task_rule_gate
 stage_rules: Any = _stage_rules
 task_engine: Any = _task_engine
 privacy: Any = _task_privacy
-refused: Any = _refused
+store_module: Any = _store_module
 
 # One bulk move takes at most this many tasks (`POST /api/v2/tasks/move`): a board's stage of a few hundred, in one write.
 MOVE_CAP = 500
@@ -392,7 +392,7 @@ def register(
                         )
                     except H.Refused as exc:
                         del c.after_commit[before:]
-                        problem = refused(c, who, exc, savepoint="tasks_move_one")
+                        problem = store_module.refused(c, who, exc, savepoint="tasks_move_one")
                         skipped.append({"id": task_id, "code": problem.code, "reason": problem.detail})
                     except Problem as exc:
                         c.execute("ROLLBACK TO tasks_move_one")

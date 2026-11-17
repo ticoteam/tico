@@ -257,11 +257,11 @@ def undo(conn: "sqlite3.Connection", task: Row, by: str, note: str, *, sub_tasks
     from . import source_actions
 
     source_actions.undo_stage(conn, task)
-    handoffs = (
+    handoffs: set[str] = (
         set()
         if sub_tasks
         else {
-            row[0]
+            str(row[0])
             for row in conn.execute(
                 "SELECT to_task_id FROM links WHERE visit_id=? AND kind='handoff'", (visit["id"],)
             ).fetchall()

@@ -8,7 +8,7 @@ team reads every pipeline record, a private one too: its tasks are private (back
 
 import re
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from fastapi import Request
 
@@ -65,9 +65,10 @@ def register(app: "FastAPI", auth: Any, mutate: "Callable[..., Any]", store: Any
             given = body.model_dump()
             seen = given.pop("settings_version", None)
             given.pop("may_change", None)
-            move_to = given.pop("move_tasks_to", None)
+            raw: Any = given.pop("move_tasks_to", None)
             given = {**given, "id": pipeline_id}
-            if move_to is not None and not (isinstance(move_to, dict) and move_to.get("pipeline")):
+            move_to = cast("dict[str, Any] | None", raw) if raw is None or isinstance(raw, dict) else None
+            if raw is not None and not (move_to and move_to.get("pipeline")):
                 raise Problem("move_tasks_to", "move_tasks_to names a pipeline and a stage", 422)
             gone = pipeline_settings.holding(c, given)
             if gone and not move_to:
