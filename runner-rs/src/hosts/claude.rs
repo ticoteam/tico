@@ -2,7 +2,8 @@
 //! bot thread. The prompt goes in on stdin as a stream-json user message and stdin stays open for steers;
 //! `--replay-user-messages` echoes each message as Claude reads it, so a `result` ends the runner's turn only
 //! when no steer is unread and no background task of the session still runs, and then stdin closes and the process
-//! exits. Claude stays up for its background tasks either way; open stdin lets a follow-up in meanwhile.
+//! exits. Claude stays up for its background tasks either way; open stdin lets a follow-up in meanwhile. Steers and
+//! stops go in as the Agent SDK sends them: a user message with priority "now", and an `interrupt` control request.
 
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
@@ -35,6 +36,12 @@ pub const STREAM_ARGS: &[&str] = &[
 ];
 const EFFORTS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a stopped turn has to end on Claude's own interrupt before its process is closed and killed.
+const INTERRUPT_GRACE: Duration = if cfg!(test) {
+    Duration::from_secs(2)
+} else {
+    Duration::from_secs(10)
+};
 /// How long a turn waits, after a `result`, with a steer unread and nothing at all on stdout.
 pub const STEER_READ_TIMEOUT_S: u64 = 120;
 /// How long a turn waits for Claude's `result` after Claude reported a usage limit and did no further model work.
@@ -142,10 +149,22 @@ fn request_usage(msg: &Value) -> Option<(Option<&str>, [i64; 3])> {
         .then_some((id.filter(|id| !id.is_empty()), tokens))
 }
 
-pub fn user_line(mid: &str, text: &str) -> String {
-    py_dumps(
-        &json!({"type": "user", "uuid": mid, "message": {"role": "user", "content": [{"type": "text", "text": text}]}}),
-    ) + "\n"
+/// A user message for stdin. `priority` "now" is a steer as the Agent SDK sends one: it ends the running step at once
+/// and the turn goes on with the message; with none, Claude reads it once the step ends.
+pub fn user_line(mid: &str, text: &str, priority: Option<&str>) -> String {
+    let mut msg = json!({"type": "user", "uuid": mid, "message": {"role": "user", "content": [{"type": "text", "text": text}]}});
+    if let Some(p) = priority {
+        msg["priority"] = json!(p);
+    }
+    py_dumps(&msg) + "\n"
+}
+
+/// The stream-json control request that interrupts the running turn, as the Agent SDK's `interrupt()` sends it.
+/// `cancel_queued` drops the follow-ups Claude has not started on too (older Claude Code ignores it).
+pub fn interrupt_line(request_id: &str) -> String {
+    py_dumps(&json!({"type": "control_request", "request_id": request_id,
+                     "request": {"subtype": "interrupt", "cancel_queued": true}}))
+        + "\n"
 }
 
 #[derive(Clone)]
@@ -189,6 +208,8 @@ struct Pipe {
     wait: Option<Duration>,
     /// Claude's pid, for finding its shells.
     pid: Option<u32>,
+    /// The id of the interrupt request a stop sent: the turn's `result`, or Claude's answer to it, closes stdin.
+    interrupting: Option<String>,
     /// The turn ended on its wait: Claude was killed so its shells run on, and these are the ones kept.
     kept: Option<Vec<Value>>,
     /// Claude runs under a reaping parent that writes its shells' exit codes here.
@@ -197,13 +218,13 @@ struct Pipe {
 
 impl Pipe {
     /// Writes a follow-up message after the prompt; Claude has not read it until it replays it.
-    fn follow_up(&mut self, text: &str) {
+    fn follow_up(&mut self, text: &str, priority: Option<&str>) {
         let mid = uuid::Uuid::new_v4().to_string();
         self.unread.insert(mid.clone());
         self.order.push(mid.clone());
         self.followups.push(text.to_string());
         self.answered = false;
-        let _ = self.lines.send(Some(user_line(&mid, text)));
+        let _ = self.lines.send(Some(user_line(&mid, text, priority)));
     }
 
     fn close(&mut self) {
@@ -221,9 +242,10 @@ impl Pipe {
     }
 
     /// The bot answered and nothing is left but shells it started in the background: no subagent works, no
-    /// follow-up is unread.
+    /// follow-up is unread. Not once stopped: a stop ends the shells too.
     fn only_waiting(&self) -> bool {
         self.open
+            && self.interrupting.is_none()
             && self.answered
             && self.unread.is_empty()
             && self.background > 0
@@ -954,7 +976,7 @@ impl ClaudeHost {
     ) {
         let (tx, mut rx) = mpsc::unbounded_channel::<Option<String>>();
         let first = uuid::Uuid::new_v4().to_string();
-        let _ = tx.send(Some(user_line(&first, text)));
+        let _ = tx.send(Some(user_line(&first, text, None)));
         let mut stdin = stdin;
         let capture = self.capture();
         // Its own task: a prompt can be larger than the pipe's buffer, and nothing else waits on it.
@@ -998,9 +1020,11 @@ impl ClaudeHost {
             pid,
             kept: None,
             reaping,
+            interrupting: None,
         };
+        // Written right behind the prompt, they steer no running step.
         for text in carried {
-            pipe.follow_up(&text);
+            pipe.follow_up(&text, None);
         }
         inner.pipe = Some(pipe);
     }
@@ -1482,6 +1506,11 @@ impl ClaudeHost {
                 }
             }
             "assistant" => {
+                // A reply the limit blocked carries the limit itself, and Claude does not repeat an unchanged
+                // `rate_limit_event`, so this may be the only sign of it.
+                if msg["error"] == "rate_limit" || msg["api_error"] == "usage_limit_reached" {
+                    self.rate_limit_info(&msg["api_error_params"]["rate_limit_info"], tid, turn);
+                }
                 let m = &msg["message"];
                 let text: String = m["content"]
                     .as_array()
@@ -1548,7 +1577,7 @@ impl ClaudeHost {
                         .as_mut()
                         .filter(|p| p.open && p.limit_at.is_none())
                     {
-                        p.follow_up(&text);
+                        p.follow_up(&text, None);
                     }
                 }
             }
@@ -1572,23 +1601,29 @@ impl ClaudeHost {
                     json!({"session_id": session}),
                 ));
             }
-            "rate_limit_event" => {
-                let info = &msg["rate_limit_info"];
-                // Rejected with overage in use: extra usage pays and the model keeps working.
-                if info["status"] == "rejected" && info["isUsingOverage"] != true {
-                    let mut inner = self.inner();
-                    inner.limited.insert(turn.into());
-                    if let Some(p) = inner.pipe.as_mut() {
-                        p.limit_at.get_or_insert(Instant::now() + LIMIT_SETTLE);
-                        p.limit_text
-                            .get_or_insert_with(|| "Claude usage limit reached".into());
+            "rate_limit_event" => self.rate_limit_info(&msg["rate_limit_info"], tid, turn),
+            "control_response" => {
+                let mut inner = self.inner();
+                if let Some(p) = inner.pipe.as_mut() {
+                    // Claude took the stop: the turn is over, so nothing more goes in.
+                    if p.interrupting.is_some()
+                        && msg["response"]["request_id"].as_str() == p.interrupting.as_deref()
+                    {
+                        p.close();
                     }
                 }
-                for payload in rate_limit_windows(info) {
-                    self.emit(event("rate_limits", Some(tid), Some(turn), payload));
-                }
             }
-            "result" => return true,
+            "result" => {
+                if let Some(p) = self
+                    .inner()
+                    .pipe
+                    .as_mut()
+                    .filter(|p| p.interrupting.is_some())
+                {
+                    p.close();
+                }
+                return true;
+            }
             _ => {}
         }
         false
@@ -1924,7 +1959,8 @@ impl ClaudeHost {
             ));
         }
         let turn = self.start_goal(thread_id, "set", objective, effort)?;
-        if let Err(HostError::SteerRefused(_)) = self.steer(thread_id, &turn, text) {
+        // Part of the turn's input, not a steer: it must not cut the goal's first step short.
+        if let Err(HostError::SteerRefused(_)) = self.write_in(thread_id, &turn, text, None) {
             // Only a turn that ended at once refuses it: the goal holds, and the task's next turn brings its prompt.
             log(&format!(
                 "claude[{}]: the task prompt missed the goal turn",
@@ -1999,8 +2035,19 @@ impl ClaudeHost {
             .insert(thread_id.into(), offset + complete as u64);
     }
 
-    /// Write `text` into the running turn, or refuse with nothing written once it is over or ending.
+    /// Write `text` into the running turn, or refuse with nothing written once it is over or ending. It goes as the
+    /// Agent SDK sends a steer (priority "now"): the running step ends and the turn goes on with it.
     pub fn steer(&self, thread_id: &str, turn_id: &str, text: &str) -> Result<(), HostError> {
+        self.write_in(thread_id, turn_id, text, Some("now"))
+    }
+
+    fn write_in(
+        &self,
+        thread_id: &str,
+        turn_id: &str,
+        text: &str,
+        priority: Option<&str>,
+    ) -> Result<(), HostError> {
         let mut inner = self.inner();
         let running = inner
             .turn
@@ -2008,8 +2055,8 @@ impl ClaudeHost {
             .is_some_and(|(t, u)| t == thread_id && u == turn_id);
         match inner.pipe.as_mut() {
             // Not once Claude reported a limit: the turn is ending, so the input goes to the next one.
-            Some(p) if running && p.open && p.limit_at.is_none() => {
-                p.follow_up(text);
+            Some(p) if running && p.open && p.limit_at.is_none() && p.interrupting.is_none() => {
+                p.follow_up(text, priority);
                 Ok(())
             }
             _ => Err(HostError::SteerRefused(format!(
@@ -2024,17 +2071,75 @@ impl ClaudeHost {
         self.inner().replay_fallback_logged
     }
 
+    /// Stops the turn as the Agent SDK does: an interrupt request on stdin, so Claude ends the turn itself and saves
+    /// it; its `result`, or its answer to the request, closes stdin and the process exits. A turn not over within
+    /// `INTERRUPT_GRACE`, or one whose stdin is already closed, is closed and killed with all it started.
     pub fn interrupt(&self, _thread_id: &str, turn_id: &str) {
         let mut inner = self.inner();
         if inner.turn.as_ref().is_none_or(|(_, t)| t != turn_id) {
             return; // already over; nothing to stop
         }
         inner.interrupted.insert(turn_id.into());
-        if let Some(p) = inner.pipe.as_mut() {
-            p.close();
-            p.stopper.terminate(STOP_TIMEOUT);
+        let Some(p) = inner.pipe.as_mut() else { return };
+        if !p.open || p.interrupting.is_some() {
+            if p.interrupting.is_none() {
+                p.stopper.terminate(STOP_TIMEOUT);
+            }
+            return;
+        }
+        let id = uuid::Uuid::new_v4().to_string();
+        let _ = p.lines.send(Some(interrupt_line(&id)));
+        p.interrupting = Some(id);
+        p.awaiting = None;
+        p.limit_at = None;
+        drop(inner);
+        let host = self.clone();
+        let turn = turn_id.to_string();
+        tokio::spawn(async move {
+            tokio::time::sleep(INTERRUPT_GRACE).await;
+            let mut inner = host.inner();
+            if inner.turn.as_ref().is_some_and(|(_, t)| *t == turn) {
+                if let Some(p) = inner.pipe.as_mut().filter(|p| p.kept.is_none()) {
+                    log(&format!(
+                        "claude[{}]: the turn did not end on its interrupt; stopping Claude",
+                        host.0.bot
+                    ));
+                    p.close();
+                    p.stopper.terminate(STOP_TIMEOUT);
+                }
+            }
+        });
+    }
+
+    /// Records a `rate_limit_info` (from a `rate_limit_event`, or a reply the limit blocked) and passes on its usage
+    /// windows. A rejection extra usage does not pay for ends the turn as limited.
+    fn rate_limit_info(&self, info: &Value, tid: &str, turn: &str) {
+        if !info.is_object() {
+            return;
+        }
+        if limit_rejected(info) {
+            let mut inner = self.inner();
+            inner.limited.insert(turn.into());
+            if let Some(p) = inner.pipe.as_mut() {
+                p.limit_at.get_or_insert(Instant::now() + LIMIT_SETTLE);
+                p.limit_text
+                    .get_or_insert_with(|| "Claude usage limit reached".into());
+            }
+        }
+        for payload in rate_limit_windows(info) {
+            self.emit(event("rate_limits", Some(tid), Some(turn), payload));
         }
     }
+}
+
+/// A rejection that stops the model: overage allowed or in use pays for the request and the model keeps working.
+fn limit_rejected(info: &Value) -> bool {
+    let overage = matches!(
+        info["overageStatus"].as_str(),
+        Some("allowed" | "allowed_warning")
+    ) || info["isUsingOverage"] == true
+        || info["overageInUse"] == true;
+    info["status"] == "rejected" && !overage
 }
 
 /// The usage windows of a `rate_limit_event` as `rate_limits` payloads. Claude Code 2.1.30x adds `unifiedWindows`
@@ -3329,6 +3434,123 @@ mod tests {
         let (got, _) = limit_turn(&format!("{overage}\n"), &format!("{result}\n"), false).await;
         assert!(got.iter().any(|e| e["kind"] == "turn_completed"), "{got:?}");
         assert!(!got.iter().any(|e| e["kind"] == "turn_failed"), "{got:?}");
+    }
+
+    #[tokio::test]
+    async fn a_reply_the_limit_blocked_marks_the_limit_and_its_reset_with_no_rate_limit_event() {
+        // Claude Code does not repeat an unchanged `rate_limit_event`; each reply the limit blocks carries it instead.
+        let blocked = r#"{"type": "assistant", "message": {"id": "m", "model": "<synthetic>", "role": "assistant", "content": [{"type": "text", "text": "API Error: Request rejected (429)"}]}, "parent_tool_use_id": null, "error": "rate_limit", "api_error": "usage_limit_reached", "api_error_params": {"rate_limit_info": {"status": "rejected", "rateLimitType": "seven_day", "resetsAt": 4102444800, "overageStatus": "rejected", "isUsingOverage": false}}}"#;
+        let (got, _) = limit_turn(&format!("{blocked}\n"), "", false).await;
+        let failed = got.iter().find(|e| e["kind"] == "turn_failed").unwrap();
+        assert_eq!(failed["limit"], true, "{got:?}");
+        let window = got.iter().find(|e| e["kind"] == "rate_limits").unwrap();
+        assert_eq!(
+            (
+                &window["status"],
+                &window["window_minutes"],
+                &window["resets_at"]
+            ),
+            (
+                &json!("rejected"),
+                &json!(10080),
+                &json!("2100-01-01T00:00:00+00:00")
+            ),
+            "{got:?}"
+        );
+    }
+
+    #[test]
+    fn a_rejection_extra_usage_pays_for_is_no_limit() {
+        let rejected = json!({"status": "rejected", "rateLimitType": "five_hour"});
+        assert!(limit_rejected(&rejected));
+        for paid in [
+            json!({"isUsingOverage": true}),
+            json!({"overageInUse": true}),
+            json!({"overageStatus": "allowed"}),
+            json!({"overageStatus": "allowed_warning"}),
+        ] {
+            let mut info = rejected.clone();
+            info.as_object_mut()
+                .unwrap()
+                .extend(paid.as_object().unwrap().clone());
+            assert!(!limit_rejected(&info), "{info}");
+        }
+        assert!(!limit_rejected(&json!({"status": "allowed_warning"})));
+    }
+
+    /// Runs one turn on a `claude` that writes an assistant line, keeps the next line it reads in `sent`, and then
+    /// runs `after`; a SIGTERM leaves a `termed` file. Stops the turn once the assistant line is read and returns the
+    /// events, the line Claude was sent, whether it was signalled, and how long the turn took to end after the stop.
+    async fn stopped_turn(after: &str) -> (Vec<Value>, Value, bool, Duration) {
+        let dir =
+            std::env::temp_dir().join(format!("claude-stop-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("claude");
+        crate::util::write_script(
+            &path,
+            &format!("#!/bin/sh\ncase \"$1\" in --version) echo '2.1.296 (Claude Code)'; exit 0;; --help) echo '  --autocompact <tokens>'; exit 0;; esac\ntrap 'touch termed; exit 143' TERM\nIFS= read -r line\necho '{}'\nIFS= read -r line\nprintf '%s\\n' \"$line\" > sent\nid=$(printf '%s' \"$line\" | sed -n 's/.*\"request_id\": *\"\\([^\"]*\\)\".*/\\1/p')\n{after}\n", assistant_line("m1", "Working on it.")),
+        );
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec![path.display().to_string()], tx);
+        host.start().await.unwrap();
+        let mut settings = Settings {
+            cwd: dir.display().to_string(),
+            ..Default::default()
+        };
+        settings.env.insert("PATH".into(), "/usr/bin:/bin".into());
+        let thread = host.start_thread(&settings);
+        let turn = host.start_turn(&thread, "hello", None).unwrap();
+        let (mut got, mut stopped) = (vec![], None);
+        while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await {
+            if stopped.is_none() && ev["kind"] == "message" {
+                host.interrupt(&thread, &turn);
+                stopped = Some(Instant::now());
+            }
+            let idle = ev["kind"] == "status" && ev["state"] == "idle";
+            got.push(ev);
+            if idle {
+                break;
+            }
+        }
+        let took = stopped.expect("the turn was stopped").elapsed();
+        let sent = std::fs::read_to_string(dir.join("sent")).unwrap_or_default();
+        let sent = serde_json::from_str(sent.trim()).unwrap_or(Value::Null);
+        let termed = dir.join("termed").exists();
+        std::fs::remove_dir_all(dir).unwrap();
+        (got, sent, termed, took)
+    }
+
+    #[tokio::test]
+    async fn a_stop_asks_claude_to_interrupt_and_the_turn_ends_on_its_answer() {
+        // Claude answers the request, ends the turn with its `result`, and exits once stdin closes.
+        let answer = r#"printf '{"type": "control_response", "response": {"subtype": "success", "request_id": "%s"}}\n' "$id"
+echo '{"type": "result", "subtype": "error_during_execution", "is_error": true, "num_turns": 1, "result": "", "usage": {"input_tokens": 1, "output_tokens": 1}}'
+cat >/dev/null"#;
+        let (got, sent, termed, took) = stopped_turn(answer).await;
+        assert_eq!(sent["type"], "control_request", "{sent}");
+        assert_eq!(sent["request"]["subtype"], "interrupt", "{sent}");
+        // The grace ends in a SIGTERM, so a turn that ended on it was never signalled.
+        assert!(
+            !termed,
+            "Claude was signalled though it ended the turn itself, {took:?} after the stop"
+        );
+        let end: Vec<_> = got
+            .iter()
+            .filter(|e| e["kind"].as_str().is_some_and(|k| k.starts_with("turn_")))
+            .collect();
+        assert_eq!(end.len(), 1, "{got:?}");
+        assert_eq!(end[0]["kind"], "turn_completed");
+        assert_eq!(end[0]["status"], "interrupted");
+    }
+
+    #[tokio::test]
+    async fn a_stop_claude_does_not_answer_closes_and_kills_it_after_the_grace() {
+        let (got, sent, termed, took) = stopped_turn("while :; do sleep 0.05; done").await;
+        assert_eq!(sent["request"]["subtype"], "interrupt", "{sent}");
+        assert!(termed, "the turn ended without its process being stopped");
+        assert!(took >= INTERRUPT_GRACE, "{took:?}");
+        let end = got.iter().find(|e| e["kind"] == "turn_completed").unwrap();
+        assert_eq!(end["status"], "interrupted", "{got:?}");
     }
 
     #[test]

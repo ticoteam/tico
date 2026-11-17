@@ -5,7 +5,8 @@
   "source": {
     "real": true,
     "recorded": "2026-10-16",
-    "how": "record_replays: the installed CLI through replay_proxy.py"
+    "how": "record_replays: the installed CLI through replay_proxy.py",
+    "edited": "The steer frame gained priority \"now\" when the runner began sending steers as the Agent SDK does; Claude's output is as recorded without it."
   },
   "turns": [
     {
