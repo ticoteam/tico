@@ -8,6 +8,14 @@
                     "endColumn": 77,
                     "lineCount": 1
                 }
+            },
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 82,
+                    "endColumn": 85,
+                    "lineCount": 1
+                }
             }
         ]
     }
