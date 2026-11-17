@@ -17,8 +17,8 @@
 .cf-hall{position:relative;min-width:0;border:1px solid var(--line);border-radius:4px;background:var(--surface);padding:var(--s3) var(--s4) var(--s5)}
 .cf-hall-head{display:flex;align-items:flex-start;justify-content:space-between;gap:var(--s4);min-width:0}
 .cf-hall-name{display:block;min-width:0;font-size:48px;font-weight:800;line-height:1.1;
-  letter-spacing:-.02em;color:var(--g4);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;transition:color var(--dur) var(--ease)}
-a.cf-hall-name:hover,.cf-hall:hover a.cf-hall-name{color:var(--g5)}
+  letter-spacing:-.02em;color:var(--g5);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;transition:color var(--dur) var(--ease)}
+a.cf-hall-name:hover,.cf-hall:hover a.cf-hall-name{color:var(--g6)}
 .cf-one .cf-hall-name{font-size:var(--t-lg);font-weight:600;line-height:1.3;letter-spacing:var(--track-tight);color:var(--ink)}
 a.cf-hall-name:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
 /* the org chart: the manager over a bar, a drop from the bar to each teammate; grey and dim until pointed at */
@@ -149,14 +149,16 @@ a.cf-hall-name:focus-visible{outline:var(--focus-ring);outline-offset:var(--focu
   .cf-hall{padding:var(--s3) var(--s3) var(--s4)}
   .cf-hall-head{flex-direction:column;gap:6px}
   .cf-hall-name{max-width:100%;font-size:34px}
-  .cf-org{flex-direction:row;align-items:center;justify-content:flex-start;opacity:.75}
-  .cf-org-top::after{left:100%;top:50%;width:6px;height:0;border-left:0;border-top:1px solid var(--g4)}
-  .cf-org-under{padding:0 0 0 6px;border-top:0;border-left:1px solid var(--g4);margin-left:6px}
+  .cf-org{flex-direction:row;align-items:center;justify-content:flex-start;opacity:1}
+  .cf-org-top::after{left:100%;top:50%;width:6px;height:0;border-left:0;border-top:1px solid var(--g5)}
+  .cf-org-under{padding:0 0 0 6px;border-top:0;border-left:1px solid var(--g5);margin-left:6px}
   .cf-org-row{justify-content:flex-start;max-width:none}
   /* a finger's target: every stack, deck, mark and rate is 44px across */
   .cf-slot{min-width:44px}
   .cf-stack{min-width:44px;min-height:44px;justify-content:flex-start}
   .cf-flow{min-width:44px;min-height:44px}
+  /* the Flow mark's target reaches down over the empty top of its stack's, so the line is no taller for it */
+  .cf-slot > .cf-flow{position:relative;z-index:1;margin-bottom:-18px}
   .cf-rate{min-height:44px;min-width:44px;display:inline-flex;align-items:flex-end;justify-content:center;padding-bottom:8px;transform:translateY(calc(14px - var(--cf-under)))}
   /* the line has the whole width, so five or six 44px stages fit; its rates go under it, in at the start, out at the end */
   .cf-line:not(.cf-deep){width:fit-content;max-width:100%;grid-template-columns:auto minmax(0,1fr) auto;grid-template-areas:"track track track" "in name out";align-items:center;column-gap:var(--s2)}
@@ -166,6 +168,13 @@ a.cf-hall-name:focus-visible{outline:var(--focus-ring);outline-offset:var(--focu
   .cf-deck{min-width:44px;min-height:44px;justify-content:flex-end}
   .cf-rail{gap:0;padding-left:0}
   .cf-chev{flex-basis:28px}
+  /* a small screen, often outdoors: the rail, its marks and its words a step brighter */
+  .cf-hall-name{color:color-mix(in srgb,var(--g5),var(--g6))}
+  .cf-rail::after{border-top-color:var(--g5)}
+  .cf-chev::before,.cf-chev.cf-into::after{border-color:var(--g6)}
+  .cf-box{background:var(--g7)}
+  .cf-box.cf-none{box-shadow:inset 0 0 0 1px var(--g5)}
+  .cf-pname,.cf-sub,.cf-rate{color:var(--g7)}
   /* one factory on a phone: the roster above; each line runs down the screen, a stage a row, its decks then its name */
   .cf-roster{width:100%}
   .cf-roster-list{grid-template-columns:repeat(auto-fill,minmax(130px,1fr))}
