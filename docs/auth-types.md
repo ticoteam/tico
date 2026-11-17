@@ -32,7 +32,8 @@ vendor. The candidates are published test credentials needing no account or spen
 Tools > Add > API, Auth **Header** with the header's name, the address, a check path, then Add key; give bots a level.
 Proxy. The bot calls `$TICO_TOOL_<ID>_URL/...` with the token in that header. Candidate: reqres.in, `x-api-key:
 reqres-free-v1` (a wrong key is 403; no key at all is accepted, so only a wrong key proves it). Test:
-`test_api_key_header_through_the_proxy_reqres` (the wrong key shows as Key rejected on Check now).
+`test_api_key_header_through_the_proxy_reqres` (the wrong key's 403 shows on Check now as Works (limited): only a
+401 reads Key rejected, so a vendor that answers a bad key with 403 is judged by its real calls).
 
 **API key in the query** (`api_key_query`). Hand it over: Auth **Query parameter** with the parameter's name. Proxy;
 Activity keeps the parameter's name, never its value. Candidate: NASA `api_key=DEMO_KEY` (a few calls an hour per

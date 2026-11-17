@@ -1,14 +1,14 @@
 import type {Page, Route} from 'playwright';
 // Offline browser check of a page that comes back on the ask screen (spec #263, backend/page_rounds.py). The OK of a
 // page at version 3, which Ana sent back at versions 1 and 2:
-// - the right side is in parts, not one paragraph: one meta line (who asked · Spec · v3 · date · Jev's word · #80 ↗; the
-//   line opens a menu with it all in full and Jev's reason, never a p-value), the question ("OK the spec?"), one line of
+// - the right side is in parts, not one paragraph: one meta line (who asked · Spec · v3 · date · the Decision model's word · #80 ↗; the
+//   line opens a menu with it all in full and the Decision model's reason, never a p-value), the question ("OK the spec?"), one line of
 //   what changed in v3 (the bot's lines) and Your points (✓ done / ✗ not done, with why); Your note on v2 is Ana's
 //   message above the ask, in full;
-// - the version in the meta line is a menu: each version on one line (date, Jev's mark, the answer), which opens that
+// - the version in the meta line is a menu: each version on one line (date, the Decision model's mark, the answer), which opens that
 //   version in the page viewer, and "Changes since v2";
 // - the page opens clean, even though Ana sent v2 back; Changes since v2 marks each block not in v2 in its margin;
-// - a page Jev has not judged yet, at version 1: "Jev checking", no versions in the menu;
+// - a page the Decision model has not judged yet, at version 1: "Decision model checking", no versions in the menu;
 // - at 390 px the parts stack, nothing runs off the side and Approve is reachable.
 // TICO_UI_SHOTS=<dir> saves a screenshot of each (light and dark at 1040, and 390).
 declare function actorLabel(actor: string): string;
@@ -79,7 +79,7 @@ async function open(page: Page, errors: string[]) {
     if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
     if (p === '/api/v2/needs-you') return json({actor: 'human:ana', count: 2, version: '1', next: null, items: [
       need('t-a', 'Decision view: a page that comes back', 'pa', 3, 10,
-        'New commits since Ana\'s OK. Version 3, after the send back: "' + NOTE + '". Jev is unsure: p 0.73, between 0.2 and 0.75. '
+        'New commits since Ana\'s OK. Version 3, after the send back: "' + NOTE + '". Decision model is unsure: p 0.73, between 0.2 and 0.75. '
         + 'OK Ana (version 3) ' + CONFLICT),
       need('t-b', 'Paste images', 'pb', 1, 11, 'OK Ana (version 1)')]});
     if (p === `/api/v2/oks/${RID}`) return json({error: 'not_found'}, 404);
@@ -131,20 +131,20 @@ async function open(page: Page, errors: string[]) {
       els => els.map(e => ['dc-msg-said', 'dc-meta', 'dc-q', 'dc-one', 'dc-points', 'dc-open-task', 'dc-part', 'p-text'].find(c => e.classList.contains(c)) || e.getAttribute('data-dc')));
     assert.deepEqual(order, ['dc-msg-said', 'dc-meta', 'dc-q', 'dc-one', 'dc-points', 'p-text', 'approve']);
 
-    // The line is one control; its menu says it in full: who, stage, version and date, then Jev's word and reason.
+    // The line is one control; its menu says it in full: who, stage, version and date, then the Decision model's word and reason.
     const ctl = side.locator('[data-dc-vmenu]');
     await ctl.click();
     assert.deepEqual(await side.locator('.dc-vmenu .dc-vinfo').allInnerTexts(), [`${asker} · Spec · v3 · Nov 13`,
-      'Jev: Meets · Clear and complete; the counts cite their queries']);
+      'Decision model: Meets · Clear and complete; the counts cite their queries']);
     await side.locator('.dc-msg-said .th-body').click();   // a click off the menu (above it: the menu opens down over the question)
 
-    // The version menu: one line per version, its date, Jev's mark and Ana's answer, then Changes since v2.
+    // The version menu: one line per version, its date, the Decision model's mark and Ana's answer, then Changes since v2.
     await ctl.click();
     const steps = side.locator('.dc-vmenu [data-dc-ver]');
     assert.deepEqual((await steps.allInnerTexts()).map(t => t.replace(/\s+/g, ' ').trim()), [
       'v1 · Nov 11 · ? · Sent back', 'v2 · Nov 12 · ✗ · Sent back', 'v3 · Nov 13 · ✓']);
     assert.deepEqual(await steps.locator('.dc-vjev').evaluateAll(els => els.map(e => e.getAttribute('title'))), [
-      'Jev: Unsure · Cannot tell who uses it', "Jev: Doesn't · No sources on the counts", 'Jev: Meets · Clear and complete; the counts cite their queries']);
+      'Decision model: Unsure · Cannot tell who uses it', "Decision model: Doesn't · No sources on the counts", 'Decision model: Meets · Clear and complete; the counts cite their queries']);
     assert.equal(await steps.nth(2).getAttribute('aria-current'), 'true');
     assert.equal(await side.locator('.dc-vmenu [data-dc-since]').innerText(), 'Changes since v2');
     await side.locator('.dc-msg-said .th-body').click();   // a click off the menu (above it: the menu opens down over the question)
@@ -196,14 +196,14 @@ async function open(page: Page, errors: string[]) {
     for (let i = 0; i < 50 && !fetched.includes('pa@1'); i++) await page.waitForTimeout(100);
     assert.ok(fetched.includes('pa@1') && !fetched.includes('pa@3'), `the viewer opens version 1 (${fetched})`);
 
-    // ---- A page Jev has not judged, at version 1: Jev checking, no history, no switch, no parts with nothing to say.
+    // ---- A page the Decision model has not judged, at version 1: Decision model checking, no history, no switch, no parts with nothing to say.
     await page.goto('http://tico-ui.test/#/tasks');
     await page.locator('#task-play').click();
     await dialog.locator('.dc-meta').waitFor();
     await dialog.locator('[data-dc="next"]').click();
     await dialog.locator('.dc-tabs-t', {hasText: 'Paste images'}).waitFor({state: 'attached'});
     await dialog.locator('.dc-jev-wait').waitFor();
-    assert.equal(await dialog.locator('.dc-jev-wait').innerText(), 'Jev checking');
+    assert.equal(await dialog.locator('.dc-jev-wait').innerText(), 'Decision model checking');
     assert.equal(await dialog.locator('.dc-vmenu [data-dc-ver]').count(), 0);
     assert.equal(await dialog.locator('.dc-part').count(), 0);
     assert.equal(await dialog.locator('[data-dc-since]').count(), 0);
@@ -223,6 +223,6 @@ async function open(page: Page, errors: string[]) {
     await phone.close();
 
     assert.deepEqual(errors, []);
-    console.log('PASS: a page that comes back shows one meta line with its version menu and Jev, what changed, the note sent back and each point answered; the page opens clean, Changes since vK marks it; a version in the menu opens that version.');
+    console.log('PASS: a page that comes back shows one meta line with its version menu and the Decision model, what changed, the note sent back and each point answered; the page opens clean, Changes since vK marks it; a version in the menu opens that version.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

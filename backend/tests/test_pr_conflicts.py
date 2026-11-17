@@ -101,7 +101,7 @@ def test_a_conflict_while_a_reviewer_holds_the_stage_wakes_the_builder_once_per_
     # What it waits on: the Builder first (the ladder's turn), the reviewer's page still there.
     waits = W.of(c, row)
     assert [(w.state, w.who) for w in waits] == [(W.BOT, "bot:builder"), (W.BOT, "bot:rev-b")]
-    assert waits[1].line.startswith("Jev sent it back")
+    assert waits[1].line.startswith("Decision model sent it back")
     assert W.turn(c, row) == "bot:builder"
     assert "bot:builder" in W.turns(c, row)  # its run is not held (task_wakes.may_start)
     line = next(w.line for w in waits if w.who == "bot:builder")

@@ -40,13 +40,14 @@ function ldotSet(el: Element | null | undefined, state: string): void {
   const next = ldotState(state, Number(el.dataset.size) || 24);
   if (el.dataset.state !== next) el.dataset.state = next;
 }
-// Flow's mark: two play-shaped dots, one behind the other. `live` rides them up and down out of step, a wave moving
-// forward (liquid-dot.css .flow-mark); every other copy on the screen is still, as every other dot is.
+// Flow's mark: two play-shaped dots close together, the one behind a darker solid shade. `live` rides them slowly up and
+// down out of step, a small wave moving forward (liquid-dot.css .flow-mark); every other copy on the screen is still,
+// as every other dot is.
 const FLOW_PLAY = 'M16 5.5C8 4 4.5 12 5 24 4.5 36 8 44 16 42.5 27 40 45 32 45 24 45 16 27 8 16 5.5Z';
 function flowMarkHTML(size = 16, live = false): string {
   return `<span class="flow-mark${live ? ' live' : ''}" style="width:${size}px" aria-hidden="true"><svg viewBox="0 0 48 48" focusable="false">`
-    + `<g class="f1"><path d="${FLOW_PLAY}" transform="translate(-3 7.2) scale(.7)" opacity=".45"/></g>`
-    + `<g class="f2"><path d="${FLOW_PLAY}" transform="translate(13 7.2) scale(.7)"/></g></svg></span>`;
+    + `<g class="f1"><path d="${FLOW_PLAY}" transform="translate(-.5 7.2) scale(.7)"/></g>`
+    + `<g class="f2"><path d="${FLOW_PLAY}" transform="translate(10.5 7.2) scale(.7)"/></g></svg></span>`;
 }
 // The dot hardly ever just vanishes: when it moves (a row into a panel and back, an older turn to the newest), a copy
 // flies from where it was (`from`, a rect) to `el` along an arc and squashes as it lands, while `el` waits unseen. Both

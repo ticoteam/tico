@@ -1,6 +1,6 @@
 # pyright: strict
 """Flow's opinion on each ask waiting on a person (Flow spec v0.8, sections 3, 4 and 8): the button Tico would press,
-one line of at most LINE_MAX characters saying what it would do and why, a note to prefill when it would send back, and
+one line of at most LINE_MAX characters saying what it would do and why, a note when it would send back, and
 a score (0-100, how much the ask needs doing now) that the screen sorts by and never shows.
 
 `POST /api/v2/flow/opinions` takes the Needs-you ids of the asks in the screen's set (at most MAX_ITEMS) and answers at

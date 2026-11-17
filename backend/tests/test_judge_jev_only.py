@@ -188,6 +188,6 @@ def test_jev_failing_on_a_page_verdict_is_retried_then_the_managers_never_met(ap
         (standing,) = R.standings(r, E.task(r, row["id"]))
         assert standing.on == "bot:manager"
         assert standing.line == (
-            f"{R.DECIDE} Jev couldn't check this: The decision model did not answer; try again shortly."
+            f"{R.DECIDE} Decision model couldn't check this: The decision model did not answer; try again shortly."
         )
         assert E.task(r, row["id"])["stage"]["name"] == "Spec"

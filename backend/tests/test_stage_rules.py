@@ -189,7 +189,7 @@ def test_an_edit_on_a_stale_revision_and_a_bad_rule_are_refused(c):
         SR.add(c, ANA, {"name": "Quiet", "event": "timer", "timer": {"kind": "quiet", "hours": 6}, "then": "block"})
     with pytest.raises(Problem):
         SR.add(c, ANA, {"name": "Odd", "event": "bot_snoozes", "cond": {"moon": "full"}, "then": "block"})
-    assert SR.cost(SR.get(c, SR.REAL_WAIT)) == "one Jev call per event"
+    assert SR.cost(SR.get(c, SR.REAL_WAIT)) == "one Decision model call per event"
 
 
 def test_the_snooze_route_refuses_a_blocked_bot_and_writes_the_rule_on_the_history(api, monkeypatch):
@@ -414,3 +414,19 @@ def test_a_saved_rule_with_a_condition_nothing_reads_is_not_acting_and_never_hol
     assert SR.matches(c, SR.get(c, "sr_sent_back_timer"), row) == (False, "")
     # A person takes the condition out and the rule acts again.
     assert SR.edit(c, ANA, "sr_turn", {"cond": {}})["not_acting"] == ""
+
+
+def test_a_timer_never_asks_the_decision_model(c):
+    with pytest.raises(Problem) as refused:
+        SR.add(
+            c,
+            ANA,
+            {
+                "name": "Timer asks",
+                "event": "timer",
+                "timer": {"kind": "quiet", "hours": 6},
+                "jev": "Is it done?",
+                "then": "tell_owner",
+            },
+        )
+    assert refused.value.detail == "A timer never asks the Decision model: use fixed conditions"

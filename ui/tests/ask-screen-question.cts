@@ -78,7 +78,7 @@ const times = (all: string, part: string) => all.split(part).length - 1;
         if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'ben', name: 'Ben'}], teams: {}});
         if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
         if (p === '/api/v2/needs-you') return json({actor: 'human:ana', count: needs.length, items: needs, version: String(needs.length), next: null});
-        // Tico's line on the Growth question says what kind of answer is wanted and picks nothing.
+        // Tico's opinion on the Growth question is ready and says what kind of answer is wanted: it picks nothing and shows no line.
         if (p === '/api/v2/flow/opinions') {
           const ids = (JSON.parse(r.postData() || '{}') as {items?: string[]}).items || [];
           return json({opinions: ids.map(id => id === 'r2' ? {id, state: 'ready', pick: '', line: WANTS, note: '', score: 50}
@@ -165,8 +165,9 @@ const times = (all: string, part: string) => all.split(part).length - 1;
       assert.deepEqual(writes[1], {p: '/api/v2/tasks/t1/comments', body: {text: 'Why not show it on the first page instead?', ask: 'r1'}}, label);
       await calm();
 
-      // The Growth question: Tico's line says what is wanted; nothing on the row is lit.
-      await page.locator('.dc-say', {hasText: WANTS}).waitFor();
+      // The Growth question: its opinion is ready, and no line shows; nothing on the row is lit.
+      await page.waitForFunction("DEC_OP.state.get('r2') === 'ready'");
+      assert.equal(await dialog.locator('.dc-say').textContent(), '', label);
       assert.equal(await dialog.locator('.dc-choice, .dc-choices').count(), 0, label);
       assert.equal(await dialog.locator('.dc-side [data-key] .primary').count(), 0, label);
       await answer.waitFor();

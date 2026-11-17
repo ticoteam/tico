@@ -26,6 +26,15 @@ UI_MAP = {
     "ui/app/visual-media.js": ["visual-media", "visual-media-app"],
     "ui/github-connect.js": ["github-after-connect", "github-personal", "settings-forms"],
 }
+# Browser scripts a UI file runs as well as what the rules pick for it (rule 6): a check whose name does not hold the
+# file's stem. UI_MAP would replace the rest of the file's selection (its smoke set and named scripts); this adds.
+UI_ALSO = {
+    # A 1,000-task board in a flood of live changes: how the board draws, and how live task and Needs you changes reach it.
+    "ui/app/tasks-page.js": ["board-flood"],
+    "ui/app/task-pipelines.js": ["board-flood"],
+    "ui/app/refresh.js": ["board-flood"],
+    "ui/app/live.js": ["board-flood"],
+}
 
 
 def browser_script(root, stem):
@@ -1221,8 +1230,9 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
     6. A ui/ path picks browser scripts the release check runs (see SUPPORT): a changed script, every script that runs a
        changed or gone helper under ui/tests/support/, the scripts named after UI source outside UI_MAP, the scripts
        that name a top-level function or const whose definition the diff from `base` to `head` changes in a UI source
-       file (changed_definitions), and every phone-dead-ends-* script for a change under PHONE_SCOPE. More than BROWSER_ALL_OVER picked runs every script
-       `ui-tests.cts --all` runs. `browser_direct` lists them: a light pull request keeps them.
+       file (changed_definitions), the scripts UI_ALSO lists for a UI file, and every phone-dead-ends-* script for a
+       change under PHONE_SCOPE. More than BROWSER_ALL_OVER picked runs every script `ui-tests.cts --all` runs.
+       `browser_direct` lists them: a light pull request keeps them.
     7. A path a CONTENT_SWEEPS test reads turns that slow test on in the contracts job (`sweeps`), with its environment.
     8. A file under MIGRATIONS runs UPGRADE_TESTS, which a light plan keeps (narrow).
     9. Guard tests (`guards`, which a light plan keeps): a ui/ file the release-shot harness lists that is added or gone
@@ -1367,6 +1377,7 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
         for name in names:
             if name.startswith(PHONE_SCOPE):
                 direct |= phone
+            direct |= set(UI_ALSO.get(ui_map_key(name), ())) & runnable
             if is_browser(name) and name in live:
                 direct.add(Path(name).stem)
             elif name.startswith(SUPPORT):
@@ -1463,7 +1474,7 @@ def changed_files(base, head="HEAD", root=ROOT, only=None):
 def smoke_check(root=ROOT):
     """Problems with SMOKE_FILE, for the static job: an unreadable file; an entry whose test file or core browser script
     is missing; an entry with no measured time or no one-line reason; a repeat; a kind whose total needs more than one VM;
-    or a UI_MAP script that is missing. An empty list means the set is sound."""
+    or a UI_MAP or UI_ALSO script that is missing. An empty list means the set is sound."""
     try:
         data = json.loads((root / SMOKE_FILE).read_text())
     except (OSError, ValueError) as error:
@@ -1508,10 +1519,11 @@ def smoke_check(root=ROOT):
             problems.append(f"{kind}: an entry is repeated")
         if job_count(total, kind) != 1:
             problems.append(f"{kind} smoke set takes {total:.0f}s: more than one VM")
-    for name, scripts in UI_MAP.items():
-        for script in scripts:
-            if browser_script(root, script) is None:
-                problems.append(f"UI_MAP {name} names a missing script: {script}")
+    for table, entries in (("UI_MAP", UI_MAP), ("UI_ALSO", UI_ALSO)):
+        for name, scripts in entries.items():
+            for script in scripts:
+                if browser_script(root, script) is None:
+                    problems.append(f"{table} {name} names a missing script: {script}")
     return problems
 
 

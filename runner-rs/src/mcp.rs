@@ -52,6 +52,17 @@ fn entropy(token: &str) -> f64 {
         .sum::<f64>()
 }
 
+/// A public identifier with a random-looking body, never a secret (access_entry.ID_SHAPES): a Twilio SID, two
+/// capitals and 32 lowercase hex digits.
+fn id_shape(token: &str) -> bool {
+    let b = token.as_bytes();
+    b.len() == 34
+        && b[..2].iter().all(|c| c.is_ascii_uppercase())
+        && b[2..]
+            .iter()
+            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(c))
+}
+
 /// A reason when `text` looks like a credential value, else "" (access_entry.secret_in).
 pub fn secret_in(text: &str) -> String {
     if secret_shapes().is_match(text) {
@@ -60,6 +71,7 @@ pub fn secret_in(text: &str) -> String {
     for token in text.split(|c: char| c.is_whitespace() || ",;()\"'<>".contains(c)) {
         let long = token.chars().count() >= 24;
         if long
+            && !id_shape(token)
             && token
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || "_+/=-".contains(c))
@@ -780,6 +792,11 @@ mod tests {
         assert!(err(json!({"url": "https://x.com/?k=${K}"}), "K").contains("holds no credential"));
         assert_eq!(secret_in("a normal sentence"), "");
         assert!(!secret_in("token Zq8vR2mXk4Lp9Wn3Ts7Yb1Cd6Fg").is_empty());
+        // A Twilio SID is an id, however random its hex looks.
+        assert_eq!(
+            secret_in(&format!("AC{}", "0123456789abcdef".repeat(2))),
+            ""
+        );
     }
 
     #[test]

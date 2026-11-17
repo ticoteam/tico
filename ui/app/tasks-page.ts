@@ -407,21 +407,27 @@ function tasksEventsPut(state: TasksPageState, events: LiveTaskEvent[]): void {
   if (events.some(d => d.bulk)) { void tasksCatchUp(state); return; }
   let moved = false;
   for (const d of events) moved = tasksTaskPut(state, d.gone ? null : (d.task as TaskAny | null | undefined) ?? null, String(d.id ?? ''), false) || moved;
-  if (moved) tasksRender(state);
+  if (moved) tasksRenderSoon(state);
 }
 /** Needs you changed (mended from the ids the event named, hub-v2.ts): You draws it; nothing is read. */
 function tasksNeedsLive(): void {
   const state = TASKS_ST;
   if (!state || !isTasksRoute(S.route) || state.archive || state.loading) return;
-  if (state.pipeline) {   // a stage's ▶ and its count; the phone's stage tabs keep where they were scrolled to
-    const left = document.querySelector('.pv-tabs')?.scrollLeft || 0;
-    tasksRender(state);
-    const tabs = document.querySelector('.pv-tabs');
-    if (tabs) tabs.scrollLeft = left;
-    return;
-  }
-  state.needs = [...(S.v2.needs || [])] as NeedsEntry[];
-  tasksRender(state);
+  if (!state.pipeline) state.needs = [...(S.v2.needs || [])] as NeedsEntry[];
+  tasksRenderSoon(state);   // a stage's ▶ and its count, or You
+}
+/** Draws the page soon, once for every change that asks meanwhile: at the next frame, and no sooner than TASKS_LIVE_MS
+ * after the last such draw. A flood of live task and Needs you changes (a bot making hundreds of tasks) draws a few
+ * times a second, not once per change, and a hidden tab not at all until it is shown. */
+const TASKS_LIVE_MS = 250;
+let TASKS_SOON = false, TASKS_LIVE_AT = 0;
+function tasksRenderSoon(state: TasksPageState): void {
+  if (TASKS_SOON || TASKS_ST !== state) return;
+  TASKS_SOON = true;
+  setTimeout(() => requestAnimationFrame(() => {
+    TASKS_SOON = false; TASKS_LIVE_AT = performance.now();
+    tasksRender(TASKS_ST);
+  }), Math.max(0, TASKS_LIVE_AT + TASKS_LIVE_MS - performance.now()));
 }
 
 // ---- drawing
@@ -447,6 +453,9 @@ async function tasksReview(state: TasksPageState): Promise<void> {
   if (!p) { if (!await decideGoThrough()) toast('Nothing waits on you'); return; }
   if (!await decideStageOpen('', p.id)) toast(`Nothing waits on you in ${p.name}`);
 }
+/** Hides or shows a part of the header only when that changes: each write, even of the same value, is a header change
+ * that fits the header again at once (page-head.ts), a layout of the whole page. */
+const tasksHidden = (el: HTMLElement, hidden: boolean): void => { if (el.hidden !== hidden) el.hidden = hidden; };
 function tasksHeadPaint(state: TasksPageState) {
   // A bot's read-only view has no Needs you: its scope is the bot's own open tasks, with their count.
   const p = tasksPipeline(state), view = tasksViewOnly(), own = view ? state.tasks.length : 0;
@@ -458,33 +467,40 @@ function tasksHeadPaint(state: TasksPageState) {
   scope.setAttribute('aria-label', p ? `Showing ${p.name}` : `Showing ${you}${own ? `, ${own}` : ''}`);
   // Flow is always on the row and keeps one width: its count is the one count of what waits on the person.
   const n = tasksReviewCount(state), play = $('#task-play');
-  play.hidden = view;                       // a view reviews nothing: no Needs you, no answers
+  tasksHidden(play, view);   // a view reviews nothing: no Needs you, no answers
   play.classList.toggle('none', !n);
-  play.querySelector('.tl-review-n')!.textContent = n ? (n > 99 ? '99+' : String(n)) : '';
+  const count = play.querySelector('.tl-review-n')!, shown = n ? (n > 99 ? '99+' : String(n)) : '';
+  if (count.textContent !== shown) count.textContent = shown;
   play.setAttribute('aria-label', n ? `Flow, ${n}` : 'Flow');
   // The manager's face: no chat button in a computer's header (style guide "Where chat lives"). On a phone the board's
   // bots show it once the board is drawn (pipeline-ask.ts pipelineAskPaint, right after this): the face of whom it opens,
   // none with no bot.
-  $('#task-manager').hidden = true;
+  tasksHidden($('#task-manager'), true);
   // ⋯
   const archive = $('#task-mi-archive');
-  archive.textContent = state.archive ? 'Leave Archived' : 'Archived';
-  $('#task-mi-edit').hidden = !p || p.may_change === false || !TASK_PAGE_HOOKS.pipeline?.edit || !!state.archive;
-  $('#task-mi-layout').hidden = !p || !!state.archive || matchMedia(PHONE).matches;
+  const archiveWord = state.archive ? 'Leave Archived' : 'Archived';
+  if (archive.textContent !== archiveWord) archive.textContent = archiveWord;
+  tasksHidden($('#task-mi-edit'), !p || p.may_change === false || !TASK_PAGE_HOOKS.pipeline?.edit || !!state.archive);
+  tasksHidden($('#task-mi-layout'), !p || !!state.archive || matchMedia(PHONE).matches);
   for (const b of document.querySelectorAll<HTMLElement>('#task-mi-layout [data-layout]')) b.setAttribute('aria-pressed', String(b.dataset.layout === state.layout));
-  $('#task-archive-x').hidden = !state.archive;
+  tasksHidden($('#task-archive-x'), !state.archive);
   const archives = $('#task-archives');
-  archives.hidden = !state.archive;
+  tasksHidden(archives, !state.archive);
   for (const b of document.querySelectorAll<HTMLElement>('#task-archives [data-archive]')) b.setAttribute('aria-pressed', String(b.dataset.archive === state.archive));
   const on = TASK_FILTER_NAMES.filter(([k]) => tasksFilterOn(state.filters, k));
-  $('#task-chips').innerHTML = on.map(([k, name]) => {
+  const chips = on.map(([k, name]) => {
     const words = tasksFilterWords(state, k), shown = words.length > 2 ? `${words[0]} +${words.length - 1}` : words.join(', ');
     return `<span class="tl-chip" data-chip="${k}"><button type="button" class="tl-chip-main" data-chip-edit="${k}" aria-haspopup="true" title="${esc(`${name}: ${words.join(', ')}`)}"><span class="k">${esc(name)}</span>${shown ? `<span class="v">${esc(shown)}</span>` : ''}</button><button type="button" class="tl-chip-x" data-chip-drop="${k}" aria-label="Remove ${esc(name)}">${TL_ICON.x}</button></span>`;
   }).join('');
+  // Written only when they change: a header change fits the header again at once (page-head.ts), a layout each time.
+  const chipset = $('#task-chips');
+  if (chipset.dataset.chips !== chips) { chipset.dataset.chips = chips; chipset.innerHTML = chips; }
   const badge = $('#task-filter .tl-fbadge');
-  badge.hidden = !on.length; badge.textContent = String(on.length);
-  $('#task-bar').hidden = !on.length && !state.archive;
+  tasksHidden(badge, !on.length); if (badge.textContent !== String(on.length)) badge.textContent = String(on.length);
+  tasksHidden($('#task-bar'), !on.length && !state.archive);
 }
+/** What the page last drew in its body when it is not a pipeline's board: drawn again only when it changed. */
+const TASKS_DRAWN = new WeakMap<HTMLElement, string>();
 function tasksRender(state: TasksPageState | null) {
   const body = $('#task-body');
   if (!body || !state || TASKS_ST !== state) return;
@@ -506,9 +522,12 @@ function tasksRender(state: TasksPageState | null) {
   const board = !!p && !!hooks && !state.failed && !(state.loading && !state.kept && !state.tasks.length);
   if (p && hooks?.rail) hooks.rail(p, board); else tasksRailOff();
   if (p && hooks && board) {
-    // The view keeps what is being done in it (a drag, a phone's stage) and draws itself again into the root it is bound to.
-    const html = hooks.html(p, state.tasks, {layout: state.layout, q: state.q, filters: state.filters, phone: matchMedia(PHONE).matches});
-    if (body.dataset.html !== html) { body.dataset.html = html; body.innerHTML = html; }
+    // The view keeps what is being done in it (a drag, a phone's stage) and draws itself again into the root it is bound
+    // to: only the stages that changed (task-pipelines.ts).
+    const opts = {layout: state.layout, q: state.q, filters: state.filters, phone: matchMedia(PHONE).matches};
+    TASKS_DRAWN.delete(body);
+    if (hooks.draw) hooks.draw(body, p, state.tasks, opts);
+    else body.innerHTML = hooks.html(p, state.tasks, opts);
     hooks.bind?.(body, p);
     hooks.ask?.($('#task-ask'), p, matchMedia(PHONE).matches);
     return;
@@ -520,7 +539,7 @@ function tasksRender(state: TasksPageState | null) {
     : state.pipeline ? tasksPipelineHTML(state)
     : tasksViewOnly() ? tasksOwnHTML(state)
     : tasksYouHTML(state);
-  if (body.dataset.html !== html) { body.dataset.html = html; body.innerHTML = html; }
+  if (TASKS_DRAWN.get(body) !== html) { TASKS_DRAWN.set(body, html); body.innerHTML = html; }
 }
 /** No Ask bar away from a pipeline's board (pipeline-ask.ts). */
 function tasksAskOff() {

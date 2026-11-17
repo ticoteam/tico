@@ -468,7 +468,7 @@ def list_tools(tool: Any, token: str) -> tuple[tuple[bool, int | None, str], lis
     try:
         response, answer = _rpc(tool, token, session, "initialize", mcp_client.initialize("tico-check")["params"])
         code = response.status_code
-        if code in (401, 403):
+        if code == 401:  # only a 401 says the key is rejected; a 403 is a check failure (no MCP without scope)
             return (False, code, "Key rejected"), None
         if code >= 300:
             return (False, code, f"Check failed: {code}"), None

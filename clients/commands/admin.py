@@ -3,7 +3,7 @@
 Moved from clients/hubtools.py; clients/commands/__init__.py says how the table is put together."""
 
 from urllib.parse import quote
-from clients.cli_spec import Command, Group
+from clients.cli_spec import Arg, Command, Group
 from clients.tico import APIError
 
 from clients.commands._registry import tool
@@ -669,4 +669,29 @@ SEAT = (
         example="tico seat update s1 --reports-to human:ana",
     ),
     Command("seat close", "take a seat off the chart (a person)", example="tico seat close s1"),
+)
+
+
+# `tico settings ...` (clients/cli_spec.py): each leaf's flags come from its tool's schema.
+_TARGETS = ("bot", "computer", "id", "person")  # the one thing a setting is set on, or none
+SETTINGS = (
+    Group("settings", "find, read and change a control in Settings by its words (docs/permissions.md)"),
+    Command(
+        "settings find",
+        "settings whose name, place or key hold these words",
+        example="tico settings find 'admin sql'",
+    ),
+    Command(
+        "settings show",
+        "one setting: its value, who may change it and its card",
+        exclusive=(_TARGETS,),
+        example="tico settings show team.rules.admin_sql --bot ana",
+    ),
+    Command(
+        "settings set",
+        "change one setting as yourself, or BotOps or the Assistant as the person who asked",
+        args=(Arg("on_behalf_of", metavar="MESSAGE_ID"),),
+        exclusive=(_TARGETS,),
+        example="tico settings set team.rules.admin_sql on",
+    ),
 )

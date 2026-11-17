@@ -50,6 +50,23 @@ environment as above, so whoever controls that computer can read it. Tools lists
 read key when there is one, else (only a Read and write key) a proxy token as for a proxied tool, so its calls go through
 the proxy's Read rules; a tool with no API address cannot be held to reads, and Who can use it marks that bot's row.
 
+**Status.** A tool's check is one authenticated GET to its check path (its known service's when it has none, at that
+service's own address) with each stored key, every 30 minutes for every tool with an address and a check path, its keys
+on the proxy or on computers alike (the server holds every value, and a check sends a key only to the tool's own public
+https address). A 2xx is **Working**; a 403 is **Works (limited)**, not a problem: the vendor knows the key and the
+path needs a scope the key was not given (a restricted ElevenLabs or Calendly key); only a 401 is **Key rejected**
+(and the 403 a known service answers a bad key with: Vercel's);
+anything else is **Check failed**. A proxied tool's real calls outrank its check: any 2xx in the last 24 hours makes it
+Working whatever the check said, and only 3 calls in a row answered 401, with no 2xx since, make it Key rejected.
+
+**Ids are not keys.** A variable whose name says id (`_PROJECT_ID`, `_ACCOUNT_ID`, `_ACCOUNT_SID`, `_ORG_ID`,
+`_WORKSPACE_ID`, `_TEAM_ID`, `_CUSTOMER_ID`) and whose value is one short word that does not look like a credential is a
+setting, never behind the proxy: a bot sends it as it is (Twilio's Account SID is also its Basic username), so a proxy
+token in its place breaks the bot. A name with KEY, SECRET, TOKEN, PASSWORD or CLIENT as a word stays a key
+(`AWS_ACCESS_KEY_ID`, `GOOGLE_ADS_CLIENT_ID`). An id stored as a key goes on a computer tool of its own with no address,
+a proxied tool's id key reaches runs as its value, a check never sends one, and a one-time repair moved the ids stored
+behind the proxy before this rule into settings on a tool their holders hold (else onto a computer tool).
+
 A remote MCP server a bot declares in bot.yaml whose key Tico holds (a proxied tool, or Read as above) is reached
 through the proxy too: the runner sends it to `$TICO_TOOL_<ID>_URL` plus the server's path under the tool's API address,
 with the run's proxy token in its header, and the proxy puts the key in its place. A server whose address is not under

@@ -146,13 +146,13 @@ def test_home_builds_thread_attention_once_for_both_cards_and_rechecks_on_the_ne
     tid = members_thread(api)
     mention = say(api, tid, "@ana please check.")
     say(api, tid, "Which lease?")  # a second message from Cara that names no one: unread for Ana, never needs-you
-    calls, addressed = [], thread_attention._addressed
+    calls, build = [], thread_attention._items
 
-    def counted(c, me):
-        calls.append(me)
-        return addressed(c, me)
+    def counted(c, viewer):
+        calls.append(viewer.actor)
+        return build(c, viewer)
 
-    monkeypatch.setattr(thread_attention, "_addressed", counted)
+    monkeypatch.setattr(thread_attention, "_items", counted)
     cards = {p["card"]["template"]: p["card"]["data"] for p in place(api, "person:me")["pins"]}
     assert calls == ["human:ana"]
     # Needs you keeps the mention once, while the sidebar's separate projection still sees the thread.

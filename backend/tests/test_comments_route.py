@@ -294,7 +294,7 @@ def test_a_defer_on_a_task_filed_into_a_shared_chat_keeps_its_deadline(api):
 
 
 def test_a_reply_reaches_its_author_only_while_they_read_the_thread_and_asks_need_them(api):
-    from backend.thread_attention import _addressed
+    from backend.open_mentions import rows as open_mentions
     from backend.tests.threads_e2e import call, create_thread, ok, remove_member, say
 
     t = create_thread(api, title="Venue", members=["human:ben", "human:cara"])
@@ -306,7 +306,7 @@ def test_a_reply_reaches_its_author_only_while_they_read_the_thread_and_asks_nee
     reply = reply.get("message", reply)
     assert delivery(api, reply["id"], "human:cara")["reason"] == "reply"
     with api.app.state.store.read() as c:
-        assert reply["id"] in [m["id"] for m in _addressed(c, "human:cara")], "a reply to a person is in Needs you"
+        assert reply["id"] in [m["id"] for m in open_mentions(c, "human:cara")], "Needs you lists a reply to the person"
     ok(remove_member(api, "ana-test", t["id"], "human:cara"))
     again = ok(
         call(

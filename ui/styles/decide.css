@@ -1,12 +1,12 @@
 /* ui/styles/decide.css — Flow, the ask screen (ui/app/decide.ts, docs/pipelines-v3.md S3): one clean bar on top (where
-   you are, Flow's mark, the mic, Tico's line, ‹ › ✕), the thing asked about on the left, the sentence and the buttons on the right; the whole screen on a phone, one
+   you are, Flow's mark, the mic, the undo notice, ‹ › ✕), the thing asked about on the left, the sentence and the buttons on the right; the whole screen on a phone, one
    scroll (the thing, then the sentence and Notes) with the buttons in a bar pinned to the bottom.
    The cascade runs in the order index.html links these files; keep rules in order. */
 .dc-dialog{width:min(1040px,calc(100vw - 32px));max-width:none;height:min(760px,calc(100dvh - 48px));max-height:none;padding:0;border:1px solid var(--line);border-radius:16px;background:var(--bg);color:var(--ink);box-shadow:0 20px 60px rgba(0,0,0,.45);overflow:hidden}
 .dc-dialog::backdrop{background:rgba(0,0,0,.5)}
 .dc-dialog[open]{display:flex}
 .decide{flex:1 1 auto;min-height:0;width:100%;display:flex;flex-direction:column;position:relative}
-/* flex:none: a column flex item with a min-height of its own could be squeezed to it, leaving Tico's line below the rule */
+/* flex:none: a column flex item with a min-height of its own could be squeezed to it, leaving the top bar's slot below the rule */
 .dc-head{flex:none;display:flex;align-items:center;gap:10px;min-height:56px;padding:0 8px 0 12px;border-bottom:1px solid var(--line)}
 /* where you are: All mine / Pipeline / Stage, a menu of the places where something waits on you */
 .dc-where{position:relative;flex:none;min-width:0}
@@ -34,14 +34,9 @@
 .dc-wave i:nth-child(4){animation-delay:-.15s;animation-duration:.8s}
 .dc-wave i:nth-child(5){animation-delay:-.75s;animation-duration:1.2s}
 @keyframes dc-wv{0%,100%{transform:scaleY(.22)}20%{transform:scaleY(.95)}45%{transform:scaleY(.4)}70%{transform:scaleY(.75)}}
-/* Tico's line: one line, cut at the end; its wrapper is the callout on a phone */
+/* The slot over the undo notice: the voice notice while the mic is on; its wrapper is the callout on a phone */
 .dc-sayw{display:contents}
-.dc-say{flex:1;display:flex;align-items:center;gap:6px;min-width:0;margin:0;padding:0;border:0;background:none;color:inherit;font:inherit;font-size:var(--t-base);text-align:left;cursor:pointer}
-.dc-say:empty{cursor:default}
-.dc-say-i{flex:none;width:18px;height:18px;font-size:18px;color:var(--muted)}
-.dc-say-t{flex:1;min-width:0;overflow-wrap:anywhere}   /* never cut: it wraps (at most 80 characters, two lines) */
-.dc-say-i.dc-say-ok{color:var(--ok)}
-.dc-say[aria-expanded=true] .dc-say-t{white-space:normal;overflow-wrap:anywhere}
+.dc-say{flex:1;display:flex;align-items:center;gap:6px;min-width:0;margin:0;padding:0;border:0;background:none;color:inherit;font:inherit;font-size:var(--t-base);text-align:left;overflow-wrap:anywhere}
 /* The next ask Tico is still thinking about, faint, before ‹ ›; none on a phone. */
 .dc-up{flex:0 1 auto;max-width:28%;min-width:0;color:var(--muted);opacity:.7;font-size:var(--t-sm);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dc-up:empty{display:none}
@@ -186,7 +181,7 @@
    next-up line) so nothing moves, never over the page or the buttons (decide.ts decideBar). */
 .dc-nav{position:relative}
 .dc-sayw{position:relative}
-/* What was just done, in Tico's line slot over the next item's line for 5 s: "✓ Approved with comments · Undo" */
+/* What was just done, in the top bar's slot for 5 s: "✓ Approved with comments · Undo" */
 .dc-bar{position:absolute;inset:0;z-index:2;display:flex;align-items:center;gap:8px;padding:0 4px 0 12px;border-radius:10px;background:var(--surface2);color:var(--ink);font-size:var(--t-sm);white-space:nowrap;transition:opacity .4s}
 .dc-bar[hidden]{display:none}
 .dc-bar.dc-bar-out{opacity:0}
@@ -312,10 +307,10 @@ button.dc-jev{cursor:pointer}
      answer an item not yet read (decideCalm) */
   .decide.dc-calm .dc-side button{pointer-events:none}
   /* One row: where you are, the mark, the mic, ‹ › ✕; the crumb gives way (its first parts first), never the buttons.
-     Tico's line goes under that row, when there is one. */
+     The slot goes under that row, when there is one. */
   .dc-head{flex-wrap:wrap;gap:0 6px;padding-left:8px}
-  /* Tico's line under the bar: a quiet callout from the mark (its caret at --dc-caret-x, set by decidePaintHead), up
-     to two lines, not cut in half; none while Tico is still working. */
+  /* The slot under the bar: a quiet callout from the mark (its caret at --dc-caret-x, set by decidePaintHead), up
+     to two lines, not cut in half; none while the slot is empty. */
   .dc-sayw{display:block;order:9;flex-basis:100%;min-width:0;position:relative;margin:4px 0 10px}
   .dc-sayw:has(>.dc-say:empty):not(:has(>.dc-bar:not([hidden]))){display:none}
   .dc-sayw::before{content:"";position:absolute;top:-6px;left:calc(var(--dc-caret-x,24px) - 6px);border:6px solid transparent;border-top:0;border-bottom-color:var(--surface2)}
@@ -402,7 +397,7 @@ button.dc-jev{cursor:pointer}
   .dc-askw .dc-snz::before{content:'';flex:none;align-self:center;width:36px;height:4px;margin:0 0 8px;border-radius:2px;background:var(--line)}
   /* a dim backdrop over the rest of the screen: a tap on it closes the sheet (decideClick) */
   .dc-askw:has(>.dc-snz)::before{content:'';position:fixed;inset:0;z-index:19;background:rgba(0,0,0,.5)}
-  /* the top bar stacks apart from the side (the undo in Tico's line): it gets the same dim, and a tap on it closes too */
+  /* the top bar stacks apart from the side (the undo notice): it gets the same dim, and a tap on it closes too */
   .decide:has(.dc-askw>.dc-snz) .dc-head{position:relative}
   .decide:has(.dc-askw>.dc-snz) .dc-head::after{content:'';position:absolute;inset:0;z-index:5;background:rgba(0,0,0,.5)}
   .dc-askw .dc-snz .dc-mi{width:100%;min-height:52px;padding:0 20px;border-radius:0;text-align:left}

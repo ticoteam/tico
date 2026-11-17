@@ -664,7 +664,7 @@ def _granted_tools(c, bot):
         if tool_id and kind in ("api", "mcp"):
             tool = one(c, "SELECT * FROM tools WHERE id=?", (tool_id,))
             if tool is not None:
-                state = api_tools.status(tool, api_tools._keys(c, tool_id), api_tools.latest_checks(c, tool_id))
+                state = api_tools.state_of(c, tool)
                 if state["tone"] == "fail":
                     status, problem = "problem", state["text"]
         elif not item["stored"] and kind != "website":
