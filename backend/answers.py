@@ -225,6 +225,8 @@ def _page_version(
     from . import task_pages as P
 
     pages = P.current_pages(conn, row["visit"]["id"], requirement["id"]) if document else ([page] if page else [])
+    if document and not pages and page:
+        pages = P.current_pages(conn, str(page["visit_id"]), requirement["id"])
     expected = P.version_key(pages)
     if keyed and is_human(by) and document and value == OK and page_version in (None, ""):
         _refuse(conn, by, "task_requirement", f"{APPROVE_SHOWN}: send its page_version", row["id"])
@@ -271,10 +273,12 @@ def _write(
         from . import task_pages as P
 
         data["page_version"] = page_version
-        data["pages"] = [
-            {"file_id": p["file_id"], "version": p["version"]}
-            for p in P.current_pages(conn, row["visit"]["id"], requirement_id)
-        ]
+        pages = P.current_pages(conn, row["visit"]["id"], requirement_id)
+        if not pages and (requirement := R.get(conn, requirement_id)):
+            page, _ = R.page_for(conn, row, requirement)
+            if page:
+                pages = P.current_pages(conn, str(page["visit_id"]), requirement_id)
+        data["pages"] = [{"file_id": p["file_id"], "version": p["version"]} for p in pages]
     # Through the task's history writer: an answer the Assistant or BotOps gave with the person's rights says so (via).
     H._task_event(conn, row["id"], by, "answer", None, value, notes, data=data)
     return answer_id
