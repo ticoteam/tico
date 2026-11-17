@@ -21,7 +21,7 @@ const {open, task} = require('./tasks-page.cts') as Tasks.Api;
 const T0 = Date.parse('2026-11-10T09:00:00Z');
 const at = (min: number) => new Date(T0 + min * 60000).toISOString();
 const say = (n: number) => ({id: `m${n}`, sender_id: n % 2 ? 'human:ana' : 'bot:writer', kind: 'say', body: `Line ${n}`, refs: {}, created_at: at(n * 10)});
-// 60 messages, then the history: a page, the Decision model's check, a send-back, then three quiet changes in a row, then a last word.
+// 60 messages, then the history: a page, the Decision model's check, a send-back, then four quiet changes in a row, then a last word.
 const comments = [...Array.from({length: 60}, (_, i) => say(i + 1)), {...say(99), body: 'The newest line', created_at: at(700)}];
 const ev = (id: string, min: number, field: string, x: Record<string, string | null> = {}) => ({id, created_at: at(min), field, actor: 'keeper', old: null, new: null, note: null, ...x});
 const events = [
@@ -30,7 +30,7 @@ const events = [
   ev('e3', 603, 'answer', {actor: 'human:ana', new: 'no', note: 'The chat should be higher\nand the rest smaller'}),
   ev('e4', 610, 'labels', {actor: 'human:ana', new: '["ui"]'}),
   ev('e5', 611, 'github', {new: 'tico#12 open', note: 'GitHub: tico#12 open (state)'}),
-  ev('e6', 612, 'number', {new: '409'}),
+  ev('e6', 612, 'number', {actor: 'human:ana', new: '409'}),
   ev('e7', 613, 'woken_again', {new: 'bot:writer'}),
 ];
 const PAGE = {file_id: 'file-spec', title: 'Task window spec', version: 3, replaced_by_id: null, archived: false};
@@ -125,7 +125,11 @@ const pages = async (page: Page) => {
       assert.match(await group.locator('> summary').innerText(), /^4 updates/);
       assert.equal(await group.evaluate(g => (g as HTMLDetailsElement).open), false);
       await group.locator('> summary').click();
-      await group.getByText(/numbered #409/i).waitFor();   // Tico gives the number: a quiet line, no "it" (task-session.cts)
+      // Tico gives the number, whoever's move set it off: a quiet line with no name (task-session.cts covers the label, 'Numbered O561').
+      const numbered = group.locator('.tcomment.tmark[data-event="number"]');
+      await numbered.waitFor();
+      assert.match((await numbered.innerText()).replace(/\s+/g, ' ').trim(), /^Numbered #409\b/);
+      assert.equal(await numbered.locator('.tcomment-who').count(), 0, 'the number names nobody');
 
       // 5. One Visible to row; no Private or Public box, no Size, no Who can see.
       const props = win.locator('[data-task-props]');
