@@ -17,6 +17,8 @@ on that exact base. Neither helper reads uncommitted content.
 The local check, PR static job and merge-commit checks discover gates automatically.
 With no gate scripts and no rules, `bash scripts/gates.sh` prints `gates: none`.
 
+`verifier_count.py` counts verification changes and allowed `Revert-Ok` reverts; edits to shipped migrations and stale tree overwrites fail.
+
 ## Structural rules
 
 Add one ast-grep rule in `scripts/rules/<name>.yml` or `.yaml`, with fixtures in
