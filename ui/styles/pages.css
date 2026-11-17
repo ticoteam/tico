@@ -198,3 +198,35 @@
 .pg-pinned a{color:var(--link-quiet)}
 
 .pg-lock { font-size: 14px; vertical-align: middle; }
+/* Links under the title (pages.ts pageFullLinks): a chip per link, "+ Link" and the picker */
+.pg-links{display:flex;flex-direction:column;gap:8px;margin:6px 0 0}
+.pg-chips{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.pg-chip{display:inline-flex;align-items:center;gap:2px;max-width:100%;min-height:26px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink);font:inherit;font-size:var(--t-sm)}
+.pg-chip-link{display:inline-flex;align-items:center;gap:5px;min-width:0;padding:2px 8px;color:inherit;text-decoration:none}
+.pg-chip-link>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pg-chip-link:hover{background:var(--hover);text-decoration:none}
+.pg-chip-link .nav-icon{flex:none;font-size:15px;width:15px;height:15px;color:var(--muted)}
+.pg-chip-ok{padding:0 6px;color:var(--muted);font-size:var(--t-xs);white-space:nowrap}
+.pg-chip-x{display:grid;place-items:center;flex:none;width:24px;height:24px;margin-right:2px;padding:0;border:0;border-radius:5px;background:none;color:var(--muted);cursor:pointer;opacity:0}
+.pg-chip:hover .pg-chip-x,.pg-chip:focus-within .pg-chip-x{opacity:1}
+.pg-chip-x:hover{background:var(--hover);color:var(--ink)}
+@media (hover: none){.pg-chip-x{opacity:1}}
+.pg-chip-add{gap:5px;padding:2px 8px;border-style:dashed;color:var(--muted);cursor:pointer}
+.pg-chip-add:hover{background:var(--hover);color:var(--ink)}
+.pg-chip-add .nav-icon{font-size:15px;width:15px;height:15px}
+.pg-chip-link:focus-visible,.pg-chip-x:focus-visible,.pg-chip-add:focus-visible,.pg-link-opt:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
+.pg-link-pick{display:flex;flex-direction:column;gap:6px;max-width:560px;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+.pg-link-pick[hidden]{display:none}
+.pg-link-row{display:flex;flex-wrap:wrap;gap:6px}
+.pg-link-role{flex:none;width:auto}
+.pg-link-q{flex:1 1 180px;min-width:0}
+.pg-link-results{display:flex;flex-direction:column}
+.pg-link-opt{display:flex;align-items:center;gap:8px;min-height:32px;padding:4px 6px;border:0;border-radius:6px;background:none;color:var(--ink);font:inherit;font-size:var(--t-sm);text-align:left;cursor:pointer}
+.pg-link-opt:hover{background:var(--hover)}
+.pg-link-opt .nav-icon{flex:none;width:16px;height:16px;font-size:16px;color:var(--muted)}
+.pg-link-opt-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Edit (pages.ts pageEditDraw): the editable frame and its note bar */
+.pg-edit{display:flex;flex-direction:column;gap:8px}
+.pg-edit-frame{display:block;width:100%;height:calc(100dvh - 220px);min-height:320px;border:1px solid var(--line);border-radius:8px;background:#fff}
+.pg-edit-bar{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+.pg-edit-note{flex:1 1 200px;min-width:0}
