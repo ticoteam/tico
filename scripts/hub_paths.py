@@ -154,6 +154,7 @@ MARKS = ("growth setup",)
 # bot's task, but its tool (tico_task_run) is not marked a write, so it stays out until that tool says so. The Assistant
 # reads (a person's own chat, what it learned, a shared chat, the waiting cards) were never in the hand list either;
 # `meeting granola sync` starts a sync, a POST its tool does not mark as a write, and `meeting pending` was not listed.
+# The `tool`, `github` and `repo` reads were never in the hand list; `tool check` POSTs a fresh check of a tool's keys.
 UNDECIDED = (
     "assistant learned",
     "assistant proposals",
@@ -174,6 +175,13 @@ UNDECIDED = (
     "automations template",
     "task run",
     "tasks run",
+    "github installed",
+    "github status",
+    "repo show",
+    "tool activity",
+    "tool check",
+    "tool index",
+    "tool query-search",
 )
 
 
