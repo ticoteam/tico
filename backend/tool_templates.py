@@ -93,11 +93,6 @@ def _dict(value: Any) -> dict[str, Any]:
     return value or {}
 
 
-def _mod(name: str) -> Any:
-    """A neighbour imported when used (most import this module back, or much of the backend), typed as Any."""
-    return importlib.import_module("." + name, __package__)
-
-
 # ---- a template
 
 
@@ -322,7 +317,7 @@ def _values(c: Any, vault: Any, spec: Any, tool_id: Any, keys: Any) -> Any:
 def proxy_auth(c: Any, vault: Any, tool: Any, spec: Any, subject: Any) -> Any:
     """What a call through the proxy by `subject` sends: {credential (the first secret key used, for the call's log),
     level, reads_only, headers, query, secrets}. Raises a 403 Problem naming what is missing."""
-    api_tools: Any = _mod("api_tools")
+    api_tools: Any = importlib.import_module(".api_tools", __package__)
 
     keys, level = api_tools.keys_for(c, tool["id"], subject)
     values = _values(c, vault, spec, tool["id"], keys)
@@ -387,8 +382,8 @@ def run_env(c: Any, vault: Any, settings: Any, subject: Any, only: Any = None) -
     `proxy-token`, the proxy's address variable with its address, a setting as its value's digest. The same choices
     as credential-runtime (backend/credentials.py), with nothing minted, revealed or recorded. `only`: just these
     variables (and their keys' proxy addresses), the ones a change can touch."""
-    tool_proxy: Any = _mod("tool_proxy")
-    credentials: Any = _mod("credentials")
+    tool_proxy: Any = importlib.import_module(".tool_proxy", __package__)
+    credentials: Any = importlib.import_module(".credentials", __package__)
     granted: Any = credentials.granted
     held_at_read: Any = credentials.held_at_read
 
@@ -561,7 +556,7 @@ def _union(c: Any, keys: Any) -> Any:
     """Grants so that whoever held one of the account's keys explicitly holds every variable of it at their level:
     [{id, subject, env, level}] made. A bot already given a variable by a key outside the account keeps that one (one value per
     variable)."""
-    effective_grant: Any = _mod("credentials").effective_grant
+    effective_grant: Any = importlib.import_module(".credentials", __package__).effective_grant
 
     holders: dict[str, Any] = {}
     for key in keys:
@@ -726,7 +721,7 @@ def _ask(c: Any, template_id: Any, label: Any, parts: Any, gained: Any) -> Any:
 
 
 def _tools_owner(c: Any) -> Any:
-    page_owners: Any = _mod("page_owners")
+    page_owners: Any = importlib.import_module(".page_owners", __package__)
 
     return page_owners.owner(c, "tools", fallback=False)
 
@@ -803,8 +798,8 @@ def latest_group(c: Any, tool_id: Any) -> Any:
 def ungroup(c: Any, who: Any, vault: Any, tool_id: Any) -> Any:
     """Split a grouped tool back as it was before its latest `tool.grouped`: its parts made again with their keys and
     settings, the grants the grouping made taken back, its name and template restored. Calls and checks stay."""
-    api_tools: Any = _mod("api_tools")
-    TA: Any = _mod("tool_access")
+    api_tools: Any = importlib.import_module(".api_tools", __package__)
+    TA: Any = importlib.import_module(".tool_access", __package__)
 
     TA.require(c, who, TA.tool(tool_id=tool_id), action=TA.EDIT, admins=vault.admins, auth=vault.auth)
     api_tools._readable(c, who, tool_id, vault.admins)
@@ -1015,8 +1010,8 @@ def classified(text: Any, template: Any = "") -> Any:
 def paste(c: Any, who: Any, vault: Any, tool_id: Any, body: Any) -> Any:
     """Store a classified paste on a tool in one step: each secret as a Read and write key under its variable, each id
     or setting as a setting (a value tool_settings refuses as one is a key), and the template when one matched."""
-    api_tools: Any = _mod("api_tools")
-    TA: Any = _mod("tool_access")
+    api_tools: Any = importlib.import_module(".api_tools", __package__)
+    TA: Any = importlib.import_module(".tool_access", __package__)
 
     TA.require(c, who, TA.tool(tool_id=tool_id), action=TA.EDIT, admins=vault.admins, auth=vault.auth)
     tool = api_tools._readable(c, who, tool_id, vault.admins)
@@ -1048,8 +1043,8 @@ def paste(c: Any, who: Any, vault: Any, tool_id: Any, body: Any) -> Any:
 
 def set_template(c: Any, who: Any, vault: Any, tool_id: Any, value: Any) -> Any:
     """A tool's template: a known one by id, the tool's own, or none (null)."""
-    api_tools: Any = _mod("api_tools")
-    TA: Any = _mod("tool_access")
+    api_tools: Any = importlib.import_module(".api_tools", __package__)
+    TA: Any = importlib.import_module(".tool_access", __package__)
 
     TA.require(c, who, TA.tool(tool_id=tool_id), action=TA.EDIT, admins=vault.admins, auth=vault.auth)
     api_tools._readable(c, who, tool_id, vault.admins)
@@ -1094,9 +1089,9 @@ def install(app: Any, store: Any) -> Any:
     `POST …/paste` and `POST …/ungroup` (whoever manages the tool)."""
     from fastapi import Request
 
-    api_tools: Any = _mod("api_tools")
-    TA: Any = _mod("tool_access")
-    validate_identity: Any = _mod("auth").validate_identity
+    api_tools: Any = importlib.import_module(".api_tools", __package__)
+    TA: Any = importlib.import_module(".tool_access", __package__)
+    validate_identity: Any = importlib.import_module(".auth", __package__).validate_identity
 
     def vault() -> Any:
         return app.state.vault
