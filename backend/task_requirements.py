@@ -10,7 +10,8 @@ In a release); the source's condition says where it stands.
 What met a requirement is its newest answer on the visit that is not undone (`answers`):
 
 - `done`: the owner said the stage's work is finished (owner_done).
-- `ok`: the named person approved. `no`: they sent it back, with notes.
+- `ok`: the named person approved. `no`: they sent it back, with notes. `again`: the owner said done again after a
+  send back, so it waits on the person again (answers.reopen_sent_back; older rows are a Look again).
 - `give`: a stage's OK was given to another person, named in `notes`. It waits on them now.
 - `pushed_past`: someone moved the task on without it, with the reason in `notes`. Any kind.
 
@@ -44,13 +45,16 @@ KIND_NAMES = {
 }
 # Kinds whose "Who OKs" switch means something. Elsewhere it reads as `none`.
 OK_KINDS = ("ok", "page")
-# Answers that steer an OK instead of meeting it: a send back, a give. They mean that only on the kinds in STEERED.
-STEERS = ("no", "give")
+# Answers that steer an OK instead of meeting it: a send back, an ask again, a give. They mean that only on the kinds in
+# STEERED. `again` is written only by the owner saying done after a send back (answers.reopen_sent_back); stored rows
+# from the retired Look again read the same, so undoing one never reads as the answer that moved the task.
+STEERS = ("no", "again", "give")
 STEERED = ("ok", "page")
 
 
 def steers(kind: str, value: object) -> bool:
-    """Whether an answer of this value steers a requirement of this kind (send back, give) instead of meeting it."""
+    """Whether an answer of this value steers a requirement of this kind (send back, ask again, give) instead of
+    meeting it."""
     return kind in STEERED and value in STEERS
 
 

@@ -803,7 +803,7 @@ def shared_tasks_sql(hidden, prefix=""):
 
 
 # How an OK's answer reads in a draft.
-_ANSWER_WORDS = {"ok": "OK", "no": "Sent back"}
+_ANSWER_WORDS = {"ok": "OK", "no": "Sent back", "again": "Asked to look again"}
 WAITING_MAX = 8  # tasks a request or a draft lists as waiting on someone else
 WAITING_SCAN = 50  # newest open tasks whose waits are read for that list
 

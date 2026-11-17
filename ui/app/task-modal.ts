@@ -1007,13 +1007,17 @@ function taskWaitHolder(data: ModalDetail, t: ModalTask | null, id: string): str
   const owner = String(rows.find(k => String(k.id) === id)?.owner_id || '');
   return owner.includes(':') ? owner : '';
 }
+// A ❓ waits under its mark's id, `qmark:<mark id>` (backend/question_marks.py wait_id).
+const taskTurnIsQmark = (id: unknown) => String(id || '').startsWith('qmark:');
 // The rows at the end of the chat that say what is happening now: a run at work (taskLiveHTML), else what the bot's next
-// run waits for, else whose turn it is; a deferred hand-over; and, whatever else shows, the reader's own ask with Answer.
+// run waits for, else whose turn it is; a deferred hand-over; and, whatever else shows, the reader's own OK with Answer.
+// The reader's own ❓ has no row: it is the bot's message with its ? mark, and their reply in the composer clears it.
 function taskStateHTML(state: TaskChatState, data: ModalDetail, sent = '') {
   const t = data.task || state.dialog.liveTask || null;
   const live = taskLiveHTML(data.execution, state.stopping, sent);
   const turn = t && !taskFinished(t) ? t.turn : null, me = myActor();
-  const yours = !!turn?.ask && !!turn.requirement_id && !!me && turn.who === me && !!turn.line;
+  const myQmark = !!turn && !!me && turn.who === me && taskTurnIsQmark(turn.requirement_id);
+  const yours = !!turn?.ask && !!turn.requirement_id && !!me && turn.who === me && !!turn.line && !myQmark;
   const owner = String(t?.owner_id || '');
   // A row names whoever it is about, face first; with nobody to name it has no face, and a word alone leads it
   // ("Waiting on you").
@@ -1030,7 +1034,7 @@ function taskStateHTML(state: TaskChatState, data: ModalDetail, sent = '') {
   // or a bot's turn always leads with who it is; a raw id never shows. Someone else's ask says what is owed ("Ben to
   // answer"), so the question does not read as theirs. A task it waits on (one it filed, one it depends on) is named by
   // whoever has that task when the reader can see it, else the row leads with "Waiting on a task".
-  if (!now && turn?.line && !yours) {
+  if (!now && turn?.line && !yours && !myQmark) {
     const other = turn.state === 'tasks' && turn.who ? String(turn.who) : '';
     const who = String(turn.who || '').includes(':') ? String(turn.who) : other ? taskWaitHolder(data, t, other) : '';
     const word = who && turn.ask ? 'to answer' : who && turn.state === 'bot' && turn.running ? 'working' : other && !who ? 'waiting on a task' : '';

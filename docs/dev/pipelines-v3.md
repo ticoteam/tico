@@ -734,7 +734,8 @@ stage), Do (from the bot's state), Let them see (from the task's readers).
 - **Approve:** the requirement is met. If it was the last one, the task moves in the same step. Undo shows for 10 seconds
   and is an ordinary move back.
 - **Send back:** the task stays in its stage and it is the bot's turn, with your notes. The next version comes back
-  marked with what changed, next to your notes.
+  marked with what changed, next to your notes. On a stage's OK, the owner saying done again asks you again: it is back
+  in your Needs you.
 - **Answer:** the reply in the chat is saved as the answer and clears the ❓. The bot is woken once with it. A paused bot gets it when it can run.
 - **Give to…:** the requirement gets the other person's name and moves to their list.
 - **If the task moves back or closes,** the ask ends with it and leaves your list.

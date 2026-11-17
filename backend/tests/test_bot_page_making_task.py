@@ -2,7 +2,7 @@
 until it is live (#411): the ask on that task, opened by the one button for the person it is addressed to, whose it is
 for anyone else, else who is still making it. Never a Finish setup button that only opens the Info tab."""
 
-from backend import question_marks
+from backend import openapi_v2, question_marks
 from backend.store import H
 from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import claim, get
@@ -47,6 +47,8 @@ def test_the_start_ok_is_the_button_for_the_person_asked_and_named_for_anyone_el
     assert mine["cause"] == "Builder 3 is waiting for your answer"
     assert mine["fix"] == "open_ask" and mine["task"]["id"] == task_id
     assert mine["ask"] == {"kind": "answer", "mine": True, "line": ASK}
+    ask_schema = openapi_v2.SCHEMAS["BotDetail"]["properties"]["cant_run"]["properties"]["ask"]["properties"]
+    assert mine["ask"]["kind"] in ask_schema["kind"]["enum"], "BotDetail says a ❓ is an answer"
 
     theirs = top_line(api, "ben-test")  # an Admin, not the one asked
     assert theirs["cause"].startswith("Builder 3 is waiting for ") and theirs["cause"].endswith("'s answer")

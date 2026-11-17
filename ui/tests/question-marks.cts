@@ -104,6 +104,21 @@ const groupOf = (page: Page, id: string) => page.locator(`[data-need="${id}"]`)
         assert.deepEqual(errors, []);
       } finally { await page.close(); }
     }
+    // The reader's own ❓ is the turn: no "Waiting on you" row with Answer under the chat, only the marked message and
+    // the composer. An OK that is theirs keeps its row.
+    {
+      const {tasks, comments} = world();
+      tasks.find(t => t.id === 't-4')!.turn = {state: 'person', who: 'human:ana', line: LINE, since: ago(30), until: null, ask: true, requirement_id: 'qmark:q1'};
+      const {page, errors} = await open(browser, {tasks, needs: [], comments, hash: '#/task/t-4'});
+      try {
+        await page.locator('#task-modal[open] [data-message="m-q1"] .qmark').waitFor();
+        assert.equal(await page.locator('#task-modal[open] .th-status-ask').count(), 0, 'a ❓ has no Answer row');
+        assert.equal(await page.locator('#task-modal[open] .th-status').filter({hasText: LINE}).count(), 0, 'nor a turn row repeating it');
+        await page.evaluate(() => { location.hash = '#/task/t-1'; });
+        await page.locator('#task-modal[open] .th-status-ask [data-task-answer="r1"]').waitFor();
+        assert.deepEqual(errors, []);
+      } finally { await page.close(); }
+    }
     // Someone else's ❓ (Sam's): the mark in the timestamp's muted tone. Opening the task from a link lands on the
     // window itself, with no focus ring on any control.
     {

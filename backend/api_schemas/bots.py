@@ -105,7 +105,8 @@ SCHEMAS.update(
                         "ask": {
                             "type": "object",
                             "properties": {
-                                "kind": {"enum": ["ok"]},
+                                # ok: an OK (an approval); answer: a ❓ on the task's chat (org_routes.making).
+                                "kind": {"enum": ["ok", "answer"]},
                                 "mine": {"type": "boolean"},
                                 "line": {"type": "string"},
                             },

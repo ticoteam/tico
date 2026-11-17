@@ -78,9 +78,10 @@ The Product and Engineering tables are in `backend/migrations/20261110213830_pro
 answer and an added requirement leave it alone. After the cut-over a field edit (a new title, a label) raises it too.
 It says "this row changed since you looked", not progress: `progress_mark` does not read it.
 
-`answers.answer` values: `done` (owner_done), `ok` and `no` (ok, and a page's person OK), `give` (a stage's OK given to the
-person in `notes`), `pushed_past` (any kind, with the reason in `notes`). `no` and `give` steer only an `ok` or a `page`
-(`task_requirements.steers`). A requirement is met for a visit by its newest answer that is not undone. It waits on the
+`answers.answer` values: `done` (owner_done), `ok` and `no` (ok, and a page's person OK), `again` (the owner said done
+again after a `no` on a stage's OK, which asks the person again: `answers.reopen_sent_back`; older rows are a Look
+again), `give` (a stage's OK given to the person in `notes`), `pushed_past` (any kind, with the reason in `notes`).
+`no`, `again` and `give` steer only an `ok` or a `page` (`task_requirements.steers`). A requirement is met for a visit by its newest answer that is not undone. It waits on the
 person of its newest `give` that is not undone, else on its `person_id`, skipping anyone who has left or was removed
 (`task_requirements.person_of`). With nobody left it names nobody, so any person may answer it.
 

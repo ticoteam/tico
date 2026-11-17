@@ -149,6 +149,45 @@ def test_send_back_needs_notes_and_wakes_the_bot_once_with_them_word_for_word(c,
     assert H._one(c, "SELECT COUNT(*) AS n FROM answers WHERE requirement_id=?", (rid,))["n"] == 1
 
 
+def test_done_again_after_a_send_back_asks_the_approver_again_and_their_ok_moves_it_on(c, general):
+    review = X.pipeline(
+        c,
+        "retry",
+        "Retry",
+        stages=[
+            {
+                "name": "Review",
+                "owner": ANA,
+                "requirements": [{"kind": "owner_done"}, {"kind": "ok", "person": BEN, "line": "OK the note"}],
+            },
+            {"name": "Publish", "owner": ANA, "requirements": [{"kind": "owner_done"}]},
+        ],
+    )
+    done, rid = review["requirements"]["Review"]
+    row = X.new_task(c, ANA, "Review the launch note", pipeline_id="retry", assignee=ANA)
+    A.answer(c, row["id"], done, ANA, "done")
+    back = A.answer(c, row["id"], rid, BEN, "no", "Change the headline")
+    mine = lambda: [n for n in W.needs(c, BEN) if n.get("task_id") == row["id"]]  # noqa: E731
+    assert mine() == []
+    with _refused("task_not_met"):
+        H.task_move(c, ANA, row["id"], E.NEXT)
+
+    again = H.task_done(c, ANA, row["id"], "New headline.")
+    assert again["stage"]["name"] == "Review"
+    assert len(mine()) == 1, "back in Ben's Needs you"
+    wait = W.headline(c, row["id"])
+    assert (wait.state, wait.who) == ("person", BEN)
+    history = c.execute(
+        "SELECT answer, notes, undone_at FROM answers WHERE requirement_id=? ORDER BY created_at", (rid,)
+    )
+    assert [tuple(r) for r in history] == [("no", "Change the headline", None), ("again", "New headline.", None)]
+    with _refused("task_not_met"):
+        H.task_done(c, ANA, row["id"])  # once more: nothing is sent back, and it waits on Ben
+    assert A.answer(c, row["id"], rid, BEN, "ok")["stage"]["name"] == "Publish"
+    with _refused("task_changed"):
+        A.undo(c, back["answer_id"], BEN)  # the send back did not move it
+
+
 def test_a_stage_ok_that_names_nobody_is_any_persons_and_never_a_bots(c, general):
     stages = ({"name": "Sign", "owner": "bot:builder", "requirements": [{"kind": "ok", "line": "OK the lease"}]},)
     X.pipeline(c, "legal", "Legal", stages)
@@ -396,6 +435,23 @@ def test_undo_of_a_send_back_after_the_task_moved_on_is_refused(c, build):
     assert A.answer(c, row["id"], rid, ANA, "ok")["status"] == "done"  # she looked again and OK'd it
     with _refused("task_changed"):
         A.undo(c, back["answer_id"], ANA)  # the send back did not move it
+
+
+def test_undo_of_an_old_look_again_after_the_task_moved_on_is_refused(c, build):
+    row = _in_review(c, build)
+    rid = build["requirements"]["Review"][0]
+    A.answer(c, row["id"], rid, ANA, "no", "Keep the header")
+    # A Look again from before it was retired: kept in answers, and nothing writes one by hand now.
+    aid = H.new_id()
+    c.execute(
+        "INSERT INTO answers (id, visit_id, requirement_id, by_id, answer, created_at) VALUES (?,?,?,?,?,?)",
+        (aid, row["visit"]["id"], rid, "bot:reviewer", "again", H.now()),
+    )
+    assert W.headline(c, row["id"]).who == ANA, "it asks Ana again"
+    assert A.answer(c, row["id"], rid, ANA, "ok")["status"] == "done"
+    with _refused("task_changed"):
+        A.undo(c, aid, "bot:reviewer")  # the Look again did not move it
+    assert E.task(c, row["id"])["status"] == "done"
 
 
 def test_undo_of_a_send_back_cancels_the_wake_no_run_took(c, build):

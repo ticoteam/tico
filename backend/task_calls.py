@@ -221,6 +221,14 @@ def task_done(
             return A.answer(
                 conn, task_id, own.requirement["id"], actor, "done", note or None, seen_version=seen_version
             )
+    if row["status"] == "open" and says:
+        # Done again after a send back: each stage OK sent back asks its approver again (answers.reopen_sent_back),
+        # and the task waits on them.
+        E.check_version(conn, actor, row, seen_version)
+        if A.reopen_sent_back(conn, row, actor, note or None):
+            with task_effects.because(actor):
+                E.changed(conn, task_id, actor)
+            return E.task(conn, task_id) or row
     with task_effects.because(actor):
         return E.move(conn, task_id, NEXT, actor, None, seen_version)
 
@@ -697,7 +705,8 @@ def _may(
         asked = viewer == person or (person is None and human)
     if kind == "owner_done" and not standing.met and works:
         out += ["done", "give"]
-    sent_back = bool(answer) and (answer or {}).get("answer") == "no"  # the bot revises and asks again
+    # Sent back: the owner revises and says done again, which asks again (answers.reopen_sent_back).
+    sent_back = bool(answer) and (answer or {}).get("answer") == "no"
     if kind == "ok" and not standing.met and not sent_back and asked:
         if standing.state == R.WAITING and not R.outside(standing.on):
             out += ["ok", "no"]  # not while it is held on Jev or back with the owner (validate_gate.held)

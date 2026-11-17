@@ -35,6 +35,9 @@ is_bot: Callable[[object], bool] = _core.is_bot
 is_human: Callable[[object], bool] = _core.is_human
 
 DONE, OK, NO, GIVE, PUSHED_PAST = "done", "ok", "no", "give", "pushed_past"
+# What the owner saying done again writes on each stage OK that was sent back (reopen_sent_back): it waits on its
+# approver again. Nobody answers it by hand: there is no Look again any more.
+AGAIN = "again"
 # The kinds a person (or a named bot) answers by hand. A page is answered once Jev has looked (task_requirements._page).
 BY_HAND = ("owner_done", "ok", "page")
 
@@ -264,6 +267,21 @@ def _write(
     return answer_id
 
 
+def reopen_sent_back(conn: "sqlite3.Connection", row: Row, by: str, note: str | None = None) -> list[str]:
+    """The owner says done again after a send back (task_calls.task_done, or `done` here): each of the stage's OKs that
+    was sent back on this visit waits on its approver again, back in their Needs you. An `again` answer by whoever said
+    done, with their note, so the send back stays in the history. The answers written."""
+    visit: Row = row.get("visit") or {}
+    if row.get("status") != "open" or not visit.get("id"):
+        return []
+    newest = R.newest_answers(conn, visit["id"])
+    written: list[str] = []
+    for requirement in R.on_stage(conn, visit["stage_id"]):
+        if requirement["kind"] == "ok" and (newest.get(requirement["id"]) or {}).get("answer") == NO:
+            written.append(_write(conn, row, requirement["id"], by, AGAIN, note))
+    return written
+
+
 def _heads(conn: "sqlite3.Connection", row: Row) -> str | None:
     """The newest commits of the task's linked PRs, as an answer on a page keeps them: a person's OK counts only while
     they are still the newest, and a bot's review of the commits after the reviews names the ones it read
@@ -389,6 +407,8 @@ def answer(
         out["answer_id"] = newest["id"]
         return out
     answer_id = _write(conn, row, requirement_id, by, value, notes, pinned)
+    if requirement["kind"] == "owner_done":
+        reopen_sent_back(conn, row, by, notes)
     if requirement["kind"] == "ok" and value != OK:
         from . import task_asks
 
