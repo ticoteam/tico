@@ -204,7 +204,7 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 def connection(
     store: Any, vault: Any, cid: str, *, rehearsal: bool = False, make: Make | None = None, at: str | None = None
 ) -> str:
-    """Sync one Stripe connection. `withheld` in rehearsal, `gone`, `idle`, `no_token`, else `ok` or `failed`."""
+    """Sync one Stripe connection. `withheld` in rehearsal, `gone`, `idle`, `refused`, `no_token`, else `ok` or `failed`."""
     now = at or _now()
     with store.read() as c:
         row = SK.get(c, "fin_connections", cid)
@@ -220,6 +220,10 @@ def connection(
     due = not row["next_sync_at"] or str(row["next_sync_at"]) <= now
     if not (due or waiting):
         return "idle"
+    refused = banking.unusable_key(store, row)
+    if refused:  # never read or send a key its connector may not use (a grant revoked, a person gone)
+        _failed(store, cid, refused, now, str(row["status"]))
+        return "refused"
     provider = _provider(store, vault, str(row["credential_ref"] or ""), make)
     if provider is None:
         _failed(store, cid, "the Stripe key is missing; store it again in Settings", now, str(row["status"]))

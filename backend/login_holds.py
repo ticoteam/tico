@@ -1,7 +1,8 @@
 """A usage limit belongs to a provider login, not to the bot that met it.
 
 A login is (computer, subscription profile or "" for the computer's own login, runtime). When a turn ends on that
-login's usage limit, a hold is saved here, in the database, so it outlives a restart of the runner or the server:
+login's usage limit, a hold is saved in the database (`holds`, kind `usage_limit` on the login: backend/holds.py), so it
+outlives a restart of the runner or the server:
 - until the reset the provider gave (Claude says it in words: "resets 2:40am (UTC)"), honored even when it is days
   away, as long as it is in the future and within LIMIT_RESET_MAX;
 - otherwise for BACKOFF[n] after the n-th limit in a row on that login (30, 50, then 120 minutes at most);
@@ -29,10 +30,16 @@ from datetime import timedelta, timezone
 
 from clients import gateway
 
+from . import holds
 from .prompt_cache import CACHE_WARM_S
 from .store import H
 
-PREFIX = "login-hold:"
+PREFIX = "login-hold:"  # a login's name as an outage source; its hold's holdable_id is the rest
+# The hold's fields kept in the row's own columns; the rest are its details.
+COLUMNS = {"until": "until_at", "streak": "streak", "probe_job": "probe_job_id", "probe_at": "probe_at"}
+OPEN_SQL = (  # holds_open, as holds.OPEN_SQL
+    "SELECT * FROM holds INDEXED BY holds_open WHERE kind='usage_limit' AND holdable_type='login' AND released_at IS NULL"
+)
 # Seconds held after the 1st, 2nd and later limits in a row with no reset given; the second comes back while the bot's
 # session is still cached (backend/prompt_cache.py).
 BACKOFF = (1800, CACHE_WARM_S, 7200)
@@ -182,26 +189,46 @@ def _canonical(c, runner_id, profile, runtime, loads=None):
     return "" if report.get("shared_login") is True else profile
 
 
-def get(c, runner_id, profile, runtime, loads=None):
-    """The hold on the login, as a dict ({} for none). `loads`: the claim's set of every hold (claim_loads), when read."""
-    k = key(runner_id, profile, runtime)
-    if loads is not None:
-        row = (loads.holds[k],) if k in loads.holds else None
-    else:
-        from .read_cache import metadata
+def _login(runner_id, profile, runtime):
+    return key(runner_id, profile, runtime)[len(PREFIX) :]
 
-        row = metadata(c, k)
-    try:
-        value = json.loads(row[0]) if row else {}
-    except ValueError:
+
+def _hold(row):
+    """An open hold row as the login's hold: its details with its end, streak and probe ({} for none)."""
+    if not row:
         return {}
-    return value if isinstance(value, dict) else {}
+    try:
+        value = json.loads(row["details"] or "{}")
+    except ValueError:
+        value = {}
+    return {**(value if isinstance(value, dict) else {}), **{name: row[col] for name, col in COLUMNS.items()}}
+
+
+def get(c, runner_id, profile, runtime, loads=None):
+    """The hold on the login, as a dict ({} for none). `loads`: the claim's set of every open hold (claim_loads)."""
+    login = _login(runner_id, profile, runtime)
+    if loads is not None:
+        return _hold(loads.holds.get((holds.LOGIN_LIMIT, "login", login, "")))
+    return _hold(holds.get(c, holds.LOGIN_LIMIT, "login", login))
+
+
+def every(c):
+    """Every login's hold now, by login."""
+    return [_hold(row) for row in c.execute(OPEN_SQL + " ORDER BY holdable_id")]
 
 
 def _save(c, hold):
-    c.execute(
-        "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        (key(hold["runner_id"], hold["profile"], hold["runtime"]), json.dumps(hold)),
+    holds.put(
+        c,
+        holds.LOGIN_LIMIT,
+        "login",
+        _login(hold["runner_id"], hold["profile"], hold["runtime"]),
+        actor=H.KEEPER,
+        details={name: value for name, value in hold.items() if name not in COLUMNS},
+        streak=int(hold.get("streak") or 0),
+        until_at=hold.get("until"),
+        probe_at=hold.get("probe_at"),
+        probe_job_id=hold.get("probe_job"),
     )
 
 
@@ -331,8 +358,10 @@ def record(
 
 
 def clear(c, runner_id, profile, runtime):
-    """A turn worked on the login: it is no longer held."""
-    c.execute("DELETE FROM registry_metadata WHERE key=?", (key(runner_id, profile, runtime),))
+    """A turn worked on the login: it is no longer held (kept as history)."""
+    holds.release(
+        c, holds.LOGIN_LIMIT, "login", _login(runner_id, profile, runtime), actor=H.KEEPER, how="probe_passed"
+    )
 
 
 def try_now(c, runner_id, profile, runtime, now=None):
@@ -405,20 +434,11 @@ def on_runner(c, runner_id):
     """Every saved hold on the computer's logins, oldest first, and on the subscriptions it is given."""
     from .model_subscriptions import given_to
 
-    out = []
-    keys = [key("", subscription_login(sid), runtime) for runtime, sid in given_to(c, runner_id)]
-    rows = c.execute(
-        "SELECT value FROM registry_metadata WHERE key LIKE ? ORDER BY key", (f"{PREFIX}{runner_id}|%",)
+    own = c.execute(  # "<runner>|..." up to "<runner>}": "}" sorts right after "|"
+        OPEN_SQL + " AND holdable_id>=? AND holdable_id<? ORDER BY holdable_id", (runner_id + "|", runner_id + "}")
     ).fetchall()
-    rows += [r for k in keys for r in c.execute("SELECT value FROM registry_metadata WHERE key=?", (k,))]
-    for (value,) in rows:
-        try:
-            hold = json.loads(value)
-        except ValueError:
-            continue
-        if isinstance(hold, dict):
-            out.append(hold)
-    return out
+    given = [get(c, "", subscription_login(sid), runtime) for runtime, sid in given_to(c, runner_id)]
+    return [_hold(row) for row in own] + [hold for hold in given if hold]
 
 
 def for_attempt(c, attempt_id):
@@ -427,17 +447,11 @@ def for_attempt(c, attempt_id):
     if not attempt_id:
         return {}
     found = {}
-    for (value,) in c.execute(
-        "SELECT value FROM registry_metadata WHERE key LIKE ? AND value LIKE ?", (PREFIX + "%", f'%"{attempt_id}"%')
-    ):
-        try:
-            hold = json.loads(value)
-        except ValueError:
-            continue
-        if isinstance(hold, dict) and hold.get("attempt_id") == attempt_id:
-            if hold.get("ended"):
-                return hold
-            found = found or hold
+    for row in c.execute(OPEN_SQL + " AND json_extract(details,'$.attempt_id')=? ORDER BY holdable_id", (attempt_id,)):
+        hold = _hold(row)
+        if hold.get("ended"):
+            return hold
+        found = found or hold
     return found
 
 

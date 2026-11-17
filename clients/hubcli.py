@@ -421,10 +421,6 @@ class HubParser(argparse.ArgumentParser):
         self.exit(2, f"{self.prog}: error: {message}{hint}\n")
 
 
-# A repeated event's edit: this one occurrence, it and the later ones, or the whole series.
-CALENDAR_SCOPES = ("this", "following", "all")
-
-
 def _group_subparsers(sub, name):
     """The subcommands of group `name`, already added by a spec, so the hand parser can add one leaf it still builds."""
     return next(a for a in sub.choices[name]._actions if isinstance(a, argparse._SubParsersAction))
@@ -853,12 +849,9 @@ def parser():
 
     cli_spec.add(sub, market_commands.CLI)  # tico market: clients/commands/market.py
 
-    listen = sub.add_parser(
-        "listening", help="Listening's sources: the ones due a read, and saving what a read found"
-    ).add_subparsers(dest="sub")
-    s = listen.add_parser("sources", help="the Search sources due a read")
-    s.add_argument("--automation", help="only this listening's sources")
-    s.set_defaults(fn="listening sources")
+    # `tico listening` (clients/commands/listening.py): every leaf but save, which reads a file or stdin here.
+    cli_spec.add(sub, listening_commands.LISTENING)
+    listen = _group_subparsers(sub, "listening")
     s = listen.add_parser("save", help="what one read of one source found, from a JSON file")
     s.add_argument("--source", required=True, help="source id, from `tico listening sources`")
     s.add_argument("--file", required=True, help="JSON: {status, error, items: [...]}; - for stdin")
@@ -904,13 +897,7 @@ def parser():
     s.add_argument("--before", help="`next` from the page before")
     s.set_defaults(fn="audit")
 
-    s = sub.add_parser("event-types", help="every event Tico names, with a one-line description and an example payload")
-    s.add_argument(
-        "--group",
-        help="only this group: task, approval, needs_you, bot, release, meeting, strategy, market, "
-        "inbound, health, webhook, tico, custom",
-    )
-    s.set_defaults(fn="event-types")
+    cli_spec.add(sub, automations_commands.EVENT_TYPES)  # tico event-types: clients/commands/automations.py
     cli_spec.add(sub, webhooks.CLI)  # tico trigger: clients/commands/webhooks.py
     cli_spec.add(sub, webhooks.RELAY)  # tico relay: clients/commands/webhooks.py
     cli_spec.add(sub, calls.CALL)  # tico call: clients/commands/calls.py
@@ -1014,9 +1001,10 @@ def parser():
     s.add_argument("--file", required=True, help="the JSON body tico_external_sync takes")
     s.set_defaults(fn="external sync")
 
-    calendar = sub.add_parser("calendar", help="events, free times and bookings on calendars").add_subparsers(
-        dest="sub"
-    )
+    # `tico calendar` (clients/commands/calls.py): every leaf but list, whose tool depends on --json, and schedule,
+    # which reads --description-file on this computer.
+    cli_spec.add(sub, calls.CALENDAR)
+    calendar = _group_subparsers(sub, "calendar")
     s = calendar.add_parser("list", help="events on calendars (--who), or a company calendar's appointments")
     s.add_argument("--calendar", default="", help="roster email; default the company owner's")
     s.add_argument("--who", help="comma-separated people or bots, refs or emails; default you")
@@ -1025,41 +1013,7 @@ def parser():
     s.add_argument("--kinds", help="comma-separated: event, run, due, away (default all)")
     s.add_argument("--json", action="store_true", help="print the API response as JSON")
     s.set_defaults(fn="calendar list")
-    s = calendar.add_parser("free", help="times when people are free, within their working hours")
-    s.add_argument("--who", help="comma-separated people or bots; default you")
-    s.add_argument("--minutes", type=int, default=30, help="length of the free slot (default 30)")
-    s.add_argument("--within", metavar="DURATION", help="how far ahead to look, such as 5d")
-    s.add_argument("--json", action="store_true", help="print the API response as JSON")
-    s.set_defaults(fn="calendar free")
-    s = calendar.add_parser("add", help="book an event; a bot or the Assistant may book anyone a rule allows")
-    s.add_argument("--title", required=True)
-    s.add_argument("--start", required=True, help="ISO-8601 time with zone, or YYYY-MM-DD with --all-day")
-    s.add_argument("--end", required=True, help="ISO-8601 time with zone, or YYYY-MM-DD (exclusive) with --all-day")
-    s.add_argument("--who", help="comma-separated attendees, refs or emails")
-    s.add_argument("--repeat", help='words or an RRULE, such as "weekly on mon,wed" or "daily until 2026-12-31"')
-    s.add_argument("--calendar", help="whose calendar: a ref such as human:ana, or an email; default you")
-    s.add_argument("--all-day", action="store_true", help="start and end are dates")
-    s.add_argument("--notes", help="description for attendees")
-    s.add_argument("--no-meet", action="store_true", help="no Google Meet link")
-    s.add_argument("--json", action="store_true", help="print the API response as JSON")
-    s.set_defaults(fn="calendar add")
-    s = calendar.add_parser("move", help="move one occurrence, or a repeated event from it on with --scope")
-    s.add_argument("occurrence", help="occurrence id from calendar list or search")
-    s.add_argument("--start", required=True, help="ISO-8601 time with zone, or YYYY-MM-DD for all day")
-    s.add_argument("--end", help="same form as --start")
-    s.add_argument("--scope", choices=CALENDAR_SCOPES, help="for a repeated event: this, following or all")
-    s.add_argument("--json", action="store_true", help="print the API response as JSON")
-    s.set_defaults(fn="calendar move")
-    s = calendar.add_parser("cancel", help="cancel one occurrence, or a repeated event from it on with --scope")
-    s.add_argument("occurrence", help="occurrence id from calendar list or search")
-    s.add_argument("--scope", choices=CALENDAR_SCOPES, help="for a repeated event: this, following or all")
-    s.add_argument("--json", action="store_true", help="print the API response as JSON")
-    s.set_defaults(fn="calendar cancel")
-    s = calendar.add_parser("search", help="find events by words, with tokens such as with:ben or before:2026-12-01")
-    s.add_argument("q", metavar="words")
-    s.add_argument("--who", help="comma-separated calendars to search; default you")
-    s.add_argument("--json", action="store_true", help="print the API response as JSON")
-    s.set_defaults(fn="calendar search")
+    cli_spec.add(sub, calls.CALENDAR_AFTER_LIST, parents={("calendar",): calendar})
     s = calendar.add_parser("schedule", help="queue one calendar appointment")
     s.add_argument("--calendar", default="", help="roster email; default the company owner's")
     s.add_argument("--title", required=True)
@@ -1070,9 +1024,7 @@ def parser():
     s.add_argument("--description-file")
     s.add_argument("--no-meet", action="store_true")
     s.set_defaults(fn="calendar schedule")
-    s = calendar.add_parser("status", help="whether a queued appointment was created")
-    s.add_argument("id")
-    s.set_defaults(fn="calendar status")
+    cli_spec.add(sub, calls.CALENDAR_AFTER_SCHEDULE, parents={("calendar",): calendar})
 
     s = sub.add_parser("sql", help="read-only SQL over what you may see (docs/hub-sql.md)")
     s.add_argument("sql", help="one SELECT (or WITH, EXPLAIN QUERY PLAN)")
@@ -1236,18 +1188,7 @@ def parser():
     )
     s.add_argument("--title")
     s.set_defaults(fn="bot suggest-to-original")
-    s = bot.add_parser("repos", help="read or set a bot’s repository access")
-    s.add_argument("bot")
-    modes = s.add_mutually_exclusive_group()
-    modes.add_argument("--all", action="store_true")
-    modes.add_argument("--own", action="store_true")
-    modes.add_argument(
-        "--chosen",
-        nargs="*",
-        metavar="OWNER/REPO[:read|:write[+actions|-actions][+edit|-edit]]",
-        help="+actions lets the bot run workflows there, +edit edit workflow files (Owner or admin)",
-    )
-    s.set_defaults(fn="bot repos")
+    cli_spec.add(sub, bot_commands.BOT_REPOS, parents={("bot",): bot})  # clients/commands/bots.py
     # `tico repo` (clients/commands/tools.py and connections.py): every leaf but review and product-create.
     cli_spec.add(sub, tools_commands.REPO)
     repos = _group_subparsers(sub, "repo")
@@ -1286,24 +1227,7 @@ def parser():
     s.add_argument("--note", metavar="TEXT", help="one line for the admin (200 characters)")
     s.add_argument("--base", type=int, metavar="N", help="the version an update is based on (default: the latest)")
     s.set_defaults(fn="skill submit")
-    agent = sub.add_parser("agent", help="external agents: connect a Hermes profile to a bot").add_subparsers(
-        dest="sub"
-    )
-    pair = agent.add_parser(
-        "pair", help="approve or decline the code a Hermes profile printed when it asked to pair"
-    ).add_subparsers(dest="subsub")
-    s = pair.add_parser("show", help="preview the profile, computer and expiry without changing a credential")
-    s.add_argument("code")
-    s.set_defaults(fn="agent pair show")
-    s = pair.add_parser(
-        "approve", help="connect the profile that printed this code to a bot (BotOps, or its owner or an admin)"
-    )
-    s.add_argument("code", help="like K7QM-4F2P")
-    s.add_argument("--bot", required=True, help="the bot's slug; it must use the hermes harness")
-    s.set_defaults(fn="agent pair approve")
-    s = pair.add_parser("decline", help="turn down the profile that printed this code")
-    s.add_argument("code")
-    s.set_defaults(fn="agent pair decline")
+    cli_spec.add(sub, bot_commands.AGENT)  # tico agent: clients/commands/bots.py
     cli_spec.add(sub, org_commands.HUMAN)  # tico human: clients/commands/org.py
     cli_spec.add(sub, admin_commands.GROUP)  # tico group: clients/commands/admin.py
     setup = sub.add_parser("setup", help="Finish setup, the welcome wizard (the owner)").add_subparsers(dest="sub")

@@ -3,6 +3,8 @@
 Moved from clients/hubtools.py; clients/commands/__init__.py says how the table is put together."""
 
 import argparse
+import re
+import sys
 
 from clients.cli_spec import NULL, Arg, Command, Group
 from clients.tico import APIError
@@ -1378,5 +1380,103 @@ BOT = (
         "bot quarantine-clear",
         "lift a bot's quarantine so it works again (a person who manages the bot)",
         example="tico bot quarantine-clear builder --note 'the refused push was a test'",
+    ),
+)
+
+
+def chosen_grant(value):
+    """`owner/repo`, `owner/repo:read`, `owner/repo:write`, or a write grant with options: `+actions` (may run
+    workflows) and `+edit` (may edit workflow files), as in `owner/repo:write+actions+edit`. Left out, an option keeps
+    whatever setting the grant has; `-actions` or `-edit` turns it off."""
+    name, _, level = value.rpartition(":") if ":" in value else (value, "", "write")
+    access, *options = re.split(r"(?=[+-])", level)
+    flags = {}
+    for option in options:
+        flag = {"actions": "run_workflows", "edit": "edit_workflows"}.get(option[1:])
+        if not flag or flag in flags:
+            access = ""
+            break
+        flags[flag] = option[0] == "+"
+    if access not in ("read", "write") or access == "read" and flags:
+        raise APIError(
+            "validation",
+            f"'{value}': use owner/repo, :read, :write, or :write with +actions, -actions, "
+            "+edit or -edit (e.g. :write+actions+edit)",
+        )
+    return {"full_name": name, "access": access, **flags}
+
+
+def _repos_fields(fields):
+    """--all, --own or --chosen (each grant parsed by chosen_grant) set the mode; none of them reads the access. No
+    operation id is sent: the hand-built command never sent one."""
+    fields = {k: v for k, v in fields.items() if k != "operation_id"}
+    if "chosen" in fields:
+        fields["mode"] = "chosen"
+        fields["chosen"] = [chosen_grant(r) for r in fields["chosen"]]
+    return fields
+
+
+def _repos_run(api, fields):
+    """Read the access when no mode is given, else set it and say on stderr what the change took away (a switch to own
+    keeps the chosen rows, but they stop applying)."""
+    if "mode" not in fields:
+        return bot_repos_get(api, {"bot": fields["bot"]})
+    result = bot_repos_set(api, fields)
+    lost = [r["full_name"] + " (" + r["access"] + ")" for r in (result or {}).get("stopped") or []]
+    lost += [name + " (run workflows)" for name in (result or {}).get("workflows_stopped") or []]
+    lost += [name + " (edit workflow files)" for name in (result or {}).get("workflow_edits_stopped") or []]
+    lost += ["repository creation"] if (result or {}).get("creation_stopped") else []
+    lost += ["product repository creation"] if (result or {}).get("product_creation_stopped") else []
+    if lost:
+        print(f"{fields['bot']} no longer has: " + ", ".join(lost), file=sys.stderr)
+    return result
+
+
+# `tico bot repos` (after the hand-built bot leaves in clients/hubcli.py): tico_bot_repos_get without a mode, else
+# tico_bot_repos_set.
+BOT_REPOS = (
+    Command(
+        "bot repos",
+        "read or set a bot’s repository access",
+        tool="tico_bot_repos_set",
+        tools=("tico_bot_repos_get",),
+        args=(
+            Arg("mode", flag="--all", action="store_const", const="all", required=False),
+            Arg("mode", flag="--own", action="store_const", const="own", required=False),
+            Arg(
+                "chosen",
+                flag="--chosen",
+                nargs="*",
+                action="store",
+                metavar="OWNER/REPO[:read|:write[+actions|-actions][+edit|-edit]]",
+            ),
+        ),
+        exclusive=(("mode", "chosen"),),
+        omit=("all_access",),
+        convert=_repos_fields,
+        run=_repos_run,
+        example="tico bot repos builder --chosen acme/app:write+actions",
+    ),
+)
+
+# `tico agent pair ...`: connect a Hermes profile to a bot.
+AGENT = (
+    Group("agent", "external agents: connect a Hermes profile to a bot"),
+    Group("agent pair", "approve or decline the code a Hermes profile printed when it asked to pair"),
+    Command(
+        "agent pair show",
+        "preview the profile, computer and expiry without changing a credential",
+        example="tico agent pair show K7QM-4F2P",
+    ),
+    Command(
+        "agent pair approve",
+        "connect the profile that printed this code to a bot (BotOps, or its owner or an admin)",
+        args=(Arg("bot", flag="--bot"),),
+        example="tico agent pair approve K7QM-4F2P --bot hermes-1",
+    ),
+    Command(
+        "agent pair decline",
+        "turn down the profile that printed this code",
+        example="tico agent pair decline K7QM-4F2P",
     ),
 )

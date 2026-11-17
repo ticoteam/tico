@@ -111,7 +111,7 @@ def held_the_old_way(api, machine, attempt):
             "result=json_set(result,'$.limited',json('false')) WHERE id=?",
             (attempt["id"],),
         )
-        c.execute("DELETE FROM registry_metadata WHERE key LIKE 'login-hold:%'")
+        c.execute("DELETE FROM holds WHERE kind='usage_limit'")
         c.execute("UPDATE bot_status SET state='idle',focus='One run stopped; saved for later' WHERE bot='ops'")
 
 

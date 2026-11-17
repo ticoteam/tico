@@ -128,11 +128,8 @@ def sync(c, settings):
         # Reuse wake batching's history/digest carrier; retries retain their own jobs and checkpoints.
         if execution.cooling_off(c, settings, row['bot_id']):
             batch_waiters(c, row['bot_id'])
-    for (raw,) in c.execute(
-        'SELECT value FROM registry_metadata WHERE key LIKE ?', (login_holds.PREFIX + '%',)
-    ).fetchall():
-        hold = H._json(raw, {}) or {}
-        if not isinstance(hold, dict) or not hold.get('runner_id') or not hold.get('runtime'):
+    for hold in login_holds.every(c):
+        if not hold.get('runner_id') or not hold.get('runtime'):
             continue
         source = login_holds.key(hold['runner_id'], hold.get('profile'), hold['runtime'])
         count = counts.get((hold['runner_id'], hold.get('profile') or '', hold['runtime']), 0)
