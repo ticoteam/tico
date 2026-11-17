@@ -77,6 +77,15 @@ def run(store, onboarding, telemetry, vault=None):
             task_depends.on_release(c, releases.version(), settings.release_repo)
     except Exception as exc:  # noqa: BLE001 - one failed job must not prevent the remaining jobs
         telemetry.capture("depends_released", exc)
+    # Questions written before a question was a ❓ become a ❓ from the bot that asked them (backend/old_questions.py).
+    # Idempotent: what it carried over is withdrawn, so a later start finds nothing.
+    try:
+        from . import old_questions
+
+        with _transaction(store) as c:
+            old_questions.carry_over(c)
+    except Exception as exc:  # noqa: BLE001 - one failed job must not prevent the remaining jobs
+        telemetry.capture("old_questions", exc)
     # Once: a stored key that is a tool's setting (a host, a region, a profile) becomes that setting, on a tool each of
     # its holders still gets it from (backend/tool_settings.py move_once). It reads values, so it needs the vault.
     if vault is not None:
