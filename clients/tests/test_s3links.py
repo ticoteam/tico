@@ -146,7 +146,9 @@ def test_a_server_without_the_mapping_leaves_text_alone_with_the_hint():
     made = hubtools.BY_NAME["tico_task_create"]["fn"](
         api, {"owner": "human:ana", "title": "T", "message": "s3://acme-files/d.md"}
     )
-    assert made["sent"]["message"] == "s3://acme-files/d.md" and made["s3_links"]["unmapped"] == ["s3://acme-files/d.md"]
+    assert made["sent"]["message"] == "s3://acme-files/d.md" and made["s3_links"]["unmapped"] == [
+        "s3://acme-files/d.md"
+    ]
 
 
 @pytest.mark.parametrize(
