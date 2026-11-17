@@ -1268,6 +1268,11 @@ class Store:
                         H.KEEPER,
                     ),
                 )
+                if entry.get("repo"):
+                    from .repositories import note_named
+
+                    # The registry names it: chosen, unless it is the name Tico would give the bot anyway.
+                    note_named(c, entry["repo"], ("emp-" + slug, "bot-" + slug), self.settings.github_owner)
                 BS.write(c, slug, json.loads(encode(entry)))
             self.seed_goals(c)
             from . import groups as Groups

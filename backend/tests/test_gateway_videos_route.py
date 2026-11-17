@@ -2,10 +2,15 @@
 the job's state and GET its MP4 read it through the server. The Gateway is faked (no call leaves the test), and a video
 at its Finance budget's cutoff is refused before anything is sent."""
 
+import io
+import json
+import urllib.error
+
 from backend.tests.helpers.api import headers  # noqa: F401
 from clients import gateway as G
 
 JOB = "gv_" + "c" * 24
+REFUSAL = "This model always generates audio with the video. generate_audio cannot be set to false."
 
 
 def connect(api):
@@ -83,6 +88,38 @@ def test_the_video_routes_map_the_gateways_answers_to_plain_problems(api, monkey
     monkeypatch.setattr(G, "video_submit", lambda *a: (404, {}, "404"))
     refused = api.post("/api/v2/gateway/videos", json={"prompt": "x"}, headers=headers("ana-test"))
     assert (refused.status_code, refused.json()["error"]["code"]) == (503, "gateway_video_unavailable")
+
+
+def test_a_refused_video_says_the_gateways_reason(api, monkeypatch):
+    connect(api)
+    monkeypatch.setattr(G, "video_submit", lambda *a: (502, {"detail": REFUSAL}, "http"))
+    refused = api.post(
+        "/api/v2/gateway/videos", json={"prompt": "a kettle", "audio": False}, headers=headers("ana-test")
+    )
+    error = refused.json()["error"]
+    assert refused.status_code == 503 and error["code"] == "gateway_video_failed", refused.text
+    assert error["detail"] == f"Video failed: http: {REFUSAL}", refused.text
+    monkeypatch.setattr(G, "video_submit", lambda *a: (502, {}, "http"))
+    refused = api.post("/api/v2/gateway/videos", json={"prompt": "a kettle"}, headers=headers("ana-test"))
+    assert refused.json()["error"]["detail"] == "Video failed: http", refused.text
+
+
+def test_the_gateway_client_keeps_a_refusals_reason_trimmed_to_300_characters():
+    def refusing(answer):
+        def opener(request, timeout):
+            raise urllib.error.HTTPError(request.full_url, 502, "refused", {}, io.BytesIO(answer))
+
+        return opener
+
+    base = "https://hq.example/v1/gateway"
+    long = json.dumps({"error": "http", "detail": "  " + "x" * 400 + "  "}).encode()
+    assert G.video_submit(base, "gw-synthetic", {"prompt": "x"}, opener=refusing(long)) == (
+        502,
+        {"detail": "x" * 300},
+        "http",
+    )
+    bare = json.dumps({"error": "http"}).encode()
+    assert G.video_submit(base, "gw-synthetic", {"prompt": "x"}, opener=refusing(bare)) == (502, {}, "http")
 
 
 def test_a_video_request_is_checked_before_anything_is_sent(api, monkeypatch):

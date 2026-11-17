@@ -8,6 +8,17 @@ own "always a click" rule asks too. Only the person's tap on the card runs it.
 Secrets go through Credentials, never arbitrary API request bodies.
 """
 
+from dataclasses import replace
+from fastapi.responses import JSONResponse
+from . import team_rules, usage_limits
+from .auth import Identity
+from .onboarding import BOTOPS
+from . import rooms
+from . import settings_catalog
+from clients import gateway as gateway_client
+from . import gateway_connection
+from .store import H, Problem
+
 import json
 import re
 
@@ -979,3 +990,917 @@ def fix(path, code, status, acting, names, base=""):
     else:
         text = ROLE_FIX + "ask an owner or admin to change " + where
     return {"fix": text, "link": (base.rstrip("/") + "/" + link) if base else link}
+
+
+def configure(app, assistant_valid, auth, create_proposal, settings, store):
+    # tools_delegation builds its route table from this module's _routes, so it is imported once both exist.
+    from . import tools_delegation
+
+    # A person's request lends their rights for as long as the task it created (or that cites it) is open, up to
+    # botops_act.LEND_MAX_DAYS after they last spoke on it, and never again once someone else reopens it. A chat
+    # message with no open task lends them for a week; a new task filed from a message also needs it within the week,
+    # or one open task could renew another for ever.
+    DELEGATION_DAYS = 7
+    # Wakes a follow-through run may start from: the daily update, and a task's due, stall or routine notice.
+    FOLLOW_THROUGH_WAKES = ("update", "due", "stalled", "occurrence")
+
+    def open_task(task):
+        return bool(task) and task["status"] not in ("done", "closed")
+
+    def lending_task(c, task):
+        """An open task that still lends its requester's rights (`botops_act.lend_lapsed`)."""
+        return open_task(task) and not lend_lapsed(c, task)
+
+    def week_old(created):
+        return created < H.shift(H.now(), days=-DELEGATION_DAYS)
+
+    def handed_over(c, task, botops):
+        """Who gave BotOps a task a person asked for, when it was not that person: the actor of the last owner change, or
+        "" when there is none to name. None when BotOps has owned it since it was filed, or the requester moved it to
+        BotOps themselves (not through BotOps or the Assistant). Otherwise any bot that owns a person's task could
+        reassign it to BotOps and borrow their rights for its next run."""
+        moved = c.execute(
+            "SELECT new, actor_id AS actor, via FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='reassign' "
+            "ORDER BY created_at DESC, rowid DESC "
+            "LIMIT 1",
+            (task["id"],),
+        ).fetchone()
+        if not moved:
+            made = c.execute(
+                "SELECT detail FROM events WHERE action='task.create' AND target=? ORDER BY created_at,id LIMIT 1",
+                (task["id"],),
+            ).fetchone()
+            return None if made and H._json(made["detail"], {}).get("owner") == botops else ""
+        moved = dict(moved)
+        if moved["new"] == botops and moved["actor"] == task["requester_id"] and not moved.get("via"):
+            return None
+        return moved["actor"] or ""
+
+    def delegated_identity(c, who, ref, new_task=False, carry=False):
+        """Resolve the run's requester, never a human named in its text. Human messages and tasks
+        carry that human's rights; bot messages and tasks carry only that bot's rights. Fleet work
+        with no requester keeps BotOps' own. Explicit message references must belong to this requester.
+        `new_task`: the reference is the request a task is being filed from. `carry`: the call is one a bot's hand-off
+        (carried_request) makes with the person's rights (botops_act.carried_lends); otherwise it keeps the bot's.
+        """
+        if who.via in tools_delegation.DELEGATE_VIAS and who.role == "bot" and not who.attempt_id:
+            if ref in ("turn", "default"):
+                return who
+            raise Problem("on_behalf_of", "A bot request cannot borrow a human's rights", 403)
+        if who.via in tools_delegation.DELEGATE_VIAS and who.attempt_id:
+            who = Identity(
+                who.task_actor or "bot:" + BOTOPS,
+                "bot",
+                runner_id=who.runner_id,
+                attempt_id=who.attempt_id,
+                agent=who.agent,
+            )
+        # BotOps, or the Tools page's owner on a Tools change (act_for_requester admits it only there).
+        agent = who.actor
+        if agent != "bot:" + BOTOPS and not tools_delegation.is_tools_owner(c, agent):
+            raise Problem("forbidden", "Only BotOps and the Tools Owner apply changes on a requester's behalf", 403)
+        via = tools_delegation.via_of(agent)
+        named = tools_delegation.name_of(c, agent)
+
+        def acting_as(principal, cited="", run="live"):
+            # Keep the actual bot's credential so writes revalidate its lease under the lock,
+            # and private reads intersect the requester with the bot doing the work.
+            # Never confirmed: only the person's own tap on a Confirm card is (auth.py, x-tico-assistant-action), so
+            # every route's "always a click" rule (`risky`) asks them.
+            if H.is_human(principal.actor):
+                lent = {"for": principal.actor, "cited": cited, "run": run}
+                if via != "botops":
+                    lent["by"] = agent  # the Tools Owner names itself on what it does for the person
+                H.DELEGATION.set(lent)  # pyright: ignore[reportArgumentType] - typed by its None default
+            return replace(
+                principal,
+                via=via,
+                confirmed=False,
+                task_actor=who.actor,
+                runner_id=who.runner_id,
+                attempt_id=who.attempt_id,
+                agent=who.agent,
+            )
+
+        message_id = ref
+        explicit = bool(ref) and ref not in ("turn", "default")
+        turn = (
+            c.execute(
+                "SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?", (who.attempt_id,)
+            ).fetchone()
+            if who.attempt_id
+            else None
+        )
+        if explicit and not turn:
+            raise Problem("on_behalf_of", "Cite the request that started this run", 403)
+        if explicit:
+            cited = followed_task(c, ref)
+            if cited:
+                return acting_as(follow_through(c, who, cited), cited["id"], "follow_through")
+        if not explicit:
+            if not turn:
+                return who
+            message_id = turn["message_id"]
+            initial = H.message(c, message_id)
+            task_id = H.message_task_id(initial) if initial else None
+            task = H.task(c, task_id) if task_id else None
+            requester = task["requester_id"] if task else (initial or {}).get("sender_id", "")
+            if task and H.is_human(requester):
+                creator = c.execute(
+                    "SELECT actor FROM events WHERE action='task.create' AND target=? ORDER BY created_at,id LIMIT 1",
+                    (task_id,),
+                ).fetchone()
+                if creator and H.is_bot(creator["actor"]):
+                    requester = creator["actor"]
+                requester = filed_for_bot(c, task_id, who) or requester
+            handed = (
+                handed_over(c, task, who.actor)
+                if task and H.is_human(requester) and task["owner_id"] == who.actor
+                else None
+            )
+            if handed is not None:
+                # Someone other than the person gave BotOps their task: it runs with the rights of the bot that moved
+                # it (its refusals become the person's Confirm card), never the person's.
+                if not H.is_bot(handed) or handed == who.actor:
+                    raise Problem(
+                        "on_behalf_of",
+                        f"Someone other than the person who asked for this task gave it to {named}, "
+                        f"so it lends no one's rights; they can move it to {named} themselves or ask in their "
+                        f"{named} chat",
+                        403,
+                    )
+                requester = handed
+            others_comment = False
+            if task and task_id and initial:
+                refs = initial.get("refs") or {}
+                relayed = any(refs.get(key) for key in ("via", "assistant", "slack", "routing"))
+                if (
+                    refs.get("comment")
+                    and not relayed
+                    and H.is_human(requester)
+                    and initial["sender_id"] == requester
+                    and task["owner_id"] == who.actor
+                    and open_task(task)
+                ):
+                    # The task's requester commenting on it, in their own words: that is them asking.
+                    auth.conversation(c, who, initial["conversation_id"])
+                    H.VIA.set(via)
+                    return acting_as(auth.identity_for_actor(c, requester), task_id, "comment")
+                if (
+                    refs.get("comment")
+                    and not relayed
+                    and handed is not None
+                    and initial["sender_id"] == task["requester_id"]
+                ):
+                    raise Problem(
+                        "on_behalf_of",
+                        f"A bot gave this task to {named}, so your comment doesn't lend your rights; "
+                        f"move it to {named} yourself or ask in your {named} chat",
+                        403,
+                    )
+                if (
+                    refs.get("comment")
+                    and not relayed
+                    and H.is_bot(requester)
+                    and H.is_human(initial["sender_id"])
+                    and task["owner_id"] == who.actor
+                    and open_task(task)
+                ):
+                    # A person's comment on a task a bot asked BotOps for lends nothing: BotOps keeps that bot's rights,
+                    # and what they can't do becomes a Confirm card for the person who commented (confirm_for_carried).
+                    others_comment = True
+                elif refs.get("comment") or relayed:
+                    raise Problem(
+                        "on_behalf_of",
+                        "Only the task's requester's own comment lends their rights; "
+                        "other comments and routed messages lend nothing",
+                        403,
+                    )
+            if initial and (task or str(requester).startswith("bot:")) and requester != H.KEEPER:
+                auth.conversation(c, who, initial["conversation_id"])
+                lapsed = lend_lapsed(c, task) if task and H.is_human(requester) else ""
+                if lapsed:
+                    raise Problem("on_behalf_of", lapsed, 403)
+                if not open_task(task) and week_old(initial["created_at"]):
+                    raise Problem("on_behalf_of", "That request is more than a week old; ask the requester again", 403)
+            if str(requester).startswith("bot:") and requester != who.actor:
+                if (H.bot(c, H.actor_id(requester)) or {}).get("state") != "active":
+                    raise Problem("forbidden", "The requesting bot is no longer active", 403)
+                person = lending_carried(c, task, requester) if carry else None
+                if person and others_comment and initial and person["person"] != initial["sender_id"]:
+                    person = None  # someone else's comment never lends the carried person's rights
+                if person:
+                    # The bot handed on a person's own request (carried_request): BotOps acts as that person.
+                    H.VIA.set(via)
+                    return acting_as(auth.identity_for_actor(c, person["person"]), person["message_id"], "carried")
+                return acting_as(Identity(requester, "bot"))
+            if not initial or requester == H.KEEPER or requester == who.actor:
+                return who
+            if task and task_id and task["owner_id"] == who.actor and not task.get("request_id"):
+                if str(task["requester_id"]).startswith("human:"):
+                    made = c.execute(
+                        "SELECT detail FROM events WHERE action='task.create' AND target=? AND actor=? LIMIT 1",
+                        (task_id, task["requester_id"]),
+                    ).fetchone()
+                    if made and H._json(made["detail"], {}).get("via") != "assistant":
+                        person = auth.identity_for_actor(c, task["requester_id"])
+                        return acting_as(person, task_id)
+                origin = c.execute(
+                    "SELECT actor FROM events WHERE action='botops.task_requested' AND target=? AND actor=? LIMIT 1",
+                    (task_id, task["requester_id"]),
+                ).fetchone()
+                if origin and str(origin["actor"]).startswith("human:"):
+                    auth.conversation(c, who, task["conversation_id"])
+                    person = auth.identity_for_actor(c, origin["actor"])
+                    H.VIA.set(via)
+                    return acting_as(person, task_id)
+            asked = (
+                c.execute(
+                    "SELECT detail FROM events WHERE action='botops.asked_via_assistant' AND target=? "
+                    "AND actor=? LIMIT 1",
+                    (task_id, task["requester_id"]),
+                ).fetchone()
+                if task and via == "botops"
+                else c.execute(
+                    "SELECT detail FROM events WHERE action='assistant.asked_helper' AND target=? AND actor=? "
+                    "AND json_extract(detail,'$.helper')=? LIMIT 1",
+                    (task_id, task["requester_id"], agent),
+                ).fetchone()
+                if task
+                else None
+            )
+            if (
+                asked
+                and task
+                and task["owner_id"] == who.actor
+                and H.is_human(task["requester_id"])
+                and open_task(task)
+            ):
+                # The person's own words to their Assistant, checked when it filed this (task_create): BotOps acts
+                # as them, as if they had asked it in their BotOps chat.
+                origin = H.message(c, (H._json(asked["detail"], {}) or {}).get("cited") or "")
+                if (
+                    not origin
+                    or origin.get("deleted_at")
+                    or origin["sender_id"] != task["requester_id"]
+                    or week_old(origin["created_at"])
+                ):
+                    raise Problem(
+                        "on_behalf_of",
+                        "The request the Assistant handed on no longer stands; ask the person again",
+                        403,
+                    )
+                H.VIA.set(via)
+                return acting_as(auth.identity_for_actor(c, task["requester_id"]), origin["id"], "assistant")
+            if task and task.get("request_id") in ("turn", "default"):
+                # Tasks filed before the request was stored by id: the person's message the filing cited.
+                made = c.execute(
+                    "SELECT detail FROM events WHERE action='task.create' AND target=? ORDER BY created_at,id LIMIT 1",
+                    (task_id,),
+                ).fetchone()
+                task = {
+                    **task,
+                    "request_id": ((H._json(made["detail"], {}) if made else {}).get("delegation") or {}).get("cited"),
+                }
+            if task and task.get("request_id") and task["owner_id"] == who.actor:
+                origin = H.message(c, task["request_id"])
+                made = c.execute(
+                    "SELECT 1 FROM events WHERE action='task.create' AND target=? AND actor=? LIMIT 1",
+                    (task_id, task["requester_id"]),
+                ).fetchone()
+                if made and origin and origin["sender_id"] == task["requester_id"]:
+                    message_id = task["request_id"]
+                    c.execute(
+                        "INSERT OR IGNORE INTO attempt_conversations VALUES(?,?)",
+                        (who.attempt_id, origin["conversation_id"]),
+                    )
+        msg = H.message(c, message_id)
+        started = (H.message(c, turn["message_id"]) or {}).get("sender_id", "") if turn else ""
+        if explicit and started and msg and msg["sender_id"] != started:
+            # A turn a person started acts for that person: another person's message id borrows nothing.
+            raise Problem("on_behalf_of", "Cite the message of the person who asked you, not someone else's", 403)
+        if (
+            not msg
+            or not str(msg["sender_id"]).startswith("human:")
+            or msg["recipient_id"] != agent
+            or msg["kind"] not in ("say", "answer")
+        ):
+            raise Problem("on_behalf_of", f"Cite a message a person sent {named} asking for this change", 403)
+        refs = msg.get("refs") or {}
+        if refs.get("via") or refs.get("assistant"):
+            # The Assistant wrote this for the person: its writes never carry the person's authority on.
+            raise Problem("on_behalf_of", "That message was written by the Assistant; ask the person to send it", 403)
+        conversation = H.conversation(c, msg["conversation_id"]) or {}
+        if conversation.get("task_id") or conversation.get("scope") == "task" or refs.get("task"):
+            raise Problem(
+                "on_behalf_of", f"A person's words inside a task are not a request to {named}; ask in chat", 403
+            )
+        slack = slack_raw if isinstance(slack_raw := refs.get("slack"), dict) else {}
+        own_dm = (
+            slack.get("kind") == "im"
+            and not slack.get("recorded_only")
+            and set(conversation.get("participants") or []) == {msg["sender_id"], agent}
+        )
+        if (refs.get("slack") or refs.get("routing")) and not own_dm:
+            # Anyone in a Slack channel or thread can put words in a routed message, so those never lend a person's
+            # rights. A 1:1 Slack DM is different: the gateway verified the sender (workspace member, not a guest,
+            # admitted, a Tico person) and nobody else writes in it, so it counts like their Tico chat (owner
+            # decision, 2026-10-01). The message decides, not the room: what they type in Tico is always their own request.
+            raise Problem(
+                "on_behalf_of",
+                f"This request arrived through a Slack channel, so {named} can't act on it for "
+                f"the person. They can DM it to the Tico app in Slack or send it in their Tico chat with {named}",
+                403,
+            )
+        if explicit and set(conversation.get("participants") or []) != {msg["sender_id"], agent}:
+            # A message cited by id: the person's own, in their own room with BotOps (not a room another person spoke in).
+            raise Problem("on_behalf_of", f"Cite a message from the person's own chat with {named}", 403)
+        if week_old(msg["created_at"]) and (
+            new_task
+            or not any(
+                lending_task(c, H.task(c, row["id"]))
+                for row in c.execute(
+                    "SELECT id FROM tasks WHERE request_id=? AND requester_id=?", (message_id, msg["sender_id"])
+                ).fetchall()
+            )
+        ):
+            raise Problem(
+                "on_behalf_of",
+                "That request is more than a week old and no open task carries it; ask the person again",
+                403,
+            )
+        # Only a request in a conversation this run may read: otherwise any message a bot sends
+        # BotOps could borrow the rights of whoever last asked it for something.
+        try:
+            auth.conversation(c, who, msg["conversation_id"])
+        except Problem:
+            raise Problem("on_behalf_of", "Cite a request from the conversation you are working on", 403) from None
+        person = auth.identity_for_actor(c, msg["sender_id"])
+        H.VIA.set(via)  # every event and history row from here says "via BotOps"
+        return acting_as(person, message_id)
+
+    def carried_request(c, who, ref):
+        """The person whose request a bot is handing BotOps, recorded on the task it files (`botops.request_carried`):
+        `{"person", "message_id", "lends", "why"}`, or None when no person is behind it.
+
+        The bot cites the person's message (`--request-id`: its id, or `turn` for the message that started this run).
+        It lends that person's rights to BotOps when they wrote it themselves to this bot, in their 1:1 chat with it
+        (the app or a Slack DM) or as a comment on a task they asked this bot for, in the conversation this run is
+        working on, within DELEGATION_DAYS. Anything else (words in a channel, written by the Assistant, from another
+        conversation, too old) still names the person, and BotOps puts what it would do to them as a Confirm card
+        (`confirm_for_carried`). With no citation, a run a person's own message started names them the same way."""
+        turn = (
+            c.execute(
+                "SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=? AND a.bot_id=?",
+                (who.attempt_id, H.actor_id(who.actor)),
+            ).fetchone()
+            if who.attempt_id
+            else None
+        )
+        start = H.message(c, turn["message_id"]) if turn else None
+        if not ref:
+            refs = (start or {}).get("refs") or {}
+            slack = slack_raw if isinstance(slack_raw := refs.get("slack"), dict) else {}
+            if (
+                start
+                and H.is_human(start["sender_id"])
+                and start["recipient_id"] == who.actor
+                and not any(refs.get(k) for k in ("via", "assistant", "routing"))
+                and (not refs.get("slack") or slack.get("kind") == "im")
+            ):
+                return {
+                    "person": start["sender_id"],
+                    "message_id": start["id"],
+                    "lends": False,
+                    "why": "No message was cited",
+                }
+            return None
+        msg = start if ref == "turn" else H.message(c, ref)
+        if not msg or not H.is_human(msg["sender_id"]) or msg.get("deleted_at"):
+            raise Problem(
+                "request_id",
+                "Cite a message a person wrote to you (its id, or `turn` for the one that started this run)",
+                422,
+            )
+        try:
+            auth.conversation(c, who, msg["conversation_id"])
+        except Problem:
+            raise Problem("request_id", "Cite a message from a conversation you are working on", 403) from None
+        person = msg["sender_id"]
+        refs = msg.get("refs") or {}
+        conversation = H.conversation(c, msg["conversation_id"]) or {}
+        task = H.task(c, H.message_task_id(msg, conversation) or "")
+        slack = slack_raw if isinstance(slack_raw := refs.get("slack"), dict) else {}
+        own_dm = slack.get("kind") == "im" and not slack.get("recorded_only")
+        if msg["recipient_id"] != who.actor or msg["kind"] not in ("say", "answer"):
+            why = "That message was not sent to you"
+        elif refs.get("via") or refs.get("assistant"):
+            why = "The Assistant wrote that message"
+        elif refs.get("routing") or (refs.get("slack") and not own_dm):
+            why = "That message came from a channel others write in"
+        elif not start or start["conversation_id"] != msg["conversation_id"]:
+            why = "That message is not in the conversation this run is working on"
+        elif task and not (
+            refs.get("comment") and task["requester_id"] == person and task["owner_id"] == who.actor and open_task(task)
+        ):
+            why = "Only the person's own comment on a task they asked you for carries their request"
+        elif not task and set(conversation.get("participants") or []) != {person, who.actor}:
+            why = "That message is not from the person's own chat with you"
+        elif week_old(msg["created_at"]):
+            why = "That message is more than a week old"
+        else:
+            why = ""
+        return {"person": person, "message_id": msg["id"], "lends": not why, "why": why}
+
+    def carried(c, task, requester):
+        """What `carried_request` recorded on this task, filed by `requester`, or None."""
+        row = (
+            c.execute(
+                "SELECT detail FROM events WHERE action='botops.request_carried' AND target=? AND actor=? "
+                "ORDER BY created_at DESC LIMIT 1",
+                (task["id"], requester),
+            ).fetchone()
+            if task
+            else None
+        )
+        return H._json(row["detail"], {}) if row else None
+
+    def filed_for_bot(c, task_id, who):
+        """The bot a task was filed for, when BotOps filed it with rights that bot's hand-off lent (carried_request):
+        it lends what that bot's rights do, never the person's, or a carried call could file itself a task that lends
+        everything. None for any other task."""
+        made = c.execute(
+            "SELECT detail FROM events WHERE action='task.create' AND target=? ORDER BY created_at,id LIMIT 1",
+            (task_id,),
+        ).fetchone()
+        lent = (H._json(made["detail"], {}) if made else {}).get("delegation") or {}
+        if not isinstance(lent, dict) or lent.get("run") != "carried":
+            return None
+        cited = H.message(c, lent.get("cited") or "")
+        return cited["recipient_id"] if cited and H.is_bot(cited["recipient_id"]) else who.actor
+
+    def lending_carried(c, task, requester):
+        """The carried request when it still lends the person's rights: the task is open and the message still stands,
+        from that person, within DELEGATION_DAYS."""
+        found = carried(c, task, requester)
+        if not found or not found.get("lends") or not open_task(task):
+            return None
+        if reopened_by(c, task["id"]):
+            return None  # finished once: the request it carried was done, whoever reopened it
+        msg = H.message(c, found.get("message_id") or "")
+        if not msg or msg.get("deleted_at") or msg["sender_id"] != found.get("person") or week_old(msg["created_at"]):
+            return None
+        return found
+
+    def confirm_for_carried(request, exc):
+        """A Confirm card for the person behind a bot's hand-off when BotOps, with only that bot's rights, was refused:
+        what BotOps tried, run as the person on their own click. None when there is no such person or no such card."""
+        who, acting = getattr(request.state, "privacy_source", None), getattr(request.state, "identity", None)
+        if (
+            exc.status != 403
+            or exc.code != "forbidden"
+            or not who
+            or who.actor != "bot:" + BOTOPS
+            or not acting
+            or acting.role != "bot"
+            or acting.actor == who.actor
+            or request.method == "GET"
+            or not who.attempt_id
+        ):
+            return None
+        path = normalize(request.url.path)
+        body = parse_body(getattr(request, "_body", b"")) if request.method != "DELETE" else None
+        body = body if isinstance(body, dict) else {}
+        if (
+            not path
+            or secret_in_request(request.method, path, body)
+            or not assistant_valid(request.method, path, settings, BOTOPS)
+        ):
+            return None
+        with store.transaction() as c:
+            turn = c.execute(
+                "SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?", (who.attempt_id,)
+            ).fetchone()
+            start = H.message(c, turn["message_id"]) if turn else None
+            task = H.task(c, H.message_task_id(start) or "") if start else None
+            said = (start or {}).get("refs") or {}
+            commented = (
+                task
+                and task["requester_id"] == acting.actor
+                and task["owner_id"] == who.actor
+                and said.get("comment")
+                and start
+                and H.is_human(start["sender_id"])
+                and not any(said.get(k) for k in ("via", "assistant", "slack", "routing"))
+            )
+            # The person whose comment started this run asked, ahead of whoever the bot's hand-off named.
+            found = (
+                {"person": start["sender_id"]}
+                if commented and start
+                else carried(c, task, acting.actor)
+                if task and task["requester_id"] == acting.actor
+                else None
+            )
+            if (
+                not found
+                and task
+                and H.is_human(task["requester_id"])
+                and task["owner_id"] == who.actor
+                and handed_over(c, task, who.actor) == acting.actor
+            ):
+                found = {"person": task["requester_id"]}  # the bot gave BotOps a task this person asked for
+            if not found or not task or not open_task(task):
+                return None
+            try:
+                person = auth.identity_for_actor(c, found["person"])
+            except Problem:
+                return None
+            if admin_only(request.method, path) and person.role != "owner" and not auth.bot_admin(person):
+                return None
+            asker = (H.bot(c, H.actor_id(acting.actor)) or {}).get("name") or H.actor_id(acting.actor)
+            summary = (
+                ("BotOps needs your OK to do this on " + asker + "'s task: ")
+                if commented
+                else (asker + " asked BotOps for this for you: ")
+            ) + task["title"]
+            return propose_card(
+                c, person, request.method, path, {k: v for k, v in body.items() if k != "on_behalf_of"}, summary[:300]
+            )
+
+    def followed_task(c, ref):
+        """The task `ref` names (its id, or an unambiguous prefix of eight or more), or None when it names none."""
+        ref = str(ref or "")
+        prefix = ref.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        rows = c.execute(
+            "SELECT id FROM tasks WHERE id=? OR (length(?)>=8 AND id LIKE ? || '%' ESCAPE '\\') LIMIT 2",
+            (ref, ref, prefix),
+        ).fetchall()
+        exact = [r for r in rows if r["id"] == ref]
+        return H.task(c, (exact or rows)[0]["id"]) if len(exact or rows) == 1 else None
+
+    def follow_through(c, who, task):
+        """The person whose open request BotOps is following through on, in a later run: a daily-update wake, a retry
+        once a busy bot finished, a notice. The run that started it is gone, so BotOps cites the task the person asked
+        for. Only a task BotOps owns, that the person filed themselves (not through the Assistant), for as long as it is
+        open; and never from a run a bot or another person started, which keeps its own requester's
+        rights."""
+        requester = task["requester_id"]
+        if task["owner_id"] != who.actor or not H.is_human(requester):
+            raise Problem("on_behalf_of", "Cite a task a person asked BotOps for", 403)
+        if task["status"] in ("done", "closed"):
+            raise Problem("on_behalf_of", "That task is closed; ask the person again", 403)
+        lapsed = lend_lapsed(c, task)
+        if lapsed:
+            raise Problem("on_behalf_of", lapsed, 403)
+        made = c.execute(
+            "SELECT actor,detail FROM events WHERE action='task.create' AND target=? ORDER BY created_at,id LIMIT 1",
+            (task["id"],),
+        ).fetchone()
+        via = H._json(made["detail"], {}).get("via") if made else None
+        if not made or made["actor"] != requester or via == "assistant" or filed_for_bot(c, task["id"], who):
+            raise Problem("on_behalf_of", "That task was not filed by the person who asked for it", 403)
+        if handed_over(c, task, who.actor) is not None:
+            raise Problem(
+                "on_behalf_of", "Someone other than the person who asked for that task gave it to BotOps", 403
+            )
+        if via and not task.get("request_id"):
+            # Filed by BotOps as the person: only a continuation of their message (--request-id) counts, or a
+            # follow-through run could file a fresh task as them and so lend their rights for ever.
+            raise Problem(
+                "on_behalf_of", "BotOps filed that task without the person's message; ask the person again", 403
+            )
+        origin = H.message(c, task["request_id"]) if task.get("request_id") else None
+        if task.get("request_id") and (not origin or origin["sender_id"] != requester):
+            raise Problem("on_behalf_of", "That task's request is not the person's own", 403)
+        current = delegated_identity(c, who, "turn")
+        if current.actor not in (who.actor, requester):
+            raise Problem(
+                "on_behalf_of", "This run is for " + current.actor + "; it keeps that requester's rights", 403
+            )
+        if current.actor == who.actor:
+            # A run with no requester lends a person's rights only when the system started it on its own schedule. A
+            # Slack digest, a live meeting, a watcher or a task comment also start such runs, with words anyone there
+            # wrote; those never carry a person's rights (Slack and comments are refused the same way above).
+            turn = c.execute(
+                "SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?", (who.attempt_id,)
+            ).fetchone()
+            start = H.message(c, turn["message_id"]) if turn else None
+            refs = (start or {}).get("refs") or {}
+            if (
+                not start
+                or start["sender_id"] != H.KEEPER
+                or start["kind"] != "notice"
+                or refs.get("wake") not in FOLLOW_THROUGH_WAKES
+                or any(refs.get(k) for k in ("slack", "routing", "via", "assistant", "comment", "live_meeting"))
+            ):
+                raise Problem(
+                    "on_behalf_of",
+                    "This run started from words others wrote; act on the person's task in "
+                    "their chat or the next daily update",
+                    403,
+                )
+        H.VIA.set("botops")
+        return auth.identity_for_actor(c, requester)
+
+    def botops_owns_task(path, body=None):
+        """A note, comment or status on a task BotOps owns is BotOps' own work: it needs no one's rights and is BotOps'
+        words, so it is never recorded as the person who asked (their rights still apply to everyone else's tasks).
+        Closing is the exception: only the requester or a human closes, so a close (a move) keeps the person's rights.
+        Its own task's worktrees are its own work too: the route checks the owning bot's repository access, which no
+        one's rights change. So is an ask or a sub-task for a person under its own task: the ask grants nothing by
+        itself, whoever asked for the task."""
+        body = body if isinstance(body, dict) else {}
+        person = None
+        if path in ("/api/v2/tasks", "/api/v2/tasks/dry-run"):
+            person = body.get("owner")
+            ref = body.get("parent")
+            # Only a plain ask: no roles, goals, links or relations reached with BotOps' rights for whoever asked.
+            if (
+                not ref
+                or not person
+                or set(body) - {"title", "message", "body", "owner", "parent", "due", "private", "on_behalf_of"}
+            ):
+                return False
+        else:
+            found = re.fullmatch(r"/api/v2/tasks/([^/]+)(?:/(?:comments|asks|links|worktrees(?:/attach)?))?", path)
+            if not found:
+                return False
+            ref = found.group(1)
+        with store.read() as c:
+            row = followed_task(c, ref)
+            if person is not None and not H.is_human(H.resolve_actor(c, person) or ""):
+                return False
+        return bool(row and row["owner_id"] == "bot:" + BOTOPS)
+
+    def manager_asker(c, who):
+        """The manager bot whose chat message to BotOps started this run, as the identity BotOps acts as for a report's
+        create, archive or restore (`Auth.report_lifecycle`): its actor is the manager and `via` is "botops", so its own
+        token, which has no `via`, is never mistaken for it. None when a bot did not ask."""
+        turn = (
+            c.execute(
+                "SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?", (who.attempt_id,)
+            ).fetchone()
+            if who.attempt_id
+            else None
+        )
+        msg = H.message(c, turn["message_id"]) if turn else None
+        if (
+            not msg
+            or msg.get("deleted_at")
+            or msg["recipient_id"] != "bot:" + BOTOPS
+            or msg["kind"] not in ("say", "answer")
+            or not H.is_bot(msg["sender_id"])
+        ):
+            return None
+        return replace(who, actor=msg["sender_id"], role="bot", via="botops", task_actor="")
+
+    def act_for_requester(request, ref):
+        """Apply the requester's identity before the route checks its normal permissions."""
+        who = request.state.identity
+        if who.actor != "bot:" + BOTOPS:
+            # The Tools Owner on a Tools change (backend/tools_delegation.py), else nobody but BotOps.
+            tools = tools_delegation.route(request.method, request.url.path)
+            if tools:
+                # Its writes then carry the person's rights, and the one rule (backend/tool_access.py) keeps the
+                # Tools Owner itself from ever being given a key that way.
+                with store.read() as c:
+                    tools = tools_delegation.is_tools_owner(c, who.actor)
+            if not tools:
+                if ref == "default":
+                    return None, None  # a bot's own Tools change, with its own rights
+                raise Problem(
+                    "forbidden",
+                    "Only BotOps, and the Tools Owner for a Tools change, act on a person's behalf: ask either in your "
+                    "chat with it",
+                    403,
+                )
+        if lifecycle_call(request.method, request.url.path) and ref in ("turn", "default", ""):
+            # A manager bot's report: BotOps acts as that manager, which the lifecycle routes check (Auth.report_lifecycle).
+            with store.read() as c:
+                asker = manager_asker(c, who)
+            if asker is not None:
+                return None, asker
+        # Runs on an executor thread: the delegation record is read back here and set again for the route.
+        token = H.DELEGATION.set(None)
+        try:
+            with store.read() as c:
+                acting = delegated_identity(c, who, ref, carry=carried_lends(request.method, request.url.path))
+            request.state.delegation = H.DELEGATION.get()
+        finally:
+            H.DELEGATION.reset(token)
+        with store.read() as c:
+            if acting.actor == who.actor:
+                return None, None
+            body = parse_body(getattr(request, "_body", b"")) if request.method != "GET" else None
+            if secret_in_request(request.method, request.url.path, body):
+                raise Problem("secret_in_request", DETAIL_SECRET, 422)
+            if H.is_human(acting.actor):
+                card = person_card(c, request, acting, body)
+                if card is not None:
+                    return card, None
+            # The ordinary route checks the requester's rights, including its own outbound send switch.
+            return None, acting
+
+    def person_card(c, request, acting, body):
+        """BotOps acting for a person: a refusal for a route that hands a secret back, or the Confirm card in their BotOps
+        chat for one that always needs their own tap (`botops_act.card_for_person`). None when the route runs as them."""
+        method, path = request.method, normalize(request.url.path)
+        why = person_only(method, path)
+        if why:
+            raise Problem(
+                "person_only",
+                why,
+                403,
+                extra=refusal_for_person(path, "Do this yourself in " + settings.app_name, settings.public_url),
+            )
+        body = {k: v for k, v in body.items() if k != "on_behalf_of"} if isinstance(body, dict) else {}
+        rules = team_rules.load(c)
+
+        def lowers():
+            assert path is not None  # a route's path normalizes; lowers only runs for one
+            rest = path[len(API) :]
+            if rest.startswith("usage/pools/"):
+                scope = rest[len("usage/pools/") :]
+                return usage_limits.pool_only_lowers(
+                    c, "company" if scope == "company" else "group:" + scope.split("/", 1)[-1], body
+                )
+            return usage_limits.only_lowers(
+                c, rest[len("usage/limits/") :] if rest.startswith("usage/limits/") else None, body
+            )
+
+        # A Gateway URL change sends the saved key to the proposed address as a connection check.
+        # Require the owner's tap whenever a key is saved, even when botops_direct is on. A key the server's
+        # environment sets can't be changed here at all, so that save is refused at once rather than carded.
+        gateway_put = method == "PUT" and path == API + "providers/gateway"
+        moved, shown, what, refusal = destination_card(c, acting, method, path, body)
+        gateway_key_address_change = (
+            gateway_put
+            and (bool(body.get("url")) or bool(moved))
+            and (gateway_connection.connected(c, settings) and not gateway_connection.env_key(settings))
+        )
+        if not path or not card_for_person(
+            method, path, body, rules, lowers, force_confirm=gateway_key_address_change or bool(moved)
+        ):
+            return None
+        # Told at once, not handed a card that fails on the tap: first in the catalogue's words, which know whose a
+        # trigger, webhook or computer is (backend/settings_catalog.py).
+        said = settings_catalog.raw_refusal(c, auth, acting, method, path, body, settings.public_url)
+        if said:
+            raise Problem("forbidden", said["fix"], 403, extra=said)
+        who_may = (
+            "the owner"
+            if owner_only(method, path, body) and acting.role != "owner"
+            else "an owner or an admin"
+            if admin_only(method, path) and acting.role != "owner" and not auth.bot_admin(acting)
+            else ""
+        )
+        if who_may:
+            raise Problem(
+                "forbidden",
+                "Only " + who_may + " can do this",
+                403,
+                extra=refusal_for_person(path, "Your role can't change this: ask " + who_may, settings.public_url),
+            )
+        if refusal:
+            raise refusal
+        if aid := automation_deleted(method, path):
+            from . import automations
+
+            automations.deletable(c, acting, aid)  # refused at once (404, 403, a built-in 409)
+        with store.transaction() as w:
+            card = propose_card(w, acting, method, path, body, card_summary(method, path, body), what=what, shown=shown)
+        return JSONResponse(card)
+
+    def destination_card(c, acting, method, path, body):
+        """For BotOps acting for a person: (change, card lines, card title, refusal) when `body` moves saved credentials
+        to another service (backend/destinations.py). It always waits for the person's own tap; until BotOps
+        says which (`credentials` "keep" or "clear") and names the revision it read, it is refused at once (`refusal`,
+        raised once the person's role is checked) with what the person must decide, so no card keeps or clears
+        anything without their word. An address edit that moves nothing saved gets no change and no refusal, but still
+        its card lines and title, so no card for either integration shows an address as typed. Else Nones."""
+        from . import destinations, webhooks
+        from .assistant import spoken
+
+        if method == "PUT" and path == API + "providers/gateway":
+            moved, labels = gateway_connection.destination_change(c, body, settings), [gateway_connection.LABEL_KEY]
+            current, integration, name = gateway_connection.revision(c), "gateway", gateway_client.LABEL
+            old_url, new_url = gateway_connection.url(c, settings), gateway_client.base_url(str(body.get("url") or ""))
+        elif method == "POST" and (hook := webhooks.UPDATE_PATH.fullmatch(path)):
+            row, moved, labels = webhooks.pending_change(c, acting, hook.group(1), body, app.state.vault)
+            current, integration, name = row["revision"], "webhook", row["name"]
+            old_url, new_url = row["url"], body.get("url") or row["url"]
+        else:
+            return None, None, None, None
+        # Whatever else the same request changes runs at the tap too, so the card names it (the address is shown
+        # only as its safe destination, never as typed).
+        also = [k for k in body if k not in ("url", "credentials", "expected_revision")]
+        and_also = f", and change {', '.join(spoken(k) for k in also)}" if also else ""
+        others = [{"field": k, "new": shown_value(body[k])} for k in also]
+        if not moved:
+            if "url" not in body:
+                return None, None, None, None
+            seen = destinations.shown(old_url, new_url)
+            old, new = seen["old"]["address"], seen["new"]["address"] or "an address that is not a URL"
+            what = f"Change {name}'s address to {new} ({seen['path']}; nothing saved moves to another service)"
+            return (
+                None,
+                [{"field": "destination", "old": old, "new": new}, {"field": "path", "new": seen["path"]}, *others],
+                (what + and_also)[:300],
+                None,
+            )
+        option = destinations.choice(body.get("credentials"))
+        if not option:
+            return moved, None, None, destinations.held(integration, moved, labels, current, name)
+        if body.get("expected_revision") is None:
+            return (
+                moved,
+                None,
+                None,
+                Problem(
+                    "expected_revision",
+                    "Changing where saved credentials go needs expected_revision: the revision you read",
+                    422,
+                ),
+            )
+        if not isinstance(body["expected_revision"], int) or body["expected_revision"] != int(current):
+            return (
+                moved,
+                None,
+                None,
+                Problem("version_conflict", name + " changed since you read it; read it again", 409),
+            )
+        old, new, listed = moved["old"]["address"], moved["new"]["address"], ", ".join(labels)
+        what = (
+            f"Send {name}'s saved {listed} to {new} instead of {old}"
+            if option == destinations.KEEP
+            else f"Move {name} to {new} and clear its saved {listed}"
+        )
+        shown = [
+            {"field": "destination", "old": old, "new": new},
+            *([{"field": "path", "new": moved["path"]}] if "path" in moved else []),
+            {"field": "credentials", "new": ("keep: " if option == destinations.KEEP else "clear: ") + listed},
+            *others,
+        ]
+        return moved, shown, (what + and_also)[:300], None
+
+    def shown_value(value):
+        """A short card value for a field that changes alongside a destination: a scalar as itself, a header list as
+        its names (a secret's value is refused before any card), anything else by size."""
+        if isinstance(value, bool) or value is None or isinstance(value, (int, float)):
+            return value
+        if isinstance(value, str):
+            return value[:120]
+        if isinstance(value, list) and all(isinstance(h, dict) and "name" in h for h in value):
+            return ", ".join(str(h["name"])[:60] for h in value) or "none"
+        return f"{len(value)} item{'s' if len(value) != 1 else ''}" if isinstance(value, (list, dict)) else "changed"
+
+    def botops_run_identity(c, attempt_id):
+        """Whose rights this BotOps run carries (the GitHub token's scope, backend/github_app.py): the person's or bot's
+        it acts for, BotOps' own, or None when its start lends nobody's (someone else's comment)."""
+        import contextvars
+
+        row = c.execute("SELECT runner_id FROM attempts WHERE id=? AND bot_id=?", (attempt_id, BOTOPS)).fetchone()
+        if not row:
+            return None
+        own = Identity("bot:" + BOTOPS, "bot", runner_id=row["runner_id"], attempt_id=attempt_id)
+        try:
+            # Its own context: resolving the run here records nothing as delegated.
+            # A bot's hand-off (carried_request) lends no repository access: the token keeps that bot's scope.
+            return contextvars.copy_context().run(delegated_identity, c, own, "turn")
+        except Problem:
+            return None
+
+    app.state.botops_run_identity = botops_run_identity
+
+    def propose_card(c, acting, method, path, body, summary, what=None, shown=None):
+        """What always needs the requesting person's own click: a Confirm card in their chat with BotOps,
+        and the answer BotOps reports back instead of asking them to go to Settings. `what`: the card's title, when the
+        route that asks already said in plain words what confirming does (never a bot's words)."""
+        room = rooms.chat_room(c, auth, acting, BOTOPS)
+        card = create_proposal(
+            c, settings, acting, room, BOTOPS, summary, method, path, body, what=what, routes=app.routes, shown=shown
+        )
+        return {
+            "proposed": True,
+            "needs_confirm": True,
+            **card,
+            "detail": "This needs "
+            + ((H.human(c, H.actor_id(acting.actor)) or {}).get("name") or "the person")
+            + "'s own OK. A Confirm card is in their chat with BotOps; nothing has changed yet.",
+        }
+
+    app.state.botops_propose = propose_card  # a route outside this file asking for the card (backend/repositories.py)
+
+    def risky(who):
+        """A delegated identity that has not been confirmed: BotOps acting for a person, before their click."""
+        return who.via == "botops" and not who.confirmed
+
+    return (
+        act_for_requester,
+        botops_owns_task,
+        carried_request,
+        confirm_for_carried,
+        delegated_identity,
+        propose_card,
+        risky,
+    )

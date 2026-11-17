@@ -1,5 +1,9 @@
 """Bot creation, onboarding and seat routes."""
 
+from . import person_asks
+from . import rooms
+from .store import Problem
+
 from .store import H
 from . import models as M
 from fastapi import Request
@@ -230,3 +234,75 @@ def register(app, auth, mutate, onboarding, report_mutate, settings, settings_ad
         auth.domain(who)
         _recover_seat(seat_id)
         return mutate(request, body, lambda c: lifecycle.close_seat(auth, c, who, seat_id))
+
+
+def register_lifecycle(app, auth, delegated_identity, mutate, onboarding, settings, settings_admin, store):
+    def report_mutate(request, body, work):
+        """`mutate` for a change to a manager bot's report: a refusal over the week's limit still files its Needs you ask
+        for the person above, which the refusal's rollback would take with it (settings_admin._report_cap)."""
+        try:
+            return mutate(request, body, work)
+        except Problem as exc:
+            ask = getattr(exc, "ask", None)
+            if exc.code == "report_cap" and ask:
+                store.write(
+                    request.state.identity,
+                    # Its question to the person above (person_asks), so the ask is in their Needs you.
+                    lambda c: person_asks.task_for(
+                        c,
+                        ask["actor"],
+                        ask["title"],
+                        ask["body"],
+                        ask["person"],
+                        question=ask["question"],
+                        why="I'm at this week's limit for report changes, so the person above me decides.",
+                        bot=ask["actor"],
+                        asker=ask["actor"],  # the manager bot that asked, in its own words
+                        lint=True,
+                    ),
+                )
+            raise
+
+    register(app, auth, mutate, onboarding, report_mutate, settings, settings_admin, store)
+
+    @app.post("/api/v2/bots/{bot}/archive")
+    def archive_bot(request: Request, bot: str, body: M.BotArchive):
+        who = request.state.identity
+
+        def work(c):
+            nonlocal bot
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
+            # A manager bot's ask is already BotOps acting as that bot (act_for_requester), not a person's request to find.
+            acting = (
+                who
+                if who.role == "bot" and who.via == "botops"
+                else (delegated_identity(c, who, body.on_behalf_of) if body.on_behalf_of else who)
+            )
+            result = settings_admin.archive(c, acting, bot, body)
+            rooms.archive_shared_room(c, acting.actor, bot)
+            if acting is not who:
+                H.event(
+                    c,
+                    who.actor,
+                    "bot.archive_delegated",
+                    bot,
+                    {"on_behalf_of": acting.actor, "message_id": body.on_behalf_of, "successor": body.successor},
+                )
+            return result
+
+        return report_mutate(request, body, work)
+
+    @app.post("/api/v2/bots/{bot}/restore")
+    def restore_bot(request: Request, bot: str, body: M.Empty):
+        """Bring an archived bot back: the owner, an admin or the bot's owner, to the status it had, else planned."""
+        who = request.state.identity
+
+        def work(c):
+            nonlocal bot
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
+            result = settings_admin.restore(c, who, bot)
+            if rooms.thread_mode(c, bot) == rooms.SHARED:
+                rooms.sync_shared_room(c, auth, bot, actor=who.actor, create=True)
+            return result
+
+        return report_mutate(request, body, work)

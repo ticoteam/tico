@@ -1,5 +1,8 @@
 """People routes: remove, edit, Slack links, bot goals, models, conversations, outline."""
 
+from . import access as Access
+from .store import encode
+
 from .store import H
 from .harnesses import HARNESS_CATALOG
 from . import models as M
@@ -172,6 +175,7 @@ def register(app, auth, mutate, settings, store, visual_view):
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             if chat_with:
                 chat_with = (H.resolve_bot(c, chat_with) or {}).get("id", chat_with)
+                assert chat_with is not None  # named above, so never empty here
                 from .shared_bots import route
 
                 chat_with = H.actor_id(route(c, who.actor, "bot:" + chat_with))
@@ -287,3 +291,137 @@ def register(app, auth, mutate, settings, store, visual_view):
                 if len(prompts) >= 500:
                     break
             return {"prompts": prompts[::-1]}
+
+
+def register_profile(app, auth, delegated_identity, mutate, settings, store, visual_view):
+    def may_edit_person(c, who, pid):
+        """Manage on this person: the same rule `my_access.manage` shows and the Access card's editor asks."""
+        from . import teammate_access
+
+        return teammate_access.can(c, who, "manage", "human:" + pid, auth=auth)
+
+    @app.post("/api/v2/humans/{pid}", **api_v2("Team chart", "updatePerson", "Edit a person's profile or reports_to"))
+    def person_update(request: Request, pid: str, body: M.PersonUpdate):
+        caller = request.state.identity
+
+        def work(c):
+            auth.domain(caller)
+            who = delegated_identity(c, caller, body.on_behalf_of) if body.on_behalf_of else caller
+            roster = views.roster(c)
+            person = P.person(pid, roster)
+            if person and person.get("hidden") and body.left:
+                return P.profile(person)  # already off the chart
+            if not person or person.get("hidden"):
+                raise Problem("not_found", "Person not found", 404)
+            if body.left is not None and who.role != "owner":
+                raise Problem("forbidden", "Only the owner takes someone off the org chart", 403)
+            if body.left and pid == H.actor_id(who.actor):
+                raise Problem("forbidden", "You cannot take yourself off the org chart", 403)
+            if not may_edit_person(c, who, pid):
+                raise Problem("forbidden", "You cannot edit this person's profile", 403)
+            if body.reports_to is not None:
+                boss = body.reports_to.strip()
+                if boss == pid:
+                    raise Problem("hierarchy", "A person cannot report to themselves", 422)
+                if boss and (not (boss_row := P.person(boss, roster)) or boss_row.get("hidden")):
+                    raise Problem("not_found", "Reports-to person was not found", 404)
+                # Nobody moves under their own report: the chain from the new boss must not reach here.
+                at, seen = boss, set()
+                while at and at not in seen:
+                    if at == pid:
+                        raise Problem("hierarchy", "A person cannot report to someone below them", 422)
+                    seen.add(at)
+                    at = str((P.person(at, roster) or {}).get("reports_to") or "")
+                # A manager may move their own reports, and may move them only under people they manage.
+                if (
+                    who.role != "owner"
+                    and boss
+                    and not auth.manages(c, who, "person", boss)
+                    and H.actor_id(who.actor) != boss
+                ):
+                    raise Problem("forbidden", "You can only move people under yourself or your own reports", 403)
+                if who.role != "owner" and not boss:
+                    raise Problem("forbidden", "Only the owner puts someone at the top of the chart", 403)
+            login = body.github.strip().lstrip("@").lower() if body.github is not None else None
+            # A review request names one login (backend/github.py), so two people never share one.
+            if login and any(
+                row["id"] != pid and not row.get("hidden") and str(row.get("github") or "").lower() == login
+                for row in roster["people"]
+            ):
+                raise Problem("github_taken", "Someone else on the team already has this GitHub login", 409)
+            people = list(roster["people"])
+            for i, row in enumerate(people):
+                if row["id"] != pid:
+                    continue
+                if body.title is not None:
+                    row = {**row, "title": body.title.strip()}
+                if body.about is not None:
+                    row = {**row, "about": body.about.strip()}
+                if body.goals is not None:
+                    row = {**row, "goals": body.goals}
+                if body.notes is not None:
+                    row = {**row, "notes": body.notes}
+                if login is not None:
+                    row = {**row, "github": login}
+                if body.notify_slack_bot_messages is not None:
+                    row = {**row, "notify_slack_bot_messages": body.notify_slack_bot_messages}
+                if body.update_draft is not None:
+                    row = {**row, "update_draft": body.update_draft}
+                if body.notify_browser is not None:
+                    row = {**row, "notify_browser": body.notify_browser}
+                if body.email_digest is not None:
+                    row = {**row, "email_digest": body.email_digest}
+                if body.slack_muted_bots is not None:
+                    row = {**row, "slack_muted_bots": list(dict.fromkeys(body.slack_muted_bots))}
+                if body.reports_to is not None:
+                    row = {**row, "reports_to": body.reports_to.strip()}
+                if body.left:
+                    row = Access.leave(c, people, row)
+                people[i] = row
+                roster = {**roster, "people": people}
+                from .report_order import roster_saved
+
+                roster_saved(c, roster)  # a new manager's report goes last there
+                c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(roster),))
+                from .finance import actions as FA
+
+                FA.revalidate_org(c)  # Finance's view grants follow the org chart at once (spec 7.5)
+                from . import people_mirror
+
+                people_mirror.changed()  # `left` and sign-in changes reach the Tico account
+                H.event(
+                    c,
+                    who.actor,
+                    "person.updated",
+                    pid,
+                    {
+                        "title": body.title is not None,
+                        "about": body.about is not None,
+                        "goals": body.goals is not None,
+                        "notes": body.notes is not None,
+                        "github": body.github is not None,
+                        "notify_slack_bot_messages": body.notify_slack_bot_messages,
+                        "update_draft": body.update_draft,
+                        "notify_browser": body.notify_browser,
+                        "email_digest": body.email_digest,
+                        "slack_muted_bots": body.slack_muted_bots,
+                        "reports_to": body.reports_to,
+                        "left": bool(body.left),
+                    },
+                )
+                if caller is not who:
+                    H.event(
+                        c,
+                        caller.actor,
+                        "person.update_delegated",
+                        pid,
+                        {"on_behalf_of": who.actor, "message_id": body.on_behalf_of},
+                    )
+                return P.profile(row)
+            raise Problem("not_found", "Person not found", 404)
+
+        return mutate(request, body, work)
+
+    register(app, auth, mutate, settings, store, visual_view)
+
+    # Org rule checks (backend/org_rule_check.py): a bot's output is checked before its write, outside the write's

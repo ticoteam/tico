@@ -1,5 +1,15 @@
 """Computer, placement, runner, agent sync and attempt routes."""
 
+from . import built_on
+from . import runner_online
+from . import org_rule_check
+from . import placement as placing
+from .auth import Identity
+from .execution import runner_repository, reset_bot_sessions
+from . import fleet_check as fleet_check_module
+from .screen import listing as screen_listing
+from .performance import listing as performance_listing
+
 from . import bot_settings as BS
 from .execution import ClaimFaults
 from .store import H
@@ -467,7 +477,9 @@ def register(
                 raise Problem("forbidden", "Only people register bots", 403)
             created = settings_admin.register(c, who, body)
             if body.build and body.template:
-                bot_id = H.resolve_bot(c, created["slug"])["id"]
+                made_bot = H.resolve_bot(c, created["slug"])
+                assert made_bot is not None  # settings_admin.register just made it
+                bot_id = made_bot["id"]
                 current = onboarding._declared(c, bot_id)
                 if not created["created"] and current.get("template") != body.template:
                     raise Problem("template", "Change the bot's template in its definition before building it", 409)
@@ -686,3 +698,472 @@ def register(
     def background_done(request: Request, aid: str, body: M.BackgroundDone):
         body = scrub_attempt(aid, body)  # a secret set in this run never reaches the wake
         return mutate(request, body, lambda c: execution.background_done(c, request.state.identity, aid, body))
+
+
+def register_placement(
+    admin_only,
+    app,
+    auth,
+    delegated_identity,
+    execution,
+    mutate,
+    onboarding,
+    propose_card,
+    risky,
+    send,
+    settings,
+    settings_admin,
+    store,
+    task_view,
+    telemetry,
+):
+    def closed_computer(c, who, bot, runner_id):
+        """An admin placing a member's bot on a computer that is neither the member's own nor open to members'
+        bots: allowed, but through BotOps only with the admin's own click."""
+        runner = c.execute(
+            "SELECT owner_id,accepts_member_bots FROM runners WHERE id=? AND revoked_at IS NULL", (runner_id,)
+        ).fetchone()
+        config = c.execute("SELECT owner_id FROM bot_config WHERE bot=?", (bot,)).fetchone()
+        return bool(
+            runner
+            and config
+            and not runner["accepts_member_bots"]
+            and runner["owner_id"] != config["owner_id"]
+            and auth.member_bot(c, bot)
+            and auth.bot_admin(who)
+        )
+
+    def placement_summary(c, bot, runner_id):
+        runner = c.execute("SELECT label,accepts_member_bots FROM runners WHERE id=?", (runner_id,)).fetchone()
+        return (
+            "Place "
+            + ((H.bot(c, bot) or {}).get("display_name") or bot)
+            + " on "
+            + (runner["label"] if runner else "a computer")
+            + (
+                ", a computer that takes members' bots"
+                if runner and runner["accepts_member_bots"]
+                else ", a computer that does not take members' bots"
+            )
+        )
+
+    @app.post("/api/v2/bots/{bot}/assignment")
+    def assign(request: Request, bot: str, body: M.Assignment):
+        caller = request.state.identity
+
+        def work(c):
+            nonlocal bot
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
+            who = delegated_identity(c, caller, body.on_behalf_of) if body.on_behalf_of else caller
+            if risky(who) and closed_computer(c, who, bot, body.runner_id):
+                return propose_card(
+                    c,
+                    who,
+                    "POST",
+                    "/api/v2/bots/" + bot + "/assignment",
+                    body.model_dump(exclude={"on_behalf_of"}),
+                    placement_summary(c, bot, body.runner_id),
+                )
+            return execution.assign(c, who, bot, body)
+
+        return mutate(request, body, work)
+
+    def find_computer(c, name):
+        """A computer by id or label (any case), or a refusal that lists the ones there are."""
+        rows = c.execute("SELECT id,label FROM runners WHERE revoked_at IS NULL ORDER BY label").fetchall()
+        hit = [r for r in rows if r["id"] == name or r["label"].strip().lower() == str(name).strip().lower()]
+        if len(hit) != 1:
+            raise Problem(
+                "not_found",
+                ("No computer is called " + name if not hit else "More than one computer is called " + name)
+                + ". The computers: "
+                + (", ".join(r["label"] for r in rows) or "none yet"),
+                404,
+            )
+        return hit[0]
+
+    def history_on_github(bot):
+        """Before the write (GitHub is never called while holding it): for a never-placed bot built on a computer,
+        whether GitHub holds its history yet (True, False, or None when it cannot be learned). None for any other bot."""
+        with store.read() as c:
+            if not built_on.computer(c, bot):
+                return None
+            repository = runner_repository(c, settings, bot)  # "" when Tico does not use it: history is only there
+        service = getattr(app.state, "github_app", None)
+        return service.repository_history(repository) if service and repository else None
+
+    def place_now(c, who, bot, computer="", history=None):
+        """`tico bot place`: on the computer named, or the one the company's own rule picks (backend/placement.py).
+        A new bot whose history is only on the computer that built it goes there first (`history` is not True): that
+        computer publishes it to GitHub, and from then on it can move like any other."""
+        settings_admin._manager(c, who, bot)
+        row = H.bot(c, bot)
+        if not row:
+            raise Problem("not_found", "Bot not found", 404)
+        current = c.execute(
+            "SELECT a.*,r.label FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=?", (bot,)
+        ).fetchone()
+        wanted = find_computer(c, computer) if computer else None
+        if current and (not wanted or wanted["id"] == current["runner_id"]):
+            return {"bot": bot, "computer": current["label"], "placed": False, "already": True}
+        from .agents import external_harness
+
+        if external_harness(c, bot):
+            raise Problem("harness", "This bot is run by an external agent; it has no computer to place it on", 422)
+        built = built_on.computer(c, bot) if history is not True else None
+        if built and wanted and wanted["id"] != built["id"]:
+            raise Problem(
+                "history_elsewhere",
+                f"{row['slug']}'s repository was built on {built['label']} and "
+                + ("Tico could not check GitHub's copy" if history is None else "is not on GitHub yet")
+                + f", so {wanted['label']} could not get it. Put it on {built['label']} first (`tico bot go-live {row['slug']} --computer "
+                f"\"{built['label']}\"`): {built['label']} publishes it to GitHub, and then it can move",
+                409,
+            )
+        options = [wanted] if wanted else [built] if built else placing.candidates(c, auth, bot)
+        from . import cloud_machines
+
+        if not options and (first := cloud_machines.first_home(c, bot)):
+            options = [first]  # a cloud-mode bot whose own machine is not made yet: the shared one first
+        if not options and cloud_machines.offered(c, settings) and cloud_machines.adopt(c, bot, who.actor):
+            # A Tico Cloud bot whose cloud machine has not enrolled yet: it is assigned there when it does
+            # (cloud_machines.enrolled), so nothing is refused while the machine is on its way.
+            machine = cloud_machines.coming(c, bot)
+            if machine and machine["status"] == "out_of_credit":
+                raise Problem("out_of_credit", f"Out of credit: {machine['label']} can't start. Add credit first", 409)
+            if machine and machine["status"] == "failed":
+                raise Problem(
+                    "cloud_computer_failed",
+                    f"{machine['label']} didn't start: {machine['words']}. See Settings > Computers",
+                    409,
+                )
+            if machine:
+                return {"bot": bot, "computer": machine["label"], "placed": False, "already": False, "waiting": True}
+        if not options:
+            raise Problem(
+                "no_computer",
+                "No computer can take this bot yet: add one, or ask an admin to open one to members' bots",
+                409,
+            )
+        generation = current["generation"] if current else 0
+        refusal = None
+        for runner in options:
+            if risky(who) and closed_computer(c, who, bot, runner["id"]):
+                return propose_card(
+                    c,
+                    who,
+                    "POST",
+                    "/api/v2/bots/" + bot + "/assignment",
+                    {"runner_id": runner["id"], "expected_generation": generation},
+                    placement_summary(c, bot, runner["id"]),
+                )
+            c.execute("SAVEPOINT place_now")
+            try:
+                execution.assign(c, who, bot, M.Assignment(runner_id=runner["id"], expected_generation=generation))
+            except Problem as exc:
+                c.execute("ROLLBACK TO place_now")
+                c.execute("RELEASE place_now")
+                if wanted:
+                    raise
+                refusal = exc
+                continue
+            c.execute("RELEASE place_now")
+            return {"bot": bot, "computer": runner["label"], "placed": True, "already": False}
+        assert refusal is not None  # options is not empty, so a place that failed left its refusal
+        raise refusal
+
+    def health_checks(who):
+        """What is wrong with the bots this person may see, most urgent first, each with its one fix."""
+        auth.domain(who)
+        with store.read_transaction() as c:  # one snapshot: company-wide reads are shared by every bot's row
+            result = fleet_check_module.check(c, who, auth, settings)
+            result["computers"] = computer_rows(c, who)
+            result["services"] = views.team_services(c, who, auth)
+            from . import health
+            from .onboarding import config_view
+
+            checks = health.view(
+                c, who, settings, auth, getattr(app.state, "github_app", None), config_view(c, settings, who)
+            )["checks"]
+            result["checks"] = checks
+            for check in checks:
+                if check["status"] not in ("warn", "bad", "unknown") and not check.get("items"):
+                    continue
+                items = check.get("items") or [
+                    {"bot": "", "name": check["label"], "text": check["summary"], "fixes": check["fixes"]}
+                ]
+                for item in items:
+                    fixes = item.get("fixes") or []
+                    result["issues"].append(
+                        {
+                            **item,
+                            "kind": check["id"],
+                            "severity": "high"
+                            if check["status"] == "bad"
+                            else "low"
+                            if check["status"] == "info"
+                            else "medium",
+                            "fix": item.get("fix")
+                            or "; ".join(f["label"] + (": " + f["href"] if f["href"] else "") for f in fixes),
+                        }
+                    )
+
+            result["issues"].sort(key=lambda i: (fleet_check_module.ORDER[i["severity"]], i["name"].lower(), i["kind"]))
+            result["counts"] = {
+                level: sum(i["severity"] == level for i in result["issues"]) for level in fleet_check_module.ORDER
+            }
+            return result
+
+    @app.get("/api/v2/health/issues")
+    def health_issues(request: Request):
+        """What is wrong with the bots this person may see, most urgent first, each with its one fix. The Assistant
+        also gets the live team snapshot (views.fleet_snapshot) with it."""
+        who = request.state.identity
+        checked = health_checks(who)
+        if getattr(who, "via", None) == "assistant":
+            from .views import fleet_snapshot
+
+            with store.read() as c:
+                snapshot = fleet_snapshot(c, auth, who, task_view)
+            return {**snapshot, **{key: checked[key] for key in ("checks", "issues", "services", "counts")}}
+        return checked
+
+    def computer_rows(c, who):
+        from .performance import load_statuses
+        from . import usage_limits
+        from .start_places import summaries, describe as describe_turns
+
+        online = {r["id"] for r in runner_online.online_rows(c)}
+        everyone = who.role == "owner" or auth.bot_admin(who)
+        mine = H.actor_id(who.actor)
+        readable = auth.bot_accesses(c, who)
+        # One pass for every computer's bots (not one SELECT per runner).
+        placed, _ = views.assignments_by_runner(c)
+        rows = []
+        # One Default for the whole listing: each computer's summary reuses pools/groups/spend memos.
+        limits = usage_limits.company(c)
+        runners = list(c.execute("SELECT * FROM runners_with_state WHERE revoked_at IS NULL ORDER BY label"))
+        # One pass for every computer's turn counts and load (not one summary and one load per computer).
+        turn_counts = summaries(c, [r["id"] for r in runners], settings, limits)
+        loads = load_statuses(c, [r["id"] for r in runners])
+        for r in runners:
+            counts = turn_counts[r["id"]]
+            turns = {"turn_counts": counts, "turn_summary": describe_turns(counts)}
+            detailed = everyone or r["owner_id"] == mine or r["accepts_member_bots"]
+            if not detailed:
+                if who.role == "bot":
+                    # Discovery and load do not grant access to repositories, logs or operator identity.
+                    rows.append(
+                        {
+                            "id": r["id"],
+                            "label": r["label"],
+                            "online": r["id"] in online,
+                            "platform": r["platform"] or "",
+                            "accepts_member_bots": False,
+                            **loads[r["id"]],
+                            **turns,
+                        }
+                    )
+                continue
+            bots = [bot for bot in placed.get(r["id"]) or [] if (readable.get(bot) or {}).get("see")]
+            rows.append(
+                {
+                    "id": r["id"],
+                    "label": r["label"],
+                    "online": r["id"] in online,
+                    "platform": r["platform"] or "",
+                    "owner_id": r["owner_id"],
+                    "accepts_member_bots": bool(r["accepts_member_bots"]),
+                    "bots": bots,
+                    "turns_at_once": r["turns_at_once"],
+                    "turn_limit": start_places.turn_limit(r),
+                    **screen_listing(r),
+                    **performance_listing(r),
+                    **views.computer_details(c, r, who, auth),
+                    **loads[r["id"]],
+                    **turns,
+                }
+            )
+        return rows
+
+    register(
+        app,
+        admin_only,
+        auth,
+        closed_computer,
+        computer_rows,
+        delegated_identity,
+        execution,
+        history_on_github,
+        mutate,
+        onboarding,
+        place_now,
+        placement_summary,
+        propose_card,
+        risky,
+        send,
+        settings,
+        settings_admin,
+        store,
+        telemetry,
+        reset_bot_sessions,
+    )
+    return computer_rows, place_now
+
+
+def register_completion(
+    app,
+    auth,
+    execution,
+    mutate,
+    rule_comment_audience,
+    rule_message_audience,
+    rule_public,
+    rule_target,
+    rule_task_audience,
+    rule_update_audience,
+    store,
+):
+    @app.post("/api/v2/attempts/{aid}/complete")
+    def complete(request: Request, aid: str, body: M.Completion):
+        body = scrub_attempt(aid, body)
+        from . import automations  # the turn's end acts for the turn (automations.for_attempt)
+
+        rc = completion_rule_check(request, aid, body)
+
+        def finish(c):
+            with automations.for_attempt(c, aid):
+                return execution.complete(c, request.state.identity, aid, body, rule_check=rc)
+
+        return mutate(request, body, finish)
+
+    @org_rule_check.replayer("reply")
+    def rule_replay_reply(c, bot, hold, replay, ingest, gate=None):
+        """A held turn reply, posted as the completion would have posted it."""
+        from .execution import reply_target, split_runner_notices, work_task_id
+
+        msg = H.message(c, replay["message"])
+        if not msg:
+            raise Problem("not_found", "The message this reply answered is gone", 409)
+        conv = H.conversation(c, msg["conversation_id"])
+        assert conv is not None  # a reply goes to its message's conversation
+        tid = work_task_id(msg, conv)
+        task = H.task(c, tid) if tid else None
+        target = msg["sender_id"] if msg["kind"] == "ask" else reply_target(msg, conv, task)
+        refs = {"turn_id": replay["attempt"], **({"task": tid} if task else {})}
+        # The completion's own destination check, as the run it came from: a private task or meeting the reply drew
+        # on that its reader lost since the hold keeps it from going there.
+        privacy.require_destination(
+            c, Identity(bot.actor, "bot", attempt_id=replay["attempt"]), target, conv["id"], refs, msg
+        )
+        text, _ = split_runner_notices(replay["text"])
+        sent = H.say(
+            c,
+            bot.actor,
+            target,
+            org_rule_check.warned_text(gate, text),
+            conversation_id=conv["id"],
+            in_reply_to=msg["id"],
+            refs=refs,
+        )
+        return {"message": sent}
+
+    def reply_audience(c, bot, replay):
+        from .execution import reply_target, work_task_id
+
+        msg = H.message(c, replay["message"])
+        if not msg:
+            raise Problem("not_found", "The message this reply answered is gone", 409)
+        conv = H.conversation(c, msg["conversation_id"])
+        tid = work_task_id(msg, conv)
+        return [reply_target(msg, conv, H.task(c, tid) if tid else None)]
+
+    def rule_audiences():
+        """Who each held write would reach now, from its replay data, counted as its route's check counted them:
+        Send anyway refuses a hold whose audience moved (org_rule_check._same_audience)."""
+
+        def task_row(c, bot, replay):
+            return auth.task(c, bot, auth.resolve_task(c, bot, replay["task"]))
+
+        def message(c, bot, replay):
+            return rule_message_audience(c, bot, M.MessageCreate.model_validate(replay["body"]))
+
+        def note(c, bot, replay):
+            return [rule_target(c, bot, M.NoteCreate.model_validate(replay["body"]).to)]
+
+        def task_create(c, bot, replay):
+            body = M.TaskCreate.model_validate(replay["body"])
+            return [rule_target(c, bot, body.owner), *(org_rule_check.company(c) if rule_public(body) else [])]
+
+        def task_update(c, bot, replay):
+            return rule_update_audience(c, bot, M.TaskUpdate.model_validate(replay["body"]), task_row(c, bot, replay))
+
+        def comment(c, bot, replay):
+            body = M.TaskComment.model_validate(replay["body"])
+            return rule_comment_audience(c, bot, task_row(c, bot, replay), body.text)
+
+        def comment_edit(c, bot, replay):
+            body = M.TaskComment.model_validate(replay["body"])
+            return rule_task_audience(c, task_row(c, bot, replay), bot.actor, body.text)
+
+        return {
+            "message": message,
+            "note": note,
+            "task_create": task_create,
+            "task_update": task_update,
+            # A hand-off (task_owner) and the other v3 task writes count their own: backend/task_moves_routes.py.
+            "bulk": task_update,
+            "comment": comment,
+            "comment_edit": comment_edit,
+            "reply": reply_audience,
+        }
+
+    def completion_rule_check(request, aid, body):
+        """The org rule check of a turn's reply, before the completion's write (backend/org_rule_check.py): the reply
+        as the completion would post it, to whom it would post it. None when there is nothing to check."""
+        if body.outcome != "completed" or not body.text:
+            return None
+        from .execution import reply_source, reply_target, split_runner_notices, work_task_id
+
+        with store.read() as c:
+            if not org_rule_check.R.any_active(c):
+                return None  # no rule in force: the completion reads nothing more for its check
+            if store.saved(c, request.state.identity, request.url.path, request.headers.get("idempotency-key")):
+                return None  # a retry answers from its saved result; nothing is checked again
+            row = c.execute(
+                "SELECT a.bot_id, j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?", (aid,)
+            ).fetchone()
+            msg = H.message(c, row["message_id"], include_deleted=True) if row else None
+            if not msg or msg["deleted_at"] is not None:
+                return None
+            # A carrier-started turn answers the message it carries, so its reply is checked as going to that sender.
+            msg = reply_source(c, msg)
+            if not msg or msg["deleted_at"] is not None:
+                return None
+            conv = H.conversation(c, msg["conversation_id"])
+            tid = work_task_id(msg, conv)
+            task = H.task(c, tid) if tid else None
+            if not (msg["kind"] in ("say", "ask", "steer") or task):
+                return None
+            target = reply_target(msg, conv, task)
+        bot = Identity("bot:" + row["bot_id"], "bot", attempt_id=aid)
+        text, _ = split_runner_notices(body.text)
+        return org_rule_check.preflight(
+            store, app.state.judge, bot, "reply", text, [target], context={"task": task["title"]} if task else None
+        )
+
+    @app.get("/api/v2/bots/{bot}/execution-review")
+    def execution_review(request: Request, bot: str):
+        with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
+            return execution.review_jobs(c, request.state.identity, bot)
+
+    @app.post("/api/v2/jobs/{jid}/reconcile")
+    def reconcile_job(request: Request, jid: str, body: M.ReconcileJob):
+        return mutate(request, body, lambda c: execution.reconcile_job(c, request.state.identity, jid, body))
+
+    @app.post("/api/v2/jobs/{jid}/retry")
+    def retry(request: Request, jid: str, body: M.Retry):
+        return mutate(request, body, lambda c: execution.retry(c, request.state.identity, jid, body))
+
+    return rule_audiences

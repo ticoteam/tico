@@ -61,13 +61,6 @@ const BACKGROUND_TOOLS: &[&str] = &["Monitor"];
 pub const RESTORING: &str =
     "Saved provider session is unavailable; restoring this conversation's context.";
 
-pub fn version_tuple(text: &str) -> Option<(u64, u64, u64)> {
-    static R: OnceLock<regex::Regex> = OnceLock::new();
-    let r = R.get_or_init(|| regex::Regex::new(r"(\d+)\.(\d+)\.(\d+)").unwrap());
-    let c = r.captures(text)?;
-    Some((c[1].parse().ok()?, c[2].parse().ok()?, c[3].parse().ok()?))
-}
-
 /// The version on Claude Code's own `--version` line, `2.1.326 (Claude Code)`, and nothing else: a launcher or wrapper
 /// in front of it (`npx`, `op run --`) that answers with its own number never decides which flags a turn passes.
 pub fn own_version(text: &str) -> Option<(u64, u64, u64)> {
@@ -549,6 +542,7 @@ pub struct ClaudeHost(Arc<Shared>);
 #[derive(Clone)]
 struct Features {
     version: String,
+    /// Steering (STEER_MIN_VERSION), read from Claude Code's own version line only; unknown leaves it off.
     steer: bool,
     /// `--effort` (EFFORT_MIN_VERSION), read from Claude Code's own version line only; unknown leaves it out.
     effort: bool,
@@ -559,12 +553,14 @@ fn features() -> &'static Mutex<HashMap<Vec<String>, Features>> {
     C.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Steering needs a Claude Code that replays its input (STEER_MIN_VERSION): read from the version alone.
+/// Steering (it needs a Claude Code that replays its input) and `--effort` are both read from the version line that is
+/// Claude Code's own: a wrapper's number never turns either on.
 fn read_features(version: &str) -> Features {
+    let own = own_version(version);
     Features {
         version: version.to_string(),
-        steer: version_tuple(version).unwrap_or((0, 0, 0)) >= STEER_MIN_VERSION,
-        effort: own_version(version).is_some_and(|v| v >= EFFORT_MIN_VERSION),
+        steer: own.is_some_and(|v| v >= STEER_MIN_VERSION),
+        effort: own.is_some_and(|v| v >= EFFORT_MIN_VERSION),
     }
 }
 
@@ -3776,6 +3772,34 @@ cat >/dev/null"#;
         }
     }
 
+    #[tokio::test]
+    async fn a_bare_or_wrapped_version_leaves_steering_and_goals_off() {
+        // Steering and goals read Claude Code's own version line, as --effort does: a number on any other line (a
+        // bare `2.1.999`, a launcher's `npx 10.9.2`) is not Claude Code's version, so none of the three turns on.
+        for text in ["2.1.999", "npx 10.9.2"] {
+            let features = read_features(text);
+            assert!(!features.steer && !features.effort, "{text:?}");
+            let (supported, commands) =
+                crate::hosts::probe_goals("claude", std::path::Path::new("claude"), text).await;
+            assert!(
+                !supported && commands.is_empty(),
+                "{text:?} turned goals on"
+            );
+            // The turn a probe that read this version starts: its features come from the version alone.
+            let (tx, _rx) = mpsc::unbounded_channel();
+            let cmd = vec![format!("claude-{}", uuid::Uuid::new_v4().simple())];
+            note_version(&cmd, text).await;
+            let host = ClaudeHost::new("acme", cmd, tx);
+            host.start().await.unwrap();
+            assert!(!host.supports_steer(), "{text:?} turned steering on");
+        }
+        let own = "2.1.999 (Claude Code)";
+        assert!(read_features(own).steer);
+        let (supported, _) =
+            crate::hosts::probe_goals("claude", std::path::Path::new("claude"), own).await;
+        assert!(supported);
+    }
+
     #[test]
     fn flags_follow_the_python_host() {
         assert_eq!(model_for(Some("gpt-5.4")), None);
@@ -3785,7 +3809,6 @@ cat >/dev/null"#;
         );
         assert_eq!(effort_for(Some("XHIGH")).as_deref(), Some("xhigh"));
         assert_eq!(effort_for(Some("minimal")), None);
-        assert_eq!(version_tuple("2.1.296 (Claude Code)"), Some((2, 1, 296)));
         assert_eq!(
             usage_tokens(
                 &json!({"input_tokens": 3, "cache_creation_input_tokens": 4, "cache_read_input_tokens": "5", "output_tokens": 7})
