@@ -245,11 +245,11 @@ def test_holds_that_are_not_the_updates_stay_in_force_when_it_clears(api, monkey
         for bot in bots:
             post(api, "tasks", {"owner": bot, "title": "Check the synthetic report", "body": "Fixture data."})
     with api.app.state.store.transaction() as c:
-        c.execute(
-            "INSERT INTO bot_status(bot,state,changed_at,updated_at) VALUES('finance','limited',?,?) "
-            "ON CONFLICT(bot) DO UPDATE SET state='limited',changed_at=excluded.changed_at",
-            (H.now(), H.now()),
-        )
+        # finance alone signs in with Codex on that computer, and that login is at its usage limit.
+        from backend import bot_settings as BS, login_holds
+
+        BS.write(c, "finance", {**BS.read(c, "finance"), "runtime": "codex", "harness": "codex", "model": "gpt-6-luna"})
+        login_holds.record(c, current["runner_id"], "", "codex", H.now(), error="Usage limit")
     for machine, bots in places:
         beat(api, machine, bots, OLD, {"state": "updating", "target": NEW, "running": 0, "handed_back": 0})
     before = {m["runner_id"]: capture(api, m, bots) for m, bots in places}

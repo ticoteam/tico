@@ -5562,9 +5562,10 @@ def create_app(settings=None):
     from . import website_tools
 
     website_tools.install(app, store, auth, settings)  # Tools: website tools and their accounts
-    from . import tool_settings
+    from . import tool_settings, tool_templates
 
     tool_settings.install(app, store)  # Tools: an API tool's Settings, its non-secret values
+    tool_templates.install(app, store)  # Tools: multi-secret templates, paste to classify, ungroup
     from . import tool_proxy
 
     tool_proxy.install(app, store)

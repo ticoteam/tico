@@ -30,6 +30,11 @@ interface KdState {
   timer: number;
   sent: string;              // the proof line after Send: the names that went
 }
+// A known vendor's auth template (GET /api/v2/tool-templates, backend/tool_templates.py): its variables' prefix and
+// fields, each with the shape a value of it has. Read once, no value sent.
+interface KdTemplateField {id: string; suffix: string; role: string; shape: string}
+interface KdTemplate {id: string; prefix: string; fields: KdTemplateField[]}
+let KD_TEMPLATES: KdTemplate[] = [];
 const KD = new WeakMap<ThvView, KdState>();
 const KD_TOKEN = /\[key:([A-Z0-9_]+)\]/g;
 const KD_LOCK = '<span class="kd-ico" aria-hidden="true">🔒</span>';
@@ -77,6 +82,9 @@ async function kdLoad(view: ThvView): Promise<void> {
   const state = KD.get(view);
   if (!state) return;
   state.rules = await sdRules();
+  if (!KD_TEMPLATES.length) {
+    try { KD_TEMPLATES = (await get<{templates?: KdTemplate[]}>('/v2/tool-templates')).templates || []; } catch { KD_TEMPLATES = []; }
+  }
   try {
     const inv = await get<{credentials?: {id: string; name: string; env?: string; revision?: number}[]; can_manage?: boolean}>('/v2/credentials', {fresh: true});
     for (const row of inv.credentials || []) {
@@ -120,9 +128,21 @@ function kdUniqueName(state: KdState, wanted: string, self?: KdItem): string {
   return name;
 }
 
+/** The variable a secret no rule named for its vendor goes under when exactly one known template has a secret field of
+ *  its shape (TWILIO_API_KEY for SK and 32 hex), the first such field still free in this drop; '' otherwise. */
+function kdTemplateName(state: KdState, found: SdItem): string {
+  if (found.service) return '';
+  const fits = KD_TEMPLATES.map(t => ({t, fields: t.fields.filter(f => f.role === 'secret' && f.shape && sdFull(f.shape, found.value))}))
+    .filter(x => x.fields.length);
+  if (fits.length !== 1) return '';
+  const {t, fields} = fits[0]!;
+  const free = fields.map(f => t.prefix + '_' + f.suffix).find(n => !state.items.some(i => i.name === n));
+  return free || '';
+}
+
 function kdItem(state: KdState, found: SdItem): KdItem {
   const item: KdItem = {...found, id: kdId(), status: 'locked', error: '', forTool: kdForTool(state, found.service), existing: null, replace: false};
-  item.name = kdUniqueName(state, found.name, item);
+  item.name = kdUniqueName(state, kdTemplateName(state, found) || found.name, item);
   kdExisting(state, item);
   state.items.push(item);
   return item;

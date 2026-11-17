@@ -26,14 +26,6 @@
                 }
             },
             {
-                "code": "reportOperatorIssue",
-                "range": {
-                    "startColumn": 10,
-                    "endColumn": 60,
-                    "lineCount": 1
-                }
-            },
-            {
                 "code": "reportPossiblyUnboundVariable",
                 "range": {
                     "startColumn": 44,

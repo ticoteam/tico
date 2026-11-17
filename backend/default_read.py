@@ -31,7 +31,7 @@ read_cache: Any = read_cache_module
 Row = Any
 
 CANDIDATES_SQL = (
-    "SELECT t.id AS tool_id, t.name AS tool_name, t.base_url, t.delivery, t.everyone_reads, k.id, k.env, "
+    "SELECT t.id AS tool_id, t.name AS tool_name, t.base_url, t.delivery, t.everyone_reads, t.auth_template, k.id, k.env, "
     "k.access_level FROM tools t JOIN credentials k ON k.tool_id=t.id "
     "WHERE t.audience IS NULL AND COALESCE(t.kind,'api')='api' "
     "AND k.ciphertext IS NOT NULL AND k.kind!='login' AND COALESCE(k.holder,'')='' "
@@ -46,9 +46,20 @@ def _proxy_reaches(tool: Row) -> bool:
     )
 
 
-def enforceable_keys(c: Any) -> dict[str, Row]:
-    """{tool id: the key a bot would read it with by default} for each tool where Read can be held to reads, the
-    switch aside: its stored Read key, else its Read and write key when the proxy can hold it to reads. Read once per
+def _pick(keys: list[Row]) -> Row | None:
+    """The key a bot reads with by default among one variable's keys (or one tool's): its stored Read key, else its
+    Read and write key when the proxy can hold it to reads."""
+    read = next((k for k in keys if k["access_level"] == "read"), None)
+    full = next((k for k in keys if k["access_level"] == "read_write"), None)
+    if read is not None:
+        return read
+    return full if full is not None and _proxy_reaches(full) else None
+
+
+def enforceable_keys(c: Any) -> dict[str, list[Row]]:
+    """{tool id: the keys a bot would read it with by default} for each tool where Read can be held to reads, the
+    switch aside: its stored Read key, else its Read and write key when the proxy can hold it to reads; for a tool
+    with a multi-secret template (backend/tool_templates.py), that for each of its variables. Read once per
     snapshot."""
     values: Any = read_cache.cache(c)
     if values is not None and ("default_read",) in values:
@@ -60,22 +71,26 @@ def enforceable_keys(c: Any) -> dict[str, Row]:
     except sqlite3.OperationalError as exc:  # a file from before the switch's migration reads nothing by default
         if "no such column" not in str(exc):
             raise
-    found: dict[str, Row] = {}
+    found: dict[str, list[Row]] = {}
     for tool_id, keys in rows.items():
-        read = next((k for k in keys if k["access_level"] == "read"), None)
-        full = next((k for k in keys if k["access_level"] == "read_write"), None)
-        if read is not None:
-            found[tool_id] = read
-        elif full is not None and _proxy_reaches(full):
-            found[tool_id] = full
+        if keys[0]["auth_template"]:
+            by_env: dict[str, list[Row]] = {}
+            for k in keys:
+                by_env.setdefault(str(k["env"]), []).append(k)
+            picked = [p for p in (_pick(group) for group in by_env.values()) if p is not None]
+        else:
+            one = _pick(keys)
+            picked = [one] if one is not None else []
+        if picked:
+            found[tool_id] = picked
     if values is not None:
         values[("default_read",)] = found
     return found
 
 
-def candidates(c: Any) -> dict[str, Row]:
+def candidates(c: Any) -> dict[str, list[Row]]:
     """`enforceable_keys` of the tools whose "Everyone can read" switch is on."""
-    return {t: k for t, k in enforceable_keys(c).items() if k["everyone_reads"]}
+    return {t: k for t, k in enforceable_keys(c).items() if k[0]["everyone_reads"]}
 
 
 def enforceable(c: Any, tool_id: str) -> bool:
@@ -83,12 +98,13 @@ def enforceable(c: Any, tool_id: str) -> bool:
     return tool_id in enforceable_keys(c)
 
 
-def _shared(found: dict[str, Row]) -> dict[str, list[str]]:
+def _shared(found: dict[str, list[Row]]) -> dict[str, list[str]]:
     """{variable: tool ids} for each variable more than one default-read tool would deliver."""
     by_env: dict[str, list[str]] = {}
-    for tool_id, key in found.items():
-        if key["env"]:
-            by_env.setdefault(str(key["env"]), []).append(tool_id)
+    for tool_id, keys in found.items():
+        for key in keys:
+            if key["env"]:
+                by_env.setdefault(str(key["env"]), []).append(tool_id)
     return {env: tools for env, tools in by_env.items() if len(tools) > 1}
 
 
@@ -147,13 +163,16 @@ def reads(c: Any, subject: str, explicit: frozenset[str]) -> dict[str, str]:
     held_tools, held_envs = _explicit(c, explicit)
     shared = _shared(found)
     out: dict[str, str] = {}
-    for tool_id, key in found.items():
-        env = str(key["env"] or "")
-        if tool_id in held_tools or (env and env in held_envs):
-            continue  # an explicit grant wins: the tool through it, the variable from it
-        if env in shared:
-            continue  # several to choose from: asked, not guessed
-        out[str(key["id"])] = tool_id
+    for tool_id, keys in found.items():
+        if tool_id in held_tools:
+            continue  # an explicit grant wins: the tool through it
+        for key in keys:
+            env = str(key["env"] or "")
+            if env and env in held_envs:
+                continue  # the variable from the explicit grant
+            if env in shared:
+                continue  # several to choose from: asked, not guessed
+            out[str(key["id"])] = tool_id
     return out
 
 
@@ -170,13 +189,10 @@ def choices(c: Any, subject: str, explicit: frozenset[str]) -> dict[str, list[st
     }
 
 
-def key_of(c: Any, tool_id: str, subject: str) -> str | None:
-    """The key `subject` reads `tool_id` with by default, or None."""
+def keys_of(c: Any, tool_id: str, subject: str) -> set[str]:
+    """The keys `subject` reads `tool_id` with by default: one, or one per variable of a tool with a template."""
     credentials: Any = importlib.import_module(".credentials", __package__)
-    for cid, tid in reads(c, subject, credentials.explicitly_granted(c, subject)).items():
-        if tid == tool_id:
-            return cid
-    return None
+    return {cid for cid, tid in reads(c, subject, credentials.explicitly_granted(c, subject)).items() if tid == tool_id}
 
 
 def summary(c: Any) -> dict[str, int]:

@@ -42,10 +42,14 @@ interface ToolApiKey {id: string; name: string; preview?: string | null; access_
 // A tool's setting: a plain variable every run holding a level on the tool gets (backend/tool_settings.py).
 interface ToolApiSetting {id: string; name: string; value: string}
 interface ToolApiCheck {ok: boolean; checked_at?: string | null; status_code?: number | string | null; detail?: string | null}
+// How a tool's several keys and settings reach the vendor (backend/tool_templates.py): a known vendor's id, or '' for its own.
+interface ToolApiTemplate {id: string; fields: {id: string; role: string}[]}
 interface ToolApiTool {
   id?: string; name: string; base_url?: string | null; check_path?: string | null; auth_scheme?: string | null;
-  delivery?: string | null; service?: string | null;
+  delivery?: string | null; service?: string | null; template?: ToolApiTemplate | null;
 }
+// One pasted value as the hub classified it: its variable, its template field ('' for none), secret, id or setting.
+interface ToolApiPasteItem {name: string; field: string; role: string; preview: string}
 interface ToolApiAudienceIn {people?: string[]; teams?: string[]; bots?: string[]}
 interface ToolApiAudience {everyone: boolean; people: string[]; teams: string[]; bots: string[]}
 interface ToolApiData {
@@ -54,6 +58,7 @@ interface ToolApiData {
   recent?: ToolApiCall[]; checks?: ToolApiCheck[]; mcp?: ToolMcp | null;
   // Every bot reads it with no grant while on, where Read can be held to reads (backend/default_read.py).
   everyone_reads?: {on: boolean; enforceable: boolean};
+  grouped?: boolean;   // made from several tools of one vendor account; Split undoes it
 }
 interface ToolApiPerson {id: string; name?: string; email?: string | null; hidden?: boolean; archived?: boolean}
 type ToolApiFinance = import('../types/api').FinanceAdAccounts & {campaigns?: FcCampaign[]};
@@ -206,9 +211,11 @@ function taKeysCard(d: ToolApiData): string {
     ? `<span data-ta-delivery="computer">Key on computers</span>${manage ? ' · <button type="button" class="linkish" data-ta-proxy>Move to proxy</button>' : ''}`
     : '<span data-ta-delivery="proxy">Through Tico · logged</span>';
   const expires = `${soonest ? esc(soonest) : 'No date'}${manage && keys.length ? ' · <button type="button" class="linkish" data-ta-expires>Set</button>' : ''}`;
-  return `<section class="card" id="tool-keys"><header><h2>Keys</h2>${manage ? '<button type="button" class="ghost small settings-head-act" data-ta-key-add>Add key</button>' : ''}</header>
+  const template = tool.template ? `<span data-ta-template="${esc(tool.template.id)}">${esc(tool.template.id ? taTemplateName(tool.template.id) : 'Own')}</span>${
+    manage && d.grouped ? ' · <button type="button" class="linkish" data-ta-split>Split</button>' : ''}` : '';
+  return `<section class="card" id="tool-keys"><header><h2>Keys</h2>${manage ? '<span class="settings-head-act"><button type="button" class="ghost small" data-ta-key-paste>Paste</button><button type="button" class="ghost small" data-ta-key-add>Add key</button></span>' : ''}</header>
     ${rows || '<p class="muted" data-ta-no-keys>No keys yet.</p>'}
-    <dl class="tt-kv">${row('Calls', calls)}${keys.length ? row('Expires', expires) : ''}${row('Added', added && `<span title="${esc(fmt(added))}">${esc(ago(added))}</span>`)}${
+    <dl class="tt-kv">${row('Calls', calls)}${row('Template', template)}${keys.length ? row('Expires', expires) : ''}${row('Added', added && `<span title="${esc(fmt(added))}">${esc(ago(added))}</span>`)}${
       row('Last used', used && `<span title="${esc(fmt(used))}">${esc(ago(used))}</span>`)}</dl></section>`;
 }
 // Settings: the tool's plain values (a host, a region, a project id), each a variable every run that can use the tool
@@ -354,6 +361,11 @@ async function taClick(ev: Event): Promise<void> {
   if (b.dataset.taReveal) return taReveal(b.dataset.taReveal);
   if (b.dataset.taRotate) return taKeyDialog((state.data.keys || []).find(k => k.id === b.dataset.taRotate));
   if (b.hasAttribute('data-ta-key-add')) return taKeyDialog(null);
+  if (b.hasAttribute('data-ta-key-paste')) return taPasteDialog(id);
+  if (b.hasAttribute('data-ta-split')) {
+    if (!await settingsConfirm({title: 'Split?', text: 'Its keys go back to the tools they came from.', ok: 'Split', danger: false})) return;
+    return write(() => post(taPath(id, '/ungroup'), {}));
+  }
   if (b.hasAttribute('data-ta-expires')) return taExpiresDialog();
   if (b.hasAttribute('data-ta-setting-add')) return taSettingDialog(null);
   if (b.dataset.taSettingEdit) return taSettingDialog((state.data.settings || []).find(v => v.id === b.dataset.taSettingEdit));
@@ -527,6 +539,39 @@ async function taReveal(cid: string): Promise<void> {
   } catch (e) { const wait = dialog.querySelector('[data-ta-reveal-wait]'); if (dialog.open && wait) wait.textContent = errorMessage(e, ''); }
 }
 
+// Paste keys: the hub splits the text into values and names each (a template's field by name or shape; else secret, id
+// or setting by the settings rules). The first submit shows what it found, never a secret's value; the second stores it.
+const taTemplateName = (id: string): string => ({twilio: 'Twilio', 'google-ads': 'Google Ads', aws: 'AWS', posthog: 'PostHog',
+  elevenlabs: 'ElevenLabs', calendly: 'Calendly'} as Record<string, string>)[id] || id;
+function taPasteRows(found: {template?: string; items?: ToolApiPasteItem[]}): string {
+  const rows = (found.items || []).map(i => `<div class="tt-key" data-ta-paste-row="${esc(i.role)}"><span class="nav-icon" aria-label="${esc(i.role)}" role="img" title="${esc(i.role)}">${
+    i.role === 'secret' ? 'key_vertical' : 'tag'}</span><span class="tt-key-name"><b class="mono">${esc(i.name)}</b> <span class="mono muted">${esc(i.preview)}</span></span></div>`).join('');
+  return `${found.template ? `<p><span class="pill" data-ta-paste-template="${esc(found.template)}">${esc(taTemplateName(found.template))}</span></p>` : ''}${rows}`;
+}
+function taPasteDialog(id: string, text = ''): void {
+  const dialog = whDialog('Paste keys', `<label>Keys<textarea name="text" rows="5" required autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore placeholder="NAME=value"></textarea></label>
+    <div data-ta-paste-rows></div>`, '<button class="primary" type="submit">Check</button>');
+  const box = dialog.querySelector<HTMLTextAreaElement>('textarea'), slot = dialog.querySelector<HTMLElement>('[data-ta-paste-rows]');
+  const button = dialog.querySelector<HTMLButtonElement>('[type="submit"]');
+  if (!box || !slot || !button) return;
+  let checked = '';
+  box.value = text;
+  box.oninput = () => { checked = ''; slot.innerHTML = ''; button.textContent = 'Check'; };
+  const check = async (value: string) => {
+    slot.innerHTML = taPasteRows(await post('/v2/tool-templates/classify', {text: value}));
+    checked = value; button.textContent = 'Add';
+  };
+  whSubmit(dialog, async (data: FormData) => {
+    const value = String(data.get('text') || '');
+    if (checked !== value) return check(value);
+    await post(taPath(id, '/paste'), {text: value});
+    dialog.close(); toast('Added');
+    const state = TA;
+    if (state && state.id === id) { await taLoad(); if (TA === state) { taDrawHead(); taDrawOverview(); } }
+  });
+  if (text) void check(text).catch(e => { const err = dialog.querySelector('[data-wh-error]'); if (err) err.textContent = errorMessage(e, ''); });
+}
+
 // ----------------------------------------------------------------- Add tool › API, and a tool's Settings
 // One form for both: name, vendor, address, where the key goes and the check path. Edit sends only what changed.
 function taToolForm(tool?: ToolApiTool | null): string {
@@ -558,12 +603,15 @@ function taToolDialog(tool?: ToolApiTool | null) {
 }
 function toolsApiCreate(): void {
   const dialog = taToolDialog(null);
+  // Its keys, pasted in one go: checked and stored on the new tool's page (taPasteDialog), held only in this page's memory.
+  dialog.querySelector('[name=check_path]')?.closest('label')?.insertAdjacentHTML('afterend', `<label>Keys<textarea name="paste" rows="3" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore placeholder="NAME=value"></textarea></label>`);
   whSubmit(dialog, async (data: FormData) => {
-    const f = taToolFields(data);
+    const f = taToolFields(data), pasted = String(data.get('paste') || '').trim();
     const made = await post('/v2/api-tools', {name: f.name, service: f.service || undefined, base_url: f.base_url || undefined, auth_scheme: f.auth_scheme,
       check_path: f.check_path || undefined});
     dialog.close(); toast('Added');
     location.hash = made?.id ? '#/tools/api/' + encodeURIComponent(made.id) : TOOLS_ROUTE;   // the tool, as POST /api-tools answers it
+    if (made?.id && pasted) taPasteDialog(made.id, pasted);
   });
 }
 function taSettingsDialog(): void {

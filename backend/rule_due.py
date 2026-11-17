@@ -29,7 +29,7 @@ STATUSES = ("overdue", "due_soon", "upcoming", "satisfied")
 WINDOW_DAYS = 30  # "due soon" without a routine window
 MAX_OCCURRENCES = 5000  # a backstop: a weekly date from decades ago still walks in a few hundred steps
 HISTORY = 5  # the last status rows a list shows for a due date
-OPEN_DAYS = 20  # the open occurrences a detail names (the count is always exact)
+DETAIL_OPEN_DAYS = 20  # the open occurrences a detail lists as open_days (the count is always exact)
 DETAIL_MARKS = 100  # the satisfied occurrences a detail shows, per row of its chain
 CHAIN_MAX = 50  # the rows of one due date's chain (its edits) a detail walks
 
@@ -113,7 +113,7 @@ def state(row, satisfied, today, window=WINDOW_DAYS):
         "due_on": current.isoformat(),
         "status": status,
         "open": len(opened),
-        "open_days": [day.isoformat() for day in opened[:OPEN_DAYS]],
+        "open_days": [day.isoformat() for day in opened[:DETAIL_OPEN_DAYS]],
     }
 
 

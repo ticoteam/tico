@@ -8305,6 +8305,11 @@ SCHEMAS['ApiToolSettings'] = obj(
             'type': 'boolean',
             'description': 'Everyone can read: every bot reads it with no grant, where Read can be held to reads',
         },
+        'template': {
+            'type': ['object', 'null'],
+            'description': 'How its several keys and settings reach the vendor (a known vendor\'s id, or its own): '
+            'fields (variable, role: secret, id or setting) and ways (basic, headers, query); null for one key',
+        },
     }
 )
 SCHEMAS['ApiTool'] = obj(
