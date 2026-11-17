@@ -85,9 +85,20 @@ const round = (n: number) => ({file_id: 'f-spec', version: n, at: ago(5), by: 'b
     const dialog = view.locator('#need-card');
     const approve = dialog.locator('.dc-side [data-key] [data-dc="approve"]');
     // The version line: over the document on the left (desktop), and over its tab (phone).
-    const left = dialog.locator('.dc-thing .dc-docver'), tab = dialog.locator('.dc-side > .dc-docpane [data-doc-ver] .doc-ver-t');
-    const said = async (where: typeof left) => (await where.textContent() ?? '').trim();
-    const leftSays = (text: string) => view.waitForFunction(t => document.querySelector('.decide .dc-thing .dc-docver')?.textContent?.trim() === t, text);
+    const tab = dialog.locator('.dc-side > .dc-docpane [data-doc-ver] .doc-ver-t');
+    const said = async (where: typeof tab) => (await where.textContent() ?? '').trim();
+    const leftSays = (text: string) => view.waitForFunction(t => document.querySelector('.decide .dc-thing > .dc-docview [data-doc-ver] .doc-ver-t')?.textContent?.trim() === t, text);
+    /** How light the document's own page is in a frame (0 black .. 1 white): its body's background, else its root's. */
+    const frameLight = (sel: string) => dialog.locator(sel).contentFrame().locator('body').evaluate(body => {
+      const css = (el: Element) => getComputedStyle(el).backgroundColor;
+      const bg = css(body).replace(/\s/g, '') === 'rgba(0,0,0,0)' ? css(body.ownerDocument.documentElement) : css(body);
+      const [r = 0, g = 0, b = 0] = (bg.match(/[\d.]+/g) || []).map(Number);
+      return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+    });
+    const setTheme = async (theme: string) => {
+      await view.evaluate(t => (window as unknown as {ticoTheme?: {set(t: string): void}}).ticoTheme?.set(t), theme);
+      await view.waitForTimeout(150);
+    };
     const shots = process.env.TICO_SHOTS;
     const shoot = async (name: string) => {
       if (!shots) return;
@@ -112,6 +123,25 @@ const round = (n: number) => ({file_id: 'f-spec', version: n, at: ago(5), by: 'b
     await leftSays(V2);
     assert.equal(await dialog.locator('.dc-msg-ask .dc-q').first().innerText(), 'Approve the Spec?');
     assert.doesNotMatch(await dialog.innerText(), /Jev|checking/i, 'no "Jev", no checking state');
+    // The wide screen shows the document as the phone's tab does: in the app's colours, light or dark.
+    const wide = '.dc-thing > .dc-docview iframe.html-view';
+    await dialog.locator(wide).contentFrame().locator('body', {hasText: 'Spec v2.'}).waitFor();
+    /** The frame's lightness once it settles: a theme change draws the document again, in a new frame. */
+    const lightOnce = async (ok: (n: number) => boolean) => {
+      let n = NaN;
+      for (let i = 0; i < 30; i++) {
+        n = await frameLight(wide).catch(() => NaN);
+        if (ok(n)) return n;
+        await view.waitForTimeout(100);
+      }
+      return n;
+    };
+    await setTheme('dark');
+    const dark = await lightOnce(n => n < 0.3);
+    assert.ok(dark < 0.3, `desktop dark: the document's page is dark (${dark})`);
+    await setTheme('light');
+    const light = await lightOnce(n => n > 0.7);
+    assert.ok(light > 0.7, `desktop light: the document's page is light (${light})`);
     await approve.and(view.locator(':not([disabled])')).waitFor();
     // A phone opens it on the Spec tab, at that version, with the same line.
     await view.setViewportSize({width: 390, height: 844});

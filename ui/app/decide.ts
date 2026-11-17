@@ -753,9 +753,13 @@ function decidePaintBody(st: DecState) {
     if (bare) decideAboutLoad(decideTaskId(it));
     const title = decideAboutOf(it)?.task?.title || it.task?.title || '';
     const changed = v?.changed ? '<p class="dc-changed" role="alert">It changed. Look again.</p>' : '';
-    // A document approval: its task's documents give the version line its note (decideApprovalLineHTML).
+    // A document approval shows the task's document as a phone's tab does (decideOkDocMount): its one version line,
+    // and the document in the app's colours. The served page stands in only when the task has no such document.
     if (it.ask?.approval) decideAboutLoad(decideTaskId(it));
+    const about = it.ask?.approval ? decideAboutOf(it) : undefined;
     html = bare ? changed + decideAboutHTML(it, kind, title ? `<h3 class="dc-title">${esc(title)}</h3>` : '')
+      : about?.state === 'loading' ? skelRows(4)
+      : decideApprovalDoc(it) ? changed + '<div class="dc-docview"></div>'
       : !v || v.state === 'loading' ? skelRows(4)
       : v.state === 'failed' ? `<p class="err" role="alert">${esc(v.error)}</p>`
       // Changes since vK on (the version menu): the same page with its changed blocks marked.
@@ -775,14 +779,26 @@ function decidePaintBody(st: DecState) {
   if (kind !== 'ok') html += (it.ask?.shows || []).filter(r => r.startsWith('browser:')).map(r => decideBrowserSlot(r.slice(8))).join('');
   // A question: on a phone the question and its answer come first, the background under them (decide.css).
   host.parentElement?.classList.toggle('dc-qmain', kind === 'question');
-  if (host.dataset.html === html && host.dataset.key === it.id) return;
+  if (host.dataset.html === html && host.dataset.key === it.id) { decideOkDocMount(host, it); return; }
   host.dataset.html = html; host.dataset.key = it.id;
   browserView.stopIn(host);
   host.innerHTML = html;
+  decideOkDocMount(host, it);
   host.querySelectorAll<HTMLElement>('[data-dc-browser]').forEach(slot => { decideBrowserMount(st, it, slot); });
   const v = kind === 'ok' ? st.ok.get(decideOkKey(it)) : null;
   if (v && typeof window.pageCard === 'function')
     v.pages.forEach((p, i) => host.querySelector(`[data-dc-page="${i}"]`)?.replaceWith(window.pageCard(p, {size: 'full'})));
+}
+/** The task document a document approval asks about, once the task is read; null for any other item. */
+function decideApprovalDoc(it: NeedsEntry): TaskDoc | null {
+  const fid = it.ask?.approval?.file_id;
+  return fid ? decideAboutOf(it)?.task?.documents?.find(d => d.file_id === fid) || null : null;
+}
+/** The approval's document on the left (wide screen), mounted as the phone's tab mounts it (task-docs.ts docViewMount),
+    so it follows the app's theme unless its own HTML sets its colours; drawn again it moves to a newer version. */
+function decideOkDocMount(host: HTMLElement, it: NeedsEntry) {
+  const slot = host.querySelector<HTMLElement>(':scope > .dc-docview'), doc = decideApprovalDoc(it);
+  if (slot && doc) docViewMount(slot, doc, decideApprovalOn(it, doc));
 }
 /** A document approval's one muted version line over the document on the left ("v2 · submitted for approval ·
     changed: …"), as a phone shows it on the document's tab (task-docs.ts docVersionLine). '' for any other OK. */

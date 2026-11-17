@@ -48,6 +48,10 @@
 .dc-main{flex:1 1 auto;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 420px}
 .dc-thing{min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:20px 24px;display:flex;flex-direction:column}
 .dc-thing>.dc-doc{flex:1 0 0}
+/* An approval's document (task-docs.css .doc-view): edge to edge with the note above it */
+.dc-thing>.dc-docview{flex:1 0 0;min-height:0}
+.dc-thing>.dc-docview .doc-ver,.dc-thing>.dc-docview .doc-vers{padding-left:0;padding-right:0}
+.dc-thing>.dc-docview .doc-body{padding:var(--s2) 0 0}
 .dc-side{min-height:0;overflow-y:auto;padding:20px;border-left:1px solid var(--line);display:flex;flex-direction:column}
 .dc-side>div{display:flex;flex-direction:column;gap:12px}
 .dc-q{margin:0;font-size:var(--t-xl);font-weight:600;line-height:var(--lh-tight);text-wrap:pretty;overflow-wrap:anywhere;letter-spacing:var(--track-tight)}
