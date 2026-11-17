@@ -56,7 +56,7 @@
           "send_way": "defer",
           "task": "<task>"
         },
-        "restricted": 1,
+        "restricted": 0,
         "revision": 0,
         "sender_id": "human:ana",
         "sender_name": "Ana",

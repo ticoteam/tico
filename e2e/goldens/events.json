@@ -707,7 +707,7 @@
             "send_way": "defer",
             "task": "<task>"
           },
-          "restricted": 1,
+          "restricted": 0,
           "revision": 0,
           "root_id": "<id12>",
           "sender_id": "human:ana",
@@ -988,7 +988,7 @@
             "send_way": "defer",
             "task": "<open_task>"
           },
-          "restricted": 1,
+          "restricted": 0,
           "revision": 0,
           "root_id": "<id16>",
           "sender_id": "human:ana",
