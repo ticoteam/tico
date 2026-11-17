@@ -333,4 +333,5 @@ def test_priming_bots_reads_their_run_back_off_once_for_all_of_them(c, general):
     finally:
         c.set_trace_callback(None)
     assert causes == [task_wakes.RUNS_FAILING if b == "bot:worker-3" else None for b in bots]
-    assert len(reads) == 2, reads  # one for failed runs, one for run budgets: eight before, one a bot
+    # one for failed runs, one for run budgets, one for any open login usage limit (holds PR 6): eight before, one a bot
+    assert len(reads) == 3, reads
