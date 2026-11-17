@@ -1619,7 +1619,7 @@ function decideChatMount(st: DecState, it: NeedsEntry, host: HTMLElement, card: 
     decideChatStop();
     // A phone's title row and tabs (decide.css, decideTabsPaint): the task's chat, its documents, what an OK shows.
     const title = decideAboutOf(it)?.task?.title || it.task?.title || '';
-    host.innerHTML = `<div class="dc-tabs"><h3 class="dc-tabs-t">${esc(title)}</h3></div><div class="dc-chat"></div><p class="dc-docnote" role="alert" hidden>It changed. Look again.</p><div class="dc-docpane"></div>`;
+    host.innerHTML = `<div class="dc-tabs"><h3 class="dc-tabs-t">${esc(title)}</h3></div><div class="dc-chat"></div><p class="dc-docnote" role="alert" hidden></p><div class="dc-docpane"></div>`;
     const el = host.querySelector<HTMLElement>('.dc-chat')!;
     DEC_CHAT = {item: it.id, cid, view: null, typed};
     if (cid) {
@@ -1686,7 +1686,9 @@ function decideTabShow(it: NeedsEntry, key: string) {
   if (doc && pane) docViewMount(pane, doc, asked);
   // A stale key shows the newer version with the same note the wide screen has above it (decidePaintBody).
   const note = $('.decide .dc-side > .dc-docnote');
-  if (note) note.hidden = !(asked && DEC?.ok.get(decideOkKey(it))?.changed);
+  // Its words are there only while it shows, so the wide screen's note is the one "It changed" on the page.
+  const changed = !!asked && !!DEC?.ok.get(decideOkKey(it))?.changed;
+  if (note) { note.hidden = !changed; note.textContent = changed ? 'It changed. Look again.' : ''; }
 }
 /** The approval an item asks of this document, as its version line says it ("v2 · submitted for approval · changed:
     …"): only when the item's page is this document. */
