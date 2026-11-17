@@ -37,6 +37,7 @@ FINISH, STOP, COMMENT, MENTION, CRASH, ASK, SNOOZE_UNTIL, SNOOZE_ICE, FILE, HANG
 REASSIGN, CLOSE, BACK = "reassign", "close", "move back"
 # What a fake person does with an item in their Needs you.
 SILENT = "stay silent"
+PLAN = "https://example.com/plan"  # what a bot's OK shows
 LEASE_S = 90  # a run's lease, renewed while its computer checks in
 RUN_CAP_S = 3600  # a run is cut off at 60 minutes
 MAX_RUNS = 7  # bot runs one task may use without a change before a person is asked (docs/dev/pipelines-v3.md)
@@ -136,10 +137,10 @@ def wake_kind(c: sqlite3.Connection, job_id: str) -> str:
 def fingerprint(c: sqlite3.Connection) -> dict[str, tuple[Any, ...]]:
     """For each task on the engine, what counts as a change (docs/dev/pipelines-v3.md, C4, as R1 settles it): its visit,
     status and owner (a move, a reassign), the answers, added requirements and who each is asked of (a person giving an
-    ask to someone else is a person acting, so a change) and filed tasks of its open visit. Not a
-    snooze or its end (setting a task aside earns no runs), and not the task's version (a field edit raises it). Read
-    by the rig itself, not through the engine's own progress mark. The last part says a person has it now (the ladder
-    or Late got to a person)."""
+    ask to someone else is a person acting, so a change), filed tasks of its open visit, and a person's reply to a ❓ on
+    it. Not a snooze or its end (setting a task aside earns no runs), and not the task's version (a field edit raises
+    it). Read by the rig itself, not through the engine's own progress mark. The last part says a person has it now (the
+    ladder or Late got to a person)."""
     rows = c.execute(
         "SELECT t.id, v.id, t.status, t.owner_id, "
         "(SELECT COUNT(*) FROM answers a WHERE a.visit_id = v.id), "
@@ -151,6 +152,7 @@ def fingerprint(c: sqlite3.Connection) -> dict[str, tuple[Any, ...]]:
         "(SELECT COUNT(*) FROM links l WHERE l.visit_id = v.id), "
         "(SELECT COUNT(*) FROM links l LEFT JOIN tasks k ON k.id = l.to_task_id "
         " WHERE l.visit_id = v.id AND COALESCE(k.status, 'gone') <> 'open'), "
+        "(SELECT COUNT(*) FROM question_marks q WHERE q.task_id = t.id AND q.cleared_message_id IS NOT NULL), "
         "v.level = 'person' "
         "FROM tasks t LEFT JOIN visits v ON v.task_id = t.id AND v.left_at IS NULL WHERE t.pipeline_id IS NOT NULL"
     ).fetchall()
@@ -544,15 +546,22 @@ class Sim:
             self.act(bot, "puts it on ice", lambda c: E.snooze(c, task, bot, "Parked until spring", None, seen), task)
             return
         if behaviour == ASK:
-            kind = rng.choice(("ok", "answer"))
+            from backend import question_marks as Q
+
             person = rng.choice((ANA, BEN, CARA, REVIEWER))
-            line = "Is this the right plan?" if kind == "answer" else "OK to go ahead?"
-            self.act(
-                bot,
-                f"asks {person} for an {kind}",
-                lambda c: E.add_requirement(c, task, bot, kind, person, line, seen_version=seen),
-                task,
-            )
+            if rng.random() < 0.5:  # an OK shows what it approves; a question is a ❓ message on the task
+                self.act(
+                    bot,
+                    f"asks {person} for an OK",
+                    lambda c: E.add_requirement(
+                        c, task, bot, "ok", person, "OK to go ahead?", shows=[PLAN], seen_version=seen
+                    ),
+                    task,
+                )
+            else:
+                self.act(
+                    bot, f"asks {person} a ❓", lambda c: Q.ask(c, bot, task, person, "Is this the right plan?"), task
+                )
             return
         if behaviour == FILE:
             self.file_under(bot, task)
@@ -698,6 +707,12 @@ class Sim:
             if rid:
                 self.act(person, "says done", lambda c: A.answer(c, task, rid, person, "done"), task)
             self.act(person, "moves it on", lambda c: E.move(c, task, E.NEXT, person, None, version), task)
+            return
+        if kind == "question":  # a ❓ on the task: their reply clears it
+            choice = rng.choice(("reply", "reply", SILENT))
+            self.stats.add(self.stats.people, f"question: {choice}")
+            if choice != SILENT:
+                self.act(person, "replies", lambda c: _h().task_comment(c, person, task, "Yes, that plan."), task)
             return
         if kind == "ask":
             rid = str(item["requirement_id"])
