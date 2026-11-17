@@ -85,7 +85,9 @@ def test_every_thread_tool_is_listed_with_a_schema_a_caller_can_check(api):
     assert THREAD_READS | THREAD_WRITES <= set(tools)
     for name in THREAD_READS | THREAD_WRITES:
         schema = tools[name]["inputSchema"]
-        assert schema["additionalProperties"] is False, name
+        # The listing leaves out `additionalProperties: false` for room (#3935); the tool's own schema keeps it, and a
+        # call with an unknown argument is still refused.
+        assert hubtools.BY_NAME[name]["inputSchema"]["additionalProperties"] is False, name
         assert set(schema.get("required", [])) <= set(schema["properties"]), name
         assert ("operation_id" in schema["properties"]) == (name in THREAD_WRITES), name
     assert "kind" not in tools["tico_thread_post"]["inputSchema"]["properties"]  # asks are gone: a post is a say
