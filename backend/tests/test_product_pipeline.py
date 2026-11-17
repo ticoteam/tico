@@ -17,7 +17,15 @@ from backend import task_requirements as R
 from backend import validate_gate as G
 from backend.store import H
 from backend.tests.helpers import engine as X
-from backend.tests.helpers.product_engineering_presets import PPM, _answers, _role_bot, _seat, _team, legacy_pair
+from backend.tests.helpers.product_engineering_presets import (
+    PPM,
+    _answers,
+    _role_bot,
+    _seat,
+    _team,
+    legacy_pair,
+    legacy_review_stages,
+)
 from backend.tests.helpers.fresh_install import booted, environment, rows, signed_in  # noqa: F401
 from backend.tests.helpers.stage_inputs import _link_pr, _push
 
@@ -28,16 +36,14 @@ STAGES = [
     "Related input",
     "OK spec",
     "Build",
-    "Review 1",
-    "Fixes 1",
-    "Review 2",
-    "Fixes 2",
+    "Review",
+    "Fixes",
     "QA",
     "OK release",
     "Merge",
     "Validate",
 ]
-HELD_BY_THE_OWNER = {"Spec", "Related input", "OK spec", "Build", "Fixes 1", "Fixes 2"}
+HELD_BY_THE_OWNER = {"Spec", "Related input", "OK spec", "Build", "Fixes"}
 HELD_BY_THE_OWNER |= {"OK release", "Validate"}
 PITCH = "Shoppers lose their cart when the tab closes. Keep it for 30 days."
 
@@ -95,7 +101,7 @@ def test_a_company_that_builds_software_gets_product_and_no_engineering(c):
     assert [s["name"] for s in product["stages"]] == STAGES
     owners = {s["name"]: s["owner"] for s in product["stages"]}
     assert {name for name, owner in owners.items() if owner == PS.ASSIGNEE} == HELD_BY_THE_OWNER
-    assert (owners["Review 1"], owners["Review 2"], owners["Merge"]) == ("bot:rev-a", "bot:rev-b", "bot:rm")
+    assert (owners["Review"], owners["Merge"]) == ("bot:rev-a", "bot:rm")
     assert owners["QA"] == "bot:" + PPM  # no QA Owner in this team: up the ladder to the manager
     stages = {s["name"]: s for s in product["stages"]}
     assert stages["Related input"]["expected_minutes"] >= 240  # never Late before it moves on by itself
@@ -109,6 +115,39 @@ def test_a_company_that_builds_software_gets_product_and_no_engineering(c):
     }
     assert R.document_of(stages["Spec"]["requirements"][0]) == "Spec", "the decision model checks the Spec first"
     assert PS.IDEAS_STAGE not in {s["id"] for s in product["stages"]}, "no pitch: a feature starts as a chat"
+
+
+@pytest.mark.parametrize(("preset", "prefix"), [("engineering", "engineering"), (PS.PRODUCT, "product")])
+def test_review_and_fixes_have_the_same_gates_in_both_presets(preset, prefix):
+    stage_prefixes = (f"{prefix}-review-", f"{prefix}-fixes-")
+    review, fixes = [s for s in PS.PRESETS[preset]["stages"] if s["id"].startswith(stage_prefixes)]
+    assert (review["id"], review["name"]) == (f"{prefix}-review-1", "Review")
+    assert review["requirements"] == [
+        {"kind": "page", "line": "Review page", "settings": {"at_head": True, "rubric": PS.REVIEW_RUBRIC}},
+        {"kind": "linked_done"},
+    ]
+    assert (fixes["id"], fixes["name"]) == (f"{prefix}-fixes-1", "Fixes")
+    assert fixes["requirements"] == [{"kind": "owner_done"}, PS.github("checks_pass")]
+
+
+@pytest.mark.parametrize("preset", ["engineering", PS.PRODUCT])
+def test_start_keeps_tasks_and_visits_in_the_separate_review_and_fixes_stages(c, preset):
+    _team(c)
+    _answers(c, software="yes")
+    PS._ensure_factory(c)
+    old = PS.save(c, PS.SYSTEM, legacy_review_stages(c, PS.preset(c, preset)))
+    pid = old["id"]
+    held = []
+    for stage in (f"{pid}-review-2", f"{pid}-fixes-2"):
+        row = H.task_create(c, ANA, f"Task in {stage}", PITCH, OWNER, pipeline=pid, lint=False)
+        row = E.move(c, row["id"], stage, ANA, "On for this test")
+        held.append((row["id"], stage, row["visit"]["id"]))
+    assert old["settings_version"] == 1
+    PS.ensure_presets(c)
+    assert PS.read(c, pid) == old
+    for task_id, stage, visit in held:
+        row = E.task(c, task_id)
+        assert (row["status"], row["stage_id"], row["visit"]["id"]) == ("open", stage, visit)
 
 
 def test_a_new_company_waits_for_setup_and_one_that_builds_no_software_gets_product_retired(c):
@@ -156,11 +195,11 @@ def test_no_bot_adds_an_ok_of_its_own_where_a_person_approves_a_document(c, stag
             E.add_requirement(c, task["id"], bot, "ok", ANA, "OK it", seen_version=E.task(c, task["id"])["version"])
 
 
-def test_the_feature_owner_holds_build_and_both_fixes(c):
+def test_the_feature_owner_holds_build_fixes_and_validate(c):
     _product(c)
     _past_merge(c)
     task = _task(c)
-    for stage in ("product-build", "product-fixes-1", "product-fixes-2", "product-validate"):
+    for stage in ("product-build", "product-fixes-1", "product-validate"):
         assert E.move(c, task["id"], stage, ANA, "On")["owner_id"] == OWNER
 
 
@@ -212,7 +251,7 @@ def test_not_validated_sends_the_task_back_to_build_in_the_same_task(c):
 
 
 # ----------------------------------------------------------------------------- Owner on the team
-BUILD_STAGES = ["product-build", "product-fixes-1", "product-fixes-2"]
+BUILD_STAGES = ["product-build", "product-fixes-1"]
 
 
 def _in_groups(c, placed):

@@ -1,6 +1,6 @@
 # QA
 
-Triggered when a task you own enters QA, after Fixes 2. The stage leaves when the checks pass at the head commit and
+Triggered when a task you own enters QA. The stage leaves when the checks pass at the head commit and
 the QA report is written: the decision model checks it, then it is approved (`tico task show` says by whom). In OK
 release a person approves the Release report, and that ships the change to production.
 

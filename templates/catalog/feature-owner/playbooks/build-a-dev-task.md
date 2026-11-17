@@ -10,7 +10,7 @@ the conversation: it answers the spec's open questions, so do not ask them again
 not read them again.
 
 Outcome: one pull request linked to the task, opened as a draft and marked ready once, with the checks passing at its
-head. Build leaves by itself when the pull request is open and the checks pass; it then goes to Review 1.
+head. Build leaves by itself when the pull request is open and the checks pass.
 
 Done when the change does what the task says, a test fails on the old code and passes on yours, the pull request
 description says what changed, why and how it was tested, and the task links the pull request.
@@ -88,7 +88,7 @@ Every push to a ready pull request runs CI, so batch the fixes that follow.
 
 ## 7. Let the stage finish
 
-There is nothing to say done in Build. {{app_name}} reads the checks from GitHub and moves the task to Review 1 once
+There is nothing to say done in Build. {{app_name}} reads the checks from GitHub and moves the task to review once
 they pass at the head; a failing check wakes you with its names (`skills/get-the-checks-green-at-the-head/SKILL.md`).
 When the same check fails on main too, follow that skill's "When main is red": comment `Blocks #<your task>` on the
 one open `Main red:` task (file it only when none is open), make your task depend on it rather than snooze, and once
@@ -97,4 +97,4 @@ Say in your reply (it is posted on the task) the head commit, the checks you ran
 
     PR <pull request url> at <head sha>: checks run <list>; not checked <list>
 
-Review findings come back in Fixes 1 and Fixes 2: `playbooks/fix-what-review-found.md`. Then QA: `playbooks/qa.md`.
+Review findings come back in Fixes: `playbooks/fix-what-review-found.md`. Then QA: `playbooks/qa.md`.

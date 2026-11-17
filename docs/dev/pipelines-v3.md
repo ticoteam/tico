@@ -808,6 +808,9 @@ old Product holds gets a number (`product-spec-2`, `product-validate-2`). Then r
 open task (`POST /api/v2/pipelines/{id}/retire`, refused while one is open), and rename Features to Product. No code
 moves a task between them.
 
+Existing pipelines retain their Review and Fixes stages on startup. In a pipeline that still has Review 2 or Fixes 2,
+tasks finish in those stages and single-review page requirements keep their rubric.
+
 One stage is added on an upgrade, once (`pipeline_settings._add_qa`): an Engineering pipeline made before QA had a stage
 of its own gets QA after Fixes 2, owned by Fixes 2's owner, with Checks pass and the page a person OKs moved there from
 Fixes 2 as it was set (its person, its switches, its line and check). Fixes 2 gets Owner says done. A task waiting in
@@ -856,16 +859,16 @@ software?" (a blank answer is yes); an untouched one is retired when it answers 
 From a spec to something checked in production, in one task. Manager: the Product Manager bot.
 Preset `features`, id `product` (`pipeline_settings.PRODUCT`).
 
-Stages: Spec → Related input → OK spec → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → QA → OK release →
+Stages: Spec → Related input → OK spec → Build → Review → Fixes → QA → OK release →
 Merge → Validate → Done · Closed
 
 The stage ids are those Tico Team's live Product has where it has the stage: `product-spec`,
-`product-build`, `product-review-1`, `product-fixes-1`, `product-review-2`, `product-fixes-2`, `product-qa`,
+`product-build`, `product-review-1`, `product-fixes-1`, `product-qa`,
 `product-merge`, `product-validate`; and `product-related`, `product-ok-spec`, `product-ok-release`. Each stage's
 purpose names the company skill it runs on: write-a-spec, build-and-open-a-pr and hand-off-to-review,
 fix-review-findings, make-the-qa-page, validate-in-production.
 
-One feature owner, the task's assignee, holds every stage but the reviews, QA and Merge, in one task and one session
+One feature owner, the task's assignee, holds every stage but Review, QA and Merge, in one task and one session
 (`session: task`). A task filed with no assignee waits in Spec for the manager
 to pick one; the owner a task leaves an assignee-held stage with becomes its assignee if it has none. After the
 pipeline's first stage, a reassign names who holds that visit only: the assignee holds the stages after it, and a stage
@@ -882,7 +885,7 @@ before it does not (a task skipped Build on one).
 - **OK spec.** Owner: the assignee, who writes the Spec's next version with what the comments changed. To leave: **a
   person approves the Spec**: any person, never a bot. The decision model shows the person what is missing; it never
   sends the Spec back. Expected time: 2 days.
-- **Build, Review 1, Fixes 1, Review 2, Fixes 2, QA, Merge:** as on Engineering below, with the assignee in the
+- **Build, Review, Fixes, QA, Merge:** as on Engineering below, with the assignee in the
   Builder's place and the QA Owner holding QA. QA's report is approved by its named person, as on Engineering.
 - **OK release.** Owner: the assignee, who writes the Release report: what is shipping, the PRs it merges at their
   newest commits, and what a person should know first. To leave: **a person approves the Release report**: any person,
@@ -933,30 +936,27 @@ Build through Merge here is what Product's Build through Merge does, with the Bu
 From a task to a published release. Manager: the Engineering Manager bot. Builder is one bot, working each task in its
 own thread.
 
-Stages: On deck → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → QA → Merge → Release → Done · Closed
+Preset stages: On deck → Build → Review → Fixes → QA → Merge → Release → Done · Closed
 
 - **On deck.** Owner: Builder. No requirements. Tasks move into Build when it has room, oldest first.
 - **Build.** Owner: Builder. To leave: PR open, Checks pass. Limit 3. Expected time: 1 day.
-- **Review 1.** Owner: Reviewer 1. To leave: a Review page for the newest commit. Jev checks it is a real review.
-  Expected time: 2 hours.
-- **Fixes 1.** Owner: Builder. To leave: Owner says done, Checks pass. Expected time: 4 hours.
-- **Review 2.** Owner: Reviewer 2, a different model: Codex if the company has it, else a different Claude model. To leave: a Review page for the newest commit. Expected time: 2
-  hours.
-- **Fixes 2.** Owner: Builder. To leave: Owner says done, Checks pass. Expected time: 4 hours. When Review 2 found
-  nothing, the Builder says done at once and the task moves to QA.
+- **Review.** Reviewer 1 reviews the newest commit of every linked PR and files a [check-model subtask](../tasks.md#a-sub-task-on-a-check-model)
+  to review those same commits on a different model. The stage waits for the subtask to finish and a Review page that
+  names both models and the commits they reviewed. Expected time: 2 hours.
+- **Fixes.** The Builder addresses both reviews and says done. The stage waits for Checks pass. Expected time: 4 hours.
 - **QA.** Owner: Builder. To leave: Checks pass, and the QA report: what changed, before and after screenshots of the
   running app (or the output that proves a change with nothing to see), how it was checked with the checks at the
   newest commit, what both reviewers found on the commit they reviewed, risks, and the PR with its head commit. The
   Builder builds it with its `build-the-page` skill (the QA template: each acceptance criterion with its result and proof); approving it ships the change. Jev checks it against the linked PRs'
   newest commits (any page on a task that links PRs is checked against them; a PR Tico has not read yet is left out),
-  then **a person OKs it** (people only). Expected time: 4 hours. Commits pushed after Review 2's page are reviewed
-  before the person is asked: Reviewer 2 (the bot that wrote the newest review) reads only those commits against what
+  then **a person OKs it** (people only). Expected time: 4 hours. Commits pushed after the Review page are reviewed
+  before the person is asked: the bot that wrote the newest review reads only those commits against what
   the reviews found and the spec, and OKs them or sends them back as an answer on the page, at the commits it read. A
   send back is the Builder's to fix; its next commits are a new round. After 2 rounds in a visit, or with no other bot
   that reviewed the task, the person is asked anyway and the ask says "not reviewed by a bot". With no commits after
-  Review 2 the person is asked at once. The person's OK is for the commits it was given at (C22). New commits after
+  the Review page the person is asked at once. The person's OK is for the commits it was given at (C22). New commits after
   it that change the same lines (GitHub's diff of each from where it branched off, without line numbers or context,
-  as `git patch-id` reads it) keep it. Others are read by Reviewer 2 the same way, the 2 rounds counted from the OK:
+  as `git patch-id` reads it) keep it. The same reviewer reads the other commits, with the 2 rounds counted from the OK:
   its OK keeps the person's; its send back goes to the Builder, and the person is asked again once the next commits
   were read. Until Tico has read what the new commits change, the page waits on GitHub. A new version of the same page
   published at the commits the person OK'd keeps the OK: nobody is asked again (Nov 13); another page is asked again.
