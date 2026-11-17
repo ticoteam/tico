@@ -205,7 +205,8 @@ def _bot_of(api, args):
 @tool(
     "tico_slack_channel_list",
     "The Slack channels bots may read and post in: each one's name and id, which bots read it, "
-    "whether bots may post there, and its note. Also whether an old registry/slack-channels.yaml is still waiting to be imported.",
+    "whether bots may post there, and its note. Also whether an old registry/slack-channels.yaml "
+    "is still waiting to be imported.",
     {},
 )
 def slack_channel_list(api, args):
@@ -596,11 +597,12 @@ def repo_product_create(api, args):
 
 @tool(
     "tico_tool_list",
-    "Every tool the team uses (each outside system), and what you need to use it: how you reach it "
-    "(`access`), the credentials or env names, how it is declared, writes, and query/learning counts. Read this "
-    "list before touching an outside system; `tico_tool_show` is the full page. With `bot`, the tools that bot uses, "
-    "as its page shows them: its model and harness, its repository and each declared tool, with who it acts as, what "
-    "it may do, its scope and a status (ready, problem, unknown, or pending while BotOps is adding it).",
+    "Every tool the team uses (each outside system): how you reach it (`access`), its credentials "
+    "or env names, how it is declared, writes, and query and learning counts. Read this before "
+    "touching an outside system; `tico_tool_show` is the full page. With `bot`, the tools that "
+    "bot uses (its model and harness, its repository, each declared tool), with who it acts as, "
+    "what it may do, its scope and a status (ready, problem, unknown, or pending while BotOps "
+    "adds it).",
     {"bot": _s("A bot's slug, or `me`: that bot's own tools instead of the team's")},
 )
 def tool_list(api, args):

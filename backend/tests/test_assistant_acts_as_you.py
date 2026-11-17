@@ -509,7 +509,7 @@ def _template_tools():
 
 def test_the_assistant_turn_is_offered_the_tools_its_template_runs_and_never_the_hidden_ones():
     """The Assistant's MCP listing: every tool its template runs is offered, the NEVER tools are not, and the listing stays
-    small enough for the model (about 185 KB today; the cliff is past 200 KB)."""
+    small enough for the model (187,363 bytes at this commit; the cap is 200,000)."""
     everything = {t["name"] for t in hubtools.TOOLS}
     offered = hubtools.listing(local=True, kind="assistant")
     names = {t["name"] for t in offered}
@@ -517,5 +517,7 @@ def test_the_assistant_turn_is_offered_the_tools_its_template_runs_and_never_the
     assert len(template) >= 40, sorted(template)
     assert template - names == set(), sorted(template - names)
     assert not set(hubtools.ASSISTANT_HIDDEN) & names and set(hubtools.ASSISTANT_HIDDEN) <= everything
+    # 187,363 bytes (default json.dumps) at this commit, about 13 KB under the cap. Keep room by compacting the text at
+    # source (see `listing()` and ASSISTANT_HIDDEN in clients/commands/_access.py), not by hiding a tool the template runs.
     assert len(json.dumps(offered)) <= 200_000, len(json.dumps(offered))
     assert "tico_assistant_propose" in {t["name"] for t in hubtools.listing(local=True, kind="bot")}

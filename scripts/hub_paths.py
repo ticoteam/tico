@@ -160,7 +160,8 @@ MARKS = ("growth setup",)
 # Spec'd reads the runner did not run without asking before they became specs, so the hand list left them out. They stay
 # out so the runner list does not widen; each one needs its own decision. `call token` mints a token, a POST that its
 # tool does not mark as a write; `file approved` reads a checkout file's bytes; the automation reads (and their
-# `automations` spellings) were never in the hand list; the others are Librarian and link reads.
+# `automations` spellings) were never in the hand list; the others are Librarian and link reads. `task run` starts a
+# bot's task, but its tool (tico_task_run) is not marked a write, so it stays out until that tool says so.
 UNDECIDED = (
     "call token",
     "doc ask-status",
@@ -172,6 +173,8 @@ UNDECIDED = (
     "automations question-sets",
     "automations recent-runs",
     "automations template",
+    "task run",
+    "tasks run",
 )
 
 

@@ -292,7 +292,7 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      - name: New migrations have unique UTC timestamps
+      - name: New migrations have unique UTC timestamps; merged ones are unchanged
         env:
           BASE_BRANCH: ${{ github.base_ref }}
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
