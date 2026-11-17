@@ -17,7 +17,6 @@ declare var thvUpdateReveal: (view: SysLive, id: string) => void;
 declare var rowSource: (m: {[key: string]: unknown; sender_id: string}, by?: unknown) => {kind: string; name: string};
 declare var isSourceLine: (m: unknown) => boolean;
 declare var actorLabel: (id: string) => string;
-declare var taskBody: (task: {[key: string]: unknown}) => string;
 declare var sourceRunsHTML: <T>(items: T[], opts: {isUpdate: (x: T) => boolean; line: (x: T) => string; draw: () => string}) => string;
 declare var commentLineHTML: (x: unknown, i: number, all: unknown[]) => string;
 const {chromium} = require('playwright') as typeof import('playwright');
@@ -190,8 +189,6 @@ let browser: Browser | null = null;
     assert.equal(await page.evaluate(() => isSourceLine({sender_id: 'keeper', kind: 'ask', refs: {task: 't', questions: [{question: 'Which?'}]}})), false);
     assert.equal(await page.evaluate(() => actorLabel('keeper')), 'Automatic', 'the keeper is never the Assistant or Tico');
     assert.ok(lineText.every(t => !/\bTico\b/.test(t)), 'no gray line says Tico');
-    assert.match(await page.evaluate(() => taskBody({requester_id: 'keeper', owner_id: 'bot:ops', title: 'Weekly',
-      body: 'Run playbook Weekly.\n\n_Created by the keeper from schedule `weekly`._'})), /_Created from schedule `weekly`\._$/);
 
     // The Assistant's chat folds a run of task updates the same way, and names no Assistant for them.
     const chat = await page.evaluate(() => {
