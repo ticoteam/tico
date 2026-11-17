@@ -221,10 +221,10 @@ const msg = (id: string, from: string, body: string, at: string) => ({id, seq: N
     await composer.fill('Covered in the boards spec');
     await wordsRow();
     await page.waitForTimeout(450);   // a phone's new item takes no taps for 400 ms (decideCalm)
-    const c = writes.length;
+    const closed = writes.length;
     await note('close-task').click();
     await dialog.getByText('All done').waitFor();
-    assert.deepEqual(writes.slice(c), [{p: '/api/v2/tasks/t5/move', body: {to: 'closed', why: 'Covered in the boards spec', version: 3}}]);
+    assert.deepEqual(writes.slice(closed), [{p: '/api/v2/tasks/t5/move', body: {to: 'closed', why: 'Covered in the boards spec', version: 3}}]);
 
     // ---- 3. On a phone: two tabs, Chat and the document's (open, no chevron). A bot's ❓ opens on its chat, with a
     // full-width box and no "To <name>" line under it, Snooze and ⋯ in the tabs row; an OK opens on its document.
