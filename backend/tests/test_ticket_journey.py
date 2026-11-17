@@ -411,7 +411,9 @@ def test_a_question_to_the_person_waits_in_their_list_and_the_answer_wakes_the_a
     co.person("POST", f"tasks/{task}/comments", {"text": "Integers only."})
     co.beat()
     assert co.new_in_list(before) == [], "the answered question is still in the person's list"
-    owner = co.handoff(task, "Spec", co.owner)
+    # The reply is a comment to the asker: it wakes the owner itself (a steer), not a wake Tico writes.
+    assert co.task(task)["turn"]["who"] == co.actor(co.owner), "the reply did not give the task back to the owner"
+    owner = co.turn_on(co.owner, task, "by the person's reply")
     assert "Integers only." in owner.wake + owner.show(), "the owner is not shown the person's answer"
     owner.end()
     co.clean()
