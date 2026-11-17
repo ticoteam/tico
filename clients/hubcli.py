@@ -696,38 +696,28 @@ def parser():
     version_help = "the version you were last shown: tico task show, a list row and every wake print it"
     s = task.add_parser(
         "ask",
-        help="ask a person on this task: with only --to and the line, it is posted on the task's chat marked ❓ (needs "
-        "their reply); with --kind, choices or --why, a stage ask the task waits on",
+        help="ask a person on this task: the message is posted on the task's chat marked ❓ (needs their reply); "
+        "with --kind ok and --show, an OK of what it shows",
     )
     s.add_argument("id")
-    s.add_argument(
-        "line", nargs="?", help="what they are asked: a first line of 140 characters at most, readable on its own"
-    )
+    s.add_argument("line", nargs="?", help="the message: a short first line that reads on its own, then any detail")
     s.add_argument("--to", help="the person you ask: their id")
     s.add_argument(
-        "--kind", choices=["answer", "ok"], help="answer (the default): a question; ok: approve or send back"
+        "--kind",
+        choices=["answer", "ok"],
+        help="ok: approve or send back what --show names (a question is the default)",
     )
-    s.add_argument("--choices", type=choice_list, help="the answers to pick from, a,b")
-    s.add_argument(
-        "--choice",
-        action="append",
-        metavar="LABEL|WHAT HAPPENS",
-        help="one answer to pick from and what happens on it; repeat, 2 to 4 (a bot asking a person)",
-    )
-    s.add_argument(
-        "--recommend", metavar="LABEL", help="the choice you recommend (a bot asking a person, with choices)"
-    )
-    s.add_argument(
-        "--title", help="a short title, at most 60 characters: the heading above the question (not with --for)"
-    )
+    # A question's choices and why go in its message now (backend/question_marks.py): refused if sent.
+    s.add_argument("--choices", type=choice_list, help=argparse.SUPPRESS)
+    s.add_argument("--choice", action="append", metavar="LABEL|WHAT HAPPENS", help=argparse.SUPPRESS)
+    s.add_argument("--recommend", metavar="LABEL", help=argparse.SUPPRESS)
+    s.add_argument("--title", help="an OK's short title, at most 60 characters (not with --for)")
     s.add_argument("--show", action="append", metavar="REF", help="what they look at: page:12, file:ID@N; repeat")
     s.add_argument("--for", dest="subject", metavar="KIND:ID", help="an OK bound to what you will do, with --content")
     s.add_argument("--content", type=json_value, help="with --for: exactly what the OK covers, as JSON")
     s.add_argument("--withdraw", action="store_true", default=None, help="take back your open ask instead")
     s.add_argument("--requirement", help="with --withdraw: the ask's requirement id, when several may be withdrawn")
-    s.add_argument(
-        "-m", "--why", help="why it matters to them, in one line (a bot asking a person needs it); with --withdraw: why"
-    )
+    s.add_argument("-m", "--why", help="with --withdraw: why")
     s.add_argument("--version", type=int, help=version_help)
     s.set_defaults(fn="task ask")
     s = task.add_parser("thumbs", help="was this ask worth asking: up or down; a down sends an open ask back")
@@ -744,7 +734,9 @@ def parser():
     s.add_argument("--version", type=int, help=version_help)
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="task give")
-    s = task.add_parser("comment", help="leave a comment on a task, on the record with your name")
+    s = task.add_parser(
+        "comment", help="leave a comment on a task (not your own task during your turn: your reply is posted there)"
+    )
     s.add_argument("--public", action="store_true", default=None)
     s.add_argument("--ok", metavar="OK_ID", help="the OK a person gave on exactly this public reply")
     s.add_argument("id")
@@ -1471,12 +1463,12 @@ RENAMED.sort(key=lambda rule: -len(rule[0]))
 # Commands taken away (asks in Tico 0.5, the old task engine in 0.6): each prints one line naming what to use instead
 # and exits 1, so a bot told an old command does not loop on it. The longest old spelling that matches wins.
 ASK_INSTEAD = (
-    'ask a person on your task with: tico task ask <id> --to <person> "<one line>" --version N; '
+    'ask a person on your task with: tico task ask <id> --to <person> "<question>" (a message marked ❓); '
     'ask a bot with: tico message send <bot> "<question>" --needs-action'
 )
 ANSWER_INSTEAD = (
-    "a person answers in Needs you; a bot named on an ask answers with: "
-    "tico task answer <id> <requirement> ok|no|<answer> --version N"
+    "a person replies in Needs you; a bot named on an OK answers with: "
+    "tico task answer <id> <requirement> ok|no --version N"
 )
 WAIT_INSTEAD = (
     "a task waits only on a person it asks (tico task ask) or a task it files (tico task file --parent <id>); "

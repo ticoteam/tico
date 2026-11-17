@@ -115,7 +115,7 @@ def _then(row: Row, *which: str) -> list[str]:
     said = {
         "push": f'tico task move {ident} next -m "why" --version {version}',
         "back": f'tico task move {ident} <earlier stage> -m "why" --version {version}',
-        "ask": f'tico task ask {ident} --to <person> "one sentence" --version {version}',
+        "ask": f'tico task ask {ident} --to <person> "<question>"',
         "file": f'tico task file --parent {ident} "title"',
         "snooze": f'tico task snooze {ident} -m "why" --version {version}',
         "close": f'tico task close {ident} -m "why" --version {version}',
@@ -2299,7 +2299,8 @@ def add_requirement(
     title: str | None = None,
     ends_with_task: bool = False,
 ) -> Row:
-    """Add an OK or an answer from a named person to this task, for this visit (C30). `brief`: a question's why, its
+    """Add an OK from a named person to this task, for this visit (C30). A question is refused: it is a message marked
+    ❓ (backend/question_marks.py); a bot's OK not bound to an action shows what it approves (a page or a file). `brief`: a question's why, its
     choices' lines and the one recommended (backend/ask_shape.py), and `title`, the ask's short heading, kept in the
     requirement's settings. `ends_with_task`: a question a feature asks about the task's own work
     (backend/person_asks.py), taken back once nothing else holds the task (`advance`), so it never holds it alone. The task does not leave the stage
@@ -2314,8 +2315,11 @@ def add_requirement(
     check_version(conn, by, row, seen_version)
     if row["status"] != "open":
         _refuse(conn, by, "task_ended", f"The task is {row['stage']['name']}. Reopen it first.", task_id)
-    if kind not in ("ok", "answer"):
-        _refuse(conn, by, "task_requirement", "Only an OK or an answer can be added to one task", task_id)
+    if kind == "answer":
+        # A question is a message marked ❓ now (backend/question_marks.py), not an ask the task waits on.
+        _refuse(conn, by, "task_requirement", QUESTION_INSTEAD, task_id)
+    if kind != "ok":
+        _refuse(conn, by, "task_requirement", "Only an OK can be added to one task", task_id)
     if not (is_human(person) or is_bot(person)):
         _refuse(conn, by, "task_requirement", "Name who it is for", task_id)
     if person == by and not is_human(by):
@@ -2334,6 +2338,10 @@ def add_requirement(
             _refuse(conn, by, "task_requirement", f"{page} is a person's OK already. {R.PAGE_OK_HINT}", task_id)
     if not for_action:
         shows = validate_gate.check_ask(conn, row, by, person, kind, shows, choices)
+        if is_bot(by) and not shows:
+            # A bot's OK that is not bound to an action approves something it shows: a page or a file. A bare "OK?"
+            # is a question.
+            _refuse(conn, by, "task_requirement", OK_SHOWS, task_id)
     if is_bot(by) and kind == "answer" and is_human(person):
         signoff = _stage_asks(conn, row, str(person))
         if signoff:
@@ -2417,6 +2425,16 @@ def _people_page(
             return R.name_of(requirement)
     return None
 
+
+# What a question is now (backend/question_marks.py), and what a bot's unbound OK needs (`add_requirement`).
+QUESTION_INSTEAD = (
+    'A question is a message: tico task ask <id> --to <person> "<question>" posts it on the task marked ❓, and '
+    "their reply clears it. No choices or --why: say them in the message."
+)
+OK_SHOWS = (
+    "An OK approves what it shows: add --show page:<id> or file:<id>@<version>. "
+    'For anything else, mark a ❓ instead: tico task ask <id> --to <person> "<question>".'
+)
 
 # What a bot is told when the stage already asks the person it names (`_stage_asks`).
 ASKED_HINT = "Do not ask them again: put any question on the page or in a comment."

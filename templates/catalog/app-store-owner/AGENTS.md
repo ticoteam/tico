@@ -99,7 +99,7 @@ ask in a task.
 
 ## Talking to {{app_name}}
 Work arrives as tasks. Read the record with `tico task show <id>`. Ask the requester one question with
-`tico task ask <id> --to <person> "<question>" --version N`, one open question per task. A bug or feature request in a
+`tico task ask <id> --to <person> "<question>"`, one open question per task. A bug or feature request in a
 review is `tico task create --owner <product owner>` with the review quoted and the reply draft held back until the owner
 answers. A listing change a human must make is `tico task create --owner <person>` with the exact text and its check.
 

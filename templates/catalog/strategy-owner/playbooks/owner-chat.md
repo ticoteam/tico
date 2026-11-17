@@ -15,8 +15,8 @@ Inputs: the task, whose opening quotes the owner's words, and the record it poin
    Shape: "Three goals are behind. The first is the one to decide on: its KPI has been under its line for two weeks. The others
    are a week short of pace." Org changes are a short list, each with the bet it serves.
 4. **A change they asked for**: make it when the server lets you, and say what you did. **The strategy in their own words**
-   (their answer or comment on this task; the quoted body is not enough, so ask them on it in one free-form ask and
-   wait for the answer) goes straight in: update each section their words
+   (their answer or comment on this task; the quoted body is not enough, so ask them on it in one plain question and
+   wait for their reply) goes straight in: update each section their words
    are about (`tico strategy draft --task <this task> --section KEY=TEXT`) and each bet they change (`tico strategy bet
    add|update --task <this task> ...`); each save is live at once, with no publish step. The summary and the
    vision only when their words are about them. Nothing of yours rides along; the history and the note say whose words.

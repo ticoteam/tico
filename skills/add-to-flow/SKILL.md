@@ -1,6 +1,6 @@
 ---
 name: add-to-flow
-description: Put a question in a person's Flow. Read when a person pings you for questions ("Any questions for me?", from Flow), when your setup task says to run it, or when you need a person's view before you act. Ask at most three plain questions, each its own task; zero is a good result.
+description: Put a question in a person's Flow. Read when a person pings you for questions ("Any questions for me?", from Flow), when your setup task says to run it, or when you need a person's view before you act. Ask at most three plain questions, each a ❓ on its own task; zero is a good result.
 ---
 
 # Add to Flow
@@ -18,38 +18,38 @@ You ask the questions whose answers would change what you do next, and nothing e
 Read what is written down first: your area's pages (`tico doc search "<topic>"`), the company strategy
 (`tico strategy show`), your own `memory/decisions.md` and the working rules at the top of `memory/learnings.md`, and
 your open tasks (`tico task list --owner <you>`). Never ask what is written down, and never ask what is already waiting on
-someone: an open ask of yours on the same thing stays as it is.
+someone: an open ❓ of yours on the same thing stays as it is.
 
 ## What to ask
 
 - Only what would change what you do next. If nothing clears that bar, ask nothing and say so in one line; that is a
   good result.
 - At most three, the most valuable first.
-- Each ask's first line (140 characters at most) says what is asked and reads on its own, never "see above"; no paths
-  or ids. `-m` is one line on what you will do with the answer. `--choices` only for a real pick between named options.
+- Each ❓'s first line (140 characters at most) says what is asked and reads on its own, never "see above"; no paths
+  or ids. Then one line on what you will do with the answer, and the options when it is a real pick.
 - If a person has corrected you on the same thing several times, a good question is whether to make it a standing
   rule; on yes, write it at the top of `memory/learnings.md`, and if it should bind the whole stage, say so to whoever
   edits that stage.
 
-Each question is its own new task, yours, with one ask on it:
+Each question is its own new task, yours, with one ❓ on it. A ❓ is for a person; a supervisor bot gets the
+question as a message instead (`tico message send <bot> "<the question>" --needs-action`).
 
 ```
 tico task create --title "<the decision, in a few words>" --message "<what you will do with the answer>"
-tico task ask <id> --to <person> "<the question>" -m "<what you will do with the answer>" --version N
+tico task ask <id> --to <person> "<the question>
+
+<what you will do with the answer>"
 ```
 
 ## When you are the one asked (a supervisor bot)
 
-Answer only when a recorded rule or decision covers it, and cite it:
-`tico task answer <id> <requirement> "<answer> (per <where it is written>)" --version N`.
-Otherwise pass it up exactly as asked: `tico task give <id> <requirement> --to <your manager> --version N` when your
-manager is a person. When your manager is a bot, ask it the same sentence on a task of your own, and answer the
-original with its reply, saying who answered.
+Answer only when a recorded rule or decision covers it, and cite it: reply with the answer and where it is written.
+Otherwise pass it up exactly as asked: to your manager with a ❓ on a task of your own when your manager is a person,
+or as a message when it is a bot. Reply to the original with their answer, saying who answered.
 
 ## When the answer comes
 
-It may come as a reply in the task's chat rather than an answer to your ask. If the reply answers it, withdraw the ask
-(`tico task ask <id> --withdraw --why "Answered in the chat: <their words>"`); if it does not, follow up once.
+Their reply in the task's chat clears your ❓ and wakes you. If it does not answer the question, ask once more.
 
 Take it as given, then do both of these:
 

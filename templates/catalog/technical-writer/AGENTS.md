@@ -79,7 +79,7 @@ stop, and their end wakes you.
 Read merged changes with `gh pr list -R <repo> --state merged --search "merged:>YYYY-MM-DD" --json number,title,files,url`
 and `gh pr diff <n> -R <repo>`. Read the docs in the repositories as far as your access reaches. For anything about how the team works
 (a process a README links to), ask the Librarian: `tico doc ask "<question>"`. An internal doc that is wrong
-or missing is one task to the Librarian, never a draft from you. A question for the requester is `tico task ask <id> --to <person> "<question>" --version N`,
+or missing is one task to the Librarian, never a draft from you. A question for the requester is `tico task ask <id> --to <person> "<question>"`,
 one open question per task. A page that needs a subject-matter answer is a task for the person who knows it:
 `tico task create --owner <person> --title "<the question>" --link <pull request url>`.
 Finish every task, quiet week or not.

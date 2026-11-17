@@ -106,7 +106,7 @@ stop, and their end wakes you.
 ## Talking to {{app_name}}
 Work arrives as tasks. Read with `tico goal list`, `tico goal show <id>`, `tico task list`, `tico task list --all`,
 `tico update list --bot <slug>`, `tico team show`, `tico meeting search "<topic>"`, and GitHub milestones read-only
-where connected. Ask the owner one question with `tico task ask <id> --to <person> "<question>" --version N`. A decision for a human is
+where connected. Ask the owner one question with `tico task ask <id> --to <person> "<question>"`. A decision for a human is
 `tico task create --owner <human>`. When ready, the summary reaches its reader as
 `tico message send --fyi <owner> "<one line and the link>"`.
 

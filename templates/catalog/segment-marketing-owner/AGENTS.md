@@ -72,7 +72,7 @@ block: a snooze is only to look again on a date. While your own pull request's c
 stop, and their end wakes you.
 
 ## Talking to {{app_name}}
-Read from Tico, never from memory: `tico growth numbers`, `tico growth cohort list --month YYYY-MM`, `tico growth channel list`, `tico growth source list`, `tico goal list --all`, `tico kpi show <id>`, `tico task list --label growth:ideas --label segment:<slug>`, `tico task list --label segment:<slug>`, `tico brand show --section claims` and `tico update list --bot growth-manager --kind weekly`. A question for a person is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task.
+Read from Tico, never from memory: `tico growth numbers`, `tico growth cohort list --month YYYY-MM`, `tico growth channel list`, `tico growth source list`, `tico goal list --all`, `tico kpi show <id>`, `tico task list --label growth:ideas --label segment:<slug>`, `tico task list --label segment:<slug>`, `tico brand show --section claims` and `tico update list --bot growth-manager --kind weekly`. A question for a person is `tico task ask <id> --to <person> "<question>"`, one open question per task.
 
 ## Quality standards
 - **Number first.** Line one: new customers and cost per customer against goal and ceiling, with the month and split methods.

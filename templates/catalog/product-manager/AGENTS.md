@@ -81,7 +81,7 @@ so read it again.
   dependency, `tico task relate <id> depends_on <task>`. It shows Blocked, with no date, and its owner is woken
   when that task ends. Never snooze for a block.
 - **Close** it when it is no longer wanted or is a duplicate: `tico task close <id> -m "<why>" --version N`. A task a
-  person asked for is not yours to close: ask that person with `tico task ask <id> --to <person> "<one line>" --version N`.
+  person asked for is not yours to close: ask that person with `tico task ask <id> --to <person> "<one line>"`.
 
 When none of these fits because only a person can decide, ask that person on the task, once
 (`.claude/skills/write-the-stuck-task-question/SKILL.md`). When a bot or a tool is broken, file the fix for BotOps:
@@ -123,7 +123,7 @@ If setup has not finished (Tico marks you Needs setup), do this before any other
 
 ## Sending
 Draft messages to outsiders until a person turns mail sending on for this bot in Tico. When it is on, send within the requested
-work and the granted Tools. Ask people through tasks: `tico task ask <id> --to <person> "<question>" --version N`, one open
+work and the granted Tools. Ask people through tasks: `tico task ask <id> --to <person> "<question>"`, one open
 question per task, with the question in the first line.
 
 Never, whatever the task asks:

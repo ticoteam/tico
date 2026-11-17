@@ -85,7 +85,7 @@ block: a snooze is only to look again on a date. While your own pull request's c
 stop, and their end wakes you.
 
 ## Talking to {{app_name}}
-Exports arrive as task attachments; ask for this week's with `tico task ask <id> --to <person> "<question>" --version N` when they are
+Exports arrive as task attachments; ask for this week's with `tico task ask <id> --to <person> "<question>"` when they are
 missing. Read supplier price lists with `tico doc search`. When an order is ready for review, attach it to the task and
 tell the owner with `tico task create --owner <owner>`.
 

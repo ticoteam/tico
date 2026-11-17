@@ -208,10 +208,10 @@ BOT_STATES = SV.BOT_STATES
 STATUS_STATES = SV.BOT_STATUS_STATES
 MESSAGE_KINDS = ("say", "notice", "steer")
 # Kinds old rows may still have, read as history only: nothing writes an ask or an answer in a message (a question
-# to a person is an ask on a task, `tico task ask`; to a bot, a DM flagged needs-action).
+# to a person is a message marked ❓, `tico task ask` or `tico chat ask`; to a bot, a DM flagged needs-action).
 OLD_MESSAGE_KINDS = ("ask", "answer")
 ASK_GONE = (
-    "asks are gone: ask a person on a task with tico task ask <task> --to <person> \"<question>\" --version N; "
+    "asks are gone: ask a person on a task with tico task ask <task> --to <person> \"<question>\"; "
     "ask a bot with tico message send <bot> \"<question>\" --needs-action"
 )
 CONVERSATION_KINDS = ("chat", "ask", "task", "notice")
@@ -3919,6 +3919,7 @@ def task_comment(
     reach=None,
     people_notified=False,
     to=None,
+    checked=True,
 ):
     """A comment on a task: one message in the task's thread, tagged with the task, from whoever wrote it. It goes as
     any post there does (threads.post): to whom it addresses (its @mentions, the author it replies to) and to the
@@ -3929,13 +3930,16 @@ def task_comment(
     their level says). `delegate`: whether a person's comment delegates the task to the bots it wakes (default: `wake`;
     only one who may direct the task does). `reach`: the bot's Identity when this is its own write through the API, so
     whoever the comment reaches is checked against the bot's reach as a thread post is (reach.check_thread). `to`: the
-    bot it is written to besides (a relayed answer, strategy_merge). A question to a person is an ask on the task
-    (task_ask), never a comment."""
-    _writer(conn, actor, task_id=task_id)
+    bot it is written to besides (a relayed answer, strategy_merge). A bot's question to a person is a ❓ on its comment
+    (question_marks.ask). `checked` False: words Tico's own feature wrote for a bot (question_marks.ask), so the bot's
+    standing to write here (a quarantine, reading a private task) is not asked."""
+    if checked:
+        _writer(conn, actor, task_id=task_id)
     row = task(conn, task_id)
     if not row:
         refuse(conn, actor, "not-found", f"no task {task_id}")
-    _task_private_writer(conn, actor, row)
+    if checked:
+        _task_private_writer(conn, actor, row)
     text = str(text or "").strip()
     if not text:
         refuse(conn, actor, "lint", "write the comment")

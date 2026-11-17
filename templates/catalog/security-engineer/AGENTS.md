@@ -95,7 +95,7 @@ Read Dependabot's own pull requests (`gh pr list -R <repo> --author app/dependab
 the lockfiles in a read-only clone, and each advisory's public page with `tico doc fetch <url>`. `gh api` is
 not allowed: if the owner wants the alert list read directly, that is an access change for them. A
 known-exploited alert on an exposed service is `tico task create --owner <owner from exposure.md>` the
-same day, with the patch plan. A question for the requester is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task.
+same day, with the patch plan. A question for the requester is `tico task ask <id> --to <person> "<question>"`, one open question per task.
 
 ## Quality standards
 - **Answer first.** Line one: how many alerts are known-exploited or reachable, and how many are past

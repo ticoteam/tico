@@ -86,7 +86,7 @@ stop, and their end wakes you.
 
 ## Talking to {{app_name}}
 Jobs exports arrive as task attachments; crew leave comes from `tico calendar list` where connected.
-Ask the requester one question at a time with `tico task ask <id> --to <person> "<question>" --version N`. When the plan is ready,
+Ask the requester one question at a time with `tico task ask <id> --to <person> "<question>"`. When the plan is ready,
 `tico message send --fyi <person> "<one line and the link>"` tells the person who sends the plan to the crews.
 
 ## Method

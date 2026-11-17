@@ -559,53 +559,42 @@ def _own_ask(api, task_id, requirement=None):
 
 
 # What makes tico_task_ask a stage ask rather than a ❓: any of these.
+# A question is a message marked ❓ (backend/question_marks.py); its choices and why are words in it.
+QUESTION_INSTEAD = (
+    'A question is a message: tico task ask <id> --to <person> "<question>", with no --kind, choices or --why. Say the '
+    "options, your pick and why in the message."
+)
 _STAGE_ASK = ("kind", "choices", "choice", "recommend", "title", "show", "subject", "why")
 
 
 @tool(
     "tico_task_ask",
-    "Ask a person on this task. Only `to` and `line`: a ❓ on its chat, in their Needs you until they reply (you are "
-    "not chased; a new ❓ replaces yours). With `kind`, choices or `why`: a stage ask; its answer wakes you once. "
-    "`withdraw` takes that back.",
+    "Ask a person on this task. `to` and `line`: a ❓ message on its chat, in their Needs you until they reply (a new "
+    "❓ replaces yours); options and why go in it. An OK: `kind` ok with `show`. `withdraw` takes an OK back.",
     {
         "id": TASK_ID,
         "to": _s("The person's id"),
-        "line": _s("The one sentence asked, readable alone", maxLength=300),
+        "line": _s("The message: a short first line that reads on its own, then any detail", maxLength=4000),
         "kind": {
             "type": "string",
-            "enum": ["answer", "ok"],
-            "description": "answer (default): a question; ok: approve or send back",
+            "enum": ["ok"],
+            "description": "ok: approve or send back what `show` names",
         },
-        "choices": {
-            "type": "array",
-            "items": {"type": "string", "maxLength": 60},
-            "minItems": 2,
-            "maxItems": 6,
-            "description": "Answers to pick; they may type their own",
-        },
-        "choice": {
-            "type": "array",
-            "items": _s("Label|what happens", maxLength=221),
-            "minItems": 2,
-            "maxItems": 4,
-            "description": "Instead of choices",
-        },
-        "recommend": _s("The choice you recommend", maxLength=60),
-        "title": _s("Short heading", maxLength=60),
+        "title": _s("An OK's short heading", maxLength=60),
         "show": {
             "type": "array",
             "items": _s("page:<id>, file:<id>@<version> or a link"),
             "maxItems": 10,
-            "description": "What they look at, shown with the ask",
+            "description": "What an OK approves, shown with it",
         },
         "subject": _s(
             "An OK bound to what you will do, <kind>:<id>, covering exactly `content`; "
             "use it once with tico_ok_use just before acting"
         ),
         "content": {"description": "With subject: exactly what the OK covers (any JSON)"},
-        "withdraw": {"type": "boolean", "description": "Take back your open ask instead"},
-        "requirement": _s("With withdraw: the ask's requirement id, if several"),
-        "why": _s("Why it matters (with withdraw: why)"),
+        "withdraw": {"type": "boolean", "description": "Take back your open OK instead"},
+        "requirement": _s("With withdraw: the OK's requirement id, if several"),
+        "why": _s("With withdraw: why"),
         "version": VERSION,
     },
     required=("id",),
@@ -622,6 +611,8 @@ def task_ask(api, args):
     if not any(args.get(field) for field in _STAGE_ASK):
         # A ❓: the message on the task's chat, needing their reply (backend/question_marks.py).
         return api.post(f"tasks/{args['id']}/questions", {"to": args["to"], "text": args["line"]}, key=_key(args))
+    if args.get("kind") != "ok" and not args.get("subject"):
+        raise ValueError(QUESTION_INSTEAD)
     body = {"to": args["to"], "line": args["line"], "version": _seen(args)}
     if args.get("subject"):
         if args.get("choices") or args.get("kind") == "answer" or "content" not in args:

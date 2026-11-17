@@ -5,16 +5,17 @@
 
 Needs you holds only what is asked of a person (backend/waiting_on.py `needs`): a plain task given to them lands in
 their Tasks and nowhere they are told. So a feature that needs a person to act files a task owned by the bot that
-owns the feature (`bot`), and that bot asks the person `question` on it, with `why` it matters: the person finds it in
-Needs you, and their answer wakes the bot. With no such bot here (none named, removed or archived) the task is the
-person's own. Only bots write questions, never Tico (`author`): the bot that holds the task or filed it asks when it
-can run, else BotOps, the built-in bot that owns Tico's own notices. A question on the person's own task is taken back
-once they finish it (task_engine.advance), so nothing a person is meant to act on is left out of Needs you, and
-nothing holds them once it is done.
+owns the feature (`bot`), and that bot asks the person `question` on it, with `why` it matters: its message on the
+task's chat, marked ❓ (backend/question_marks.py). The person finds it in Needs you, and their reply clears it and
+reaches the bot. With no such bot here (none named, removed or archived) the task is the person's own. Only bots write
+questions, never Tico (`author`): the bot that holds the task or filed it asks when it can run, else BotOps, the
+built-in bot that owns Tico's own notices. The ❓ clears once the task ends, so nothing a person is meant to act on is
+left out of Needs you, and nothing holds them once it is done.
 
-The question is the ask's first line, short and plain, the way the ask checks want it (backend/ask_shape.py): it says
-what is asked, with no paths or hashes; the task's body keeps the detail. It is worded so that whichever bot asks can
-say it. A line or why that would fail those checks (a name with a path in it) is replaced by a plain one (`shaped`).
+The question is the message's first line, short and plain, the way the ❓ checks want it (backend/ask_shape.py): it
+says what is asked, with no paths or hashes; the why follows it, and the task's body keeps the detail. It is worded so
+that whichever bot asks can say it. A line or why that would fail those checks (a name with a path in it) is replaced
+by a plain one (`shaped`).
 """
 
 import logging
@@ -110,7 +111,7 @@ def ask(
     if not writer:
         log.warning("No bot here to ask %s about task %s; it stays in their Tasks", target, made["id"])
         return made
-    ask_on(conn, writer, made, target, question, why, ends_with_task=not is_bot(owner))
+    ask_on(conn, writer, made, target, question, why)
     return H.task(conn, made["id"]) or made
 
 
@@ -121,34 +122,17 @@ def ask_on(
     person: str,
     question: str,
     why: str,
-    *,
-    ends_with_task: bool = False,
 ) -> str:
-    """`asker`, a bot, asks `person` `question` on `task`, with `why` it matters: a person who may not read a private
-    task is let in first, as an OK filed for a person is (task_asks.ask_ok). Returns the requirement's id."""
-    from . import task_engine as E
+    """`asker`, a bot, asks `person` `question` on `task`, with `why` it matters: its message on the task's chat, marked
+    ❓ (backend/question_marks.py). A person who may not read a private task is let in first, as an OK filed for a
+    person is (task_asks.ask_ok). Returns the mark's id."""
+    from . import question_marks
 
-    H = _h()
-    row: Row = H.task(conn, task["id"]) or task
-    if not H.task_private_readable(conn, person, row):
-        H.task_reach(conn, asker, row, person)
-        row = H.task(conn, task["id"]) or row
     if not is_bot(asker):
         raise ValueError("only bots write questions")  # Tico never does (`author`)
     line, said = shaped(question, why)
-    brief: Row = {"why": said, "details": None, "recommend": None}
-    asked: Row = E.add_requirement(
-        conn,
-        row["id"],
-        asker,
-        "answer",
-        person,
-        line,
-        seen_version=row.get("version"),
-        brief=brief,
-        ends_with_task=ends_with_task,
-    )
-    return str(asked["requirement_id"])
+    asked: Row = question_marks.ask(conn, asker, str(task["id"]), person, f"{line}\n\n{said}", checked=False)
+    return str(asked["id"])
 
 
 def shaped(question: str, why: str) -> tuple[str, str]:

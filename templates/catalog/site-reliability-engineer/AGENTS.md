@@ -85,7 +85,7 @@ stop, and their end wakes you.
 Read what you were given: `tico task show <id>`, `tico task list --updated-since <ISO-8601 time with a timezone>`, `tico update list --kind daily`,
 `tico meeting search "<incident>"` for a debrief, and, where the owner connected them, the incident channel and
 error-tracker exports (read only). Merged changes near the incident: `gh pr list -R <repo> --state merged --search "merged:>YYYY-MM-DD"`.
-A question for the requester is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task. An action item, when the task
+A question for the requester is `tico task ask <id> --to <person> "<question>"`, one open question per task. An action item, when the task
 asks for it and the record supports it, is `tico task create --owner <person> --title "<action item>" --parent <id>`.
 Finish every task, quiet week or not.
 

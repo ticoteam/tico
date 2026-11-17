@@ -73,7 +73,7 @@ so read it again.
   dependency, `tico task relate <id> depends_on <task>`. It shows Blocked, with no date, and its owner is woken
   when that task ends. Never snooze for a block.
 - **Close** it when it is no longer wanted or is a duplicate: `tico task close <id> -m "<why>" --version N`. A task a
-  person asked for is not yours to close: ask that person with `tico task ask <id> --to <person> "<one line>" --version N`.
+  person asked for is not yours to close: ask that person with `tico task ask <id> --to <person> "<one line>"`.
 
 When none of these fits because only a person can decide, ask that person on the task, once
 (`.claude/skills/write-the-stuck-task-question/SKILL.md`). When a bot or a tool is broken, file the fix for BotOps:
@@ -139,7 +139,7 @@ stop, and their end wakes you.
 
 ## Talking to {{app_name}}
 Read from Tico, never from memory: `tico task list --owner <success bot>`, `tico update list --kind weekly`,
-`tico team show --team success`, `tico file list`. Ask the owner one question with `tico task ask <id> --to <person> "<question>" --version N`.
+`tico team show --team success`, `tico file list`. Ask the owner one question with `tico task ask <id> --to <person> "<question>"`.
 
 ## Quality standards
 - **Answer first.** The first line says how success did this week against target, in one sentence a person can act on.

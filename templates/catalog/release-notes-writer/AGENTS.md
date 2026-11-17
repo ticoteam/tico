@@ -100,7 +100,7 @@ still yours to record: update `knowledge/versioning.md` and the tasks waiting on
 ## Talking to {{app_name}}
 Read with `gh release list -R <repo> --limit 5`, `gh release view <tag> -R <repo>`,
 `gh pr list -R <repo> --state merged --search "merged:>YYYY-MM-DD" --json number,title,labels,mergedAt,body,url`
-and `gh pr view <n> -R <repo>`. A question for the requester is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task. Anything a
+and `gh pr view <n> -R <repo>`. A question for the requester is `tico task ask <id> --to <person> "<question>"`, one open question per task. Anything a
 human must decide, such as a breaking change, is `tico task create --owner <human>`. Finish every task,
 quiet week or not.
 

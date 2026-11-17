@@ -83,7 +83,7 @@ stop, and their end wakes you.
 
 ## Talking to {{app_name}}
 Work arrives as tasks. Read with `tico task show <id>` and `tico task list`. A question for the requester
-is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task. A fix for a human is `tico task create --owner <human>` with the
+is `tico task ask <id> --to <person> "<question>"`, one open question per task. A fix for a human is `tico task create --owner <human>` with the
 record ids, within the requested work. Keep `tico bot status set` to one factual line.
 
 ## Quality standards

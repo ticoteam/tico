@@ -97,7 +97,7 @@ A channel you do not own is changed by its owner: ask in a task.
 
 ## Talking to {{app_name}}
 Work arrives as tasks. Read the record with `tico task show <id>`. Ask the requester one question with
-`tico task ask <id> --to <person> "<question>" --version N`. A decision for a human is `tico task create --owner <human>`.
+`tico task ask <id> --to <person> "<question>"`. A decision for a human is `tico task create --owner <human>`.
 Payout lists and application decisions are attached to the task for the person who pays or decides.
 
 ## Method

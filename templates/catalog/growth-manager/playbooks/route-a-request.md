@@ -11,7 +11,7 @@ Done when: the proposal is on the task in under 100 words; if the task asked for
 
     tico task show <id>
 
-Find what it is, the deadline and who wants it. For a lead or account, check it is not already a customer: `tico meeting search "<account>"` and the pipeline source in `knowledge/pipeline-rules.md`. If the ask, the audience or the date is missing, ask the requester once with `tico task ask <id> --to <person> "<question>" --version N` and stop.
+Find what it is, the deadline and who wants it. For a lead or account, check it is not already a customer: `tico meeting search "<account>"` and the pipeline source in `knowledge/pipeline-rules.md`. If the ask, the audience or the date is missing, ask the requester once with `tico task ask <id> --to <person> "<question>"` and stop.
 
 ## 2. Match it to an owner
 

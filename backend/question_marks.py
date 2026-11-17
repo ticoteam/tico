@@ -236,9 +236,11 @@ def readable(conn: sqlite3.Connection, person: str, message: Row, chat: Row | No
     return threads.message_readable(conn, viewer, message)
 
 
-def _addressee(conn: sqlite3.Connection, actor: str, person: str, message: Row, task_id: str) -> str:
+def _addressee(
+    conn: sqlite3.Connection, actor: str, person: str, message: Row, task_id: str, *, checked: bool = True
+) -> str:
     """The person a ❓ (or its Give to) names, refused with a clear reason when it may not be: someone off the roster,
-    out of the bot's reach, or unable to read the chat."""
+    out of the bot's reach (`checked`: the bot's own pick), or unable to read the chat."""
     target = str(H._reach(conn, actor, person))
     if not H.is_human(target):
         H.refuse(conn, actor, "reach", f"{H.actor_name(conn, target)} is a bot: a ❓ is for a person's reply")
@@ -247,7 +249,7 @@ def _addressee(conn: sqlite3.Connection, actor: str, person: str, message: Row, 
         E = _mod("task_engine")
 
         task = E.task(conn, task_id)
-    if H.is_bot(actor):
+    if checked and H.is_bot(actor):
         from types import SimpleNamespace
 
         reach = _mod("reach")
@@ -271,8 +273,10 @@ def _addressee(conn: sqlite3.Connection, actor: str, person: str, message: Row, 
     return target
 
 
-def mark(conn: sqlite3.Connection, bot: str, message_id: str, person: str) -> Row:
-    """Mark the bot's own message ❓ for `person`, replacing the bot's open ❓ in that chat. Returns the mark."""
+def mark(conn: sqlite3.Connection, bot: str, message_id: str, person: str, *, checked: bool = True) -> Row:
+    """Mark the bot's own message ❓ for `person`, replacing the bot's open ❓ in that chat. Returns the mark.
+    `checked` False: a question Tico's own feature words and addresses for the bot (`ask`), so neither the bot's reach
+    nor the words' shape is the bot's to answer for; the person must still be able to read the chat."""
     if not H.is_bot(bot) or bot == H.KEEPER:
         H.refuse(conn, bot, "identity", "Only a bot marks a message ❓")
     message = H.message(conn, message_id)
@@ -287,9 +291,9 @@ def mark(conn: sqlite3.Connection, bot: str, message_id: str, person: str) -> Ro
         status = conn.execute("SELECT status FROM tasks WHERE id=?", (task_id,)).fetchone()
         if not status or status[0] != "open":
             H.refuse(conn, bot, "identity", "The task has ended: a ❓ is for an open task's chat")
-    target = _addressee(conn, bot, person, message, task_id)
+    target = _addressee(conn, bot, person, message, task_id, checked=checked)
     line = first_line(message.get("body"))
-    shape = ask_shape.line_refusal(str(message.get("body") or ""))
+    shape = ask_shape.line_refusal(str(message.get("body") or "")) if checked else None
     if shape:
         H.refuse(conn, bot, "lint", shape)
     room = room_of(conv)
@@ -319,6 +323,38 @@ def mark(conn: sqlite3.Connection, bot: str, message_id: str, person: str) -> Ro
     H.event(conn, bot, "question.marked", row["id"], {"message": message["id"], "to": target, "task": task_id})
     H._recount(conn, bot)  # its status's "waits on a person" (hubdb.status_counts)
     return {**row, "cleared_at": None}
+
+
+def ask(
+    conn: sqlite3.Connection,
+    bot: str,
+    task_id: str,
+    person: str,
+    text: str,
+    *,
+    checked: bool = True,
+    let_in: bool | None = None,
+    refs: Row | None = None,
+) -> Row:
+    """`bot` asks `person` on a task's chat: its message there, then the ❓ on it, in the caller's transaction. Returns
+    the mark. `checked` False: Tico's own feature words the question and picks the person for the bot (person_asks, a
+    rule, the ladder, BotOps's setup notices), so neither the bot's reach, its reading the task, nor the words' shape is
+    the bot's to answer for. `let_in` (default: not `checked`): a person who may not read a private task is made a
+    reader first, as an OK filed for a person is (task_asks.ask_ok); else they are refused. `refs`: more marks on the
+    message (`shows`: a website's live browser the person takes over). Wakes nobody and notifies nobody: the ❓ is how
+    the person hears, in their Needs you."""
+    if (not checked) if let_in is None else let_in:
+        row: Row | None = H.task(conn, task_id)
+        if row and not H.task_private_readable(conn, person, row):
+            H.task_reach(conn, bot, row, person)
+    said: Row = H.task_comment(conn, bot, task_id, text, wake=False, checked=checked, extra_refs=refs)
+    return mark(conn, bot, str(said["id"]), person, checked=checked)
+
+
+def ask_in_chat(conn: sqlite3.Connection, bot: str, person: str, text: str, *, checked: bool = True) -> Row:
+    """`bot` asks `person` in its direct chat with them (no task): the message, then the ❓ on it. Returns the mark."""
+    said: Row = H.say(conn, bot, person, text)
+    return mark(conn, bot, str(said["id"]), person, checked=checked)
 
 
 def give(conn: sqlite3.Connection, mid: str, to: str, by: str) -> Row:

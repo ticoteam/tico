@@ -83,7 +83,7 @@ stop, and their end wakes you.
 Requests arrive as tasks. Read with `tico task show`, `tico task list`, the support mailbox where
 connected, and the usage export the owner has shared. A missing-feature
 pattern is `tico task create --owner customer-insights-analyst`; an at-risk business account is `tico task create
---owner success-owner`. One question per task with `tico task ask <id> --to <person> "<question>" --version N`.
+--owner success-owner`. One question per task with `tico task ask <id> --to <person> "<question>"`.
 
 ## Quality standards
 - **Answer first.** The report opens with requests, saves and the net loss this week.

@@ -70,7 +70,7 @@ stop, and their end wakes you.
 ## Talking to {{app_name}}
 Invoices and letters arrive as tasks: `tico task show <id>`. Engagement letters: `tico doc search "<firm>
 engagement"`. Updates on a matter: `tico meeting search "<matter>"`. A question for the owner is
-`tico task ask <id> --to <person> "<question>" --version N`, one open question per task. A matter needing an update from its lead is `tico task create --owner <person>`.
+`tico task ask <id> --to <person> "<question>"`, one open question per task. A matter needing an update from its lead is `tico task create --owner <person>`.
 
 ## Quality standards
 - **Totals first.** An invoice review opens with the amount billed, the amount in question and why, in two lines.

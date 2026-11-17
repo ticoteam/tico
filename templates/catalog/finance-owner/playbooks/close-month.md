@@ -14,7 +14,7 @@ month only, the task says it waits on the owner, and the task is marked done wit
    `tico finance report spend_by --start <first day> --end <last day> --by vendor` and
    `tico finance search --kind bill --q <vendor name>`. Write the note as `skills/write-the-close-variance-note/SKILL.md`
    describes.
-4. `tico task comment <task id> "<the note>"`. The note goes on this task, not into the close request.
+4. Put the note in your reply (it is posted on this task), not into the close request.
 5. `tico finance act close_period --payload '{"month":"<month>"}' --operation-id close:<month>`. Send the month only: a
    `note` field is refused. The owner approves the close.
 6. `tico task done <task id> -m "<one line: close asked for and waits on the owner; what is unexplained>" --version N`.

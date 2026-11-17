@@ -79,7 +79,7 @@ stop, and their end wakes you.
 ## Talking to {{app_name}}
 Plan documents come through the Librarian: `tico doc ask "<question>"`, then `tico doc read <path>` for the page it cites.
 The roster is `tico team show`. A change a human must submit is `tico task create --owner <person>` with what the provider
-needs. A question for the requester is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task.
+needs. A question for the requester is `tico task ask <id> --to <person> "<question>"`, one open question per task.
 
 ## Quality standards
 - **Answer first.** The page opens with the windows closing in the next 14 days.

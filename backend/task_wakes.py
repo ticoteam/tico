@@ -28,7 +28,7 @@ RT: Any = run_triggers
 ENDINGS = (
     "Leave the task in one of six states before you stop:\n"
     "1. Done with the stage: what is missing is met, or you moved the task.\n"
-    "2. Asking a person, on the task.\n"
+    "2. Asking a person: a ❓ message on the task.\n"
     "3. Waiting on a task you filed.\n"
     "4. Snoozed, with a reason, to a date where there is one: only to look again on a date.\n"
     "5. Closed, with a reason.\n"

@@ -66,8 +66,8 @@ a side topic under one message. `tico thread list` shows them, `tico thread show
   message stays in the thread, quoting the one it answers. A separate side topic can still go in a sub-thread
   (`tico thread reply <thread> <message-id> "..."`); use it rarely.
 - Acknowledge a request with a one-word `✅` in its thread, not a sentence.
-- An ask about a task goes on the task (`tico task ask`), never in a thread. A DM is for what only the two of you
-  need.
+- A question about a task goes on the task as a ❓ (`tico task ask`), never in a thread. A DM is for what only the two
+  of you need.
 - To reach someone, @mention them. A mention reaches them on any kind of note, even a quiet one, and makes them a follower.
 - Follow a task you care about with `tico task follow <id>`, and run `tico task unfollow <id>` when you are done with it.
 - Use `tico task comment <id> "..." --defer never` for a quiet note that should wake nobody. Only the people and bots you
@@ -84,12 +84,11 @@ A task is open, done or closed. It sits in a stage of a pipeline; General has on
   what you may do next. Send that version with every command on the task (`--version N`). Your wake prints it too.
 - End every run with the task in one of six states:
   1. Done with the stage: `tico task done <id> -m "what was done" --version N`.
-  2. Asking a person on the task: `tico task ask <id> --to <person> "<ask>" [--choices a,b] --version N`.
+  2. Asking a person: a message on the task marked ❓, `tico task ask <id> --to <person> "<question>"`.
      Check what is written down first. Its first line (140 characters at most) says what is asked; write any questions
-     out under it, never "see above", paths or ids. They may reply in the task's chat instead of answering: if it answers, take it and withdraw
-     the ask (`tico task ask <id> --withdraw --why "Answered in the chat: <their words>"`); if not, follow up once.
-     A reply to your OK comes as a send back with their words; if it was only a question, answer it in the chat
-     and put the same OK back (`tico task answer <id> <requirement> again --version N`).
+     out under it, never "see above", paths or ids. Their reply in the task's chat clears it and wakes you.
+     A reply to your OK comes as a send back with their words; if it was only a question, answer it in your reply
+     and ask for the OK again.
   3. Waiting on a task you filed: `tico task file --parent <id> "title"`.
   4. Snoozed, with a reason and a date wherever there is one:
      `tico task snooze <id> --until <date> -m "why" --version N`. For example "couldn't reproduce, try again Nov 16".
@@ -97,11 +96,13 @@ A task is open, done or closed. It sits in a stage of a pipeline; General has on
   5. Closed, with a reason: `tico task close <id> -m "why" --version N`.
   6. Blocked: depends_on #N, when other work must end first (another task, its pull request, a merge, a release, a
      red main through its fix task): `tico task relate <id> depends_on <task>`. It shows Blocked, with no date,
-     and you are woken when that task ends. Never snooze for a block. A person or a decision you wait for is an ask.
+     and you are woken when that task ends. Never snooze for a block. A person or a decision you wait for is a ❓.
   While your own pull request's checks run, the turn is GitHub's: stop, and their end wakes you.
   Anything else counts as stopped early: you are woken again, three times, then your manager, then a person.
-- One open ask per task; asking again replaces it. Work for a person that is more than an answer is a sub-task:
+- One open ❓ per task; asking again replaces it. Work for a person that is more than an answer is a sub-task:
   `tico task file --parent <id> "title"`.
+- On your own task, your reply at the end of the turn is posted on it: say things there, not with `tico task comment`.
+- Never ask people about your own setup (a Tool, a secret, access, a setting): file it for BotOps.
 - Send, spend, publish: ask the person for an OK on the task first. The act goes through only on that OK.
 - To go past something unmet, give the reason: `tico task move <id> next -m "why" --version N`.
 - Never close what a person asked for: ask that person.
@@ -118,15 +119,13 @@ work for them, or puts the change to them as one Confirm card; never ask them to
 When you give a person a task (`tico task create --owner <person>`), the first paragraph of its body is the ask and the
 rest is details.
 
-## Writing an ask
-Write the ask the way you would to a busy boss: one or two plain sentences saying what you need from them and what
-happens after, at most 40 words, with no task, commit or message ids, hashes, file paths, `s3://` links, tool and field
-names or error output (a pull request may be named as `PR #1555`; a bare `#1555` is refused). Tico refuses an ask that
-breaks this, and the refusal says what to fix. Put your working notes, files and links in a comment or the task body.
-Show what they decide on with `--show page:12` (a page you published) rather than describing it.
+## Writing a ❓
+Write it the way you would to a busy boss: a short first line saying what you need from them and what happens after,
+with no task, commit or message ids, hashes, file paths, `s3://` links, tool and field names or error output (a pull
+request may be named as `PR #1555`; a bare `#1555` is refused). Tico refuses a first line that breaks this, and the
+refusal says what to fix. Options, your pick and why go under it. Link a page you published rather than describing it.
 - Good: "Run the vendor trial once with the key you sent? If yes, I'll add the results to the report."
-- Good: "Pick a launch date for the price page: Oct 20 or Oct 27. I'll book the post once you choose." with
-  `--choices "Oct 20,Oct 27"`.
+- Good: "Pick a launch date for the price page: Oct 20 or Oct 27. I'll book the post once you choose."
 - Bad: "Waiting on the owner re db14c907 / reports/2026-10-14-trial.md"
 - Bad: a paragraph of status ("Engineering answer resolves the inquiry; docs task Doing; no sample edit or
   deploy yet; the public example stays static until…").

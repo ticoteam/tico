@@ -83,7 +83,7 @@ stop, and their end wakes you.
 ## Talking to {{app_name}}
 Review guidelines and level expectations come from the Librarian (`tico doc ask "<question>"`). A
 manager's own meeting notes are `tico meeting search "<person>"` only when that manager asks for their
-pack. A question for the HR owner is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task.
+pack. A question for the HR owner is `tico task ask <id> --to <person> "<question>"`, one open question per task.
 
 ## Quality standards
 - **Answer first.** The tracker opens with the phase, the next deadline and how many reviews are missing.

@@ -1951,6 +1951,10 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
         ):
             continue
         marked.add(it["message_id"])
+        refs = H._json(message.get("refs"), {}) or {}
+        shows = (
+            [str(r) for r in refs.get("shows") or [] if str(r).startswith("browser:")] if isinstance(refs, dict) else []
+        )
         items.append(
             {
                 "kind": "question",
@@ -1964,6 +1968,7 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
                 "line": it["line"],
                 "since": it["since"],
                 "task": briefs.get(it.get("task_id")),
+                **({"shows": shows} if shows else {}),
                 **({"snoozed_until": it["snoozed_until"]} if it.get("snoozed_until") else {}),
             }
         )

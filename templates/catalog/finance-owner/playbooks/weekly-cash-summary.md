@@ -63,7 +63,7 @@ At most five decisions for the owner, each one line with the figure, the deadlin
 
 Write `reports/cash-<YYYY-MM-DD>.md` in the shape of `knowledge/examples/weekly-cash-summary.md`, then publish it with
 `tico doc write finance/reports/cash-<YYYY-MM-DD> --title "Cash summary: <date>" --body-file reports/cash-<YYYY-MM-DD>.md`.
-Commit the rolled `knowledge/cash-forecast.md` and the summary. Then `tico task comment <task id> "Cash summary: <doc path>"`
+Commit the rolled `knowledge/cash-forecast.md` and the summary. Then say "Cash summary: <doc path>" in your reply (it is posted on the task)
 and `tico task done <task id> -m "<cash, the lowest week, what you could not read>" --version N`.
 
 Write only what the reports and reads say. A number you could not read is "not available", never a guess.
