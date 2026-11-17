@@ -178,7 +178,7 @@ def _screen_reason(row):
     reason = row["screen_reason"] if failed else None
     return {
         "screen_reason": reason,
-        "screen_action": SCREEN_REASONS.get(reason, NO_REASON) if failed else None,
+        "screen_action": SCREEN_REASONS.get(reason or "", NO_REASON) if failed else None,
         "screen_failures": row["screen_failures"] or 0,
         "judge_call_id": row["screen_judge_call_id"],
     }
