@@ -475,6 +475,7 @@ WRITES = frozenset(
         "done_at",
         "closed_at",
         "closed_by_id",
+        "prefix",
     }
 )
 
@@ -795,9 +796,9 @@ def enter(
         assignee_id=assignee,
         status="open",
         updated_at=ts,
+        # Its label's letters are the pipeline's it is made in, and stay the task's wherever it moves (`refile`).
+        **({} if row.get("prefix") else {"prefix": pipe.get("prefix") or None}),
     )
-    # Its label's letters are the pipeline's it is made in, and stay the task's wherever it moves (`refile`).
-    conn.execute("UPDATE tasks SET prefix=? WHERE id=? AND prefix IS NULL", (pipe.get("prefix") or None, task_id))
     entered_visit = _open_visit(conn, task_id, first["id"], "new", ts)
     if picked:
         _picked(conn, task_id, entered_visit, first, picked[0])
@@ -1374,11 +1375,9 @@ def refile(
         owner = picked[0].bot
         if picked[1].owns_task:
             extra["assignee_id"] = owner
-    # The label keeps the letters of the pipeline the task was made in ('' when that one had none).
-    conn.execute(
-        "UPDATE tasks SET prefix=COALESCE((SELECT prefix FROM pipelines WHERE id=?), '') WHERE id=? AND prefix IS NULL",
-        (row["pipeline_id"], task_id),
-    )
+    if row.get("prefix") is None:
+        # The label keeps the letters of the pipeline the task was made in ('' when that one had none).
+        extra["prefix"] = _part(row, "pipeline").get("prefix") or ""
     _write(
         conn,
         task_id,
