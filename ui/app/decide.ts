@@ -214,6 +214,7 @@ function decideDialog(): HTMLDialogElement {
       <button type="button" class="dc-mic" data-dc="voice" aria-label="Voice" aria-pressed="false" title="Voice">${DEC_MIC}</button>
       <div class="dc-sayw"><span class="dc-say"></span><span class="dc-vh" aria-live="polite"></span></div>
       <span class="dc-up"></span><span class="dc-bar" role="status" hidden></span>
+      <span class="dc-head-acts"></span>
       <span class="dc-nav">
         <button type="button" class="dc-icon dc-wide" data-dc="prev" aria-label="Previous" title="Previous (←)">‹</button>
         <button type="button" class="dc-icon dc-wide" data-dc="next" aria-label="Next" title="Next (→)">›</button>
@@ -731,6 +732,8 @@ function decideRender(st: DecState) {
   const it = decideCurrent(st);
   root.classList.toggle('dc-empty', !it);
   if (!it) {
+    root.classList.remove('dc-solo');
+    $('.dc-head-acts', root)?.replaceChildren();
     $('.dc-thing', root)!.innerHTML = '';
     $('.dc-side', root)!.innerHTML = decideDoneHTML(st);
     decideBarRoom();
@@ -951,6 +954,13 @@ function decidePaintSide(st: DecState) {
   // and Close task.
   const more = decideAskMoreHTML(st, it);
   if (more) host.querySelector<HTMLElement>('[data-key] > .dc-acts')?.insertAdjacentHTML('beforeend', more);
+  // A ❓ on a wide screen: Snooze and ⋯ go on the header row by ‹ ›, as a phone has them on its title row, so the
+  // composer ends the column.
+  const headActs = $('.decide .dc-head-acts') as HTMLElement | null;
+  if (headActs) {
+    const row = chat && it.kind === 'question' && !decidePhone() ? host.querySelector<HTMLElement>(':scope > [data-key] > .dc-acts') : null;
+    if (row && !row.querySelector(':scope > button')) headActs.replaceChildren(row); else headActs.replaceChildren();
+  }
   const box = host.querySelector<HTMLInputElement>('#dc-other');
   if (box && held) box.value = held;
   const saidBox = host.querySelector<HTMLTextAreaElement>('#dc-other-note');
@@ -1631,6 +1641,12 @@ function decideChatOf(it: NeedsEntry): boolean {
   const kind = decideKind(it);
   return (kind === 'ok' || kind === 'question') && !it.ask?.typed && !!decideTaskId(it);
 }
+/** The chat's box as the task's window words it (task-modal.ts taskComposerToPaint): "Message <the task's owner>"
+    when that is someone else; in a direct chat, the bot. */
+function decideChatPlaceholder(it: NeedsEntry): string {
+  const owner = decideTaskId(it) ? String(it.task?.owner_id || '') : it.from_id || '';
+  return owner && owner !== myActor() ? `Message ${actorLabel(owner)}` : 'Message';
+}
 function decideChatStop() { if (DEC_CHAT?.view) threadUnmount(DEC_CHAT.view); DEC_CHAT = null; }
 /** A bot's OK of Product's Validate page, its page first (backend/validate_gate.py): OK, or a reply that sends the work
     back. `product-validate-2`: Product added beside the pair it replaced (validate_gate.STAGES). */
@@ -1658,7 +1674,8 @@ function decideChatMount(st: DecState, it: NeedsEntry, host: HTMLElement, card: 
       // A ❓'s question is a message of the chat already: no ask under it; the chat opens at that message.
       DEC_CHAT.view = threadMount(el, {id: cid, card: true, header: false, ...(mark ? {focus: it.message_id || ''} : {}),
         tail: () => { const now = DEC && decideCurrent(DEC); return now && now.id === it.id && !mark ? decideAskBubbleHTML(DEC!, now) : ''; },
-        send: (text, files) => decideChatSend(st, text, files), typed: decideChatTyped, reach: false});   // no "To <name>" line
+        send: (text, files) => decideChatSend(st, text, files), typed: decideChatTyped, reach: false,   // no "To <name>" line
+        placeholder: () => decideChatPlaceholder(it)});
     } else el.innerHTML = `<div class="thv-list">${decideAskBubbleHTML(st, it)}</div>`;   // until the task's read lands
   } else if (DEC_CHAT.view) thvDraw(DEC_CHAT.view, {parts: ['list']});
   else host.querySelector('.dc-chat .thv-list')!.innerHTML = decideAskBubbleHTML(st, it);

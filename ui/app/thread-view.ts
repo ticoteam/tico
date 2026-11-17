@@ -193,6 +193,8 @@ interface ThvOpts {
   typed?: (text: string) => void;
   // false: no "To <name>" line under the box (who the message reaches); Flow's chat leaves it out.
   reach?: boolean;
+  // The box's words when empty, in place of the thread's name: Flow's chat says it as the task's window does.
+  placeholder?: () => string;
 }
 // The composer of a bot's Home or DM or a thread: what pill.js, slash-commands.js and chat-goal.js read off it.
 interface ThvComposer {
@@ -1327,6 +1329,8 @@ function thvComposerLabel(view: ThvView) {
 }
 // Who the words go to: the bot in its Home or DM, the thread by its name, the people in a DM.
 function thvPlaceholder(view: ThvView) {
+  const own = view.opts.placeholder?.();
+  if (own) return own;
   const t = view.thread, slug = view.opts.goals;
   // The bot's own name only: botDisplayName adds the slug when two bots share a name, and the page already says which.
   if (slug) return 'Message ' + (slug === assistantBot() ? assistantName() : botRow(slug)?.display_name || botRow(slug)?.slug || slug);

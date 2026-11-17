@@ -60,9 +60,20 @@ const groupOf = (page: Page, id: string) => page.locator(`[data-need="${id}"]`)
         assert.equal(await q.getAttribute('aria-label'), 'Needs your reply');
         assert.ok(await q.isVisible(), 'the marked message is in view');
         assert.equal(await page.locator('#need-card[open] :is([data-dc="open"], [data-dc="approve"], [data-dc="sendback"])').count(), 0, 'no Open, Approve or Send back');
-        assert.equal(await side.locator('[data-dc="snooze"]').count(), 1, 'Snooze, keyed on the mark');
-        assert.equal(await side.locator('[data-dc="ask-more"]').count(), 1, '⋯ with Give to…');
+        const card = page.locator('#need-card[open] .decide');
+        assert.equal(await card.locator('[data-dc="snooze"]').count(), 1, 'Snooze, keyed on the mark');
+        assert.equal(await card.locator('[data-dc="ask-more"]').count(), 1, '⋯ with Give to…');
         assert.equal(await side.locator('.dc-chat .p-foot').count(), 0, 'no "To <name>" line');
+        assert.equal(await side.locator('.dc-chat .p-text').getAttribute('placeholder'), 'Message Engineer', "worded as the task's window");
+        assert.equal(await side.locator('.th-focus').evaluate(el => getComputedStyle(el).boxShadow), 'none', 'a faint tint, no bar');
+        // Snooze and ⋯: on the header row on a wide screen (the composer ends the column), on the title row on a phone.
+        assert.equal(await page.locator(phone ? '#need-card .dc-tabs ~ [data-key] [data-dc="snooze"]' : '#need-card .dc-head .dc-head-acts [data-dc="snooze"]').count(), 1);
+        if (!phone) {
+          await card.locator('[data-dc="snooze"]').click();
+          const menu = await card.locator('.dc-head-acts .dc-snz').boundingBox();
+          assert.ok(menu && menu.y > 40 && menu.y + menu.height <= viewport.height, `its menu opens down, on screen (${JSON.stringify(menu)})`);
+          await card.locator('[data-dc="snooze"]').click();
+        }
         if (phone) {
           assert.equal(await side.locator('.dc-tabs [data-dc-tab="chat"]').getAttribute('aria-selected'), 'true', 'a phone opens on Chat');
           const box = await side.locator('.dc-chat .thv-composer').boundingBox();
