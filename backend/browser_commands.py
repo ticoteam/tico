@@ -42,6 +42,7 @@ from . import hubdb
 from . import auth as auth_module
 from .models import Contract
 from .store import Problem
+from .api_contract import api_v2
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -1547,7 +1548,15 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
                 pass
             return central(c)
 
-    @app.post(base)
+    @app.post(
+        base,
+        **api_v2(
+            "Tools",
+            "openWebsiteBrowser",
+            "Open, or wake, the account's browser for your live view: on the computer its session runs on, else the browser host. A live session is woken without changing its page",
+            "BrowserOpened",
+        ),
+    )
     async def browser_open(request: Request, tool_id: str, account_id: str, body: BrowserOpen) -> Any:
         """Wake an existing session for the person's live view, or open one on the browser host."""
         who = request.state.identity
@@ -1582,6 +1591,11 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
             200: {"description": "The newest picture of the page", "content": {"image/jpeg": {}}},
             204: {"description": "No picture yet"},
         },
+        **api_v2(
+            "Tools",
+            "getWebsiteBrowserFrame",
+            "The newest picture of the account's browser (JPEG; 204 before the first), with X-Page-Url, X-Page-Width and X-Page-Height. From the computer the session runs on, at most one a second however many people watch",
+        ),
     )
     async def browser_frame(request: Request, tool_id: str, account_id: str) -> Response:
         """The newest picture of the account's browser (JPEG), with X-Page-Url, X-Page-Width and
@@ -1653,7 +1667,15 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
         if isinstance(outcome, BrowserReport):
             mailbox.note(cmd, outcome)
 
-    @app.post(base + "/control")
+    @app.post(
+        base + "/control",
+        **api_v2(
+            "Tools",
+            "setWebsiteBrowserControl",
+            "Take control (bots wait until you give it back, or 5 minutes idle), or give it back",
+            "BrowserControlState",
+        ),
+    )
     async def browser_control(request: Request, tool_id: str, account_id: str, body: BrowserControl) -> Any:
         """Take control of the account's browser (bots wait until it is given back, or 5 minutes idle), or give it back."""
         who = request.state.identity
@@ -1670,7 +1692,15 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
         mailbox.clear_needs_you(account_id)  # the person did what the bot asked for
         return {"ok": True, "control": False}
 
-    @app.post(base + "/input")
+    @app.post(
+        base + "/input",
+        **api_v2(
+            "Tools",
+            "sendWebsiteBrowserInput",
+            "A click (x, y in frame pixels), typed text, a key or a scroll from the person in control",
+            "BrowserInputDone",
+        ),
+    )
     async def browser_input(request: Request, tool_id: str, account_id: str, body: BrowserInput) -> Any:
         """A click, typed text, a key or a scroll from the person in control; x and y are pixels of the frame."""
         who = request.state.identity

@@ -28,6 +28,7 @@ from . import manual
 from . import models as M
 from .names import lookup
 from .store import H, Problem, encode
+from .api_contract import api_v2
 
 KINDS = ("website", "google_drive", "google_doc", "notion", "github", "other")
 MAX_BODY = 1_000_000
@@ -1160,7 +1161,15 @@ def install_docs(app, store, auth, mutate):
         if str(doc_id).startswith("manual:"):
             raise Problem("read_only", "The Tico manual is read-only; it ships with each release", 405)
 
-    @app.get("/api/v2/docs")
+    @app.get(
+        "/api/v2/docs",
+        **api_v2(
+            "Docs",
+            "listInternalDocs",
+            "Internal docs by path, without their text; path_prefix narrows to a folder, limit and cursor page",
+            "InternalDocList",
+        ),
+    )
     def list_docs(
         request: Request,
         path_prefix: str = Query(default="", max_length=300),
@@ -1183,13 +1192,29 @@ def install_docs(app, store, auth, mutate):
                     H.event(c, who.actor, "docs.write_refused", target, {"code": exc.code, "path": path, **detail})
             raise
 
-    @app.post("/api/v2/docs")
+    @app.post(
+        "/api/v2/docs",
+        **api_v2(
+            "Docs",
+            "createInternalDoc",
+            "Write a new internal doc (Markdown). The path defaults to a slug of the title; a chosen path that is taken is a 409",
+            "InternalDocResult",
+        ),
+    )
     def create_doc(request: Request, body: DocCreate):
         return refusals_recorded(
             request, body, (body.path or "").strip(), lambda: mutate(request, body, docs.create(request, body))
         )
 
-    @app.get("/api/v2/docs/search")
+    @app.get(
+        "/api/v2/docs/search",
+        **api_v2(
+            "Docs",
+            "searchInternalAndLinkedDocs",
+            "Search team and manual sections by relevance, with excerpts, and linked docs by title, note and address; each result has a type",
+            "DocsSearchResults",
+        ),
+    )
     def search_docs(
         request: Request,
         q: str = Query(min_length=1, max_length=4000),
@@ -1254,7 +1279,16 @@ def install_docs(app, store, auth, mutate):
         }
     }
 
-    @app.post("/api/v2/docs/import", openapi_extra=upload_doc)
+    @app.post(
+        "/api/v2/docs/import",
+        **api_v2(
+            "Docs",
+            "importInternalDoc",
+            "A file (.md .markdown .txt .html .htm .docx .pdf, up to 20 MB) converted to Markdown and saved as a new internal doc",
+            "InternalDocResult",
+            openapi_extra=upload_doc,
+        ),
+    )
     async def import_doc(request: Request):
         """A file (.md .markdown .txt .html .htm .docx .pdf, up to 20 MB) becomes an internal doc."""
         who = request.state.identity
@@ -1284,37 +1318,91 @@ def install_docs(app, store, auth, mutate):
             lambda: mutate(request, item, docs.create(request, create_body(item, text), imported=item.filename))
         )
 
-    @app.get("/api/v2/docs/{doc_id}")
+    @app.get(
+        "/api/v2/docs/{doc_id}",
+        **api_v2("Docs", "getInternalDoc", "One internal doc with its text and version", "InternalDocResult"),
+    )
     def get_doc(request: Request, doc_id: str):
         return docs.read(request.state.identity, doc_id)
 
-    @app.patch("/api/v2/docs/{doc_id}")
+    @app.patch(
+        "/api/v2/docs/{doc_id}",
+        **api_v2(
+            "Docs",
+            "updateInternalDoc",
+            "Change a doc's title, text or path, archive it, or lock it (owner and bot administrators). `version` must be the current one or the answer is 409 version_conflict; a locked doc answers 403 locked to everyone else",
+            "InternalDocResult",
+        ),
+    )
     def edit_doc(request: Request, doc_id: str, body: DocEdit):
         read_only(doc_id)
         return refusals_recorded(request, body, doc_id, lambda: mutate(request, body, docs.edit(request, doc_id, body)))
 
-    @app.get("/api/v2/docs/{doc_id}/versions")
+    @app.get(
+        "/api/v2/docs/{doc_id}/versions",
+        **api_v2(
+            "Docs",
+            "listInternalDocVersions",
+            "A doc's versions, newest first, without their text",
+            "InternalDocVersions",
+        ),
+    )
     def doc_versions(request: Request, doc_id: str):
         return docs.versions(request.state.identity, doc_id)
 
-    @app.get("/api/v2/docs/{doc_id}/versions/{number}")
+    @app.get(
+        "/api/v2/docs/{doc_id}/versions/{number}",
+        **api_v2("Docs", "getInternalDocVersion", "One version with its text", "InternalDocVersionResult"),
+    )
     def doc_version(request: Request, doc_id: str, number: int):
         return docs.version(request.state.identity, doc_id, number)
 
-    @app.post("/api/v2/docs/{doc_id}/restore")
+    @app.post(
+        "/api/v2/docs/{doc_id}/restore",
+        **api_v2(
+            "Docs",
+            "restoreInternalDoc",
+            "Save an earlier version as a new version (the history is never rewritten)",
+            "InternalDocResult",
+        ),
+    )
     def restore_doc(request: Request, doc_id: str, body: DocRestore):
         read_only(doc_id)
         return mutate(request, body, docs.restore(request, doc_id, body))
 
-    @app.get("/api/v2/linked-docs")
+    @app.get(
+        "/api/v2/linked-docs",
+        **api_v2(
+            "Docs",
+            "listLinkedDocs",
+            "External link identities and metadata; public GitHub content is indexed separately",
+            "LinkedDocList",
+        ),
+    )
     def list_links(request: Request):
         return docs.links(request.state.identity)
 
-    @app.post("/api/v2/linked-docs")
+    @app.post(
+        "/api/v2/linked-docs",
+        **api_v2(
+            "Docs",
+            "addLinkedDoc",
+            "Link a doc by its address; the kind is detected and the title defaults to the host and path. Anyone may add one",
+            "LinkedDocResult",
+        ),
+    )
     def add_linked(request: Request, body: LinkCreate):
         return mutate(request, body, docs.link_add(request, body))
 
-    @app.patch("/api/v2/linked-docs/{link_id}")
+    @app.patch(
+        "/api/v2/linked-docs/{link_id}",
+        **api_v2(
+            "Docs",
+            "updateLinkedDoc",
+            "Change or remove (archived) a linked doc: whoever added it, owners and bot administrators",
+            "LinkedDocResult",
+        ),
+    )
     def edit_link(request: Request, link_id: str, body: LinkEdit):
         return mutate(request, body, docs.link_edit(request, link_id, body))
 
