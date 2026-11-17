@@ -15,13 +15,22 @@ from fastapi import Request
 from . import hubdb as H
 from . import task_relations, threads, views
 from .store import Problem
+from .api_contract import api_v2
 
 WINDOW_DAYS = 7
 STOPS_MAX = 3
 
 
 def install(app, store, auth):
-    @app.get("/api/v2/origins/{ref}")
+    @app.get(
+        "/api/v2/origins/{ref}",
+        **api_v2(
+            "Needs you",
+            "getOrigin",
+            "Why a task, bot question or approval is on your list: who made it, its cause (automation, rule, parent task or bot), its siblings in the last seven days and up to three commands that would stop the source; 404 when you cannot read it",
+            "Origin",
+        ),
+    )
     def origin_show(request: Request, ref: str):
         """Why this task or message is on the caller's list: its maker, its cause, its siblings in the last
         seven days and the commands that would stop the source."""

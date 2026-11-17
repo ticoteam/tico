@@ -15,12 +15,12 @@ const {cold, drawn, table} = require('./support/parts.cts') as PartsSupport.Api;
 // A task's page brings the parts it draws from (its files, the ask screen and the browser view it opens, its tags, its
 // stages' rules), and
 // Settings its Tags tab and the assistant's strip: each is its own part so that Home, which uses none of them, does not download them (P05b).
-const TASK = ['browser-view', 'decide', 'stage-rules', 'tags', 'task', 'task-files'];
-const ONLY: Record<string, string[]> = {'#/task/': TASK, '#/thread/': [], '#/settings/general': ['assistant', 'settings', 'tags'], '#/settings': ['assistant', 'settings', 'tags']};
+const TASK = ['browser-view', 'decide', 'stage-rules', 'tags', 'task', 'task-docs', 'task-files'];
+const ONLY: Record<string, string[]> = {'#/task/': TASK, '#/thread/': ['threads-rail'], '#/threads': ['threads-rail'], '#/settings/general': ['assistant', 'settings', 'tags'], '#/settings': ['assistant', 'settings', 'tags']};
 // Every page in the sidebar, the account menu, Company, Library and Settings. A bot's and a person's page are added from
 // the sidebar's links, a task's and a thread's from ones made on the hub.
 const ROUTES = [
-  '#/home', '#/overview/company-page', '#/threads/new', '#/updates', '#/calendar', '#/meetings', '#/assistant', '#/assistant/learned',
+  '#/home', '#/overview/company-page', '#/threads', '#/threads/new', '#/updates', '#/calendar', '#/meetings', '#/assistant', '#/assistant/learned',
   '#/roadmap', '#/tags', '#/finance', '#/growth', '#/growth/sources', '#/strategy', '#/strategy/goals', '#/strategy/org',
   '#/strategy/budget', '#/strategy/market', '#/strategy/lenses', '#/strategy/brand', '#/automations', '#/listening',
   '#/rules', '#/company-page', '#/library/contacts', '#/library/skills', '#/library/files', '#/tools', '#/docs',

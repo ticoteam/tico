@@ -64,8 +64,8 @@ const init = () => {
     return route.fulfill({json: {task}});
    });
    await page.route('**/api/v2/presence**', route => route.fulfill({json: {actors: []}}));
-   // The request and its Edit are on the task window's Description tab.
-   const info = async () => { await page.locator('#task-modal[open] [data-task-tab="desc"]').click(); };
+   // The request and its Edit head the task window's Details (its icon, pressed while Details shows).
+   const info = async () => { await page.locator('#task-modal[open] [data-task-tab="details"][aria-pressed="false"]').click(); };
    await page.evaluate(async task => taskModalShow(task), task);
    await info();
    const idle = () => page.waitForFunction(() => !taskModal().taskLive!.reading && !taskModal().taskLive!.draft.flight);
@@ -106,7 +106,8 @@ const init = () => {
    // A task in the Product pipeline is a roadmap item (ui/app/roadmaps.ts roadmapTask).
    Object.assign(task, {pipeline_id: 'product', public_title: 'Public A', public_summary: 'Summary A'});
    await update();
-   await page.locator('#task-modal[open] [data-task-tab="details"]').click();   // the public text is under Activity and links
+   // the public text is under Activity and links, in Details
+   if (await page.locator('#task-modal[open] [data-task-tab="details"][aria-pressed="false"]').count()) await info();
    for (const [key, label] of [['public_title', 'Public title'], ['public_summary', 'Public summary']] as const) {
     const box = page.getByRole('textbox', {name: label, exact: true}), base = task.version, original = task[key];
     await box.focus();
@@ -194,8 +195,8 @@ const init = () => {
     await box.pressSequentially('X'); values[i] = values[i]!.slice(0, 2) + 'X' + values[i]!.slice(2);
     assert.equal(await box.inputValue(), values[i]!, boxes[i]! + ' keeps its native caret');
    }
-   // The comment box keeps its text and focus through both redraw paths too.
-   await page.locator('#task-modal[open] [data-task-tab="chat"]').click();
+   // The comment box keeps its text and focus through both redraw paths too. Details closes back to the chat.
+   await page.locator('#task-modal[open] [data-task-tab="details"][aria-pressed="true"]').click();
    const message = page.getByRole('textbox', {name: 'Message', exact: true});
    await message.fill('Unsent comment'); await message.focus();
    for (const redraw of [update, refresh]) {
@@ -337,7 +338,8 @@ const init = () => {
    // Ana's expired-session recovery never appears or autosaves when Ben signs into this same tab.
    offline = true;
    await fillTitle('Ana private title'); await title.evaluate(el => el.blur()); await error.waitFor(); await idle();
-   await page.locator('#task-modal[open] [data-task-tab="chat"]').click();
+   const shut = page.locator('#task-modal[open] [data-task-tab="details"][aria-pressed="true"]');
+   if (await shut.count()) await shut.click();   // Details closes back to the chat
    await page.getByRole('textbox', {name: 'Message', exact: true}).fill('Ana private comment');
    await page.evaluate(() => taskModal().close());
    await page.waitForFunction(() => !taskModal().taskLive);

@@ -22,6 +22,7 @@ from .bot_rows import BotRows
 from .harnesses import resolve_harness
 from .settings_admin import compact_at as compact_at_of
 from .store import H, P, Problem, repo_url
+from .api_contract import api_v2
 
 
 def register(app, auth, settings, settings_admin, store):
@@ -163,7 +164,15 @@ def register(app, auth, settings, settings_admin, store):
             row["online"] = external["online"]
         return row
 
-    @app.get("/api/v2/bots")
+    @app.get(
+        "/api/v2/bots",
+        **api_v2(
+            "Bots",
+            "listBots",
+            "Bots the caller can see, each with the caller's own access; ?can=read|write keeps the ones they can read or write to",
+            "BotList",
+        ),
+    )
     def bots(request: Request, include_archived: str | None = None, can: str | None = None):
         """The bots the caller may see, each with `access` (their own see, read and write on it).
         `?can=read` or `?can=write` keeps only the bots they hold that level on."""
@@ -269,7 +278,15 @@ def register(app, auth, settings, settings_admin, store):
             out = {"cause": f"{H.actor_name(c, row['owner_id'])} is still setting up {name}", "fix": None}
         return {**out, **({"task": task} if task else {})}
 
-    @app.get("/api/v2/bots/{bot}")
+    @app.get(
+        "/api/v2/bots/{bot}",
+        **api_v2(
+            "Bots",
+            "getBot",
+            "One bot: its profile for anyone who can see it; status, computer, queue and goals too for anyone who can read it",
+            "BotDetail",
+        ),
+    )
     def bot_detail(request: Request, bot: str):
         """One bot: the profile a caller who can see it gets (name, role, who runs it, who it reports
         to, who it works for), and for one who can read it also its status, machine, queue, goals and
@@ -312,7 +329,15 @@ def register(app, auth, settings, settings_admin, store):
                 value["owner_name"] = (H.human(c, value["owner_id"]) or {}).get("name") or value["owner_id"]
             return teammate_access.bot_redactor(c, who, auth)(value)
 
-    @app.get("/api/v2/org")
+    @app.get(
+        "/api/v2/org",
+        **api_v2(
+            "Team chart",
+            "getOrg",
+            "Humans, the bots the caller can see and reports_to; ?can=read|write keeps the bots they can read or write to",
+            "Org",
+        ),
+    )
     def org(request: Request, person: str | None = None, team: str | None = None, can: str | None = None):
         """The mixed people-and-bots org chart. Bots use this (and `tico team show` / `tico_team_show`) to
         find who handles a kind of work and how to reach them. Only the bots the caller may see,

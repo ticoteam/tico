@@ -356,6 +356,7 @@ let browser: import('playwright').Browser | null = null;
   {
     const {page, seen} = await open(browser, {phone: true});
     await page.goto('https://tico-ui.test/#/thread/t-ship');
+    await page.locator('#threads-shell').waitFor();
     await row(page, 'm6').waitFor();
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth) <= 390, 'no sideways scroll');
     // The quote is cut short on its name line, and a finger's size: its target reaches past the line above and below.

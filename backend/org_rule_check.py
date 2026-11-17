@@ -81,6 +81,7 @@ from .call_slots import NEUTRAL, Calls
 from .store import H, Problem
 from . import sources as SRC
 from .entities import rules as DR
+from .api_contract import api_v2
 
 LOG = logging.getLogger("tico.org_rule_check")
 QUESTION_SET = "rule-check"
@@ -3047,7 +3048,14 @@ def install(app, store, auth, mutate):
         )
         return mutate(request, body, lambda c: mail_decide(c, prep))
 
-    @app.get("/api/v2/rules/stats")
+    @app.get(
+        "/api/v2/rules/stats",
+        **api_v2(
+            "Rules",
+            "getRuleCheckStats",
+            "Rule checks today: checks, unchecked, blocked, dollars left under the decisions monthly cap, and whether checks are on",
+        ),
+    )
     def rules_stats(request: Request):
         """The Rules page header: checks today, unchecked, blocked, dollars left under Decide's monthly cap, and on/off."""
         who = request.state.identity
@@ -3055,7 +3063,14 @@ def install(app, store, auth, mutate):
         with store.read() as c:
             return stats(c, store.settings)
 
-    @app.get("/api/v2/rule-holds")
+    @app.get(
+        "/api/v2/rule-holds",
+        **api_v2(
+            "Rules",
+            "listRuleHolds",
+            "The held writes the caller may read, as summaries, a page at a time: a review task's holds (task), a conversation's held writes (thread), or every held write the caller may read",
+        ),
+    )
     def rule_holds(
         request: Request,
         task: str | None = None,
@@ -3071,25 +3086,46 @@ def install(app, store, auth, mutate):
             items, nxt = holds_listed(c, who, task or "", thread or "", cursor, limit, auth)
         return {"holds": items, "next_cursor": nxt}
 
-    @app.get("/api/v2/rule-holds/{hold_id}")
+    @app.get(
+        "/api/v2/rule-holds/{hold_id}",
+        **api_v2(
+            "Rules",
+            "getRuleHold",
+            "One held output as its reader sees it: the author reads the writes they made, a person or a bot; the reviewer and the person a bot reports to read the rest",
+        ),
+    )
     def rule_hold(request: Request, hold_id: str):
         who = request.state.identity
         with store.read() as c:
             hold = _hold(c, hold_id)
             return view_hold(c, who, hold, auth=auth)
 
-    @app.post("/api/v2/rule-holds/{hold_id}/keep")
+    @app.post("/api/v2/rule-holds/{hold_id}/keep", **api_v2("Rules", "keepRuleHold", "The reviewer keeps it blocked"))
     def rule_hold_keep(request: Request, hold_id: str, body: HoldEmpty):
         who = request.state.identity
         return mutate(request, body, lambda c: keep(c, who, hold_id, auth))
 
-    @app.post("/api/v2/rule-holds/{hold_id}/withdraw")
+    @app.post(
+        "/api/v2/rule-holds/{hold_id}/withdraw",
+        **api_v2(
+            "Rules",
+            "withdrawRuleHold",
+            "The author takes a held write back to edit and resend it, or the person a bot reports to withdraws its post; nothing is sent",
+        ),
+    )
     def rule_hold_withdraw(request: Request, hold_id: str, body: HoldEmpty):
         """The author takes back a held write to send it again (Edit and resend): the hold is kept, nothing is sent."""
         who = request.state.identity
         return mutate(request, body, lambda c: withdraw(c, who, hold_id, auth))
 
-    @app.post("/api/v2/rule-holds/{hold_id}/send")
+    @app.post(
+        "/api/v2/rule-holds/{hold_id}/send",
+        **api_v2(
+            "Rules",
+            "sendRuleHold",
+            "The reviewer sends it anyway, once, with the hold's nonce; for a person's write that is the rule's author, its editors or an admin",
+        ),
+    )
     def rule_hold_send(request: Request, hold_id: str, body: HoldSend):
         who = request.state.identity
         ingest, check, ident = None, None, None
@@ -3122,13 +3158,23 @@ def install(app, store, auth, mutate):
             ),
         )
 
-    @app.post("/api/v2/rule-holds/{hold_id}/appeal")
+    @app.post(
+        "/api/v2/rule-holds/{hold_id}/appeal",
+        **api_v2("Rules", "appealRuleHold", "The author bot asks the reviewer to look, with why"),
+    )
     def rule_hold_appeal(request: Request, hold_id: str, body: HoldAppeal):
         """The author bot asks the reviewer to look. Never checked by rules: it delivers nothing."""
         who = request.state.identity
         return mutate(request, body, lambda c: appeal(c, who, hold_id, body.why))
 
-    @app.post("/api/v2/rules/check")
+    @app.post(
+        "/api/v2/rules/check",
+        **api_v2(
+            "Rules",
+            "checkRuleDraft",
+            "A bot checks a draft as the write it will be; sending that exact draft then costs no second check",
+        ),
+    )
     def rules_check(request: Request, body: DraftCheck):
         """A bot checks a draft as the write it will be (`tico rules check`): the same input, and the verdict cached, so
         sending that exact draft costs no second call. A person's draft is checked as theirs."""

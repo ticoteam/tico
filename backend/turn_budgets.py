@@ -22,7 +22,8 @@ from pydantic import Field
 from .batch_work import shared_check
 from .models import Contract
 from .store import H, Problem
-from . import bot_settings as BS
+from . import bot_settings as BS, holds
+from .api_contract import api_v2
 
 MAX = 100_000
 KEYS = ("turns_per_hour", "turns_per_day")
@@ -75,33 +76,51 @@ def limits(c, declared):
     return {key: mine[key] if mine[key] is not None else shared[key] for key in KEYS}
 
 
-def counts(c, bot, floor="", now=None):
-    """The bot's runs in the last hour and the last day, counted from `floor` at the earliest (a release)."""
+# The runs counted for a window: from the window's start, or from the bot's last release when that is later.
+COUNT_SQL = (
+    "SELECT count(*) FROM attempts WHERE bot_id=?1 AND created_at>max(?2,coalesce((SELECT max(released_at) FROM holds "
+    "WHERE holdable_type='bot' AND holdable_id=?1 AND kind='runaway' AND released_at IS NOT NULL),''))"
+)
+
+
+def counts(c, bot, now=None):
+    """The bot's runs in the last hour and the last day, counted from its last release at the earliest."""
     now = now or H.now()
-    out = {}
-    for window, _, seconds, _ in WINDOWS:
-        since = max(H.shift(now, seconds=-seconds), floor or "")
-        out[window] = c.execute(
-            "SELECT count(*) FROM attempts WHERE bot_id=? AND created_at>?", (bot, since)
-        ).fetchone()[0]
-    return out
+    return {
+        window: c.execute(COUNT_SQL, (bot, H.shift(now, seconds=-seconds))).fetchone()[0]
+        for window, _, seconds, _ in WINDOWS
+    }
 
 
 # ---------------------------------------------------------------------------------------------------- the hold
-GET_SQL = "SELECT * FROM bot_budget WHERE bot=?"
+# The hold is a `runaway` hold on the bot (backend/holds.py), its window, runs and budget in its details.
+def _shape(row):
+    if not row:
+        return {}
+    details = _declared(row["details"])
+    return {
+        "bot": row["holdable_id"],
+        "held_at": row["created_at"],
+        "window": details.get("window") or "hour",
+        "runs": details.get("runs"),
+        "budget": details.get("budget"),
+        "task_id": row["upkeep_task_id"],
+        "reason": row["reason"],
+    }
 
 
 def get(c, bot):
-    """The bot's row, read once per snapshot (read_cache): a status page primes every bot's (events.prime_status_lines)."""
-    from .read_cache import one
-
-    row = one(c, GET_SQL, (bot,))
-    return dict(row) if row else {}
+    """The bot's open hold ({} when none), read once per snapshot: a status page primes every bot's (holds.prime)."""
+    return _shape(holds.get(c, holds.RUNAWAY, "bot", bot))
 
 
 def held(c):
     """Every bot held on its budget: the rows Health lists."""
-    return [dict(r) for r in c.execute("SELECT * FROM bot_budget WHERE held_at IS NOT NULL ORDER BY held_at")]
+    found = c.execute(
+        "SELECT * FROM holds WHERE kind=? AND holdable_type='bot' AND released_at IS NULL ORDER BY created_at",
+        (holds.RUNAWAY,),
+    )
+    return [_shape(row) for row in found]
 
 
 def refusal(c, bot, message):
@@ -129,8 +148,8 @@ def enforce(c, settings, job, message, now=None):
     with shared_check("team"):
         cap = limits(c, declared)
     now = now or H.now()
-    seen = counts(c, bot, state.get("released_at") or "", now)
-    for window, key, _, label in WINDOWS:
+    seen = counts(c, bot, now)
+    for window, key, _, _ in WINDOWS:
         if cap[key] and seen[window] >= cap[key]:
             _hold(c, settings, bot, window, seen[window], cap[key], now)
             return True
@@ -160,11 +179,15 @@ def _hold(c, settings, bot, window, runs, budget, now):
         f"Then release {name} (Settings > Bots > {name}, or `tico bot release {bot}`) or raise its budget "
         f"(`tico bot budget {bot} --{window} N`). Everything queued for it is kept and starts after the release.",
     )
-    c.execute(
-        "INSERT INTO bot_budget(bot,held_at,window,runs,budget,task_id) VALUES(?,?,?,?,?,?) "
-        "ON CONFLICT(bot) DO UPDATE SET held_at=excluded.held_at,window=excluded.window,runs=excluded.runs,"
-        "budget=excluded.budget,task_id=excluded.task_id",
-        (bot, now, window, runs, budget, task_id),
+    holds.put(
+        c,
+        holds.RUNAWAY,
+        "bot",
+        bot,
+        actor=H.KEEPER,
+        reason=_sentence(name, runs, window),
+        details={"window": window, "runs": runs, "budget": budget},
+        upkeep_task_id=task_id,
     )
     H.event(c, H.KEEPER, "bot.budget_held", bot, {"window": window, "runs": runs, "budget": budget, "task": task_id})
     H.hook(
@@ -193,25 +216,26 @@ def _sentence(name, runs, window):
 
 
 def words(c, bot):
-    """What every page says about a budget hold."""
-    from . import bot_stops
-
-    state = get(c, bot)
-    if not state.get("held_at"):
-        return ""
-    return _sentence(bot_stops.name_of(c, bot), state.get("runs"), state.get("window") or "hour")
+    """What every page says about a budget hold: the sentence written with it."""
+    return get(c, bot).get("reason") or ""
 
 
-def release(c, actor, bot):
-    """Lift the hold; the count starts over from now. Answers whether the bot was held."""
-    state = get(c, bot)
-    if not state.get("held_at"):
-        return False
-    from . import bot_stops
-
-    c.execute(
-        "UPDATE bot_budget SET held_at=NULL,task_id=NULL,released_at=?,released_by=? WHERE bot=?", (H.now(), actor, bot)
+def release(c, actor, bot, how=None):
+    """Lift the hold; the count starts over from now. `how` is "raised" for a budget raised above the count, else a
+    person's (or a bot's, BotOps') release. Answers whether the bot was held."""
+    ended = holds.release(
+        c,
+        holds.RUNAWAY,
+        "bot",
+        bot,
+        actor=actor,
+        how=how or ("botops" if str(actor).startswith("bot:") else "person"),
     )
+    if not ended:
+        return False
+    state = _shape(ended)
+    from . import bot_stops
+
     bot_stops.close_item(c, state.get("task_id"), "Released.")
     H.event(c, actor, "bot.budget_released", bot, {"window": state.get("window"), "runs": state.get("runs")})
     H.hook(
@@ -233,7 +257,7 @@ def view(c, bot, config):
         **limits(c, declared),
         "own": own(declared),
         "team": team(c),
-        "runs": counts(c, bot, state.get("released_at") or "", now),
+        "runs": counts(c, bot, now),
         "held": (
             {
                 "window": state["window"],
@@ -295,8 +319,8 @@ def _release_if_room(c, actor, bot, declared):
     if not state.get("held_at"):
         return False
     cap = limits(c, declared)[next(key for window, key, _, _ in WINDOWS if window == state["window"])]
-    runs = counts(c, bot, state.get("released_at") or "")[state["window"]]
-    return release(c, actor, bot) if not cap or runs < cap else False
+    runs = counts(c, bot)[state["window"]]
+    return release(c, actor, bot, "raised") if not cap or runs < cap else False
 
 
 def set_team(c, actor, body):
@@ -318,8 +342,8 @@ def set_team(c, actor, body):
         H.event(c, actor, "settings.turn_budgets", "team", {"before": before, "after": after})
         # A held bot that follows the team's budget is let go when the new one leaves it room, as its own would.
         for row in c.execute(
-            f"SELECT b.bot, {BS.CONFIG} AS config FROM bot_budget b JOIN bot_config bc ON bc.bot=b.bot {BS.JOIN} "
-            "WHERE b.held_at IS NOT NULL"
+            f"SELECT h.holdable_id AS bot, {BS.CONFIG} AS config FROM holds h JOIN bot_config bc ON bc.bot=h.holdable_id "
+            f"{BS.JOIN} WHERE h.kind='runaway' AND h.holdable_type='bot' AND h.released_at IS NULL"
         ).fetchall():
             if _release_if_room(c, actor, row["bot"], _declared(row["config"])):
                 freed.append(row["bot"])
@@ -336,7 +360,15 @@ def install(app, store, auth, mutate, settings_admin):
             raise Problem("not_found", "Bot not found", 404)
         auth.require_see(c, who, bot)
 
-    @app.get("/api/v2/bots/{bot}/budget")
+    @app.get(
+        "/api/v2/bots/{bot}/budget",
+        **api_v2(
+            "Bots",
+            "getBotBudget",
+            "A bot's run budget (runs per hour and per day), the team default, its runs so far and any hold; for the people who manage it",
+            "BotBudgetState",
+        ),
+    )
     def bot_budget(request: Request, bot: str):
         """A bot's run budget: in force, its own and the team's, its runs so far and any hold. For the people who
         manage it."""
@@ -347,7 +379,15 @@ def install(app, store, auth, mutate, settings_admin):
             settings_admin._manager(c, who, bot, botops=True)
             return view(c, bot, settings_admin._config(c, bot))
 
-    @app.post("/api/v2/bots/{bot}/budget")
+    @app.post(
+        "/api/v2/bots/{bot}/budget",
+        **api_v2(
+            "Bots",
+            "setBotBudget",
+            "Set the bot's own runs per hour and per day: null follows the team, 0 is no limit; raising it above the runs that held the bot releases it",
+            "BotBudgetState",
+        ),
+    )
     def bot_budget_set(request: Request, bot: str, body: BotBudget):
         """Set the bot's own runs per hour and per day; null follows the team, 0 is no limit. Raising it above the
         runs that held the bot releases it."""
@@ -361,7 +401,15 @@ def install(app, store, auth, mutate, settings_admin):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/bots/{bot}/release")
+    @app.post(
+        "/api/v2/bots/{bot}/release",
+        **api_v2(
+            "Bots",
+            "releaseBot",
+            "Release a bot Tico stopped for failed runs or too many runs, or for queued runs it could not start; its queued work starts again",
+            "BotReleased",
+        ),
+    )
     def bot_release(request: Request, bot: str, body: ReleaseBot):
         """Release a bot Tico stopped, for failed runs or for too many runs. Its queued work starts again."""
         who = request.state.identity
@@ -382,14 +430,30 @@ def install(app, store, auth, mutate, settings_admin):
         if not auth.bot_admin(who):
             raise Problem("forbidden", "Only an owner or an admin " + what, 403)
 
-    @app.get("/api/v2/settings/turn-budgets")
+    @app.get(
+        "/api/v2/settings/turn-budgets",
+        **api_v2(
+            "Bots",
+            "getTeamBudgets",
+            "The team default runs per hour and per day for bots with no budget of their own (owner and admins)",
+            "TeamBudgetState",
+        ),
+    )
     def team_budgets(request: Request):
         """The team defaults for each bot's runs per hour and per day."""
         admin_only(request.state.identity, "sees the team's run budgets")
         with store.read() as c:
             return {**team(c), "defaults": DEFAULTS}
 
-    @app.post("/api/v2/settings/turn-budgets")
+    @app.post(
+        "/api/v2/settings/turn-budgets",
+        **api_v2(
+            "Bots",
+            "setTeamBudgets",
+            "Set the team default runs per hour and per day; 0 is no limit (owner and admins)",
+            "TeamBudgetState",
+        ),
+    )
     def team_budgets_set(request: Request, body: TeamBudgets):
         """Set the team defaults; bots with no budget of their own follow them. 0 is no limit."""
         if not body.model_fields_set & set(KEYS):

@@ -1,9 +1,9 @@
-// The task window's Details tab, run lines and the reader's own ask (the style guide's Task window).
-// - 1280 × 800: Details is a tab; its facts are one line each: Stage, Owner, Asked by, Visible to, Followers, Tags; a
+// The task window's Details, run lines and the reader's own ask (the style guide's Task window).
+// - 1280 × 800: Details is the icon before ⋯; its facts are one line each: Stage, Owner, Asked by, Visible to, Followers, Tags; a
 //   Human or a due date not set waits hidden, and ⋯ shows it and opens its editor. No "Details" fold.
 // - A bot's finished run is one chat line, "Builder worked 14 min", in order with the messages.
 // - A task waiting on the reader's own answer opens on Chat, whose last row is that ask with Answer (the Chat tab has a
-//   dot); answering removes it.
+//   no tabs: it has no documents); answering removes it.
 // Fixtures only (tasks-page.cts).
 import type {Need, Task} from './tasks-page.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
@@ -36,10 +36,10 @@ const RID = 'spec-ok-ana';
       const request = win.locator('.task-comments .th-request');
       assert.ok((await request.locator('.th-body').innerText()).trim().length > 0, 'the request\'s words');
       assert.equal(await request.locator('.th-head time').count(), 1, 'when it was asked');
-      // The facts are on the Details tab, one line each; no fold.
+      // The facts are under the Details icon, one line each; no fold.
       assert.equal(await win.locator('details.task-details').count(), 0, 'no Details fold');
       assert.equal(await win.locator('[data-prop-row="owner"]').isVisible(), false, 'a tab away');
-      await win.getByRole('tab', {name: /Details/}).click();
+      await win.getByRole('button', {name: /^Details/}).click();
       await win.locator('[data-prop-row="owner"]').waitFor({state: 'visible'});
       const rows = await win.locator('[data-task-props] [data-prop-row]:not([hidden])').evaluateAll(els => els.map(e => e.getAttribute('data-prop-row')));
       assert.deepEqual(rows, ['stage', 'owner', 'asker', 'visible', 'followers', 'tags'].filter(r => rows.includes(r)), `in order: ${rows}`);
@@ -77,9 +77,9 @@ const RID = 'spec-ok-ana';
       assert.match(head, /^PM waiting on you$/, `the asker, then "waiting on you": ${head}`);
       assert.equal(await banner.locator('.th-av').count(), 1, 'the asker\'s face');
       assert.doesNotMatch(await banner.innerText(), /You waiting on you/);
-      // The ask is the chat's last row, and the window opens on Chat, whose tab carries a dot.
-      assert.equal(await win.getByRole('tab', {name: /Chat/}).getAttribute('aria-selected'), 'true');
-      assert.equal(await win.locator('[data-task-tab="chat"] .tw-dot').count(), 1, 'the Chat tab has a dot');
+      // The ask is the chat's last row, and the window opens on the chat; a task with no documents has no tabs, so no dot.
+      assert.equal(await win.locator('.task-chat').isVisible(), true);
+      assert.equal(await win.getByRole('tab').count(), 0, 'no tabs without documents');
       const last = await page.evaluate(() => { const rows = [...document.querySelectorAll('#task-modal .task-comments > *')]; return rows.at(-1)?.matches('.task-need'); });
       assert.ok(last, 'the ask is the last row of the chat');
       await banner.getByRole('button', {name: 'Answer'}).click();
@@ -87,7 +87,6 @@ const RID = 'spec-ok-ana';
       await card.getByRole('button', {name: 'Pro trial'}).click();
       await win.locator('.task-need').waitFor({state: 'detached'});
       assert.equal(await win.locator('.task-need').count(), 0, 'answered: the banner goes');
-      await win.locator('[data-task-tab="chat"] .tw-dot').waitFor({state: 'detached'});   // and so does the Chat tab's dot
       assert.deepEqual(errors, []);
       await page.close();
     }
@@ -96,10 +95,10 @@ const RID = 'spec-ok-ana';
       const t: Task = task('t-3', 'Pricing page', 'spec', {owner_id: 'human:ana'});
       const {page, errors} = await open(browser, {viewport: {width: 1280, height: 800}, hash: '#/task/t-3', tasks: [t], needs: []});
       const win = page.locator('#task-modal[open]');
-      await win.getByRole('tab', {name: /Details/}).click();
+      await win.getByRole('button', {name: /^Details/}).click();
       assert.equal(await win.locator('[data-prop-row="due"]').isVisible(), false, 'no due date: the row waits hidden');
       assert.equal(await win.locator('[data-prop-row="tags"]').isVisible(), false, 'no tags: the row hides even when editable');
-      await win.getByRole('tab', {name: /Chat/}).click();
+      await win.getByRole('button', {name: /^Details/}).click();   // pressed again: back to the chat
       assert.equal(await win.locator('.task-need').count(), 0);
       t.turn = {state: 'person', who: 'human:ana', line: 'Ship it?', since: null, until: null, ask: true, requirement_id: RID};
       t.version += 1;

@@ -16,14 +16,16 @@ import weakref
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from html import unescape
+from typing import Any
 
 import httpx
 from fastapi import Request
 
-from . import mcp_client
+from . import mcp_client, oauth_refresh
 from .auth import Identity, validate_identity
 from .imports import MeetingImport, segments_of
 from .store import H, Problem, encode
+from .api_contract import api_v2
 
 MCP = "https://mcp.granola.ai/mcp"
 AUTH = "https://mcp-auth.granola.ai"
@@ -153,6 +155,13 @@ class GranolaMCP:
             if not row:
                 return None
             return dict(row), json.loads(row["metadata"]), json.loads(self.app.state.vault.cipher.decrypt(c, row))
+
+    def save_meta(self, row, meta):
+        with self.store.transaction() as c:
+            c.execute(
+                "UPDATE granola_connections SET metadata=? WHERE actor=? AND id=?",
+                (encode(meta), row["actor"], row["id"]),
+            )
 
     def save(self, row, meta, secret):
         with self.store.transaction() as c:
@@ -456,7 +465,46 @@ class GranolaMCP:
                 await asyncio.to_thread(self.save, row, meta, secret)
             return {"state": meta["state"], **await asyncio.to_thread(self.status, who)}
 
+    def claim_refresh(self, actor, sign_in, sent) -> tuple[str, Any]:
+        """Inside a transaction of its own: ("claimed", holder) when this call takes the sign-in's refresh, ("changed",
+        the stored tokens) when another refresh has stored a refresh token other than `sent`, or ("busy", None) while
+        another holder's refresh lasts."""
+        with self.store.transaction() as c:
+            saved = c.execute("SELECT * FROM granola_connections WHERE actor=?", (actor,)).fetchone()
+            stored = json.loads(self.app.state.vault.cipher.decrypt(c, saved)) if saved else {}
+            if stored.get("refresh_token") != sent:
+                return "changed", stored
+            holder = oauth_refresh.take(c, sign_in)
+            return ("claimed", holder) if holder else ("busy", None)
+
     async def refresh(self, row, meta, secret):
+        """The access token refreshed once across processes (backend/oauth_refresh.py): Granola rotates its refresh
+        token, so two refreshes of one connection would spend it twice. The claim is taken with the refresh token
+        read; when another refresh stored a newer one meanwhile, its tokens are taken instead of refreshing."""
+        sign_in = "granola:" + row["actor"]
+        deadline = time.monotonic() + oauth_refresh.WAIT_SECONDS
+        while True:
+            state, found = await asyncio.to_thread(
+                self.claim_refresh, row["actor"], sign_in, secret.get("refresh_token")
+            )
+            if state == "claimed":
+                holder = found
+                break
+            if state == "changed":
+                if not found.get("refresh_token"):
+                    raise GranolaError("needs_signin")
+                secret.clear()
+                secret.update(found)
+                return
+            if time.monotonic() > deadline:
+                raise GranolaError("unreachable")
+            await asyncio.sleep(oauth_refresh.POLL_SECONDS)
+        try:
+            await self.send_refresh(row, meta, secret)
+        finally:
+            await asyncio.to_thread(oauth_refresh.release, self.store, sign_in, holder)
+
+    async def send_refresh(self, row, meta, secret):
         for attempt in range(2):
             response = await self.http(
                 "POST",
@@ -992,7 +1040,7 @@ class GranolaMCP:
                 return
             who = Identity(actor, "human", row["email"])
             meta.update(last_attempt=self.clock(), skipped=0, skip_reasons={})
-            await asyncio.to_thread(self.save, row, meta, secret)
+            await asyncio.to_thread(self.save_meta, row, meta)
             step = "initialize"
             skipped_error = skipped_detail = None
 
@@ -1296,7 +1344,7 @@ class GranolaMCP:
                                     raise
                         except Exception:
                             skipped_error = skip("bad_response: import_meeting")
-                        await asyncio.to_thread(self.save, row, meta, secret)
+                        await asyncio.to_thread(self.save_meta, row, meta)
                     # New notes go first, so the checkpoint is the last note in list-date order with every
                     # earlier one processed: it never passes an imported note not yet revisited.
                     # Ids left untried stay out of `done`, so the checkpoint stops before them and a later sync lists them again.
@@ -1307,7 +1355,7 @@ class GranolaMCP:
                     checkpoint = dates[by_date[position - 1]] if position else None
                     if checkpoint and (not meta.get("cursor") or checkpoint > datetime.fromisoformat(meta["cursor"])):
                         meta["cursor"] = checkpoint.isoformat()
-                    await asyncio.to_thread(self.save, row, meta, secret)
+                    await asyncio.to_thread(self.save_meta, row, meta)
                 if meta.get("state") == "needs_signin":
                     return
                 meta["failures"] = 0
@@ -1347,7 +1395,7 @@ class GranolaMCP:
                 meta["last_error"] = "sync_error: " + step
                 meta["last_error_detail"] = GranolaError().detail(step)
                 log.warning("%s", meta["last_error"])
-            await asyncio.to_thread(self.save, row, meta, secret)
+            await asyncio.to_thread(self.save_meta, row, meta)
 
     async def trigger(self, who, interval=DEBOUNCE, now=False):
         if who.actor in self.changing_connections:
@@ -1474,23 +1522,37 @@ def install_granola(app):
         except GranolaError as exc:
             raise Problem("granola_unavailable", "Granola: " + exc.code, 503) from None
 
-    @app.get("/api/v2/meetings/granola")
+    @app.get(
+        "/api/v2/meetings/granola", **api_v2("Meetings", "getGranolaStatus", "Your Granola connection", "GranolaStatus")
+    )
     def status(request: Request):
         return service.status(person(request))
 
-    @app.post("/api/v2/meetings/granola/connect")
+    @app.post(
+        "/api/v2/meetings/granola/connect",
+        **api_v2("Meetings", "connectGranola", "Start personal Granola browser sign-in", "GranolaDevice"),
+    )
     async def connect(request: Request):
         return await safe(service.connect(person(request)))
 
-    @app.get("/api/v2/meetings/granola/connect/status")
+    @app.get(
+        "/api/v2/meetings/granola/connect/status",
+        **api_v2("Meetings", "pollGranolaSignIn", "Poll personal sign-in at the provider interval", "GranolaSignIn"),
+    )
     async def poll(request: Request):
         return await safe(service.poll(person(request)))
 
-    @app.delete("/api/v2/meetings/granola/connect")
+    @app.delete(
+        "/api/v2/meetings/granola/connect",
+        **api_v2("Meetings", "disconnectGranola", "Delete your encrypted Granola tokens", "GranolaDisconnect"),
+    )
     async def disconnect(request: Request):
         return await safe(service.disconnect(person(request)))
 
-    @app.post("/api/v2/meetings/granola/sync")
+    @app.post(
+        "/api/v2/meetings/granola/sync",
+        **api_v2("Meetings", "syncGranola", "Start a background sync; reuse the last two minutes", "GranolaSync"),
+    )
     async def sync(request: Request, now: bool = False):
         """`now`: the person pressed Sync now, so a backoff yields after five minutes since the last attempt."""
         return await service.trigger(person(request), now=now)

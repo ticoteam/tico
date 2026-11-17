@@ -401,7 +401,7 @@ def run(args, who=None):
 
     if fn in hubtools_connections.COMMANDS:
         return hubtools_connections.run_command(client, args)
-    if args.cmd == "alerts" or fn in ("tool index", "tool check", "tool activity", "tool level"):
+    if args.cmd == "alerts":
         return via_tool(client, args)
     if args.cmd == "contacts":
         return via_tool(client, _contacts_args(args))
@@ -415,9 +415,9 @@ def run(args, who=None):
         with Path(args.file).open("rb") as source:
             return client.post_bytes("team/icon", source)
     if fn in ("task worktree add", "task worktree attach", "task worktree setup"):
-        from runner_support.worktrees import command
+        from clients.commands.task_work import worktree
 
-        return command(client, args.worktree_sub, getattr(args, 'repo', None) or getattr(args, 'path', None), args.task)
+        return worktree(args.worktree_sub, getattr(args, 'repo', None) or getattr(args, 'path', None), args.task)
     if args.cmd == "repo":
         from clients import hubtools
 
@@ -434,11 +434,7 @@ def run(args, who=None):
                     **({"operation_id": args.operation_id} if args.operation_id else {}),
                 },
             )
-        if args.fn == "repo product-create":
-            return product_repo_create(client, args.name, confirm=args.confirm)
-        if args.sub == "list":
-            return hubtools.repo_list(client, {})
-        return hubtools.repo_update(client, {"full_name": args.full_name, "enabled": args.sub == "tick"})
+        return product_repo_create(client, args.name, confirm=args.confirm)
     if fn == "bot repos":
         from clients import hubtools
 
@@ -457,15 +453,10 @@ def run(args, who=None):
         if lost:
             print(f"{args.bot} no longer has: " + ", ".join(lost), file=sys.stderr)
         return result
-    if fn in ("tool list", "tool show", "tool query-search") and not (fn == "tool list" and args.bot):
-        # Reads a runner credential may make outside a turn; /me would refuse a runner.
-        return integrations(client, args)
     if fn in ("bot copy", "bot update-from-original", "bot suggest-to-original", "skill copy", "skill submit"):
         return via_tool(client, args)  # they work in this computer's workspace (clients/botcopy.py)
     if fn == "bot app-shot":
         return via_tool(client, args)  # it writes the PNG on this computer
-    if fn == "tool report":
-        return via_tool(client, args, tools=json.loads(args.tools))
     if args.cmd in ("template", "bot"):  # `bot create`, `check` and `model`; the other bot leaves are specs
         return bots(client, args)
     if fn in (
@@ -473,11 +464,6 @@ def run(args, who=None):
         "group update",
         "group delete",
         "group access",
-        "tool list",
-        "tool learn",
-        "tool add",
-        "tool update",
-        "tool remove",
         "update create",
         "update redo",
         "update list",
@@ -503,7 +489,6 @@ def run(args, who=None):
         "slack channel list",
         "slack channel add",
         "slack channel remove",
-        "slack channel import",
         "setup show",
         "setup complete",
         "setup invite",
@@ -737,6 +722,8 @@ def run(args, who=None):
         if sub in ("relate", "unrelate"):
             return via_tool(client, args)  # the tool says what to do instead of blocks and blocked_by
         if sub == "attach":
+            if getattr(args, "doc", None):
+                return via_tool(client, args, document=args.doc, path=args.file)
             if getattr(args, "req", None):
                 return via_tool(client, args, page=args.file)
             path = Path(args.file)
@@ -1059,24 +1046,6 @@ def onboarding(client):
     return record if isinstance(record, dict) else {}
 
 
-# ----------------------------------------------------------------------------- integrations
-def integrations(client, args):
-    if args.fn == "tool list":
-        return client.get("tools")["integrations"]
-    page = client.get("tools/" + args.service)
-    if args.fn == "tool show":
-        return page
-    if args.query_id:
-        for query in page["queries"]:
-            if query["id"] == args.query_id:
-                return query
-        raise APIError("not_found", f"No query {args.query_id} under {page['service']}", 404)
-    return query_search(page["queries"], args.term)
-
-
-from clients.hubtools import query_search  # (one search, shared with the tico_tool_query_search tool)
-
-
 # ----------------------------------------------------------------------------- decisions
 def judge(client, args):
     """`tico decision ask`: load the questions on this side, send them inline, print the answers.
@@ -1119,63 +1088,6 @@ def judge(client, args):
         return J.through_hub(client)(state, questions, args.label or label)
     except J.JudgeError as exc:
         raise APIError(exc.code, exc.detail, exc.status, exc.retryable)
-
-
-def integrations_text(rows):
-    blocks = []
-    for row in rows:
-        head = (
-            f"{row['service']:<24} {row['kind']:<8} {row['writes']:<9} {row['summary']}"
-            f"  [{row['query_count']} queries, {row['learning_count']} learnings]"
-        )
-        extra = [f"  credentials: {c}" for c in (row.get("credentials") or [])]
-        if row.get("access"):
-            extra.append(f"  access: {row['access']}")
-        blocks.append("\n".join([head, *extra]))
-    return "\n\n".join(blocks) or "no integrations"
-
-
-def integration_text(page):
-    out = [
-        f"# {page['title']} ({page['service']}, {page['kind']}, writes: {page['writes']}, owner: {page['owner']})",
-        "",
-        page["summary"],
-        "",
-        f"Access: {page['access']}",
-        "Credentials:",
-    ]
-    out += [f"  - {c}" for c in page["credentials"]]
-    out += ["Declared in bot.yaml as:"] + ["  " + line for line in page["declared_as"].rstrip().splitlines()]
-    out += ["", page["body"].rstrip()]
-    if page["queries"]:
-        out += [
-            "",
-            f"## Queries ({len(page['queries'])}; `tico tool query-search {page['service']} <term>` searches, `--id <id>` prints one)",
-        ]
-        out += [f"  {q['id']:<44} {q['title']}" for q in page["queries"]]
-    notes = page.get("learnings") or []
-    out += ["", f"## Learnings ({len(notes)}; add one with `tico tool learn {page['service']} \"...\"`)"]
-    out += [f"  {n['created_at'][:10]}  {n['actor']}: {n['text']}" for n in notes] or ["  none yet"]
-    return "\n".join(out)
-
-
-def query_text(query):
-    out = [
-        f"{query['id']}: {query['title']}",
-        query.get("description", ""),
-        f"database: {query.get('database', '')}  category: {query.get('category', '')}  tags: {', '.join(query.get('tags') or [])}",
-    ]
-    if query.get("params"):
-        out.append("params:")
-        for p in query["params"]:
-            extra = (" required" if p.get("required") else "") + (f" default={p['default']}" if "default" in p else "")
-            out.append(f"  {p['name']} ({p.get('type', 'text')}): {p.get('label', p['name'])}{extra}")
-    out += ["", query["sql"].rstrip() if "sql" in query else json.dumps(query.get("mongo"), indent=2)]
-    return "\n".join(out)
-
-
-def queries_text(rows):
-    return "\n".join(f"{q['id']:<44} {q['title']}  — {q.get('description', '')}" for q in rows) or "no matching queries"
 
 
 def sql_params(pairs):
@@ -1596,12 +1508,6 @@ def main(args, who=None, fields=None):
                 print(line, file=sys.stderr)
         elif args.cmd == "contacts" and getattr(args, "as_text", False):
             print(contacts_text(args.fn, result))
-        elif args.fn == "tool list" and not args.bot and not args.json:
-            print(integrations_text(result))
-        elif args.fn == "tool show" and not args.json:
-            print(integration_text(result))
-        elif args.fn == "tool query-search" and not args.json:
-            print(query_text(result) if args.query_id else queries_text(result))
         elif args.fn == "automation guide" and isinstance(result, dict) and "text" in result:
             print(result["text"])
         elif args.fn == "meeting read" and getattr(args, "notes", False):

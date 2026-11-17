@@ -178,6 +178,9 @@ EMPTY = (
     "directory_credentials",
     "company_storage",
     "tico_storage",
+    # Refresh claims on OAuth sign-ins (backend/oauth_refresh.py): transient. A copy starts with none, so a claim the
+    # source holds never blocks the copy's refresh.
+    "oauth_refresh_claims",
     # API tools: emptied with their keys, so a copy never calls a vendor or shows a real vendor's call log
     "tools",
     "tool_checks",
@@ -389,6 +392,8 @@ KEEP = (
             "blob_media",
             "blobs",
             "bot_agent_instructions",
+            # Run-budget holds before migration 20261117061834_holds_runaway moves them into `holds`: a copy is pruned
+            # before its first start runs that migration, so an unlisted table here would be emptied and its holds lost.
             "bot_budget",
             "bot_config",
             "bot_settings",
@@ -449,6 +454,7 @@ KEEP = (
             "goals",
             "health_findings",
             "health_reports",
+            "holds",  # why a bot may not start work: the copy holds what the source held (runaway runs, so far)
             "humans",
             "principals",
             "import_refs",
@@ -566,6 +572,7 @@ KEEP = (
             "task_check_models",
             "task_delegations",
             "history_events",
+            "task_documents",
             "task_file_reviews",
             "task_links",
             "task_relations",

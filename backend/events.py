@@ -61,6 +61,7 @@ from . import runs
 from . import read_cache
 from . import visuals as V
 from .store import H, Problem, encode
+from .api_contract import api_v2
 
 TOPICS = ("tasks", "messages", "runs", "bots", "needs", "threads", "meeting_items", "presence", "letters", "calendar")
 AGENT_TOPICS = ("messages", "threads")  # what an external agent's standing token may follow (outside a turn)
@@ -846,6 +847,13 @@ _TASK_COMPUTERS = "SELECT computer_id AS rid FROM task_links WHERE task_id={task
 _REFRESH_RUNNER = (
     "SELECT substr(NEW.key,22,instr(substr(NEW.key,22),':')-1) AS rid WHERE NEW.key LIKE 'subscription-refresh:%'"
 )
+# A Claude plan's week asked of one computer (subscription_refresh.request_plan_read, key `subscription-usage:{sid}`):
+# that computer is told while the read is asked, so it polls at once and not on its backup timer, after the read lapsed.
+_PLAN_READ_RUNNER = (
+    "SELECT json_extract(NEW.value,'$.request.runner_id') AS rid "
+    "WHERE json_extract(NEW.value,'$.request.state')='requested'"
+)
+_PLAN_READ = "NEW.key LIKE 'subscription-usage:%' AND json_valid(NEW.value)"
 _MIGRATIONS = "NEW.key IN ('credential-file-migration-v1','credential-file-migration-v2-hub')"
 _WORKTREE_LINK = "{row}.kind IN ('worktree','pr')"
 
@@ -1042,6 +1050,20 @@ RUNNER_TRIGGERS = [
         "registry_metadata",
         "NEW.key LIKE 'subscription-refresh:%'",
         _tell("subscription_refresh", _REFRESH_RUNNER),
+    ),
+    (
+        "changes_runner_plan_read_insert",
+        "INSERT",
+        "registry_metadata",
+        _PLAN_READ,
+        _tell("subscription_refresh", _PLAN_READ_RUNNER),
+    ),
+    (
+        "changes_runner_plan_read_update",
+        "UPDATE",
+        "registry_metadata",
+        _PLAN_READ,
+        _tell("subscription_refresh", _PLAN_READ_RUNNER),
     ),
     (
         "changes_runner_imports_insert",
@@ -1877,7 +1899,7 @@ def prime_bot_rows(c, slugs):
     one query per table (per 500 bots), so a loop over bots reads none of them again; spend limits are one read of
     every budget node (usage_limits.nodes). Outside a snapshot nothing is kept."""
     from .read_cache import cache, prime
-    from . import browser_exit, run_backoff, turn_budgets
+    from . import browser_exit, holds, run_backoff
 
     if cache(c) is None:
         return
@@ -1887,11 +1909,11 @@ def prime_bot_rows(c, slugs):
             ("bot_status", "bot", "SELECT * FROM bot_status WHERE bot=?"),
             ("bots", "id", "SELECT * FROM bots WHERE id=?"),
             ("run_backoff", "bot", run_backoff.GET_SQL),
-            ("bot_budget", "bot", turn_budgets.GET_SQL),
             ("bot_browser_exits", "bot", browser_exit.BOT_EXIT_SQL),
         ):
             found = {row[column]: row for row in c.execute(f"SELECT * FROM {table} WHERE {column} IN ({marks})", part)}
             prime(c, statement, {(s,): found.get(s) for s in part})
+        holds.prime(c, holds.RUNAWAY, "bot", part)
 
 
 def prime_status_lines(c, slugs):
@@ -3234,7 +3256,14 @@ def install(app, store, auth, task_views, task_view):
             raise Problem("not_found", "No such run step", 404)
         return {"output": step}
 
-    @app.get("/api/v2/events")
+    @app.get(
+        "/api/v2/events",
+        **api_v2(
+            "Live events",
+            "streamEvents",
+            "Server-sent events: tasks, messages, runs, bots and Needs you as they change. topics=<comma list> (default all), after=<change number> resumes, conversation=<ids> narrows messages and runs, bot=<bot ids or slugs> narrows runs and bots, meeting=<ids> filters meeting_items, place=<places> filters presence (20 each); task=<ids> and party=<actors> narrow tasks to those and to the ones those actors own or asked for, needs=changes sends Needs you as changed ids",
+        ),
+    )
     async def events(
         request: Request,
         topics: str | None = None,

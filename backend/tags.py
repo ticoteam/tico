@@ -6,6 +6,7 @@ from pydantic import Field
 from .models import Contract, ID
 from .store import H, Problem
 from . import task_privacy as privacy
+from .api_contract import api_v2
 
 
 class TagCreate(Contract):
@@ -38,13 +39,13 @@ def install(app, store, auth, mutate, task_views):
             raise Problem("not_found", "Tag not found", 404)
         return row
 
-    @app.get("/api/v2/tags")
+    @app.get("/api/v2/tags", **api_v2("Tags", "listTags", "Tags and templates", "TagList"))
     def list_tags(request: Request, is_template: bool | None = None):
         auth.domain(request.state.identity)
         with store.read() as c:
             return {"tags": privacy.tags_readable(c, request.state.identity, H.tags(c, is_template))}
 
-    @app.get("/api/v2/tags/{tag_id}")
+    @app.get("/api/v2/tags/{tag_id}", **api_v2("Tags", "getTag", "A tag and its visible tasks", "TagDetail"))
     def show_tag(request: Request, tag_id: str, limit: int = 500, offset: int = 0):
         who = request.state.identity
         auth.domain(who)
@@ -69,11 +70,14 @@ def install(app, store, auth, mutate, task_views):
             )
         }
 
-    @app.post("/api/v2/tags")
+    @app.post("/api/v2/tags", **api_v2("Tags", "createTag", "Create a tag or template", "TagResult"))
     def create_tag(request: Request, body: TagCreate):
         return mutate(request, body, lambda c: create(c, request.state.identity, body))
 
-    @app.post("/api/v2/tags/{tag_id}/instances")
+    @app.post(
+        "/api/v2/tags/{tag_id}/instances",
+        **api_v2("Tags", "createTagInstance", "Copy a template into a task tag", "TagResult"),
+    )
     def create_instance(request: Request, tag_id: str, body: TagCreate):
         def work(c):
             template = require_tag(c, request.state.identity, tag_id)
@@ -83,7 +87,9 @@ def install(app, store, auth, mutate, task_views):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/tags/{tag_id}")
+    @app.post(
+        "/api/v2/tags/{tag_id}", **api_v2("Tags", "updateTag", "Edit a tag using its current version", "TagResult")
+    )
     def update_tag(request: Request, tag_id: str, body: TagUpdate):
         def work(c):
             who = request.state.identity

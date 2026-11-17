@@ -189,6 +189,7 @@ async function restrictPerson(hub: RealHubSupport.Hub) {
     await priya.waitForFunction(() => document.body.classList.contains('drawer'), null, {timeout: t(15000)});
     await priya.locator('#nav-threads:not([hidden])').click({timeout: t(15000)});
     await priya.waitForFunction(() => location.hash === '#/threads', null, {timeout: t(15000)});
+    await priya.locator('#threads-shell').waitFor();
     await priya.locator('#thread-rail .tr-title', {hasText: 'Launch plan'}).first().waitFor({timeout: t(15000)});
     assert.equal(await priya.locator('#thread-rail .tr-title', {hasText: 'Pricing war room'}).count(), 0);
     await priya.locator('#thread-rail a.tr-row[data-thread="' + plan.id + '"]').tap();
@@ -219,6 +220,7 @@ async function restrictPerson(hub: RealHubSupport.Hub) {
     await phone.goto(hub.url + '/#/thread/' + risks.thread_id);
     await phone.getByText('A late risk from Omar').waitFor({timeout: t(15000)});
     await phone.goto(hub.url + '/#/threads');
+    await phone.locator('#threads-shell').waitFor();
     await planRow.waitFor({timeout: t(15000)});
     assert.equal(await phone.locator(`#thread-rail a[data-thread="${risks.thread_id}"]`).count(), 0, 'opening a sub-thread adds no row');
 
@@ -281,6 +283,7 @@ async function restrictPerson(hub: RealHubSupport.Hub) {
 
       // Calls are not set up on this hub: no Start call, and no note about it.
       await page.goto(hub.url + '/#/thread/' + plan.id);
+      await page.locator('#threads-shell').waitFor();
       await page.locator('.thv-title', {hasText: 'Launch plan'}).waitFor({timeout: t(15000)});
       assert.equal(await page.locator('[data-call]').count(), 0, `${tag}: no Start call without calls`);
 

@@ -32,6 +32,7 @@ from . import people as P
 from . import read_cache
 from . import teammate_access as TA
 from .store import Problem, encode
+from .api_contract import api_v2
 
 KEY = "report_order"
 
@@ -327,7 +328,15 @@ def install(app, store, auth, mutate):
 
     from . import models as M
 
-    @app.get("/api/v2/org/order/{manager}")
+    @app.get(
+        "/api/v2/org/order/{manager}",
+        **api_v2(
+            "Team chart",
+            "getReportOrder",
+            "A manager's direct reports (a bot's id or slug, or a human's id), humans and the bots the caller can see, in the chart's order",
+            "ReportOrderView",
+        ),
+    )
     def report_order(request: Request, manager: str):
         """A manager's direct reports, humans and the bots the caller may see, in the team chart's order."""
         who = request.state.identity
@@ -335,7 +344,15 @@ def install(app, store, auth, mutate):
         with store.read() as c:
             return view(c, auth, who, manager_key(c, auth, who, manager))
 
-    @app.put("/api/v2/org/order/{manager}")
+    @app.put(
+        "/api/v2/org/order/{manager}",
+        **api_v2(
+            "Team chart",
+            "setReportOrder",
+            "Put a manager's reports in this order; the ones left out keep their places (whoever may put reports under that manager, and a bot for its own)",
+            "ReportOrderView",
+        ),
+    )
     def report_order_set(request: Request, manager: str, body: M.ReportOrder):
         who = request.state.identity
 

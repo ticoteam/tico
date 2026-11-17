@@ -16,10 +16,18 @@ from . import rooms
 from . import teammate_access
 from . import turns as turn_work
 from . import views
+from .api_contract import api_v2
 
 
 def register(app, auth, mutate, settings, store, visual_view):
-    @app.delete("/api/v2/humans/{pid}")
+    @app.delete(
+        "/api/v2/humans/{pid}",
+        **api_v2(
+            "Team chart",
+            "removePerson",
+            "Remove a left person with no history for good (owner only); anyone with history stays as left",
+        ),
+    )
     def person_remove(request: Request, pid: str):
         """The owner removes a left person who has no history, such as one added by mistake, for good
         (backend/people_remove.py). Anyone with history stays as left."""
@@ -125,7 +133,7 @@ def register(app, auth, mutate, settings, store, visual_view):
 
         return mutate(request, body, work)
 
-    @app.get("/api/v2/models")
+    @app.get("/api/v2/models", **api_v2("Bots", "listModels", "Models a bot can be set to"))
     def models(request: Request):
         auth.domain(request.state.identity)
         with store.read() as c:
@@ -144,7 +152,15 @@ def register(app, auth, mutate, settings, store, visual_view):
             "default": {"runtime": choice["runtime"], "model": choice["model"]},
         }
 
-    @app.get("/api/v2/conversations")
+    @app.get(
+        "/api/v2/conversations",
+        **api_v2(
+            "Conversations",
+            "listConversations",
+            "The caller's conversations; chat_with=<bot> for that bot's chat",
+            "ConversationList",
+        ),
+    )
     def conversations(request: Request, bot: str | None = None, chat_with: str | None = None):
         """`chat_with=<bot>`: my open chat with that bot or its Home after the chats move there.
         Otherwise my conversations, or the owner's view of a bot's."""
@@ -178,7 +194,7 @@ def register(app, auth, mutate, settings, store, visual_view):
                     row.pop(key, None)
             return {"actor": who.actor, "conversations": rows}
 
-    @app.post("/api/v2/conversations")
+    @app.post("/api/v2/conversations", **api_v2("Conversations", "createConversation", "Open a conversation"))
     def create_conversation(request: Request, body: M.ConversationCreate):
         who = request.state.identity
 
@@ -200,7 +216,15 @@ def register(app, auth, mutate, settings, store, visual_view):
 
         return mutate(request, body, work)
 
-    @app.get("/api/v2/conversations/{cid}/messages")
+    @app.get(
+        "/api/v2/conversations/{cid}/messages",
+        **api_v2(
+            "Conversations",
+            "listMessages",
+            "The newest messages (up to 200, or limit=); before=<message id> pages back, since=<timestamp> only newer, max_bytes= ends the page at that many bytes of messages",
+            "MessagePage",
+        ),
+    )
     def messages(
         request: Request,
         cid: str,

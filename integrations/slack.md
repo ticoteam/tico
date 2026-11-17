@@ -34,7 +34,7 @@ tracking, deploys). DMs and
 group DMs people send the bot. A DM to Tico, or an `@Tico` in a channel it is in, wakes the
 employee the decision model routes it to and the reply comes back in that thread under the employee's name
 ([Tico in Slack: the gateway](../docs/slack-gateway.md)). A plain channel message wakes nobody
-at once: it is stored, and the channel's `readers` in the registry get what they have not seen,
+at once: it is stored, and the channel's readers (Settings > Tools > Slack) get what they have not seen,
 grouped by thread, on the gateway's hourly pass, the way an employee subscribed to the channel
 catches up on it. A bot that is not a reader still reads a channel with `history` during a turn.
 A channel can also be linked to a Tico thread, both ways ([Slack](../docs/slack.md#link-a-channel-to-a-thread)).
@@ -88,9 +88,9 @@ Inside a hosted turn the bot is the one its `HUB_TOKEN` belongs to, and its scop
   `history --channel '#release-notes,#sales,#support,#engineering' --since yesterday --threads --format md`
 - A fixed window, machine-readable: `history --channel <channel-id> --since 2026-09-01T09:00 --until 2026-09-01T17:00 --format json`
 - An engineering bot's daily watch reads the alert channels with `--since 24h`; each channel's
-  purpose is in the registry file.
+  note is in Settings > Tools > Slack.
 - Use a channel id (`C...`) when a name is ambiguous; a channel that does not exist is refused,
-  so check the registry file for the real name.
+  so check Settings > Tools > Slack for the real name.
 
 ## Gotchas
 

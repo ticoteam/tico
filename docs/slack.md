@@ -42,15 +42,11 @@ list in Tico's database, not a file:
 - **With `tico`.** `tico slack channel add '#customer_success' --reader support`, `tico slack channel list`,
   `tico slack channel remove '#customer_success' [--reader BOT]`.
 - **By asking BotOps.** "Let the support bot read #customer_success": BotOps adds it as the person who asked,
-  so a member is told who to ask. The MCP tools are `tico_slack_channel_add`, `_list`, `_remove` and `_import`.
+  so a member is told who to ask. The MCP tools are `tico_slack_channel_add`, `_list` and `_remove`.
 
 A reader gets what is new in the channel about once an hour, as a message in its own thread
 ([slack-gateway.md](slack-gateway.md)). A bot's own `history` reads through `connectors/slack.py` follow the same
 list and its `tools:` entry. Channels shared outside the workspace are always refused, whatever the list says.
-
-**An older install** has `registry/slack-channels.yaml`. It is still read, and its channels show in the list marked as
-coming from the file, until an owner or an admin presses **Import** (or runs `tico slack channel import`). After that the
-file is ignored. A public install has no such file and needs none.
 
 ## Link a channel to a thread
 

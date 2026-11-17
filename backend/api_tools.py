@@ -83,6 +83,7 @@ from . import tool_access as TA
 from .credentials import CredentialWrite, administrator, effective_grant, owned
 from .models import AccessAudience, Contract
 from .store import H, Problem, encode
+from .api_contract import api_v2
 
 log = logging.getLogger(__name__)
 
@@ -2085,7 +2086,15 @@ def install(app, store, auth, settings):
     def manager(c, w):
         TA.require(c, w, TA.tool(), action=TA.EDIT, admins=vault().admins, auth=auth)
 
-    @app.get("/api/v2/tool-index")
+    @app.get(
+        "/api/v2/tool-index",
+        **api_v2(
+            "Tools",
+            "listToolIndex",
+            "API tools, mailboxes, Tico addresses and numbers, mailing mail, Slack, GitHub, meeting importers, Listening, outgoing webhooks and declared tools the caller may see, with status and who can use each. Follow next with cursor",
+            "ToolIndex",
+        ),
+    )
     def tool_index(
         request: Request,
         limit: int = Query(default=INDEX_LIMIT_MAX, ge=1, le=INDEX_LIMIT_MAX),
@@ -2096,14 +2105,30 @@ def install(app, store, auth, settings):
         with store.read_transaction() as c:
             return index_page(c, request.state.identity, auth, settings, vault().admins, limit, cursor)
 
-    @app.get("/api/v2/tool-vendors/{vendor}")
+    @app.get(
+        "/api/v2/tool-vendors/{vendor}",
+        **api_v2(
+            "Tools",
+            "getToolVendor",
+            "One vendor's page: its rows on Tools (website logins, MCP servers, API tools, its connections), an API tool's with its keys (never a value), who can use it at which level and its settings",
+            "ToolVendor",
+        ),
+    )
     def tool_vendor(request: Request, vendor: str):
         """One vendor's page on Tools: its website logins, MCP servers, API tools (keys, levels, settings) and the
         connections that are its, as the reader may see them."""
         with store.read_transaction() as c:
             return vendor_page(c, request.state.identity, auth, settings, vault().admins, vendor)
 
-    @app.get("/api/v2/api-tools/{tool_id}")
+    @app.get(
+        "/api/v2/api-tools/{tool_id}",
+        **api_v2(
+            "Tools",
+            "getApiTool",
+            "One API tool: its keys (never a value), who can use it at which level, its last checks and calls; to whoever may change it, who can see it and why. A tool the caller may not see is a 404",
+            "ApiTool",
+        ),
+    )
     def get_api_tool(request: Request, tool_id: str):
         with store.read_transaction() as c:
             return detail(c, request.state.identity, tool_id, vault().admins, auth)
@@ -2116,7 +2141,15 @@ def install(app, store, auth, settings):
         if w.role != "owner":  # the owner may change Who can see it (update_tool says what else)
             TA.require(c, w, TA.tool(), action=TA.EDIT, admins=vault().admins, auth=auth)
 
-    @app.patch("/api/v2/api-tools/{tool_id}")
+    @app.patch(
+        "/api/v2/api-tools/{tool_id}",
+        **api_v2(
+            "Tools",
+            "updateApiTool",
+            "Change a tool's settings (credential administrators) or who can see it: audience null for Everyone, or an audience for Only listed (the owner, or a credential administrator who can see it, who then stays on the list)",
+            "ApiToolSettings",
+        ),
+    )
     def update_api_tool(request: Request, tool_id: str, body: ToolUpdate):
         """A tool's settings and its Who can see it (`audience`: null for Everyone, or an audience for Only listed)."""
         return change(
@@ -2183,7 +2216,15 @@ def install(app, store, auth, settings):
             "rows": [{k: r[k] for k in ("credential_id", "ok", "status_code", "detail", "checked_at")} for r in rows],
         }
 
-    @app.get("/api/v2/api-tools/{tool_id}/activity")
+    @app.get(
+        "/api/v2/api-tools/{tool_id}/activity",
+        **api_v2(
+            "Tools",
+            "listApiToolActivity",
+            "Calls through the proxy and uses of its keys, newest first. Follow next with cursor",
+            "ApiToolActivity",
+        ),
+    )
     def api_tool_activity(
         request: Request,
         tool_id: str,

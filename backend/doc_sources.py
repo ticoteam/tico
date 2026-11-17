@@ -20,6 +20,7 @@ from clients import github_scope
 from . import manual
 from .models import Empty
 from .store import H, Problem, encode
+from .api_contract import api_v2
 
 log = logging.getLogger('tico.doc_sources')
 INTERVAL = 6 * 3600
@@ -786,13 +787,24 @@ def install(app, docs, mutate):
     sources = Sources(app, docs)
     app.state.doc_sources = sources
 
-    @app.get('/api/v2/doc-sources')
+    @app.get(
+        '/api/v2/doc-sources',
+        **api_v2("Docs", "listDocSources", "External sources and indexing state; limit/cursor page", "DocSourceList"),
+    )
     def list_sources(
         request: Request, limit: int = Query(default=100, ge=1, le=500), cursor: str = Query(default='', max_length=100)
     ):
         return sources.listing(request.state.identity, limit, cursor)
 
-    @app.post('/api/v2/doc-sources')
+    @app.post(
+        '/api/v2/doc-sources',
+        **api_v2(
+            "Docs",
+            "addDocSource",
+            "Save a URL and queue public GitHub indexing; duplicate URLs open the existing source",
+            "DocSourceResult",
+        ),
+    )
     def add_source(request: Request, body: SourceCreate):
         docs.reader(request.state.identity)
 
@@ -810,7 +822,10 @@ def install(app, docs, mutate):
 
         return mutate(request, body, work)
 
-    @app.patch('/api/v2/doc-sources/{source_id}')
+    @app.patch(
+        '/api/v2/doc-sources/{source_id}',
+        **api_v2("Docs", "updateDocSource", "Edit or remove a source; follows linked-doc permissions"),
+    )
     def edit_source(request: Request, source_id: str, body: SourceEdit):
         change = docs.link_edit(request, source_id, body)
 
@@ -821,7 +836,12 @@ def install(app, docs, mutate):
 
         return mutate(request, body, work)
 
-    @app.post('/api/v2/doc-sources/{source_id}/refresh')
+    @app.post(
+        '/api/v2/doc-sources/{source_id}/refresh',
+        **api_v2(
+            "Docs", "refreshDocSource", "Queue one coalesced refresh without waiting for GitHub", "DocSourceResult"
+        ),
+    )
     def refresh_source(request: Request, source_id: str, body: Empty):
         docs.reader(request.state.identity)
 
@@ -836,7 +856,10 @@ def install(app, docs, mutate):
 
         return mutate(request, body, work)
 
-    @app.get('/api/v2/doc-sources/{source_id}/documents')
+    @app.get(
+        '/api/v2/doc-sources/{source_id}/documents',
+        **api_v2("Docs", "listSourceDocuments", "Included file metadata, limit/cursor page", "SourceDocumentList"),
+    )
     def source_documents(
         request: Request,
         source_id: str,
@@ -845,7 +868,15 @@ def install(app, docs, mutate):
     ):
         return sources.files(request.state.identity, source_id, limit, cursor)
 
-    @app.get('/api/v2/docs/external/{document_id}')
+    @app.get(
+        '/api/v2/docs/external/{document_id}',
+        **api_v2(
+            "Docs",
+            "getExternalDoc",
+            "Untrusted external text and provenance; optional observed revision",
+            "ExternalDocResult",
+        ),
+    )
     def external_doc(request: Request, document_id: str, revision: str = Query(default='', max_length=64)):
         return sources.read(request.state.identity, document_id, revision)
 

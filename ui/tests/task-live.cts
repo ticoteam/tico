@@ -31,8 +31,8 @@ type Gate = ReturnType<typeof gate>;
    try {
     const {page, errors} = await open({newPage: () => context.newPage()}, {viewport: {width, height: 900}});
     const edit = page.getByRole('button', {name: 'Edit details', exact: true});
-    // The request and its Edit are on the task window's Description tab.
-    await page.locator('#task-modal[open] [data-task-tab="desc"]').click();
+    // The request and its Edit head the task window's Details.
+    await page.locator('#task-modal[open] [data-task-tab="details"]').click();
     await edit.waitFor();
     const box = (await edit.boundingBox())!;
     if (phone) {
@@ -91,8 +91,8 @@ type Gate = ReturnType<typeof gate>;
     });
     await page.evaluate(async task => { await taskModalShow(task); }, task);
     await page.waitForFunction(() => !!taskModal().taskLive?.shared);
-    // The request and its Edit are on the task window's Description tab.
-    await page.locator('#task-modal[open] [data-task-tab="desc"]').click();
+    // The request and its Edit head the task window's Details.
+    await page.locator('#task-modal[open] [data-task-tab="details"]').click();
     assert.deepEqual(errors, []);
    }
    const [a, b] = viewers as [Page, Page];

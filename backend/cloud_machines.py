@@ -116,6 +116,7 @@ from clients.gateway import user_agent
 from . import cloud_access, outbound_tls, releases, runner_online
 from .store import H, Problem, digest, encode
 from . import bot_settings as BS
+from .api_contract import api_v2
 
 log = logging.getLogger(__name__)
 
@@ -3121,7 +3122,15 @@ def install(app, settings, store, auth, execution, mutate):
             raise Problem("not_cloud", "Tico support on cloud machines is not available here", 404)
         return {"available": False, "on": None, "machines": []}
 
-    @app.get("/api/v2/cloud-machines/support", response_model=CloudSupportView)
+    @app.get(
+        "/api/v2/cloud-machines/support",
+        response_model=CloudSupportView,
+        **api_v2(
+            "Computers",
+            "getCloudMachineSupport",
+            "Read Tico support's cloud-machine switch and helper states from HQ; unavailable off Tico Cloud",
+        ),
+    )
     def cloud_machine_support(request: Request):
         """The switch and each machine's helper state, read from HQ every time. Unavailable off Tico Cloud.
         Signed-in people only; demo and rehearsal never contact HQ."""
@@ -3131,7 +3140,15 @@ def install(app, settings, store, auth, execution, mutate):
             raise Problem("forbidden", "Only people see Tico support on cloud machines", 403)
         return support_state()
 
-    @app.put("/api/v2/cloud-machines/support", response_model=CloudSupportView)
+    @app.put(
+        "/api/v2/cloud-machines/support",
+        response_model=CloudSupportView,
+        **api_v2(
+            "Computers",
+            "setCloudMachineSupport",
+            "Let Tico support reach the company's cloud machines, or stop it; owner only",
+        ),
+    )
     def cloud_machine_support_set(request: Request, body: CloudSupportChange):
         """Let Tico support reach this company's cloud machines, or stop it, at HQ. Owner only; support sessions
         cannot change their own access. Retries keep the same revision; HQ refuses a change older than its latest."""
