@@ -1195,6 +1195,7 @@ TASK = (
         "task follow",
         "follow a task, or set your level",
         args=(Arg("who", "--who"),),
+        omit=("unfollow",),
         example="tico task follow T1 --level digest",
     ),
     Command(
@@ -1208,7 +1209,15 @@ TASK = (
     ),
     Command("task context", "readable page and meeting references for a task", example="tico task context T1"),
     Command("task meetings", "meetings linked to a task", example="tico task meetings T1 --limit 5"),
-    Command("task list", "the tasks you may see, newest first", example="tico task list --status open --limit 10"),
+    Command(
+        "task list",
+        "the tasks you may see, newest first",
+        args=(
+            Arg("status", "--status", choices=("open", "done", "closed")),
+            Arg("snoozed", "--snoozed", choices=("only", "all")),
+        ),
+        example="tico task list --status open --limit 10",
+    ),
     Command(
         "task show",
         "a task: its state, its asks and the next steps (--json for the whole record)",
@@ -1314,7 +1323,11 @@ TASK = (
     Command(
         "task file",
         "file a task under a parent: it waits until that one ends",
-        args=(Arg("parent", "--parent"), Arg("labels", "--label", action="append")),
+        args=(
+            Arg("parent", "--parent"),
+            Arg("labels", "--label", action="append"),
+            Arg("private", "--private", action="store_const", const=True),
+        ),
         example="tico task file 'Write the summary' --parent T1",
         run=_via("tico_task_file"),
     ),
