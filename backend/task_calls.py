@@ -22,9 +22,10 @@ import functools
 import json
 import re
 from collections.abc import Callable, Iterable
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Concatenate, NoReturn, ParamSpec, TypeVar
 
-from . import ask_shape, hubdb_core, task_effects
+from . import ask_shape, hubdb_core, late_rule, task_effects
 
 if TYPE_CHECKING:
     import sqlite3
@@ -1152,9 +1153,7 @@ def task_view(
     # The repositories the work is in (a filed Engineering task's from the start), for `tico task show`.
     repos = stage_inputs.repositories(conn, task_id, shown) if inputs else []
     snooze: Row | None = row.get("snooze")
-    late = None
-    if live and visit.get("late_told_at"):
-        late = {"since": visit["late_told_at"], "level": "person" if visit.get("late_person_at") else "told"}
+    late = late_rule.late_of(row, visit, stage.get("expected_minutes"), datetime.now(timezone.utc)) if live else None
     return {
         "id": task_id,
         "status": row["status"],

@@ -105,8 +105,10 @@ function check(where: string, rows: Awaited<ReturnType<typeof drawn>>): void {
     await serve(desk, errors);
     await desk.goto('http://tico-ui.test/#/tasks?pipeline=eng&layout=columns');
     check('columns', await drawn(desk, '[data-pv-col="build"] .tk-card'));
-    // Build has a limit of 5: the snoozed and the three blocked tasks hold no slot.
-    assert.equal((await desk.locator('[data-pv-col="build"] .pv-stage-n').innerText()).trim(), '2/5', 'blocked tasks hold no slot');
+    // Build has a limit of 5: the snoozed and the three blocked tasks hold no slot. Its number is the tasks it lists.
+    const built = desk.locator('[data-pv-col="build"] .pv-stage-n');
+    assert.equal((await built.innerText()).trim(), String(await desk.locator('[data-pv-col="build"] .tk-card').count()), 'the tasks it lists');
+    assert.equal(await built.getAttribute('title'), '2 of 5 slots used.', 'blocked tasks hold no slot');
 
     await desk.goto('http://tico-ui.test/#/tasks?pipeline=eng&layout=list');
     await desk.locator('.pv-group').first().waitFor();
