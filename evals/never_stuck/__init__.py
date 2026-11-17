@@ -1,1 +1,1 @@
-"""The fault rig for the one task engine (docs/pipelines-v3.md, "The fault rig"). See README.md."""
+"""The fault rig for the one task engine (docs/dev/pipelines-v3.md, "The fault rig"). See README.md."""

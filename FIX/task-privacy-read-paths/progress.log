@@ -1,7 +1,0 @@
-2026-10-02 Audited API, SQL, files/media/review, attempts/turns/context, status, queued delivery and cached response paths; committed initial controls as 6056abbc.
-2026-10-02 Integrated coordinator core privacy/schema and service/comment prerequisites through f41ce93f; preserved actual bot identity and current comment contracts.
-2026-10-02 Removed eager SQL scans, used one readonly snapshot and lazy bounded recursive lookups; batched fleet task/status/job reads.
-2026-10-02 Verified 17 focused read cases, full core privacy cases and narrow SQL/batch/context/turn/storage/KPI compatibility; corrected only stale permission/status fixtures and reran failed/not-reached cases.
-2026-10-02 Measured 54k blobs, 2000 private attachment associations and 3000 execution/event rows with synthetic data only; released sequential pytest slot.
-2026-10-02 Recorded coordinator-approved retention/classification limits in the private report and repository task documentation.
-2026-10-02 Added narrow canonical deletion-receipt authorization and pre-write delegated creation defaults/audience checks, plus five focused regression cases; coordinator owns the sequential late integration rerun.

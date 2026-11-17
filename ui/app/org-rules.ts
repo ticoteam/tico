@@ -1,4 +1,4 @@
-/* ui/app/org-rules.ts — Rules (docs/rules-plan.md, Screens 1, 2, 4–8; docs/reach.md): the Rules page with a tab for every
+/* ui/app/org-rules.ts — Rules (docs/dev/rules-plan.md, Screens 1, 2, 4–8; docs/reach.md): the Rules page with a tab for every
    kind of rule, each with its count (GET /rule-groups): Company (internal; Reach: the org chart and a party's panel),
    Outside (external), Pipelines and stages (stage rules by pipeline, then stage, in the stage panel's one-line row; one
    the viewer may change opens the panel's form, and its ⋯ has Edit and Retire, stage-rules.ts), Due, Wakes and Automations on tasks (listed, edited on the Automations page), Built in (read-only)

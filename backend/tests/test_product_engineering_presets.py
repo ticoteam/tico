@@ -1,4 +1,4 @@
-"""The Product and Engineering pair (docs/pipelines-v3.md "Default pipelines", contract §5, §10 items 1 and 2), as a
+"""The Product and Engineering pair (docs/dev/pipelines-v3.md "Default pipelines", contract §5, §10 items 1 and 2), as a
 company set up before 0.6 has it (pipeline_settings.LEGACY; Product replaced it for new companies,
 test_product_pipeline.py): who fills each role (backend/pipeline_seats.py), its upkeep and retiring
 (pipeline_settings.ensure_presets), the

@@ -1,4 +1,4 @@
-/* ui/app/overview-factories.ts — Company › Factories (docs/pipelines-v3.md S9, S12). One block per factory: its name and
+/* ui/app/overview-factories.ts — Company › Factories (docs/dev/pipelines-v3.md S9, S12). One block per factory: its name and
    how many of its tasks reached Done in the period (Closed never counts). Inside, one box per pipeline: its name, how
    many tasks are open, and a mark when it has one (red: a bot in it can't run; amber "!": it needs a person). An arrow
    joins a pipeline to the one it files into. Pipelines in no factory sit in "Other", with no count. A box opens the

@@ -2825,7 +2825,7 @@ def job_refusal(c, job, followed, ready, busy, live=frozenset(), *, runner=None)
     conversation = H.conversation(c, message["conversation_id"])
     task_id = work_task_id(message, conversation)
     if task_id and message.get("sender_id") == H.KEEPER and not H.in_person_name(message) and task_snoozed(c, task_id):
-        # Tico wakes no bot about a snoozed task (docs/pipelines-v3.md, rule 7); a person still can, through the
+        # Tico wakes no bot about a snoozed task (docs/dev/pipelines-v3.md, rule 7); a person still can, through the
         # keeper's carrier of their own message too (task_wakes.may_start).
         return "task_wait"
     refs = message.get("refs") or {}

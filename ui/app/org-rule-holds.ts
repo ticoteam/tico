@@ -1,4 +1,4 @@
-/* ui/app/org-rule-holds.ts — What org rule checks show (backend/org_rule_check.py, docs/rules-plan.md §3, board Held):
+/* ui/app/org-rule-holds.ts — What org rule checks show (backend/org_rule_check.py, docs/dev/rules-plan.md §3, board Held):
    on a review task (tagged rule-review) each held output with its rule and the reviewer's three actions, Keep blocked,
    Send anyway and Edit rule; the one-line note a person sees in a chat when a bot's reply was held; a person's own held
    message in their chat (the rule, Edit and resend, or Send anyway for an editor of the rule); and the checks line in

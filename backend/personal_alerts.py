@@ -27,7 +27,7 @@ from clients.gateway import user_agent
 
 TRANSPORT = None
 MAX_RESPONSE = 32768
-# What a person may be paged about. Nothing pages a person about a task (docs/pipelines-v3.md): an overdue or stuck
+# What a person may be paged about. Nothing pages a person about a task (docs/dev/pipelines-v3.md): an overdue or stuck
 # task reaches them in Needs you.
 KINDS = ("legal_mail",)
 TEXTS = {

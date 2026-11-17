@@ -291,7 +291,7 @@ def test_the_nov12_fixes_2_pages_are_judged_with_the_shipped_rubric_good_and_cut
 
 
 def test_the_growth_pages_are_judged_with_the_shipped_rubrics_good_and_cut():
-    """Growth Experiments' two pages (docs/pipelines-v3.md "Growth and Success"): for each, an email, a page change and
+    """Growth Experiments' two pages (docs/dev/pipelines-v3.md "Growth and Success"): for each, an email, a page change and
     an ad that meet it, and four cuts that do not (no prediction, no stop rule, no brand check, nothing shown; no dates
     or source, watching with no Monitoring link, no result tag, called worked below 60% of the prediction)."""
     from backend.pipeline_presets_more import GO_LIVE_RUBRIC, RESULTS_RUBRIC

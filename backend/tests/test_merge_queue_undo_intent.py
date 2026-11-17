@@ -1,4 +1,4 @@
-"""An old visit's undo never takes out a PR that an open visit still wants queued (SM-02, docs/pipelines-v3.md
+"""An old visit's undo never takes out a PR that an open visit still wants queued (SM-02, docs/dev/pipelines-v3.md
 Merge). The undo is moot while an open visit (the task's next one, or another task's on the same PR) wants the PR
 queued at the same head; one that reached GitHub anyway owes that visit's queue again. A PR GitHub removed for
 failed checks still waits for an explicit queue-again, and a merged PR stays merged.

@@ -354,7 +354,7 @@ add the ruleset: every PR of theirs would wait for a check Tico never posts.
 
 What it means: Tico's Merge stage queued this PR at this commit, after the sign-off. It does not mean every commit was
 reviewed: a commit pushed after the person's OK still merges once green when the stage owner queues it again (C22 in
-[Pipelines v3](pipelines-v3.md)), and the check is posted on that new commit then. A commit pushed later has no check
+[Pipelines v3](dev/pipelines-v3.md)), and the check is posted on that new commit then. A commit pushed later has no check
 until the owner queues it again.
 
 What it needs on the App:

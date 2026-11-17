@@ -1,4 +1,4 @@
-"""Org rules over the API (docs/rules-plan.md §5, §6): who a rule reaches, who may change it, what a bot may do, what a
+"""Org rules over the API (docs/dev/rules-plan.md §5, §6): who a rule reaches, who may change it, what a bot may do, what a
 person sees of a quote, and the bot's settings read back as sentences. Acme is the fictional company here.
 
 The org: Ana owns it (owner), Ben is an admin, Cara is a plain member in the Support group, with a nested Support

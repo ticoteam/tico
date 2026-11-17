@@ -4,8 +4,8 @@ This release gives each thing one name. Times end in `_at`, JSON fields and colu
 called a run (it was an attempt), and a bot has an id that never changes next to a slug that can. Clients written
 against the old names need the changes below. There are no aliases: the old names stop working in this release.
 
-Use this page with the spec (`GET /api/v2/openapi.json`), the [SQL guide](hub-sql.md) and the
-[status and state columns](status-and-state.md). If a name here and the spec disagree, the spec is right.
+Use this page with the spec (`GET /api/v2/openapi.json`), the [SQL guide](../hub-sql.md) and the
+[status and state columns](../status-and-state.md). If a name here and the spec disagree, the spec is right.
 
 ## Before you upgrade
 
@@ -102,7 +102,7 @@ SELECT id, created_at FROM messages WHERE json_extract(refs, '$.task') = :task;
 - `turns.tokens_in`, `turns.tokens_out` and `turns.cost` are gone. Read `input_tokens`, `output_tokens` and
   `est_cost_usd`.
 - `attempt_events.payload_json` is `payload`, and `attempt_events.created` is `created_at`.
-- The stable tables are listed in [Querying Tico with SQL](hub-sql.md#stable-and-unstable-tables). Other tables can change
+- The stable tables are listed in [Querying Tico with SQL](../hub-sql.md#stable-and-unstable-tables). Other tables can change
   in any release.
 
 ## Unchanged on purpose

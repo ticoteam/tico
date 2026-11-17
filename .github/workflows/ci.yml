@@ -20,7 +20,7 @@ on:
       previous_release:
         description: Published stable release for install/upgrade/rollback
         required: true
-        default: v0.3.48
+        default: v0.6.0
         type: string
       version:
         description: The version this candidate will be released as (vX.Y.Z); it is built into the images

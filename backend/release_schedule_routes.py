@@ -1,5 +1,5 @@
 # pyright: strict
-"""The daily release hour and Release now (docs/pipelines-v3.md D13): GET/PATCH /api/v2/release-schedule and POST
+"""The daily release hour and Release now (docs/dev/pipelines-v3.md D13): GET/PATCH /api/v2/release-schedule and POST
 /api/v2/release/now, the paths and methods the CLI calls.
 
 The setting (`release-schedule`, a team setting in registry_metadata) is what it was: on or off, one or two hours in
