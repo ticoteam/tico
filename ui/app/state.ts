@@ -45,7 +45,7 @@ const CONFIG_DEFAULTS: AppConfig = {environment_id: '', company_name: '', app_na
 const S: AppState = { emps: [], people: [], orgGroups: [], status: null, statusPending: true, me: null, route: location.hash || HOME,
             config: {...CONFIG_DEFAULTS},
             v2: {on: false, status: {}, needs: []},
-            // What each main page last read (Tasks, Strategy, Automations, a dashboard, the campus's hours card): a
+            // What each main page last read (Tasks, Strategy, Automations, a dashboard): a
             // return visit paints it in the same task as the page's shell, then reads again and patches what changed,
             // so switching pages never flashes a skeleton. Live events keep or drop it (ui/app/refresh.ts).
             lastRead: {} };

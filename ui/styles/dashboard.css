@@ -1,6 +1,13 @@
 /* Overview › Dashboard and team pages (ui/app/dashboard.ts): a grid of pins in sixths on a computer (small a third,
    medium a half, large the row), halves on a narrow screen, one column on a phone. The bot sidebar's card and page widgets reuse the card bodies. */
 #main.dash-layout{max-width:none;padding:0}
+/* Company's full-height views, Floor (ui/app/company-floor.ts) and Share (ui/app/company-page.ts): the header over a
+   body that fills the rest of the screen, above the phone's bottom bar. */
+#main.overview-layout{padding:0;max-width:none;overflow:hidden;min-height:0}
+.overview-page{height:100%;min-height:0;display:flex;flex-direction:column}
+@media(max-width:760px){
+  #main.overview-layout{height:calc(100dvh - var(--demo-h,0px) - var(--mobile-nav-height) - env(safe-area-inset-bottom))}
+}
 .dash{display:flex;flex-direction:column;min-height:100%}
 /* Every place (Company's views, team pages, Growth) draws the shared header (ui/app/page-head.ts, .ph); the grid keeps
    the header's gap. */

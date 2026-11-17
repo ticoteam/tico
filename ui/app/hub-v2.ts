@@ -75,7 +75,6 @@ interface NeedsRead {
   plate_count?: number | null;
   by_kind?: Record<string, number> | null;
   folded_task_ids?: string[] | null;
-  went_away?: WentAway | null;
   unchanged?: boolean;
   restart?: boolean;
   /** When the first ask this person snoozed for themselves comes back (backend/ask_snoozes.py): read again then. */
@@ -269,7 +268,6 @@ async function v2Refresh() {
   if (st) S.v2.status = Object.fromEntries((st.bots || []).map(b => [b.bot, b]));
   // when Tico is updating itself, say so at the top of the sidebar
   if (st) { const el = $('#side-update'); if (el) el.hidden = !st.updating; }
-  if (needs && typeof OVERVIEW_PAGE !== 'undefined' && OVERVIEW_PAGE) overviewNeedsDraw();
   if (needs && !needs.unchanged && typeof BOT !== 'undefined' && BOT) botNeedsChanged(BOT.slug);
   if (needs && !needs.unchanged && typeof DEC !== 'undefined' && DEC) decideRefresh(DEC, S.v2.needs || []);   // the open Needs you card
   if (needs && !needs.unchanged && typeof notifyNewThreadNeeds === 'function') notifyNewThreadNeeds(S.v2.needs || []);
@@ -307,7 +305,6 @@ async function v2NeedsRead() {
   NEEDS_KEPT = seq;
   if (!needs.unchanged) needsTake(needs);
   else if (needs.plate_count != null) { S.v2.needsPlateCount = needs.plate_count; needsListsRedraw(); }
-  S.v2.wentAway = needs.went_away || null;
   needsWakeAt(needs.snoozed_until || null);
   return needs;
 }
@@ -366,10 +363,7 @@ async function v2NeedsDrain(): Promise<boolean> {
   let moved = false;
   while (NEEDS_PENDING.length) {
     const held = S.v2.needsVersion, last = held ? NEEDS_PENDING.map(p => p.d.version).lastIndexOf(held) : -1;
-    if (last >= 0) {
-      for (const p of NEEDS_PENDING.splice(0, last + 1)) if (p.d.went_away) S.v2.wentAway = p.d.went_away;
-      continue;
-    }
+    if (last >= 0) { NEEDS_PENDING.splice(0, last + 1); continue; }
     const next = NEEDS_PENDING.shift()!;
     const r = await v2NeedsMend(next.d);
     if (r !== 'whole') { moved = r || moved; continue; }
@@ -381,7 +375,6 @@ async function v2NeedsDrain(): Promise<boolean> {
 }
 /** One event onto the held list: true when it moved, 'whole' when only a whole read will do (v2NeedsDrain sends it). */
 async function v2NeedsMend(d: NeedsChange): Promise<boolean | 'whole'> {
-  if (d.went_away) S.v2.wentAway = d.went_away;
   if (Array.isArray(d.items)) {       // a server without changes
     NEEDS_REVISION++;
     needsTake({...d, version: null, next: null});

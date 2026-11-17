@@ -5,9 +5,6 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-const OVERVIEW_CAMPUS = OVERVIEW + '/campus';
-const OVERVIEW_GRAPH = OVERVIEW + '/graph';           // ui/app/overview-graph.ts
-const OVERVIEW_FACTORIES = OVERVIEW + '/factories';   // ui/app/overview-factories.ts
 const OVERVIEW_FLOOR = OVERVIEW + '/floor';           // ui/app/company-floor.ts; one factory at OVERVIEW_FLOOR/<id>
 const OVERVIEW_COMPANY = OVERVIEW + '/company-page';   // ui/app/company-page.ts
 const TEAM_PAGE = '#/team/';
@@ -121,10 +118,9 @@ const dashApi = (place: string) => '/v2/places/' + encodeURIComponent(place);
 // The place as it reads: the Growth page's for the month picked there.
 const dashReadUrl = (state: DashState) => dashApi(state.place) + (state.month ? '?month=' + encodeURIComponent(state.month) : '');
 const dashKey = (state: DashState) => state.place + (state.month ? '?month=' + state.month : '');
-// Company's views, one tab each. The shared header (ui/app/page-head.ts) keeps five on the row and lists the rest (Factories,
-// and Share, which is rarely used) in ⋯; the one open takes the fifth place.
+// Company's views, one tab each, in the shared header (ui/app/page-head.ts); Share only for owners and admins.
 const dashTabs = (on: string): PageTab[] =>
-  [['mine', HOME, 'Mine'], ['dashboard', OVERVIEW, 'Dashboard'], ['floor', OVERVIEW_FLOOR, 'Floor'], ['campus', OVERVIEW_CAMPUS, 'Campus'], ['graph', OVERVIEW_GRAPH, 'Graph'], ['factories', OVERVIEW_FACTORIES, 'Factories'], ...(cpAllowed() ? [['company', OVERVIEW_COMPANY, 'Share']] : [])]
+  [['mine', HOME, 'Mine'], ['dashboard', OVERVIEW, 'Dashboard'], ['floor', OVERVIEW_FLOOR, 'Floor'], ...(cpAllowed() ? [['company', OVERVIEW_COMPANY, 'Share']] : [])]
     .map(([id, href, label]) => ({label: label!, href: href!, cur: on === id}));
 // The one page header of every Company view (style guide "Top bars: one line"): Company, its tabs, then the view's own
 // tools, its filled button or quiet +, and ⋯ last. `.dash-tabs` stays on the tab row as a hook for tests and the

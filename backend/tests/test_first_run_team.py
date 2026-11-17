@@ -175,7 +175,7 @@ def test_a_starter_is_created_onboarding_and_leaves_it_only_when_a_person_above_
 
 
 def test_finishing_setup_with_defaults_turns_the_first_routine_on_as_starting_it_would(environment):
-    """Overview's "Finish with defaults" on a bot nobody started: its template's first routine is on, as Start setup
+    """Health's "Finish with defaults" on a bot nobody started: its template's first routine is on, as Start setup
     would have left it, and only once."""
     api = environment(cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (BOTOPS_CARD, "")])
     real_starters(api, "support-owner")

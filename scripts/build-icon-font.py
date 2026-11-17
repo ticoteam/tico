@@ -116,8 +116,8 @@ def fetch(url):
         return resp.read()
 
 
-# The files that name the font's URL: the page's preload, the @font-face rule and the Overview's own FontFace.
-FONT_URL_FILES = [UI / "index.html", UI / "styles" / "tokens.css", UI / "overview" / "building.ts"]
+# The files that name the font's URL: the page's preload and the @font-face rule.
+FONT_URL_FILES = [UI / "index.html", UI / "styles" / "tokens.css"]
 FONT_URL = re.compile(r"(?<![\w/])/vendor/fonts/material-symbols-outlined\.woff2(?:\?v=[0-9a-f]*)?")
 
 

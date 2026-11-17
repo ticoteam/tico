@@ -55,20 +55,22 @@ const botByRef = (ref: string) => { const key = String(ref || '').replace(/^bot:
 // As issues.js: named by the roster row's display name, which a slug or id alone does not reach.
 const botDisplayName = (id: string) => { const row = botRow(id); return row?.display_name || row?.slug || id; };
 
-function context(read: () => Promise<unknown> = async () => { throw new Error('the test sets get'); }) {
+function context(read: () => Promise<unknown> = async () => { throw new Error('the test sets get'); }, me: Record<string, unknown> = {id: 'ana', owner_id: 'ana'}) {
   // The two reads of one overview: an overview without its lists answers as the server's empty lists would.
   const get = async (route: string) => {
     const map = (await read()) as Partial<OrgOverview>;
     assert.match(route, /^\/v2\/factories\?period=/);
-    return {factories: map.factories, pipelines: (map.pipelines || []).map(p => ({id: p.id, name: p.name, factory_id: p.factory_id, open: p.cards, files_into: [], mark: null}))};
+    return {factories: map.factories, pipelines: (map.pipelines || []).map(p => ({id: p.id, name: p.name, factory_id: p.factory_id, files_into: []}))};
   };
   const pipelinesAll = async () => ((await read()) as Partial<OrgOverview>).pipelines?.map(p => ({...p, retired_at: null, stages: []})) ?? [];
   const ctx = vm.createContext({
     esc: (s: unknown) => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'} as Record<string, string>)[c]!),
     TASKS: '#/tasks',
     BUILT_IN_GROUP: 'built-in',
-    S: {emps: EMPS, people: [], me: {id: 'ana', owner_id: 'ana'}, orgGroups: GROUPS},
+    S: {emps: EMPS, people: [], me, orgGroups: GROUPS},
     botRow, botByRef, botDisplayName,
+    // page-head.ts: the header's quiet +, as + New factory draws it
+    pageHeadAdd: (label: string, attrs = '') => `<button type="button" class="ghost ph-add" aria-label="${label}" ${attrs}>+</button>`,
     avatar: (id: string, size: number) => `<span class="av" data-av="${id}" style="width:${size}px"></span>`,
     personAvatar: (p: {id?: string; name?: string}, size: number) => `<span class="av" data-person="${p.id || p.name}" style="width:${size}px"></span>`,
     orgTreeByParent: () => tree(),
@@ -82,7 +84,7 @@ function context(read: () => Promise<unknown> = async () => { throw new Error('t
     get, pipelinesAll,
   });
   // pages-shell.ts: the names the shell keeps for every page (the page parts' ui/parts.json) load first, as in the app.
-  for (const file of ['pages-shell.ts', 'pipeline-api.ts', 'overview-factories.ts', 'org-factories.ts', 'redesign-org.ts']) {
+  for (const file of ['pages-shell.ts', 'pipeline-api.ts', 'org-factories.ts', 'redesign-org.ts']) {
     const loader = file.endsWith('.ts') ? 'ts' : 'js';
     const js = transformSync(fs.readFileSync(path.join(APP, file), 'utf8'), {loader, target: 'es2022'}).code;
     vm.runInContext(js, ctx, {filename: file});
@@ -106,9 +108,9 @@ const overview = (extra: OrgPipe[] = []): OrgOverview => ({
 });
 const legal = pipe('legal', 'Legal', 'gc', null, {visibility: 'members'});
 
-// The section drawn from an overview, through the same grouping the map uses.
-const sectionOf = (ctx: import('node:vm').Context, map: OrgOverview): string => ctx.orgFactoriesHtml(ctx.ofGroups(
-  {factories: map.factories, pipelines: map.pipelines.map(p => ({id: p.id, name: p.name, factory_id: p.factory_id, open: p.cards, files_into: [], mark: null}))},
+// The section drawn from an overview, through the section's own grouping.
+const sectionOf = (ctx: import('node:vm').Context, map: OrgOverview): string => ctx.orgFactoriesHtml(ctx.orgFacGroups(
+  {factories: map.factories, pipelines: map.pipelines.map(p => ({id: p.id, name: p.name, factory_id: p.factory_id, files_into: []}))},
   map.pipelines.map(p => ({...p, retired_at: null, stages: []}))));
 
 // The markup of one box, from its opening tag to its close (boxes hold no nested section).
@@ -143,7 +145,7 @@ test('a Factory Manager sits on top only for a factory with two or more pipeline
   assert.match(box(html, 'f-success'), /href="#\/bot\/success-mgr"/, 'its pipeline manager still shows');
 });
 
-test('a chip opens its pipeline by the route the map uses', async () => {
+test('a chip opens its pipeline on the Tasks page', async () => {
   const {ctx} = await page();
   const html = sectionOf(ctx, overview());
   const chip = box(html, 'f-growth').match(/<a class="org-fac-chip" href="([^"]*)"[^>]*>Marketing/);
@@ -169,7 +171,7 @@ test('a manager stored as a slug is shown by its roster id, name and avatar', as
 test('the section is locked: no people-chart controls, buttons or edit menus', async () => {
   const {ctx} = await page();
   const html = sectionOf(ctx, overview([legal]));
-  assert.doesNotMatch(html, /data-rdo-|<button|<select|<input|draggable/);
+  assert.doesNotMatch(html, /data-rdo-|<button|<select|<input|draggable/, 'a member sees no control at all');
   assert.equal(count(html, /data-org-card="/g), count(html, /class="[^"]*org-fac-lock/g), 'every card carries the lock');
 });
 
@@ -177,6 +179,35 @@ test('no factories: nothing to draw, even with pipelines outside them', async ()
   const {ctx} = await page();
   assert.equal(sectionOf(ctx, {factories: [], pipelines: [], edges: [], inputs: []}), '');
   assert.equal(sectionOf(ctx, {factories: [], pipelines: [legal], edges: [], inputs: []}), '');
+});
+
+test('the owner and an Admin get + New factory, even before the first factory; a member does not', async () => {
+  for (const me of [{id: 'ana', role: 'owner'}, {id: 'chris', role: 'member', bot_admin: true}]) {
+    const ctx = context(async () => overview(), me);
+    const empty = sectionOf(ctx, {factories: [], pipelines: [legal], edges: [], inputs: []});
+    assert.match(empty, /<h2 id="org-fac-title">Factories<\/h2><button[^>]*data-org-fac-add/, 'the title and its + alone');
+    assert.match(empty, /<form class="org-fac-new" id="org-fac-new" hidden>/);
+    assert.doesNotMatch(empty, /org-fac-box|org-fac-key/, 'no boxes and no legend with nothing to draw');
+    assert.equal(count(sectionOf(ctx, overview()), /data-org-fac-add/g), 1);
+  }
+  const member = context(async () => overview(), {id: 'dana', role: 'member'});
+  assert.doesNotMatch(sectionOf(member, overview()), /data-org-fac-add|org-fac-new/);
+});
+
+test('+ New factory saves the name and goal, then draws the section again', async () => {
+  const posts: [string, unknown][] = [];
+  let map = overview();
+  const ctx = context(async () => map, {id: 'ana', role: 'owner'});
+  ctx.post = async (route: string, body: unknown) => { posts.push([route, body]); map = {...map, factories: [...map.factories, factory('f-legal', 'Legal', null)]}; };
+  ctx.errorBody = () => ({});
+  ctx.errorMessage = (_e: unknown, fallback: string) => fallback;
+  const host = {isConnected: true, innerHTML: ''};
+  await ctx.orgFactoriesMount(host);
+  const field = (value: string) => ({value});
+  const form = {querySelector: (sel: string) => sel === '[name=name]' ? field(' Legal ') : sel === '[name=goal]' ? field('') : null};
+  await ctx.orgFacNewSave(host, form);
+  assert.deepEqual(JSON.parse(JSON.stringify(posts)), [['/v2/factories', {name: 'Legal'}]], 'the name trimmed, no empty goal');
+  assert.match(host.innerHTML, /data-org-fac="f-legal"/, 'the new factory is drawn');
 });
 
 

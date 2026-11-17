@@ -26,7 +26,7 @@ function route(hash: string = location.hash): void {
     DECIDE_STAGE = DECIDE_WANT ? '' : q.get('stage') || '';
     location.replace(NEEDS_YOU); return;
   }
-  overviewStop(); graphStop(); DASH = null;
+  DASH = null;
   $('#main').classList.remove('overview-layout');
   const from = LAST_ROUTE;
   S.route = LAST_ROUTE = hash || UPDATES;
@@ -83,9 +83,8 @@ function route(hash: string = location.hash): void {
   else if (S.route === '#/inbox' || S.route.startsWith('#/inbox?')) { location.hash = MAIL; return; }
   else if (S.route === HOME) pageDashboard('person:me');
   else if (S.route === OVERVIEW) pageDashboard('dashboard');
-  else if (S.route === OVERVIEW_CAMPUS) pageOverview();
-  else if (S.route === OVERVIEW_GRAPH || S.route.startsWith(OVERVIEW_GRAPH + '?')) pageOverviewGraph();
-  else if (S.route === OVERVIEW_FACTORIES) pageOverviewFactories();
+  // Campus, Graph and Factories were Company views: a bookmark or an old message's link lands on Floor.
+  else if (/^#\/overview\/(?:campus|graph|factories)(?:\?|$)/.test(S.route)) { location.replace(OVERVIEW_FLOOR); return; }
   else if (S.route === OVERVIEW_FLOOR || S.route.startsWith(OVERVIEW_FLOOR + '/')) pageOverviewFloor(decodeURIComponent(S.route.slice(OVERVIEW_FLOOR.length + 1)));
   else if (S.route === OVERVIEW_COMPANY) pageOverviewCompany();
   else if (S.route.startsWith(TEAM_PAGE)) pageDashboard('team:' + decodeURIComponent(S.route.slice(TEAM_PAGE.length).split('?')[0] ?? ''));

@@ -2,7 +2,8 @@ import type {Page, Route} from 'playwright';
 // Company › Floor (ui/app/company-floor.ts) from fixtures: halls, lines and stacks whose heights are relative and capped,
 // Flow's mark only over a stage holding something that waits on the reader, the rate flip kept per browser, the card a
 // hover shows and a click pins with its task rows, one factory with a deck per teammate and one mark by a stage's name,
-// a factory the reader may not see never drawn, a phone's stacked halls and sheet. Fixtures only.
+// a factory the reader may not see never drawn, the old Campus, Graph and Factories links landing here, a phone's stacked
+// halls and sheet. Fixtures only.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -234,6 +235,20 @@ const levels = (page: Page, sel: string) => page.locator(sel).evaluateAll(els =>
       await page.waitForFunction(() => location.hash === '#/overview/floor');
       await page.locator('.cf-hall').first().waitFor();
       assert.equal(await page.locator('.cf-hall[data-cf-factory="f-hidden"]').count(), 0);
+      assert.deepEqual(errors, []);
+      await close();
+    }
+    // Campus, Graph and Factories were Company views: an old link to any of them, query and all, lands on Floor.
+    {
+      const hub = fresh();
+      const {page, errors, close} = await open(1440, 900, hub);
+      await page.locator('.cf-hall').first().waitFor();
+      for (const old of ['#/overview/campus', '#/overview/graph', '#/overview/graph?view=goals', '#/overview/factories']) {
+        await page.evaluate((h: string) => { location.hash = '#/overview'; location.hash = h; }, old);
+        await page.waitForFunction(() => location.hash === '#/overview/floor');
+        await page.locator('.cf-hall').first().waitFor();
+        assert.equal(await page.locator('.dash-tabs a.cur').innerText(), 'Floor', old);
+      }
       assert.deepEqual(errors, []);
       await close();
     }

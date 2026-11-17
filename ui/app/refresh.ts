@@ -13,9 +13,8 @@ let REFRESH_STARTED = 0;
 const REFRESH_SHOWN = {status: 0, roster: 0, seats: 0};
 async function refresh(force = false): Promise<void> {
   const mine = ++REFRESH_STARTED;
-  // Every read at once: hub.db status and needs-you (docs/history/hub-v2.md) and the campus's computers (only while it
-  // is open) do not wait for the roster.
-  const v2 = v2Refresh(), computers = overviewLoadComputers();
+  // Every read at once: hub.db status and needs-you (docs/history/hub-v2.md) do not wait for the roster.
+  const v2 = v2Refresh();
   try {
     // BotOps and other sessions can change the chart. Publish a complete roster together so groups and members agree.
     const seatsDue = force || S.seats === undefined || ++SEATS_POLLS % 5 === 0 || Date.now() - SEATS_AT > 600e3;
@@ -37,13 +36,11 @@ async function refresh(force = false): Promise<void> {
         S.emps = namedRoster(emps.value);
         // /humans carries recruiting seats too: they never replace seats a later refresh already showed.
         setPeople(mine > REFRESH_SHOWN.seats ? people.value : {...people.value, seats: undefined});
-        S.overviewRosterFresh = true;
-      } else S.overviewRosterFresh = false;
+      }
     }
     if (seatsDue && seats.status === 'fulfilled' && mine > REFRESH_SHOWN.seats) { REFRESH_SHOWN.seats = mine; S.seats = seats.value?.seats || []; SEATS_AT = Date.now(); }   // Recruiting seats (backend/lifecycle.py)
-  } catch (e) { S.overviewRosterFresh = false; }
-  await Promise.all([v2, computers]);
-  overviewRefresh();
+  } catch { /* a failed read publishes nothing */ }
+  await v2;
   if (S.me) void updUnreadRefresh();
   renderTree(); renderHeartbeat(); pausedRender(); botAvatarsSync(); goalsFollowRoster(); pageChatFollowRoster(); document.dispatchEvent(new CustomEvent('tico:roster'));
   tipRefresh();
@@ -120,7 +117,6 @@ function liveWire(): void {
       renderTree(); renderHeartbeat(); pausedRender(); botAvatarsSync(); goalsFollowRoster(); pageChatFollowRoster(); document.dispatchEvent(new CustomEvent('tico:roster'));
       tipRefresh();
       botAlertDraw();
-      overviewRefresh();                // the campus desks too, not only at the next refresh (no read: the model is local)
     }, 200);
   });
   // Needs you comes as the ids that changed; the list is mended from them (v2NeedsChanged), then `needs-list` says so.
@@ -131,7 +127,6 @@ function liveWire(): void {
     liveEmit('needs-list', S.v2.needs || []);
     liveSoon('needs', () => {
       renderTree();
-      if (OVERVIEW_PAGE) overviewNeedsDraw();
       tasksNeedsLive();
       if (BOT) botNeedsChanged(BOT.slug);
     }, 200);

@@ -963,7 +963,7 @@ STABLE = [
         "get",
         "Pipelines",
         "listFactories",
-        "Company › Factories: each factory's Done count for the period, each pipeline's open count, handoffs and mark",
+        "The factories: each factory's Done count for the period, each pipeline's open count, handoffs and mark",
         "FactoryMap",
     ),
     (

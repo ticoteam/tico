@@ -25,8 +25,8 @@ This record does not provide the separate automatic fixer.
 Health's **Stuck bots** check and `tico health check` name the bot, its queue split (jobs
 that can start, jobs behind an interrupted run awaiting review, jobs held after repeated refusals until cooldown,
 jobs held on purpose), the oldest age, why it cannot
-start, and a fix or a command to inspect its runs. Work held on purpose never makes a bot stuck. The web Stuck list,
-Company › Campus and the silent-computer line split the queue the same way. Settings > General > Health > Details
+start, and a fix or a command to inspect its runs. Work held on purpose never makes a bot stuck. The web Stuck list
+and the silent-computer line split the queue the same way. Settings > General > Health > Details
 shows the same summaries.
 
 **Tasks** shows the never-stuck check's hourly reading: whether every rule that holds at all times holds (each open task

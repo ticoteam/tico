@@ -273,12 +273,12 @@ async function shotPart(page: Page, id: string, name: string) {
     await close();
     // Overview as it always was: no tab, no way in by address, and search doesn't offer it.
     const tab = await open(browser, {viewer: 'erin', hash: '#/overview', ready: false});
-    assert.deepEqual(await tabLabels(tab.page), ['Mine', 'Dashboard', 'Floor', 'Campus', 'Graph', 'Factories']);
+    assert.deepEqual(await tabLabels(tab.page), ['Mine', 'Dashboard', 'Floor']);
     assert.equal(await tab.page.evaluate(() => searchEntries().some(x => x.label === 'Share')), false);
     await tab.page.evaluate((h: string) => { location.hash = h; }, '#/overview/company-page');
     await tab.page.locator('#cp-tab-body .empty-state').waitFor();
     assert.equal(await tab.page.locator('.cp-frame, [data-cp-preview], [data-cp-share], [data-cp-manage]').count(), 0, 'no frame, no controls');
-    assert.deepEqual(await tabLabels(tab.page), ['Mine', 'Dashboard', 'Floor', 'Campus', 'Graph', 'Factories']);
+    assert.deepEqual(await tabLabels(tab.page), ['Mine', 'Dashboard', 'Floor']);
     assert.deepEqual(tab.hub.reads, [], 'a member asks the server for nothing here');
     assert.deepEqual(tab.hub.previews, []);
     assert.deepEqual(tab.errors, []);
@@ -291,7 +291,7 @@ async function shotPart(page: Page, id: string, name: string) {
     assert.match(await page.locator('#cp-page').innerText(), /Owners and admins only/);
     await page.evaluate((h: string) => { location.hash = h; }, '#/overview/company-page');
     await page.locator('#cp-tab-body .empty-state').waitFor();
-    assert.deepEqual(await tabLabels(page), ['Mine', 'Dashboard', 'Floor', 'Campus', 'Graph', 'Factories', 'Share']);
+    assert.deepEqual(await tabLabels(page), ['Mine', 'Dashboard', 'Floor', 'Share']);
     assert.equal(await page.locator('.cp-frame').count(), 0, 'no frame');
     assert.equal(await page.locator('[data-cp-tab-pick], [data-cp-share], [data-cp-manage]').count(), 0, 'no controls');
     assert.deepEqual(hub.previews, []);
@@ -718,22 +718,21 @@ async function shotPart(page: Page, id: string, name: string) {
   // Overview's tab: the page in a sandboxed frame, the share panel, Manage and back.
   {
     const {page, hub, errors, natives, close} = await open(browser, {hash: '#/overview', theme: 'dark', ready: false});
-    assert.deepEqual(await tabLabels(page), ['Mine', 'Dashboard', 'Floor', 'Campus', 'Graph', 'Factories', 'Share']);
+    assert.deepEqual(await tabLabels(page), ['Mine', 'Dashboard', 'Floor', 'Share']);
     assert.equal(await page.evaluate(() => searchEntries().find(x => x.label === 'Share')?.href), '#/overview/company-page', 'search finds it');
-    // Share is the seventh tab: it waits in ⋯ until it is the one open.
-    await page.locator('#main header.ph > .ph-more').click();
-    await page.locator('#main header.ph .ph-menu .ph-mtab', {hasText: 'Share'}).click();
+    // Share is the fourth tab, on the row.
+    await page.locator('#main header.ph .ph-tabs > .ph-tab', {hasText: 'Share'}).click();
     const frame = page.locator('iframe.cp-frame');
     await frame.waitFor();
     assert.equal(await frame.getAttribute('sandbox'), 'allow-scripts', 'the frame gets no origin');
     assert.match((await frame.getAttribute('src'))!, /\/api\/v2\/company-page\/preview\?audience=a-board&theme=dark$/, 'the first audience on, in the app\'s theme');
     assert.ok(await page.locator('#side a[data-nav="overview"]').evaluate((a: HTMLElement) => a.classList.contains('cur')), 'Company stays lit');
     assert.equal(await page.locator('.dash-tabs a.cur').innerText(), 'Share');
-    // The shared header: Share takes the fifth place on the row while it is open, Graph and Factories wait in ⋯; the tools are
-    // the audience picker (named as a preview, no caption beside it) and Share; Manage is in ⋯; ⋯ is last.
+    // The shared header: the four tabs on the row, none in ⋯; the tools are the audience picker (named as a preview, no
+    // caption beside it) and Share; Manage is in ⋯; ⋯ is last.
     const head = page.locator('#main header.ph');
-    assert.deepEqual(await head.locator('.ph-tabs > .ph-tab:visible').allInnerTexts(), ['Mine', 'Dashboard', 'Floor', 'Campus', 'Share']);
-    assert.deepEqual(await head.locator('.ph-menu .ph-mtab').allTextContents(), ['Graph', 'Factories']);
+    assert.deepEqual(await head.locator('.ph-tabs > .ph-tab:visible').allInnerTexts(), ['Mine', 'Dashboard', 'Floor', 'Share']);
+    assert.deepEqual(await head.locator('.ph-menu .ph-mtab').allTextContents(), []);
     assert.equal(await head.locator('.ph-menu [data-cp-manage]').count(), 1, 'Manage is in ⋯');
     assert.equal(await page.locator('.cp-tab-preview').count(), 0, 'no Preview caption');
     const pick = page.locator('[data-cp-tab-pick] select');

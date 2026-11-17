@@ -464,8 +464,8 @@ can therefore continue that session once, even before any quota/capacity result.
 resumes the old primary; unknown effects and final answers keep their settlement safeguards. Late diagnostics cannot
 erase an already recorded continuation decision. The result field is sent to every runner the server accepts (each advertises `source_continue_v1`). Other turns try the bot's own provider first, so the
 bot moves back on its own once the limit resets. The owner turns this off in **Settings → Models**
-(*Fall back when a plan runs out*, `auto_fallback`). Company › Campus lists how many bots are on a fallback and
-since when, and how many are limited.
+(*Fall back when a plan runs out*, `auto_fallback`). Settings › Health's *What bots run on* check lists the bots running
+on a fallback, and `GET /api/v2/health` names them (`on_fallback`, `limited`).
 
 **Held runs after a usage limit (Unreleased).** Safe runs previously held after the primary hit its limit and the fallback failed to start recover automatically.
 Tico puts them back in the queue, oldest first, after the provider's reset, a model change, or a configured fallback becoming ready.

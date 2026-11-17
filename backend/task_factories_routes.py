@@ -1,5 +1,5 @@
 # pyright: strict
-"""Company › Factories (S12) and a pipeline manager's Log (S10), read from the pipelines' own tables.
+"""The factories (S12, Strategy › Org) and a pipeline manager's Log (S10), read from the pipelines' own tables.
 
 GET /api/v2/factories?period=1d|7d|30d: each live factory with how many of its tasks reached Done in the period (Closed
 never counts), and each live pipeline with its factory, how many open tasks the reader may read, what it files into,
@@ -191,7 +191,7 @@ def log(c: Any, pipeline_id: str, visible_sql: str) -> list[dict[str, Any]]:
 def register(app: FastAPI, auth: Any, mutate: Callable[..., Any], store: Any) -> None:
     @app.get("/api/v2/factories")
     def factory_list(request: Request, period: str = "7d"):
-        """Company › Factories: the live factories with their Done count for the period, and every live pipeline with
+        """The factories: the live factories with their Done count for the period, and every live pipeline with
         its open count, what it files into and its mark."""
         who = request.state.identity
         auth.domain(who)

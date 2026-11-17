@@ -1,10 +1,10 @@
 // Overview › Dashboard and team pages (ui/app/dashboard.ts, backend/cards.py) against a fake server shaped as
 // GET/PUT /api/v2/places/{place}, POST /places/{place}/order, /api/v2/pins and /api/v2/cards answer: the Dashboard
-// opens with its default cards and the Campus tab beside it; the first change saves the defaults, then the order goes
+// opens with its default cards and the other Company tabs beside it; the first change saves the defaults, then the order goes
 // by pin ids (keys and a pointer drag); a card is added from its form, sized from its menu and removed; a page is
 // pinned from Add page; a team opens from its name in the sidebar while its arrow still folds it; a member sees the
-// cards and no way to arrange them; a phone has one column and no sideways scroll. The header is the shared one (five
-// tabs, Share in ⋯). Arranging is in edit mode only: Edit, in ⋯, shows the grips, the menus and + Card / + Page, a
+// cards and no way to arrange them; a phone has one column and no sideways scroll. The header is the shared one (four
+// tabs). Arranging is in edit mode only: Edit, in ⋯, shows the grips, the menus and + Card / + Page, a
 // redraw keeps it, and Done, Escape or leaving the page ends it. The app opens on My dashboard
 // (person:me, Overview › Mine) with its own defaults.
 // TICO_UI_SHOTS=<dir> saves screenshots.
@@ -198,12 +198,12 @@ async function shot(page: Page, name: string) {
       assert.equal(await page.locator('#dash-grid a[href="#/page/f1"]').count(), 1, 'Latest pages links each page');
       await shot(page, 'desktop-dashboard');
 
-      // The shared header (style guide "Top bars: one line"): Company at the page title's size, five tabs on the row with
-      // Factories and Share, the sixth and seventh, in ⋯, and ⋯ last. One line.
+      // The shared header (style guide "Top bars: one line"): Company at the page title's size, its four tabs on the row,
+      // and ⋯ last. One line.
       const head = page.locator('#main header.ph');
       assert.equal(await head.locator('h1').evaluate(h => getComputedStyle(h).fontSize), '17px', 'the page title size');
-      assert.deepEqual(await head.locator('.ph-tabs > .ph-tab:visible').allInnerTexts(), ['Mine', 'Dashboard', 'Floor', 'Campus', 'Graph']);
-      assert.deepEqual(await head.locator('.ph-menu .ph-mtab').allTextContents(), ['Factories', 'Share'], 'Factories and Share wait in ⋯');
+      assert.deepEqual(await head.locator('.ph-tabs > .ph-tab:visible').allInnerTexts(), ['Mine', 'Dashboard', 'Floor', 'Share']);
+      assert.deepEqual(await head.locator('.ph-menu .ph-mtab').allTextContents(), [], 'no tab waits in ⋯');
       assert.ok((await head.boundingBox())!.height < 60, 'one line');
       assert.equal(await head.evaluate(h => h.querySelector(':scope > .ph-menu')!.previousElementSibling!.matches('.ph-more')), true, '⋯ last');
 
@@ -295,13 +295,6 @@ async function shot(page: Page, name: string) {
       assert.equal(await shown(page, EDIT_CONTROLS), 0, 'Escape leaves edit mode');
       // Leaving the page ends it too.
       await startEditing(page);
-
-      // Campus: the 3D view as it was, Overview still current.
-      await page.locator('.dash-tabs a', {hasText: 'Campus'}).click();
-      await page.locator('#overview-frame').waitFor({state: 'attached'});
-      assert.equal(await page.evaluate(() => location.hash), '#/overview/campus');
-      assert.equal(await page.locator('.dash-tabs a.cur').innerText(), 'Campus');
-      assert.equal(await page.locator('#side a[data-nav="overview"].cur').count(), 1);
 
       // A team opens from its name in the sidebar; its arrow still folds it.
       const label = page.locator('#tree a.dept-label', {hasText: /^Engineering$/});
@@ -440,10 +433,6 @@ async function shot(page: Page, name: string) {
       assert.deepEqual(fit, {whole: true, icons: true}, 'the long name is whole; Seen by is its icon (or in ⋯)');
       assert.equal(await sideways(page), false);
       await shot(page, 'phone-team');
-      await page.evaluate(() => { location.hash = '#/overview/campus'; });
-      await page.locator('.overview-page .dash-tabs').waitFor();
-      assert.equal(await sideways(page), false);
-      await shot(page, 'phone-campus');
       assert.deepEqual(errors, []);
       await page.close();
     }
@@ -600,6 +589,6 @@ async function shot(page: Page, name: string) {
         await page.close();
       }
     }
-    console.log('Dashboard: My dashboard landing, defaults, Campus tab, edit mode (Edit, Done, Escape), order by keys and drag, add/edit/size/remove a card, pin a page, team page from the sidebar, audience, member, phone, Tasks by status columns, Needs you rows by title with the count on the header line, header counts and no billboard figures');
+    console.log('Dashboard: My dashboard landing, defaults, Company tabs, edit mode (Edit, Done, Escape), order by keys and drag, add/edit/size/remove a card, pin a page, team page from the sidebar, audience, member, phone, Tasks by status columns, Needs you rows by title with the count on the header line, header counts and no billboard figures');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });
