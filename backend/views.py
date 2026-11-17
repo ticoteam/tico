@@ -3095,7 +3095,7 @@ def install_views(app, store, auth, mutate, task_view):
                 "server_time": H.now(),
                 "health_issues": operation_issues(c, who, auth),
                 # A Tico Cloud company's access, for the banner and Pay to continue (backend/cloud_access.py).
-                "cloud_access": cloud_access.view(cloud_access.current(store)),
+                "cloud_access": cloud_access.shown(c, cloud_access.current(store)),
             }
 
     @app.get("/api/runs")

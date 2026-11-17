@@ -70,7 +70,8 @@ def register(app, admin_only, auth, mutate, settings, store):
         """A Tico Cloud company's access for every page: open, frozen or locked, why, and where to pay. Null off
         cloud. Open to every signed-in person, also while locked."""
         views.human_only(request.state.identity)
-        return {"cloud": cloud_access.view(cloud_access.current(store))}
+        with store.read() as c:
+            return {"cloud": cloud_access.shown(c, cloud_access.current(store))}
 
     @app.get("/api/v2/billing/usage")
     def billing_day(request: Request, day: str = ""):

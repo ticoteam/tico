@@ -538,6 +538,8 @@ function v2StatePill(slug: string) {
   if (!s) return botStatePill(slug);
   // A back-off keeps the bot's state; its wait is the line beside it until the next try.
   const line = s.backoff || s.focus;
+  // A cloud machine stopped for credit (backend/events.py credit_overlay) says so, with Add credit, never Idle.
+  if (s.stopped === 'out_of_credit') return `<span class="pill fail">Out of credit</span>${line ? ` <span class="muted">${esc(line)}</span>` : ''}${cloudCreditLinkHTML()}`;
   return `<span class="pill ${V2_PILL[s.state] ?? ''}">${esc(s.stopped ? 'Stopped' : V2_WORD[s.state] || s.state || 'Unknown')}</span>${
     line ? ` <span class="muted">${esc(line)}</span>` : ''}`;
 }

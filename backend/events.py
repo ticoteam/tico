@@ -2139,7 +2139,23 @@ def status_line(c, who, slug, default=None, inputs=None, auth=None):
             row["quarantine"]["review"] = review
     from . import holds
 
-    return holds.overlay(c, usage_limits.overlay(c, row, usage_limits.company(c) if default is None else default))
+    row = holds.overlay(c, usage_limits.overlay(c, row, usage_limits.company(c) if default is None else default))
+    return credit_overlay(c, row)
+
+
+CREDIT_FOCUS = "Its cloud machine is stopped: add credit to start it"
+
+
+def credit_overlay(c, row):
+    """A cloud-mode bot whose machine is stopped for credit (cloud_machines.out_of_credit) reads stopped, out of
+    credit, not idle with its turns queued (Nov 17). A running turn, a quarantine and Tico's own stops keep theirs."""
+    if not row or row.get("state") in ("running", "quarantined") or row.get("stopped"):
+        return row
+    from . import cloud_machines
+
+    if not cloud_machines.out_of_credit(c, row["bot"]):
+        return row
+    return {**row, "state": "paused", "focus": CREDIT_FOCUS, "stopped": "out_of_credit"}
 
 
 def _trashed_visible(c, who, task_id):

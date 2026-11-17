@@ -630,15 +630,28 @@ def overlay(c: Any, row: dict[str, Any] | None) -> dict[str, Any] | None:
     return row
 
 
+CREDIT_WARNING = (
+    "Out of credit: this bot's cloud machine is stopped. What you sent is kept and starts once credit is added."
+)
+
+
 def warning(c: Any, actor: str | None) -> str | None:
-    """The words a sender gets when its message or task goes to a bot Tico stopped (STOPPED), else None. A note beside
+    """The words a sender gets when its message or task goes to a bot Tico stopped (STOPPED), or one whose cloud
+    machine is stopped for credit (CREDIT_WARNING), else None. A note beside
     the saved message, not a refusal: the work stays queued and runs once the bot is released. A claim hold holds only
     its own run, so new work gets no warning for it; the run's own label names it (`queued_reason`)."""
     if not str(actor or "").startswith("bot:"):
         return None
     bot = str(actor)[4:]
     kind = why(c, bot, kinds=STOPPED)
-    return f"{words(c, bot, kind)} What you sent is kept and starts when the bot runs again." if kind else None
+    if kind:
+        return f"{words(c, bot, kind)} What you sent is kept and starts when the bot runs again."
+    from . import cloud_machines
+
+    if cast(Any, cloud_machines).out_of_credit(c, bot):
+        # Its cloud machine is stopped for credit (Nov 17: bots read idle with turns queued, and nobody was told).
+        return CREDIT_WARNING
+    return None
 
 
 def queued_reason(

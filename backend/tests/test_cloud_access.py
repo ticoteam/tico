@@ -56,6 +56,7 @@ def test_billing_passes_cloud_through_and_keeps_it(api, hq):  # noqa: F811
         "plan": "trial",
         "trial_days_left": 14,
         "billing_url": BILLING_URL,
+        "days_left": None,
     }
     assert not [url for url, _ in hq.calls if url.endswith("/cloud")]
     # Credit added: the page's next answer opens it again.

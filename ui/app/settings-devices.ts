@@ -518,6 +518,12 @@ async function settingsTurnsAtOnceSave(input: HTMLInputElement): Promise<void> {
   if (input.value !== (input.dataset.current || '')) return settingsTurnsAtOnceSave(input);
   if (saved) await loadSettings();
 }
+// A cloud computer that is not up because credit ran out (backend/cloud_machines.py `problem` "Out of credit").
+function machineOutOfCredit(machine: DeviceMachine): boolean {
+  const cloud = machine.cloud_machine;
+  if (!cloud || machineOnline(machine)) return false;
+  return cloud.problem === 'Out of credit' || CLOUD_ACCESS?.access === 'frozen';
+}
 // What a computer is doing now: "1 running · 55 queued", idle, asleep (a cloud computer stopped to save), or offline.
 function machineNowWords(machine: DeviceMachine) {
   if (machine.revoked_at) return 'revoked';
@@ -525,6 +531,8 @@ function machineNowWords(machine: DeviceMachine) {
   const counts = machine.turn_counts || {};
   const parts = [['running', 'running'], ['starting', 'starting'], ['queued', 'queued'], ['waiting', 'waiting']]
     .filter(([key]) => Number(counts[String(key)]) > 0).map(([key, word]) => `${counts[String(key)]} ${word}`);
+  // Stopped for credit (HQ's 402 on its start, or the company frozen): say so, with what waits, never asleep or idle.
+  if (machineOutOfCredit(machine)) return ['Out of credit', ...parts].join(' · ');
   if (parts.length) return parts.join(' · ');
   if (machineOnline(machine)) return 'idle';
   if (['stopped', 'stopping'].includes(String(machine.cloud_machine?.state))) return 'asleep';
@@ -568,7 +576,7 @@ function renderSettingsMachines() {
       <td class="num tnum machine-bot-count" data-label="Bots">${(machine.bots || []).length}</td>
       ${pickers.map(runtime => `<td data-label="${esc(subsToolName(runtime))}" data-subs-cell>${subsPickerHTML(machine, runtime)}</td>`).join('')}
       ${others.map(runtime => `<td data-label="${esc(machineToolName(machine, runtime))}">${machineToolCellHTML(machine, runtime)}</td>`).join('')}
-      <td class="machine-now${['idle', 'asleep', 'offline', 'revoked'].includes(now) ? ' muted' : ''}" data-label="Now" data-machine-now>${esc(now)}${online && machine.restarting ? ' <span class="muted" data-machine-restarting>· restarting</span>' : ''}</td></tr>`;
+      <td class="machine-now${['idle', 'asleep', 'offline', 'revoked'].includes(now) ? ' muted' : ''}" data-label="Now" data-machine-now>${esc(now)}${machineOutOfCredit(machine) ? cloudCreditLinkHTML() : ''}${online && machine.restarting ? ' <span class="muted" data-machine-restarting>· restarting</span>' : ''}</td></tr>`;
   }).join('');
   const toolHead = (runtime: string) => `<th>${esc(machines.map(m => machineToolName(m, runtime)).find(Boolean) || subsToolName(runtime))}</th>`;
   // A cloud machine not enrolled yet: its name and what it is doing (being made, starting, out of credit, failed), with
