@@ -52,8 +52,10 @@ def _visits(c, task_id):
     return c.execute("SELECT COUNT(*), SUM(left_at IS NULL) FROM visits WHERE task_id=?", (task_id,)).fetchone()
 
 
-def _ok(c, task_id, person=ANA, line="OK the launch note?", by=BUILDER, shows=X.shown(c)):
-    """A bot's OK of a person on the task, showing what it approves: the task waits on it."""
+def _ok(c, task_id, person=ANA, line="OK the launch note?", by=BUILDER, shows=None):
+    """A bot's OK of a person on the task, showing what it approves (a page, unless `shows` names one): the task waits on
+    it."""
+    shows = shows or X.shown(c)
     return H.task_ask(c, by, task_id, person, line, kind="ok", shows=shows, seen_version=_version(c, task_id))
 
 
