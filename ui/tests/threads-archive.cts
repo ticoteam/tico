@@ -163,6 +163,7 @@ let browser: Browser = null!;
   {
     const {page, seen} = await open(browser);
     await page.goto('https://tico-ui.test/#/thread/t-read');
+    await page.locator('#threads-shell').waitFor();
     await page.getByText('Morning.').waitFor();
     assert.equal(await page.locator('.thv-head [data-thv-archive]').count(), 0);
 
@@ -177,6 +178,7 @@ let browser: Browser = null!;
 
     await headArchive.tap();
     await page.waitForFunction(() => location.hash === '#/threads');
+    await page.locator('#threads-shell').waitFor();
     assert.deepEqual(seen.patches, [{id: 't-plan', archived: true}]);
     await page.locator('.toast', {hasText: 'Archived'}).waitFor();
     assert.equal(await page.locator('.tr-row[data-thread="t-plan"]').count(), 0);
@@ -241,6 +243,7 @@ let browser: Browser = null!;
     threads['t-plan']!.deletable = true;
     const {page, seen} = await open(browser, {viewport: {width: 1280, height: 800}, phone: false, threads});
     await page.goto('https://tico-ui.test/#/thread/t-plan');
+    await page.locator('#threads-shell').waitFor();
     await page.getByText('Morning.').waitFor();
     assert.equal(await page.locator('.thv-head [data-thv-delete], .thv-head .thv-del').count(), 0, 'no Delete word in the header');
     await page.locator('.thv-head [data-thv-menu]').click();
@@ -271,6 +274,7 @@ let browser: Browser = null!;
     const {page, seen, send, block, threads} = await open(browser, {threads: liveWorld()});
     threads['t-task']!.hidden = true;
     await page.goto('https://tico-ui.test/#/threads');
+    await page.locator('#threads-shell').waitFor();
     await page.locator('.tr-row[data-thread="t-plan"]').waitFor();
     assert.equal(await page.locator('.tr-row[data-thread="t-task"]').count(), 0, 'the finished task is not listed');
     threads['t-task']!.title = 'Pricing (renamed)';
@@ -288,6 +292,7 @@ let browser: Browser = null!;
     const {page, seen, send, block, threads} = await open(browser, {threads: liveWorld()});
     threads['t-task']!.hidden = true;
     await page.goto('https://tico-ui.test/#/threads');
+    await page.locator('#threads-shell').waitFor();
     await page.locator('.tr-row[data-thread="t-plan"]').waitFor();
     assert.equal(await page.locator('.tr-row[data-thread="t-task"]').count(), 0, 'the finished task is not listed');
     threads['t-task']!.hidden = false;
@@ -345,6 +350,7 @@ let browser: Browser = null!;
   if (!only || only === 'toast-tab-bar') {
     const {page, seen} = await open(browser);
     await page.goto('https://tico-ui.test/#/threads');
+    await page.locator('#threads-shell').waitFor();
     await page.locator('.tr-row[data-thread="t-plan"]').waitFor();
     assert.equal(await page.locator('#mobile-nav').isVisible(), true, 'the tab bar shows on the Threads page');
     await page.evaluate(() => toast('Tab bar shows'));
