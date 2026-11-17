@@ -2,7 +2,7 @@
   "name": "tico-observability",
   "private": true,
   "engines": {
-    "node": ">=24.22.3"
+    "node": ">=22.18"
   },
   "scripts": {
     "build:ui": "node scripts/build-ui.cjs",

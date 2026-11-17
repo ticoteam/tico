@@ -38,10 +38,11 @@ export function connect(config, filters) {
       Sentry.init({dsn:config.sentry_dsn, environment:config.environment, release:config.release || undefined,
         dataCollection:{userInfo:false, cookies:false, httpHeaders:{request:false, response:false},
           httpBodies:[], urlQueryParams:false, genAI:{inputs:false, outputs:false}, databaseQueryData:false,
-          queues:false, graphQL:{document:false, variables:false}},
+          queues:false, graphQL:{document:false, variables:false}, mcp:{inputs:false, outputs:false},
+          stackFrameVariables:false, frameContextLines:0},
         defaultIntegrations:false,
         integrations:[Sentry.globalHandlersIntegration()], beforeSend:filters.sentry,
-        maxBreadcrumbs:0, autoSessionTracking:false, sendClientReports:false,
+        maxBreadcrumbs:0, sendClientReports:false,
         tracesSampleRate:0, replaysSessionSampleRate:0, replaysOnErrorSampleRate:0});
       errorClient = Sentry.getClient();
       errors = true;
