@@ -31,7 +31,7 @@ def serve(request, blobs, row, versioned=False):
         "ETag": '"' + digest + '"',
         "X-Content-SHA256": digest,
         "Accept-Ranges": "bytes",
-        "Cache-Control": "private, no-store",
+        "Cache-Control": "private, no-store, no-transform",
         "X-Content-Type-Options": "nosniff",
         "Content-Security-Policy": "default-src 'none'; sandbox",
         "Content-Disposition": disposition(mime) + "; filename*=UTF-8''" + quote(row["name"], safe=""),

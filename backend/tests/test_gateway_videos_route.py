@@ -58,6 +58,7 @@ def test_a_video_is_started_polled_and_read_through_the_server(api, monkeypatch)
     content = api.get(f"/api/v2/gateway/videos/{JOB}/content", headers=headers("ana-test"))
     assert content.status_code == 200 and content.content == b"mp4 bytes"
     assert content.headers["content-type"] == "video/mp4" and len(content.headers["x-content-sha256"]) == 64
+    assert "no-transform" in content.headers["cache-control"].split(", ")
 
 
 def test_the_video_routes_map_the_gateways_answers_to_plain_problems(api, monkeypatch):
