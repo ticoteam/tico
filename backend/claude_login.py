@@ -1,3 +1,4 @@
+# pyright: strict
 """A Claude plan signed in with a full login, as Orca and t3code sign one in: kind `claude_login` (backend/model_subscriptions.py).
 
 Connect runs `claude auth login --claudeai` on a Linux computer through the sign-in relay, in a home of its own, and the
@@ -20,7 +21,12 @@ computer may take it again until the old access token has expired. A refresh sta
 
 A turn refused ("OAuth token revoked") while the plan moved on, or while a refresh is under way, was caught between a
 rotation and its file's rewrite: it is not a failure and never asks for a Reconnect; it goes back in the queue and
-continues its session on the new token (`gap`, execution.complete).
+continues its session on the new token (`gap`, execution.complete). While the refresh is still under way its job waits
+(`claude_login_parks`, execution.queued_jobs_sql) until the plan's revision moves past the one it held or the lease
+ends, five minutes at most, so a claim does not hand it the revoked token again; a second refusal of the same job is
+an ordinary failure.
+
+A refresh's result counts only from the computer its lease was issued to (`claude_login_leases`), late or repeated.
 
 Usage: computers read `GET /api/oauth/usage` with the access token (never the server: calls to Anthropic run from
 computers), every 15 minutes with jitter for a plan on a computer, at most every 5 minutes, backing off from 30 s to
@@ -36,16 +42,46 @@ a few days before (`login_expires_at`).
 import json
 import random
 from datetime import datetime, timedelta, timezone
-from typing import Literal
+from collections.abc import Callable, Iterable
+from typing import Any, Literal, cast
 
 from fastapi import Request
 from pydantic import Field, SecretStr
 
-from clients import harness_manifests as manifests
+from clients import harness_manifests as _manifests
 
-from . import hubdb as H
+from . import hubdb as _hubdb
 from . import models as M
 from .store import Problem
+
+Row = dict[str, Any]
+H: Any = _hubdb  # untyped helpers: their rows are `Row`
+manifests: Any = _manifests
+
+
+def _MS() -> Any:
+    from . import model_subscriptions
+
+    return model_subscriptions
+
+
+def _SR() -> Any:
+    from . import subscription_refresh
+
+    return subscription_refresh
+
+
+def _login() -> Any:
+    from . import model_login
+
+    return model_login
+
+
+def _repos() -> Any:
+    from . import repositories
+
+    return repositories
+
 
 KIND = "claude_login"
 CAPABILITY = "claude_login_v1"
@@ -61,10 +97,13 @@ USAGE_LIFETIME = 120
 NEAR, CLEAR = 95.0, 90.0
 RECONNECT_WARN = timedelta(days=5)
 MAX_LIVE = 50
+PARK_SECONDS = 5 * 60  # the longest a refused turn waits for its plan's refresh
+KEEP_SECONDS = 30 * 24 * 60 * 60  # how long an issued lease and a park are remembered
+RECENT_SECONDS = 7 * 24 * 60 * 60  # a computer a plan ran on this recently must take a full login before it becomes one
 
 
 # ------------------------------------------------------------------------------------------------ values
-def _ms(value):
+def _ms(value: object) -> str | None:
     """Milliseconds since the epoch as this database writes a time, or None."""
     if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
         return None
@@ -75,19 +114,23 @@ def _ms(value):
     return at.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
 
-def parse(text):
+def _obj(value: object) -> Row | None:
+    return cast(Row, value) if isinstance(value, dict) else None
+
+
+def parse(text: str) -> Row:
     """A full Claude login as Connect sends it, `{"claudeAiOauth": {...}, "oauthAccount": {...}}`, or a Problem."""
     try:
-        value = json.loads(text)
+        value = _obj(json.loads(text))
     except ValueError:
         value = None
-    oauth = value.get("claudeAiOauth") if isinstance(value, dict) else None
-    account = value.get("oauthAccount") if isinstance(value, dict) else None
+    oauth = _obj(value.get("claudeAiOauth")) if value else None
+    account = _obj(value.get("oauthAccount")) if value else None
     if not (
-        isinstance(oauth, dict)
+        oauth is not None
         and all(isinstance(oauth.get(k), str) and oauth[k] for k in ("accessToken", "refreshToken"))
         and _ms(oauth.get("expiresAt"))
-        and isinstance(account, dict)
+        and account is not None
         and isinstance(account.get("emailAddress"), str)
         and "@" in account["emailAddress"]
         and len(account["emailAddress"]) <= 200
@@ -96,13 +139,13 @@ def parse(text):
     return {"claudeAiOauth": oauth, "oauthAccount": account}
 
 
-def checked(text):
+def checked(text: str) -> tuple[str, str]:
     """(value to seal, preview: the account's email)."""
     value = parse(text.strip())
     return json.dumps(value, separators=(",", ":")), value["oauthAccount"]["emailAddress"].strip()
 
 
-def facts(value):
+def facts(value: Any) -> Row:
     """What the plan's row keeps of a login: its account, its email, and when its access token and login end."""
     if isinstance(value, str):
         value = json.loads(value)
@@ -116,13 +159,13 @@ def facts(value):
     }
 
 
-def turn_file(text):
+def turn_file(text: str) -> str:
     """A turn's `.credentials.json`: the login without its refresh token, so no turn can rotate it."""
     oauth = json.loads(text)["claudeAiOauth"]
     return json.dumps({"claudeAiOauth": {k: v for k, v in oauth.items() if k != "refreshToken"}}, separators=(",", ":"))
 
 
-def stamp(c, sid, value, refreshed=False):
+def stamp(c: Any, sid: str, value: Any, refreshed: bool = False) -> None:
     """Keep the login's account and times on the plan's row."""
     known = facts(value)
     c.execute(
@@ -132,7 +175,7 @@ def stamp(c, sid, value, refreshed=False):
     )
 
 
-def same_account(c, account, sid=None):
+def same_account(c: Any, account: str, sid: str | None = None) -> Row | None:
     """The plan already connected as `account` (another than `sid`), or None."""
     return H._one(
         c,
@@ -141,7 +184,7 @@ def same_account(c, account, sid=None):
     )
 
 
-def reconnect_by(sub):
+def reconnect_by(sub: Any) -> str | None:
     """When to reconnect a full login, shown a few days before its login runs out; None otherwise."""
     ends = H.parse_ts(sub.get("login_expires_at")) if sub.get("kind") == KIND else None
     if ends and ends - RECONNECT_WARN <= datetime.now(timezone.utc):
@@ -149,7 +192,7 @@ def reconnect_by(sub):
     return None
 
 
-def expired(sub):
+def expired(sub: Any) -> bool:
     """A full login whose access token has run out (its refresh has failed for an hour): passed over until refreshed."""
     if sub.get("kind") != KIND or not sub.get("access_expires_at"):
         return False
@@ -157,25 +200,23 @@ def expired(sub):
 
 
 # ------------------------------------------------------------------------------------------------ computers
-def _caps(runner):
+def _caps(runner: Any) -> list[str]:
     return H._json(runner["capabilities"], []) or []
 
 
-def takes_turns(runner):
+def takes_turns(runner: Any) -> bool:
     """A runner that puts a full login's access token in a turn's own file."""
     return bool(runner) and CAPABILITY in _caps(runner)
 
 
-def can_sign_in(runner):
+def can_sign_in(runner: Any) -> bool:
     """A computer that can run a full login's Connect or refresh: it says it can, and its Claude keeps the login in a
     file (not the system keychain), so a copy can be refreshed beside the one turns use."""
-    from . import model_login
-
     keychain = manifests.caps("claude").get("switch_unavailable_on", [])
-    return takes_turns(runner) and runner["platform"] not in keychain and model_login._online(runner)
+    return takes_turns(runner) and runner["platform"] not in keychain and _online(runner)
 
 
-def _computers(c, sid):
+def _computers(c: Any, sid: str) -> list[tuple[Any, bool]]:
     """The computers of a plan, each `(runner row, live)`: those with a turn on it now first, then those given it (on
     its own or in its owner's plans), each by id."""
     live = {
@@ -205,14 +246,44 @@ def _computers(c, sid):
     return sorted(((r, r["id"] in live) for r in rows), key=lambda x: (not x[1], x[0]["id"]))
 
 
-def _chosen(computers, ok, turn):
+def can_convert(c: Any, sid: str) -> None:
+    """A setup-token plan becomes a full login only when every computer that runs it can take one: those given it, those
+    with a turn on it, and those it ran on in the last week. An older runner would drop the plan (its turns would sign in
+    as the computer instead), so the change is refused, naming them, until they are updated."""
+    ids = {r["id"] for r, _ in _computers(c, sid)}
+    ids |= {
+        r[0]
+        for r in c.execute(
+            "SELECT DISTINCT a.runner_id FROM attempt_subscriptions s JOIN attempts a ON a.id=s.attempt_id "
+            "WHERE s.subscription_id=? AND a.created_at>?",
+            (sid, H.shift(H.now(), seconds=-RECENT_SECONDS)),
+        )
+    }
+    ids.discard(None)
+    if not ids:
+        return
+    marks = ",".join("?" * len(ids))
+    behind = [
+        r["label"] or r["id"]
+        for r in c.execute(
+            f"SELECT id,label,capabilities FROM runners_with_state WHERE revoked_at IS NULL AND id IN ({marks}) "
+            "ORDER BY lower(label),id",
+            sorted(ids),
+        )
+        if not takes_turns(r)
+    ]
+    if behind:
+        raise Problem("update_computers", f"Update {', '.join(behind)} first: they cannot run a full Claude login", 409)
+
+
+def _chosen(computers: list[tuple[Any, bool]], ok: Callable[[Any], bool], turn: int) -> str | None:
     """The computer whose turn it is among those `ok` admits: they take it in rotation by `turn` (failures so far), so
     one that keeps failing does not hold a plan forever."""
     ready = [r for r, _ in computers if ok(r)]
     return ready[turn % len(ready)]["id"] if ready else None
 
 
-def _tell(c, runner_ids):
+def _tell(c: Any, runner_ids: Iterable[str]) -> None:
     """Each computer polls its full logins at once (runner-rs claude_login.rs, channel `subscription_refresh`)."""
     for rid in sorted(set(runner_ids)):
         c.execute(
@@ -221,18 +292,31 @@ def _tell(c, runner_ids):
         )
 
 
-def pushed(c, sid):
+def pushed(c: Any, sid: str) -> None:
     """A plan's login changed (a refresh, or a Reconnect of the same account): every computer with a turn on it is told,
-    and rewrites its turns' files on its poll."""
+    and rewrites its turns' files on its poll; a turn waiting for it goes."""
     _tell(c, [r["id"] for r, live in _computers(c, sid) if live])
+    unpark(c, sid)
+
+
+def unpark(c: Any, sid: str) -> None:
+    """The turns waiting on this plan's refresh (`gap`) go now: their computers claim them at once."""
+    now = H.now()
+    c.execute(
+        "INSERT INTO changes(topic,kind,subject_id,bot,created_at) SELECT DISTINCT 'runner','work',a.runner_id,"
+        "a.bot_id,? FROM claude_login_parks p JOIN attempts a ON a.id=p.attempt_id WHERE p.subscription_id=? "
+        "AND p.until>?",
+        (now, sid, now),
+    )
+    c.execute("UPDATE claude_login_parks SET until=? WHERE subscription_id=? AND until>?", (now, sid, now))
 
 
 # ------------------------------------------------------------------------------------------------ refresh
-def _lease(c, sid):
+def _lease(c: Any, sid: str) -> Row:
     return H._one(c, "SELECT * FROM claude_logins WHERE subscription_id=?", (sid,)) or {}
 
 
-def _put_lease(c, sid, **fields):
+def _put_lease(c: Any, sid: str, **fields: Any) -> None:
     now = H.now()
     c.execute(
         "INSERT INTO claude_logins(subscription_id,updated_at) VALUES(?,?) ON CONFLICT(subscription_id) DO NOTHING",
@@ -245,22 +329,24 @@ def _put_lease(c, sid, **fields):
     )
 
 
-def _backoff(failures):
+def _backoff(failures: int) -> int:
     return min(BACKOFF[0] * 2 ** max(failures - 1, 0), BACKOFF[1])
 
 
-def forget(c, sid):
-    """A plan removed or no longer a full login: its lease goes."""
+def forget(c: Any, sid: str) -> None:
+    """A plan removed, reconnected or no longer a full login: its lease goes, and so does any wait on it. The leases it
+    issued are remembered, so a late result is still known for whose it is."""
     c.execute("DELETE FROM claude_logins WHERE subscription_id=?", (sid,))
+    unpark(c, sid)
 
 
-def _refreshes(c, vault, runner_id):
+def _refreshes(c: Any, vault: Any, runner_id: str) -> list[Row]:
     """The refreshes this computer is to make now, each with the plan's login: a lease it holds, or one it takes."""
-    from . import model_subscriptions as MS
+    MS = _MS()
 
     now = H.now()
     due = H.shift(now, seconds=REFRESH_BEFORE.total_seconds())
-    out = []
+    out: list[Row] = []
     for sub in H._rows(
         c.execute(
             "SELECT * FROM model_subscriptions WHERE kind=? AND status<>'needs_reconnect' "
@@ -268,7 +354,7 @@ def _refreshes(c, vault, runner_id):
             (KIND, due),
         )
     ):
-        lease = _lease(c, sub["id"])
+        lease: Row = _lease(c, sub["id"])
         quiet = ""
         if lease.get("lease_id"):
             mine = lease["lease_runner"] == runner_id
@@ -292,6 +378,11 @@ def _refreshes(c, vault, runner_id):
             if _chosen(others or computers, can_sign_in, lease.get("failures") or 0) != runner_id:
                 continue
             lease = {"lease_id": H.new_id(), "lease_revision": sub["revision"]}
+            c.execute(
+                "INSERT INTO claude_login_leases(id,subscription_id,runner_id,revision,issued_at) VALUES(?,?,?,?,?)",
+                (lease["lease_id"], sub["id"], runner_id, sub["revision"], now),
+            )
+            c.execute("DELETE FROM claude_login_leases WHERE issued_at<?", (H.shift(now, seconds=-KEEP_SECONDS),))
             _put_lease(
                 c,
                 sub["id"],
@@ -310,17 +401,26 @@ def _refreshes(c, vault, runner_id):
     return out
 
 
-def refresh_result(c, vault, runner_id, sid, body):
+def refresh_result(c: Any, vault: Any, runner_id: str, sid: str, body: "RefreshResult") -> Row:
     """A computer's answer to its lease. `succeeded`: the refreshed login, kept when the plan is still at the revision
     the refresh began from, whatever became of the lease (the old refresh token is spent, so it is the newest login
     there is); a result already kept for this lease is acknowledged again. `failed`: nothing rotated; tried again after
     a backoff, on the next computer in turn. `rejected`: the login is gone (Claude Code signed it out), so the plan
-    needs reconnecting, unless the plan moved on since."""
-    from . import model_subscriptions as MS
+    needs reconnecting, unless the plan moved on since. Any of them only from the computer the lease was issued to,
+    for the plan and the revision it was issued for: anything else is not kept."""
+    MS = _MS()
 
     sub = MS.row(c, sid)
     if not sub or sub["kind"] != KIND:
         raise Problem("not_found", "That plan is not a full Claude login", 404)
+    issued = H._one(c, "SELECT * FROM claude_login_leases WHERE id=?", (body.lease,))
+    if (
+        not issued
+        or issued["runner_id"] != runner_id
+        or issued["subscription_id"] != sid
+        or issued["revision"] != body.revision
+    ):
+        return {"stored": False}
     lease = _lease(c, sid)
     if lease.get("done_lease") == body.lease:
         return {"stored": True, "revision": lease["done_revision"]}
@@ -368,31 +468,64 @@ def refresh_result(c, vault, runner_id, sid, body):
     if body.state == "rejected" and body.revision == sub["revision"]:
         MS._status(c, sid, "needs_reconnect", "Signed out: reconnect this plan")
     H.event(c, "runner:" + runner_id, "subscription.refresh_" + body.state, sid, {"revision": body.revision})
+    unpark(c, sid)  # the lease ended without a new login: a waiting turn runs, and fails if it is refused again
     return {"stored": False}
 
 
-def gap(c, attempt_id, runtime):
+def gap(c: Any, attempt_id: str, runtime: str) -> bool:
     """Whether a turn refused its sign-in on a full login was caught by a rotation: the plan moved on since it was
-    handed the turn, a refresh is under way, or one was kept moments ago."""
-    from . import model_subscriptions as MS
+    handed the turn, a refresh is under way (a lease, held or uncertain), or one was kept moments ago. Once per job: its
+    second refusal is the login's own. While the refresh is under way the job waits for it (`PARK_SECONDS` at most),
+    so its next claim is handed the new token, not the revoked one again."""
+    MS = _MS()
 
     handed = MS.handed(c, attempt_id, runtime)
     sub = MS.row(c, handed["subscription_id"]) if handed else None
     if not handed or not sub or sub["kind"] != KIND:
         return False
-    if sub["revision"] > handed["revision"]:
-        return True
-    lease = _lease(c, sub["id"])
+    attempt: Row = H._one(c, "SELECT job_id FROM attempts WHERE id=?", (attempt_id,)) or {}
+    job: str = attempt.get("job_id") or ""
+    if (
+        job
+        and c.execute("SELECT 1 FROM claude_login_parks WHERE job_id=? AND attempt_id<>?", (job, attempt_id)).fetchone()
+    ):
+        return False
     now = H.now()
-    if lease.get("lease_id") and (lease.get("lease_until") or "") > now:
-        return True
-    return bool(sub["refreshed_at"]) and sub["refreshed_at"] > H.shift(now, seconds=-GAP_SECONDS)
+    moved = sub["revision"] > handed["revision"]
+    leased = bool(_lease(c, sub["id"]).get("lease_id"))
+    recent = bool(sub["refreshed_at"]) and sub["refreshed_at"] > H.shift(now, seconds=-GAP_SECONDS)
+    if not (moved or leased or recent):
+        return False
+    if job:
+        c.execute("DELETE FROM claude_login_parks WHERE created_at<?", (H.shift(now, seconds=-KEEP_SECONDS),))
+        c.execute(
+            "INSERT OR REPLACE INTO claude_login_parks(job_id,attempt_id,subscription_id,revision,until,created_at) "
+            "VALUES(?,?,?,?,?,?)",
+            (
+                job,
+                attempt_id,
+                sub["id"],
+                handed["revision"],
+                H.shift(now, seconds=PARK_SECONDS) if leased and not moved else now,
+                now,
+            ),
+        )
+    return True
+
+
+# A queued job a full login's refresh holds (`gap`): it waits while its plan is still at the revision it was refused on
+# and a lease is out, until its time is up. SQL over a queued job `j` (execution.queued_jobs_sql).
+PARKED_SQL = (
+    "EXISTS(SELECT 1 FROM claude_login_parks p JOIN model_subscriptions ps ON ps.id=p.subscription_id "
+    "JOIN claude_logins pl ON pl.subscription_id=p.subscription_id WHERE p.job_id=j.id "
+    "AND p.until>strftime('%Y-%m-%dT%H:%M:%fZ','now') AND ps.revision=p.revision AND pl.lease_id<>'')"
+)
 
 
 # ------------------------------------------------------------------------------------------------ tokens
-def _tokens(c, runner_id, live):
+def _tokens(c: Any, runner_id: str, live: "list[LiveToken]") -> list[Row]:
     """The new access token for each plan this computer runs turns on whose revision it has is behind."""
-    out = []
+    out: list[Row] = []
     for item in live[:MAX_LIVE]:
         sub = H._one(c, "SELECT * FROM model_subscriptions WHERE id=?", (item.subscription,))
         if not sub or sub["kind"] != KIND or sub["status"] == "needs_reconnect" or sub["revision"] <= item.revision:
@@ -408,24 +541,18 @@ def _tokens(c, runner_id, live):
 
 
 # ------------------------------------------------------------------------------------------------ usage
-def _usage_meta(c, sid):
-    from . import subscription_refresh as SR
-    from .repositories import metadata
-
-    return metadata(c, SR.plan_key(sid)) or {}
+def _usage_meta(c: Any, sid: str) -> Row:
+    return _repos().metadata(c, _SR().plan_key(sid)) or {}
 
 
-def _save_usage_meta(c, sid, value):
-    from . import subscription_refresh as SR
-    from .repositories import save_metadata
-
-    save_metadata(c, SR.plan_key(sid), value)
+def _save_usage_meta(c: Any, sid: str, value: Row) -> None:
+    _repos().save_metadata(c, _SR().plan_key(sid), value)
 
 
-def ask_usage(c, sid, actor):
+def ask_usage(c: Any, sid: str, actor: str) -> Any:
     """Read the plan's usage now (↻ on its row): as soon as a computer can, and not within five minutes of the last
     read."""
-    from . import subscription_refresh as SR
+    SR = _SR()
 
     sub = H._one(c, "SELECT * FROM model_subscriptions WHERE id=?", (sid,))
     if not sub:
@@ -434,10 +561,11 @@ def ask_usage(c, sid, actor):
     if not ready:
         raise Problem("offline", "Its computers are offline or not yet updated to read usage", 409)
     value = _usage_meta(c, sid)
-    old = value.get("request") or {}
+    old: Row = value.get("request") or {}
     now = H.now()
     # Never two reads of the same plan less than USAGE_GAP apart, whoever asked.
-    last = max(old.get("requested_at", ""), (value.get("schedule") or {}).get("read_at") or "")
+    schedule: Row = value.get("schedule") or {}
+    last: str = max(old.get("requested_at", ""), schedule.get("read_at") or "")
     if (old.get("state") == "requested" and old.get("expires_at", "") > now) or last > H.shift(
         now, seconds=-max(SR.COOLDOWN, USAGE_GAP)
     ):
@@ -449,13 +577,11 @@ def ask_usage(c, sid, actor):
     return SR.plan_view(value)
 
 
-def _online(runner):
-    from . import model_login
-
-    return model_login._online(runner)
+def _online(runner: Any) -> bool:
+    return bool(_login()._online(runner))
 
 
-def _request(runner_id, now):
+def _request(runner_id: str, now: str) -> Row:
     return {
         "id": H.new_id(),
         "kind": "oauth_usage",
@@ -467,10 +593,10 @@ def _request(runner_id, now):
     }
 
 
-def _wanted(c, sid, schedule):
+def _wanted(c: Any, sid: str, schedule: Row) -> bool:
     """Whether a plan's usage is read on its schedule: never read yet, in use (a turn runs on it, or a computer signs in
     with it now), or next in line in a person's set. Others wait for ↻ or their turn to come up."""
-    from . import model_subscriptions as MS
+    MS = _MS()
 
     if not schedule.get("read_at"):
         return True
@@ -480,27 +606,29 @@ def _wanted(c, sid, schedule):
         (sid,),
     ).fetchone():
         return True
-    for (_, runtime), entry in (MS._given(c) or {}).items():
+    given: dict[tuple[str, str], Row] = MS._given(c) or {}
+    for (_, runtime), entry in given.items():
         if not entry.get("person"):
             if entry.get("id") == sid:
                 return True
             continue
         if entry.get("id") == sid:
             return True
-        ready = [m for m in entry.get("members") or [] if MS.available(c, m, runtime)]
+        members: list[Row] = entry.get("members") or []
+        ready = [m for m in members if MS.available(c, m, runtime)]
         if sid in [m["id"] for m in MS._ordered(c, ready, runtime)[:2]]:
             return True
     return False
 
 
-def _usage_jobs(c, vault, runner_id):
+def _usage_jobs(c: Any, vault: Any, runner_id: str) -> list[Row]:
     """The usage reads this computer is to make now, each with the plan's access token for this read only: one asked of
     it, or one due on the plan's schedule whose turn is this computer's."""
-    from . import model_subscriptions as MS
+    MS = _MS()
 
     now = H.now()
     fresh = H.shift(now, seconds=120)
-    out = []
+    out: list[Row] = []
     for sub in H._rows(
         c.execute(
             "SELECT * FROM model_subscriptions WHERE kind=? AND status<>'needs_reconnect' AND access_expires_at>?",
@@ -511,10 +639,10 @@ def _usage_jobs(c, vault, runner_id):
         if lease.get("lease_id") and (lease.get("lease_until") or "") > now:
             continue  # its token is about to change
         value = _usage_meta(c, sub["id"])
-        request = value.get("request") or {}
+        request: Row = value.get("request") or {}
         live = request.get("state") == "requested" and request.get("expires_at", "") > now
         if not live:
-            schedule = value.get("schedule") or {}
+            schedule: Row = value.get("schedule") or {}
             if (schedule.get("next_at") or "") > now or not _wanted(c, sub["id"], schedule):
                 continue
             computers = _computers(c, sub["id"])
@@ -538,7 +666,7 @@ def _usage_jobs(c, vault, runner_id):
     return out
 
 
-def _instant(text, within):
+def _instant(text: object, within: timedelta) -> str | None:
     """An ISO instant with its offset, in UTC, no further off than `within`; None for anything else."""
     try:
         at = datetime.fromisoformat(str(text).replace("Z", "+00:00"))
@@ -551,24 +679,24 @@ def _instant(text, within):
     return at.isoformat() if now < at <= now + within else None
 
 
-def _window(w, within):
+def _window(w: "Window | None", within: timedelta) -> Row | None:
     if w is None:
         return None
     resets = _instant(w.resets_at, within)
     return {"used_percent": w.used_percent, "resets_at": resets} if resets else None
 
 
-def usage_result(c, runner_id, sid, body):
+def usage_result(c: Any, runner_id: str, sid: str, body: "UsageResult") -> Any:
     """A computer's answer to a usage read. A read kept for its plan replaces the plan's reading (the week, the 5-hour
     window, each model's week), unless the plan's account changed since it was asked; a refused read (429) waits as long
     as it was told; any other failure backs off. Never a Reconnect."""
     sub = H._one(c, "SELECT * FROM model_subscriptions WHERE id=?", (sid,))
     value = _usage_meta(c, sid)
-    request = value.get("request") or {}
+    request: Row = value.get("request") or {}
     if not sub or request.get("id") != body.id or request.get("runner_id") != runner_id:
         raise Problem("not_found", "Usage request not found", 404)
     now = H.now()
-    schedule = dict(value.get("schedule") or {})
+    schedule: Row = dict(value.get("schedule") or {})
     if body.state == "succeeded":
         week = _window(body.seven_day, timedelta(days=8))
         if not week:
@@ -600,14 +728,14 @@ def usage_result(c, runner_id, sid, body):
     value["schedule"] = schedule
     value["request"] = {**request, "state": "succeeded" if body.state == "succeeded" else "failed", "updated_at": now}
     _save_usage_meta(c, sid, value)
-    from . import subscription_refresh as SR
+    SR = _SR()
 
     return SR.plan_view(value)
 
 
-def reset_usage(c, sid):
+def reset_usage(c: Any, sid: str) -> None:
     """A plan whose account may have changed (a conversion): its old readings and asked reads go."""
-    from . import subscription_refresh as SR
+    SR = _SR()
 
     c.execute("DELETE FROM registry_metadata WHERE key=?", (SR.plan_key(sid),))
 
@@ -649,9 +777,9 @@ class UsageResult(M.Contract):
     retry_after: int | None = Field(default=None, ge=0, le=10 * RETRY_AFTER_CAP)
 
 
-def poll(c, vault, runner_id, body):
+def poll(c: Any, vault: Any, runner_id: str, body: "Poll") -> Row:
     """A computer's poll: the access tokens its running turns need, the refreshes and usage reads it is to make."""
-    from . import model_subscriptions as MS
+    MS = _MS()
 
     runner = c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (runner_id,)).fetchone()
     if not takes_turns(runner):
@@ -665,7 +793,7 @@ def poll(c, vault, runner_id, body):
             "(SELECT id FROM attempts WHERE runner_id=? AND state IN ('leased','running'))",
             (item.revision, item.subscription, item.subscription, item.revision, runner_id),
         )
-    tokens = []
+    tokens: list[Row] = []
     for sub in _tokens(c, runner_id, body.live):
         value = MS.value_of(c, vault.cipher, sub)
         if value is not None:
@@ -677,10 +805,10 @@ def poll(c, vault, runner_id, body):
     }
 
 
-def install(app, store):
+def install(app: Any, store: Any) -> None:
     """Runner routes. Not through `mutate`: a login or token is kept in no request receipt."""
 
-    def runner_only(c, who):
+    def runner_only(c: Any, who: Any) -> None:
         if (
             who.role != "runner"
             or not c.execute("SELECT 1 FROM runners WHERE id=? AND revoked_at IS NULL", (who.runner_id,)).fetchone()
@@ -688,21 +816,21 @@ def install(app, store):
             raise Problem("forbidden", "Only a registered computer may send this", 403)
 
     @app.post("/api/v2/runner-claude-logins")
-    def runner_poll(request: Request, body: Poll):
+    def runner_poll(request: Request, body: Poll) -> Row:
         who = request.state.identity
         with store.transaction() as c:
             runner_only(c, who)
             return poll(c, app.state.vault, who.runner_id, body)
 
     @app.post("/api/v2/runner-claude-logins/{sid}/refreshed")
-    def runner_refreshed(request: Request, sid: str, body: RefreshResult):
+    def runner_refreshed(request: Request, sid: str, body: RefreshResult) -> Row:
         who = request.state.identity
         with store.transaction() as c:
             runner_only(c, who)
             return refresh_result(c, app.state.vault, who.runner_id, sid, body)
 
     @app.post("/api/v2/runner-claude-logins/{sid}/usage")
-    def runner_usage(request: Request, sid: str, body: UsageResult):
+    def runner_usage(request: Request, sid: str, body: UsageResult) -> Any:
         who = request.state.identity
         with store.transaction() as c:
             runner_only(c, who)

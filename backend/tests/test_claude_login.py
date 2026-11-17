@@ -168,6 +168,47 @@ def test_a_setup_token_plan_reconnected_with_a_full_login_keeps_its_owner_comput
     assert [(s["id"], s["kind"]) for s in listed(api)] == [(sid, "claude_token")]
 
 
+def test_a_kept_key_reconnected_as_a_full_login_is_retired_and_never_hands_out_the_login(api):
+    setup(api)
+    company(api)
+    m = computer(api)
+    sid = add(api)["id"]
+    give(api, m, "claude", sid)
+    # A setup token kept in the vault as the computer's key (before D11-4): older runners fetch it as their key.
+    cid = post(api, "credentials", {"name": "Claude key", "env": "CLAUDE_CODE_OAUTH_TOKEN", "secret": TOKEN})["id"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE model_subscriptions SET credential_id=? WHERE id=?", (cid, sid))
+    with api.app.state.store.read() as c:
+        before, _ = MS.keys_for(c, api.app.state.vault, m["runner_id"], "claude")
+    assert [k["value"] for k in before["credentials"]] == [TOKEN]
+    post(api, f"model-subscriptions/{sid}", {"kind": "claude_login", "secret": full(), "confirm": True})
+    row = sub_row(api, sid)
+    assert (row["kind"], row["credential_id"]) == ("claude_login", MS.CREDENTIAL + sid)
+    with api.app.state.store.read() as c:
+        after, sent = MS.keys_for(c, api.app.state.vault, m["runner_id"], "claude")
+        assert c.execute("SELECT 1 FROM credentials WHERE id=?", (cid,)).fetchone() is None
+    # The computer is told to clear its copy of the old key; nothing it fetches holds the login.
+    assert after.get("clear_key") is True and after["credentials"] == [] and sent == []
+    assert refresh(1) not in json.dumps(after)
+    with api.app.state.store.read() as c:
+        assert json.loads(MS.value_of(c, api.app.state.vault.cipher, row))["claudeAiOauth"]["refreshToken"] == refresh(
+            1
+        )
+
+
+def test_a_setup_token_plan_becomes_a_full_login_only_when_every_computer_running_it_can(api):
+    setup(api)
+    company(api)
+    sid = add(api)["id"]
+    give(api, computer(api), "claude", sid)
+    give(api, computer(api, caps=OLD, label="Old box"), "claude", sid)
+    refused = post(
+        api, f"model-subscriptions/{sid}", {"kind": "claude_login", "secret": full(), "confirm": True}, expected=409
+    )
+    assert refused["error"]["code"] == "update_computers" and "Old box" in json.dumps(refused["error"])
+    assert sub_row(api, sid)["kind"] == "claude_token"
+
+
 def test_a_turn_gets_only_an_access_token_in_its_own_file_and_an_older_runner_none(api):
     setup(api)
     company(api)
@@ -279,6 +320,89 @@ def test_a_lease_whose_computer_went_quiet_is_not_handed_over_while_the_old_toke
     assert sub_row(api, sid)["status"] != "needs_reconnect"
     with api.app.state.store.read() as c:
         assert CL._lease(c, sid)["failures"] == 1 and CL._lease(c, sid)["retry_at"]
+
+
+def test_a_refresh_result_counts_only_from_the_computer_its_lease_went_to(api):
+    setup(api)
+    company(api)
+    sid = add(api, "claude_login", full(minutes=30), name=None)["id"]
+    m = computer(api)
+    give(api, m, "claude", sid)
+    other = computer(api, label="Other")
+    give(api, other, "claude", sid)
+    [job] = poll(api, m)["refreshes"] + poll(api, other)["refreshes"]
+    if not poll(api, m)["refreshes"]:
+        m, other = other, m  # the lease went to the other one: name them by it
+    done = {"lease": job["lease"], "revision": 1, "state": "succeeded", "value": full(n=2)}
+    # Another computer with the lease's id: not kept, and the plan stays where it was.
+    assert post(api, f"runner-claude-logins/{sid}/refreshed", done, other["token"]) == {"stored": False}
+    assert post(api, f"runner-claude-logins/{sid}/refreshed", {**done, "lease": "x" * 32}, m["token"]) == {
+        "stored": False
+    }
+    assert sub_row(api, sid)["revision"] == 1
+    # Its own computer's result is kept, late or not; a repeat is acknowledged to it alone.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE claude_logins SET lease_until=? WHERE subscription_id=?", (at(minutes=-5), sid))
+    assert post(api, f"runner-claude-logins/{sid}/refreshed", done, m["token"]) == {"stored": True, "revision": 2}
+    assert post(api, f"runner-claude-logins/{sid}/refreshed", done, other["token"]) == {"stored": False}
+    assert post(api, f"runner-claude-logins/{sid}/refreshed", done, m["token"]) == {"stored": True, "revision": 2}
+    assert sub_row(api, sid)["revision"] == 2
+
+
+def refused_turn(api, m, turn, thread="t-park"):
+    post(api, f"attempts/{turn['id']}/started", {"thread_id": thread}, m["token"])
+    post(
+        api,
+        f"attempts/{turn['id']}/complete",
+        {"outcome": "failed", "last_seq": 0, "auth_rejected": {"runtime": "claude", "reason": "OAuth token revoked"}},
+        m["token"],
+    )
+    with api.app.state.store.read() as c:
+        state, result = c.execute("SELECT state,result FROM attempts WHERE id=?", (turn["id"],)).fetchone()
+    return state, json.loads(result or "{}")
+
+
+def test_a_turn_refused_during_a_refresh_waits_for_the_new_token_and_is_handed_it(api):
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    sid = add(api, "claude_login", full(minutes=30), name=None)["id"]
+    m = computer(api, bot="ops")
+    give(api, m, "claude", sid)
+    post(api, "chat/ops", {"text": "Summarize the Acme account."})
+    turn = claim(api, m)
+    [job] = poll(api, m, [(sid, 1)])["refreshes"]
+    # The refresh revoked the turn's token before its upload landed: the turn waits instead of taking it again.
+    state, result = refused_turn(api, m, turn)
+    assert state == "interrupted" and result["token_gap"] is True
+    assert claim(api, m) is None
+    done = {"lease": job["lease"], "revision": 1, "state": "succeeded", "value": full(n=2)}
+    post(api, f"runner-claude-logins/{sid}/refreshed", done, m["token"])
+    again = claim(api, m)
+    assert again and again["subscriptions"][0]["revision"] == 2
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT 1 FROM changes WHERE kind='work' AND subject_id=?", (m["runner_id"],)).fetchone()
+
+
+def test_a_refused_turn_waits_five_minutes_at_most_and_a_second_refusal_is_a_failure(api):
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    sid = add(api, "claude_login", full(minutes=30), name=None)["id"]
+    m = computer(api, bot="ops")
+    give(api, m, "claude", sid)
+    post(api, "chat/ops", {"text": "Summarize the Acme account."})
+    turn = claim(api, m)
+    poll(api, m, [(sid, 1)])  # a lease goes out, and its upload stalls
+    assert refused_turn(api, m, turn)[0] == "interrupted"
+    assert claim(api, m) is None
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE claude_login_parks SET until=? WHERE subscription_id=?", (at(minutes=-1), sid))
+    again = claim(api, m)
+    assert again and again["subscriptions"][0]["revision"] == 1
+    state, result = refused_turn(api, m, again, "t-park-2")
+    assert state == "failed" and not result.get("token_gap")
+    assert sub_row(api, sid)["status"] == "needs_reconnect"
 
 
 def test_a_turn_refused_while_its_login_rotated_resumes_instead_of_failing(api):

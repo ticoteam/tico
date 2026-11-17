@@ -34,7 +34,7 @@
 //! One computer is one trust group (SECURITY.md): every bot on it runs as the same OS user, so another bot's turn here
 //! could read a subscription's home while a turn runs on it, or a running turn's environment.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
@@ -53,6 +53,9 @@ pub const CREDENTIALS: &str = ".credentials.json";
 /// What stays the subscription home's own in a full Claude login's config directory: everything else is linked to the
 /// turn's own `~/.claude`.
 const OWN: &[&str] = &[CREDENTIALS, ".claude.json"];
+/// Where a full Claude login keeps one config directory per turn: `subscriptions/<id>/turns/<turn>/claude`. Two turns
+/// on one plan here (two bots, two HOMEs) each link their own `~/.claude` in, so neither repoints the other's.
+const TURNS: &str = "turns";
 /// Left by an older runner, which kept the file between turns.
 const LEGACY_REVISION_FILE: &str = ".tico-revision";
 /// The shortest string inside a sign-in file masked on its own (tokens and keys are far longer).
@@ -253,10 +256,16 @@ pub fn apply(
                 }
                 delivered.home_env = Some(home_env);
             }
-            let home = crate::isolation::bot_state(state_dir)
+            let plan = crate::isolation::bot_state(state_dir)
                 .join("subscriptions")
-                .join(&id)
-                .join(&runtime);
+                .join(&id);
+            let home = if name == CREDENTIALS {
+                plan.join(TURNS)
+                    .join(uuid::Uuid::new_v4().simple().to_string())
+                    .join(&runtime)
+            } else {
+                plan.join(&runtime)
+            };
             values.extend(if name == CREDENTIALS {
                 claude_secrets(&value)
             } else {
@@ -487,6 +496,19 @@ fn link_config(home: &Path, own: &Path) {
     }
 }
 
+/// The plan a home is of: `subscriptions/<id>/<runtime>`, or a full Claude login's `subscriptions/<id>/turns/<turn>/claude`.
+fn plan_of(home: &Path) -> Option<String> {
+    let mut up = home.parent()?;
+    if up
+        .parent()
+        .and_then(|p| p.file_name())
+        .is_some_and(|n| n == TURNS)
+    {
+        up = up.parent()?.parent()?;
+    }
+    Some(up.file_name()?.to_string_lossy().to_string())
+}
+
 /// A full Claude login's config directory with a turn running on it: the one CLAUDE_CONFIG_DIR a turn keeps
 /// (hosts/claude.rs turn_env).
 pub fn is_config_home(path: &str) -> bool {
@@ -499,16 +521,19 @@ pub fn is_config_home(path: &str) -> bool {
 }
 
 /// Each full Claude login a turn here runs on, with the revision its file has (claude_login.rs asks for newer ones).
+/// Each plan once, at the oldest revision any of its turns has.
 pub fn live_logins() -> Vec<(String, i64)> {
-    homes()
-        .live
-        .iter()
-        .filter(|(home, _)| home.join(CREDENTIALS).is_file())
-        .filter_map(|(home, live)| {
-            let id = home.parent()?.file_name()?.to_string_lossy().to_string();
-            Some((id, live.revision))
-        })
-        .collect()
+    let mut out: BTreeMap<String, i64> = BTreeMap::new();
+    for (home, live) in homes().live.iter() {
+        if !home.join(CREDENTIALS).is_file() {
+            continue;
+        }
+        if let Some(id) = plan_of(home) {
+            let at = out.entry(id).or_insert(live.revision);
+            *at = (*at).min(live.revision);
+        }
+    }
+    out.into_iter().collect()
 }
 
 /// A full Claude login's new access token (`value`, its `.credentials.json` at `revision`): written into every home
@@ -521,20 +546,49 @@ pub fn rewrite(id: &str, revision: i64, value: &str) -> usize {
     for secret in claude_secrets(value) {
         crate::redact::hide_everywhere(&secret, false);
     }
+    write_logins(id, value, Some(revision))
+}
+
+/// A login this computer refreshed and the server has not yet acknowledged: the old access token is revoked already,
+/// so every home of the plan gets the new one now, while each keeps the revision it had until the server says which
+/// revision this is (`rewrite`), or that it kept another (`stale`).
+pub fn renew(id: &str, value: &str) -> usize {
+    if !safe_id(id) || value.is_empty() || value.len() > MAX_VALUE {
+        return 0;
+    }
+    for secret in claude_secrets(value) {
+        crate::redact::hide_everywhere(&secret, false);
+    }
+    write_logins(id, value, None)
+}
+
+/// The server did not keep this computer's refresh of a plan (a Reconnect came first): every home of it asks for the
+/// server's login on the next poll, whatever revision it had.
+pub fn stale(id: &str) {
+    for (home, live) in homes().live.iter_mut() {
+        if plan_of(home).is_some_and(|p| p == id) && home.join(CREDENTIALS).is_file() {
+            live.revision = 0;
+        }
+    }
+}
+
+/// Write `value` into each live home of plan `id`: those behind `revision` (and record it), or all of them (None).
+fn write_logins(id: &str, value: &str, revision: Option<i64>) -> usize {
     let mut homes = homes();
     let mut done = 0;
     for (home, live) in homes.live.iter_mut() {
         let file = home.join(CREDENTIALS);
-        let ours = home
-            .parent()
-            .and_then(|p| p.file_name())
-            .is_some_and(|n| n == id);
-        if !ours || live.revision >= revision || !file.is_file() {
+        if plan_of(home).is_none_or(|p| p != id)
+            || revision.is_some_and(|r| live.revision >= r)
+            || !file.is_file()
+        {
             continue;
         }
         match write_private(&file, value) {
             Ok(()) => {
-                live.revision = revision;
+                if let Some(r) = revision {
+                    live.revision = r;
+                }
                 done += 1;
             }
             Err(e) => crate::util::diagnostic(&format!(
@@ -626,7 +680,9 @@ pub fn sweep(state_dir: &Path) {
             .flatten()
             .flatten()
         {
-            if home.file_type().is_ok_and(|t| t.is_dir()) {
+            if home.file_name() == TURNS {
+                let _ = std::fs::remove_dir_all(home.path());
+            } else if home.file_type().is_ok_and(|t| t.is_dir()) {
                 clear(&home.path());
             }
         }
@@ -665,9 +721,22 @@ fn release(d: &mut Delivered) -> Vec<String> {
         _ => {
             homes.live.remove(&home);
             clear(&home);
+            if let Some(turn) = turn_dir(&home) {
+                // A turn's own config directory: its links go with it (never what they point at).
+                let _ = std::fs::remove_dir_all(turn);
+            }
         }
     }
     secrets
+}
+
+/// `subscriptions/<id>/turns/<turn>` of a full Claude login's home; None for any other home.
+fn turn_dir(home: &Path) -> Option<&Path> {
+    let turn = home.parent()?;
+    turn.parent()
+        .and_then(|p| p.file_name())
+        .is_some_and(|n| n == TURNS)
+        .then_some(turn)
 }
 
 pub fn for_runtime<'a>(delivered: &'a [Delivered], runtime: &str) -> Option<&'a Delivered> {
@@ -785,6 +854,69 @@ mod tests {
         let bad = json!([{"id": "s2", "runtime": "claude", "env": "PATH", "value": "/evil", "revision": 1}]);
         assert!(apply(&state, &bad, &mut env2, &mut vec![], &mut BTreeSet::new()).is_empty());
         assert!(!env2.contains_key("PATH"));
+        std::fs::remove_dir_all(&state).unwrap();
+    }
+
+    #[test]
+    fn two_turns_on_one_full_claude_login_keep_their_own_config_and_each_gets_the_new_token() {
+        let state = dir();
+        let id = format!("cl{}", uuid::Uuid::new_v4().simple());
+        let file = |token: &str| json!({"claudeAiOauth": {"accessToken": token}}).to_string();
+        let item = json!([{"id": id, "runtime": "claude", "kind": "claude_login", "file": CREDENTIALS,
+                           "home_env": "CLAUDE_CONFIG_DIR", "value": file("sk-ant-oat01-first-synthetic"),
+                           "revision": 3, "billing": "subscription"}]);
+        // Two bots, each with its own HOME, on one plan at once.
+        let mut turns = vec![];
+        for bot in ["ana", "bo"] {
+            let own = state.join(bot).join(".claude");
+            std::fs::create_dir_all(own.join(bot)).unwrap();
+            let mut env: Env = [("HOME".into(), state.join(bot).display().to_string())].into();
+            let mut got = apply(&state, &item, &mut env, &mut vec![], &mut BTreeSet::new());
+            start(&mut got, "claude", &mut env);
+            let home = PathBuf::from(&env["CLAUDE_CONFIG_DIR"]);
+            assert!(is_config_home(&env["CLAUDE_CONFIG_DIR"]));
+            assert_eq!(
+                std::fs::read_link(home.join("projects")).unwrap(),
+                own.join("projects")
+            );
+            assert_eq!(std::fs::read_link(home.join(bot)).unwrap(), own.join(bot));
+            turns.push((got, home));
+        }
+        let (ana, bo) = (turns[0].1.clone(), turns[1].1.clone());
+        assert_ne!(ana, bo);
+        // Neither repointed the other's links.
+        assert!(std::fs::read_link(ana.join("projects"))
+            .unwrap()
+            .starts_with(state.join("ana")));
+        assert!(!bo.join("ana").exists() && !ana.join("bo").exists());
+        assert_eq!(
+            live_logins()
+                .into_iter()
+                .filter(|(p, _)| *p == id)
+                .collect::<Vec<_>>(),
+            vec![(id.clone(), 3)]
+        );
+        let read = |home: &Path| std::fs::read_to_string(home.join(CREDENTIALS)).unwrap();
+        // Refreshed here: both files at once, each still at its revision until the server says which this is.
+        assert_eq!(renew(&id, &file("sk-ant-oat01-second-synthetic")), 2);
+        assert!(read(&ana).contains("second") && read(&bo).contains("second"));
+        assert!(live_logins().contains(&(id.clone(), 3)));
+        assert_eq!(rewrite(&id, 4, &file("sk-ant-oat01-second-synthetic")), 2);
+        assert!(live_logins().contains(&(id.clone(), 4)));
+        // A refresh the server did not keep: every home asks for the server's login again.
+        stale(&id);
+        assert!(live_logins().contains(&(id.clone(), 0)));
+        assert_eq!(rewrite(&id, 5, &file("sk-ant-oat01-third-synthetic")), 2);
+        assert!(read(&ana).contains("third") && read(&bo).contains("third"));
+        // A finished turn's config directory goes, never what its links point at.
+        for (mut got, home) in turns {
+            finish(&mut got);
+            assert!(!home.exists());
+        }
+        assert!(
+            state.join("ana/.claude/projects").is_dir() && state.join("bo/.claude/bo").is_dir()
+        );
+        assert!(!live_logins().iter().any(|(p, _)| *p == id));
         std::fs::remove_dir_all(&state).unwrap();
     }
 

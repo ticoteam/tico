@@ -1371,6 +1371,8 @@ def save(c, vault, settings, who, body, sid=None, signed_on=""):
         same = bool(login) and not converting and login["account"] == sub["account"]
         if body.secret is not None:
             value, preview = checked(kind, body.secret.get_secret_value())
+            if converting and kind == "claude_login":
+                claude_login.can_convert(c, sid)
             given = [] if same else _signed_in_with(c, sid)
             if not body.confirm:
                 _confirm_reconnect(c, settings, given)
@@ -1396,6 +1398,8 @@ def save(c, vault, settings, who, body, sid=None, signed_on=""):
             _follow(c, settings, who.actor)
             return view(c, row(c, sid))
         if body.secret is not None:
+            retired = ""
+            keyed = []
             if converting:
                 # A setup-token plan becomes a full login, the same plan: owner, computers and history stay. Its readings
                 # and asked reads were the token's, and the login may be another account: they go.
@@ -1403,6 +1407,16 @@ def save(c, vault, settings, who, body, sid=None, signed_on=""):
                 claude_login.reset_usage(c, sid)
                 claude_login.forget(c, sid)
                 H.event(c, who.actor, "subscription.converted", sid, {"from": sub["kind"], "to": body.kind})
+            if kind == "claude_login" and _kept_key(sub):
+                # A key kept in the vault reaches older runners and bots' grants as a key (`keys_for`, `for_claim`):
+                # a full login, with its refresh token, never goes there. It is kept as the plan's own value, and the
+                # key is retired as Remove retires one (its computers clear their copies; the vault row goes once
+                # nothing else holds it).
+                retired = sub["credential_id"]
+                keyed = c.execute(
+                    "SELECT runner_id,runtime FROM computer_subscriptions WHERE subscription_id=? AND person=''", (sid,)
+                ).fetchall()
+                sub = {**dict(sub), "credential_id": None}
             # The credential's own time: readings taken before it are the old account's (`_plan_usage`). Only a replaced or
             # reconnected value moves it; a rename, an owner change or a same-account refresh (`refreshed`) does not.
             c.execute(
@@ -1411,6 +1425,12 @@ def save(c, vault, settings, who, body, sid=None, signed_on=""):
                 "login_expires_at=NULL,refreshed_at=NULL WHERE id=?",
                 (_keep_value(c, vault, sub, value, preview, who.actor, now), preview, now, now, now, sid),
             )
+            if retired:
+                from .model_login import mark_key_cleared
+
+                for g in keyed:
+                    mark_key_cleared(c, who, g["runner_id"], g["runtime"])
+                drop_credential(c, retired)
             if kind == "claude_login":
                 claude_login.stamp(c, sid, value)
                 claude_login.forget(c, sid)

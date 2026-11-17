@@ -5,10 +5,14 @@
 //!   (model_subscriptions.rs). When the plan was refreshed elsewhere the server hands the new one, and every home of
 //!   that plan here is rewritten at once (`model_subscriptions::rewrite`).
 //! - Refreshes: the server leases one refresh per plan to one computer when less than an hour is left. The refresh
-//!   runs `claude auth status --json` on a copy of the login in a folder of its own (refresh tokens are single-use,
-//!   and a spent one blanks the file it is in), rewrites this computer's own turns first, keeps the new login on disk
-//!   (`pending-<lease>.json`, 0600, the supervisor's state) until the server acknowledged it, and sends it again until
-//!   it has: the server keeps one result per lease, so a resend is harmless.
+//!   runs `claude auth status --json`, as the runner (never a bot's user), on a copy of the login in a folder of the
+//!   lease's own in the runner's private state (`<sid>/work-<lease>`: refresh tokens are single-use, and a spent one
+//!   blanks the file it is in). It keeps the outcome there as `pending-<lease>.json` (0600) before anything is cleaned
+//!   up, puts the new access token in this computer's own turns at once (the old one is revoked), and sends the outcome
+//!   until the server answers: the server keeps one result per lease, so a resend is harmless. Only the server's answer
+//!   says which revision the turns now hold (`model_subscriptions::rewrite`), or that it kept another login (`stale`:
+//!   they take the server's on the poll that follows). A workspace a crash left behind is read on the next poll: a
+//!   login rotated there is kept and sent like any other.
 //! - Usage: the server schedules each plan's usage read (`GET /api/oauth/usage`, what Claude Code's `/usage` reads)
 //!   and hands it to one computer with the plan's access token. Only fixed states and the windows' numbers travel
 //!   back; a 429 carries its Retry-After, and nothing here ever marks the plan for Reconnect.
@@ -50,9 +54,11 @@ impl Logins {
     /// for new tokens and jobs and do them.
     pub async fn poll(&mut self, runner: &Arc<Runner>, ask: bool) -> Result<(), ApiError> {
         let dir = runner.config.state_dir().join("claude-logins");
-        flush(runner, &dir).await?;
+        recover(&dir);
+        // An answer may name a newer login than the turns here hold: asked for now, not on the next tick.
+        let answered = flush(runner, &dir).await?;
         let live = crate::model_subscriptions::live_logins();
-        if !ask || self.missing.is_some_and(|at| at.elapsed() < MISSING_FOR) {
+        if !(ask || answered) || self.missing.is_some_and(|at| at.elapsed() < MISSING_FOR) {
             return Ok(());
         }
         let body = json!({"live": live
@@ -93,7 +99,7 @@ impl Logins {
                 continue; // done here already: only its upload may still be owed
             }
             self.done.insert(lease, Instant::now());
-            refresh(runner, &dir, job).await;
+            refresh(&dir, job).await;
         }
         flush(runner, &dir).await?;
         for job in answer["usage"]
@@ -137,6 +143,12 @@ fn pending_path(dir: &Path, job: &Value) -> Option<PathBuf> {
     (safe(&sid) && safe(&lease)).then(|| dir.join(&sid).join(format!("pending-{lease}.json")))
 }
 
+/// The lease's own workspace: the job as handed (`job.json`) and the copy `claude` refreshes (`.claude/`).
+fn work_path(dir: &Path, job: &Value) -> Option<PathBuf> {
+    let (sid, lease) = (text_of(&job["subscription"]), text_of(&job["lease"]));
+    (safe(&sid) && safe(&lease)).then(|| dir.join(&sid).join(format!("work-{lease}")))
+}
+
 /// Write `text` 0600, whole or not at all, in the supervisor's own state.
 fn keep(path: &Path, text: &str) -> Result<(), String> {
     use std::io::Write;
@@ -161,9 +173,12 @@ fn keep(path: &Path, text: &str) -> Result<(), String> {
     written.map_err(|e| e.to_string())
 }
 
-/// Send every refreshed login still on disk. The server answers each lease once and the same way again after
-/// (backend/claude_login.py refresh_result), so any answer, kept or not, ends it; a network failure keeps it.
-async fn flush(runner: &Runner, dir: &Path) -> Result<(), ApiError> {
+/// Send every refresh outcome still on disk. The server answers each lease once and the same way again after
+/// (backend/claude_login.py refresh_result), so any answer, kept or not, ends it; a network failure keeps it. A kept
+/// login's revision is now this computer's turns' too; one not kept leaves them to take the server's. Returns whether
+/// the server answered any.
+async fn flush(runner: &Runner, dir: &Path) -> Result<bool, ApiError> {
+    let mut answered = false;
     for sub in std::fs::read_dir(dir).into_iter().flatten().flatten() {
         let sid = sub.file_name().to_string_lossy().to_string();
         for entry in std::fs::read_dir(sub.path())
@@ -191,17 +206,37 @@ async fn flush(runner: &Runner, dir: &Path) -> Result<(), ApiError> {
                 )
                 .await
             {
-                Ok(_) => {
+                Ok(answer) => {
+                    answered = true;
+                    acknowledged(&sid, &body, &answer);
                     let _ = std::fs::remove_file(entry.path());
                 }
                 Err(e) if !e.retryable && e.status != 0 && e.status != 429 && e.status < 500 => {
+                    answered = true;
+                    acknowledged(&sid, &body, &json!({"stored": false}));
                     let _ = std::fs::remove_file(entry.path());
                 }
                 Err(e) => return Err(e),
             }
         }
     }
-    Ok(())
+    Ok(answered)
+}
+
+/// What the server's answer to a refresh means for this computer's turns on the plan.
+fn acknowledged(sid: &str, sent: &Value, answer: &Value) {
+    if sent["state"] != "succeeded" {
+        return; // nothing was written into a turn
+    }
+    let file = serde_json::from_str::<Value>(&text_of(&sent["value"]))
+        .ok()
+        .and_then(|v| turn_file(&v));
+    match (answer["stored"] == true, answer["revision"].as_i64(), file) {
+        (true, Some(revision), Some(file)) => {
+            crate::model_subscriptions::rewrite(sid, revision, &file);
+        }
+        _ => crate::model_subscriptions::stale(sid),
+    }
 }
 
 /// A turn's `.credentials.json` for a login: its OAuth part without the refresh token
@@ -244,108 +279,144 @@ pub fn refreshed(
     Ok(json!({"claudeAiOauth": oauth, "oauthAccount": account}))
 }
 
-/// One leased refresh: the login copied into a folder of its own with its access token marked expired, so
-/// `claude auth status` refreshes it. Kept on disk, put in this computer's own turns, then sent (`flush`).
-async fn refresh(runner: &Runner, dir: &Path, job: &Value) {
-    let sid = text_of(&job["subscription"]);
-    let revision = job["revision"].as_i64().unwrap_or(0);
-    let Some(pending) = pending_path(dir, job) else {
+/// One leased refresh, in the lease's workspace: the job kept there first, then the login copied with its access
+/// token marked expired so `claude auth status` refreshes it (`run_refresh`), then the outcome kept (`settle`).
+async fn refresh(dir: &Path, job: &Value) {
+    let (Some(pending), Some(work)) = (pending_path(dir, job), work_path(dir, job)) else {
         return;
     };
-    let report = |state: &str, value: Option<String>| {
-        let mut body = json!({"lease": job["lease"], "revision": revision, "state": state});
-        if let Some(v) = value {
-            body["value"] = json!(v);
-        }
-        body
+    let old = serde_json::from_str::<Value>(&text_of(&job["value"]))
+        .ok()
+        .filter(|v| v["claudeAiOauth"]["refreshToken"].is_string());
+    let outcome = match old {
+        Some(old) => run_refresh(&work, job, &old).await.map(|new| (old, new)),
+        None => Err("failed"),
     };
-    let outcome = match serde_json::from_str::<Value>(&text_of(&job["value"])) {
-        Ok(old) => run_refresh(runner, &old).await.map(|new| (old, new)),
-        Err(_) => Err("failed"),
-    };
-    let body = match outcome {
-        Ok((_, new)) => {
+    settle(&work, &pending, job, outcome.map(|(_, new)| new));
+}
+
+/// Keep a refresh's outcome as `pending-<lease>.json`, and only then remove the lease's workspace (a crash in between
+/// leaves both: the pending file wins). A refreshed login goes into this computer's own turns at once.
+fn settle(work: &Path, pending: &Path, job: &Value, outcome: Result<Value, &'static str>) {
+    let sid = text_of(&job["subscription"]);
+    let mut body = json!({"lease": job["lease"], "revision": job["revision"]});
+    match &outcome {
+        Ok(new) => {
             let text = new.to_string();
             for secret in crate::model_subscriptions::claude_secrets(&text) {
                 crate::redact::hide_everywhere(&secret, false);
             }
-            let body = report("succeeded", Some(text));
-            if let Err(e) = keep(&pending, &body.to_string()) {
-                crate::util::diagnostic(&format!(
-                    "Tico runner: could not keep a refreshed Claude plan: {e}"
-                ));
-            }
-            // This computer's turns first: their old token stopped working when the refresh went through.
-            if let Some(file) = turn_file(&new) {
-                crate::model_subscriptions::rewrite(&sid, revision + 1, &file);
-            }
-            body
+            body["state"] = json!("succeeded");
+            body["value"] = json!(text);
         }
-        Err(state) => report(state, None),
-    };
-    if !pending.exists() {
-        // A failure, or a success that could not be kept: sent at once (kept for a resend when it can be).
-        let _ = keep(&pending, &body.to_string());
+        Err(state) => body["state"] = json!(state),
+    }
+    if let Err(e) = keep(pending, &body.to_string()) {
+        // The workspace stays: the next poll finds the rotated login there (`recover`).
+        crate::util::diagnostic(&format!(
+            "Tico runner: could not keep a refreshed Claude plan: {e}"
+        ));
+        return;
+    }
+    if let Some(file) = outcome.ok().as_ref().and_then(turn_file) {
+        // This computer's turns first: their old token stopped working when the refresh went through.
+        crate::model_subscriptions::renew(&sid, &file);
+    }
+    let _ = std::fs::remove_dir_all(work);
+}
+
+/// Workspaces a stopped runner left: the outcome each holds is kept and sent like any other. A login rotated there is
+/// the only copy of the plan's login, so it is never thrown away unsent.
+fn recover(dir: &Path) {
+    for sub in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        for entry in std::fs::read_dir(sub.path())
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !name.starts_with("work-") {
+                continue;
+            }
+            let work = entry.path();
+            let job = std::fs::read_to_string(work.join("job.json"))
+                .ok()
+                .and_then(|t| serde_json::from_str::<Value>(&t).ok());
+            let Some((job, pending)) = job.and_then(|j| pending_path(dir, &j).map(|p| (j, p)))
+            else {
+                let _ = std::fs::remove_dir_all(&work); // the job was never kept: nothing was refreshed
+                continue;
+            };
+            if pending.exists() {
+                let _ = std::fs::remove_dir_all(&work);
+                continue;
+            }
+            let old = serde_json::from_str::<Value>(&text_of(&job["value"])).unwrap_or_default();
+            let config = work.join(".claude");
+            let creds = std::fs::read_to_string(config.join(".credentials.json")).ok();
+            let settings = std::fs::read_to_string(config.join(".claude.json")).ok();
+            let outcome = refreshed(&old, creds.as_deref(), settings.as_deref(), None);
+            settle(&work, &pending, &job, outcome);
+        }
     }
 }
 
-async fn run_refresh(runner: &Runner, old: &Value) -> Result<Value, &'static str> {
+async fn run_refresh(work: &Path, job: &Value, old: &Value) -> Result<Value, &'static str> {
+    use std::os::unix::fs::DirBuilderExt;
     let exe =
         crate::env::which("claude", &std::env::var("PATH").unwrap_or_default()).ok_or("failed")?;
     let mut oauth = old["claudeAiOauth"].as_object().cloned().ok_or("failed")?;
     oauth.insert("expiresAt".into(), json!(1000));
-    let home = crate::isolation::bot_state(&runner.config.state_dir())
-        .join("claude-logins")
-        .join(format!("refresh-{}", uuid::Uuid::new_v4().simple()));
-    let result = async {
-        crate::isolation::mkdir(&home.join(".claude"), 0o700).map_err(|_| "failed")?;
-        let config = home.join(".claude");
-        crate::model_subscriptions::write_private(
-            &config.join(".credentials.json"),
-            &json!({"claudeAiOauth": oauth}).to_string(),
-        )
+    let config = work.join(".claude");
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&config)
         .map_err(|_| "failed")?;
-        crate::model_subscriptions::write_private(
-            &config.join(".claude.json"),
-            &json!({"oauthAccount": old["oauthAccount"], "hasCompletedOnboarding": true})
-                .to_string(),
-        )
-        .map_err(|_| "failed")?;
-        let mut env: crate::env::Env = std::env::vars().collect();
-        for name in crate::harness_tools::api_key_env("claude") {
-            env.remove(&name);
-        }
-        for name in [
-            "ANTHROPIC_BASE_URL",
-            "CLAUDE_CODE_OAUTH_TOKEN",
-            "ANTHROPIC_AUTH_TOKEN",
-            "ANTHROPIC_API_KEY",
-        ] {
-            env.remove(name);
-        }
-        env.insert("HOME".into(), home.display().to_string());
-        env.insert("CLAUDE_CONFIG_DIR".into(), config.display().to_string());
-        let mut cmd = crate::isolation::command(exe);
-        cmd.args(["auth", "status", "--json"])
-            .env_clear()
-            .envs(&env)
-            .current_dir(&home)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .kill_on_drop(true);
-        let out = tokio::time::timeout(REFRESH_TIMEOUT, cmd.output())
-            .await
-            .map_err(|_| "failed")?
-            .map_err(|_| "failed")?;
-        let status: Option<Value> = serde_json::from_slice(&out.stdout).ok();
-        let creds = std::fs::read_to_string(config.join(".credentials.json")).ok();
-        let settings = std::fs::read_to_string(config.join(".claude.json")).ok();
-        refreshed(old, creds.as_deref(), settings.as_deref(), status.as_ref())
+    // The job first: a crash from here on leaves what `recover` needs to tell what happened.
+    keep(&work.join("job.json"), &job.to_string()).map_err(|_| "failed")?;
+    keep(
+        &config.join(".credentials.json"),
+        &json!({"claudeAiOauth": oauth}).to_string(),
+    )
+    .map_err(|_| "failed")?;
+    keep(
+        &config.join(".claude.json"),
+        &json!({"oauthAccount": old["oauthAccount"], "hasCompletedOnboarding": true}).to_string(),
+    )
+    .map_err(|_| "failed")?;
+    let mut env: crate::env::Env = std::env::vars().collect();
+    for name in crate::harness_tools::api_key_env("claude") {
+        env.remove(&name);
     }
-    .await;
-    let _ = std::fs::remove_dir_all(&home);
-    result
+    for name in [
+        "ANTHROPIC_BASE_URL",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_API_KEY",
+    ] {
+        env.remove(name);
+    }
+    env.insert("HOME".into(), work.display().to_string());
+    env.insert("CLAUDE_CONFIG_DIR".into(), config.display().to_string());
+    // As the runner itself: the copy holds a refresh token, which no bot's turn may read or spend.
+    let mut cmd = tokio::process::Command::new(exe);
+    cmd.args(["auth", "status", "--json"])
+        .env_clear()
+        .envs(&env)
+        .current_dir(work)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    let out = tokio::time::timeout(REFRESH_TIMEOUT, cmd.output())
+        .await
+        .map_err(|_| "failed")?
+        .map_err(|_| "failed")?;
+    let status: Option<Value> = serde_json::from_slice(&out.stdout).ok();
+    let creds = std::fs::read_to_string(config.join(".credentials.json")).ok();
+    let settings = std::fs::read_to_string(config.join(".claude.json")).ok();
+    refreshed(old, creds.as_deref(), settings.as_deref(), status.as_ref())
 }
 
 /// `claude-code/<version>`, as the CLI itself says it when it reads usage.
@@ -531,6 +602,118 @@ mod tests {
             usage_of(&json!({"five_hour": {"utilization": 3}}))["state"],
             "failed"
         );
+    }
+
+    fn scratch() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "tico-claude-login-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// A turn here on plan `sid` at `revision`, holding `token`; its config directory.
+    fn turn_on(
+        state: &Path,
+        sid: &str,
+        revision: i64,
+        token: &str,
+    ) -> (Vec<crate::model_subscriptions::Delivered>, PathBuf) {
+        let file = json!({"claudeAiOauth": {"accessToken": token}}).to_string();
+        let item = json!([{"id": sid, "runtime": "claude", "kind": "claude_login", "file": ".credentials.json",
+                           "home_env": "CLAUDE_CONFIG_DIR", "value": file, "revision": revision,
+                           "billing": "subscription"}]);
+        let mut env: crate::env::Env =
+            [("HOME".into(), state.join("bot").display().to_string())].into();
+        let mut got = crate::model_subscriptions::apply(
+            state,
+            &item,
+            &mut env,
+            &mut vec![],
+            &mut Default::default(),
+        );
+        crate::model_subscriptions::start(&mut got, "claude", &mut env);
+        let home = PathBuf::from(&env["CLAUDE_CONFIG_DIR"]);
+        (got, home)
+    }
+
+    fn revision_of(sid: &str) -> Option<i64> {
+        crate::model_subscriptions::live_logins()
+            .into_iter()
+            .find(|(p, _)| p == sid)
+            .map(|(_, r)| r)
+    }
+
+    #[test]
+    fn a_refresh_rewrites_the_turns_at_once_and_their_revision_only_when_the_server_answers() {
+        let (state, dir) = (scratch(), scratch());
+        let sid = format!("cl{}", uuid::Uuid::new_v4().simple());
+        let (mut turn, home) = turn_on(&state, &sid, 4, "sk-ant-oat01-old-synthetic");
+        let job = json!({"lease": "lease-a", "subscription": sid, "revision": 4,
+                         "value": login("sk-ant-oat01-old-synthetic", "r1").to_string()});
+        let (work, pending) = (
+            work_path(&dir, &job).unwrap(),
+            pending_path(&dir, &job).unwrap(),
+        );
+        std::fs::create_dir_all(&work).unwrap();
+        settle(
+            &work,
+            &pending,
+            &job,
+            Ok(login("sk-ant-oat01-new-synthetic", "r2")),
+        );
+        // Kept before the workspace went; the turn has the new token, still recorded at the old revision.
+        let sent: Value =
+            serde_json::from_str(&std::fs::read_to_string(&pending).unwrap()).unwrap();
+        assert_eq!(sent["state"], "succeeded");
+        assert!(!work.exists());
+        assert!(std::fs::read_to_string(home.join(".credentials.json"))
+            .unwrap()
+            .contains("new-synthetic"));
+        assert_eq!(revision_of(&sid), Some(4));
+        // Kept by the server as revision 5: the turn is at 5.
+        acknowledged(&sid, &sent, &json!({"stored": true, "revision": 5}));
+        assert_eq!(revision_of(&sid), Some(5));
+        // A Reconnect took the plan first: the turn asks for the server's login, whatever it had.
+        acknowledged(&sid, &sent, &json!({"stored": false}));
+        assert_eq!(revision_of(&sid), Some(0));
+        crate::model_subscriptions::finish(&mut turn);
+        let _ = std::fs::remove_dir_all(&state);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_workspace_left_by_a_crash_is_kept_and_sent_never_lost() {
+        let dir = scratch();
+        let old = login("sk-ant-oat01-old-synthetic", "r1");
+        let job = |lease: &str| json!({"lease": lease, "subscription": "sub-1", "revision": 2, "value": old.to_string()});
+        // Rotated before the crash: the only copy of the login, kept as this lease's outcome.
+        let rotated = work_path(&dir, &job("lease-r")).unwrap();
+        std::fs::create_dir_all(rotated.join(".claude")).unwrap();
+        keep(&rotated.join("job.json"), &job("lease-r").to_string()).unwrap();
+        keep(
+            &rotated.join(".claude/.credentials.json"),
+            &login("sk-ant-oat01-new-synthetic", "r2").to_string(),
+        )
+        .unwrap();
+        // Never ran: nothing rotated, a failure the server tries again.
+        let idle = work_path(&dir, &job("lease-i")).unwrap();
+        std::fs::create_dir_all(idle.join(".claude")).unwrap();
+        keep(&idle.join("job.json"), &job("lease-i").to_string()).unwrap();
+        keep(&idle.join(".claude/.credentials.json"), &old.to_string()).unwrap();
+        recover(&dir);
+        let read = |lease: &str| -> Value {
+            serde_json::from_str(
+                &std::fs::read_to_string(pending_path(&dir, &job(lease)).unwrap()).unwrap(),
+            )
+            .unwrap()
+        };
+        assert_eq!(read("lease-r")["state"], "succeeded");
+        assert!(text_of(&read("lease-r")["value"]).contains("new-synthetic"));
+        assert_eq!(read("lease-i")["state"], "failed");
+        assert!(!rotated.exists() && !idle.exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -3199,6 +3199,8 @@ def queued_jobs_sql(bots=None):
         "JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
         f"WHERE j.bot_id{'=?' if bots is None else ' IN (' + ','.join('?' * len(bots)) + ')'} "
         "AND j.state='queued' AND j.held=0 "
+        # A turn refused while its full Claude login was being refreshed waits for the new token (claude_login.gap).
+        f"AND NOT {claude_login.PARKED_SQL} "
         f"ORDER BY j.redirect DESC,CASE WHEN {H.in_person_name_sql()} THEN 0 ELSE 1 END,j.created_at,j.id"
     )
 
@@ -4546,6 +4548,8 @@ class Execution:
             f"WHERE j.state='queued' AND j.held=0 AND j.bot_id IN ({marks}) AND a.runner_id=? "
             f"AND {lifecycle.claim_message_sql()} "
             f"AND {unfenced_sql()} AND {scoped_sql()} "
+            # A turn refused while its full Claude login was being refreshed waits for the new token (claude_login.gap).
+            f"AND NOT {claude_login.PARKED_SQL} "
             + ("AND j.id=? " if job_id is not None else "")
             + ("AND " + H.in_person_name_sql() + " " if people_only else "")
             +
