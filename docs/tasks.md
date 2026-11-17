@@ -60,6 +60,9 @@ caller's rights; a task that can't change stays, and the board says how many and
   normal entry: its owner rule, stage rules, limit and wake apply (a by-hand stage wakes nobody).
 - The task keeps its label: D18450 stays D18450 on the Backlog board, and `D18450` still finds it. The prefix is the
   task's own, from the pipeline it was made in.
+- Numbers are one sequence for the whole team. A task gets the next one when it is made in a pipeline with a prefix
+  (General's is G). A pipeline that gets a prefix later numbers the tasks it already holds, open, done and closed,
+  oldest first, each with one history line ("Numbered when General got the prefix G"); a number never changes.
 - The old stage's open asks are withdrawn, a snooze ends, and what the old stage did on entering is undone as a back
   move undoes it. Sub-tasks stay in their own pipelines, linked as they were.
 - A Done or Closed task lands in the new pipeline's Done or Closed, never reopened.
@@ -520,7 +523,8 @@ tico task restore <id>
 `POST /api/v2/tasks/{id}/delete`, `GET /api/v2/deleted-tasks` and `POST /api/v2/tasks/{id}/restore` do the same.
 Deleting moves the task to the trash with its thread, links, labels and relations; it leaves every list and every
 bot's context at once, and keeps its number. A restore puts it back open on a new visit to the stage it was in (the
-first stage if that one is gone), or Done or Closed as it ended. Its old asks and wakes are not replayed.
+first stage if that one is gone), or Done or Closed as it ended. Its old asks and wakes are not replayed. A task
+that had no number gets the next one if its pipeline has a prefix.
 
 To delete many at once, such as a bulk import run twice, the owner runs the offline command on the server after a
 snapshot:
