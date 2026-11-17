@@ -150,11 +150,11 @@ def test_each_counted_kind_once_and_working_tree_is_ignored(repo, monkeypatch, t
     assert "verifier count: 6" in summary.read_text()
 
 
-@pytest.mark.parametrize("token", ["sha", "#4008", "https://github.com/ticoteam/tico/pull/4008"])
+@pytest.mark.parametrize("token", ["sha", "#4008"])
 def test_revert_ok_names_one_commit_and_counts_it(repo, monkeypatch, token):
     base = stale_tree(repo, monkeypatch)
     token = base[:12] if token == "sha" else token
-    commit(repo, monkeypatch, f"Revert intentionally\n\nRevert-Ok: {token}")
+    commit(repo, monkeypatch, f"Revert intentionally\n\nRevert-Ok: {token} restore the previous behavior")
     result = check(repo, base)
     assert kinds(result) == {"allowed_revert": 1}
     assert result["count"] == 1 and not hard(result)
@@ -162,7 +162,7 @@ def test_revert_ok_names_one_commit_and_counts_it(repo, monkeypatch, token):
 
 def test_wrong_revert_trailer_does_not_clear_a_finding(repo, monkeypatch):
     base = stale_tree(repo, monkeypatch)
-    commit(repo, monkeypatch, "Revert\n\nRevert-Ok: #4009")
+    commit(repo, monkeypatch, "Revert\n\nRevert-Ok: #4009 restore the previous behavior")
     assert kinds(check(repo, base)) == {"stale_revert": 1}
 
 
@@ -172,12 +172,25 @@ def test_revert_ok_pr_names_the_merge_of_a_blame_commit(repo, monkeypatch):
     tree = git(repo, "rev-parse", f"{base}^{{tree}}")
     # A normal merge names the PR; the branch commit that blame identifies has no PR number.
     branch = git(repo, "commit-tree", tree, "-p", original, "-m", "Close the claim item")
-    merge = git(repo, "commit-tree", tree, "-p", original, "-p", branch, "-m", "Merge pull request #4008 from acme/fix")
+    tip = git(repo, "commit-tree", tree, "-p", branch, "-m", "Finish the branch")
+    merge = git(repo, "commit-tree", tree, "-p", original, "-p", tip, "-m", "Merge pull request #4008 from acme/fix")
     git(repo, "update-ref", "refs/heads/main", merge)
-    commit(repo, monkeypatch, "Revert intentionally\n\nRevert-Ok: #4008")
-    result = check(repo, merge)
-    assert kinds(result) == {"allowed_revert": 1}
-    assert result["count"] == 1 and not hard(result)
+    git(repo, "tag", "v1.0.0", original)
+    git(repo, "tag", "v1.0.1", merge)
+    commit(repo, monkeypatch, "Restore the earlier tree")
+    for token in [merge[:7], branch[:12], tip, "#4008", original[:12]]:
+        head = git(
+            repo, "commit-tree", "HEAD^{tree}", "-p", merge, "-m", f"Revert\n\nRevert-Ok: {token} restore behavior"
+        )
+        result = check(repo, merge, head)
+        queue = freeze_guard.check_revert_only(str(repo), merge, head)
+        if token == original[:12]:
+            assert kinds(result) == {"stale_revert": 1}
+            assert [f["reverts"] for f in queue["findings"]] == [merge]
+        else:
+            assert kinds(result) == {"allowed_revert": 1}
+            assert result["count"] == 1 and not hard(result)
+            assert queue["findings"] == []
 
 
 def test_one_whole_hunk_of_a_larger_recent_commit_is_a_stale_revert(repo, monkeypatch):
@@ -269,7 +282,7 @@ def test_all_skip_and_suppression_spellings(repo, monkeypatch):
     assert kinds(check(repo, base)) == {"new_skip": len(skips), "new_suppression": len(suppressions)}
 
 
-def test_baseline_shrink_and_range_moves_are_free_but_per_rule_growth_counts(repo, monkeypatch):
+def test_baseline_edits_count_and_per_rule_growth_is_its_own_fact(repo, monkeypatch):
     before = {
         "baselines/ruff/backend/a.py.json": {"backend/a.py": {"F401": 3, "F821": 1}},
         "baselines/pyright/backend/b.py.json": {
@@ -295,7 +308,9 @@ def test_baseline_shrink_and_range_moves_are_free_but_per_rule_growth_counts(rep
     commit(repo, monkeypatch)
     result = check(repo, base)
     assert kinds(result) == {"raised_baseline": 1}
-    assert result["facts"][0]["path"] == "baselines/ruff/backend/a.py.json"
+    assert [(f["kind"], f["path"]) for f in result["facts"]] == [
+        ("raised_baseline", "baselines/ruff/backend/a.py.json")
+    ]
 
 
 def test_comments_spacing_old_lines_and_own_commits_are_not_stale_reverts(repo, monkeypatch):
@@ -334,7 +349,7 @@ def test_refactor_of_a_larger_block_is_not_a_stale_tree(repo, monkeypatch):
 
 def test_revert_ok_in_message_body_is_not_a_trailer(repo, monkeypatch):
     base = stale_tree(repo, monkeypatch)
-    commit(repo, monkeypatch, f"Revert\n\nRevert-Ok: {base[:12]}\n\nThis is body text, not a trailer.")
+    commit(repo, monkeypatch, f"Revert\n\nRevert-Ok: {base[:12]} restore behavior\n\nThis is body text, not a trailer.")
     assert kinds(check(repo, base)) == {"stale_revert": 1}
 
 
@@ -406,7 +421,7 @@ def test_queue_revert_only_is_offline_and_checks_only_merged_change_and_last_rel
     assert [(f["kind"], f["reverts"]) for f in result["findings"]] == [("NET REVERT", shipped)]
     # Permitting the named revert never needs a GitHub review lookup.
     write(repo, "backend/other.py", "value = 4\n")
-    allowed = commit(repo, monkeypatch, f"Intentional revert\n\nRevert-Ok: {shipped[:12]}")
+    allowed = commit(repo, monkeypatch, f"Intentional revert\n\nRevert-Ok: {shipped[:12]} restore behavior")
     result = freeze_guard.check_revert_only(str(repo), base, allowed)
     assert result["findings"] == []
     # The preceding release is outside the bounded queue window.
@@ -414,3 +429,146 @@ def test_queue_revert_only_is_offline_and_checks_only_merged_change_and_last_rel
     (repo / "backend/older.py").unlink()
     newest = commit(repo, monkeypatch)
     assert freeze_guard.check_revert_only(str(repo), allowed, newest)["findings"] == []
+
+
+def test_pr_4038_behind_main_reports_only_the_branch_changes(repo, monkeypatch):
+    write(repo, "backend/holds.py", "LIMIT = 1\n")
+    write(repo, "README.md", "Example\n")
+    fork = commit(repo, monkeypatch, days=30)
+    write(repo, "README.md", "Updated example\n")
+    head = commit(repo, monkeypatch, "Update the example")
+    write(repo, "README.md", "Example\n")
+    write(repo, "backend/holds.py", "LIMIT = 10\n")
+    write(repo, "backend/other.py", "ENABLED = True\n")
+    write(repo, "backend/migrations/20261117000000_new.py", "def up(conn):\n    return None\n")
+    git(repo, "add", "-A")
+    tree = git(repo, "write-tree")
+    base = git(repo, "commit-tree", tree, "-p", fork, "-m", "Main advances after the branch point")
+    result = check(repo, base, head)
+    assert result["base"] == fork
+    assert result["facts"] == []
+
+
+def test_migration_maintenance_and_restoring_shipped_bytes_are_allowed(repo, monkeypatch):
+    path = "backend/migrations/20261117000000_floor.py"
+    shipped = "def up(conn):\n    conn.execute('SELECT 1')\n"
+    write(repo, path, shipped)
+    write(repo, "backend/migrations/__init__.py", "LOADER = 1\n")
+    write(repo, "backend/migrations/ddl_allowlist.txt", "3\n")
+    write(repo, "backend/migrations/notes.txt", "Migration notes\n")
+    commit(repo, monkeypatch, days=30)
+    git(repo, "tag", "v0.6.14")
+    write(repo, path, shipped.replace("SELECT 1", "SELECT 0"))
+    commit(repo, monkeypatch, "Ship a different version", days=20)
+    git(repo, "tag", "v0.6.15")
+    write(repo, path, shipped.replace("SELECT 1", "SELECT 2"))
+    base = commit(repo, monkeypatch, "Edit an applied migration", days=2)
+    write(repo, path, shipped)
+    write(repo, "backend/migrations/__init__.py", "LOADER = 2\n")
+    write(repo, "backend/migrations/ddl_allowlist.txt", "2\n")
+    (repo / "backend/migrations/notes.txt").unlink()
+    commit(repo, monkeypatch, "Restore shipped bytes and maintain the loader")
+    assert check(repo, base)["facts"] == []
+    write(repo, path, shipped.replace("SELECT 1", "SELECT 3"))
+    commit(repo, monkeypatch, "Different bytes are still frozen")
+    assert kinds(check(repo, base)) == {"edited_migration": 1}
+
+
+def test_replacing_a_recent_addition_is_evolution_but_deleting_it_is_a_revert(repo, monkeypatch):
+    write(repo, "backend/config.py", "ENABLED = True\n")
+    commit(repo, monkeypatch, days=30)
+    write(repo, "backend/config.py", "ENABLED = True\nLIMIT = 10\n")
+    base = commit(repo, monkeypatch, days=2)
+    write(repo, "backend/config.py", "ENABLED = True\nLIMIT = 20\n")
+    commit(repo, monkeypatch)
+    assert check(repo, base)["facts"] == []
+    write(repo, "backend/config.py", "ENABLED = True\n")
+    commit(repo, monkeypatch)
+    assert kinds(check(repo, base)) == {"stale_revert": 1}
+
+
+def test_replacing_recent_lines_must_restore_the_preimage(repo, monkeypatch):
+    write(repo, "backend/config.py", "LIMIT = 1\n")
+    commit(repo, monkeypatch, days=30)
+    write(repo, "backend/config.py", "LIMIT = 10\n")
+    base = commit(repo, monkeypatch, days=2)
+    write(repo, "backend/config.py", "LIMIT = 20\n")
+    commit(repo, monkeypatch)
+    assert check(repo, base)["facts"] == []
+    write(repo, "backend/config.py", "")
+    commit(repo, monkeypatch)
+    assert check(repo, base)["facts"] == []
+    write(repo, "backend/config.py", "LIMIT = 1\n")
+    commit(repo, monkeypatch)
+    assert kinds(check(repo, base)) == {"stale_revert": 1}
+
+
+def test_revert_trailers_require_a_target_and_reason_and_allow_several(repo, monkeypatch):
+    base = stale_tree(repo, monkeypatch)
+    commit(repo, monkeypatch, "Restore the earlier tree")
+    invalid = [base[:12], f"{base[:6]} too short", "4008 bare number", "https://github.com/acme/tico/pull/4008 link"]
+    for token in invalid:
+        head = git(repo, "commit-tree", "HEAD^{tree}", "-p", base, "-m", f"Revert\n\nRevert-Ok: {token}")
+        assert kinds(check(repo, base, head)) == {"stale_revert": 1}
+    head = git(
+        repo,
+        "commit-tree",
+        "HEAD^{tree}",
+        "-p",
+        base,
+        "-m",
+        f"Revert\n\nRevert-Ok: #4009 unrelated\nRevert-Ok: {base[:7]} restore behavior",
+    )
+    assert kinds(check(repo, base, head)) == {"allowed_revert": 1}
+
+
+def test_verifier_scripts_and_configuration_all_count(repo, monkeypatch):
+    write(repo, "README.md", "Example\n")
+    base = commit(repo, monkeypatch, days=30)
+    paths = [
+        "scripts/gates/example.py",
+        "scripts/ci/example.py",
+        "scripts/check.sh",
+        "scripts/check_migration_order.py",
+        "scripts/lint.sh",
+        "scripts/lint_baseline.py",
+        "scripts/freeze_guard.py",
+        "scripts/example_guard_check.py",
+        "scripts/diff_facts.py",
+        "scripts/pr_checks.py",
+        "scripts/gates.sh",
+        ".github/workflows/example.yml",
+        "ruff.toml",
+        "pytest.ini",
+        "pyrightconfig.strict.json",
+        "biome.json",
+        "biome.jsonc",
+        "scripts/rules/example.yml",
+        "backend/tests/conftest.py",
+    ]
+    for path in paths:
+        write(repo, path, "changed = 1\n")
+    write(repo, "scripts/product.py", "changed = 1\n")
+    commit(repo, monkeypatch)
+    result = check(repo, base)
+    assert kinds(result) == {"verifier_edit": len(paths)}
+    assert {fact["path"] for fact in result["facts"]} == set(paths)
+
+
+def test_deleted_rust_async_and_parameterized_tests_count_once_per_function(repo, monkeypatch):
+    path = "runner-rs/src/client.rs"
+    attributes = [
+        "#[test]",
+        "#[tokio::test]",
+        '#[tokio::test(flavor = "multi_thread")]',
+        '#[tokio::test(\n    flavor = "multi_thread",\n)]',
+        "#[rstest]\n#[case(1)]\n#[case(2)]",
+        "#[test_case(1)]\n#[test_case(2)]",
+    ]
+    write(repo, path, "\n".join(f"{attr}\nasync fn test_{i}() {{}}" for i, attr in enumerate(attributes)))
+    base = commit(repo, monkeypatch, days=30)
+    write(repo, path, "fn production() {}\n")
+    commit(repo, monkeypatch)
+    result = check(repo, base)
+    assert kinds(result) == {"deleted_test": len(attributes)}
+    assert {fact["reason"] for fact in result["facts"]} == {f"removed test test_{i}" for i in range(len(attributes))}

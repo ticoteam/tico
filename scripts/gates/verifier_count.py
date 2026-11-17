@@ -14,7 +14,7 @@ import tomllib
 
 # Direct invocation has scripts/gates, rather than the repository, on sys.path.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from scripts import diff_facts, flake_quarantine, freeze_guard
+from scripts import check_migration_order, diff_facts, flake_quarantine, freeze_guard
 
 ROOT = Path(__file__).resolve().parents[2]
 SKIP = re.compile(
@@ -62,7 +62,10 @@ def test_definitions(path, source):
     else:
         pattern = None
         if path.endswith(".rs"):
-            pattern = r"#\[test\]\s*(?:#\[[^\n]*\]\s*)*(?:async\s+)?fn\s+(\w+)"
+            pattern = (
+                r"#\[\s*(?:\w+::)*\w*test(?:_case)?\b(?:\([^\]]*\))?\s*\]"
+                r"\s*(?:#\[[^\]]*\]\s*)*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+(\w+)"
+            )
         elif re.search(r"\.test\.[cm]?[jt]sx?$", path):
             pattern = r"\b(?:test|it)(?:\.(?:skip|only))?\s*\(\s*(['\"`][^\n]*?['\"`])"
         if pattern:
@@ -103,14 +106,22 @@ def verifier_edit(path, before, after):
     name = Path(path).name
     if path.startswith(("scripts/gates/", "scripts/rules/", ".github/workflows/", "scripts/ci/")):
         return True
-    if path in {"scripts/check.sh", "scripts/gates.sh"} or name in {
-        "pytest.ini",
-        ".pytest.ini",
-        "ruff.toml",
-        ".ruff.toml",
-        "pyrightconfig.json",
-        "conftest.py",
-    }:
+    if (
+        re.fullmatch(r"scripts/(?:check[^/]*|lint[^/]*|[^/]*guard[^/]*)\.(?:sh|py)", path)
+        or re.fullmatch(r"pyrightconfig[^/]*\.json", name)
+        or path in {"scripts/diff_facts.py", "scripts/pr_checks.py", "scripts/gates.sh"}
+        or name
+        in {
+            "pytest.ini",
+            ".pytest.ini",
+            "ruff.toml",
+            ".ruff.toml",
+            "pyrightconfig.json",
+            "conftest.py",
+            "biome.json",
+            "biome.jsonc",
+        }
+    ):
         return True
     if name == "pyproject.toml":
 
@@ -135,7 +146,13 @@ def normalized(change):
             for text, count in source.items():
                 if code_line(text):
                     target[re.sub(r"\s+", "", text)] += count
-    return {**change, "files": files, "meaningful": files}
+    hunks = {
+        path: [
+            tuple([re.sub(r"\s+", "", text) for text in side if code_line(text)] for side in pair) for pair in groups
+        ]
+        for path, groups in change["hunks"].items()
+    }
+    return {**change, "files": files, "meaningful": files, "hunks": hunks}
 
 
 def whole_hunk_reverted(change, log):
@@ -145,7 +162,7 @@ def whole_hunk_reverted(change, log):
     def reverted():
         patch = "\n".join(header + body)
         earlier = normalized(freeze_guard.parse_log(f"\0hunk\0\0hunk\0\0{patch}")[0])
-        gone, total, back, removed = freeze_guard.undone(change, earlier)
+        gone, total, back, removed = freeze_guard.undone(freeze_guard.preimage_change(change, earlier), earlier)
         size = sum(sum(side.values()) for pair in change["files"].values() for side in pair)
         return (
             total + removed > 0
@@ -160,6 +177,8 @@ def whole_hunk_reverted(change, log):
             body = []
             if line.startswith("diff --git "):
                 header = [line]
+            else:
+                body = [line]
         elif line.startswith(("--- ", "+++ ")):
             header.append(line)
         elif line[:1] in {"+", "-"}:
@@ -179,7 +198,11 @@ def stale_reverts(facts, repo, sources, now=None):
         return []
     candidates = {}
     for item in facts["files"]:
-        if freeze_guard.TEST_PATH.search(item["path"]) or item["path"].startswith("e2e/"):
+        if (
+            freeze_guard.TEST_PATH.search(item["path"])
+            or item["path"].startswith("e2e/")
+            or check_migration_order.migrations([item["path"]])
+        ):
             continue
         before, after = (text.splitlines() for text in sources[item["path"]])
         for hunk in item["hunks"]:
@@ -229,7 +252,7 @@ def stale_reverts(facts, repo, sources, now=None):
             if path not in clean["files"]:
                 continue
             pair = change["files"].get(path, (Counter(), Counter()))
-            local = {"files": {path: pair}, "meaningful": {path: pair}}
+            local = {"files": {path: pair}, "meaningful": {path: pair}, "hunks": {path: change["hunks"].get(path, [])}}
             previous = {"files": {path: clean["files"][path]}, "meaningful": {path: clean["files"][path]}}
             gone, _, back, removed = freeze_guard.undone(local, previous)
             size = sum(sum(side.values()) for side in pair)
@@ -277,7 +300,8 @@ def stale_reverts(facts, repo, sources, now=None):
 
 
 def check(base, head="HEAD", repo=ROOT, now=None):
-    facts = diff_facts.diff_facts(base, head, repo)
+    ancestor = diff_facts.git(repo, "merge-base", base, head).strip()
+    facts = diff_facts.diff_facts(ancestor, head, repo)
     found = []
     sources = {}
 
@@ -290,7 +314,16 @@ def check(base, head="HEAD", repo=ROOT, now=None):
         after = "" if item["status"] == "deleted" else diff_facts.git(repo, "show", f"{facts['head']}:{path}")
         sources[path] = before, after
         line = next(iter(item["added"] or item["deleted"]), 1)
-        if path.startswith("backend/migrations/") and item["status"] != "added":
+        if (
+            check_migration_order.migrations([path])
+            and item["status"] != "added"
+            and (
+                item["status"] == "deleted"
+                or not check_migration_order._as_released(
+                    lambda *args: diff_facts.git(repo, *args), facts["head"], path, before=facts["base"]
+                )
+            )
+        ):
             add(
                 "edited_migration",
                 path,
@@ -310,6 +343,7 @@ def check(base, head="HEAD", repo=ROOT, now=None):
                     remaining[name] -= 1
                 else:
                     add("deleted_test", path, number, f"removed test {name}")
+        raised = False
         if not item["binary"]:
             lines = after.splitlines()
             for number in item["added"]:
@@ -325,7 +359,10 @@ def check(base, head="HEAD", repo=ROOT, now=None):
             if path.startswith(("baselines/", "ui/baselines/")) or path in BASELINES:
                 if allowances(after, path) - allowances(before, path):
                     add("raised_baseline", path, line, "allowed verification counts or entries grew")
-        if verifier_edit(path, before, after):
+                    raised = True
+        # A baseline only counts when it allows more; shrinking or reshaping one is the ratchet doing its job.
+        baseline = path.startswith(("baselines/", "ui/baselines/")) or path in BASELINES
+        if not raised and not baseline and verifier_edit(path, before, after):
             add("verifier_edit", path, line, "changed verification code or configuration")
     found.extend(stale_reverts(facts, repo, sources, now))
     return {"base": facts["base"], "head": facts["head"], "facts": found, "count": sum(not f["hard"] for f in found)}
