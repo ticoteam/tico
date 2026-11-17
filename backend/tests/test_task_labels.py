@@ -145,6 +145,9 @@ def _a_bot_still_changes_no_lane_or_number_and_a_mover_is_unchanged(api):
         assert r.status_code == 403 and r.json()["error"]["code"] == "identity", r.text
     assert get(api, "tasks/" + item["id"])["task"]["labels"] == []
     other = post(api, "tasks", {"owner": "cmo", "title": "Draft the newsletter", "body": "x"})
+    with api.app.state.store.transaction() as c:  # a task with no number yet: a mover may give it one
+        c.execute("UPDATE tasks SET number=NULL WHERE id=?", (other["id"],))
+    other = get(api, "tasks/" + other["id"])["task"]
     moved = post(
         api,
         "tasks/" + other["id"],

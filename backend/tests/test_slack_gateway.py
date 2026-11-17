@@ -676,7 +676,7 @@ def _a_task_reply_with_a_visual_links_to_that_message_in_the_task(gateway, hub):
     assert post["text"] == (
         "Here is the quarter.\n\n"
         f"<https://tico.example.com/?task={task}&amp;message={reply}|2 visuals - view in Tico>"
-        f"\n\n(sent from Legal on <https://tico.example.com/#/task/{task}|Q3 numbers>)"
+        f"\n\n(sent from Legal on <https://tico.example.com/#/task/{task}|#1 Q3 numbers>)"
     )
 
 
@@ -708,7 +708,7 @@ def test_a_bot_post_is_shaped_from_its_message_its_task_and_its_visuals(gateway,
     assert shaped["text"] == (
         "Here is the quarter.\n\n"
         f"<{base}/?task={task}&amp;message={reply}|1 visual - view in Tico>"
-        f"\n\n(sent from Legal on <{base}/#/task/{task}|Q4 numbers>)"
+        f"\n\n(sent from Legal on <{base}/#/task/{task}|#1 Q4 numbers>)"
     )
 
 

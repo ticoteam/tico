@@ -129,3 +129,10 @@ def test_the_migration_leaves_a_general_that_has_a_prefix():
     conn.execute("UPDATE pipelines SET prefix='T' WHERE id='general'")
     migration.up(conn)
     assert conn.execute("SELECT COUNT(*) FROM tasks WHERE number IS NULL").fetchone()[0] == 2
+
+
+def test_a_pipeline_without_a_prefix_numbers_nothing(c):
+    (task_id,) = _unnumbered(c, "Stays plain")
+    assert H.number_pipeline(c, ANA, "general") == 0
+    H.number_task(c, ANA, task_id, "general")
+    assert _numbers(c, [task_id]) == [None]
