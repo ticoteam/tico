@@ -198,7 +198,9 @@ const pages = async (page: Page) => {
       assert.equal(await menu8.locator('.tl-mi', {hasText: /^Close$/}).count(), 0, 'Archive is in the head, not here');
       await page.keyboard.press('Escape');
 
-      // 8. No links, runs or meetings: none of those sections show until ⋯ › Activity and links.
+      // 8. No links, runs or meetings: none of those sections show until ⋯ › Activity and links. They live in Details,
+      // which the Files tab above has covered.
+      await win.getByRole('button', {name: /^Details/}).click();
       for (const sel of ['.task-links', '[data-task-runs]', '[data-task-meetings]'])
         assert.equal(await win.locator(sel).isVisible(), false, `${sel} is hidden`);
       // ...and nor does the Activity and links heading: never a heading with nothing under it.
