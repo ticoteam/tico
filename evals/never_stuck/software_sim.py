@@ -79,10 +79,10 @@ class SoftwareSim:
         stage = r.stage_of(task)
         lines = " / ".join(r.lines(task))
         if bot == PM and stage == "Spec":
-            if "Jev is checking" not in lines and "person" not in {s for s, _ in r.waits(task)}:
+            if "Decision model is checking" not in lines and "person" not in {s for s, _ in r.waits(task)}:
                 self._page(task, PM, "Spec")
         elif bot == PM and stage == "Validate":
-            if "Jev is checking" in lines:
+            if "Decision model is checking" in lines:
                 return
             older = self.older_first and (task, "Validate") not in self.pages
             self._page(task, PM, "Validate", verdict=NOT_MET if older else MET)
@@ -105,10 +105,10 @@ class SoftwareSim:
         elif bot == BUILDER and stage == "QA":
             for n in self._red(task):
                 self._push(n)
-            if "Jev is checking" not in lines:
+            if "Decision model is checking" not in lines:
                 self._page(task, BUILDER, "QA")
         elif bot in (REVIEWER_1, REVIEWER_2) and stage in ("Review 1", "Review 2"):
-            if "Jev is checking" not in lines:
+            if "Decision model is checking" not in lines:
                 self._page(task, bot, stage)
         elif bot in (EM, PPM) and "Decide if it meets the check" in lines:
             # Jev was unsure twice on a bot's stage: the pipeline's manager decides, with why (two sign-offs rule).
