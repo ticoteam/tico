@@ -220,10 +220,12 @@ def owned(c, who):
     see their metadata and share them with bots they manage, never their value unless it is also granted to them.
     `created_by` alone is not enough: it names whoever added any credential, an administrator's company credentials too,
     and a person demoted since must not keep those. A value someone else has since saved makes it no longer theirs, and
-    the team rule "Members store credentials for their bots" off ends it for everyone."""
+    the team rule "Members store credentials for their bots" off ends it for everyone. A bot acting as itself owns the
+    keys it stored for itself (backend/tool_access.py `_itself`), the same way and whatever the team rule."""
     from . import team_rules
 
-    if who.role not in ('human', 'owner') or not team_rules.load(c)['members_store_credentials']:
+    own_bot = who.role == 'bot' and not getattr(who, 'via', '')
+    if not own_bot and (who.role not in ('human', 'owner') or not team_rules.load(c)['members_store_credentials']):
         return set()
     return {
         r[0]
@@ -599,8 +601,8 @@ class Vault:
 
     def write(self, c, who, body, cid=None, for_bot=None):
         """`for_bot`: storing it for that bot (backend/credential_cards.py `store_for_bot`), which a member who manages the bot
-        may do too, for a new credential or one they stored themselves (backend/tool_access.py STORE); everything else is
-        an administrator's."""
+        may do too, and the bot itself for its own key, for a new credential or one they stored themselves
+        (backend/tool_access.py STORE); everything else is an administrator's."""
         member = bool(
             for_bot
             and not TA.admin(c, who, self.admins)

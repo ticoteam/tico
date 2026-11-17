@@ -103,6 +103,17 @@ def _a_bot(api):
     return kind_of(api.get("me")) in BOTS
 
 
+def _own_key(api, args):
+    """The caller's bot id when it stores a key for itself: a bot (not BotOps, which stores for the person who asked it)
+    naming no other bot in `for_bot`. None otherwise."""
+    me = api.get("me")
+    if kind_of(me) not in ("bot", "agent"):
+        return None
+    mine = str(me.get("actor") or "").removeprefix("bot:")
+    named = str(args.get("for_bot") or "").removeprefix("bot:")
+    return mine if mine and named in ("", mine, str(me.get("slug") or "")) else None
+
+
 # ----------------------------------------------------------------------------- API and MCP tools
 @tool(
     "tico_tool_detail",
@@ -450,9 +461,11 @@ def tool_website_delete(api, args):
 @tool(
     "tico_credential_add",
     "Store a key you already hold (one you made through a vendor's API) without it entering your conversation: name "
-    "the variable (from_env) or file (from_file) on this computer that holds it. With `tool`, it becomes that tool's "
-    "key at `level` (with `for_bot`, that bot gets the level); with `for_bot` alone, it is granted to that bot; else "
-    "it is stored for its vendor's tool. A person's own key comes through tico_credential_request instead.",
+    "the variable (from_env) or file (from_file) on this computer that holds it. A bot stores it as its own key: "
+    "given to it alone and back in its next run under `env` (default: the from_env name), on a tool of its own under "
+    "`tool`'s vendor. A person (or BotOps for one): with `tool`, it becomes that tool's key at `level` (with `for_bot`, "
+    "that bot gets the level); with `for_bot` alone, it is granted to that bot; else it is stored for its vendor's "
+    "tool. A person's own key comes through tico_credential_request instead.",
     {
         "name": _s("What to call it, such as Linear (Ops)"),
         "env": _s("The variable runs read it under, such as LINEAR_API_KEY"),
@@ -469,11 +482,31 @@ def tool_website_delete(api, args):
     local=True,
 )
 def credential_add(api, args):
+    if any(args.get(k) for k in ("value", "secret")):
+        raise ValueError(
+            "A value never goes in an argument: name the variable (from_env) or file (from_file) holding it"
+        )
     value = secret_from(args)
     if value is None:
         raise ValueError("Say where the value is: from_env (a variable's name) or from_file (a file), never the value")
     if (args.get("level") or args.get("expires_on")) and not args.get("tool"):
         raise ValueError("level and expires_on belong to a tool's key: name the tool")
+    me = _own_key(api, args)
+    if me:
+        env = args.get("env") or args.get("from_env")
+        if not env:
+            raise ValueError("Say which variable your runs read it under: env")
+        if args.get("expires_on"):
+            raise ValueError("expires_on is set on a tool's key in Tools; your own key has none")
+        body = {
+            "env": env,
+            "for_bot": me,
+            "value": value,
+            **_given(args, ("name", "kind", "username")),
+            **({"tool": _api_tool(args, "tool")} if args.get("tool") else {}),
+            **({"level": args["level"]} if args.get("level") else {}),
+        }
+        return _hide(api.post("credential-set", body, key=_key(args)))
     person = _as_person(api)
     if args.get("tool"):
         tool_id, level = _api_tool(args, "tool"), args.get("level") or "read_write"

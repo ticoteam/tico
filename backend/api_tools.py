@@ -1463,6 +1463,8 @@ def ensure_tool(c, who, credential_id, from_computer=False, value=None):
         return None
     if row["source"] == "tools-chat":
         return None  # a key dropped in the Tools chat goes to the tool the person grants it to (backend/key_grants.py)
+    if row["member_stored"] and str(row["created_by"] or "").startswith("bot:"):
+        return None  # a bot's own key goes on a tool of its own (`own_tool`), never on a tool others use
     on_computers = c.execute(
         "SELECT 1 FROM computer_keys WHERE credential_id=? UNION SELECT 1 FROM credential_grants WHERE credential_id=?"
         " AND (subject='computers' OR subject LIKE 'computer:%')",
@@ -1510,6 +1512,43 @@ def ensure_tool(c, who, credential_id, from_computer=False, value=None):
         )
     c.execute("UPDATE credentials SET tool_id=?, access_level='read_write' WHERE id=?", (tid, credential_id))
     H.event(c, who.actor, "tool.key_added", tid, {"credential": credential_id, "access_level": "read_write"})
+    return tid
+
+
+def own_tool(c, who, credential_id, near="", level="read_write"):
+    """Put a key a bot stored for itself (backend/credential_cards.py `store_for_bot`) on a new tool of its own, so it
+    shows on Tools like any key and never changes a tool others use: under the vendor of the tool `near` names (one
+    everybody may see) or else of its own variable and name, its keys to computers (the bot gets back the value it
+    already held), and "Everyone can read" off, so no other bot reads with it until an administrator gives it to them.
+    The tool id."""
+    row = c.execute("SELECT * FROM credentials WHERE id=?", (credential_id,)).fetchone()
+    if not row or row["tool_id"]:
+        return row["tool_id"] if row else None
+    beside = (
+        c.execute(
+            "SELECT * FROM tools WHERE id=? AND audience IS NULL AND COALESCE(kind,'api')='api'", (str(near),)
+        ).fetchone()
+        if near
+        else None
+    )
+    service = (beside["service"] if beside is not None else "") or TS.match(env=row["env"], name=row["name"]) or ""
+    bot = H.bot(c, H.actor_id(who.actor)) or {}
+    name = (
+        f"{beside['name']} ({bot.get('display_name') or bot.get('slug') or H.actor_id(who.actor)})"
+        if beside
+        else row["name"]
+    )
+    now = H.now()
+    tid = TS.insert_tool(c, service, name, "computer", who.actor, now, tid=_unique_id(c, TS.slug(name)), first=False)
+    if beside is not None:
+        c.execute(
+            "UPDATE tools SET base_url=?, auth_scheme=?, check_path=? WHERE id=?",
+            (beside["base_url"], beside["auth_scheme"], beside["check_path"], tid),
+        )
+    c.execute("UPDATE tools SET everyone_reads=0 WHERE id=?", (tid,))
+    c.execute("UPDATE credentials SET tool_id=?, access_level=? WHERE id=?", (tid, level, credential_id))
+    H.event(c, who.actor, "tool.created", tid, {"service": service, "delivery": "computer", "own": True})
+    H.event(c, who.actor, "tool.key_added", tid, {"credential": credential_id, "access_level": level})
     return tid
 
 

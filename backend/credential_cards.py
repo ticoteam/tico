@@ -70,6 +70,9 @@ class CredentialSet(Contract):
     username: str = Field(default="", max_length=250)
     redact: bool = True
     on_behalf_of: ID | None = None
+    # A bot's own key (`for_bot` itself, no `on_behalf_of`): the tool whose vendor it goes under, and its level.
+    tool: ID | None = None
+    level: Literal["read", "read_write"] = "read_write"
 
 
 class CredentialImport(Contract):
@@ -147,8 +150,10 @@ def admin_names(c, vault):
     return _admin_names(c, vault.admins)
 
 
-def store_for_bot(c, vault, who, env, bot, value, name="", kind="api_key", username=""):
-    """The credential for `env` on `bot`, created or replaced, and granted to that bot alone. `who` is the person."""
+def store_for_bot(c, vault, who, env, bot, value, name="", kind="api_key", username="", tool=None, level="read_write"):
+    """The credential for `env` on `bot`, created or replaced, and granted to that bot alone. `who` is the person, or
+    the bot itself for its own key (backend/tool_access.py `_itself`): that one goes on a tool of its own under the
+    vendor of `tool` (backend/api_tools.py `own_tool`) at `level`."""
     validate_identity(c, who)
     row = H.bot(c, bot)
     from . import tool_access as TA
@@ -199,6 +204,10 @@ def store_for_bot(c, vault, who, env, bot, value, name="", kind="api_key", usern
                 "UPDATE credential_grants SET revoked_at=?,revoked_by=? WHERE credential_id=? AND subject=? AND revoked_at IS NULL",
                 (H.now(), who.actor, r["id"], subject),
             )
+    if who.role == "bot":
+        from .api_tools import own_tool
+
+        own_tool(c, who, saved["id"], tool or "", level)
     H.event(c, who.actor, "credential.set_for_bot", saved["id"], {"env": env, "bot": bot, "replaced": bool(existing)})
     # A replaced value keeps its grant, so the grant's own hook did not run: the waiting tasks go on here.
     from . import reconnects
@@ -585,12 +594,18 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
         caller = request.state.identity
         with store.transaction() as c:
             validate_identity(c, caller)
-            person = acting(c, caller, body.on_behalf_of)
             bot = (H.resolve_bot(c, body.for_bot) or {}).get("id", body.for_bot)
-            manager(c, person, bot)
+            # A bot storing a value it already holds for itself, as itself: its own key (backend/tool_access.py
+            # `_itself` decides); for anyone else a bot acts only with a person's rights.
+            own = not body.on_behalf_of and caller.role == "bot" and not caller.via and caller.actor == "bot:" + bot
+            person = caller if own else acting(c, caller, body.on_behalf_of)
+            if not own:
+                manager(c, person, bot)
             value = check_format("", body.value.get_secret_value())
-            stored = store_for_bot(c, vault, person, body.env, bot, value, body.name, body.kind, body.username)
-            if (body.on_behalf_of and caller.role == "bot") or (caller.via == "botops" and caller.attempt_id):
+            stored = store_for_bot(
+                c, vault, person, body.env, bot, value, body.name, body.kind, body.username, body.tool, body.level
+            )
+            if own or (body.on_behalf_of and caller.role == "bot") or (caller.via == "botops" and caller.attempt_id):
                 turn = turn_of(c, caller)
                 stored["redacted"] = (
                     redact_value(

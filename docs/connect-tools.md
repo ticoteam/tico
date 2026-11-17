@@ -356,7 +356,7 @@ write route has no command, or a command calls another route.
 | Website account: add, change, delete | `POST`, `PATCH`, `DELETE website-tools/{id}/accounts` | `tico credential login add`, `edit`, `delete` | `tico_credential_login_*` |
 | Share a website account | `PUT website-tools/{id}/accounts/{a}/access/{subject}` | `tico credential login share` | `tico_credential_login_share` |
 | Keys and their grants | `GET credentials`, `POST credentials/{id}/grants`, `…/revoke`, `DELETE credentials/{id}` | `tico credential list`, `grant`, `revoke`, `delete` | `tico_credential_*` |
-| Store a key a caller holds | `POST credentials`, `POST credential-set` (`--for-bot`) | `tico credential add` | `tico_credential_add` |
+| Store a key a caller holds (a bot: as its own key) | `POST credentials`, `POST credential-set` (`--for-bot`) | `tico credential add` | `tico_credential_add` |
 | Change a key on no tool | `POST credentials/{id}` | `tico credential update` | `tico_credential_update` |
 | A person's key: open a card, withdraw it | `POST credential-requests`, `…/{id}/cancel` | `tico credential request`, `cancel` | `tico_credential_request`, `tico_credential_cancel` |
 | A value a person pasted in chat | `POST credential-set` | `tico credential set` | `tico_credential_set` |

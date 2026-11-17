@@ -106,15 +106,143 @@ def test_a_bot_without_the_right_gets_the_routes_refusal_naming_who_can_and_no_v
     tid = tool(api)["id"]
     _, attempt = turn(api)  # ops is an ordinary bot here: not BotOps, not the Tools Owner
     monkeypatch.setenv("NEW_CLOSE_KEY", SECRET)
-    for args in (
-        {"name": "Close", "from_env": "NEW_CLOSE_KEY", "tool": tid},
-        {"name": "Close", "env": "CLOSE_API_KEY", "from_env": "NEW_CLOSE_KEY", "for_bot": "cpo"},
-    ):
-        with pytest.raises(APIError) as refused:
-            run(api, attempt["token"], "tico_credential_add", args)
-        assert refused.value.status == 403 and SECRET not in str(refused.value)
-        assert "BotOps" in str(refused.value) or "Ask" in str(refused.value), str(refused.value)
+    # Storing a key for another bot needs a person's rights, which an ordinary bot does not have.
+    args = {"name": "Close", "env": "CLOSE_API_KEY", "from_env": "NEW_CLOSE_KEY", "for_bot": "cpo"}
+    with pytest.raises(APIError) as refused:
+        run(api, attempt["token"], "tico_credential_add", args)
+    assert refused.value.status == 403 and SECRET not in str(refused.value)
+    assert "BotOps" in str(refused.value) or "Ask" in str(refused.value), str(refused.value)
     assert get(api, f"api-tools/{tid}")["keys"] == [] and SECRET not in everything(api)
+
+
+# ---- a bot's own key
+
+
+def runtime(api, token):
+    """{variable: value} a run with this attempt token is given (credential-runtime)."""
+    return {v["env"]: v.get("value") for v in get(api, "credential-runtime", token)["credentials"]}
+
+
+def next_run(api, machine, attempt, bot="ops"):
+    """Finish `attempt` and claim the bot's next run on a new task."""
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "t"}, machine["token"])
+    post(
+        api,
+        f"attempts/{attempt['id']}/complete",
+        {"outcome": "completed", "text": "Done", "last_seq": 0},
+        machine["token"],
+    )
+    post(api, "tasks", {"owner": bot, "title": "Use the Close key", "body": "Call Close."})
+    return claim(api, machine)
+
+
+def credential(api, env):
+    with api.app.state.store.read() as c:
+        return [dict(r) for r in c.execute("SELECT * FROM credentials WHERE env=? ORDER BY created_at", (env,))]
+
+
+def grants(api, cid):
+    with api.app.state.store.read() as c:
+        return {
+            r[0]
+            for r in c.execute(
+                "SELECT subject FROM credential_grants WHERE credential_id=? AND revoked_at IS NULL", (cid,)
+            )
+        }
+
+
+def test_a_bot_stores_a_key_it_holds_as_its_own_under_the_vendor_and_its_next_run_gets_it(api, monkeypatch, caplog):
+    vault(api)
+    company = tool(api)["id"]  # Close CRM, with the company's own key that nobody gave ops
+    post(api, f"api-tools/{company}/keys", {"name": "Close company", "value": "close-company-synthetic-0000aa"})
+    machine, attempt = turn(api)
+    monkeypatch.setenv("CLOSE_API_KEY", SECRET)
+    args = {"name": "Close (ops)", "from_env": "CLOSE_API_KEY", "tool": "api:" + company}
+    with caplog.at_level(logging.DEBUG):
+        out = run(api, attempt["token"], "tico_credential_add", args)
+    assert out["bot"] == "ops" and out["granted"] is True and out["replaced"] is False
+    assert SECRET not in json.dumps(out) and SECRET not in caplog.text
+    [own] = [r for r in credential(api, "CLOSE_API_KEY") if r["created_by"] == "bot:ops"]
+    assert own["member_stored"] == 1 and own["updated_by"] == "bot:ops" and grants(api, own["id"]) == {"bot:ops"}
+    # On a tool of its own, under the company tool's vendor; the company tool and its key are untouched.
+    mine = get(api, f"api-tools/{own['tool_id']}")
+    assert (
+        own["tool_id"] != company and mine["tool"]["vendor"] == get(api, f"api-tools/{company}")["tool"]["vendor"] != ""
+    )
+    assert [k["name"] for k in mine["keys"]] == ["Close (ops)"] and mine["everyone_reads"]["on"] is False
+    assert {(a["subject"], a["level"]) for a in mine["access"]} == {("bot:ops", "read_write")}
+    assert [k["name"] for k in get(api, f"api-tools/{company}")["keys"]] == ["Close company"]
+    # Audited as the bot's, with no value in any event.
+    with api.app.state.store.read() as c:
+        kinds = {r[0] for r in c.execute("SELECT action FROM events WHERE actor='bot:ops'")}
+    assert {"credential.created", "credential.granted", "credential.set_for_bot", "tool.key_added"} <= kinds
+    assert SECRET not in everything(api)
+    # Its next run gets the value back; another bot's run does not, nor does default read hand it out.
+    later = next_run(api, machine, attempt)
+    assert runtime(api, later["token"])["CLOSE_API_KEY"] == SECRET
+    _, other = turn(api, "cpo")  # cpo may read Close through the proxy with the company's key, never with ops's
+    assert runtime(api, other["token"]).get("CLOSE_API_KEY") != SECRET
+
+
+def test_a_bot_replaces_only_its_own_key(api, monkeypatch):
+    vault(api)
+    _, attempt = turn(api)
+    monkeypatch.setenv("CLOSE_API_KEY", SECRET)
+    first = run(api, attempt["token"], "tico_credential_add", {"name": "Close (ops)", "from_env": "CLOSE_API_KEY"})
+    monkeypatch.setenv("CLOSE_API_KEY", SECRET + "-rotated")
+    again = run(api, attempt["token"], "tico_credential_add", {"name": "Close (ops)", "from_env": "CLOSE_API_KEY"})
+    assert again["replaced"] is True and again["id"] == first["id"]
+    assert runtime(api, attempt["token"])["CLOSE_API_KEY"] == SECRET + "-rotated"
+
+
+def test_a_bot_never_overwrites_anyone_elses_key_nor_gives_its_own_away(api, monkeypatch):
+    vault(api)
+    machine, attempt = turn(api)
+    token = attempt["token"]
+    # Ana stored CLOSE_API_KEY for ops: it is hers, not ops's.
+    theirs = post(
+        api, "credential-set", {"env": "CLOSE_API_KEY", "for_bot": "ops", "value": "close-ana-synthetic-1111bb"}
+    )
+    before = credential(api, "CLOSE_API_KEY")
+    monkeypatch.setenv("NEW_CLOSE_KEY", SECRET)
+    with pytest.raises(APIError) as refused:
+        run(api, token, "tico_credential_add", {"name": "Close", "env": "CLOSE_API_KEY", "from_env": "NEW_CLOSE_KEY"})
+    assert refused.value.status == 409 and "one value per variable" in str(refused.value)
+    assert credential(api, "CLOSE_API_KEY") == before  # nothing stored, Ana's untouched
+    # Nor straight at the vault or at a tool's key.
+    with pytest.raises(APIError) as refused:
+        run(api, token, "tico_credential_update", {"credential": theirs["id"], "from_env": "NEW_CLOSE_KEY"})
+    assert refused.value.status in (403, 404)
+    assert credential(api, "CLOSE_API_KEY") == before
+    # Its own key stays its own: never given to another bot or a person, by grant or by level.
+    own = run(
+        api,
+        token,
+        "tico_credential_add",
+        {"name": "Linear (ops)", "from_env": "NEW_CLOSE_KEY", "env": "LINEAR_API_KEY"},
+    )
+    for subject in ("bot:cpo", "human:ben"):
+        r = api.post(f"/api/v2/credentials/{own['id']}/grants", json={"subject": subject}, headers=headers(token))
+        assert r.status_code == 403, r.text
+    tid = credential(api, "LINEAR_API_KEY")[0]["tool_id"]
+    r = api.put(f"/api/v2/api-tools/{tid}/access/bot:cpo", json={"level": "read"}, headers=headers(token))
+    assert r.status_code == 403, r.text
+    assert grants(api, own["id"]) == {"bot:ops"} and SECRET not in everything(api)
+
+
+def test_a_value_is_never_an_argument_and_the_tools_owner_keeps_no_key_of_its_own(api, monkeypatch):
+    vault(api)
+    _, attempt = turn(api)
+    for literal in ({"value": SECRET}, {"secret": SECRET}):
+        with pytest.raises(ValueError, match="never goes in an argument") as bad:
+            run(api, attempt["token"], "tico_credential_add", {"name": "Close", "env": "CLOSE_API_KEY", **literal})
+        assert SECRET not in str(bad.value)
+    assert credential(api, "CLOSE_API_KEY") == []
+    put(api, "page-owners/tools", {"bot": "ops"})
+    monkeypatch.setenv("CLOSE_API_KEY", SECRET)
+    with pytest.raises(APIError) as refused:
+        run(api, attempt["token"], "tico_credential_add", {"name": "Close", "from_env": "CLOSE_API_KEY"})
+    assert refused.value.status == 403 and credential(api, "CLOSE_API_KEY") == []
 
 
 def test_a_value_is_read_on_the_computer_that_runs_the_command_and_errors_never_quote_it(monkeypatch, tmp_path):
