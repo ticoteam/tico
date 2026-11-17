@@ -1658,6 +1658,8 @@ def renumber(c, place):
 def drop_pin(ctx, pin):
     ctx.c.execute("DELETE FROM pins WHERE id=?", (pin["id"],))
     if pin["item"].startswith("page:"):
+        if pin["place"].startswith("task:"):
+            ctx.c.execute("DELETE FROM page_links WHERE id=?", ("pin:" + pin["id"],))
         if not pin["place"].startswith("person:"):
             file_activity(ctx.c, pin["item"][5:], ctx.who.actor, "unpinned", pin["place"])
     elif pin["item"].startswith("card:"):

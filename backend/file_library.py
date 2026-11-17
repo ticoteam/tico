@@ -457,9 +457,6 @@ class Library:
         if task:
             where.append("f.task_id=?")
             params.append(task)
-        link_where, link_args = page_links.filters(linked, role, writer)
-        where.extend(link_where)
-        params.extend(link_args)
         if since:
             where.append("f.last_activity_at>=?")
             params.append(since)
@@ -487,18 +484,19 @@ class Library:
                 spent[0] += 900 + len(r["title"] or "") * 2
                 return spent[0] <= LIST_BYTES
 
-            rows, nxt = scan(
-                c,
-                "SELECT f.*,p.cadence AS page_cadence,p.archived AS page_archived FROM bot_files f "
-                "LEFT JOIN pages p ON p.file_id=f.id",
-                where,
-                params,
-                limit,
-                cursor,
-                lambda r: self.files.visible(c, who, r, cache),
-                budget,
-                cursor_key=visuals.key_for(self.app, self.store.settings),
-            )
+            with page_links.visible_filters(c, self.auth, who, linked, role, writer) as (sql, args):
+                rows, nxt = scan(
+                    c,
+                    "SELECT f.*,p.cadence AS page_cadence,p.archived AS page_archived FROM bot_files f "
+                    "LEFT JOIN pages p ON p.file_id=f.id",
+                    [*where, *sql],
+                    [*params, *args],
+                    limit,
+                    cursor,
+                    lambda r: self.files.visible(c, who, r, cache),
+                    budget,
+                    cursor_key=visuals.key_for(self.app, self.store.settings),
+                )
             page_links.prime(c, rows)
             known = names.lookup(c, {"bot:" + r["bot_id"] for r in rows})
             files = [self.row_view(c, who, r, caches, known) for r in rows]
@@ -513,15 +511,12 @@ class Library:
         if who.role not in ("owner", "human", "bot"):
             raise Problem("forbidden", "People and bots search files", 403)
         kind_sql, kind_args = kind_filter(kind)
-        link_where, link_args = page_links.filters(linked, role, writer)
-        if link_where:
-            kind_sql = "(" + kind_sql + ") AND " + " AND ".join(link_where)
-            kind_args = [*kind_args, *link_args]
         tokens = manual.query_words(q)
         if not tokens:
             raise Problem("query", "Search needs at least one word", 422)
         with self.store.read_transaction() as c:
-            candidates = self._candidates(c, tokens, kind_sql, kind_args)
+            with page_links.visible_filters(c, self.auth, who, linked, role, writer) as (sql, args):
+                candidates = self._candidates(c, tokens, " AND ".join([f"({kind_sql})", *sql]), [*kind_args, *args])
             from .files import prime_visible
 
             cache, out = {}, []

@@ -271,3 +271,64 @@ def test_markdown_tab_names():
     assert markdown_name("2026-11-17-how-admin-tico-works-today.md") == "How admin tico works today"
     assert markdown_name("How admin-tico works today.md") == "How admin-tico works today"
     assert markdown_name("notes.MARKDOWN") == "Notes"
+
+
+def test_linked_document_files_and_context_fill_their_limits_with_readable_pages(api):
+    from backend import task_context, task_documents
+    from backend.auth import Identity
+
+    tid = task(api, "human:ben", "List linked planning documents")
+    source = task(api, "human:ben", "Write planning documents")
+    original = write(api, source, "Spec", SPEC)["file_id"]
+    store = api.app.state.store
+    visible = [f"file-{i:024x}" for i in range(205)]
+    hidden = [f"file-{i:024x}" for i in range(205, 260)]
+    with store.transaction() as c:
+        old, recent = "2026-01-01T00:00:00Z", "2026-02-01T00:00:00Z"
+        for ids, at, audience in ((visible, old, None), (hidden, recent, '{"people":["ana"]}')):
+            c.executemany(
+                "INSERT INTO bot_files(id,bot_id,task_id,scope,identity,title,kind,mime,locator,current_version,"
+                "first_activity_at,last_activity_at) SELECT ?,bot_id,task_id,scope,?,title,kind,mime,locator,1,?,? "
+                "FROM bot_files WHERE id=?",
+                [(fid, fid, at, at, original) for fid in ids],
+            )
+            c.executemany(
+                "INSERT INTO pages(file_id,created_at,updated_at,audience) VALUES(?,?,?,?)",
+                [(fid, at, at, audience) for fid in ids],
+            )
+            c.executemany(
+                "INSERT INTO bot_file_versions(file_id,version,blob_id,digest,size,name,mime,actor,created_at) "
+                "SELECT ?,1,blob_id,digest,size,name,mime,actor,? FROM bot_file_versions WHERE file_id=?",
+                [(fid, at, original) for fid in ids],
+            )
+            c.executemany(
+                "INSERT INTO page_links VALUES(?,?,?,'Spec','human:ana',?)",
+                [(fid, fid, f"task:{tid}", at) for fid in ids],
+            )
+        newest = visible[0]
+        c.execute("UPDATE bot_files SET current_version=51,last_activity_at=? WHERE id=?", (recent, newest))
+        c.executemany(
+            "INSERT INTO bot_file_versions(file_id,version,blob_id,digest,size,name,mime,actor,created_at) "
+            "SELECT ?,?,blob_id,digest,size,name,mime,actor,? FROM bot_file_versions WHERE file_id=?",
+            [(newest, v, recent, original) for v in range(2, 52)],
+        )
+        c.execute("INSERT INTO task_file_reviews(file_id,version,note) VALUES(?,51,'Latest note')", (newest,))
+
+    files = api.app.state.files
+    reader = Identity("human:cara", "human", "cara@acme.example")
+    with store.read_transaction() as c:
+        trace = []
+        c.set_trace_callback(trace.append)
+        docs = task_documents.listing(c, files, reader, tid)
+        result = files.task_listing(c, reader, tid, all_pages=True)["files"]
+        context = task_context.listing(c, files.auth, reader, tid)["pages"]
+        c.set_trace_callback(None)
+    assert len(docs) == 50 and len(result) == 200 and len(context) == 10
+    for records, key in ((docs, "file_id"), (result, "id"), (context, "id")):
+        assert records[0][key] == newest
+        assert {record[key] for record in records} <= set(visible)
+    for records in (docs, result):
+        assert [v["n"] for v in records[0]["versions"]] == list(range(51, 1, -1))
+        assert records[0]["versions"][0]["note"] == "Latest note"
+    review_reads = [q for q in trace if "task_file_reviews" in q]
+    assert len(review_reads) <= 3, review_reads

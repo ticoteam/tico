@@ -7,7 +7,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from backend import page_links, task_documents, task_pages
+from backend import files, page_links, task_context, task_documents, task_pages
 from backend.store import H
 from backend.tests.helpers.company import company_store
 
@@ -156,6 +156,10 @@ def main():
                 [(i + 1, r[4], 'Orbitalcraft report') for i, r in enumerate(rows)],
             )
             seed_approvals(c, now, rows)
+            c.executemany(
+                "INSERT INTO pins(id,place,item,position,made_by,created_at) VALUES(?,'task:t42',?,?,'human:ana',?)",
+                [(f'pin-{i}', 'page:' + rows[i][0], i, now) for i in range(30)],
+            )
             c.execute('ANALYZE')
             c.commit()
         with store.read_transaction() as c:
@@ -278,27 +282,11 @@ def main():
                         "SELECT f.* FROM bot_files f WHERE f.locator='tico_blob' AND f.task_id=? ORDER BY f.last_activity_at DESC",
                         ('t42',),
                     ),
-                    (
-                        'task-files/all',
-                        "SELECT f.*,p.file_id AS page_id,p.archived AS page_archived FROM bot_files f "
-                        "LEFT JOIN pages p ON p.file_id=f.id AND p.deleted_at IS NULL "
-                        "WHERE f.locator='tico_blob' AND (f.task_id=? OR f.id IN (SELECT page_id FROM page_links WHERE target=?)) "
-                        "ORDER BY f.last_activity_at DESC",
-                        ('t42', 'task:t42'),
-                    ),
-                    (
-                        'task-files/markdown',
-                        "SELECT f.id FROM bot_files f JOIN bot_file_versions v ON v.file_id=f.id AND v.version=f.current_version "
-                        "WHERE f.task_id=? AND f.archived=0 AND f.locator='tico_blob' AND f.current_version>0 "
-                        "AND NOT EXISTS (SELECT 1 FROM pages p WHERE p.file_id=f.id) ORDER BY f.last_activity_at DESC",
-                        ('t42',),
-                    ),
-                    (
-                        'document/candidates',
-                        "SELECT f.* FROM page_links l JOIN bot_files f ON f.id=l.page_id "
-                        "WHERE l.target=? AND l.role=? AND f.state<>'deleted' ORDER BY f.id",
-                        ('task:t42', 'Spec'),
-                    ),
+                    ('task-files/all', *files.task_listing_query('t42', True)),
+                    ('task-files/versions', files.TASK_VERSIONS_SQL, (json.dumps([r[0] for r in rows[:200]]), 50, 49)),
+                    ('task-files/markdown', task_documents.TASK_MARKDOWN_SQL, ('t42',)),
+                    ('document/candidates', task_documents.TASK_DOCUMENTS_SQL, ('task:t42',)),
+                    ('context/candidates', *task_context.pages_query('t42')),
                     ('links', page_links.LINKS_SQL, (rows[42][0],)),
                     ('writers', page_links.WRITERS_SQL, (rows[42][0],)),
                     (
@@ -307,6 +295,16 @@ def main():
                         ('v', 'r', 1, now),
                     ),
                 ]
+            )
+            # Model the role-only read filter with 90 hidden targets in the fixture.
+            c.create_function('page_link_target_readable', 1, lambda target: target.endswith('2'))
+            clauses, args = page_links.filters(role='Spec', check_role_target=True)
+            cases.append(
+                (
+                    'list/visible-roles',
+                    "SELECT f.id FROM bot_files f WHERE " + " AND ".join(clauses) + " LIMIT 50",
+                    args,
+                )
             )
             for label, sql, args in cases:
                 plan = [row[3] for row in c.execute('EXPLAIN QUERY PLAN ' + sql, args)]

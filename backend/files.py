@@ -18,10 +18,11 @@ import re
 import secrets
 import sqlite3
 import tempfile
-from collections import namedtuple
+from collections import defaultdict, namedtuple
 from collections.abc import Iterable
 from contextlib import ExitStack
 from datetime import datetime, timezone
+from itertools import islice
 from typing import Annotated
 from urllib.parse import quote, unquote, urlsplit
 
@@ -236,6 +237,15 @@ def prime_visible(c, rows):
     restricted_page_rows(c, sorted(versions))
     privacy.prime_blobs(c, {v["blob_id"] for found in versions.values() for v in found})
     privacy.prime_attempts(c, {v["attempt_id"] for found in versions.values() for v in found})
+
+
+def visible_rows(c, auth, who, sql, params):
+    """Read and authorize file candidates in chunks, stopping when the caller has enough rows."""
+    cursor = c.execute(sql, params)
+    cache = {}
+    while rows := cursor.fetchmany(50):
+        prime_visible(c, rows)
+        yield from (row for row in rows if file_visible(c, auth, who, row, cache))
 
 
 def asked_to_read(c, who, file_id, version=None, cache=None, auth=None):
@@ -1179,16 +1189,53 @@ def file_added(c, who, task_id, item, number, poster=None, *, document=None):
     c.execute("INSERT OR IGNORE INTO blob_media(blob_id,poster_blob_id) VALUES(?,?)", (item["id"], poster))
 
 
+def _review_view(c, actor, note, comment_id):
+    if comment_id and not privacy.message_readable(c, actor, H.message(c, comment_id)):
+        note = comment_id = None
+    return {"note": note, "comment_id": comment_id}
+
+
 def version_review(c, fid, number, *, actor):
     """A file version's note and the comment it came with, as far as `actor` may read them."""
     row = c.execute("SELECT * FROM task_file_reviews WHERE file_id=? AND version=?", (fid, number)).fetchone()
-    comment_visible = row and (
-        not row["comment_id"] or privacy.message_readable(c, actor, H.message(c, row["comment_id"]))
+    return _review_view(c, actor, row["note"], row["comment_id"]) if row else {"note": None, "comment_id": None}
+
+
+TASK_VERSIONS_SQL = (
+    "SELECT v.*,r.note,r.comment_id FROM json_each(?) ids JOIN bot_file_versions v ON v.file_id=ids.value "
+    "AND v.version>=CASE WHEN ? > 0 THEN coalesce((SELECT older.version FROM bot_file_versions older "
+    "WHERE older.file_id=ids.value ORDER BY older.version DESC LIMIT 1 OFFSET ?),0) ELSE 0 END "
+    "LEFT JOIN task_file_reviews r ON r.file_id=v.file_id AND r.version=v.version ORDER BY v.file_id,v.version DESC"
+)
+
+
+def task_file_versions(c, actor, file_ids, *, limit):
+    """Batch the latest version rows and their reviews for a task's visible files."""
+    if not file_ids:
+        return {}
+    rows = c.execute(TASK_VERSIONS_SQL, (json.dumps(sorted(set(file_ids))), limit, max(0, limit - 1))).fetchall()
+    H.prime_messages(c, {v["comment_id"] for v in rows if v["comment_id"]})
+    out = defaultdict(list)
+    for v in rows:
+        out[v["file_id"]].append({**dict(v), **_review_view(c, actor, v["note"], v["comment_id"])})
+    return out
+
+
+def task_listing_query(task_id, all_pages):
+    from . import page_links
+
+    membership, params = "f.task_id=?", (task_id,)
+    if all_pages:
+        membership = "f.id IN (SELECT id FROM bot_files WHERE task_id=? UNION " + page_links.TASK_PAGE_IDS + ")"
+        params += ("task:" + task_id,) * 2
+    return (
+        "SELECT f.*,p.file_id AS page_id,p.archived AS page_archived FROM bot_files f "
+        "LEFT JOIN pages p ON p.file_id=f.id AND p.deleted_at IS NULL "
+        "WHERE f.locator='tico_blob' AND f.current_version>0 AND "
+        + membership
+        + " ORDER BY f.last_activity_at DESC,f.id DESC",
+        params,
     )
-    return {
-        "note": row["note"] if comment_visible else None,
-        "comment_id": row["comment_id"] if comment_visible else None,
-    }
 
 
 def edit_file_version(c, auth, who, task_id, fid, number, body):
@@ -1692,83 +1739,78 @@ class Files:
         self.auth.task(c, who, task_id)
         from . import page_links
 
-        listed = []
-        rows = c.execute(
-            "SELECT f.*,p.file_id AS page_id,p.archived AS page_archived FROM bot_files f "
-            "LEFT JOIN pages p ON p.file_id=f.id AND p.deleted_at IS NULL "
-            "WHERE f.locator='tico_blob' AND (f.task_id=?"
-            + (" OR f.id IN (SELECT page_id FROM page_links WHERE target=?)" if all_pages else "")
-            + ") ORDER BY f.last_activity_at DESC",
-            (task_id, "task:" + task_id) if all_pages else (task_id,),
-        ).fetchall()
-        prime_visible(c, rows)
+        limit = 200
+        sql, params = task_listing_query(task_id, all_pages)
+        candidates = visible_rows(c, self.auth, who, sql, params)
+        rows = list(islice(candidates, limit) if all_pages else candidates)
+        actor = privacy.actor(who)
+        histories = task_file_versions(c, actor, [r["id"] for r in rows], limit=50 if all_pages else 0)
         if all_pages:
             page_links.prime(c, [row for row in rows if row["page_id"]])
+        listed = []
         for row in rows:
-            if not self.visible(c, who, row, {}):
+            fid = row["id"]
+            history = histories.get(fid, [])
+            if not history:
                 continue
-            versions = []
-            for v in c.execute("SELECT * FROM bot_file_versions WHERE file_id=? ORDER BY version DESC", (row["id"],)):
-                fields = dict(v)
-                versions.append(
+            current = next((v for v in history if v["version"] == row["current_version"]), history[0])
+            is_page = bool(row["page_id"])
+            archived = bool(row["archived"] or row["page_archived"])
+            details = {}
+            if all_pages and is_page:
+                details = {
+                    "title": row["title"],
+                    "links": page_links.links_of(c, self.auth, who, fid),
+                    "writers": page_links.writers_of(c, fid),
+                }
+            listed.append(
+                (
+                    row,
+                    None if archived or is_page else current["digest"],
                     {
-                        "n": v["version"],
-                        "size": v["size"],
-                        "mime": v["mime"],
-                        "sha256": v["digest"],
-                        "created_at": v["created_at"],
-                        "by": v["actor"],
-                        **version_review(c, row["id"], v["version"], actor=privacy.actor(who)),
-                        **{k: fields.get(k) for k in ("width", "height", "duration_ms", "media_state")},
-                        "poster_url": f"/api/v2/files/{row['id']}/poster?v={v['version']}"
-                        if fields.get("poster_blob_id")
-                        else None,
-                        "thumb_url": f"/api/v2/files/{row['id']}/thumb?v={v['version']}"
-                        if fields.get("thumb_blob_id")
-                        else None,
-                        "url": f"/api/v2/files/{row['id']}?v={v['version']}",
-                    }
+                        "id": fid,
+                        **details,
+                        "name": current["name"],
+                        "mime": row["mime"],
+                        "current_version": row["current_version"],
+                        "archived": archived,
+                        "versions": [
+                            {
+                                "n": v["version"],
+                                "size": v["size"],
+                                "mime": v["mime"],
+                                "sha256": v["digest"],
+                                "created_at": v["created_at"],
+                                "by": v["actor"],
+                                **{
+                                    k: v[k]
+                                    for k in ("note", "comment_id", "width", "height", "duration_ms", "media_state")
+                                },
+                                "poster_url": f"/api/v2/files/{fid}/poster?v={v['version']}"
+                                if v["poster_blob_id"]
+                                else None,
+                                "thumb_url": f"/api/v2/files/{fid}/thumb?v={v['version']}"
+                                if v["thumb_blob_id"]
+                                else None,
+                                "url": f"/api/v2/files/{fid}?v={v['version']}",
+                            }
+                            for v in history
+                        ],
+                    },
                 )
-            if versions:
-                name = c.execute(
-                    "SELECT name FROM bot_file_versions WHERE file_id=? AND version=?",
-                    (row["id"], row["current_version"]),
-                ).fetchone()[0]
-                current = next((v for v in versions if v["n"] == row["current_version"]), versions[0])
-                is_page = bool(row["page_id"])
-                archived = bool(row["archived"] or row["page_archived"])
-                details = {}
-                if all_pages and is_page:
-                    details = {
-                        "title": row["title"],
-                        "links": page_links.links_of(c, self.auth, who, row["id"]),
-                        "writers": page_links.writers_of(c, row["id"]),
-                    }
-                listed.append(
-                    (
-                        row,
-                        None if archived or is_page else current["sha256"],
-                        {
-                            "id": row["id"],
-                            **details,
-                            "name": name,
-                            "mime": row["mime"],
-                            "current_version": row["current_version"],
-                            "archived": archived,
-                            "versions": versions,
-                        },
-                    )
-                )
+            )
         out = once_per_content(listed)
-        for b in c.execute(
-            "SELECT b.*,m.width,m.height,m.duration_ms,m.media_state,m.poster_blob_id,m.thumb_blob_id "
-            "FROM blobs b JOIN task_assets a ON a.blob_id=b.id LEFT JOIN blob_media m ON m.blob_id=b.id WHERE a.task_id=? "
+        assets = c.execute(
+            "SELECT b.*,m.width,m.height,m.duration_ms,m.media_state,m.poster_blob_id,m.thumb_blob_id,r.note,r.comment_id "
+            "FROM task_assets a JOIN blobs b ON a.blob_id=b.id LEFT JOIN blob_media m ON m.blob_id=b.id "
+            "LEFT JOIN task_file_reviews r ON r.file_id=b.id AND r.version=1 WHERE a.task_id=? "
             "AND NOT EXISTS(SELECT 1 FROM bot_file_versions v WHERE v.blob_id=b.id)",
             (task_id,),
-        ):
-            if not page_blob_visible(c, self.auth, who, b["id"]) or not privacy.blob_readable(
-                c, privacy.actor(who), b["id"]
-            ):
+        )
+        for b in assets:
+            if all_pages and len(out) >= limit:
+                break
+            if not page_blob_visible(c, self.auth, who, b["id"]) or not privacy.blob_readable(c, actor, b["id"]):
                 continue
             out.append(
                 {
@@ -1785,7 +1827,7 @@ class Files:
                             "sha256": b["digest"],
                             "created_at": b["created_at"],
                             "by": b["owner"],
-                            **version_review(c, b["id"], 1, actor=privacy.actor(who)),
+                            **_review_view(c, actor, b["note"], b["comment_id"]),
                             **{k: b[k] for k in ("width", "height", "duration_ms", "media_state")},
                             "poster_url": f"/api/v2/files/{b['id']}/poster?v=1" if b["poster_blob_id"] else None,
                             "thumb_url": f"/api/v2/files/{b['id']}/thumb?v=1" if b["thumb_blob_id"] else None,

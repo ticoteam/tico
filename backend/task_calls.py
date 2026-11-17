@@ -514,6 +514,7 @@ def task_answer(
     page_version: str | None = None,
     visit_id: str | None = None,
     keyed: bool = False,
+    page_reader: Callable[[list[str]], bool] | None = None,
 ) -> Row:
     """Answer what is asked: `ok` or `no` with a note (send back) on an OK; `ok` or `no` on a page, for the page shown
     (`page_version`, `<file id>@<version>`; a document approval's key adds `visit_id`, and a person's answer from a
@@ -541,6 +542,7 @@ def task_answer(
             page_version=page_version,
             visit_id=visit_id,
             keyed=keyed,
+            page_reader=page_reader,
         )
 
 

@@ -167,7 +167,14 @@ def _may_answer(
 
 
 def _may_answer_page(
-    conn: "sqlite3.Connection", by: str, row: Row, requirement: Row, value: str, notes: str | None
+    conn: "sqlite3.Connection",
+    by: str,
+    row: Row,
+    requirement: Row,
+    value: str,
+    notes: str | None,
+    *,
+    stale: bool = False,
 ) -> None:
     """A page takes ok or no, and only once Jev has looked and it waits on someone: the person it names after Jev passed
     it, a person deciding what Jev was unsure of or could not check, or the manager bot deciding what Jev was unsure of
@@ -182,9 +189,15 @@ def _may_answer_page(
             _refuse(conn, by, "task_requirement", task_asks.NOT_YOURS, task_id)
     newest = R.newest_answers(conn, row["visit"]["id"]).get(requirement["id"])
     standing = R.standing(conn, row, requirement, newest)
-    if standing.state != R.WAITING or R.outside(standing.on):
-        _refuse(conn, by, "task_requirement", f"{R.name_of(requirement)} is not waiting on anyone", task_id)
     person = standing.on
+    if stale and person == R.JEV and (requirement.get("person_id") or R.people_only(requirement)):
+        # The approver can refresh a stale key while the Decision model checks the new submission.
+        visit = row["visit"]["id"]
+        person = R.person_of(conn, requirement, visit)
+        if not requirement.get("person_id") and (back := R._sent_back(conn, visit, requirement["id"])):
+            person = person or str(back["by_id"])
+    elif standing.state != R.WAITING or R.outside(person):
+        _refuse(conn, by, "task_requirement", f"{R.name_of(requirement)} is not waiting on anyone", task_id)
     if by != person and not (person is None and is_human(by)):
         _refuse(conn, by, "task_requirement", f"This is asked of {_name(conn, person)}", task_id)
     if value == NO and not (notes or "").strip():
@@ -209,6 +222,8 @@ def _page_version(
     value: str = "",
     visit_id: str | None = None,
     keyed: bool = False,
+    page_reader: Callable[[list[str]], bool] | None = None,
+    notes: str | None = None,
 ) -> int | None:
     """The page version an answer on a page is for: the one that counts now (task_requirements.page_for: the one
     attached, or the one a person's OK brought back from Merge). A caller that names the page it was shown
@@ -226,7 +241,22 @@ def _page_version(
 
     pages = P.current_pages(conn, row["visit"]["id"], requirement["id"]) if document else ([page] if page else [])
     if document and not pages and page:
-        pages = P.current_pages(conn, str(page["visit_id"]), requirement["id"])
+        pages = P.current_pages(conn, str(page["visit_id"]), requirement["id"]) or [page]
+    if document and pages:
+        refs = [f"page:{p['file_id']}@{p['version']}" for p in pages]
+        if page_reader is None:
+            from . import files, teammate_access
+            from .auth import Auth
+
+            viewer: Any = cast(Callable[..., Any], teammate_access._viewer_for)(conn, by)
+            policy: Any = cast(Callable[..., Any], Auth.read_policy)(conn)
+            readable = viewer is not None and cast(Callable[..., bool], files.page_refs_readable)(
+                conn, policy, viewer, refs
+            )
+        else:
+            readable = page_reader(refs)
+        if not readable:
+            _refuse(conn, by, "task_requirement", "This approval is unavailable", row["id"])
     expected = P.version_key(pages)
     if keyed and is_human(by) and document and value == OK and page_version in (None, ""):
         _refuse(conn, by, "task_requirement", f"{APPROVE_SHOWN}: send its page_version", row["id"])
@@ -234,6 +264,7 @@ def _page_version(
     if stale_visit or (page_version not in (None, "") and (not page or str(page_version) != expected)):
         if not document:
             _refuse(conn, by, "task_changed", "The page changed. Look again.", row["id"])
+        _may_answer_page(conn, by, row, requirement, value, notes, stale=True)
         approval = {
             "document": document,
             "visit_id": _part(row, "visit").get("id"),
@@ -404,6 +435,7 @@ def answer(
     page_version: str | None = None,
     visit_id: str | None = None,
     keyed: bool = False,
+    page_reader: Callable[[list[str]], bool] | None = None,
 ) -> Row:
     """Answer a requirement of the task's open visit: `done` (owner says done), `ok` or `no` with notes (an OK), or `ok`
     or `no` on a page (for the version attached now; `page_version`, when given, is the `<file id>@<version>` the
@@ -414,7 +446,7 @@ def answer(
     E.check_version(conn, by, row, seen_version)
     requirement = _asked(conn, row, requirement_id, by)
     value = str(value or "").strip()
-    pinned = _page_version(conn, by, row, requirement, page_version, value, visit_id, keyed)
+    pinned = _page_version(conn, by, row, requirement, page_version, value, visit_id, keyed, page_reader, notes)
     _may_answer(conn, by, row, requirement, value, notes, own_click=own_click)
     newest = R.newest_answers(conn, row["visit"]["id"]).get(requirement_id)
     same = (str(by), value, notes, pinned, _heads(conn, row) if pinned is not None else None)
