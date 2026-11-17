@@ -157,7 +157,14 @@ def _handoff_body(conn: "sqlite3.Connection", task: Row) -> str:
         approved = TD.approved_versions(conn, task["id"])
         parts.extend(f"Spec: page:{p['id']}@{approved.get(p['id'], p['current_version'])}" for p in specs)
     elif page:
-        parts.append(f"Spec: page:{page['file_id']}@{page['version']}")
+        from . import task_requirements as R
+
+        # Legacy page requirements have no role link; a document explicitly unlinked from the task stays out.
+        requirement = R.get(conn, str(page["requirement_id"]))
+        if requirement and R.document_of(requirement):
+            page = None
+        else:
+            parts.append(f"Spec: page:{page['file_id']}@{page['version']}")
     if page:
         for said in sign_off_notes(conn, str(page["visit_id"])):
             parts.append(f"{H.actor_name(conn, said['by'])}'s notes on the spec, given with their OK:\n{said['notes']}")
