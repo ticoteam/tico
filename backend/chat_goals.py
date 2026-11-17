@@ -9,6 +9,7 @@ from pydantic import Field
 from . import models as M, providers
 from .store import H, Problem, bot_readiness, readiness_document, encode
 from . import bot_settings as BS
+from .api_contract import api_v2
 
 TICO_COMMANDS = [
     {
@@ -258,7 +259,10 @@ def task_goal_ended(c, goal, task_id, status, note):
 
 
 def install(app, store, auth, mutate, send):
-    @app.get("/api/v2/conversations/{cid}/goal")
+    @app.get(
+        "/api/v2/conversations/{cid}/goal",
+        **api_v2("Conversations", "getChatGoal", "Read the pinned goal and commands", "ChatGoalResult"),
+    )
     def read(request: Request, cid: str):
         with store.read() as c:
             conv = auth.conversation(c, request.state.identity, cid)
@@ -267,7 +271,10 @@ def install(app, store, auth, mutate, send):
                 auth.require_read(c, request.state.identity, bot)
             return {"goal": current(c, cid), "supported": supported, "commands": commands}
 
-    @app.post("/api/v2/conversations/{cid}/goal")
+    @app.post(
+        "/api/v2/conversations/{cid}/goal",
+        **api_v2("Conversations", "setChatGoal", "Set, edit, pause, resume or clear a native goal", "ChatGoalResult"),
+    )
     def write(request: Request, cid: str, body: GoalAction):
         def work(c):
             who = request.state.identity

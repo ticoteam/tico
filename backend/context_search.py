@@ -13,6 +13,7 @@ from fastapi import Query, Request
 from . import documents, market, media, meetings, threads
 from .store import Problem
 from . import task_privacy as privacy
+from .api_contract import api_v2
 
 
 def terms(text):
@@ -188,7 +189,7 @@ def loaded(c, ids, wanted, cap=256):
 
 
 def install_context_search(app, store, auth):
-    @app.get("/api/v2/context/search")
+    @app.get("/api/v2/context/search", **api_v2("Docs", "searchDocs", "Search team documents", "DocSearch"))
     def search(
         request: Request,
         q: str = Query(min_length=1, max_length=500),
@@ -298,7 +299,7 @@ def install_context_search(app, store, auth):
         found.sort(key=lambda r: (-r["score"], r["kind"], r["id"]))
         return {"query": q, "mode": "keyword", "results": found[:limit], "has_more": len(found) > limit}
 
-    @app.get("/api/v2/context/document")
+    @app.get("/api/v2/context/document", **api_v2("Docs", "getDocument", "One document"))
     def document(request: Request, id: str = Query(min_length=1, max_length=200)):
         with store.read_transaction() as c:
             auth.domain(request.state.identity)
@@ -329,7 +330,10 @@ def install_context_search(app, store, auth):
 
     # `recordings` is the old name of both routes; installed CLIs and MCP clients still call it.
     @app.get("/api/v2/recordings/search", include_in_schema=False)
-    @app.get("/api/v2/meetings/search")
+    @app.get(
+        "/api/v2/meetings/search",
+        **api_v2("Meetings", "searchMeetings", "Search or list recorded meetings", "MeetingSearch"),
+    )
     def meetings_search(
         request: Request,
         q: str = Query(default="", max_length=500),
@@ -392,7 +396,14 @@ def install_context_search(app, store, auth):
         }
 
     @app.get("/api/v2/recordings/transcript", include_in_schema=False)
-    @app.get("/api/v2/meetings/transcript")
+    @app.get(
+        "/api/v2/meetings/transcript",
+        **api_v2(
+            "Meetings",
+            "getMeetingTranscript",
+            "A meeting's transcript; includes saved notes at offset zero, or notes only with notes=true",
+        ),
+    )
     def transcript(
         request: Request,
         id: str = Query(min_length=1, max_length=200),

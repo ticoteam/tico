@@ -32,6 +32,7 @@ from . import kpis as K
 from . import marketing_tasks as MT
 from .brand import admin
 from .store import Problem
+from .api_contract import api_v2
 
 MONTHS_DEFAULT, MONTHS_MIN, MONTHS_MAX = 12, 1, 24
 MARKERS_MAX = 200
@@ -303,7 +304,15 @@ def numbers(c, auth, who, months, hidden, until=None):
 def install(app, store, auth):
     from .goal_routes import _hidden_owners
 
-    @app.get("/api/v2/growth/numbers")
+    @app.get(
+        "/api/v2/growth/numbers",
+        **api_v2(
+            "KPIs",
+            "getGrowthNumbers",
+            "The Growth page's numbers: the newest months (1 to 24, default 12), every channel's and the total's CAC, LTV and retention, revenue and margin per month (null where not recorded), the KPI tree with each KPI's last 24 readings, and the marketing tests that started or finished, newest first",
+            "GrowthNumbers",
+        ),
+    )
     def growth_numbers(request: Request, months: int = MONTHS_DEFAULT):
         """The Growth page's numbers: the months, every channel's and the total's CAC, LTV, retention, revenue and
         margin, the KPI tree with its last readings, and the marketing ideas whose test started or that finished.

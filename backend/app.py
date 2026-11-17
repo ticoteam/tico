@@ -77,8 +77,7 @@ from .recruit import Recruiter
 from . import rooms
 from . import fast_json
 from . import names as actor_names
-from .openapi_v2 import STABLE as STABLE_ROUTES
-from .legacy_spellings import legacy_of
+from .openapi_v2 import stable_path
 from . import settings_catalog
 from . import updates
 from .files import raw_media
@@ -127,17 +126,6 @@ from . import (
     bot_seats_routes,
     fleet_runner_routes,
     ui_bundle_routes,
-)
-
-
-# The stable v2 routes whose answers carry display names (backend/names.py); streams are left alone.
-STABLE_PATH = re.compile(
-    "|".join(
-        re.sub(r"\\\{[^}]+\\\}", "[^/]+", re.escape(spelling))
-        for path, *_ in STABLE_ROUTES
-        if path != "/api/v2/events"
-        for spelling in (path, *legacy_of(path))
-    )
 )
 
 
@@ -1491,7 +1479,7 @@ def create_app(settings=None):
             or "content-disposition" in response.headers
             or "x-content-sha256" in response.headers
             or "count" in request.query_params
-            or not STABLE_PATH.fullmatch(request.url.path)
+            or not stable_path(app).fullmatch(request.url.path)  # the stable v2 routes (backend/names.py)
             or "application/json" not in response.headers.get("content-type", "")
         ):
             return response

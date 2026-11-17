@@ -43,6 +43,7 @@ from . import people as _people
 from . import reach as _reach
 from .models import Contract
 from .store import H as _H, Problem
+from .api_contract import api_v2
 
 # Untyped modules, used through Any (as calendar_store does). gcal_live is looked up on each call, so tests replace its
 # functions.
@@ -1666,7 +1667,15 @@ def install_calendar(app: Any, store: Any, mutate: Callable[..., Any]) -> None:
     def key_of(request: Request) -> str | None:
         return request.headers.get("idempotency-key")
 
-    @app.get("/api/v2/calendar/events")
+    @app.get(
+        "/api/v2/calendar/events",
+        **api_v2(
+            "Calendar",
+            "listCalendarEvents",
+            "Occurrences on the calendars in `who` (default you) from `from` to `to`, at most 62 days; `kinds` narrows to event, run, due, away. Over 7 days runs come as `month_counts`. A calendar that could not be read is in `errors`, never shown as free",
+            "CalendarEvents",
+        ),
+    )
     def calendar_events(request: Request) -> Row:
         """Occurrences on the calendars in `who` (default the caller) in [from, to), at most 62 days."""
         params = request.query_params
@@ -1683,7 +1692,15 @@ def install_calendar(app: Any, store: Any, mutate: Callable[..., Any]) -> None:
             group,
         )
 
-    @app.get("/api/v2/calendar/calendars")
+    @app.get(
+        "/api/v2/calendar/calendars",
+        **api_v2(
+            "Calendar",
+            "listCalendars",
+            "Every calendar you can open: people, bots, shared, teams and your other Google calendars (`q` narrows)",
+            "CalendarList",
+        ),
+    )
     def calendar_list(request: Request, q: str = "") -> Row:
         who = request.state.identity
         needle = q.strip().lower()
@@ -1741,7 +1758,15 @@ def install_calendar(app: Any, store: Any, mutate: Callable[..., Any]) -> None:
                     errors.append({"ref": "google:" + viewer, "reason": refused.detail})
         return {"calendars": out, "errors": errors}
 
-    @app.get("/api/v2/calendar/search")
+    @app.get(
+        "/api/v2/calendar/search",
+        **api_v2(
+            "Calendar",
+            "searchCalendar",
+            "Search events, runs and recorded meetings (`q` with with:, bot:, kind:, before:, after:, has:transcript, automation:, trigger:, longer:); Google has 3 seconds, past that the answer is `partial`",
+            "CalendarSearch",
+        ),
+    )
     def calendar_search(request: Request, q: str = "") -> Row:
         params = request.query_params
         if not q.strip():
@@ -1752,14 +1777,30 @@ def install_calendar(app: Any, store: Any, mutate: Callable[..., Any]) -> None:
             store, auth, request.state.identity, q, _refs(params.get("who")), params.get("from"), params.get("to")
         )
 
-    @app.get("/api/v2/calendar/free")
+    @app.get(
+        "/api/v2/calendar/free",
+        **api_v2(
+            "Calendar",
+            "findCalendarFreeTimes",
+            "Times everyone in `who` is free for `minutes` within `within` (such as 5d), in working hours",
+            "CalendarFree",
+        ),
+    )
     def calendar_free(request: Request, minutes: int = 30, within: str = "5d") -> Row:
         if not 5 <= minutes <= 8 * 60:
             raise Problem("validation", "minutes is 5 to 480", 422)
         params = request.query_params
         return _free(store, request.state.identity, _refs(params.get("who")), minutes, within, params.get("from"))
 
-    @app.post("/api/v2/calendar/events")
+    @app.post(
+        "/api/v2/calendar/events",
+        **api_v2(
+            "Calendar",
+            "createCalendarEvent",
+            "Add an event (bots and the Assistant; a person only on their own Tico calendar). A bot booking a person needs their book rule; a connected person on it puts it on Google",
+            "CalendarOccurrence",
+        ),
+    )
     def calendar_create(request: Request, body: EventCreate) -> Any:
         who = request.state.identity
         with store.read() as c:
@@ -1792,14 +1833,30 @@ def install_calendar(app: Any, store: Any, mutate: Callable[..., Any]) -> None:
             raise Problem("scope", "On Google, change this one or all of a repeated event", 422)
         return str(current.get("event_id") or event_id) if scope == "all" else event_id
 
-    @app.get("/api/v2/calendar/events/{occurrence_id:path}")
+    @app.get(
+        "/api/v2/calendar/events/{occurrence_id:path}",
+        **api_v2(
+            "Calendar",
+            "getCalendarEvent",
+            "One event as the caller sees it (404 when they cannot see it)",
+            "CalendarOccurrence",
+        ),
+    )
     def calendar_event(request: Request, occurrence_id: str) -> Row:
         """One occurrence as the caller sees it (the Recorder checks a Join link against it). 404 when it is not an
         event, or the caller cannot see it."""
         with store.read() as c:
             return _one_occurrence(c, auth, request.state.identity, occurrence_id)
 
-    @app.patch("/api/v2/calendar/events/{occurrence_id:path}")
+    @app.patch(
+        "/api/v2/calendar/events/{occurrence_id:path}",
+        **api_v2(
+            "Calendar",
+            "changeCalendarEvent",
+            "Change an event: `scope` this, following (Tico only) or all",
+            "CalendarOccurrence",
+        ),
+    )
     def calendar_change(request: Request, occurrence_id: str, body: EventChange) -> Any:
         who = request.state.identity
         parsed = _parse_occurrence(occurrence_id)
@@ -1859,7 +1916,10 @@ def install_calendar(app: Any, store: Any, mutate: Callable[..., Any]) -> None:
 
         return mutate(request, body, record)
 
-    @app.delete("/api/v2/calendar/events/{occurrence_id:path}")
+    @app.delete(
+        "/api/v2/calendar/events/{occurrence_id:path}",
+        **api_v2("Calendar", "cancelCalendarEvent", "Cancel an event (`scope` query: this, following or all)"),
+    )
     def calendar_cancel(request: Request, occurrence_id: str, scope: str | None = None) -> Any:
         who = request.state.identity
         body = EventCancel.model_validate({"scope": scope} if scope else {})
@@ -1894,7 +1954,10 @@ def install_calendar(app: Any, store: Any, mutate: Callable[..., Any]) -> None:
 
         return mutate(request, body, record)
 
-    @app.post("/api/v2/calendar/events/{occurrence_id:path}/response")
+    @app.post(
+        "/api/v2/calendar/events/{occurrence_id:path}/response",
+        **api_v2("Calendar", "respondToCalendarEvent", "Accept, decline or tentatively accept an event you attend"),
+    )
     def calendar_respond(request: Request, occurrence_id: str, body: EventResponse) -> Any:
         who = request.state.identity
         parsed = _parse_occurrence(occurrence_id)
@@ -1954,7 +2017,10 @@ def install_calendar(app: Any, store: Any, mutate: Callable[..., Any]) -> None:
             raise Problem("identity", "Calendar settings are a person's own", 403)
         return caller
 
-    @app.get("/api/v2/calendar/settings")
+    @app.get(
+        "/api/v2/calendar/settings",
+        **api_v2("Calendar", "getCalendarSettings", "Your zone, hours and recording", "CalendarSettingsView"),
+    )
     def calendar_settings(request: Request) -> Row:
         with store.read() as c:
             caller = person_of(c, request.state.identity)
@@ -1962,7 +2028,15 @@ def install_calendar(app: Any, store: Any, mutate: Callable[..., Any]) -> None:
             zone = _google_zone(c, caller["email"]) if cal and cal["home"] == "google" else None
             return _settings_view(c, caller["id"], zone)
 
-    @app.put("/api/v2/calendar/settings")
+    @app.put(
+        "/api/v2/calendar/settings",
+        **api_v2(
+            "Calendar",
+            "setCalendarSettings",
+            "Change your zone, working hours or Record calls I join (send only what changes)",
+            "CalendarSettingsView",
+        ),
+    )
     def calendar_settings_put(request: Request, body: CalendarSettings) -> Any:
         who = request.state.identity
         given = body.model_dump(include=body.model_fields_set)
@@ -2003,7 +2077,9 @@ def install_calendar(app: Any, store: Any, mutate: Callable[..., Any]) -> None:
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/calendar/shared")
+    @app.post(
+        "/api/v2/calendar/shared", **api_v2("Calendar", "createSharedCalendar", "Make a shared calendar (admins)")
+    )
     def calendar_shared_create(request: Request, body: SharedCreate) -> Any:
         who = request.state.identity
 
@@ -2019,7 +2095,14 @@ def install_calendar(app: Any, store: Any, mutate: Callable[..., Any]) -> None:
 
         return mutate(request, body, work)
 
-    @app.put("/api/v2/calendar/shared/{calendar_id}/access")
+    @app.put(
+        "/api/v2/calendar/shared/{calendar_id}/access",
+        **api_v2(
+            "Calendar",
+            "setSharedCalendarAccess",
+            "Give a person, bot or team read or read_write on a shared calendar, or take it away (admins)",
+        ),
+    )
     def calendar_shared_access(request: Request, calendar_id: str, body: SharedAccess) -> Any:
         who = request.state.identity
 
@@ -2044,7 +2127,9 @@ def install_calendar(app: Any, store: Any, mutate: Callable[..., Any]) -> None:
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/calendar/absences")
+    @app.post(
+        "/api/v2/calendar/absences", **api_v2("Calendar", "addAbsence", "Record days away (yours; admins anyone's)")
+    )
     def calendar_absence(request: Request, body: AbsenceCreate) -> Any:
         who = request.state.identity
 
