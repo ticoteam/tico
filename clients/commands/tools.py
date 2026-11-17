@@ -439,6 +439,9 @@ def credential_revoke(api, args):
 def credential_delete(api, args):
     person = _as_person(api)
     row = _credential_of(person.get("credentials"), args["credential"])
+    if row.get("tool_id"):  # a tool's key goes as its tool's page deletes it (backend/api_tools.py delete_key)
+        path = f"api-tools/{quote(str(row['tool_id']), safe='')}/keys/{quote(str(row['id']), safe='')}"
+        return person.call("DELETE", path, key=_key(args))
     return person.call("DELETE", f"credentials/{row['id']}", key=_key(args))
 
 
@@ -706,10 +709,13 @@ def tool_level(api, args):
         'note': _s('One line above the card (optional)'),
     },
     required=('thread_id', 'rows'),
+    writes=True,
 )
 def tools_propose_grant(api, args):
     return api.post(
-        'tools-chat/proposals', {'thread_id': args['thread_id'], 'rows': args['rows'], 'note': args.get('note') or ''}
+        'tools-chat/proposals',
+        {'thread_id': args['thread_id'], 'rows': args['rows'], 'note': args.get('note') or ''},
+        key=_key(args),
     )
 
 

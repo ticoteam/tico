@@ -20,9 +20,9 @@ you will do instead.
 | Get a key typed in for a bot | the person, on your card | `tico credential request <VAR> --for-bot <bot> ...` |
 | Grant keys a person dropped in your chat, by tool, level and bots | the person, on your card | MCP `tico_tools_propose_grant` |
 | Give a bot a key, set its level, take it back | you, as the person who asked | `tico tool level <tool> <bot> <read, read_write or none>`; `tico credential grant <key> --to <bot>` and `tico credential revoke <key> --from <bot>` for a key on no tool |
-| Add or change an API tool, its settings, an MCP server (sign-in), share a website account with a bot | you, as the person who asked | Tools routes; the person's own rights decide |
+| Add or change an API tool, its settings, an MCP server (sign-in), share a website account with a bot | you, as the person who asked | the commands below; the person's own rights decide |
 | Notes on a bot's tool (a `bot.yaml` `tools:` entry: identity, scope, note), never needed for access | you (any bot), or the bot itself | `tico tool add <bot> ...` / `tico tool update`; BotOps commits it |
-| A key's value, its reveal, deleting a tool or key, a person's own access | the person, in Tools | link the exact page and say what to click |
+| A person's key's value, a reveal, deleting a tool or key, a person's own access | the person | a card for the value; for the rest, link the exact page and say what to click |
 
 The person's rights are the ceiling: a member who may not manage that bot is refused, and the refusal names who can.
 Give keys and levels to the bot that needs them, never to yourself. With no person behind your run (your weekly review),
@@ -32,6 +32,28 @@ A grant is all a bot needs. A key, API or MCP tool, setting or website account g
 on its Tools tab (`tico tool list --bot <bot>`, marked granted) with no bot.yaml entry, MCP servers included. Never ask
 anyone to register or declare a tool as a step to access, and never file a task for one: `tico tool add` for a tool the
 bot already holds answers with the grant and files nothing. Read that list before you say a bot "has nothing connected".
+
+## Every Tools change from the command line
+Do the action yourself: the Tools page is never required. Each command calls the route the page calls, with the
+person's rights; a refusal names who can. The MCP tools have the same names (`tico_tool_setting_add`).
+- Read: `tico tool index`, `tico tool detail <tool>` (keys, levels, settings), `tico tool vendor <vendor>`,
+  `tico tool website show <tool>`.
+- API tools: `tico tool create <name> --base-url <url> --check-path <path>`; `tico tool edit <tool>` with `--name`,
+  `--delivery proxy|computer`, `--everyone-reads on|off`, `--audience <json>` or `--audience-everyone`; `tico tool delete
+  <tool>`.
+- Settings: `tico tool setting add <tool> <NAME> <value>`, `tico tool setting change <tool> <NAME> --value <value>`,
+  `tico tool setting remove <tool> <NAME>`.
+- Auth templates: `tico tool templates`, `tico tool template <tool> <template id>` (or `--none`), `tico tool ungroup
+  <tool>`; a vendor account's values a bot holds in a file go on in one step with `tico tool paste <tool> --from-file
+  <path>` (`tico tool classify --from-file <path>` first shows what each is, storing nothing).
+- MCP servers: `tico tool mcp probe <url>`; `tico tool mcp add <name> <url> oauth`, then `tico tool sign-in <tool>` and
+  send the person the address it prints (a token server's token comes from the person, on a card).
+- Websites: `tico tool website add --site <host>`, `tico tool website edit <tool>`, `tico tool website delete <tool>`;
+  `tico credential login share <tool> <account> bot:<slug> on|off`.
+- Keys: `tico credential update <key> --level read` (or `--name`, `--expires-on`), `tico credential cancel <card>`. A key a
+  bot already holds (one it made through the vendor's API) is stored with `tico credential add <name> --env <VAR>
+  --from-env <SRC>` or `--from-file <path>`, plus `--tool <tool> --level read` and `--for-bot <bot>`: the value is read
+  on that computer and never typed. A person's own key always comes through a card.
 
 ## Words
 - **Tool**: a service with an address. An **API tool** (`/api/v2/api-tools`) has a base URL, an auth scheme (`bearer`,

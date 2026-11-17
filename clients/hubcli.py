@@ -453,6 +453,7 @@ def parser():
     from clients.commands import assistant as assistant_commands
     from clients.commands import automations as automations_commands
     from clients.commands import browser as browser_commands, logins
+    from clients.commands import tools_admin
 
     sub.add_parser("whoami", help="who you are, to which company, and through which profile").set_defaults(fn="whoami")
     cli_plumbing.add_parsers(sub)  # tico auth, tico token, tico events tail (clients/cli_plumbing.py)
@@ -1363,6 +1364,7 @@ def parser():
     s.add_argument("bot")
     s.add_argument("id", help="the tool id from `tico tool list --bot`")
     s.set_defaults(fn="tool remove")
+    cli_spec.add(sub, tools_admin.TOOL_CLI, parents={("tool",): tools})  # clients/commands/tools_admin.py
 
     # Automations (clients/commands/automations.py): every leaf but create, update and inbox, which stay here.
     cli_spec.add(sub, automations_commands.AUTOMATION)
@@ -2151,6 +2153,7 @@ def parser():
     s.add_argument("--kind", choices=["api_key", "token", "password", "connection"])
     s.add_argument("--wait", type=int, help="seconds to wait for the computer to answer (30; at most 60)")
     s.set_defaults(fn="credential import")
+    cli_spec.add(sub, tools_admin.CREDENTIAL_CLI, parents={("credential",): cred})  # clients/commands/tools_admin.py
     slack = sub.add_parser("slack", help="the Slack channels bots may read and post in").add_subparsers(dest="sub")
     chan = slack.add_parser("channel", help="list, add or remove a channel").add_subparsers(dest="subsub")
     chan.add_parser("list", help="the listed channels, their readers, and whether bots may post").set_defaults(
