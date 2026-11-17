@@ -286,6 +286,26 @@ def reader_sql(c, actor):
     )
 
 
+def followed_credential_admins(c, owner_email, admins):
+    """The credential administrators when the server names none (TICO_CREDENTIAL_ADMINS unset): the owner and the
+    Admins, or the owner alone when the owner's rule "Admins store credentials" is off. `Auth.sync_access` adopts this
+    for each request; `credential_admins` gives it to work that runs outside one."""
+    admins = sorted(admins) if team_rules.load(c)["admin_credentials"] else []
+    return tuple(dict.fromkeys(e for e in (owner_email, *admins) if e))
+
+
+def credential_admins(c, settings):
+    """The credential administrators in force for work outside a request (a worker, a timer with no sign-in): the
+    server's own list when it names one, else `followed_credential_admins` of the stored owner and Admins, so a
+    transfer counts here as it does in `Auth.sync_access`, never the owner the settings were started with."""
+    from . import access
+
+    if not getattr(settings, "credential_admins_follow_owner", False):
+        return tuple(settings.credential_admins)
+    owner = access.load_owner(c, settings)["email"]
+    return followed_credential_admins(c, owner, access.load_access(c, settings)["admins"])
+
+
 class Auth:
     def __init__(self, store):
         self.store = store
@@ -345,8 +365,7 @@ class Auth:
                 else ((previous,) if previous else ())
             )
             if tuple(self.settings.credential_admins) == expected:
-                admins = sorted(lists["admins"]) if team_rules.load(c)["admin_credentials"] else []
-                self._credential_followed = tuple(dict.fromkeys(e for e in (self.owner_email, *admins) if e))
+                self._credential_followed = followed_credential_admins(c, self.owner_email, lists["admins"])
                 self.settings.credential_admins = self._credential_followed
 
     def admits(self, email):

@@ -105,7 +105,6 @@ launchd agents live in `~/Library/LaunchAgents`, mode 0600, in the `gui/<uid>` d
 | Job | Legacy label | Environment label | Log |
 |---|---|---|---|
 | bot runs | `team.tico.tico-bot` | `team.tico.tico.<slug>.bot` | `<env>/logs/tico-bot.log` |
-| tool snapshots | `team.tico.tico-connectors` | `team.tico.tico.<slug>.connectors` | `<env>/logs/tico-connectors.log` |
 | local server | not applicable | `team.tico.tico.<slug>.api` | `<env>/logs/api.log` |
 
 Default-environment logs are `~/.config/tico/logs/tico-<job>.log` (older installations may still use `<parent of the checkout>/runtime/tico-<job>.log`). `scripts/tico-computer -e <slug> logs`

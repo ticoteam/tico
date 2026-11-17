@@ -8,8 +8,8 @@ import pytest
 
 from backend import email_sending as S
 from backend import task_asks
-from backend.store import H
-from backend.tests.helpers.api import headers, post as api_post, runner, setup_attempt  # noqa: F401
+from backend.store import H, Problem
+from backend.tests.helpers.api import headers, post, runner, setup_attempt  # noqa: F401
 from backend.tests.helpers.fake_gmail import fake_gmail  # noqa: F401
 from backend.tests.helpers.email_sending import (
     BOX,
@@ -20,7 +20,6 @@ from backend.tests.helpers.email_sending import (
     incoming,
     mime,
     policy,
-    post,
     queue,
 )
 
@@ -113,7 +112,6 @@ def test_reply_and_address_checks_ask_gmail_and_wait_while_it_does_not_answer(in
     assert waited.value.retryable
     with inbox.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM email_sends").fetchone()[0] == before
-        assert c.execute("SELECT count(*) FROM mail_messages").fetchone()[0] == 0
 
 
 def test_a_gmail_refusal_is_not_remembered_as_a_fact_and_the_send_waits(inbox, fake_gmail, monkeypatch):
@@ -413,7 +411,7 @@ def test_a_bot_managers_message_approves_nothing(inbox):
     policy(inbox, undo_seconds=0, pacing_seconds=0, ask_lint=False, second_review=False)
     queued = queue(inbox, actor="bot:ops")
     assert inbox.get("/api/v2/email/sends/" + queued["id"], headers=headers()).json()["preview_complete"]
-    note = api_post(inbox, "chat/ops", {"text": "Send it " + queued["id"]})
+    note = post(inbox, "chat/ops", {"text": "Send it " + queued["id"]})
     with inbox.app.state.store.transaction() as c:
         c.execute("UPDATE email_sends SET approval_id=? WHERE id=?", (note["id"], queued["id"]))
         row = c.execute("SELECT * FROM email_sends WHERE id=?", (queued["id"],)).fetchone()
@@ -432,6 +430,25 @@ def test_never_refuses_and_names_the_setting(inbox):
     with inbox.app.state.store.read() as c:
         detail = c.execute("SELECT detail FROM email_sends WHERE id=?", (queued["id"],)).fetchone()[0]
     assert "never (bot setting)" in detail
+
+
+def test_a_gmail_hiccup_reading_the_thread_stops_a_bots_send_as_retryable(inbox, monkeypatch):
+    """The second reviewer reads the thread the email answers; if Gmail cannot answer now, nothing is queued."""
+    from backend import gmail_live
+
+    autonomous(inbox, second_review=True)
+    _, _, attempt = setup_attempt(inbox, "ops")
+
+    def down(c, mailbox, thread_id):
+        raise Problem("gmail_unavailable", "Gmail did not answer; try again", 502, retryable=True)
+
+    monkeypatch.setattr(gmail_live, "thread", down)
+    monkeypatch.setattr(S, "classify", lambda *a, **k: pytest.fail("reviewed without its thread"))
+    message = {"mailbox": BOX, "raw": mime(In_Reply_To="<inbound@vendor.example>"), "thread_id": "thread"}
+    response = inbox.post("/api/v2/email/sends", json=message, headers=headers(attempt["token"]))
+    assert response.status_code == 502 and response.json()["error"]["retryable"], response.text
+    with inbox.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM email_sends").fetchone()[0] == 0
 
 
 def workspace(monkeypatch, answer):
@@ -463,8 +480,8 @@ def test_the_server_sends_a_workspace_inboxs_mail_itself_once(inbox, monkeypatch
     calls = workspace(monkeypatch, answer)
     queued = queue(inbox, reply_to_id="inbound", thread_id="thread")
     machine = runner(inbox)
-    # No computer leases a Workspace inbox's mail (the computer that syncs it gets None, any other is refused).
-    post(inbox, "connectors/email/sends/claim", {"mailbox": BOX}, token=machine["token"], expected=403)
+    # No computer leases mail: a 0.6 computer that still asks is handed nothing (backend/connectors_floor.py).
+    assert post(inbox, "connectors/email/sends/claim", {"mailbox": BOX}, token=machine["token"]) == {"send": None}
     store, auth = inbox.app.state.store, inbox.app.state.auth
     assert S.drain(store, auth) == int(state == "sent")
     [call] = calls
@@ -539,7 +556,7 @@ def test_the_server_sends_a_personal_grant_s_mail_from_its_own_grant(inbox, monk
     google, calls = own_grant(inbox, monkeypatch, GC.READ_SCOPES + [GC.G + "gmail.modify"])
     queued = queue(inbox, reply_to_id="inbound", thread_id="thread")
     machine = runner(inbox)
-    post(inbox, "connectors/email/sends/claim", {"mailbox": BOX}, token=machine["token"], expected=403)
+    assert post(inbox, "connectors/email/sends/claim", {"mailbox": BOX}, token=machine["token"]) == {"send": None}
     store, auth = inbox.app.state.store, inbox.app.state.auth
     assert S.drain(store, auth) == 1
     assert [call["token"] for call in calls] == ["ya29.own"]
@@ -602,16 +619,19 @@ def test_a_retired_registry_mail_policy_carries_its_safeguards_over_once(inbox):
 
 def test_a_drain_leases_no_new_email_once_its_budget_is_spent(inbox, monkeypatch):
     """The drain worker's budget (backend/drains.py): a slow Gmail ends the pass early; the rest go next pass, once."""
-    import time
+    from types import SimpleNamespace
 
     from backend import drains, gmail_live
 
     autonomous(inbox)
     calls = workspace(monkeypatch, (200, {"id": "gmail-1"}))
     answer = gmail_live.send_call
+    # The budget's clock moves only when Gmail answers, so a loaded machine cannot change what one pass leases.
+    clock = [0.0]
+    monkeypatch.setattr(drains, "time", SimpleNamespace(monotonic=lambda: clock[0]))
 
     def slow(*args, **kwargs):
-        time.sleep(0.5)
+        clock[0] += 0.5
         return answer(*args, **kwargs)
 
     monkeypatch.setattr(gmail_live, "send_call", slow)

@@ -12,11 +12,10 @@ from backend.tests.helpers.fake_gmail import fake_gmail  # noqa: F401
 from backend.tests.helpers.automation_mail_actions import BOX, automate, claim, last_run, later, owned_by_ana
 from backend.tests.helpers.gmail_live import gmail_http  # noqa: F401
 from backend.tests.helpers.google_workspace import personal
-from backend.tests.helpers.google_workspace_authz import place, publish, workspace_key  # noqa: F401
+from backend.tests.helpers.google_workspace_authz import place, workspace_key  # noqa: F401
 from backend.tests.helpers.mail_api import seed_org
 from backend.tests.helpers.mail_targets import declare
-from connectors.mail.actions import label_name
-from connectors.mail.labels import NEEDS_OWNER
+from backend.mail_lib.labels import NEEDS_OWNER, label_name
 
 SHARED = "legal@acme.example"
 ARCHIVE = {"do": "archive"}
@@ -92,12 +91,11 @@ def queued(api, *kinds, step=None):
 
 
 def organizer(api):
-    """A published computer for claim-route checks; filing itself never needs this setup."""
+    """A computer running Ana's message bot, as a 0.6 one that still asks for mail work; filing never needs it."""
     seed_org(api)
     declare(api, BOX)
     machine = runner(api)
     place(api, machine)
-    publish(api, machine["token"])
     return machine
 
 
@@ -121,8 +119,6 @@ def test_workspace_archive_needs_no_computer_and_settles_the_run(api, live, mail
             "count": 1,
             "via": "automation:" + aid,
         }
-        assert c.execute("SELECT count(*) FROM mail_messages").fetchone()[0] == 0
-        assert c.execute("SELECT count(*) FROM mail_mailboxes").fetchone()[0] == 0
     api.app.state.store.automations.drain()
     assert len(live["writes"]) == 1
 
@@ -140,7 +136,7 @@ def test_workspace_label_normalizes_and_creates_only_on_first_use(api, live):
     assert all(json.loads(r["result"])["detail"] == "labelled " + name for r in rows(api, aid))
 
 
-def test_workspace_leave_adds_the_connectors_needs_owner_label(api, live):
+def test_workspace_leave_adds_the_needs_owner_label(api, live):
     aid, run = run_mail(api, LEAVE)
     assert run["status"] == "ok"
     assert live["writes"][0][1] == {"name": NEEDS_OWNER}
@@ -185,10 +181,10 @@ def test_chains_waiting_on_an_earlier_action_do_not_crowd_out_ready_work(api, li
     assert all(r["state"] in ("queued", "claimed") for r in rows(api) if r["id"] != ready)
 
 
-def test_an_older_computer_that_asks_for_actions_gets_none(api, live):
+def test_an_older_computer_that_asks_for_actions_is_handed_none(api, live):
     machine = organizer(api)
     queued(api, "archive", "label", "leave", "draft", "send", "forward", "unsubscribe")
-    assert claim(api, machine["token"])["actions"] == []
+    assert claim(api, machine["token"]) == {"actions": []}
     assert all(r["state"] == "queued" and r["attempts"] == 0 for r in rows(api))
 
 
@@ -303,7 +299,7 @@ def test_only_the_server_recovers_expired_workspace_computer_leases(api, live):
             "UPDATE automation_mail_actions SET state='claimed',claimed_by=?,claimed_at=?,attempts=1 WHERE id=?",
             (machine["runner_id"], H.shift(H.now(), minutes=-M.MAIL_LEASE_MINUTES - 1), mid),
         )
-    assert claim(api, machine["token"])["actions"] == []
+    assert claim(api, machine["token"]) == {"actions": []}
     assert rows(api)[0]["state"] == "claimed" and not live["writes"]
     M.drain_workspace_mail(api.app.state.store)
     (row,) = rows(api)

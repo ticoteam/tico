@@ -40,7 +40,7 @@ function auQuestionIds(s: AuStep) {
   return Object.keys(qs);
 }
 // An action's text under each name the hub reads, first to last (backend/automation_actions.py and
-// connectors/mail/actions.py): the first one set runs. An edit writes `key` and drops the others, so what the editor
+// backend/mail_actions.py): the first one set runs. An edit writes `key` and drops the others, so what the editor
 // shows is what runs (a task's label reads tag, then name; name works for mail and tasks alike).
 const AU_ARG_NAMES: Record<string, {keys: string[]; key: string; drop?: string[]}> = {label: {keys: ['label', 'tag', 'name'], key: 'name'}, draft_reply: {keys: ['body', 'text'], key: 'body'},
   send_reply: {keys: ['body', 'text'], key: 'body'}, wake_bot: {keys: ['text', 'prompt'], key: 'text'},

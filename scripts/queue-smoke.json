@@ -36,11 +36,6 @@
       "reason": "install.sh --runner with stubs"
     },
     {
-      "file": "connectors/mail/tests/test_write.py",
-      "seconds": 0.978,
-      "reason": "Mail draft and send retry safety through the CLI"
-    },
-    {
       "file": "backend/tests/test_permission_attacks.py",
       "seconds": 9.392,
       "reason": "What members, BotOps and untrusted people cannot do"

@@ -18,9 +18,8 @@ import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
-from connectors.mail.gmail import normalize
-
 from . import google_tokens
+from .mail_lib.gmail import normalize
 from .store import Problem
 
 BASE = "https://gmail.googleapis.com/gmail/v1/users/"

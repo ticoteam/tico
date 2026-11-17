@@ -116,7 +116,7 @@ from clients.gateway import user_agent
 from . import cloud_access, outbound_tls, releases, runner_online
 from .store import H, Problem, digest, encode
 from . import bot_settings as BS
-from .api_contract import ERROR, api_v2
+from .api_contract import api_v2, error
 
 log = logging.getLogger(__name__)
 
@@ -3104,8 +3104,8 @@ CLOUD_SUPPORT_DESCRIPTION = (
     "on in the error. After an uncertain PUT, read HQ again before showing a saved state."
 )
 CLOUD_SUPPORT_ERRORS = {
-    "403": {"description": "People only; changing the switch needs the owner", **ERROR},
-    "502": {"description": "Didn't reach Tico HQ, or HQ's answer could not be used", **ERROR},
+    "403": error("People only; changing the switch needs the owner"),
+    "502": error("Didn't reach Tico HQ, or HQ's answer could not be used"),
 }
 
 
@@ -3167,7 +3167,7 @@ def install(app, settings, store, auth, execution, mutate):
             description=CLOUD_SUPPORT_DESCRIPTION,
             responses={
                 **CLOUD_SUPPORT_ERRORS,
-                "404": {"description": "not_cloud: cloud-machine support is not available", **ERROR},
+                "404": error("not_cloud: cloud-machine support is not available"),
             },
         ),
     )

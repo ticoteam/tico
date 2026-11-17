@@ -17,6 +17,7 @@ Posting a feed row:
 - Pending -> posted, or an amount change, updates the row in place; a changed posted row is reversed and posted
   again, never twice. A row a done reconciliation cleared is locked."""
 
+import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from datetime import timedelta
@@ -46,6 +47,8 @@ OTHER, BANK, CARDS, OPENING = "6900", "1000", "2100", "3900"
 BOOKS_PROVIDERS = ("quickbooks", "xero")
 MATCH_DAYS = 5  # a transfer's two sides post within this many days of each other
 AUTH_DAYS = 30  # an authorization's hold lasts this long without its settlement
+
+log = logging.getLogger(__name__)
 
 
 def event(ctx: Ctx, name: str, subject: str, payload: Mapping[str, object], key: str = "") -> None:
@@ -123,7 +126,45 @@ def new_account(ctx: Ctx, base: str, name: str, type_: str, subtype: str, who: s
 
 
 # ------------------------------------------------------------------------------------------------ connecting
+KEY_NOT_USABLE_NOW = "the key is not one this connection's creator may use now (a grant revoked, a person gone, a bot paused or archived)"
+KEY_NOT_YOURS = "that credential is not one you may use: pick a key you hold on Tools"
+
+
+def require_usable_key(ctx: Ctx, who: str, credential_id: str) -> None:
+    """Refuse binding a credential the requester may not use (the vault's rule, `tico.may_use_credential`). Every
+    path that sets a connection's credential runs it: the connect route before its probe sends the key anywhere, and
+    connection_create, which the route and the generic actions path both reach, again at approval."""
+    if not tico.may_use_credential(ctx.c, who, credential_id):
+        raise denied(KEY_NOT_YOURS)
+
+
+def unusable_key(store: Any, row: Mapping[str, Any]) -> str:
+    """Why a sync must not read this connection's credential, or "" when it may: the person or bot who made the
+    connection may no longer use it (a grant revoked, a person gone, a bot paused or archived). A credential with no value left is the sync's own
+    "missing" case. Logged by category and id, never the value."""
+    ref, creator = str(row["credential_ref"] or ""), str(row["created_by"] or "")
+    with store.read() as c:
+        if not tico.credential_exists(c, ref) or tico.may_use_credential(c, creator, ref):
+            return ""
+    log.warning(
+        "finance sync refused: category=credential_not_usable id=%s provider=%s credential=%s detail=%s",
+        row["id"],
+        row["provider"],
+        ref,
+        "the connection's creator may no longer use its credential",
+    )
+    return KEY_NOT_USABLE_NOW
+
+
 def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
+    """Connect a bank, card or Stripe account with a stored credential the requester may use (`require_usable_key`),
+    checked after the provider's own checks so a malformed request still says what is wrong with it."""
+    plan = _connection_plan(ctx, who, p)
+    require_usable_key(ctx, who, str(p.get("credential_id") or ""))
+    return plan
+
+
+def _connection_plan(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Connect a Mercury account with the company's token (a Tico credential, read at use time and never copied
     here). `probe` is what finance/sync.probe read with that token just before: the accounts (last 4 only), the IO
     credit accounts and Mercury's users. Each account becomes a money account mapped to a line in the books: checking

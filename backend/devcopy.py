@@ -76,8 +76,6 @@ EMPTY = (
     # reconnect cards: an open one is a wake the copy could send; the refusals only settle those
     "task_reconnects",
     "google_signin_refusals",
-    # refusal holds on one task or chat: their cooldowns belong to the source's runs; the copy starts with none
-    "quarantine_holds",
     # The retired Nightly memory tidy pilot's ledger: history only.
     "memory_tidy_passes",
     "memory_tidy_packets",
@@ -200,9 +198,7 @@ EMPTY = (
     "email_legacy_automations",
     "mail_unsubscribes",  # one-click unsubscribes sent from the source: a copy sends none
     "mail_drafts",  # ids of the source's Gmail drafts
-    # mail, Slack, GitHub, Granola, meeting bots, support; the old copies of mail (read live from Gmail now) stay behind
-    "mail_mailboxes",
-    "mail_messages",
+    # mail, Slack, GitHub, Granola, meeting bots, support
     "mailboxes",
     "mailbox_accesses",
     "google_connects",
@@ -210,12 +206,11 @@ EMPTY = (
     "slack_posts",
     "slack_events",
     "slack_threads",
-    # Tools > Settings > Email: the Workspace key (sealed), setup codes and the OAuth client secret (sealed), and the health each
-    # computer reported. A copy holds none of them (google_connects.client_id goes with its table).
+    # Tools > Settings > Email: the Workspace key (sealed), setup codes and the OAuth client secret (sealed). A copy holds
+    # none of them (google_connects.client_id goes with its table).
     "google_workspaces",
     "google_setup_codes",
     "google_oauth_clients",
-    "connector_reports",
     "github_app",
     "github_app_states",
     # The owner's GitHub user token (sealed, for a personal account) and its single-use states: a copy holds neither.
@@ -395,6 +390,9 @@ KEEP = (
             # Run-budget holds before migration 20261117061834_holds_runaway moves them into `holds`: a copy is pruned
             # before its first start runs that migration, so an unlisted table here would be emptied and its holds lost.
             "bot_budget",
+            # Quarantines on one task or chat before migration 20261117072054_holds_quarantine moves them into `holds`,
+            # kept for the same reason.
+            "quarantine_holds",
             "bot_config",
             "bot_settings",
             "bot_control",
@@ -424,7 +422,6 @@ KEEP = (
             "chat_goals",
             "schema_migrations",
             "company_profile",
-            "connector_snapshots",
             "conversations",
             "doc_sources",
             "doc_versions",
@@ -454,7 +451,7 @@ KEEP = (
             "goals",
             "health_findings",
             "health_reports",
-            "holds",  # why a bot may not start work: the copy holds what the source held (runaway runs, so far)
+            "holds",  # why a bot may not start work: the copy holds what the source held (runaway runs, quarantines)
             "humans",
             "principals",
             "import_refs",

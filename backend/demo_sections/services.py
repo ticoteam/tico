@@ -258,7 +258,7 @@ def mail_access(b):
 
 def _email_sending(b):
     from .. import email_sending, mailbox_access
-    from connectors.mail import compose
+    from ..mail_lib import compose
 
     b.at(hours=0.1)
 

@@ -773,9 +773,6 @@ def run_sample(case, sample, args, outdir):
     logf = work / "hub.log"
     logf.write_text("")
     (work / "hubdir/scripts").mkdir(parents=True)
-    mail = work / "hubdir/scripts/mail.sh"
-    mail.write_text("#!/bin/sh\necho '[]'\n")
-    mail.chmod(0o755)
     # Inherited HUB_* and TICO_* (credentials, tokens, hub addresses) never reach the child: the run has its own.
     inherited = {k: v for k, v in os.environ.items() if not k.startswith(("HUB_", "TICO_"))}
     env = {

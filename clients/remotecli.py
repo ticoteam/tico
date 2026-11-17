@@ -9,14 +9,13 @@ import re
 import sys
 import time
 import uuid
-from datetime import date, datetime, timedelta, timezone
 from urllib.parse import quote
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 if __package__ in (None, ""):  # imported by a script run from anywhere
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from clients import cli_spec, hubcli_pipelines
+from clients.commands.calls import calendar_names, calendar_notes, calendar_text
 from clients.tico import APIError, Client
 
 
@@ -150,28 +149,6 @@ def product_repo_create(client, name, *, confirm=None, stdin=None, stderr=None):
     )
 
 
-def chosen_grant(value):
-    """`owner/repo`, `owner/repo:read`, `owner/repo:write`, or a write grant with options: `+actions` (may run
-    workflows) and `+edit` (may edit workflow files), as in `owner/repo:write+actions+edit`. Left out, an option keeps
-    whatever setting the grant has; `-actions` or `-edit` turns it off."""
-    name, _, level = value.rpartition(":") if ":" in value else (value, "", "write")
-    access, *options = re.split(r"(?=[+-])", level)
-    flags = {}
-    for option in options:
-        flag = {"actions": "run_workflows", "edit": "edit_workflows"}.get(option[1:])
-        if not flag or flag in flags:
-            access = ""
-            break
-        flags[flag] = option[0] == "+"
-    if access not in ("read", "write") or access == "read" and flags:
-        raise APIError(
-            "validation",
-            f"'{value}': use owner/repo, :read, :write, or :write with +actions, -actions, "
-            "+edit or -edit (e.g. :write+actions+edit)",
-        )
-    return {"full_name": name, "access": access, **flags}
-
-
 def counsel_held(args):
     """The Rules Owner runs a shell, so its CLI is held to the tools it is offered as its MCP is (hubtools.COUNSEL_TOOLS): a web
     search or fetch, a message, and every other command outside that list are refused before anything is sent."""
@@ -221,148 +198,19 @@ def calendar_text_mode(args):
     )
 
 
-def _names(value, *, text=False):
-    """A comma-separated flag as its names, spaces dropped: a list, or the text the API reads; None when it is empty."""
-    names = [part.strip() for part in (value or "").split(",") if part.strip()]
-    if not names:
-        return None
-    return ",".join(names) if text else names
-
-
 def calendar_command(client, args):
-    """The Calendar tools (tico_calendar_*) with the command's flags as they take them."""
+    """`tico calendar list` with a Calendar flag: the events on calendars (tico_calendar_events). The other Calendar
+    leaves are specs (CALENDAR in clients/commands/calls.py)."""
     from clients import hubtools
 
-    def call(name, fields):
-        fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
-        return hubtools.BY_NAME[name]["fn"](client, fields)
-
-    if args.sub == "list":
-        return call(
-            "tico_calendar_events",
-            {
-                "who": _names(args.who, text=True) or args.calendar or None,
-                "from": args.from_,
-                "to": args.to,
-                "kinds": args.kinds,
-            },
-        )
-    if args.sub == "free":
-        return call(
-            "tico_calendar_free",
-            {"who": _names(args.who, text=True), "minutes": args.minutes, "within": args.within},
-        )
-    if args.sub == "add":
-        return call(
-            "tico_calendar_add",
-            {
-                "calendar": args.calendar,
-                "title": args.title,
-                "start": args.start,
-                "end": args.end,
-                "all_day": args.all_day or None,
-                "attendees": _names(args.who),
-                "repeat": args.repeat,
-                "notes": args.notes,
-                "add_meet": not args.no_meet,
-            },
-        )
-    if args.sub == "move":
-        return call(
-            "tico_calendar_move",
-            {"occurrence": args.occurrence, "start": args.start, "end": args.end, "scope": args.scope},
-        )
-    if args.sub == "cancel":
-        return call("tico_calendar_cancel", {"occurrence": args.occurrence, "scope": args.scope})
-    return call("tico_calendar_search", {"q": args.q, "who": _names(args.who, text=True)})
-
-
-def _zone(name):
-    """The IANA zone a time is shown in, or None when there is none to use."""
-    try:
-        return ZoneInfo(name) if name else None
-    except (KeyError, ValueError):
-        return None
-
-
-def _answer_zone(result):
-    """The zone an answer's times show in: the first calendar the server gives a time zone for, else a single event's
-    own zone. None keeps the offsets the server sent (UTC for Z)."""
-    if not isinstance(result, dict):
-        return None
-    for calendar in result.get("calendars") or []:
-        if calendar.get("time_zone"):
-            return _zone(calendar["time_zone"])
-    return _zone(result.get("time_zone"))
-
-
-def _instant(iso, zone):
-    moment = datetime.fromisoformat(iso)
-    if moment.tzinfo is None:
-        moment = moment.replace(tzinfo=timezone.utc)
-    return moment.astimezone(zone) if zone else moment
-
-
-def _day(day):
-    return f"{day:%a} {day.day} {day:%b}"
-
-
-def _when(start, end, all_day, zone):
-    """`Wed 11 Nov 09:30–10:00`, or `Wed 11 Nov all day`: where a line says when, in the zone its answer names."""
-    if all_day:
-        first = date.fromisoformat(start)
-        last = date.fromisoformat(end or start) - timedelta(days=1)  # the end is exclusive
-        if last <= first:
-            return f"{_day(first)} all day"
-        return f"{_day(first)}–{_day(last)} all day"
-    begin, finish = _instant(start, zone), _instant(end or start, zone)
-    if begin.date() == finish.date():
-        return f"{_day(begin)} {begin:%H:%M}–{finish:%H:%M}"
-    return f"{_day(begin)} {begin:%H:%M}–{_day(finish)} {finish:%H:%M}"
-
-
-def _occurrence_line(occ, zone):
-    """`Wed 11 Nov 09:30–10:00  Standup  (Ana)  [occurrence id]`: one occurrence, its calendar named."""
-    parts = [_when(occ.get("start"), occ.get("end"), occ.get("all_day"), zone), occ.get("title") or "(no title)"]
-    if occ.get("planned"):
-        parts.append("(planned)")
-    if occ.get("count"):
-        parts.append(f"({occ['count']} runs)")
-    name = (occ.get("calendar") or {}).get("name")
-    if name:
-        parts.append(f"({name})")
-    parts.append(f"[{occ.get('occurrence_id')}]")
-    return "  ".join(parts)
-
-
-def calendar_text(args, result):
-    """The Calendar command's answer as lines a person reads."""
-    if args.sub == "cancel":
-        return f"cancelled {args.occurrence}" + (f" ({args.scope})" if args.scope else "")
-    if args.sub in ("add", "move"):
-        if not isinstance(result, dict) or "start" not in result:
-            return json.dumps(result, indent=2)
-        return _occurrence_line(result, _answer_zone(result))
-    zone = _answer_zone(result)
-    if args.sub == "free":
-        slots = (result or {}).get("slots") or []
-        return (
-            "\n".join(_when(slot["start"], slot["end"], False, zone) for slot in slots)
-            or "No free time in that window."
-        )
-    occurrences = (result or {}).get("occurrences") or []
-    empty = "No matches." if args.sub == "search" else "Nothing in that window."
-    return "\n".join(_occurrence_line(occ, zone) for occ in occurrences) or empty
-
-
-def calendar_notes(result):
-    """What a Calendar answer could not give: a calendar that did not answer, a search that ran out of time."""
-    if not isinstance(result, dict):
-        return []
-    lines = [f"tico: could not read {err.get('ref')}: {err.get('reason')}" for err in result.get("errors") or []]
-    if result.get("partial"):
-        lines.append("tico: some results are missing: the search ran out of time")
-    return lines
+    fields = {
+        "who": calendar_names(args.who, text=True) or args.calendar or None,
+        "from": args.from_,
+        "to": args.to,
+        "kinds": args.kinds,
+        "operation_id": os.environ.get("HUB_OPERATION_ID"),
+    }
+    return hubtools.BY_NAME["tico_calendar_events"]["fn"](client, fields)
 
 
 def run(args, who=None):
@@ -390,7 +238,7 @@ def run(args, who=None):
         **({"retries": 0} if browsing else {}),
     )
     fn = args.fn
-    if args.cmd == "calendar" and args.sub in CALENDAR_SUBS and calendar_on_events(args):
+    if args.cmd == "calendar" and args.sub == "list" and calendar_on_events(args):
         return calendar_command(client, args)
     if (spec := cli_spec.of(args)) is not None:  # a command declared as a spec (clients/cli_spec.py)
         return spec.call(client, args)
@@ -408,8 +256,6 @@ def run(args, who=None):
     if fn in ("token list", "token create", "token revoke"):  # clients/cli_plumbing.py
         return via_tool(client, args)
     if args.cmd == "call":
-        return via_tool(client, args)
-    if fn == "event-types":
         return via_tool(client, args)
     if fn == "team icon":
         with Path(args.file).open("rb") as source:
@@ -435,24 +281,6 @@ def run(args, who=None):
                 },
             )
         return product_repo_create(client, args.name, confirm=args.confirm)
-    if fn == "bot repos":
-        from clients import hubtools
-
-        if not args.all and not args.own and args.chosen is None:
-            return hubtools.bot_repos_get(client, {"bot": args.bot})
-        body = {"bot": args.bot, "mode": "all" if args.all else "own" if args.own else "chosen"}
-        if args.chosen is not None:
-            body["chosen"] = [chosen_grant(r) for r in args.chosen]
-        result = hubtools.bot_repos_set(client, body)
-        # Say what the change took away: a switch to own keeps the chosen rows, but they stop applying.
-        lost = [r["full_name"] + " (" + r["access"] + ")" for r in (result or {}).get("stopped") or []]
-        lost += [name + " (run workflows)" for name in (result or {}).get("workflows_stopped") or []]
-        lost += [name + " (edit workflow files)" for name in (result or {}).get("workflow_edits_stopped") or []]
-        lost += ["repository creation"] if (result or {}).get("creation_stopped") else []
-        lost += ["product repository creation"] if (result or {}).get("product_creation_stopped") else []
-        if lost:
-            print(f"{args.bot} no longer has: " + ", ".join(lost), file=sys.stderr)
-        return result
     if fn in ("bot copy", "bot update-from-original", "bot suggest-to-original", "skill copy", "skill submit"):
         return via_tool(client, args)  # they work in this computer's workspace (clients/botcopy.py)
     if fn == "bot app-shot":
@@ -465,13 +293,9 @@ def run(args, who=None):
         "brief",
         "mcp stats",
         "calendar list",
-        "calendar status",
         "run list",
         "message list",
         "message mark-read",
-        "agent pair show",
-        "agent pair approve",
-        "agent pair decline",
         "setup show",
         "setup complete",
         "setup invite",
@@ -716,17 +540,15 @@ def run(args, who=None):
             except UnicodeDecodeError:
                 body["content_base64"] = base64.b64encode(data).decode("ascii")
             return post(f"tasks/{args.id}/files", body)
-    if cmd == "listening":
-        if fn == "listening save":
-            text = sys.stdin.read() if args.file == "-" else Path(args.file).read_text()
-            try:
-                read = json.loads(text)
-            except ValueError as exc:
-                raise APIError("file", f"--file is not JSON ({exc})") from None
-            if not isinstance(read, dict):
-                raise APIError("file", "--file must hold a JSON object")
-            return post("listening/sources/" + quote(args.source, safe="") + "/items", read)
-        return client.get("listening/sources", due=1, automation=args.automation)
+    if fn == "listening save":  # `listening sources` is a spec (clients/commands/listening.py)
+        text = sys.stdin.read() if args.file == "-" else Path(args.file).read_text()
+        try:
+            read = json.loads(text)
+        except ValueError as exc:
+            raise APIError("file", f"--file is not JSON ({exc})") from None
+        if not isinstance(read, dict):
+            raise APIError("file", "--file must hold a JSON object")
+        return post("listening/sources/" + quote(args.source, safe="") + "/items", read)
     if fn == "conversation show":
         return call_tool(
             "tico_conversation_show", {"conversation": args.conversation, "before": args.before, "since": args.since}

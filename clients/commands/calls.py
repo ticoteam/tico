@@ -2,9 +2,11 @@
 
 Moved from clients/hubtools.py; clients/commands/__init__.py says how the table is put together."""
 
+import json
 import sys
 from urllib.parse import quote
-from datetime import datetime
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 from clients.cli_spec import Arg, Command, Group
@@ -658,5 +660,180 @@ MEETING = (
         "restore a dismissed meeting to Pending",
         convert=_no_key,
         example="tico meeting restore m1",
+    ),
+)
+
+
+def calendar_names(value, *, text=False):
+    """A comma-separated flag as its names, spaces dropped: a list, or the text the API reads; None when it is empty."""
+    names = [part.strip() for part in (value or "").split(",") if part.strip()]
+    if not names:
+        return None
+    return ",".join(names) if text else names
+
+
+def _zone(name):
+    """The IANA zone a time is shown in, or None when there is none to use."""
+    try:
+        return ZoneInfo(name) if name else None
+    except (KeyError, ValueError):
+        return None
+
+
+def _answer_zone(result):
+    """The zone an answer's times show in: the first calendar the server gives a time zone for, else a single event's
+    own zone. None keeps the offsets the server sent (UTC for Z)."""
+    if not isinstance(result, dict):
+        return None
+    for calendar in result.get("calendars") or []:
+        if calendar.get("time_zone"):
+            return _zone(calendar["time_zone"])
+    return _zone(result.get("time_zone"))
+
+
+def _instant(iso, zone):
+    moment = datetime.fromisoformat(iso)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(zone) if zone else moment
+
+
+def _day(day):
+    return f"{day:%a} {day.day} {day:%b}"
+
+
+def _when(start, end, all_day, zone):
+    """`Wed 11 Nov 09:30–10:00`, or `Wed 11 Nov all day`: where a line says when, in the zone its answer names."""
+    if all_day:
+        first = date.fromisoformat(start)
+        last = date.fromisoformat(end or start) - timedelta(days=1)  # the end is exclusive
+        if last <= first:
+            return f"{_day(first)} all day"
+        return f"{_day(first)}–{_day(last)} all day"
+    begin, finish = _instant(start, zone), _instant(end or start, zone)
+    if begin.date() == finish.date():
+        return f"{_day(begin)} {begin:%H:%M}–{finish:%H:%M}"
+    return f"{_day(begin)} {begin:%H:%M}–{_day(finish)} {finish:%H:%M}"
+
+
+def _occurrence_line(occ, zone):
+    """`Wed 11 Nov 09:30–10:00  Standup  (Ana)  [occurrence id]`: one occurrence, its calendar named."""
+    parts = [_when(occ.get("start"), occ.get("end"), occ.get("all_day"), zone), occ.get("title") or "(no title)"]
+    if occ.get("planned"):
+        parts.append("(planned)")
+    if occ.get("count"):
+        parts.append(f"({occ['count']} runs)")
+    name = (occ.get("calendar") or {}).get("name")
+    if name:
+        parts.append(f"({name})")
+    parts.append(f"[{occ.get('occurrence_id')}]")
+    return "  ".join(parts)
+
+
+def calendar_text(args, result):
+    """The Calendar command's answer as lines a person reads."""
+    if args.sub == "cancel":
+        return f"cancelled {args.occurrence}" + (f" ({args.scope})" if args.scope else "")
+    if args.sub in ("add", "move"):
+        if not isinstance(result, dict) or "start" not in result:
+            return json.dumps(result, indent=2)
+        return _occurrence_line(result, _answer_zone(result))
+    zone = _answer_zone(result)
+    if args.sub == "free":
+        slots = (result or {}).get("slots") or []
+        return (
+            "\n".join(_when(slot["start"], slot["end"], False, zone) for slot in slots)
+            or "No free time in that window."
+        )
+    occurrences = (result or {}).get("occurrences") or []
+    empty = "No matches." if args.sub == "search" else "Nothing in that window."
+    return "\n".join(_occurrence_line(occ, zone) for occ in occurrences) or empty
+
+
+def calendar_notes(result):
+    """What a Calendar answer could not give: a calendar that did not answer, a search that ran out of time."""
+    if not isinstance(result, dict):
+        return []
+    lines = [f"tico: could not read {err.get('ref')}: {err.get('reason')}" for err in result.get("errors") or []]
+    if result.get("partial"):
+        lines.append("tico: some results are missing: the search ran out of time")
+    return lines
+
+
+# `tico calendar ...` (clients/cli_spec.py): every leaf but `list` and `schedule`. `list` reads the company calendar's
+# appointments (tico_calendar_list) or, with a Calendar flag or --json, the events (tico_calendar_events; see
+# clients/remotecli.py); `schedule` reads --description-file on this computer.
+def _calendar_render(args, result):
+    """The answer as lines a person reads; what it could not give goes to stderr."""
+    for line in calendar_notes(result):
+        print(line, file=sys.stderr)
+    return calendar_text(args, result)
+
+
+def _calendar_who(fields):
+    """--who as the API reads it: the names, comma-separated, spaces dropped; left out when it is empty."""
+    who = calendar_names(fields.pop("who", None), text=True)
+    return {**fields, **({"who": who} if who else {})}
+
+
+def _calendar_add(fields):
+    """--who is the attendees, comma-separated; --all-day is sent only when given."""
+    attendees = calendar_names(fields.pop("attendees", None))
+    if not fields.get("all_day"):
+        fields.pop("all_day", None)
+    return {**fields, **({"attendees": attendees} if attendees else {})}
+
+
+CALENDAR = (Group("calendar", "events, free times and bookings on calendars"),)
+CALENDAR_AFTER_LIST = (
+    Command(
+        "calendar free",
+        "times when people are free, within their working hours",
+        render=_calendar_render,
+        convert=_calendar_who,
+        example="tico calendar free --who human:ana,human:ben --minutes 45 --within 5d",
+    ),
+    Command(
+        "calendar add",
+        "book an event; a bot or the Assistant may book anyone a rule allows",
+        args=(
+            Arg("title", flag="--title"),
+            Arg("start", flag="--start"),
+            Arg("end", flag="--end"),
+            Arg("attendees", flag="--who", action="store"),
+            Arg("add_meet", flag="--no-meet", action="store_false"),
+        ),
+        render=_calendar_render,
+        convert=_calendar_add,
+        example="tico calendar add --title 'Plan review' --start 2026-12-01T10:00:00-08:00 "
+        "--end 2026-12-01T10:30:00-08:00 --who human:ana",
+    ),
+    Command(
+        "calendar move",
+        "move one occurrence, or a repeated event from it on with --scope",
+        args=(Arg("start", flag="--start"),),
+        render=_calendar_render,
+        example="tico calendar move occ1 --start 2026-12-01T11:00:00-08:00",
+    ),
+    Command(
+        "calendar cancel",
+        "cancel one occurrence, or a repeated event from it on with --scope",
+        render=_calendar_render,
+        example="tico calendar cancel occ1 --scope following",
+    ),
+    Command(
+        "calendar search",
+        "find events by words, with tokens such as with:ben or before:2026-12-01",
+        args=(Arg("q", metavar="words"),),
+        render=_calendar_render,
+        convert=_calendar_who,
+        example="tico calendar search 'plan review with:ana'",
+    ),
+)
+CALENDAR_AFTER_SCHEDULE = (
+    Command(
+        "calendar status",
+        "whether a queued appointment was created",
+        example="tico calendar status a1",
     ),
 )

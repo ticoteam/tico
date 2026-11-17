@@ -364,7 +364,6 @@ def test_a_nights_sent_mail_is_read_from_gmail_and_a_silent_mailbox_is_passed_ov
     since, now = (learnings.utc(datetime_of(t)) for t in window)
     with store.read() as c:
         items = learnings._sent_mail(c, people, since, now)
-        assert c.execute("SELECT count(*) FROM mail_messages").fetchone()[0] == 0
     assert [(i["key"], i["author"]) for i in items] == [("mail:ana@acme.example:sent", "human:ana")]
     assert "How does pricing work?" in items[0]["text"]
 

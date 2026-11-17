@@ -12,8 +12,9 @@
 /* A phone: the mark sits at the end of the stage tabs' row for the stage shown, a whole 44 px target there; a stage with
    none keeps its place empty, so the tabs keep their width from stage to stage. */
 .pv-phone-head .sr-mark{width:44px;height:44px;margin:0 0 4px}
-/* (a hidden mark takes no room anywhere, [hidden] being display:none!important app-wide: an empty 44 px box holds it) */
-.pv-phone-head:has(> .sr-mark[hidden])::after{content:'';flex:none;width:44px;height:44px}
+/* A stage with no rules keeps the mark's box, invisible, so the tabs keep their width and the ⋯ after it stays at the end
+   ([hidden] is display:none!important app-wide, hence the !important). */
+.pv-phone-head .sr-mark[hidden]{display:inline-grid!important;visibility:hidden}
 
 .sr-modal{width:min(600px,calc(100vw - 32px))}
 /* The form's dialog has no padding of its own, so the shared dialog head sits flush rather than pulled out over it. */

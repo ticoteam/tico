@@ -115,7 +115,7 @@ def test_a_later_boot_only_starts_the_runner_and_takes_out_a_code_boat_wrote_aga
     assert cm.boot(m2, {}) == 0
     assert not fake2.named("enroll") and not fake2.named("install")
     starts = fake2.named("start")
-    assert starts and starts[0][-4:] == [f"tico-{job}.service" for job in cm.JOBS]
+    assert starts and starts[0][-len(cm.JOBS) :] == [f"tico-{job}.service" for job in cm.JOBS]
     assert (machine.etc / "environment").read_text() == 'PATH="/usr/bin"\n'
 
 

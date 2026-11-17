@@ -199,14 +199,16 @@ const waitCount = (page: Page, sid: string, n: string) => page.waitForFunction((
     // A screen reader hears whose rules: the stage, then the count (each column has one).
     assert.equal(await mark.getAttribute('aria-label'), 'Build: 1 rule of its own');
     assert.equal(await desk.locator('[data-pv-col="spec"] [data-sr-open]').getAttribute('aria-label'), 'Spec: 1 rule of its own');
-    // The muted gavel, never dimmed or struck through; last in the header, at its far right edge (▶'s slot before it).
+    // The muted gavel, never dimmed or struck through; at the header's right, just before the stage's ⋯, which ends it
+    // at its far right edge (▶'s slot before the gavel).
     assert.equal(await mark.evaluate(el => getComputedStyle(el.querySelector('.nav-icon')!).opacity), '1');
     assert.equal(await mark.evaluate(el => getComputedStyle(el, '::after').content), 'none', 'no strike-through');
     const edge = (sel: string) => desk.locator(sel).evaluateAll(els => els.map(el => {
-      const h = el.parentElement!, hb = h.getBoundingClientRect(), b = el.getBoundingClientRect();
-      return {last: h.lastElementChild === el, gap: Math.round(hb.right - parseFloat(getComputedStyle(h).paddingRight) - b.right)};
+      const h = el.parentElement!, more = el.nextElementSibling, last = h.lastElementChild!;
+      const gap = Math.round(h.getBoundingClientRect().right - parseFloat(getComputedStyle(h).paddingRight) - last.getBoundingClientRect().right);
+      return {next: more?.matches('[data-pv-col-menu]') && more === last, gap};
     }));
-    assert.deepEqual(await edge('.pv-col-head [data-sr-open]'), [{last: true, gap: 0}, {last: true, gap: 0}], 'at the far right of each column header');
+    assert.deepEqual(await edge('.pv-col-head [data-sr-open]'), [{next: true, gap: 0}, {next: true, gap: 0}], 'at the right of each column header, then its ⋯');
 
     // Build's mark opens Build's editor at its first phase with rules (While here: the pipeline's timer), scrolled to,
     // its heading focused. No other dialog.
@@ -506,8 +508,9 @@ const waitCount = (page: Page, sid: string, n: string) => page.waitForFunction((
     await serve(member, errors, false);
     await member.goto('http://tico-ui.test/#/tasks?pipeline=eng&layout=list');
     await waitCount(member, 'build', '1 rule of its own');
-    const listMark = member.locator('.pv-group[aria-label="Build"] .pv-group-head > :last-child');
-    assert.equal(await listMark.getAttribute('data-sr-open'), 'build', 'the list\'s mark ends its header too');
+    const listMark = member.locator('.pv-group[aria-label="Build"] .pv-group-head > [data-sr-open]');
+    assert.equal(await listMark.evaluate(el => !el.nextElementSibling || el.nextElementSibling.matches('[data-pv-col-menu]:last-child')), true,
+      'the list\'s mark ends its header too, before the stage\'s ⋯');
     await listMark.click();
     await member.locator(`${PH('here')} [data-sr-rule]`).first().waitFor();
     await member.waitForFunction(sel => document.activeElement?.matches(sel) ?? false, HERE_H);
@@ -544,7 +547,8 @@ const waitCount = (page: Page, sid: string, n: string) => page.waitForFunction((
     await waitCount(phone, 'build', '1 rule of its own');
     const button = await phone.locator('.pv-phone-head [data-sr-open="build"]').boundingBox();
     assert.ok(button && button.height >= 44 && button.width >= 44, 'the phone mark is a 44 px target');
-    assert.equal(await phone.locator('.pv-phone-head > :last-child').getAttribute('data-sr-open'), 'build', 'last in the row');
+    assert.equal(await phone.locator('.pv-phone-head > [data-sr-open="build"]').evaluate(el => !el.nextElementSibling
+      || el.nextElementSibling.matches('[data-pv-col-menu]:last-child')), true, 'last in the row, but for the stage\'s ⋯');
     // Its whole target is its own: a tap near each corner (inside its rounding) and at the centre lands on the mark, not
     // on a stage tab beside it.
     assert.deepEqual(await phone.locator('.pv-phone-head [data-sr-open="build"]').evaluate(el => {

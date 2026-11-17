@@ -3,6 +3,14 @@
 from backend import hubdb as H
 from backend.tests.helpers.api import claim, get, post
 
+# The open quarantines on one task or chat (backend/task_quarantine.py), with the task or chat each holds as its own
+# column.
+OPEN_SQL = (
+    "SELECT *, CASE holdable_type WHEN 'task' THEN holdable_id END AS task_id, "
+    "CASE holdable_type WHEN 'conversation' THEN holdable_id END AS conversation_id FROM holds "
+    "WHERE kind='quarantine' AND holdable_type IN ('task','conversation') AND released_at IS NULL"
+)
+
 
 def started(api, machine):
     attempt = claim(api, machine)

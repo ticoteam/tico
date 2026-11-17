@@ -206,7 +206,6 @@ backend/goal_read_back.py
 backend/goal_routes.py
 backend/goals.py
 backend/google_connect.py
-backend/google_rights.py
 backend/google_workspace.py
 backend/granola_mcp.py
 backend/groups.py
@@ -324,7 +323,6 @@ backend/provenance_clock.py
 backend/providers.py
 backend/providers_routes.py
 backend/public_roadmaps.py
-backend/quarantine_display.py
 backend/quarantine_stops.py
 backend/queue_purge.py
 backend/queue_refusals.py

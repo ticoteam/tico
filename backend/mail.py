@@ -7,8 +7,7 @@ chose, so the same draft asked for again is found, not made twice (backend/mail_
 the lint first, and the second reviewer reads it. Sending a draft is the send gate's (`POST /api/v2/email/sends` with
 its `draft_id`). `tico email ...` (clients/commands/mail.py) is a thin call to each route.
 
-`GET /api/v2/mail/access` is the mail CLI's question (connectors/mail/access.py): what the caller, a person or a bot's
-turn, may do on each mailbox it holds.
+`GET /api/v2/mail/access` answers what the caller, a person or a bot's turn, may do on each mailbox it holds.
 """
 
 import base64
@@ -23,7 +22,7 @@ from . import gmail_live, google_tokens, google_workspace, mail_compose, mailbox
 from .models import Contract
 from .store import H, Problem
 from .views import human_only, roster
-from .api_contract import ERROR, api_v2, ref
+from .api_contract import api_v2, error, ref
 
 LIMIT_DEFAULT, LIMIT_MAX = 50, 100
 DURATION = {"d": 86400, "h": 3600, "m": 60}
@@ -287,7 +286,7 @@ def install_mail(app, store, auth):
             "Organize up to 500 messages live in Whole Workspace Gmail; requires organize access; never deletes",
             "MailOrganizeResult",
             request_body={"required": True, "content": {"application/json": {"schema": ref("MailOrganizeBody")}}},
-            responses={"403": {"description": "Organize access or the company organize switch is off", **ERROR}},
+            responses={"403": error("Organize access or the company organize switch is off")},
         ),
     )
     def organize(request: Request, body: dict):
@@ -351,7 +350,7 @@ def install_mail(app, store, auth):
     @app.get("/api/v2/mail/access")
     def mail_access(request: Request, mailbox: str = ""):
         """What the caller may do: on every mailbox it holds, and on `mailbox` when named. A person (their Assistant
-        included, which is them) or a bot's turn; a computer asks /api/v2/connectors/mail/targets instead."""
+        included, which is them) or a bot's turn; a computer holds no mailbox."""
         who = request.state.identity
         if who.role not in ("owner", "human", "bot"):
             raise Problem("identity", "Mail access is answered for a person or a bot's turn", 403)
@@ -555,7 +554,7 @@ def install_mail(app, store, auth):
         return {"mailbox": addr, "ok": not found["errors"], "errors": found["errors"], "warnings": found["warnings"]}
 
     def _attachments(c, addr, mid):
-        from connectors.mail import gmail as gm
+        from .mail_lib import gmail as gm
 
         return gm.attachment_refs((gmail_live.payload(c, addr, mid) or {}).get("payload") or {})
 
@@ -578,8 +577,8 @@ def install_mail(app, store, auth):
     def attachment(request: Request, msg_id: str, ref: str, mailbox: str = ""):
         """One attachment's bytes (base64), at most gmail_live.ATTACHMENT_MAX_BYTES; `tico email attachment` writes
         them to a private file."""
-        from connectors.mail import Failure
-        from connectors.mail import gmail as gm
+        from .mail_lib import Failure
+        from .mail_lib import gmail as gm
 
         who = request.state.identity
         reader(who)

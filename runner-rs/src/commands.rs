@@ -24,8 +24,8 @@ fn failed(message: String) -> Refusal {
 }
 
 /// `enroll --url --code-file --label --projects [--environment]`: POST runners/enroll with the one-time code,
-/// then write the registration 0600, never over an existing one (O_EXCL), and carry the protected mail key from
-/// this operator's previous registration. Returns what Python prints: runner_id, config, operator.
+/// then write the registration 0600, never over an existing one (O_EXCL). Returns what Python prints: runner_id,
+/// config, operator.
 pub async fn enroll(
     config_path: &Path,
     url: &str,
@@ -87,7 +87,6 @@ pub async fn enroll(
         path: config_path.to_path_buf(),
         data,
     };
-    crate::mail_key::carry_protected(&config);
     Ok(
         json!({"runner_id": config.data.get("runner_id").cloned().unwrap_or(Value::Null), "config": config_path.to_string_lossy(), "operator": config.data.get("operator").cloned().unwrap_or(Value::Null)}),
     )
@@ -201,9 +200,6 @@ pub async fn doctor(config: &Config, client: &Client) -> Result<(Value, bool), R
     crate::perbot::PerBot::default().decorate(config, &mut checks, &candidates);
     let ready = checks.iter().all(|row| row["ready"] == true);
     let mut readiness = crate::readiness::document(&runtimes, &checks, &config.state_dir());
-    if crate::mail_key::status(config) == Some("exposed") {
-        readiness["mail_key"] = json!("exposed");
-    }
     if let Some(h) = crate::harness_tools::report(&runtimes).await {
         readiness["harnesses"] = h;
     }

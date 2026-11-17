@@ -97,8 +97,8 @@ The runner image brings its own Python, and a release can move it to a new minor
 release that moved the images to Debian trixie). The image's own venv (`/opt/tico/.venv`) comes with it. The runner's
 home volume (`/home/runner`) is kept across updates, and a Python environment there belongs to the Python that built it:
 
-- **Tico's mail venv** (`~/tools/mail-venv`, or `TICO_MAIL_VENV`) rebuilds itself the next time the runner's `connectors` job starts, which logs
-  "built by another Python, rebuilding it". Nothing to do.
+- **Tico's old mail venv** (`~/tools/mail-venv`) is deleted when the runner starts, since mail runs on the server
+  now. Nothing to do.
 - **A venv a bot or person made** (a project's `.venv`, say) still points at the old interpreter, which the new image
   does not have, so its `python` fails with "No such file or directory". Delete it and build it again with the image's
   Python, or let the project's own setup do so.
@@ -158,11 +158,12 @@ The runner is a git checkout. When the server's release is newer, the runner:
    `rolled_back` (or `failed` if the old code does not start either). It does not retry that release for six hours,
    or until the server's release changes. A disk-space failure retries as soon as free space increases.
 6. once the runner is healthy on the new release, restarts the background jobs that are installed on this Mac
-   (`connectors`, `close-calls`, `importers`; the same `launchctl kickstart -k` or `systemctl --user restart` as
-   `scripts/tico-computer restart`), so none keeps the old release in memory. A job that is not installed is left alone. Each job also checks the checkout's
+   (`close-calls`, `importers`; the same `launchctl kickstart -k` or `systemctl --user restart` as
+   `scripts/tico-computer restart`), so none keeps the old release in memory. A job that is not installed is left alone.
+   An old `connectors` job left from before mail moved to the server is removed instead. Each job also checks the checkout's
    revision about once a minute and exits when it changes, so its supervisor starts it on the new code even after a
    `scripts/tico-computer update` or a pull by hand. Each restart is a line in the job's log
-   (`scripts/tico-computer logs connectors`) and in `update.log`. A Docker runner replaces its container, jobs included.
+   (`scripts/tico-computer logs importers`) and in `update.log`. A Docker runner replaces its container, jobs included.
 
 A runner's release is the one it started on, not whatever the checkout names now. The runners of several company
 environments (`scripts/tico-computer -e <env> install`) may share one checkout: the first to update moves it, and each other
@@ -203,10 +204,10 @@ So a checkout runner that nothing supervises **refuses the update and says so** 
 Run it once on that computer, as the user the runner runs as (enroll first: [install.md](install.md#a-linux-checkout-systemd)):
 
 ```
-scripts/tico-computer install            # the runner, connectors, close-calls and importers
+scripts/tico-computer install            # the runner, close-calls and importers
 ```
 
-It writes four systemd **user** units under `~/.config/systemd/user` (`tico-bot.service`, `tico-connectors.service`,
+It writes three systemd **user** units under `~/.config/systemd/user` (`tico-bot.service`,
 `tico-close-calls.service`, `tico-importers.service`; `tico-<env>-...` for a team environment), each with
 `Restart=always`, and starts them. Nothing needs root. The units set `TICO_SUPERVISED=1` and `TICO_SYSTEMD_UNIT`, which is how
 the runner knows something will start it again and how the update restarts it through `systemctl --user restart`. The update
@@ -428,7 +429,7 @@ had, the runner does not start: it logs why and launchd or systemd tries again. 
 not drive is not ready, with the reason on that bot; the other bots on the computer run.
 
 The Python runner is gone. `"engine": "python"` in `runner.json` and `TICO_RUNNER_ENGINE=python` are ignored. Python
-still runs the side jobs (connectors, Close calls, meeting importers), the catalog set-up and the update process, from
+still runs the side jobs (Close calls, meeting importers), the catalog set-up and the update process, from
 `runner_support/`. A small `runner/` package forwards the two entry points saved things still start: `python -m runner ...`
 (launchd plists and systemd units, written before the move and by this release) and `python -m runner.cloud_machine boot`
 (cloud machine images). The other old `runner.<module>` paths were removed once no supported release predated the move, so

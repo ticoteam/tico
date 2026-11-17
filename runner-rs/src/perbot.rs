@@ -29,7 +29,6 @@ impl PerBot {
         checks: &mut [Map<String, Value>],
         candidates: &[Value],
     ) {
-        let held_key = crate::mail_key::held_by_computer(config);
         for (row, entry) in checks.iter_mut().zip(candidates) {
             let bot = text_of(&row["bot"]);
             if row["repository_present"] != true {
@@ -46,10 +45,7 @@ impl PerBot {
             if !crate::util::truthy(Some(&access)) {
                 continue;
             }
-            let mut held = crate::readiness_extra::held(&bot);
-            if held_key {
-                held.push("GOOGLE_SA_KEY".into());
-            }
+            let held = crate::readiness_extra::held(&bot);
             let mut tools = crate::declared_access::declared_tools(
                 &access,
                 &crate::env::process_environment(),

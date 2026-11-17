@@ -52,10 +52,6 @@ def test_owner_and_assistant_read_personal_and_shared_workspace_mail_without_a_c
         == google_workspace.READ_ONLY_SCOPES["gmail"][0]
         for call in workspace_key
     )
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT COUNT(*) FROM mail_messages").fetchone()[0] == 0
-        assert c.execute("SELECT COUNT(*) FROM mail_fts").fetchone()[0] == 0
-        assert c.execute("SELECT COUNT(*) FROM mail_mailboxes").fetchone()[0] == 0
 
 
 @pytest.mark.parametrize("mailbox", [BOX, SHARED])
@@ -74,7 +70,6 @@ def test_opening_live_mail_keeps_the_public_shape_and_audits_every_open(api, liv
         assert [item["kind"] for item in details] == ["message", "thread", "message"]
         assert all(item["mailbox"] == mailbox and item["via"] == "assistant" for item in details)
         assert "Live contract body" not in json.dumps(details)
-        assert c.execute("SELECT COUNT(*) FROM mail_messages").fetchone()[0] == 0
 
 
 def test_member_is_refused_before_gmail_and_a_grant_is_checked_each_time(api, live):
@@ -122,7 +117,6 @@ def ana_connected(api, monkeypatch):
 def test_a_personal_grant_is_read_live_through_its_own_grant_even_with_workspace_connected(
     api, live, workspace_key, ana_connected
 ):
-    put_old_copy(api, BOX, "stored")
     minted = len(workspace_key)
     page = read(api, "messages", mailbox=BOX, q="from:sender")
     assert page["messages"][0]["msg_id"] == "m2" and page["messages"][0]["mailbox"] == BOX
@@ -137,22 +131,10 @@ def test_every_mailbox_reads_gmail_and_never_an_old_copy(api, gmail_http, monkey
     from backend import google_tokens
 
     monkeypatch.setattr(google_tokens, "token", lambda c, mailbox, service, write=False: "door-token")
-    put_old_copy(api, BOX, "stored")
     page = read(api, "messages", mailbox=BOX, q="invoice")
     assert [item["msg_id"] for item in page["messages"]] == ["m2"] and page["next_cursor"] == NEXT
     assert [item["msg_id"] for item in read(api, "threads/t1", mailbox=BOX)["messages"]] == ["m1", "m2"]
     assert all(token == "door-token" for _, _, token in gmail_http["calls"])
-
-
-def put_old_copy(api, mailbox, msg_id):
-    """A row a computer's sync left behind before the server read Gmail itself: nothing reads it."""
-    with api.app.state.store.transaction() as c:
-        c.execute(
-            "INSERT INTO mail_messages(mailbox,msg_id,thread_id,epoch,date,from_addr,to_addresses,cc,subject,"
-            "snippet,labels,body,attachments,updated_at) VALUES(?,?,'t1',300,'','old@acme.example','[]','[]',"
-            "'Old invoice','','[]','Old body','[]',?)",
-            (mailbox, msg_id, H.now()),
-        )
 
 
 def organize(api, token="ana-test", expected=200, **body):
@@ -198,7 +180,6 @@ def test_organizing_explicit_ids_is_live_and_audits_only_action_facts(
             assert detail["via"] == "assistant"
         assert not {"subject", "body", "snippet", "query"} & detail.keys()
         assert "Live contract body" not in rows[0]["detail"]
-        assert c.execute("SELECT COUNT(*) FROM mail_messages").fetchone()[0] == 0
 
 
 def test_query_resolves_ids_with_default_and_explicit_caps_before_modifying(api, live):

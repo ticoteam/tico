@@ -487,7 +487,7 @@ def test_each_limit_is_held_on_the_login_it_came_from_however_the_turn_ends(api,
     machine = runner(api)
     with api.app.state.store.transaction() as c:
         c.execute(
-            "UPDATE registry_metadata SET key=replace(key,'r3|',?) WHERE key LIKE 'login-hold:r3|%'",
+            "UPDATE holds SET holdable_id=replace(holdable_id,'r3|',?) WHERE holdable_id LIKE 'r3|%'",
             (machine["runner_id"] + "|",),
         )
     at_config = {h["runtime"] for h in get(api, "config", machine["token"])["login_holds"]}
@@ -590,8 +590,8 @@ def test_the_runners_report_of_a_fallback_that_never_started_requeues_the_job_an
         after = login_holds.get(c, machine["runner_id"], "", "fake")
         assert c.execute("SELECT state FROM jobs WHERE id=?", (moved["job_id"],)).fetchone()[0] == "queued"
         # The fallback never ran, so it met no limit: only the bot's own login is held, as it was.
-        assert [r[0] for r in c.execute("SELECT key FROM registry_metadata WHERE key LIKE 'login-hold:%'")] == [
-            f"login-hold:{machine['runner_id']}||fake"
+        assert [(h["runner_id"], h["profile"], h["runtime"]) for h in login_holds.every(c)] == [
+            (machine["runner_id"], "", "fake")
         ]
     assert (after["until"], after["streak"], after["stuck"]) == (hold["until"], 1, ["ops"])
     signed_in(api, machine, ["ops", "finance"], ["codex"])

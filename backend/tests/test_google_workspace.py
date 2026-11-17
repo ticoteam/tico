@@ -461,27 +461,6 @@ def test_authority_follows_a_live_personal_grant_then_the_key_then_legacy(api, p
     assert who("eve@acme.example") == "legacy"  # a pending key alone does not
 
 
-def test_a_cloud_computer_publishes_the_workspace_mailboxes_its_bots_run_on(api, private, covered, google):
-    covered((MAILBOX, "inbox-cara"))
-    store = api.app.state.store
-    with store.transaction() as c:
-        H.sync_registry(
-            c, {"inbox-cara": {"name": "inbox-cara", "runtime": "fake", "status": "active"}}, {"people": []}
-        )
-        for runner_id in ("cloud-1", "box-2"):
-            c.execute(
-                "INSERT INTO runners(id,label,owner_id,token_hash,created_at) VALUES(?,?,'ana',?,?)",
-                (runner_id, runner_id, "h-" + runner_id, H.now()),
-            )
-        c.execute("INSERT INTO assignments VALUES('inbox-cara','cloud-1',1,?,'human:ana')", (H.now(),))
-    connected(api, private)
-    personal(api, "cara", "cara@acme.example", grant="g1")
-    with store.read() as c:
-        # Cara's own grant follows the same rule: no bot of hers runs anywhere and no computer is online for her.
-        assert W.owned_mailboxes(c, "cloud-1") == {MAILBOX}
-        assert W.owned_mailboxes(c, "box-2") == set()
-
-
 def test_a_token_is_minted_per_mailbox_and_service_and_cached_until_near_expiry(api, private, covered, google):
     covered((MAILBOX, "inbox-cara"))
     state, calls = google

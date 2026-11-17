@@ -1,6 +1,7 @@
-"""The claim's read of open `failing` holds (claim_loads._failing), one bot's (holds.get) and the held list
-(run_failures.held) seek holds_open, never scan holds, whatever sqlite_stat1 says: holds keeps every release as history,
-so it only grows (PR #3973 moved run_backoff, one row per bot, into it)."""
+"""One bot's `failing` hold (holds.get) and the held list (run_failures.held) seek holds_open, and the claim's read of
+every open hold (claim_loads.open_holds, where it finds each bot's failing hold) walks holds_bot, never the whole of
+holds, whatever sqlite_stat1 says: holds keeps every release as history, so it only grows (PR #3973 moved run_backoff,
+one row per bot, into it)."""
 
 import sqlite3
 
@@ -36,7 +37,7 @@ def test_failing_hold_reads_seek_holds_open(tmp_path, stats):
     seen: list[str] = []
     c.set_trace_callback(seen.append)
     try:
-        assert claim_loads._failing(c, ["ops", "web"]) == {"ops": None, "web": None}
+        assert claim_loads.open_holds(c) == {}
         assert holds.get(c, holds.FAILING, "bot", "ops") is None
         assert run_failures.held(c) == []
     finally:
@@ -45,5 +46,8 @@ def test_failing_hold_reads_seek_holds_open(tmp_path, stats):
     assert len(reads) == 3, reads
     for sql in reads:  # the trace has the values written in
         plan = [r[3] for r in c.execute("EXPLAIN QUERY PLAN " + sql)]
+        if "holds_bot" in sql:  # every open hold: the partial index of open holds, whole
+            assert plan and all("USING INDEX holds_bot" in p for p in plan if "holds" in p), (sql, plan)
+            continue
         assert "USING INDEX holds_open (kind=? AND holdable_type=?" in plan[0], (sql, plan)
         assert not any(p.startswith("SCAN holds") for p in plan), (sql, plan)

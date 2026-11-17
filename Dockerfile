@@ -123,7 +123,7 @@ PY
 RUN chmod -R go-w,go+rX /opt/tico
 # The venv is only mounted here, so this stage's /opt/tico holds the source alone.
 RUN --mount=type=bind,from=venv,source=/opt/tico/.venv,target=/opt/tico/.venv \
-    .venv/bin/python -c 'import backend.app, runner_support.connectors, runner_support.close_calls, runner_support.importers.service, runner_support.engine, clients.environments, yaml; yaml.CSafeLoader' \
+    .venv/bin/python -c 'import backend.app, runner_support.close_calls, runner_support.importers.service, runner_support.engine, clients.environments, yaml; yaml.CSafeLoader' \
     && .venv/bin/python -m backend.ui_build --check \
     && .venv/bin/python -m compileall -q backend runner_support runner clients
 
