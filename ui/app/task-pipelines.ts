@@ -268,11 +268,17 @@ function pvTabDotHTML(stage: PipelineStageRec): string {
   return n ? '<span class="pv-tab-dot" aria-hidden="true"></span>' : '';
 }
 
+/** The stage a phone shows: the one picked (a tab, a swipe, a review's link), else the first with tasks, else the
+    first. The fallback is not kept as a pick: a draw before the view's tasks land, or of an earlier read, would hold
+    the tab on a stage the tasks have since left. */
+function pvPhoneStage(state: PvState): string {
+  const ids = state.rec.stages.map(s => s.id ?? '');
+  return ids.includes(state.stage) ? state.stage : ids.find(id => pvInStage(state, id).length) ?? ids[0] ?? '';
+}
+
 /** S17.3: a row of stage tabs, then the chosen stage's tasks. */
 function pvPhoneHTML(state: PvState): string {
-  const stages = state.rec.stages, ids = stages.map(s => s.id ?? '');
-  const shown = ids.includes(state.stage) ? state.stage : ids.find(id => pvInStage(state, id).length) ?? ids[0] ?? '';
-  state.stage = shown;
+  const stages = state.rec.stages, shown = pvPhoneStage(state);
   const tabs = stages.map(stage => {
     const on = stage.id === shown;
     const waits = stage.id ? needsStageCount(stage.id) : 0;
@@ -461,7 +467,7 @@ function pvStageShow(state: PvState, stage: string): void {
 /** A phone swipe steps to the next (1) or the previous (-1) stage. */
 function pvStageStep(state: PvState, by: number): void {
   const ids = state.rec.stages.map(s => s.id ?? '');
-  const to = ids[ids.indexOf(state.stage) + by];
+  const to = ids[ids.indexOf(pvPhoneStage(state)) + by];
   if (to) pvStageShow(state, to);
 }
 
