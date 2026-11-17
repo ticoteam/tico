@@ -711,6 +711,41 @@ def _granted_tools(c, bot):
     return out
 
 
+def _choices(c, bot, tools):
+    """A row per variable several Everyone-can-read tools would deliver and `bot` holds no grant for
+    (backend/default_read.py `choices`): it gets none of them until a person picks one, so the row says so. Left out
+    when a row already shows that variable (a bot.yaml entry naming it)."""
+    from . import default_read
+    from .credentials import explicitly_granted
+
+    shown = {e.strip() for tool in tools for e in str(tool.get("env") or "").split(",") if e.strip()}
+    out = []
+    for env, tool_ids in sorted(default_read.choices(c, "bot:" + bot, explicitly_granted(c, "bot:" + bot)).items()):
+        if env in shown:
+            continue
+        names = [
+            r["name"]
+            for r in c.execute("SELECT name FROM tools WHERE id IN (%s)" % ",".join("?" * len(tool_ids)), tool_ids)
+        ]
+        out.append(
+            {
+                "id": "choose-" + env.lower(),
+                "service": "",
+                "name": env,
+                "logo_key": None,
+                "identity": "",
+                "can": [],
+                "scope": {},
+                "env": env,
+                "note": "",
+                "status": "unknown",
+                "detail": "Several to choose from: ask (" + ", ".join(sorted(names)) + ")",
+                "choose": sorted(tool_ids),
+            }
+        )
+    return out
+
+
 def _merge_granted(tools, granted):
     """One row per service: a declared entry and a grant for the same service (or the same variable) are one row, the
     declared one (its identity, scope and note) marked granted; the grants with no declared entry follow as their own
@@ -1148,6 +1183,10 @@ def install(app, store, auth, mutate, settings_admin, requester=None):
                 raise Problem("not_found", "Bot not found", 404)
             result = listing(c, store.settings, bot)
             result["tools"] = _merge_granted(result["tools"], shown_grants(c, who, bot))
+            from .credentials import administrator
+
+            if administrator(c, who, admins()) or who.actor == "bot:" + bot or auth.bot_manager(c, who, bot):
+                result["tools"] += _choices(c, bot, result["tools"])
             from . import task_privacy as privacy
 
             def redact(value):

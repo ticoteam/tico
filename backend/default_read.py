@@ -14,7 +14,9 @@ What a bot reads by default reaches its runs exactly as a grant at Read does: `c
 (credential-runtime, the watcher, MCP servers, the tool's settings), `api_tools._held` counts them at Read (the
 proxy's `key_for`), and the bot's Tools tab marks them. An explicit grant always wins: a bot holding any grant on a
 tool reads it through that grant, and a bot already given a variable by an explicit grant gets no default key under
-the same name (one value per variable). The Tools page's owner holds no key, so it reads nothing by default.
+the same name (one value per variable). A variable several default-read tools would deliver is given by none of them
+by default: the bot's Tools tab lists it as several to choose from, and a person picks. The Tools page's owner holds no
+key, so it reads nothing by default.
 """
 
 import importlib
@@ -81,20 +83,17 @@ def enforceable(c: Any, tool_id: str) -> bool:
     return tool_id in enforceable_keys(c)
 
 
-def reads(c: Any, subject: str, explicit: frozenset[str]) -> dict[str, str]:
-    """{credential id: tool id} `subject` reads by default, given the credential ids it holds explicitly."""
-    if not str(subject or "").startswith("bot:"):
-        return {}
-    bot = H.actor_id(subject)
-    live = c.execute("SELECT 1 FROM bots WHERE id=? AND state<>'archived'", (bot,)).fetchone()
-    if live is None:
-        return {}
-    page_owners: Any = importlib.import_module(".page_owners", __package__)
-    if page_owners.owner(c, "tools", fallback=False) == subject:
-        return {}
-    found = candidates(c)
-    if not found:
-        return {}
+def _shared(found: dict[str, Row]) -> dict[str, list[str]]:
+    """{variable: tool ids} for each variable more than one default-read tool would deliver."""
+    by_env: dict[str, list[str]] = {}
+    for tool_id, key in found.items():
+        if key["env"]:
+            by_env.setdefault(str(key["env"]), []).append(tool_id)
+    return {env: tools for env, tools in by_env.items() if len(tools) > 1}
+
+
+def _explicit(c: Any, explicit: frozenset[str]) -> tuple[set[str], set[str]]:
+    """(tool ids, variables) the explicitly granted credential ids bring."""
     held_tools: set[str] = set()
     held_envs: set[str] = set()
     for part in H.chunks(sorted(explicit)):
@@ -106,15 +105,53 @@ def reads(c: Any, subject: str, explicit: frozenset[str]) -> dict[str, str]:
                 held_tools.add(str(row["tool_id"]))
             if row["env"]:
                 held_envs.add(str(row["env"]))
+    return held_tools, held_envs
+
+
+def _reader(c: Any, subject: str) -> bool:
+    """A live bot other than the Tools page's owner, which holds no key."""
+    if not str(subject or "").startswith("bot:"):
+        return False
+    live = c.execute("SELECT 1 FROM bots WHERE id=? AND state<>'archived'", (H.actor_id(subject),)).fetchone()
+    if live is None:
+        return False
+    page_owners: Any = importlib.import_module(".page_owners", __package__)
+    return page_owners.owner(c, "tools", fallback=False) != subject
+
+
+def reads(c: Any, subject: str, explicit: frozenset[str]) -> dict[str, str]:
+    """{credential id: tool id} `subject` reads by default, given the credential ids it holds explicitly. A variable
+    several default-read tools would deliver (two PostHog projects, say) is given by none of them: which account a bot
+    needs is a question for a person (`choices`), never the first found."""
+    if not _reader(c, subject):
+        return {}
+    found = candidates(c)
+    if not found:
+        return {}
+    held_tools, held_envs = _explicit(c, explicit)
+    shared = _shared(found)
     out: dict[str, str] = {}
     for tool_id, key in found.items():
         env = str(key["env"] or "")
         if tool_id in held_tools or (env and env in held_envs):
             continue  # an explicit grant wins: the tool through it, the variable from it
+        if env in shared:
+            continue  # several to choose from: asked, not guessed
         out[str(key["id"])] = tool_id
-        if env:
-            held_envs.add(env)
     return out
+
+
+def choices(c: Any, subject: str, explicit: frozenset[str]) -> dict[str, list[str]]:
+    """{variable: tool ids} `subject` gets no default read for because several tools would deliver it, leaving out a
+    variable it holds through an explicit grant: the bot's Tools tab says there are several to choose from."""
+    if not _reader(c, subject):
+        return {}
+    held_tools, held_envs = _explicit(c, explicit)
+    return {
+        env: tools
+        for env, tools in _shared(candidates(c)).items()
+        if env not in held_envs and not held_tools & set(tools)
+    }
 
 
 def key_of(c: Any, tool_id: str, subject: str) -> str | None:

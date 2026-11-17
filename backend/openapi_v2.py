@@ -3388,6 +3388,12 @@ SCHEMAS = {
             "bot.yaml and granted is one row with this set",
         },
         kind={"enum": ["mcp"], "description": "`mcp` when the tool is a remote MCP server (see `mcp`)"},
+        choose={
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Several tools anyone can read give this variable (`env`), so the bot gets none of them "
+            "until a person grants one: their ids. Shown to the bot, its managers and credential admins",
+        },
         mcp={
             "type": "object",
             "description": "A remote MCP server: `host` (its URL's host), `transport` (http or sse) and "

@@ -108,7 +108,7 @@ def test_only_where_read_is_enforceable_and_an_explicit_grant_wins(api):
     assert held(api, crm, "bot:cpo") == [] and held(api, files, "bot:cpo") == []
 
 
-def test_a_variable_an_explicit_grant_gives_is_not_given_again_by_default(api):
+def test_a_variable_several_tools_give_is_asked_for_never_given_by_default(api):
     setup(api)
     crm = tool(api)["id"]
     key(api, crm, SECRET)
@@ -118,7 +118,16 @@ def test_a_variable_an_explicit_grant_gives_is_not_given_again_by_default(api):
         f"api-tools/{other}/keys",
         {"name": "Mirror", "value": SECRET + "-m", "access_level": "read", "env": "CLOSE_API_KEY"},
     )
+    # Two accounts under one variable: neither by default, and the bot's Tools tab says to ask.
+    assert held(api, crm) == [] and held(api, other) == []
+    attempt = turn(api)
+    assert "CLOSE_API_KEY" not in delivered(api, attempt)
+    rows = {t["id"]: t for t in get(api, "bots/ops/tools")["tools"]}
+    assert sorted(rows["choose-close_api_key"]["choose"]) == sorted([crm, other])
+    assert "Several to choose from" in rows["choose-close_api_key"]["detail"]
+    # An explicit grant delivers its own, and the question is gone for that bot only.
     level(api, other, "bot:ops", "read")
-    assert held(api, crm) == []  # ops already gets CLOSE_API_KEY from its explicit grant
-    # Two tools by default under one variable: one value per variable, the first tool's.
-    assert held(api, other, "bot:inbox") == [("read", "read")] and held(api, crm, "bot:inbox") == []
+    assert held(api, other) == [("read", "read")] and held(api, crm) == []
+    assert delivered(api, attempt)["CLOSE_API_KEY"]["tool"] == "Acme CRM mirror"  # its proxy token
+    assert "choose-close_api_key" not in {t["id"] for t in get(api, "bots/ops/tools")["tools"]}
+    assert held(api, crm, "bot:inbox") == [] and held(api, other, "bot:inbox") == []
