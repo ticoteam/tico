@@ -77,18 +77,11 @@ def ui_map_key(name):
 
 
 CONFORMANCE = "runner_support/tests/test_conformance.py"
-# A new or changed file under MIGRATIONS runs the tests that upgrade the floor's database or a fixture through every
-# migration, in a light plan too: they reach a migration only through the app's start, past a light plan's depth, and
-# a migration that assumes a column another migration adds breaks only there.
+# A migration runs the checks that apply migrations or inspect the baseline and compatibility floor, in light plans
+# too. DependencyMap discovers those checks from their source rather than the names of individual test files.
 MIGRATIONS = "backend/migrations/"
-UPGRADE_TESTS = (
-    "backend/tests/test_migrations.py",  # the migration authority: baseline, converge, rerun, roll back, refuse
-    "backend/tests/test_schema_baseline.py",  # schema_floor.sql upgraded equals a new database, every table
-    "backend/tests/test_upgrade.py",  # a foreign or empty file, and the journey's seeded rows
-    "backend/tests/test_upgrade_boot.py",  # schema_floor.sql through create_app and backend.boot
-)
 # Guard tests check a repository-wide invariant through a path the map cannot follow, so a change that can break one
-# names it directly, and it runs in a light plan too (level 0, like UPGRADE_TESTS). On Nov 13 main went red
+# names it directly, and it runs in a light plan too (level 0, like the discovered upgrade checks). On Nov 13 main went red
 # on guards the change's plan never picked:
 # - RELEASE_SHOTS runs scripts/screenshots/index.cts --list-pages, which lists every tracked ui/ file through git: a new
 #   ui/ file that no PAGES, SHARED or UNSHOWN entry names fails it (#3335 ui/app/browser-view.ts), and a gone one can
@@ -264,7 +257,7 @@ def git_files(root):
 
 TOKEN = re.compile(r"[\w.\-/]+")
 IDENTIFIER = re.compile(r"[A-Za-z_]\w*(\.[A-Za-z_]\w*)*$")
-CODE = {".py", ".sh", ".bash", ".js", ".cjs", ".mjs", ".ts"}
+CODE = {".py", ".sh", ".bash", ".js", ".cjs", ".mjs", ".ts", ".cts"}
 JS_SOURCES = CODE - {".py", ".sh", ".bash"}  # browser and Node code: no Python imports by bare name
 PATHLIKE = {
     "Path",
@@ -386,6 +379,10 @@ class DependencyMap:
         self.fixtures = defaultdict(dict)  # conftest -> {fixture: (runs, reads)}
         self.names = {}  # Python file -> its identifiers and strings (fixture names it uses)
         self.imports = {}  # Python file -> the dotted names it imports (for a gone file's importers, named_by)
+        self.commands = defaultdict(set)  # literal CLI command or MCP tool name -> defining modules
+        self.js_imports = defaultdict(set)
+        self.command_sweeps = set()
+        self.upgrade_tests = set()
         self._tokens = None  # built on first use by tokens()
         # Every scan needs `bare` (from all files' imports) first, so the Python files are parsed twice, one tree alive
         # at a time; the build takes no longer. Holding every tree at once peaked near 2.3 GB per map, and the
@@ -411,11 +408,79 @@ class DependencyMap:
         for path in self.files:
             if Path(path).suffix in CODE - {".py"} or (not Path(path).suffix and self.shebang(path)):
                 self.text(path)
+        self.ui_links()
+        self.command_links()
         self.run_by, self.read_by = defaultdict(set), defaultdict(set)
         for edges, reverse in ((self.runs, self.run_by), (self.reads, self.read_by)):
             for path, targets in edges.items():
                 for target in targets - {path}:
                     reverse[target].add(path)
+
+    def ui_links(self):
+        """Classic UI scripts share globals rather than imports. Link browser checks to the globals and DOM
+        selectors they exercise, including CSS selectors; do not propagate selector edges between app modules."""
+        owners = defaultdict(set)
+        sources = {}
+        for path in self.files:
+            if not path.startswith("ui/") or path.startswith(("ui/tests/", "ui/vendor/", "ui/types/")):
+                continue
+            if Path(path).suffix not in {".ts", ".js", ".css"}:
+                continue
+            text = (self.root / path).read_text(errors="replace")
+            sources[path] = ui_selectors(text)
+            if not path.endswith(".css"):
+                for match in re.finditer(r"^" + TOP_LEVEL.pattern, text, re.MULTILINE):
+                    name = match[1] or match[2]
+                    if len(name) > 3:
+                        owners[name].add(path)
+        selectors = defaultdict(set)
+        for path, tokens in sources.items():
+            for token in tokens:
+                selectors[token].add(path)
+        for path in self.files:
+            if not is_browser(path):
+                continue
+            text = (self.root / path).read_text(errors="replace")
+            for token in ui_selectors(text):
+                self.runs[path] |= selectors.get(token, set())
+            for token in set(re.findall(r"[A-Za-z_$][\w$]*", text)):
+                if len(owners.get(token, ())) == 1:
+                    self.runs[path] |= owners[token]
+            # Source guards recursively walk a literal folder through a local helper, such as walk('ui').
+            for helper in re.findall(r"\bconst\s+(\w+)\s*=\s*[^;]*?\breaddirSync\s*\(", text):
+                for folder in re.findall(r"\b" + re.escape(helper) + r"\(\s*['\"]([^'\"]+)['\"]", text):
+                    if (self.root / folder).is_dir():
+                        self.reads[path].add(folder.rstrip("/") + "/")
+
+    def command_links(self):
+        """A test naming a command uses its implementation, even through the CLI parser or MCP registry."""
+        modules = set().union(*self.commands.values()) if self.commands else set()
+        for path, names in self.names.items():
+            if not is_test(path):
+                continue
+            for text in names:
+                for tool in re.findall(r"\btico_[a-z0-9_]+\b", text):
+                    self.runs[path] |= self.commands.get(tool, set())
+                words = text.removeprefix("tico ").split()
+                for end in range(1, min(5, len(words)) + 1):
+                    self.runs[path] |= self.commands.get(" ".join(words[:end]), set())
+            if path in self.command_sweeps:
+                self.runs[path] |= modules
+
+    def ui_users(self, name):
+        """Browser consumers through UI imports and test helpers, stopping before backend application imports."""
+        pending, seen, found = [name], {name}, set()
+        while pending:
+            current = pending.pop()
+            for user in self.run_by.get(current, ()):
+                if user in seen:
+                    continue
+                seen.add(user)
+                if is_browser(user):
+                    found.add(Path(user).stem)
+                elif user.startswith("ui/") and current in self.js_imports.get(user, ()):
+                    pending.append(user)
+        return found
 
     def parse(self, path):
         """The file's syntax tree, or None for one that cannot be read or parsed (it then reaches everything)."""
@@ -673,6 +738,11 @@ class DependencyMap:
             elif isinstance(node, ast.Call):
                 function = dotted_name(node.func)
                 last = function.rsplit(".", 1)[-1]
+                if path.startswith("clients/") and last in {"tool", "Command"} and node.args:
+                    for command in self.strings(node.args[0]):
+                        self.commands[command].add(path)
+                if is_test(path) and function in {"hubcli.parser", "hubcli.command_paths", "hubtools.listing"}:
+                    self.command_sweeps.add(path)
                 if last in PATHLIKE:
                     self.joined(node.args, runs_, reads_)
                 if last in RUNNERS or any(k.arg == "cwd" for k in node.keywords):
@@ -752,7 +822,7 @@ class DependencyMap:
                 prose = len(node.value.split()) > 1
                 for token in TOKEN.findall(node.value.replace(":", " ")):
                     self.path(token, reads_ if prose else runs_, reads_, module=not prose)
-        imported = set()
+        imported, migration_calls = set(), set()
         for node in nodes:
             if isinstance(node, ast.Import):
                 imported |= {alias.name for alias in node.names}
@@ -761,7 +831,26 @@ class DependencyMap:
                 module = ".".join([*prefix, *([node.module] if node.module else [])])
                 imported.add(module)
                 imported |= {".".join(filter(None, [module, alias.name])) for alias in node.names}
+                if module == "backend.migrations":
+                    migration_calls |= {a.asname or a.name for a in node.names if a.name == "apply"}
         self.imports[path] = imported
+        if is_test(path) and (
+            any("baseline.sql" in name or "schema_floor.sql" in name for name in names)
+            or "backend.migrations.MigrationError" in imported
+            or "backend/migrations/__init__.py" in runs
+            and any(
+                isinstance(n, ast.Call)
+                and (dotted_name(n.func).endswith(".apply") or dotted_name(n.func) in migration_calls)
+                for n in nodes
+            )
+        ):
+            self.upgrade_tests.add(path)
+        if is_test(path):
+            for node in nodes:
+                if isinstance(node, (ast.List, ast.Tuple)) and all(
+                    isinstance(n, ast.Constant) and isinstance(n.value, str) for n in node.elts
+                ):
+                    names.add(" ".join(n.value for n in node.elts))
         self.runs[path] |= runs
         self.reads[path] |= reads
         self.names[path] = names
@@ -774,7 +863,20 @@ class DependencyMap:
         if len(raw) > 512 * 1024 or b"\0" in raw[:4096]:
             return
         folder = str(Path(path).parent)
-        for token in TOKEN.findall(raw.decode("utf-8", "replace")):
+        text = raw.decode("utf-8", "replace")
+        if Path(path).suffix in JS_SOURCES:
+            # Module specifiers may omit the extension, or name the .js emitted from a TypeScript source.
+            for spec in re.findall(r"(?:\bfrom\s*|\brequire\s*\(\s*|\bimport\s*)['\"]([.][^'\"]+)['\"]", text):
+                target = os.path.normpath(folder + "/" + spec)
+                candidates = [target, *(target + suffix for suffix in (".ts", ".js", ".cts", ".cjs"))]
+                if target.endswith(".js"):
+                    candidates.append(target[:-3] + ".ts")
+                for candidate in candidates:
+                    if candidate in self.tracked:
+                        self.runs[path].add(candidate)
+                        self.js_imports[path].add(candidate)
+                        break
+        for token in TOKEN.findall(text):
             self.path(token, self.runs[path], self.reads[path])
             if token.startswith(("./", "../")) and folder != ".":
                 self.path(os.path.normpath(folder + "/" + token), self.runs[path], self.reads[path])
@@ -969,8 +1071,7 @@ def runnable_scripts(root=ROOT):
 def support_scripts(root, files, name):
     """The browser scripts that use a ui/tests/support file, directly or through other support files: a file uses a
     helper whose file name it names (`require('./support/page.cts')`, `'ui/tests/support/real_hub_server.py'`). The
-    dependency map scans no .cts file, so this reads ui/tests itself. `files` are the tracked files; a gone helper is
-    found by the files that still name it."""
+    tracked live paths are scanned too when the changed helper has gone; its users still name its path."""
     folder = [f for f in files if f.startswith("ui/tests/")]
     helpers = defaultdict(set)  # file name -> the support files with that name
     for path in [*(f for f in folder if f.startswith(SUPPORT)), name]:
@@ -1014,6 +1115,22 @@ def named_after(name, scripts):
 TOP_LEVEL = re.compile(
     r"(?:export\s+)?(?:async\s+)?(?:function\s*\*?\s*([A-Za-z_$][\w$]*)|(?:const|let|var|class)\s+([A-Za-z_$][\w$]*))"
 )
+
+
+def ui_selectors(text):
+    """Stable DOM anchors shared by markup, CSS and browser locators; omit generic classes and hex colors."""
+    found = set(re.findall(r"[.#][A-Za-z_][\w-]*", text))
+    found = {s for s in found if "-" in s and not re.fullmatch(r"#[a-fA-F0-9]+", s)}
+    found.update("[" + a + "]" for a in re.findall(r"\b(data-[\w-]+)(?=[=\]\s])", text))
+    for kind, value in re.findall(r"\b(id|class)=[\"']([^\"']+)[\"']", text):
+        found.update(
+            ("#" if kind == "id" else ".") + word
+            for word in value.split()
+            if re.fullmatch(r"[\w-]+", word) and "-" in word
+        )
+    return found
+
+
 HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", re.MULTILINE)
 
 
@@ -1254,10 +1371,11 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
        changed or gone helper under ui/tests/support/, the scripts named after UI source outside UI_MAP, the scripts
        that name a top-level function or const whose definition the diff from `base` to `head` changes in a UI source
        file (changed_definitions), the scripts UI_ALSO lists for a UI file, and every phone-dead-ends-* script for a
-       change under PHONE_SCOPE. More than BROWSER_ALL_OVER picked runs every script `ui-tests.cts --all` runs.
+       change under PHONE_SCOPE. More than BROWSER_ALL_OVER of these hints runs every release script. Computed
+       consumers of a UI file's globals, selectors and imports are added exactly, without widening to all scripts.
        `browser_direct` lists them: a light pull request keeps them.
     7. A path a CONTENT_SWEEPS test reads turns that slow test on in the contracts job (`sweeps`), with its environment.
-    8. A file under MIGRATIONS runs UPGRADE_TESTS, which a light plan keeps (narrow).
+    8. A file under MIGRATIONS runs the discovered schema and upgrade checks, which a light plan keeps (narrow).
     9. Guard tests (`guards`, which a light plan keeps): a ui/ file the release-shot harness lists that is added or gone
        runs RELEASE_SHOTS; a file under CLI_COMMANDS runs CLI_SPEC; a path that can move what a
        cold open of Home downloads (moves_ui_shell) runs UI_SHELL_SIZE.
@@ -1393,13 +1511,15 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
         smoke_browser = True
         uncertain.append(f"rule 4: {name} is not in UI_MAP: the scripts that name it, its readers and the smoke set")
         notes.append("rule 4: ui outside UI_MAP")
-    direct = set()
+    direct, linked_scripts = set(), set()
     if any(n.startswith("ui/") for n in names):  # rule 6
         runnable = set(runnable_scripts(root))
         phone = {s for s in runnable if s.startswith(PHONE_PREFIX)}
         for name in names:
             if name.startswith(PHONE_SCOPE):
                 direct |= phone
+            if name.startswith("ui/") and not name.startswith("ui/tests/"):
+                linked_scripts |= graph.ui_users(name) & runnable
             direct |= set(UI_ALSO.get(ui_map_key(name), ())) & runnable
             if is_browser(name) and name in live:
                 direct.add(Path(name).stem)
@@ -1416,6 +1536,7 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
         if len(direct) > BROWSER_ALL_OVER:
             uncertain.append(f"rule 6: {len(direct)} browser scripts picked: every script the release check runs")
             direct |= runnable
+        direct |= linked_scripts
         if direct:
             notes.append("rule 6: browser scripts the release check runs")
         browser |= direct
@@ -1453,7 +1574,8 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
         python |= owned_tests
         notes.append(owned_reason(owned))
     if any(n.startswith(MIGRATIONS) for n in names):  # rule 8
-        python |= {t for t in UPGRADE_TESTS if (root / t).is_file()}
+        python |= graph.upgrade_tests
+        guards |= graph.upgrade_tests
         notes.append("rule 8: a migration runs the upgrade tests")
     if any(shot_listed(n) and (n in added or n in gone) for n in names) and (root / RELEASE_SHOTS).is_file():
         guards.add(RELEASE_SHOTS)
@@ -1739,7 +1861,8 @@ def shapes_the_api(name, root=ROOT):
 
 def reach_levels(names, depth, added=None, root=ROOT, graph=None):
     """{file: level} for the files a change reaches within `depth` levels (see NARROW): 0 for the changed files, 1 for
-    what uses one directly, 2 for what runs a level-1 file that is not a hub."""
+    what uses one directly, 2 for what runs a level-1 file that is not a hub. A package initializer also reaches tests
+    through one test helper, up to level 3, while its direct test users stay below the hub limit."""
     graph = graph or DependencyMap(root)
     added = set(names) if added is None else set(added)
     level = dict.fromkeys(names, 0)
@@ -1779,6 +1902,19 @@ def reach_levels(names, depth, added=None, root=ROOT, graph=None):
         frontier = found - set(level)
         for f in frontier:
             level[f] = step
+    # Importing a package member executes its initializer. Tests often import that member through a shared helper;
+    # preserve this bounded path without opening the app/store hubs or following arbitrary production modules.
+    for module, hop in list(level.items()):
+        if hop > 1 or not module.endswith("/__init__.py"):
+            continue
+        users = graph.run_by.get(module, ())
+        if sum(is_test(user) for user in users) > HUB_TEST_USERS:
+            continue
+        for helper in users:
+            if "/tests/helpers/" in helper:
+                for test in graph.run_by.get(helper, ()):
+                    if is_test(test):
+                        level[test] = min(level.get(test, hop + 2), hop + 2)
     return level
 
 
@@ -1792,10 +1928,8 @@ def narrow(picked, changed, event, added=None, root=ROOT, graph=None):
     level = reach_levels(names, mode["depth"], added, root, graph) if names else {}
     smoke_tests, smoke_scripts = smoke(root)
     full = set(picked["python"])
-    # Rule 8: a migration's upgrade tests reach it only through the app's start; they always run, like a changed test.
-    upgrade = set(UPGRADE_TESTS) & full if any(n.startswith(MIGRATIONS) for n in names) else set()
-    # Rule 9: a guard test checks the whole repository through a path the map cannot follow; it runs like a changed test.
-    upgrade |= set(picked.get("guards", ())) & full
+    # Schema and other guard checks run like changed tests; their repository-wide reads exceed the depth limit.
+    upgrade = set(picked.get("guards", ())) & full
     level = {**level, **dict.fromkeys(upgrade, 0)}
     python = {p for p in full if p in level}
     left = sorted(full - python)

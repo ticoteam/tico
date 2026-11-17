@@ -645,6 +645,116 @@ def smoke_tree(root):
     source(root, checks.SMOKE_FILE, (ROOT / checks.SMOKE_FILE).read_text())
 
 
+def test_browser_links_globals_selectors_styles_and_typescript_imports(tmp_path):
+    smoke_tree(tmp_path)
+    source(
+        tmp_path,
+        "ui/app/widget.ts",
+        'function widgetOpen() {}\nconst html = `<div class="widget-card" data-widget-open></div>`;\n',
+    )
+    source(tmp_path, "ui/styles/widget.css", '.widget-card { color: red; }\n')
+    source(tmp_path, "ui/app/dependency.ts", 'export const value = 1;\n')
+    source(tmp_path, "ui/app/entry.ts", "import {value} from './dependency.js';\n")
+    source(tmp_path, "ui/tests/call.cts", 'await page.evaluate(() => widgetOpen());\n')
+    source(tmp_path, "ui/tests/layout.cts", "await page.locator('.widget-card [data-widget-open]').click();\n")
+    source(tmp_path, "ui/tests/import.cts", "import '../app/entry';\n")
+    source(tmp_path, "ui/tests/unrelated.cts", "await page.locator('.other-card').click();\n")
+    graph = checks.DependencyMap(tmp_path)
+    assert "ui/app/dependency.ts" in graph.runs["ui/app/entry.ts"]
+    assert "ui/app/entry.ts" in graph.runs["ui/tests/import.cts"]
+    for changed, expected in (
+        ("ui/app/widget.ts", {"call", "layout"}),
+        ("ui/styles/widget.css", {"layout"}),
+        ("ui/app/dependency.ts", {"import"}),
+    ):
+        plan = checks.selection([changed], root=tmp_path, graph=graph, core=[])
+        light = checks.narrow(plan, [changed], "pull_request", root=tmp_path, graph=graph)
+        assert expected <= set(light["browser_direct"]) <= set(light["browser"])
+        assert "unrelated" not in light["browser"]
+    assert not checks.ui_selectors('.button #fff .value')
+
+
+def test_typescript_source_guards_follow_their_walked_folder(tmp_path):
+    smoke_tree(tmp_path)
+    source(tmp_path, "ui/app/new.ts", 'function openNew() {}\n')
+    source(
+        tmp_path,
+        "ui/tests/guard.cts",
+        "const walk = (dir: string) => fs.readdirSync(dir).flatMap(entry => walk(entry));\nfor (const f of walk('ui/app')) fs.readFileSync(f);\n",
+    )
+    graph = checks.DependencyMap(tmp_path)
+    assert "ui/app/" in graph.reads["ui/tests/guard.cts"]
+    picked = checks.selection(["ui/app/new.ts"], root=tmp_path, graph=graph, core=[])
+    light = checks.narrow(picked, ["ui/app/new.ts"], "pull_request", root=tmp_path, graph=graph)
+    assert "guard" in light["browser"]
+
+
+def test_command_names_and_table_sweeps_link_to_defining_modules(tmp_path):
+    smoke_tree(tmp_path)
+    source(
+        tmp_path,
+        "clients/commands/widgets.py",
+        '@tool("tico_widget_add")\ndef add(): pass\nCLI = [Command("widget add", "add a widget")]\n',
+    )
+    source(tmp_path, "clients/commands/other.py", '@tool("tico_other_list")\ndef listing(): pass\n')
+    source(tmp_path, "clients/tests/test_mcp_widget.py", 'def test_x(): assert tools["tico_widget_add"]\n')
+    source(tmp_path, "clients/tests/test_cli_widget.py", 'def test_x(): run(["widget", "add", "--name", "sample"])\n')
+    source(tmp_path, "clients/tests/test_tree.py", 'def test_x(): hubcli.parser()\n')
+    source(tmp_path, "clients/tests/test_other.py", 'def test_x(): assert tools["tico_other_list"]\n')
+    graph = checks.DependencyMap(tmp_path)
+    tests = {"clients/tests/test_mcp_widget.py", "clients/tests/test_cli_widget.py", "clients/tests/test_tree.py"}
+    assert graph.run_by["clients/commands/widgets.py"] == tests
+    changed = ["clients/commands/widgets.py"]
+    picked = checks.selection(changed, root=tmp_path, graph=graph, core=[])
+    light = checks.narrow(picked, changed, "pull_request", root=tmp_path, graph=graph)
+    assert tests <= set(light["python"])
+    assert "clients/tests/test_other.py" not in light["python"]
+
+
+def test_migration_checks_are_discovered_from_calls_and_schema_reads(tmp_path):
+    smoke_tree(tmp_path)
+    source(tmp_path, "backend/migrations/__init__.py", 'def apply(conn): pass\n')
+    source(tmp_path, "backend/migrations/change.sql", 'CREATE TABLE example (id TEXT);\n')
+    source(
+        tmp_path,
+        "backend/tests/test_apply.py",
+        'from backend.migrations import apply as upgrade\ndef test_x(): upgrade(None)\n',
+    )
+    source(tmp_path, "backend/tests/test_floor.py", 'def test_x(): read("schema_floor.sql")\n')
+    source(tmp_path, "backend/tests/test_baseline.py", 'def test_x(): read("baseline.sql")\n')
+    source(tmp_path, "backend/tests/test_other.py", 'def test_x(): pass\n')
+    graph = checks.DependencyMap(tmp_path)
+    expected = {"backend/tests/test_apply.py", "backend/tests/test_floor.py", "backend/tests/test_baseline.py"}
+    assert graph.upgrade_tests == expected
+    for migration in ("backend/migrations/change.sql", "backend/migrations/gone.sql"):
+        picked = checks.selection([migration], root=tmp_path, graph=graph, core=[])
+        light = checks.narrow(picked, [migration], "pull_request", root=tmp_path, graph=graph)
+        assert expected <= set(light["python"])
+        assert all(light["narrow"]["tier"][t] == 0 for t in expected)
+        assert "backend/tests/test_other.py" not in light["python"]
+
+
+def test_package_initialization_reaches_tests_through_one_helper_but_still_stops_at_hubs(tmp_path, monkeypatch):
+    smoke_tree(tmp_path)
+    source(tmp_path, "backend/sections/__init__.py", "from . import growth\n")
+    source(tmp_path, "backend/sections/growth.py", "VALUE = 1\n")
+    source(tmp_path, "backend/sections/finance.py", "VALUE = 2\n")
+    source(tmp_path, "backend/tests/helpers/demo.py", "from backend.sections import finance\n")
+    source(tmp_path, "backend/tests/test_demo.py", "from backend.tests.helpers import demo\ndef test_x(): pass\n")
+    source(tmp_path, "backend/tests/test_direct.py", "from backend.sections import finance\ndef test_x(): pass\n")
+    source(tmp_path, "backend/tests/test_other.py", "def test_x(): pass\n")
+    graph = checks.DependencyMap(tmp_path)
+    changed = ["backend/sections/growth.py"]
+    picked = checks.selection(changed, root=tmp_path, graph=graph, core=[])
+    light = checks.narrow(picked, changed, "pull_request", root=tmp_path, graph=graph)
+    assert "backend/tests/test_demo.py" in light["python"]
+    assert light["narrow"]["tier"]["backend/tests/test_demo.py"] == 4
+    assert "backend/tests/test_other.py" not in light["python"]
+    monkeypatch.setattr(checks, "HUB_TEST_USERS", 0)
+    capped = checks.narrow(picked, changed, "pull_request", root=tmp_path, graph=graph)
+    assert "backend/tests/test_demo.py" not in capped["python"]
+
+
 def test_hub_change_selects_every_test_that_imports_it_transitively_and_no_other(tmp_path, mapped):
     # A hub imported through a shared helper (the way most tests reach backend.app through test_api) selects every
     # test that imports the helper, at module level, in a function or by importlib. A conftest fixture body that runs
@@ -2430,13 +2540,18 @@ def test_a_migration_change_runs_the_upgrade_tests_even_in_a_light_plan(event, r
     for changed in ([migration], ["backend/migrations/__init__.py"]):
         picked = checks.selection(changed, event, graph=repo_map, added=changed[:1] if changed == [migration] else [])
         light = checks.narrow(picked, changed, event, added=[], graph=repo_map)
-        assert set(checks.UPGRADE_TESTS) <= set(light["python"]), changed
-        assert all(light["narrow"]["tier"][t] == 0 for t in checks.UPGRADE_TESTS), changed
-    assert all((ROOT / t).is_file() for t in checks.UPGRADE_TESTS)
+        assert repo_map.upgrade_tests <= set(light["python"]), changed
+        assert all(light["narrow"]["tier"][t] == 0 for t in repo_map.upgrade_tests), changed
+    assert {
+        "backend/tests/test_migrations.py",
+        "backend/tests/test_schema_baseline.py",
+        "backend/tests/test_upgrade.py",
+        "backend/tests/test_upgrade_boot.py",
+    } <= repo_map.upgrade_tests
     # Another change keeps its own plan: the upgrade tests it reaches are not lifted to always run.
     other = ["backend/health.py"]
     tier = checks.narrow(checks.selection(other, event, graph=repo_map), other, event, graph=repo_map)["narrow"]["tier"]
-    assert not any(tier.get(t) == 0 for t in checks.UPGRADE_TESTS)
+    assert not any(tier.get(t) == 0 for t in repo_map.upgrade_tests)
 
 
 def light_plan(changed, event, repo_map, added):
