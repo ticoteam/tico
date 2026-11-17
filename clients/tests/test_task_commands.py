@@ -2,12 +2,12 @@
 MCP tool send the same request to the plan's route, with the version the bot was given; none reads the task to find
 one. A refusal says what is missing and what the bot may run next. The API is a recorder; no server runs."""
 
-import argparse
 import json
 
 import pytest
 
 from clients import hubcli, hubtools, remotecli
+from clients.commands import tasks as task_commands
 from clients.tico import APIError
 
 
@@ -695,5 +695,8 @@ def test_a_task_move_that_names_no_task_or_no_place_sends_nothing(args, why):
     ],
 )
 def test_the_cli_refuses_a_move_place_it_cannot_read_before_it_sends(place, why):
+    api = Recorder()
+    fields = {k: place[k] for k in ("id", "to") if place[k]}
     with pytest.raises(APIError, match=why):
-        remotecli._move_places(argparse.Namespace(**place))
+        task_commands._move(api, fields, to_place=place["to_place"], from_place=place["from_place"])
+    assert api.writes() == []
