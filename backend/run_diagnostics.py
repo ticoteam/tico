@@ -109,7 +109,7 @@ FAILED_TEXT = {'item_id': 200, 'tool': 200, 'command': 4000, 'output_tail': 8192
 FAILED_KEPT = 20
 
 
-def scrub(text):
+def scrub(text: object) -> str:
     return SECRET.sub('[redacted]', str(text or ''))
 
 

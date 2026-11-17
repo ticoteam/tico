@@ -4,6 +4,8 @@
 call or a Slack event logs the class alone instead: a Slack error's text can echo a user's message.
 """
 
+# pyright: strict
+
 from .run_diagnostics import scrub
 
 LIMIT = 200  # characters of the message in a log line
