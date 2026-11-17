@@ -50,10 +50,11 @@ def test_every_bot_budget_row_moves_open_and_released_and_running_it_again_chang
         assert not c.execute("SELECT 1 FROM sqlite_master WHERE name='bot_budget'").fetchone()
 
         by_id = {row.pop("id"): row for row in moved}
-        common = {"kind": "runaway", "holdable_type": "bot", "bot_id": None, "created_by_id": "keeper"}
+        common = {"kind": "runaway", "holdable_type": "bot", "created_by_id": "keeper"}
         assert by_id["bot_budget-ops"] == {
             **common,
             "holdable_id": "ops",
+            "bot_id": "ops",
             "reason": "Tico stopped ops: 300 runs in the last hour. This looks like a runaway loop, not normal work. "
             "Check its last runs, then release it or raise its budget.",
             "details": '{"window":"hour","runs":300,"budget":300}',
@@ -66,6 +67,7 @@ def test_every_bot_budget_row_moves_open_and_released_and_running_it_again_chang
         assert by_id["bot_budget-cpo-released"] == {
             **common,
             "holdable_id": "cpo",
+            "bot_id": "cpo",
             "reason": "",
             "details": '{"window":"day","runs":2600,"budget":2500}',
             "upkeep_task_id": None,
@@ -97,6 +99,7 @@ def test_put_keeps_one_open_hold_and_release_keeps_it_as_history(api):
     with api.app.state.store.transaction() as c:
         assert holds.release(c, holds.RUNAWAY, "bot", "ops", actor="human:ana", how="person") is None
         first = holds.put(c, holds.RUNAWAY, "bot", "ops", actor=H.KEEPER, details={"runs": 300})
+        assert first["bot_id"] == "ops"  # a bot's own hold names it: every open hold of a bot is one read (holds_bot)
         again = holds.put(c, holds.RUNAWAY, "bot", "ops", actor=H.KEEPER, reason="Again.", details={"runs": 301})
         assert again["id"] == first["id"] and again["reason"] == "Again." and again["details"] == '{"runs": 301}'
         # The same kind on one bot's task is another hold.

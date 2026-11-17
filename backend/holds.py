@@ -93,15 +93,21 @@ OPEN_SQL = (
 )
 
 
+def _held_bot(holdable_type: str, holdable_id: str, bot_id: str | None) -> str | None:
+    """The bot a hold holds: `bot_id` always names it, the holdable itself for a bot (holds_bot reads every open hold of
+    a bot in one query)."""
+    return bot_id or (holdable_id if holdable_type == "bot" else None)
+
+
 def get(c: Any, kind: str, holdable_type: str, holdable_id: str, bot_id: str | None = None) -> dict[str, Any] | None:
     """The open hold of `kind` on the holdable, or None. Read once per snapshot (read_cache; `prime` reads many)."""
-    row = _read(c, OPEN_SQL, (kind, holdable_type, holdable_id, bot_id or ""))
+    row = _read(c, OPEN_SQL, (kind, holdable_type, holdable_id, _held_bot(holdable_type, holdable_id, bot_id) or ""))
     return dict(row) if row else None
 
 
 def prime(c: Any, kind: str, holdable_type: str, holdable_ids: Collection[str]) -> None:
-    """Read the open holds of `kind` on each of these holdables (no bot_id) in one statement, misses too, and keep them
-    in the snapshot's read cache for `get`. Nothing outside a snapshot."""
+    """Read the open holds of `kind` on each of these holdables (a bot's own, or one naming no bot) in one statement,
+    misses too, and keep them in the snapshot's read cache for `get`. Nothing outside a snapshot."""
     from . import read_cache
 
     RC: Any = read_cache
@@ -110,12 +116,16 @@ def prime(c: Any, kind: str, holdable_type: str, holdable_ids: Collection[str]) 
     found = {
         str(row["holdable_id"]): row
         for row in c.execute(
-            "SELECT * FROM holds WHERE kind=? AND holdable_type=? AND bot_id IS NULL AND released_at IS NULL "
-            "AND holdable_id IN (SELECT value FROM json_each(?))",
+            "SELECT * FROM holds WHERE kind=? AND holdable_type=? AND coalesce(bot_id,'')=(CASE holdable_type WHEN 'bot' "
+            "THEN holdable_id ELSE '' END) AND released_at IS NULL AND holdable_id IN (SELECT value FROM json_each(?))",
             (kind, holdable_type, json.dumps(sorted(holdable_ids))),
         )
     }
-    RC.prime(c, OPEN_SQL, {(kind, holdable_type, h, ""): found.get(h) for h in holdable_ids})
+    RC.prime(
+        c,
+        OPEN_SQL,
+        {(kind, holdable_type, h, _held_bot(holdable_type, h, None) or ""): found.get(h) for h in holdable_ids},
+    )
 
 
 def put(
@@ -133,7 +143,7 @@ def put(
     upkeep_task_id: str | None = None,
 ) -> dict[str, Any]:
     """The one writer: open a hold of `kind` on the holdable, or update the one open already (holds_open). Answers
-    the row."""
+    the row. A bot's own hold names it as its bot_id."""
     now = str(H.now())
     found = c.execute(
         "INSERT INTO holds(id,kind,holdable_type,holdable_id,bot_id,reason,details,streak,until_at,upkeep_task_id,"
@@ -146,7 +156,7 @@ def put(
             kind,
             holdable_type,
             holdable_id,
-            bot_id,
+            _held_bot(holdable_type, holdable_id, bot_id),
             reason,
             json.dumps(dict(details or {})),
             streak,
@@ -169,7 +179,7 @@ def release(
     found = c.execute(
         "UPDATE holds SET released_at=?,released_by_id=?,released_how=?,updated_at=? WHERE kind=? AND holdable_type=? "
         "AND holdable_id=? AND coalesce(bot_id,'')=? AND released_at IS NULL RETURNING *",
-        (now, actor, how, now, kind, holdable_type, holdable_id, bot_id or ""),
+        (now, actor, how, now, kind, holdable_type, holdable_id, _held_bot(holdable_type, holdable_id, bot_id) or ""),
     ).fetchall()
     return dict(found[0]) if found else None
 

@@ -30,9 +30,10 @@ CREATE INDEX IF NOT EXISTS holds_released ON holds(holdable_type, holdable_id, k
 -- changes nothing.
 CREATE TABLE IF NOT EXISTS bot_budget(bot TEXT PRIMARY KEY, held_at TEXT, window TEXT, runs INTEGER, budget INTEGER,
   task_id TEXT, released_at TEXT, released_by TEXT);
-INSERT OR IGNORE INTO holds(id, kind, holdable_type, holdable_id, reason, details, upkeep_task_id, created_by_id,
-  created_at, updated_at)
-SELECT 'bot_budget-' || bb.bot, 'runaway', 'bot', bb.bot,
+-- bot_id names the held bot on every hold, a bot's own too (none for a bot that is gone).
+INSERT OR IGNORE INTO holds(id, kind, holdable_type, holdable_id, bot_id, reason, details, upkeep_task_id,
+  created_by_id, created_at, updated_at)
+SELECT 'bot_budget-' || bb.bot, 'runaway', 'bot', bb.bot, b.id,
   'Tico stopped ' || coalesce(nullif(b.display_name, ''), bb.bot) || ': ' || coalesce(bb.runs, 0) ||
   ' runs in the last ' || coalesce(bb.window, 'hour') ||
   '. This looks like a runaway loop, not normal work. Check its last runs, then release it or raise its budget.',
@@ -42,13 +43,14 @@ FROM bot_budget bb LEFT JOIN bots b ON b.id = bb.bot
 WHERE bb.held_at IS NOT NULL;
 -- A released row's window, runs and budget are its last hold's; a row held again has the new hold's, so its release
 -- keeps none. When that release's hold began is not kept: it is dated at the release.
-INSERT OR IGNORE INTO holds(id, kind, holdable_type, holdable_id, details, created_by_id, created_at, updated_at,
-  released_at, released_by_id, released_how)
-SELECT 'bot_budget-' || bot || '-released', 'runaway', 'bot', bot,
-  CASE WHEN held_at IS NULL THEN json_object('window', coalesce(window, 'hour'), 'runs', runs, 'budget', budget)
+INSERT OR IGNORE INTO holds(id, kind, holdable_type, holdable_id, bot_id, details, created_by_id, created_at,
+  updated_at, released_at, released_by_id, released_how)
+SELECT 'bot_budget-' || bb.bot || '-released', 'runaway', 'bot', bb.bot, b.id,
+  CASE WHEN bb.held_at IS NULL THEN
+    json_object('window', coalesce(bb.window, 'hour'), 'runs', bb.runs, 'budget', bb.budget)
     ELSE '{}' END,
-  'keeper', released_at, released_at, released_at, released_by,
-  CASE WHEN released_by LIKE 'bot:%' THEN 'botops' ELSE 'person' END
-FROM bot_budget
-WHERE released_at IS NOT NULL;
+  'keeper', bb.released_at, bb.released_at, bb.released_at, bb.released_by,
+  CASE WHEN bb.released_by LIKE 'bot:%' THEN 'botops' ELSE 'person' END
+FROM bot_budget bb LEFT JOIN bots b ON b.id = bb.bot
+WHERE bb.released_at IS NOT NULL;
 DROP TABLE bot_budget;
