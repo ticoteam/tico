@@ -326,7 +326,7 @@ def test_install_retry_is_bounded_and_warm_browser_or_python_never_downloads_apt
     cache = tmp_path / "playwright-system"
     cache.mkdir()
     (cache / "complete").touch()
-    for suite in ("python", "browser"):
+    for suite in ("python", "browser", "types"):
         log.write_text("")
         result = subprocess.run(
             ["bash", str(ROOT / "scripts/ci_install.sh"), "--once", suite], env=env, capture_output=True
@@ -334,13 +334,20 @@ def test_install_retry_is_bounded_and_warm_browser_or_python_never_downloads_apt
         assert result.returncode == 0, result.stderr.decode()
         calls = log.read_text()
         assert "update" not in calls and "--download-only" not in calls and "--with-deps" not in calls
-        if suite == "python":
+        if suite == "types":
+            assert calls == ""  # the venv alone: no npm, no UI build, no system packages
+        elif suite == "python":
             assert calls.splitlines() == [
                 "npm ci --fetch-retries=1 --no-audit --no-fund --prefer-offline",
                 "npm run --silent build:ui",
             ]
         else:
             assert "--no-download install" in calls and "playwright install chromium webkit" in calls
+            # dpkg runs beside pip and npm, and finishes before the browsers install.
+            lines = calls.splitlines()
+            assert "--force-unsafe-io" in calls
+            dpkg = next(i for i, line in enumerate(lines) if "--no-download install" in line)
+            assert dpkg < next(i for i, line in enumerate(lines) if "playwright install" in line)
 
 
 def test_cached_system_packages_match_the_locked_browser_version():
@@ -1130,7 +1137,7 @@ def test_the_main_cache_warm_up_saves_the_keys_pr_checks_restore():
             assert len(setup) == 1 and steps[setup[0]].get("id") == "python" and setup[0] < at[0], name
             install = [i for i, step in enumerate(steps) if "scripts/ci_install.sh" in str(step.get("run", ""))]
             assert install and at[0] < install[0], name
-    assert sum(venv in str(job) for job in pr["jobs"].values()) == 4  # plan, tests, static, caddy-linux
+    assert sum(venv in str(job) for job in pr["jobs"].values()) == 5  # plan, tests, static, types, caddy-linux
     for ident, uses, args, runner, lookup in warmed:
         assert runner in ("ubuntu-24.04", "macos-latest"), ident
         assert any((uses, args) == (r[1], r[2]) and runner == r[3] for r in restored), ident
@@ -1296,6 +1303,7 @@ def test_every_job_runs_on_a_github_hosted_runner_and_only_a_ready_pull_request_
     assert set(jobs) == {
         "plan",
         "static",
+        "types",
         "tests",
         "checks",
         "rust-lint",
@@ -1320,9 +1328,10 @@ def test_a_draft_starts_no_job_and_marking_it_ready_or_pushing_to_a_ready_pull_r
     # On a ready pull request nothing but the draft flag holds back the plan, the static checks and the gate. The static
     # checks run on pull requests only: the merge queue runs them in the plan's merge commit checks.
     assert doc["jobs"]["plan"]["if"] == "${{ !github.event.pull_request.draft }}"
-    assert (
-        doc["jobs"]["static"]["if"] == "${{ github.event_name == 'pull_request' && !github.event.pull_request.draft }}"
-    )
+    for name in ("static", "types"):
+        assert (
+            doc["jobs"][name]["if"] == "${{ github.event_name == 'pull_request' && !github.event.pull_request.draft }}"
+        ), name
     assert doc["jobs"]["checks"]["if"] == "${{ always() && !github.event.pull_request.draft }}"
     # Every other workflow that runs on a pull request holds its jobs back on a draft too (a push to main still runs).
     for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
@@ -1896,11 +1905,16 @@ def test_a_queue_group_runs_every_whole_tree_static_check_on_its_merge_commit_be
     script = (ROOT / "scripts/ci/merge_commit_checks.sh").read_text()
     # Every static check runs on the merge commit too, the per-file ones included: they share configuration (a lint rule
     # one pull request turns on can fail the other's new code).
-    static = [str(step.get("run", "")) for step in jobs["static"]["steps"] if step.get("run")]
+    static = [str(step.get("run", "")) for job in ("static", "types") for step in jobs[job]["steps"] if step.get("run")]
     found = {re.search(r"scripts/[\w/]+\.(?:py|sh)", run).group(0) for run in static if "scripts/" in run}
     found -= {"scripts/ci_install.sh"}  # the static job's install, which the plan job has already done
     found |= {"-m backend.openapi_v2 --check", "npm ci --ignore-scripts", "pinned_tool.sh actionlint"}
-    assert found >= {"scripts/check_migration_order.py", "scripts/lint.sh", "scripts/check_ui_lint.sh"}
+    assert found >= {
+        "scripts/check_migration_order.py",
+        "scripts/lint.sh",
+        "scripts/check_ui_lint.sh",
+        "scripts/check_types.sh",
+    }
     for name in found:
         assert name in script, name
     assert 'LINT_BASE_REF="$base"' in script and 'PYRIGHT_BASE_REF="$base"' in script
