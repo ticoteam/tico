@@ -24,10 +24,14 @@ the caller could read the task now, or could under one of those earlier states.
 
 import hashlib
 import json
+from typing import TYPE_CHECKING
 
 from fastapi.responses import Response
 
 from . import events as E
+
+if TYPE_CHECKING:
+    import sqlite3
 
 CAP = 500  # more changed tasks than one page: a full read is no dearer
 SNOOZE_LINE_BYTES = 200  # a brief row's snooze line, in UTF-8 bytes: the task's own read keeps the whole why
@@ -206,7 +210,7 @@ def _could_read(c, visible_sql, tid, ref):
 
 
 # ----------------------------------------------------------------------------- the engine's part of a list row
-def came_from(c, ids):
+def came_from(c: "sqlite3.Connection", ids: list[str]) -> dict[str, dict[str, str]]:
     """Each side-stage task's latest main work visit in its current pipeline, if it has one."""
     return {
         task: {"id": stage, "name": name}
