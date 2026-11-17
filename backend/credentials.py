@@ -394,7 +394,9 @@ def open_or_reseal(c, key, legacy_path, nonce, ciphertext, aad, table, where, va
 
 def keep_service(c, cipher, cid, name, value, actor, source, at=None):
     """`value` sealed in the service row `cid`, made or replaced in place. Returns what a record keeps in its place:
-    KEPT and a fresh tag, so the reference changes with every save (a caller can tell one save from the next)."""
+    KEPT and the save's time (to the microsecond), so the reference changes with every save (a caller can tell one
+    save from the next: backend/company_server.py `_forget`) and is the same for the same save on the same clock (a
+    demo company built twice for one date comes out the same). It carries nothing of the value."""
     at = at or H.now()
     ciphertext, nonce = cipher.encrypt(c, cid, value)
     c.execute(
@@ -404,7 +406,7 @@ def keep_service(c, cipher, cid, name, value, actor, source, at=None):
         "updated_by=excluded.updated_by WHERE credentials.kind='service'",
         (cid, name, SERVICE, ciphertext, nonce, source, at, at, actor, actor),
     )
-    return KEPT + os.urandom(8).hex()
+    return KEPT + at
 
 
 def kept_record(c, key, cids):
