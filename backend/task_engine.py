@@ -2355,6 +2355,29 @@ def add_requirement(
         _refuse(conn, by, "private", told(conn, by, row, unshared), task_id, said=said)
     if not (line or "").strip():
         _refuse(conn, by, "task_requirement", "Say what you are asking, in one sentence", task_id)
+    return _write_ask(
+        conn, row, by, kind, person, line, choices=choices, shows=shows, brief=brief, title=title, ends=ends_with_task
+    )
+
+
+def _write_ask(
+    conn: "sqlite3.Connection",
+    row: Row,
+    by: str,
+    kind: str,
+    person: str | None,
+    line: str,
+    *,
+    choices: list[str] | None = None,
+    shows: object = None,
+    brief: Row | None = None,
+    title: str | None = None,
+    ends: bool = False,
+) -> Row:
+    """The ask `add_requirement` checked, written on the task's visit: it replaces the bot's open one, starts the
+    ladder again and wakes whom it names. Returns the task with `requirement_id`."""
+    H = _h()
+    task_id = str(row["id"])
     ts = H.now()
     visit = row["visit"]
     if is_bot(by):
@@ -2378,7 +2401,7 @@ def add_requirement(
                 {
                     **({"brief": brief} if brief else {}),
                     **({"title": title} if title else {}),
-                    **({"ends_with_task": True} if ends_with_task else {}),
+                    **({"ends_with_task": True} if ends else {}),
                 }
             ),
             ts,
