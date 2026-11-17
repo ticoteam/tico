@@ -682,3 +682,16 @@ def test_the_cli_refuses_a_move_place_it_cannot_read_before_it_sends(place, why)
     with pytest.raises(APIError, match=why):
         task_commands._move(api, fields, to_place=place["to_place"], from_place=place["from_place"])
     assert api.writes() == []
+
+
+def test_not_known_is_sent_only_when_given():
+    """`tico task ask ... --not-known`: past Tico's own answer to the person (Tasks spec "Tico answers what it already
+    knows", criterion 9)."""
+    argv = ["task", "ask", "T1", "Which repo is this in?", "--to", "chris", "--version", "3"]
+    for extra, sent in ((["--not-known"], True), ([], None)):
+        args = {k: v for k, v in vars(hubcli.parser().parse_args([*argv, *extra])).items()}
+        args = {k: v for k, v in args.items() if k != "fn" and v is not None}
+        api = Recorder()
+        hubtools.task_ask(api, args)
+        [(_, path, body)] = api.writes()
+        assert path == "tasks/T1/questions" and body.get("not_known") is sent
