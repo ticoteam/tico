@@ -121,8 +121,9 @@ def slack_rows(v):
         return []
     readers = []
     if table(v.c, "slack_channels"):
-        for (raw,) in v.c.execute("SELECT readers FROM slack_channels"):
-            readers += [str(r).removeprefix("bot:") for r in (H._json(raw, []) or []) if isinstance(r, str)]
+        from . import slack_channels as SC
+
+        readers = [bot for entry in SC.listing(v.c, None) for bot in entry["readers"]]
     bots, more = v.bots(readers)
     status = {"off": "off", "waiting": "waiting", "connected": "on"}.get(state["state"], "error")
     return [

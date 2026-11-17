@@ -29,8 +29,8 @@ fallback.
 
 A message bot's mail is read live from Gmail on the server, newest first, with the Message automations each message
 started a run of shown as its evidence. Tico keeps no copy of the mail.
-Slack digests have exact event IDs, so a check opens the messages delivered to that bot. Slack
-replies come from `slack_posts` with their delivery state. Slack channel message content is
+A Slack reader catches up on its channel's thread ([slack-gateway.md](slack-gateway.md)); a digest the old hourly
+pass wrote still opens its messages by their event IDs. Slack replies come from `slack_posts` with their delivery state. Slack channel message content is
 restricted to the owner in Message bots; everyone else's email view stays within their existing
 mailbox access. The backend enforces these rules for every detail and thread endpoint.
 The gateway publishes the verified Slack workspace URL so message links open the exact Slack

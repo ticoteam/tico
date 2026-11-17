@@ -1,13 +1,14 @@
 """Which Slack channels bots may read and post in: a list kept in the database and managed in the app.
 
 Settings > Tools > Slack (an owner or an admin), `tico slack channel`, the MCP tools and BotOps all change this one
-list. An entry names the channel (its name, its id, or both), the bots that read it, whether bots may post there
-(on by default, like every internal channel) and a note. The Slack gateway's readers' pass and the bots' Slack routes
-(backend/slack_bots.py) read it; nobody edits a file. A channel shared outside the workspace is refused by the gateway
-whatever this list says: that cannot be overridden here.
+list. An entry names the channel (its name, its id, or both), whether bots may post there (on by default, like every
+internal channel) and a note. Its readers are the bots that follow the channel's linked thread at `digest`: adding a
+reader links a channel that has no link yet to a read-only thread (`slack_threads.add_readers`), and the hourly bot
+digest wakes each reader with what the channel said. The bots' Slack routes (backend/slack_bots.py) read the list;
+nobody edits a file. A channel shared outside the workspace is refused by the gateway whatever this list says: that
+cannot be overridden here.
 """
 
-import json
 import re
 
 from fastapi import Request
@@ -55,9 +56,9 @@ def _entry(row, source):
         "name": row["name"],
         "channel": row["name"] and "#" + row["name"] or row["id"],
         "readers": list(row["readers"]),
+        "link": row["link"],
         "post": bool(row["post"]),
         "note": row["note"],
-        "digest_hours": row["digest_hours"],
         "source": source,
         "updated_at": row.get("updated_at"),
         "updated_by": row.get("updated_by", ""),
@@ -78,18 +79,67 @@ def _readers(value):
 
 
 # ----------------------------------------------------------------------------- the stored list
+# Each listed channel's link: by the reference it was asked with, and by the channel id once the gateway found it. A
+# refused read-only link is still the channel's (adding a reader asks it again), so its state shows. CROSS JOIN keeps
+# the list outer, so each entry looks its links up by index and the links table is never scanned.
+LINKS_SQL = (
+    "SELECT s.key, l.id, l.thread_id, l.state, l.reason, l.read_only, l.created_at FROM slack_channels s "
+    "CROSS JOIN slack_thread_links l ON l.channel_ref=s.key "
+    "AND l.state IN ('requested','active','suspended','refused') "
+    "UNION ALL "
+    "SELECT s.key, l.id, l.thread_id, l.state, l.reason, l.read_only, l.created_at FROM slack_channels s "
+    "CROSS JOIN slack_thread_links l ON l.channel_id=s.channel_id AND l.state IN ('active','suspended') "
+    "WHERE s.channel_id<>''"
+)
+# A channel's readers: the bots that follow its linked thread at digest.
+READERS_SQL = (
+    "SELECT thread_id, actor FROM thread_followers WHERE thread_id IN ({}) AND following=1 AND notify='digest' "
+    "AND actor LIKE 'bot:%' ORDER BY created_at, rowid"
+)
+
+
+def _links(c):
+    """{channel key: its link as the list shows it}: an open link before a refused one, the newest first."""
+    best = {}
+    for r in c.execute(LINKS_SQL):
+        rank = (r["state"] != "refused", r["created_at"])
+        if r["key"] not in best or rank > best[r["key"]][0]:
+            best[r["key"]] = (
+                rank,
+                {
+                    "id": r["id"],
+                    "thread_id": r["thread_id"],
+                    "state": r["state"],
+                    "reason": r["reason"],
+                    "read_only": bool(r["read_only"]),
+                },
+            )
+    return {key: link for key, (_rank, link) in best.items()}
+
+
+def _readers_of(c, thread_ids):
+    out = {}
+    for part in H.chunks(sorted(set(thread_ids))):
+        for r in c.execute(READERS_SQL.format(",".join("?" * len(part))), tuple(part)):
+            out.setdefault(r["thread_id"], []).append(r["actor"][4:])
+    return out
+
+
 def _stored(c):
+    links = _links(c)
+    readers = _readers_of(c, [link["thread_id"] for link in links.values()])
     out = []
     for r in c.execute("SELECT * FROM slack_channels ORDER BY name, channel_id"):
+        link = links.get(r["key"])
         out.append(
             {
                 "key": r["key"],
                 "id": r["channel_id"],
                 "name": r["name"],
-                "readers": H._json(r["readers"], []),
+                "readers": readers.get(link["thread_id"], []) if link else [],
+                "link": link,
                 "post": bool(r["post"]),
                 "note": r["note"],
-                "digest_hours": r["digest_hours"],
                 "updated_at": r["updated_at"],
                 "updated_by": r["updated_by"],
             }
@@ -107,13 +157,12 @@ def listing(c, settings):
 
 
 def channel_map(c, settings):
-    """{channel id: {name, purpose, post, digest_hours, readers}} for the channels that have an id: what the gateway reads."""
+    """{channel id: {name, purpose, post, readers}} for the channels that have an id: what the gateway reads."""
     return {
         r["id"]: {
             "name": r["name"],
             "purpose": r["note"],
             "post": r["post"],
-            "digest_hours": r["digest_hours"],
             "readers": r["readers"],
         }
         for r in listing(c, settings)
@@ -136,7 +185,7 @@ def lookup(c, settings, channel_id, name=""):
 
 def unresolved(c):
     """Stored entries that name a channel but not its id yet (the gateway asks Slack for it)."""
-    return [r for r in _stored(c) if not r["id"] and r["name"]]
+    return [dict(r) for r in c.execute("SELECT key, name FROM slack_channels WHERE channel_id='' AND name<>''")]
 
 
 def fill_ids(c, ids):
@@ -159,40 +208,15 @@ def _save(c, who, entry, created):
     now = H.now()
     if created:
         c.execute(
-            "INSERT INTO slack_channels(key,channel_id,name,readers,post,note,digest_hours,created_at,updated_at,updated_by) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?)",
-            (
-                entry["key"],
-                entry["id"],
-                entry["name"],
-                _dump(entry["readers"]),
-                int(entry["post"]),
-                entry["note"],
-                entry["digest_hours"],
-                now,
-                now,
-                who.actor,
-            ),
+            "INSERT INTO slack_channels(key,channel_id,name,post,note,created_at,updated_at,updated_by) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            (entry["key"], entry["id"], entry["name"], int(entry["post"]), entry["note"], now, now, who.actor),
         )
     else:
         c.execute(
-            "UPDATE slack_channels SET channel_id=?,name=?,readers=?,post=?,note=?,digest_hours=?,updated_at=?,updated_by=? WHERE key=?",
-            (
-                entry["id"],
-                entry["name"],
-                _dump(entry["readers"]),
-                int(entry["post"]),
-                entry["note"],
-                entry["digest_hours"],
-                now,
-                who.actor,
-                entry["key"],
-            ),
+            "UPDATE slack_channels SET channel_id=?,name=?,post=?,note=?,updated_at=?,updated_by=? WHERE key=?",
+            (entry["id"], entry["name"], int(entry["post"]), entry["note"], now, who.actor, entry["key"]),
         )
-
-
-def _dump(value):
-    return json.dumps(value, separators=(",", ":"))
 
 
 def _check_readers(c, readers):
@@ -206,9 +230,11 @@ def _check_readers(c, readers):
     return ids
 
 
-def add(c, settings, who, ref, readers=None, post=None, note=None, digest_hours=None, name=""):
-    """Add a channel, or change the one already listed: readers are added to the ones it has, `post`, `note` and
-    `digest_hours` replace theirs when given."""
+def add(c, settings, who, ref, readers=None, post=None, note=None, name=""):
+    """Add a channel, or change the one already listed: readers are added to the ones it has (they follow its thread,
+    see `slack_threads.add_readers`), `post` and `note` replace theirs when given."""
+    from . import slack_threads as ST
+
     cid, label = parse_ref(ref, name)
     readers = _check_readers(c, _readers(readers))
     rows = listing(c, settings)
@@ -218,10 +244,8 @@ def add(c, settings, who, ref, readers=None, post=None, note=None, digest_hours=
             "key": entry_key(cid, label),
             "id": cid,
             "name": label,
-            "readers": readers,
             "post": True if post is None else bool(post),
             "note": (note or "").strip(),
-            "digest_hours": max(0.0, float(digest_hours or 0)),
         }
         if any(r["key"] == entry["key"] for r in _stored(c)):  # the same channel under its other spelling
             raise Problem("slack_channel", "That channel is already listed.", 409)
@@ -232,39 +256,43 @@ def add(c, settings, who, ref, readers=None, post=None, note=None, digest_hours=
             "key": have["key"],
             "id": have["id"] or cid,
             "name": have["name"] or label,
-            "readers": have["readers"] + [r for r in readers if r not in have["readers"]],
             "post": have["post"] if post is None else bool(post),
             "note": have["note"] if note is None else note.strip(),
-            "digest_hours": have["digest_hours"] if digest_hours is None else max(0.0, float(digest_hours)),
         }
         _save(c, who, entry, False)
         created = False
+    if readers:
+        ST.add_readers(c, who, entry["key"], entry["name"], entry["id"], readers)
+    shown = next(r for r in listing(c, settings) if _same(entry, r))
     H.event(
         c,
         who.actor,
         "slack.channel_added" if created else "slack.channel_changed",
         entry["key"],
-        {"readers": entry["readers"], "post": entry["post"]},
+        {"readers": shown["readers"], "post": entry["post"]},
     )
-    return {**next(r for r in listing(c, settings) if _same(entry, r)), "created": created}
+    return {**shown, "created": created}
 
 
 def remove(c, settings, who, ref, reader=""):
-    """Take a channel off the list, or only one reader off it."""
+    """Take a channel off the list (its read-only link ends with it), or only one reader off it."""
+    from . import slack_threads as ST
+
     cid, label = parse_ref(ref)
     rows = listing(c, settings)
     have = _find(rows, cid, label)
     if have is None:
         raise Problem("not_found", "That channel is not on the list.", 404)
+    link = ST.channel_link(c, have["key"], have["id"])
     if reader:
         slug = _readers([reader])[0]
         bot_id = (H.resolve_bot(c, slug) or {}).get("id", slug)
-        if bot_id not in have["readers"]:
+        if bot_id not in have["readers"] or link is None:
             return {**have, "removed": False}
-        have["readers"] = [r for r in have["readers"] if r != bot_id]
-        _save(c, who, {**have}, False)
+        ST.remove_reader(c, who, link, bot_id)
         H.event(c, who.actor, "slack.channel_reader_removed", have["key"], {"reader": bot_id})
         return {**next(r for r in listing(c, settings) if _same(have, r)), "removed": True}
+    ST.drop_channel(c, who, link)
     c.execute("DELETE FROM slack_channels WHERE key=?", (have["key"],))
     H.event(c, who.actor, "slack.channel_removed", have["key"], {})
     return {**have, "removed": True, "deleted": True}
@@ -278,7 +306,8 @@ class ChannelAdd(BaseModel):
     readers: list[str] = Field(default_factory=list, max_length=200)
     post: bool | None = None
     note: str | None = Field(default=None, max_length=500)
-    digest_hours: float | None = Field(default=None, ge=0, le=720)
+    # rc.1 clients send it (`tico slack channel add --digest-hours`); the hourly bot digest replaced it, so it is ignored.
+    digest_hours: float | None = Field(default=None, deprecated=True)
     operation_id: str | None = None
 
 
@@ -324,7 +353,7 @@ def install(app, settings, store, auth):
     def channel_add(request: Request, body: ChannelAdd):
         who = person(request, manage=True)
         with store.transaction() as c:
-            return add(c, settings, who, body.channel, body.readers, body.post, body.note, body.digest_hours, body.name)
+            return add(c, settings, who, body.channel, body.readers, body.post, body.note, body.name)
 
     @app.post("/api/v2/slack/channels/remove")
     def channel_remove(request: Request, body: ChannelRemove):
