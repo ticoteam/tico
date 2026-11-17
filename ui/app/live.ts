@@ -25,6 +25,7 @@ interface LiveState {
   handlers: Map<string, Set<LiveHandler>>;
   conversations: Map<string, number>;
   threads: Map<string, number>;
+  tasks: Map<string, number>;
   taskKey: string;
   urlTopics?: string[];
   readyTopics?: string[];
@@ -33,7 +34,7 @@ interface LiveState {
 interface ThrottleEntry { at: number; timer: number; hidden: boolean; fn?: () => void; ms?: number; }
 const LIVE_TOPICS = ['tasks', 'messages', 'runs', 'bots', 'needs', 'letters'];
 const LIVE: LiveState = {es: null, after: null, started: false, connected: false, opened: 0, tries: 0, timer: 0, restart: 0,
-              handlers: new Map(), conversations: new Map(), threads: new Map(), taskKey: '', waiting: false};
+              handlers: new Map(), conversations: new Map(), threads: new Map(), tasks: new Map(), taskKey: '', waiting: false};
 // The first reads that may add a topic (liveTopicAdd), still on their way: the first stream waits for them, up to
 // LIVE_PROBE_WAIT_MS, so it opens once with every topic rather than once without and again with. A read that hangs
 // holds the first stream (and every live update) for that long; if it is the rail, the stream then opens from now, not
@@ -96,6 +97,22 @@ function liveFollowThread(id: string | number | null | undefined): () => void {
     else { LIVE.threads.delete(id); liveRestart(); }
   };
 }
+// The changes of this task while a card shows it (the Market page's sizing task), wherever the page is; returns the release.
+function liveFollowTask(id: string | number | null | undefined): () => void {
+  if (!id) return () => {};
+  id = String(id);
+  const had = LIVE.tasks.has(id);
+  LIVE.tasks.set(id, (LIVE.tasks.get(id) || 0) + 1);
+  if (!had) { if (LIVE.started) liveTasksSync(); else liveStart(); }
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const n = (LIVE.tasks.get(id) || 1) - 1;
+    if (n > 0) LIVE.tasks.set(id, n);
+    else { LIVE.tasks.delete(id); liveTasksSync(); }
+  };
+}
 // A topic joins once a read has shown the server sends it (`threads`, from GET /v2/threads/rail).
 // `seq`: the change number the read that showed it is as of (GET /v2/threads/rail `seq`). Before the first stream opens,
 // that stream resumes from it, so it carries the topic over from that read (`carried` on its `needs` connect) and replays
@@ -147,12 +164,13 @@ function liveRestart(): void {
   LIVE.restart = setTimeout(liveEventsConnect, 30);       // several views following at once reconnect once
 }
 // The task changes this page shows (refresh.js liveTasksApply): every task's on a task list, a bot's or a person's
-// own on their page, the open task's anywhere, and none elsewhere. Every open tab was sent every task's change.
+// own on their page, the open task's and each followed one's anywhere, and none elsewhere. Every open tab was sent every task's change.
 function liveTaskScope(): TaskScope {
   const r = typeof S !== 'undefined' && S.route || '';
   if (isTasksRoute(r) || r.startsWith('#/meetings')) return {all: true};
   if (r.startsWith('#/task/')) return {task: [decodeURIComponent(String(r.slice(7).split(/[/?]/)[0]))], party: []};
-  const open: string[] = typeof TASK_CHAT !== 'undefined' && TASK_CHAT?.id ? [String(TASK_CHAT.id)] : [];
+  const chat: string[] = typeof TASK_CHAT !== 'undefined' && TASK_CHAT?.id ? [String(TASK_CHAT.id)] : [];
+  const open = [...new Set([...chat, ...LIVE.tasks.keys()])];   // and the tasks a card follows (liveFollowTask)
   // A bot's route may name it by slug (a link made from a label); its actor is its id.
   const botRef = r.startsWith('#/bot/') ? decodeURIComponent(String(r.slice(6).split(/[/?]/)[0])) : '';
   const party = botRef ? 'bot:' + (botByRef(botRef)?.id || botRef)

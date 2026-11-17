@@ -67,7 +67,12 @@ interface MktDefinition {
   counting_rules?: string[] | null;
   params?: unknown;
 }
+/** What the open Size the market task waits on the reader for (backend/market_spend.py sizing). */
+interface MktAsk { requirement_id: string; kind?: string | null; line?: string | null; choices?: string[] | null; }
+/** The open Size the market task: whose turn it is, and the reader's question when it waits on them. */
+interface MktSizing { id: string; version?: number | null; turn?: string | null; ask?: MktAsk | null; }
 interface MktSpend {
+  sizing?: MktSizing | null;
   name?: string | null;
   definition?: MktDefinition | null;
   year?: string | number | null;
@@ -228,37 +233,105 @@ const mktGrowthPts = (tree: MktTree): MktGrowthGroup[] => tree.drawn.filter((g):
 
 // ------------------------------------------------------------------ Where is the money going?
 
-// Nothing sized yet: the owner describes the market in a sentence and the Librarian sizes it (POST
-// /v2/market/spend/research); the notice then stands in for the form until the sizes arrive. `started` runs once the
-// sizing is filed, when the form is gone.
-function mktSizeForm(host: HTMLElement, description: string | null | undefined, started?: () => void): void {
-  host.innerHTML = `<form class="mkt-card mkt-start" data-mkt-size novalidate>
+// The sizing card: the open Size the market task as the server has it (GET /v2/market/spend `sizing`), so a reload shows
+// the same. Working: a spinner and the task. Waiting on the reader: the Librarian's question, answered here (POST
+// /v2/tasks/{id}/asks/{requirement_id}/answer). With `form` (nothing sized yet, the owner), the sentence that defines the
+// market, sent with POST /v2/market/spend/research: a new sentence changes the market and goes to the open task.
+// It follows the task live (liveFollowTask) and Needs you; when the sizes arrive the page is drawn again. `needs` is
+// told whether the card waits on the owner.
+interface MktSizingOpts { form: boolean; sized: boolean; needs?: (needs: boolean) => void; }
+interface MktSizingMounted { stop(): void; }
+const mktTaskLink = (s: MktSizing): string => `<a href="#/task/${esc(s.id)}">View task</a>`;
+function mktSizingHtml(s: MktSizing | null): string {
+  if (!s) return '';
+  const ask = s.ask;
+  if (ask?.kind === 'answer') {
+    return `<div class="mkt-card mkt-asked" data-mkt-asked role="status"><p class="mkt-q-line">${esc(ask.line || '')}</p>
+      ${(ask.choices || []).length ? `<div class="mkt-chips">${(ask.choices || []).map(c => `<button class="mkt-pick" type="button" data-mkt-choice="${esc(c)}">${esc(c)}</button>`).join('')}</div>` : ''}
+      <form class="mkt-cite" data-mkt-reply novalidate><input name="value" type="text" maxlength="2000" autocomplete="off" aria-label="Reply">
+        <button class="primary" type="submit">Reply</button></form><p class="mkt-small">${mktTaskLink(s)}</p></div>`;
+  }
+  if (ask) return `<div class="mkt-card mkt-asked" data-mkt-asked role="status"><p class="mkt-q-line">${esc(ask.line || '')}</p><p class="mkt-small">${mktTaskLink(s)}</p></div>`;
+  const working = s.turn !== 'person';
+  return `<div class="mkt-card market-researching" data-mkt-researching role="status">${working ? '<span class="market-spin" aria-hidden="true"></span>' : ''}
+    <div><strong>${working ? 'On it.' : 'Waiting'}</strong><p>${mktTaskLink(s)}</p></div></div>`;
+}
+function mktSizing(host: HTMLElement, first: MktSpend | null | undefined, opts: MktSizingOpts): MktSizingMounted {
+  let sizing: MktSizing | null = first?.sizing || null, dead = false, unfollow = (): void => {}, followed = '';
+  host.innerHTML = '<div data-mkt-sizing></div>' + (opts.form ? `<form class="mkt-card mkt-start" data-mkt-size novalidate>
       <label class="mkt-lab" for="mkt-describe">Describe the market in a sentence</label>
-      <input id="mkt-describe" name="description" type="text" maxlength="400" autocomplete="off" value="${esc(description || '')}" placeholder="What small offices spend on cleaning services">
+      <input id="mkt-describe" name="description" type="text" maxlength="400" autocomplete="off" value="${esc(first?.definition?.description || '')}" placeholder="What small offices spend on cleaning services">
       <p class="err" data-mkt-error role="alert" hidden></p>
-      <div class="market-start-actions"><button class="primary" type="submit">Size the market</button></div></form>`;
-  // Each element was rendered just above, by this function.
-  const form = host.querySelector<HTMLFormElement>('[data-mkt-size]')!;
-  const line = form.querySelector<HTMLElement>('[data-mkt-error]')!;
-  const submit = form.querySelector<HTMLButtonElement>('[type=submit]')!;
-  form.onsubmit = async ev => {
+      <div class="market-start-actions"><button class="primary" type="submit">Size the market</button></div></form>` : '');
+  const box = host.querySelector<HTMLElement>('[data-mkt-sizing]'), form = host.querySelector<HTMLFormElement>('[data-mkt-size]');
+  const follow = (): void => {
+    if (followed === (sizing?.id || '')) return;
+    unfollow(); followed = sizing?.id || '';
+    unfollow = liveFollowTask(followed);
+  };
+  const paint = (): void => {
+    if (dead || !box) return;
+    patchHTML(box, mktSizingHtml(sizing));
+    const submit = form?.querySelector<HTMLButtonElement>('[type=submit]');
+    if (submit) submit.textContent = sizing ? 'Update' : 'Size the market';
+    opts.needs?.(opts.form && (!sizing || !!sizing.ask));
+    follow();
+  };
+  // A read of the card as the server has it now; the sizes arriving draw the whole page again.
+  const refresh = async (): Promise<void> => {
+    let data: MktSpend;
+    try { data = await get<MktSpend>('/v2/market/spend', {fresh: true}); } catch { return; }
+    if (dead) return;
+    if (!opts.sized && mktSized(data)) { window.marketReload(); return; }
+    sizing = data.sizing || null;
+    paint();
+  };
+  const soon = (): void => { if (!dead) liveSoon('mkt-sizing', () => void refresh(), 400); };
+  const offs = [liveOn('tasks', (d: {id?: unknown; task_id?: unknown}) => { if (sizing && String(d.id ?? d.task_id) === sizing.id) soon(); }),
+    liveOn('needs-list', soon), liveOn('reset', soon)];
+  const answer = async (value: string, from: HTMLElement): Promise<void> => {
+    const s = sizing, ask = s?.ask;
+    if (!s || !ask || !value) return;
+    from.querySelectorAll<HTMLInputElement | HTMLButtonElement>('input, button').forEach(el => { el.disabled = true; });
+    try { await taskAnswer(s.id, ask.requirement_id, value, s.version ?? null); }
+    catch (error) { toast(errorMessage(error, 'That did not go through.'), true); }
+    await refresh();
+    from.querySelectorAll<HTMLInputElement | HTMLButtonElement>('input, button').forEach(el => { el.disabled = false; });
+  };
+  box?.addEventListener('click', ev => {
+    const choice = eventElement(ev)?.closest<HTMLElement>('[data-mkt-choice]');
+    if (choice && box) void answer(choice.dataset.mktChoice || '', box);
+  });
+  box?.addEventListener('submit', ev => {
+    const reply = eventElement(ev)?.closest<HTMLFormElement>('[data-mkt-reply]');
+    if (!reply) return;
     ev.preventDefault();
-    if (submit.disabled) return;
-    // The form template above has this input.
-    const description = form.querySelector<HTMLInputElement>('[name=description]')!.value.trim();
+    const input = reply.querySelector<HTMLInputElement>('[name=value]');
+    const value = input?.value.trim() || '';
+    if (!value) { input?.focus(); return; }
+    void answer(value, reply);
+  });
+  if (form) form.onsubmit = async ev => {
+    ev.preventDefault();
+    const line = form.querySelector<HTMLElement>('[data-mkt-error]'), submit = form.querySelector<HTMLButtonElement>('[type=submit]');
+    const description = form.querySelector<HTMLInputElement>('[name=description]')?.value.trim() || '';
+    if (!line || !submit || submit.disabled) return;
     if (!description) { line.textContent = 'Say what the market is.'; line.hidden = false; return; }
     line.hidden = true;
     submit.disabled = true;
     try {
       const sent = await post('/v2/market/spend/research', {description});
-      host.innerHTML = `<div class="mkt-card market-researching" data-mkt-researching role="status"><span class="market-spin" aria-hidden="true"></span>
-        <div><strong>On it.</strong>${sent?.task_id ? `<p><a href="#/task/${esc(sent.task_id)}">View task</a></p>` : ''}</div></div>`;
-      started?.();
+      // The answer carries the task as the server has it now; an older server answers only its id.
+      const now: MktSizing | null | undefined = sent?.sizing;
+      sizing = now || (sent?.task_id ? {id: String(sent.task_id), turn: 'working'} : sizing);
+      paint();
     } catch (error) {
-      submit.disabled = false;
       line.textContent = errorMessage(error, 'That did not go through.'); line.hidden = false;
     }
+    submit.disabled = false;
   };
+  paint();
+  return {stop() { dead = true; unfollow(); offs.forEach(off => { off(); }); }};
 }
 
 interface MktCiteLoading { loading: true; bets?: undefined; all?: undefined; revision?: undefined; }

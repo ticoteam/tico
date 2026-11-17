@@ -27,7 +27,9 @@ interface Seg {id: string; name: string; parent: string | null; depth: number; s
   rolled_usd: {spend_usd: number; low_usd: number; high_usd: number} | null; estimates: Size[]; disagree: boolean; bases: string[]; players: unknown[]; self: boolean}
 interface Data {definition: unknown; year: number; dimension: string; basis: string; total: unknown; segments: Seg[]}
 interface LiveData {offering?: Data; chain?: typeof chain; [key: string]: unknown}
-interface OpenOpts {role?: string; route?: string; viewport?: Viewport; empty?: boolean; data?: LiveData}
+// The open Size the market task as GET /api/v2/market/spend carries it (market_spend.py sizing).
+interface Sizing {id: string; version: number; turn: string; ask: {requirement_id: string; kind: string; line: string; choices: string[]} | null}
+interface OpenOpts {role?: string; route?: string; viewport?: Viewport; empty?: boolean; data?: LiveData; sizing?: Sizing | null}
 type Sent = [string, string, unknown];
 
 const shots = process.env.TICO_SCREENSHOT_DIR;
@@ -93,11 +95,11 @@ const chain = {layers: [
 const bets = [{id: 'b-price', statement: 'Price at half the market.', status: 'active', cites: ['segment/home']},
   {id: 'b-offices', statement: 'Sell to offices through managers.', status: 'active', cites: []}, {id: 'b-old', statement: 'Offices only.', status: 'retired', cites: []}];
 
-async function open(browser: Browser, {role = 'owner', route = '#/strategy/market', viewport = DESKTOP, empty = false, data}: OpenOpts = {}) {
+async function open(browser: Browser, {role = 'owner', route = '#/strategy/market', viewport = DESKTOP, empty = false, data, sizing = null}: OpenOpts = {}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block', locale: 'en-GB'});
   const errors: string[] = [], sent: Sent[] = [], reads: [string, string][] = [];
   page.on('pageerror', (e: Error) => errors.push(e.message));
-  const live: {data: LiveData | undefined; task: boolean} = {data, task: false};
+  const live: {data: LiveData | undefined; task: boolean; sizing: Sizing | null} = {data, task: !!sizing, sizing};
   await page.route('**/*', async (route: Route) => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
     const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
@@ -116,13 +118,20 @@ async function open(browser: Browser, {role = 'owner', route = '#/strategy/marke
     if (p === '/api/v2/market/spend' && method === 'GET') {
       const dimension = url.searchParams.get('dimension') || 'offering', basis = url.searchParams.get('basis') || 'product';
       reads.push([dimension, basis]);
-      if (empty) return json({definition: live.task ? {description: 'What offices spend on cleaning'} : null, year: 2025, dimension, basis, total: {spend_usd: 0, low_usd: 0, high_usd: 0}, segments: []});
+      if (empty) return json({definition: live.task ? {description: 'What offices spend on cleaning'} : null, year: 2025, dimension, basis, total: {spend_usd: 0, low_usd: 0, high_usd: 0}, segments: [], sizing: live.sizing});
       return json(live.data?.[dimension] || buildData(dimension, basis));
     }
     if (p === '/api/v2/market/spend/research') {
       sent.push(['POST', p, req.postDataJSON()]);
       live.task = true;
-      return json({task_id: 'task-size'});
+      live.sizing = {id: 'task-size', version: (live.sizing?.version || 0) + 1, turn: 'working', ask: null};
+      return json({task_id: 'task-size', sizing: live.sizing});
+    }
+    const answered = p.match(/^\/api\/v2\/tasks\/([^/]+)\/asks\/([^/]+)\/answer$/);
+    if (answered && method === 'POST') {
+      sent.push(['POST', p, req.postDataJSON()]);
+      live.sizing = {id: answered[1]!, version: (live.sizing?.version || 0) + 1, turn: 'working', ask: null};
+      return json({id: answered[1], version: live.sizing.version});
     }
     const params = p.match(/^\/api\/v2\/market\/sizes\/([^/]+)\/params$/);
     if (params) {
@@ -238,11 +247,36 @@ const noSideScroll = (page: Page) => page.evaluate(() => ({page: document.docume
         await page.locator('#mkt-q-money [data-mkt-researching]').waitFor();
         assert.deepEqual(sent, [['POST', '/api/v2/market/spend/research', {description: 'What offices spend on cleaning'}]], 'one research request');
         assert.equal(await page.locator('[data-mkt-researching] a').getAttribute('href'), '#/task/task-size');
+        assert.equal(await form.locator('button').innerText(), 'Update', 'the sentence now changes the market');
+        // The task is the server's: a reload shows it working.
+        await page.reload();
+        await page.locator('#mkt-q-money [data-mkt-researching] .market-spin').waitFor();
+        assert.equal(await page.locator('#mkt-describe').inputValue(), 'What offices spend on cleaning');
       } else assert.equal(await page.locator('#mkt-q-money').count(), 0, role);
       assert.deepEqual(await page.locator('.mkt-pl tbody tr button').allInnerTexts(), ['Acme'], role);
       assert.equal(await page.locator('.mkt-pl tr.us').count(), 1, role + ': our row is marked');
       assert.equal(await page.evaluate(() => location.hash), '#/strategy/market/spend');
       assert.deepEqual(errors, [], role);
+      await page.close();
+    }
+    // The task waits on the owner: its question is on the card, answered there with the task's version, and the card
+    // goes back to working. Needs you marks Where is the money going? until then.
+    {
+      const sizing = {id: 'task-size', version: 4, turn: 'person', ask: {requirement_id: 'req-1', kind: 'answer', line: 'Offices only, or homes too?', choices: ['Offices only']}};
+      const {page, errors, sent} = await open(browser, {route: '#/strategy/market/spend', empty: true, sizing});
+      const asked = page.locator('#mkt-q-money [data-mkt-asked]');
+      await asked.waitFor();
+      assert.equal(await asked.locator('.mkt-q-line').innerText(), 'Offices only, or homes too?');
+      assert.equal(await asked.locator('a').getAttribute('href'), '#/task/task-size');
+      assert.equal(await page.locator('#mkt-qh-money .needs-mark').count(), 1, 'Needs you');
+      await asked.locator('[data-mkt-reply] [type="submit"]').click();
+      assert.equal(sent.length, 0, 'an empty reply is not sent');
+      await asked.locator('[data-mkt-reply] input').fill('Offices only, under 50 staff');
+      await asked.locator('[data-mkt-reply] [type="submit"]').click();
+      await page.locator('#mkt-q-money [data-mkt-researching] .market-spin').waitFor();
+      assert.deepEqual(sent, [['POST', '/api/v2/tasks/task-size/asks/req-1/answer', {value: 'Offices only, under 50 staff', version: 4}]]);
+      assert.equal(await page.locator('#mkt-qh-money .needs-mark').count(), 0, 'answered');
+      assert.deepEqual(errors, []);
       await page.close();
     }
     // A link to a note, a note id route, an old #/market link, the old Players view and Open map open the map, with a

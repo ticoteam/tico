@@ -51,6 +51,13 @@
 .mkt-seg button[aria-pressed=true]{background:var(--raised);color:var(--ink);font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,.12)}
 .mkt-start{display:grid;gap:8px;max-width:560px}
 .mkt-start input{width:100%}
+/* The sizing task: its question to the reader, with a reply; the sentence form under it. */
+[data-mkt-sizing]:not(:empty){margin-bottom:12px}
+.mkt-asked{display:grid;gap:8px;max-width:560px}
+.mkt-asked p{margin:0}
+.mkt-q-line{font-weight:600;color:var(--ink)}
+.mkt-asked .mkt-cite{margin:0}
+.mkt-asked .mkt-cite input{flex:1;min-width:0}
 .mkt-two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;align-items:start}
 .mkt-two.solo{grid-template-columns:minmax(0,1fr)}
 .mkt-card .mkt-lab+.mkt-growth{margin-top:8px}
