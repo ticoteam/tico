@@ -176,7 +176,8 @@ def set_parent(conn: Any, actor: str, task_id: str, parent_id: str, *, mover: An
 def _comments(conn: Any, task_id: str) -> int:
     """The comments left on A: its said messages, not its request (that comes over to B under "From #A")."""
     H = _h()
-    asked = (H.task_request(conn, task_id) or {}).get("id")
+    request: Row | None = H.task_request(conn, task_id)
+    asked = request["id"] if request else None
     return sum(1 for m in H.task_comments(conn, task_id) if m.get("kind") == "say" and m.get("id") != asked)
 
 
