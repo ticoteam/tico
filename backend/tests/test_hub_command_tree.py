@@ -3,8 +3,8 @@
 runner-rs/src/hosts/hub_paths.rs holds HUB_PATHS (every path clients/hubcli.py parses, aliases and top-level renames
 included) and HUB_READ_PATHS (the leaves the runner trusts to only read). scripts/hub_paths.py writes it from the
 parser and the tool table; this fails when the file is out of date, so a command the CLI adds, renames or drops cannot
-drift from what a run log shows. It also checks that every phrase key in backend/turns.py is a real path, and that
-every read-only path parses to one command, never a group whose subcommand could write.
+drift from what a run log shows. It also checks that every read-only path parses to one command, never a group whose
+subcommand could write.
 Light: it only builds the argparse tree, with no network.
 """
 
@@ -16,6 +16,10 @@ from scripts import hub_paths
 
 def subcommands(p):
     return next((action.choices for action in p._actions if isinstance(action, argparse._SubParsersAction)), None)
+
+
+def test_the_runner_lists_are_generated_from_the_cli():
+    assert hub_paths.RUST.read_text() == hub_paths.rust(), "run: python scripts/hub_paths.py"
 
 
 def test_every_read_only_path_the_runner_trusts_parses_to_one_command():

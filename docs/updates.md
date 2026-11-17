@@ -496,9 +496,10 @@ Automatic rollback covers a release that does not come up. To go back by choice:
 
 Every bot made from a template (built-in, starter or one that fills a seat) takes the newer template's files after an
 update, before its first run once its computer has the new release (once per start of the runner, never mid-run).
-These files are the template's: the ones its card calls Tico's own (`AGENTS.md`, `playbooks/`, `skills/`), the
-permissions file `.claude/settings.json` (no template ships a Codex settings file), and the template's `knowledge/`
-pages. `knowledge/company.md` (written from the onboarding answers), `memory/`, `reports/`, `bot.yaml` and
+These files are the template's: the ones its card calls Tico's own (`AGENTS.md`, `playbooks/`, `skills/`,
+`.claude/skills/`), the permissions file `.claude/settings.json` (no template ships a Codex settings file), and the
+template's `knowledge/` pages. A template's files include what it takes from the catalog's base and shared files
+(`templates/catalog/_base/` and `_shared/`), so a change there reaches every bot made from a template that takes it. `knowledge/company.md` (written from the onboarding answers), `memory/`, `reports/`, `bot.yaml` and
 anything the bot wrote itself are never touched.
 
 A file the bot or a person changed since the bot was given it (when it was made, or by the last refresh) is kept, not
@@ -507,7 +508,7 @@ seat bot's `AGENTS.md` keeps its `## Job description`. The repository's `.tico-t
 given; a bot made before that record counts its first commit ("Set up ... from the ... template") as what it was given.
 
 The Assistant, BotOps, the Librarian and the Strategy Owner are the exception for `AGENTS.md`, `playbooks/` and
-`skills/`: the release's text wins over their edits, which stay in the repository's history.
+skills: the release's text wins over their edits, which stay in the repository's history.
 
 Each refresh is a `bot.template_refreshed` event naming the bot, the release its files came from and the one they come
 from now, and the files added, updated, removed and kept because they were changed. The bot's `template_version` moves

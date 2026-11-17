@@ -57,3 +57,8 @@ repo_all_access: read
 recommend_when:
 - sells_software
 - has_pipeline
+# Files this template takes from templates/catalog/_shared, one copy for every template that lists them.
+shared_files:
+  - knowledge/manager-practice.md
+  - .claude/skills/read-what-is-missing
+  - .claude/skills/write-the-stuck-task-question
