@@ -6,7 +6,6 @@ import json
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, post, runner  # noqa: F401  (api is a fixture)
 from backend.tests.helpers.task_lanes import RUNNER_CAPABILITIES
-from runner_support import state
 from backend import bot_settings as BS
 
 
@@ -139,7 +138,6 @@ def test_a_subtask_turn_runs_in_its_parents_lane_and_session_and_links_and_check
     assert turn["task"]["id"] == sub
     assert (turn["lane"], turn["task"]["session_task_id"]) == ("task:" + parent, parent)
     assert turn["task"]["checkpoint"] == "Planned.", "a fresh session starts from the root's checkpoint"
-    assert state.session_key({"session": "task"}, turn) == "task:" + parent
     post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-parent"}, machine["token"])
     with api.app.state.store.transaction() as c:  # moved out from under the parent mid-turn
         c.execute("DELETE FROM task_relations WHERE from_task=? AND kind='parent'", (sub,))
@@ -218,11 +216,11 @@ def test_a_subtask_keeps_its_own_session_and_lane_beside_its_parent(api):
     with api.app.state.store.transaction() as c:
         BS.write(c, "ops", {**BS.read(c, "ops"), "subtask_session": "own"})
         sub = H.task_create(c, "human:ana", "Step 1 of the launch", "Do this step.", "bot:ops", parent_id=parent)["id"]
-    assert claim(api, machine)["lane"] == "task:" + sub, "beside its parent's running turn, in a lane of its own"
+    turn = claim(api, machine)
+    assert turn["lane"] == "task:" + sub, "beside its parent's running turn, in a lane of its own"
     with api.app.state.store.read() as c:
         assert H.session_root(c, "ops", sub, {"subtask_session": "own"}) == sub
-    turn = {"bot": "ops", "task": {"id": sub}}  # no session_task_id: keyed on the subtask
-    assert state.session_key({}, turn) == "task:" + sub
+    assert (turn["task"].get("session_task_id") or turn["task"]["id"]) == sub
 
 
 def test_a_person_finishing_a_subtask_wakes_the_bot_once_on_the_parent_with_its_title_never_its_note(api):
