@@ -322,11 +322,6 @@ function isAutomationsRoute(r: string): boolean { return auUnder(r, AUTOMATIONS)
 let USE: UseState | null = null;
 
 // app/computer-screen.ts
-// A task's owner bot's screen, in the task's header: a monitor icon, as quiet as the header's other icon buttons.
-const taskScreenLinkHTML = (owner: string | null | undefined) => {
-  const id = botScreenComputer(actorSlug(owner));
-  return id ? `<a class="ghost peek-btn" href="${screenHref(id)}" aria-label="Screen" title="Screen">${TL_ICON.screen}</a>` : '';
-};
 
 // app/finance.ts
 const FIN_ROUTE = '#/finance';

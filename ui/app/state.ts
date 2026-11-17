@@ -88,10 +88,6 @@ const strategyBotName = (): string => {
 const myChatBot = (): string => assistantBot();
 const myChatName = (): string => assistantName();
 const companyName = (): string => S.config.company_name || appName();
-// Tico's own wordmark, only while the app is called Tico; a team that named its app gets that name as text.
-const brandLogo = (): string => appName() === CONFIG_DEFAULTS.app_name
-  ? `<img class="brand-logo on-light" src="assets/tico/tico-wordmark.svg" alt="${esc(appName())}"><img class="brand-logo on-dark" src="assets/tico/tico-wordmark-reversed.svg" alt="${esc(appName())}">`
-  : `<span class="brand-name">${esc(appName())}</span>`;
 const publicUrl = (): string => S.config.public_url || location.origin;
 const runnerUrl = (): string => S.config.runner_url || location.origin;
 // Only a successful authenticated workspace config may grant native visual navigation.

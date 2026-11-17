@@ -106,7 +106,6 @@ const zoneWord = (tz: string | null | undefined): string => {
     return new Intl.DateTimeFormat('en-US', {timeZone: tz, timeZoneName: 'short'}).formatToParts(new Date()).find(p => p.type === 'timeZoneName')?.value || tz;
   } catch { return tz; }
 };
-const cadenceZoned = (r: {on?: string | null; cron?: string | null; timezone?: string | null}): string => { const z = !r.on && zoneWord(r.timezone); return cadenceWords(r) + (z ? ` ${z}` : ''); };
 function durationWords(value: number | string | null | undefined): string {
   if (value == null || value === '') return '';
   const s = Math.max(0, Math.round(+value));
