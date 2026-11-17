@@ -6,7 +6,11 @@ Gmail call, kept for CACHE_SECONDS so a send decided again within a few minutes 
 enqueue and again at dispatch) asks Gmail once. Callers that hold the write lock warm the cache first, under a read
 (`warm`). Only Gmail's answers are kept. Gmail not answering, or refusing (it refuses for a rate limit too, and a
 token that cannot be had refuses), raises a retryable Problem and keeps nothing: a decision that needs a fact waits for
-Gmail, never guesses. A mailbox no server credential covers cannot be asked, so its facts are unknown the same way.
+Gmail, never guesses.
+
+A mailbox no server credential covers (backend/gmail_watch.py `watched`) cannot be asked, and asking again would not
+change that: nothing is known about it, so a send from it is decided as one to a stranger that answers no message,
+the strictest reading.
 """
 
 import collections
@@ -17,7 +21,7 @@ import time
 from collections.abc import Callable
 from typing import Any, TypeVar, cast
 
-from . import gmail_live
+from . import gmail_live, gmail_watch
 from .store import Problem
 
 T = TypeVar("T")
@@ -63,6 +67,10 @@ def forget() -> None:
         _CACHE.clear()
 
 
+def _asked(c: Conn, mailbox: str) -> bool:
+    return gmail_watch.watched(c, mailbox)
+
+
 def _found(c: Conn, mailbox: str, q: str) -> bool:
     return cast("Callable[[Conn, str, str], Json | None]", gmail_live.first)(c, mailbox, q) is not None
 
@@ -70,7 +78,7 @@ def _found(c: Conn, mailbox: str, q: str) -> bool:
 def sent_to(c: Conn, mailbox: str, address: str) -> bool:
     """Whether this mailbox ever sent mail to `address` (Gmail `in:sent`)."""
     box, addr = mailbox.lower(), str(address or "").strip().lower()
-    if not ADDRESS.fullmatch(addr):
+    if not ADDRESS.fullmatch(addr) or not _asked(c, box):
         return False
     return _cached(("sent_to", box, addr), lambda: _found(c, box, f"in:sent {{to:{addr} cc:{addr}}}"))
 
@@ -78,7 +86,7 @@ def sent_to(c: Conn, mailbox: str, address: str) -> bool:
 def known(c: Conn, mailbox: str, address: str) -> bool:
     """Whether `address` wrote to this mailbox or the mailbox wrote to it."""
     box, addr = mailbox.lower(), str(address or "").strip().lower()
-    if not ADDRESS.fullmatch(addr):
+    if not ADDRESS.fullmatch(addr) or not _asked(c, box):
         return False
     return _cached(("heard_from", box, addr), lambda: _found(c, box, f"from:{addr}")) or sent_to(c, box, addr)
 
@@ -86,7 +94,7 @@ def known(c: Conn, mailbox: str, address: str) -> bool:
 def by_message_id(c: Conn, mailbox: str, message_id: str) -> Json | None:
     """The Gmail message whose Message-ID header is `message_id` (with its angle brackets), as {id, threadId}, or None."""
     box = mailbox.lower()
-    if not MESSAGE_ID.fullmatch(message_id or ""):
+    if not MESSAGE_ID.fullmatch(message_id or "") or not _asked(c, box):
         return None
     first = cast("Callable[[Conn, str, str], Json | None]", gmail_live.first)
     return _cached(("rfc822", box, message_id), lambda: first(c, box, "rfc822msgid:" + message_id[1:-1]))
@@ -96,6 +104,8 @@ def message(c: Conn, mailbox: str, msg_id: str) -> Json | None:
     """What a send decision reads of the message it answers: sender, thread and its header facts; None when Gmail no
     longer has it. The body is not kept."""
     box = mailbox.lower()
+    if not _asked(c, box):
+        return None
 
     def read() -> Json | None:
         try:
