@@ -2,6 +2,7 @@
 
 import json
 import statistics
+import sqlite3
 import tempfile
 import time
 from pathlib import Path
@@ -17,7 +18,9 @@ REPEATS = 15
 def main():
     with tempfile.TemporaryDirectory() as folder:
         store = company_store(Path(folder))
-        with store.transaction() as c:
+        with store.read() as c:
+            # Measure the SQL on an isolated fixture, without task-engine maintenance over synthetic task ids.
+            c.execute("BEGIN")
             now = H.now()
             rows = [
                 (
@@ -71,6 +74,7 @@ def main():
                 [(i + 1, r[4], 'Orbitalcraft report') for i, r in enumerate(rows)],
             )
             c.execute('ANALYZE')
+            c.commit()
         with store.read_transaction() as c:
             print(
                 json.dumps(
@@ -84,7 +88,11 @@ def main():
             order = ' ORDER BY f.last_activity_at DESC,f.id DESC LIMIT 50'
             library = 'SELECT f.*,p.cadence AS page_cadence,p.archived AS page_archived FROM bot_files f LEFT JOIN pages p ON p.file_id=f.id WHERE f.state<>\'deleted\' AND f.archived=0 AND COALESCE(p.archived,0)=0'
             old_task = "(f.task_id=? OR EXISTS (SELECT 1 FROM pins WHERE place=? AND item='page:' || f.id))"
-            new_task = "(f.task_id=? OR f.id IN (SELECT page_id FROM page_links WHERE target=?) OR EXISTS (SELECT 1 FROM pins WHERE place=? AND item='page:' || f.id))"
+            new_task = (
+                "f.id IN (SELECT id FROM bot_files WHERE task_id=? UNION "
+                "SELECT page_id FROM page_links WHERE target=? UNION "
+                "SELECT substr(item,6) FROM pins WHERE place=? AND item LIKE 'page:%')"
+            )
             cases = [
                 ('pages/task/old', select + ' AND ' + old_task + order, ('t42', 'task:t42')),
                 ('pages/task/new', select + ' AND ' + new_task + order, ('t42', 'task:t42', 'task:t42')),
@@ -96,7 +104,9 @@ def main():
                     ('pages/bot/old', select + ' AND f.bot_id=?' + order, ('ops',)),
                     (
                         'pages/bot/new',
-                        select + ' AND (f.bot_id=? OR f.id IN (SELECT page_id FROM page_links WHERE target=?))' + order,
+                        select
+                        + ' AND f.id IN (SELECT id FROM bot_files WHERE bot_id=? UNION SELECT page_id FROM page_links WHERE target=?)'
+                        + order,
                         ('ops', 'bot:ops'),
                     ),
                     (
@@ -123,13 +133,20 @@ def main():
                 "ORDER BY bm25(file_text,10.0,1.0) LIMIT 500"
             )
             cases.append(('search/old', fts.format(where='1'), ('orbitalcraft',)))
+            forced_fts = fts.replace(
+                "FROM bot_files f LEFT JOIN pages p ON p.file_id=f.id JOIN file_text_state s ON s.file_id=f.id JOIN file_text ON file_text.rowid=s.doc",
+                "FROM file_text CROSS JOIN file_text_state s ON s.doc=file_text.rowid CROSS JOIN bot_files f ON f.id=s.file_id LEFT JOIN pages p ON p.file_id=f.id",
+            )
             for label, filters in [
                 ('linked', ('task:t42', '', '')),
                 ('role', ('', 'Spec', '')),
                 ('writer', ('', '', 'human:ben')),
             ]:
                 where, args = page_links.filters(*filters)
-                cases.append(('search/' + label, fts.format(where=' AND '.join(where)), (*args, 'orbitalcraft')))
+                cases.append(
+                    ('search/' + label + '/unforced', fts.format(where=' AND '.join(where)), (*args, 'orbitalcraft'))
+                )
+                cases.append(('search/' + label, forced_fts.format(where=' AND '.join(where)), (*args, 'orbitalcraft')))
             context = (
                 "SELECT f.*,p.audience,coalesce(v.created_at,f.last_activity_at) AS context_updated_at "
                 "FROM pages p JOIN bot_files f ON f.id=p.file_id LEFT JOIN bot_file_versions v "
@@ -194,13 +211,32 @@ def main():
             )
             for label, sql, args in cases:
                 plan = [row[3] for row in c.execute('EXPLAIN QUERY PLAN ' + sql, args)]
-                c.execute(sql, args).fetchall()
                 took = []
-                for _ in range(REPEATS):
-                    start = time.perf_counter()
-                    c.execute(sql, args).fetchall()
-                    took.append((time.perf_counter() - start) * 1000)
-                print(json.dumps({'query': label, 'median_ms': round(statistics.median(took), 3), 'plan': plan}))
+                timed_out = False
+                try:
+                    for _ in range(REPEATS + 1):
+                        deadline = time.monotonic() + 2
+                        c.set_progress_handler(lambda: int(time.monotonic() > deadline), 10_000)
+                        start = time.perf_counter()
+                        c.execute(sql, args).fetchall()
+                        took.append((time.perf_counter() - start) * 1000)
+                except sqlite3.OperationalError as exc:
+                    if 'interrupted' not in str(exc):
+                        raise
+                    timed_out = True
+                finally:
+                    c.set_progress_handler(None, 0)
+                print(
+                    json.dumps(
+                        {
+                            'query': label,
+                            'median_ms': round(statistics.median(took[1:]), 3) if len(took) > 1 else None,
+                            'exceeded_2000_ms': timed_out,
+                            'plan': plan,
+                        }
+                    ),
+                    flush=True,
+                )
 
 
 if __name__ == '__main__':

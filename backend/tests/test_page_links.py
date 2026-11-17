@@ -69,8 +69,8 @@ def publish_page(api, token, text='One', **fields):
     )
 
 
-def task(api, private=False, token='ana-test'):
-    return post(api, 'tasks', {'owner': 'ops', 'title': 'Standalone pages', 'body': 'Work', 'private': private}, token)
+def task(api, private=False, token='ana-test', title='Standalone pages'):
+    return post(api, 'tasks', {'owner': 'ops', 'title': title, 'body': 'Work', 'private': private}, token)
 
 
 def add_link(api, fid, target, role='related', token='ana-test'):
@@ -317,7 +317,7 @@ def test_publish_submits_each_linked_document_requirement(api):
 
 def test_search_filters_and_page_relationship_previews(api):
     ops = bot(api, 'ops')
-    one, two = task(api), task(api)
+    one, two = task(api), task(api, title='Other pages')
     first = publish_page(api, ops, 'orbitalcraft', task=one['id'], **{'as': 'Spec'})
     assert first.status_code == 200, first.text
     fid = first.json()['page']['file_id']
