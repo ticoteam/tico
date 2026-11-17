@@ -182,3 +182,177 @@ def test_a_bot_moved_to_another_computer_leaves_the_old_logins_limit_behind(api,
     assert state(api) == "limited"
     ready(api, machine, ["ops"])
     assert claim(api, machine, "ops") is None
+
+
+def gateway_env(api, monkeypatch):
+    """The Gateway connected, as backend/tests/test_gateway_connection.py sets it up, without moving the bot to it."""
+    from backend import gateway_connection
+
+    monkeypatch.setattr(gateway_connection, "_tried", {})
+    monkeypatch.setattr(gateway_connection, "check_soon", lambda *args, **kwargs: None)
+    monkeypatch.delenv("TICO_GATEWAY_KEY", raising=False)
+    monkeypatch.delenv("TICO_GATEWAY_URL", raising=False)
+    api.app.state.store.settings.credential_kms_key = "test-key"
+    api.app.state.vault.cipher = CredentialCipher("test-key", FakeKMS())
+
+
+def hold_gateway(api, until):
+    from backend import login_holds
+
+    with api.app.state.store.transaction() as c:
+        login_holds.record(
+            c, "", login_holds.GATEWAY, login_holds.GATEWAY_RUNTIME, H.now(), error=GATEWAY_CAP, until=until
+        )
+
+
+def gateway_hold(api):
+    from backend import login_holds
+
+    with api.app.state.store.read() as c:
+        return login_holds.get(c, "", login_holds.GATEWAY, login_holds.GATEWAY_RUNTIME)
+
+
+def handed(api, attempt):
+    from backend import gateway_connection
+
+    with api.app.state.store.read() as c:
+        return gateway_connection.handed(c, attempt["id"])
+
+
+def test_a_held_gateway_is_never_handed_out_as_a_fallback_and_a_fallback_turn_is_its_probe(api, monkeypatch):
+    # A bot on its own login whose named fallback is a Tico model: the runner would hop to the Gateway mid-turn with
+    # the credentials the claim hands it, and an older runner reads no hold, so the claim decides.
+    gateway_env(api, monkeypatch)
+    at(monkeypatch, HIT)
+    with api.app.state.store.transaction() as c:
+        BS.write(c, "ops", {**BS.read(c, "ops"), "fallback": {"harness": "pi", "model": "tico-medium-1.0"}})
+    machine = runner(api)
+    assign(api, machine, "ops")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runner_states SET capacity=16 WHERE runner_id=?", (machine["runner_id"],))
+    ready(api, machine, ["ops"])
+    for n in range(4):
+        post(api, "tasks", {"owner": "ops", "title": f"Task {n}", "body": "Please do it."})
+    hold_gateway(api, H.shift(HIT, seconds=60))
+    first = claim(api, machine, "ops")
+    assert first, "the bot's own login is free: it runs"
+    assert first["config"]["fallback"].get("off") and not handed(api, first), "no Gateway fallback while it is held"
+    done(api, machine, first)
+    tick(api, monkeypatch, H.shift(HIT, seconds=61), machine)
+    probe = claim(api, machine, "ops")
+    assert probe["config"]["fallback"] == {"harness": "pi", "model": "tico-medium-1.0"} and handed(api, probe)
+    assert gateway_hold(api)["probe_job"] == probe["job_id"], "a turn that may hop to the Gateway is its one probe"
+    other = claim(api, machine, "ops")
+    assert other and other["config"]["fallback"].get("off") and not handed(api, other)
+
+
+def test_a_tico_check_waits_on_the_gateways_hold_and_takes_its_one_probe(api, monkeypatch):
+    from backend.tests.helpers.check_models import company, finish, parent_turn
+
+    gateway_env(api, monkeypatch)
+    at(monkeypatch, HIT)
+    machine, parent, turn = parent_turn(api)
+    company(api, "anthropic", "xai", "tico")
+    report = {
+        "schema_version": 1,
+        "isolated": True,
+        "runtimes": {
+            "claude": {"installed": True, "authenticated": "ready"},
+            "grok": {"installed": True, "authenticated": "ready"},
+            "pi": {"installed": True, "authenticated": "ready"},
+        },
+        "bots": {"ops": {"runtime": "claude", "ready": True}},
+    }
+    beat = {"version": "test", "platform": "test", "capabilities": ["task_lanes_v2", "session_roots_v1"]}
+    post(api, "runners/heartbeat", {**beat, "readiness": report}, token=machine["token"])
+    for n in range(2):
+        post(
+            api,
+            "tasks",
+            {
+                "owner": "ops",
+                "title": f"Check part {n} with a Tico model",
+                "body": "Read the plan.",
+                "check_model": "grok",
+                "parent": parent["id"],
+            },
+            turn["token"],
+        )
+    with api.app.state.store.transaction() as c:  # named as a Tico model, as a company on the Gateway names it
+        c.execute("UPDATE task_check_models SET runtime='pi',model='tico-medium-1.0',harness='pi',effort=''")
+    finish(api, machine, turn)
+    hold_gateway(api, H.shift(HIT, seconds=60))
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runner_states SET capacity=16 WHERE runner_id=?", (machine["runner_id"],))
+
+    def checks():
+        got = []
+        while (one := claim(api, machine)) is not None:
+            got.append(one)
+        return [one for one in got if (one.get("task") or {}).get("check")]
+
+    assert checks() == [], "no Tico check starts while the Gateway is held"
+    at(monkeypatch, H.shift(HIT, seconds=61), api)
+    post(api, "runners/heartbeat", {**beat, "readiness": report}, token=machine["token"])
+    started = checks()
+    assert len(started) == 1, "one probe on the Gateway, not one per check"
+    assert gateway_hold(api)["probe_job"] == started[0]["job_id"]
+
+
+def test_a_turn_settles_the_gateway_by_what_it_ran_not_the_model_the_bot_moved_to(api, monkeypatch):
+    # The bot runs pi on its own keys; while that turn is out it is moved to a Tico model. The turn's success says
+    # nothing about the Gateway, whose hold stands.
+    gateway_env(api, monkeypatch)
+    at(monkeypatch, HIT)
+    with api.app.state.store.transaction() as c:
+        BS.write(c, "ops", {**BS.read(c, "ops"), "runtime": "pi", "harness": "pi", "model": "kimi-k3"})
+    machine = runner(api)
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    post(api, "tasks", {"owner": "ops", "title": "Task", "body": "Please do it."})
+    hold_gateway(api, H.shift(HIT, seconds=600))
+    turn = claim(api, machine, "ops")
+    assert turn and turn["config"]["model"] == "kimi-k3"
+    with api.app.state.store.transaction() as c:
+        BS.write(c, "ops", {**BS.read(c, "ops"), "model": "tico-medium-1.0"})
+    done(api, machine, turn)
+    assert gateway_hold(api)["until"] == H.shift(HIT, seconds=600)
+
+
+def test_an_older_servers_gateway_waits_become_the_gateways_hold(api, monkeypatch):
+    # rc.1 kept the Gateway's cap and address block only in the bot's status cooldown, and an outage in a per-bot row.
+    import importlib
+    import json
+
+    from backend.store import encode
+
+    at(monkeypatch, HIT)
+    machine = runner(api)
+    assign(api, machine, "ops")
+    with api.app.state.store.transaction() as c:
+        aid = H.new_id()
+        c.execute(
+            "INSERT INTO attempts(id,bot_id,runner_id,state,created_at,started_at,finished_at,result) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            (aid, "ops", machine["runner_id"], "failed", HIT, HIT, HIT, encode({"limited": True})),
+        )
+        c.execute(
+            "INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) VALUES(?,1,'error',?,?)",
+            (aid, json.dumps({"error": GATEWAY_CAP, "limit": True}), HIT),
+        )
+        H.status_set(c, H.KEEPER, "ops", state="limited", focus="Gateway cap reached")
+        c.execute(
+            "INSERT INTO registry_metadata VALUES('gateway-unavailable:finance',?)",
+            (json.dumps({"since": HIT, "until": H.shift(HIT, seconds=60)}),),
+        )
+        importlib.import_module("backend.migrations.20261117015737_gateway_waits_to_login_hold").up(c)
+        assert not c.execute("SELECT 1 FROM registry_metadata WHERE key LIKE 'gateway-unavailable:%'").fetchone()
+    hold = gateway_hold(api)
+    # The cap's month, not the outage's minute: the later wait wins, and the month is weeks away.
+    assert hold["until"] == "2026-11-01T00:00:01.000000Z" and hold["bot"] == "ops"
+    ready(api, machine, ["ops"])
+    gateway_env(api, monkeypatch)
+    with api.app.state.store.transaction() as c:
+        BS.write(c, "ops", {**BS.read(c, "ops"), "runtime": "pi", "harness": "pi", "model": "tico-medium-1.0"})
+    post(api, "tasks", {"owner": "ops", "title": "Task", "body": "Please do it."})
+    assert claim(api, machine, "ops") is None

@@ -777,6 +777,48 @@ def test_switching_a_computer_to_another_plan_frees_a_bot_limited_on_the_old_one
     assert turn and turn["bot"] == "ops" and signed_with(api, turn) == plan_b
 
 
+def test_a_held_plan_waits_on_its_hold_when_the_computers_named_home_is_not_signed_in(api):
+    # A computer that names its default home ("own"): the login a turn signs in with is that home, which is not
+    # signed in, so the held plan is still what the bot waits for, and Try now ends that plan's hold.
+    from backend.execution import own_login_hold
+
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    plan_a = add(api, name="Plan A")["id"]
+    m = machine(api)
+    home_less(api, m)
+    limited_on(api, m, plan_a)
+    assert waits(api) == ["cooling_off"]
+    with api.app.state.store.read() as c:
+        assert own_login_hold(c, api.app.state.store.settings, "ops")["profile"] == login_holds.subscription_login(
+            plan_a
+        )
+    post(api, "bots/ops/limit/retry", {})
+    with api.app.state.store.read() as c:
+        assert login_holds.get(c, "", login_holds.subscription_login(plan_a), "claude")["until"] <= H.now()
+
+
+def home_less(api, m):
+    """A heartbeat naming the computer's default home ("own"), with Claude not signed in there."""
+    post(
+        api,
+        "runners/heartbeat",
+        {
+            "version": "test",
+            "platform": "test",
+            "capabilities": ["model_subscriptions_v1", "computer_logins_v1"],
+            "readiness": {
+                "schema_version": 1,
+                "computer_profile": "own",
+                "runtimes": {"claude": {"installed": True, "authenticated": "missing"}},
+                "bots": {"ops": {"runtime": "claude", "ready": True}},
+            },
+        },
+        token=m["token"],
+    )
+
+
 def test_a_new_plan_held_at_its_limit_is_passed_over_so_the_bot_runs_on_the_computers_own_login(api):
     setup(api)
     company(api)
