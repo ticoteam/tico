@@ -12,7 +12,7 @@ Steps:
 3. Check each claim against `tico brand show --section claims`. An approved claim is used with its source. A claim not in that list is not used. Ask the Design Owner (`design-owner`) on a task whether it can be added with its evidence, or rewrite the line without it.
 4. Save the final copy to a file and run `tico brand check <file>`, or `tico brand check -` to read it from stdin. Fix each flag, or say on the task why a flag is wrong.
 5. Check the offer against the segment's counting rule and activation step in `knowledge/segment.md`. If the offer promises something the product does not do for this segment, stop, and ask the Feature Owner for this segment on its task.
-6. Write the idea's first message with the segment, the change, the channel and the measure: the new customers and cost per customer from `skills/read-cost-per-customer-for-a-segment/SKILL.md`. Do not write a prediction, a hypothesis or a score. The Marketing task has no field for them.
+6. Write the idea's first message with the segment, the change, the channel and the measure: the new customers and cost per customer from `skills/read-cost-per-customer-for-a-segment/SKILL.md`. Do not write a prediction, a hypothesis or a score in the idea. The prediction comes later, once, on the Go-live page in Building, as a number: the metric, where it is now and where it should get to by the test's end date.
 7. Record the message's version, its date, and each claim with its check in `knowledge/message.md`.
 
 Checks before you finish:
