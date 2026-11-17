@@ -3,7 +3,8 @@
 //! the bot's repository.
 //!
 //! A turn may use its primary, named fallback and automatic candidates. Automatic values are fetched only at the
-//! hop boundary (`activate`); each process gets only its own (`start`). An
+//! hop boundary (`activate`); each process gets only its own (`start`), except a plan login kept in a home (a ChatGPT
+//! login), which every process of the turn gets for its own commands, so a bot on Claude can run `codex`. An
 //! environment subscription (`env`: a Claude setup-token as CLAUDE_CODE_OAUTH_TOKEN, an Anthropic key) is set in that
 //! process's environment, and the runtime's other sign-in variables are taken out of the turn's so the CLI cannot
 //! prefer one of them (Claude Code ranks ANTHROPIC_API_KEY above the token). The computer's own key for that runtime is
@@ -72,6 +73,15 @@ impl Delivered {
     /// never resumed on this one, and a home subscription's threads live in that home.
     pub fn binding(&self) -> Option<String> {
         Some(format!(":subscription:{}", self.id))
+    }
+
+    /// A plan login kept in a home of its own (a ChatGPT login): it also signs its CLI in for the commands of a turn
+    /// running another runtime, so a bot on Claude can run `codex exec` on its computer's ChatGPT plan. Never an API
+    /// key (that spends per use), and never a runtime whose home is HOME (it would move the running CLI's own home).
+    fn for_shell(&self) -> bool {
+        self.home.is_some()
+            && self.billing == "subscription"
+            && crate::profiles::home_var(&self.runtime).is_some_and(|v| v != "HOME")
     }
 }
 
@@ -278,14 +288,18 @@ pub async fn activate(
     Ok((got, secrets))
 }
 
-/// Sign `runtime` in, and only it, in `env`, the environment of its process about to start: the other runtimes'
-/// subscriptions leave it (a hop's environment is copied from the turn's first), and their homes are let go, since
-/// the host before it has stopped. A home subscription's file is put in place now. Returns what joins the turn's
-/// redaction list: the file as found in place, and what Codex refreshed in a home let go. A home that cannot be made
-/// leaves its subscription out of the turn, said in the runner's log.
+/// Sign `runtime` in, in `env`, the environment of its process about to start: the other runtimes' subscriptions
+/// leave it (a hop's environment is copied from the turn's first), and their homes are let go, since the host before
+/// it has stopped, except a plan login kept in a home (`Delivered::for_shell`), which stays in place with its CLI's
+/// home variable set so the turn's own commands can run that CLI signed in. A home subscription's file is put in
+/// place now. Returns what joins the turn's redaction list: the file as found in place, and what Codex refreshed in a
+/// home let go. A home that cannot be made leaves its subscription out of the turn, said in the runner's log.
 pub fn start(delivered: &mut Vec<Delivered>, runtime: &str, env: &mut Env) -> Vec<String> {
     let mut secrets = vec![];
-    for d in delivered.iter_mut().filter(|d| d.runtime != runtime) {
+    for d in delivered
+        .iter_mut()
+        .filter(|d| d.runtime != runtime && !d.for_shell())
+    {
         secrets.extend(release(d));
         if let Some(name) = &d.env {
             if env.get(name) == Some(&d.value) {
@@ -295,6 +309,26 @@ pub fn start(delivered: &mut Vec<Delivered>, runtime: &str, env: &mut Env) -> Ve
         if let (Some(home), Some(var)) = (&d.home, crate::profiles::home_var(&d.runtime)) {
             if env.get(&var).is_some_and(|v| Path::new(v) == home) {
                 env.remove(&var);
+            }
+        }
+    }
+    let mut at = 0;
+    while at < delivered.len() {
+        let d = &mut delivered[at];
+        if d.runtime == runtime || !d.for_shell() {
+            at += 1;
+            continue;
+        }
+        match hold(d, env) {
+            Ok(found) => {
+                secrets.extend(found);
+                at += 1;
+            }
+            Err(e) => {
+                crate::util::diagnostic(&format!(
+                    "Tico runner: left a subscription out of this turn: {e}"
+                ));
+                delivered.remove(at);
             }
         }
     }
@@ -309,38 +343,48 @@ pub fn start(delivered: &mut Vec<Delivered>, runtime: &str, env: &mut Env) -> Ve
         env.insert(name, d.value.clone());
         return secrets;
     }
-    let (Some(home), Some(file)) = (d.home.clone(), d.file.clone()) else {
+    if d.home.is_none() || d.file.is_none() {
         return secrets;
+    }
+    match hold(d, env) {
+        Ok(found) => secrets.extend(found),
+        Err(e) => {
+            crate::util::diagnostic(&format!(
+                "Tico runner: left a subscription out of this turn: {e}"
+            ));
+            delivered.remove(at);
+        }
+    }
+    secrets
+}
+
+/// Put a home subscription's file in place for this turn (once: a held home keeps what is there) and point its CLI's
+/// home variable at it in `env`, without the variables that CLI reads ahead of that home. Returns the file's secrets
+/// when it held something other than what was handed (Codex refreshed it in another turn here).
+fn hold(d: &mut Delivered, env: &mut Env) -> Result<Vec<String>, String> {
+    let mut secrets = vec![];
+    let (Some(home), Some(file)) = (d.home.clone(), d.file.clone()) else {
+        return Ok(secrets);
     };
     if !d.held {
         let name = file
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
-        match place(&home, &name, &d.value, d.revision) {
-            Ok(written) => {
-                if written != d.value {
-                    secrets.extend(secrets_in(&written));
-                }
-                d.written = written;
-                d.held = true;
-            }
-            Err(e) => {
-                crate::util::diagnostic(&format!(
-                    "Tico runner: left a subscription out of this turn: {e}"
-                ));
-                delivered.remove(at);
-                return secrets;
-            }
+        let written = place(&home, &name, &d.value, d.revision)?;
+        if written != d.value {
+            secrets.extend(secrets_in(&written));
         }
+        d.written = written;
+        d.held = true;
     }
-    if let Some(var) = crate::profiles::home_var(runtime) {
-        for key in crate::harness_tools::caps(runtime, "").profile_home_overrides {
+    if let Some(var) = crate::profiles::home_var(&d.runtime) {
+        for key in crate::harness_tools::caps(&d.runtime, "").profile_home_overrides {
             env.remove(&key);
         }
         env.insert(var, home.display().to_string());
     }
-    secrets
+    Ok(secrets)
 }
 
 /// Hold `home/name` for one turn. The first turn on a home writes the file: the login Codex refreshed here at this
@@ -665,7 +709,8 @@ mod tests {
     }
 
     #[test]
-    fn each_process_of_a_turn_gets_only_its_own_runtimes_subscription() {
+    fn each_process_gets_its_runtimes_subscription_and_every_turn_the_chatgpt_login_for_its_commands(
+    ) {
         let state = dir();
         let token = "sk-ant-oat01-synthetic-primary";
         let login =
@@ -687,14 +732,9 @@ mod tests {
         }
         start(&mut got, "claude", &mut env);
         assert_eq!(env["CLAUDE_CODE_OAUTH_TOKEN"], token);
-        assert_eq!(
-            env["CODEX_HOME"], "/computer/.codex",
-            "Claude's process was pointed at the fallback's home"
-        );
-        assert!(
-            !file.exists(),
-            "the fallback's login was in place while only Claude ran"
-        );
+        // The ChatGPT login signs `codex` in for Claude's own commands (`codex exec` in its shell), in its own home.
+        assert_eq!(env["CODEX_HOME"], home.display().to_string());
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), login);
         // No local login and no named fallback: the handed subscription wins before Gateway.
         let config =
             json!({"runtime": "claude", "harness": "claude", "model": "claude-sonnet-5-5"});
@@ -716,7 +756,8 @@ mod tests {
         finish(&mut got);
         assert!(!file.exists());
 
-        // The other way round: Codex first, Claude its fallback. The Codex home is let go once Claude starts.
+        // The other way round: Codex first, Claude its fallback. The Codex home stays for Claude's commands; what Codex
+        // refreshed goes back when the turn ends.
         let mut env = Env::new();
         let mut got = apply(&state, &items, &mut env, &mut vec![], &mut BTreeSet::new());
         start(&mut got, "codex", &mut env);
@@ -727,22 +768,36 @@ mod tests {
         )
         .unwrap();
         let mut hop = env.clone();
-        let fresh = start(&mut got, "claude", &mut hop);
+        start(&mut got, "claude", &mut hop);
+        assert!(got[1].held && file.exists());
+        assert_eq!(hop["CODEX_HOME"], home.display().to_string());
+        assert_eq!(hop["CLAUDE_CODE_OAUTH_TOKEN"], token);
+        let fresh = finish(&mut got);
         assert!(
             fresh.iter().any(|s| s == "rt_synthetic_refreshed_dddddddd"),
             "the refresh was not masked: {fresh:?}"
         );
         assert!(got[1].refreshed.is_some() && !got[1].held);
-        assert!(
-            !file.exists(),
-            "the Codex login stayed after its host stopped"
-        );
-        assert!(!hop.contains_key("CODEX_HOME"), "{hop:?}");
-        assert_eq!(hop["CLAUDE_CODE_OAUTH_TOKEN"], token);
+        assert!(!file.exists(), "the Codex login stayed after the turn");
         assert!(
             finish(&mut got).is_empty(),
             "a home let go is not let go twice"
         );
+        std::fs::remove_dir_all(&state).unwrap();
+    }
+
+    #[test]
+    fn an_openai_key_never_signs_in_another_runtimes_commands() {
+        let state = dir();
+        let items = json!([
+            {"id": "s11", "runtime": "codex", "kind": "openai_key", "file": "auth.json", "billing": "api",
+             "value": r#"{"OPENAI_API_KEY":"sk-synthetic-openai-key-eeeeeeee"}"#, "revision": 1},
+        ]);
+        let mut env = Env::new();
+        let mut got = apply(&state, &items, &mut env, &mut vec![], &mut BTreeSet::new());
+        let file = got[0].file.clone().unwrap();
+        start(&mut got, "claude", &mut env);
+        assert!(!file.exists() && !env.contains_key("CODEX_HOME"), "{env:?}");
         std::fs::remove_dir_all(&state).unwrap();
     }
 
