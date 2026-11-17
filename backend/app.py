@@ -2842,7 +2842,9 @@ def create_app(settings=None):
 
     @app.post(
         "/api/v2/questions/{mid}/give",
-        **api_v2("Needs you", "giveQuestion", "Give to: an open ❓ is for `to` now. Its person or the bot that marked it"),
+        **api_v2(
+            "Needs you", "giveQuestion", "Give to: an open ❓ is for `to` now. Its person or the bot that marked it"
+        ),
     )
     def question_give(request: Request, mid: str, body: M.QuestionGive):
         """Give to: an open ❓ is for someone else now. Its person, or the bot that marked it, may move it."""
