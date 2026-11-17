@@ -15,7 +15,14 @@ _ROW = {
     "credentials": ["POSTHOG_KEY"],
     "access": "proxy",
 }
-_QUERY = {"id": "signups", "title": "Signups", "description": "new accounts", "sql": "select 1", "tags": ["growth"]}
+_QUERY = {
+    "id": "signups",
+    "title": "Signups",
+    "description": "new accounts",
+    "sql": "select 1",
+    "tags": ["growth"],
+    "params": [{"name": "since", "required": True, "default": "7d"}],
+}
 _PAGE = {
     "service": "posthog",
     "title": "PostHog",
@@ -66,6 +73,7 @@ def test_tool_query_search_searches_the_page_or_prints_one_query(monkeypatch):
     assert found["stdout"].startswith("signups") and "churn" not in found["stdout"]
     one = run_line(["tool", "query-search", "posthog", "--id", "signups"], monkeypatch)["stdout"]
     assert one.startswith("signups: Signups") and "select 1" in one
+    assert "  since (text): since required default=7d" in one
     missing = run_line(["tool", "query-search", "posthog", "--id", "nope"], monkeypatch)
     assert missing["exit"] != 0 and "No query nope under posthog" in missing["stdout"]
     none = run_line(["tool", "query-search", "posthog", "zzz"], monkeypatch)["stdout"]
