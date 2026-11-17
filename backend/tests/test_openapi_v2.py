@@ -255,7 +255,12 @@ def test_the_declared_answers_match_the_live_ones(api):
         "/api/v2/tasks/" + task["id"],
         json={"version": detail["task"]["version"], "title": "Draft the launch plan today"},
     )
-    asked = call("askOnTask", "post", "/api/v2/tasks/%s/asks" % task["id"], json={"to": "ben", "line": "Which date?"})
+    asked = call(
+        "askOnTask",
+        "post",
+        "/api/v2/tasks/%s/asks" % task["id"],
+        json={"to": "ben", "line": "OK the date", "kind": "ok"},
+    )
     call("getNeedsYou", "get", "/api/v2/needs-you")
     call("withdrawAsk", "delete", "/api/v2/tasks/%s/asks/%s" % (task["id"], asked["requirement_id"]))
     call("snoozeTask", "post", "/api/v2/tasks/%s/snooze" % task["id"], json={"until": "2099-01-05", "why": "Later"})

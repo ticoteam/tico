@@ -312,11 +312,11 @@ def test_a_turn_that_already_wrote_in_the_tasks_chat_posts_no_end_of_turn_text(a
 
 
 def test_a_bot_does_not_comment_on_its_own_task_during_its_turn_there(api):
-    """(c): what it says goes in its reply at the end of the turn; a comment carrying files, or on another task, goes."""
+    """(c): what it says goes in its reply at the end of the turn; a comment on another task of its own goes."""
     machine, task, attempt = _turn(api)
     refused = post(api, f"tasks/{task['id']}/comments", {"text": "Halfway."}, attempt["token"], expected=409)
     assert refused["error"]["code"] == "own_turn"
-    other = post(api, "tasks", {"owner": "ana", "title": "Order the paper", "body": "Order the fixture paper"})
+    other = post(api, "tasks", {"owner": "ops", "title": "Order the paper", "body": "Order the fixture paper"})
     post(api, f"tasks/{other['id']}/comments", {"text": "The packet needs paper."}, attempt["token"])
     assert _said(api, "The packet needs paper.") == 1
     reply = _finish(api, machine, attempt, "Halfway through the packet.")

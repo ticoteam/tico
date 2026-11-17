@@ -41,7 +41,8 @@ def test_counsel_edit_then_narrow_scrubs_history_comments_results_and_sse(api):
     post(api, "tasks/" + tid, changed, token="cara-test", key="edit-page-copy")
     machine, attempt = counsel_run(api)
     aid = attempt["id"]
-    post(api, "tasks/" + tid + "/comments", {"text": "The document reports 42 deals."}, token=attempt["token"])
+    with api.app.state.store.transaction() as c:  # what its run said on the task (a comment from before the turn's end)
+        H.task_comment(c, "bot:" + attempt["bot"], tid, "The document reports 42 deals.", wake=False)
     output = [
         {"seq": 1, "kind": "message", "payload": {"text": original}},
         {"seq": 2, "kind": "delta", "payload": {"text": original}},

@@ -362,7 +362,7 @@ def test_label_as_taught_needs_no_version_and_guards_the_labels_with_the_version
         ("tico_task_move", {"id": "T1", "to": "next", "why": "x"}),
         ("tico_task_close", {"id": "T1", "why": "x"}),
         ("tico_task_reassign", {"id": "T1", "owner": "ana"}),
-        ("tico_task_ask", {"id": "T1", "to": "chris", "line": "Which plan?"}),
+        ("tico_task_ask", {"id": "T1", "to": "chris", "line": "OK the plan?", "kind": "ok"}),
         ("tico_task_answer", {"id": "T1", "requirement": "r9", "value": "ok"}),
         ("tico_task_give", {"id": "T1", "requirement": "r9", "to": "ben"}),
         ("tico_task_snooze", {"id": "T1", "why": "x"}),
