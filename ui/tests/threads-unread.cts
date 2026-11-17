@@ -157,6 +157,7 @@ let browser: Browser = null!;
     // Opening a row: current, no count, and it keeps its place once read, until another row is opened.
     await page.locator('[data-list="unread"] [data-thread="dm-growth"]').click();
     await page.waitForFunction(() => location.hash === '#/thread/dm-growth');
+    await page.locator('#threads-shell').waitFor();
     const opened = page.locator('[data-list="unread"] [data-thread="dm-growth"]');
     await until(async () => (await opened.getAttribute('class'))?.includes('cur'), 'the opened row is current');
     assert.equal(await opened.locator('.tr-count').count(), 0, 'its count goes');
@@ -246,6 +247,7 @@ let browser: Browser = null!;
   for (const opts of [{world: []}, {unreadField: false}]) {
     const {page, seen} = await open(browser, opts);
     await page.goto('https://tico-ui.test/#/threads');
+    await page.locator('#threads-shell').waitFor();
     await page.locator('.tr-row[data-thread="t-plan"]').waitFor();
     assert.equal(await page.locator('[data-sec="unread"]').isVisible(), false);
     assert.equal(await page.locator('[data-list="unread"] .tr-row').count(), 0);
