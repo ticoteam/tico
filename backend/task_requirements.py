@@ -618,10 +618,10 @@ def approval_line(requirement: Row) -> str:
 
 
 def jev_gates(requirement: Row) -> bool:
-    """Whether Jev's not met sends a page back to its owner: everywhere but a Spec page a person OKs, where Jev only
-    shows the person the part that is missing (`_page`)."""
+    """Whether the decision model's not met sends a page back to its owner: everywhere but a Spec a person approves,
+    where it only shows the person the part that is missing (`_page`)."""
     oks_anyway = bool(requirement.get("person_id") or people_only(requirement))
-    return not (oks_anyway and _check_of(requirement) == "spec")
+    return not (oks_anyway and (document_of(requirement) == "Spec" or _check_of(requirement) == "spec"))
 
 
 def _check_of(requirement: Row) -> str | None:

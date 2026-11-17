@@ -1114,7 +1114,7 @@
    "department": "product",
    "lead": false,
    "core": false,
-   "summary": "Owns one area of the product, or the whole product as plain Feature Owner, and takes each feature from pitch to production in one task: a pitch of 280 characters a person OKs, the Spec page a person OKs, the build on a branch with a test that proves it, the fixes for what two reviewers found, the QA page and the check in production. Each week it reads its area's activation and retention and ranks the problems. It never merges: the Merge stage queues the pull request.",
+   "summary": "Owns one area of the product, or the whole product as plain Feature Owner, and takes each feature from a chat to production in one task: the Spec a person approves, the build on a branch with a test that proves it, the fixes for what two reviewers found, the QA report, the Release report a person approves and the check in production. Each week it reads its area's activation and retention and ranks the problems. It never merges: the Merge stage queues the pull request.",
    "when": "A software team that turns ideas into code. One per product area (Tasks, Files) or customer segment, or one for the whole product.",
    "tags": [
     "product",

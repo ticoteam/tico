@@ -60,8 +60,8 @@ class TaskFile(M.Contract):
     document: str | None = Field(
         default=None,
         max_length=40,
-        description="The task's document this is the next version of (HTML text): Spec, QA report, Release report, "
-        "Invoice and Email are the names a stage approves; any other name is a document no stage asks for",
+        description="The task's document this is the next version of (HTML text): Spec, QA report, Release report "
+        "and Invoice are the names a stage approves; any other name is a document no stage asks for",
     )
 
 
@@ -572,12 +572,13 @@ def finish_delivery(c, auth, who, rid):
 
 
 def write_upload(store, request, body, uploads, fn):
-    """One idempotent write whose payload includes the files already stored for it."""
+    """One idempotent write whose payload includes the files already stored for it. A multipart task file hashes
+    without `document` (it is never one), as its replay check does (replay_upload)."""
     result = store.mutate(
         request.state.identity,
         request.url.path,
         request.headers.get("idempotency-key"),
-        {**body.model_dump(), "uploads": uploads},
+        {**body.model_dump(exclude={"document"}), "uploads": uploads},
         fn,
     )
     if isinstance(result, dict) and "_refusal" in result:

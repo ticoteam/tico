@@ -194,9 +194,10 @@ function peReqText(req: PipelineReqRec): string {
   return line ? `${peKindName(needs)}: ${line}` : peKindName(needs);
 }
 
-/** A requirement's small editor, under its row: who OKs it (an OK: one person or one bot; a page: who OKs after Jev),
- * its name where its kind has one (an OK's ask, a page's name, an answer's title), its kind's settings, its switches
- * (Can be pushed past last, off and fixed on a kind that never is), and Remove. */
+/** A requirement's small editor, under its row: who OKs it (an OK: one person or one bot; a page: who OKs after the
+ * decision model; an approval: its document and approver), its name where its kind has one (an OK's ask, a page's name,
+ * an answer's title), its kind's settings, its switches (Can be pushed past last, off and fixed on a kind that never
+ * is), and Remove. */
 function peReqEdHTML(state: PeState, req: PipelineReqRec, si: number, ri: number, id: string): string {
   const at = `data-pe-si="${si}" data-pe-ri="${ri}"`;
   const needs = peNeeds(req), never = PE_NEVER_PUSHED.includes(needs), page = needs === 'page', answer = needs === 'answer';

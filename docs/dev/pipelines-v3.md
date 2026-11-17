@@ -46,7 +46,7 @@ architecture) and C (the screens).
 
 - Anyone, bots included, may push past unmet requirements with a reason.
 - Validate loops have no limit.
-- One feature owner takes a Product task from pitch to production, in one task and one session; there are no
+- One feature owner takes a Product task from a chat to production, in one task and one session; there are no
   Builders (Nov 14). Engineering work no feature owns goes, through the Engineering Manager, to the owner of its area.
 - No migration and no rollback.
 - A stage with no requirements moves tasks on by itself when the next stage has room.
@@ -69,10 +69,23 @@ architecture) and C (the screens).
   then its manager bot; then the ladder rests and the quiet-task rule tells the manager.
 - **One ask:** everything you are asked is the task. You see the page itself, then Approve, or Send back with notes. The
   notes go to the bot.
-- **Person OKs** on Product: the pitch, the spec, the QA page and the release. The rest is bots and Jev.
-- **Person OK setting:** "People only" or "People, with exceptions". Default: with exceptions. Product's person OKs are
-  people only. An OK from someone that is people only and names nobody is any person's: Product's pitch, spec and
-  release gates.
+- **Person approvals** on Product: the Spec, the QA report and the Release report. The rest is bots and the decision
+  model. There is no pitch: a feature starts as a chat, and its first approval is the Spec (Nov 16).
+- **Stage approvals name a document** (Nov 16). A stage that asks a person to approve names the task document it
+  approves (a page requirement with `settings.document`: Spec, QA report, Release report or Invoice,
+  `task_requirements.APPROVED`) and who approves it: any person (people only) or one person. The stage editor (✎) sets
+  both. The bot writing that document while the task is in the stage is the submission (`task_pages.submit`, from
+  `POST /api/v2/tasks/{id}/files` with `document`); no bot asks for an OK, and a bot adding an OK on such a stage is
+  refused. The decision model checks the submitted version: a first fail goes back to the bot without telling anyone, a
+  second fail in the same visit goes to the person with the reason beside it, and a version it could not check reaches
+  the person marked "not checked". The Spec's check only advises. The approval's key is (task, visit, stage, document,
+  version): Flow shows the document at that version on its tab, with one muted version line, and Approve sends the
+  visit and `<file id>@<version>` back. A stale key is refused (`task_changed`, with the version submitted now in
+  `approval`), and Flow shows the newer version. A newer version moves the approval to it. Not approving is a reply in
+  the chat; approving moves the task on.
+- **Person OK setting:** "People only" or "People, with exceptions". Default: with exceptions. Product's person
+  approvals are people only. An approval that is people only and names nobody is any person's: Product's Spec and
+  Release report.
 - **Push past** is a switch on each requirement.
 - Tasks leave Product's **Ideas** by hand, except a request a person files: it goes into Spec when Spec has room. Later
   is dropped. Growth's and Success's Ideas hold every idea, a person's too, until someone starts it.
@@ -385,8 +398,8 @@ lists all of them. The list is never empty for an open task. Each state's look i
      unsure when none is no and one can't be told. The reason names the missing parts in one line each, at most
      three ("No out-of-scope list found."), never a probability or the check's wording. (Changed Nov 13, task #351.)
    - Ends: Pass: met, or on to the person's OK. Fail: the bot's turn, with the missing parts; on a page a person OKs
-     anyway, a second fail in the same visit is that person's to decide. A Spec page is never sent back by Jev: a
-     missing part goes to the person as "Jev: <part>". Unsure: on a page a person OKs anyway (people only, or naming
+     anyway, a second fail in the same visit is that person's to decide. A Spec a person approves is never sent back
+     by the decision model: a missing part goes to the person beside the approval, as "Decision model: <part>". Unsure: on a page a person OKs anyway (people only, or naming
      someone), that person at once, every version, shown nothing from Jev; after a send back, the person who sent it
      back, with their words. On a stage a bot holds: the pipeline's manager bot looks once per page version, with the
      part Jev can't tell, and OKs it or sends it back and says why; the page's bot is not sent back to rewrite it.
@@ -866,44 +879,41 @@ software?" (a blank answer is yes); an untouched one is retired when it answers 
 
 ### Product
 
-From a pitch to something checked in production, in one task. Manager: the Product Manager bot.
+From a spec to something checked in production, in one task. Manager: the Product Manager bot.
 Preset `features`, id `product` (`pipeline_settings.PRODUCT`).
 
-Stages: Pitch → Spec → Related input → OK spec → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → QA → OK release →
+Stages: Spec → Related input → OK spec → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → QA → OK release →
 Merge → Validate → Done · Closed
 
-The stage ids are those Tico Team's live Product has where it has the stage: `product-ideas` (Pitch), `product-spec`,
+The stage ids are those Tico Team's live Product has where it has the stage: `product-spec`,
 `product-build`, `product-review-1`, `product-fixes-1`, `product-review-2`, `product-fixes-2`, `product-qa`,
 `product-merge`, `product-validate`; and `product-related`, `product-ok-spec`, `product-ok-release`. Each stage's
-purpose names the company skill it runs on: write-a-pitch, write-a-spec, build-and-open-a-pr and hand-off-to-review,
+purpose names the company skill it runs on: write-a-spec, build-and-open-a-pr and hand-off-to-review,
 fix-review-findings, make-the-qa-page, validate-in-production.
 
 One feature owner, the task's assignee, holds every stage but the reviews, QA and Merge, in one task and one session
-(`session: task`). A task filed with no assignee waits in Pitch for the manager
+(`session: task`). A task filed with no assignee waits in Spec for the manager
 to pick one; the owner a task leaves an assignee-held stage with becomes its assignee if it has none. After the
 pipeline's first stage, a reassign names who holds that visit only: the assignee holds the stages after it, and a stage
 rule that refuses the assignee leaves only that stage with nobody (Tico Team, Nov 14: Build fell to the Engineering
 Manager). Build's PR open counts a PR that is open, or one linked since the task entered Build: an old PR that merged
 before it does not (a task skipped Build on one).
 
-- **Pitch.** Owner: the assignee. The task's body is the pitch: the problem, who has it and the fix. To leave: **a
-  person OKs it**: any person, never a bot (people only, nobody named). Over 280 characters (the OK's `body_max`) it
-  is not asked: it is the owner's turn to shorten the body, and an OK is refused. Not now is a snooze, no is a close. A bot's own pitch is not snoozed as a bot's idea in
-  Ideas is (idea_checks: never where the stage asks a person's OK): it reaches a person's Needs you. Jev's duplicate
-  check runs as in Ideas. Expected time: 1 day.
-- **Spec.** Owner: the assignee. To leave: a Spec page (the visual-spec format) with the goal, the scope and acceptance
-  criteria. Jev checks it. Expected time: 2 days.
+- **Spec.** Owner: the assignee. A feature starts as a chat. To leave: the task's Spec (the visual-spec format) with the
+  goal, the scope and acceptance criteria, which the decision model checks. Writing it here submits it. Expected time:
+  2 days.
 - **Related input.** Owner: the assignee. Jev picks the 1 to 2 bots the feature touches over a bar (0.8 to start), and
   each adds one round of comments to the spec page (`related_input`). It never blocks: with nobody over the bar, or
   after 4 hours, the task moves on. Expected time: 4 hours.
-- **OK spec.** Owner: the assignee, who attaches the spec page as the comments left it. To leave: **a person OKs it**:
-  any person, never a bot. Jev shows the person what is missing; it never sends the page back. Expected time: 2 days.
+- **OK spec.** Owner: the assignee, who writes the Spec's next version with what the comments changed. To leave: **a
+  person approves the Spec**: any person, never a bot. The decision model shows the person what is missing; it never
+  sends the Spec back. Expected time: 2 days.
 - **Build, Review 1, Fixes 1, Review 2, Fixes 2, QA, Merge:** as on Engineering below, with the assignee in the
-  Builder's place and the QA Owner holding QA. QA's page is OK'd by its named person, as on Engineering.
-- **OK release.** Owner: the assignee. To leave: **a person OKs the release**: any person, never a bot. Then it merges.
-  The OK names nothing to show, so it shows the task's page from the stage before (QA's), with that stage on its meta
-  line, to a person who may open it; Tico's opinion reads the same page when it has no audience of its own. Any stage
-  OK that names nothing does this; with no earlier page it shows the task's title and text (#3784).
+  Builder's place and the QA Owner holding QA. QA's report is approved by its named person, as on Engineering.
+- **OK release.** Owner: the assignee, who writes the Release report: what is shipping, the PRs it merges at their
+  newest commits, and what a person should know first. To leave: **a person approves the Release report**: any person,
+  never a bot. Then it merges. An OK that names nothing to show (on a company's own stage) shows the task's page from
+  the stage before, with that stage on its meta line; with no earlier page it shows the task's title and text (#3784).
   A task Merge sends back to QA keeps the person's QA OK as on Engineering (C22), and the release is asked again.
 - **Validate.** Owner: the assignee. To leave: a "Checked in production" page that names the version production runs,
   checked against the release that holds the task's own PRs. No person. Not validated sends the task back to Build,
@@ -960,7 +970,7 @@ Stages: On deck → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → 
   hours.
 - **Fixes 2.** Owner: Builder. To leave: Owner says done, Checks pass. Expected time: 4 hours. When Review 2 found
   nothing, the Builder says done at once and the task moves to QA.
-- **QA.** Owner: Builder. To leave: Checks pass, and the QA page: what changed, before and after screenshots of the
+- **QA.** Owner: Builder. To leave: Checks pass, and the QA report: what changed, before and after screenshots of the
   running app (or the output that proves a change with nothing to see), how it was checked with the checks at the
   newest commit, what both reviewers found on the commit they reviewed, risks, and the PR with its head commit. The
   Builder builds it with its `build-the-page` skill (the QA template: each acceptance criterion with its result and proof); approving it ships the change. Jev checks it against the linked PRs'

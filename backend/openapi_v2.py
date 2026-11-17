@@ -2900,7 +2900,7 @@ SCHEMAS["TaskDocument"] = obj(
     {
         "name": {
             "type": "string",
-            "description": ", ".join(DOCUMENT_NAMES) + " (the names a stage approves), or a bot's own",
+            "description": ", ".join(DOCUMENT_NAMES) + " (the names Tico knows), or a bot's own",
         },
         "file_id": "s",
         "version": "i",

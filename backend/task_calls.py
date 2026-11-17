@@ -525,10 +525,12 @@ def task_answer(
     own_click: bool = False,
     page_version: str | None = None,
     visit_id: str | None = None,
+    keyed: bool = False,
 ) -> Row:
     """Answer what is asked: `ok`, `no` with a note (send back) or `again` (look again) on an OK; `ok` or `no` on a
-    page, for the page shown (`page_version`, `<file id>@<version>`; a document approval's key adds `visit_id`); the choice or the text on a question; `done` on
-    the owner's own work. If that was the last thing missing the task moves on. The result carries `answer_id`. `own_click` says the
+    page, for the page shown (`page_version`, `<file id>@<version>`; a document approval's key adds `visit_id`, and
+    a person's answer from a client, `keyed`, must carry it); the choice or the text on a question; `done` on the
+    owner's own work. If that was the last thing missing the task moves on. The result carries `answer_id`. `own_click` says the
     request is the person's own click in their own session (task_asks.own_click): only that OKs an OK the person
     asked themself."""
     from . import answers as A
@@ -548,6 +550,7 @@ def task_answer(
             own_click=own_click,
             page_version=page_version,
             visit_id=visit_id,
+            keyed=keyed,
         )
 
 
