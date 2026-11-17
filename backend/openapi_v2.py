@@ -56,13 +56,13 @@ TAGS = {
     "Health": "Whether the installation is working.",
     "Live events": "One server-sent event stream for a person's pages (docs/custom-frontend.md, Live events): tasks, "
     "messages, runs, bots and Needs you as they change, resumable from a change number.",
-# Tags add rich display data beside the existing task label keys.
+    # Tags add rich display data beside the existing task label keys.
     'Tags': "Tags, metadata, markdown checklists and reusable templates.",
-# The named events automations and outgoing webhooks listen for (backend/event_catalog.py).
+    # The named events automations and outgoing webhooks listen for (backend/event_catalog.py).
     'Events': "The catalog of named events (docs/routines.md).",
     'Finance': "Budgets, the P&L, expenses, bills, invoices, contacts, reports and the work inbox, as far as the "
     "caller sees; Finance actions, committed or sent to one person for approval.",
-# Automations (backend/automations.py).
+    # Automations (backend/automations.py).
     'Automations': "A trigger and a tree of steps (filter, decide, llm, find, bot_turn, paths, action), saved as versions; "
     "one permission rule for UI, CLI and MCP.",
     'Roadmaps': "Company roadmap settings and internal requesters (docs/roadmaps.md).",
@@ -80,48 +80,36 @@ TAGS = {
     'Webhooks': "Outgoing webhooks: endpoints a person owns, the events Tico sends them, and each send's log (docs/webhooks.md).",
     'Cards and pins': "Tico's built-in cards and where pages and cards are pinned: the Dashboard, team pages, bot "
     "sidebars and tasks (docs/overview.md). A card shows each reader only what they may see.",
-# Settings > Models: the company's subscriptions (backend/model_subscriptions.py). Values are never in an answer.
+    # Settings > Models: the company's subscriptions (backend/model_subscriptions.py). Values are never in an answer.
     'Model subscriptions': "The company's saved model logins and keys, given to computers per runtime. A value is "
     "sent only to add or reconnect one; no answer carries it.",
     'Slack links': "A thread's link to a Slack channel, both ways (docs/slack.md): asked for by an admin, checked by the "
     "gateway, then active, suspended or refused. Admins only.",
-# Threads (docs/dev/threads-contract.md §10): a thread is a conversation read through threads.view, and its messages
-# carry thread_id, root_id-free fields as _message_out writes them.
+    # Threads (docs/dev/threads-contract.md §10): a thread is a conversation read through threads.view, and its messages
+    # carry thread_id, root_id-free fields as _message_out writes them.
     'Threads': "Threads: the sidebar, a thread and its timeline, read marks, search, members, follow, and the messages "
     "in a thread. A thread the viewer may not read answers 404, never 403.",
-# Feedback on work (backend/feedback.py): 👍/👎 with a reason on a message, task or approval a bot or a person made.
+    # Feedback on work (backend/feedback.py): 👍/👎 with a reason on a message, task or approval a bot or a person made.
     'Feedback': "A person's 👍 or 👎 on a message, task or approval a bot or another person made, with an optional reason: "
     "a 👎 on a bot's work can tell the bot (a note for its next run in that conversation) or become an org rule. "
     "Every answer leaves out feedback on what the caller cannot read.",
-# The Company page (backend/company_page): what an owner or an admin writes, and the page's own settings. Readers never
-# reach these routes; the reader origin serves the page and its data without a key.
+    # The Company page (backend/company_page): what an owner or an admin writes, and the page's own settings. Readers never
+    # reach these routes; the reader origin serves the page and its data without a key.
     'Company page': "The public page for the company's updates: its audiences, the editions each one reads, the stats "
     "the page shows, the readers who sign in to it, and the logo (docs/company-page.md).",
-# Tools (backend/mailboxes.py): which inboxes Tico uses and who may use each.
+    # Tools (backend/mailboxes.py): which inboxes Tico uses and who may use each.
     'Mailboxes': "Which mailboxes Tico uses and who may use each: Read, or Read and write (organize, draft and send, as far as the company allows).",
     'Email': "Live Gmail organizing; Gmail holds the mail and Tico records only action details and ids.",
     'Letters out': "Physical letters sent through the Gateway; approvals bind the saved proof and price.",
     'Physical mail': "Company letters, explicit Read grants and legal mail routing (docs/physical-mail.md).",
     'Email sending': "One sending policy and durable undo queue for bots, automations and people acting through Tico.",
     'Alerts': "Personal phone verification, consent and opt-in paging, paid by the company at $1 per accepted alert.",
-# The company skills directory (backend/skills.py): answers are not declared yet, so the document lists the routes only.
+    # The company skills directory (backend/skills.py): answers are not declared yet, so the document lists the routes only.
     'Skills': "The company's approved skills: proposals and approval, screening state, and installs for bots and people (docs/skills.md).",
-# Calendar (docs/dev/calendar-contract.md, HTTP): one way in for Google, Tico and derived calendars.
+    # Calendar (docs/dev/calendar-contract.md, HTTP): one way in for Google, Tico and derived calendars.
     'Calendar': "Calendars of people, bots, shared calendars and teams: Google read live, Tico events, runs, due dates and time "
     "away merged into one list of occurrences (docs/dev/calendar-contract.md).",
 }
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 PROBLEM = {
@@ -141,9 +129,6 @@ PROBLEM = {
         }
     },
 }
-
-
-
 
 
 # The methods that write. Each /api/v2 write declares the Idempotency-Key header, required unless its route says not
@@ -171,10 +156,6 @@ def _refs(node, found):
     elif isinstance(node, list):
         for value in node:
             _refs(value, found)
-
-
-
-
 
 
 def operations(app):
@@ -311,18 +292,6 @@ def spec(app):
         },
         "security": [{"bearer": []}, {"cookie": []}],
     }
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def generate():
