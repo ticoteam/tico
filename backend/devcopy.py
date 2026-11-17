@@ -553,6 +553,8 @@ KEEP = (
             "stage_pick_turns",
             # Keep-warm's old per-stage setting (removed): unread, left until every install ran the migration that made it.
             "stage_keep_warm",
+            # Failed-run holds before migration 20261117072000_holds_failing moves them into `holds`: a copy is pruned
+            # before its first start runs that migration, so an unlisted table here would be emptied and its holds lost.
             "run_backoff",
             "runners",
             "runner_states",

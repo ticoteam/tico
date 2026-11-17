@@ -7,7 +7,7 @@ reached a busy server keeps its turn (test_lease_held.py); a restart gives lapse
 (test_recovery.py::test_restart_gives_lapsed_leases_one_more_period_instead_of_expiring_them); a refused provider
 sign-in neither replays a turn nor re-queues it in a loop (test_execution_review.py::
 test_rejected_signin_cannot_replay_a_run_that_acted); usage limits and repeated limit failures are held and probed
-once per window (test_login_holds.py, test_run_backoff.py)."""
+once per window (test_login_holds.py, test_run_failures.py)."""
 
 import json
 import random

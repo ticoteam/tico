@@ -348,6 +348,24 @@ def test_a_copy_of_a_database_that_has_not_moved_its_run_budgets_into_holds_keep
         assert c.execute("SELECT bot, held_at FROM bot_budget").fetchall() == [("sales", OLD)]
 
 
+def test_a_copy_of_a_database_that_has_not_moved_its_failed_runs_into_holds_keeps_them(tmp_path, booted):
+    """The copy is pruned before its first start runs migration 20261117072000_holds_failing: run_backoff is kept."""
+    source = source_db(tmp_path, booted)
+    with closing(sqlite3.connect(source)) as c:
+        c.execute(
+            "CREATE TABLE IF NOT EXISTS run_backoff(bot TEXT PRIMARY KEY, fails INTEGER NOT NULL DEFAULT 0, "
+            "wait_until TEXT, error_class TEXT, error TEXT, last_failed_at TEXT, held_at TEXT, task_id TEXT, "
+            "released_at TEXT, released_by TEXT)"
+        )
+        c.execute("INSERT INTO run_backoff(bot,fails,held_at) VALUES('sales',5,?)", (OLD,))
+        c.commit()
+    dest = tmp_path / "copy" / "hub.sqlite"
+    _, loose = devcopy.build(source, dest, days=30)
+    assert "run_backoff" not in loose
+    with closing(sqlite3.connect(dest)) as c:
+        assert c.execute("SELECT bot, held_at FROM run_backoff").fetchall() == [("sales", OLD)]
+
+
 def test_a_lease_less_run_is_kept_only_once_settled(tmp_path, booted):
     """A run with no job (a chat run, or a turn migration 0072 made into an attempts row) has no lease: it is open until
     settled_at. A copy keeps the settled ones and removes the open ones, as it removes a job-backed attempt still running."""

@@ -719,11 +719,16 @@ def _profile_checks(c):
 def _stop_checks(c):
     """A bot Tico stopped for failed runs or for running away (backend/bot_stops.py): one finding per bot until it is
     released. The signature carries the error class or the window, never the bot."""
-    from . import claim_holds, run_backoff, turn_budgets
+    from . import claim_holds, run_failures, turn_budgets
 
     out = []
-    for hold in run_backoff.held(c):
-        bot, kind = hold["bot"], hold["error_class"] or run_backoff.OTHER
+    words = run_failures.CLASS_WORDS
+    for hold in run_failures.held(c):
+        bot, kind, details = (
+            hold["holdable_id"],
+            hold["details"].get("error_class") or run_failures.OTHER,
+            hold["details"],
+        )
         row = H.bot(c, bot) or {}
         name = row.get("display_name") or row.get("slug") or bot
         out.append(
@@ -731,10 +736,10 @@ def _stop_checks(c):
                 f"run_hold:{bot}",
                 "run_hold",
                 SETUP,
-                f"{name} was stopped after {hold['fails']} failed runs in a row",
-                f"{name}'s last {hold['fails']} runs each failed within a minute of starting, with "
-                f"{run_backoff.CLASS_WORDS.get(kind, run_backoff.CLASS_WORDS[run_backoff.OTHER])}. Held "
-                f"since {str(hold['held_at'])[:16]} UTC. Last error: {hold['error'] or 'none reported'}.",
+                f"{name} was stopped after {hold['streak']} failed runs in a row",
+                f"{name}'s last {hold['streak']} runs each failed within a minute of starting, with "
+                f"{words.get(kind, words[run_failures.OTHER])}. Held "
+                f"since {str(details.get('held_at'))[:16]} UTC. Last error: {details.get('error') or 'none reported'}.",
                 f"BotOps: read {name}'s last runs, fix the cause, then release it (tico bot release {row.get('slug', bot)}). "
                 "Tico also tries one run on its own at growing intervals and releases it when one completes. "
                 "Its queued work is kept.",

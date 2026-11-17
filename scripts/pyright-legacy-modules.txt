@@ -355,8 +355,8 @@ backend/row_clock.py
 backend/rule_due.py
 backend/rule_due_routine.py
 backend/rules.py
-backend/run_backoff.py
 backend/run_diagnostics.py
+backend/run_failures.py
 backend/run_triggers.py
 backend/run_view.py
 backend/runner_states.py

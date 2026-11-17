@@ -10,6 +10,7 @@ import pytest
 from backend import claim_holds, execution, holds, login_holds, start_holds, task_wakes, views
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, post, ready, runner
+from backend.tests.helpers.run_failures import failing
 
 NOW = "2026-10-24T12:00:00.000000Z"
 LATER = "2026-10-24T13:00:00.000000Z"
@@ -27,10 +28,7 @@ def _bot_state(state):
 
 
 def _run_hold(api, c, rig):
-    c.execute(
-        "INSERT INTO run_backoff(bot,fails,wait_until,error_class,last_failed_at,held_at) VALUES('ops',5,?,?,?,?)",
-        (LATER, "other", NOW, NOW),
-    )
+    failing(c, "ops", 5, held_at=NOW, probe_at=LATER)
 
 
 def _budget(api, c, rig):
@@ -72,10 +70,7 @@ def _handed_back(api, c, rig):
 
 
 def _backoff(api, c, rig):
-    c.execute(
-        "INSERT INTO run_backoff(bot,fails,wait_until,error_class,last_failed_at) VALUES('ops',1,?,?,?)",
-        (LATER, "other", NOW),
-    )
+    failing(c, "ops", 1, until_at=LATER, failed=NOW)
 
 
 SKIP = object()  # this page does not show the kind (holds.py says which pages show which)
@@ -284,7 +279,7 @@ def test_a_held_run_does_not_hold_a_bot_on_a_task_where_another_run_of_it_can_st
 @pytest.mark.parametrize("delegated", [False, True], ids=["sent before the failure", "sent for a person"])
 def test_a_persons_message_the_back_off_holds_shows_the_wait(api, monkeypatch, delegated):
     # Before: the "Saved - waiting" label let every person's message past a back-off wait, but the claim lets through
-    # only one a person typed since the failure (run_backoff.job_refusal): one sent before it, or for the person by
+    # only one a person typed since the failure (run_failures.typed_since): one sent before it, or for the person by
     # someone else, waits, and its label now says so.
     monkeypatch.setattr(H, "now", lambda: NOW)
     machine = runner(api)
@@ -299,10 +294,7 @@ def test_a_persons_message_the_back_off_holds_shows_the_wait(api, monkeypatch, d
                 "UPDATE messages SET refs=json_set(coalesce(refs,'{}'),'$.via','assistant') WHERE id=?",
                 (job["message_id"],),
             )
-        c.execute(
-            "INSERT INTO run_backoff(bot,fails,wait_until,error_class,last_failed_at) VALUES('ops',1,?,?,?)",
-            (LATER, "other", failed),
-        )
+        failing(c, "ops", 1, until_at=LATER, failed=failed)
     settings = api.app.state.store.settings
     with api.app.state.store.read() as c:
         job = c.execute("SELECT * FROM jobs WHERE id=?", (job["id"],)).fetchone()

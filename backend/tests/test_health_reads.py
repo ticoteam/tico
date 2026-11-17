@@ -7,7 +7,7 @@ from collections import Counter
 
 from backend.tests.helpers.api import headers, ready  # noqa: F401
 from backend.tests.helpers.health_reads import counted
-from backend.tests.helpers.run_backoff import setup as bare_setup
+from backend.tests.helpers.run_failures import setup as bare_setup
 from backend.tests.helpers.status_reads import busy
 from backend.tests.helpers.task_lanes import RUNNER_CAPABILITIES, new_task, task_bot
 
@@ -86,7 +86,7 @@ def stuck_company(api, monkeypatch, count):
     on a blocker, a few running, and a refusal Health has watched for over 12 hours on each."""
     from backend import health
     from backend.store import H, encode
-    from backend.tests.helpers.run_backoff import at
+    from backend.tests.helpers.run_failures import at
 
     monkeypatch.setattr(
         health,
@@ -118,7 +118,7 @@ def stuck_company(api, monkeypatch, count):
 def refuse_queues(api, monkeypatch, slugs):
     """Each of these bots' queues refused for over 12 hours, as stuck_company leaves them."""
     from backend.store import H, encode
-    from backend.tests.helpers.run_backoff import at
+    from backend.tests.helpers.run_failures import at
 
     at(monkeypatch, api, "2026-10-24T12:40:00.000000Z")
     with api.app.state.store.transaction() as c:
@@ -135,7 +135,7 @@ def refuse_queues(api, monkeypatch, slugs):
 def test_refused_queue_checks_read_the_company_limit_once_for_all_bots(api, monkeypatch):
     # Each refused queue's claim check read the company's limit default fresh: its budget cutoffs (the Finance book
     # first, one read a bot) and every period's spend. One pass over the refused queues shares that default now.
-    from backend.tests.helpers.run_backoff import at
+    from backend.tests.helpers.run_failures import at
 
     machine = setup(api, monkeypatch, tasks=2)
     at(monkeypatch, api, "2026-10-24T12:00:00.000000Z")
