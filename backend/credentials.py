@@ -42,6 +42,8 @@ BOTS = 'bots'
 # A grant to every computer, present and future: a model API key or token that signs each computer's model CLI in
 # (runner-rs/src/signin.rs `team_model_keys`). Never a bot's: a bot still gets only what is granted to it.
 COMPUTERS = 'computers'
+# A model key for computers is a subscription now (backend/computer_keys.py), given in Settings > Models.
+MODELS_FOR_COMPUTERS = 'Give model keys to computers in Settings > Models'
 FILE_MIGRATION = 'credential-file-migration-v1'
 # 0.2.30 reserved every HUB_ name, so a team's own HUB_ keys (HUB_BUCKET) were left out of v1. v2 adds only those.
 HUB_MIGRATION = 'credential-file-migration-v2-hub'
@@ -143,7 +145,8 @@ def explicitly_granted(c, subject):
         for r in c.execute(
             'SELECT g.credential_id FROM credential_grants g '
             'LEFT JOIN credential_grants p ON p.id=g.parent_id '
-            "LEFT JOIN bot_config bc ON g.subject='bot:'||bc.bot "
+            # By the bot's key, so each grant seeks its bot rather than scanning bot_config.
+            "LEFT JOIN bot_config bc ON substr(g.subject,1,4)='bot:' AND bc.bot=substr(g.subject,5) "
             'WHERE g.subject=? AND g.revoked_at IS NULL '
             "AND (g.parent_id IS NULL OR (p.revoked_at IS NULL AND p.id IS NOT NULL "
             "AND p.subject='human:'||bc.owner_id))",
@@ -171,7 +174,8 @@ def prime_granted(c, subjects):
         for subject, credential in c.execute(
             'SELECT g.subject,g.credential_id FROM credential_grants g '
             'LEFT JOIN credential_grants p ON p.id=g.parent_id '
-            "LEFT JOIN bot_config bc ON g.subject='bot:'||bc.bot "
+            # By the bot's key, so each grant seeks its bot rather than scanning bot_config.
+            "LEFT JOIN bot_config bc ON substr(g.subject,1,4)='bot:' AND bc.bot=substr(g.subject,5) "
             f"WHERE g.subject IN ({','.join('?' * len(part))}) AND g.revoked_at IS NULL "
             "AND (g.parent_id IS NULL OR (p.revoked_at IS NULL AND p.id IS NOT NULL "
             "AND p.subject='human:'||bc.owner_id))",
@@ -714,19 +718,7 @@ class Vault:
         if subject == BOTS:
             exists = row['kind'] == LOGIN
         elif subject == COMPUTERS:
-            if (
-                row['env'] not in providers.MODEL_KEY_NAMES
-                or row['kind'] not in ('api_key', 'token')
-                or row['ciphertext'] is None
-            ):
-                raise Problem(
-                    'subject',
-                    'Only a stored model API key or token, named '
-                    + ', '.join(sorted(providers.MODEL_KEY_NAMES))
-                    + ', can be given to every computer',
-                    422,
-                )
-            exists = True
+            raise Problem('subject', MODELS_FOR_COMPUTERS, 422)
         elif subject.startswith('human:'):
             exists = c.execute('SELECT 1 FROM humans WHERE id=?', (H.actor_id(subject),)).fetchone()
         elif subject.startswith('bot:'):
@@ -1226,6 +1218,9 @@ def install_credentials(app, store, delegate=None, propose=None):
         who = acting(request, body)
         from .tools_delegation import DELEGATE_VIAS
 
+        if body.subject == COMPUTERS:
+            # A model key for computers is a subscription now (backend/computer_keys.py), given in Settings > Models.
+            raise Problem('subject', MODELS_FOR_COMPUTERS, 422)
         if who.via in DELEGATE_VIAS and not who.confirmed and propose:
             # BotOps giving a bot a stored credential for a credential administrator who asked in chat runs at once, as
             # them: their own rights allow it, and a bot only ever gets what is explicitly granted to it. Anyone else is
@@ -1251,9 +1246,7 @@ def install_credentials(app, store, delegate=None, propose=None):
                         'POST',
                         request.url.path,
                         {'subject': body.subject},
-                        f"Give every computer the stored credential {name}, to sign its model in"
-                        if body.subject == COMPUTERS
-                        else f"Give {body.subject} the stored credential {name}",
+                        f"Give {body.subject} the stored credential {name}",
                     )
         return vault.change(
             who,
@@ -1317,7 +1310,7 @@ def install_credentials(app, store, delegate=None, propose=None):
             return vault.reveal(c, request.state.identity, cid)
 
     @app.get('/api/v2/credential-runtime')
-    def runtime(request: Request, subscription_runtime: Literal["claude", "codex"] | None = None):
+    def runtime(request: Request, subscription_runtime: Literal["claude", "codex", "cursor", "musecode"] | None = None):
         who = request.state.identity
         if who.role != 'bot':
             raise Problem('forbidden', 'An active bot run is required', 403)
@@ -1490,8 +1483,10 @@ def install_credentials(app, store, delegate=None, propose=None):
 
     @app.get('/api/v2/runner-model-credentials')
     def model_credentials(request: Request, runtime: str, login: str = ''):
-        """The model key or token this computer signs `runtime` in with: its own, stored from Settings > Computers, or
-        the one the company gave every computer. Only those, named for this runtime: never one granted to a bot."""
+        """The model key or token this computer signs `runtime` in with: the key subscription it is given (its own,
+        stored from Settings > Computers, or a shared one). Only those, named for this runtime: never one granted to a
+        bot, never a subscription saved in Settings > Models. Runners of v0.6.0-rc.1 on poll it, so the reply keeps
+        its shape (backend/computer_keys.py keys_for)."""
         who = request.state.identity
         names = providers.MODEL_KEYS.get(runtime)
         if who.role != 'runner':
@@ -1503,8 +1498,8 @@ def install_credentials(app, store, delegate=None, propose=None):
         def chosen(c):
             if not c.execute('SELECT 1 FROM runners WHERE id=? AND revoked_at IS NULL', (who.runner_id,)).fetchone():
                 raise Problem('forbidden', 'Only a registered computer may ask for this', 403)
-            # Which key, in the one order (backend/computer_keys.py): a key staged for its `use_key` job, its own,
-            # else the shared one; none once a person cleared it or signed it out (model_login).
+            # Which key, in the one order (backend/computer_keys.py): a key staged for its `use_key` job, else the
+            # key it is given; none once a person cleared it or signed it out (model_login).
             return keys_for(c, vault, who.runner_id, runtime, login)
 
         # Most computers poll with no key to send (signed out, switching, subscription): answer those from a read,

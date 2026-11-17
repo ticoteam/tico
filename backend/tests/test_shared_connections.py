@@ -1,6 +1,8 @@
 """Shared connections on Settings > Computers (backend/computer_keys.py `serving`, backend/model_login.py `share_key`,
-`attach_shared_key`): a key shared with some computers by name, or with every computer in Credentials, shows on each
-computer it serves with the same computers listed, and "this computer only" takes one computer off it for good."""
+`attach_shared_key`): a key shared with some computers, a subscription given to each, shows on each computer it serves
+with the same computers listed, and "this computer only" takes one computer off it for good. A key shared in Credentials
+before keys became subscriptions arrives through the migration (backend/tests/helpers/computer_keys.py
+`shared_before`)."""
 
 import json
 
@@ -14,9 +16,11 @@ from backend.tests.helpers.computer_keys import (
     listed,
     pending,
     report,
+    MOVE,
     setup,
+    shared_before,
 )
-from backend.tests.helpers.computer_signin import grant, store
+from backend.tests.helpers.computer_signin import store
 from backend.tests.helpers.onboarding import as_person, environment  # noqa: F401
 
 PASTED = "sk-proj-shared-pasted-0123456789"
@@ -36,13 +40,16 @@ def labels(machine_or_info):
     return [c["label"][len(Tag.v) :] for c in machine_or_info["computers"]]
 
 
-def by_name(api, cid, machine):
-    """Share credential `cid` with `machine` by name, as Add connection does."""
+def by_name(api, *shares):
+    """Credentials shared with computers by name before keys became subscriptions (a grant per (cid, machine), as Add
+    connection made them), moved as an upgrade moves them."""
     with api.app.state.store.transaction() as c:
-        c.execute(
-            "INSERT INTO credential_grants(id,credential_id,subject,granted_by,created_at) VALUES(?,?,?,?,?)",
-            (H.new_id(), cid, "computer:" + machine["runner_id"], "human:ana", H.now()),
-        )
+        for cid, machine in shares:
+            c.execute(
+                "INSERT INTO credential_grants(id,credential_id,subject,granted_by,created_at) VALUES(?,?,?,?,?)",
+                (H.new_id(), cid, "computer:" + machine["runner_id"], "human:ana", H.now()),
+            )
+        MOVE.up(c)
 
 
 def _a_key_shared_with_two_computers_shows_on_both_and_lists_both(api):
@@ -66,21 +73,21 @@ def _a_key_shared_with_two_computers_shows_on_both_and_lists_both(api):
         assert row["every"] is False and labels(row) == ["Alpha", "Bravo"] and row["id"] == out["shared"]["id"]
         assert listed(api, machine)["shared_keys"]["codex"] == {"env": "OPENAI_API_KEY", "preview": "sk-…789"}
     assert fetch(api, three)["credentials"] == [] and listed(api, three)["shared_with"] == {}
-    # Credentials lists it with a grant per computer, named; revoking one there stops sharing it with that computer.
+    # Credentials lists it with no grants: the computers have it as a subscription (Settings > Models).
     vault = call(api, "GET", "credentials")
     row = next(r for r in vault["credentials"] if r["id"] == out["shared"]["id"])
-    assert sorted(g["subject"] for g in row["grants"]) == sorted("computer:" + m["runner_id"] for m in (one, two))
-    assert {m["id"]: m["label"] for m in vault["computers"]}[two["runner_id"]] == Tag.v + "Bravo"
-    gid = next(g["id"] for g in row["grants"] if g["subject"] == "computer:" + two["runner_id"])
-    call(api, "POST", f"credentials/{out['shared']['id']}/grants/{gid}/revoke", {})
-    assert fetch(api, two)["credentials"] == [] and labels(listed(api, one)["shared_with"]["codex"]) == ["Alpha"]
+    assert row["grants"] == []
+    given = {
+        g["runner_id"] for g in call(api, "GET", "computer-subscriptions")["assignments"] if g["runtime"] == "codex"
+    }
+    assert {one["runner_id"], two["runner_id"]} <= given and three["runner_id"] not in given
 
 
 def test_the_every_computer_key_is_a_shared_connection_on_every_computer(environment):
-    """Acceptance 21: today's "Every computer" key in Credentials shows on every computer, a computer whose tool has
-    not reported yet included; one signing in with its own terminal key does not claim it."""
+    """Acceptance 21: an "Every computer" key in Credentials, moved by the upgrade, shows on every computer that said it
+    ran on it. One whose tool has not said yet, one signing in with its own terminal key, or its own account, is not
+    given it (nobody is billed differently), and "every" never says it is given to every computer."""
     api = setup(environment)
-    grant(api, store(api, "OPENAI_API_KEY", SHARED), "computers")
     ready = computer(api, "Alpha", source="shared")
     fresh = computer(api, "Bravo")  # reports codex installed, not signed in yet
     own = computer(api, "Charlie", source="terminal")
@@ -92,18 +99,18 @@ def test_the_every_computer_key_is_a_shared_connection_on_every_computer(environ
             "UPDATE runner_states SET readiness=replace(readiness, 'missing', 'ready') WHERE runner_id=?",
             (account["runner_id"],),
         )
-    for machine in (ready, fresh):
-        row = listed(api, machine)["shared_with"]["codex"]
-        assert row["every"] is True and labels(row) == ["Alpha", "Bravo"]
-    assert listed(api, own)["shared_with"] == {} and listed(api, account)["shared_with"] == {}
-    # Bravo's own report still says what its tool did: the page shows the key, not a reading it has not taken.
-    assert listed(api, fresh)["readiness"]["runtimes"]["codex"]["authenticated"] == "missing"
+    shared_before(api)
+    row = listed(api, ready)["shared_with"]["codex"]
+    assert row["every"] is False and labels(row) == ["Alpha"]
+    for machine in (fresh, own, account):
+        assert listed(api, machine)["shared_with"] == {}
+        assert fetch(api, machine)["credentials"] == []
 
 
 def test_a_key_shared_by_name_comes_before_the_every_computer_key(environment):
     api = setup(environment)
-    grant(api, store(api, "OPENAI_API_KEY", SHARED), "computers")
-    one, two = computer(api, "Alpha"), computer(api, "Bravo")
+    one, two = computer(api, "Alpha", source="shared"), computer(api, "Bravo", source="shared")
+    shared_before(api)
     call(
         api,
         "POST",
@@ -118,8 +125,7 @@ def test_a_key_shared_by_name_comes_before_the_every_computer_key(environment):
 
 def _this_computer_only_takes_one_computer_off_a_shared_key_for_good(api):
     """Acceptance 36: Clear key from Alpha on a key shared with Alpha and Bravo asks with both named; "this computer
-    only" leaves Bravo working and Alpha off it, after a refetch too, and the "Every computer" key does not step in."""
-    grant(api, store(api, "OPENAI_API_KEY", SHARED), "computers")
+    only" leaves Bravo working and Alpha off it, after a refetch too."""
     one, two = computer(api, "Alpha"), computer(api, "Bravo")
     call(
         api,
@@ -303,13 +309,11 @@ def _a_cleared_computer_given_a_shared_key_is_told_to_take_it_again(api):
 def _the_shared_key_picked_for_a_computer_is_the_one_it_runs_on(api):
     """Two shared keys of the same kind: the one picked in Add connection replaces the other on that computer,
     whichever is older, in what the dialog says, the computers listed and what the computer fetches."""
-    one, two, three = (computer(api, label) for label in ("Alpha", "Bravo", "Charlie"))
+    one, two, three = (computer(api, label, source="shared") for label in ("Alpha", "Bravo", "Charlie"))
     # The key Charlie has sorts first, so credential order alone would keep it.
     value = {store(api, "OPENAI_API_KEY", key): key for key in (SHARED, PASTED)}
     old, picked = sorted(value)
-    by_name(api, old, one)
-    by_name(api, old, three)
-    by_name(api, picked, two)
+    by_name(api, (old, one), (old, three), (picked, two))
     assert fetch(api, three)["credentials"][0]["value"] == value[old]
     out = call(api, "POST", f"computers/{three['runner_id']}/shared-key", {"runtime": "codex", "credential": picked})
     assert out["shared"]["id"] == picked and labels(out) == ["Bravo", "Charlie"]
@@ -329,7 +333,7 @@ def _the_shared_key_picked_for_a_computer_is_the_one_it_runs_on(api):
 
 
 def _a_computer_still_reporting_a_key_that_stopped_serving_it_is_described_as_it_now_is(api):
-    """Cleared here, or its grant revoked, before the computer's next heartbeat: its last report still says the
+    """Cleared here, or taken off it in Settings > Models, before the computer's next heartbeat: its last report still says the
     shared key signs it in, and Add / Replace / Clear key still open, describing no shared key."""
     one, two = computer(api, "Alpha", source="shared"), computer(api, "Bravo", source="shared")
     cid = call(
@@ -341,15 +345,13 @@ def _a_computer_still_reporting_a_key_that_stopped_serving_it_is_described_as_it
     call(api, "POST", f"computers/{one['runner_id']}/keys/clear", {"runtime": "codex"})
     info = call(api, "GET", f"computers/{one['runner_id']}/keys?runtime=codex")
     assert info["source"] == "" and "shared" not in info and info["computers"] == [] and info["cleared"] is True
-    vault = call(api, "GET", "credentials")
-    gid = next(
-        g["id"]
-        for r in vault["credentials"]
-        if r["id"] == cid
-        for g in r["grants"]
-        if g["subject"] == "computer:" + two["runner_id"]
+    assert cid
+    call(
+        api,
+        "PUT",
+        "computer-subscriptions",
+        {"runner_id": two["runner_id"], "runtime": "codex", "subscription": None, "confirm": True},
     )
-    call(api, "POST", f"credentials/{cid}/grants/{gid}/revoke", {})
     info = call(api, "GET", f"computers/{two['runner_id']}/keys?runtime=codex")
     assert info["source"] == "" and "shared" not in info
     heartbeat(api, two["token"], "shared")
