@@ -290,7 +290,7 @@ const PAST = [done('r-blue', 'blue-ocean'), done('r-draft', 'scenarios', {on_dra
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // Nothing published: only Draft is offered. A publish that vanished meanwhile (422 no_published) offers the draft.
+    // No strategy yet: only Draft is offered. One that vanished meanwhile (422 no_published) offers the draft.
     {
       const {page, errors, sent} = await open(browser, {published: false});
       await page.locator('[data-lens-run="scenarios"]').click();
@@ -310,7 +310,7 @@ const PAST = [done('r-blue', 'blue-ocean'), done('r-draft', 'scenarios', {on_dra
       const d2 = racy.page.locator('#lens-flow');
       await d2.locator('[data-lens-next]').click();
       await d2.locator('[data-lens-notice]').waitFor();
-      assert.match(await d2.locator('[data-lens-notice]').innerText(), /Nothing is published/);
+      assert.match(await d2.locator('[data-lens-notice]').innerText(), /No strategy yet/);
       assert.deepEqual(await d2.locator('[data-lens-on]').allInnerTexts(), ['Draft']);
       await d2.locator('[data-lens-next]').click();
       await racy.page.locator('[data-lens-run-page]').waitFor();

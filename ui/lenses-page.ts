@@ -338,7 +338,7 @@ async function lensFlowRun(dlg: HTMLDialogElement, flow: LensFlow): Promise<void
   try { run = await post(`/v2/lenses/${encodeURIComponent(flow.lens.id)}/runs`, body); }
   catch (error) {
     if (LENS_FLOW !== flow) return;
-    // Nothing published yet: the owner may run it on the draft instead.
+    // No live version yet: the owner may run it on the draft instead.
     if (errorCode(error) === 'no_published') { flow.published = false; flow.on = 'draft'; flow.notice = 'No strategy yet. Run on the draft?'; lensFlowRender(); return; }
     buttons.forEach(b => { b.disabled = false; });
     lensesNeed<HTMLButtonElement>('[data-lens-back]', dlg).disabled = flow.i === 0;  // the dialog still holds the Back button lensFlowRender rendered.
