@@ -23,7 +23,7 @@ import json
 from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING, Any, Concatenate, NoReturn, ParamSpec, TypeVar, cast
 
-from . import hubdb_core, task_effects
+from . import ask_shape, hubdb_core, task_effects
 
 if TYPE_CHECKING:
     import sqlite3
@@ -439,8 +439,13 @@ def task_ask(
         reach.check(conn, SimpleNamespace(role="bot", actor=actor), target, "task", task_id=task_id)
     bring_in(conn, actor, row, target)
     if is_bot(actor) and is_human(target):
-        # What a bot puts in front of a person is plain: one or two short sentences, no ids or paths (rule 7).
-        H.require_person_ask(conn, actor, target, line, "ask")
+        # What a bot puts in front of a person is plain: a first line of one or two short sentences, no ids or paths
+        # (rule 7), that stands on its own; a list of questions may follow it, and its why is one line. Every path that
+        # asks a person comes through here, whatever the bot was told (backend/ask_shape.py).
+        H.require_person_ask(conn, actor, target, str(line or "").strip().split("\n", 1)[0], "ask")
+        shape = ask_shape.line_refusal(line, (brief or {}).get("why"))
+        if shape:
+            H.refuse(conn, actor, "lint", shape)
     return E.add_requirement(
         conn,
         task_id,

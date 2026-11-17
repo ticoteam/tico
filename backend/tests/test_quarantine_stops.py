@@ -49,6 +49,18 @@ def review(api):
         return "\n".join([task['body'] or '', *said])
 
 
+def told(api, conversation_id):
+    """Tico's newest notice to ops in the room: the bot reads it with the room in its next run; no person's chat shows
+    it."""
+    with api.app.state.store.read() as c:
+        row = c.execute(
+            "SELECT kind, body FROM messages WHERE conversation_id=? AND sender_id=? AND recipient_id='bot:ops' "
+            "ORDER BY rowid DESC LIMIT 1",
+            (conversation_id, H.KEEPER),
+        ).fetchone()
+    return dict(row)
+
+
 def lift(api):
     with api.app.state.store.transaction() as c:
         H.status_set(c, H.KEEPER, 'ops', state='active', reason='Cooldown over: the refusal count starts again.')
@@ -90,7 +102,7 @@ def test_a_quarantine_stops_a_turn_that_used_a_shell_and_requeues_it_with_a_note
         assert H.bot(c, 'ops')['state'] == 'quarantined'
     # Queued, not uncertain and not canceled, and nothing held for review.
     assert job_state(api, attempt['job_id']) == 'queued'
-    notice = get(api, f"conversations/{message['conversation_id']}/messages")[-1]
+    notice = told(api, message['conversation_id'])
     assert notice['kind'] == 'notice' and notice['body'].startswith(line)
     assert 'goes back in the queue and runs again when the quarantine lifts' in notice['body']
     assert get(api, 'bots/ops/execution-review')['jobs'] == [] and sweep(api) == [] and review(api) is None
@@ -128,7 +140,7 @@ def test_a_quarantine_stopped_turn_with_a_named_merge_is_held_for_review(api, ti
     post(api, f"attempts/{attempt['id']}/renew", {}, machine['token'])
     post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'interrupted', 'last_seq': 4}, machine['token'])
     assert job_state(api, attempt['job_id']) == 'uncertain'
-    notice = get(api, f"conversations/{message['conversation_id']}/messages")[-1]
+    notice = told(api, message['conversation_id'])
     assert HELD in notice['body'] and 'runs again when the quarantine lifts' not in notice['body']
     aged(api, attempt['id'])
     assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
@@ -170,7 +182,7 @@ def test_a_quarantine_stopped_turn_that_only_read_runs_again_when_it_lifts(api, 
     # Back in the queue, never uncertain, and nothing held for review.
     assert job_state(api, attempt['job_id']) == 'queued'
     assert get(api, 'bots/ops/execution-review')['jobs'] == []
-    notice = get(api, f"conversations/{message['conversation_id']}/messages")[-1]
+    notice = told(api, message['conversation_id'])
     assert notice['kind'] == 'notice' and notice['body'].startswith(line)
     assert 'goes back in the queue and runs again when the quarantine lifts' in notice['body']
     assert sweep(api) == [] and review(api) is None
@@ -323,7 +335,7 @@ def test_a_stopped_read_only_turn_whose_computer_never_reported_back_goes_back_i
     assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'queued'
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM tasks WHERE title=?", (H.HELD_REVIEW_TITLE.format(bot='ops'),)).fetchone()
-    notice = get(api, f"conversations/{message['conversation_id']}/messages")[-1]
+    notice = told(api, message['conversation_id'])
     assert notice['body'].startswith('Quarantined: 10 refusals today')
 
 
@@ -352,7 +364,7 @@ def test_a_stopped_turn_that_used_a_shell_and_never_reported_back_is_held_for_re
     assert end_reason(api, attempt).startswith('Quarantined: 10 refusals today') and LOST not in end_reason(
         api, attempt
     )
-    assert HELD in get(api, f"conversations/{message['conversation_id']}/messages")[-1]['body']
+    assert HELD in told(api, message['conversation_id'])['body']
     aged(api, attempt['id'])
     assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
     assert attempt['job_id'] in review(api)

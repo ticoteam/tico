@@ -10,7 +10,7 @@ from backend.tests.helpers.api import assign, claim, get, headers, post, put, re
 from backend.tests.helpers.api_tools import key, level, tool
 from backend.tests.helpers.assistant import assistant_turn
 from backend.tests.helpers.bot_tools import configure, report
-from backend.tests.helpers.credentials import setup as vault
+from backend.tests.helpers.credentials import explicit_only, setup as vault
 from backend.tests.helpers.member_bots import botops  # noqa: F401  (fixture)
 
 SECRET = "acme-crm-synthetic-0123456789"
@@ -81,6 +81,7 @@ def test_the_tools_owner_sets_a_level_with_the_rights_of_the_person_who_asked_an
     vault(api)
     tid = tool(api)["id"]
     key(api, tid, SECRET)
+    explicit_only(api)  # what explicit grants alone give
     put(api, "page-owners/tools", {"bot": "ops"})
     run = turn_of(api, "ops")  # Ana gave the Tools Owner this task
     assert level(api, tid, "bot:cpo", "read", run)["level"] == "read"

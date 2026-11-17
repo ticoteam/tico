@@ -52,6 +52,8 @@ interface ToolApiData {
   tool: ToolApiTool; status?: ToolsStatus; private?: boolean; can_manage?: boolean; can_set_audience?: boolean;
   access?: ToolApiAccess[]; seen_by?: ToolApiSeen[]; audience?: ToolApiAudienceIn | null; keys?: ToolApiKey[]; settings?: ToolApiSetting[];
   recent?: ToolApiCall[]; checks?: ToolApiCheck[]; mcp?: ToolMcp | null;
+  // Every bot reads it with no grant while on, where Read can be held to reads (backend/default_read.py).
+  everyone_reads?: {on: boolean; enforceable: boolean};
 }
 interface ToolApiPerson {id: string; name?: string; email?: string | null; hidden?: boolean; archived?: boolean}
 type ToolApiFinance = import('../types/api').FinanceAdAccounts & {campaigns?: FcCampaign[]};
@@ -84,7 +86,11 @@ async function pageToolApi(id: string, tab?: string): Promise<void> {
     <div data-ta-head></div><div data-ta-body>${skelRows(4, {card: true})}</div></div>`;
   const root = $('#tool-api');
   root.dataset.tab = tab || 'overview';
-  if (!root.dataset.bound) { root.dataset.bound = '1'; root.addEventListener('click', (ev: Event) => void taClick(ev)); }
+  if (!root.dataset.bound) {
+    root.dataset.bound = '1';
+    root.addEventListener('click', (ev: Event) => void taClick(ev));
+    root.addEventListener('change', (ev: Event) => void taEveryone(ev));
+  }
   try { await taLoad(); }
   catch (e) { if (TA?.run === run) root.querySelector('[data-ta-body]').innerHTML = `<div class="empty">${esc(errorMessage(e, ''))}</div>`; return; }
   if (TA?.run !== run) return;
@@ -129,6 +135,10 @@ function taWhoCard(d: ToolApiData): string {
         `<button type="button" role="radio" aria-checked="${a.level === k}" data-ta-level="${k}" data-ta-subject="${esc(a.subject)}">${label}</button>`).join('')}</div>` : esc(taLevelName(a.level))}</td>
       <td class="muted tt-used">${a.last_used_at ? esc(ago(a.last_used_at)) : ''}</td>
       <td class="mb-act">${manage && !a.fixed ? `<button type="button" class="ghost tt-x" data-ta-remove="${esc(a.subject)}" aria-label="Remove ${esc(a.name)}" title="Remove">×</button>` : ''}</td></tr>`).join('');
+  const er = d.everyone_reads;
+  const everyone = er?.enforceable ? `<tr data-ta-everyone-row><td class="tt-who-name"><span class="nav-icon" aria-hidden="true">groups</span><span>Everyone</span></td>
+      <td>${esc(taLevelName('read'))}</td><td></td>
+      <td class="mb-act"><input type="checkbox" role="switch" class="people-switch" aria-label="Everyone can read" title="Every bot reads it with no grant"${er.on ? ' checked' : ''}${manage ? '' : ' disabled'} data-ta-everyone></td></tr>` : '';
   const taken = new Set((d.access || []).map(a => a.subject));
   const people = taPeople().filter(p => !p.hidden && !p.archived && !taken.has('human:' + p.id));
   const bots = (S.emps || []).filter(e => e.status !== 'archived' && !taken.has('bot:' + e.id));
@@ -138,7 +148,7 @@ function taWhoCard(d: ToolApiData): string {
       <select name="level" aria-label="Level">${TA_LEVELS.map(([k, label]) => `<option value="${k}">${label}</option>`).join('')}</select>
       <button type="submit" class="primary small">Add</button><button type="button" class="ghost small" data-ta-add-cancel>Cancel</button></form>` : '';
   return `<section class="card" id="tool-access"><header><h2>Who can use it</h2>${add ? '<button type="button" class="ghost small settings-head-act" data-ta-add-open>Add</button>' : ''}</header>
-    ${add}${rows ? `<table class="settings-table tt-who-table"><tbody>${rows}</tbody></table>` : '<p class="muted" data-ta-nobody>Nobody yet.</p>'}
+    ${add}${everyone || rows ? `<table class="settings-table tt-who-table"><tbody>${everyone}${rows}</tbody></table>` : '<p class="muted" data-ta-nobody>Nobody yet.</p>'}
     <p class="muted tt-foot">Assistants act as their person.</p></section>`;
 }
 // Who can see it: Everyone (today's rules) or Only listed; the owner, the list and whoever can use it see it.
@@ -275,6 +285,21 @@ async function taActivity(fresh: boolean): Promise<void> {
 }
 
 // ----------------------------------------------------------------- actions
+// The "Everyone can read" switch on Who can use it: PATCH the tool, then read the page again.
+async function taEveryone(ev: Event): Promise<void> {
+  const box = eventElement(ev)?.closest('input[data-ta-everyone]');
+  const state = TA;
+  if (!(box instanceof HTMLInputElement) || !state?.data) return;
+  box.disabled = true;
+  try {
+    await patch(taPath(state.id), {everyone_reads: box.checked});
+    await taLoad();
+    if (TA !== state) return;
+    taDrawHead();
+    if (state.tab !== 'activity') taDrawOverview();
+  } catch (e) { box.checked = !box.checked; toast(errorMessage(e, ''), true); }
+  finally { if (box.isConnected) box.disabled = false; }
+}
 async function taClick(ev: Event): Promise<void> {
   const b = eventElement(ev)?.closest('button');
   const state = TA;

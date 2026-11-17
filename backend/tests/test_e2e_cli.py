@@ -474,7 +474,7 @@ def test_every_apply_command_the_packs_teach_files_as_written_for_a_bot(api, liv
         for path in sorted(TEMPLATES.rglob("*.md"))
         for m in APPLY_COMMAND.finditer(path.read_text())
     ]
-    assert len(taught) >= 6 * 3, taught  # run-and-measure, fix-a-slip and watch in every channel pack
+    assert len(taught) >= 3, taught  # run-and-measure, fix-a-slip and watch, one copy for every channel pack (_shared)
     token = as_bot(api, "ops")
     parent = post(api, "tasks", {"owner": "ops", "title": "Acme smoke bet", "body": "The bet the change is for."})
     body = tmp_path / "apply-body.md"

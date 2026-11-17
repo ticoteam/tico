@@ -198,9 +198,9 @@ def _insert(c: Any, actor: Any, tool_id: Any, name: Any, value: Any, source: Any
 
 def _managed(c: Any, who: Any, tool_id: Any, admins: Any) -> Any:
     _readable: Any = _api_tools()._readable
-    require_admin: Any = _credentials().require_admin
+    from . import tool_access as TA
 
-    require_admin(c, who, admins)
+    TA.require(c, who, TA.tool(tool_id=str(tool_id or "")), action=TA.EDIT, admins=admins)
     return _readable(c, who, tool_id, admins)
 
 
@@ -364,7 +364,8 @@ def _grantees(c: Any, cid: Any) -> Any:
 def _move_one(c: Any, vault: Any, row: Any) -> Any:
     """One stored key that is a setting, moved to a tool every one of its holders gets it from; False when none is."""
     api_tools: Any = _api_tools()
-    granted: Any = _credentials().granted
+    # Explicit grants only: a default read can be switched off, and then the variable would be gone.
+    granted: Any = _credentials().explicitly_granted
 
     try:
         value = vault.cipher.decrypt(c, row)
@@ -502,9 +503,9 @@ def install(app: Any, store: Any) -> Any:
     vault = lambda: app.state.vault
 
     def manager(c: Any, w: Any) -> Any:
-        require_admin: Any = _credentials().require_admin
+        from . import tool_access as TA
 
-        require_admin(c, w, vault().admins)
+        TA.require(c, w, TA.tool(), action=TA.EDIT, admins=vault().admins, auth=vault().auth)
 
     def change(request: Any, body: Any, fn: Callable[[Any], Any]) -> Any:
         return vault().change(

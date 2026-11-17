@@ -10,7 +10,7 @@ from backend import tool_settings
 from backend.credentials import FILE_MIGRATION
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner
 from backend.tests.helpers.api_tools import key, level, tool
-from backend.tests.helpers.credentials import setup
+from backend.tests.helpers.credentials import explicit_only, setup
 
 SECRET = "acme-close-synthetic-rw-0011223344"
 
@@ -37,6 +37,7 @@ def test_a_setting_reaches_every_run_holding_a_level_on_its_tool_and_never_count
     key(api, tid, SECRET)
     other = tool(api, "Acme internal")["id"]
     key(api, other, SECRET + "-other")
+    explicit_only(api)  # what explicit grants alone give
     level(api, tid, "bot:ops", "read")
     setting(api, tid, "CLOSE_REGION", "eu")
     setting(api, other, "ACME_PROJECT_ID", "acme-7")  # ops holds nothing of Acme internal

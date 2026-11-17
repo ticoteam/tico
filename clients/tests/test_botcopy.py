@@ -250,6 +250,20 @@ def test_a_skill_is_committed_into_each_target_and_a_different_one_is_not_replac
         botcopy.copy_skill(workspace, "nothing-here", "scribe", ["one"])
 
 
+def test_a_skill_where_claude_code_loads_it_is_copied_to_the_same_place(workspace):
+    # Shared template skills (build-the-page) live in .claude/skills/; a bot made before the move still has skills/.
+    save(workspace / "bot-scribe", {".claude/skills/page/SKILL.md": "Build the page.\n"}, "A loaded skill")
+    target = workspace / "bot-one"
+    target.mkdir()
+    run(target, "init", "-q", "-b", "main")
+    save(target, {"AGENTS.md": "# one\n"}, "Start")
+    assert [r["status"] for r in botcopy.copy_skill(workspace, "page", "scribe", ["one"])] == ["copied"]
+    assert files_of(target)[".claude/skills/page/SKILL.md"] == "Build the page.\n"
+    assert run(target, "status", "--porcelain") == ""
+    assert [r["status"] for r in botcopy.copy_skill(workspace, "triage", "scribe", ["one"])] == ["copied"]
+    assert files_of(target)["skills/triage/SKILL.md"] == "Triage it.\n"
+
+
 # ------------------------------------------------------------------ an original that is on GitHub, not in this workspace
 class Person:
     """The api acting for the requester, answering the few calls a copy makes."""

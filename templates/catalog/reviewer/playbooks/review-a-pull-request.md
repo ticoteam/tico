@@ -8,7 +8,7 @@ stages" in `tico task show <id>` (in Review 2, also Reviewer 1's page and what t
 request's description and its linked issue. `knowledge/standards.md`, `knowledge/patterns.md` and
 `knowledge/review-practice.md` are read once per session. Read the rest of the repository only where the diff needs it.
 
-Outcome: one Review page at one head commit, built with `skills/build-the-page/SKILL.md` from its
+Outcome: one Review page at one head commit, built with `.claude/skills/build-the-page/SKILL.md` from its
 `templates/review.html`. It opens with what the change does and whether anything blocks, and its title names that
 commit; then the screens, when the change has any; then what was read and run, and the details. It names what was read
 and what was not.

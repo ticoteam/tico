@@ -19,7 +19,11 @@ maintain the MCP connection, a REST skill with a supported API credential is an 
 
 ## How a tool is connected
 
-1. **The vendor's MCP server, if there is one.** Declare it in the bot's `tools:` in `bot.yaml`:
+1. **The vendor's MCP server, if there is one.** A credential administrator adds it in **Tools → Add → MCP server**
+   (its address, then a pasted token or a sign-in) and gives each bot that needs it a level. That grant is all a bot
+   needs: the server reaches its runs (through Tico's proxy when Tico holds the key) and shows on its Tools tab, with no
+   `bot.yaml` entry. A server Tools does not hold (an older `sse` one, say) can instead be declared in the bot's `tools:`
+   in `bot.yaml`, with its key granted as usual:
 
    ```yaml
    tools:
@@ -37,7 +41,9 @@ maintain the MCP connection, a REST skill with a supported API credential is an 
      Nothing from the runner's own environment is used. A server whose variable is not
      granted is left out, and the run's log says which.
    - From a shell or a chat: `tico tool add <bot> linear --can read,write --env LINEAR_API_KEY --mcp-url https://mcp.linear.app/mcp
-     --header 'Authorization: Bearer ${LINEAR_API_KEY}'`. `tico tool update` takes the same three flags.
+     --header 'Authorization: Bearer ${LINEAR_API_KEY}'`. `tico tool update` takes the same three flags. When Tools
+     also grants the bot an MCP tool under the same name, the bot.yaml server is used if its key reached the run, else
+     the granted one, and nothing is reported missing.
 2. **Otherwise a small client or skill in the bot's own repository** (`skills/<service>/SKILL.md`, or a script under
    `software/`) that calls the vendor's REST API with a key from `env`. See [A REST skill](#a-rest-skill) below.
 3. **The credential.** `tico credential request <VAR> --for-bot <bot> ...` opens a card in the chat, or
@@ -57,7 +63,7 @@ maintain the MCP connection, a REST skill with a supported API credential is an 
 | Muse Code | http only | `-c mcp_servers.<name>=...` for that run; a `${VAR}` header is read by the CLI from the run's environment, other shapes are filled into a variable only that run has |
 | Cursor, Antigravity, pi | no | they read MCP servers only from a config file in the operator's home, or have none, so the operator's own servers would reach every bot; the bot's readiness shows a warning naming the tool |
 
-A bot's turn gets the `hub` server, the servers its `bot.yaml` declares and its repository's own `.mcp.json` (Claude Code),
+A bot's turn gets the `hub` server, its granted MCP tools, the servers its `bot.yaml` declares and its repository's own `.mcp.json` (Claude Code),
 not the computer operator's own (`~/.claude.json`, plugins, claude.ai connectors, `~/.codex/config.toml`). Grok still loads
 servers in the operator's `~/.grok/config.toml` and plugins; Cursor reads `~/.cursor/mcp.json`; Antigravity its user config.
 

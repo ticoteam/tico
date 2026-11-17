@@ -1,7 +1,7 @@
 import json
 
 from backend.tests.helpers.api import post, get, runner, assign, ready, claim, headers
-from backend.tests.helpers.credentials import create, setup
+from backend.tests.helpers.credentials import create, explicit_only, setup
 
 
 def test_ciphertext_only_and_authorizers_and_validation_redaction(api):
@@ -39,6 +39,7 @@ def test_explicit_human_grants_delegate_only_to_owned_bots_and_revoke_cascades(a
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET owner_id='cara' WHERE bot='finance'")
     child = post(api, f'credentials/{cid}/grants', {'subject': 'bot:finance'}, 'cara-test')
+    explicit_only(api)  # what explicit grants alone give
     machine = runner(api)
     assign(api, machine, 'finance')
     ready(api, machine, ['finance'])
@@ -84,6 +85,7 @@ def test_the_person_who_stored_a_credential_shares_it_only_with_their_own_bots(a
     post(api, f'credentials/{theirs}/grants', {'subject': 'bot:finance'}, 'cara-test', expected=403)
     ops = post(api, f'credentials/{mine}/grants', {'subject': 'bot:ops'})
     post(api, f'credentials/{mine}/grants/{ops["id"]}/revoke', {}, 'cara-test', expected=403)
+    explicit_only(api)  # what explicit grants alone give
     machine = runner(api)
     assign(api, machine, 'finance')
     ready(api, machine, ['finance'])
@@ -519,6 +521,7 @@ def test_a_bot_lists_only_the_names_of_what_it_is_granted(api):
     setup(api)
     mine = create(api)['id']
     other = create(api, name='Stripe', secret='sk-synthetic-other-123456', env='STRIPE_KEY')['id']
+    explicit_only(api)  # what explicit grants alone give
     post(api, f'credentials/{mine}/grants', {'subject': 'bot:ops'})
     post(api, f'credentials/{other}/grants', {'subject': 'bot:finance'})
     as_bot(api, 'ops')

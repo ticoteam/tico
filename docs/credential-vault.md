@@ -67,6 +67,17 @@ token in its place breaks the bot. A name with KEY, SECRET, TOKEN, PASSWORD or C
 a proxied tool's id key reaches runs as its value, a check never sends one, and a one-time repair moved the ids stored
 behind the proxy before this rule into settings on a tool their holders hold (else onto a computer tool).
 
+**Everyone can read.** Every bot reads every company tool at Read with no grant, exactly as a grant at Read reaches a
+run (its key or proxy token, its settings, its MCP server), while the tool's switch on the **Everyone** row of Who can
+use it is on: on for every tool by default, a credential administrator turns it off (event `tool.everyone_reads_changed`).
+Only where Read can be held to reads: the tool has a stored Read key, or the proxy can call it. A tool with only a Read
+and write key on computers and no API address (a database URL, an SSH key, a file) never reads by default, and has no
+Everyone row; nor does an Only listed tool, a website login, or the Tools page's owner. An explicit grant always wins:
+a bot granted the tool uses that grant, and a variable an explicit grant gives is never given again by default. A
+variable several such tools would give (two PostHog projects) is given by none of them: the bot's Tools tab lists it
+as several to choose from until a person grants one. The bot's Tools tab marks a tool it reads this way
+(backend/default_read.py).
+
 A remote MCP server a bot declares in bot.yaml whose key Tico holds (a proxied tool, or Read as above) is reached
 through the proxy too: the runner sends it to `$TICO_TOOL_<ID>_URL` plus the server's path under the tool's API address,
 with the run's proxy token in its header, and the proxy puts the key in its place. A server whose address is not under

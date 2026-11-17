@@ -2295,6 +2295,12 @@ def _event(row, actor, entry):
     return data
 
 
+def _answers_run_notice(c, message):
+    """Whether a message replies to Tico's notice to a bot (H.run_notice), which no person's timeline holds."""
+    target = H.message(c, message["in_reply_to"], include_deleted=True) if message.get("in_reply_to") else None
+    return bool(target) and H.run_notice(target.get("sender_id"), target.get("recipient_id"))
+
+
 def _messages(view, rows, shared=None):
     c, privacy = view.c, view.privacy
     last = {}
@@ -2331,6 +2337,8 @@ def _messages(view, rows, shared=None):
             continue
         if isinstance(refs, dict) and refs.get("carries"):
             continue  # a carrier starts a bot's run; no thread shows it (threads._carrier)
+        if message.get("seq") is None and not H.is_bot(view.who.actor):
+            continue  # Tico's notice to a bot (H.run_notice) is the bot's run input: no person's chat shows it
         place = {
             "thread_id": cid,
             "root_id": conversation.get("root_id") or cid,
@@ -2341,6 +2349,9 @@ def _messages(view, rows, shared=None):
             shown = view.known.message(message)
             # Shared text only when this reader sees the message as all its readers do, `source` included.
             whole = view.known.whole(message) if "sender_id" in message else message
+            if _answers_run_notice(c, message):
+                # A reply to Tico's notice to a bot quotes nothing (threads.reply_quotes), live as on a re-read.
+                shown, whole = {**shown, "reply_to": None}, {**whole, "reply_to": None}
             from .files import readable_page_refs
 
             original_refs = refs
@@ -2527,6 +2538,8 @@ def _activity_shown(view, thread, message_id):
     message = H.message(view.c, message_id, include_deleted=True) if message_id else None
     if not message or threads.legacy_reader_only(view.c, view.reader, thread):
         return False
+    if message.get("seq") is None and not H.is_bot(view.who.actor):
+        return False  # Tico's notice to a bot is its run's input: it moves no person's row
     if message.get("deleted_at"):
         return not threads.legacy_hidden(view.c, view.reader, message) and _readable_before_deletion(
             view, dict(message)

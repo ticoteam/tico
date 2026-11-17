@@ -4704,17 +4704,10 @@ def create_app(settings=None):
             # The Tools Owner on a Tools change (backend/tools_delegation.py), else nobody but BotOps.
             tools = tools_delegation.route(request.method, request.url.path)
             if tools:
+                # Its writes then carry the person's rights, and the one rule (backend/tool_access.py) keeps the
+                # Tools Owner itself from ever being given a key that way.
                 with store.read() as c:
                     tools = tools_delegation.is_tools_owner(c, who.actor)
-            if tools:
-                body = botops_act.parse_body(getattr(request, "_body", b"")) if request.method != "GET" else None
-                with store.read() as c:
-                    if tools_delegation.to_itself(c, who.actor, request.url.path, body):
-                        raise Problem(
-                            "forbidden",
-                            "The Tools Owner holds none of the keys it connects: give the level to the bot that needs it",
-                            403,
-                        )
             if not tools:
                 if ref == "default":
                     return None, None  # a bot's own Tools change, with its own rights
