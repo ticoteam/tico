@@ -24,8 +24,10 @@ it shows (`kinds`): the claim reads the company and the bot's failed runs before
 back-off for each job (CLAIM_JOB); a status row, a task card and a sender's warning show what stops the bot (STOPS); a
 task card adds what holds the bot on that task (ON_TASK); a run's "Saved - waiting" label adds what holds that run.
 
-A person's message passes a budget hold (it only stops work nobody asked for) and a back-off wait (it goes with the next
-try), as before; no other hold lets it through. `words` is the sentence the pages show for a kind.
+A person's message passes a budget hold (it only stops work nobody asked for), and one a person typed since the last
+failure passes a back-off wait (it goes with the next try), as before: a queued run's own message is judged by the
+claim's rules (turn_budgets.refusal, run_backoff.job_refusal); `human` speaks only for new work, sent now. No other hold
+lets it through. `words` is the sentence the pages show for a kind.
 """
 
 from collections.abc import Callable, Collection
@@ -79,7 +81,6 @@ STOPPED = (RUN_HOLD, BUDGET)
 SAVED = (*STOPPED, CLAIM_HELD, BACKOFF)
 
 STATE_SQL = "SELECT state FROM bots WHERE id=?"
-STATUS_SQL = "SELECT state FROM bot_status WHERE bot=?"
 
 
 def _task_sql() -> str:
@@ -88,13 +89,19 @@ def _task_sql() -> str:
 
 def claim_held_sql(many: bool = False) -> str:
     """The bots (comma-joined) with a run on one task its claim could not start, held for its wait now
-    (claim_holds.hold; held=1 ends at the wait, release_due). With `many`, (task, bots) for every such task. Few rows:
-    jobs_held_queued holds only held queued jobs."""
+    (claim_holds.hold; held=1 ends at the wait, release_due), and no other queued run there that is not held: the
+    claim takes that one (bot_claimable reads only held=0 jobs), so the bot is not held on the task. With `many`,
+    (task, bots) for every such task. Few rows: jobs_held_queued holds only held queued jobs."""
     task = _task_sql()
+    other = task.replace("m.", "m2.").replace("cv.", "cv2.")
     return (
         f"SELECT {task + ', ' if many else ''}group_concat(DISTINCT j.bot_id) FROM jobs j "
         "JOIN messages m ON m.id = j.message_id JOIN conversations cv ON cv.id = m.conversation_id "
-        f"WHERE j.held = 1 AND j.state = 'queued' AND j.hold_reason = ? {'GROUP BY 1' if many else f'AND {task} = ?'}"
+        "WHERE j.held = 1 AND j.state = 'queued' AND j.hold_reason = ? "
+        "AND NOT EXISTS (SELECT 1 FROM jobs j2 JOIN messages m2 ON m2.id = j2.message_id "
+        "JOIN conversations cv2 ON cv2.id = m2.conversation_id "
+        f"WHERE j2.bot_id = j.bot_id AND j2.state = 'queued' AND j2.held = 0 AND {other} = {task}) "
+        f"{'GROUP BY 1' if many else f'AND {task} = ?'}"
     )
 
 
@@ -178,6 +185,7 @@ class _Ask:
     _state: str | None = None
     _backoff: str | None = field(default=None)
     _backoff_read: bool = False
+    _message_read: bool = False
 
     def state(self) -> str:
         if self._state is None:
@@ -202,6 +210,15 @@ class _Ask:
                 self._backoff = BACKOFF if (row.get("wait_until") or "") > H.now() else None
             self._backoff_read = True
         return self._backoff
+
+    def work(self) -> Row | None:
+        """The work's message: the one given, else the queued `job`'s own, read when a check needs it (a job row with no
+        message_id has none). None for new work: what is being sent now."""
+        if self.message is None and not self._message_read:
+            self._message_read = True
+            mid = _col(self.job, "message_id") if self.job is not None else None
+            self.message = H.message(self.c, mid) if mid else None
+        return self.message
 
     def on_task(self, kind: str) -> bool:
         if not self.task_id:
@@ -239,14 +256,33 @@ def _budget(a: _Ask) -> bool:
     TB: Any = turn_budgets
     if a.message is not None:
         return TB.refusal(a.c, a.bot, a.message) == BUDGET  # the claim's own rule for one job
-    return not a.human and bool(TB.get(a.c, a.bot).get("held_at"))
+    if not TB.get(a.c, a.bot).get("held_at"):
+        return False
+    message = a.work()  # a queued job's message, read only now that the bot is held
+    if message is not None:
+        return TB.refusal(a.c, a.bot, message) == BUDGET
+    return not a.human  # new work: a person's message passes
+
+
+# Any login hold at all (login_holds.PREFIX): without one no login keeps a bot waiting. One read per snapshot.
+ANY_LOGIN_HOLD_SQL = "SELECT 1 FROM registry_metadata WHERE key >= 'login-hold:' AND key < 'login-hold;' LIMIT 1"
 
 
 def _usage_limit(a: _Ask) -> bool:
-    # The bot's Rate limited status is the display of the claim's own answer (execution.cooling_off), kept in step
-    # with the login holds by execution.relieve: a reader with no computer to judge the login on reads that.
-    row = _read(a.c, STATUS_SQL, (a.bot,))
-    return bool(row and row[0] == "limited")
+    """The claim's own answer, execution.cooling_off: the hold on the login the bot's next turn would sign in with on
+    the computer it is assigned to (its own login, a company subscription's, or the Gateway's), and no fallback ready.
+    It is read from the login holds, not from the bot's Rate limited status: a bot sharing a login another bot met the
+    limit on keeps its own status until it runs, yet the claim holds it. Each bot is judged once per snapshot, and not
+    at all while no login is held. Readers have no Settings here: they only seed a company that has not saved its
+    providers (saved at initialization) and give the Gateway's key, which gateway_connection.env_key reads from the
+    environment without them."""
+    if not _read(a.c, ANY_LOGIN_HOLD_SQL, ()):
+        return False
+    from . import execution, read_cache
+
+    EX: Any = execution
+    RC: Any = read_cache
+    return bool(RC.value(a.c, ("holds.cooling_off", a.bot), lambda: bool(EX.cooling_off(a.c, None, a.bot)), True))
 
 
 def _claim_held(a: _Ask) -> bool:
@@ -272,10 +308,13 @@ def _backoff(a: _Ask) -> bool:
     from . import run_backoff
 
     RB: Any = run_backoff
-    if a.message is not None:
-        return RB.job_refusal(a.c, a.bot, a.message) == BACKOFF  # a person's message sent since the failure goes
-    if a.claim:
+    if a.claim and a.message is None and a.job is None:
         return not RB.person_waiting(a.c, a.bot)  # the whole queue: a person's message waiting goes with the next try
+    message = a.work()
+    if message is not None:
+        # The claim's own rule for one job: only a message a person typed since the failure goes with the next try.
+        return RB.job_refusal(a.c, a.bot, message) == BACKOFF
+    # New work, sent now: after any failure, so a person's own message goes with the next try.
     return not a.human
 
 
@@ -309,9 +348,10 @@ def why(
 ) -> str | None:
     """The first of `kinds`, in ORDER, that keeps `bot`'s work from starting now, or None.
 
-    The work is a queued `job` (its row: held, hold_reason, attempt_id) and its `message`, when given; else new work,
-    `human` saying it is a person's. `claim`: the claim asks, about the whole queue when no message is given: a held
-    bot whose try is due is let through for it, and a back-off holds nothing while a person's message waits.
+    The work is a queued `job` (its row: held, hold_reason, attempt_id, message_id) and its `message`, when given (the
+    job's own is read when a budget or back-off needs it); else new work, sent now, `human` saying it is a person's.
+    `claim`: the claim asks, about the whole queue when no message or job is given: a held bot whose try is due is let
+    through for it, and a back-off holds nothing while a person's message waits.
     `task_id` asks about the bot's work on that task too. `loads` is what the claim read for its bots (claim_loads),
     when it has it."""
     ask = _Ask(c, bot, message, job, task_id, human, claim, loads)
@@ -369,8 +409,11 @@ def warning(c: Any, actor: str | None) -> str | None:
     return f"{words(c, bot, kind)} What you sent is kept and starts when the bot runs again." if kind else None
 
 
-def queued_reason(c: Any, bot: str, human: bool = False, job: Row | None = None) -> str | None:
+def queued_reason(
+    c: Any, bot: str, human: bool = False, job: Row | None = None, message: Row | None = None
+) -> str | None:
     """The words after "Saved - " for work waiting on a stop, on its run's own hold, or on a back-off, else None. `job`
-    is the queued run, when the label is its own; `human` that the work is a person's message."""
-    kind = why(c, bot, kinds=SAVED, job=job, human=human)
+    is the queued run, when the label is its own, and `message` its message when read already: the budget and back-off
+    then judge that message as the claim does. `human` that new work, with no job yet, is a person's message."""
+    kind = why(c, bot, kinds=SAVED, job=job, message=message, human=human)
     return "waiting: " + words(c, bot, kind, job) if kind else None

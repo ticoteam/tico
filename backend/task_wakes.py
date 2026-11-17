@@ -480,10 +480,10 @@ _ONBOARDING = "SELECT onboarding_state FROM bot_config WHERE bot=?"
 
 def prime_bots(conn: "sqlite3.Connection", actors: Collection[str | None]) -> None:
     """Read what `cannot_run` asks of each of these bots (its state, its settings, its computer, its run back-off and
-    budget holds, its status, its sign-in cards) in a few statements for all of them, and keep it in the snapshot's read
+    budget holds, its sign-in cards) in a few statements for all of them, and keep it in the snapshot's read
     cache: a pass over many tasks then asks "can this bot run" for each bot without reading it again. Nothing without a
     read cache."""
-    from . import bot_settings, holds, read_cache, reconnects, run_backoff, turn_budgets
+    from . import bot_settings, read_cache, reconnects, run_backoff, turn_budgets
 
     RC: Any = read_cache
     H = _h()
@@ -517,7 +517,7 @@ def prime_bots(conn: "sqlite3.Connection", actors: Collection[str | None]) -> No
         )
     }
     RC.prime(conn, _ONBOARDING, {(b,): onboarding.get(b) for b in bots})
-    # Most bots have no back-off, budget or status row: the miss is kept too, or each would be read again.
+    # Most bots have no back-off or budget row: the miss is kept too, or each would be read again.
     for table, column, sql in (
         ("run_backoff", "bot", cast("Any", run_backoff).GET_SQL),
         ("bot_budget", "bot", cast("Any", turn_budgets).GET_SQL),
@@ -527,10 +527,6 @@ def prime_bots(conn: "sqlite3.Connection", actors: Collection[str | None]) -> No
             for r in conn.execute(f"SELECT * FROM {table} WHERE {column} IN (SELECT value FROM json_each(?))", listed)
         }
         RC.prime(conn, sql, {(b,): found.get(b) for b in bots})
-    status = dict(
-        conn.execute("SELECT bot, state FROM bot_status WHERE bot IN (SELECT value FROM json_each(?))", listed)
-    )
-    RC.prime(conn, holds.STATUS_SQL, {(b,): ((status[b],) if b in status else None) for b in bots})
     cast("Any", reconnects).prime_open(conn, bots, "login:")
 
 

@@ -210,3 +210,104 @@ def test_a_person_messaging_a_bot_tico_stopped_is_told_and_a_budget_hold_lets_th
     ready(api, machine, ["ops"])
     attempt = claim(api, machine)
     assert attempt and attempt["message"]["body"] == "Are you there?"
+
+
+def test_a_bot_on_a_login_another_bot_met_the_limit_on_shows_the_limit(api, monkeypatch):
+    # Before: ops met the usage limit, and finance on the same login kept its idle status, so its tasks said it could
+    # run while the claim held it (cooling_off). The login's hold decides, not the status.
+    machine, rig = _start(api, monkeypatch)
+    assign(api, machine, "finance")
+    ready(api, machine, ["ops", "finance"])
+    post(api, "tasks", {"owner": "finance", "title": "Close the month", "body": "Please close the month."})
+    settings = api.app.state.store.settings
+    with api.app.state.store.transaction() as c:
+        _usage_limit(api, c, rig)
+        H.status_set(c, H.KEEPER, "finance", state="idle", focus="Checked the queue")
+    with api.app.state.store.read() as c:
+        assert (H.status(c, "finance") or {}).get("state") == "idle"
+        assert execution.bot_refusal(c, settings, rig["runner_id"], "finance") == "cooling_off"
+        assert holds.why(c, "finance", kinds=holds.STOPS) == holds.USAGE_LIMIT
+        assert task_wakes.cannot_run(c, "bot:finance") == task_wakes.USAGE_LIMIT
+        task_wakes.prime_bots(c, ["bot:finance"])
+        assert task_wakes.cannot_run(c, "bot:finance") == task_wakes.USAGE_LIMIT
+    with api.app.state.store.transaction() as c:
+        login_holds.clear(c, rig["runner_id"], "", "fake")
+    with api.app.state.store.read() as c:
+        assert holds.why(c, "finance", kinds=holds.STOPS) is None
+        # ops's Rate limited status, left behind, is not read: the claim takes its work again.
+        assert (H.status(c, "ops") or {}).get("state") == "limited"
+        assert holds.why(c, "ops", kinds=holds.STOPS) is None
+        assert not execution.cooling_off(c, settings, "ops")
+
+
+def _second_run(c, job_id):
+    """Another queued run of the same bot on the same task, not held: a person's message there (a second task_turn wake
+    would be canceled as a duplicate), with the job's other columns."""
+    job = dict(c.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone())
+    message = dict(c.execute("SELECT * FROM messages WHERE id=?", (job["message_id"],)).fetchone())
+    task = json.loads(message["refs"])["task"]
+    message.update(id=message["id"] + "-again", wake_key=None, sender_id="human:ana", refs=json.dumps({"task": task}))
+    job.update(
+        id=job_id + "-again", message_id=message["id"], held=0, hold_until=None, hold_reason=None, hold_task_id=None
+    )
+    for table, row in (("messages", message), ("jobs", job)):
+        c.execute(f"INSERT INTO {table}({','.join(row)}) VALUES({','.join('?' * len(row))})", tuple(row.values()))
+    return job["id"]
+
+
+def test_a_held_run_does_not_hold_a_bot_on_a_task_where_another_run_of_it_can_start(api, monkeypatch):
+    # Before: one claim-held run marked the bot held on its task though the claim takes its other, free run there.
+    machine, rig = _start(api, monkeypatch)
+    with api.app.state.store.transaction() as c:
+        _claim_held(api, c, rig)
+        free = _second_run(c, rig["job_id"])
+    with api.app.state.store.read() as c:
+        assert holds.why(c, "ops", kinds=holds.ON_TASK, task_id=rig["task_id"]) is None
+        assert "ops" not in holds.on_tasks(c).get(rig["task_id"], set())
+        assert task_wakes.task_cause(c, rig["task_id"], "bot:ops") is None
+        task_wakes.prime_holds(c, [rig["task_id"]])
+        assert task_wakes.task_cause(c, rig["task_id"], "bot:ops") is None
+        held = c.execute("SELECT * FROM jobs WHERE id=?", (rig["job_id"],)).fetchone()
+        assert holds.why(c, "ops", job=held) == holds.CLAIM_HELD  # the held run itself still says so
+    ready(api, machine, ["ops"])
+    attempt = claim(api, machine)
+    assert attempt
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT attempt_id FROM jobs WHERE id=?", (free,)).fetchone()[0] == attempt["id"]
+
+
+@pytest.mark.parametrize("delegated", [False, True], ids=["sent before the failure", "sent for a person"])
+def test_a_persons_message_the_back_off_holds_shows_the_wait(api, monkeypatch, delegated):
+    # Before: the "Saved - waiting" label let every person's message past a back-off wait, but the claim lets through
+    # only one a person typed since the failure (run_backoff.job_refusal): one sent before it, or for the person by
+    # someone else, waits, and its label now says so.
+    monkeypatch.setattr(H, "now", lambda: NOW)
+    machine = runner(api)
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    post(api, "chat/ops", {"text": "Are you there?"})
+    failed = "2026-10-24T11:59:00.000000Z" if delegated else "2026-10-24T12:00:01.000000Z"
+    with api.app.state.store.transaction() as c:
+        job = c.execute("SELECT * FROM jobs WHERE bot_id='ops' AND state='queued'").fetchone()
+        if delegated:
+            c.execute(
+                "UPDATE messages SET refs=json_set(coalesce(refs,'{}'),'$.via','assistant') WHERE id=?",
+                (job["message_id"],),
+            )
+        c.execute(
+            "INSERT INTO run_backoff(bot,fails,wait_until,error_class,last_failed_at) VALUES('ops',1,?,?,?)",
+            (LATER, "other", failed),
+        )
+    settings = api.app.state.store.settings
+    with api.app.state.store.read() as c:
+        job = c.execute("SELECT * FROM jobs WHERE id=?", (job["id"],)).fetchone()
+        message = H.message(c, job["message_id"])
+        assert H.in_person_name(message)
+        assert holds.why(c, "ops", kinds=holds.CLAIM_JOB, message=message, claim=True) == holds.BACKOFF
+        assert execution.bot_refusal(c, settings, machine["runner_id"], "ops") == "backoff"
+        assert "is pausing" in (holds.queued_reason(c, "ops", human=True, job=job) or "")
+        assert "is pausing" in (holds.queued_reason(c, "ops", human=True, job=job, message=message) or "")
+        label, _ = views.queued_label(c, "ops", views.machine(c, "ops"), settings, human=True, job=job)
+        assert "is pausing" in label
+        assert holds.queued_reason(c, "ops", human=True) is None  # new work sent now goes with the next try
+    assert not claim(api, machine)
