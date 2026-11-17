@@ -271,7 +271,7 @@ def _all_verdicts(api, tid):
             _say(c, dict(page), "met")
 
 
-def test_two_specs_are_one_approval_with_both_submitted_versions(api):
+def test_two_specs_are_one_approval_with_both_submitted_versions(api, monkeypatch):
     from backend import page_rounds as rounds
     from backend import task_pages as P
 
@@ -297,6 +297,21 @@ def test_two_specs_are_one_approval_with_both_submitted_versions(api):
         {"value": "ok", "page_version": approval["page_version"], "visit_id": approval["visit_id"]},
     )
     assert out["task"]["stage_id"] == "approvals-build"
+    from backend import task_documents
+
+    calls = []
+    read = task_documents._read_approvals
+
+    def tracked(c, ids):
+        calls.append(ids)
+        return read(c, ids)
+
+    monkeypatch.setattr(task_documents, "_read_approvals", tracked)
+    listed = get(api, "pages?ids=" + ",".join(expected))["pages"]
+    assert calls == [[row["id"]]]
+    assert {
+        p["file_id"]: next(link["approval"]["version"] for link in p["links"] if link["role"] == "Spec") for p in listed
+    } == expected
     with api.app.state.store.read() as c:
         answer = dict(
             c.execute("SELECT * FROM answers WHERE visit_id=? AND answer='ok'", (row["visit"]["id"],)).fetchone()
@@ -327,6 +342,11 @@ def test_a_shared_spec_has_separate_task_oks_and_changes_since_each(api):
     _all_verdicts(api, b["id"])
     assert _approve(api, a["id"], _entry(api, a["id"]), 1).status_code == 200
     assert not _standing(api, b["id"]).met
+    links = get(api, "pages/" + written["file_id"])["page"]["links"]
+    assert {link["target"]: link.get("approval") for link in links if link["role"] == "Spec"} == {
+        "task:" + a["id"]: {"version": 1},
+        "task:" + b["id"]: None,
+    }
     requirement_id = _entry(api, b["id"])["requirement_id"]
     assert _approve(api, b["id"], _entry(api, b["id"]), 1).status_code == 200
     _write(api, a["id"], SPEC + "<p>Changed</p>", "ben-test")
@@ -411,3 +431,8 @@ def test_a_pages_spec_ok_does_not_approve_its_other_document_role(api):
     documents = {d["name"]: d for d in get(api, "tasks/" + row["id"])["task"]["documents"]}
     assert documents["Spec"]["approved_version"] == 1
     assert "approved_version" not in documents["QA report"]
+    listed = get(api, "pages?ids=" + written["file_id"])["pages"][0]
+    assert {link["role"]: link.get("approval") for link in listed["links"] if link["target"] == "task:" + row["id"]} == {
+        "Spec": {"version": 1},
+        "QA report": None,
+    }

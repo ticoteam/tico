@@ -8,6 +8,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 from clients import bot_files as BF, hubcli, hubtools, remotecli
+from clients.commands import content
 from clients.tico import APIError
 
 

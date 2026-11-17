@@ -190,10 +190,13 @@ def test_links_never_widen_private_page_or_reveal_private_targets(api):
     made = publish_page(api, ops, task=secret['id'])
     assert made.status_code == 200, made.text
     fid = made.json()['page']['file_id']
-    linked = add_link(api, fid, 'task:' + public['id'], token='ben-test')
+    linked = add_link(api, fid, 'task:' + public['id'], 'Spec', token='ben-test')
     assert linked.status_code == 200, linked.text
     public_page = publish_page(api, ops, 'Public', task=public['id'], name='public.html').json()['page']['file_id']
-    assert add_link(api, public_page, 'task:' + secret['id'], token='ben-test').status_code == 200
+    assert add_link(api, public_page, 'task:' + public['id'], 'Spec').status_code == 200
+    for target in ('bot:finance', 'bot:cpo', 'human:ana', 'human:cara'):
+        assert add_link(api, public_page, target).status_code == 200
+    assert add_link(api, public_page, 'task:' + secret['id'], 'Spec', token='ben-test').status_code == 200
     seen = api.get('/api/v2/pages/' + public_page, headers=headers('cara-test')).json()['page']
     assert not any(l['target'] == 'task:' + secret['id'] for l in seen['links'])
     assert api.get('/api/v2/pages/' + fid, headers=headers('cara-test')).status_code == 404
@@ -211,8 +214,46 @@ def test_links_never_widen_private_page_or_reveal_private_targets(api):
         assert fid not in r.text, route
     files = api.get('/api/v2/tasks/' + public['id'] + '/files?all=1', headers=headers('ben-test')).json()['files']
     assert any(f['id'] == fid and f['links'] for f in files)
+    files = api.get('/api/v2/tasks/' + public['id'] + '/files?all=1', headers=headers('cara-test')).json()['files']
+    assert [f['id'] for f in files] == [public_page]
+    library = api.get('/api/v2/files', params={'linked': 'task:' + public['id']}, headers=headers('cara-test'))
+    [preview] = library.json()['files']
+    assert len(preview['links']) == 5 and preview['links_more'] == 2
+    assert not any(l.get('approval') for l in preview['links'])
     context = api.get('/api/v2/tasks/' + public['id'] + '/context', headers=headers('ben-test')).json()['pages']
     assert any(p['id'] == fid and p['links'] for p in context)
+    other_page = publish_page(api, ops, 'Other public', task=public['id'], name='other.html').json()['page']['file_id']
+    assert add_link(api, other_page, 'task:' + public['id'], 'Spec').status_code == 200
+    refusals = [
+        publish_page(api, 'cara-test', task=public['id'], **{'as': 'Spec'}),
+        api.post(
+            '/api/v2/tasks/' + public['id'] + '/files',
+            json={'document': 'Spec', 'text': '<p>Spec</p>'},
+            headers=headers('cara-test'),
+        ),
+    ]
+    for refused in refusals:
+        assert refused.status_code == 409, refused.text
+        assert set(refused.json()['error']['pages']) == {public_page, other_page}
+
+
+def test_page_writers_can_continue_after_the_storage_bot_is_archived(api):
+    ops, finance = bot(api, 'ops'), bot(api, 'finance')
+    t = task(api)
+    made = publish_page(api, ops, task=t['id'])
+    assert made.status_code == 200, made.text
+    fid = made.json()['page']['file_id']
+    assert add_link(api, fid, 'human:ben', 'writer').status_code == 200
+    assert add_link(api, fid, 'bot:finance', 'writer').status_code == 200
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET state='archived' WHERE id='ops'")
+    for version, actor in enumerate(('ben-test', finance), 2):
+        read = api.get('/api/v2/pages/' + fid, headers=headers(actor))
+        assert read.status_code == 200 and read.json()['page']['may_write']
+        written = publish_page(api, actor, f'Content {version}', page=fid)
+        assert written.status_code == 200, written.text
+        page = written.json()['page']
+        assert (page['file_id'], page['bot_id'], page['version']) == (fid, 'ops', version)
 
 
 def test_plain_upload_does_not_overwrite_linked_document(api):

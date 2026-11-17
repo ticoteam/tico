@@ -203,7 +203,11 @@ def links_of(c: Any, auth: Any, who: Any, page_id: str) -> list[dict[str, Any]]:
             continue
         role = str(r["role"])
         link: dict[str, Any] = {
-            "target": target, "role": role, "name": name, "by": r["created_by"], "at": r["created_at"]
+            "target": target,
+            "role": role,
+            "name": name,
+            "by": r["created_by"],
+            "at": r["created_at"],
         }
         if kind == "task" and role not in ("writer", "related"):
             if role not in approvals:

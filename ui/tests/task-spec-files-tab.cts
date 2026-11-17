@@ -112,6 +112,7 @@ const tabs = (win: ReturnType<Page['locator']>) => win.getByRole('tab').evaluate
     assert.match(rows[0]!.meta ?? '', /^v2 · Writer · /, 'a page: v<version> · writers · time');
     assert.equal(rows[2]!.href, `#/page/${BRIEF}`, 'a page row opens the page');
     assert.match(rows[3]!.meta ?? '', /^v3 · /, 'a file: its version and time');
+    assert.equal(await win.locator('.task-side :is([data-task-files], [data-tft-list])').count(), 0);
 
     // Link a page or file: the search leaves out the page already on the task, and the pick links it as related.
     await win.locator('[data-tp-add]').click();

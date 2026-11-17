@@ -522,14 +522,14 @@ TRIGGERS = [
         "INSERT",
         "page_links",
         "NEW.target LIKE 'task:%'",
-        _row("tasks", "files", "substr(NEW.target,6)"),
+        _row("tasks", "files", "substr(NEW.target,6)", "NEW.page_id"),
     ),
     (
         "changes_page_links_delete",
         "DELETE",
         "page_links",
         "OLD.target LIKE 'task:%'",
-        _row("tasks", "files", "substr(OLD.target,6)"),
+        _row("tasks", "files", "substr(OLD.target,6)", "OLD.page_id"),
     ),
     (
         "changes_pins_insert",
@@ -2249,10 +2249,21 @@ class _Viewer:
 
 
 def _tasks(view, rows, task_views, tasks=(), parties=()):
-    from . import meeting_task_links, task_reads
+    from . import files, meeting_task_links, task_reads
 
     c, who = view.c, view.who
     rows, meeting_links = meeting_task_links.event_changes(c, who, rows)
+    refs = {row["ref"] for row in rows if row["kind"] == "files" and row["ref"]}
+    if refs:
+        pages = files.page_rows(c, refs)
+        files.prime_visible(c, list(pages.values()))
+        cache = {}
+        visible_files = {ref for ref, page in pages.items() if files.file_visible(c, view.auth, who, page, cache)}
+        rows = [
+            row
+            for row in rows
+            if row["kind"] != "files" or not row["ref"] or row["ref"] in visible_files
+        ]
     # A change to more tasks than one event each is worth (FAN_CAP): one `bulk` event, read lists in full.
     bulk = [row for row in rows if row["kind"] == "bulk"]
     out = [(bulk[-1], {"bulk": True})] if bulk else []

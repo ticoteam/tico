@@ -230,6 +230,11 @@ def test_a_report_published_and_attached_by_name_is_one_file_and_a_markdown_tab(
         "kind": "markdown",
         "version": 1,
     }
+    revised = post(api, f"tasks/{tid}/files", {"name": "How UI works today.md", "text": REPORT + "\nUpdated."})
+    assert (revised["file_id"], revised["version"]) == (named["file_id"], 2)
+    [doc] = documents(api, tid)
+    assert doc["kind"] == "markdown" and "page_id" not in doc
+    assert [v["n"] for v in doc["versions"]] == [2, 1]
 
     # Changed, they are two contents again; the dated one's tab drops the date, and an HTML document of the same name wins.
     publish(

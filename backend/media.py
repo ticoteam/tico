@@ -908,9 +908,7 @@ def install_media(
 
                 document = TD.named(c, tid, body.document)
                 # A document continues its own file whoever writes it, never another file of the same name.
-                page = TD.file_of(c, tid, document)
-                if page is not None and not files.visible(c, who, page, {}):
-                    raise Problem("not_found", "That document is not one you can read", 404)
+                page = TD.file_of(c, tid, document, lambda row: files.visible(c, who, row, {}))
                 fid, number = files.attach_task(c, who, tid, item, digest, bot, file=page, series=False)
                 TD.record(c, tid, document, fid, who.actor)
             else:

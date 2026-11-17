@@ -77,12 +77,14 @@ def clean(text: str | None) -> bytes:
     return cleaned
 
 
-def file_of(c: Any, task_id: str, name: str) -> Any:
+def file_of(c: Any, task_id: str, name: str, visible: Callable[[Any], bool]) -> Any:
     """The page continued by a document write; more than one requires an explicit page id."""
-    rows = c.execute(
-        "SELECT f.* FROM page_links l JOIN bot_files f ON f.id=l.page_id WHERE l.target=? AND l.role=? ORDER BY f.id",
+    candidates = c.execute(
+        "SELECT f.* FROM page_links l JOIN bot_files f ON f.id=l.page_id "
+        "WHERE l.target=? AND l.role=? AND f.state<>'deleted' ORDER BY f.id",
         ("task:" + task_id, name),
     ).fetchall()
+    rows = [row for row in candidates if visible(row)]
     if len(rows) > 1:
         raise Problem(
             "ambiguous",
@@ -145,7 +147,7 @@ def _read_approvals(c: Any, task_ids: list[str]) -> dict[str, DocumentApprovals]
     marks = ",".join("?" * len(task_ids))
     out: dict[str, DocumentApprovals] = {task_id: {} for task_id in task_ids}
     for answer in c.execute(APPROVALS_SQL.format(marks=marks), (*task_ids, *task_ids)):
-        pages = json.loads(answer["pages"]) if answer["pages"] is not None else []
+        pages: list[dict[str, Any]] = json.loads(answer["pages"]) if answer["pages"] is not None else []
         if answer["legacy_page"]:
             pages = [json.loads(answer["legacy_page"])]
         for page in pages:

@@ -219,6 +219,10 @@ async function desktop(browser: Browser) {
   assert.equal(await q4.locator('a.lf-open').getAttribute('target'), '_blank', 'desktop: and opens in a new tab');
   assert.equal(await page.locator('.lf-row').filter({hasText: 'Weekly report'}).locator('a.lf-open').getAttribute('href'), '#/page/file-weekly', 'desktop: a page opens the page');
   assert.equal((await page.locator('.lf-row').filter({hasText: 'Weekly report'}).locator('.lf-by-n').innerText()).trim(), 'AI CMO, Ana', 'desktop: a page is made by its writers');
+  const spec = page.locator('.lf-row').filter({hasText: 'Weekly report'}).locator('.lf-meta');
+  assert.equal(await spec.isVisible(), true);
+  assert.equal(await spec.innerText(), 'Spec of D-18463, D-19385 +2');
+  assert.equal(await spec.getByRole('link', {name: 'D-18463'}).getAttribute('href'), '#/task/t-18463');
   // A file whose bot has no team shows nothing there, not a dash.
   assert.ok((await page.locator('td.lf-team').allInnerTexts()).every(x => x.trim() !== '—'), 'desktop: no dash for no team');
 

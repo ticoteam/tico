@@ -21,6 +21,7 @@ interface TfDialog extends TaskDialog {
   tfEl?: HTMLElement | null;
   tfOpen?: {id: string; n: number | null; cmp: number | null} | null;
   tfLoadSeq?: number;
+  tfFilesChanged?: (() => Promise<void>) | undefined;
   taskOpening?: unknown;
   liveTask?: (PropTask & {attachments?: TfAttachment[] | null}) | null;
   taskFiles?: TfFile[] | null;
@@ -203,7 +204,7 @@ async function tfAdd(d: TfDialog, files: File[]): Promise<void> {
   if (added === files.length) toast(`Added ${plural(added, 'file')}`);
   if (d.open && d.taskOpening === opening && String(d.dataset.task) === id) {
     await tfLoad(d, id);
-    await taskFilesTabLoad(d, id);
+    await d.tfFilesChanged?.();
   }
   if (TASKS_ST) void tasksCatchUp(TASKS_ST);
 }
@@ -229,7 +230,7 @@ async function tfRemove(d: TfDialog, fid: string, button: HTMLButtonElement): Pr
   TF_CACHE.delete(id);
   tfClose(d);
   await tfLoad(d, id);
-  await taskFilesTabLoad(d, id);
+  await d.tfFilesChanged?.();
   if (TASK_CHAT?.dialog === d) { TASK_CHAT.rendered = ''; void taskChatRead(TASK_CHAT); }
   if (TASKS_ST) void tasksCatchUp(TASKS_ST);
 }
@@ -355,6 +356,8 @@ function tfBodyWire(box: HTMLElement): void {
 // Clicks and keys inside a task dialog's files section (wired once per dialog by taskDialogWire).
 function tfWire(d: TfDialog): void {
   d.addEventListener('click', ev => {
+    const file = eventElement(ev)?.closest<HTMLElement>('[data-tft-file]');
+    if (file) { tfOpen(d, file.dataset.tftFile); return; }
     if (!d.tfEl?.contains(eventElement(ev))) return;
     if (eventElement(ev)?.closest('[data-tf-close]')) { tfClose(d); return; }
     // The file full screen with the task's thread beside it (file-review.ts); the task's viewer stays under it.

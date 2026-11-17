@@ -1645,9 +1645,10 @@ function decideTabsPaint(st: DecState, it: NeedsEntry, host: HTMLElement) {
   const bar = host.querySelector<HTMLElement>(':scope > .dc-tabs');
   if (!bar) return;
   const tabs = decideTabsOf(st, it), said = JSON.stringify(tabs);
-  const docs = decideAboutOf(it)?.task?.documents || [], own = DEC_TAB === 'task' ? decideOkDoc(it, docs) : null;
-  if (own) DEC_TAB = docKey(own, docs);
-  if (!tabs.some(t => t.key === DEC_TAB)) DEC_TAB = 'chat';
+  const docs = decideAboutOf(it)?.task?.documents || [], own = decideOkDoc(it, docs);
+  const active = tabs.some(t => t.key === DEC_TAB);
+  if (own && (DEC_TAB === 'task' || !active)) DEC_TAB = docKey(own, docs);
+  else if (!active) DEC_TAB = 'chat';
   if (bar.dataset.tabs !== said) {
     bar.dataset.tabs = said;
     bar.querySelector('.doc-tabs')?.remove();

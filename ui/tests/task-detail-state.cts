@@ -83,17 +83,20 @@ async function show(page: Page) {
   {
    const {page, data, errors} = await visit(browser), held = gate(), reached = gate(); let requests = 0;
    const old: FileRow[] = JSON.parse(JSON.stringify(data.files)); old[0]!.versions = old[0]!.versions.filter(v => v.n === 1); old[0]!.current_version = 1;
-   await page.route('**/api/v2/tasks/t-checkout/files', async r => {
+   await page.route(/\/api\/v2\/tasks\/t-checkout\/files(?:\?.*)?$/, async r => {
+    if (new URL(r.request().url()).searchParams.has('all')) {
+      await r.fulfill({json: {files: data.files}});
+      return;
+    }
     const n = ++requests; if (n === 1) { reached.resolve(); await held.promise; }
     await r.fulfill({contentType: 'application/json', body: JSON.stringify({files: n === 1 ? old : data.files})});
    });
    await show(page); await reached.promise;
    // A change to the task arrives on the live stream while the first read is still out: the files are read again.
    await page.evaluate(() => taskChatLive(TASK_CHAT));
-   // A phone shows the task's files in its Info tab (task #409).
-   await page.locator('#task-modal[open]').getByRole('button', {name: /^Details/}).click();
-   await page.locator('#task-modal [data-tf-file="f-notes"] .tf-meta', {hasText: 'v2'}).waitFor({timeout: t(12000)});
-   await page.locator('#task-modal [data-tf-file="f-notes"]').click();
+   await page.locator('#task-modal[open]').getByRole('tab', {name: /^Files/}).click();
+   await page.locator('#task-modal [data-tft-file="f-notes"] .tft-m', {hasText: 'v2'}).waitFor({timeout: t(12000)});
+   await page.locator('#task-modal [data-tft-file="f-notes"]').click();
    await page.locator('#task-modal [data-tf-view]', {hasText: 'Receipt check version 2.'}).waitFor();
    const delivered = page.waitForResponse(r => r.url().endsWith('/tasks/t-checkout/files')); held.resolve(); await delivered;
    await page.waitForFunction((n: number) => readDone.filter(x => x === '/api/v2/tasks/t-checkout/files').length >= n, requests);   // the stale answer was read

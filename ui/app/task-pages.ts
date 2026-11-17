@@ -32,6 +32,7 @@ function taskPagesAdopt(d: TftHost, task: {id?: unknown}) {
   if (d.tpEl && d.tpEl.dataset.task === id) { slot.replaceWith(d.tpEl); return; }
   d.tpOff?.();
   d.tpEl = slot; slot.dataset.task = id;
+  d.tfFilesChanged = () => taskFilesTabLoad(d, id);
   // The section's head: "Link a page or file" opens the page search (recent pages until something is typed, then what
   // matches), and under it a file dropped (or picked) uploads to the task (task-files.ts). New page is a title and a
   // text (taskNewPageOpen). Make page is ⋯ › Make a page (taskPageMakeOpen); its Describe box shows once chosen, or
@@ -41,7 +42,7 @@ function taskPagesAdopt(d: TftHost, task: {id?: unknown}) {
       <div class="tp-results" aria-live="polite"></div><button type="button" class="tp-drop" data-tp-drop>or drop a file to upload</button></div>
     <form class="tp-make" hidden>${ldotHTML({state: 'still', size: 20})}<input type="text" aria-label="Describe the page" placeholder="Describe the page" maxlength="8000" required><button type="submit" class="primary">Make page</button></form>
     <p class="tp-error err" role="alert" hidden></p><div class="tp-making" role="status" hidden></div>`;
-  $('[data-tft-new]', slot).hidden = d.canComment === false;
+  taskPagesActions(d);
   $('[data-tft-new]', slot).onclick = () => taskNewPageOpen(d, id);
   const make = $('.tp-make', slot), prompt = $('input', make), error = $('.tp-error', slot);
   try { prompt.value = localStorage.getItem(taskMakeDraftKey(id)) || ''; } catch { /* storage may be unavailable */ }
@@ -130,6 +131,15 @@ function taskPagesAdopt(d: TftHost, task: {id?: unknown}) {
   d.tpOff = () => { for (const off of offs) off(); slot.tpFollow?.(); };
   void taskPagesLoad(d);
 }
+function taskPagesActions(d: TftHost) {
+  const slot = d.tpEl;
+  if (!slot) return;
+  const addPage = $('[data-tft-new]', slot);
+  addPage.hidden = d.canComment === false;
+  if (slot.tpCanLink != null) slot.hidden = !slot.tpCanLink && addPage.hidden;
+  const drop = $('[data-tp-drop]', slot);
+  if (drop) drop.hidden = d.canComment === false || !$('[data-tf-input]', d);
+}
 // ⋯ › Make a page (task-props.ts): the Describe box, focused, on the Files tab where the section is.
 function taskPageMakeOpen(d: TaskPagesHost) {
   const slot = d.tpEl;
@@ -197,12 +207,6 @@ function tftFileRowHTML(f: TftItem): string {
     + '<span class="nav-icon tft-ic" aria-hidden="true">draft</span>'
     + `<span class="tft-main"><span class="tft-t">${esc(f.name || 'file')}</span><span class="tft-m muted">${esc(meta)}</span></span></button>`;
 }
-// A file row opens the file in the task's viewer (task-files.ts).
-document.addEventListener('click', ev => {
-  const row = eventElement(ev)?.closest<HTMLElement>('[data-tft-file]');
-  const d = row?.closest('dialog') as TfDialog | null | undefined;
-  if (row && d) d.tfOpenFile?.(row.dataset.tftFile);
-});
 // New page: a minimal dialog, a title and the page's text, saved (POST /api/v2/pages) as the task's related page.
 function taskNewPageOpen(d: TftHost, id: string) {
   const dlg = document.createElement('dialog');

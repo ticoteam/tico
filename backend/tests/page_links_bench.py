@@ -7,12 +7,89 @@ import tempfile
 import time
 from pathlib import Path
 
-from backend import page_links
+from backend import page_links, task_documents, task_pages
 from backend.store import H
 from backend.tests.helpers.company import company_store
 
 N = 20_000
 REPEATS = 15
+
+
+def seed_approvals(c, now, rows):
+    c.execute("INSERT INTO pipelines(id,name,created_at,updated_at) VALUES('bench','Bench',?,?)", (now, now))
+    c.execute(
+        "INSERT INTO stages(id,pipeline_id,position,kind,name,created_at,updated_at) VALUES('bench','bench',0,'work','Bench',?,?)",
+        (now, now),
+    )
+    c.execute(
+        "INSERT INTO requirements(id,stage_id,kind,settings,created_at) VALUES('bench','bench','page',?,?)",
+        (json.dumps({'document': 'Spec'}), now),
+    )
+    visits = [(f'v{i}', f't{i % 100}', now, now) for i in range(800)]
+    c.executemany(
+        "INSERT INTO visits(id,task_id,stage_id,entered_at,entered_how,left_at,how) "
+        "VALUES(?,?,'bench',?,'new',?,'met')",
+        visits,
+    )
+    answers = [(f'a{i}', visit, now) for i, (visit, _, _, _) in enumerate(visits)]
+    c.executemany(
+        "INSERT INTO answers(id,visit_id,requirement_id,by_id,answer,page_version,created_at) "
+        "VALUES(?,?,'bench','human:ben','ok',1,?)",
+        answers,
+    )
+    c.executemany(
+        "INSERT INTO requirement_pages(id,visit_id,requirement_id,file_id,version,attached_by_id,created_at) "
+        "VALUES(?,?,'bench',?,1,'bot:ops',?)",
+        [(f'sub-{i}', visit, rows[i][0], now) for i, (visit, _, _, _) in enumerate(visits)],
+    )
+    c.executemany(
+        "INSERT INTO history_events(id,subject_type,subject_id,kind,data,created_at) VALUES(?,'task',?,'answer',?,?)",
+        [
+            (
+                f'event-{i}',
+                task,
+                json.dumps(
+                    {
+                        'answer_id': answers[i][0],
+                        **({'pages': [{'file_id': rows[i][0], 'version': 1}]} if i % 2 else {}),
+                    }
+                ),
+                now,
+            )
+            for i, (_, task, _, _) in enumerate(visits)
+        ],
+    )
+
+
+def compare_approvals(c):
+    task_ids = [f't{i}' for i in range(50)]
+    sql = task_documents.APPROVALS_SQL.format(marks=','.join('?' * len(task_ids)))
+    plan = [row[3] for row in c.execute('EXPLAIN QUERY PLAN ' + sql, (*task_ids, *task_ids))]
+
+    def previous():
+        out = {}
+        for task_id in task_ids:
+            approved = out[task_id] = {}
+            answers = c.execute(
+                "SELECT a.*,json_extract(r.settings,'$.document') AS document FROM visits v "
+                "JOIN answers a ON a.visit_id=v.id JOIN requirements r ON r.id=a.requirement_id "
+                "WHERE v.task_id=? AND a.answer='ok' AND a.undone_at IS NULL ORDER BY a.created_at DESC,a.rowid DESC",
+                (task_id,),
+            )
+            for answer in answers:
+                if answer['document']:
+                    for fid, version in task_pages.answer_pages(c, task_id, dict(answer)).items():
+                        approved.setdefault((fid, answer['document']), version)
+        return out
+
+    assert previous() == task_documents._read_approvals(c, task_ids)
+    for kind, read in [('per-task/old', previous), ('batched/new', lambda: task_documents._read_approvals(c, task_ids))]:
+        elapsed = []
+        for _ in range(REPEATS):
+            start = time.perf_counter()
+            read()
+            elapsed.append((time.perf_counter() - start) * 1000)
+        print(json.dumps({'query': 'approvals/' + kind, 'median_ms': round(statistics.median(elapsed), 3), 'plan': plan}))
 
 
 def main():
@@ -73,6 +150,7 @@ def main():
                 'INSERT INTO file_text(rowid,title,text) VALUES(?,?,?)',
                 [(i + 1, r[4], 'Orbitalcraft report') for i, r in enumerate(rows)],
             )
+            seed_approvals(c, now, rows)
             c.execute('ANALYZE')
             c.commit()
         with store.read_transaction() as c:
@@ -197,8 +275,24 @@ def main():
                     ),
                     (
                         'task-files/all',
-                        "SELECT f.* FROM bot_files f WHERE f.locator='tico_blob' AND (f.task_id=? OR f.id IN (SELECT page_id FROM page_links WHERE target=?)) ORDER BY f.last_activity_at DESC",
+                        "SELECT f.*,p.file_id AS page_id,p.archived AS page_archived FROM bot_files f "
+                        "LEFT JOIN pages p ON p.file_id=f.id AND p.deleted_at IS NULL "
+                        "WHERE f.locator='tico_blob' AND (f.task_id=? OR f.id IN (SELECT page_id FROM page_links WHERE target=?)) "
+                        "ORDER BY f.last_activity_at DESC",
                         ('t42', 'task:t42'),
+                    ),
+                    (
+                        'task-files/markdown',
+                        "SELECT f.id FROM bot_files f JOIN bot_file_versions v ON v.file_id=f.id AND v.version=f.current_version "
+                        "WHERE f.task_id=? AND f.archived=0 AND f.locator='tico_blob' AND f.current_version>0 "
+                        "AND NOT EXISTS (SELECT 1 FROM pages p WHERE p.file_id=f.id) ORDER BY f.last_activity_at DESC",
+                        ('t42',),
+                    ),
+                    (
+                        'document/candidates',
+                        "SELECT f.* FROM page_links l JOIN bot_files f ON f.id=l.page_id "
+                        "WHERE l.target=? AND l.role=? AND f.state<>'deleted' ORDER BY f.id",
+                        ('task:t42', 'Spec'),
                     ),
                     ('links', page_links.LINKS_SQL, (rows[42][0],)),
                     ('writers', page_links.WRITERS_SQL, (rows[42][0],)),
@@ -237,6 +331,7 @@ def main():
                     ),
                     flush=True,
                 )
+            compare_approvals(c)
 
 
 if __name__ == '__main__':
