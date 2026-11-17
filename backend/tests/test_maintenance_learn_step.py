@@ -439,7 +439,8 @@ def test_only_what_the_company_may_read_reaches_the_company_update(api, fake_gma
             title = "Private invoice rules" if private else "Public invoice rules"
             task = H.task_create(c, "human:ana", title, "Friday is the cutoff.", "bot:ops", lint=False, private=private)
             comment = H.task_comment(c, "human:ana", task["id"], "Keep the Friday cutoff.", wake=False)
-            assert H.message(c, comment["id"])["restricted"] == 1
+            # Plain in its task's own thread (it names only that task): the task's privacy still decides below.
+            assert H.message(c, comment["id"])["restricted"] == 0
             items.append(
                 {"key": "private" if private else "public", "source": "task", "ref": {"message": comment["id"]}}
             )
