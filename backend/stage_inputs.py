@@ -1,5 +1,5 @@
 # pyright: strict
-"""What earlier stages handed on to the one a task is in (docs/pipelines-v3.md, "What a stage is handed").
+"""What earlier stages handed on to the one a task is in (docs/dev/pipelines-v3.md, "What a stage is handed").
 
 A stage's bot works from what came before it: the Spec page, the pull request, each Review page, what the Builder said
 it fixed. Those live on other visits (and, for the Spec, on the task that filed this one), so a stage's own

@@ -77,7 +77,7 @@ declare function renderSettingsBots(): void;
         as_of: '2026-11-06',
         picks, models: served.lineup, services: served.services});
       if (p === '/api/v2/usage/limits') return json({bots: {}});
-      if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
+      if (p === '/api/v2/settings/history') return json({changes: []});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));
     });

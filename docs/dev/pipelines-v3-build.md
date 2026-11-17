@@ -1,6 +1,6 @@
 # Pipelines v3: build contract
 
-The spec is `docs/pipelines-v3.md`. This file is what the spec leaves to the build: table and column names, function
+The spec is `docs/dev/pipelines-v3.md`. This file is what the spec leaves to the build: table and column names, function
 signatures, refusal names, and the order things land in. Code follows this file. A change to a name or a signature changes
 this file in the same PR.
 

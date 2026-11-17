@@ -2,10 +2,12 @@
 
 import contextlib
 from backend.tests.helpers.api import headers
+from backend.tests.helpers.statement_scope import measuring, recorder
 
 
 def counted(api, monkeypatch, path, token="ana-test", trace=None):
-    """GET `path` as `token`: the body, and the statements it took on the one snapshot it read."""
+    """GET `path` as `token`: the body, and the statements the request ran on the one snapshot it read. Statements
+    other threads ran on the store meanwhile are not part of the request, so they are not counted."""
     store, seen = api.app.state.store, []
     if trace is not None:
         seen = trace
@@ -17,7 +19,7 @@ def counted(api, monkeypatch, path, token="ana-test", trace=None):
                 @contextlib.contextmanager
                 def borrowed():
                     with opened() as c:
-                        c.set_trace_callback(lambda q: seen.append(q))
+                        c.set_trace_callback(recorder(seen))
                         try:
                             yield c
                         finally:
@@ -26,6 +28,7 @@ def counted(api, monkeypatch, path, token="ana-test", trace=None):
                 return borrowed()
 
             patched.setattr(store, name, traced)
-        response = api.get(path, headers=headers(token))
+        with measuring(seen):
+            response = api.get(path, headers=headers(token))
     assert response.status_code == 200, response.text
     return response.json(), len(seen)

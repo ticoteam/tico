@@ -1,4 +1,4 @@
-"""A stage's limit counts bot work, not tasks waiting on a person (docs/pipelines-v3.md "Limits"): a task whose only
+"""A stage's limit counts bot work, not tasks waiting on a person (docs/dev/pipelines-v3.md "Limits"): a task whose only
 waits are a person's OK or answer gives up its slot, so requests keep leaving Ideas while people review. Spec:
 "A stage's limit counts bot work, not tasks waiting on a person" (Tico Team, Nov 12: Spec full at 20 of 20, 15 of them
 on one person's OK, and nothing could leave Ideas).

@@ -1,4 +1,0 @@
-PR14 reviewed and integrated from origin/pr-14; full-task disclosure and plaintext retry-cache storage fixed.
-PR16 integrated from origin/pr-16; main file-review and UI conflicts resolved while preserving existing behavior.
-Comment authorization, tombstone scrubbing, cached replies, SQL and delivery boundaries reviewed and fixed.
-Final focused validation: 25 passed before optional broader validation was interrupted; total pytest runtime 200.08 seconds.

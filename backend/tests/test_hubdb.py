@@ -416,3 +416,56 @@ def test_task_ref_sql_matches_a_scalar_or_a_list_element_and_no_other_shape():
     assert [row[0] for row in conn.execute(sql, ("T", "T"))] == [1, 2]
     by_task_id = f"SELECT id FROM m WHERE {H.task_ref_sql('refs', '$.task_id')} ORDER BY id"
     assert [row[0] for row in conn.execute(by_task_id, ("T", "T"))] == [8]
+
+
+class _Switching:
+    """A connection whose WAL switch fails with each of `errors` in turn, then succeeds."""
+
+    def __init__(self, *errors):
+        self.errors, self.tries = list(errors), 0
+
+    def execute(self, sql):
+        assert sql == "PRAGMA journal_mode=WAL"
+        self.tries += 1
+        if self.errors:
+            raise sqlite3.OperationalError(self.errors.pop(0))
+
+
+def test_the_wal_switch_tries_again_while_another_connection_holds_the_new_file():
+    conn = _Switching("database is locked", "database is locked")
+    H.wal_mode(conn)
+    assert conn.tries == 3
+
+
+def test_the_wal_switch_raises_any_other_error_and_a_lock_that_outlasts_its_wait():
+    import pytest
+
+    other = _Switching("disk I/O error")
+    with pytest.raises(sqlite3.OperationalError, match="disk I/O error"):
+        H.wal_mode(other)
+    assert other.tries == 1
+    held = _Switching("database is locked", "database is locked")
+    with pytest.raises(sqlite3.OperationalError, match="locked"):
+        H.wal_mode(held, wait=0)
+    assert held.tries == 1
+
+
+def test_connect_closes_the_connection_when_the_wal_switch_fails(tmp_path, monkeypatch):
+    import pytest
+
+    opened = []
+    real = H.leave_wal_for_litestream
+
+    def keep(conn):
+        opened.append(conn)
+        return real(conn)
+
+    def refuse(conn, wait=30.0):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(H, "leave_wal_for_litestream", keep)
+    monkeypatch.setattr(H, "wal_mode", refuse)
+    with pytest.raises(sqlite3.OperationalError, match="locked"):
+        H.connect(tmp_path / "hub.sqlite")
+    with pytest.raises(sqlite3.ProgrammingError):  # closed: no handle left on the file
+        opened[0].execute("SELECT 1")

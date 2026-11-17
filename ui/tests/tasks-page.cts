@@ -1,4 +1,4 @@
-// The Tasks page (docs/pipelines-v3.md S2, S7), offline, and the fake server the other task scripts open the app with.
+// The Tasks page (docs/dev/pipelines-v3.md S2, S7), offline, and the fake server the other task scripts open the app with.
 // Every request is answered from the fixtures below, in the shapes backend/openapi_v2.py gives them (ui/types/api.d.ts):
 // GET /api/v2/pipelines, /needs-you (NeedsYou), /tasks (TaskBrief rows), /tasks/{id} (TaskDetail), and the writes on a
 // task (edit with its version, done, move, owner, snooze, an ask's answer, a comment). Checks here:

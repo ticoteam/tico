@@ -1,4 +1,4 @@
-// No browser: the pipeline screens' drawing and decisions (docs/pipelines-v3.md S7, S8, S11, S12, S17.3). The classic
+// No browser: the pipeline screens' drawing and decisions (docs/dev/pipelines-v3.md S7, S8, S11, S12, S17.3). The classic
 // scripts are compiled with esbuild's transform and run in one vm context, with the few shared globals they read stubbed:
 // - the pipeline view's hook draws columns, the list and the phone's tabs from the tasks the page gives it, with each
 //   stage's count out of its limit, and a stage header that opens settings only for whoever may change the pipeline;

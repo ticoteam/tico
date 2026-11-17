@@ -40,7 +40,7 @@ def test_wakes_on_a_task_with_a_live_turn_join_it_and_only_the_other_side_starts
         task = H.task_create(c, "bot:finance", "Install", "Install the admin page.", "bot:ops", lint=False)
     active = busy_on(api, machine, task["id"])
     # The owner's own status comment @mentioning its requester never wakes the owner. The requester bot has no turn on
-    # the task (docs/pipelines-v3.md: only a bot whose turn it is starts a run on a task), so no run of its starts.
+    # the task (docs/dev/pipelines-v3.md: only a bot whose turn it is starts a run on a task), so no run of its starts.
     post(
         api,
         f"tasks/{task['id']}/comments",

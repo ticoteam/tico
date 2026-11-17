@@ -4,7 +4,8 @@ makes the turn use a credential the way a real bot would, from the environment a
 launched the harness with:
 
 - `CALL <auth> <ENV> <url> [+wrong|+bare]`: one GET to `url` with the value of $ENV as `auth` says: `bearer`,
-  `header:<Name>`, `query:<param>`, `basic:<username>` or `digest:<username>`. A `url` starting with `$NAME` starts
+  `header:<Name>`, `query:<param>`, `basic:<username>` or `digest:<username>` (a username `${NAME}` is that variable's
+  value: Twilio's Account SID beside its secret). A `url` starting with `$NAME` starts
   from that variable (a proxied tool's `$TICO_TOOL_<ID>_URL`), so the same line calls the vendor directly or through the
   Tools proxy; `${NAME}` elsewhere in it is that variable's value. `+wrong` sends the request again with the value
   changed and `+bare` without it, its status kept as `refused`: proof that the service checks what it was sent.
@@ -113,6 +114,7 @@ def call(auth, env, url, also=""):
     if not value:
         return {"use": "call", "env": env, "present": False}
     url = _url(url)
+    auth = re.sub(r"\$\{([A-Z_][A-Z0-9_]*)\}", lambda m: os.environ.get(m.group(1), ""), auth)
     status, body = _request(auth, value, url)
     entry = {"use": "call", "env": env, "present": True, "status": status, "body": body}
     if also in ("+wrong", "+bare"):

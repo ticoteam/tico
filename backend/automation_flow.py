@@ -388,7 +388,7 @@ def _check_due(trigger):
     except ValueError:
         raise Invalid("trigger: first_due is a date such as 2027-01-31") from None
     _need(trigger["repeats"] in D.REPEATS, "trigger", "repeats is once, weekly, monthly, quarterly or yearly")
-    open_days = trigger.get("open_days", D.OPEN_DAYS)
+    open_days = trigger.get("open_days", D.DEFAULT_OPEN_DAYS)
     _need(
         type(open_days) is int and 0 <= open_days <= D.MAX_OPEN_DAYS,
         "trigger",

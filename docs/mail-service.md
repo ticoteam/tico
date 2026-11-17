@@ -226,16 +226,17 @@ immediately. Same for legal@acme.example.
   with `--new` or `--since`. An empty answer means the pass is complete; a non-empty one lists
   exactly what is still owed, however the previous run ended.
 
-## Persisted mail on Tico
+## Reading and hearing mail
 
-The server never talks to Gmail. The `connectors` job (`python -m runner_support connectors`) syncs one
-roster mailbox every `TICO_MAIL_SYNC_SECONDS` (default 10 minutes): `mail sync --as ana`
-locally ( `--backfill 90d` when the server still has no messages), then `mail sync export` →
-`POST /api/v2/connectors/mail/messages` → `mail sync ack` until the local outbox is empty.
-The CLI never holds `HUB_TOKEN`; the runner posts. Same owner gate as calendar snapshots.
-Bodies stay ≤32 KB; Tico keeps about 180 days (`TICO_MAIL_RETENTION_DAYS`) and a porter FTS
-index. Humans browse that copy on the Message bots page (`GET /api/v2/mail/...`, [Message bots](mail.md)); SQL
-access to `mail_*` is owner-only.
+The server reads Gmail itself. `backend/gmail_watch.py`, on the server's `gmail_watch` drain worker, checks each watched
+mailbox about every 90 seconds: it hears each new message once, runs the mailbox's message automations, and keeps only
+where it got to. Nothing of a message is stored; an automation run sees the body while it runs. People read mail live
+through the read API (`GET /api/v2/mail/...`, [Message bots](mail.md)), and every body read is audited as `mail.read`.
+
+No computer syncs mail any more: `mailboxes` is empty in `GET /api/v2/connectors/mail/targets`. A computer still carries
+out queued sends and automation mail actions for the mailboxes it acts for. Older computers may still post a copy to
+`POST /api/v2/connectors/mail/messages`; the server keeps such a copy for `TICO_MAIL_RETENTION_DAYS` (default 180).
+SQL access to `mail_*` is owner-only.
 
 ## Shared sending policy and queue
 

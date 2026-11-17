@@ -83,7 +83,7 @@ async function signOut(browser: import('playwright').Browser) {
           return json({machines: [box], services: []});
         }
         if (p === '/api/v2/models') return json({models: [], harnesses});
-        if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
+        if (p === '/api/v2/settings/history') return json({changes: []});
         if (p === '/api/v2/subscriptions') return json({profiles_by_computer: [{runner_id: 'box', label: 'Team box', profiles: box.profiles}], assignments: []});
         // backend/model_login.py affected_bots
         if (p === '/api/v2/computers/box/logouts/bots') {
@@ -381,7 +381,7 @@ async function keys(browser: import('playwright').Browser) {
         if (p === '/api/v2/needs-you') return json({items: []});
         if (p === '/api/v2/operations') return json({machines: [box], services: []});
         if (p === '/api/v2/models') return json({models: [], harnesses});
-        if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
+        if (p === '/api/v2/settings/history') return json({changes: []});
         if (p === '/api/v2/subscriptions') return json({profiles_by_computer: [], assignments: []});
         const keys = p.match(/^\/api\/v2\/computers\/(\w+)\/keys$/);
         if (keys && method === 'GET') return json(info(url.searchParams.get('runtime') as string));

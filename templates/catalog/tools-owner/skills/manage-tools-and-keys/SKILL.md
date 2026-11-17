@@ -38,7 +38,11 @@ bot already holds answers with the grant and files nothing. Read that list befor
   `basic_user`, `basic_password`, `header:<Name>`, `query:<param>`) and a **check path**; a known service fills these in.
   A **website tool** (`/api/v2/website-tools`) has sites and accounts.
 - **Key**: a vault credential on a tool, at most one per level: a **Read** key and a **Read and write** key. Its
-  **variable** (`env`, like `LINEAR_API_KEY`) is the name a run reads it under.
+  **variable** (`env`, like `LINEAR_API_KEY`) is the name a run reads it under. A tool with an **auth template** holds
+  one key per variable per level (section 2b).
+- **Auth template**: how a vendor account's several values are sent: its fields (each a variable: secret, id or
+  setting) and its ways through the proxy (Basic with two fields, a header pair, query + header). Built in for Twilio,
+  Google Ads, AWS, PostHog, ElevenLabs and Calendly; any other vendor's tool can take its own.
 - **Level** on a tool, per bot or person: Read uses the Read key when there is one, else the Read and write key at Read;
   Read and write uses the Read and write key. Setting a level grants the one key it uses and takes the others away.
 - **Delivery**: `proxy` (default when the tool has an address; Tico holds the key) or `computer` (the value goes into
@@ -62,6 +66,39 @@ today is in `docs/auth-types.md` (the manual: `tico doc read manual:auth-types`)
 3. **The vendor's own remote MCP server** → an MCP tool: Tools → Add → MCP server (its address, then a pasted token or
    its sign-in), and a level for each bot that uses it. Prefer the vendor's server to a script.
 4. Otherwise a small REST skill in the bot's own repository that reads the key from its variable (BotOps writes it).
+
+## 2b. A vendor account with several values: one tool
+Twilio's SID and secret, Google Ads' five values, AWS's key pair and region, PostHog's key, host and project id are one
+**account**: one tool, never one tool per value. Its name is vendor and label ("Twilio", "PostHog · CRO").
+- **New**: a credential admin pastes every value at once in Tools > Add > API (Keys box) or Keys > Paste on the tool.
+  Tico names each as the template's field by its name or shape (or marks it secret, id or setting), and one click
+  stores it: secrets as keys, ids and settings as Settings. In your Tools chat, a dropped value takes the template's
+  variable when its shape fits one vendor (an `SK…` key is `TWILIO_API_KEY`); put an id or setting the person typed as
+  words under the tool's Settings.
+- **What the bot gets**: every field it holds as its own variable, unchanged in name. Through the proxy each secret is
+  a proxy token and Tico builds the vendor's auth from all of them, so the bot calls as the vendor's docs say (Twilio:
+  Basic with `$TWILIO_ACCOUNT_SID` as the user and its token as the password, at `$TICO_TOOL_TWILIO_URL/...`). AWS and
+  Google Ads sign on the computer (SigV4; Google Ads' OAuth refresh in its client library), so their values go to
+  computers together.
+- **Grouped at update**: the tools that were one account's values became one tool, with every bot's variables kept
+  exactly as they were; whoever held one part got the account's other values at their level, named in the tool's
+  `tool.grouped` event. A sensitive vendor (AWS) or an Only listed tool where that would give someone a new value came
+  to you as a task "Group <vendor>?": ask a credential admin whether each named bot should have those values; if yes,
+  they set the levels; if not, leave the tools apart. Keys > Split (`POST /api/v2/api-tools/<id>/ungroup`) undoes a
+  grouping.
+
+## 2c. Login pairs: a sign-in stored as two keys
+`VPM_TIDY_USERNAME` and `VPM_TIDY_PASSWORD`, `AAA_WEBFILE_*`, `CLICK2MAIL_*`, `UPFLUENCE_EMAIL` and `UPFLUENCE_PASSWORD` are
+a website sign-in, not an API key. You get one task per pair ("Make <PREFIX> a website account?"). Do this, in order:
+1. Find which bots read the two variables: search their repositories and skills (`grep -r <VAR>`), and the tasks that
+   name them. Note each place.
+2. Offer the person who manages Tools a website account on the vendor (Tools > Add > Website: its sites and a Shared
+   account with that username and password; they reveal and type the values, you never see them), granted to the bots
+   that use it. Tico then types it in the browser, with 2FA, and no bot sees the password.
+3. For each bot that read the variables, have its code or skill moved to `tico browser open <site>` and
+   `tico login fill <site> username|password|code` (BotOps commits it).
+4. Keep both variables delivered until step 3 is done for every bot and you have confirmed no bot reads them; only then
+   ask a credential admin to delete the two keys. Say on the task what you checked.
 
 ## 3. Get the key stored without seeing it
 - **A card** for the bot that needs it (you may name any bot but yourself):

@@ -8,6 +8,7 @@ from backend import task_requirements as R
 from backend import waiting_on as W
 from backend.store import H
 from backend.tests.helpers import engine as X
+from backend.tests.old_asks import old_answer, old_ask
 
 ANA, BEN = "human:ana", "human:ben"
 OPS, CPO = "bot:ops", "bot:cpo"
@@ -91,3 +92,24 @@ def test_an_ask_leaves_needs_you_when_its_task_or_one_above_it_closes(c):
     H.task_close(c, ANA, top["id"], "The offsite is off.")  # the top closes the open tree under it
     assert H.task(c, other["id"])["status"] == "closed"
     assert _asks(c) == []
+
+
+def test_a_task_with_a_stored_answered_ask_still_lists_the_ask_and_its_answer(c):
+    """Asks and answers written before step 6c stay as history: the asks migration leaves answered and stale ones as
+    they are, so a task that holds them still lists both, with the ask's question and who answered."""
+    row = _new(c)
+    ask = old_ask(
+        c,
+        OPS,
+        ANA,
+        "@ana Which month should the offsite be?",
+        conversation_id=row["conversation_id"],
+        refs={"task": row["id"], "questions": ["Which month?"], "who": ANA},
+    )
+    answer = old_answer(c, ANA, ask, "June, if the venue is free.", refs={"task": row["id"]})
+    listed = {m["id"]: m for m in H.task_comments(c, row["id"], actor=ANA)}
+    assert listed[ask["id"]]["kind"] == "ask"
+    assert listed[ask["id"]]["answered_by_id"] == ANA
+    assert listed[ask["id"]]["ask"]["questions"] == ["Which month?"], "the ask's question is shown"
+    assert listed[answer["id"]]["kind"] == "answer"
+    assert listed[answer["id"]]["body"] == "June, if the venue is free."

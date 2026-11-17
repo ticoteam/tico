@@ -222,19 +222,36 @@ def preflight(path, *, directory=None):
 
 @functools.cache
 def _baseline(path):
+    """The baseline's statements, one by one: they run inside a transaction the loader holds, which executescript
+    would commit first."""
     if not path.is_file():
         return None
-    return "BEGIN IMMEDIATE;\nPRAGMA defer_foreign_keys=ON;\n" + path.read_text(encoding="utf-8") + "\nCOMMIT;"
+    out, buffer = [], ""
+    for line in path.read_text(encoding="utf-8").splitlines(keepends=True):
+        buffer += line
+        if sqlite3.complete_statement(buffer):
+            out.append(buffer)
+            buffer = ""
+    if buffer.strip():
+        raise MigrationError(f"{path.name} ends inside a statement")
+    return tuple(out)
 
 
 def _load_baseline(conn, directory=None):
-    """A new file takes the baseline in one transaction: a failure leaves it empty. Rows go in before the triggers, so
-    none fires; foreign keys are checked at COMMIT."""
+    """A new file takes the baseline in one transaction: a failure leaves it empty. The write lock comes first and the
+    file is looked at again under it, so of two starts that both found it empty (two processes, or a request beside the
+    start) one loads the baseline and the other finds it loaded. Rows go in before the triggers, so none fires; foreign
+    keys are checked at COMMIT."""
     script = _baseline(Path(directory or DIRECTORY) / BASELINE)
     if script is None:
         return
+    conn.execute("BEGIN IMMEDIATE")
     try:
-        conn.executescript(script)
+        if not _tables(conn):
+            conn.execute("PRAGMA defer_foreign_keys=ON")
+            for statement in script:
+                conn.execute(statement)
+        conn.execute("COMMIT")
     except BaseException:
         if conn.in_transaction:
             conn.execute("ROLLBACK")
@@ -257,6 +274,10 @@ def _run(conn, migration):
     try:
         conn.execute("BEGIN IMMEDIATE")
         try:
+            # Another start may have run it since this one read the records: under the write lock, look again.
+            if conn.execute("SELECT 1 FROM schema_migrations WHERE version=?", (migration.version,)).fetchone():
+                conn.execute("ROLLBACK")
+                return
             before = _broken_references(conn) if keys_off else None
             if module:
                 module.up(conn)

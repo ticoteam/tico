@@ -71,6 +71,7 @@ from pydantic import ConfigDict, Field, SecretStr
 from . import mcp_connect
 from . import tool_services as TS
 from . import tool_settings
+from . import tool_templates
 from . import default_read
 from . import tool_access as TA
 from .credentials import CredentialWrite, administrator, effective_grant, owned
@@ -139,9 +140,15 @@ def _held(c, tool_id, subject):
             level = "read" if key["access_level"] == "read" or grant["access_level"] == "read" else "read_write"
             out.append((key, level))
     if not out and str(subject).startswith("bot:"):
-        default = default_read.key_of(c, tool_id, subject)
-        out = [(key, "read") for key in keys if key["id"] == default]
+        default = default_read.keys_of(c, tool_id, subject)
+        out = [(key, "read") for key in keys if key["id"] in default]
     return out
+
+
+def _templated(c, tool_id):
+    """Whether the tool has a multi-secret template (backend/tool_templates.py): one key per variable per level."""
+    row = c.execute("SELECT * FROM tools WHERE id=?", (tool_id,)).fetchone()
+    return row is not None and bool(_field(row, "auth_template"))
 
 
 def computer_way(c, row, subject):
@@ -158,7 +165,12 @@ def computer_way(c, row, subject):
     mine = [level for key, level in held if key["id"] == row["id"]]
     if not mine or mine[0] != "read":
         return "key"
-    if any(key["access_level"] == "read" and key["ciphertext"] is not None for key, _level in held):
+    # A template's keys are each a variable of their own: only a read key of the same variable goes instead.
+    same = _templated(c, row["tool_id"])
+    if any(
+        key["access_level"] == "read" and key["ciphertext"] is not None and (not same or key["env"] == row["env"])
+        for key, _level in held
+    ):
         return "skip"
     tool = c.execute("SELECT * FROM tools WHERE id=?", (row["tool_id"],)).fetchone()
     from .tool_proxy import address_problem
@@ -212,6 +224,25 @@ def key_for(c, tool_id, subject):
     else:
         held = [(key, lv) for key, lv in held if lv == "read_write"]
     return held[0][0], level
+
+
+def keys_for(c, tool_id, subject):
+    """([credential row], level) a call by `subject` through a tool with a template uses: one key per variable, at its
+    level (at Read the variable's read key when there is a stored one, else its Read and write key held at Read).
+    Raises key_for's 403s."""
+    tool_row(c, tool_id)
+    subject = subject_of(c, subject)
+    held = [(key, level) for key, level in _held(c, tool_id, subject) if key["ciphertext"] is not None]
+    if not held:
+        key_for(c, tool_id, subject)  # raises the Problem that names the setting
+        raise Problem("tool_access", "No stored key", 403)  # pragma: no cover - key_for raises first
+    level = max((level for _key, level in held), key=lambda lv: RANK[lv])
+    best = {}
+    for key, lv in held:
+        rank = (lv != level, key["access_level"] != ("read" if level == "read" else "read_write"), key["created_at"])
+        if key["env"] not in best or rank < best[key["env"]][0]:
+            best[key["env"]] = (rank, key)
+    return [pair[1] for pair in best.values()], level
 
 
 # ---- status
@@ -294,6 +325,8 @@ def status(tool, keys, checks, today=None, calls=None):
     if calls == "rejected":
         return {"tone": "fail", "text": "Key rejected", "needs_you": True}
     last = [checks.get(k["id"]) for k in stored]
+    if _field(tool, "auth_template"):
+        last = [r for r in last if r is not None] or [None]  # a template's keys are checked together, on one row
     failed = [r for r in last if r is not None and not r["ok"] and not _limited(tool, r)]
     if any(r["detail"] == "Sign in again" for r in failed):
         # A refused sign-in refresh is no check path's opinion: it stands, whatever calls worked before it.
@@ -695,6 +728,8 @@ def _tool_view(tool):
         "vendor": TS.vendor_of(tool["service"], tool["name"], host=tool["base_url"] or _field(tool, "mcp_url") or ""),
         "private": _field(tool, "audience") is not None,
         "everyone_reads": bool(_field(tool, "everyone_reads")),
+        # How its several keys and settings reach the vendor (backend/tool_templates.py); None for one key.
+        "template": tool_templates.view(tool),
     }
 
 
@@ -763,6 +798,8 @@ def detail(c, who, tool_id, admins, auth=None):
         "private": _field(tool, "audience") is not None,
         "can_set_audience": False,
         "mcp": mcp_connect.view(c, tool, keys) if _field(tool, "mcp_url") else None,
+        # Made from several tools of one vendor account; POST …/ungroup splits it back (backend/tool_templates.py).
+        "grouped": tool_templates.latest_group(c, tool_id) is not None,
         # Every bot reads it with no grant while `on` and Read can be held to reads (backend/default_read.py).
         "everyone_reads": {
             "on": bool(_field(tool, "everyone_reads")),
@@ -845,14 +882,15 @@ def send_check(url, headers, params):
             return response.status_code
 
 
-def _check_one(tool, key, secret):
-    """(ok, status_code, detail) for one key. An exception's text is never kept: a query-param key would be in it."""
+def _check_one(tool, key, secret, auth=None):
+    """(ok, status_code, detail) for one key, or for a template's keys together (`auth`: the headers and query its
+    template built). An exception's text is never kept: a query-param key would be in it."""
     from . import egress
 
     service = TS.SERVICES.get(tool["service"]) or {}
     username = key["username"] or service.get("username") or ""
     try:
-        headers, params = TS.apply_auth(tool["auth_scheme"], secret, username)
+        headers, params = auth if auth is not None else TS.apply_auth(tool["auth_scheme"], secret, username)
     except ValueError:
         return False, None, "Check failed: unknown auth scheme"
     headers = {
@@ -887,11 +925,18 @@ def check_tool(store, vault, tool_id):
             )
         else:
             mcp = False
+        spec = None if mcp else tool_templates.spec_of(tool)
+        together = tool_templates.check_auth(c, vault, tool, spec) if spec and spec.get("ways") else None
         stored = (
-            [] if mcp else [(k, vault.cipher.decrypt(c, k)) for k in _keys(c, tool_id) if k["ciphertext"] is not None]
+            []
+            if mcp or together
+            else [(k, vault.cipher.decrypt(c, k)) for k in _keys(c, tool_id) if k["ciphertext"] is not None]
         )
     if mcp:  # initialize and tools/list, with a sign-in's access token when it signs in
         return mcp_connect.check(store, vault, tool_id)
+    if together:  # a template's keys go on one call together, as the proxy sends them
+        key, headers, params = together
+        return _record_checks(store, tool_id, [(key, *_check_one(tool, key, "", (headers, params)))])
     if not stored:
         raise Problem("check", f"{tool['name']} has no stored key. Add one in Tools > {tool['name']} > Keys", 409)
     # An id stored as a key (TWILIO_ACCOUNT_SID) is no key to the vendor: sent as one it would read Key rejected.
@@ -900,6 +945,10 @@ def check_tool(store, vault, tool_id):
         raise Problem("check", f"{tool['name']} holds only ids, no key to check", 409)
     results = [(key, *_check_one(tool, key, secret)) for key, secret in stored]
     stored = None  # the values leave scope before anything is written
+    return _record_checks(store, tool_id, results)
+
+
+def _record_checks(store, tool_id, results):
     rows = []
     with store.transaction() as c:
         for key, ok, code, text in results:
@@ -1070,9 +1119,18 @@ def _unique_id(c, base):
     """`base`, else `base-<random>` whenever any tool has `base`, seen or not: an id never says how many tools of that
     name exist, nor (by its shape) that a hidden one does."""
     tid = base
-    while c.execute("SELECT 1 FROM tools WHERE id=?", (tid,)).fetchone():
+    while c.execute("SELECT 1 FROM tools WHERE id=?", (tid,)).fetchone() or _former(c, tid):
         tid = f"{base}-{H.new_id()[:8].lower()}"
     return tid
+
+
+def _former(c, tid):
+    """Whether a grouped tool's key still names `tid` as its old tool (its run address keeps it; an ungroup brings it
+    back), so no new tool takes that id."""
+    try:
+        return c.execute("SELECT 1 FROM credentials WHERE former_tool_id=? LIMIT 1", (tid,)).fetchone() is not None
+    except sqlite3.OperationalError:
+        return False
 
 
 def _clean(fields):
@@ -1283,7 +1341,13 @@ def delete_tool(c, who, tool_id, admins, kind="api"):
     return {"deleted": True, "id": tool_id}
 
 
-def _key_at(c, tool_id, level, other_than=None):
+def _key_at(c, tool_id, level, other_than=None, env=None):
+    """The tool's other key at `level`; on a tool with a template, at that level under `env` (one key per variable)."""
+    if env is not None and _templated(c, tool_id):
+        return c.execute(
+            "SELECT * FROM credentials WHERE tool_id=? AND access_level=? AND env=? AND id<>?",
+            (tool_id, level, env, other_than or ""),
+        ).fetchone()
     return c.execute(
         "SELECT * FROM credentials WHERE tool_id=? AND access_level=? AND id<>?", (tool_id, level, other_than or "")
     ).fetchone()
@@ -1301,7 +1365,7 @@ def add_key(c, who, vault, tool_id, body):
     """A new key for the tool at its level, stored by the vault under the tool's variable."""
     TA.require(c, who, TA.tool(tool_id=tool_id), action=TA.EDIT, admins=vault.admins, auth=vault.auth)
     tool = _readable(c, who, tool_id, vault.admins)
-    if _key_at(c, tool_id, body.access_level):
+    if _key_at(c, tool_id, body.access_level, env=body.env or None):
         raise _taken(tool, body.access_level)
     _day(body.expires_on)
     sibling = c.execute("SELECT env FROM credentials WHERE tool_id=? AND env<>'' LIMIT 1", (tool_id,)).fetchone()
@@ -1357,6 +1421,12 @@ def ensure_tool(c, who, credential_id, from_computer=False, value=None):
         return None
     service = TS.match(env=row["env"], name=row["name"])
     env = row["env"] or ""
+    # A vendor account's other value (TWILIO_API_SECRET beside a Twilio tool's TWILIO_API_KEY) joins its tool.
+    home = tool_templates.home_for(c, env, computer_only=from_computer)
+    if home:
+        c.execute("UPDATE credentials SET tool_id=?, access_level='read_write' WHERE id=?", (home, credential_id))
+        H.event(c, who.actor, "tool.key_added", home, {"credential": credential_id, "access_level": "read_write"})
+        return home
     if tool_settings.is_setting(env, value) if value is not None else tool_settings.known_name(env):
         tid = TS.insert_tool(c, service, row["name"], "computer", who.actor, H.now(), tid=_unique_id(c, TS.slug(env)))
         c.execute("UPDATE tools SET name=?, base_url='', check_path='' WHERE id=?", (env, tid))
@@ -1409,7 +1479,7 @@ def update_key(c, who, vault, tool_id, key_id, body):
     if (
         body.access_level
         and body.access_level != key["access_level"]
-        and _key_at(c, tool_id, body.access_level, key_id)
+        and _key_at(c, tool_id, body.access_level, key_id, env=key["env"])
     ):
         raise _taken(tool, body.access_level)
     _day(body.expires_on)
@@ -1477,6 +1547,8 @@ def set_level(c, who, vault, tool_id, subject, level):
     if not subject.startswith(("bot:", "human:")):
         raise Problem("subject", "Choose a person or a bot", 422)
     keys = [k for k in _keys(c, tool_id) if k["ciphertext"] is not None]
+    if _templated(c, tool_id) and level != "none":
+        return _set_template_level(c, who, vault, tool, subject, level, keys)
     target = None
     if level == "read":
         target = next((k for k in keys if k["access_level"] == "read"), None) or next(
@@ -1502,6 +1574,30 @@ def set_level(c, who, vault, tool_id, subject, level):
         c.execute("UPDATE credential_grants SET access_level=? WHERE id=?", (level, grant["id"]))
     H.event(c, who.actor, "tool.access_set", tool_id, {"subject": subject, "level": level})
     return {"subject": subject, "level": subject_level(c, tool_id, subject)}
+
+
+def _set_template_level(c, who, vault, tool, subject, level, keys):
+    """`set_level` on a tool with a template: each variable's key for the level (at Read its read key, else its Read
+    and write key at Read; at Read and write its Read and write key), the subject's grants on the tool's other keys
+    taken away first."""
+    targets = {}
+    for key in keys:
+        fits = key["access_level"] == "read_write" or level == "read"
+        better = key["env"] not in targets or (level == "read" and key["access_level"] == "read")
+        if fits and better:
+            targets[key["env"]] = key
+    if not targets:
+        missing = "stored key" if level == "read" else "Read and write key"
+        raise Problem("tool_access", f"{tool['name']} has no {missing}. Add one in Tools > {tool['name']} > Keys", 409)
+    chosen = {k["id"] for k in targets.values()}
+    for key in _keys(c, tool["id"]):
+        if key["id"] not in chosen:
+            _revoke(c, who, key["id"], subject)
+    for key in targets.values():
+        grant = vault.grant(c, who, key["id"], subject)
+        c.execute("UPDATE credential_grants SET access_level=? WHERE id=?", (level, grant["id"]))
+    H.event(c, who.actor, "tool.access_set", tool["id"], {"subject": subject, "level": level})
+    return {"subject": subject, "level": subject_level(c, tool["id"], subject)}
 
 
 # ---- tool-index

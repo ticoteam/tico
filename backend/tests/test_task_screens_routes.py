@@ -1,4 +1,4 @@
-"""The reads the cut-over's screens need (docs/pipelines-v3.md S7, S10, S12): a list's pipeline, stage, waiting-on and
+"""The reads the cut-over's screens need (docs/dev/pipelines-v3.md S7, S10, S12): a list's pipeline, stage, waiting-on and
 pushed-past filters, a row's `pushed_past` and `turn.running`, Company › Factories, the manager rail's Log, a person's
 preferences and a support report's answer."""
 

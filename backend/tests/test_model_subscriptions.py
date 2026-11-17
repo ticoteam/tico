@@ -276,11 +276,11 @@ def test_a_limit_met_on_a_subscription_holds_every_computer_given_it(api):
     assert other and other["bot"] == "cpo" and other["config"]["runtime"] == "claude" and "subscriptions" not in other
     assert not other["config"].get("primary_held")
     # The bot that met the limit is not kept waiting by it either: its work back in the queue signs in with the
-    # computer's own login, which no limit holds.
+    # computer's own login, which no limit holds. Its status still shows the limit until the scheduler's next pass.
     from backend.execution import cooling_off
 
     with api.app.state.store.read() as c:
-        assert H.status(c, "ops")["state"] == "limited" and cooling_off(c, "ops")
+        assert H.status(c, "ops")["state"] == "limited" and not cooling_off(c, api.app.state.store.settings, "ops")
     mine = claim(api, m)
     assert mine and mine["job_id"] == turn["job_id"] and "subscriptions" not in mine
     assert not mine["config"].get("primary_held")
@@ -688,6 +688,16 @@ def status(api, bot="ops"):
         return H.status(c, bot) or {}
 
 
+def waits(api, bot="ops"):
+    """Why the claim passes over each of the bot's queued jobs on its computer (None: it may start)."""
+    from backend import execution
+
+    with api.app.state.store.read() as c:
+        place = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchone()
+        settings = api.app.state.store.settings
+        return [why for _, why in execution.queued_reasons(c, settings, place["runner_id"], bot)]
+
+
 def queued_holds(api, bot="ops"):
     with api.app.state.store.read() as c:
         return [
@@ -760,11 +770,53 @@ def test_switching_a_computer_to_another_plan_frees_a_bot_limited_on_the_old_one
     plan_a, plan_b = add(api, name="Plan A")["id"], add(api, secret=OTHER, name="Plan B")["id"]
     m = machine(api)  # no login of its own: the held work waits for the reset
     limited_on(api, m, plan_a)
-    assert status(api)["state"] == "limited" and queued_holds(api) == [(1, "quota-reset")]
+    assert status(api)["state"] == "limited" and waits(api) == ["cooling_off"]
     give(api, m, "claude", plan_b)
-    assert status(api)["state"] != "limited" and queued_holds(api) == [(0, "quota-reset")]
+    assert status(api)["state"] != "limited" and waits(api) == [None]
     turn = claim(api, m)
     assert turn and turn["bot"] == "ops" and signed_with(api, turn) == plan_b
+
+
+def test_a_held_plan_waits_on_its_hold_when_the_computers_named_home_is_not_signed_in(api):
+    # A computer that names its default home ("own"): the login a turn signs in with is that home, which is not
+    # signed in, so the held plan is still what the bot waits for, and Try now ends that plan's hold.
+    from backend.execution import own_login_hold
+
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    plan_a = add(api, name="Plan A")["id"]
+    m = machine(api)
+    home_less(api, m)
+    limited_on(api, m, plan_a)
+    assert waits(api) == ["cooling_off"]
+    with api.app.state.store.read() as c:
+        assert own_login_hold(c, api.app.state.store.settings, "ops")["profile"] == login_holds.subscription_login(
+            plan_a
+        )
+    post(api, "bots/ops/limit/retry", {})
+    with api.app.state.store.read() as c:
+        assert login_holds.get(c, "", login_holds.subscription_login(plan_a), "claude")["until"] <= H.now()
+
+
+def home_less(api, m):
+    """A heartbeat naming the computer's default home ("own"), with Claude not signed in there."""
+    post(
+        api,
+        "runners/heartbeat",
+        {
+            "version": "test",
+            "platform": "test",
+            "capabilities": ["model_subscriptions_v1", "computer_logins_v1"],
+            "readiness": {
+                "schema_version": 1,
+                "computer_profile": "own",
+                "runtimes": {"claude": {"installed": True, "authenticated": "missing"}},
+                "bots": {"ops": {"runtime": "claude", "ready": True}},
+            },
+        },
+        token=m["token"],
+    )
 
 
 def test_a_new_plan_held_at_its_limit_is_passed_over_so_the_bot_runs_on_the_computers_own_login(api):
@@ -777,7 +829,7 @@ def test_a_new_plan_held_at_its_limit_is_passed_over_so_the_bot_runs_on_the_comp
     hold_plan(api, plan_b)
     give(api, m, "claude", plan_b)
     # The held plan is passed over (model_subscriptions.in_effect), so the turn runs on the computer's own login.
-    assert status(api)["state"] != "limited" and queued_holds(api) == [(0, "quota-reset")]
+    assert status(api)["state"] != "limited" and waits(api) == [None]
     turn = claim(api, m)
     assert turn and turn["bot"] == "ops" and signed_with(api, turn) is None
 
@@ -792,7 +844,7 @@ def test_a_new_plan_held_at_its_limit_keeps_the_bot_limited_when_the_computers_o
     hold_plan(api, plan_b)
     hold_own_login(api, m)
     give(api, m, "claude", plan_b)
-    assert status(api)["state"] == "limited" and queued_holds(api) == [(1, "quota-reset")]
+    assert status(api)["state"] == "limited" and waits(api) == ["cooling_off"]
 
 
 def test_a_plan_switch_does_not_end_the_computers_own_login_hold(api):
@@ -864,7 +916,7 @@ def test_removing_the_plan_a_bot_is_limited_on_frees_it_to_the_computers_own_log
     gone = api.delete(f"/api/v2/model-subscriptions/{plan_a}?confirm=1", headers=headers())
     assert gone.status_code == 200
     # The computer's row is deleted before the re-judge, so the bot's login is the computer's own, which is free.
-    assert status(api)["state"] != "limited" and queued_holds(api) == [(0, "quota-reset")]
+    assert status(api)["state"] != "limited" and waits(api) == [None]
     turn = claim(api, m)
     assert turn and turn["bot"] == "ops" and signed_with(api, turn) is None
 
@@ -891,16 +943,16 @@ def test_a_switch_re_judges_a_bot_whose_named_fallback_runs_the_runtime_and_keep
     hold_plan(api, plan_b)
     hold_own_login(api, m)
     give(api, m, "claude", plan_b)
-    assert status(api)["state"] == "limited" and queued_holds(api) == [(1, "quota-reset")]
+    assert status(api)["state"] == "limited" and waits(api) == ["cooling_off"]
     # Plan B taken off and the Claude login free: the fallback runs the turn on the computer's own login, so it is freed.
     with api.app.state.store.transaction() as c:
         login_holds.clear(c, m["runner_id"], "", "claude")
     give(api, m, "claude", None)
-    assert status(api)["state"] != "limited" and queued_holds(api) == [(0, "quota-reset")]
+    assert status(api)["state"] != "limited" and waits(api) == [None]
 
 
 def test_a_held_own_login_keeps_the_bot_limited_and_its_job_waits_for_that_login_not_the_replaced_plan(api):
-    from backend import wake_presets
+    from backend.execution import own_login_hold
 
     setup(api)
     company(api)
@@ -910,17 +962,14 @@ def test_a_held_own_login_keeps_the_bot_limited_and_its_job_waits_for_that_login
     limited_on(api, m, plan_a)
     plan_end, own_end = "2999-01-01T20:00:00.000000Z", "2999-01-01T19:00:00.000000Z"
     hold_plan(api, plan_a, until=plan_end)
-    hold_queued(api, until=plan_end)
+    hold_queued(api, until=plan_end)  # as an older server held the job for the plan's reset
     hold_own_login(api, m, until=own_end)
     give(api, m, "claude", None)  # plan A taken off; the computer's own login is held until 19:00
-    assert status(api)["state"] == "limited" and queued_holds(api) == [(1, "quota-reset")]
-    assert queued_until(api) == [(1, own_end)]
-    with api.app.state.store.transaction() as c:
-        wake_presets.release_quota_resets(c, at="2999-01-01T18:59:59.000000Z")
-    assert queued_until(api) == [(1, own_end)]
-    with api.app.state.store.transaction() as c:
-        wake_presets.release_quota_resets(c, at=own_end)
-    assert queued_until(api) == [(0, own_end)]
+    # The job waits on the login it runs on now, through that login's hold: the old per-job hold is let go.
+    assert status(api)["state"] == "limited" and waits(api) == ["cooling_off"]
+    assert queued_until(api) == [(0, None)]
+    with api.app.state.store.read() as c:
+        assert own_login_hold(c, api.app.state.store.settings, "ops")["until"] == own_end
 
 
 def test_a_branch_runs_its_originals_runtime_now_not_the_runtime_it_stored(api):
@@ -1651,6 +1700,7 @@ def test_a_reading_taken_on_the_computers_own_login_is_not_the_plans_when_its_ho
 def listing_statements(api, monkeypatch):
     """GET /api/v2/model-subscriptions after one warm-up read, and the SQL statements that request ran."""
     import contextlib
+    from backend.tests.helpers.statement_scope import measuring, recorder
 
     store, seen = api.app.state.store, []
     get(api, "model-subscriptions")
@@ -1661,7 +1711,7 @@ def listing_statements(api, monkeypatch):
                 @contextlib.contextmanager
                 def borrowed():
                     with opened() as c:
-                        c.set_trace_callback(seen.append)
+                        c.set_trace_callback(recorder(seen))
                         try:
                             yield c
                         finally:
@@ -1670,7 +1720,8 @@ def listing_statements(api, monkeypatch):
                 return borrowed()
 
             patched.setattr(store, name, traced)
-        get(api, "model-subscriptions")
+        with measuring(seen):
+            get(api, "model-subscriptions")
     return seen
 
 

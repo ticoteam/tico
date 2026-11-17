@@ -1,4 +1,4 @@
-"""The page requirement (docs/pipelines-v3.md "The nine requirement kinds", 3): a page attached at a pinned version
+"""The page requirement (docs/dev/pipelines-v3.md "The nine requirement kinds", 3): a page attached at a pinned version
 (backend/task_pages.py), Jev's verdict on it (backend/page_verdicts.py, the Heartbeat's `jev_verdicts`), then the named
 person's OK of that exact version (backend/answers.py). The lines are docs/dev/pipelines-v3-build.md's.
 

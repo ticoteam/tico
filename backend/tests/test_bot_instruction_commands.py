@@ -2,7 +2,7 @@
 
 Bots copy the commands they read in policies/, the templates their repositories are made from (AGENTS.md, playbooks,
 skills), the shared skills, the integration pages, the runner's prompt and the BotOps routine's text. When the task
-engine changed (docs/pipelines-v3.md), those texts kept teaching commands that no longer existed, so a bot in a new
+engine changed (docs/dev/pipelines-v3.md), those texts kept teaching commands that no longer existed, so a bot in a new
 company failed on its first task. Parsing was not enough either: `tico task label <id> --add x` parsed, but the CLI
 refused it before sending anything ("Run `tico task show` first", even right after a show), so a bot that followed the
 text looped.

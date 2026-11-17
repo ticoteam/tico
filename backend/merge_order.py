@@ -1,5 +1,5 @@
 # pyright: strict
-"""A task that merges after another one ("after #40"): docs/pipelines-v3.md, "Whose turn it is" and the Engineering
+"""A task that merges after another one ("after #40"): docs/dev/pipelines-v3.md, "Whose turn it is" and the Engineering
 pipeline's Merge stage.
 
 When two tasks change the same lines, one must merge after the other. The order is a relation of kind `after` on the

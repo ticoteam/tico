@@ -1,4 +1,4 @@
-"""Due dates on rules (docs/rules-plan.md §1, §4): occurrences, the month-end clamp, and when an occurrence turns overdue.
+"""Due dates on rules (docs/dev/rules-plan.md §1, §4): occurrences, the month-end clamp, and when an occurrence turns overdue.
 These are pure: the day "today" is passed in, so no test depends on the clock."""
 
 from datetime import date

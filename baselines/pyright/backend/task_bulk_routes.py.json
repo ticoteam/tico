@@ -2,14 +2,6 @@
     "files": {
         "./backend/task_bulk_routes.py": [
             {
-                "code": "reportPossiblyUnboundVariable",
-                "range": {
-                    "startColumn": 104,
-                    "endColumn": 107,
-                    "lineCount": 1
-                }
-            },
-            {
                 "code": "reportOptionalMemberAccess",
                 "range": {
                     "startColumn": 34,
