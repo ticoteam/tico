@@ -19,19 +19,23 @@ TASK_IDS = re.compile("(?=(" + TASK_ID.pattern + "))")
 
 
 class ReadIndex:
-    def __init__(self, c, who, rooms=False):
+    def __init__(self, c, who, rooms=False, denials=True):
+        """`denials=False` skips working out which private tasks `who` may not read (one check per private task, most
+        of the cost here): for a caller that sets `private` and `denied` itself (read_deps.Walk, under the write lock)."""
         privacy.snapshot(c)
         self.c, self.who = c, who
         self.principals = privacy.actor(who)
         self.meetings = MeetingSources(c)
-        # Read private rows by their partial index. Ordinary task identifiers and
-        # room references load lazily, without task bodies or room participants.
-        self.private = {r["id"]: dict(r) for r in row_clock.parties(c)}
-        # Meeting participant grants belong to one task, even when its parties match another task's.
-        self.denied = {tid for tid, row in self.private.items() if not privacy.task_readable(c, who, row)}
-        from . import counsel
+        self.private, self.denied = {}, set()
+        if denials:
+            # Read private rows by their partial index. Ordinary task identifiers and
+            # room references load lazily, without task bodies or room participants.
+            self.private = {r["id"]: dict(r) for r in row_clock.parties(c)}
+            # Meeting participant grants belong to one task, even when its parties match another task's.
+            self.denied = {tid for tid, row in self.private.items() if not privacy.task_readable(c, who, row)}
+            from . import counsel
 
-        self.denied.update(counsel.denied_page_copies(c, who))
+            self.denied.update(counsel.denied_page_copies(c, who))
         self._attempts = self._attachments = self._tags = self._intervals = None
         # Each instance belongs to one consistent read transaction.
         self.message_sources = lru_cache(maxsize=4096)(self._message_sources)
