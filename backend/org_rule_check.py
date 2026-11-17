@@ -2259,7 +2259,7 @@ def view_hold(c, who, hold, role=None, summary=False, auth=None):
         rule_ids, destinations = rule_ids[:SUMMARY_RULES], destinations[:SUMMARY_NAMES]
     rules = []
     # The part of the held text that breaks each rule (`_parts`), shown only with the text itself.
-    parts = {} if summary else _shown_parts(verdict.get("parts"), stored.get("text"))
+    parts = {} if summary or not isinstance(stored, dict) else _shown_parts(verdict.get("parts"), stored.get("text"))
     for rid in rule_ids:
         row = c.execute(
             "SELECT id, kind, text, version, status, if_broken FROM org_rules WHERE id=?", (rid,)
