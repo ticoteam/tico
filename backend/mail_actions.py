@@ -65,6 +65,7 @@ def queue(store, app, row, actor, raw, thread, reply_to, draft_id):
     body = ES.Enqueue(
         mailbox=box, raw=raw, draft_id=draft_id, thread_id=thread, reply_to_id=reply_to, automation_action_id=aid
     )
+    snap = None  # the frozen message, read only when this action has no send yet
     with store.read() as c:
         prior = c.execute(
             "SELECT * FROM email_sends WHERE automation_action_id=? ORDER BY rowid DESC LIMIT 1", (aid,)

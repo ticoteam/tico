@@ -50,6 +50,7 @@ def verify_dkim(raw):
     raw message (dkimpy, with the signer's published key) and signs From and both unsubscribe headers. A signature with
     a body length limit (`l=`) is not used: text could be added after the signed part."""
     import dkim
+    import dkim.dnsplug
 
     msg = BytesParser(policy=policy.compat32).parsebytes(raw)
     found = re.findall(r"[\w.+%'-]+@([\w-]+(?:\.[\w-]+)+)", str(msg.get("From") or ""))
@@ -100,7 +101,7 @@ def keep_reason(c, mailbox, original):
         return "the message is starred"
     domains = mailbox_access.company_domains(c)
     domain = sender.rpartition("@")[2]
-    if sender == box or any(domain == d or domain.endswith("." + d) for d in domains):
+    if sender == box or any(domain == d or domain.endswith(f".{d}") for d in domains):
         return "the mail is internal"
     from . import views
 
