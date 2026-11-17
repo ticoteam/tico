@@ -2071,7 +2071,7 @@ class Gateway:
                 else:
                     state, error = "failed", exc.code
             except Exception as exc:  # unreachable, unreadable, or anything unexpected
-                state, error = "uncertain", f"{type(exc).__name__}: {exc}"[:300]
+                state, error = "uncertain", SE.describe(exc)
             with self.store.transaction() as c:
                 c.execute(
                     "UPDATE slack_posts SET state=?,slack_ts=?,error=?,next_attempt_at=?,updated_at=? WHERE message_id=?",
@@ -2504,7 +2504,7 @@ class Gateway:
             except Exception as exc:  # one bad event never stops the rest
                 LOG.error("Event %s failed: %s", event["event_id"], SE.describe(exc))
                 with self.store.transaction() as c:
-                    self.finish(c, event, "failed", reason=f"{type(exc).__name__}: {exc}")
+                    self.finish(c, event, "failed", reason=SE.describe(exc))
                 out.append({"event_id": event["event_id"], "state": "failed"})
         out.extend(self.offer())
         self.originate()
