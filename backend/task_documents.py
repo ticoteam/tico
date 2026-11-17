@@ -29,6 +29,8 @@ def canonical(name: str | None) -> str:
     """The document's name: a fixed name in its own spelling (`qa report` is `QA report`), else `name` tidied, or
     Problem."""
     said = " ".join(str(name or "").split())
+    if said.lower() in ("writer", "related"):
+        raise Problem("validation", "Writer and related are link roles, not document names", 422)
     found = next((n for n in NAMES if n.lower() == _key(said)), None)
     if found:
         return found

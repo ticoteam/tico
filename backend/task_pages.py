@@ -44,8 +44,11 @@ def _one(conn: "sqlite3.Connection", sql: str, args: tuple[Any, ...]) -> Row | N
 def current_pages(conn: "sqlite3.Connection", visit_id: str, requirement_id: str) -> list[Row]:
     """All submitted pages on a requirement, newest submission first."""
     cursor = conn.execute(
-        "SELECT * FROM requirement_pages WHERE visit_id=? AND requirement_id=? AND replaced_at IS NULL "
-        "ORDER BY created_at DESC,rowid DESC",
+        "SELECT p.* FROM requirement_pages p JOIN requirements r ON r.id=p.requirement_id "
+        "JOIN visits v ON v.id=p.visit_id WHERE p.visit_id=? AND p.requirement_id=? AND p.replaced_at IS NULL "
+        "AND (json_extract(r.settings,'$.document') IS NULL OR EXISTS "
+        "(SELECT 1 FROM page_links l WHERE l.page_id=p.file_id AND l.target='task:'||v.task_id "
+        "AND l.role=json_extract(r.settings,'$.document'))) ORDER BY p.created_at DESC,p.rowid DESC",
         (visit_id, requirement_id),
     )
     names = [d[0] for d in cursor.description]

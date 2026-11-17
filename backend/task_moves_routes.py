@@ -907,7 +907,10 @@ def register(
         """Attach a page to a page requirement of the task's stage: Jev checks it, then a person OKs it if one is
         named. Attaching again replaces the page."""
         from . import files as F
+        from . import page_links
+        from . import task_engine
         from . import task_pages
+        from . import task_requirements
 
         def call(c: Any, who: Any, task_id: str) -> Any:
             ref = body.page.strip()
@@ -918,6 +921,14 @@ def register(
             row = c.execute("SELECT * FROM bot_files WHERE id=?", (file_id,)).fetchone()
             if not row or not F.file_visible(c, auth, who, row, {}):  # pyright: ignore[reportUnknownMemberType]
                 raise Problem("not_found", "That page is not one you can read", 404)
+            task = task_engine.task(c, task_id)
+            requirement = task_pages.requirement_of(c, task, body.requirement) if task else None
+            if (
+                requirement
+                and task_requirements.document_of(requirement)
+                and not page_links.may_write(c, auth, who, row)
+            ):
+                raise Problem("forbidden", "Only a page writer may link it as a task document", 403)
             made = H.task_page_attach(
                 c,
                 who.actor,
