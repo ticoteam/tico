@@ -4,6 +4,8 @@ Two or more distinct tasks/chats, or any refusal with no attributable source, ke
 quarantines always stay bot-wide. A run's own task/chat takes precedence over the target of its refused write.
 The hold fences claims like interrupted work does, and uses the same quarantine Stop and review rules. It changes
 no task status, snooze or dependency, and ends after the refusal cooldown or a person's quarantine clear.
+
+Each is a `quarantine` hold (backend/holds.py) on the task or the conversation, naming the held bot as its bot_id.
 """
 
 from . import hubdb as H
@@ -32,24 +34,31 @@ def source(c, actor, task_id=None):
     return "task:" + task_id if task_id and H.task(c, task_id) else None
 
 
+def _held_sql(bot_sql, task_sql, conversation_sql):
+    """SQL: an open hold of bot `bot_sql` on the task `task_sql`, or on the chat `conversation_sql` when no task."""
+    return (
+        f"EXISTS(SELECT 1 FROM holds qh WHERE qh.kind='quarantine' AND qh.bot_id={bot_sql} AND qh.released_at IS NULL "
+        f"AND (qh.holdable_type='task' AND qh.holdable_id={task_sql} OR qh.holdable_type='conversation' "
+        f"AND qh.holdable_id={conversation_sql} AND {task_sql} IS NULL))"
+    )
+
+
+def scope(hold):
+    """The refusals' scope ("task:<id>" or "chat:<id>") of a hold row."""
+    return ("task:" if hold["holdable_type"] == "task" else "chat:") + hold["holdable_id"]
+
+
 def free_sql(task_sql):
     """SQL over job j and message m: a scoped quarantine holds every wake, including a person's new message."""
-    return (
-        "NOT EXISTS(SELECT 1 FROM quarantine_holds qh WHERE qh.bot_id=j.bot_id AND qh.released_at IS NULL "
-        f"AND qh.task_id={task_sql}) AND "
-        "NOT EXISTS(SELECT 1 FROM quarantine_holds qh WHERE qh.bot_id=j.bot_id AND qh.released_at IS NULL "
-        f"AND qh.conversation_id=m.conversation_id AND {task_sql} IS NULL)"
-    )
+    return "NOT " + _held_sql("j.bot_id", task_sql, "m.conversation_id")
 
 
 def for_task(c, bot, task_id):
     """The bot's hold on the task being written, including writes from an external agent or another run."""
+    from . import holds
+
     task_id = H._task_ref(task_id)
-    if not task_id:
-        return None
-    return c.execute(
-        "SELECT * FROM quarantine_holds WHERE bot_id=? AND task_id=? AND released_at IS NULL", (bot, task_id)
-    ).fetchone()
+    return holds.get(c, holds.QUARANTINE, "task", task_id, bot) if task_id else None
 
 
 def for_attempt(c, row):
@@ -60,9 +69,9 @@ def for_attempt(c, row):
     return c.execute(
         f"SELECT qh.* FROM attempts a JOIN jobs j ON j.id=a.job_id "
         "JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
-        "JOIN quarantine_holds qh ON qh.bot_id=a.bot_id AND qh.released_at IS NULL "
-        f"AND (qh.task_id={task_sql} OR "
-        f"(qh.conversation_id=m.conversation_id AND {task_sql} IS NULL)) "
+        "JOIN holds qh ON qh.kind='quarantine' AND qh.bot_id=a.bot_id AND qh.released_at IS NULL "
+        f"AND (qh.holdable_type='task' AND qh.holdable_id={task_sql} OR "
+        f"qh.holdable_type='conversation' AND qh.holdable_id=m.conversation_id AND {task_sql} IS NULL) "
         "WHERE a.id=?",
         (row["id"],),
     ).fetchone()
@@ -70,19 +79,25 @@ def for_attempt(c, row):
 
 def hold(c, bot, scope, reason, refusal):
     """Hold this bot's task/chat once, tell its readers why, and keep the cooldown's original start."""
+    from . import holds
+
     kind, ident = scope.split(":", 1)
-    column = "task_id" if kind == "task" else "conversation_id"
-    if c.execute(
-        f"SELECT 1 FROM quarantine_holds WHERE bot_id=? AND {column}=? AND released_at IS NULL", (bot, ident)
-    ).fetchone():
+    holdable = "task" if kind == "task" else "conversation"
+    if holds.get(c, holds.QUARANTINE, holdable, ident, bot):
         return
-    at = H.now()
-    c.execute(
-        f"INSERT INTO quarantine_holds(bot_id,{column},reason,refusal,created_at) VALUES(?,?,?,?,?)",
-        (bot, ident, reason, H._dump(refusal), at),
+    until = H.shift(H.now(), seconds=H.QUARANTINE_COOLDOWN_S)
+    holds.put(
+        c,
+        holds.QUARANTINE,
+        holdable,
+        ident,
+        actor=H.KEEPER,
+        bot_id=bot,
+        reason=reason,
+        details={"refusal": refusal},
+        until_at=until,
     )
     H.event(c, H.KEEPER, "quarantine.held", H.bot_actor(bot), {"scope": scope, "reason": reason})
-    until = H.shift(at, seconds=H.QUARANTINE_COOLDOWN_S)
     said = (
         f"Held for {H.actor_name(c, H.bot_actor(bot))}: {reason} ({refusal.get('rule')} rule). This task or chat resumes after "
         f"{until[:16].replace('T', ' ')} UTC, or when a person clears the bot's quarantine. Other tasks can continue."
@@ -105,11 +120,7 @@ def notes_free_sql():
     task_sql = queued_task_sql()
     return (
         "NOT EXISTS(SELECT 1 FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-        "WHERE m.id=n.message_id AND (EXISTS(SELECT 1 FROM quarantine_holds qh "
-        "WHERE qh.bot_id=substr(n.to_actor,5) AND qh.released_at IS NULL "
-        f"AND qh.task_id={task_sql}) OR EXISTS(SELECT 1 FROM quarantine_holds qh "
-        "WHERE qh.bot_id=substr(n.to_actor,5) AND qh.released_at IS NULL "
-        f"AND qh.conversation_id=m.conversation_id AND {task_sql} IS NULL)))"
+        f"WHERE m.id=n.message_id AND {_held_sql('substr(n.to_actor,5)', task_sql, 'm.conversation_id')})"
     )
 
 
@@ -117,32 +128,42 @@ def _release_notice(c, row):
     # Archiving ends a bot's work; its hold can still expire without addressing an inactive recipient.
     if (H.bot(c, row["bot_id"]) or {}).get("state") == "archived":
         return
-    refusal = H._json(row["refusal"], {})
+    refusal = (H._json(row["details"], {}) or {}).get("refusal") or {}
     said = (
         f"The refusal hold for {H.actor_name(c, H.bot_actor(row['bot_id']))} has lifted "
         f"({refusal.get('rule')} rule). {H.QUARANTINE_LIFTED}"
     )
-    if row["task_id"]:
-        H.task_comment(c, H.KEEPER, row["task_id"], said, wake=False)
+    if row["holdable_type"] == "task":
+        H.task_comment(c, H.KEEPER, row["holdable_id"], said, wake=False)
     else:
-        _notice(c, row["bot_id"], row["conversation_id"], said)
+        _notice(c, row["bot_id"], row["holdable_id"], said)
 
 
-def release(c, actor, bot=None, cutoff=None):
-    """Release scoped holds for quarantine clear, or only cooled ones for the scheduler; reset only their counts."""
+def release(c, actor, bot=None, due=False):
+    """Release scoped holds for quarantine clear, or only those whose cooldown is over (`due`) for the scheduler;
+    reset only their counts."""
+    from . import holds
+
     rows = c.execute(
-        "SELECT * FROM quarantine_holds WHERE released_at IS NULL "
-        "AND (? IS NULL OR bot_id=?) AND (? IS NULL OR created_at<=?)",
-        (bot, bot, cutoff, cutoff),
+        "SELECT * FROM holds WHERE kind='quarantine' AND holdable_type IN ('task','conversation') "
+        "AND released_at IS NULL AND (? IS NULL OR bot_id=?) AND (? = 0 OR until_at<=?)",
+        (bot, bot, int(due), H.now()),
     ).fetchall()
-    at = H.now()
     released = set()
     for row in rows:
         released_row = False
         with isolated(c, "quarantine_release", row["id"]):
-            c.execute("UPDATE quarantine_holds SET released_at=? WHERE id=?", (at, row["id"]))
-            scope = "task:" + row["task_id"] if row["task_id"] else "chat:" + row["conversation_id"]
-            H.event(c, actor, "quarantine.released", H.bot_actor(row["bot_id"]), {"scope": scope})
+            how = "expired" if due else H.released_how(actor)
+            holds.release(
+                c,
+                holds.QUARANTINE,
+                row["holdable_type"],
+                row["holdable_id"],
+                actor=actor,
+                how=how,
+                bot_id=row["bot_id"],
+            )
+            H.event(c, actor, "quarantine.released", H.bot_actor(row["bot_id"]), {"scope": scope(row)})
             released.add(row["bot_id"])
             released_row = True
         # A notice is best effort: rolling it back must preserve the release and every other row in this batch.

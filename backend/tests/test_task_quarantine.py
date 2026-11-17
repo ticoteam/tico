@@ -7,12 +7,12 @@ from backend.tests.helpers.api import claim, get, headers, post, ready, settled 
 from backend.tests.helpers.execution_review import job_state
 from backend.tests.helpers.held_runs import botops
 from backend.tests.helpers.task_lanes import new_task, task_bot
-from backend.tests.helpers.task_quarantine import refusals, started
+from backend.tests.helpers.task_quarantine import OPEN_SQL, refusals, started
 
 
 def holds(api):
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT * FROM quarantine_holds WHERE released_at IS NULL")]
+        return [dict(r) for r in c.execute(OPEN_SQL)]
 
 
 @pytest.fixture
@@ -589,8 +589,8 @@ def test_held_scopes_are_also_contained_at_the_total_refusal_backstop(api, rule)
                 with pytest.raises(H.Refused):
                     H.refuse(c, "bot:ops", rule, f"Refused target {i}", task=task["id"])
                 assert H.bot(c, "ops")["state"] == "active"
-                held = c.execute("SELECT task_id FROM quarantine_holds WHERE released_at IS NULL").fetchall()
-                assert (task["id"] in {row[0] for row in held}) == (i == H.QUARANTINE_TOTAL_AT - 1)
+                held = c.execute(OPEN_SQL).fetchall()
+                assert (task["id"] in {row["task_id"] for row in held}) == (i == H.QUARANTINE_TOTAL_AT - 1)
     assert {row["task_id"] for row in holds(api)} == {first["id"], second["id"]}
 
 

@@ -1,12 +1,11 @@
 """A bot back from a quarantine is told the refusal that stopped it, and its manager bot can write to it meanwhile."""
 
-import json
-
 import pytest
 
 from backend import hubdb as H
 from backend.tests.helpers.tasks_board import api, bot_token, headers, post  # noqa: F401 (fixture)
 from backend import bot_settings as BS
+from backend.tests.helpers.task_quarantine import OPEN_SQL
 
 
 def notes_for(api, slug):
@@ -24,11 +23,11 @@ def test_a_lifted_chat_hold_leaves_a_chat_notice_and_an_escape_leaves_the_bot_a_
         assert r.status_code == 403, r.text
     with api.app.state.store.read() as c:
         assert H.bot(c, "cpo")["state"] == "active"
-        hold = c.execute("SELECT task_id,conversation_id FROM quarantine_holds WHERE released_at IS NULL").fetchone()
+        hold = c.execute(OPEN_SQL).fetchone()
         assert hold["task_id"] is None and hold["conversation_id"]
     assert notes_for(api, "cpo") == [], "nothing until it is back"
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE quarantine_holds SET created_at=?", (H.shift(H.now(), seconds=-3700),))
+        c.execute("UPDATE holds SET until_at=? WHERE kind='quarantine'", (H.shift(H.now(), seconds=-100),))
         assert H.lift_cooled_quarantines(c) == ["cpo"]
         note = c.execute(
             "SELECT body FROM messages WHERE conversation_id=? ORDER BY rowid DESC LIMIT 1", (hold["conversation_id"],)
@@ -94,21 +93,3 @@ def test_a_manager_declared_only_in_the_bots_definition_counts_too(api):
         H.quarantine(c, "cpo", "10 repeated refusals today")
     with api.app.state.store.transaction() as c:
         assert H.note_create(c, "bot:ops", "bot:cpo", "The roadmap label needs an approval.")
-
-
-def test_quarantine_batch_and_single_read_pick_the_same_newest_event_on_a_tied_time(api):
-    """Two quarantine events with the same `ts`: the batch and the single-row read both take the one inserted last."""
-    from backend.read_cache import one
-
-    store = api.app.state.store
-    with store.transaction() as c:
-        for event_id, reason in (("older", "first"), ("newer", "second")):
-            c.execute(
-                "INSERT INTO events(id,created_at,actor,action,target,detail) VALUES(?,?,?,?,?,?)",
-                (event_id, "2026-11-01T10:00:00Z", "owner", "quarantine", "bot:tied", json.dumps({"reason": reason})),
-            )
-    with store.read_transaction() as c:
-        H.prime_quarantines(c, ["tied"])
-        batched = json.loads(one(c, H.QUARANTINE_DETAIL_SQL, ("bot:tied",))["detail"])["reason"]
-        single = json.loads(c.execute(H.QUARANTINE_DETAIL_SQL, ("bot:tied",)).fetchone()["detail"])["reason"]
-    assert batched == single == "second"

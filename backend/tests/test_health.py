@@ -1190,7 +1190,8 @@ def test_refusal_quarantine_explains_the_claim_hold_and_matches_bot_status(envir
                 H.refuse(c, "bot:helper", "identity", words)
         assert H.bot(c, "helper")["state"] == "quarantined"
         c.execute(
-            "UPDATE events SET created_at='2030-10-26T23:55:00Z' WHERE action='quarantine' AND target='bot:helper'"
+            "UPDATE holds SET updated_at='2030-10-26T23:55:00Z', until_at='2030-10-27T00:55:00.000000Z' "
+            "WHERE kind='quarantine' AND holdable_id='helper'"
         )
     body, checks = health_of(api)
     [held] = body["stuck"]

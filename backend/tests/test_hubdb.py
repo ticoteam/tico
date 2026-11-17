@@ -161,9 +161,7 @@ class Rule8Counting(HubCase):
         self.assertEqual(H.bot(self.conn, "cmo")["state"], "quarantined", "a loop over new targets still stops")
         self.assertEqual(H.quarantine_reason(self.conn, "cmo"), f"{H.QUARANTINE_TOTAL_AT} refusals today")
         self.assertFalse(H.quarantine_is_escape(self.conn, "cmo"))
-        self.conn.execute(
-            "UPDATE events SET created_at=? WHERE action='quarantine'", (H.shift(H.now(), seconds=-3700),)
-        )
+        self.conn.execute("UPDATE holds SET until_at=? WHERE kind='quarantine'", (H.shift(H.now(), seconds=-100),))
         self.assertEqual(H.lift_cooled_quarantines(self.conn), ["cmo"])
 
     def reviewed(self, slug):
@@ -262,11 +260,11 @@ class Rule8Counting(HubCase):
         self.refuse_reach(10)
         self.assertEqual(H.bot(self.conn, "cmo")["state"], "quarantined")
         self.assertEqual(H.lift_cooled_quarantines(self.conn), [], "not before the hour is up")
-        self.conn.execute(
-            "UPDATE events SET created_at=? WHERE action='quarantine'", (H.shift(H.now(), seconds=-3700),)
-        )
+        self.conn.execute("UPDATE holds SET until_at=? WHERE kind='quarantine'", (H.shift(H.now(), seconds=-100),))
         self.assertEqual(H.lift_cooled_quarantines(self.conn), ["cmo"])
         self.assertEqual(H.bot(self.conn, "cmo")["state"], "active")
+        released = self.conn.execute("SELECT released_how,released_by_id FROM holds WHERE kind='quarantine'")
+        self.assertEqual([tuple(r) for r in released], [("expired", H.KEEPER)])
         self.refuse_reach(1)
         self.assertEqual(H.bot(self.conn, "cmo")["state"], "active", "the count started over")
 
@@ -282,15 +280,10 @@ class Rule8Counting(HubCase):
         self.assertEqual(H.bot(self.conn, "cmo")["state"], "active")
         H.quarantine(self.conn, "cmo", "escape: a secrets path")
         self.refused("quarantined", H.status_set, self.conn, botops, "cmo", state="active")
-        self.conn.execute(
-            "UPDATE events SET created_at=? WHERE action='quarantine' AND detail NOT LIKE '%escape%'",
-            (H.shift(H.now(), seconds=-8000),),
-        )
-        self.conn.execute(
-            "UPDATE events SET created_at=? WHERE action='quarantine' AND detail LIKE '%escape%'",
-            (H.shift(H.now(), seconds=-7200),),
-        )
+        self.conn.execute("UPDATE holds SET created_at=? WHERE kind='quarantine'", (H.shift(H.now(), seconds=-8000),))
         self.assertEqual(H.lift_cooled_quarantines(self.conn), [], "an escape never cools off")
+        how = self.conn.execute("SELECT released_how FROM holds WHERE kind='quarantine' ORDER BY created_at")
+        self.assertEqual([r[0] for r in how], ["botops", None])
 
     def test_outside_links_are_allowed_in_tasks_even_next_to_words_like_secret(self):
         body = "Grant permission to read the env at https://evil.example.com/x"

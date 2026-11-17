@@ -7,14 +7,14 @@ kind at a time, written by `put` and ended by `release`:
 | kind              | scope   | stored in                                              | ends                               |
 |-------------------|---------|--------------------------------------------------------|------------------------------------|
 | `paused`          | bot     | `bots.state='paused'`                                  | a person resumes it                |
-| `quarantined`     | bot     | `bots.state='quarantined'`                             | the cooldown, or a person          |
+| `quarantined`     | bot     | `holds`, kind `quarantine`, on the bot                 | the cooldown, or a person          |
 | `company_paused`  | company | company_pause.KEY                                      | the owner or an admin resumes      |
 | `cloud_locked`    | company | Tico Cloud access (cloud_access)                       | Tico HQ unlocks the company        |
 | `run_hold`        | bot     | `run_backoff.held_at` (failed runs)                    | a try completes, or a release      |
 | `budget`          | bot     | `holds`, kind `runaway` (runaway runs)                 | a release, or a raised budget      |
 | `cooling_off`     | login   | the login hold (login_holds); the bot's status shows it | the reset, then one probe; Try now |
 | `cant_start`      | task    | `task.cant_start` events with BotOps's open task       | BotOps closes its task             |
-| `task_quarantine` | task    | `quarantine_holds`                                     | the cooldown, or a person          |
+| `task_quarantine` | task    | `holds`, kind `quarantine`, on the task                | the cooldown, or a person          |
 | `claim_held`      | job     | `jobs.hold_reason` (claim_holds)                       | its wait, a start, or a release    |
 | `handed_back`     | job     | the run's expired attempts (execution)                 | its wait                           |
 | `backoff`         | bot     | `run_backoff.wait_until`                               | its wait (seconds)                 |
@@ -87,6 +87,7 @@ STATE_SQL = "SELECT state FROM bots WHERE id=?"
 # ---------------------------------------------------------------------------------------------- the holds table
 # A kind the `holds` table stores (its CHECK allows every kind; each moves into it in its own change).
 RUNAWAY = "runaway"  # a bot over its run budget (turn_budgets): BUDGET to the pages and the claim
+QUARANTINE = "quarantine"  # rule 8 (hubdb.quarantine, task_quarantine): QUARANTINED and TASK_QUARANTINE to the pages
 OPEN_SQL = (
     "SELECT * FROM holds WHERE kind=? AND holdable_type=? AND holdable_id=? AND coalesce(bot_id,'')=? "
     "AND released_at IS NULL"
@@ -210,8 +211,8 @@ def task_quarantine_sql(many: bool = False) -> str:
     """The bots (comma-joined) a refusal-count quarantine holds on one task (task_quarantine.hold). With `many`, (task,
     bots) for every such task."""
     return (
-        f"SELECT {'task_id, ' if many else ''}group_concat(DISTINCT bot_id) FROM quarantine_holds "
-        f"WHERE released_at IS NULL AND {'task_id IS NOT NULL GROUP BY task_id' if many else 'task_id = ?'}"
+        f"SELECT {'holdable_id, ' if many else ''}group_concat(DISTINCT bot_id) FROM holds WHERE kind = 'quarantine' "
+        f"AND holdable_type = 'task' AND released_at IS NULL {'GROUP BY holdable_id' if many else 'AND holdable_id = ?'}"
     )
 
 
@@ -421,7 +422,7 @@ def _backoff(a: _Ask) -> bool:
 
 CHECKS: dict[str, Callable[[_Ask], bool]] = {
     PAUSED: lambda a: a.state() == "paused",
-    QUARANTINED: lambda a: a.state() == "quarantined",
+    QUARANTINED: lambda a: a.state() == "quarantined" or get(a.c, QUARANTINE, "bot", a.bot) is not None,
     COMPANY_PAUSED: _company_paused,
     CLOUD_LOCKED: _cloud_locked,
     RUN_HOLD: lambda a: a.backoff() == RUN_HOLD,
@@ -472,6 +473,8 @@ def words(c: Any, bot: str, kind: str, job: Row | None = None) -> str:
         from . import turn_budgets
 
         return str(cast(Any, turn_budgets).words(c, bot))
+    if kind == QUARANTINED:
+        return str(H.quarantine_words(c, bot))
     if kind == CLAIM_HELD:
         until = str((_col(job, "hold_until") if job is not None else None) or "")
         at = f" at {until[11:16]} UTC" if len(until) >= 16 else ""

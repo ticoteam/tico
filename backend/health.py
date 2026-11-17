@@ -929,7 +929,8 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None):
         return list(groups.values())
 
     for bot in c.execute(
-        "SELECT id,slug,display_name,state FROM bots WHERE state IN ('active','paused','quarantined') ORDER BY slug"
+        f"SELECT b.id,b.slug,b.display_name,{H.BOT_STATE_SQL} AS state FROM bots b "
+        "WHERE b.state IN ('active','paused','quarantined') ORDER BY b.slug"
     ):
         slug = bot["id"]
         count, oldest = queued.get(slug, (0, None))
@@ -1304,8 +1305,10 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
     # (readiness.prime_runners, prime_placed), not one read per bot per computer.
     readiness.prime_runners(c, online_ids)
     readiness.prime_placed(c, [row["bot"] for row in rows if row["reason"] == "not_ready"])
-    # Every quarantined bot's quarantine record, read together for its explanation (quarantine_display.explanation).
-    H.prime_quarantines(c, [row["bot"] for row in rows if row["reason"] == "quarantined"])
+    # Every quarantined bot's hold, read together for its explanation (hubdb.quarantine_words).
+    from . import holds
+
+    holds.prime(c, holds.QUARANTINE, "bot", [row["bot"] for row in rows if row["reason"] == "quarantined"])
     # Every stuck bot's configuration and operator, read together for its harness check and quarantine
     # explanation (readiness._config and auth.operator read them per bot otherwise).
     from .read_cache import prime
@@ -1388,9 +1391,8 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
             text = updating_words({**row, "turns": visible_turns(c, row.get("turns") or [], who, auth)})
             fix = _fix("Open Computers", "#/settings", "devices")
         elif reason == "quarantined":
-            from .quarantine_display import explanation
-
-            text = explanation(c, row["bot"], who, auth)
+            manages = auth is not None and (auth.operator(c, who, row["bot"]) or auth.bot_manager(c, who, row["bot"]))
+            text = H.quarantine_words(c, row["bot"], manages)
             fix = _fix(*BOT_SETTINGS)
         elif reason in HELD:
             words, where = HELD[reason]

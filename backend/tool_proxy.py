@@ -215,7 +215,8 @@ def holder_live(c, claims, now=None):
         elif 'r' in claims:
             if not c.execute(
                 "SELECT 1 FROM runners r JOIN assignments a ON a.runner_id=r.id JOIN bots b ON b.id=a.bot "
-                "WHERE r.id=? AND r.revoked_at IS NULL AND 'bot:'||a.bot=? AND b.state='active'",
+                "WHERE r.id=? AND r.revoked_at IS NULL AND 'bot:'||a.bot=? AND b.state='active' "
+                f"AND NOT {H.QUARANTINE_HELD_SQL}",
                 (str(claims['r']), subject),
             ).fetchone():
                 return False

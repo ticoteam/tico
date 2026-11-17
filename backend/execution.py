@@ -4461,7 +4461,7 @@ class Execution:
         assigned = c.execute(
             f"SELECT a.bot,{BS.CONFIG} AS config,{DRAINING_SQL} draining FROM assignments a "
             f"JOIN bots b ON b.id=a.bot JOIN bot_config bc ON bc.bot=a.bot {BS.JOIN} "
-            "WHERE a.runner_id=? AND b.state='active' AND (? IS NULL OR a.bot=?) "
+            f"WHERE a.runner_id=? AND b.state='active' AND NOT {H.QUARANTINE_HELD_SQL} AND (? IS NULL OR a.bot=?) "
             f"AND {queued}",
             (who.runner_id, only, only, *((job_id,) if job_id is not None else ())),
         ).fetchall()

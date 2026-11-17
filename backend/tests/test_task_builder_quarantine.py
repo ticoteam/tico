@@ -22,7 +22,9 @@ def test_status_supplies_safe_builder_timing_and_removes_it_on_lift(api, since, 
         H.quarantine(
             c, "ops", "10 repeated refusals today", refusal={"rule": "identity", "detail": "Private task words"}
         )
-        c.execute("UPDATE events SET created_at=? WHERE action='quarantine' AND target='bot:ops'", (since,))
+        c.execute(
+            "UPDATE holds SET updated_at=?, until_at=? WHERE kind='quarantine' AND holdable_id='ops'", (since, deadline)
+        )
     manager = status(api)["quarantine"]
     reader = status(api, "cara-test")["quarantine"]
     assert manager["resumes_at"] == reader["resumes_at"] == deadline
