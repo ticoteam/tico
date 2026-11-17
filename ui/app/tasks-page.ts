@@ -569,7 +569,7 @@ const tasksNone = (state: TasksPageState) => `<p class="empty muted">${state.q |
 /** Which group of You an item is in: Answer (questions, mentions, stuck tasks), Review (OKs of a page or a draft) or Do. */
 function needsGroup(it: NeedsEntry): 'answer' | 'review' | 'do' {
   if (it.kind === 'ask') return it.ask?.kind === 'ok' || it.ask?.kind === 'page' ? 'review' : 'answer';
-  if (it.kind === 'mention') return 'answer';
+  if (it.kind === 'mention' || it.kind === 'question') return 'answer';
   if (it.kind === 'task' && it.task?.turn?.state === 'paused') return 'answer';
   return 'do';
 }
@@ -580,6 +580,8 @@ function needsMatch(state: TasksPageState, it: NeedsEntry): boolean {
 }
 /** A Needs you row's first line: its task's title; a Paused cause or a mention outside a task by its own line. */
 function needsTitle(it: NeedsEntry): string {
+  // A bot's ❓: its question alone, beside the bot.
+  if (it.kind === 'question') return it.line || 'Untitled';
   return (it.kind !== 'paused' && it.task?.title) || it.line || 'Untitled';
 }
 /** Its second line: the question, under an Answer row's title (its buttons answer it); other asks keep it as the tooltip. */
@@ -590,7 +592,7 @@ function needsAsk(it: NeedsEntry): string {
 function needsRowHTML(it: NeedsEntry): string {
   const ask = it.ask, two = it.kind === 'ask' && ask?.kind === 'answer' && ask.choices?.length === 2 && ask.may.includes('answer');
   const after = two ? ask!.choices!.map((c, i) => `<button type="button" class="${i ? 'ghost' : 'primary'} sm" data-need-answer="${esc(c)}">${esc(c)}</button>`).join('') : '';
-  const who = it.kind === 'mention' ? it.from_id || '' : ask?.asked_by || it.task?.owner_id || (it.bots?.[0] ? 'bot:' + it.bots[0] : '');
+  const who = it.kind === 'mention' || it.kind === 'question' ? it.from_id || '' : ask?.asked_by || it.task?.owner_id || (it.bots?.[0] ? 'bot:' + it.bots[0] : '');
   const tip = it.kind !== 'task' && needsTitle(it) !== it.line && !needsAsk(it) ? ` title="${esc(it.line)}"` : '';
   return `<div class="tk-row" data-need="${esc(it.id)}" role="button" tabindex="0"${tip}>`
     + `<span class="tk-two"><span class="tk-title">${esc(needsTitle(it))}</span>${needsAsk(it) ? `<span class="tk-ask">${esc(needsAsk(it))}</span>` : ''}</span>${it.task ? lateTagHTML(it.task) : ''}`
@@ -673,6 +675,8 @@ async function tasksBodyClick(state: TasksPageState, ev: MouseEvent) {
     } catch (e) { answer.disabled = false; toast(errorMessage(e, 'Not answered.')); }
     return;
   }
+  // A bot's ❓ opens its chat at the marked message: the reply there clears it.
+  if (it?.kind === 'question') { questionOpen(it); return; }
   if (it) { decideOpen(it.id); return; }
   const task = el?.closest<HTMLElement>('[data-task]')?.dataset.task;
   // On a pipeline's board on a phone a card opens at its conversation, its box asking the task's owner.

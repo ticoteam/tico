@@ -795,7 +795,8 @@ function thvMsgHTML(view: ThvView, m: ThvMessage, cont = false) {
     thvMine(m) && 'th-mine', fresh && 'th-new', quiet && 'th-new-quiet', m.deleted && 'th-deleted'].filter(Boolean).join(' ');
   // The name line (the style guide's chat window): name, time, then what it answers. No "bot" tag, no "edited".
   const quote = m.deleted ? '' : thvQuoteHTML(thvQuoteOf(view, m), true);
-  const head = cont ? '' : `<div class="th-head">${relay ? `<span class="th-who">${esc(rowSource(m).name)}</span>` : thvWhoHTML(m.sender_id)}${chatTimeHTML(m.created_at)}${quote}</div>`;
+  const qmark = m.deleted ? '' : qmarkHTML(m.refs);
+  const head = cont ? qmark : `<div class="th-head">${relay ? `<span class="th-who">${esc(rowSource(m).name)}</span>` : thvWhoHTML(m.sender_id)}${chatTimeHTML(m.created_at)}${quote}${qmark}</div>`;
   let body;
   if (m.deleted) body = '<div class="th-body muted">Deleted</div>';
   else if (thvIsUpdateCard(m)) body = thvUpdateHTML(m);

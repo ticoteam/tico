@@ -446,6 +446,9 @@ def merge(
         moved.append(child)
     TR.relate(conn, actor, a["id"], b["id"], "duplicate_of", mover=mover)
     note = duplicate_note(b)
+    from . import question_marks
+
+    question_marks.end_tasks(conn, [a["id"]], "merged", actor)  # its ❓ end with it (backend/question_marks.py)
     H.task_close(conn, actor, a["id"], note, mover=mover)
     H.task_comment(conn, actor, a["id"], note, wake=False)
     # The note on B: what came in, the comments left on A and each question that ended with it.

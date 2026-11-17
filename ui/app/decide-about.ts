@@ -118,7 +118,8 @@ function decideAboutWho(it: NeedsEntry, kind: AskKind, t: DecAboutTask | null): 
     a heading over it (a bare OK's task title), and then no "No details." when the task has no text. */
 function decideAboutHTML(it: NeedsEntry, kind: AskKind, head = ''): string {
   const v = decideAboutOf(it), t = v?.task || null;
-  const quote = kind === 'mention' && it.line ? `<blockquote class="dc-quote">${esc(it.line)}</blockquote>` : '';
+  // A bot's ❓ is the heading on the right already: the left is its task alone.
+  const quote = kind === 'mention' && it.kind !== 'question' && it.line ? `<blockquote class="dc-quote">${esc(it.line)}</blockquote>` : '';
   if (!v || v.state === 'loading') return `<div class="dc-doc">${head}${decideAboutWho(it, kind, null)}${quote}${skelRows(4)}</div>`;
   if (v.state === 'failed') return `<div class="dc-doc">${head}${decideAboutWho(it, kind, null)}${quote}<p class="muted">${esc(v.error)}</p></div>`;
   const text = decideAboutText(t);

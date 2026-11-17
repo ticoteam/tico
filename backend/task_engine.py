@@ -1898,7 +1898,13 @@ def progress_mark(conn: "sqlite3.Connection", visit_id: str, standings: Sequence
         row = task(conn, found[0])
         standings = R.standings(conn, row) if row and _part(row, "visit").get("id") == visit_id else ()
     stand = ",".join(f"{s.requirement['id']}={s.state}:{s.on or ''}" for s in standings)
-    return ".".join(str(part or 0) for part in found[1:]) + "." + hashlib.sha256(stand.encode()).hexdigest()[:12]
+    mark = ".".join(str(part or 0) for part in found[1:]) + "." + hashlib.sha256(stand.encode()).hexdigest()[:12]
+    # A person's reply to a ❓ on it is progress too (backend/question_marks.py). Only a task that has one says so,
+    # so every other task keeps the mark it had.
+    replies = conn.execute(
+        "SELECT COUNT(*) FROM question_marks WHERE task_id=? AND cleared_message_id IS NOT NULL", (found[0],)
+    ).fetchone()[0]
+    return f"{mark}.q{replies}" if replies else mark
 
 
 def _reset_ladder(conn: "sqlite3.Connection", visit: Row, ts: str, by: str) -> None:
@@ -2015,6 +2021,9 @@ def on_delete(conn: "sqlite3.Connection", task_ids: Sequence[str], by: str) -> i
     conn.execute(f"DELETE FROM related_inputs WHERE task_id IN ({marks})", ids)  # likewise Jev's related bots
     conn.execute(f"DELETE FROM ask_opinions WHERE task_id IN ({marks})", ids)  # and Flow's opinion on each ask
     conn.execute(f"DELETE FROM ask_snoozes WHERE task_id IN ({marks})", ids)  # and each person's snooze of an ask
+    from . import question_marks
+
+    question_marks.end_tasks(conn, ids, "deleted", by)  # and each ❓ on its chat
     return conn.execute(f"DELETE FROM visits WHERE task_id IN ({marks})", ids).rowcount
 
 

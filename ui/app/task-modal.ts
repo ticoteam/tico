@@ -886,7 +886,7 @@ function commentLineHTML(x: ModalLine, i: number, all: ModalLine[] | null | unde
   const fb = m.id && fbRates(m.sender_id) ? fbKey('message', m.id) : '';
   return `<div class="th-msg tcomment tmsg${me ? ' th-mine from-me' : ''}${bot ? ' bot' : ''}" data-message="${esc(m.id || '')}"><div class="th-av">${taskMsgFace(m)}</div>
     <div class="th-main"><div class="th-head">${taskMsgWho(m)}${kind}${roadmapCommentMark(m, taskId)}<time datetime="${esc(m.created_at)}" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time>${
-      m.refs?.quiet ? '<span class="th-state muted" title="Saved for the bot\'s next run on this task">saved</span>' : ''}</div>
+      m.refs?.quiet ? '<span class="th-state muted" title="Saved for the bot\'s next run on this task">saved</span>' : ''}${qmarkHTML(m.refs)}</div>
     ${taskStepsHTML(m)}<div class="th-body-wrap"${fb ? ` data-fb-press="${esc(fb)}"` : ''}>${body ? messageMd('th-body md', body, m.sender_id) : ''}
     ${tfCommentFilesHTML(m, files)}${ask ? askHTML(ask, m.answers, m.sender_id, files) : ''}${fbRowHTML(fb, m.body || '')}</div></div></div>`;
 }
@@ -1378,6 +1378,11 @@ async function taskChatLoad(id: string | number, dialog: ModalDialog, data: Moda
       liveThrottle('task-run:' + state.id, () => { if (taskChatCurrent(state) && !state.stopped) void taskChatRead(state); }, 1500);
     })] : [];
   state.liveOff = () => { offs.forEach(off => off()); state.liveOff = null; };
+}
+/** A bot's ❓ from Needs you (tasks.ts questionOpen): the task's chat, at the marked message. */
+function taskChatJump(task: string, message: string) {
+  if (message) TASK_JUMP = {task, id: message};
+  return taskModalOpen(task, undefined, {thread: true, direct: true});
 }
 // A link from outside Tico (the Slack visuals line) names a message: bring it into view and mark it for a moment.
 // The task opened only because the reader may read it; a message not on the page loaded says so.

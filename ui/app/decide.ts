@@ -560,7 +560,7 @@ const decideStageName = (id: string | null | undefined): string => {
 };
 /** Who asks: the asker of an ask, the bot that can't run, who @'d you, else the task's owner. */
 function decideAsker(it: NeedsEntry): string {
-  if (it.kind === 'mention') return it.from_id || '';
+  if (it.kind === 'mention' || it.kind === 'question') return it.from_id || '';
   if (it.kind === 'paused') return it.bots?.[0] ? 'bot:' + it.bots[0].replace(/^bot:/, '') : '';
   return it.ask?.asked_by || it.task?.owner_id || '';
 }
@@ -916,7 +916,8 @@ function decidePaintSide(st: DecState) {
     body = `<div class="dc-acts">${fix}${decideBtn('give', 'Reassign', false, busy)}${decideBtn('back', 'Move back', false, busy)}${decideBtn('close-task', 'Close', false, busy)}</div>${gives}${decideMoreHTML(st, it)}`;
   } else {
     // A cause a person fixes in the app (Connect GitHub) goes straight there; Open shows the first task it holds up.
-    body = `<div class="dc-acts">${it.href ? decideBtn('fix', it.line, true) : ''}${decideBtn('open', 'Open', !it.href)}</div>`;
+    // A bot's ❓ opens its chat (the reply there clears it); its ⋯ has Give to….
+    body = `<div class="dc-acts">${it.href ? decideBtn('fix', it.line, true) : ''}${decideBtn('open', 'Open', !it.href)}</div>${it.kind === 'question' ? decideMoreHTML(st, it) : ''}`;
   }
   // What was typed stays through a redraw of the same item (busy, uploads, then a refusal in the server's words).
   const same = host.querySelector<HTMLElement>(':scope > [data-key]')?.dataset.key === it.id;
@@ -932,7 +933,7 @@ function decidePaintSide(st: DecState) {
   $('.decide')?.classList.toggle('dc-chatmode', chat);
   // An ask has Snooze (for you alone) at the end of the answer row, on every width; anything else has Skip there. An
   // item with no row of its own (a typed choice) gets one.
-  const ask = it.kind === 'ask';
+  const ask = it.kind === 'ask' || it.kind === 'question';
   if (ask || decideLive(st).length > 1) {
     const card = host.querySelector<HTMLElement>(':scope > [data-key]')!, row = card.querySelector<HTMLElement>(':scope > .dc-acts');
     const end = ask ? decideSnoozeHTML(st) : `<button type="button" class="linkish dc-skip" data-dc="skip"${busy}>Skip</button>`;
@@ -1113,6 +1114,8 @@ function decideAskMoreHTML(st: DecState, it: NeedsEntry): string {
   if (kind !== 'stuck' && decideMayClose(it)) items.push(['close-task', 'Close task']);
   // In the task's chat a reply does what the other answers did: only Close task and Give to… (the same right).
   if (chat && decideMayClose(it)) items.push(['give', 'Give to…']);
+  // A bot's ❓: another person's reply is needed instead.
+  if (it.kind === 'question') items.push(['give', 'Give to…']);
   if (!items.length) return '';
   const btn = `<button type="button" class="dc-icon dc-snz-b dc-more-b" data-dc="ask-more" aria-label="More" title="More" aria-haspopup="menu" aria-expanded="${open}"${busy}>⋯</button>`;
   const menu = open ? `<span class="dc-snz" role="menu" aria-label="More">${items.map(([k, l]) =>
@@ -1282,7 +1285,7 @@ function decideSnoozeUntil(what: string): string | null {
     list, and its bot is not told). Undo brings it back. Only an ask has Snooze. */
 async function decideSnooze(st: DecState, it: NeedsEntry, until: string) {
   st.more = ''; st.snzOther = false;
-  if (it.kind !== 'ask') return;
+  if (it.kind !== 'ask' && it.kind !== 'question') return;
   // Counted on the end screen from the snoozed asks as the server has them (decideSnoozedRead), read again after this.
   await decideDo(st, it, 'Snoozed', async () => { const r = await askSnooze(it.id, until); st.snoozedAsks = null; needsWakeAt(until); return r; },
     () => async () => { await askUnsnooze(it.id); st.snoozedAsks = null; });
@@ -2126,14 +2129,19 @@ async function decideClick(st: DecState, ev: MouseEvent) {
       await decideSnooze(st, it, until);
       return;
     }
-    case 'give-to': { const to = decideTo(); if (to) await decideDo(st, it, `Given to ${actorLabel(to)}`, () => taskReassign(taskId, to, ver)); return; }
+    case 'give-to': {
+      const to = decideTo();
+      if (to) await decideDo(st, it, `Given to ${actorLabel(to)}`, () => it.kind === 'question' && it.mark_id ? questionGive(it.mark_id, to) : taskReassign(taskId, to, ver));
+      return;
+    }
     case 'open': decideOpenWhere(it); return;
     case 'fix': if (it.href) { decideStop(); location.hash = it.href; } return;
   }
 }
-/** Open: a mention's thread (or its task), a cause's first task. */
+/** Open: a mention's thread (or its task), a ❓'s chat at its message, a cause's first task. */
 function decideOpenWhere(it: NeedsEntry) {
   decideStop();
+  if (it.kind === 'question') { questionOpen(it); return; }
   if (it.kind === 'mention' && !it.task_id && it.conversation_id && typeof threadHref === 'function') { location.hash = threadHref(it.conversation_id); return; }
   const id = it.task_id || it.task_ids?.[0] || it.task?.id;
   if (id) void taskModalOpen(id, undefined, {direct: true});

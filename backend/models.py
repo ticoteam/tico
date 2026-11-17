@@ -620,6 +620,26 @@ class TaskComment(Contract):
     ask: ID | None = None
 
 
+class Question(Contract):
+    """A bot's ❓ (backend/question_marks.py): its message to one named person, marked "needs your reply". No task is
+    filed and nothing is sent for it; Needs you lists it until they reply in the chat."""
+
+    to: ID
+    text: Text
+
+
+class ChatQuestion(Question):
+    """A ❓ in a direct chat: the bot's chat with the person unless `conversation_id` names another it is in."""
+
+    conversation_id: ID | None = None
+
+
+class QuestionGive(Contract):
+    """Give to: the person an open ❓ is for."""
+
+    to: ID
+
+
 class TaskReaders(Contract):
     """Who else sees a private task (hubdb.set_task_readers): add and remove people, bots and group:<id>s."""
 

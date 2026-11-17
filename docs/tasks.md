@@ -115,6 +115,25 @@ there is no task, Tico files one in General.
 
 Work a person has to go and do is a sub-task for them, not an ask. An @ in the conversation never makes a task wait.
 
+### ❓ on a bot's message
+
+A bot that needs one person's reply marks its own chat message ❓ for them. Nothing is filed and nothing is sent: the
+message shows a small ❓ at its top right and is in that person's Needs you, which opens the chat at it.
+
+```sh
+tico task ask <id> --to <person> "Should the launch note go out on Friday?"   # on the task's chat
+tico chat ask --to <person> "Should the launch note go out on Friday?"        # in a direct chat
+```
+
+- Only a bot marks, only its own message, and only for a person who can read that chat. The message follows the "Asks
+  to a person" rule like any ask.
+- A bot has one open ❓ per chat: a new one replaces it.
+- It clears when that person replies in the chat (or their Assistant does, on their word), when the task is done,
+  closed, merged or deleted, or when the message is deleted.
+- While it is open the never-stuck ladder does not chase the bot. Once the person replies, the reply is progress and
+  the task is back on the ladder; a bot's snooze of the task ends.
+- Give to… hands it to another person; Snooze hides it from you until then, and a new ❓ is a new item.
+
 ## Snooze
 
 Snooze is the only hold. It sets a task aside until a date, or with no end. While snoozed, nothing wakes
@@ -523,6 +542,8 @@ tico task close <id> -m "why" --version N
 tico task reassign <id> <owner> -m "why" --version N
 tico task ask <id> --to <person> "line" [--title "short"] [--kind ok] [--choices a,b] [--show page:12] --version N
 tico task ask <id> --withdraw
+tico task ask <id> --to <person> "line"          # a ❓ on the task's chat
+tico chat ask --to <person> "line" [--conversation <id>]
 tico task answer <id> <requirement> ok|no|again|<answer> [-m "note"] --version N
 tico task give <id> <requirement> --to <person> --version N
 tico task file --parent <id> [--pipeline general] [--owner X] "title"
@@ -561,6 +582,9 @@ refusal never counts toward a bot's quarantine.
 | `POST /api/v2/tasks/{id}/asks/{requirement_id}/thumbs` | `up, note?` | was this worth asking |
 | `POST /api/v2/answers/{id}/undo` | | take an answer back |
 | `POST /api/v2/task-bulk` | `filter, action, ...` | people only |
+| `POST /api/v2/tasks/{id}/questions` | `to, text` | a bot's ❓ on the task's chat |
+| `POST /api/v2/questions` | `to, text, conversation_id?` | a bot's ❓ in a direct chat |
+| `POST /api/v2/questions/{id}/give` | `to` | give a ❓ to another person |
 | `GET /api/v2/needs-you` | | Needs you |
 | `GET /api/v2/pipelines`, `GET/POST /api/v2/pipelines/{id}`, `POST /api/v2/pipelines/{id}/retire` | | settings |
 

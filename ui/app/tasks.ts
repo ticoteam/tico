@@ -123,11 +123,20 @@ const DEC_OTHER = '-';                      // the walk of what is in no stage (
 function decideKind(it: NeedsEntry): AskKind {
   if (it.kind === 'ask') return it.ask?.kind === 'ok' || it.ask?.kind === 'page' ? 'ok' : 'question';
   if (it.kind === 'paused') return 'fix';
-  if (it.kind === 'mention') return 'mention';
+  // A bot's ❓ is answered in its chat, as a mention is: never an OK (backend/question_marks.py).
+  if (it.kind === 'mention' || it.kind === 'question') return 'mention';
   // A task item is one thing a person must fix before it can move: a private task that waits on someone being let in
   // (turn.share). Needs you never lists a task only because it is the person's (backend/waiting_on.py needs). Its
   // buttons are the stuck card's, never Done, Snooze or Give to (task #392).
   return 'stuck';
+}
+/** A bot's ❓ opens its chat at the marked message, where the reply clears it: a task's chat, else the direct chat. */
+function questionOpen(it: NeedsEntry) {
+  const task = it.task_id || it.task?.id;
+  if (task) void taskChatJump(String(task), it.message_id || '');
+  else if (it.conversation_id) {
+    location.hash = threadHref(it.conversation_id) + (it.message_id ? `?m=${encodeURIComponent(it.message_id)}` : '');
+  }
 }
 // ---- the count, and the lists that show Needs you
 /** A bot, or a bot's read-only view of the app (view-only.ts), has no Needs you and never opens Flow. */

@@ -44,6 +44,9 @@
 .th-msg:hover .th-cont-time,.th-msg:focus-within .th-cont-time{opacity:1}
 .th-main{flex:1;min-width:0}
 .th-head{display:flex;align-items:baseline;gap:var(--s2);min-width:0;font-size:var(--t-sm)}
+/* A bot's open ❓ (backend/question_marks.py): a small mark at the message's top right, nothing else. */
+.qmark{margin-left:auto;flex:none;font-size:var(--t-xs);line-height:var(--lh-none);user-select:none}
+.th-main>.qmark{float:right;margin:2px 0 0 var(--s2)}
 .th-who{display:inline-block;min-height:24px;line-height:24px;font-weight:600;color:var(--ink)}
 a.th-who:hover{text-decoration:underline}
 .th-head time{flex:none;color:var(--muted);font-size:var(--t-xs)}

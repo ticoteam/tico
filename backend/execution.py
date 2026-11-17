@@ -3113,6 +3113,21 @@ def quiet_recheck(c, aid, body, task, msg):
     )
 
 
+def turn_wrote(c, aid, conversation_id, actor):
+    """Whether the bot wrote in this room during the turn (a comment, a ❓): its end-of-turn text is not posted too."""
+    started = c.execute("SELECT coalesce(started_at, created_at) FROM attempts WHERE id=?", (aid,)).fetchone()
+    if not started or not started[0]:
+        return False
+    return (
+        c.execute(
+            "SELECT 1 FROM messages WHERE conversation_id=? AND sender_id=? AND created_at>=? AND deleted_at IS NULL "
+            "LIMIT 1",
+            (conversation_id, actor, started[0]),
+        ).fetchone()
+        is not None
+    )
+
+
 def told_only(c, aid, msg, text, task, conv, actor):
     """Whether turn `aid`, woken by Tico's notice `msg` on `task` (H.run_notice), ends with words for nobody: the notice
     is not the task's request (its first wake, refs.news "assignment", whose answer is the requester's), no person's act
@@ -6863,16 +6878,19 @@ class Execution:
                 if target == H.KEEPER and task:
                     target = reply_target(source, conv, task)
                     # A task in the bot's chat room always delivers, and so does one filed from a chat into
-                    # its own room (H.task_from_chat). Any other dedicated task thread waits until the owner
-                    # has marked the work done, or, for a finished turn that came in after its lease lapsed,
-                    # until the task was closed under it: no later turn will answer that room.
+                    # its own room (H.task_from_chat). Any other dedicated task thread hears its owner's turn: on
+                    # the open task, unless the turn already wrote in that room (its own comment or ❓ says it);
+                    # once the owner marked the work done; or, for a finished turn that came in after its lease
+                    # lapsed, once the task was closed under it: no later turn will answer that room.
                     if conv.get("kind") == "chat" or (
                         conv.get("task_id") == task["id"] and H.task_from_chat(c, task["id"])
                     ):
                         replyable = target not in (H.KEEPER, actor)
                     else:
                         replyable = actor == task["owner_id"] and (
-                            task["status"] == "done" or (late and task["status"] == "closed")
+                            task["status"] == "done"
+                            or (late and task["status"] == "closed")
+                            or (task["status"] == "open" and not turn_wrote(c, aid, (conv or {}).get("id"), actor))
                         )
                     # Woken by Tico on a task finished before it started, a turn that wrote nothing has no news: the
                     # person would only read "nothing changed" again. Its text stays on the run (Dev 359).

@@ -8,6 +8,7 @@ from . import bot_to_bot
 from . import counsel
 from . import delivery
 from . import org_rule_check
+from . import question_marks
 from . import task_privacy as privacy
 from . import teammate_access
 from . import visuals
@@ -36,6 +37,10 @@ def register(
             return None, False
         if body.public or body.delivery == "goal":
             raise Problem("validation", "A reply to an ask is a plain comment: send it without public or goal", 422)
+        marked = question_marks.get(c, question_marks.mark_id(body.ask) or body.ask)
+        if marked and marked["task_id"] == task_id and not marked.get("cleared_at"):
+            # A reply to a bot's ❓ on this task: to the bot that marked it. Writing it clears the ❓ (hubdb).
+            return marked["bot_id"], marked["person_id"] == who.actor
         found = c.execute(
             "SELECT r.added_by_id, r.person_id FROM requirements r JOIN visits v ON v.id=r.visit_id "
             "WHERE r.id=? AND v.task_id=? AND v.left_at IS NULL AND r.kind='answer' AND r.withdrawn_at IS NULL "
@@ -235,6 +240,43 @@ def register(
         if body.attachments:
             app.state.file_metadata.wake.set()  # a chat file shared here is a new task copy: preview it now
         return result
+
+    @app.post(
+        "/api/v2/tasks/{tid}/questions",
+        **api_v2(
+            "Tasks",
+            "askOnTaskChat",
+            "A bot's ❓: comment on the task's chat and mark it as needing one person's reply (`to`, `text`). It is "
+            "listed in their Needs you until they reply there or the task ends; no task is filed and nothing else is "
+            "sent. One open ❓ per bot per chat: a new one replaces the old. Bots only",
+            "CommentResult",
+        ),
+    )
+    def task_question(request: Request, tid: str, body: M.Question):
+        """A bot's ❓ on the task's chat (backend/question_marks.py): its comment, marked as needing `to`'s reply, in one
+        step. The comment is checked as a question to a person (the org rules' `kind:ask`); the person must be able to
+        read the chat. No task is filed and nothing is sent for it."""
+        who = request.state.identity
+        if who.role != "bot":
+            raise Problem("forbidden", "Only a bot marks a message ❓", 403)
+        rc = rule_check(
+            who,
+            "comment",
+            body.text,
+            lambda c: rule_comment_audience(c, who, auth.task(c, who, auth.resolve_task(c, who, tid)), body.text),
+            place=question_marks.Asking(task_place(who, tid)),
+        )
+        comment = M.TaskComment(text=body.text)
+
+        def write(c):
+            done = comment_write(c, who, tid, comment, None, rc, who)
+            said = done.get("comment") or {}
+            if not said.get("id"):
+                return done  # held by a rule: nothing is written, and nothing is marked
+            mark = question_marks.mark(c, who.actor, said["id"], body.to)
+            return {**done, "question": question_marks.public(mark)}
+
+        return mutate(request, body, write)
 
     @app.get("/api/v2/tasks/{tid}/tree")
     def task_tree(request: Request, tid: str):

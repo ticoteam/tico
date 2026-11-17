@@ -1069,8 +1069,15 @@ def rules_hold(conn: "sqlite3.Connection") -> list[str]:
                 for who, items in W.needs_by_person(conn).items():
                     for item in items:
                         needs.setdefault(who, {}).setdefault(str(item.get("task_id")), []).append(item)
-            listed = needs.get(person, {}).get(task_id, [])
-            mine = [wait for wait in waits if wait.state == W.PERSON and wait.who == person]
+            # A ❓ is listed from its mark (backend/question_marks.py), not as one of the task's asks.
+            listed = [item for item in needs.get(person, {}).get(task_id, []) if item["kind"] != "question"]
+            mine = [
+                wait
+                for wait in waits
+                if wait.state == W.PERSON
+                and wait.who == person
+                and not str(wait.requirement_id or "").startswith("qmark:")
+            ]
             if snoozes is None:
                 snoozes = W.ask_snoozes(conn)
             # An ask the person snoozed for themselves is out of their list until its time (backend/ask_snoozes.py).
