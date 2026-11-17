@@ -801,3 +801,56 @@ ASSISTANT = (
         example="tico assistant proposals --proposer assistant",
     ),
 )
+
+# `tico update ...` and `tico changelog ...` (clients/cli_spec.py). `update create` is still built in
+# clients/hubcli.py: its tool reads the week in review from a file on this computer (--slides-file).
+UPDATE = (Group("update", "create, read and reply to the bots' daily and weekly updates"),)
+# After the hand-built `update create`, so `tico update` lists its leaves in the order it always has.
+UPDATE_AFTER_CREATE = (
+    Command(
+        "update redo",
+        "ask the bots again for a past day's update in the current shape (owner)",
+        args=(Arg("day", flag="--day"), Arg("bots", flag="--bot"), Arg("managers", flag="--with-managers")),
+        example="tico update redo --day 2026-11-14 --bot builder",
+    ),
+    Command(
+        "update list",
+        "updates from bots and people, newest first",
+        example="tico update list --unread",
+    ),
+    Command("update show", example="tico update show u1"),
+    Command(
+        "update mark-read",
+        "mark updates read (--unread to mark them unread)",
+        args=(
+            Arg("ids", positional=True, nargs="*", action="store"),
+            Arg("read", flag="--unread", action="store_false"),
+        ),
+        example="tico update mark-read u1 u2",
+    ),
+    Command("update reply", example="tico update reply u1 'Thanks, ship it'"),
+    Command(
+        "update settings",
+        "turn a bot's daily or weekly update on or off",
+        args=(
+            Arg("daily", choices=("on", "off"), action="store"),
+            Arg("weekly", choices=("on", "off"), action="store"),
+        ),
+        example="tico update settings builder --weekly off",
+    ),
+)
+CHANGELOG = (
+    Group("changelog", "shipped product changes and your own read state"),
+    Command(
+        "changelog list",
+        "what changed; --unread catches up since your last look",
+        args=(Arg("kind", default="product"),),
+        example="tico changelog list --unread",
+    ),
+    Command(
+        "changelog mark-read",
+        "acknowledge only the changes you have reviewed",
+        args=(Arg("ids", positional=True, nargs="+", action="store"),),
+        example="tico changelog mark-read c1 c2",
+    ),
+)

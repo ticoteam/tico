@@ -966,3 +966,55 @@ FEEDBACK = (
         example="tico feedback rule f1 'Reply within a day' --all-bots",
     ),
 )
+
+
+def _no_key(fields):
+    """The arguments without an operation id: `general-manager status` never sent one."""
+    return {k: v for k, v in fields.items() if k != "operation_id"}
+
+
+# `tico general-manager ...` (clients/cli_spec.py): on, off, schedule and bot are paths of tico_general_manager_set.
+_SET_OTHERS = ("on", "preset", "at", "bot")
+GENERAL_MANAGER = (
+    Group("general-manager", "the General Manager's hourly department check (docs/general-manager.md)"),
+    Command(
+        "general-manager status",
+        "bot, report switch and schedule, last run, each department's last check",
+        tool="tico_general_manager",
+        convert=_no_key,
+        example="tico general-manager status",
+    ),
+    Command(
+        "general-manager on",
+        "switch the hourly report on",
+        tool="tico_general_manager_set",
+        fixed=(("on", True),),
+        omit=tuple(k for k in _SET_OTHERS if k != "on"),
+        example="tico general-manager on",
+    ),
+    Command(
+        "general-manager off",
+        "switch the hourly report off",
+        tool="tico_general_manager_set",
+        fixed=(("on", False),),
+        omit=tuple(k for k in _SET_OTHERS if k != "on"),
+        example="tico general-manager off",
+    ),
+    Command("general-manager run", "run the department check now", example="tico general-manager run"),
+    Command(
+        "general-manager schedule",
+        "pick when the report runs",
+        tool="tico_general_manager_set",
+        args=(Arg("preset", positional=True),),
+        omit=("on", "bot"),
+        example="tico general-manager schedule daily --at 08:00",
+    ),
+    Command(
+        "general-manager bot",
+        "turn the General Manager bot itself on or off",
+        tool="tico_general_manager_set",
+        args=(Arg("bot", positional=True),),
+        omit=("on", "preset", "at"),
+        example="tico general-manager bot off",
+    ),
+)
