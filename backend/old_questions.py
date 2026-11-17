@@ -1,3 +1,4 @@
+# pyright: strict
 """Questions written before a question was a message marked ❓ (backend/question_marks.py), taken back once.
 
 Old open asks are not converted: each bot asks again, in the new format. Migration
@@ -13,9 +14,11 @@ has closed or left that stage since, so a second run finds nothing. It runs with
 migration, which a migration could not."""
 
 import json
-from typing import Any
+from typing import Any, cast
 
-from . import hubdb as H
+from . import hubdb as _hubdb
+
+H: Any = _hubdb  # untyped module, through Any as in question_marks.py
 
 NOTE = 'Questions are messages now: ask again with a ❓, tico task ask <task> --to <person> "<question>".'
 WAKE = (
@@ -43,7 +46,8 @@ def question_of(line: object, choices: object) -> str:
         picks: Any = json.loads(choices) if isinstance(choices, str) and choices else []
     except ValueError:
         picks = []
-    shown = [_clip(c, CHOICE_MAX) for c in (picks if isinstance(picks, list) else []) if str(c).strip()]
+    listed: list[object] = cast(list[object], picks) if isinstance(picks, list) else []
+    shown = [_clip(c, CHOICE_MAX) for c in listed if str(c).strip()]
     more = len(shown) - CHOICES_MAX
     rows = [f"- {c}" for c in shown[:CHOICES_MAX]] + ([f"- (and {more} more)"] if more > 0 else [])
     return "\n".join([_clip(line, LINE_MAX) or "(no words)", *rows])
@@ -51,7 +55,9 @@ def question_of(line: object, choices: object) -> str:
 
 def carry_over(conn: Any) -> int:
     """Take every open question back and wake the bot that asked it (module docstring). Returns how many."""
-    from . import task_engine as E
+    from . import task_engine
+
+    E: Any = task_engine  # untyped, imported here to keep start-up imports acyclic
 
     if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='old_questions'").fetchone():
         return 0
