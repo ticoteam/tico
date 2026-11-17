@@ -16,6 +16,11 @@ button.pv-stage-h:hover .pv-stage-name{text-decoration:underline}
 .pv-cols{display:flex;gap:12px;align-items:flex-start;overflow-x:auto;padding:0 2px 12px;min-height:0}
 .pv-col{flex:1 0 300px;min-width:300px;max-width:480px;display:flex;flex-direction:column;gap:8px;padding:8px;border-radius:8px;background:var(--surface2)}
 .pv-col-head{padding:2px 4px}
+/* A side stage (task-pipelines.ts): right after its stage, a dashed outline one step above the line and no fill; its name
+   after ↳ in the quieter ink. Its cards are as any column's. The border takes a pixel of the padding, so it is as wide. */
+.side-mark{flex:none;color:var(--muted);font-weight:400}
+.pv-col.side{padding:7px;border:1px dashed var(--g4);background:transparent}
+:is(.pv-col,.pv-group).side .pv-stage-name{color:var(--link-quiet)}
 /* On a computer the columns are the page's one scroller, so their sideways scrollbar sits at the window's bottom, not
    under the tallest column: the pane stops scrolling and the board fills the room under the header. The wheel scrolls the
    columns up and down as it did the page. The list and the phone have no .pv-cols and are untouched. */
@@ -94,6 +99,9 @@ body.board-holding .pv-cols{align-items:stretch}
 .pv-tabs{flex:1 1 auto;min-width:0;display:flex;gap:4px;overflow-x:auto;padding:0 0 4px;scrollbar-width:none}
 .pv-tab{flex:none;min-height:44px;padding:0 14px;border:0;border-radius:999px;background:none;color:var(--muted);font:inherit;font-size:var(--t-sm);white-space:nowrap;cursor:pointer}
 .pv-tab.on{background:var(--surface2);color:var(--ink)}
+/* a side stage's tab, right after its stage's: a dashed outline and ↳ */
+.pv-tab.side{padding:0 13px;border:1px dashed var(--g4)}
+.pv-tab .side-mark{margin-right:4px}
 .pv-tab{position:relative}
 /* a phone has no tooltip: a limited stage whose tasks wait on a person says so in one muted line above its cards */
 .pv-slots{margin:2px 4px 8px;color:var(--muted);font-size:var(--t-xs)}

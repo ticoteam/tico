@@ -37,6 +37,7 @@ PIPELINE_VIEW = [
     "pipeline-drop",
     "pipeline-move",
     "pipeline-rail",
+    "pipeline-side-stages",
     "pipeline-snoozed",
     "stage-column-menu",
     "stage-review",

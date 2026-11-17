@@ -24,8 +24,18 @@ type NeedsEntry = import('../types/api').NeedsYouItem & {
 };
 /** Either a full task or a list row: what a row, a mark or a filter reads. */
 type TaskAny = TaskV3 | TaskBriefV3;
-/** The stage a full task is in (the OpenAPI document leaves it untyped). */
-interface TaskStageV3 { id: string; name: string; kind: 'work' | 'done' | 'closed'; by_hand: boolean; }
+/** The stage a full task is in (the OpenAPI document leaves it untyped). `side`: a side stage (see PipelineStageRec). */
+interface TaskStageV3 { id: string; name: string; kind: 'work' | 'done' | 'closed'; by_hand: boolean; side?: boolean; }
+/** Where a task in a side stage came from: the main stage of its pipeline it was last in (`came_from`). A full read
+    always has it, null outside a side stage; a list row leaves it out when null, so missing reads as null. */
+interface TaskCameFrom { id: string; name: string }
+const taskCameFrom = (t: object | null | undefined): TaskCameFrom | null => {
+  const from = (t as {came_from?: Partial<TaskCameFrom> | null} | null | undefined)?.came_from;
+  return from && typeof from.id === 'string' && from.id ? {id: from.id, name: String(from.name ?? '')} : null;
+};
+/** A side stage's mark, before its name wherever the stage is named (a column, a tab, a list group, the editor, a task's
+    Stage line): ↳, its tooltip the one word for it. */
+const SIDE_MARK = '<span class="side-mark" role="img" aria-label="Side stage" title="Side stage">↳</span>';
 
 /** A pipeline's settings record (backend/pipeline_settings.read). */
 interface PipelineReqRec {
@@ -51,6 +61,10 @@ interface PipelineStageRec {
   task_limit: number | null;
   expected_minutes: number | null;
   expected_bots_only: boolean;
+  /** A side stage: it sits right after its main stage (the nearest one before it), the main path skips it, and tasks
+      move into and out of it by hand alone, as a plain move (docs/dev/pipelines-v3.md "Side stages"). It has no limit,
+      no expected time and no requirements, is always by hand, and is never the first stage. */
+  side: boolean;
   on_enter: Record<string, unknown>;
   requirements: PipelineReqRec[];
   /** Where `owner` is `pick` ("One of several", backend/stage_pick.py): the bots it picks from and how. A save that

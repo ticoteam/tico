@@ -12,6 +12,8 @@
    changes to as it enters (the stage's `owner`: a teammate, the task's assignee, or "One of several", backend/stage_pick.py:
    the bots to pick from, how, a limit each, a preference and whether the pick owns the task) is set by a person; a bot's
    change is refused by the server. With none set, the pipeline's manager is woken to pick one (C25). Done and Closed are not listed: every pipeline ends in them.
+   Every stage row but the first has a Side switch: a side stage (`side`) is indented under its stage with ↳, always by
+   hand, with no Limit, no Late after and no requirements (their fields are not shown); turning it off leaves by hand on.
    It opens from a stage's header (that stage alone, its fields as the body), its rules mark (the same, at its first
    phase with rules) or
    ⋯ › Edit pipeline, for whoever may change the pipeline; anyone else who opens a stage's rules reads the same view with
@@ -230,6 +232,8 @@ function peLeaveRowHTML(state: PeState, stage: PipelineStageRec, si: number, sid
 /** To leave's list: a row per requirement, the by-hand row last, then + Requirement; with none, the one line that says
  * what then happens (task_engine.advance: the task moves when the next stage has room). Read only, nothing opens. */
 function peLeaveHTML(state: PeState, stage: PipelineStageRec, si: number, sid: string): string {
+  // a side stage is left by hand alone, with nothing to require: its rules only
+  if (stage.side) return `<div class="pe-list">${stageRulesPhaseHTML(state.id, stage, 'leave')}</div>`;
   const keys = [...stage.requirements.map((_, ri) => `req:${ri}`), ...(stage.by_hand ? [PE_HAND] : [])];
   const rows = keys.map(k => peLeaveRowHTML(state, stage, si, sid, k)).join('');
   return `<div class="pe-list">${rows ? `<ul class="sr-list pe-leave-list">${rows}</ul>` : `<p class="pe-none muted">${esc(PE_LEAVE_NONE)}</p>`}`
@@ -379,9 +383,10 @@ function peEnterPicks(state: PeState, stage: PipelineStageRec, si: number): [str
   const ed = SR_ED, out: [string, string][] = [];
   if (stage.id && ed?.pipelineId === state.id && ed.list?.may_add) out.push(['rule', "The owner's team…"]);
   if (state.readOnly) return out;
-  if (si > 0 && !stage.task_limit) out.push(['limit', 'Limit']);
+  // a side stage has no Limit, and opens or queues nothing (its owner it may change)
+  if (si > 0 && !stage.task_limit && !stage.side) out.push(['limit', 'Limit']);
   if (!stage.owner) out.push(['owner', PE_THEN_OWNER]);
-  if (!peActOf(state, stage)) {
+  if (!peActOf(state, stage) && !stage.side) {
     if (peIntoTargets(state, '').length) out.push(['file_into', PE_THEN_INTO]);
     out.push(['queue', PE_THEN_QUEUE]);
   }
@@ -404,7 +409,7 @@ function peEnterHTML(state: PeState, stage: PipelineStageRec, si: number, sid: s
   };
   // the rules first (the Limit, then the rules that act as a task enters), then the actions: one mark for each kind
   const act = peActOf(state, stage), owner = peOwnerOf(stage);
-  const limit = si > 0 && stage.task_limit ? row('limit', SR_ROW_ICONS.rule, peLimitText(stage.task_limit)) : '';
+  const limit = si > 0 && stage.task_limit && !stage.side ? row('limit', SR_ROW_ICONS.rule, peLimitText(stage.task_limit)) : '';
   const acts = (owner ? row('owner', SR_ROW_ICONS.act, owner.text) : '') + (act ? row('act', SR_ROW_ICONS.act, act.text) : '');
   const picks = peEnterPicks(state, stage, si);
   // + Rule goes straight to a new rule when that is all it offers; with a Limit to add too, it lists both
@@ -522,6 +527,10 @@ function peMoreClick(ev: Event): boolean {
   return true;
 }
 
+/** A stage's Side switch: on, the stage is a side stage of the stage before it (peInput sets what that means). */
+const peSideHTML = (state: PeState, stage: PipelineStageRec, si: number): string =>
+  `<label class="pe-check pe-side"><input type="checkbox" role="switch" data-pe-sf="side" data-pe-si="${si}"${stage.side ? ' checked' : ''}${state.readOnly ? ' disabled' : ''}> Side</label>`;
+
 /** A stage, as its phases in the order a task moves (spec "A stage picks its owner from several", 1): its name and goal;
     On entering, one list (its Limit, its actions, the rules that act as a task enters), + Rule and + Action; While here
     (Late after: the stage's expected time) and the rules that act while it is there; To leave (how tasks leave, then the
@@ -534,6 +543,8 @@ function peStageHTML(state: PeState, stage: PipelineStageRec, si: number, count:
   // the fields are off for a viewer who may not change the pipeline; the rules beside them are not (they open to read)
   const ro = (html: string): string => state.readOnly ? `<fieldset class="pe-ro" disabled>${html}</fieldset>` : html;
   const sid = stage.id ? `${state.id}-${stage.id}` : `${state.id}-n${si}`;
+  // Side: every stage but the first (a first stage that is one still shows it, to turn it off)
+  const side = si > 0 || stage.side ? peSideHTML(state, stage, si) : '';
   // a phase: its heading, then its fields and its rules, or (On entering) its one list
   const phase = (key: SrPhase, fields: string, list = ''): string => {
     const [icon, label] = PE_PHASE_ICONS[key];
@@ -543,9 +554,12 @@ function peStageHTML(state: PeState, stage: PipelineStageRec, si: number, count:
   };
   const inner = ro(peRow(peF('Name', `<input data-pe-sf="name" ${at} maxlength="80" value="${esc(stage.name)}" required autocomplete="off">`, 'name')
       // the stage's goal, stored as `purpose`
-      + peF('Goal', `<input data-pe-sf="purpose" ${at} maxlength="300" value="${esc(stage.purpose)}" autocomplete="off">`)))
+      + peF('Goal', `<input data-pe-sf="purpose" ${at} maxlength="300" value="${esc(stage.purpose)}" autocomplete="off">`)
+      // one stage's editor has no row: its Side is beside its Name and Goal
+      + (state.only && stage.id === state.only ? side : '')))
     + phase('enter', '', peEnterHTML(state, stage, si, sid))
-    + phase('here', peRow(`<div class="pe-f pe-f-time"><span>Late after</span><span class="pe-pair"><input type="number" min="1" step="1" inputmode="numeric" data-pe-sf="expected_n" ${at} value="${ex.n}" placeholder="Never" aria-label="Late after">`
+    // a side stage has no Late after: its rules only
+    + phase('here', stage.side ? '' : peRow(`<div class="pe-f pe-f-time"><span>Late after</span><span class="pe-pair"><input type="number" min="1" step="1" inputmode="numeric" data-pe-sf="expected_n" ${at} value="${ex.n}" placeholder="Never" aria-label="Late after">`
       + `<select data-pe-sf="expected_unit" ${at} aria-label="Unit">${PE_UNITS.map(([l, size]) => `<option value="${size}"${size === ex.unit ? ' selected' : ''}>${l}</option>`).join('')}</select></span></div>`))
     + phase('leave', '', peLeaveHTML(state, stage, si, sid))
     // rules that answer something else than entering or a timer (a bot's snooze): their When is this place
@@ -555,7 +569,7 @@ function peStageHTML(state: PeState, stage: PipelineStageRec, si: number, count:
   // The closed row: its name, who owns it ("One of 2" for a stage that picks), and how many requirements it has to leave
   // (named when pointed at).
   const owner = stage.owner === PE_ASSIGNEE || picks ? '' : stage.owner;
-  const reqs = [...stage.requirements.map(peReqText), ...(stage.by_hand ? [PE_BY_HAND] : [])];
+  const reqs = stage.side ? [] : [...stage.requirements.map(peReqText), ...(stage.by_hand ? [PE_BY_HAND] : [])];
   const pool = stage.pick?.bots ?? [];
   const meta = `<span class="pe-stage-meta">`
     + (reqs.length ? `<span class="pe-stage-reqs" title="${esc(reqs.join(', '))}" aria-label="${reqs.length} to leave">✓ ${reqs.length}</span>` : '')
@@ -565,7 +579,7 @@ function peStageHTML(state: PeState, stage: PipelineStageRec, si: number, count:
   const tools = `<span class="pe-tools"><button type="button" class="ghost" data-pe-up ${at} aria-label="Move up"${si === 0 ? ' disabled' : ''}>↑</button>`
     + `<button type="button" class="ghost" data-pe-down ${at} aria-label="Move down"${si === count - 1 ? ' disabled' : ''}>↓</button>`
     + `<button type="button" class="ghost" data-pe-stage-x ${at}${count < 2 ? ' disabled' : ''}>Remove</button></span>`;
-  return `<details class="pe-stage" ${at}${state.open.has(stage) ? ' open' : ''}><summary><span class="pe-stage-name">${esc(stage.name || 'New stage')}</span>${meta}${state.readOnly ? '' : tools}</summary>`
+  return `<details class="pe-stage${stage.side ? ' side' : ''}" ${at}${state.open.has(stage) ? ' open' : ''}><summary>${stage.side ? SIDE_MARK : ''}<span class="pe-stage-name">${esc(stage.name || 'New stage')}</span>${meta}${side}${state.readOnly ? '' : tools}</summary>`
     + `<div class="pe-stage-body">${inner}</div></details>`;
 }
 
@@ -669,6 +683,15 @@ function peInput(state: PeState, el: HTMLInputElement | HTMLSelectElement): void
       } else peEnterSay(state, peIndex(el, 'peSi'), 'owner');
     }
     else if (sf === 'requests_move_on') stage.requests_move_on = checked;
+    else if (sf === 'side') {
+      // A side stage moves by hand alone, with no Limit, no Late after and nothing to leave by (pipeline_settings refuses
+      // them): on clears them; off leaves by hand on, for the person to take off.
+      stage.side = checked;
+      if (checked) Object.assign(stage, {by_hand: true, requests_move_on: false, task_limit: null, expected_minutes: null, requirements: []});
+      state.rowOpen = '';
+      peDraw(state);
+      document.querySelector<HTMLElement>(`#pe-body [data-pe-sf="side"][data-pe-si="${peIndex(el, 'peSi')}"]`)?.focus();
+    }
     else if (sf === 'on_enter') { stage.on_enter = peOnEnter(value); peEnterSay(state, peIndex(el, 'peSi'), 'act'); }
     else if (sf === 'on_enter_kind') {
       // Open a linked task in… starts on the pipeline chosen before, else the first other one; its pick then shows
@@ -791,7 +814,7 @@ function peClick(state: PeState, target: Element): void {
   }
   if (el.hasAttribute('data-pe-stage-add')) {
     const fresh: PipelineStageRec = {name: '', purpose: '', owner: null, by_hand: false, requests_move_on: false, task_limit: null, expected_minutes: null,
-      expected_bots_only: false, on_enter: {}, requirements: []};
+      expected_bots_only: false, on_enter: {}, requirements: [], side: false};
     d.stages.push(fresh);
     state.open.add(fresh);
     peDraw(state);
@@ -1032,8 +1055,11 @@ async function openPipelineEditor(pipelineId: string, stageId = '', at: '' | 'ru
     // the phases' rule clicks: a rule's form opens over the editor, the stage's draft stays
     if (peMoreClick(ev)) return;
     if (stageRulesSectionClick(ev)) return;
-    // A button in a stage's summary (up, down, remove) does not also open or close the stage.
+    // A button in a stage's summary (up, down, remove) does not also open or close the stage; nor does its Side switch's
+    // word, which flips the switch alone.
     if (t.closest('summary button')) ev.preventDefault();
+    const sideWord = t.closest('summary .pe-side');
+    if (sideWord && !(t instanceof HTMLInputElement)) { ev.preventDefault(); sideWord.querySelector('input')?.click(); return; }
     if (PE) peClick(PE, t);
   });
   // A stage's panel stays open or closed across redraws.
