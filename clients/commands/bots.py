@@ -2,6 +2,9 @@
 
 Moved from clients/hubtools.py; clients/commands/__init__.py says how the table is put together."""
 
+import argparse
+
+from clients.cli_spec import NULL, Arg, Command, Group
 from clients.tico import APIError
 
 from clients.commands._registry import tool
@@ -1132,3 +1135,248 @@ def github_create_bot_repo(api, args):
 )
 def catalog(api, args):
     return api.get("templates")["cards"]
+
+
+# ----------------------------------------------------------------------------- the `tico bot` commands
+def _update(client, fields):
+    """`tico bot update`: the tool, without an operation id (the hand parser sent none), and a bot it cannot find is
+    not_found, not a crash."""
+    from clients import hubtools
+
+    try:
+        return hubtools.BY_NAME["tico_bot_update"]["fn"](
+            client, {k: v for k, v in fields.items() if k != "operation_id"}
+        )
+    except ValueError as exc:
+        raise APIError("not_found", str(exc)) from None
+
+
+def _branch(client, fields, computer=None):
+    """`tico bot branch`: `--computer` is one of your own computers, by its id or unique label, sent as its id. No
+    operation id is sent, as the hand parser sent none."""
+    body = {"bot": fields["bot"]}
+    if computer:
+        person = _as_person(client)
+        listing = person.get("computers")
+        rows = listing.get("computers", []) if isinstance(listing, dict) else listing
+        me = person.get("me")
+        own = str(me.get("actor") or me.get("id") or "").removeprefix("human:")
+        matches = [
+            row
+            for row in rows
+            if not row.get("revoked_at")
+            and row.get("owner_id") == own
+            and computer in (row.get("id"), row.get("label"))
+        ]
+        if len(matches) != 1:
+            raise APIError("computer", "Choose one of your computers by its id or unique label")
+        body["runner_id"] = matches[0]["id"]
+    return bot_branch(client, body)
+
+
+def _budget(client, fields, action=None):
+    """`tico bot budget BOT release` releases the bot from a hold instead of changing a budget."""
+    from clients import hubtools
+
+    return hubtools.BY_NAME["tico_bot_budget"]["fn"](client, {**fields, "release": True} if action else fields)
+
+
+def _subscriptions(text):
+    """`--subscribe-updates templates,tico`: the list; `none` (or nothing) is the empty list."""
+    return [p.strip() for p in text.split(",") if p.strip() and p.strip() != "none"]
+
+
+# `tico bot ...` (clients/cli_spec.py): the flags come from each tool's schema. A positional the schema leaves optional
+# says so (`positional=True, nargs="?"`); a switch that sent nothing when left out keeps `default=None`. The words a
+# value is typed as (`unlimited`, `none`, `on`/`off`) are converted where they are parsed, so a wrong word is refused
+# with the same line it always was. The hand parser keeps the leaves clients/hubcli.py names: their arguments are not
+# the tool's, or they work on this computer.
+_ON_OFF = lambda v: {"on": True, "off": False}[v]  # a lambda, as the hand parser had: its errors name <lambda>
+BOT = (
+    Group("bot", "build a bot from a template (BotOps), change it, place it, its status", aliases=("bots",)),
+    Command(
+        "bot show",
+        "one bot: its profile, and for one you may read also its status, machine, queue, goals and routines",
+        example="tico bot show builder",
+    ),
+    Command(
+        "bot update",
+        "change a bot's settings with your rights, or the requester's (BotOps)",
+        args=(
+            Arg("on_behalf_of", metavar="MESSAGE_ID"),
+            Arg("shared", action=argparse.BooleanOptionalAction),
+            Arg(
+                "update_subscriptions",
+                "--subscribe-updates",
+                action="store",
+                type=_subscriptions,
+                metavar="templates,tico|none",
+            ),
+        ),
+        omit=("template",),
+        example="tico bot update builder --display-name Builder --status paused",
+        run=_update,
+    ),
+    Command(
+        "bot access",
+        "show or set who may see, read and write to a bot",
+        example="tico bot access builder --see everyone",
+    ),
+    Command(
+        "bot owners",
+        "add or remove the humans who own a bot",
+        args=(
+            Arg("add", action="store", nargs="+", metavar="HUMAN"),
+            Arg("remove", action="store", nargs="+", metavar="HUMAN"),
+        ),
+        example="tico bot owners builder --add 7",
+    ),
+    Command(
+        "bot mail",
+        "show or set whether a bot sends mail on its own (a person only)",
+        args=(Arg("outbound_send", "--send", action=argparse.BooleanOptionalAction),),
+        example="tico bot mail builder --no-send",
+    ),
+    Command(
+        "bot setup-done",
+        "mark a bot's onboarding complete, as a person above it on the org chart",
+        args=(Arg("slug", positional=True, nargs="?"),),
+        example="tico bot setup-done builder",
+    ),
+    Command(
+        "bot ready",
+        "an onboarding bot says it is ready, with what it learned",
+        args=(Arg("summary", "--summary"),),
+        example="tico bot ready --summary 'Read the backlog; starting with the oldest bug'",
+    ),
+    Command(
+        "bot place",
+        "put a bot on a computer, as the person who asked (BotOps)",
+        example="tico bot place builder --computer studio",
+    ),
+    Command(
+        "bot go-live",
+        "place it if needed, turn it on and start its setup (BotOps)",
+        args=(Arg("setup", "--no-setup", action="store_const", const=False),),
+        example="tico bot go-live builder --computer studio",
+    ),
+    Command(
+        "bot restore", "bring an archived bot back, as the person who asked (BotOps)", example="tico bot restore ana"
+    ),
+    Command("bot archive", "archive a bot you manage", example="tico bot archive ana --successor builder"),
+    Command(
+        "bot turns-at-once",
+        "read or set the most turns the bot runs at once across all computers: N or unlimited",
+        args=(Arg("limit", positional=True, nargs="?", type=lambda v: NULL if v == "unlimited" else int(v)),),
+        example="tico bot turns-at-once builder 2",
+    ),
+    Command(
+        "bot browser-exit",
+        "read or set the computer a bot browses the web through: a computer id, or none for its own",
+        args=(Arg("computer", positional=True, nargs="?", type=lambda v: NULL if v == "none" else v),),
+        example="tico bot browser-exit builder none",
+    ),
+    Command(
+        "bot app-view",
+        "read or set whether a bot may view the app read only, for its screenshots: on or off",
+        args=(Arg("on", positional=True, nargs="?", action="store", type=_ON_OFF),),
+        example="tico bot app-view builder on",
+    ),
+    Command(
+        "bot budget",
+        "read or set a bot's runs per hour and per day, or release it from a hold",
+        args=(
+            Arg(
+                "action",
+                positional=True,
+                nargs="?",
+                choices=("release",),
+                local=True,
+                help="release the bot from a hold instead of changing a budget",
+            ),
+            Arg("hour", type=lambda v: v if v == "default" else int(v)),
+            Arg("day", type=lambda v: v if v == "default" else int(v)),
+        ),
+        omit=("release",),
+        example="tico bot budget builder --hour 4 --day default",
+        run=_budget,
+    ),
+    Command(
+        "bot profile",
+        "read or set a bot's profile: what wakes it and which tasks it takes",
+        args=(
+            Arg("profile", positional=True, nargs="?"),
+            Arg("sweeps", action="store", type=_ON_OFF, metavar="on|off"),
+            Arg("confirm_drop_rules", default=None),
+        ),
+        example="tico bot profile builder reviewer",
+    ),
+    Command(
+        "bot release",
+        "release a bot Tico stopped (failed runs, too many runs, or a run it could not start); its queue starts again",
+        example="tico bot release builder",
+    ),
+    Command(
+        "bot task-model",
+        "the model the bot's tasks run on, with its effort and harness; --clear puts them back on the bot's own model",
+        args=(Arg("model", positional=True, nargs="?"),),
+        example="tico bot task-model builder gpt-6.1-sol --effort high",
+    ),
+    Command("bot pause", "pause a bot (BotOps)", example="tico bot pause builder"),
+    Command("bot resume", "resume a bot (BotOps)", example="tico bot resume builder"),
+    Command(
+        "bot scope",
+        "limit a bot's claims to one task and its subtasks, or lift that (BotOps)",
+        args=(Arg("task", positional=True, nargs="?"),),
+        example="tico bot scope builder T1",
+    ),
+    Command(
+        "bot branch",
+        "make your branch of a bot that allows branches",
+        args=(Arg("computer", "--computer", local=True, help="your computer's label or id"),),
+        omit=("runner_id",),
+        example="tico bot branch builder --computer studio",
+        run=_branch,
+    ),
+    Command(
+        "bot repo-create",
+        "owner or BotOps: create <org>/bot-<slug> from a template, or empty",
+        args=(Arg("template", default="ticoteam/botops", metavar="OWNER/REPO"),),
+        example="tico bot repo-create inbound-sales-owner",
+    ),
+    Command(
+        "bot recent",
+        "the bots you have been working with lately and where each stands",
+        example="tico bot recent --days 3",
+    ),
+    Group("bot status", "a bot's live status: set yours, list every bot's, read the history"),
+    Command(
+        "bot status set",
+        "one factual line about what you are doing now",
+        args=(Arg("task_id", "--task"),),
+        example="tico bot status set 'Reviewing the pricing PR' --state running --task T1",
+    ),
+    Command("bot status list", "every bot you may see with its live status", example="tico bot status list"),
+    Command("bot status history", "a bot's status history", example="tico bot status history builder --since 7d"),
+    Command(
+        "bot list",
+        "every bot's state, stage and setup in one short row, with the command that gets a stuck one working (anyone)",
+        args=(Arg("needs_action", default=None), Arg("archived", default=None)),
+        example="tico bot list --needs-action",
+    ),
+    Command(
+        "bot go-live-all",
+        "take every planned bot live; --setup-done also finishes onboarding (the owner, admins, the bots' managers)",
+        args=(
+            Arg("setup_done", default=None),
+            Arg("setup", action=argparse.BooleanOptionalAction),
+            Arg("dry_run", default=None),
+        ),
+        example="tico bot go-live-all --dry-run",
+    ),
+    Command(
+        "bot quarantine-clear",
+        "lift a bot's quarantine so it works again (a person who manages the bot)",
+        example="tico bot quarantine-clear builder --note 'the refused push was a test'",
+    ),
+)

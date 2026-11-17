@@ -188,7 +188,7 @@ def test_every_task_command_a_bot_is_taught_runs_as_taught(tmp_path, monkeypatch
     parser = hubcli.parser()
     failures, ran = [], set()
     for where, number, text, argv in cases():
-        # `tico task worktree ...` runs git in the bot's own checkout (runner_support/worktrees.py): parsed only.
+        # `tico task worktree ...` runs git in the bot's own checkout (tico-runner worktree): parsed only.
         if argv[0] not in RUN_GROUPS or mention(argv) or argv[1:2] == ["worktree"]:
             continue
         for option in variants(argv):

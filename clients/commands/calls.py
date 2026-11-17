@@ -584,3 +584,79 @@ CALL = (
         example="tico call bot remove c1 ana",
     ),
 )
+
+
+def _no_key(fields):
+    """The meeting tools without an operation id: the hand parser these specs replaced never sent one, so a meeting
+    write carries no idempotency key, as before."""
+    return {k: v for k, v in fields.items() if k != "operation_id"}
+
+
+# `tico meeting ...` (clients/cli_spec.py). `meeting import` is still built by the hand parser (clients/hubcli.py): it
+# reads the transcript and notes files on this computer.
+MEETING = (
+    Group("meeting", "search meetings, read transcripts, import a transcript from another tool"),
+    Group("meeting granola", "your Granola account; connect in Meetings in your browser"),
+    Command(
+        "meeting granola status",
+        "your Granola connection",
+        convert=_no_key,
+        example="tico meeting granola status",
+    ),
+    Command(
+        "meeting granola sync",
+        "start a background sync of your Granola notes",
+        convert=_no_key,
+        example="tico meeting granola sync",
+    ),
+    Command(
+        "meeting link",
+        "link existing tasks to a saved meeting",
+        args=(Arg("task_ids", action="store", nargs="+"),),
+        omit=("kind",),
+        convert=_no_key,
+        example="tico meeting link m1 T1 T2",
+    ),
+    Command("meeting unlink", "remove a meeting's task link", convert=_no_key, example="tico meeting unlink m1 T1"),
+    Command(
+        "meeting search",
+        "search meeting history and transcripts; no words lists recent meetings",
+        args=(
+            Arg("q", positional=True, nargs="?", default=""),
+            Arg("person", default=""),
+            Arg("limit", default=20),
+            Arg("offset", default=0),
+        ),
+        convert=_no_key,
+        example="tico meeting search pricing --since 2026-09-01",
+    ),
+    Command(
+        "meeting read",
+        "read a transcript",
+        args=(Arg("offset", default=0), Arg("limit", default=20000), Arg("notes", default=None)),
+        convert=_no_key,
+        example="tico meeting read m1 --notes",
+    ),
+    Command("meeting delete", "delete a Meeting you may edit", convert=_no_key, example="tico meeting delete m1"),
+    Command("meeting pending", "your Pending queue", convert=_no_key, example="tico meeting pending"),
+    Command(
+        "meeting approve",
+        "share your Pending meetings",
+        args=(Arg("id", positional=True, nargs="?"), Arg("private", default=None)),
+        one_of=(("id", "all"),),
+        convert=_no_key,
+        example="tico meeting approve --all",
+    ),
+    Command(
+        "meeting dismiss",
+        "dismiss one of your Pending meetings",
+        convert=_no_key,
+        example="tico meeting dismiss m1",
+    ),
+    Command(
+        "meeting restore",
+        "restore a dismissed meeting to Pending",
+        convert=_no_key,
+        example="tico meeting restore m1",
+    ),
+)

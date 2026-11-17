@@ -48,6 +48,7 @@ from .media import (
 from .meetings import get as meeting, initial_review, announce
 from .store import H, Problem, encode
 from .views import roster
+from .api_contract import api_v2
 
 SOURCES = ("close",)
 SOURCE_NAME = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,39}$")
@@ -343,7 +344,15 @@ def install_imports(app, store, auth, execution, mutate):
         row = c.execute("SELECT deleted_at FROM media_control WHERE meeting_id=?", (rid,)).fetchone()
         return bool(row and row[0])
 
-    @app.post("/api/v2/meetings/import", openapi_extra=upload_contract(MeetingImport))
+    @app.post(
+        "/api/v2/meetings/import",
+        **api_v2(
+            "Meetings",
+            "importMeeting",
+            "Import into your Pending queue unless shared explicitly or automatically",
+            openapi_extra=upload_contract(MeetingImport),
+        ),
+    )
     async def meeting_import(request: Request):
         """File a meeting of the caller's (or of `owner_email`, from a machine), or update the one
         this source and id already made."""

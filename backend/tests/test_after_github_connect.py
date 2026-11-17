@@ -1,4 +1,4 @@
-"""Right after the owner connects GitHub on the default company (21 bots, one shared computer): organization, "All
+"""Right after the owner connects GitHub on the default company (its default bots, one shared computer): organization, "All
 repositories", "Let Tico create bot repositories" ticked (docs/github-app.md "Set up").
 
 The company is the one setup makes, the routes are the server's own, and only GitHub is a fake. Each test is one thing
@@ -9,16 +9,38 @@ lands on Tools; and one tap on the product repository gives each seat its access
 
 import json
 from collections import Counter
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from backend import bot_repo_maker as maker
 from backend import heartbeat
+from backend.company_file import chart_formula
 from backend.tests.helpers.github_app import gh  # noqa: F401
 from backend.tests.helpers.fresh_install import booted, environment, machine, rows, signed_in  # noqa: F401
 
-TEAM = 21  # the default company's bots: the built-ins (Tools Owner included) and the starter team
+CATALOG = Path(__file__).resolve().parents[2] / "templates" / "catalog"
+
+
+def _default_team():
+    """The default company's bots: each required catalog card (the built-ins, Tools Owner included; a card's slug is its
+    bot's) and each live seat of the chart a company starts with when setup picks none (chart_formula's default, whose
+    live seats company_import makes bots). The company below picks nothing, so these are all of its bots."""
+    loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+    cards = [
+        yaml.load((folder / "card.yaml").read_text(), Loader=loader)
+        for folder in sorted(CATALOG.iterdir())
+        if (folder / "card.yaml").is_file()
+    ]
+    required = {card.get("slug") or card["template"] for card in cards if card.get("required")}
+    live = {seat["id"] for seat in chart_formula.build({})["employees"] if seat["live"]}
+    return sorted(required | live)
+
+
+DEFAULT_TEAM = _default_team()
+TEAM = len(DEFAULT_TEAM)
 
 ORG = "ticoteam"
 BROWSER = {"accept": "text/html,application/xhtml+xml"}
@@ -125,7 +147,7 @@ def test_every_bot_gets_its_repository_without_anyone_asking_once_each_and_a_few
     api = company
     connect(api)
     team = bots(api)
-    assert len(team) == TEAM and "archive" not in team
+    assert team == DEFAULT_TEAM and "archive" not in team
     before = token(api, gh, "feature-owner")
     assert before.status_code == 409 and before.json()["error"]["code"] == "github_repo_missing", before.text
     assert progress(api) == {"made": 0, "taken": 0, "waiting": TEAM, "problem": ""}

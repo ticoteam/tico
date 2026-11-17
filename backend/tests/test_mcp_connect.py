@@ -7,12 +7,15 @@ import base64
 import hashlib
 import ipaddress
 import json
+import threading
+import time
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import pytest
 
-from backend import egress, mcp_connect
+from backend import egress, mcp_connect, oauth_refresh
+from backend.store import Store
 from backend.tests.helpers.api import assign, claim, get, headers, post, put, ready, runner
 from backend.tests.helpers.credentials import setup
 
@@ -259,6 +262,8 @@ def test_an_ending_access_token_is_refreshed_on_the_server_and_a_refused_refresh
     r = mcp_call(api, servers[0], token, "tools/list")
     assert r.status_code == 401 and r.json()["error"]["code"] == "tool_sign_in"
     assert get(api, "api-tools/acme-errors")["status"]["text"] == "Sign in again"
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM oauth_refresh_claims").fetchone()
 
 
 def test_an_oauth_server_without_registration_takes_the_client_a_person_gives(api, server):
@@ -302,3 +307,124 @@ def test_a_read_caller_on_a_signed_in_tool_is_held_to_mcp_reads(api, server):
     r = mcp_call(api, servers[0], token, "tools/call", {"name": "resolve_error", "arguments": {}})
     assert r.status_code == 403 and "resolve_error" in r.json()["error"]["detail"]
     assert len(fake.seen) == calls + 1
+
+
+def signed_in(api, server):
+    """An OAuth tool signed in on the fake server: (the fake, the sign-in's credential id)."""
+    fake = server(oauth=True, dcr=True, token=None)
+    post(api, "mcp-tools", {"name": "Acme Errors", "url": MCP, "auth": "oauth"})
+    query, code = fake.authorize(post(api, "api-tools/acme-errors/sign-in", {})["authorize_url"])
+    api.get(mcp_connect.CALLBACK_PATH, params={"code": code, "state": query["state"]}, follow_redirects=False)
+    with api.app.state.store.read() as c:
+        return fake, c.execute("SELECT id FROM credentials WHERE tool_id='acme-errors'").fetchone()[0]
+
+
+def read_tokens(api, cid):
+    with api.app.state.store.transaction() as c:
+        row = c.execute("SELECT * FROM credentials WHERE id=?", (cid,)).fetchone()
+        return json.loads(api.app.state.vault.cipher.decrypt(c, row))
+
+
+def write_tokens(api, cid, held):
+    vault = api.app.state.vault
+    with api.app.state.store.transaction() as c:
+        sealed, nonce = vault.cipher.encrypt(c, cid, json.dumps(held))
+        c.execute("UPDATE credentials SET ciphertext=?, nonce=? WHERE id=?", (sealed, nonce, cid))
+
+
+def another_writer(store):
+    with store.transaction() as c:
+        c.execute("SELECT 1")
+
+
+def test_two_refreshes_of_one_sign_in_at_once_send_its_refresh_token_once(api, server):
+    """Two callers (two stores on one database, as two processes have) find an ending access token at once. The vendor
+    rotates refresh tokens and refuses a used one, so exactly one refresh may reach it, and both callers get the access
+    token that refresh stored. While the vendor answers, another writer gets the database: no write lock is held."""
+    fake, cid = signed_in(api, server)
+    write_tokens(api, cid, {**read_tokens(api, cid), "expires_at": 1})  # long ended
+    store, vault = api.app.state.store, api.app.state.vault
+    other = Store(store.settings)
+    original = fake.auth
+    seen = []  # (the vendor's status, whether another writer got the database during its answer)
+
+    def slow_vendor(request, path):
+        form = {k: v[0] for k, v in parse_qs(request.content.decode()).items()} if path == "/token" else {}
+        if form.get("grant_type") != "refresh_token":
+            return original(request, path)
+        writer = threading.Thread(target=another_writer, args=(other,))
+        writer.start()
+        writer.join(10)
+        time.sleep(0.3)  # the second caller arrives while this refresh is in flight
+        response = original(request, path)
+        seen.append((response.status_code, not writer.is_alive()))
+        return response
+
+    fake.auth = slow_vendor
+    results, errors = [], []
+
+    def caller(s):
+        try:
+            results.append(mcp_connect.access_token(s, vault, cid))
+        except Exception as exc:  # noqa: BLE001 - reported by the assertion below
+            errors.append(exc)
+
+    callers = [threading.Thread(target=caller, args=(s,)) for s in (store, other)]
+    for thread in callers:
+        thread.start()
+    for thread in callers:
+        thread.join(60)
+    other.close()
+    assert errors == [] and len(results) == 2
+    assert seen == [(200, True)]
+    stored = read_tokens(api, cid)
+    assert results == [stored["access_token"], stored["access_token"]]
+    assert stored["access_token"] in fake.issued and stored["refresh_token"] in fake.refreshes
+
+
+def test_a_refresh_whose_claim_lapsed_keeps_the_tokens_another_refresh_stored(api, server):
+    """A refresh whose claim lapsed while the vendor answered: another refresh has stored a newer refresh token
+    meanwhile. Its answer is dropped, the stored tokens are used, and the newer refresh token is kept."""
+    fake, cid = signed_in(api, server)
+    write_tokens(api, cid, {**read_tokens(api, cid), "expires_at": 1})
+    store, vault = api.app.state.store, api.app.state.vault
+    original = fake.auth
+
+    def lapse_then_newer_refresh(request, path):
+        form = {k: v[0] for k, v in parse_qs(request.content.decode()).items()} if path == "/token" else {}
+        if form.get("grant_type") == "refresh_token":
+            with store.transaction() as c:
+                c.execute("UPDATE oauth_refresh_claims SET claimed_until='2000-01-01T00:00:00.000000Z'")
+            write_tokens(
+                api,
+                cid,
+                {
+                    "access_token": "acme-newer-access",
+                    "refresh_token": "acme-newer-refresh",
+                    "expires_at": time.time() + 3600,
+                },
+            )
+        return original(request, path)
+
+    fake.auth = lapse_then_newer_refresh
+    assert mcp_connect.access_token(store, vault, cid) == "acme-newer-access"
+    assert read_tokens(api, cid)["refresh_token"] == "acme-newer-refresh"
+
+
+def test_a_live_claim_makes_a_refresh_wait_and_a_lapsed_claim_is_taken_over(api, server, monkeypatch):
+    """A refresh another holder has claimed is not sent again: the caller waits, then fails, and the vendor is not asked.
+    A claim whose holder died lapses, and the next caller takes the sign-in over."""
+    fake, cid = signed_in(api, server)
+    write_tokens(api, cid, {**read_tokens(api, cid), "expires_at": 1})
+    store, vault = api.app.state.store, api.app.state.vault
+    monkeypatch.setattr(oauth_refresh, "WAIT_SECONDS", 0.5)
+    monkeypatch.setattr(oauth_refresh, "POLL_SECONDS", 0.05)
+    with store.transaction() as c:
+        assert oauth_refresh.take(c, "credential:" + cid)
+    asked = len([s for s in fake.seen if s[2] == "/token"])
+    with pytest.raises(mcp_connect.Failed):
+        mcp_connect.access_token(store, vault, cid)
+    assert len([s for s in fake.seen if s[2] == "/token"]) == asked
+    with store.transaction() as c:
+        c.execute("UPDATE oauth_refresh_claims SET claimed_until='2000-01-01T00:00:00.000000Z'")
+    assert mcp_connect.access_token(store, vault, cid).startswith("acme-synthetic-access-")

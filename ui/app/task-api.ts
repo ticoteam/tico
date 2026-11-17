@@ -349,7 +349,8 @@ async function pipelinesAll(): Promise<PipelineRec[]> {
 /** One pipeline's settings record (the server answers {pipeline: record}, to a read and to a save). */
 const pipelineRec = async (id: string): Promise<PipelineRec> =>
   (await get<{pipeline: PipelineRec}>(`/v2/pipelines/${encodeURIComponent(id)}`, {fresh: true})).pipeline;
-const pipelineSave = async (id: string, rec: Omit<PipelineRec, 'id'> | PipelineRec): Promise<PipelineRec> =>
+/** `move_tasks_to`: where the tasks of a stage the save removes go (a 409 stage_has_tasks asks for it). */
+const pipelineSave = async (id: string, rec: (Omit<PipelineRec, 'id'> | PipelineRec) & {move_tasks_to?: {pipeline: string; stage: string}}): Promise<PipelineRec> =>
   ((await post(`/v2/pipelines/${encodeURIComponent(id)}`, rec, newRequestId())) as {pipeline: PipelineRec}).pipeline;
 const pipelineRetire = (id: string, settingsVersion: number): Promise<unknown> =>
   post(`/v2/pipelines/${encodeURIComponent(id)}/retire`, {settings_version: settingsVersion}, newRequestId());

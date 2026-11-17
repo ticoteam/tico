@@ -9,9 +9,10 @@ const assert = require('node:assert/strict');
 const {startHub, pageAs} = require('./support/real-hub.cts') as RealHubSupport.Api;
 const {t} = require('./support/load.cts') as {t: (ms: number) => number};
 
-// Each visible element in #main with text of its own above 16px: "<size> <tag.class>: <text>".
+// Each visible element in #main with text of its own above 16px: "<size> <tag.class>: <text>". The Floor's hall names
+// are faint stencils behind each hall (the design), a backdrop and not a figure, so they are left out.
 const bigText = (page: Page) => page.evaluate(() => [...document.querySelectorAll('#main *')].flatMap(el => {
-  if (!(el instanceof HTMLElement) || !el.checkVisibility() || el.matches('header.ph > .ph-t')) return [];
+  if (!(el instanceof HTMLElement) || !el.checkVisibility() || el.matches('header.ph > .ph-t, .cf-hall > .cf-hall-head > .cf-hall-name')) return [];
   const own = [...el.childNodes].filter(n => n.nodeType === 3 && n.textContent!.trim()).map(n => n.textContent!.trim()).join(' ');
   const cs = getComputedStyle(el);
   if (!own || parseFloat(cs.fontSize) <= 16 || /Material Symbols/i.test(cs.fontFamily)) return [];

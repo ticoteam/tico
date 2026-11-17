@@ -18,6 +18,7 @@ from . import hubdb as H_
 from . import reach as R_
 from . import views as views_
 from .store import Problem
+from .api_contract import api_v2
 
 Row = dict[str, Any]
 # Untyped helpers, as Any so this strict module checks its own code (as backend/flow_opinions.py does).
@@ -119,7 +120,15 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
         scope: str = Field(default="reports", max_length=20)
         id: str | None = Field(default=None, max_length=200)
 
-    @app.post("/api/v2/flow/ping")
+    @app.post(
+        "/api/v2/flow/ping",
+        **api_v2(
+            "Needs you",
+            "pingFlowBots",
+            "Ask bots for the questions they have for you (people only): `scope` `reports` (default: the bots you manage), `bot` (`id`: one bot) or `group` (`id`: a team's bots, the teams under it included). Only bots you may read; never BotOps or the Assistant. Each gets one message from you pointing at the add-to-flow skill; its questions come back as tasks of its own, each with one ask to you, in your Needs you. A bot you pinged in the last 10 minutes is listed in `recent` and not messaged again. Calls no model",
+            "FlowPinged",
+        ),
+    )
     def flow_ping(request: Request, body: FlowPing) -> Row:  # pyright: ignore[reportUnusedFunction]
         """Ask bots for their questions for the caller: their reports by default, one bot, or one team's bots."""
         who = request.state.identity

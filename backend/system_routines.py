@@ -178,6 +178,10 @@ ACTIONS = {
     "goal_colours": ("work out every goal's colour again", ("goal", "colour", "color")),
     "check_gateway": ("check this server's Gateway key and the month's cap", ("gateway", "key", "cap")),
     "check_tools": ("call each proxied API tool's check with its keys", ("tools", "keys", "check")),
+    "close_access_requests": (
+        "close access requests and old access tasks whose access exists now",
+        ("access", "requests", "grant", "tools", "repositories"),
+    ),
     "read_billing": ("read HQ's nightly billing check", ("billing",)),
     "check_pages": (
         "read the watched competitor pages and file an insight for each that changed",
@@ -524,6 +528,16 @@ JOBS = [
         300,
         then=("check_tools",),
         applies=_tools_checked,
+    ),
+    Job(
+        "access_requests",
+        "Access requests",
+        "Closes each open access request whose access exists by now, and each old access task that asks for "
+        "access a bot has now, so nobody is asked twice.",
+        HOUSEKEEPING,
+        "Hourly",
+        3600,
+        then=("close_access_requests",),
     ),
     Job(
         "billing_check",

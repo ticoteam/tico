@@ -733,6 +733,7 @@ let browser: import('playwright').Browser | null = null;
 
     // A migrated Home: one "Earlier messages" row and the manager's control; the notice in a DM opens the same history.
     await page.goto('https://tico-ui.test/#/thread/h-old');
+    await page.locator('#threads-shell').waitFor();
     await page.getByText('New plan.').waitFor();
     assert.equal(await page.locator('.th-earlier').count(), 1);
     assert.match((await page.locator('.th-earlier').textContent())!, /Earlier messages/);
@@ -996,6 +997,7 @@ let browser: import('playwright').Browser | null = null;
     assert.ok(width <= 390, 'no sideways scroll: ' + width);
     await shot(page, 'thread-phone');
     await page.goto('https://tico-ui.test/#/thread/t-tree');
+    await page.locator('#threads-shell').waitFor();
     await page.getByText('Unread inline.').waitFor();
     await page.evaluate(() => document.querySelector<HTMLElement>('.th-msg[data-mid="p1"]')!.scrollIntoView());
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth) <= 390);
@@ -1012,6 +1014,7 @@ let browser: import('playwright').Browser | null = null;
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth) <= 390);
     await shot(page, 'person-empty-home-phone');
     await page.goto('https://tico-ui.test/#/thread/t-plan');
+    await page.locator('#threads-shell').waitFor();
     await page.locator('.th-notshown').waitFor();
     await page.evaluate(() => document.querySelector<HTMLElement>('.th-notshown')!.scrollIntoView({block: 'center'}));
     await shot(page, 'not-shown-phone');
@@ -1076,6 +1079,7 @@ let browser: import('playwright').Browser | null = null;
 
     // A group chat on the rail is named by who the server says is in it; a 1:1 DM is not on the rail.
     await page.goto('https://tico-ui.test/#/threads');
+    await page.locator('#threads-shell').waitFor();
     await page.locator('#thread-rail [data-thread="t-group"]').waitFor();
     assert.equal(await page.locator('#thread-rail [data-thread="t-group"] .tr-title').innerText(), 'Bea, Cy, Di +3');
     assert.equal(await page.locator('#thread-rail [data-thread="t-zed"], #thread-rail [data-thread="t-none"]').count(), 0);
@@ -1119,6 +1123,7 @@ let browser: import('playwright').Browser | null = null;
     // Calls off: nobody gets a control that cannot work, and no "Set up calls" note either.
     callsOff = true;
     await page.goto('https://tico-ui.test/#/thread/t-sub');
+    await page.locator('#threads-shell').waitFor();
     await page.locator('.thv-title').waitFor();
     await page.waitForLoadState('networkidle');
     assert.equal(await page.locator('.thv-call-note, [data-call]').count(), 0);
@@ -1126,6 +1131,7 @@ let browser: import('playwright').Browser | null = null;
     await page.close();
     const member = await open(browser, 'bob', {phone: true});
     await member.page.goto('https://tico-ui.test/#/thread/t-sub');
+    await member.page.locator('#threads-shell').waitFor();
     await member.page.locator('.thv-title').waitFor();
     await member.page.waitForLoadState('networkidle');
     assert.equal(await member.page.locator('.thv-call-note, [data-call]').count(), 0);
@@ -1219,6 +1225,7 @@ let browser: import('playwright').Browser | null = null;
   {
     const {page, seen} = await open(browser, 'ana', {phone: true});
     await page.goto('https://tico-ui.test/#/threads');
+    await page.locator('#threads-shell').waitFor();
     await page.locator('#thread-rail [data-list="threads"] .tr-row[data-thread="t11"]').waitFor();
     assert.equal(await page.locator('#thread-pane').isVisible(), false);
     assert.equal(await page.locator('.tr-empty').count(), 0);
@@ -1262,6 +1269,7 @@ let browser: import('playwright').Browser | null = null;
     pinsAtOpen = [];
     const {page, seen} = await open(browser, 'ana');
     await page.goto('https://tico-ui.test/#/threads');
+    await page.locator('#threads-shell').waitFor();
     const line = page.locator('.tr-pane [data-tr-unread-n]');
     await line.waitFor();
     assert.equal(await line.textContent(), '3 chats with new messages', 'what waits, in one line');

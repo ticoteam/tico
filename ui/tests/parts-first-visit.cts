@@ -1,5 +1,5 @@
 // Page parts on a real hub (support/real-hub.cts), the bundle served as in production (scripts/build-ui.cjs, ui/parts.json):
-// - a cold open of Home, Tasks or Threads downloads the shell only, and so does an owner's first visit and Home's refresh;
+// - a cold open of Home or Tasks downloads the shell only, and so does an owner's first visit and Home's refresh;
 // - a part that cannot load leaves Retry in the main area while the sidebar still works, and Retry opens the page once
 //   the network is back;
 // - a tab open from before a release, whose part address the server no longer has, reloads to the current release and
@@ -23,7 +23,7 @@ declare function decideTabPages(): {page: string}[];
 declare function uiPartLoad(name: string): Promise<void>;
 
 // Pages a cold open draws from the shell alone.
-const SHELL = ['#/home', '#/tasks', '#/threads'];
+const SHELL = ['#/home', '#/tasks'];
 
 (async () => {
   const hub = await startHub({seeds: ['org', 'toured']});     // toured: no first-visit tour over Home

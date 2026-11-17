@@ -106,6 +106,19 @@ def test_in_and_out_count_each_task_once_in_the_last_day_and_week(api):
     assert today["id"] and pipe["stages"][0]["count"] == 3
 
 
+def test_an_open_task_moved_in_from_another_pipeline_comes_in_and_a_done_one_is_not_output(api):
+    made = post(api, "factories", {"name": "Product development"})["factory"]
+    pipeline(api, "product", made["id"])
+    pipeline(api, "backlog", made["id"], stages=("ice",))
+    parked = task(api, "Saved carts", "ben", "backlog")
+    shipped = task(api, "Guest checkout", "ben", "backlog")
+    post(api, f"tasks/{shipped['id']}/move", {"to": "done", "why": "Shipped"})
+    for moved in (parked, shipped):
+        post(api, f"tasks/{moved['id']}/move", {"to_pipeline": "product", "why": "Picked up"})
+    pipe = find(floor(api), "product")
+    assert pipe["in"] == {"day": 1, "week": 1} and pipe["out"] == {"day": 0, "week": 0}
+
+
 def test_a_private_pipeline_a_reader_cannot_read_is_not_there(api):
     open_one = post(api, "factories", {"name": "Product development"})["factory"]
     quiet = post(api, "factories", {"name": "Deals"})["factory"]

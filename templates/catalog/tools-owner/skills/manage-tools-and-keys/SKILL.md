@@ -18,6 +18,7 @@ you will do instead.
 | See every tool, its status and who holds which level (never a value) | you | `tico tool index` (MCP `tico_tool_index`); `tico tool list --bot <bot>` for one bot's tools, declared and granted |
 | Check a tool's keys now | you | `tico tool check <id>` (MCP `tico_tool_check`) |
 | Get a key typed in for a bot | the person, on your card | `tico credential request <VAR> --for-bot <bot> ...` |
+| A bot needs a level on a tool or repository that exists | Tico, or a person on its card | `tico access request <tool or owner/repo> --level read --for <bot> --why "..."` |
 | Grant keys a person dropped in your chat, by tool, level and bots | the person, on your card | MCP `tico_tools_propose_grant` |
 | Give a bot a key, set its level, take it back | you, as the person who asked | `tico tool level <tool> <bot> <read, read_write or none>`; `tico credential grant <key> --to <bot>` and `tico credential revoke <key> --from <bot>` for a key on no tool |
 | Add or change an API tool, its settings, an MCP server (sign-in), share a website account with a bot | you, as the person who asked | the commands below; the person's own rights decide |
@@ -161,6 +162,16 @@ a website sign-in, not an API key. You get one task per pair ("Make <PREFIX> a w
 - When the person asked for it, set the level yourself (section "What you can do"). Otherwise link the tool's row
   (`href` in `tico tool index`) and name the bot and level in one line.
 
+## 4b. Access requests
+A bot (or you, or BotOps, for a bot) asks with `tico access request <tool or owner/repo> --level read|read_write
+--for <bot> --why "<what for>"`. Never file a task to a person for a level or repository access, and close one you
+find by asking this way instead.
+- Read where Tico can hold it to reads (a tool every bot could read by default; a ticked repository that is no bot's
+  own) is granted at once; the person who added it gets a card with Take back.
+- Everything else is one card to each person who can grant it; the first to act decides. Asking again adds nothing.
+- The request closes itself once the access exists by any path (a level you set for a person counts), and the task
+  that asked is woken. "Several to choose from" on a bot's Tools tab is answered by asking for the one tool it needs.
+
 ## 5. How the key reaches the bot, and what the bot must do
 - **Proxy** (lock on the row): the run gets a proxy token in the key's variable and the proxy's address in
   `TICO_TOOL_<ID>_URL` (`TICO_TOOL_CLOSE_CRM_URL` for `close-crm`). The bot calls `$TICO_TOOL_<ID>_URL/<vendor path>`
@@ -209,8 +220,11 @@ a key: put it under Settings.
 - **409 `env_in_use`**: the bot already gets that variable from another key. Same value: it is a duplicate (section 6).
   Different value: a person decides which the bot keeps, takes the other away, then grants.
 - **Key rejected**: the vendor refused it (revoked, expired, wrong account, wrong format such as `email:token` for
-  Basic). Open a card for the bot whose key it is, or ask for a new drop in your chat; the new value replaces the old.
-  Check again after it is saved.
+  Basic). Tico gives you one **Reconnect <vendor>** task for it, with a key card in its thread already addressed to the
+  person who connected the tool (or a credential admin): do not open another card or ask for the key in words. The new
+  value replaces the old key in place, every grant kept, and the task closes itself once it is saved or the tool reads
+  Working again. Repeats of the same rejection fold into that task. Work it only when the person asks you something
+  there, or the card is not enough (a key that needs a new scope, a vendor account that is gone: say so on the task).
 - **Check failed**: the address or check path is wrong, the vendor is down, or the address is not public (the proxy
   only sends to public https addresses). Read the check's detail before blaming the key.
 - **Proxy 403 "<bot>'s level on <tool> is Read: only GET calls"**: the bot holds Read and the tool has no Read key. Add a

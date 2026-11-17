@@ -660,10 +660,15 @@ function taskSaveQueued(d: ModalDialog, id: string, body: PropBody, then?: boole
   const run = () => taskSave(d, id, body, then, field).finally(() => { d.saving!--; });
   return (d.saveQueue = (d.saveQueue || Promise.resolve()).then(run, run));
 }
+/** To a stage of another pipeline: the same task, its number and label kept. */
+const taskMoveTo = (id: string, pipeline: string, stage: string, version: number | null, why?: string): Promise<TaskMoved> =>
+  post(`${taskPath(id)}/move`, withVersion(version, {to_pipeline: pipeline, to: stage, ...(why ? {why} : {})}), newRequestId());
+
 // One save, by what it asks (task-api.ts): a move ({move: to, why?}, {close}, {done}), a new owner, a snooze, or the
 // task's own fields. `quiet` with a move: a refusal for what is missing is answered (the caller asks why) instead of shown.
 async function taskSaveSend(cur: ModalTask, body: PropPatch, note: string): Promise<TaskV3> {
   const id = String(cur.id), version = cur.version, why = typeof body.why === 'string' ? body.why : undefined;
+  if (typeof body.move === 'string' && typeof body.pipeline === 'string') return (await taskMoveTo(id, body.pipeline, body.move, version, why)).task;
   if (typeof body.move === 'string') return (await taskMove(id, body.move, version, why)).task;
   if (body.close) return (await taskMove(id, 'closed', version)).task;
   if (body.done) return (await taskDone(id, version, note || undefined)).task;
@@ -690,6 +695,8 @@ async function taskSave(d: ModalDialog, id: string, body: PropBody | null, then:
     if (String(d.liveTask?.id) === id) d.liveTask = task;
     if (here() && then !== false) void taskModalShow(task, d);       // the server's answer, at once
     // Closing says so with Undo for a while (S5): Undo reopens it.
+    // Another pipeline: the task keeps its number, so the toast names it by that.
+    if (typeof body.where === 'string') toast(`Moved ${task.number ? `#${task.number}` : task.title} to ${body.where}`);
     if (body.close) toast('Closed', false, {label: 'Undo', run: () => taskMove(id, 'reopen', task.version, 'Undone').then(r => { if (here()) void taskModalShow(r.task, d); }, e => toast(errorMessage(e, ''), true))});
     if (BOT) void botTasksCatchUp(BOT.slug);
     void personTasksReload();
@@ -757,6 +764,13 @@ const commentAuthor = (a: string | null | undefined, via?: string | null, src: {
 };
 // A stage's name by its id, from the pipelines the Tasks page has read; else the id.
 const taskStageWord = (id: string | null | undefined) => ((typeof TASK_PIPELINES !== 'undefined' && TASK_PIPELINES) || []).flatMap(p => p.stages).find(st => st.id === id)?.name || String(id || '');
+// A stage with its pipeline ("Backlog › On ice"), by its id: how a move to another pipeline names both ends.
+function taskStagePlace(id: string | null | undefined): {pipeline: string; words: string} | null {
+  const p = ((typeof TASK_PIPELINES !== 'undefined' && TASK_PIPELINES) || []).find(x => x.stages.some(st => st.id === id)
+    || x.done?.id === id || x.closed?.id === id);
+  const st = p ? [...p.stages, p.done, p.closed].find(x => x?.id === id) : null;
+  return p && st ? {pipeline: p.id, words: `${p.name} › ${st.name}`} : null;
+}
 // The pipelines' stage names a task's history names its moves by, read once when it has a move and the Tasks page has not read them.
 const taskStagesFor = async (data: ModalDetail | null | undefined) => {
   if (!TASK_PIPELINES && data?.events?.some(e => e.field === 'move')) await tasksPipelinesRead().catch(() => []);
@@ -765,7 +779,11 @@ const taskStagesFor = async (data: ModalDetail | null | undefined) => {
 const JEV_WORDS: Record<string, string> = {met: 'met', not_met: 'not met', unsure: 'unsure'};
 const ANSWER_WORDS: Record<string, string> = {ok: 'gave the OK', no: 'sent it back', done: 'said done', yes: 'answered yes'};
 // A move (backend/task_engine.py) names the stage it went to; a reassign who has it now.
-const TASK_EVENT_WORDS: Record<string, (v: string | null | undefined, x: ModalEvent) => string> = {move: id => `moved it to ${taskStageWord(id)}`, reassign: v => `handed it to ${actorLabel(v)}`, status: s => `moved it to ${taskStatusLabel({status: s ?? null})}`, owner: v => `handed it to ${actorLabel(v)}`,
+const TASK_EVENT_WORDS: Record<string, (v: string | null | undefined, x: ModalEvent) => string> = {move: (id, x) => {
+  // To another pipeline: "moved it from Dev › Ideas to Backlog › On ice".
+  const from = taskStagePlace(x.old), to = taskStagePlace(id);
+  return from && to && from.pipeline !== to.pipeline ? `moved it from ${from.words} to ${to.words}` : `moved it to ${taskStageWord(id)}`;
+}, reassign: v => `handed it to ${actorLabel(v)}`, status: s => `moved it to ${taskStatusLabel({status: s ?? null})}`, owner: v => `handed it to ${actorLabel(v)}`,
   lane: v => `moved it to the ${v === 'company' ? 'team' : v} lane`, labels: v => { try { const l = JSON.parse(v || '[]'); return l.length ? `set the tags: ${l.join(', ')}` : 'removed the tags'; } catch { return 'changed the tags'; } },
   blocked_by: v => v ? 'marked it blocked' : 'cleared the block', parent_id: v => v ? 'filed it under a parent task' : 'took it out of its parent',
   subtask: v => v ? 'added a subtask' : 'moved a subtask out', blocks: v => v ? 'made it block another task' : 'stopped it blocking a task',

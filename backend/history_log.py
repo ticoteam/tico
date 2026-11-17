@@ -49,6 +49,7 @@ MOVES = {
     "closed": "closed",
     "reopen": "reopened",
     "restored": "restored",
+    "moved": "moved to another pipeline",
 }
 REVEALS = {"credential.revealed": "revealed", "credential.sent_to_computer": "sent to its computer"}
 # What each permission event changed, in words.

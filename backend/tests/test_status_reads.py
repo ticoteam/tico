@@ -1,6 +1,6 @@
 """The status page reads each table once for every bot, and says exactly what each bot's own status line says."""
 
-from backend import task_engine as E
+from backend import holds, task_engine as E
 from backend import task_privacy as privacy, usage_limits
 from backend.events import prime_status_lines, status_line
 from backend.store import H
@@ -36,7 +36,9 @@ def test_primed_status_lines_match_each_bots_own_and_read_each_table_once(api, m
     with api.app.state.store.transaction() as c:
         for slug, state in (("cpo", "idle"), ("finance", "idle"), ("assistant", "crashed"), ("inbox", "idle")):
             H.status_set(c, H.KEEPER, slug, state=state, focus="Checked the queue")
-        c.execute("INSERT INTO bot_budget(bot,held_at,window,runs,budget) VALUES('cpo',?,'hour',301,300)", (H.now(),))
+        holds.put(
+            c, holds.RUNAWAY, "bot", "cpo", actor=H.KEEPER, details={"window": "hour", "runs": 301, "budget": 300}
+        )
         c.execute(
             "INSERT INTO run_backoff(bot,fails,wait_until) VALUES('finance',2,?)", (H.shift(H.now(), seconds=600),)
         )

@@ -1055,6 +1055,49 @@ mod tests {
         );
     }
 
+    /// GitHub's stateless installation token (`ghs_<app id>_<JWT>`, ~520 characters with dots and dashes; the
+    /// default since Oct 2026), synthetic. backend/tests/helpers/github_app.py stateless_token makes the same shape.
+    fn stateless_token() -> String {
+        format!(
+            "ghs_4242_eyJhbGciOiJSUzI1NiJ9.eyJpaWQiOjc3LCJub25jZSI6InN5bnRoZXRpYyJ9.{}",
+            "S1g-n_aTuRe".repeat(40)
+        )
+    }
+
+    #[test]
+    fn a_stateless_token_reaches_git_exactly_as_the_socket_answers_it() {
+        let token = stateless_token();
+        let dir =
+            PathBuf::from("/tmp").join(format!("tico-cred-fmt-{}", uuid::Uuid::new_v4().simple())); // short
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("git-credential.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let answer = token.clone();
+        let served = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut asked = String::new();
+            BufReader::new(&stream).read_line(&mut asked).unwrap();
+            (&stream)
+                .write_all(format!("{}\n", json!({ "token": answer })).as_bytes())
+                .unwrap();
+            asked
+        });
+        let got = socket_request(&path, "attempt-1", Some("Acme/emp-ops"), "git").unwrap();
+        let asked: Value = serde_json::from_str(&served.join().unwrap()).unwrap();
+        assert_eq!(
+            asked,
+            json!({"token": "attempt-1", "repository": "Acme/emp-ops", "purpose": "git"})
+        );
+        assert_eq!(
+            got, token,
+            "the token git is given is the one the socket answered"
+        );
+        let granted = json!({"configured": true, "token": token, "tokens": [{"token": token, "repositories": ["Acme/emp-ops"]}]});
+        assert_eq!(select_token(&granted, Some("acme/emp-ops")), token);
+        assert_eq!(select_token(&granted, None), token);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[tokio::test]
     async fn a_turn_user_trusts_only_its_checkout_and_owns_its_own_credential_socket() {
         let dir =

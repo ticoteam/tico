@@ -786,6 +786,11 @@ class Vault:
             from . import reconnects
 
             reconnects.secret_stored(c, H.actor_id(subject), row['env'])
+        if subject.startswith('bot:'):
+            # An access request this grant answers closes itself (backend/access_requests.py).
+            from . import access_requests
+
+            access_requests.settled(c, who, subject=subject)
         return {'id': gid, 'subject': subject, 'credential': row['name'], 'env': row['env']}
 
     def reveal_login(self, c, who, row):

@@ -106,9 +106,12 @@ Do it yourself, as the requester; the server decides and a refusal names who can
 - Generated access tasks take a title prefix: `tico tool add --title-prefix <prefix>`. Keep requested title prefixes on child tasks
   and notes too.
 - Keep Tool declarations separate: they describe actions and do not grant repository access.
-- Repository access requests use `tico_bot_repos_set` / `tico bot repos` (`tico bot repos <slug>` reads it; `--chosen owner/repo:read`
-  sets it). Then read `effective` to verify the requested repositories and read/write grants. Preserve existing grants unless
-  the requester asked to change them.
+- A bot that needs a level on a tool or a repository that exists: `tico access request <tool or owner/repo> --level read
+  --for <slug> --why "..."`. Read Tico can hold to reads is granted at once; anything else is one card to each person who
+  can grant it, and it closes itself once the access exists. Never file a person a task for it.
+- A person's own change to a bot's repository access uses `tico_bot_repos_set` / `tico bot repos` (`tico bot repos <slug>`
+  reads it; `--chosen owner/repo:read` sets it). Then read `effective` to verify the requested repositories and read/write
+  grants. Preserve existing grants unless the requester asked to change them.
 - Putting a bot's local repository on GitHub, when the team has connected it: `tico bot repo-create <slug> --empty`.
 - Slack channels: "let the Setup bot read #customer_success" is `tico slack channel add '#customer_success' --reader <bot>`,
   then say so in one line. Only an owner or admin may do it, so a member is told who to ask.

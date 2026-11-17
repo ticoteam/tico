@@ -8,6 +8,7 @@ import re
 from urllib.parse import quote
 from clients.tico import APIError
 
+from clients.cli_spec import Arg, Command, Group
 from clients.commands._registry import tool
 from clients.commands._schemas import _key, _s
 from clients.commands._shared import _CHANNEL
@@ -295,6 +296,52 @@ def credential_request(api, args):
     if _as_person(api) is not api:
         body["on_behalf_of"] = "turn"
     return api.post("credential-requests", body, key=_key(args))
+
+
+@tool(
+    "tico_access_request",
+    "Ask for a level on a tool in Tools or a GitHub repository that already exists, for yourself (BotOps, the Tools "
+    "Owner and people: `for_bot`). Read where Tico can hold it to reads is granted at once; anything else is one card "
+    "to each person who can grant it, and the first to act decides. Asking again adds nothing and notifies nobody. You "
+    "are woken on your task when it is granted, however it was given: work on something else or end your turn. Use "
+    "this for every access need instead of filing a task. A key that is not stored yet is tico_credential_request.",
+    {
+        "resource": _s(
+            "The tool (its name or id, `tool:<name>`) or the repository (`owner/name`, its short name, `repo:<name>`). "
+            "When several tools give the same variable, name the one you need"
+        ),
+        "level": _s("read (the default) or read_write", enum=["read", "read_write"]),
+        "for_bot": _s("The bot that needs it; you, when you leave it out"),
+        "why": _s("One line for the person: what it is for"),
+        "task": _s("The task that waits on it (its full id); the task your turn is on when you leave it out"),
+    },
+    required=("resource",),
+    writes=True,
+)
+def access_request(api, args):
+    body = {k: args[k] for k in ("resource", "level", "for_bot", "why", "task") if args.get(k)}
+    return api.post("access-requests", body, key=_key(args))
+
+
+@tool(
+    "tico_access_stats",
+    "Access requests in numbers: asked, reached a person, share granted at once, open, median minutes to grant.",
+    {"days": {"type": "integer", "minimum": 1, "maximum": 90, "description": "How many days back; 7 by default"}},
+)
+def access_stats(api, args):
+    return api.get("access-requests/stats" + (f"?days={int(args['days'])}" if args.get("days") else ""))
+
+
+ACCESS = (
+    Group("access", "ask for a level on a tool or a repository; the numbers on asking"),
+    Command(
+        "access request",
+        "ask for Read or Read and write on a tool or a repository",
+        args=(Arg("for_bot", flag="--for", metavar="BOT"),),
+        example="tico access request acme/web --level read --why 'review the release notes'",
+    ),
+    Command("access stats", "the last days' access requests in numbers", example="tico access stats --days 7"),
+)
 
 
 @tool(
@@ -827,3 +874,188 @@ def query_search(queries, term):
         ).lower()
 
     return [q for q in queries if all(w in text(q) for w in words)]
+
+
+# ----------------------------------------------------------------------------- `tico tool` and `tico repo` (cli_spec)
+# The command lines of the tools above (clients/cli_spec.py). `tool call` is still built in clients/hubcli.py: it calls
+# the vendor through this computer's proxy. So are `repo review`, which reads --body-file here, and `repo
+# product-create`, which asks for the exact name at this terminal.
+def integrations_text(rows):
+    blocks = []
+    for row in rows:
+        head = (
+            f"{row['service']:<24} {row['kind']:<8} {row['writes']:<9} {row['summary']}"
+            f"  [{row['query_count']} queries, {row['learning_count']} learnings]"
+        )
+        extra = [f"  credentials: {c}" for c in (row.get("credentials") or [])]
+        if row.get("access"):
+            extra.append(f"  access: {row['access']}")
+        blocks.append("\n".join([head, *extra]))
+    return "\n\n".join(blocks) or "no integrations"
+
+
+def integration_text(page):
+    out = [
+        f"# {page['title']} ({page['service']}, {page['kind']}, writes: {page['writes']}, owner: {page['owner']})",
+        "",
+        page["summary"],
+        "",
+        f"Access: {page['access']}",
+        "Credentials:",
+    ]
+    out += [f"  - {c}" for c in page["credentials"]]
+    out += ["Declared in bot.yaml as:"] + ["  " + line for line in page["declared_as"].rstrip().splitlines()]
+    out += ["", page["body"].rstrip()]
+    if page["queries"]:
+        out += [
+            "",
+            f"## Queries ({len(page['queries'])}; `tico tool query-search {page['service']} <term>` searches, `--id <id>` prints one)",
+        ]
+        out += [f"  {q['id']:<44} {q['title']}" for q in page["queries"]]
+    notes = page.get("learnings") or []
+    out += ["", f"## Learnings ({len(notes)}; add one with `tico tool learn {page['service']} \"...\"`)"]
+    out += [f"  {n['created_at'][:10]}  {n['actor']}: {n['text']}" for n in notes] or ["  none yet"]
+    return "\n".join(out)
+
+
+def query_text(query):
+    out = [
+        f"{query['id']}: {query['title']}",
+        query.get("description", ""),
+        f"database: {query.get('database', '')}  category: {query.get('category', '')}  tags: {', '.join(query.get('tags') or [])}",
+    ]
+    if query.get("params"):
+        out.append("params:")
+        for p in query["params"]:
+            extra = (" required" if p.get("required") else "") + (f" default={p['default']}" if "default" in p else "")
+            out.append(f"  {p['name']} ({p.get('type', 'text')}): {p.get('label', p['name'])}{extra}")
+    out += ["", query["sql"].rstrip() if "sql" in query else json.dumps(query.get("mongo"), indent=2)]
+    return "\n".join(out)
+
+
+def queries_text(rows):
+    return "\n".join(f"{q['id']:<44} {q['title']}  — {q.get('description', '')}" for q in rows) or "no matching queries"
+
+
+def _tool_list(client, fields):
+    """With a bot, its tools (the tool). Without, the team's rows from GET /tools, which a runner credential may read
+    outside a turn (/me, which the tool asks first for a bot, would refuse a runner)."""
+    from clients import hubtools
+
+    if fields.get("bot"):
+        return hubtools.BY_NAME["tico_tool_list"]["fn"](client, fields)
+    return client.get("tools")["integrations"]
+
+
+def _query_search(client, fields):
+    """The catalog searched here, from the tool's page (GET /tools/<service>), which a runner may read outside a turn."""
+    page = client.get("tools/" + fields["service"])
+    if fields.get("id"):
+        for query in page["queries"]:
+            if query["id"] == fields["id"]:
+                return query
+        raise APIError("not_found", f"No query {fields['id']} under {page['service']}", 404)
+    return query_search(page["queries"], fields.get("term"))
+
+
+def _no_key(fields):
+    """The arguments without an operation id: `repo tick` and `repo untick` never sent one."""
+    return {k: v for k, v in fields.items() if k != "operation_id"}
+
+
+_MCP_ARGS = (Arg("headers", flag="--header", action="append", metavar="'NAME: VALUE'"),)
+_SCOPE = Arg("scope", action="append", metavar="KEY=VALUE")
+
+TOOL = (
+    Group(
+        "tool",
+        "what the team uses: each tool, what a bot uses, its model, repository and declared tools (docs/creating-bots.md)",
+    ),
+    Command(
+        "tool list",
+        "the team's tools; with --bot, that bot's tools with their status",
+        run=_tool_list,
+        render=lambda args, result: json.dumps(result, indent=2) if args.bot else integrations_text(result),
+        example="tico tool list --bot me",
+    ),
+    Command(
+        "tool show",
+        "one tool: the page, its queries and the learnings",
+        render=lambda args, result: integration_text(result),
+        example="tico tool show posthog",
+    ),
+    Command(
+        "tool index", "Tools: every API tool, mailbox, number and connection you may see", example="tico tool index"
+    ),
+    Command("tool check", "check an API tool's keys now", example="tico tool check linear"),
+    Command(
+        "tool activity",
+        "an API tool's recent calls and key uses, with repeated calls and errors summed up; never a value",
+        args=(Arg("id", metavar="tool"),),
+        example="tico tool activity linear --since 24h",
+    ),
+    Command(
+        "tool level",
+        "set a bot's level on an API tool: read, read_write or none",
+        example="tico tool level linear ops read",
+    ),
+)
+# After the hand-built `tool call`, so `tico tool` lists its leaves in the order it always has.
+TOOL_AFTER_CALL = (
+    Command(
+        "tool query-search",
+        "search a tool's query catalog",
+        args=(Arg("term", positional=True, nargs="?", default=""),),
+        run=_query_search,
+        render=lambda args, result: query_text(result) if args.id else queries_text(result),
+        example="tico tool query-search posthog signups",
+    ),
+    Command(
+        "tool learn", 'add a learning: tico tool learn <service> "<text>"', example='tico tool learn posthog "..."'
+    ),
+    Command(
+        "tool report",
+        "report the external profile's complete current tool list",
+        args=(Arg("tools", action="store"),),
+        convert=lambda fields: {**fields, "tools": json.loads(fields["tools"])},
+        example="tico tool report '[...]'",
+    ),
+    Command(
+        "tool add",
+        "register a tool: BotOps adds it to bot.yaml; never a credential value",
+        args=(Arg("can", flag="--can", action="store"), _SCOPE, *_MCP_ARGS),
+        example="tico tool add analyst posthog --can read --env POSTHOG_KEY",
+    ),
+    Command(
+        "tool update",
+        "change a declared tool's can, scope or note in place; never remove and add again",
+        args=(Arg("bot", flag="--bot"), Arg("can", flag="--can", action="store"), _SCOPE, *_MCP_ARGS),
+        example="tico tool update posthog --bot analyst --can read,write",
+    ),
+    Command(
+        "tool remove",
+        "ask BotOps to remove a tool, or withdraw a pending request",
+        example="tico tool remove analyst posthog",
+    ),
+)
+
+REPO = (
+    Group("repo", "team repositories"),
+    Command("repo list", example="tico repo list"),
+    Command(
+        "repo tick",
+        tool="tico_repo_update",
+        fixed=(("enabled", True),),
+        omit=("setup_command",),
+        convert=_no_key,
+        example="tico repo tick acme/web",
+    ),
+    Command(
+        "repo untick",
+        tool="tico_repo_update",
+        fixed=(("enabled", False),),
+        omit=("setup_command",),
+        convert=_no_key,
+        example="tico repo untick acme/web",
+    ),
+)

@@ -75,8 +75,10 @@ from pydantic import ConfigDict, Field, SecretStr
 from . import mcp_connect
 from . import tool_services as TS
 from . import tool_settings
+from . import access_requests
 from . import tool_templates
 from . import default_read
+from . import reconnect_tasks
 from . import tool_access as TA
 from .credentials import CredentialWrite, administrator, effective_grant, owned
 from .models import AccessAudience, Contract
@@ -983,7 +985,14 @@ def _check_one(tool, key, secret, auth=None):
 
 
 def check_tool(store, vault, tool_id):
-    """Check each stored key of the tool and record a tool_checks row for it; the rows written, worst first."""
+    """Check each stored key of the tool and record a tool_checks row for it; the rows written, worst first. A tool that
+    reads Key rejected now gets its Reconnect task, and one that reads Working ends it (backend/reconnect_tasks.py)."""
+    rows = _check_tool(store, vault, tool_id)
+    reconnect_tasks.checked(store, tool_id)
+    return rows
+
+
+def _check_tool(store, vault, tool_id):
     with store.transaction() as c:  # decrypt may reseal an old value in place
         tool = tool_row(c, tool_id)
         if _field(tool, "mcp_url"):
@@ -1281,6 +1290,8 @@ def update_tool(c, who, tool_id, body, admins, auth=None):
             {"before": not body.everyone_reads, "after": body.everyone_reads},
         )
         tool = dict(tool_row(c, tool_id))
+        if body.everyone_reads:  # every bot reads it now: requests for Read on it close themselves
+            access_requests.settled(c, who, resource_type="tool", resource_id=tool_id, via="everyone-reads")
     fields = {k: v for k, v in _clean(asked).items()}
     merged = tool | fields
     if merged["delivery"] == "proxy" and not merged["base_url"]:
@@ -1409,6 +1420,7 @@ def delete_tool(c, who, tool_id, admins, kind="api"):
     c.execute("DELETE FROM tool_checks WHERE tool_id=?", (tool_id,))
     c.execute("DELETE FROM tool_oauth_states WHERE tool_id=?", (tool_id,))
     c.execute("DELETE FROM tools WHERE id=?", (tool_id,))
+    reconnect_tasks.gone(c, tool_id)
     H.event(c, who.actor, "tool.deleted", tool_id, {"name": tool["name"], "keys": len(keys)})
     return {"deleted": True, "id": tool_id}
 
@@ -1461,6 +1473,7 @@ def add_key(c, who, vault, tool_id, body):
         (tool_id, body.access_level, body.expires_on or None, brief["id"]),
     )
     H.event(c, who.actor, "tool.key_added", tool_id, {"credential": brief["id"], "access_level": body.access_level})
+    access_requests.settled(c, who, resource_type="tool", resource_id=tool_id)  # a Read key may make Read default
     return _key_view(c, who, vault.row(c, brief["id"]), True, vault.admins)
 
 
@@ -1619,6 +1632,8 @@ def update_key(c, who, vault, tool_id, key_id, body):
         tool_id,
         {"credential": key_id, "access_level": level, "value_changed": body.value is not None},
     )
+    if body.value is not None:
+        reconnect_tasks.replaced(c, tool_id)  # its Reconnect task, if one is open, is done
     return _key_view(c, who, vault.row(c, key_id), True, vault.admins)
 
 
@@ -1657,6 +1672,17 @@ def set_level(c, who, vault, tool_id, subject, level):
     subject = subject_of(c, subject)
     if not subject.startswith(("bot:", "human:")):
         raise Problem("subject", "Choose a person or a bot", 422)
+    deferred = access_requests.DEFERRED.set(True)  # the grant is made, then its level set: settled once both are
+    try:
+        _set_level(c, who, vault, tool, tool_id, subject, level)
+    finally:
+        access_requests.DEFERRED.reset(deferred)
+    if subject.startswith("bot:") and level != "none":
+        access_requests.settled(c, who, subject=subject, resource_type="tool", resource_id=tool_id)
+    return {"subject": subject, "level": subject_level(c, tool_id, subject)}
+
+
+def _set_level(c, who, vault, tool, tool_id, subject, level):
     keys = [k for k in _keys(c, tool_id) if k["ciphertext"] is not None]
     if _templated(c, tool_id) and level != "none":
         return _set_template_level(c, who, vault, tool, subject, level, keys)
@@ -1684,7 +1710,6 @@ def set_level(c, who, vault, tool_id, subject, level):
         grant = vault.grant(c, who, target["id"], subject)
         c.execute("UPDATE credential_grants SET access_level=? WHERE id=?", (level, grant["id"]))
     H.event(c, who.actor, "tool.access_set", tool_id, {"subject": subject, "level": level})
-    return {"subject": subject, "level": subject_level(c, tool_id, subject)}
 
 
 def _set_template_level(c, who, vault, tool, subject, level, keys):

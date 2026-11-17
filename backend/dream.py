@@ -26,6 +26,7 @@ from . import task_privacy as privacy
 from .shared_bots import declared, route, source_of
 from .store import H, Problem
 from .views import human_only
+from .api_contract import api_v2
 
 LABEL = "dream"
 TITLE = "Dream"
@@ -331,7 +332,15 @@ def start(c, who, owner, task_create, reason=None, wake_refs=None):
 def install(app, store, auth, mutate, task_create, cap_before_preflight):
     store.dream_create = task_create
 
-    @app.get("/api/v2/bots/{bot}/dream")
+    @app.get(
+        "/api/v2/bots/{bot}/dream",
+        **api_v2(
+            "Bots",
+            "getBotDream",
+            "The bot's open dream, or else its newest one finished in the last day; dream is null otherwise",
+            "BotDreamView",
+        ),
+    )
     def dream_get(request: Request, bot: str):
         """The bot's open dream, or else its newest one finished in the last day; `{"dream": null}` otherwise. It
         reads the bot the caller's own dream goes to (shared_bots.route, as POST), so someone else's dream on the
@@ -344,7 +353,15 @@ def install(app, store, auth, mutate, task_create, cap_before_preflight):
             owner = route(c, who.actor, "bot:" + bot) or "bot:" + bot
             return view(c, who, latest(c, auth, who, owner))
 
-    @app.post("/api/v2/bots/{bot}/dream")
+    @app.post(
+        "/api/v2/bots/{bot}/dream",
+        **api_v2(
+            "Bots",
+            "startBotDream",
+            "Start a dream: a `dream` task for the bot, with the rights `POST /api/v2/tasks` needs. Its open dream is returned instead of a second; 409 stateless for a bot that keeps no memory",
+            "BotDreamView",
+        ),
+    )
     def dream_start(request: Request, bot: str, body: M.Empty):
         """Start a dream: a task for the bot, filed as `POST /api/v2/tasks` files one, with the caller's rights to give
         it work. The bot's open dream, when it has one, is returned instead of a second."""

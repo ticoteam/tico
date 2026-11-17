@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Any, cast
 from . import scheduler as S
 from . import system_routines as SR
 from .store import H, Problem
+from .api_contract import api_v2
 
 if TYPE_CHECKING:
     import sqlite3
@@ -1278,7 +1279,15 @@ def install(app: "FastAPI", store: "Store", auth: "Auth", mutate: "Callable[...,
 
     from . import models as M
 
-    @app.get("/api/v2/heartbeat")
+    @app.get(
+        "/api/v2/heartbeat",
+        **api_v2(
+            "Health",
+            "getHeartbeat",
+            "The Heartbeat: seconds between beats, the last beat, beats in the last day and quiet beats, each step in order with its kind, cadence, switch and day counts, and the beats that did something, newest first (pass `next` back as `before`)",
+            "HeartbeatView",
+        ),
+    )
     def heartbeat(request: Request, limit: int = PAGE, before: str | None = None):
         """The Heartbeat: its interval, the last beat, beats in the last day and quiet beats, each step in order with
         its kind, cadence, switch and numbers, and the beats that did something, newest first (`next` is `before` for
@@ -1288,7 +1297,12 @@ def install(app: "FastAPI", store: "Store", auth: "Auth", mutate: "Callable[...,
         with store.read() as c:
             return listing(c, auth, who, limit, before, store=store)
 
-    @app.put("/api/v2/heartbeat")
+    @app.put(
+        "/api/v2/heartbeat",
+        **api_v2(
+            "Health", "saveHeartbeat", "The owner or an admin: set the seconds between beats, 5 to 60", "HeartbeatView"
+        ),
+    )
     def heartbeat_save(request: Request, body: M.HeartbeatUpdate):
         """Set the seconds between beats (5 to 60). An owner or an admin."""
         who = request.state.identity

@@ -1328,7 +1328,7 @@ def runnable(c, method, path, body):
     without it is refused, never given the task's version now, or a change made from an older read would pass over
     changes made since."""
     m = re.fullmatch(r"/api/v2/tasks/([^/]+)(/move|/owner|/done)?", path or "")
-    if method != "POST" or not m or m.group(1) == "dry-run" or not isinstance(body, dict):
+    if method != "POST" or not m or m.group(1) in ("dry-run", "move") or not isinstance(body, dict):
         return path, body
     if body.get("version") is None:
         raise Problem(

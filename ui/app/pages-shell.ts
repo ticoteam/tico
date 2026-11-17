@@ -322,11 +322,6 @@ function isAutomationsRoute(r: string): boolean { return auUnder(r, AUTOMATIONS)
 let USE: UseState | null = null;
 
 // app/computer-screen.ts
-// A task's owner bot's screen, in the task's header: a monitor icon, as quiet as the header's other icon buttons.
-const taskScreenLinkHTML = (owner: string | null | undefined) => {
-  const id = botScreenComputer(actorSlug(owner));
-  return id ? `<a class="ghost peek-btn" href="${screenHref(id)}" aria-label="Screen" title="Screen">${TL_ICON.screen}</a>` : '';
-};
 
 // app/finance.ts
 const FIN_ROUTE = '#/finance';
@@ -1263,3 +1258,58 @@ function botTaskRowHTML(t: TaskAny): string {
   const stage = t.status === 'open' ? botTaskStage(t) : '';
   return taskRowHTML(t, {after: stage ? `<span class="muted">${esc(stage)}</span>` : ''});
 }
+
+// ----------------------------------------------------------------- the Threads page
+// What the shell draws with, of the Threads page (ui/app/thread-rail.ts, ui/app/new-message.ts): the rail's icons, the
+// `#` or lock before a thread's name, the thread last opened here, the teammates a picker offers and the thread dialogs.
+// The page itself is the threads-rail part (ui/parts.json).
+const TR_SVG = {
+  plus: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>',
+  catchUp: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="4" y="9" width="16" height="11" rx="2"/><path d="M6 6h12M8 3h8"/></svg>',
+  browse: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>',
+  lock: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
+  pin: (on: boolean) => `<svg width="15" height="15" viewBox="0 0 24 24" fill="${on ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="${on ? 0 : 1.6}" stroke-linejoin="round" aria-hidden="true"><path d="M15 3l6 6-3 1-4 4 .5 5-1.5 1.5-4-4-5 5-1-1 5-5-4-4L5 10l5 .5 4-4z"/></svg>`,
+};
+
+// `#` before a thread's name, a lock for a private one.
+const threadHashHTML = (t: ThreadRow | null | undefined) => `<span class="tr-mark" aria-hidden="true">${threadPrivate(t) ? TR_SVG.lock : '#'}</span>`;
+
+// The thread last opened here, which #/threads opens again.
+const THREADS_LAST_KEY = 'tico.threads.last';
+function threadsLastGet() { try { return localStorage.getItem(THREADS_LAST_KEY) || ''; } catch { return ''; } }
+function threadsLastSet(id: string) { try { localStorage.setItem(THREADS_LAST_KEY, id); } catch { /* not kept */ } }
+
+// ---- Thread dialogs and the teammates a picker offers: shared by the rail, New message and a thread's Members and
+// settings (the threads-page part, ui/app/threads-page.ts).
+// Whom the viewer may add: a bot, a person or (except to a DM, which names its people) a group they may write to. The
+// helpers and the viewer are never listed.
+function threadAddable({groups = true}: {groups?: boolean} = {}): ThdPick[] {
+  const bots = shownEmps().filter(e => e.can_chat !== false && (!e.my_access || e.my_access.write))
+    .map(e => ({actor: 'bot:' + e.name, label: (e.display_name || e.name)!}));
+  const people = (S.people || []).filter((p: ThdAccessible & (typeof S.people)[number]) => p.id && !p.hidden && p.id !== S.me?.id && p.my_access?.write !== false)
+    .map(p => ({actor: 'human:' + p.id, label: p.name || p.id}));
+  const teams = groups ? (S.orgGroups || []).filter((g: ThdAccessible & OrgGroup) => g.id && g.my_access?.write).map(g => ({actor: 'group:' + g.id, label: g.name || g.id})) : [];
+  return [...people, ...teams, ...bots].sort((a, b) => a.label.localeCompare(b.label));
+}
+function threadDialog(id: string, label: string): HTMLDialogElement {
+  let dlg = document.getElementById(id) as HTMLDialogElement | null;
+  if (!dlg) {
+    dlg = document.createElement('dialog'); dlg.id = id; dlg.className = 'tmodal tmodal-shell dash-dialog thd-dialog'; document.body.append(dlg);
+    // A route change (a link, the phone's Back) leaves the page the dialog was for.
+    addEventListener('hashchange', () => { if (dlg?.open) dlg.close(); });
+  }
+  dlg.setAttribute('aria-label', label);
+  return dlg;
+}
+const threadDialogHead = (title: string) => `<header class="tmodal-head"><h2>${esc(title)}</h2><span class="spacer"></span>
+  <button class="ghost tmodal-x" type="button" data-close aria-label="Close">✕</button></header>`;
+function threadDialogWire(dlg: HTMLDialogElement): void { dlg.querySelectorAll<HTMLElement>('[data-close]').forEach(b => { b.onclick = () => dlg.close(); }); }
+
+// ----------------------------------------------------------------- Library › Files
+// What the shell draws with of Library › Files (ui/app/library-files.ts): the kinds a search and a bot's file picker
+// offer, the icon of a search hit, and the open list the router resets.
+const LF_KINDS = [['', 'All kinds'], ['page', 'Pages'], ['document', 'Documents'], ['image', 'Images'], ['data', 'Data'],
+  ['media', 'Video and audio'], ['other', 'Other']];
+const LF_ICON: Record<string, string> = {page: 'article', document: 'description', image: 'palette', data: 'analytics', media: 'play_arrow', other: 'inventory_2'};
+// The open Files page's state; null until it opens, and again once another page is shown.
+let LF: LfState | null = null;

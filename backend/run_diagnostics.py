@@ -141,7 +141,11 @@ def keep(c, row: AttemptRow, body):
     both."""
     kept: dict[str, object] = dict(keep_stderr(c, row, body.tail)) if body.tail is not None else {'kept': False}
     if body.failed_tools:
-        kept['failed_tools'] = keep_failed_tools(c, row, [t.model_dump() for t in body.failed_tools])
+        calls = [t.model_dump() for t in body.failed_tools]
+        kept['failed_tools'] = keep_failed_tools(c, row, calls)
+        from . import reconnect_tasks
+
+        reconnect_tasks.diagnosed(c, row, calls)  # a key the vendor refused gets its tool's Reconnect task
     return kept
 
 

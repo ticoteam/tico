@@ -210,8 +210,8 @@ function decideDialog(): HTMLDialogElement {
       <span class="dc-flow">${flowMarkHTML(24)}</span>
       <button type="button" class="dc-wave" data-dc="voice" aria-label="Voice" aria-pressed="true" title="Voice" hidden><i></i><i></i><i></i><i></i><i></i></button>
       <button type="button" class="dc-mic" data-dc="voice" aria-label="Voice" aria-pressed="false" title="Voice">${DEC_MIC}</button>
-      <div class="dc-sayw"><span class="dc-say"></span><span class="dc-vh" aria-live="polite"></span><span class="dc-bar" role="status" hidden></span></div>
-      <span class="dc-up"></span>
+      <div class="dc-sayw"><span class="dc-say"></span><span class="dc-vh" aria-live="polite"></span></div>
+      <span class="dc-up"></span><span class="dc-bar" role="status" hidden></span>
       <span class="dc-nav">
         <button type="button" class="dc-icon dc-wide" data-dc="prev" aria-label="Previous" title="Previous (←)">‹</button>
         <button type="button" class="dc-icon dc-wide" data-dc="next" aria-label="Next" title="Next (→)">›</button>
@@ -583,7 +583,7 @@ function decidePaintHead(st: DecState) {
   $('.dc-flow', root)!.hidden = DEC_VOICE;
   $('.dc-mic', root)!.hidden = DEC_VOICE;
   $('.dc-wave', root)!.hidden = !DEC_VOICE;
-  // The slot over the bar's undo notice holds the voice notice while the mic is on, and nothing else.
+  // The slot holds the voice notice while the mic is on, and nothing else (the undo notice is beside it: decideBar).
   const say = DEC_VOICE ? 'Voice is coming soon' : '';
   const line = $('.dc-say', root)!, heard = line.nextElementSibling as HTMLElement;
   if (line.textContent !== say) line.textContent = say;
@@ -1290,13 +1290,13 @@ function decideMoreHTML(st: DecState, it: NeedsEntry): string {
   }
   return '';
 }
-/** After an action, in the top bar's slot: "✓ <what was done>" and Undo, which takes it back.
+/** After an action, quiet in the top bar left of ‹ ›: "✓ <what was done>" and Undo, which takes it back.
     It stays DEC_UNDO_MS, longer while it has the focus, then fades. A failed undo says so there. */
 function decideBar(label: string, undo: (() => Promise<unknown>) | null) {
   const st = DEC, bar: HTMLElement | null = $('.decide .dc-bar');
   if (!st || !bar) return;
   clearTimeout(st.barTimer);
-  // In the top bar's slot, for DEC_UNDO_MS: "✓ Approved with comments · Undo".
+  // For DEC_UNDO_MS: "✓ Approved with comments  Undo".
   bar.innerHTML = `<span class="dc-bar-w">✓ ${esc(label)}</span>` + (undo ? '<button type="button" data-dc="undo">Undo</button>' : '');
   bar.classList.remove('dc-bar-out', 'dc-bar-err');
   const b = $('button', bar) as HTMLButtonElement | null;
@@ -1828,7 +1828,12 @@ async function decideApprove(st: DecState, it: NeedsEntry) {
       if (!left && take) decideChatGone(take);
     }
     if (DEC !== st) return;
-    decideBar(said && !left ? 'Approved with comments' : 'Approved', decideUndoAnswer(r));
+    // Undone, an approval whose comment did not go is not approved any more: Approve comes back, without the why.
+    const undo = decideUndoAnswer(r);
+    decideBar(said && !left ? 'Approved with comments' : 'Approved', undo && left ? async () => {
+      await undo(); DEC_APPROVED.delete(it.id);
+      if (DEC === st && st.at === it.id) { st.error = ''; decidePaintSide(st); }
+    } : undo);
     if (left) {
       DEC_APPROVED.add(it.id);
       st.busy = false; st.error = `Approved. Your comment did not go: ${left} The arrow sends it again.`;

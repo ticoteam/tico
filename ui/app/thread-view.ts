@@ -633,36 +633,6 @@ async function thvMembersLoad(view: ThvView) {
     thvDraw(view);
   } catch { /* the Members button stays */ }
 }
-// Pin or unpin for the viewer; the rail moves the row at once.
-async function thvPinToggle(view: ThvView, button: HTMLButtonElement) {
-  const t = view.thread; if (!thvPinnable(t)) return;
-  const on = !t.me.pinned;
-  button.disabled = true;
-  try {
-    const r: ThvThread | null = on ? await put(thvPath(t.id) + '/pin', {}) : await writeRequest('DELETE', thvPath(t.id) + '/pin');
-    view.thread = {...t, ...(r?.id ? r : {}), me: {...t.me, ...(r?.me || {}), pinned: r?.me ? !!r.me.pinned : on}};
-    threadsPut(view.thread);
-    thvDraw(view);
-  } catch (e) { toast(errorMessage(e, ''), true); button.disabled = false; }
-}
-// The header's Archive takes the thread off the list and goes back to it (Undo is in the toast); on an archived thread
-// Unarchive brings it back here.
-async function thvArchive(view: ThvView, button: HTMLButtonElement) {
-  const t = view.thread; if (!t) return;
-  button.disabled = true;
-  try {
-    if (!t.archived_at) {
-      await threadsArchive(t.id);
-      if (threadsLastGet() === t.id) threadsLastSet('');
-      location.hash = THREADS_ROUTE;
-      return;
-    }
-    const r: ThvThread = await patch(thvPath(t.id), {archived: false});
-    view.thread = {...t, ...r};
-    threadsUnarchived(view.thread);
-    thvDraw(view);
-  } catch (e) { toast(errorMessage(e, ''), true); button.disabled = false; }
-}
 // Delete asks first. The thread leaves Threads and Catch up at once and reads as not found after that.
 async function thvDelete(view: ThvView, button: HTMLButtonElement) {
   const t = view.thread; if (!t || !(await askConfirm("Delete this thread? It can't be undone.", button))) return;
@@ -832,6 +802,9 @@ function thvMsgHTML(view: ThvView, m: ThvMessage, cont = false) {
   else if (m.refs?.call?.card) body = callCardHTML(m);
   // The Tools owner's proposal: rows the server built, and Grant (tools-key-drop.ts).
   else if (m.refs?.card === 'key_grant') body = kgCardHTML(m);
+  // A bot's access request: who asks for what, Grant or Decline; every copy shows how it ended (backend/access_requests.py).
+  // Its card is drawn into this place once the list is (thvListDraw, ui/app/access-requests.ts).
+  else if (m.refs?.card === 'access_request') body = `<div data-ar-host="${esc(m.id)}"><div class="asst-state">Loading the card…</div></div>`;
   // A met or stopped goal: the one line the chat showed (chat-goal.js).
   else if (m.refs?.chat_goal && m.refs?.goal_status) body = chatGoalNoticeHTML(m, view.goals?.goal);
   // A card a bot left for you fills in from its action or request (ui/assistant.ts, ui/credential-card.ts).
@@ -1087,6 +1060,7 @@ function thvListDraw(view: ThvView, list: HTMLElement, box: HTMLElement) {
   const reload = () => thvRefresh(view);
   if (list.querySelector('[data-action-host]')) void assistantCards(list, {get, post, esc, toast, reload});
   if (list.querySelector('[data-credential-host]')) void window.credentialCards?.mount(list, {get, post, esc, toast, reload});
+  if (list.querySelector('[data-ar-host]')) void arMount(view, list);
   (view.el.querySelector('.thv-older') as HTMLElement).hidden = !view.next;
   chatThumbsLoad?.(list);
   const unread = list.querySelector('.th-new');
@@ -1545,34 +1519,6 @@ function thvChips(view: ThvView) {
     ...C.lib.map((f, i) => `<span>${esc(f.title)} <a href="#" data-rm="lib:${i}" aria-label="Remove ${esc(f.title)}">×</a></span>`)].join('');
   thvComposerLabel(view);   // a file sends as a message, so goal mode's "Set goal" waits until it is gone
 }
-// Library files: the newest the viewer may read, filtered as they type.
-async function thvLibOpen(view: ThvView) {
-  const C = view.composer, pane = C.el.querySelector('.thv-lib') as HTMLElement;
-  pane.hidden = false;
-  pane.innerHTML = '<div class="thv-lib-top"><input type="search" class="thv-lib-q" placeholder="Find a file" aria-label="Find a file"><button type="button" class="ghost thv-lib-x" data-lib-close aria-label="Close">✕</button></div><div class="thv-lib-list"><div class="muted">Loading…</div></div>';
-  const q = pane.querySelector('.thv-lib-q') as HTMLInputElement, list = pane.querySelector('.thv-lib-list') as HTMLElement;
-  // ✕ or Escape puts the picker away and hands the cursor back to the message box.
-  const shut = () => { pane.hidden = true; C.el.querySelector<HTMLElement>('.p-text')?.focus(); };
-  (pane.querySelector('[data-lib-close]') as HTMLElement).onclick = shut;
-  pane.onkeydown = ev => { if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); shut(); } };
-  let files: ThvFileRow[] = [];
-  try { files = ((await get<{files?: ThvFileRow[]}>('/v2/files?limit=50', {fresh: true})).files || []).filter(f => f.locator !== 'remote_link' && !f.url && !f.archived); }
-  catch (e) { list.innerHTML = `<div class="err">${esc(errorMessage(e, ''))}</div>`; return; }
-  const draw = () => {
-    const words = q.value.trim().toLowerCase();
-    const shown = files.filter(f => !words || String(f.title || f.name || '').toLowerCase().includes(words)).slice(0, 20);
-    list.innerHTML = shown.length ? shown.map(f => `<button type="button" class="thv-lib-row" data-lib="${esc(f.id)}">${esc(f.title || f.name || f.id)}</button>`).join('')
-      : '<div class="muted">No files</div>';
-  };
-  q.oninput = draw; draw(); q.focus();
-  list.onclick = ev => {
-    const b = eventElement(ev)?.closest<HTMLElement>('[data-lib]'); if (!b) return;
-    const f = files.find(x => x.id === b.dataset.lib);
-    if (f && !C.lib.some(x => x.id === f.id)) C.lib.push({id: f.id, title: f.title || f.name || f.id});
-    pane.hidden = true; thvChips(view);
-    (C.el.querySelector('.p-text') as HTMLTextAreaElement).focus();
-  };
-}
 
 // ----------------------------------------------------------------- mentions
 // "@" then letters: the teammates whose name or handle starts so. A bot goes in as @slug, a person as their handle.
@@ -1851,34 +1797,6 @@ async function thvClick(view: ThvView, ev: Event) {
   }
 }
 const thvCopy = (m: ThvMessage) => void copyText(m.body || '').then(() => toast('Message copied'), () => toast('Could not copy the message', true));
-async function thvReact(view: ThvView, m: ThvMessage, emoji: string) {
-  const before = (m.reactions || []).map(r => ({...r, actors: [...(r.actors || [])]}));
-  const me = myActor(), r = before.find(x => x.emoji === emoji), on = !thvReactedMine(r);
-  // Shown at once; the server's answer (the message's reactions, as a list) settles it.
-  m.reactions = r ? before.map(x => x.emoji !== emoji ? x : {...x, count: Math.max(0, x.count + (on ? 1 : -1)),
-                                                                 actors: on ? [...x.actors, me] : x.actors.filter(a => a !== me)})
-    : [...before, {emoji, count: 1, actors: [me]}];
-  thvDraw(view);
-  try {
-    const path = '/v2/messages/' + encodeURIComponent(m.id) + '/reactions/' + encodeURIComponent(emoji);
-    const back = on ? await put(path, {}) : await writeRequest('DELETE', path);
-    const fresh = Array.isArray(back) ? back : back?.reactions || back?.message?.reactions;
-    if (Array.isArray(fresh)) { m.reactions = fresh; thvDraw(view); }
-  } catch (e) {
-    m.reactions = before;
-    thvDraw(view); toast(errorMessage(e, ''), true);
-  }
-}
-// The emoji to pick from: six common ones, then any already used in this thread.
-function thvEmojiChoices(view: ThvView) {
-  const used = new Set(THV_EMOJI);
-  for (const x of view.messages) for (const r of x.reactions || []) if (r?.emoji && r.count > 0) used.add(r.emoji);
-  return [...used].slice(0, 18);
-}
-function thvEmojiPick(view: ThvView, m: ThvMessage, button: HTMLElement) {
-  thvMenuClose();
-  thvMenuShow(button, thvEmojiChoices(view).map(e => [e, e]), emoji => thvReact(view, m, emoji), 'thv-emoji');
-}
 
 // ---- the long press, on touch: React, Reply and Copy as one sheet (and 👍 and 👎 on a bot's words)
 const THV_PRESS_MS = 450;
@@ -1907,31 +1825,6 @@ function thvPressWire(view: ThvView) {
   el.addEventListener('scroll', end, {passive: true});
   // The browser's own long-press menu would cancel the press before it is one.
   el.addEventListener('contextmenu', ev => { if ((press || view.pressQuiet > Date.now()) && eventElement(ev)?.closest('.th-msg')) ev.preventDefault(); });
-}
-function thvSheet(view: ThvView, m: ThvMessage) {
-  const d = fbDialog('fb-menu thv-sheet', 'Message actions');
-  const key = fbRates(m.sender_id) ? fbKey('message', m.id) : '', mine = key ? fbMine(key)?.rating || '' : '';
-  d.innerHTML = `<div class="thv-sheet-emoji" role="group" aria-label="React">${thvEmojiChoices(view).slice(0, 6).map(e =>
-      `<button type="button" data-pick-emoji="${esc(e)}" aria-label="${esc(e)}">${esc(e)}</button>`).join('')}</div>
-    <div class="fb-menu-row">${thvCanPost(view) ? `<button type="button" data-pick="reply" aria-label="Reply">${THV_SVG.reply}</button>` : ''}${
-      m.body ? `<button type="button" data-pick="copy" aria-label="Copy">${THV_SVG.copy}</button>` : ''}${key ? `
-      <button type="button" data-pick="up" aria-pressed="${mine === 'up'}" aria-label="Good">${FB_ICON.up}</button>
-      <button type="button" data-pick="down" aria-pressed="${mine === 'down'}" aria-label="Not good">${FB_ICON.down}</button>` : ''}</div>`;
-  // The click the lift makes lands on the backdrop: it is not a tap to close.
-  d.addEventListener('click', ev => { if (view.pressQuiet > Date.now()) { ev.stopImmediatePropagation(); view.pressQuiet = 0; } }, true);
-  d.showModal();
-  d.onclick = ev => {
-    const target = eventElement(ev), e = target?.closest<HTMLElement>('[data-pick-emoji]'), b = target?.closest<HTMLElement>('[data-pick]');
-    if (!e && !b) return;
-    d.close();
-    if (e) { void thvReact(view, m, e.dataset.pickEmoji!); return; }
-    const k = b!.dataset.pick;
-    if (k === 'reply') thvReplyStart(view, m);
-    else if (k === 'copy') thvCopy(m);
-    else if (k === 'up') void fbUp(key);
-    else if (mine === 'down') fbShow(key); else void fbDown(key);
-  };
-  d.querySelector('button')?.focus();
 }
 // One small menu at a time, under the button that opened it; Escape or a click elsewhere closes it.
 let THV_MENU: {menu: HTMLElement; button: HTMLElement} | null = null;

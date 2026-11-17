@@ -45,6 +45,12 @@ def test_an_admin_reads_a_claude_plans_week_on_its_computer_and_it_becomes_the_p
     give(api, m, "claude", sid)
     asked = post(api, f"model-subscriptions/{sid}/usage-refresh", {})
     assert asked["state"] == "requested"
+    # The computer is told at once (a `runner` change), not left to its five-minute backup poll, after the read lapsed.
+    with api.app.state.store.read() as c:
+        told = c.execute(
+            "SELECT subject_id FROM changes WHERE topic='runner' AND kind='subscription_refresh'"
+        ).fetchall()
+    assert m["runner_id"] in {r[0] for r in told}
     [read] = get(api, "runner-subscription-refreshes", m["token"])["refreshes"]
     assert read["subscription"] == sid and read["env"] == {"CLAUDE_CODE_OAUTH_TOKEN": TOKEN}
     post(

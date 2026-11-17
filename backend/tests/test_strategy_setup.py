@@ -120,7 +120,7 @@ def test_the_job_reads_the_site_and_writes_unconfirmed_sections_and_proposed_bet
     assert {host for _, host in research.connected} == {"acme.example"}
     assert not any("server-secret" in request for _, _, request in research.asked)  # no credential of the server's
     (sent,) = research.sent
-    assert sent["owner_words"] == "Bots for small landlords" and len(sent["pages"]) == 4
+    assert sent["owner_words"] == "Bots for small landlords" and len(sent["pages"]) == SS.PAGES
     assert "$29 a unit" in json.dumps(sent["pages"]) and "text" not in json.dumps(job["pages"])
 
     view = get(api, "strategy")

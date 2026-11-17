@@ -12,8 +12,9 @@ the rest are summed in `more`.
   or held by a person the reader may not be told about (teammate_access.Known), counts in `count` and is in no group.
 - `needs_you`: of those, the ones in the reader's own Needs you (the asks, tasks and @s a stage's Flow walks).
 - `manager_id`: the pipeline's manager, which a factory with no manager of its own is drawn under.
-- `in`, `out`: tasks that entered the pipeline (a first visit, `entered_how='new'`) and tasks that reached a Done
-  stage, in the last 24 hours (`day`) and 7 days (`week`), each task once per window.
+- `in`, `out`: tasks that entered the pipeline (a first visit, `entered_how='new'`, or an open one moved in from another
+  pipeline) and tasks that reached a Done stage (not one moved there already done), in the last 24 hours (`day`) and 7
+  days (`week`), each task once per window.
 
 Retired factories and pipelines are left out. A private pipeline is left out unless the reader may read its tasks:
 its manager, its owner, the company's person (private_pipelines.readers), or a reader of one of its open tasks. A
@@ -33,6 +34,10 @@ TA: Any = _teammate_access
 V: Any = _views
 
 OWNERS_MAX = 12  # holders listed per stage; the rest are summed in `more`
+# A visit that brought a task into the pipeline (`in`), and one that finished it there (`out`). A task moved from another
+# pipeline (task_engine.refile) comes in when it is open; one moved already done was not finished here.
+CAME_IN = "(v.entered_how='new' OR (v.entered_how='moved' AND s.kind='work'))"
+DONE_HERE = "(s.kind='done' AND v.entered_how<>'moved')"
 
 
 def _company_person(c: Any) -> str | None:
@@ -60,12 +65,12 @@ def _rates(c: Any, pipeline_ids: list[str], visible_sql: str) -> dict[str, dict[
         return out
     rows = c.execute(
         "SELECT s.pipeline_id, "
-        "COUNT(DISTINCT CASE WHEN v.entered_how='new' AND v.entered_at>=? THEN v.task_id END), "
-        "COUNT(DISTINCT CASE WHEN v.entered_how='new' THEN v.task_id END), "
-        "COUNT(DISTINCT CASE WHEN s.kind='done' AND v.entered_at>=? THEN v.task_id END), "
-        "COUNT(DISTINCT CASE WHEN s.kind='done' THEN v.task_id END) "
+        f"COUNT(DISTINCT CASE WHEN {CAME_IN} AND v.entered_at>=? THEN v.task_id END), "
+        f"COUNT(DISTINCT CASE WHEN {CAME_IN} THEN v.task_id END), "
+        f"COUNT(DISTINCT CASE WHEN {DONE_HERE} AND v.entered_at>=? THEN v.task_id END), "
+        f"COUNT(DISTINCT CASE WHEN {DONE_HERE} THEN v.task_id END) "
         "FROM visits v JOIN stages s ON s.id=v.stage_id "
-        "WHERE v.entered_at>=? AND (v.entered_how='new' OR s.kind='done') "
+        f"WHERE v.entered_at>=? AND ({CAME_IN} OR {DONE_HERE}) "
         "AND s.pipeline_id IN (SELECT value FROM json_each(?)) "
         f"AND EXISTS (SELECT 1 FROM tasks WHERE tasks.id=v.task_id AND ({visible_sql})) "
         "GROUP BY s.pipeline_id",

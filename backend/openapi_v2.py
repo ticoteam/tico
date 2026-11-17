@@ -1,8 +1,9 @@
 """The stable v2 contract for a team's own frontend: `GET /api/v2/openapi.json`.
 
 FastAPI would describe every route, runner and bot endpoint included. A frontend team needs the
-resources a person's app is built from, so this module keeps only those (STABLE below), names
-each operation, groups them by resource and describes the answers a person gets. Handlers return
+resources a person's app is built from, so this module keeps only those, named and grouped by resource where each route
+is declared (`**api_v2(...)` on its decorator, backend/api_contract.py; the rows still in STABLE below are the ones not
+moved there yet), and describes the answers a person gets. Handlers return
 plain dictionaries rather than response models, so the answer shapes are declared here; a test
 (backend/tests/test_openapi_v2.py) checks them against live responses. The document is generated, not committed:
 `python3 -m backend.openapi_v2 > openapi-v2.json` writes it, `--check` confirms it generates the same bytes twice, and
@@ -13,10 +14,13 @@ Anything not listed is internal and may change in any release. See docs/api.md.
 
 import copy
 import json
+import re
 import sys
 from pathlib import Path
 
 from . import needs_shape
+from .api_contract import MARK
+from .legacy_spellings import legacy_of
 from .sources import KINDS as SOURCE_KINDS
 
 VERSION = "2.0.0"
@@ -96,24 +100,9 @@ EVENTS_DESCRIPTION = (
     "browser's own `Last-Event-ID`). People only: a bot is refused with 403."
 )
 
-# Path, method, tag, operationId, summary, name of the 200 answer in ANSWERS.
+# Path, method, tag, operationId, summary, name of the 200 answer in ANSWERS: the stable operations not yet declared on
+# their routes. A route declares itself with api_v2(...) (backend/api_contract.py); operations() gives both.
 STABLE = [
-    (
-        "/api/v2/cloud-machines/support",
-        "get",
-        "Computers",
-        "getCloudMachineSupport",
-        "Read Tico support's cloud-machine switch and helper states from HQ; unavailable off Tico Cloud",
-        None,
-    ),
-    (
-        "/api/v2/cloud-machines/support",
-        "put",
-        "Computers",
-        "setCloudMachineSupport",
-        "Let Tico support reach the company's cloud machines, or stop it; owner only",
-        None,
-    ),
     (
         "/api/v2/subscriptions",
         "get",
@@ -147,103 +136,6 @@ STABLE = [
         "SubscriptionRefreshResult",
     ),
     (
-        "/api/v2/bots/{bot}/turns-at-once",
-        "post",
-        "Bots",
-        "setBotTurnsAtOnce",
-        "Set the most turns the bot runs at once on every computer: null is no limit, 1 to 256 otherwise",
-        None,
-    ),
-    (
-        "/api/v2/bots/{bot}/manages-reports",
-        "post",
-        "Bots",
-        "setBotManagesReports",
-        "Whether the bot's manager bot may change its direct reports: true is on (the default), false is off; the owner's team rule overrides it",
-        None,
-    ),
-    (
-        "/api/v2/computers/{rid}/turns-at-once",
-        "post",
-        "Computers",
-        "setComputerTurnsAtOnce",
-        "Set the most turns a computer runs at once: null is automatic (its own capacity)",
-        None,
-    ),
-    (
-        "/api/v2/computers/{rid}/label",
-        "post",
-        "Computers",
-        "renameComputer",
-        "Rename a computer: 1 to 100 characters, trimmed; owners and admins",
-        None,
-    ),
-    (
-        "/api/v2/computers/{rid}/browser-exit",
-        "get",
-        "Computers",
-        "getComputerBrowserExit",
-        "Whether this computer shares its internet with bots, which bots, and its daily cap in bytes",
-        "BrowserExit",
-    ),
-    (
-        "/api/v2/computers/{rid}/browser-exit",
-        "post",
-        "Computers",
-        "setComputerBrowserExit",
-        "Share this computer's internet with chosen bots, or stop: its owner only; an admin may turn it off",
-        None,
-    ),
-    (
-        "/api/v2/computers/{rid}/browser-exit/usage",
-        "get",
-        "Computers",
-        "listComputerBrowserExitUsage",
-        "Bytes and connections through this computer per day, bot and hostname (30 days); its owner or an admin",
-        "BrowserExitUsage",
-    ),
-    (
-        "/api/v2/bots/{bot}/browser-exit",
-        "get",
-        "Bots",
-        "getBotBrowserExit",
-        "The computer the bot's browser reaches the web through (null: its own) and the ones it may pick",
-        "BotBrowserExitView",
-    ),
-    (
-        "/api/v2/bots/{bot}/browser-exit",
-        "post",
-        "Bots",
-        "setBotBrowserExit",
-        "Browse through a computer that shares its internet with this bot, or null for its own",
-        "BotBrowserExitView",
-    ),
-    (
-        "/api/v2/bots/{bot}/app-view",
-        "get",
-        "Bots",
-        "getBotAppView",
-        "Whether the bot may view the app read only, for its own screenshots, and who turned that on",
-        None,
-    ),
-    (
-        "/api/v2/bots/{bot}/app-view",
-        "post",
-        "Bots",
-        "setBotAppView",
-        "Turn Can view the app (read only) on or off for a bot: an owner or admin, as themselves. Off ends its open views",
-        None,
-    ),
-    (
-        "/api/v2/app-view",
-        "post",
-        "Bots",
-        "openAppView",
-        "A bot, from inside its run, opens a read-only view of the app: a token for 15 minutes that reads as the bot and "
-        "is refused every write",
-        None,
-    ),
-    (
         "/api/v2/bots/{bot}/subscription",
         "get",
         "Subscriptions",
@@ -259,22 +151,6 @@ STABLE = [
         "refreshRepositories",
         "Refresh from GitHub",
         "RepositoryList",
-    ),
-    (
-        "/api/v2/github/product-repos/preview",
-        "get",
-        "Repositories",
-        "previewProductRepository",
-        "Preview an empty private product repository",
-        "ProductRepositoryPreview",
-    ),
-    (
-        "/api/v2/github/product-repos",
-        "post",
-        "Repositories",
-        "createProductRepository",
-        "Create the confirmed product repository",
-        "ProductRepositoryResult",
     ),
     (
         "/api/v2/repositories/settings",
@@ -309,23 +185,6 @@ STABLE = [
         "BotRepositories",
     ),
     (
-        "/api/v2/bots/{bot}/github-repos",
-        "get",
-        "Repositories",
-        "getExtraRepositories",
-        "Chosen write repositories (legacy alias)",
-        None,
-    ),
-    (
-        "/api/v2/bots/{bot}/github-repos",
-        "put",
-        "Repositories",
-        "setExtraRepositories",
-        "Set chosen write repositories (legacy alias)",
-        None,
-    ),
-    ("/api/v2/me", "get", "Session", "getMe", "The signed-in caller", "Me"),
-    (
         "/auth/login",
         "get",
         "Session",
@@ -342,30 +201,6 @@ STABLE = [
         "Token",
     ),
     ("/auth/token/revoke", "post", "Session", "revokeSession", "Sign the bearer session out", "Revoked"),
-    (
-        "/api/v2/me/tokens",
-        "get",
-        "Session",
-        "listMyTokens",
-        "The caller's personal API tokens (never the secret)",
-        None,
-    ),
-    (
-        "/api/v2/me/tokens",
-        "post",
-        "Session",
-        "createMyToken",
-        "Mint a personal API token for server-to-server use (any person unless the owner limits it to admins; cookie sessions only)",
-        None,
-    ),
-    (
-        "/api/v2/me/tokens/{token_id}/revoke",
-        "post",
-        "Session",
-        "revokeMyToken",
-        "Revoke a personal API token: your own; the owner and admins revoke anyone's",
-        None,
-    ),
     (
         "/api/v2/service-keys",
         "get",
@@ -384,7 +219,6 @@ STABLE = [
         None,
     ),
     ("/api/v2/service-keys/{key_id}/revoke", "post", "Session", "revokeServiceKey", "Revoke a service key", None),
-    ("/api/v2/openapi.json", "get", "Session", "getOpenApi", "This document", None),
     ("/api/v2/config", "get", "Team", "getConfig", "Team and app names, version, setup state", "Config"),
     (
         "/api/v2/org",
@@ -394,14 +228,6 @@ STABLE = [
         "Humans, the bots the caller can see and reports_to; ?can=read|write keeps the bots they can read or write to",
         "Org",
     ),
-    (
-        "/api/v2/org-models",
-        "get",
-        "Team chart",
-        "listOrgModels",
-        "Published Tico starter org charts used for re-org recommendations; contains no customer org data",
-        "OrgModels",
-    ),
     ("/api/v2/humans/{pid}", "post", "Team chart", "updatePerson", "Edit a person's profile or reports_to", None),
     (
         "/api/v2/humans/{pid}",
@@ -410,145 +236,6 @@ STABLE = [
         "removePerson",
         "Remove a left person with no history for good (owner only); anyone with history stays as left",
         None,
-    ),
-    (
-        "/api/v2/humans/{pid}/access",
-        "get",
-        "Team chart",
-        "getPersonAccess",
-        "Who may see, read and write to a person (themselves, whoever they report up to, admins; docs/permissions.md)",
-        "TeammateAccessView",
-    ),
-    (
-        "/api/v2/humans/{pid}/access",
-        "put",
-        "Team chart",
-        "setPersonAccess",
-        "Set who may see, read and write to a person; send the revision you read (409 version_conflict otherwise)",
-        "TeammateAccessView",
-    ),
-    (
-        "/api/v2/seats",
-        "get",
-        "Team chart",
-        "listSeats",
-        "The Recruiting seats: roles on the chart with a job description and reporting line, and no bot. A seat holds no "
-        "work: a task for it is refused and its role's work stays with its manager",
-        "SeatList",
-    ),
-    (
-        "/api/v2/seats",
-        "post",
-        "Team chart",
-        "createSeat",
-        "Add a Recruiting seat: the owner anywhere, a person under themselves or someone below them",
-        "Seat",
-    ),
-    (
-        "/api/v2/seats/batch",
-        "post",
-        "Team chart",
-        "createSeats",
-        "Add a group of Recruiting seats in one transaction; the owner anywhere, others only under themselves or below",
-        "SeatBatch",
-    ),
-    (
-        "/api/v2/seats/{seat_id}",
-        "patch",
-        "Team chart",
-        "updateSeat",
-        "Change a seat's title, job description, reporting line or group (a person it reports up to, or the owner)",
-        "Seat",
-    ),
-    (
-        "/api/v2/seats/{seat_id}/close",
-        "post",
-        "Team chart",
-        "closeSeat",
-        "Take a seat off the chart; its row is kept",
-        "SeatClosed",
-    ),
-    (
-        "/api/v2/seats/draft",
-        "post",
-        "Team chart",
-        "draftSeat",
-        "A job description for a job not posted yet, from its title: composed from the template catalog at once, or "
-        "with `redraft` rewritten once by the model when the server has a key. Stores nothing",
-        "SeatDrafted",
-    ),
-    (
-        "/api/v2/seats/{seat_id}",
-        "get",
-        "Team chart",
-        "getSeat",
-        "One seat, with whose words its job description is and whether the caller may edit it",
-        "SeatDetail",
-    ),
-    (
-        "/api/v2/seats/{seat_id}/recruit",
-        "post",
-        "Team chart",
-        "recruitSeat",
-        "Up to eight Tico templates for the seat at once, best fit first, each with one line, what it needs, how well it "
-        "matches and a suggested model, and the models one may choose instead. Local: nothing leaves the server",
-        "SeatCandidates",
-    ),
-    (
-        "/api/v2/seats/{seat_id}/hire",
-        "post",
-        "Team chart",
-        "hireSeat",
-        "Pick a candidate: the bot is created in Onboarding in the seat's place, then its repository",
-        "SeatHired",
-    ),
-    (
-        "/api/v2/groups",
-        "get",
-        "Team chart",
-        "listGroups",
-        "The groups, nested by `parent`, each with its humans and the bots the caller can see",
-        "GroupList",
-    ),
-    (
-        "/api/v2/groups",
-        "post",
-        "Team chart",
-        "createGroup",
-        "Add a group: a name, an optional parent group and teammates to start with (owners and admins)",
-        "Group",
-    ),
-    (
-        "/api/v2/groups/{gid}",
-        "patch",
-        "Team chart",
-        "updateGroup",
-        "Rename a group, move it under another (`parent`, empty for the top) and add or remove teammates (owners and admins)",
-        "Group",
-    ),
-    (
-        "/api/v2/groups/{gid}",
-        "delete",
-        "Team chart",
-        "deleteGroup",
-        "Remove a group; the groups and teammates in it move up to its parent (owners and admins)",
-        None,
-    ),
-    (
-        "/api/v2/groups/{gid}/access",
-        "get",
-        "Team chart",
-        "getGroupAccess",
-        "Who may see, read and write to a group (its leads and admins; docs/permissions.md)",
-        "TeammateAccessView",
-    ),
-    (
-        "/api/v2/groups/{gid}/access",
-        "put",
-        "Team chart",
-        "setGroupAccess",
-        "Set who may see, read and write to a group; send the revision you read (409 version_conflict otherwise)",
-        "TeammateAccessView",
     ),
     (
         "/api/v2/org/order/{manager}",
@@ -585,91 +272,12 @@ STABLE = [
         "BotDetail",
     ),
     (
-        "/api/v2/bots/{bot}/pause-state",
-        "get",
-        "Bots",
-        "getBotPauseState",
-        "Pause state and recorded person/time, readable open-task count and company billing pause; no billing amounts",
-        None,
-    ),
-    (
-        "/api/v2/bots/{bot}/access",
-        "get",
-        "Bots",
-        "getBotAccess",
-        "Who may see, read and write to a bot (its managers only; docs/permissions.md)",
-        "BotAccessView",
-    ),
-    (
-        "/api/v2/bots/{bot}/access",
-        "put",
-        "Bots",
-        "setBotAccess",
-        "Set who may see, read and write to a bot; send the revision you read (409 version_conflict otherwise)",
-        "BotAccessView",
-    ),
-    (
         "/api/v2/bots/{bot}/instructions",
         "get",
         "Bots",
         "getBotInstructions",
         "Latest Instructions snapshot published by the Computer; requires Read, published is false until content arrives",
         "BotInstructions",
-    ),
-    (
-        "/api/v2/bots/{bot}/onboarded",
-        "post",
-        "Bots",
-        "markBotOnboarded",
-        "Mark onboarding complete, by a person above the bot on the org chart (its manager, their managers or the owner; "
-        "403 for anyone else): its `stage` goes from onboarding to active (`onboarding_state` `needs_setup` to "
-        "`onboarded`) and its automations start. The bot's own call is its \"I'm ready\" with a `summary` and leaves it "
-        "onboarding. Repeating it changes nothing; 409 bot_limit for a member's bot over their limit",
-        "BotOnboarded",
-    ),
-    (
-        "/api/v2/bots/{bot}/tools",
-        "get",
-        "Bots",
-        "listBotTools",
-        "The tools a bot uses, for the row at the top of its page: its model and harness, its repository, each "
-        "declared `tools:` entry and each tool granted to it in Tools, with its status; names and verbs, never a secret",
-        "BotTools",
-    ),
-    (
-        "/api/v2/bots/{bot}/tools",
-        "post",
-        "Bots",
-        "registerBotTool",
-        "Add a note entry for a bot you manage: validated, kept as a pending request and handed to BotOps as a task with the "
-        "exact `tools:` entry. One that only names a tool the bot already holds through a grant opens no task. Never a "
-        "credential: `env` is a variable's name",
-        "BotToolRegistered",
-    ),
-    (
-        "/api/v2/bots/{bot}/tools/{tool_id}",
-        "delete",
-        "Bots",
-        "removeBotTool",
-        "Ask BotOps to remove a declared tool, or withdraw a pending request (bot managers)",
-        "BotToolRemoval",
-    ),
-    (
-        "/api/v2/bots/{bot}/tools/{tool_id}/delete",
-        "post",
-        "Bots",
-        "removeBotToolPost",
-        "The same as DELETE, for clients that only send GET and POST",
-        "BotToolRemoval",
-    ),
-    (
-        "/api/v2/bots/{bot}/tools/{tool_id}/update",
-        "post",
-        "Bots",
-        "updateBotTool",
-        "Change a declared tool's `can`, `scope` or `note` in place (bot managers): one BotOps task with the changed entry; "
-        "the tool shows `pending: update` until the computer reports it",
-        "BotToolUpdated",
     ),
     ("/api/v2/models", "get", "Bots", "listModels", "Models a bot can be set to", None),
     ("/api/v2/me/recent", "get", "Bots", "listRecentBots", "Bots the caller worked with lately", "Recent"),
@@ -723,30 +331,6 @@ STABLE = [
         "chatWithBot",
         "Send a message to a bot (opens the chat if needed)",
         "ChatResult",
-    ),
-    (
-        "/api/v2/chat/{bot}/new",
-        "post",
-        "Conversations",
-        "startNewChat",
-        "Archive the current personal chat and start fresh",
-        None,
-    ),
-    (
-        "/api/v2/conversations/{cid}/goal",
-        "get",
-        "Conversations",
-        "getChatGoal",
-        "Read the pinned goal and commands",
-        "ChatGoalResult",
-    ),
-    (
-        "/api/v2/conversations/{cid}/goal",
-        "post",
-        "Conversations",
-        "setChatGoal",
-        "Set, edit, pause, resume or clear a native goal",
-        "ChatGoalResult",
     ),
     ("/api/v2/messages", "post", "Conversations", "sendMessage", "Send a message to a person or bot", "Message"),
     ("/api/v2/messages/{mid}", "get", "Conversations", "getMessage", "One message", "Message"),
@@ -819,9 +403,22 @@ STABLE = [
         "post",
         "Tasks",
         "moveTask",
-        "Move a task: to is next (with a why, past what is not met), done, closed, reopen, or a stage's id or name. A "
-        "refusal is 409 with error, detail, missing, next and version",
+        "Move a task: to is next (with a why, past what is not met), done, closed, reopen, or a stage's id or name. "
+        "With to_pipeline (another pipeline's id or name) it moves there, to the stage to names (its first when left out), "
+        "keeping its number, label and history; a Done or Closed task lands in that pipeline's Done or Closed. A "
+        "refusal is 409 with error, detail, missing, next and version (task_turn_running while a bot's turn on it runs)",
         "TaskResult",
+    ),
+    (
+        "/api/v2/tasks/move",
+        "post",
+        "Tasks",
+        "moveTasks",
+        "Move many tasks to a stage of another pipeline: ids, or from {pipeline, stage} for every open task there; "
+        "to_pipeline, to (its first stage when left out) and why (a bot's is required). Each moves as one move does; "
+        "one that cannot is skipped with its code (task_turn_running, task_stage_full, not_found, ...) and the rest "
+        "still move. At most 500 tasks",
+        "TaskMoveResult",
     ),
     (
         "/api/v2/tasks/{tid}/owner",
@@ -931,7 +528,9 @@ STABLE = [
         "post",
         "Pipelines",
         "savePipeline",
-        "Make or change a pipeline: the whole record, with the settings_version it was read at",
+        "Make or change a pipeline: the whole record, with the settings_version it was read at. Removing a stage that "
+        "holds open tasks answers 409 stage_has_tasks (stages, and a move_to hint) until the record carries "
+        "move_tasks_to {pipeline, stage}: its tasks move there first, in any pipeline",
         None,
     ),
     (
@@ -947,7 +546,8 @@ STABLE = [
         "post",
         "Pipelines",
         "retirePipeline",
-        "Take a pipeline out of use once it holds no open task",
+        "Take a pipeline out of use once it holds no open task; move_tasks_to {pipeline, stage} (another pipeline) moves "
+        "its open tasks there first",
         None,
     ),
     (
@@ -1270,45 +870,12 @@ STABLE = [
         None,
     ),
     (
-        "/api/v2/flow/opinions",
-        "post",
-        "Needs you",
-        "getFlowOpinions",
-        "Tico's opinion on each ask in Flow's set (`items`: the Needs-you ids of asks, at most 30), one entry per id in "
-        "order: `ready` with `pick` (an OK: approve or send_back, never a snooze; a question: one of its choices, or empty), "
-        "`line` (80 characters at most), `note` (for a send back) and `score` (0-100, to sort by, never shown); "
-        "`pending` while it is worked out: ask again for those; `none` when there is none, including any id that is "
-        "not an ask on the caller's own Needs you. Answers at once, never waits on a model and changes no task. One "
-        "opinion per ask, shared by everyone the ask waits on, for 24 hours or until the ask changes",
-        "FlowOpinions",
-    ),
-    (
-        "/api/v2/flow/ping",
-        "post",
-        "Needs you",
-        "pingFlowBots",
-        "Ask bots for the questions they have for you (people only): `scope` `reports` (default: the bots you manage), "
-        "`bot` (`id`: one bot) or `group` (`id`: a team's bots, the teams under it included). Only bots you may read; "
-        "never BotOps or the Assistant. Each gets one message from you pointing at the add-to-flow skill; its questions "
-        "come back as tasks of its own, each with one ask to you, in your Needs you. A bot you pinged in the last 10 "
-        "minutes is listed in `recent` and not messaged again. Calls no model",
-        "FlowPinged",
-    ),
-    (
         "/api/v2/meetings",
         "get",
         "Meetings",
         "listMeetings",
         "Meetings; review=pending reads your own queue",
         "MeetingReviewList",
-    ),
-    (
-        "/api/v2/meetings/import",
-        "post",
-        "Meetings",
-        "importMeeting",
-        "Import into your Pending queue unless shared explicitly or automatically",
-        None,
     ),
     (
         "/api/v2/meetings/settings",
@@ -1390,22 +957,6 @@ STABLE = [
         "syncGranola",
         "Start a background sync; reuse the last two minutes",
         "GranolaSync",
-    ),
-    (
-        "/api/v2/meetings/search",
-        "get",
-        "Meetings",
-        "searchMeetings",
-        "Search or list recorded meetings",
-        "MeetingSearch",
-    ),
-    (
-        "/api/v2/meetings/transcript",
-        "get",
-        "Meetings",
-        "getMeetingTranscript",
-        "A meeting's transcript; includes saved notes at offset zero, or notes only with notes=true",
-        None,
     ),
     (
         "/api/v2/bots/{bot}/files",
@@ -1498,153 +1049,6 @@ STABLE = [
         "The bytes of one version (a download, never a storage address)",
         None,
     ),
-    (
-        "/api/v2/docs",
-        "get",
-        "Docs",
-        "listInternalDocs",
-        "Internal docs by path, without their text; path_prefix narrows to a folder, limit and cursor page",
-        "InternalDocList",
-    ),
-    (
-        "/api/v2/docs",
-        "post",
-        "Docs",
-        "createInternalDoc",
-        "Write a new internal doc (Markdown). The path defaults to a slug of the title; a chosen path that is taken is a 409",
-        "InternalDocResult",
-    ),
-    (
-        "/api/v2/docs/search",
-        "get",
-        "Docs",
-        "searchInternalAndLinkedDocs",
-        "Search team and manual sections by relevance, with excerpts, and linked docs by title, note and address; each result has a type",
-        "DocsSearchResults",
-    ),
-    (
-        "/api/v2/doc-sources",
-        "get",
-        "Docs",
-        "listDocSources",
-        "External sources and indexing state; limit/cursor page",
-        "DocSourceList",
-    ),
-    (
-        "/api/v2/doc-sources",
-        "post",
-        "Docs",
-        "addDocSource",
-        "Save a URL and queue public GitHub indexing; duplicate URLs open the existing source",
-        "DocSourceResult",
-    ),
-    (
-        "/api/v2/doc-sources/{source_id}",
-        "patch",
-        "Docs",
-        "updateDocSource",
-        "Edit or remove a source; follows linked-doc permissions",
-        None,
-    ),
-    (
-        "/api/v2/doc-sources/{source_id}/refresh",
-        "post",
-        "Docs",
-        "refreshDocSource",
-        "Queue one coalesced refresh without waiting for GitHub",
-        "DocSourceResult",
-    ),
-    (
-        "/api/v2/doc-sources/{source_id}/documents",
-        "get",
-        "Docs",
-        "listSourceDocuments",
-        "Included file metadata, limit/cursor page",
-        "SourceDocumentList",
-    ),
-    (
-        "/api/v2/docs/external/{document_id}",
-        "get",
-        "Docs",
-        "getExternalDoc",
-        "Untrusted external text and provenance; optional observed revision",
-        "ExternalDocResult",
-    ),
-    (
-        "/api/v2/docs/import",
-        "post",
-        "Docs",
-        "importInternalDoc",
-        "A file (.md .markdown .txt .html .htm .docx .pdf, up to 20 MB) converted to Markdown and saved as a new internal doc",
-        "InternalDocResult",
-    ),
-    (
-        "/api/v2/docs/{doc_id}",
-        "get",
-        "Docs",
-        "getInternalDoc",
-        "One internal doc with its text and version",
-        "InternalDocResult",
-    ),
-    (
-        "/api/v2/docs/{doc_id}",
-        "patch",
-        "Docs",
-        "updateInternalDoc",
-        "Change a doc's title, text or path, archive it, or lock it (owner and bot administrators). `version` must be the "
-        "current one or the answer is 409 version_conflict; a locked doc answers 403 locked to everyone else",
-        "InternalDocResult",
-    ),
-    (
-        "/api/v2/docs/{doc_id}/versions",
-        "get",
-        "Docs",
-        "listInternalDocVersions",
-        "A doc's versions, newest first, without their text",
-        "InternalDocVersions",
-    ),
-    (
-        "/api/v2/docs/{doc_id}/versions/{number}",
-        "get",
-        "Docs",
-        "getInternalDocVersion",
-        "One version with its text",
-        "InternalDocVersionResult",
-    ),
-    (
-        "/api/v2/docs/{doc_id}/restore",
-        "post",
-        "Docs",
-        "restoreInternalDoc",
-        "Save an earlier version as a new version (the history is never rewritten)",
-        "InternalDocResult",
-    ),
-    (
-        "/api/v2/linked-docs",
-        "get",
-        "Docs",
-        "listLinkedDocs",
-        "External link identities and metadata; public GitHub content is indexed separately",
-        "LinkedDocList",
-    ),
-    (
-        "/api/v2/linked-docs",
-        "post",
-        "Docs",
-        "addLinkedDoc",
-        "Link a doc by its address; the kind is detected and the title defaults to the host and path. Anyone may add one",
-        "LinkedDocResult",
-    ),
-    (
-        "/api/v2/linked-docs/{link_id}",
-        "patch",
-        "Docs",
-        "updateLinkedDoc",
-        "Change or remove (archived) a linked doc: whoever added it, owners and bot administrators",
-        "LinkedDocResult",
-    ),
-    ("/api/v2/context/search", "get", "Docs", "searchDocs", "Search team documents", "DocSearch"),
-    ("/api/v2/context/document", "get", "Docs", "getDocument", "One document", None),
     (
         "/api/v2/docs/ask",
         "post",
@@ -1807,18 +1211,6 @@ STABLE = [
         "The Assistant's background run only: one morning message for a person, in their own Assistant chat, as the "
         "Assistant (no card). Once a company day per person: a second is 409 already_sent_today",
         None,
-    ),
-    # Goals and KPIs (docs/goals-and-kpis.md)
-    (
-        "/api/v2/strategy-bot",
-        "get",
-        "Goals",
-        "getStrategyBot",
-        "The Strategy Owner's name, whether its regular checks run, how much it does (its level, "
-        "with each level's sentence and "
-        "who changed it when), and how many items it put in each person's Needs you today against its cap of 5 "
-        "(everyone's for the owner, admins and the Strategy Owner; your own for anyone else)",
-        "StrategyBotView",
     ),
     (
         "/api/v2/strategy-bot/level",
@@ -2257,14 +1649,6 @@ STABLE = [
         "QueuePurgeResult",
     ),
     ("/healthz", "get", "Health", "getLiveness", "Is the server up (no sign-in)", None),
-    (
-        "/api/v2/health",
-        "get",
-        "Health",
-        "getHealth",
-        "Checks, computers and failures (bots see counts, computers and failed runs)",
-        "Health",
-    ),
     (
         "/api/v2/health/findings",
         "get",
@@ -3612,6 +2996,13 @@ SCHEMAS = {
             "run_model": {"oneOf": [ref("TaskRunChoice"), {"type": "null"}]},
             "readiness": {"type": ["object", "null"]},
             "warning": "s",
+        }
+    ),
+    "TaskMoveResult": obj(
+        {
+            "batch_id": "s",
+            "moved": items("s"),
+            "skipped": items(obj({"id": "s", "code": "s", "reason": "s"})),
         }
     ),
     "TaskBulkResult": obj(
@@ -5333,18 +4724,6 @@ STABLE.extend(
 )
 
 # The audit trail (backend/audit_log.py).
-STABLE.extend(
-    [
-        (
-            "/api/v2/audit",
-            "get",
-            "Team",
-            "listAudit",
-            "Who changed caps, spend, groups and automations, newest first (owner: all; others: their own)",
-            "AuditPage",
-        ),
-    ]
-)
 SCHEMAS.update(
     {
         "AuditPage": {
@@ -5398,456 +4777,6 @@ DOC_PAYMENT = {
 TAGS["Finance"] = (
     "Budgets, the P&L, expenses, bills, invoices, contacts, reports and the work inbox, as far as the "
     "caller sees; Finance actions, committed or sent to one person for approval."
-)
-STABLE.extend(
-    [
-        (
-            "/api/v2/finance/budgets",
-            "get",
-            "Finance",
-            "listFinanceBudgets",
-            "The budgets the caller sees, each with where it stands today, or with at=YYYY-MM-DD in the period holding that "
-            "day (the version in effect then); amounts in cents. The owner may pass view_as",
-            "FinanceBudgets",
-        ),
-        (
-            "/api/v2/finance/brief",
-            "get",
-            "Finance",
-            "getFinanceBrief",
-            "What changed in Finance for the caller: a few short lines about the money they may see, with as_of (when "
-            "those numbers last moved) and changed_since. Empty lines when there is nothing to say. The owner may pass view_as",
-            "FinanceBrief",
-        ),
-        (
-            "/api/v2/finance/pnl",
-            "get",
-            "Finance",
-            "getFinancePnl",
-            "The P&L the caller sees, by day, week, month, quarter or year (past, current and projected columns), with budget "
-            "and projection beside each actual; each row says its section. view=expenses filters by teams and teammates "
-            "(several at once), who (bots, people or both) and unattributed. The owner may pass view_as",
-            "FinancePnl",
-        ),
-        (
-            "/api/v2/finance/balance-sheet",
-            "get",
-            "Finance",
-            "getFinanceBalanceSheet",
-            "Assets, liabilities and equity on a day, each line with its sources. Owner-only unless granted",
-            "FinanceBalanceSheet",
-        ),
-        (
-            "/api/v2/finance/transactions",
-            "get",
-            "Finance",
-            "listFinanceTransactions",
-            "Feed rows and entries the caller sees, newest first, with filters, search and a cursor",
-            "FinanceTransactions",
-        ),
-        (
-            "/api/v2/finance/cards",
-            "get",
-            "Finance",
-            "listFinanceCards",
-            "The cards the caller follows, last 4 only, with allocation and spend this period",
-            "FinanceCards",
-        ),
-        (
-            "/api/v2/finance/sources",
-            "get",
-            "Finance",
-            "listFinanceSources",
-            "Every source of the books grouped with counts, each with its account mapping, sync and access. Owner-only "
-            "unless granted",
-            "FinanceSources",
-        ),
-        (
-            "/api/v2/finance/access",
-            "get",
-            "Finance",
-            "getFinanceAccess",
-            "Who can see what in Finance: teams, each teammate's default, grants and rights, whether the caller may grant "
-            "them more (may_grant), private lines, the defaults",
-            "FinanceAccess",
-        ),
-        (
-            "/api/v2/finance/transfers",
-            "get",
-            "Finance",
-            "listFinanceTransfers",
-            "Internal transfers between two money accounts the caller sees, newest first, with their status and a cursor; "
-            "errors only for the maker or a finance admin",
-            "FinanceTransfers",
-        ),
-        (
-            "/api/v2/finance/tax/sales-tax",
-            "get",
-            "Finance",
-            "getFinanceSalesTax",
-            "The sales tax workpaper for a year (this year when omitted): each jurisdiction's quarters with taxable and exempt "
-            "sales, tax collected and remitted, what is due and when. Full view only",
-            "FinanceSalesTax",
-        ),
-        (
-            "/api/v2/finance/tax/sales-tax.csv",
-            "get",
-            "Finance",
-            "getFinanceSalesTaxCsv",
-            "The sales tax workpaper as CSV, the same lines as on screen. Full view only",
-            None,
-        ),
-        (
-            "/api/v2/finance/tax/1099",
-            "get",
-            "Finance",
-            "getFinance1099",
-            "The 1099 workpaper for a year (this year when omitted): each flagged vendor's cash paid with card payments left "
-            "out, the threshold, whether a 1099-NEC is due and when. Full view only",
-            "Finance1099",
-        ),
-        (
-            "/api/v2/finance/tax/1099.csv",
-            "get",
-            "Finance",
-            "getFinance1099Csv",
-            "The 1099 workpaper as CSV, the same lines as on screen. Full view only",
-            None,
-        ),
-        (
-            "/api/v2/finance/mercury-users",
-            "get",
-            "Finance",
-            "listFinanceMercuryUsers",
-            "Mercury's users as last synced, to pick a card holder, for teammates who may issue cards; emails (masked) only "
-            "for a finance admin",
-            "FinanceMercuryUsers",
-        ),
-        (
-            "/api/v2/finance/statements/preview",
-            "post",
-            "Finance",
-            "previewFinanceStatement",
-            "Review a bank or card statement file before it posts: each row New or Already in Tico, its vendor and "
-            "attribution, and the tie-out. Writes only a short-lived preview token",
-            "FinanceStatementReview",
-        ),
-        (
-            "/api/v2/finance/attribution-rules",
-            "get",
-            "Finance",
-            "listFinanceAttributionRules",
-            "The attribution rules in the book (vendor, P&L account or money account matches, their shares, enabled and "
-            "apply_from); needs the finance.attribution right or admin",
-            "FinanceAttributionRules",
-        ),
-        (
-            "/api/v2/finance/attribution/dimensions",
-            "get",
-            "Finance",
-            "listFinanceAttributionDimensions",
-            "The classes, departments (locations) and projects seen on P&L lines in the last 12 months the caller sees, "
-            "largest amount first, each with its line count, amount and rule (its shares, or null); needs the "
-            "finance.attribution right or admin. Set them with the attribution_map action",
-            "FinanceAttributionDimensions",
-        ),
-        (
-            "/api/v2/finance/lines/{line_id}/attribution",
-            "get",
-            "Finance",
-            "getFinanceLineAttribution",
-            "One posted P&L line's attribution: the shares in force (source: person, bot, rule or tags), their amounts, and "
-            "the line's history newest first, as far as the caller sees the line",
-            "FinanceLineAttribution",
-        ),
-        (
-            "/api/v2/finance/bills",
-            "get",
-            "Finance",
-            "listFinanceBills",
-            "Bills the caller sees (payables: a view grant or finance.ap), newest first, filtered by status (comma-separated, "
-            "or unpaid), vendor, dates, aging bucket or late, and a search, with the open total by aging bucket and a cursor; "
-            "order=paid_on lists the last paid first",
-            "FinanceBills",
-        ),
-        (
-            "/api/v2/finance/bills/{bill_id}",
-            "get",
-            "Finance",
-            "getFinanceBill",
-            "One bill with its lines, the payments settled against it, its attachments and the actions and approvals on it",
-            "FinanceDocument",
-        ),
-        (
-            "/api/v2/finance/invoices",
-            "get",
-            "Finance",
-            "listFinanceInvoices",
-            "Invoices the caller sees (receivables: a view grant or finance.ar), newest first, with the same filters as bills",
-            "FinanceInvoices",
-        ),
-        (
-            "/api/v2/finance/invoices/{invoice_id}",
-            "get",
-            "Finance",
-            "getFinanceInvoice",
-            "One invoice with its lines, the payments received, its attachments and the actions and approvals on it",
-            "FinanceDocument",
-        ),
-        (
-            "/api/v2/finance/contacts",
-            "get",
-            "Finance",
-            "listFinanceContacts",
-            "Vendors (to whoever sees payables) and customers (receivables) by name, with what their open documents owe; a "
-            "tax id's last 4 only for a finance admin",
-            "FinanceContacts",
-        ),
-        (
-            "/api/v2/finance/chart",
-            "get",
-            "Finance",
-            "getFinanceChart",
-            "The lines the caller may post to (id, number, name, type), for the bill, invoice and journal forms; for= bill "
-            "keeps expense and asset lines, invoice income lines; for teammates who write to the books",
-            "FinanceChart",
-        ),
-        (
-            "/api/v2/finance/pay-from",
-            "get",
-            "Finance",
-            "listFinancePayFrom",
-            "The connected bank accounts the caller may pay bills from (finance.pay); balances only where the caller sees "
-            "that account",
-            "FinancePayFrom",
-        ),
-        (
-            "/api/v2/finance/feed/{feed_id}/expected",
-            "get",
-            "Finance",
-            "listFinanceFeedExpected",
-            "The payments marked paid a settled bank row not yet in the books may be the bank side of (same money account and "
-            "direction, at most its amount, marked within 5 days), capped at 20, for the feed_match action",
-            "FinanceFeedExpected",
-        ),
-        (
-            "/api/v2/finance/inbox",
-            "get",
-            "Finance",
-            "getFinanceInbox",
-            "The caller's Finance work queue: uncategorized rows, bills to enter, unmatched and missing receipts, bills due, "
-            "overdue invoices, budgets near their limit, failed syncs and months ready to close, with counts and a cursor",
-            "FinanceInbox",
-        ),
-        (
-            "/api/v2/finance/reports/{kind}",
-            "get",
-            "Finance",
-            "getFinanceReport",
-            "pnl (cash or accrual), balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging, spend_by or campaigns, cut to the "
-            "caller's view; compare=prior adds the window before; rows past top_n fold into one Other row (key \" other\"; the "
-            "group with no vendor, team or teammate is keyed \" unattributed\": no real key starts with a space)",
-            "FinanceReportOf",
-        ),
-        (
-            "/api/v2/finance/search",
-            "get",
-            "Finance",
-            "searchFinance",
-            "Search entries, bank and card rows, bills, invoices, contacts and rules the caller sees; with kind it pages by "
-            "cursor, without it returns the first few of each kind",
-            "FinanceSearch",
-        ),
-        (
-            "/api/v2/estimates",
-            "get",
-            "Finance",
-            "listEstimates",
-            "Estimates the caller sees (receivables), newest first, by status, customer and a search over number, memo and "
-            "customer name, with a cursor",
-            "Estimates",
-        ),
-        (
-            "/api/v2/locations",
-            "get",
-            "Finance",
-            "listLocations",
-            "Locations by name; q searches names, archived hides them (default), shows only them or both; with a cursor",
-            "Locations",
-        ),
-        (
-            "/api/v2/items",
-            "get",
-            "Finance",
-            "listItems",
-            "Products and services by name or sku; q searches both, archived hides them (default), shows only them or both; "
-            "with a cursor. An item's accounts show to viewers who see them; its price shows with its income account",
-            "Items",
-        ),
-        (
-            "/api/v2/items/{item_id}",
-            "get",
-            "Finance",
-            "getItem",
-            "One product or service, archived or not; its accounts show to viewers who see them",
-            "ItemOne",
-        ),
-        (
-            "/api/v2/projects",
-            "get",
-            "Finance",
-            "listProjects",
-            "Projects by name; q searches names, archived hides them (default), shows only them or both; with a cursor",
-            "Projects",
-        ),
-        ("/api/v2/projects/{project_id}", "get", "Finance", "getProject", "One project, archived or not", "ProjectOne"),
-        (
-            "/api/v2/finance/metrics/{name}",
-            "get",
-            "Finance",
-            "getFinanceMetric",
-            "One number with when it was worked out (and for bank-backed numbers how fresh the data is): cash, burn, "
-            "runway_months, revenue, spend, budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, "
-            "unreconciled_days, unattributed, ad_spend, per_conversion",
-            "FinanceMetric",
-        ),
-        (
-            "/api/v2/finance/unattributed",
-            "get",
-            "Finance",
-            "listFinanceUnattributed",
-            "The Unattributed queue: the P&L lines in the period (this month by default) with no team, teammate or attribution "
-            "in force, newest first, paged by cursor, cut to what the caller sees",
-            "FinanceUnattributed",
-        ),
-        (
-            "/api/v2/finance/close/{month}",
-            "get",
-            "Finance",
-            "getFinanceCloseChecklist",
-            "A month's close checklist (YYYY-MM) for teammates who do the books, and whether it is ready to close",
-            "FinanceCloseChecklist",
-        ),
-        (
-            "/api/v2/finance/action-kinds",
-            "get",
-            "Finance",
-            "listFinanceActionKinds",
-            "Every Finance action kind in a line, or with kind= one kind's payload fields, right and approval kind",
-            "FinanceActionKinds",
-        ),
-        (
-            "/api/v2/finance/connections",
-            "post",
-            "Finance",
-            "createFinanceConnection",
-            "Connect Mercury with a stored token credential (finance admins): the token is tested, its accounts listed and "
-            "mapped into the books. The Idempotency-Key is the action's key",
-            "FinanceConnectionResult",
-        ),
-        (
-            "/api/v2/finance/subscriptions",
-            "get",
-            "Finance",
-            "listFinanceSubscriptions",
-            "The subscriptions the caller sees: recurring charges the daily look suggests and the Finance Owner confirms, each "
-            "with its cadence, expected amount and monthly cost in cents, next charge, card, seats and attribution, and the "
-            "monthly total of the active ones. status narrows them",
-            "FinanceSubscriptions",
-        ),
-        (
-            "/api/v2/finance/campaigns",
-            "get",
-            "Finance",
-            "listFinanceCampaigns",
-            "The ad campaigns the caller sees for a month (YYYY-MM): each with its owner (a team or teammate, inherited when "
-            "it is the account's bot), its spend, clicks, conversions and cost per conversion in cents, by spend, with totals",
-            "FinanceCampaigns",
-        ),
-        (
-            "/api/v2/finance/receipts",
-            "get",
-            "Finance",
-            "listFinanceReceipts",
-            "The receipts the caller sees, newest first: each Library file with what it reads as (amount, date, vendor) and "
-            "its suggested or filed bank or card row; ?status= narrows them, and a cursor pages them",
-            "FinanceReceipts",
-        ),
-        (
-            "/api/v2/finance/ad-accounts",
-            "get",
-            "Finance",
-            "listFinanceAdAccounts",
-            "A Google Ads or Meta Ads tool's ad spend (finance admins): whether Finance imports it every 4 hours and from which "
-            "day, the books line it books as, which stored keys hold each value (names only), the last import's result, and "
-            "each ad account with the bot it counts for and its spend this month in cents",
-            "FinanceAdAccounts",
-        ),
-        (
-            "/api/v2/finance/ad-imports",
-            "post",
-            "Finance",
-            "saveFinanceAdImport",
-            "Save a tool's ad spend import (finance admins): on or off, history_from, the books line and {slot: credential "
-            "id}. One enabled import per platform (409 otherwise); switching on asks for a run at once",
-            "FinanceAdAccounts",
-        ),
-        (
-            "/api/v2/finance/ad-imports/run",
-            "post",
-            "Finance",
-            "runFinanceAdImport",
-            "Import an enabled tool's ad spend now instead of at the next 4-hourly run (finance admins)",
-            "FinanceAdAccounts",
-        ),
-        (
-            "/api/v2/finance/ad-accounts/{ad_account_id}",
-            "patch",
-            "Finance",
-            "updateFinanceAdAccount",
-            "Pick the bot an ad account's spend counts for, or null for none (finance admins)",
-            "FinanceAdAccount",
-        ),
-        (
-            "/api/v2/finance/lines/{account_id}",
-            "get",
-            "Finance",
-            "getFinanceLine",
-            "One line's spend by vendor, team and teammate, its entries, how they were paid (paid_by) and next month's "
-            "projection (next_month; by vendor, team and teammate in next_by, named in next_labels), as far as the caller sees; vendor narrows it to one vendor, and teams[], teammates[], who and "
-            "unattributed filter it as the P&L's expenses view does (private totals only from whole cohorts). Rows past top_n "
-            "fold into one Other row keyed \" other\", and the group with none is keyed \" unattributed\". The owner may pass view_as",
-            "FinanceReport",
-        ),
-        (
-            "/api/v2/finance/actions",
-            "post",
-            "Finance",
-            "requestFinanceAction",
-            "Request a Finance action: committed, sent to one person for approval, denied or failed. The Idempotency-Key is "
-            "the action's key; a retry re-reads the rest through the caller's current view. dry_run writes nothing and says "
-            "what would happen",
-            "FinanceAction",
-        ),
-        (
-            "/api/v2/finance/actions/{action_id}",
-            "get",
-            "Finance",
-            "getFinanceAction",
-            "An action's status, for whoever asked, its approver, or whose view covers it; its reason for the approver, and "
-            "otherwise only while that view covers it",
-            "FinanceAction",
-        ),
-        (
-            "/api/v2/finance/bills-address",
-            "put",
-            "Finance",
-            "setFinanceBillsAddress",
-            "Set the email address vendors send bills to, or clear it with null (owner or admin). inbox_id is the Email & "
-            "Phone inbox that receives it, else null: mail to it never reaches Tico and uploads still work",
-            "FinanceBillsAddress",
-        ),
-    ]
 )
 SCHEMAS.update(
     {
@@ -6909,184 +5838,6 @@ SCHEMAS.update(
 TAGS["Automations"] = (
     "A trigger and a tree of steps (filter, decide, llm, find, bot_turn, paths, action), saved as versions; "
     "one permission rule for UI, CLI and MCP."
-)
-STABLE.extend(
-    [
-        (
-            "/api/v2/automations",
-            "get",
-            "Automations",
-            "listAutomations",
-            "The automations you may see, newest first, each with can_edit; paged by cursor",
-            "AutomationList",
-        ),
-        (
-            "/api/v2/automations",
-            "post",
-            "Automations",
-            "createAutomation",
-            "Save a new automation as version 1; a flow that fails its checks is refused with where and why. BotOps saves "
-            "it off unless `enabled` is sent; a bot without rights to it saves a proposal (off, version 1 pending). "
-            "An Assistant Message routine saves off with action, message_id and needs_confirm; only its person's card "
-            "click enables it. A chooser without a mode defaults to Draft",
-            "Automation",
-        ),
-        (
-            "/api/v2/automations/guide",
-            "get",
-            "Automations",
-            "getAutomationGuide",
-            "How BotOps builds and edits automations, with the flow format generated from the hub's code",
-            "AutomationGuide",
-        ),
-        (
-            "/api/v2/automations/runs",
-            "get",
-            "Automations",
-            "listAllAutomationRuns",
-            "Runs across every automation you may see in the last range (5m, 1h, 24h, 7d), newest first: what started each, "
-            "its outcome or failing step, steps, time and cost; status, trigger, owner and ids narrow it (before → next)",
-            "AutomationOverviewRuns",
-        ),
-        (
-            "/api/v2/automations/stats",
-            "get",
-            "Automations",
-            "getAutomationStats",
-            "Runs, failures and cost per automation you may see over the range, in buckets oldest first, with totals",
-            "AutomationStats",
-        ),
-        (
-            "/api/v2/automations/question-sets",
-            "get",
-            "Automations",
-            "listQuestionSets",
-            "The saved question sets a Decide step may name (`set`), each with its questions",
-            "QuestionSets",
-        ),
-        (
-            "/api/v2/automations/templates",
-            "get",
-            "Automations",
-            "listAutomationTemplates",
-            "The inbox templates a new inbox starts from: each with its id, name and destination names",
-            "AutomationTemplates",
-        ),
-        (
-            "/api/v2/automations/templates/{tid}",
-            "get",
-            "Automations",
-            "getAutomationTemplate",
-            "One template filled in for `owner` and `inbox`, as the flow the hub would save: enabled off, nothing saved",
-            "AutomationTemplate",
-        ),
-        (
-            "/api/v2/automations/{aid}",
-            "get",
-            "Automations",
-            "getAutomation",
-            "One automation with set questions filled in, today's counts and, for a schedule or a due date, next_run (for a due date, next_due too)",
-            "Automation",
-        ),
-        (
-            "/api/v2/automations/{aid}",
-            "patch",
-            "Automations",
-            "updateAutomation",
-            "Change it: a new trigger, steps or batch is a new version. A bot without edit rights gets "
-            "`pending`, a proposal a person restores",
-            "Automation",
-        ),
-        (
-            "/api/v2/automations/{aid}",
-            "delete",
-            "Automations",
-            "deleteAutomation",
-            "Delete it; its runs stay. A built-in one is refused",
-            "AutomationDeleted",
-        ),
-        (
-            "/api/v2/automations/{aid}/delete",
-            "post",
-            "Automations",
-            "deleteAutomationPost",
-            "The same delete, for clients that only POST",
-            "AutomationDeleted",
-        ),
-        (
-            "/api/v2/automations/{aid}/run",
-            "post",
-            "Automations",
-            "runAutomation",
-            "Run it now with `input` standing in for the trigger's output; answers the run",
-            "AutomationRunNow",
-        ),
-        (
-            "/api/v2/automations/{aid}/held",
-            "post",
-            "Automations",
-            "endAutomationHold",
-            "End the run guard's hold: `release` queues its held runs, oldest first; `drop` skips them. `moved` is how many",
-            "AutomationHeld",
-        ),
-        (
-            "/api/v2/automations/{aid}/runs",
-            "get",
-            "Automations",
-            "listAutomationRuns",
-            "Its runs, newest first (limit, before → next), step detail for 30 days, and daily run and drop counts",
-            "AutomationRuns",
-        ),
-        (
-            "/api/v2/automations/{aid}/versions",
-            "get",
-            "Automations",
-            "listAutomationVersions",
-            "Its versions, newest first; status=pending for proposals",
-            "AutomationVersions",
-        ),
-        (
-            "/api/v2/automations/{aid}/versions/{n}/restore",
-            "post",
-            "Automations",
-            "restoreAutomationVersion",
-            "Make a version current: a pending one keeps its number, an older one is saved as a new version; a draft's first "
-            "pending version turns it on",
-            "Automation",
-        ),
-        (
-            "/api/v2/automations/{aid}/versions/{n}",
-            "delete",
-            "Automations",
-            "discardAutomationVersion",
-            "Discard a pending version (409 for any other)",
-            "Automation",
-        ),
-        (
-            "/api/v2/inboxes/{inbox}",
-            "get",
-            "Automations",
-            "getInboxSend",
-            "An inbox's send switch (on by default): email address, slack:dm or slack:#<channel>",
-            "InboxSwitch",
-        ),
-        (
-            "/api/v2/inboxes/{inbox}",
-            "patch",
-            "Automations",
-            "setInboxSend",
-            "Turn the send switch on or off (the inbox's person, or the owner); off, send_reply saves a draft",
-            "InboxSwitch",
-        ),
-        (
-            "/api/v2/humans/{person}/assistant",
-            "get",
-            "Automations",
-            "getPersonAssistant",
-            "The bot behind a person's Assistant, or null until it is first used",
-            "PersonAssistant",
-        ),
-    ]
 )
 _RUN = obj(
     {
@@ -8349,114 +7100,11 @@ SCHEMAS['WebsiteTool'] = obj(
     required=['tool', 'status', 'accounts', 'host', 'recent', 'can_manage', 'private', 'can_set_audience'],
 )
 BROWSER = '/api/v2/website-tools/{tool_id}/accounts/{account_id}/browser'
-STABLE.extend(
-    [
-        (
-            BROWSER,
-            'post',
-            'Tools',
-            'openWebsiteBrowser',
-            'Open, or wake, the account\'s browser for your live view: on the computer its session runs on, else the browser '
-            'host. A live session is woken without changing its page',
-            'BrowserOpened',
-        ),
-        (
-            BROWSER + '/frame',
-            'get',
-            'Tools',
-            'getWebsiteBrowserFrame',
-            'The newest picture of the account\'s browser (JPEG; 204 before the first), with X-Page-Url, X-Page-Width and '
-            'X-Page-Height. From the computer the session runs on, at most one a second however many people watch',
-            None,
-        ),
-        (
-            BROWSER + '/control',
-            'post',
-            'Tools',
-            'setWebsiteBrowserControl',
-            'Take control (bots wait until you give it back, or 5 minutes idle), or give it back',
-            'BrowserControlState',
-        ),
-        (
-            BROWSER + '/input',
-            'post',
-            'Tools',
-            'sendWebsiteBrowserInput',
-            'A click (x, y in frame pixels), typed text, a key or a scroll from the person in control',
-            'BrowserInputDone',
-        ),
-    ]
-)
 SCHEMAS['BrowserOpened'] = obj({'ok': 'b', 'where': {'enum': ['central', 'own']}})
 SCHEMAS['BrowserControlState'] = obj({'ok': 'b', 'control': 'b'})
 SCHEMAS['BrowserInputDone'] = obj({'ok': 'b'})
 TAGS['Webhook relay'] = (
     'Addresses for triggers through Tico Gateway: they keep deliveries while this server is off (backend/hook_relay.py).'
-)
-STABLE.extend(
-    [
-        (
-            '/api/v2/relay',
-            'get',
-            'Webhook relay',
-            'getWebhookRelay',
-            'The Gateway key, how many relay addresses exist, the last '
-            'pull, the last problem and what waits at the Gateway',
-            'WebhookRelayState',
-        ),
-        (
-            '/api/v2/triggers/{trigger_id}/relay',
-            'post',
-            'Webhook relay',
-            'createWebhookRelay',
-            'Give a trigger an address through '
-            'Tico Gateway; the answer carries the secret once (people who manage the trigger, and BotOps)',
-            'WebhookRelayAddress',
-        ),
-        (
-            '/api/v2/triggers/{trigger_id}/relay/rotate',
-            'post',
-            'Webhook relay',
-            'rotateWebhookRelay',
-            'Replace the Gateway address\'s secret; the old address stops at once and the new one is shown once',
-            'WebhookRelayAddress',
-        ),
-        (
-            '/api/v2/triggers/{trigger_id}/relay/wake',
-            'post',
-            'Webhook relay',
-            'setWebhookRelayWake',
-            'Say whether a delivery to '
-            'the Gateway address starts a sleeping server (people who manage the trigger, and BotOps)',
-            'WebhookRelayWake',
-        ),
-        (
-            '/api/v2/triggers/{trigger_id}/relay/delete',
-            'post',
-            'Webhook relay',
-            'deleteWebhookRelay',
-            'Remove the Gateway address; the trigger and its own address stay',
-            'WebhookRelayDeleted',
-        ),
-        (
-            '/api/v2/hooks/wake-url',
-            'get',
-            'Webhook relay',
-            'getWebhookWakeUrl',
-            'The address Tico Gateway knocks on to start '
-            'this server when a webhook waits for it, who set it and when (the owner)',
-            'WebhookWakeUrl',
-        ),
-        (
-            '/api/v2/hooks/wake-url',
-            'put',
-            'Webhook relay',
-            'setWebhookWakeUrl',
-            'Set the wake address (https) or turn it off '
-            '(url null); the answer carries the signing secret once, for the receiver (the owner; needs the Gateway key)',
-            'WebhookWakeUrlSet',
-        ),
-    ]
 )
 TAGS['Sleep when idle'] = (
     'A server Tico hosts stops after quiet hours and starts again on a webhook, a routine or a sign-in (backend/sleep_idle.py).'
@@ -8847,23 +7495,6 @@ STABLE.extend(
             "PageShown",
         ),
         (
-            "/api/v2/files",
-            "get",
-            "Files",
-            "listFiles",
-            "Library › Files: every file the caller may see, newest activity first, filtered by kind, bot, team, task, date, "
-            "pinned or archived; paged and byte-capped, no totals",
-            "FileLibrary",
-        ),
-        (
-            "/api/v2/files/search",
-            "get",
-            "Files",
-            "searchFiles",
-            "Search the files the caller may read by title and text, filtered by kind, best first with an excerpt",
-            "FileSearch",
-        ),
-        (
             "/api/v2/files/{fid}",
             "delete",
             "Files",
@@ -9140,22 +7771,6 @@ STABLE.extend(
             'Rules',
             'getRulesCounts',
             'Internal and external rules in force, due dates open, suggestions waiting',
-            None,
-        ),
-        (
-            '/api/v2/rules/read',
-            'post',
-            'Rules',
-            'readRuleDocument',
-            'Add a document for the Rules Owner to read: a file you can read, or a public link (saved as a file version); the Rules Owner suggests the rules in it',
-            None,
-        ),
-        (
-            '/api/v2/rules/ask',
-            'post',
-            'Rules',
-            'askRules',
-            'A can-I question: the active rules that share words with it, cited, and the Rules Owner\'s answer on a task',
             None,
         ),
         (
@@ -9710,27 +8325,6 @@ SCHEMAS['SlackLink'] = obj(
 SCHEMAS['SlackLinkList'] = obj({'links': items(ref('SlackLink')), 'next_cursor': 'n', 'available': 'b'})
 
 # A bot's Dream (backend/dream.py): a cleanup task over its own memory, with up to three questions to its requester.
-STABLE.extend(
-    [
-        (
-            '/api/v2/bots/{bot}/dream',
-            'get',
-            'Bots',
-            'getBotDream',
-            "The bot's open dream, or else its newest one finished in the last day; dream is null otherwise",
-            'BotDreamView',
-        ),
-        (
-            '/api/v2/bots/{bot}/dream',
-            'post',
-            'Bots',
-            'startBotDream',
-            'Start a dream: a `dream` task for the bot, with the rights `POST /api/v2/tasks` needs. Its open dream is returned '
-            'instead of a second; 409 stateless for a bot that keeps no memory',
-            'BotDreamView',
-        ),
-    ]
-)
 SCHEMAS['BotDreamView'] = obj(
     {
         'dream': {
@@ -10427,110 +9021,6 @@ STABLE.extend(
 )
 # Calls (docs/meet.md): a call belongs to a thread. Joining a Tico Meet call hands back a token for audio and screen share
 # only; joining a Google Meet hands back its link.
-STABLE.extend(
-    [
-        (
-            "/api/v2/threads/{thread_id}/calls",
-            "get",
-            "Calls",
-            "listCalls",
-            "The calls in a thread, newest first, a page at a time: before=<next_before> reads the next page",
-            "CallList",
-        ),
-        (
-            "/api/v2/threads/{thread_id}/calls",
-            "post",
-            "Calls",
-            "startCall",
-            "Start a call in a thread you can write to: provider auto (Google Meet when your Workspace mailbox has it, "
-            "else Tico Meet), google_meet or tico. A Google Meet start makes the space, posts the call's card and rings",
-            "Call",
-        ),
-        (
-            "/api/v2/calls/ringing",
-            "get",
-            "Calls",
-            "listRingingCalls",
-            "The live calls ringing you now, in threads you can read",
-            "CallRinging",
-        ),
-        (
-            "/api/v2/calls/{call_id}",
-            "get",
-            "Calls",
-            "getCall",
-            "A call: its state, people, bots and how it ended",
-            "Call",
-        ),
-        (
-            "/api/v2/calls/{call_id}/join",
-            "post",
-            "Calls",
-            "joinCall",
-            "Join a call. Tico Meet: its media URL and a token good for 5 minutes. Google Meet: the Meet link as you "
-            "open it, no token",
-            "CallJoin",
-        ),
-        (
-            "/api/v2/calls/{call_id}/token",
-            "post",
-            "Calls",
-            "refreshCallToken",
-            "A fresh token for a Tico Meet call you have joined; 409 not_tico_meet for a Google Meet",
-            "CallToken",
-        ),
-        ("/api/v2/calls/{call_id}/leave", "post", "Calls", "leaveCall", "Leave a call you joined", "Call"),
-        (
-            "/api/v2/calls/{call_id}/end",
-            "post",
-            "Calls",
-            "endCall",
-            "End a call you started; its transcript is posted to the thread",
-            "Call",
-        ),
-        (
-            "/api/v2/calls/{call_id}/action-items/retry",
-            "post",
-            "Calls",
-            "retryCallActionItems",
-            "Ask again for a call's action items the Gateway could not make; the sweep makes them",
-            "Call",
-        ),
-        (
-            "/api/v2/calls/{call_id}/bots",
-            "post",
-            "Calls",
-            "attachCallBots",
-            "Let bots listen to a call and reply in its thread",
-            "Call",
-        ),
-        ("/api/v2/calls/{call_id}/bots/{bot}", "delete", "Calls", "detachCallBot", "Take a bot out of a call", "Call"),
-        (
-            "/api/v2/calls/{call_id}/recorder",
-            "post",
-            "Calls",
-            "claimCallRecorder",
-            "Make your Tico Recorder a live Google Meet call's recording source: the first claim wins, if you are in the call",
-            "CallRecorderSource",
-        ),
-        (
-            "/api/v2/calls/{call_id}/recorder",
-            "delete",
-            "Calls",
-            "releaseCallRecorder",
-            "Stop your Recorder being the call's recording source",
-            "CallRecorderSource",
-        ),
-        (
-            "/api/v2/calls/{call_id}/presence",
-            "post",
-            "Calls",
-            "reportCallPresence",
-            "The recording source's Recorder reports the names in the Meet; kept only while Google gives no status",
-            "Call",
-        ),
-    ]
-)
 SCHEMAS.update(
     {
         "CallParticipant": obj({"actor": "s", "joined_at": "s", "left_at": "n", "removed_at": "n", "in_call": "b"}),
@@ -10840,28 +9330,6 @@ SCHEMAS.update(
 
 # The Heartbeat (backend/heartbeat.py): one short beat of ordered steps, every 10 s by default.
 INT_N = {"type": ["integer", "null"]}
-STABLE.extend(
-    [
-        (
-            "/api/v2/heartbeat",
-            "get",
-            "Health",
-            "getHeartbeat",
-            "The Heartbeat: seconds between beats, the last beat, beats in the last day and quiet beats, each step in order "
-            "with its kind, cadence, switch and day counts, and the beats that did something, newest first (pass `next` back "
-            "as `before`)",
-            "HeartbeatView",
-        ),
-        (
-            "/api/v2/heartbeat",
-            "put",
-            "Health",
-            "saveHeartbeat",
-            "The owner or an admin: set the seconds between beats, 5 to 60",
-            "HeartbeatView",
-        ),
-    ]
-)
 SCHEMAS.update(
     {
         "HeartbeatStep": obj(
@@ -10946,14 +9414,52 @@ MENTIONS_DESCRIPTION = (
 )
 
 
+def operations(app):
+    """Each stable operation as (path, method, tag, operationId, summary, answer): the rows still in STABLE, then the
+    routes whose decorator carries api_v2(...), in the order the app serves them."""
+    found = list(STABLE)
+    listed = {(path, method) for path, method, *_ in found}
+    for route in app.routes:
+        extra = getattr(route, "openapi_extra", None) or {}
+        if MARK not in extra:
+            continue
+        for method in sorted(m.lower() for m in route.methods):
+            if (route.path_format, method) in listed:
+                raise RuntimeError("%s %s is both in STABLE and on its route" % (method.upper(), route.path_format))
+            if route.tags[0] not in TAGS:
+                raise RuntimeError(
+                    "%s %s has the tag %r, which is not in TAGS" % (method.upper(), route.path, route.tags[0])
+                )
+            found.append((route.path_format, method, route.tags[0], extra["operationId"], route.summary, extra[MARK]))
+    return found
+
+
+def stable_path(app):
+    """The pattern of every stable path and its kept old spellings (backend/legacy_spellings.py), but the event
+    stream: the answers that carry display names (app.py). Built once per app, on first use."""
+    pattern = getattr(app.state, "stable_path", None)
+    if pattern is None:
+        pattern = app.state.stable_path = re.compile(
+            "|".join(
+                re.sub(r"\\\{[^}]+\\\}", "[^/]+", re.escape(spelling))
+                for path, *_ in operations(app)
+                if path != "/api/v2/events"
+                for spelling in (path, *legacy_of(path))
+            )
+        )
+    return pattern
+
+
 def spec(app):
     """The v2 document for this app: the stable operations of `app.openapi()`, described."""
     full = copy.deepcopy(app.openapi())
     paths = {}
-    for path, method, tag, op_id, summary, answer in STABLE:
+    for path, method, tag, op_id, summary, answer in operations(app):
         op = (full["paths"].get(path) or {}).get(method)
         if op is None:
             raise RuntimeError("the stable API lists %s %s, which the server does not serve" % (method.upper(), path))
+        op.pop(MARK, None)
+        op.pop("tags", None)  # FastAPI puts a route's own tags first; the document has them after its answers
         op["tags"], op["operationId"], op["summary"] = [tag], op_id, summary
         op.pop("description", None)
         responses = {code: r for code, r in op.get("responses", {}).items() if code != "422"}
@@ -11122,6 +9628,11 @@ def spec(app):
                     param["required"] = False
                     param["description"] = "Not needed: a refresh writes nothing; the header is ignored."
         paths.setdefault(path, {})[method] = op
+    listed = {(path, method) for path, method, *_ in STABLE}
+    for path in {path for path, method, *_ in operations(app) if (path, method) not in listed}:
+        # A path with an operation declared on its route lists its methods in the order the app serves them.
+        served = list(full["paths"][path])
+        paths[path] = dict(sorted(paths[path].items(), key=lambda item: served.index(item[0])))
     used = set()
     _refs(paths, used)
     request_schemas = full.get("components", {}).get("schemas", {})
@@ -11170,60 +9681,6 @@ def spec(app):
 
 
 # Cloud agents (backend/cloud_agents.py): a seat asks Tico's team to connect an agent it does not connect yet.
-STABLE.extend(
-    [
-        (
-            "/api/v2/cloud-agents",
-            "get",
-            "Team chart",
-            "listCloudAgents",
-            "The cloud coding agents: the supported ones are added to the team, the others are requested from Tico",
-            "CloudAgentList",
-        ),
-        (
-            "/api/v2/cloud-agents/{agent_id}/request",
-            "post",
-            "Team chart",
-            "requestCloudAgent",
-            "Request an agent Tico does not connect yet: a seat for it goes on the chart now and Tico's team builds the "
-            "connection. `other` takes the agent's name or website in `name`",
-            "Seat",
-        ),
-        (
-            "/api/v2/seats/{seat_id}/request-agent",
-            "post",
-            "Team chart",
-            "requestSeatAgent",
-            "Request a cloud agent for a seat that has none: the seat keeps its role and holds its place until the agent connects",
-            "Seat",
-        ),
-        (
-            "/api/v2/seats/{seat_id}/request",
-            "get",
-            "Team chart",
-            "getSeatAgent",
-            "A seat's cloud agent: where its request stands (requested, building, ready) and the first task waiting for it",
-            "SeatAgent",
-        ),
-        (
-            "/api/v2/cloud-agents/{agent_id}/add",
-            "post",
-            "Team chart",
-            "addCloudAgent",
-            "Add an agent Tico connects as a Tico bot on the harness it runs on, placed under `reports_to`, or in the seat's "
-            "place when `seat_id` names one, which the bot then fills",
-            "CloudAgentAdded",
-        ),
-        (
-            "/api/v2/seats/{seat_id}/cancel-request",
-            "post",
-            "Team chart",
-            "cancelSeatRequest",
-            "Withdraw a seat's cloud agent request: Tico hears of it, the seat closes and its first task is declined",
-            "SeatCanceled",
-        ),
-    ]
-)
 SCHEMAS.update(
     {
         "CloudAgent": obj(
@@ -11252,18 +9709,6 @@ SCHEMAS["Seat"]["properties"].update({name: _t("s") for name in ("agent", "agent
 SCHEMAS["Seat"]["required"] = sorted(set(SCHEMAS["Seat"]["required"]) | {"agent", "agent_name", "request_state"})
 
 # The Growth page's numbers (backend/growth_numbers.py): the one read it draws from.
-STABLE.append(
-    (
-        "/api/v2/growth/numbers",
-        "get",
-        "KPIs",
-        "getGrowthNumbers",
-        "The Growth page's numbers: the newest months (1 to 24, default 12), every channel's and the total's CAC, LTV "
-        "and retention, revenue and margin per month (null where not recorded), the KPI tree with each KPI's last 24 "
-        "readings, and the marketing tests that started or finished, newest first",
-        "GrowthNumbers",
-    )
-)
 NUM_N_INT = {"type": ["integer", "null"]}
 SCHEMAS.update(
     {
@@ -11344,340 +9789,6 @@ COMPANY_LOGO_TYPES = ("image/png", "image/jpeg", "image/webp")  # company_page/r
 TAGS["Company page"] = (
     "The public page for the company's updates: its audiences, the editions each one reads, the stats "
     "the page shows, the readers who sign in to it, and the logo (docs/company-page.md)."
-)
-STABLE.extend(
-    [
-        (
-            "/api/v2/company-page",
-            "get",
-            "Company page",
-            "getCompanyPage",
-            "The page's settings, its address and whether it is live",
-            None,
-        ),
-        (
-            "/api/v2/company-page",
-            "patch",
-            "Company page",
-            "updateCompanyPage",
-            "Change the page's transparency, address or accent; the owner's own tap when BotOps asks",
-            None,
-        ),
-        ("/api/v2/company-page/logo", "get", "Company page", "getCompanyLogo", "The logo's bytes, with its type", None),
-        (
-            "/api/v2/company-page/logo",
-            "post",
-            "Company page",
-            "setCompanyLogo",
-            "Upload the logo as the raw image body: PNG, JPEG, GIF or WebP, up to 2 MB",
-            None,
-        ),
-        (
-            "/api/v2/company-page/logo",
-            "delete",
-            "Company page",
-            "removeCompanyLogo",
-            "Take the logo off the page",
-            None,
-        ),
-        (
-            "/api/v2/company-page/preview",
-            "get",
-            "Company page",
-            "getCompanyPreview",
-            "The page as it would read for one audience, as HTML that is never kept",
-            None,
-        ),
-        (
-            "/api/v2/audiences",
-            "get",
-            "Company page",
-            "listAudiences",
-            "The audiences, paged, each with its next due date",
-            None,
-        ),
-        (
-            "/api/v2/audiences",
-            "post",
-            "Company page",
-            "createAudience",
-            "Add an audience (the board, investors, the public or a custom one)",
-            None,
-        ),
-        (
-            "/api/v2/audiences/{audience_id}",
-            "patch",
-            "Company page",
-            "updateAudience",
-            "Change an audience's name, cadence, due rule, lag, approver or whether it is on",
-            None,
-        ),
-        (
-            "/api/v2/audiences/{audience_id}",
-            "delete",
-            "Company page",
-            "deleteAudience",
-            "Delete an audience and what it reaches; the owner's own tap when BotOps asks",
-            None,
-        ),
-        (
-            "/api/v2/audiences/{audience_id}/disclosure",
-            "get",
-            "Company page",
-            "getAudienceDisclosure",
-            "The disclosure grid for one audience: each data class, the stat it shows and how",
-            None,
-        ),
-        (
-            "/api/v2/audiences/{audience_id}/disclosure",
-            "put",
-            "Company page",
-            "setAudienceDisclosure",
-            "Replace the disclosure rules for one audience; the owner's own tap when BotOps asks",
-            None,
-        ),
-        (
-            "/api/v2/audiences/{audience_id}/disclosure/preset",
-            "post",
-            "Company page",
-            "applyDisclosurePreset",
-            "Apply a preset to one audience's disclosure grid",
-            None,
-        ),
-        (
-            "/api/v2/audiences/{audience_id}/sources",
-            "get",
-            "Company page",
-            "listAudienceSources",
-            "The authors whose updates feed one audience",
-            None,
-        ),
-        (
-            "/api/v2/audiences/{audience_id}/sources",
-            "post",
-            "Company page",
-            "addAudienceSource",
-            "Name an author whose updates feed one audience",
-            None,
-        ),
-        (
-            "/api/v2/audiences/{audience_id}/sources/{source_id}",
-            "delete",
-            "Company page",
-            "removeAudienceSource",
-            "Stop an author feeding one audience",
-            None,
-        ),
-        (
-            "/api/v2/company-page/stats",
-            "get",
-            "Company page",
-            "listPageStats",
-            "The stats the page can show, in order",
-            None,
-        ),
-        (
-            "/api/v2/company-page/stats",
-            "post",
-            "Company page",
-            "createPageStat",
-            "Add a stat from a Finance or KPI source",
-            None,
-        ),
-        (
-            "/api/v2/company-page/stats/{stat_id}",
-            "patch",
-            "Company page",
-            "updatePageStat",
-            "Change a stat's label, definition, chart or place",
-            None,
-        ),
-        (
-            "/api/v2/company-page/stats/{stat_id}",
-            "delete",
-            "Company page",
-            "deletePageStat",
-            "Remove a stat from the page",
-            None,
-        ),
-        (
-            "/api/v2/audiences/{audience_id}/stats",
-            "get",
-            "Company page",
-            "getAudienceStats",
-            "The stats one audience sees, with the values the disclosure grid lets through",
-            None,
-        ),
-        (
-            "/api/v2/audiences/{audience_id}/stats/approval",
-            "get",
-            "Company page",
-            "getBoardApproval",
-            "The approval of which stats one audience sees, and in what form",
-            None,
-        ),
-        (
-            "/api/v2/audiences/{audience_id}/stats/approval",
-            "post",
-            "Company page",
-            "requestBoardApproval",
-            "Ask the approver to approve which stats one audience sees; a person's ask, never BotOps' own",
-            None,
-        ),
-        (
-            "/api/v2/editions",
-            "get",
-            "Company page",
-            "listEditions",
-            "The editions, paged, newest first, filtered by audience or status",
-            None,
-        ),
-        (
-            "/api/v2/editions",
-            "post",
-            "Company page",
-            "draftEdition",
-            "Draft an edition now for one audience and period, out of cycle",
-            None,
-        ),
-        (
-            "/api/v2/editions/{edition_id}",
-            "get",
-            "Company page",
-            "getEdition",
-            "One edition: its text, checks and status",
-            None,
-        ),
-        (
-            "/api/v2/editions/{edition_id}",
-            "patch",
-            "Company page",
-            "updateEdition",
-            "Change an edition's title and sections; it is checked again before it can publish",
-            None,
-        ),
-        (
-            "/api/v2/editions/{edition_id}/check",
-            "post",
-            "Company page",
-            "checkEdition",
-            "Run the checks on an edition's text now",
-            None,
-        ),
-        (
-            "/api/v2/editions/{edition_id}/approval",
-            "post",
-            "Company page",
-            "requestEditionApproval",
-            "Ask the approver to approve an edition; a person's ask, never BotOps' own",
-            None,
-        ),
-        (
-            "/api/v2/editions/{edition_id}/publish",
-            "post",
-            "Company page",
-            "publishEdition",
-            "Publish an approved edition: the person's own click in Tico, never a token, the Assistant or BotOps",
-            None,
-        ),
-        (
-            "/api/v2/editions/{edition_id}/retract",
-            "post",
-            "Company page",
-            "retractEdition",
-            "Take a published edition back, with a note; a person in the app, never BotOps",
-            None,
-        ),
-        (
-            "/api/v2/editions/{edition_id}/correct",
-            "post",
-            "Company page",
-            "correctEdition",
-            "The next version of a published or retracted edition, with what changed; a person in the app",
-            None,
-        ),
-        (
-            "/api/v2/editions/{edition_id}/override",
-            "post",
-            "Company page",
-            "overrideEdition",
-            "Clear a held edition with a kept note: the person's own click in Tico",
-            None,
-        ),
-        (
-            "/api/v2/editions/{edition_id}/notices",
-            "get",
-            "Company page",
-            "listEditionNotices",
-            "The reader notices on one edition (who was told, what was sent)",
-            None,
-        ),
-        (
-            "/api/v2/readers",
-            "get",
-            "Company page",
-            "listReaders",
-            "The readers, paged, with the audiences each may read",
-            None,
-        ),
-        (
-            "/api/v2/readers",
-            "post",
-            "Company page",
-            "addReader",
-            "Give one person outside the company access to the audiences named; the owner's own tap when BotOps asks",
-            None,
-        ),
-        (
-            "/api/v2/readers/{reader_id}",
-            "patch",
-            "Company page",
-            "updateReader",
-            "Change which audiences a reader may read, or their name; the owner's own tap when BotOps asks",
-            None,
-        ),
-        ("/api/v2/readers/{reader_id}", "delete", "Company page", "removeReader", "Take a reader's access away", None),
-        (
-            "/api/v2/readers/import",
-            "post",
-            "Company page",
-            "importReaders",
-            "Add readers from a CSV of addresses; the owner's own tap when BotOps asks",
-            None,
-        ),
-        (
-            "/api/v2/audiences/{audience_id}/invites",
-            "get",
-            "Company page",
-            "listInvites",
-            "The invites to one audience, paged, without their links",
-            None,
-        ),
-        (
-            "/api/v2/audiences/{audience_id}/invites",
-            "post",
-            "Company page",
-            "createInvite",
-            "A single-use link into one audience; the link is shown to a person in the app, never to BotOps",
-            None,
-        ),
-        (
-            "/api/v2/audiences/{audience_id}/invites/{invite_id}",
-            "delete",
-            "Company page",
-            "revokeInvite",
-            "Revoke an invite that has not been used",
-            None,
-        ),
-        (
-            "/api/v2/reader-messages",
-            "get",
-            "Company page",
-            "listReaderMessages",
-            "What readers sent the page (replies and requests), newest first; they never wake a bot",
-            None,
-        ),
-    ]
 )
 
 
@@ -12327,114 +10438,6 @@ ANSWERS.update(
         "EmailSuppressionList": obj({"recipients": items("o"), "next_cursor": "n"}),
     }
 )
-STABLE.extend(
-    [
-        (
-            "/api/v2/email/sending-policy",
-            "get",
-            "Email sending",
-            "getEmailSendingPolicy",
-            "Company sending policy",
-            "EmailSendingPolicy",
-        ),
-        (
-            "/api/v2/email/sending-policy",
-            "put",
-            "Email sending",
-            "setEmailSendingPolicy",
-            "Set company sending policy (an admin, acting as themselves)",
-            "EmailSendingPolicy",
-        ),
-        (
-            "/api/v2/email/inboxes/{mailbox}/sending-policy",
-            "get",
-            "Email sending",
-            "getInboxSendingPolicy",
-            "Inbox policy with effective rule and inheritance",
-            "EmailSendingPolicy",
-        ),
-        (
-            "/api/v2/email/inboxes/{mailbox}/sending-policy",
-            "put",
-            "Email sending",
-            "setInboxSendingPolicy",
-            "Set inbox policy (its person or a shared inbox admin)",
-            "EmailSendingPolicy",
-        ),
-        (
-            "/api/v2/bots/{bot}/email-sending-policy",
-            "get",
-            "Email sending",
-            "getBotEmailSendingPolicy",
-            "Bot policy, optionally resolved for an inbox",
-            "EmailSendingPolicy",
-        ),
-        (
-            "/api/v2/bots/{bot}/email-sending-policy",
-            "put",
-            "Email sending",
-            "setBotEmailSendingPolicy",
-            "Set bot override (a person who manages it)",
-            "EmailSendingPolicy",
-        ),
-        (
-            "/api/v2/email/sends",
-            "post",
-            "Email sending",
-            "queueEmail",
-            "Freeze email content for approval and the undo window; identical content and recipients deduplicate",
-            "EmailSendResult",
-        ),
-        (
-            "/api/v2/email/sends",
-            "get",
-            "Email sending",
-            "listEmailSends",
-            "Pending sends or the inbox send audit, paged and byte capped",
-            "EmailSendList",
-        ),
-        (
-            "/api/v2/email/sends/{sid}",
-            "get",
-            "Email sending",
-            "getEmailSend",
-            "Frozen preview and audit (inbox readers, the sender or an authorized approver)",
-            "EmailSendDetail",
-        ),
-        (
-            "/api/v2/email/sends/{sid}/attachments/{part}",
-            "get",
-            "Email sending",
-            "getFrozenEmailAttachment",
-            "Download the exact frozen attachment (the send's readers or approvers)",
-            None,
-        ),
-        (
-            "/api/v2/email/sends/{sid}/cancel",
-            "post",
-            "Email sending",
-            "cancelEmailSend",
-            "Cancel before dispatch; delivered mail cannot be recalled",
-            "EmailSendResult",
-        ),
-        (
-            "/api/v2/email/inboxes/{mailbox}/suppressed-recipients",
-            "get",
-            "Email sending",
-            "listEmailSuppressions",
-            "Inbox admin's bounce suppression list",
-            "EmailSuppressionList",
-        ),
-        (
-            "/api/v2/email/inboxes/{mailbox}/suppressed-recipients/{address}",
-            "delete",
-            "Email sending",
-            "removeEmailSuppression",
-            "Restore sending to a bounced address (inbox admin)",
-            None,
-        ),
-    ]
-)
 
 
 TAGS["Alerts"] = "Personal phone verification, consent and opt-in paging, paid by the company at $1 per accepted alert."
@@ -12771,126 +10774,6 @@ SCHEMAS.update(
             }
         ),
     }
-)
-STABLE.extend(
-    [
-        (
-            "/api/v2/calendar/events",
-            "get",
-            "Calendar",
-            "listCalendarEvents",
-            "Occurrences on the calendars in `who` (default you) from `from` to `to`, at most 62 days; `kinds` "
-            "narrows to event, run, due, away. Over 7 days runs come as `month_counts`. A calendar that could not be "
-            "read is in `errors`, never shown as free",
-            "CalendarEvents",
-        ),
-        (
-            "/api/v2/calendar/events",
-            "post",
-            "Calendar",
-            "createCalendarEvent",
-            "Add an event (bots and the Assistant; a person only on their own Tico calendar). A bot booking a "
-            "person needs their book rule; a connected person on it puts it on Google",
-            "CalendarOccurrence",
-        ),
-        (
-            "/api/v2/calendar/events/{occurrence_id}",
-            "get",
-            "Calendar",
-            "getCalendarEvent",
-            "One event as the caller sees it (404 when they cannot see it)",
-            "CalendarOccurrence",
-        ),
-        (
-            "/api/v2/calendar/events/{occurrence_id}",
-            "patch",
-            "Calendar",
-            "changeCalendarEvent",
-            "Change an event: `scope` this, following (Tico only) or all",
-            "CalendarOccurrence",
-        ),
-        (
-            "/api/v2/calendar/events/{occurrence_id}",
-            "delete",
-            "Calendar",
-            "cancelCalendarEvent",
-            "Cancel an event (`scope` query: this, following or all)",
-            None,
-        ),
-        (
-            "/api/v2/calendar/events/{occurrence_id}/response",
-            "post",
-            "Calendar",
-            "respondToCalendarEvent",
-            "Accept, decline or tentatively accept an event you attend",
-            None,
-        ),
-        (
-            "/api/v2/calendar/calendars",
-            "get",
-            "Calendar",
-            "listCalendars",
-            "Every calendar you can open: people, bots, shared, teams and your other Google calendars (`q` narrows)",
-            "CalendarList",
-        ),
-        (
-            "/api/v2/calendar/search",
-            "get",
-            "Calendar",
-            "searchCalendar",
-            "Search events, runs and recorded meetings (`q` with with:, bot:, kind:, before:, after:, "
-            "has:transcript, automation:, trigger:, longer:); Google has 3 seconds, past that the answer is `partial`",
-            "CalendarSearch",
-        ),
-        (
-            "/api/v2/calendar/free",
-            "get",
-            "Calendar",
-            "findCalendarFreeTimes",
-            "Times everyone in `who` is free for `minutes` within `within` (such as 5d), in working hours",
-            "CalendarFree",
-        ),
-        (
-            "/api/v2/calendar/settings",
-            "get",
-            "Calendar",
-            "getCalendarSettings",
-            "Your zone, hours and recording",
-            "CalendarSettingsView",
-        ),
-        (
-            "/api/v2/calendar/settings",
-            "put",
-            "Calendar",
-            "setCalendarSettings",
-            "Change your zone, working hours or Record calls I join (send only what changes)",
-            "CalendarSettingsView",
-        ),
-        (
-            "/api/v2/calendar/shared",
-            "post",
-            "Calendar",
-            "createSharedCalendar",
-            "Make a shared calendar (admins)",
-            None,
-        ),
-        (
-            "/api/v2/calendar/shared/{calendar_id}/access",
-            "put",
-            "Calendar",
-            "setSharedCalendarAccess",
-            "Give a person, bot or team read or read_write on a shared calendar, or take it away (admins)",
-            None,
-        ),
-        (
-            "/api/v2/calendar/absences",
-            "post",
-            "Calendar",
-            "addAbsence",
-            "Record days away (yours; admins anyone's)",
-            None,
-        ),
-    ]
 )
 
 

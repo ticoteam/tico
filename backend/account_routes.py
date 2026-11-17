@@ -10,6 +10,7 @@ from . import invites, mcp_oauth, models as M, oidc, owner_link, personal_tokens
 from .auth import LOCAL_COOKIE, LOCAL_COOKIE_DAYS, LOCAL_SIGNIN_PATH, LOGOUT_PATH
 from .observability import browser_config, staff_display_name
 from .store import H, Problem, encode
+from .api_contract import api_v2
 
 
 def register(app, auth, mutate, onboarding, owner_only, recruiter, settings, store):
@@ -20,7 +21,15 @@ def register(app, auth, mutate, onboarding, owner_only, recruiter, settings, sto
         with store.read() as c:
             return {"cards": onboarding.catalog(c)}
 
-    @app.get("/api/v2/strategy-bot")
+    @app.get(
+        "/api/v2/strategy-bot",
+        **api_v2(
+            "Goals",
+            "getStrategyBot",
+            "The Strategy Owner's name, whether its regular checks run, how much it does (its level, with each level's sentence and who changed it when), and how many items it put in each person's Needs you today against its cap of 5 (everyone's for the owner, admins and the Strategy Owner; your own for anyone else)",
+            "StrategyBotView",
+        ),
+    )
     def strategy_bot_settings(request: Request):
         """The Strategy Owner's name, level and regular checks (backend/strategy_bot.py). How many items it put in each
         person's Needs you today is the owner's, an admin's and the Strategy Owner's to read; anyone else sees only their
@@ -175,7 +184,7 @@ def register(app, auth, mutate, onboarding, owner_only, recruiter, settings, sto
         )
         return Response(encode(data), media_type="application/manifest+json")
 
-    @app.get("/api/v2/openapi.json")
+    @app.get("/api/v2/openapi.json", **api_v2("Session", "getOpenApi", "This document"))
     def contract():
         """The stable v2 contract for a frontend (backend/openapi_v2.py); signed-in callers only."""
         from .openapi_v2 import spec
@@ -195,7 +204,7 @@ def register(app, auth, mutate, onboarding, owner_only, recruiter, settings, sto
                 config["person_display_name"] = name
         return config
 
-    @app.get("/api/v2/me")
+    @app.get("/api/v2/me", **api_v2("Session", "getMe", "The signed-in caller", "Me"))
     def me(request: Request):
         from .mcp import caller_kind, tool_profile
 
@@ -222,18 +231,32 @@ def register(app, auth, mutate, onboarding, owner_only, recruiter, settings, sto
 
     # A person's own API tokens (backend/personal_tokens.py). Made only from a browser sign-in: a token is that
     # person everywhere else and may list and revoke its person's tokens, but it cannot mint one.
-    @app.get("/api/v2/me/tokens")
+    @app.get(
+        "/api/v2/me/tokens", **api_v2("Session", "listMyTokens", "The caller's personal API tokens (never the secret)")
+    )
     def my_tokens(request: Request):
         with store.read() as c:
             who = request.state.identity
             # can_create: the team chart offers Connect only to someone who may make a token (personal_tokens.create)
             return {"tokens": personal_tokens.listing(c, who), "can_create": personal_tokens.can_create(c, auth, who)}
 
-    @app.post("/api/v2/me/tokens")
+    @app.post(
+        "/api/v2/me/tokens",
+        **api_v2(
+            "Session",
+            "createMyToken",
+            "Mint a personal API token for server-to-server use (any person unless the owner limits it to admins; cookie sessions only)",
+        ),
+    )
     def create_my_token(request: Request, body: M.PersonalTokenCreate):
         return mutate(request, body, lambda c: personal_tokens.create(c, auth, request.state.identity, body))
 
-    @app.post("/api/v2/me/tokens/{token_id}/revoke")
+    @app.post(
+        "/api/v2/me/tokens/{token_id}/revoke",
+        **api_v2(
+            "Session", "revokeMyToken", "Revoke a personal API token: your own; the owner and admins revoke anyone's"
+        ),
+    )
     def revoke_my_token(request: Request, token_id: str, body: M.Empty):
         return mutate(request, body, lambda c: personal_tokens.revoke(c, auth, request.state.identity, token_id))
 

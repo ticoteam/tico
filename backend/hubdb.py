@@ -1877,12 +1877,14 @@ def check_message_refs(refs, *, make_page=False):
         from .store import Problem
 
         raise Problem("forbidden", "Use the task’s Make page control", 403)
-    if refs and ("key_grant" in refs or refs.get("card") == "key_grant"):
+    if refs and any(card in refs or refs.get("card") == card for card in ("key_grant", "access_request")):
         from . import key_grants
         from .store import Problem
 
-        if not key_grants.MINTING.get():  # only the Tools owner's proposal route builds a key grant card
-            raise Problem("forbidden", "A key grant card is built from the Tools owner's proposal", 403)
+        # Only the Tools owner's proposal route builds a key grant card, and only an access request its card
+        # (backend/access_requests.py).
+        if not key_grants.MINTING.get():
+            raise Problem("forbidden", "A key grant or access request card is built by the server alone", 403)
 
 
 def say(
@@ -3759,8 +3761,10 @@ def pr_state(links):
 
 
 def ticket_refs(conn, ids):
-    """Each task's label (its pipeline's prefix and its number) and its stage's name, for many ids in one query:
-    {id: {"label": str|None, "stage": str|None}}. A task with no number, no prefix or no stage has None for that."""
+    """Each task's label (the prefix it was made with and its number) and its stage's name, for many ids in one query:
+    {id: {"label": str|None, "stage": str|None}}. A task with no number, no prefix or no stage has None for that. The
+    prefix is the task's own (`tasks.prefix`, kept when it moves to another pipeline); one made before it was kept
+    reads its pipeline's."""
     ids = list(ids)
     refs: dict[str, dict[str, str | None]] = {ident: {"label": None, "stage": None} for ident in ids}
     if not ids:
@@ -3768,7 +3772,7 @@ def ticket_refs(conn, ids):
     marks = ",".join("?" * len(ids))
     for row in _rows(
         conn.execute(
-            "SELECT k.id, k.number, p.prefix, s.name AS stage FROM tasks k "
+            "SELECT k.id, k.number, COALESCE(k.prefix, p.prefix) AS prefix, s.name AS stage FROM tasks k "
             "LEFT JOIN pipelines p ON p.id = k.pipeline_id LEFT JOIN stages s ON s.id = k.stage_id "
             f"WHERE k.id IN ({marks})",
             ids,
@@ -7192,6 +7196,7 @@ from .task_calls import (
     task_give as task_give,
     task_let_see as task_let_see,
     task_move as task_move,
+    task_move_to as task_move_to,
     task_page_attach as task_page_attach,
     task_reassign as task_reassign,
     task_release as task_release,

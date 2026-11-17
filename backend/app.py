@@ -77,8 +77,7 @@ from .recruit import Recruiter
 from . import rooms
 from . import fast_json
 from . import names as actor_names
-from .openapi_v2 import STABLE as STABLE_ROUTES
-from .legacy_spellings import legacy_of
+from .openapi_v2 import stable_path
 from . import settings_catalog
 from . import updates
 from .files import raw_media
@@ -127,17 +126,6 @@ from . import (
     bot_seats_routes,
     fleet_runner_routes,
     ui_bundle_routes,
-)
-
-
-# The stable v2 routes whose answers carry display names (backend/names.py); streams are left alone.
-STABLE_PATH = re.compile(
-    "|".join(
-        re.sub(r"\\\{[^}]+\\\}", "[^/]+", re.escape(spelling))
-        for path, *_ in STABLE_ROUTES
-        if path != "/api/v2/events"
-        for spelling in (path, *legacy_of(path))
-    )
 )
 
 
@@ -1483,7 +1471,7 @@ def create_app(settings=None):
             or "content-disposition" in response.headers
             or "x-content-sha256" in response.headers
             or "count" in request.query_params
-            or not STABLE_PATH.fullmatch(request.url.path)
+            or not stable_path(app).fullmatch(request.url.path)  # the stable v2 routes (backend/names.py)
             or "application/json" not in response.headers.get("content-type", "")
         ):
             return response
@@ -1614,8 +1602,9 @@ def create_app(settings=None):
             privacy.require_payload(c, request.state.identity, result)
         return result
 
-    # The columns of a task's row that are the server's own, never in a view.
-    SERVER_COLUMNS = ("checkpoint_state", "work_revision", "occurrence_step", "rule_due_id")
+    # The columns of a task's row that are the server's own, never in a view. `prefix` is read as the task's label
+    # (hubdb.ticket_refs); a list of 500 rows carries no copy of it.
+    SERVER_COLUMNS = ("checkpoint_state", "work_revision", "occurrence_step", "rule_due_id", "prefix")
 
     def plain_view(row, c=None):
         """A task's plain fields, as every view of it starts: the row, without the server's own columns."""
@@ -5588,6 +5577,9 @@ def create_app(settings=None):
     from . import api_tools
 
     api_tools.install(app, store, auth, settings)  # Tools: API tools, their keys and levels, and the tool index
+    from . import access_requests
+
+    access_requests.install(app, store, auth, mutate)  # a bot asks for a level on a tool or a repository
     from . import website_tools
 
     website_tools.install(app, store, auth, settings)  # Tools: website tools and their accounts

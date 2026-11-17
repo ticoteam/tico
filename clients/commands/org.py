@@ -3,14 +3,13 @@
 Each tool here is registered into `hubtools.TOOLS` by hubtools itself (it reads `TOOLS` below just before it builds
 `BY_NAME`), so the MCP server, the stdio adapter and the `tico` CLI serve them like any other: `tico bot list` is
 `tico_bot_list`. ORG, HUMAN and SPEND are their command lines as specs (clients/cli_spec.py), with `tico org order`,
-`reports-to` and `models` and `tico human add`, `list` and `access`, whose tools are in clients/commands/admin.py;
-`add_commands` still builds the `tico bot` ones by hand, and clients/remotecli.py runs those through `COMMANDS`. Nothing here decides who may do what: every rule is the
-server's, and a refusal is the server's own words.
+`reports-to` and `models` and `tico human add`, `list` and `access`, whose tools are in clients/commands/admin.py.
+`tico bot list`, `go-live-all` and `quarantine-clear` are specs in BOT (clients/commands/bots.py) with the other bot
+commands. Nothing here decides who may do what: every rule is the server's, and a refusal is the server's own words.
 
 Pure stdlib and no import of hubtools at module level, so importing this first is as safe as importing hubtools first.
 """
 
-import argparse
 from urllib.parse import quote
 
 from clients.cli_spec import Arg, Command, Group
@@ -738,66 +737,3 @@ SPEND = (
         example="tico reach set bot:builder --mode closed --tasks-per-day 20",
     ),
 )
-
-# The bot commands here wait for `tico bot` to move to a spec: command words -> its tool; clients/remotecli.py runs
-# each through via_tool.
-COMMANDS = {
-    "bot list": "tico_bot_list",
-    "bot go-live-all": "tico_bot_go_live_all",
-    "bot quarantine-clear": "tico_bot_quarantine_clear",
-}
-
-
-def _subcommands(sub, noun, help_):
-    """The subcommand group under `tico <noun>`, made when the CLI has no such noun yet."""
-    parser = sub.choices.get(noun) or sub.add_parser(noun, help=help_)
-    found = next((a for a in parser._actions if isinstance(a, argparse._SubParsersAction)), None)
-    return found or parser.add_subparsers(dest="sub")
-
-
-def _command(group, words, help_, example):
-    s = group.add_parser(
-        words.split()[-1],
-        help=help_,
-        description=help_[:1].upper() + help_[1:] + ".",  # `--help` says who may run it too
-        epilog="Example: " + example,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    s.set_defaults(fn=words)
-    return s
-
-
-def add_commands(sub):
-    """`tico bot list`, `go-live-all` and `quarantine-clear` under `tico bot`. `sub` is the CLI's top-level subcommands
-    (clients/hubcli.py `parser`)."""
-    bot = _subcommands(sub, "bot", "bots")
-    s = _command(
-        bot,
-        "bot list",
-        "every bot's state, stage and setup in one short row, with the command that gets a stuck one working (anyone)",
-        "tico bot list --needs-action",
-    )
-    s.add_argument("--state", choices=STATES)
-    s.add_argument("--stage", choices=["onboarding", "active"])
-    s.add_argument(
-        "--needs-action", dest="needs_action", action="store_true", default=None, help="only bots that take no work now"
-    )
-    s.add_argument("--archived", action="store_true", default=None, help="also archived bots")
-    s = _command(
-        bot,
-        "bot go-live-all",
-        "take every planned bot live; --setup-done also finishes onboarding (the owner, admins, the bots' managers)",
-        "tico bot go-live-all --setup-done   (tico bot go-live-all --dry-run first to see the list)",
-    )
-    s.add_argument("--setup-done", dest="setup_done", action="store_true", default=None, help="also mark setup done")
-    s.add_argument("--setup", action=argparse.BooleanOptionalAction, default=None, help="start each setup chat")
-    s.add_argument("--computer", help="put them all on this computer")
-    s.add_argument("--dry-run", dest="dry_run", action="store_true", default=None, help="only list what it would do")
-    s = _command(
-        bot,
-        "bot quarantine-clear",
-        "lift a bot's quarantine so it works again (a person who manages the bot)",
-        'tico bot quarantine-clear builder --note "the refused push was a test"',
-    )
-    s.add_argument("bot")
-    s.add_argument("--note", help="why it is safe to resume")
