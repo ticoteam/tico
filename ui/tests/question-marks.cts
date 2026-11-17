@@ -57,7 +57,7 @@ const groupOf = (page: Page, id: string) => page.locator(`[data-need="${id}"]`)
         const q = side.locator('.dc-chat [data-message="m-q1"] .qmark');
         await q.waitFor();
         assert.equal(await q.innerText(), '?', 'a plain mark, no emoji');
-        assert.equal(await q.getAttribute('aria-label'), 'Needs your reply');
+        assert.equal(await q.getAttribute('title'), 'Needs your reply');
         assert.ok(await q.isVisible(), 'the marked message is in view');
         assert.equal(await page.locator('#need-card[open] :is([data-dc="open"], [data-dc="approve"], [data-dc="sendback"])').count(), 0, 'no Open, Approve or Send back');
         const card = page.locator('#need-card[open] .decide');
@@ -113,7 +113,7 @@ const groupOf = (page: Page, id: string) => page.locator(`[data-need="${id}"]`)
       try {
         const q = page.locator('#task-modal[open] [data-message="m-q1"] .qmark');
         await q.waitFor();
-        assert.equal(await q.getAttribute('aria-label'), "Needs Sam's reply");
+        assert.equal(await q.getAttribute('title'), "Needs Sam's reply");
         const tone = await q.evaluate(el => [getComputedStyle(el).color, getComputedStyle(el.parentElement!.querySelector('time')!).color]);
         assert.equal(tone[0], tone[1], 'the same tone as the time');
         const tab = page.locator('#task-modal[open] [data-task-tab][aria-selected="true"]');

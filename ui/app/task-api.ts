@@ -112,7 +112,6 @@ const withVersion = (version: number | null | undefined, body: Record<string, un
   version == null ? body : {...body, version};
 
 // ---- reads
-const taskGet = (id: string): Promise<TaskV3> => get<TaskV3>(taskPath(id), {fresh: true});
 interface TaskBriefQuery {
   owner?: string; status?: string; ids?: string[]; snoozed?: string; q?: string; pipeline?: string;
   sort?: 'queue' | 'finished'; limit?: number; offset?: number;
@@ -136,9 +135,6 @@ async function taskBriefsPage(query: TaskBriefQuery = {}): Promise<{tasks: TaskB
   const res = await get<{tasks?: TaskBriefV3[]; cursor?: string; next_offset?: number | null; next_after?: string | null} | TaskBriefV3[]>(`/v2/tasks?${taskBriefParams(query)}`);
   return Array.isArray(res) ? {tasks: res, cursor: '', more: false, next: ''}
     : {tasks: res.tasks || [], cursor: res.cursor || '', more: res.next_offset != null || !!res.next_after, next: res.next_after || ''};
-}
-async function taskBriefs(query: TaskBriefQuery = {}): Promise<TaskBriefV3[]> {
-  return (await taskBriefsPage(query)).tasks;
 }
 /** What changed since `cursor` under the same filters (GET /v2/tasks?changed_after): the changed rows that still match,
  * the ids that left the filters or became unreadable (`gone`), the next cursor; `reset` when only a full read will do. */
@@ -356,5 +352,3 @@ const pipelineRec = async (id: string): Promise<PipelineRec> =>
 /** `move_tasks_to`: where the tasks of a stage the save removes go (a 409 stage_has_tasks asks for it). */
 const pipelineSave = async (id: string, rec: (Omit<PipelineRec, 'id'> | PipelineRec) & {move_tasks_to?: {pipeline: string; stage: string}}): Promise<PipelineRec> =>
   ((await post(`/v2/pipelines/${encodeURIComponent(id)}`, rec, newRequestId())) as {pipeline: PipelineRec}).pipeline;
-const pipelineRetire = (id: string, settingsVersion: number): Promise<unknown> =>
-  post(`/v2/pipelines/${encodeURIComponent(id)}/retire`, {settings_version: settingsVersion}, newRequestId());

@@ -165,8 +165,6 @@ const threadHref = (t: string | ThreadRow | null | undefined) => THREAD_ROUTE + 
 // Other pages link a thread by this (a top-level const is not a window property; the dashboard's cards look for it there).
 window.threadHref = threadHref;
 const threadIsDm = (t: ThreadRow | null | undefined): t is ThreadRow => t?.audience === 'personal' || t?.audience === 'participants';
-// A DM with one bot and no one else: its bot's page holds it, so lists leave it to the Team list's count.
-const threadIsBotDm = (t: ThreadRow) => threadIsDm(t) && !t.parent_id && Number(t.dm_with_count) === 1 && String(t.dm_with?.[0]?.actor || '').startsWith('bot:');
 const threadIsGroupDm = (t: ThreadRow | null | undefined) => threadIsDm(t) && !t?.parent_id && (Number(t.dm_with_count) || threadOthers(t).length) >= 2;
 const threadPrivate = (t: ThreadRow | null | undefined) => ['members', 'personal', 'participants', 'meeting'].includes(t?.audience ?? '');
 // What the rail lists (and what may be pinned): a root that is a public, team or members thread, or a group DM.
@@ -222,7 +220,6 @@ function threadMarkHTML(t: ThreadRow | null | undefined, size = 18) {
   return `<span class="nav-icon th-mark" aria-hidden="true">${threadPrivate(t) ? 'lock' : 'forum'}</span>`;
 }
 const threadUnread = (t: ThreadRow | null | undefined) => Number(t?.me?.unread) || 0;
-const threadActivity = (t: ThreadRow | null | undefined) => !threadUnread(t) && !!t?.me?.activity;
 const threadsCountText = (n: number) => n > 99 ? '99+' : String(n);
 // The server's order (contract §10.1): by title, case-insensitively, unnamed last, then id.
 const threadsByTitle = (a: ThreadRow, b: ThreadRow) => (Number(!a.title) - Number(!b.title)) || String(a.title || '').localeCompare(String(b.title || ''), undefined, {sensitivity: 'base'})
