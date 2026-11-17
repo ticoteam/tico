@@ -79,6 +79,9 @@ body.board-holding .pv-cols{align-items:stretch}
 .pv-col-more:hover,.pv-col-more[aria-expanded="true"]{background:var(--hover);color:var(--ink)}
 .pv-col-more:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 .pv-phone-head .pv-col-more{width:44px;height:44px;margin:0 0 4px}
+/* No ⋯ on a phone's row (a viewer who may not change the pipeline, a stage with no tasks): an empty box of the same size
+   keeps its place, so the tabs keep their width from stage to stage. */
+.pv-phone-head:not(:has(> .pv-col-more))::after{content:'';flex:none;width:44px;height:44px;margin:0 0 4px}
 
 /* A phone: a row of stage tabs (the only thing that scrolls sideways), ▶ for the stage shown, then its tasks. Every
    control is at least 44 px tall (S17). */
