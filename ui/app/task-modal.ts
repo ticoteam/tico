@@ -640,7 +640,7 @@ function taskDependsHTML(t: ModalTask) {
     const where = [k.status === 'open' ? k.stage || '' : k.status, k.since ? `since ${lowerDay(shortDate(k.since))}` : ''].filter(Boolean).join(' · ');
     return `<span class="tlink task"><button type="button" class="linkish" data-open-task="${esc(k.id)}" aria-label="Open ${esc(k.title)}">${esc(ref)} ${esc(clipLine(k.title, 60))}</button>`
       + `${where ? ` · <span class="tchip-note">${esc(where)}</span>` : ''}`
-      + `<button type="button" class="x" data-drop-rel="depends_on ${dir} ${esc(k.id)}" aria-label="Remove ${esc(label)}: ${esc(k.title)}">×</button></span>`;
+      + `<button type="button" class="x tap-mark" data-drop-rel="depends_on ${dir} ${esc(k.id)}" aria-label="Remove ${esc(label)}: ${esc(k.title)}">×</button></span>`;
   };
   const on = taskRels(t, 'depends_on', 'out'), of = taskRels(t, 'depends_on', 'in');
   const blocked = on.length ? `<div class="trel task-depends"><span class="trel-k">Blocked by</span><div class="tlinks">${on.map(k => row(k, 'out', 'blocked by')).join('')}`
@@ -652,7 +652,7 @@ function taskRelHTML(t: ModalTask) {
   const groups = TASK_REL_GROUPS.map(([kind, dir, label]): [string, string, string, TaskRelRow[]] => [kind, dir, label, taskRels(t, kind, dir)]).filter(g => g[3].length);
   const milestones = taskDependsHTML(t) + taskMilestoneHTML(t) + taskOrderHTML(t);
   return `<section class="tsec task-related${groups.length || milestones ? '' : ' tsec-empty'}"><h3 class="rail-h">Related<button type="button" class="prop-add" data-related-add aria-haspopup="menu" aria-label="Relate a task" title="Relate a task">${TL_ICON.plus}</button></h3>
-    ${groups.map(([kind, dir, label, rows]) => `<div class="trel"><span class="trel-k">${esc(label)}</span><div class="tlinks">${rows.map(k => `<span class="tlink task"><button type="button" class="linkish" data-open-task="${esc(k.id)}" aria-label="Open ${esc(k.title)}">${taskStatusText(k)} ${esc(clipLine(k.title, 70))}</button><button type="button" class="x" data-drop-rel="${esc(kind)} ${esc(dir)} ${esc(k.id)}" aria-label="Remove ${esc(label.toLowerCase())}: ${esc(k.title)}">×</button></span>`).join('')}</div></div>`).join('')}${milestones}</section>`;
+    ${groups.map(([kind, dir, label, rows]) => `<div class="trel"><span class="trel-k">${esc(label)}</span><div class="tlinks">${rows.map(k => `<span class="tlink task"><button type="button" class="linkish" data-open-task="${esc(k.id)}" aria-label="Open ${esc(k.title)}">${taskStatusText(k)} ${esc(clipLine(k.title, 70))}</button><button type="button" class="x tap-mark" data-drop-rel="${esc(kind)} ${esc(dir)} ${esc(k.id)}" aria-label="Remove ${esc(label.toLowerCase())}: ${esc(k.title)}">×</button></span>`).join('')}</div></div>`).join('')}${milestones}</section>`;
 }
 // ---- saving a task's properties. One save at a time per dialog, each with the version the last one returned, so a
 // quick second edit never trips over the first. The dialog redraws at once with the task the server sent back; the
@@ -1570,7 +1570,7 @@ function hubModalHTML(t: ModalTask, opts: {thread?: boolean; docs?: TaskDoc[]; t
         <section class="tsec task-files" data-task-files aria-label="Files" hidden></section>
         <section class="task-activity" data-task-activity aria-label="Activity and links"><h3 class="tw-h rail-h">Activity and links</h3>
           <section class="tsec task-links${links.length ? '' : ' tsec-empty'}"><h3 class="rail-h">Links<button type="button" class="prop-add" data-link-add aria-label="Add a link" title="Add a link">${TL_ICON.plus}</button></h3>
-            ${links.length ? `<div class="tlinks">${links.map(l => `<span class="tlink ${esc(l.kind)} ${esc(l.state || '')}"><a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.title || l.url)}</a>${l.state && l.state !== 'open' ? ` · ${esc(l.state)}` : ''}${mover ? `<button type="button" class="x" data-drop-link="${esc(l.id)}" aria-label="Remove link">×</button>` : ''}</span>`).join('')}</div>` : ''}
+            ${links.length ? `<div class="tlinks">${links.map(l => `<span class="tlink ${esc(l.kind)} ${esc(l.state || '')}"><a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.title || l.url)}</a>${l.state && l.state !== 'open' ? ` · ${esc(l.state)}` : ''}${mover ? `<button type="button" class="x tap-mark" data-drop-link="${esc(l.id)}" aria-label="Remove link">×</button>` : ''}</span>`).join('')}</div>` : ''}
             <form class="inline task-link-add" data-modal-link hidden><input type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://…" aria-label="Add a link"></form></section>
           ${roadmapTaskHTML(t)}
           ${taskSessionsHTML(t)}
