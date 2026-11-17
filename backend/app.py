@@ -3307,6 +3307,15 @@ def create_app(settings=None):
         except check_models.CheckModelError as exc:
             raise Problem(exc.code, str(exc), 409 if exc.code == "runner_not_ready" else 422)
 
+    def reads_bot(c, person, bot):
+        """Whether `person` may read `bot`'s activity, so a task the bot holds is one they can open (auth.task_row)."""
+        try:
+            them = auth.identity_for_actor(c, person)
+        except Problem:
+            return False
+        level = auth.bot_accesses(c, them, [H.actor_id(bot)]).get(H.actor_id(bot))
+        return not level or bool(level["read"])
+
     def task_create(c, who, body, lint=True, ingest=None, same=None, rule=None, wake_refs=None):
         """`POST /api/v2/tasks`: the task is made and put in the first stage of its pipeline (H.task_create). A task
         for a bot wakes it; `wake_refs` go on that wake (an auto dream's release policy, backend/dream_auto.py)."""
@@ -3524,7 +3533,8 @@ def create_app(settings=None):
         # A bot's task for a person is the bot's own task with its question to them (backend/person_asks.py): Needs you
         # holds only what is asked of a person, so a plain task handed to them would reach no list they are told of.
         asks_person = ask_ingest.gated(who, settings.assistant_bot) and H.is_human(owner)
-        holder = who.actor if asks_person else owner
+        # The bot holds it when the person may read its work; else the task stays the person's, with the bot's question.
+        holder = who.actor if asks_person and reads_bot(c, owner, who.actor) else owner
         row = H.task_create(
             c,
             who.actor,
@@ -3560,7 +3570,7 @@ def create_app(settings=None):
             unassigned=unassigned,
             wake_refs=wake_refs,
             human_id=body.human,
-            asks=owner if asks_person else None,
+            asks=owner if asks_person and holder != owner else None,
         )
         c.execute("UPDATE tasks SET acceptance=? WHERE id=?", (encode(body.acceptance_criteria), row["id"]))
         if asks_person:
