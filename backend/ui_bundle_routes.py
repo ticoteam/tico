@@ -38,8 +38,8 @@ def register(app, auth, settings):
         browser that accepts it, and a 304 for a matching If-None-Match (a weak form too: Cloudflare sends one)."""
         from .json_response import accepts_gzip
 
-        zipped = gz is not None and gz.is_file() and accepts_gzip(request.headers)
-        source = gz if zipped else path
+        source = gz if gz is not None and gz.is_file() and accepts_gzip(request.headers) else path
+        zipped = source is not path
         try:
             stat = source.stat()
         except OSError:
