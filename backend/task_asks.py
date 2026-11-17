@@ -315,14 +315,21 @@ def own_click(who: object) -> bool:
 
 
 # ----------------------------------------------------------------------------- reads
+GRANT_SQL = "SELECT * FROM ok_grants WHERE requirement_id=?"
+
+
 def grant(conn: "sqlite3.Connection", requirement_id: str) -> Row | None:
-    """The grant of one OK requirement, with its content loaded, or None."""
-    found = conn.execute("SELECT * FROM ok_grants WHERE requirement_id=?", (requirement_id,))
-    names = [d[0] for d in found.description]
-    row = found.fetchone()
+    """The grant of one OK requirement, with its content loaded, or None. Read through the snapshot's cache: a list of
+    waits primes it for every OK it holds (waiting_on.prime)."""
+    from . import read_cache
+
+    row = read_cache.one(conn, GRANT_SQL, (requirement_id,))
     if not row:
         return None
-    out: Row = dict(zip(names, row, strict=True))
+    if not hasattr(row, "keys"):  # a connection without named rows
+        found = conn.execute(GRANT_SQL, (requirement_id,))
+        row = dict(zip([d[0] for d in found.description], found.fetchone() or (), strict=True))
+    out: Row = dict(row)
     try:
         out["content"] = json.loads(out.get("content") or "null")
     except ValueError:

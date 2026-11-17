@@ -781,13 +781,24 @@ def prime(conn: "sqlite3.Connection", task_ids: Iterable[str]) -> dict[str, Row]
     visits = sorted({str(row["visit"]["id"]) for row in rows if row.get("visit")})
     from . import task_asks
 
-    # Whether each OK on them is bound (task_asks.bound, which `of` asks of every OK): one statement for them all.
-    oks = conn.execute(
-        "SELECT r.id, EXISTS (SELECT 1 FROM ok_grants g WHERE g.requirement_id=r.id) FROM requirements r "
-        "WHERE r.kind='ok' AND r.visit_id IN (SELECT value FROM json_each(?))",
-        (json.dumps(visits),),
-    ).fetchall()
-    read_cache.prime(conn, task_asks.BOUND_SQL, {(str(row[0]),): (1,) if row[1] else None for row in oks})
+    # Each OK's grant on them (task_asks.bound, which `of` asks of every OK, and task_asks.grant, which a reader's
+    # view of each asks): one statement for them all.
+    oks = [
+        str(row[0])
+        for row in conn.execute(
+            "SELECT id FROM requirements WHERE kind='ok' AND visit_id IN (SELECT value FROM json_each(?))",
+            (json.dumps(visits),),
+        )
+    ]
+    grants = {
+        str(row["requirement_id"]): row
+        for row in conn.execute(
+            task_asks.GRANT_SQL.replace("requirement_id=?", "requirement_id IN (SELECT value FROM json_each(?))"),
+            (json.dumps(oks),),
+        )
+    }
+    read_cache.prime(conn, task_asks.BOUND_SQL, {(rid,): (1,) if rid in grants else None for rid in oks})
+    read_cache.prime(conn, task_asks.GRANT_SQL, {(rid,): grants.get(rid) for rid in oks})
     unread = [visit_id for visit_id in visits if ("filed_open", visit_id) not in values]
     for visit_id, filed in _filed_open_of(conn, unread).items():
         values.setdefault(("filed_open", visit_id), filed)
