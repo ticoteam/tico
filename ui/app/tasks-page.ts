@@ -580,8 +580,8 @@ function needsMatch(state: TasksPageState, it: NeedsEntry): boolean {
 }
 /** A Needs you row's first line: its task's title; a Paused cause or a mention outside a task by its own line. */
 function needsTitle(it: NeedsEntry): string {
-  // A bot's ❓: its question alone, beside the bot.
-  if (it.kind === 'question') return it.line || 'Untitled';
+  // A bot's ❓: its task's title like any ask; in a direct chat with the bot, the bot's name. Its question goes under it.
+  if (it.kind === 'question') return it.task?.title || actorLabel(it.from_id || '') || it.line || 'Untitled';
   return (it.kind !== 'paused' && it.task?.title) || it.line || 'Untitled';
 }
 /** Its second line: the question, under an Answer row's title (its buttons answer it); other asks keep it as the tooltip. */
@@ -675,8 +675,8 @@ async function tasksBodyClick(state: TasksPageState, ev: MouseEvent) {
     } catch (e) { answer.disabled = false; toast(errorMessage(e, 'Not answered.')); }
     return;
   }
-  // A bot's ❓ opens its chat at the marked message: the reply there clears it.
-  if (it?.kind === 'question') { questionOpen(it); return; }
+  // A bot's ❓ opens in Flow as its chat (decide.ts), like any ask; one with no chat named opens its task's.
+  if (it?.kind === 'question' && !(it.root_id || it.conversation_id)) { questionOpen(it); return; }
   if (it) { decideOpen(it.id); return; }
   const task = el?.closest<HTMLElement>('[data-task]')?.dataset.task;
   // On a pipeline's board on a phone a card opens at its conversation, its box asking the task's owner.

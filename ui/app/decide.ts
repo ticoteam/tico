@@ -771,7 +771,8 @@ function decidePaintBody(st: DecState) {
   } else if (decideTaskId(it)) {
     // Who asked and when, then the task's own text, its links, files and pages; the heading is on the right only.
     html = decideAboutHTML(it, kind);
-  } else if (kind === 'mention') {
+  } else if (kind === 'mention' && it.kind !== 'question') {
+    // (A ❓ in a direct chat has no task: its chat is the whole item, dc-solo.)
     html = `<blockquote class="dc-quote">${esc(it.line)}</blockquote>`;
   }
   // A website's browser the ask shows (`browser:<tool>/<account>`): the live view; an OK's comes in its shows.
@@ -916,7 +917,7 @@ function decidePaintSide(st: DecState) {
     body = `<div class="dc-acts">${fix}${decideBtn('give', 'Reassign', false, busy)}${decideBtn('back', 'Move back', false, busy)}${decideBtn('close-task', 'Close', false, busy)}</div>${gives}${decideMoreHTML(st, it)}`;
   } else {
     // A cause a person fixes in the app (Connect GitHub) goes straight there; Open shows the first task it holds up.
-    // A bot's ❓ opens its chat (the reply there clears it); its ⋯ has Give to….
+    // (A bot's ❓ is its chat, above; one with no chat to show keeps Open and its ⋯.)
     body = `<div class="dc-acts">${it.href ? decideBtn('fix', it.line, true) : ''}${decideBtn('open', 'Open', !it.href)}</div>${it.kind === 'question' ? decideMoreHTML(st, it) : ''}`;
   }
   // What was typed stays through a redraw of the same item (busy, uploads, then a refusal in the server's words).
@@ -931,6 +932,7 @@ function decidePaintSide(st: DecState) {
   const card = `<div data-key="${esc(it.id)}">${head}${err}${body}</div>`;
   if (chat) decideChatMount(st, it, host, card); else { decideChatStop(); host.innerHTML = card; }
   $('.decide')?.classList.toggle('dc-chatmode', chat);
+  $('.decide')?.classList.toggle('dc-solo', chat && !decideTaskId(it));
   // An ask has Snooze (for you alone) at the end of the answer row, on every width; anything else has Skip there. An
   // item with no row of its own (a typed choice) gets one.
   const ask = it.kind === 'ask' || it.kind === 'question';
@@ -1113,7 +1115,7 @@ function decideAskMoreHTML(st: DecState, it: NeedsEntry): string {
   // Close task, on every item with a task the person may close (a stuck one has its own Close).
   if (kind !== 'stuck' && decideMayClose(it)) items.push(['close-task', 'Close task']);
   // In the task's chat a reply does what the other answers did: only Close task and Give to… (the same right).
-  if (chat && decideMayClose(it)) items.push(['give', 'Give to…']);
+  if (chat && decideMayClose(it) && it.kind !== 'question') items.push(['give', 'Give to…']);
   // A bot's ❓: another person's reply is needed instead.
   if (it.kind === 'question') items.push(['give', 'Give to…']);
   if (!items.length) return '';
@@ -1615,7 +1617,11 @@ function decideMayClose(it: NeedsEntry): boolean {
 // own boxes. Underneath an ask stays an ask: an OK's reply is its send back, a bot's question waits on the bot's reply.
 let DEC_CHAT: {item: string; cid: string; view: ThvView | null; typed: string} | null = null;
 const DEC_CHAT_SNOOZE_DAYS = 7;   // a replied question leaves Flow until the bot writes back (waiting_on), or this long
+/** A bot's ❓: the chat it sits in (its task's, or a direct chat with the bot). */
+const decideMarkRoom = (it: NeedsEntry): string => it.kind === 'question' ? it.root_id || it.conversation_id || '' : '';
 function decideChatOf(it: NeedsEntry): boolean {
+  // A bot's ❓ is its chat: the marked message in view and the composer, whose reply clears it.
+  if (it.kind === 'question') return !!decideMarkRoom(it);
   const kind = decideKind(it);
   return (kind === 'ok' || kind === 'question') && !it.ask?.typed && !!decideTaskId(it);
 }
@@ -1627,9 +1633,9 @@ const decideCheckedOk = (it: NeedsEntry): boolean => !it.ask?.page && /^product-
 /** The right side of an ask: the task's chat, kept through every redraw of the item (its thread is mounted once the
     task's read names it), then `card`, the row under it. On a phone the task folds to its title above the chat. */
 function decideChatMount(st: DecState, it: NeedsEntry, host: HTMLElement, card: string) {
-  const taskId = decideTaskId(it);
-  decideAboutLoad(taskId);
-  const cid = decideAboutOf(it)?.task?.conversation_id || '';
+  const taskId = decideTaskId(it), mark = decideMarkRoom(it);
+  if (taskId) decideAboutLoad(taskId);
+  const cid = mark || decideAboutOf(it)?.task?.conversation_id || '';
   if (!DEC_CHAT || DEC_CHAT.item !== it.id || (cid && !DEC_CHAT.view) || !host.querySelector(':scope > .dc-chat')) {
     const typed = DEC_CHAT?.item === it.id ? DEC_CHAT.typed : '';
     // Each item opens on what it needs from the person: an OK on what is to be approved (its Spec, Proof, Invoice...),
@@ -1637,13 +1643,15 @@ function decideChatMount(st: DecState, it: NeedsEntry, host: HTMLElement, card: 
     if (DEC_CHAT?.item !== it.id) DEC_TAB = decideKind(it) === 'ok' ? 'task' : 'chat';
     decideChatStop();
     // A phone's title row and tabs (decide.css, decideTabsPaint): the task's chat, its documents, what an OK shows.
-    const title = decideAboutOf(it)?.task?.title || it.task?.title || '';
+    // A ❓ in a direct chat has no task: the bot's name heads its chat.
+    const title = decideAboutOf(it)?.task?.title || it.task?.title || (mark ? actorLabel(it.from_id || '') : '');
     host.innerHTML = `<div class="dc-tabs"><h3 class="dc-tabs-t">${esc(title)}</h3></div><div class="dc-chat"></div><p class="dc-docnote" role="alert" hidden></p><div class="dc-docpane"></div>`;
     const el = host.querySelector<HTMLElement>('.dc-chat')!;
     DEC_CHAT = {item: it.id, cid, view: null, typed};
     if (cid) {
-      DEC_CHAT.view = threadMount(el, {id: cid, card: true, header: false,
-        tail: () => { const now = DEC && decideCurrent(DEC); return now && now.id === it.id ? decideAskBubbleHTML(DEC!, now) : ''; },
+      // A ❓'s question is a message of the chat already: no ask under it; the chat opens at that message.
+      DEC_CHAT.view = threadMount(el, {id: cid, card: true, header: false, ...(mark ? {focus: it.message_id || ''} : {}),
+        tail: () => { const now = DEC && decideCurrent(DEC); return now && now.id === it.id && !mark ? decideAskBubbleHTML(DEC!, now) : ''; },
         send: (text, files) => decideChatSend(st, text, files), typed: decideChatTyped, reach: false});   // no "To <name>" line
     } else el.innerHTML = `<div class="thv-list">${decideAskBubbleHTML(st, it)}</div>`;   // until the task's read lands
   } else if (DEC_CHAT.view) thvDraw(DEC_CHAT.view, {parts: ['list']});
@@ -1860,6 +1868,19 @@ const decideHeldSaid = (held: RuleHold) => held.outcome === 'escalated' ? 'A rul
 async function decideChatSend(st: DecState, text: string, files: File[]): Promise<boolean> {
   const it = DEC === st ? decideCurrent(st) : null;
   if (!it || st.busy) return false;
+  if (it.kind === 'question') {
+    // A bot's ❓: the reply is a message of its chat like any other (a task's chat or a direct one), which clears the ❓
+    // (backend/question_marks.py); Flow moves on. Files go up with it, into that chat.
+    const room = decideMarkRoom(it);
+    await decideDo(st, it, 'Sent', async () => {
+      const body = {text};
+      const r = (files.length ? await thvUpload(thvPath(room).replace('/v2/', '/v2/uploads/') + '/messages', body, files)
+        : await post(thvPath(room) + '/messages', body)) as {held?: RuleHold | null} | undefined;
+      if (r?.held) throw new Error(decideHeldSaid(r.held));
+      return r;
+    });
+    return !st.error;
+  }
   const taskId = decideTaskId(it), rid = decideRid(it), ver = it.task?.version ?? null;
   const ups = await decideChatUpload(st, it.id, taskId, files);
   if (!ups) return false;

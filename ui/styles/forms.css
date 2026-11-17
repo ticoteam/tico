@@ -77,6 +77,8 @@ button:disabled{opacity:.5;cursor:default}
 :is(button.tmodal-x,button.peek-btn,button.tf-x,:is(dialog .tmodal-head,dialog header,.notes-modal-close,.msg-message-head,.co-head,.doc-viewer-head)>button:is([aria-label^="Close"],[aria-label="Back"],[aria-label^="Open in"])):not(.primary,.tmodal-act):hover{background:var(--surface2);color:var(--ink)}
 /* A dialog's heading takes the focus when it opens (core.js), so no control wears a ring before a key is pressed. */
 dialog :is(h1,h2,h3,strong)[tabindex="-1"]:focus,dialog[tabindex="-1"]:focus{outline:0}
+/* Where a dialog put the focus on opening (task-modal.ts): no ring until the person moves it. */
+[data-quiet-focus]:focus{outline:0}
 /* The date field (ui/app/format.ts dateField; style guide, Fields > Date): on a computer a date input marked
    data-date-field is a text field reading "Nov 13, 2026" with a calendar mark at its right, and opens this calendar
    under it. The same look in every browser and both themes; a phone keeps the native picker. */
