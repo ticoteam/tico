@@ -846,6 +846,13 @@ _TASK_COMPUTERS = "SELECT computer_id AS rid FROM task_links WHERE task_id={task
 _REFRESH_RUNNER = (
     "SELECT substr(NEW.key,22,instr(substr(NEW.key,22),':')-1) AS rid WHERE NEW.key LIKE 'subscription-refresh:%'"
 )
+# A Claude plan's week asked of one computer (subscription_refresh.request_plan_read, key `subscription-usage:{sid}`):
+# that computer is told while the read is asked, so it polls at once and not on its backup timer, after the read lapsed.
+_PLAN_READ_RUNNER = (
+    "SELECT json_extract(NEW.value,'$.request.runner_id') AS rid "
+    "WHERE json_extract(NEW.value,'$.request.state')='requested'"
+)
+_PLAN_READ = "NEW.key LIKE 'subscription-usage:%' AND json_valid(NEW.value)"
 _MIGRATIONS = "NEW.key IN ('credential-file-migration-v1','credential-file-migration-v2-hub')"
 _WORKTREE_LINK = "{row}.kind IN ('worktree','pr')"
 
@@ -1042,6 +1049,20 @@ RUNNER_TRIGGERS = [
         "registry_metadata",
         "NEW.key LIKE 'subscription-refresh:%'",
         _tell("subscription_refresh", _REFRESH_RUNNER),
+    ),
+    (
+        "changes_runner_plan_read_insert",
+        "INSERT",
+        "registry_metadata",
+        _PLAN_READ,
+        _tell("subscription_refresh", _PLAN_READ_RUNNER),
+    ),
+    (
+        "changes_runner_plan_read_update",
+        "UPDATE",
+        "registry_metadata",
+        _PLAN_READ,
+        _tell("subscription_refresh", _PLAN_READ_RUNNER),
     ),
     (
         "changes_runner_imports_insert",
