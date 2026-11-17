@@ -156,6 +156,10 @@
   #task-modal .tw-head .tmodal-act{min-height:44px}
   #task-modal .tw-head>.tw-tabs{flex:0 1 auto;max-width:none;align-self:center}
   #task-modal .tw-head:has(>.tw-tabs) .tmodal-title{flex:1 0 40%;padding-top:0;align-self:center;min-width:40%;-webkit-line-clamp:2;line-clamp:2}
+  /* Chat and Files get their own row so the title can fit beside the full set of 44px actions. */
+  #task-modal .tw-head:has(>.tw-tabs):not(:has(>.tw-tabs [data-task-tab^="doc:"])){display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center}
+  #task-modal .tw-head:has(>.tw-tabs):not(:has(>.tw-tabs [data-task-tab^="doc:"]))>.tmodal-title{min-width:0}
+  #task-modal .tw-head>.tw-tabs:not(:has([data-task-tab^="doc:"])){grid-column:1/-1;grid-row:2;justify-self:start;max-width:100%}
   /* With a document's tab, a phone head drops Archive and Details (the style guide's phone-with-documents head). Chat and Files alone keep them. */
   #task-modal .tw-head:has(>.tw-tabs [data-task-tab^="doc:"]) :is(.tw-details,[data-task-finish]){display:none}
   #task-modal .task-side .rail-h .prop-add,#task-modal .task-pages .tp-drop{min-height:44px;min-width:44px}
