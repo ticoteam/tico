@@ -396,8 +396,8 @@ def test_a_new_sentence_changes_the_market_and_tells_the_open_task(api):
     assert later["task_id"] != first["task_id"]
     assert get(api, "market/spend")["definition"]["description"] == "Software for letting agents"
     with api.app.state.store.read() as c:
-        body = c.execute("SELECT body FROM tasks WHERE id=?", (later["task_id"],)).fetchone()[0]
-    assert "Define and size our market: Software for letting agents" in body
+        words = H.task_words(c, later["task_id"])
+    assert "Define and size our market: Software for letting agents" in words
 
 
 def test_the_owner_changes_the_sentence_of_a_sized_market(api):
