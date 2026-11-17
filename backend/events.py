@@ -1573,7 +1573,13 @@ SETUP_TRIGGERS = [
     ),
     ("changes_setup_goals_delete", "DELETE", "goals", "NOT EXISTS (SELECT 1 FROM goals)", _setup("goals")),
     ("changes_setup_bots_insert", "INSERT", "bots", None, _setup("org")),
-    ("changes_setup_bots_update", "UPDATE", "bots", "OLD.state IS NOT NEW.state", _setup("org")),
+    (
+        "changes_setup_bots_update",
+        "UPDATE",
+        "bots",
+        "(OLD.state IN ('archived','planned')) IS NOT (NEW.state IN ('archived','planned'))",
+        _setup("org"),
+    ),
     ("changes_setup_bots_delete", "DELETE", "bots", None, _setup("org")),
     (
         "changes_setup_tools_insert",
