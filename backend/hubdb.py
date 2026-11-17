@@ -1011,6 +1011,14 @@ def escape_preview(text):
     return out if len(out) <= ESCAPE_PREVIEW_MAX else out[: ESCAPE_PREVIEW_MAX - 1] + "…"
 
 
+# The bot's task and chat holds open now or released since a time, one row each (backend/migrations, holds_bot_kind).
+QUARANTINE_SCOPES_SQL = (
+    "SELECT holdable_type,holdable_id,max(released_at) AS released_at,max(released_at IS NULL) AS held FROM holds "
+    "WHERE kind='quarantine' AND holdable_type IN ('task','conversation') AND bot_id=? "
+    "AND (released_at IS NULL OR released_at>=?) GROUP BY holdable_type,holdable_id"
+)
+
+
 def _escalate(conn, actor, rule, detail, severity, ts, context=None):
     """Rule 8: count the day's refusals, open review tasks, quarantine when it is bad enough."""
     if not is_bot(actor):
@@ -1035,12 +1043,7 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
     from . import task_quarantine
 
     held, released = set(), {}
-    for hold in conn.execute(
-        "SELECT holdable_type,holdable_id,max(released_at) AS released_at,max(released_at IS NULL) AS held FROM holds "
-        "WHERE kind='quarantine' AND holdable_type IN ('task','conversation') AND bot_id=? "
-        "AND (released_at IS NULL OR released_at>=?) GROUP BY holdable_type,holdable_id",
-        (slug, since),
-    ):
+    for hold in conn.execute(QUARANTINE_SCOPES_SQL, (slug, since)):
         scope = task_quarantine.scope(hold)
         if hold["held"]:
             held.add(scope)
@@ -1269,22 +1272,22 @@ def builder_notice(timing):
     return "Builder quarantined: resumes " + at.strftime(("%Y-%m-%d " if dated else "") + "%H:%M UTC")
 
 
+# The bots whose own quarantine's cooldown is over, with their state now (an archived bot's hold just ends).
+COOLED_BOTS_SQL = (
+    "SELECT h.holdable_id,b.state FROM holds h JOIN bots b ON b.id=h.holdable_id WHERE h.kind='quarantine' "
+    "AND h.holdable_type='bot' AND h.released_at IS NULL AND h.until_at<=?"
+)
+
+
 def lift_cooled_quarantines(conn):
     """Release every quarantine whose cooldown (its hold's until_at) is over and start its count over: a task's or
     chat's with a notice there, a bot's as the cooldown lifting it (status_set). Runs from the scheduler's tick.
     Returns the bots whose work was let out; an escape has no cooldown and still needs a person."""
+    from . import holds
     from . import task_quarantine
 
-    from . import holds
-
     lifted = task_quarantine.release(conn, KEEPER, due=True)
-    for row in _rows(
-        conn.execute(
-            "SELECT h.holdable_id,b.state FROM holds h JOIN bots b ON b.id=h.holdable_id WHERE h.kind='quarantine' "
-            "AND h.holdable_type='bot' AND h.released_at IS NULL AND h.until_at<=?",
-            (now(),),
-        )
-    ):
+    for row in _rows(conn.execute(COOLED_BOTS_SQL, (now(),))):
         slug = row["holdable_id"]
         with isolated(conn, "lift_cooled_quarantines", slug):
             if row["state"] != "quarantined":  # archived meanwhile: its hold ends, and it stays as it is

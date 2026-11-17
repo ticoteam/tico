@@ -28,6 +28,9 @@ CREATE INDEX IF NOT EXISTS holds_bot ON holds(bot_id) WHERE released_at IS NULL;
 -- The last release of a kind on one thing: a run budget counts runs from it, on every claim of a bot's own work.
 CREATE INDEX IF NOT EXISTS holds_released ON holds(holdable_type, holdable_id, kind, released_at)
   WHERE released_at IS NOT NULL;
+-- A bot's holds of a kind since a time, open and released: a quarantine's escalation counts the bot's task and chat
+-- holds of the day (hubdb.QUARANTINE_SCOPES_SQL).
+CREATE INDEX IF NOT EXISTS holds_bot_kind ON holds(bot_id, kind, released_at);
 --
 -- Each quarantined bot: an open hold whose reason, review and refusal are its latest quarantine event's.
 INSERT OR IGNORE INTO holds(id, kind, holdable_type, holdable_id, bot_id, reason, details, until_at, created_by_id,
