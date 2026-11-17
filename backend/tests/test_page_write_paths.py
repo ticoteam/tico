@@ -27,8 +27,8 @@ def link_spec(api, fid, tid):
     return post(api, f"pages/{fid}/links", {"target": "task:" + tid, "role": "Spec"})
 
 
-def spec_task(c):
-    return X.new_task(c, X.ANA, "Review a Spec", "page-write", assignee="bot:ops")["id"]
+def spec_task(c, title):
+    return X.new_task(c, X.ANA, title, "page-write", assignee="bot:ops")["id"]
 
 
 def approval_task(api):
@@ -48,7 +48,7 @@ def approval_task(api):
                 {"name": "Build", "owner": "bot:ops"},
             ),
         )
-        return spec_task(c)
+        return spec_task(c, "Review the primary Spec")
 
 
 def submission(c, tid):
@@ -165,7 +165,7 @@ def test_document_link_and_archive_changes_reconcile_the_open_approval(api):
 def test_legacy_document_upload_resubmits_shared_page_for_both_tasks(api):
     first = approval_task(api)
     with api.app.state.store.transaction() as c:
-        second = spec_task(c)
+        second = spec_task(c, "Review the shared Spec")
     fid = page(publish(api, task=first, **{"as": "Spec"}))["file_id"]
     link_spec(api, fid, second)
     # Give both approvals an explicit submission so the test isolates updating the shared version.
