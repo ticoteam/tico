@@ -1,7 +1,7 @@
 /* ui/app/company-floor.ts — Company › Floor (#/overview/floor): every factory the reader sees as a hall, each pipeline a
    line, each work stage a small stack of boxes standing on it, as high as the stage is full (relative and capped, never
-   one box a task). A hall's dim org chart is its manager over the teammates holding its work; pointing at one lights
-   their stacks. Flow's mark stands over a stack holding something that waits on the reader, and opens Flow there. The
+   one box a task). A hall's dim org chart is its manager over its reports and the teammates holding its work; pointing
+   at one lights their stacks. Flow's mark stands over a stack holding something that waits on the reader, and opens Flow there. The
    two numbers at a line's ends are tasks in and out, as a rate; either flips every rate between a day and a week, kept
    in this browser. Nothing else is written on the floor: pointing at a stack shows its card (who holds it, the stage, how
    many, how many wait on you, the oldest tasks), a click or Enter pins the card, a phone opens it as a sheet.
@@ -79,9 +79,19 @@ function cfManager(f: FloorFactory): string | null {
   for (const p of f.pipelines) if (p.manager_id) tally.set(p.manager_id, (tally.get(p.manager_id) ?? 0) + 1);
   return [...tally].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
 }
-/** Everyone holding work in the factory, the most loaded first, the manager left out. */
+/** The manager's own reports on the org chart, as actors: the bots the reader may see, archived ones and helpers left out. */
+function cfReports(manager: string | null): string[] {
+  if (!manager) return [];
+  const boss = manager.startsWith('bot:') ? manager.slice(4) : manager;
+  return (S.emps || [])
+    .filter(e => e.reports_to === boss && e.status !== 'archived' && e.state !== 'archived' && orgBranchVisible(e) && !isHelperBot(e))
+    .map(e => 'bot:' + e.id);
+}
+/** Everyone on the factory's pipelines or reporting to its manager: those holding work first, the most loaded leading,
+    then the manager's idle reports by name. The manager is left out. */
 function cfMates(f: FloorFactory, manager: string | null): string[] {
   const load = new Map<string, number>();
+  for (const a of cfReports(manager)) load.set(a, 0);
   for (const p of f.pipelines) for (const s of p.stages) for (const o of s.owners) load.set(o.actor, (load.get(o.actor) ?? 0) + o.count);
   return [...load].filter(([a]) => a !== manager).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([a]) => a);
 }

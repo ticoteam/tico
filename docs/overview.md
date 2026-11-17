@@ -87,8 +87,8 @@ the live channels. Tests: `backend/tests/test_cards.py`, `backend/tests/test_gro
 ## Floor
 
 **Floor** draws the work as it stands. Each factory you can see is a hall, with its name set large and faint and a dim
-org chart: its manager (the factory's own, else the one most of its pipelines have) over the teammates holding its
-work. Each live pipeline is a line, and each work stage a small stack of boxes standing on it, as tall as the stage is
+org chart: its manager (the factory's own, else the one most of its pipelines have) over its reports on the
+org chart and the teammates holding its work. Each live pipeline is a line, and each work stage a small stack of boxes standing on it, as tall as the stage is
 full: relative, not one box a task, and never taller than eight (1, 3, 10 and 50 tasks stand at 1, 3, 6 and 8 boxes).
 A stage with nothing in it keeps its spot as an outline. Nothing is written on the floor but each line's two rates: tasks
 in at its start and tasks that reached Done at its end, as `3/day`; either flips every rate between a day and a week,

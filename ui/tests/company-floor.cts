@@ -34,8 +34,9 @@ const FLOOR = {factories: [
   {id: 'f-product', name: 'Product', manager_id: null, pipelines: [FEATURES]},
   {id: 'f-eng', name: 'Engineering', manager_id: null, pipelines: [FIXES]},
 ]};
-const BOTS = ['pm', 'f1', 'f2', 'f3', 'f4', 'f5', 'b1', 'rm', 'em', 'fb', 'qa', ...Array.from({length: 12}, (_, i) => `fx${i}`)]
-  .map(id => ({id, slug: id, display_name: id.toUpperCase(), state: 'active'}));
+// `idle` reports to the Product manager and holds no task: it is on the hall's chart all the same.
+const BOTS = ['pm', 'f1', 'f2', 'f3', 'f4', 'f5', 'b1', 'rm', 'em', 'fb', 'qa', 'idle', ...Array.from({length: 12}, (_, i) => `fx${i}`)]
+  .map(id => ({id, slug: id, display_name: id.toUpperCase(), state: 'active', ...(id === 'idle' ? {reports_to: 'pm'} : {})}));
 const TASKS = Array.from({length: 5}, (_, i) => ({id: `t${i}`, number: 200 + i, title: `Task ${i}`, status: 'open', stage_id: 'spec',
   pipeline_id: 'features', owner_id: 'bot:f1', stage_since: new Date(Date.now() - (i + 1) * 3600e3).toISOString(), turn: null,
   version: 1, snoozed: false, pushed_past: false, on_person: false, requester_id: null, assignee_id: null, due_at: null, late: null}));
@@ -97,9 +98,10 @@ const levels = (page: Page, sel: string) => page.locator(sel).evaluateAll(els =>
       // Flow's mark only over the stages holding something that waits on the reader, and no names on the floor.
       assert.deepEqual(await page.locator('.cf-flow').evaluateAll(els => els.map(el => el.getAttribute('data-cf-flow'))), ['spec', 'release']);
       assert.equal(await page.locator('.cf-sname').count(), 0, 'no stage names on the company floor');
-      // A dim org chart per hall: the manager over the teammates holding its work.
+      // A dim org chart per hall: the manager over its reports and the teammates holding its work.
       assert.equal(await page.locator('.cf-hall[data-cf-factory="f-product"] .cf-org-top [data-cf-mate="bot:pm"]').count(), 1);
-      assert.equal(await page.locator('.cf-hall[data-cf-factory="f-product"] .cf-org-row .cf-mate').count(), 7);
+      assert.equal(await page.locator('.cf-hall[data-cf-factory="f-product"] .cf-org-row .cf-mate').count(), 8);
+      assert.equal(await page.locator('.cf-hall[data-cf-factory="f-product"] .cf-org-row [data-cf-mate="bot:idle"]').count(), 1);
       const scroll = await page.evaluate(() => { const m = document.querySelector('#main')!; return m.scrollWidth - m.clientWidth; });
       assert.ok(scroll <= 0, 'no sideways scroll');
       await shot(page, 'floor-desktop');
@@ -200,7 +202,7 @@ const levels = (page: Page, sel: string) => page.locator(sel).evaluateAll(els =>
       assert.equal(await page.locator('.cf-flow').count(), 2);
       // The factory's manager and teammates, by name.
       assert.equal(await page.locator('.cf-roster-top [data-cf-mate="bot:pm"]').count(), 1);
-      assert.equal(await page.locator('.cf-roster-list .cf-mate').count(), 7);
+      assert.equal(await page.locator('.cf-roster-list .cf-mate').count(), 8);
       await shot(page, 'floor-factory');
       // A deck's card is that teammate's tasks in that stage.
       hub.reads.length = 0;
