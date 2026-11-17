@@ -61,6 +61,7 @@ def page(api, monkeypatch, path, token="ana-test"):
     """One status page as `token` sees it, without its clock fields, and the statements it took."""
     import contextlib
     from backend.tests.helpers.api import headers
+    from backend.tests.helpers.statement_scope import measuring, recorder
 
     store, seen = api.app.state.store, []
     with monkeypatch.context() as patched:
@@ -70,7 +71,7 @@ def page(api, monkeypatch, path, token="ana-test"):
                 @contextlib.contextmanager
                 def borrowed():
                     with opened() as c:
-                        c.set_trace_callback(seen.append)
+                        c.set_trace_callback(recorder(seen))
                         try:
                             yield c
                         finally:
@@ -79,7 +80,8 @@ def page(api, monkeypatch, path, token="ana-test"):
                 return borrowed()
 
             patched.setattr(store, name, traced)
-        response = api.get(path, headers=headers(token))
+        with measuring(seen):
+            response = api.get(path, headers=headers(token))
     assert response.status_code == 200, response.text
     body = {k: v for k, v in response.json().items() if k not in ("server_time", "tick_age_s", "last_tick")}
     return body, len(seen)

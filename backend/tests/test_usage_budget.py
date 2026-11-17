@@ -87,6 +87,8 @@ def big_org(api, first, last, groups_=8):
 
 def statements(api, monkeypatch):
     """GET /api/v2/usage/limits as the owner, and the statements it took."""
+    from backend.tests.helpers.statement_scope import measuring, recorder
+
     store, seen = api.app.state.store, []
     with monkeypatch.context() as patched:
         for name in ("read", "read_transaction"):
@@ -95,7 +97,7 @@ def statements(api, monkeypatch):
                 @contextlib.contextmanager
                 def borrowed():
                     with opened() as c:
-                        c.set_trace_callback(seen.append)
+                        c.set_trace_callback(recorder(seen))
                         try:
                             yield c
                         finally:
@@ -104,6 +106,7 @@ def statements(api, monkeypatch):
                 return borrowed()
 
             patched.setattr(store, name, traced)
-        response = api.get("/api/v2/usage/limits", headers=headers("ana-test"))
+        with measuring(seen):
+            response = api.get("/api/v2/usage/limits", headers=headers("ana-test"))
     assert response.status_code == 200, response.text
     return response.json(), len(seen)

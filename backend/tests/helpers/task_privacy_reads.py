@@ -1,6 +1,7 @@
 """Helpers that other tests share, moved out of test_task_privacy_reads.py so they import no test file."""
 
 from backend.tests.helpers.api import get, headers
+from backend.tests.helpers.statement_scope import measuring, recorder
 
 
 def sql(api, text, token="ana-test"):
@@ -22,7 +23,7 @@ def traced(api, request):
 
     def traced():
         c = take()
-        c.set_trace_callback(statements.append)
+        c.set_trace_callback(recorder(statements))
         return c
 
     def untraced(c):
@@ -31,6 +32,8 @@ def traced(api, request):
 
     store._take, store._give = traced, untraced
     try:
-        return request(), statements
+        with measuring(statements):
+            result = request()
+        return result, statements
     finally:
         store._take, store._give = take, give

@@ -2,6 +2,7 @@
 
 import contextlib
 from backend.tests.helpers.api import headers
+from backend.tests.helpers.statement_scope import measuring, recorder
 
 
 def counted(api, monkeypatch, path, token="ana-test"):
@@ -15,14 +16,16 @@ def counted(api, monkeypatch, path, token="ana-test"):
         @contextlib.contextmanager
         def traced():
             with opened() as c:
-                c.set_trace_callback(seen.append)
+                c.set_trace_callback(recorder(seen))
                 try:
                     yield c
                 finally:
                     c.set_trace_callback(None)
 
-        # Background workers borrow store.read too; their periodic reads are not the page's work.
+        # Background workers borrow store.read too; their periodic reads are not the page's work, so only the page's
+        # own statements count (statement_scope).
         patched.setattr(store, "read_transaction", traced)
-        response = api.get(path, headers=headers(token))
+        with measuring(seen):
+            response = api.get(path, headers=headers(token))
     assert response.status_code == 200, response.text
     return response.json(), len(seen)
