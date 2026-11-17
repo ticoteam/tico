@@ -1093,9 +1093,12 @@ def _label(client, fields):
 def _link(client, fields):
     """`tico task link`: the URL and title, `kind` session with --session, and the wake switch when it was given."""
     sent = {"id": fields["id"], "url": fields["url"], "title": fields.get("title")}
-    for key in ("kind", "wake_once", "on_behalf_of"):
-        if fields.get(key):
-            sent[key] = fields[key]
+    if fields.get("kind"):
+        sent["kind"] = fields["kind"]
+    if fields.get("wake_once") is not None:  # --no-wake-once sends false, as the hand parser did
+        sent["wake_once"] = fields["wake_once"]
+    if fields.get("on_behalf_of"):
+        sent["on_behalf_of"] = fields["on_behalf_of"]
     return _call(client, "tico_task_link", sent, unwrapped=True)
 
 
