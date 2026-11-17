@@ -432,7 +432,9 @@ def test_a_pages_spec_ok_does_not_approve_its_other_document_role(api):
     assert documents["Spec"]["approved_version"] == 1
     assert "approved_version" not in documents["QA report"]
     listed = get(api, "pages?ids=" + written["file_id"])["pages"][0]
-    assert {link["role"]: link.get("approval") for link in listed["links"] if link["target"] == "task:" + row["id"]} == {
+    assert {
+        link["role"]: link.get("approval") for link in listed["links"] if link["target"] == "task:" + row["id"]
+    } == {
         "Spec": {"version": 1},
         "QA report": None,
     }

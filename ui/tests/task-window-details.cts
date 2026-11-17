@@ -111,13 +111,13 @@ const RID = 'spec-ok-ana';
       assert.match((await win.locator('.task-need .th-head').innerText()).trim(), /^Waiting on you$/);
       assert.equal(await win.locator('.task-need .th-av').count(), 0);
       assert.equal(await win.locator('.task-need').getByRole('button', {name: 'Answer'}).count(), 1);
-      // No files: Files waits hidden, and ⋯ › Add a file… shows it and opens the file picker.
-      assert.equal(await win.locator('[data-task-files]').isVisible(), false, 'no files: no Files section');
+      // ⋯ › Add a file… opens Files and the file picker.
+      assert.equal(await win.locator('.task-side [data-task-files]').count(), 0);
       const chooser = page.waitForEvent('filechooser');
       await win.locator('[data-task-more]').click();
       await page.locator('.prop-pop:popover-open').getByRole('menuitem', {name: 'Add a file…'}).click();
       await chooser;
-      await win.locator('[data-task-files]').waitFor({state: 'visible'});
+      assert.equal(await win.getByRole('tab', {name: 'Files', exact: true}).getAttribute('aria-selected'), 'true');
       // No tags: ⋯ › Add a tag… shows the row and opens its menu.
       await win.locator('[data-task-more]').click();
       await page.locator('.prop-pop:popover-open').getByRole('menuitem', {name: 'Add a tag…'}).click();

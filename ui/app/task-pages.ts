@@ -162,14 +162,19 @@ async function taskFilesTabLoad(d: TftHost, id: string | number): Promise<void> 
   if (!data) return;                       // a failed read keeps what the last one found
   const items = (data.files || []).filter(f => !f.archived);
   for (const f of items) TFT_TITLES.set(f.id, f.title || f.name || '');
-  const rows = taskFilesRowsHTML(key, items);
+  const plain = new Map(items.flatMap<[string, TfFile]>(f => !Array.isArray(f.links) && f.versions?.length ? [[f.id, tfNorm({
+    id: f.id, name: f.name || 'file', current_version: f.current_version ?? f.version ?? 0,
+    ...(f.mime ? {mime: f.mime} : {}), versions: f.versions,
+  })]] : []));
+  d.tfListed = plain;
+  const rows = taskFilesRowsHTML(key, items, plain);
   TFT_COUNT.set(key, items.length); TFT_ROWS.set(key, rows);
   const list = d.querySelector<HTMLElement>('[data-tft-list]');
   if (list && list.dataset.html !== rows) {
     list.innerHTML = list.dataset.html = rows;
-    tfSelection(d);
     tfLazy(list);
   }
+  if (d.tfEl) tfPaint(d);
   const label = taskFilesLabel(items.length), tab = d.querySelector<HTMLElement>(`.tw-tabs [data-task-tab="${TASK_FILES_TAB}"] .doc-tab-t`);
   if (tab) tab.textContent = label;
   const btn = d.querySelector<HTMLElement>(`.tw-tabs [data-task-tab="${TASK_FILES_TAB}"]`);
@@ -182,9 +187,12 @@ async function taskFilesTabLoad(d: TftHost, id: string | number): Promise<void> 
   }
 }
 /** The list's rows: a page (a file carrying its `links`) or a file, in the order the task's files read gives them. */
-function taskFilesRowsHTML(id: string, items: TftItem[]): string {
+function taskFilesRowsHTML(id: string, items: TftItem[], plain: Map<string, TfFile>): string {
   if (!items.length) return '<p class="muted tft-none">Nothing linked yet.</p>';
-  return items.map(f => Array.isArray(f.links) ? tftPageRowHTML(id, f) : tftFileRowHTML(f)).join('');
+  return items.map(f => {
+    const file = plain.get(f.id);
+    return file ? tfFileRowHTML(file) : Array.isArray(f.links) ? tftPageRowHTML(id, f) : tftFileRowHTML(f);
+  }).join('');
 }
 function tftPageRowHTML(id: string, f: TftItem): string {
   const chips = (f.links || []).filter(l => l.target === 'task:' + id).map(l => `<span class="tft-chip">${esc(l.role)}</span>`).join('');
@@ -197,10 +205,6 @@ function tftPageRowHTML(id: string, f: TftItem): string {
     + `<span class="tft-main"><span class="tft-t">${esc(f.title || f.name || 'Untitled')}</span><span class="tft-m muted">${esc(meta)}</span></span>${chips}</a>`;
 }
 function tftFileRowHTML(f: TftItem): string {
-  if (f.versions?.length) return tfFileRowHTML(tfNorm({
-    id: f.id, name: f.name || 'file', current_version: f.current_version ?? f.version ?? 0,
-    ...(f.mime ? {mime: f.mime} : {}), versions: f.versions,
-  }));
   const v = f.current_version ?? f.version ?? null, when = f.versions?.find(x => x.n === v)?.created_at ?? f.updated_at ?? null;
   const meta = [v != null ? `v${v}` : '', when ? ago(when) : ''].filter(Boolean).join(' · ');
   return `<button type="button" class="tft-row" data-tft-file="${esc(f.id)}">`

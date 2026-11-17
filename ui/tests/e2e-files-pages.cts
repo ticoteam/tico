@@ -117,7 +117,7 @@ async function filesPages({hub, browser, phone}: PassContext) {
     assert.ok(overflow <= 1, `${where}: files page scrolls sideways by ${overflow}px`);
     assertClean(page, `${where}: back on files`);
 
-    const task = await must<{task?: {id: string}; id?: string}>(hub, 'dana', 'POST', 'tasks', {owner: 'person:dana', title: 'Review the linked plan', body: 'Review.'});
+    const task = await must<{task?: {id: string}; id?: string}>(hub, 'dana', 'POST', 'tasks', {owner: 'bot:engineering-manager', title: 'Review the linked plan', body: 'Review.'});
     const id = (task.task || task).id!;
     const reader = await open(browser, hub, 'priya', {phone, hash: '#/task/' + id});
     const permissions = await must<{can_edit: boolean; can_link: boolean}>(hub, 'priya', 'GET', 'places/task:' + id);
@@ -170,7 +170,7 @@ async function filesPages({hub, browser, phone}: PassContext) {
     await body.getByRole('heading', {name: 'Launch notes'}).waitFor({timeout: t(10000)});
     assert.match(await body.innerText(), /First draft/);
     const revised = await attach('# Launch notes\n\nReady for approval.');
-    assert.deepEqual(revised, {...revised, file_id: notes.file_id, version: 2});
+    assert.deepEqual([revised.file_id, revised.version], [notes.file_id, 2]);
     await body.getByText('Ready for approval.').waitFor({timeout: t(15000)});
     assert.equal(await doc.count(), 1);
     await pagesTab(page);

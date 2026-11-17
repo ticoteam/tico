@@ -25,6 +25,7 @@ interface TfDialog extends TaskDialog {
   taskOpening?: unknown;
   liveTask?: (PropTask & {attachments?: TfAttachment[] | null}) | null;
   taskFiles?: TfFile[] | null;
+  tfListed?: Map<string, TfFile>;
   canComment?: boolean;
   tfJustClosed?: boolean;
   // Opens one of the task's files in its files section (tfOpen), for code outside this page part: set with tfEl.
@@ -109,7 +110,14 @@ function tfNorm(f: TfFile): TfFile {
 }
 const tfVersion = (f: TfFile, n?: number | string | null): TfVersion => f.versions.find(v => v.n === Number(n)) || f.versions.find(v => v.n === f.current_version) || f.versions[0]!;
 const tfAskOpen = (v: TfVersion | null | undefined): boolean => !!(v?.ask && !(v.answers || []).length);
-const tfFiles = (d: TfDialog | null | undefined): TfFile[] => (d?.taskFiles || []).filter(f => !f.archived && f.versions.length);
+function tfFiles(d: TfDialog | null | undefined): TfFile[] {
+  const files = new Map((d?.taskFiles || []).map(f => [f.id, f]));
+  for (const [id, listed] of d?.tfListed || []) {
+    const file = files.get(id);
+    if (!file || file.current_version < listed.current_version) files.set(id, listed);
+  }
+  return [...files.values()].filter(f => !f.archived && f.versions.length);
+}
 const TF_CACHE = new Map<string, TfFile[]>();          // task id -> its files, for a task reopened before the read lands
 
 // ---- the Files tab row
@@ -132,6 +140,7 @@ function tfAdopt(d: TfDialog, task: {id: string | number; attachments?: unknown}
     slot.replaceWith(d.tfEl); tfSelection(d); tfViewModal($('[data-tf-view]', d.tfEl)); return;
   }
   d.tfEl = slot; slot.dataset.task = id; d.tfOpen = null;
+  d.tfListed = new Map();
   d.tfOpenFile = (fid, n = null) => tfOpen(d, fid, n);
   d.taskFiles = TF_CACHE.get(id) || tfFromAttachments(task.attachments as TfAttachment[] | null | undefined);
   tfPaint(d);
@@ -227,6 +236,7 @@ async function tfRemove(d: TfDialog, fid: string, button: HTMLButtonElement): Pr
   toast(`Removed ${f?.name || 'the file'}`);
   if (!d.open || d.taskOpening !== opening || String(d.dataset.task) !== id) return;
   d.taskFiles = (d.taskFiles || []).filter(x => x.id !== fid);
+  d.tfListed?.delete(fid);
   TF_CACHE.delete(id);
   tfClose(d);
   await tfLoad(d, id);
@@ -357,7 +367,7 @@ function tfBodyWire(box: HTMLElement): void {
 function tfWire(d: TfDialog): void {
   d.addEventListener('click', ev => {
     const file = eventElement(ev)?.closest<HTMLElement>('[data-tft-file]');
-    if (file) { tfOpen(d, file.dataset.tftFile); return; }
+    if (file?.closest('dialog') === d) { tfOpen(d, file.dataset.tftFile); return; }
     if (!d.tfEl?.contains(eventElement(ev))) return;
     if (eventElement(ev)?.closest('[data-tf-close]')) { tfClose(d); return; }
     // The file full screen with the task's thread beside it (file-review.ts); the task's viewer stays under it.

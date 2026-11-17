@@ -110,7 +110,7 @@ run('redesign-e2e-pages', ['org', 'toured', 'groups', 'pages'], async ({hub, bro
   // One header line: back, title, the status line and ⋯; no sharing row or version picker; the page right below.
   assert.equal(await page.locator('#pg-view .pg-head .pg-headline .pg-status').count(), 1, `${tag}: the status line is on the header line`);
   assert.equal(await page.locator('#pg-view .pg-access, #pg-view .pg-ver, #pg-view .pg-body .pg-status').count(), 0, `${tag}: no sharing row, version picker or second status line`);
-  assert.equal(await page.locator('#pg-view > .pg-head + .pg-body').count(), 1, `${tag}: the page starts below the header`);
+  assert.equal(await page.locator('#pg-view > .pg-head + .pg-links + .pg-body').count(), 1, `${tag}: link chips sit above the page body`);
   // One frame: no border, corner or white backdrop around the page.
   const bare = await page.locator('#pg-view .pg-preview').evaluate(box => [box, box.querySelector('iframe')!].map(el => {
     const c = getComputedStyle(el);
@@ -120,16 +120,17 @@ run('redesign-e2e-pages', ['org', 'toured', 'groups', 'pages'], async ({hub, bro
   // ⋯ stays at the header's right edge.
   const head = (await page.locator('#pg-view .pg-head').boundingBox())!, more = (await page.locator('#pg-view .pg-menu summary').boundingBox())!;
   assert.ok(Math.abs(head.x + head.width - (more.x + more.width)) < 4, `${tag}: ⋯ on the right`);
-  // A manager's first item is who can see it, with the audience under it; a page of one version has no history or diff.
+  // A writer can edit. The owner can also manage the page's audience.
   await page.locator('#pg-view .pg-menu summary').click();
   const menuNames = () => page.locator('#pg-view .pg-menu-list [role^=menuitem]').evaluateAll(els => els.map(el => (el.querySelector('.pg-mi-name') || el).textContent!.trim()));
-  assert.deepEqual(await menuNames(), ['Who can see it', 'Archive', 'Download', 'Delete for good'], `${tag}: the owner's menu`);
+  assert.deepEqual(await menuNames(), ['Edit', 'Who can see it', 'Archive', 'Download', 'Delete for good'], `${tag}: the owner's menu`);
   assert.equal(await page.locator('#pg-view [data-pg-act=access] .pg-mi-sub').innerText(), "Everyone who can see where it's filed");
   await page.locator('#pg-view .pg-menu summary').click();
   // Keyboard: Enter on ⋯ opens the menu at its first item, the arrows walk it, Esc closes it and returns to ⋯.
   await page.locator('#pg-view .pg-menu summary').focus();
   await page.keyboard.press('Enter');
-  await page.waitForFunction(() => document.activeElement?.matches('#pg-view .pg-menu-list [data-pg-act=access]'), null, {timeout: t(5000)});
+  await page.waitForFunction(() => document.activeElement?.matches('#pg-view .pg-menu-list [data-pg-act=edit]'), null, {timeout: t(5000)});
+  await page.keyboard.press('ArrowDown');
   await page.keyboard.press('ArrowDown');
   assert.equal(await page.evaluate(() => document.activeElement?.textContent), 'Archive', `${tag}: the arrows move through the menu`);
   await page.keyboard.press('Escape');
@@ -162,7 +163,7 @@ run('redesign-e2e-pages', ['org', 'toured', 'groups', 'pages'], async ({hub, bro
   await page.locator('#pg-view .pg-preview iframe.html-view').waitFor({timeout: t(10000)});
   await page.locator('#pg-view .pg-menu summary').click();
   await page.waitForFunction(() => document.querySelector('#pg-view [data-pg-act=history]'), null, {timeout: t(5000)});
-  assert.deepEqual(await menuNames(), ['Who can see it', "What's changed?", 'Version history', 'Archive', 'Download', 'Delete for good'], `${tag}: a paged page's menu`);
+  assert.deepEqual(await menuNames(), ['Edit', 'Who can see it', "What's changed?", 'Version history', 'Archive', 'Download', 'Delete for good'], `${tag}: a paged page's menu`);
   await page.locator('#pg-view [data-pg-act=history]').click();
   assert.deepEqual(await menuNames(), ['Version history', 'v5 · latest', 'v4', 'v3', 'v2', 'v1'], `${tag}: every version, newest first`);
   assert.equal(await page.locator('#pg-view [data-pg-v="3"] .pg-mi-sub').innerText(), 'Nov 3 · Engineering Lead', `${tag}: a version's date and publisher`);

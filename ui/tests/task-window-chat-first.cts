@@ -239,7 +239,7 @@ const pages = async (page: Page) => {
       await win.locator('[data-prop-row="visible"]').waitFor({state: 'visible'});
       assert.equal(await win.locator('.task-chat').isVisible(), false);
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth) <= 390, 'nothing scrolls sideways');
-      // A task whose reader cannot link pages: its last page goes, so its Pages section goes too (nothing to add).
+      // A reader without link permission still sees readable pages and can make a page if they can comment.
       await page.evaluate(() => { location.hash = '#/task/t-2'; });
       const other = page.locator('#task-modal[open][data-task="t-2"]');
       await other.locator('.tw-tabs [data-task-tab="files"]').click();
@@ -247,7 +247,8 @@ const pages = async (page: Page) => {
       assert.equal(await other.locator('[data-tp-add]').isVisible(), false, 'no + for a reader who may not link pages');
       PLACES['t-2'] = {can_link: false, pins: []};
       await page.evaluate(() => liveEmit('tasks', {id: 't-2', kind: 'update', kinds: ['files']}));
-      await other.locator('[data-task-pages]').waitFor({state: 'hidden'});
+      assert.equal(await other.locator('[data-tp-add]').isVisible(), false);
+      assert.equal(await other.locator('[data-tft-new]').isVisible(), true);
       assert.deepEqual(errors, []);
       await page.close();
     }

@@ -83,13 +83,18 @@ def compare_approvals(c):
         return out
 
     assert previous() == task_documents._read_approvals(c, task_ids)
-    for kind, read in [('per-task/old', previous), ('batched/new', lambda: task_documents._read_approvals(c, task_ids))]:
+    for kind, read in [
+        ('per-task/old', previous),
+        ('batched/new', lambda: task_documents._read_approvals(c, task_ids)),
+    ]:
         elapsed = []
         for _ in range(REPEATS):
             start = time.perf_counter()
             read()
             elapsed.append((time.perf_counter() - start) * 1000)
-        print(json.dumps({'query': 'approvals/' + kind, 'median_ms': round(statistics.median(elapsed), 3), 'plan': plan}))
+        print(
+            json.dumps({'query': 'approvals/' + kind, 'median_ms': round(statistics.median(elapsed), 3), 'plan': plan})
+        )
 
 
 def main():
