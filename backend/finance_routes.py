@@ -400,42 +400,11 @@ def install(app, store, auth, mutate):
             )
         )
 
-    @app.get("/api/v2/finance/webhook-deliveries")
-    def finance_webhook_deliveries(request: Request, limit: int = Query(20, ge=1, le=100)):
-        """Calls to Finance's triggers (Mercury) still kept, newest first, with their bodies: for a finance admin who
-        sees sources. The ordinary trigger routes never show these bodies."""
-        who = viewer(request)
-        audit_private_read(request, who.actor)
-        return read(lambda c: finance_reads.webhook_deliveries(c, who.actor, limit=limit))
-
     @app.get("/api/v2/finance/access")
     def finance_access(request: Request):
         """Who can see what in Finance: the org chart with defaults and grants, private lines and the defaults."""
         who = viewer(request)
         return read(lambda c: finance_reads.access(c, who.actor))
-
-    @app.get("/api/v2/finance/payments")
-    def finance_payments(
-        request: Request,
-        status: Literal[
-            "queued",
-            "sending",
-            "awaiting_bank_approval",
-            "submitted",
-            "settled",
-            "returned",
-            "failed",
-            "canceled",
-            "unknown",
-        ]
-        | None = None,
-        cursor: str | None = Query(None, max_length=100),
-        limit: int = Query(50, ge=1, le=200),
-        view_as: str | None = None,
-    ):
-        """Payments the caller made or whose line they see, newest first, with their lifecycle status."""
-        actor = as_viewer(request, view_as)
-        return read(lambda c: finance_reads.payments(c, actor, status=status, cursor=cursor, limit=limit))
 
     @app.get("/api/v2/finance/transfers")
     def finance_transfers(
@@ -448,40 +417,12 @@ def install(app, store, auth, mutate):
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.transfers(c, actor, cursor=cursor, limit=limit))
 
-    @app.get("/api/v2/finance/recipients")
-    def finance_recipients(request: Request):
-        """Current recipients, last 4 only, for teammates who may pay."""
-        who = viewer(request)
-        return read(lambda c: finance_reads.recipients(c, who.actor))
-
     @app.get("/api/v2/finance/mercury-users")
     def finance_mercury_users(request: Request):
         """Mercury's users as the last sync read them, to pick a card holder: for teammates who may issue cards. A
         finance admin also sees each email, masked."""
         who = viewer(request)
         return read(lambda c: finance_reads.provider_users(c, who.actor))
-
-    @app.get("/api/v2/finance/reconciliations")
-    def finance_reconciliations(
-        request: Request,
-        money_account_id: str | None = None,
-        limit: int = Query(50, ge=1, le=200),
-        view_as: str | None = None,
-    ):
-        """Reconciliations of the money accounts the caller sees, with each account's locked-through day."""
-        actor = as_viewer(request, view_as)
-        return read(lambda c: finance_reads.reconciliations(c, actor, money_account_id=money_account_id, limit=limit))
-
-    @app.get("/api/v2/finance/statements")
-    def finance_statements(
-        request: Request,
-        money_account_id: str | None = None,
-        limit: int = Query(50, ge=1, le=200),
-        view_as: str | None = None,
-    ):
-        """Bank and card statements for the money accounts the caller sees."""
-        actor = as_viewer(request, view_as)
-        return read(lambda c: finance_reads.statements(c, actor, money_account_id=money_account_id, limit=limit))
 
     @app.post("/api/v2/finance/statements/preview")
     def finance_statement_preview(request: Request, body: FinanceStatementPreviewRequest):
@@ -501,12 +442,6 @@ def install(app, store, auth, mutate):
         except finance.FinanceError as e:
             raise problem(e) from None
         return audited(review)
-
-    @app.get("/api/v2/finance/rules")
-    def finance_rules(request: Request, external_rule_id: str | None = Query(None, max_length=120)):
-        """Finance gate rules for teammates who may write them; `external_rule_id` lists those linked to one."""
-        who = viewer(request)
-        return read(lambda c: finance_reads.rules(c, who.actor, external_rule_id=external_rule_id))
 
     @app.get("/api/v2/finance/attribution-rules")
     def finance_attribution_rules(request: Request):
@@ -571,31 +506,6 @@ def install(app, store, auth, mutate):
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.bill(c, actor, bill_id))
 
-    @app.get("/api/v2/purchase-orders")
-    def finance_purchase_orders(
-        request: Request,
-        status: str | None = Query(None, max_length=80),
-        vendor_id: str | None = Query(None, max_length=80),
-        q: str = Query("", max_length=100),
-        cursor: str | None = Query(None, max_length=600),
-        limit: int = Query(50, ge=1, le=200),
-        view_as: str | None = None,
-    ):
-        """Purchase orders the caller sees (payables), newest first; `next_cursor` pages. `status` takes
-        draft|sent|approved|partial|closed|void, and `q` searches number, memo and vendor name."""
-        actor = as_viewer(request, view_as)
-        return read(
-            lambda c: finance_reads.orders(
-                c, actor, status=status, vendor_id=vendor_id, q=q, cursor=cursor, limit=limit
-            )
-        )
-
-    @app.get("/api/v2/purchase-orders/{po_id}")
-    def finance_purchase_order(request: Request, po_id: ID, view_as: str | None = None):
-        """One purchase order with its lines and what each line has billed."""
-        actor = as_viewer(request, view_as)
-        return read(lambda c: finance_reads.order(c, actor, po_id))
-
     @app.get("/api/v2/estimates")
     def finance_estimates(
         request: Request,
@@ -615,12 +525,6 @@ def install(app, store, auth, mutate):
             )
         )
 
-    @app.get("/api/v2/estimates/{estimate_id}")
-    def finance_estimate(request: Request, estimate_id: ID, view_as: str | None = None):
-        """One estimate with its lines; each line says whether it is taxable."""
-        actor = as_viewer(request, view_as)
-        return read(lambda c: finance_reads.estimate(c, actor, estimate_id))
-
     @app.get("/api/v2/locations")
     def finance_locations(
         request: Request,
@@ -638,12 +542,6 @@ def install(app, store, auth, mutate):
                 c, actor, kind="location", q=q, archived=archived, cursor=cursor, limit=limit
             )
         )
-
-    @app.get("/api/v2/locations/{location_id}")
-    def finance_location(request: Request, location_id: ID, view_as: str | None = None):
-        """One location, archived or not."""
-        actor = as_viewer(request, view_as)
-        return read(lambda c: finance_reads.record(c, actor, kind="location", record_id=location_id))
 
     @app.get("/api/v2/items")
     def finance_items(
@@ -1123,26 +1021,6 @@ def install(app, store, auth, mutate):
         except books_link.BrokerFailed as e:
             raise books_problem(e) from None
         return {"connection_id": connection_id, "status": "disconnected"}
-
-    @app.get("/api/v2/finance/expenses")
-    def finance_expenses(
-        request: Request,
-        start: str | None = None,
-        end: str | None = None,
-        by: Group = "department",
-        account_id: str | None = None,
-        team: str | None = None,
-        teammate: str | None = None,
-        top_n: int = Query(20, ge=1, le=200),
-        view_as: str | None = None,
-    ):
-        """Expenses the caller sees, grouped by department, team, teammate, bot, person, vendor or line."""
-        actor = as_viewer(request, view_as)
-        return read(
-            lambda c: finance_reads.expenses(
-                c, actor, start, end, by, account_id=account_id, team=team, teammate=teammate, top_n=top_n
-            )
-        )
 
     @app.get("/api/v2/finance/lines/{account_id}")
     def finance_line(

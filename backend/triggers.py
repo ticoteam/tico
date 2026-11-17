@@ -31,7 +31,7 @@ trigger's `type_from` (a header name, or a JSON pointer starting with /).
 A trigger whose `consumer` is `finance` is Finance's (it becomes one when a Finance preset, `mercury`, is set;
 trigger_presets.FINANCE): its calls go to Finance, never to rules or automations; only a finance admin makes one,
 changes, signs, replays, recovers or deletes it, whoever made it;
-and its kept calls are read only in Finance (GET /api/v2/finance/webhook-deliveries), never here.
+and its kept calls are Finance's, never listed here.
 """
 
 import asyncio
@@ -1030,7 +1030,7 @@ def read(c, who, trigger_id, delivery, part=1):
     (a task made from it, or a notice from Tico naming it). Anyone else finds nothing."""
     found = _row(c, trigger_id)
     if finance_owned(found):
-        # Bank payloads: read in Finance, by a finance admin who sees sources (GET /api/v2/finance/webhook-deliveries).
+        # Bank payloads are Finance's: kept for finance admins who see sources, never shown here.
         raise Problem("forbidden", "This trigger belongs to Finance: read its calls in Finance", 403)
     base = _base(c, trigger_id, delivery)
     allowed = (who.role in ("human", "owner") and manages(who, found)) or (
