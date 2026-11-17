@@ -3,12 +3,12 @@
 A task titled "Draft the strategy" (a number after it means the owner asked again), or the owner asking for the
 strategy through their Assistant. The owner wants the Strategy page to say how the team means to win, in words they
 recognise, so that every bot reads the same summary on every run and the goals have bets to hang from. You
-propose; they write, confirm and publish. A strategy with no trade-offs is a description, so "What we won't do" is
+propose; they write and confirm. A strategy with no trade-offs is a description, so "What we won't do" is
 part of every draft.
 
 Inputs: `tico strategy show` and `tico strategy versions`, the market pages (`tico market show company/self`, `tico doc search --market`), `knowledge/company.md`, the goals and KPIs, the Growth numbers and what customers said (`playbooks/keep-proof-current.md`), and the owner's words in the task.
 
-The outcome is one `strategy_draft` proposal the owner can confirm and publish after twenty minutes of their time:
+The outcome is one `strategy_draft` proposal the owner can confirm after twenty minutes of their time:
 a summary of at most 400 characters, the vision (at most 400), the seven sections filled or marked unknown, and three
 to five bets, each with a statement, why, what it rules out and what would prove it wrong. Nothing else counts as
 good.
@@ -22,8 +22,8 @@ appears only when a market page, a KPI reading or a source you read this run sta
 cites it, or when the owner said it. Otherwise the section says "unknown" and the gap is a claim for the owner or an
 Open question for the Librarian. No round figures, no "typically", no "roughly" from your own memory.
 
-**You propose at every level.** The draft, the bets and every version are the owner's: `tico strategy draft`,
-`tico strategy bet` and `tico strategy publish` refuse you unless you name a task with the owner's words on it
+**You propose at every level.** The strategy, the bets and every version are the owner's: `tico strategy draft` and
+`tico strategy bet` refuse you unless you name a task with the owner's words on it
 (`playbooks/owner-chat.md`, step 4); asking another way is not a workaround. A drafting run from your own reading is the
 same at Passive, Suggests actions and Acts on its own: the result is always one proposal.
 
@@ -33,15 +33,15 @@ same at Passive, Suggests actions and Acts on its own: the result is always one 
 
 Start from the record, not from memory.
 
-- `tico strategy show`: the published version, if there is one, with its bets, `goals_by_bet` and `health_by_bet`.
-  The draft is in it too (the owner's and yours to read). If a version is published, this run is a revision: read
+- `tico strategy show`: the live version, if there is one, with its bets, `goals_by_bet` and `health_by_bet`.
+  If there is a version, this run is a revision: read
   `tico strategy versions` and propose only what should change, saying why in the proposal's reason.
 - The questions to turn into claims are the default guide's, in the style of the YC application
   and a16z's go-to-market writing: what you make and who needs it; how bad the problem is and what they use instead;
   the wedge you enter through; how you know people want it; why now; why this team; what you understand that others
   don't; who you fear and what stops a bigger company copying you; how you make money, how much, and the price that
   breaks; where the next 100 customers come from; the bet most people would call wrong; what you won't do.
-  Lenses (`playbooks/run-a-lens.md`) come after a first strategy is published, not before.
+  Lenses (`playbooks/run-a-lens.md`) come after a first strategy is saved, not before.
 - The market: `tico market show company/self` (who the team is, from the Librarian's research), then
   `tico doc search --market "<the team's name>"`, the Overview and Theses pages, and Open questions. The market
   pages are the evidence the bets cite. If the market is empty, say so in the proposal's reason: the Librarian's
@@ -151,13 +151,13 @@ The payload is partial: send only the fields you have something for.
                "cites": ["..."], "status": "active"}]}
 
 A bet already on the page carries its `id`. Look at `tico proposal list` first: one pending `strategy_draft` from a
-drafting run at a time; replace yours rather than file a second beside it. Confirming writes the draft and the bets
-as the owner; nothing is published.
+drafting run at a time; replace yours rather than file a second beside it. Confirming writes the strategy and the bets
+as the owner, live at once as the next version.
 
 Then end with one message to the owner, as the task note: the summary, the bets in one line each with
-their wrong-if, what is still unknown, and the ask: "Confirm the draft in Needs you, then publish it from the
-Strategy page when it reads right; I never publish." Say what publishing needs: at least one active bet with a
-rules-out and a wrong-if, and something under "What we won't do"; the page refuses it otherwise.
+their wrong-if, what is still unknown, and the ask: "Confirm it in Needs you when it reads right; confirming makes it
+live." Say what a strategy needs: at least one active bet with a rules-out and a wrong-if, and something under "What we
+won't do".
 
 Note on the task what the draft rests on, which claims were kept, edited or struck, and what is still open; record
 a durable lesson about this team's words or sources in `knowledge/`, and commit this repository. From a task,
@@ -165,7 +165,7 @@ finish it with `tico task done <id> -m "<the message above>" --version N`.
 
 **Done when:** one `strategy_draft` proposal is pending (or it replaced an older one), every bet has a rules-out and a wrong-if or is left `proposed` with the gap named, the owner's message with its ask is the task note, and the task says what the draft rests on.
 
-## After the owner publishes
+## After the owner confirms
 
 Every bot gets the new summary and active bets in its next run's context under "Team strategy"; you do not tell them
 yourself. When a bet was retired or rewritten, the server puts one realignment ask in the owner's Needs you

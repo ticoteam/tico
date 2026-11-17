@@ -6,7 +6,7 @@ One file per recurring kind of work. A playbook is the checklist you would hand 
 - `strategy-and-bets.md`: the strategy page, bets, goals, KPIs, and the commands that read and write them.
 - `draft-the-strategy.md`: a task "Draft the strategy", or the owner asking through their Assistant. From the market pages and the
   default guide, build claims the owner confirms or strikes, propose three to five bets and the sections as
-  one `strategy_draft` proposal, and ask the owner to confirm and publish. Never write the page, never publish.
+  one `strategy_draft` proposal, and ask the owner to confirm it; confirming makes it live. Never write the page.
 - `keep-proof-current.md`: fill or refresh "How we know they want it" from the Growth numbers, support work, meetings,
   Listening and what customer-facing bots learned, each fact with its source, as one `strategy_draft` proposal.
 - `vision-question.md`: the server's question "What is this team for?" to the owner. A reply that is a vision you save in
@@ -14,7 +14,7 @@ One file per recurring kind of work. A playbook is the checklist you would hand 
 - `bet-tripped.md`: a task "Bet N: may be wrong", filed by the server when a bet's wrong-if trips, at every level.
   One proposal for the owner: retire, rewrite, or keep with a new wrong-if, and your pick.
 - `run-a-lens.md`: the owner asks for a lens, or a tripped bet or a weekly review calls for one. Answer its questions
-  from the published strategy and the market, run it, and the server files at most one `strategy_draft` proposal.
+  from the live strategy and the market, run it, and the server files at most one `strategy_draft` proposal.
 - `market-briefing.md`: a task "Market briefing", opened by the server when the Librarian's weekly briefing touches a bet.
   Weigh each touched bet; propose (source `briefing`) only when one is no longer right.
 - `kpi-pass.md`: the daily routine. Every KPI due on its cadence, one pass, a time budget each, then the status pass.
@@ -42,7 +42,7 @@ to a file, then `tico proposal create --kind <kind> [--goal ID] [--kpi ID] --pay
 | `goal_why` | `--goal` | `{"why": "one line tying the goal to the vision"}` (only where the Strategy Owner is on, and only for a goal with no bet) |
 | `recovery` | `--goal` | `{"evidence": "...", "options": [{"label": "...", "actions": [...]}], "pick": 0}` (the Strategy Owner at level 2; `playbooks/recoveries.md`) |
 | `kpi_target` | `--kpi` and `--goal` | `{"kind": "improve", "baseline": 40, "target": 65, "deadline": "2026-12-31"}` or `{"kind": "maintain", "min": 40, "max": 60}` |
-| `strategy_draft` | nothing | any of `{"summary", "vision", "sections": {"serve", "sell", "proof", "now", "know", "how", "not", "extra": {key: {"title", "body"}}}, "bets": [{"id"?, "statement", "why"?, "rules_out"?, "wrong_if"?, "cites"?, "status"?}]}`, where `wrong_if` is `{"kind": "kpi", "kpi_id", "direction": "above" \| "below", "threshold", "check_by"}`, `{"kind": "thesis", "market_id", "check_by"}` or `{"kind": "text", "text", "check_by"}`. An optional `"source"` says what prompted it (`bet_tripped`, `lens`, `briefing`). Partial: only the fields you send change. The owner confirms, and confirming writes the draft and the bets as them, at every level (`playbooks/draft-the-strategy.md`, `playbooks/bet-tripped.md`). Publishing stays a separate click of theirs |
+| `strategy_draft` | nothing | any of `{"summary", "vision", "sections": {"serve", "sell", "proof", "now", "know", "how", "not", "extra": {key: {"title", "body"}}}, "bets": [{"id"?, "statement", "why"?, "rules_out"?, "wrong_if"?, "cites"?, "status"?}]}`, where `wrong_if` is `{"kind": "kpi", "kpi_id", "direction": "above" \| "below", "threshold", "check_by"}`, `{"kind": "thesis", "market_id", "check_by"}` or `{"kind": "text", "text", "check_by"}`. An optional `"source"` says what prompted it (`bet_tripped`, `lens`, `briefing`). Partial: only the fields you send change. The owner confirms, and confirming writes the strategy and the bets as them, live at once, at every level (`playbooks/draft-the-strategy.md`, `playbooks/bet-tripped.md`) |
 
 `direction` is up, down or range; `cadence` is daily, weekly or monthly. An improvement target needs a target and a
 deadline; a range needs a min, a max or both. The server refuses anything else with the reason.

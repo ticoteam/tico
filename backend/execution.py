@@ -5460,7 +5460,7 @@ class Execution:
                 "principal": principal,
                 # What the person's chat bot has learned, read now: a deleted entry is gone from this turn
                 # (backend/learned.py; rendered by runner-rs/src/prompt.rs). Outside their own chat only
-                # `strategy`, the team's published strategy, which every turn carries (backend/strategy.py).
+                # `strategy`, the team's live strategy, which every turn carries (backend/strategy.py).
                 "learned": learned.for_turn(c, self.store.settings, conv, row["bot_id"]),
                 # What changed in Finance for whoever this turn is for: the person in their own Assistant turn, else the
                 # bot (backend/finance/brief.py). Standing lines in the prompt, so a resumed thread gets them when they change.

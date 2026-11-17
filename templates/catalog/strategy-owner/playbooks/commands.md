@@ -7,9 +7,9 @@ Not commands, so never run them: --json on task, goal or kpi commands, proposal 
 with --all, kpi readings, and any `--help` or `--version` probe of a name not listed here. Use the lines below instead.
 
 ## Read the strategy
-- `tico strategy show`: the published strategy: summary, vision, the sections, bets (id, statement, wrong-if), their goals and
+- `tico strategy show`: the live strategy: summary, vision, the sections, bets (id, statement, wrong-if), their goals and
   health, and `proof_since` (when How we know they want it last changed; null when empty).
-- `tico strategy versions`: published versions, newest first. `tico strategy diff --from <n> --to <n>`: what changed between two.
+- `tico strategy versions`: the versions, newest first (each save is one). `tico strategy diff --from <n> --to <n>`: what changed between two.
 - `tico goal strategy-bot`: your level, whether the regular checks run, and `asked_today` per person.
 - Level 3 only: `tico goal strategy-bot-decide "<reason>" '<changes json>' --goal-id <goal>`: creates or reorders bot tasks
   (`playbooks/acts-on-its-own.md`).
@@ -75,7 +75,7 @@ with --all, kpi readings, and any `--help` or `--version` probe of a name not li
 
 ## Never run these
 They belong to the owner or to the server. Do not run them, not even with `--help`.
-- `tico strategy draft`, `tico strategy bet`, `tico strategy publish`.
+- `tico strategy draft`, `tico strategy bet`.
 - `tico goal status` (colours are never set by hand), `tico kpi create`, `tico kpi update`, `tico kpi target`, `tico kpi link`,
   `tico kpi unlink`. A change to a goal, a KPI or a target is a `tico proposal create`.
 - `tico proposal decide`: a person's own decision; a bot is refused.

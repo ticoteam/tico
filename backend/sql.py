@@ -614,8 +614,8 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         "goal_asks": "task_id IN (SELECT id FROM tasks)",
         # The company's Vision and Description and their history: everyone's to read, like the company's goals.
         "company_profile": "id IS NOT NULL",
-        # The team's strategy (backend/strategy.py): the published versions are everyone's, like the goals. The draft,
-        # the live bets (their words may be unpublished) and the history of both are the owner's.
+        # The team's strategy (backend/strategy.py): the versions are everyone's, like the goals. The draft (the same as
+        # the newest version), the bets with the retired ones and the history of both are the owner's.
         "strategy_versions": "id IS NOT NULL" if owner else "status='published'",
         "strategy_bets": "id IS NOT NULL" if owner else "id IS NULL",
         # A lens run (backend/lenses.py) on the draft carries the unpublished strategy's words: the owner's. Every other

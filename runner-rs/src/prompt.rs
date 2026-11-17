@@ -13,7 +13,7 @@ pub const LEARNED_HEADER: &str = "What you have learned, read fresh for this tur
 /// The company layer, only in the owner's own Assistant chat.
 /// What changed in Finance (backend/finance/brief.py): the money lines this reader may see, read fresh for this turn.
 pub const FINANCE_HEADER: &str = "What changed in Finance, read fresh for this turn: the money you may see, in short lines, each already cut to what this reader may see. Answer about money from these; for any other number use `tico finance metric` or `tico finance report`.";
-pub const STRATEGY_HEADER: &str = "The team's published strategy, read fresh for this turn. Work that serves an active bet comes first; work that its \"We won't\" rules out needs a reason. A bot proposes a change with `tico proposal create --kind strategy_draft`; only the owner publishes. Full text: `tico strategy show`.";
+pub const STRATEGY_HEADER: &str = "The team's live strategy, read fresh for this turn. Work that serves an active bet comes first; work that its \"We won't\" rules out needs a reason. A bot proposes a change with `tico proposal create --kind strategy_draft`; only the owner confirms it. Full text: `tico strategy show`.";
 /// The brand (backend/brand.py), for growth-facing bots once it is published.
 pub const BRAND_HEADER: &str = "The company's published brand, read fresh for this turn. Write in its voice; check customer-facing text with `tico brand check <file>` before it goes out. Full text: `tico brand show`.";
 pub const LEARNED_COMPANY: &str = "`company` is the company layer: the vision, the company's priorities (its live company goals, in order) and what the owner taught you about the company (`taught`). Only the owner changes it, and only you use it. What they teach you about the company itself, not about how they like things, goes there: `tico assistant learn --company \"<line>\"`. They change the vision on Strategy and the goals on Goals.";
@@ -426,7 +426,7 @@ fn parts(
                                s(&page["title"]), s(&page["path"])));
         }
     }
-    // The team's published strategy: every turn carries it once one is published (backend/strategy.py summary_text,
+    // The team's live strategy: every turn carries it once one is saved (backend/strategy.py summary_text,
     // handed over in `learned.strategy` by backend/learned.py for_turn). Rendered on its own, before what the bot learned.
     let mut learned = attempt["learned"].as_object().cloned().unwrap_or_default();
     if let Some(text) = learned
@@ -1284,7 +1284,7 @@ mod tests {
             "{}",
             changed.text
         );
-        // A published strategy changed: the same.
+        // The live strategy changed: the same.
         let mut moved = next.clone();
         moved["learned"]["strategy"] = json!("Bet 1: ship the Acme release a week early.");
         assert!(!build(

@@ -307,9 +307,9 @@ def checklist(c, who, settings, github):
         ),
         _item(
             "strategy",
-            "Publish your strategy",
+            "Write your strategy",
             _published(c),
-            "Setup saved a draft. Publish it when the bets and what you won't do are right.",
+            "Your bets and what you won't do. Every save is live.",
             "#/strategy",
         ),
     ]
@@ -317,7 +317,8 @@ def checklist(c, who, settings, github):
 
 
 def _published(c):
-    """The team has published a strategy version (backend/strategy.py); a server without the table has not."""
+    """The team has a strategy version, which every save makes (backend/strategy.py); a server without the table has
+    not."""
     try:
         return c.execute("SELECT 1 FROM strategy_versions WHERE status='published' LIMIT 1").fetchone()
     except sqlite3.OperationalError:

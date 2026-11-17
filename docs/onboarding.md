@@ -60,8 +60,8 @@ older chart, still imports.
 from the file, or the group that already has it. Without one, a role goes in its template's group.
 
 **Unreleased:** A file from the setup page's Strategy step (format 0.3, with a `strategy` block) also brings the strategy
-it drafted, for the owner to confirm; nothing is published. The preview lists it under `strategy`. The import writes the
-[strategy draft](strategy.md#setup): the summary and vision, and the file's four sections (Who we serve, What we sell, What we know that others don't, What we won't do) marked
+it drafted, live at once as one version. The preview lists it under `strategy`. The import writes the
+[strategy](strategy.md#setup): the summary and vision, and the file's four sections (Who we serve, What we sell, What we know that others don't, What we won't do) marked
 `_Unconfirmed: drafted from the company file._` (only where empty), with the file's listening requests as a
 **Watching** section; each bet `proposed`, its wrong-if a text test due on the file's check date (90 days out when it
 has none); and each goal on the bet it came from. With a market not defined yet it adds the

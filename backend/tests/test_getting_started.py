@@ -53,10 +53,10 @@ def test_each_person_sees_only_what_they_can_act_on(environment):
     assert api.get("/api/v2/setup/getting-started").status_code in (401, 403)
 
 
-def test_publish_your_strategy_is_ticked_by_the_first_published_version(environment):
+def test_write_your_strategy_is_ticked_by_the_first_save(environment):
     api, owner = environment(), signed_in()
     step = items(api)[1]["strategy"]
-    assert (step["label"], step["done"], step["href"]) == ("Publish your strategy", False, "#/strategy")
+    assert (step["label"], step["done"], step["href"]) == ("Write your strategy", False, "#/strategy")
     revision = api.get("/api/v2/strategy", headers=owner).json()["draft"]["revision"]
     assert (
         api.put(
@@ -66,25 +66,7 @@ def test_publish_your_strategy_is_ticked_by_the_first_published_version(environm
         ).status_code
         == 200
     )
-    assert (
-        api.post(
-            "/api/v2/strategy/bets",
-            headers=owner,
-            json={
-                "statement": "Small landlords pay for bots",
-                "rules_out": "Enterprise sales",
-                "status": "active",
-                "wrong_if": {"kind": "text", "text": "Three landlords say no", "check_by": "2099-01-01"},
-            },
-        ).status_code
-        == 200
-    )
-    assert items(api)[1]["strategy"]["done"] is False  # a draft is not a strategy yet
-    revision = api.get("/api/v2/strategy", headers=owner).json()["draft"]["revision"]
-    assert (
-        api.post("/api/v2/strategy/publish", headers=owner, json={"note": "First", "revision": revision}).status_code
-        == 200
-    )
+    # Every save is live: no publish step.
     step = items(api)[1]["strategy"]
     assert step["done"] is True and step["why"] == ""
 

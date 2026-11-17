@@ -96,15 +96,15 @@ def _bet_body(args):
 
 @tool(
     "tico_strategy_show",
-    "The team's published strategy: summary, vision, the seven sections, the bets with their "
+    "The team's live strategy: summary, vision, the seven sections, the bets with their "
     "wrong-ifs, each bet's goals and colour, the website, and proof_since (when How we know they "
-    "want it last changed). The owner also gets the draft. With `section`, only that section of "
-    "the published strategy.",
+    "want it last changed). The owner also gets the draft, the same words: every save is live. With `section`, only "
+    "that section of the live strategy.",
     {
         "section": {
             "type": "string",
             "enum": list(STRATEGY_SECTIONS),
-            "description": "Only this section of the published strategy, as text (proof: How we know they want it; "
+            "description": "Only this section of the live strategy, as text (proof: How we know they want it; "
             "now: Why now; how: How we sell)",
         }
     },
@@ -120,7 +120,7 @@ def strategy_show(api, args):
 
 @tool(
     "tico_strategy_summary",
-    "The published strategy as the text every run's context carries: the summary, one line "
+    "The live strategy as the text every run's context carries: the summary, one line "
     "per active bet with what would show it wrong, what we won't do, the version.",
     {},
 )
@@ -130,7 +130,8 @@ def strategy_summary(api, args):
 
 @tool(
     "tico_strategy_draft",
-    "The owner: change the strategy draft, only the fields sent (\"\" clears one). The Strategy Owner writes it "
+    "The owner: change the strategy, only the fields sent (\"\" clears one); the save is live at once as the next "
+    "version. The Strategy Owner writes it "
     "too, only what the owner told it, naming the task they said it on (task). Any other bot proposes instead: "
     "tico_proposal_create, kind strategy_draft.",
     {
@@ -186,32 +187,8 @@ def strategy_vision(api, args):
 
 
 @tool(
-    "tico_strategy_publish",
-    "The owner: the draft becomes the next numbered version. Needs an active bet with "
-    "rules_out and wrong_if, and \"What we won't do\". The Strategy Owner publishes too, only when the owner told it "
-    "to, naming that task (task); the note says whose words.",
-    {
-        "note": _s("What this version is for, in a line", default=""),
-        "task": _s("The Strategy Owner's: its task the owner told it to publish on"),
-        "revision": {"type": "integer", "description": "The draft's revision you read; default the current one"},
-    },
-    writes=True,
-)
-def strategy_publish(api, args):
-    return _as_person(api).post(
-        "strategy/publish",
-        {
-            "note": args.get("note") or "",
-            "revision": _draft_revision(api, args),
-            **({"task": args["task"]} if args.get("task") else {}),
-        },
-        key=_key(args),
-    )
-
-
-@tool(
     "tico_strategy_versions",
-    "The published strategy versions, newest first; with n, that version whole.",
+    "The strategy versions, newest first (each save that changed something is one); with n, that version whole.",
     {"n": {"type": "integer", "description": "One version's number"}},
 )
 def strategy_versions(api, args):
@@ -220,7 +197,7 @@ def strategy_versions(api, args):
 
 @tool(
     "tico_strategy_diff",
-    "What changed between two published versions: fields, and bets added, retired or changed.",
+    "What changed between two versions: fields, and bets added, retired or changed.",
     {
         "from_n": {"type": "integer", "description": "The older version's number"},
         "to_n": {"type": "integer", "description": "The newer version's number"},
@@ -256,7 +233,7 @@ def strategy_bet_update(api, args):
 
 @tool(
     "tico_strategy_bet_retire",
-    "Owner only: retire a bet. Its goals keep their link; the next publish asks the owner what to do with them.",
+    "Owner only: retire a bet. Its goals keep their link; the owner is asked what to do with them.",
     {"id": _s("Bet id")},
     required=("id",),
     writes=True,
@@ -1155,9 +1132,9 @@ def lens_list(api, args):
 @tool(
     "tico_lens_run",
     "Run a lens: answers by step key (a step left out is skipped and assumed from the strategy), on "
-    "the published strategy or, for the owner, the draft. The owner, the Strategy Owner and, for a market lens, the "
-    "Librarian may run one. The Strategy Owner's run files its changes as one strategy_draft proposal; nobody's run "
-    "publishes. Waits up to `wait` seconds (at most 60) for the result.",
+    "the live strategy. The owner, the Strategy Owner and, for a market lens, the Librarian may run one. The Strategy "
+    "Owner's run files its changes as one strategy_draft proposal; nobody's run changes the strategy. Waits up to "
+    "`wait` seconds (at most 60) for the result.",
     {
         "lens": _s("Lens id, from `lens list`"),
         "answers": {
@@ -1166,7 +1143,10 @@ def lens_list(api, args):
             "(at most 12); scores: {columns: [\"Us\", ...], rows: [{factor, scores: [0-5 per column]}]}; "
             "choice: one of the step's options",
         },
-        "draft": {"type": "boolean", "description": "Owner only: run on the draft instead of the published version"},
+        "draft": {
+            "type": "boolean",
+            "description": "Owner only: run on the draft (the same words as the live version)",
+        },
         "wait": {"type": "integer", "description": "Seconds to wait for the result; 0 returns the running run"},
     },
     required=("lens",),
@@ -1244,7 +1224,7 @@ def _strategy_text(args, result):
     """`strategy show`: one section as text with `--section`, else the strategy as JSON."""
     if not args.section:
         return json.dumps(result, indent=2)
-    return "Nothing published yet." if result["text"] is None else result["text"]
+    return "No strategy yet." if result["text"] is None else result["text"]
 
 
 def _read_draft(fields):
@@ -1271,14 +1251,14 @@ STRATEGY = (
     Group("strategy", "the team's strategy: its bets, its sections, the versions"),
     Command(
         "strategy show",
-        "the published strategy, its bets and their goals; the owner also gets the draft",
+        "the live strategy, its bets and their goals; the owner also gets the draft",
         render=_strategy_text,
         example="tico strategy show --section serve",
     ),
     Command("strategy summary", "the text every run's context carries", example="tico strategy summary"),
     Command(
         "strategy draft",
-        "owner only: change the draft; a bot proposes instead (proposal create --kind strategy_draft)",
+        "owner only: change the strategy, live at once; a bot proposes instead (proposal create --kind strategy_draft)",
         args=(Arg("sections", type=json.loads, metavar="JSON"), Arg("section", metavar="KEY=TEXT")),
         example="tico strategy draft --section 'serve=Small offices with one IT person' --revision 4",
     ),
@@ -1289,19 +1269,14 @@ STRATEGY = (
         example="tico strategy vision --task t_1 'Every small landlord runs on bots'",
     ),
     Command(
-        "strategy publish",
-        "owner only: the draft becomes the next version",
-        example="tico strategy publish --note 'serve: small offices'",
-    ),
-    Command(
         "strategy versions",
-        "the published versions, newest first; with N, that version whole",
+        "the versions, newest first; with N, that version whole",
         args=(Arg("n", positional=True, nargs="?"),),
         example="tico strategy versions 3",
     ),
     Command(
         "strategy diff",
-        "what changed between two published versions",
+        "what changed between two versions",
         args=(Arg("from_n", "--from"), Arg("to_n", "--to")),
         example="tico strategy diff --from 2 --to 3",
     ),

@@ -11,7 +11,7 @@ bets it touches. The Strategy Owner looks only at those.
 - Items: one sentence each of what happened, with a kind (`change`, `signal`, `theme` or `size`) and the market entity
   ids it is about.
 - The bets it touches. These are worked out from the entity ids, not written by the Librarian: an active bet of the
-  published strategy is touched when it cites one of the entities, or its market wrong-if watches one. Each item read
+  live strategy is touched when it cites one of the entities, or its market wrong-if watches one. Each item read
   also lists, as `bets`, the touched bets that watch one of its own entities.
 - Answers: one sentence each for the Market page's questions, keyed `changed` (What changed?), `money` (Where is the
   money going?), `players` (Who are we up against?), `reach` (How does it reach buyers?) and `saying` (What are buyers
@@ -53,7 +53,7 @@ question's answer line comes from the latest briefing's answers. With no briefin
 When a briefing is posted the server emits `market.briefing` for that week. The Strategy Owner has a routine on it, **Market
 briefing**, which opens a task only when the briefing touches a bet. For each touched bet it asks whether the bet is
 still right. Most weeks the answer is yes and nothing more happens. When it is not, the Strategy Owner files one
-`strategy_draft` proposal in your Needs you, marked as from the weekly briefing. Publishing stays your click.
+`strategy_draft` proposal in your Needs you, marked as from the weekly briefing. Confirming it makes it live.
 
 A replacement that touches different bets than before opens one more task for them.
 

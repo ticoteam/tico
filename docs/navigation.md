@@ -42,7 +42,7 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 | See how full each stage is and who holds it, by factory | Company's Floor card; a hall's name opens one factory (`#/overview/floor/<id>`) ([Company](overview.md#floor)) |
 | See the team chart and its factories, or make a factory | Company → Strategy → Org (`#/strategy/org`); **+** beside Factories makes one (owners and admins) |
 | Open a page full size | Tap its card, or `#/page/<id>` ([Pages](pages.md)) |
-| Read or write the team's strategy, publish a version | Company → Strategy (`#/strategy`); the owner writes and publishes, the Strategy Owner proposes ([Strategy](strategy.md)); Lenses on that page run a framework against it ([Lenses](lenses.md)) |
+| Read or write the team's strategy | Company → Strategy (`#/strategy`); the owner writes it, each save live, the Strategy Owner proposes ([Strategy](strategy.md)); Lenses on that page run a framework against it ([Lenses](lenses.md)) |
 | See the market, its map, or ask the Librarian about it | Company → Strategy → Market (`#/strategy/market`; `#/market` redirects there); **Open map** for the graph |
 | See growth numbers and their sources, or marketing tasks | Company → Growth (`#/growth`; Sources is a link on the page, or in Settings for the owner and admins) ([Growth](growth.md)). Marketing tasks are on the Tasks page, type Marketing |
 | Review goals and KPIs | Goals; a goal's **Bet** picker links it to a strategy bet |
