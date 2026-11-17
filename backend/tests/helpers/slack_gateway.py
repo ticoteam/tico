@@ -305,23 +305,6 @@ def readers(tmp_path):
     registry = tmp_path / "registry"
     registry.mkdir()
     (registry / "hub-access.yaml").write_text("owner: ana@acme.example\nallowed_domains:\n  - acme.example\n")
-    (registry / "slack-channels.yaml").write_text(f"""
-channels:
-  - id: {MARKETING}
-    name: marketing
-    purpose: "Marketing work log."
-    post: true
-    readers: [cmo, seo, finance, nobody-here]
-  - id: {RELEASE}
-    name: release_notes
-    purpose: "Product release notes."
-    post: false
-    readers: cto
-  - id: {QUIET}
-    name: quiet
-    purpose: "Nobody reads this one."
-    post: false
-""")
     settings = Settings(
         db_path=tmp_path / "hub.db", slack_team_id=TEAM, slack_app_id=APP, registry_dir=registry, slack_digest_cap=5
     )
@@ -343,6 +326,17 @@ channels:
                 ),
             ),
         )
+        now = H.now()
+        for cid, name, post, slack_readers, note in (
+            (MARKETING, "marketing", 1, ["cmo", "seo", "finance", "nobody-here"], "Marketing work log."),
+            (RELEASE, "release_notes", 0, ["cto"], "Product release notes."),
+            (QUIET, "quiet", 0, [], "Nobody reads this one."),
+        ):
+            c.execute(
+                "INSERT INTO slack_channels(key,channel_id,name,readers,post,note,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                (cid, cid, name, encode(slack_readers), post, note, now, now),
+            )
         for slug, entry in BOTS.items():
             c.execute(
                 'INSERT INTO bot_config(bot,team,owner_id,description,reports_to) VALUES(?,?,?,?,?)',

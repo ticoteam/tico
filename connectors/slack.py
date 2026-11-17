@@ -28,7 +28,7 @@ access entry declares under `channels:`. Without `channels:` a bot reads only th
 It refuses any channel outside the scope before calling Slack.
 
 The channel list lives in Tico's database. In a hosted run (`HUB_API_URL` and `HUB_TOKEN`) this script reads it from
-the hub; the old registry/slack-channels.yaml is read too, until an owner or admin imports it in Settings.
+the hub.
 
 DM reads can likewise be disabled with `dms: false`. `inbox` is checked the same way as `history` and refuses before
 calling Slack when that flag is present.
@@ -70,7 +70,6 @@ HUB = Path(__file__).resolve().parent.parent  # .../tico
 # a Linux runner does not, and the runner names the workspace in TICO_PROJECTS_DIR, as mail/ reads it.
 PROJECTS = Path(os.environ.get("TICO_PROJECTS_DIR") or HUB.parent).expanduser()  # .../tico-work
 REGISTRY = Path(os.environ.get("TICO_REGISTRY_DIR") or HUB / "registry")
-CHANNELS_FILE = REGISTRY / "slack-channels.yaml"
 HUB_ACCESS_FILE = REGISTRY / "hub-access.yaml"
 AUDIT_FILE = PROJECTS / "runtime" / "slack-audit.jsonl"
 USER_CACHE = PROJECTS / "runtime" / "slack-users.json"
@@ -768,46 +767,14 @@ CHANNELS_HINT = (
 )
 
 
-def file_channels(path=CHANNELS_FILE):
-    """The old registry/slack-channels.yaml as a list of entries; [] when this machine has none."""
-    p = Path(path)
-    if not p.exists():
-        return []
-    data = load_yaml(p, "registry/slack-channels.yaml")
-    chans = data.get("channels") if isinstance(data, dict) else data
-    out = []
-    for c in chans or []:
-        if isinstance(c, dict):
-            readers = c.get("readers") or []
-            out.append({**c, "readers": [readers] if isinstance(readers, str) else list(readers)})
-    return out
-
-
-def load_channels(path=CHANNELS_FILE):
-    """The company's Slack channel list: the hub's (Settings > Tools > Slack), else the old registry file.
-
-    The file counts only until an owner or admin imports it, and never when the hub could not be asked and there
-    is no file: then there is no list and the refusal says where it lives."""
+def load_channels():
+    """The company's Slack channel list: the hub's (Settings > Tools > Slack). A run that cannot ask the hub has no
+    list, and the refusal says where it lives."""
     if "hub_channels" not in _CACHE:
         _CACHE["hub_channels"] = HUB_GET("slack/channels")
     listed = _CACHE["hub_channels"]
     if isinstance(listed, dict) and isinstance(listed.get("channels"), list):
-        rows = [c for c in listed["channels"] if isinstance(c, dict)]
-        if (listed.get("registry_file") or {}).get("imported"):
-            return rows
-        for extra in file_channels(path):
-            if not any(
-                norm_ref(extra.get("name")) == norm_ref(r.get("name"))
-                and extra.get("name")
-                or extra.get("id")
-                and extra.get("id") == r.get("id")
-                for r in rows
-            ):
-                rows.append(extra)
-        return rows
-    rows = file_channels(path)
-    if rows or Path(path).exists():
-        return rows
+        return [c for c in listed["channels"] if isinstance(c, dict)]
     raise Refused("there is no Slack channel list this run can read.", CHANNELS_HINT)
 
 

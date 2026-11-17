@@ -1476,9 +1476,6 @@ def parser():
     s.add_argument("channel")
     s.add_argument("--reader", help="only this bot stops reading it")
     s.set_defaults(fn="slack channel remove")
-    chan.add_parser("import", help="store the channels of the old registry/slack-channels.yaml").set_defaults(
-        fn="slack channel import"
-    )
     cli_spec.add(sub, computers.SUPPORT)  # tico support: clients/commands/computers.py
     cli_spec.add(sub, finance.CLI)  # tico finance: clients/commands/finance.py
     # Contacts (backend/entities/routes.py): every reader sees what the read rule lets it see; writes name their actor.

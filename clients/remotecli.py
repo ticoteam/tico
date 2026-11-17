@@ -489,7 +489,6 @@ def run(args, who=None):
         "slack channel list",
         "slack channel add",
         "slack channel remove",
-        "slack channel import",
         "setup show",
         "setup complete",
         "setup invite",
