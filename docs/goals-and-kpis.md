@@ -91,9 +91,10 @@ A goal's colour is set automatically:
 1. **From its KPIs** that carry a target: the worst of them decides, and the note is the one line that says why. A gray KPI
    never turns a goal red.
 2. **From its owner's check-in and its tasks** when it has no KPI to judge it by: the owner's latest check-in that carries a
-   signal (`on_track`, `at_risk`, `off_track`) within three weeks; else the tasks that name the goal (all done or one done in
-   the last two weeks is green; nothing done in two weeks on a goal at least that old is yellow, and nothing moved in thirty
-   days is red).
+   signal (`on_track`, `at_risk`, `off_track`) within three weeks; else the tasks that name the goal. Tasks can warn but never
+   make a goal green: nothing done in two weeks on a goal at least that old is yellow, nothing moved in thirty days is red, and
+   tasks all done or one done in the last two weeks leave it gray, "No measure yet: 2 of 4 tasks done, latest today", until
+   a KPI on target or an on-track check-in says it is being met.
 3. **Gray, "no data"**, when there is not enough to go on. If the goal's only measure was archived, the note reads
    "Its only measure was archived on <date>" instead. A goal nothing has scored yet has no colour at all.
 

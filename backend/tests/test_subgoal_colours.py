@@ -91,7 +91,7 @@ def test_subgoal_uses_a_recent_at_risk_checkin_without_a_measure(api, clock):
             assert row["status"] == expected, (case, row["status"])
             if expected:
                 assert row["status_note"].startswith("Check-in "), case
-                assert row["status_note"].endswith(" ago: at risk"), case
+                assert row["status_note"].endswith(": at risk") and "today ago" not in row["status_note"], case
                 assert row["status_source"] == "auto", case
             else:
                 assert status_events(c, child) == [], case
