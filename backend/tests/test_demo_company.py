@@ -140,7 +140,7 @@ def test_tasks_are_open_done_or_closed_and_show_asks_snoozes_and_sub_tasks(ana):
         *ana.get("/api/v2/tasks?status=done,closed&sort=finished&limit=200").json()["tasks"],
     ]
     assert {task["status"] for task in tasks} == {"open", "done", "closed"}
-    floor = {"lead", "opportunity", "growth-experiments", "customer"}  # the work standing on Company › Floor
+    floor = {"lead", "opportunity", "customer"}  # the work standing on Company › Floor
     assert {task["pipeline_id"] for task in tasks} == {"general", "product", "finance"} | floor
     by_title = {task["title"]: task for task in tasks}
     stages = {title: by_title[title]["stage_id"] for title in ("Schedule shows from the app", "Faster scene upload")}

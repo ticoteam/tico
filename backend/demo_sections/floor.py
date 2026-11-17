@@ -1,11 +1,10 @@
 # pyright: strict
 """Company › Floor: work standing in the Growth, Success and Product factories' stages, so each hall has stacks of
-different heights, a few teammates holding them, a rate in and out, and two that wait on Ana.
+different heights, a few teammates holding them, a rate in and out, and one that waits on Ana.
 
 Leads come in all week and most stop at Targets; a few reach Outreach and Replies, one is Qualified, and three closed
-out as Done. Bids talks to three venues and has two proposals out. Growth Experiments has ideas waiting, one of them
-Ana's own price test. Most customers sit in Active. Product has builds in Build and Review 1, one in QA, and one
-release waiting on Ana's OK. Each task enters its pipeline on its day and is moved on by Ana with a reason, the way a
+out as Done. Bids talks to three venues and has two proposals out. Most customers sit in Active. Product has builds
+in Build and Review 1, one in QA, and one release waiting on Ana's OK. Each task enters its pipeline on its day and is moved on by Ana with a reason, the way a
 person moves work past a stage it has no check for yet.
 """
 
@@ -39,18 +38,6 @@ WORK = (
     ("opportunity", "opportunity-talking", "bot:bids", 4.8, "Proposal: Bayside summer season"),
     ("opportunity", "opportunity-proposal", "bot:bids", 6.1, "Proposal: Old Mill gallery nights"),
     ("opportunity", "opportunity-proposal", "bot:bids", 6.6, "Proposal: Fernwood winter show"),
-    ("growth-experiments", "growth-experiments-ideas", "bot:content-owner", 1.1, "Short videos of a show set-up"),
-    ("growth-experiments", "growth-experiments-ideas", "bot:email-owner", 1.8, "Welcome email with a first scene"),
-    (
-        "growth-experiments",
-        "growth-experiments-ideas",
-        "bot:community-manager",
-        2.9,
-        "Show-and-tell thread each Friday",
-    ),
-    ("growth-experiments", "growth-experiments-ideas", ANA, 3.3, "Price test for the Studio kit"),
-    ("growth-experiments", "growth-experiments-building", "bot:content-owner", 4.4, "Creator kit landing page"),
-    ("growth-experiments", "growth-experiments-running", "bot:email-owner", 6.2, "Abandoned cart reminder at 2 hours"),
     ("customer", "customer-onboarding", "bot:success-owner", 0.9, "Onboard Riverbend Theatre"),
     ("customer", "customer-onboarding", "bot:success-owner", 1.6, "Onboard Summit Climbing"),
     ("customer", "customer-active", "bot:success-owner", 2.2, "Grove Street Cinema"),
@@ -75,7 +62,6 @@ DONE = (
     ("lead", "bot:sdr", 5.8, 0.3, "Linden Street Theatre"),
     ("customer", "bot:success-owner", 6.7, 2.4, "Onboard Westfield Cinema"),
     ("opportunity", "bot:bids", 6.9, 0.6, "Proposal: Juniper Hall season lights"),
-    ("growth-experiments", "bot:email-owner", 6.4, 2.9, "Gift guide email in the first week"),
 )
 
 
