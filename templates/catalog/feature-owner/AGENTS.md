@@ -74,6 +74,7 @@ Read each skill once in a session, when it first applies; after a compaction, re
 - `skills/write-a-test-that-proves-the-change/SKILL.md`: before the first code change for a task.
 - `skills/answer-each-review-comment/SKILL.md`: when a pull request has comments, before you reply to any.
 - `skills/get-the-checks-green-at-the-head/SKILL.md`: when a check fails or you hand a commit on.
+- `.claude/skills/quick-perf-check/SKILL.md`: when your change adds or changes SQL, before you hand the commit on.
 - `skills/run-a-launch-readiness-check/SKILL.md`: before you mark a launch line done.
 
 ## Method
