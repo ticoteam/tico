@@ -4,6 +4,7 @@
 # one removes and the other calls, a lint rule one turns on and the other's new code breaks), so the group runs them all.
 # The plan job starts this beside its test selection, so a group needs no static checks VM
 # (.github/workflows/pr-checks.yml). Every check runs; any failure fails the script.
+# Includes scripts/gates.sh: shared gate scripts and ast-grep rules with their fixtures.
 #   PATH="$RUNNER_TEMP/venv/bin:$PATH" bash scripts/ci/merge_commit_checks.sh <base sha> <merge commit sha>
 set -uo pipefail
 cd "$(dirname "$0")/../.." || exit 2
@@ -22,6 +23,7 @@ command -v uvx >/dev/null || python3 -m pip install --disable-pip-version-check 
 export PYRIGHT_BASE_REF="$base" LINT_BASE_REF="$base"
 check python3 scripts/check_migration_order.py --base "$base" --head "$head" --base-name main
 check bash scripts/lint.sh
+check bash scripts/gates.sh --base "$base"
 check python3 -m backend.openapi_v2 --check
 check python3 scripts/build_api_docs.py --check
 check python3 scripts/check_wire_contract.py
