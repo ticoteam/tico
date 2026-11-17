@@ -228,8 +228,17 @@ def test_the_gateway_reads_tokens_from_the_secret_arn_and_nowhere_else(monkeypat
     assert config.slack_credentials() == pinned
     assert fetched == [arn]
     monkeypatch.delenv("TICO_SLACK_SECRET_ARN")
-    assert config.slack_credentials() == {"bot_token": "", "app_token": "", "team_id": "T0PINNED", "app_id": ""}
+    empty = {"bot_token": "", "app_token": "", "team_id": "T0PINNED", "app_id": ""}
+    assert config.slack_credentials() == empty
     assert fetched == [arn]
+
+    class Refused:
+        def get_secret_value(self, SecretId):
+            raise PermissionError("no access")  # the gateway logs the error's type, never a value
+
+    monkeypatch.setattr("boto3.client", lambda name, **k: Refused())
+    monkeypatch.setenv("TICO_SLACK_SECRET_ARN", arn)
+    assert config.slack_credentials() == empty
 
 
 def test_the_gateway_with_no_tokens_says_where_to_paste_them(tmp_path, monkeypatch, caplog):
@@ -249,3 +258,9 @@ def test_the_gateway_with_no_tokens_says_where_to_paste_them(tmp_path, monkeypat
     assert G.main([], make_slack=FakeClient) == 1
     assert len(FakeClient.instances) == clients  # no Slack client was built from the environment pair
     assert "No Slack tokens: paste them in Tools > Slack or set TICO_SLACK_SECRET_ARN" in caplog.text
+    # Waiting (TICO_SLACK_WAIT=1, as compose runs it), it says the same and checks again until stopped.
+    monkeypatch.setenv("TICO_SLACK_WAIT", "1")
+    monkeypatch.setattr(G, "_sleep", lambda stopping, seconds: False)
+    caplog.set_level("INFO")
+    assert G.main([], make_slack=FakeClient) == 0
+    assert "No Slack tokens yet; paste them in Tools > Slack" in caplog.text
