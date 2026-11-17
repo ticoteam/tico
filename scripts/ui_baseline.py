@@ -35,7 +35,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-TSC = ["npx", "--yes", "-p", "typescript@5.9.3", "tsc", "-p", "ui/tsconfig.json", "--pretty", "false"]
+TSC = ["npx", "--no-install", "tsc", "-p", "ui/tsconfig.json", "--pretty", "false"]
 TSC_LINE = re.compile(r"^(?P<file>[^()\n]+)\((?P<line>\d+),(?P<col>\d+)\): error (?P<code>TS\d+): (?P<msg>.*)$")
 TSC_GLOBAL = re.compile(r"^error (?P<code>TS\d+): (?P<msg>.*)$")
 VENDOR = "ui/vendor/"
@@ -88,7 +88,8 @@ def run_tsc():
     # A failing run with no diagnostic at all crashed. Findings in .ts files count too: the strict ratchet owns them.
     if done.returncode not in (0, 1, 2) or (done.returncode != 0 and not diagnostics):
         fail(f"tsc exited {done.returncode} without diagnostics:\n{done.stdout}{done.stderr}")
-    return findings, "tsc " + TSC[3].split("@")[1]
+    pinned = json.loads((ROOT / "package.json").read_text())["devDependencies"]["@typescript/native"]
+    return findings, "tsc " + pinned.rsplit("@", 1)[1]
 
 
 def biome_command():

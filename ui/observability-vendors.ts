@@ -36,7 +36,10 @@ export function connect(config, filters) {
   if (config.sentry_dsn) {
     try {
       Sentry.init({dsn:config.sentry_dsn, environment:config.environment, release:config.release || undefined,
-        sendDefaultPii:false, defaultIntegrations:false,
+        dataCollection:{userInfo:false, cookies:false, httpHeaders:{request:false, response:false},
+          httpBodies:[], urlQueryParams:false, genAI:{inputs:false, outputs:false}, databaseQueryData:false,
+          queues:false, graphQL:{document:false, variables:false}},
+        defaultIntegrations:false,
         integrations:[Sentry.globalHandlersIntegration()], beforeSend:filters.sentry,
         maxBreadcrumbs:0, autoSessionTracking:false, sendClientReports:false,
         tracesSampleRate:0, replaysSessionSampleRate:0, replaysOnErrorSampleRate:0});

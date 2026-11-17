@@ -55,7 +55,7 @@ ROOT = Path(__file__).resolve().parent.parent
 CONFIG = "ui/tsconfig.strict.json"
 LEGACY = "ui/strict-legacy.json"  # the single list before the pieces; read from REF, never written
 STRICT = "strict"
-TSC = ["npx", "--yes", "-p", "typescript@5.9.3", "tsc", "-p", CONFIG, "--pretty", "false"]
+TSC = ["npx", "--no-install", "tsc", "-p", CONFIG, "--pretty", "false"]
 TSC_LINE = re.compile(r"^(?P<file>[^()\n]+)\((?P<line>\d+),(?P<col>\d+)\): error (?P<code>TS\d+): (?P<msg>.*)$")
 TSC_GLOBAL = re.compile(r"^error (?P<code>TS\d+): (?P<msg>.*)$")
 REQUIRED_FLAGS = (
@@ -75,7 +75,7 @@ ALLOWED_EXCLUDE = {"./vendor/**", "./assets/**", "./node_modules/**", "./observa
 WORKER_CONFIG = "ui/tsconfig.worker.json"
 WORKER_FILES = ["sw.ts"]
 WORKER_LIB = ["ES2022", "WebWorker"]
-WORKER_TSC = ["npx", "--yes", "-p", "typescript@5.9.3", "tsc", "-p", WORKER_CONFIG, "--pretty", "false"]
+WORKER_TSC = ["npx", "--no-install", "tsc", "-p", WORKER_CONFIG, "--pretty", "false"]
 # The one generated bundle (npm run build:observability): the only JavaScript that may sit under ui/ outside tests/.
 ALLOWED_JS = {"ui/assets/observability-vendors.js"}
 # Classic scripts that stay JavaScript, each with its reason (path: reason). None is left: every UI script is a .ts file.
@@ -84,7 +84,7 @@ SKIP_TS = ("ui/vendor/", "ui/assets/", "ui/node_modules/")
 DIRECTIVE = re.compile(r"@ts-(nocheck|ignore)\b")
 # The UI test scripts: their own strict config, read by no baseline (rule 10).
 TESTS_CONFIG = "ui/tests/tsconfig.json"
-TESTS_TSC = ["npx", "--yes", "-p", "typescript@5.9.3", "tsc", "-p", TESTS_CONFIG, "--pretty", "false"]
+TESTS_TSC = ["npx", "--no-install", "tsc", "-p", TESTS_CONFIG, "--pretty", "false"]
 TESTS_REQUIRED = ("strict", "erasableSyntaxOnly", "verbatimModuleSyntax")
 TESTS_INCLUDE = "./**/*.cts"
 DECLARE_GLOBAL = re.compile(r"^\s*declare\s+global\b", re.M)

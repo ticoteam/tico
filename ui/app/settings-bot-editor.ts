@@ -332,7 +332,7 @@ function settingsEditBot(slug = '', inline = false) {
   const more = dialog.querySelector('[data-bot-more]') as HTMLButtonElement | null, moreMenu = more?.nextElementSibling as HTMLElement | null;
   const moreShow = (open: boolean) => { if (!more || !moreMenu) return; moreMenu.hidden = !open; more.setAttribute('aria-expanded', String(open)); };
   if (more && moreMenu) {
-    more.onclick = () => { moreShow(moreMenu.hidden); if (!moreMenu.hidden) moreMenu.querySelector<HTMLElement>('[role=menuitem]')?.focus(); };
+    more.onclick = () => { moreShow(Boolean(moreMenu.hidden)); if (!moreMenu.hidden) moreMenu.querySelector<HTMLElement>('[role=menuitem]')?.focus(); };
     moreMenu.addEventListener('keydown', (event: KeyboardEvent) => { if (event.key === 'Escape') { event.stopPropagation(); moreShow(false); more.focus(); } });
     // The editor redraws in place (Cancel, Save, a reload): this menu's listener goes with the menu it closes.
     const outside = (event: Event) => { if (!moreMenu.isConnected) { document.removeEventListener('click', outside, true); return; }

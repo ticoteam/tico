@@ -72,9 +72,9 @@ if ! { [ -f .venv/.dev-setup ] && [ "$(cat .venv/.dev-setup)" = "$py_stamp" ] &&
 fi
 
 # 3. node_modules, from package-lock.json (Biome, tsc, esbuild and Playwright's scripts).
-command -v node >/dev/null 2>&1 || fail "needs Node 22 or later on PATH"
+command -v node >/dev/null 2>&1 || fail "needs Node 24 or later on PATH"
 node_major=$(node -p 'process.versions.node.split(".")[0]')
-[ "$node_major" -ge 22 ] || fail "needs Node 22 or later; this is $(node --version)"
+[ "$node_major" -ge 24 ] || fail "needs Node 24 or later; this is $(node --version)"
 node_stamp=$(stamp_of "node $node_major" "lock $(git hash-object package-lock.json)")
 if ! { [ -f node_modules/.dev-setup ] && [ "$(cat node_modules/.dev-setup)" = "$node_stamp" ]; }; then
   npm ci --no-audit --no-fund --update-notifier=false --prefer-offline --loglevel=error >/dev/null

@@ -67,7 +67,7 @@ Where the local gate differs from CI:
 - Uncommitted and untracked files are checked locally; CI checks only the pushed commit. The hook says so when the tree is dirty.
 - The baselines (ruff, tsc, UI strict, Biome, API paths) compare with origin/main as the hook last fetched it. CI compares with the pull request's base at the time of its run, so a base that moved since the fetch can differ.
 - `check.sh` uses `.venv/bin` first when there is one (`scripts/dev_setup.sh` makes it), then the Python and Node on your
-  PATH. CI uses a pinned Python 3.15 venv and Node 22 with `npm ci`.
+  PATH. CI uses a pinned Python 3.15 venv and Node 24 with `npm ci`.
 - `check.sh` runs cargo fmt on the Rust crates; CI's static job does not (the merge queue's rust lint does).
 - `check.sh` collects every test file (`pytest --collect-only`, nothing run), so a test that imports a removed module fails before the push; CI finds it only in the test job.
 - Tests, clippy, the desktop app, the recorder and the Caddy checks are not in `check.sh`. The merge queue runs the tests a change reaches; run the ones you touched with `scripts/remote.py`.

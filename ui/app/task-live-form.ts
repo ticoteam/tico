@@ -18,7 +18,7 @@ function taskFormCapture(root: Element): TaskFormCapture {
         ? [offset(selection.anchorNode, selection.anchorOffset), offset(selection.focusNode, selection.focusOffset)] : null};
   });
   const folds = [...root.querySelectorAll<TaskField>('form[hidden], form:not([hidden]), details')]
-    .map((el): TaskFormFold => ({key: taskFormKey(el, root), hidden: el.hidden, open: el.open}));
+    .map((el): TaskFormFold => ({key: taskFormKey(el, root), hidden: Boolean(el.hidden), open: el.open}));
   return {fields, folds};
 }
 function taskFormAdopt(root: Element, kept: TaskFormCapture) {

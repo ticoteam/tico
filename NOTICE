@@ -8,23 +8,26 @@ The license text for those grants is in licenses/Apache-2.0.txt.
 It includes third-party software, kept under its own license:
 
   ui/vendor/marked.min.js
-      marked 12.0.2, MIT License. Copyright (c) 2011-2024 Christopher Jeffrey and
+      marked 18.2.1, MIT License. Copyright (c) 2011-2024 Christopher Jeffrey and
       2018+ MarkedJS. Includes the Markdown license (BSD-3-Clause, John Gruber).
       License text: ui/vendor/LICENSE-marked.md
 
-  ui/vendor/js-yaml.min.js
   templates/employee-repo/ui/vendor/js-yaml.min.js
-      js-yaml 4.1.0, MIT License. Copyright (C) 2011-2015 Vitaly Puzrin.
-      License text: ui/vendor/LICENSE-js-yaml and templates/employee-repo/ui/vendor/LICENSE-js-yaml
+      js-yaml 4.3.2, MIT License. Copyright (C) 2011-2015 Vitaly Puzrin.
+      License text: templates/employee-repo/ui/vendor/LICENSE-js-yaml
 
   ui/vendor/docx-preview.min.js
-      docx-preview 0.3.7 (unmodified dist build), Apache License 2.0. Copyright (c) 2016-2023
+      docx-preview 0.4.1 (unmodified dist build), Apache License 2.0. Copyright (c) 2016-2023
       Volodymyr Baydalka. License text: ui/vendor/LICENSE-docx-preview
 
   ui/vendor/jszip.min.js
-      JSZip 3.10.1 (unmodified dist build), used under the MIT License (dual MIT or GPLv3).
+      JSZip 3.10.2 (unmodified dist build), used under the MIT License (dual MIT or GPLv3).
       Copyright (c) 2009-2016 Stuart Knightley, David Duponchel, Franz Buchinger, Antonio Afonso.
       Includes pako, MIT License. License text: ui/vendor/LICENSE-jszip.md
+
+  ui/vendor/livekit-client.umd.min.js
+      LiveKit JavaScript SDK 2.24.1, Apache License 2.0.
+      License text: ui/vendor/LICENSE-livekit-client
 
   ui/vendor/novnc/
       noVNC 1.7.0 (@novnc/novnc, the core/ modules RFB needs, unmodified), Mozilla Public License 2.0.

@@ -85,7 +85,7 @@ jobs:
           key: venv-ubuntu24-${{ runner.arch }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('backend/requirements-dev.txt', 'scripts/ci_install.sh') }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '22'
+          node-version: '24.22.3'
           cache: npm
           cache-dependency-path: package-lock.json
       - name: Install (five minutes per attempt, one retry)
@@ -216,7 +216,7 @@ jobs:
       # Every suite compiles the UI's TypeScript (scripts/ci_install.sh); only browser suites install Playwright.
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '22'
+          node-version: '24.22.3'
           cache: npm
           cache-dependency-path: package-lock.json
       - if: startsWith(matrix.suite, 'browser-')
@@ -315,10 +315,10 @@ jobs:
           key: venv-ubuntu24-${{ runner.arch }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('backend/requirements-dev.txt', 'scripts/ci_install.sh') }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '22'
+          node-version: '24.22.3'
       - name: Install (five minutes per attempt, one retry)
         timeout-minutes: 11
-        run: bash scripts/ci_install.sh python && "$RUNNER_TEMP/venv/bin/python" -m pip install --disable-pip-version-check uv==0.13.0
+        run: bash scripts/ci_install.sh python && "$RUNNER_TEMP/venv/bin/python" -m pip install --disable-pip-version-check uv==0.13.9
       - name: Python lint
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" LINT_BASE_REF="$BASE_SHA" bash scripts/lint.sh
       - name: Verification gates (scripts and ast-grep rules with fixtures)
@@ -384,7 +384,7 @@ jobs:
           key: venv-ubuntu24-${{ runner.arch }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('backend/requirements-dev.txt', 'scripts/ci_install.sh') }}
       - name: Install (five minutes per attempt, one retry)
         timeout-minutes: 11
-        run: bash scripts/ci_install.sh types && "$RUNNER_TEMP/venv/bin/python" -m pip install --disable-pip-version-check uv==0.13.0
+        run: bash scripts/ci_install.sh types && "$RUNNER_TEMP/venv/bin/python" -m pip install --disable-pip-version-check uv==0.13.9
       - name: Types (basedpyright baseline, strict new modules)
         env:
           PYRIGHT_BASE_REF: ${{ env.BASE_SHA }}
@@ -488,7 +488,7 @@ jobs:
         run: rustup toolchain install 1.92.0 --profile minimal --component clippy,rustfmt
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '22'
+          node-version: '24.22.3'
           cache: npm
           cache-dependency-path: package-lock.json
       - name: The window's scripts (TypeScript, stripped into recorder/dist, which the desktop build embeds)
@@ -543,7 +543,7 @@ jobs:
           key: venv-ubuntu24-${{ runner.arch }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('backend/requirements-dev.txt', 'scripts/ci_install.sh') }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '22'
+          node-version: '24.22.3'
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Build this source's server image locally; never publish
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0

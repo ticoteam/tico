@@ -19,7 +19,7 @@ check() {
   fi
 }
 # The pinned uv the static checks job installs: basedpyright runs through uvx.
-command -v uvx >/dev/null || python3 -m pip install --disable-pip-version-check --quiet uv==0.13.0
+command -v uvx >/dev/null || python3 -m pip install --disable-pip-version-check --quiet uv==0.13.9
 export PYRIGHT_BASE_REF="$base" LINT_BASE_REF="$base"
 check python3 scripts/check_migration_order.py --base "$base" --head "$head" --base-name main
 check bash scripts/lint.sh

@@ -123,7 +123,7 @@ function pipelineAskOpen(): void {
   if (!state) return;
   const pop = paPop(state);
   if (!pop) { const b = paBots(state.rec, state.stage)[0]; if (b) paSheetOpen(state, b.actor); return; }
-  paMenu(state, pop.hidden);
+  paMenu(state, Boolean(pop.hidden));
 }
 
 /** A tap outside the menu, or Escape, closes it. */

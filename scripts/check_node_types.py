@@ -33,7 +33,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-TSC = ["npx", "--yes", "-p", "typescript@5.9.3", "tsc"]
+TSC = ["npx", "--no-install", "tsc"]
 BASE = "tsconfig.node.json"
 PROJECTS = (
     "scripts/tsconfig.json",
