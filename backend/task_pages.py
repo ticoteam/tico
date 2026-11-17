@@ -264,7 +264,6 @@ def attach(
     document = TR.document_of(found)
     if document:
         _as_document(conn, by, task_id, document, file_id)
-    if document:
         return _submit_pages(conn, row, found, file_id, version, by, saying)
     return _pin(conn, row, found, file_id, version, by, saying)
 

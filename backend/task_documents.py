@@ -105,7 +105,7 @@ def record(c: Any, task_id: str, name: str, file_id: str, by: str | None = None)
     )
     if by is None:
         row = c.execute("SELECT bot_id FROM bot_files WHERE id=?", (file_id,)).fetchone()
-        by = "bot:" + row["bot_id"]
+        by = f"bot:{row['bot_id']}"
     L.link(c, file_id, "task:" + task_id, name, by)
     version = c.execute(
         "SELECT actor FROM bot_file_versions WHERE file_id=? ORDER BY version DESC LIMIT 1", (file_id,)

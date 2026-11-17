@@ -430,9 +430,10 @@ def _one_page(
         from . import task_pages as P
 
         approved = P.answer_pages(conn, task["id"], answer)
-        answer = (
-            dict(answer, page_version=page["version"]) if approved.get(page["file_id"]) == page["version"] else None
-        )
+        if approved.get(page["file_id"]) != page["version"]:
+            answer = None
+        elif answer.get("page_version") != page["version"]:
+            answer = dict(answer, page_version=page["version"])
     if answer and (answer.get("page_version") != page["version"] or answer["created_at"] < page["created_at"]):
         # Given on an earlier page. A person's OK of an earlier version of this same page, at the commits the PRs are
         # at now, stays: publishing the page again changed no code (Nov 13, #3584: Chris was asked again for nothing).
