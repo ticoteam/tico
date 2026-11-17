@@ -573,7 +573,7 @@ def test_openrouter_comparison_checks_paid_pinned_typed_answers(monkeypatch):
 
     monkeypatch.setattr(httpx, "post", post)
     ask = adapter.openrouter("eval-key", model, "acme/us")
-    assert ask("today", questions)["answers"]["score"]["probabilities"] == [0.1, 0.9]
+    assert ask("today", questions)["answers"]["score"]["probabilities"] == {0: 0.1, 1: 0.9}
     payload["model"] = "acme/another-version"
     with pytest.raises(J.JudgeError, match="pinned"):
         ask("today", questions)

@@ -207,11 +207,6 @@ def openrouter(key, model, endpoint):
             kind = question["type"]
             if not isinstance(answer, dict) or answer.get("type") != kind:
                 raise J.JudgeError("shape", "OpenRouter omitted or refused a question")
-            if kind == "score" and isinstance(probabilities := answer.get("probabilities"), dict):
-                answer = {
-                    **answer,
-                    "probabilities": [probabilities.get(str(i)) for i in range(len(question["criteria"]))],
-                }
             answers[qid] = answer
         usage = payload.get("usage")
         cost = usage.get("cost") if isinstance(usage, dict) else None
