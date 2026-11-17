@@ -221,7 +221,6 @@ button.dc-jev{cursor:pointer}
 .dc-jev[data-v="met"]{border-color:color-mix(in srgb,var(--ok) 40%,var(--line));background:var(--ok-bg);color:var(--ok)}
 .dc-jev[data-v="unsure"],.dc-jev[data-v="failed"]{color:var(--muted)}
 .dc-jev[data-v="not_met"]{border-color:color-mix(in srgb,var(--fail) 40%,var(--line));background:var(--fail-bg);color:var(--fail)}
-.dc-jev-wait{border-style:dashed;color:var(--muted);font-weight:400}
 .dc-notice{margin:0;color:var(--muted);font-size:var(--t-sm);overflow-wrap:anywhere}   /* one muted line, never an amber callout */
 .dc-step-ans{color:var(--muted);white-space:nowrap}
 .dc-step-ans[data-a="Sent back"]{color:var(--fail)}

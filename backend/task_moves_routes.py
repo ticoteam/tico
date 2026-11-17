@@ -798,6 +798,7 @@ def register(
             body.version,
             own_click=task_asks.own_click(who),
             page_version=body.page_version,
+            visit_id=body.visit_id,
         )
         # An answer on the Strategy Owner's merged item goes to each original it stands for.
         strategy_merge.on_answer(c, who.actor, task_id, body.value)

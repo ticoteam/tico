@@ -76,11 +76,17 @@ const PE_SWITCHES: Record<string, [string, string][]> = {
  * same kind `ok`, told apart by who it names); "…" opens the new one's editor to choose. "Someone moves it by hand" is
  * the stage's `by_hand`, shown as one more requirement. */
 const PE_REQ_PICKS: [string, string][] = [
-  ['by_hand', 'OK from anyone'], ['ok_person', 'OK from a person…'], ['ok_bot', 'OK from a bot…'], ['owner_done', 'Owner says done'], ['page', 'A page, checked by Decision model…'],
+  ['by_hand', 'OK from anyone'], ['approval', 'Approval…'], ['ok_bot', 'OK from a bot…'], ['owner_done', 'Owner says done'], ['page', 'A page, checked by Decision model…'],
   ['answer', 'An answer…'], ['pr_open', 'PR open'], ['checks_pass', 'Checks pass'], ['pr_merged', 'PR merged'], ['in_release', 'In a release'],
   ['linked_done', 'Linked work done'], ['related_input', 'Related input']];
 /** The picks whose new requirement opens its editor (something to choose or name); the rest are added as a row. */
-const PE_REQ_CHOOSE = ['ok_person', 'ok_bot', 'page', 'answer', 'in_release'];
+const PE_REQ_CHOOSE = ['approval', 'ok_bot', 'page', 'answer', 'in_release'];
+/** The documents a stage approves (task_requirements.APPROVED): a person approves the version the bot submits by
+ * writing it in the stage. */
+const PE_APPROVALS = ['Spec', 'QA report', 'Release report', 'Invoice'];
+/** The document a page requirement approves, or '' for a page attached by hand. */
+const peDocument = (req: PipelineReqRec): string =>
+  req.kind === 'page' && typeof req.settings['document'] === 'string' ? req.settings['document'] : '';
 /** Kinds with nothing of their own to set: one of each is enough, so + Requirement no longer offers one that is there. */
 const PE_REQ_ONCE = ['owner_done', 'pr_open', 'checks_pass', 'pr_merged', 'linked_done', 'related_input'];
 /** By hand is an OK with nobody named (Chris, Nov 14: named approvers and by hand are the same thing). */
@@ -174,10 +180,11 @@ const peOkByBot = (req: PipelineReqRec): boolean => peNeeds(req) === 'ok' && !!r
 /** A requirement that can never be pushed past: by its kind (C3), or switched off. */
 const peLocked = (req: PipelineReqRec): boolean => PE_NEVER_PUSHED.includes(peNeeds(req)) || !req.can_push_past;
 
-/** A requirement in words, as its row says it. An OK naming nobody says what it asks (the default pipelines' "OK the
- * pitch"), else who may give it. */
+/** A requirement in words, as its row says it. An approval names its document ("Approve Spec"), its approver as a face
+ * after it. An OK naming nobody says what it asks, else who may give it. */
 function peReqText(req: PipelineReqRec): string {
-  const needs = peNeeds(req), line = req.line.trim();
+  const needs = peNeeds(req), line = req.line.trim(), document = peDocument(req);
+  if (document) return `Approve ${document}`;
   if (needs === 'ok') {
     const who = peApprovers(req);
     return who.length ? peOkWords(who) : line || (req.who_oks === 'people_only' ? 'OK from a person' : 'OK from someone');
@@ -197,7 +204,13 @@ function peReqEdHTML(state: PeState, req: PipelineReqRec, si: number, ri: number
     peF(label, `<input data-pe-rf="line" ${at} maxlength="200" value="${esc(req.line)}" placeholder="${esc(placeholder)}" autocomplete="off">`);
   const whoOks = peF('Who OKs', `<select data-pe-rf="who_oks" ${at}>${PE_WHO_OKS.map(([v, l]) => `<option value="${v}"${v === req.who_oks ? ' selected' : ''}>${l}</option>`).join('')}</select>`);
   let fields = '';
-  if (needs === 'ok') {
+  const document = peDocument(req);
+  if (document) {
+    // the document and who approves it: any person, or one named person; the decision model checks it first
+    const docs = PE_APPROVALS.map(d => `<option value="${esc(d)}"${d === document ? ' selected' : ''}>${esc(d)}</option>`).join('');
+    fields = peRow(peF('Document', `<select data-pe-rf="document" ${at}>${docs}</select>`)
+      + peF('Approver', `<select data-pe-rf="approver" ${at}>${peChoice(pePeople(), req.person_id, 'Any person')}</select>`));
+  } else if (needs === 'ok') {
     // one person (or "Any person": nobody named) or one bot; a bot's OK names a bot, so it has no empty choice
     const bot = peOkByBot(req);
     const from = bot ? peChoice(peBots(), req.person_id, '').replace(/^<option value="">.*?<\/option>/, '') : peChoice(pePeople(), req.person_id, 'Any person');
@@ -213,7 +226,7 @@ function peReqEdHTML(state: PeState, req: PipelineReqRec, si: number, ri: number
     fields = peF('Release repo', `<input data-pe-rf="release_repo" ${at} maxlength="200" value="${esc(String(req.settings['release_repo'] ?? ''))}" placeholder="owner/repo" autocomplete="off">`)
       + peF('Release with', `<input data-pe-rf="release_with" ${at} maxlength="120" value="${esc(String(req.settings['release_with'] ?? ''))}" placeholder="workflow:release.yml or tag" autocomplete="off">`);
   }
-  const switches = (PE_SWITCHES[needs] ?? []).map(([key, label]) => {
+  const switches = (document ? [] : PE_SWITCHES[needs] ?? []).map(([key, label]) => {
     const on = needs === 'in_release' && key === 'prereleases' ? req.settings[key] !== false : req.settings[key] === true;
     return `<label class="pe-check"><input type="checkbox" role="switch" data-pe-rs="${key}" ${at}${on ? ' checked' : ''}> ${esc(label)}</label>`;
   }).join('') + `<label class="pe-check"><input type="checkbox" role="switch" data-pe-rf="can_push_past" ${at}${req.can_push_past && !never ? ' checked' : ''}${never ? ' disabled' : ''}> Can be pushed past</label>`;
@@ -269,14 +282,17 @@ function peLeaveSay(state: PeState, si: number, ri: number): void {
 }
 
 /** A new requirement of a kind (or a GitHub condition), as + Requirement adds it: its own settings, who OKs it, and
- * whether it can be pushed past. A person's OK starts on the person editing (a person), else the first person; a bot's
- * on the pipeline's manager, else the first bot. */
+ * whether it can be pushed past. An approval starts on the Spec, from any person; a bot's OK on the pipeline's manager,
+ * else the first bot. */
 function peReqNew(state: PeState, pick: string): PipelineReqRec {
-  const kind = pick === 'ok_person' || pick === 'ok_bot' ? 'ok' : pick;
+  if (pick === 'approval') {
+    const document = PE_APPROVALS[0] ?? 'Spec';
+    return {kind: 'page', source: null, condition: null, settings: {document}, can_push_past: true, who_oks: 'people_only',
+      person_id: null, line: document, choices: null};
+  }
+  const kind = pick === 'ok_bot' ? 'ok' : pick;
   const github = PE_GITHUB.includes(kind), ok = PE_OK_KINDS.includes(kind);
-  const me = S.me?.id ? 'human:' + S.me.id : '';
-  const person = pick === 'ok_person' ? (pePeople().some(p => p.id === me) ? me : pePeople()[0]?.id ?? null)
-    : pick === 'ok_bot' ? (state.draft.manager_id ? prActor(state.draft.manager_id) : peBots()[0]?.id ?? null) : null;
+  const person = pick === 'ok_bot' ? (state.draft.manager_id ? prActor(state.draft.manager_id) : peBots()[0]?.id ?? null) : null;
   return {kind: github ? 'item' : kind, source: github ? 'github' : null, condition: github ? kind : null,
     settings: kind === 'answer' ? {type: 'text'} : {},
     can_push_past: !PE_NEVER_PUSHED.includes(kind), who_oks: ok ? 'people_with_exceptions' : 'none', person_id: person, line: '', choices: null};
@@ -286,7 +302,7 @@ function peReqNew(state: PeState, pick: string): PipelineReqRec {
 function peReqPicks(stage: PipelineStageRec): [string, string][] {
   const have = new Set(stage.requirements.map(peNeeds));
   return PE_REQ_PICKS.filter(([k]) => !(PE_REQ_ONCE.includes(k) && have.has(k)) && !(k === 'by_hand' && stage.by_hand)
-    && !(k === 'ok_bot' && !peBots().length) && !(k === 'ok_person' && !pePeople().length));
+    && !(k === 'ok_bot' && !peBots().length));
 }
 /** + Requirement's pick list, beside the button (the shared menu look, .tl-pop), one list in plain words. Arrow keys
  * move, Esc closes it and the button has the focus back; a second click on the button closes it; on a phone it is a
@@ -765,10 +781,18 @@ function peInput(state: PeState, el: HTMLInputElement | HTMLSelectElement): void
   }
   else if (rf === 'release_repo' || rf === 'release_with') req.settings = peSetting(req.settings, rf, value.trim() || null);
   else if (rf === 'person_id') req.person_id = value || null;
+  else if (rf === 'document') {
+    req.settings = peSetting(req.settings, 'document', value);
+    req.line = value;
+  } else if (rf === 'approver') {
+    // one named person, or any person: never a bot (a person approves a document)
+    req.person_id = value || null;
+    req.who_oks = 'people_only';
+  }
   else if (rf === 'who_oks') req.who_oks = value as PipelineReqRec['who_oks'];
   else if (rf === 'can_push_past') req.can_push_past = checked;
   // what the row says follows: an OK's name and face, a page's or an answer's title, the lock
-  if (['line', 'person_id', 'who_oks', 'can_push_past'].includes(rf)) peLeaveSay(state, peIndex(el, 'peSi'), peIndex(el, 'peRi'));
+  if (['line', 'person_id', 'who_oks', 'can_push_past', 'document', 'approver'].includes(rf)) peLeaveSay(state, peIndex(el, 'peSi'), peIndex(el, 'peRi'));
 }
 
 /** The On enter choice as the record stores it. */

@@ -524,9 +524,10 @@ def task_answer(
     *,
     own_click: bool = False,
     page_version: str | None = None,
+    visit_id: str | None = None,
 ) -> Row:
     """Answer what is asked: `ok`, `no` with a note (send back) or `again` (look again) on an OK; `ok` or `no` on a
-    page, for the page shown (`page_version`, `<file id>@<version>`); the choice or the text on a question; `done` on
+    page, for the page shown (`page_version`, `<file id>@<version>`; a document approval's key adds `visit_id`); the choice or the text on a question; `done` on
     the owner's own work. If that was the last thing missing the task moves on. The result carries `answer_id`. `own_click` says the
     request is the person's own click in their own session (task_asks.own_click): only that OKs an OK the person
     asked themself."""
@@ -546,6 +547,7 @@ def task_answer(
             seen_version=seen_version,
             own_click=own_click,
             page_version=page_version,
+            visit_id=visit_id,
         )
 
 
@@ -1060,7 +1062,7 @@ def ask_shown(conn: "sqlite3.Connection", row: Row, requirement: Row) -> Row:
     typed, brief, title = _typed_view(requirement), _brief_of(requirement), _title_of(requirement)
     return {
         "kind": requirement["kind"],
-        "line": R.name_of(requirement),
+        "line": R.approval_line(requirement),
         "choices": requirement.get("choices"),
         **({"typed": typed} if typed else {}),
         **({"brief": brief} if brief else {}),
@@ -1097,6 +1099,7 @@ def _leave_entry(
     earlier = None if private else earlier_page(conn, task_id, row["visit"]["id"], requirement)
     # An OK that shows a page first (Validate's): what Jev passed on that page, as its check rows.
     checks = _page_checks(conn, shows[0]) if requirement["kind"] == "ok" and not page and shows else []
+    approval = _approval_of(row, standing, page)
     return {
         "requirement_id": requirement["id"],
         "kind": requirement["kind"],
@@ -1116,8 +1119,28 @@ def _leave_entry(
         **({"page": page} if page else {}),
         **({"earlier": earlier} if earlier else {}),
         **({"checks": checks} if checks else {}),
+        **({"approval": approval} if approval else {}),
         "answer": _answer_view(conn, task_id, answer, private) if answer else None,
         "may": _may(conn, row, standing, answer, str(viewer), holder, works) if viewer else [],
+    }
+
+
+def _approval_of(row: Row, standing: Any, page: Row | None) -> Row | None:
+    """A document approval's key and marks, as Flow shows it on the document's tab: the document, the visit and the
+    version submitted (an OK sends `visit_id` and `<file id>@<version>` back, answers._page_version), and `unchecked`
+    when the decision model could not check it. None for any other requirement."""
+    from . import task_requirements as R
+
+    document = R.document_of(standing.requirement)
+    if not document:
+        return None
+    visit: Row = row.get("visit") or {}
+    return {
+        "document": document,
+        "visit_id": visit.get("id"),
+        "file_id": page["file_id"] if page else None,
+        "version": page["version"] if page else None,
+        "unchecked": bool(getattr(standing, "unchecked", False)),
     }
 
 

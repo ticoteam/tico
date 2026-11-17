@@ -94,8 +94,10 @@ interface TaskRefused { error: string; detail: string; missing: string[]; next: 
 const taskPath = (id: string) => `/v2/tasks/${encodeURIComponent(id)}`;
 const askPath = (id: string, rid: string) => `/v2/tasks/${encodeURIComponent(id)}/asks/${encodeURIComponent(rid)}`;
 /** The engine's refusal in a failed write, or null when the failure was something else. */
+/** A failed call's body, as ApiFailure carries it. */
+const taskFailureBody = (err: unknown) => (err as Partial<ApiFailure> | null)?.body;
 function taskRefusedOf(err: unknown): TaskRefused | null {
-  const body = (err as Partial<ApiFailure> | null)?.body;
+  const body = taskFailureBody(err);
   if (!body || typeof body.error !== 'string' || !body.error.startsWith('task_')) return null;
   const list = (v: unknown) => Array.isArray(v) ? v.map(String) : [];
   return {
@@ -329,8 +331,17 @@ const taskWithdrawAsk = (id: string, rid: string, why?: string): Promise<TaskMov
   writeRequest('DELETE', `/v2/tasks/${encodeURIComponent(id)}/asks/${encodeURIComponent(rid)}`, why ? {why} : {});
 /** ok, no (send back, with a note), again (look again), or the answer to a question. On a page, `pageVersion` is the
     page the person was shown (`<file id>@<version>`): refused when another is attached now. */
-const taskAnswer = (id: string, rid: string, value: string, version: number | null, note?: string, pageVersion?: string): Promise<TaskMoved> =>
-  post(`${askPath(id, rid)}/answer`, withVersion(version, {value, ...(note ? {note} : {}), ...(pageVersion ? {page_version: pageVersion} : {})}), newRequestId());
+/** `pageVersion` (`<file id>@<version>`) is the page shown; with `visitId` it is a document approval's whole key, and a
+    stale one is refused (task_changed) with the version submitted now (`approval`, taskStaleApproval). */
+const taskAnswer = (id: string, rid: string, value: string, version: number | null, note?: string, pageVersion?: string, visitId?: string): Promise<TaskMoved> =>
+  post(`${askPath(id, rid)}/answer`, withVersion(version, {value, ...(note ? {note} : {}), ...(pageVersion ? {page_version: pageVersion} : {}), ...(visitId ? {visit_id: visitId} : {})}), newRequestId());
+/** The version a stale approval key was refused for (answers._page_version): the one submitted now, or null. */
+function taskStaleApproval(err: unknown): {document: string; version: number | null} | null {
+  const body = taskFailureBody(err);
+  const found = body?.['approval'] as {document?: unknown; version?: unknown} | undefined;
+  if (body?.['error'] !== 'task_changed' || !found || typeof found.document !== 'string') return null;
+  return {document: found.document, version: typeof found.version === 'number' ? found.version : null};
+}
 const answerUndo = (answerId: string): Promise<TaskMoved> => post(`/v2/answers/${encodeURIComponent(answerId)}/undo`, {}, newRequestId());
 
 // ---- an OK bound to what was shown

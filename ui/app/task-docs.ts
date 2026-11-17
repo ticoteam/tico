@@ -56,7 +56,9 @@ function docTabsPaint(row: ParentNode, on: string, keyOf: (tab: HTMLElement) => 
 
 // ---- one document open: its one version line ("v3 · Ana · 2h ⌄"), which opens the version list and Compare, and the
 // version shown, sandboxed as a page is. Kept per host across redraws of the same document.
-interface DocViewState { doc: TaskDoc; shown: number; open: boolean; compare: [number, number] | null; seq: number; }
+interface DocViewState { doc: TaskDoc; shown: number; open: boolean; compare: [number, number] | null; seq: number; approval: DocApproval | null; }
+// The version of a document a stage asks a person to approve (Flow), and whether the decision model could check it.
+interface DocApproval { version: number; unchecked: boolean; }
 const DOC_VIEWS = new WeakMap<HTMLElement, DocViewState>();
 const DOC_BOUND = new WeakSet<HTMLElement>();  // hosts whose delegated listeners are on, once each
 /** A document's default look, the app's own theme: its background, text, lines and links, light or dark as the app is.
@@ -80,22 +82,33 @@ function docViewsRetheme() {
 new MutationObserver(docViewsRetheme).observe(document.documentElement, {attributes: true, attributeFilter: ['data-theme']});
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', docViewsRetheme);
 const docVersionSaid = (v: TaskDocVersion) => [`v${v.n}`, actorLabel(v.by), ago(v.at)].filter(Boolean).join(' · ');
+/** The one version line: the version submitted for approval says so, with what changed, and "not checked" when the
+    decision model could not check it ("v2 · submitted for approval · changed: empty state"); any other, who and when. */
+function docVersionLine(v: TaskDocVersion, approval: DocApproval | null): string {
+  if (!approval || approval.version !== v.n) return docVersionSaid(v);
+  const note = (v.note || '').trim();
+  return [`v${v.n}`, 'submitted for approval', note ? `changed: ${note}` : '', approval.unchecked ? 'not checked' : ''].filter(Boolean).join(' · ');
+}
 /** Shows `doc` in `host`: its newest version, or the older version picked there before when it is the same document.
-    The same document keeps its state object, so a read already on its way still lands. */
-function docViewMount(host: HTMLElement, doc: TaskDoc) {
+    With `approval`, the version submitted for it, which the person approves. The same document keeps its state object,
+    so a read already on its way still lands. */
+function docViewMount(host: HTMLElement, doc: TaskDoc, approval: DocApproval | null = null) {
   const was = DOC_VIEWS.get(host), same = !!was && was.doc.file_id === doc.file_id;
   const fresh = !same || !host.querySelector('.doc-view');
   if (fresh) host.innerHTML = '<div class="doc-view"><div class="doc-ver"></div><div class="doc-vers" hidden></div><div class="doc-body"></div></div>';
   if (!DOC_BOUND.has(host)) { DOC_BOUND.add(host); docViewBind(host); }
+  const asked = approval && doc.versions.some(v => v.n === approval.version) ? approval : null;
   if (!was || !same) {
-    const st: DocViewState = {doc, shown: doc.version, open: false, compare: null, seq: 0};
+    const st: DocViewState = {doc, shown: asked?.version ?? doc.version, open: false, compare: null, seq: 0, approval: asked};
     DOC_VIEWS.set(host, st);
     docViewPaint(host, st);
     return;
   }
-  const pinned = was.shown !== was.doc.version && doc.versions.some(v => v.n === was.shown);
-  const shown = pinned ? was.shown : doc.version, moved = shown !== was.shown;
-  was.doc = doc; was.shown = shown;
+  // An approval that moved to a newer version shows that one; else a version picked here stays.
+  const base = was.approval?.version ?? was.doc.version, now = asked?.version ?? doc.version;
+  const pinned = was.shown !== base && now === base && doc.versions.some(v => v.n === was.shown);
+  const shown = pinned ? was.shown : now, moved = shown !== was.shown;
+  was.doc = doc; was.shown = shown; was.approval = asked;
   docViewPaint(host, was, fresh || moved);
 }
 function docViewPaint(host: HTMLElement, st: DocViewState, body = true) {
@@ -111,7 +124,7 @@ function docViewPaint(host: HTMLElement, st: DocViewState, body = true) {
       + `<button type="button" class="doc-ic" data-doc-compare-off aria-label="Close compare" title="Close compare">${icon('close')}</button>`;
   } else {
     line.innerHTML = st.open ? '' : `<button type="button" class="doc-ver-line" data-doc-ver aria-expanded="false" title="Versions">`
-      + `<span class="doc-ver-t">${esc(v ? docVersionSaid(v) : '')}</span>${icon('expand_more')}</button>`;
+      + `<span class="doc-ver-t">${esc(v ? docVersionLine(v, st.approval) : '')}</span>${icon('expand_more')}</button>`;
   }
   // Open, the list says each version once: the one shown, in bold, is the line itself (tapped again, the list shuts),
   // with Compare at its right end; each other version shows when picked.

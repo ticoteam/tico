@@ -900,7 +900,7 @@ def install_media(
             item = register(c, who, digest, size, name, content_type)
             bot_actor = next((a for a in (who.actor, task["owner_id"], task["requester_id"]) if H.is_bot(a)), None)
             bot = H.actor_id(bot_actor) if bot_actor else default_bot(c, store.settings)
-            document = None
+            document, submitted = None, None
             if body.document:
                 from . import task_documents as TD
 
@@ -924,12 +924,20 @@ def install_media(
                     "UPDATE bot_file_versions SET poster_blob_id=? WHERE file_id=? AND version=?",
                     (preview, fid, number),
                 )
+            if document:
+                from . import task_pages as TP
+
+                # Written while the task is in the stage that names it for approval, this version is the submission:
+                # no bot asks anyone for an OK. Anywhere else it is just a new version.
+                pinned = TP.submit(c, tid, document, fid, number, who.actor)
+                submitted = {"requirement": pinned["requirement_id"], "version": number} if pinned else None
             return {
                 "file": {**item, "file_id": fid, "version": number},
                 "file_id": fid,
                 "version": number,
                 "link": store.settings.public_url + f"/api/v2/files/{fid}?v={number}",
                 **({"document": document} if document else {}),
+                **({"submitted": submitted} if submitted else {}),
             }
 
         # Include byte identity in the receipt without storing multipart bytes.
