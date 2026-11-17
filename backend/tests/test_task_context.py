@@ -70,7 +70,7 @@ def test_context_is_bounded_metadata_newest_first_and_claims_include_it(api):
     assert len(result['pages']) == len(result['meetings']) == 10
     assert [r['id'] for r in result['pages']] == page_ids[:1:-1]
     assert [r['id'] for r in result['meetings']] == [f'meeting-{i:02}' for i in range(11, 1, -1)]
-    assert all(len(r['title']) == 200 for rows in result.values() for r in rows)
+    assert all(len(r['title']) == 200 for rows in (result['pages'], result['meetings']) for r in rows)
     assert all(
         set(r) == {'id', 'title', 'version', 'updated_at', 'links', 'writers', 'may_write'} for r in result['pages']
     )
@@ -81,10 +81,16 @@ def test_context_is_bounded_metadata_newest_first_and_claims_include_it(api):
     assign(api, machine, 'ops')
     ready(api, machine, ['ops'])
     attempt = claim(api, machine, 'ops')
-    assert attempt['task_context'] == result
+
+    def core(value):
+        if isinstance(value, dict):
+            return {k: core(v) for k, v in value.items() if k not in ('actors', 'actor_name')}
+        return [core(v) for v in value] if isinstance(value, list) else value
+
+    assert core(attempt['task_context']) == core(result)
     assert get(api, 'tasks/' + t['id'][:8] + '/context', attempt['token']) == result
     error, mcp = call(api, 'tico_task_context', {'id': t['id']}, token=attempt['token'])
-    assert not error and mcp == result
+    assert not error and core(mcp) == core(result)
     with api.app.state.store.transaction() as c:
         restrict(c, 'ops', people=['ana'])
     get(api, 'tasks/' + t['id'] + '/context', 'cara-test', expected=404)

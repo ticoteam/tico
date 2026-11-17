@@ -164,7 +164,9 @@ def test_link_validation_last_writer_filters_and_preview_limit(api):
     assert add_link(api, fid, 'missing:x').status_code == 422
     assert add_link(api, fid, 'human:ben', 'writer').status_code == 200
     assert api.delete(base, params={'target': 'bot:ops', 'role': 'writer'}, headers=headers()).status_code == 200
-    assert add_link(api, fid, 'task:D-' + str(t['number']), 'qa-report').status_code == 200
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET number=18463,number_prefix='D' WHERE id=?", (t['id'],))
+    assert add_link(api, fid, 'task:D-18463', 'qa-report').status_code == 200
     for who in ('ops', 'finance', 'cpo', 'product-design', 'assistant', 'doc-updater'):
         assert add_link(api, fid, 'bot:' + who).status_code == 200
     for params in (

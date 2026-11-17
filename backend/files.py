@@ -1395,6 +1395,8 @@ class Files:
         fid=None,
         modified=None,
         existing_row=None,
+        version_actor=None,
+        version_time=None,
     ):
         """One publish of bytes already in the blob store: a new file, a new version, or a no-op touch. `fid` names a new
         file's id (for a caller that writes the file's id somewhere before the file exists). `existing_row` continues
@@ -1404,7 +1406,7 @@ class Files:
         unchanged publish is no activity: it leaves the time alone, except that it may move a time that only says when
         Tico copied the current version back to when that content was written."""
         now = H.now()
-        when = content_time(modified, now) or now
+        when = version_time or content_time(modified, now) or now
         row, created = (
             (existing_row, False)
             if existing_row is not None
@@ -1426,7 +1428,13 @@ class Files:
         last = c.execute(
             "SELECT * FROM bot_file_versions WHERE file_id=? AND version=?", (row["id"], row["current_version"])
         ).fetchone()
-        changed = created or last is None or (source_digest or digest) != (last["source_digest"] or last["digest"])
+        changed = (
+            created
+            or last is None
+            or (source_digest or digest) != (last["source_digest"] or last["digest"])
+            or bool(version_actor and version_actor != last["actor"])
+            or bool(version_time and version_time != last["created_at"])
+        )
         version = row["current_version"]
         if changed:
             version += 1
@@ -1444,8 +1452,8 @@ class Files:
                     commit or None,
                     repo_path or None,
                     attempt or None,
-                    actor,
-                    now,
+                    version_actor or actor,
+                    version_time or now,
                 ),
             )
         action = "created" if created else "modified" if changed else "published"
@@ -1943,6 +1951,8 @@ class Files:
                 explicit_title=bool(fields.get("title")),
                 modified=fields.get("modified"),
                 existing_row=existing_page,
+                version_actor=str(fields.get("written_by") or "") if page_publish else None,
+                version_time=str(fields.get("written_at") or "") if page_publish else None,
             )
             H.event(c, actor, "file.publish", row["id"], {"bot": bot, "version": row["current_version"], "size": size})
             if changed:

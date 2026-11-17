@@ -404,19 +404,16 @@ class Pages:
             if importing:
                 from . import audit_log
 
-                before = dict(
+                imported = dict(
                     c.execute(
                         "SELECT actor,created_at FROM bot_file_versions WHERE file_id=? AND version=?",
                         (row["id"], row["current_version"]),
                     ).fetchone()
                 )
-                after = {"actor": written_by or before["actor"], "created_at": written_at or before["created_at"]}
-                c.execute(
-                    "UPDATE bot_file_versions SET actor=?,created_at=? WHERE file_id=? AND version=?",
-                    (after["actor"], after["created_at"], row["id"], row["current_version"]),
+                page_links.link(c, row["id"], imported["actor"], "writer", actor)
+                audit_log.write(
+                    c, who.actor, "page:" + row["id"] + ":import", None, {**imported, "version": row["current_version"]}
                 )
-                page_links.link(c, row["id"], after["actor"], "writer", actor)
-                audit_log.write(c, who.actor, "page:" + row["id"] + ":import", before, after)
             if task:
                 linked_task = self.auth.resolve_task(c, editor, task)
                 self.auth.task(c, editor, linked_task)
