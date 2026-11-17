@@ -10,6 +10,8 @@ import type * as StrategyFakeSupport from './support/strategy-fake.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const {openStrategy, DESKTOP, sideways, shot} = require('./support/strategy-fake.cts') as StrategyFakeSupport.Api;
+const fs = require('node:fs');
+const path = require('node:path');
 
 const texts = (page: Page, sel: string) => page.locator(sel).allInnerTexts().then(a => a.map(t => t.trim()));
 const QUESTIONS = ['What changed?', 'Where is the money going?', 'Who are we up against?', 'How does it reach buyers?', 'What are buyers saying?'];
@@ -204,6 +206,32 @@ async function onePage(page: Page, tag: string) {
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
     }
+    // Saving the brand (the Set up brand button) clears the row's mark and the Strategy tab's as soon as it is saved, and a
+    // return to Strategy paints the saved brand: no row, no mark.
+    {
+      const tag = 'brand', mark = '.needs-mark[aria-label="Needs you"]';
+      const {page, errors, writes} = await openStrategy(browser, {viewport: DESKTOP, hash: '#/strategy'});
+      await page.locator('#strat-setup .needs-mark').waitFor();
+      assert.equal(await page.locator(`.strat-tabs [data-strat-tab="strategy"] ${mark}`).count(), 1, tag + ': Strategy is marked before the save');
+      await page.locator('#strat-setup a').click();
+      await page.locator('form[data-sec="positioning"] input[name="positioning"]').fill('Plain tools for small teams');
+      await page.locator('form[data-sec="positioning"] [type="submit"]').click();
+      await page.waitForFunction(() => !document.querySelector('.strat-tabs [data-strat-tab="strategy"] .needs-mark'));
+      assert.equal(await page.locator(`.strat-tabs [data-strat-tab="strategy"] ${mark}`).count(), 0, tag + ': the Strategy tab is unmarked once the brand is saved');
+      const puts = writes.filter(w => w.method === 'PUT');
+      assert.equal(puts.length, 1, tag + ': one section saved');
+      assert.equal(puts[0]?.path, '/api/v2/brand/draft', tag + ': saved into the brand draft');
+      assert.equal((puts[0]?.body as {sections: {positioning: string}}).sections.positioning, 'Plain tools for small teams', tag + ': the positioning is what was typed');
+      const read = page.waitForResponse(r => r.url().endsWith('/api/v2/brand') && r.request().method() === 'GET');
+      await page.evaluate(() => { location.hash = '#/strategy'; });
+      await read;
+      await page.locator('#strat-brand .br-strip').waitFor();
+      assert.equal(await page.locator('#strat-setup .needs-mark').count(), 0, tag + ': back on Strategy, no setup mark');
+      assert.equal(await page.locator('#strat-setup a').count(), 0, tag + ': back on Strategy, no setup button');
+      assert.equal(await page.locator(`.strat-tabs [data-strat-tab="strategy"] ${mark}`).count(), 0, tag + ': back on Strategy, its tab is unmarked');
+      assert.deepEqual(errors, [], tag + ': no page errors');
+      await page.close();
+    }
     // A member is asked nothing: an unsized market shows no mark on the page or on any tab.
     {
       const tag = 'member', mark = '.needs-mark[aria-label="Needs you"]';
@@ -240,6 +268,20 @@ async function onePage(page: Page, tag: string) {
         await shot(page, `market-${sized ? 'sized' : 'unsized'}-${name}-${theme}`);
       }
       await page.close();
+    }
+    // The Strategy tab with the brand still empty: the Set up brand button with its mark, desktop in light and a phone in
+    // dark, the whole page and a close-up of the row.
+    if (process.env.TICO_UI_SHOTS) {
+      fs.mkdirSync(process.env.TICO_UI_SHOTS, {recursive: true});
+      for (const [name, width, theme] of [['desktop', 1280, 'light'], ['phone', 400, 'dark']] as [string, number, string][]) {
+        const {page} = await openStrategy(browser, {viewport: {width, height: 900}, hash: '#/strategy'});
+        await page.locator('#strat-setup .needs-mark').waitFor();
+        await page.evaluate(t => { document.documentElement.dataset.theme = t; }, theme);
+        await page.waitForTimeout(300);
+        await page.screenshot({path: path.join(process.env.TICO_UI_SHOTS, `strategy-setup-${name}-${theme}.png`), fullPage: true});
+        await page.locator('#strat-setup').screenshot({path: path.join(process.env.TICO_UI_SHOTS, `strategy-setup-row-${name}-${theme}.png`)});
+        await page.close();
+      }
     }
     console.log('strategy market ok');
   } finally {

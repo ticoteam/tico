@@ -59,6 +59,8 @@ export interface StrategyDb {
   // Market: whether the spend is sized (a test flips it to stand for the sizes arriving), and whether the owner has a
   // setup in progress (the questions Market asks before it is set up).
   market: {sized: boolean; setup: boolean};
+  // Brand: the draft body, empty until the owner saves a section into it (PUT /api/v2/brand/draft merges it in).
+  brand: {draft: Json | null; revision: number};
 }
 
 export interface OpenStrategyOptions {
@@ -139,8 +141,11 @@ async function openStrategy(browser: Browser, {viewport = PHONE, hash = '#/strat
       kpis: [{id: 'k-cust', name: 'Paying customers', status: 'green', link: {kind: 'improve', baseline: 20, baseline_at: '2026-09-01', target: 100, deadline: '2026-12-31'}}]},
     {id: 'g-sales', title: 'Book 40 demos a month', owner_id: 'bot:growth-manager', parent_id: 'g-co', status: 'yellow', status_source: 'auto', rank: 1, kpis: []},
   ];
-  const db: StrategyDb = {people: fx.people, emps: fx.employees, groups: fx.groups, needs: [], goals, market: {sized, setup}};
+  const db: StrategyDb = {people: fx.people, emps: fx.employees, groups: fx.groups, needs: [], goals, market: {sized, setup}, brand: {draft: null, revision: 0}};
   const writes: StrategyWrite[] = [];
+  // The Brand document as the owner reads it: an empty brand until a section is saved into its draft.
+  const brandDoc = (): Json => ({may_edit: me.role === 'owner', published: null, versions: [],
+    draft: db.brand.draft ? {body: db.brand.draft, changed: Object.keys(db.brand.draft), revision: db.brand.revision} : null});
   // The spend as a sized market reads it, or with its sizes taken off (what a market is before anyone sizes it).
   const spendOf = (dimension: string): Json => {
     const spend = mk.spend[dimension] as Json;
@@ -208,6 +213,13 @@ async function openStrategy(browser: Browser, {viewport = PHONE, hash = '#/strat
     if (p === '/api/v2/market/value-chain') return json(market ? mk.chain : {layers: [], edges: []});
     if (p === '/api/company-docs') return json({documents: []});
     if (p === '/api/v2/librarian/setup') return json({market: db.market.setup ? {answers: {}, can_answer: true, skipped: false, step: 0, task: null} : null});
+    // The Brand: a section saved into the draft (grDocSave) comes back as the document.
+    if (p === '/api/v2/brand' && method === 'GET') return json(brandDoc());
+    if (p === '/api/v2/brand/draft' && method === 'PUT') {
+      db.brand.draft = {...(db.brand.draft || {}), ...((b.sections || {}) as Json)};
+      db.brand.revision += 1;
+      return json(brandDoc());
+    }
     // The Strategy Owner beside the tabs, and Goals.
     // The strategy: the owner has a draft to edit and no published version yet; a member reads the published one.
     if (p === '/api/v2/strategy') {

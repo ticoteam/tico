@@ -618,6 +618,15 @@ function strategyPaintMarket(key: string) {
   if (!el) return;
   patchHTML(el, key === 'spend' ? strategyWhereHtml(owner) : key === 'rivals' ? strategyRivalsHtml(owner) : strategyNewsHtml());
 }
+// The brand draft was saved (brand-page.ts): the setup row and its Strategy tab stop asking now, and the brand this page
+// paints from is the saved one, so a return to Strategy does not show the row it had before.
+function strategyBrandSaved(brand: BrandDoc | null): void {
+  STRAT_MKT.growth = {brand};
+  const setup = brandSetupHtml(brand);
+  if ($('#strat-setup')) patchHTML($('#strat-setup'), setup);
+  if ($('#strat-brand')) patchHTML($('#strat-brand'), brandStripHtml(brand));
+  strategyTabNeeds('strategy', !!setup);
+}
 
 // ---------------------------------------------------------------- the sections
 // The seven fixed sections, then the extra ones in the order they were added. The owner writes each, one at a time;
