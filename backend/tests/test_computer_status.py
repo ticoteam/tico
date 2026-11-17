@@ -289,8 +289,13 @@ def test_retirement_keeps_stored_or_reported_logins(api, login):  # noqa: F811
                 (H.now(), H.now()),
             )
             c.execute(
-                "INSERT INTO computer_keys(credential_id,runner_id,runtime,state,created_at,created_by) "
-                "VALUES('key',?,'claude','active',?,'human:ana')",
+                "INSERT INTO model_subscriptions(id,name,kind,sealed,added_by,created_at,updated_at,credential_id) "
+                "VALUES('plan','Computer key','anthropic_key','','human:ana',?,?,'key')",
+                (H.now(), H.now()),
+            )
+            c.execute(
+                "INSERT INTO computer_subscriptions(runner_id,runtime,subscription_id,set_by,updated_at) "
+                "VALUES(?,'claude','plan','human:ana',?)",
                 (rid, H.now()),
             )
         else:

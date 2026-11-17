@@ -2813,7 +2813,7 @@ def install_views(app, store, auth, mutate, task_view):
             default = {providers.default_runtime(providers.load(c, store.settings))} - {""}
             run_on = providers.runtimes_run_on(c, store.settings)
             from . import subscriptions, inbox_isolation
-            from .computer_keys import serving, shared_listing
+            from .model_subscriptions import key_listing
 
             subscription_context = subscriptions.context(c, store.settings)
             # One pass for every computer's bot_connections (not assignment+config+identity per bot per runner).
@@ -2821,7 +2821,8 @@ def install_views(app, store, auth, mutate, task_view):
             # One pass for every computer's subscription profiles (not per-runner SELECTs + metadata).
             profiles_map = subscriptions.profiles_by_runner(c)
             kept_for_inbox = inbox_isolation.inbox_only(c, roster(c))
-            shared_keys = serving(c)
+            # One pass for every computer's keys (backend/model_subscriptions.py key_listing), not one per computer.
+            keys_by_runner = key_listing(c)
             # A company key's name and preview are a credential administrator's to read, as in Credentials; a
             # computer's operator reads its own key's.
             from .credentials import administrator
@@ -2845,10 +2846,6 @@ def install_views(app, store, auth, mutate, task_view):
 
             # One pass for every computer's repository status (not one registry_metadata lookup per runner).
             repo_status = computer_repositories(c)
-            from .computer_keys import listing_by_runner
-
-            # One pass for every computer's own keys (not one SELECT per runner).
-            keys_by_runner = listing_by_runner(c)
             from . import cloud_machines
 
             # {runner: {bot, shared, size, state}} for computers that are a cloud machine: a bot's own (`bot`), or the
@@ -2942,19 +2939,14 @@ def install_views(app, store, auth, mutate, task_view):
                     for p in (profiles_map.get(row["id"]) or [])
                 ]
                 # Copy per computer so stripping previews for non-operators does not mutate the shared batch map.
-                keys = {runtime: dict(info) for runtime, info in (keys_by_runner.get(row["id"]) or {}).items()}
-                # `shared_keys`: {runtime: {env, preview}} of the shared key it runs on; `shared_with`: that key's
-                # name, whether it is the "Every computer" one, and every computer it serves.
-                served = shared_keys.get(row["id"]) or {}
-                shared = shared_listing(c, row)
+                given = keys_by_runner.get(row["id"]) or {}
+                keys = {runtime: dict(info) for runtime, info in (given.get("keys") or {}).items()}
+                # `shared_keys`: {runtime: {env, preview}} of the shared key given to it; `shared_with`: the one it
+                # runs on, its name and every computer it serves.
+                shared = {runtime: dict(info) for runtime, info in (given.get("shared_keys") or {}).items()}
                 shared_with = {
-                    runtime: {
-                        "id": key["id"],
-                        "name": key["name"],
-                        "every": key["every"],
-                        "computers": [dict(m) for m in key["computers"]],
-                    }
-                    for runtime, key in served.items()
+                    runtime: {**key, "computers": [dict(m) for m in key["computers"]]}
+                    for runtime, key in (given.get("shared_with") or {}).items()
                 }
                 if not manage:
                     for profile in profiles:
@@ -2992,8 +2984,8 @@ def install_views(app, store, auth, mutate, task_view):
                             exit_used.get(row["id"], 0),
                         ),
                         # {runtime: {env, preview}}: its own keys stored from here, and the company's shared
-                        # ones, for the rows a key signs in (backend/computer_keys.py). Never a value, and a
-                        # preview only for whoever may change the computer.
+                        # ones, for the rows a key signs in (backend/model_subscriptions.py key_listing). Never a
+                        # value, and a preview only for whoever may change the computer.
                         "keys": keys,
                         "shared_keys": shared,
                         "shared_with": shared_with,

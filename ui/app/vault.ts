@@ -111,7 +111,7 @@ function vaultShare(id: string) {
   if (!VAULT) return;
   const row = VAULT.credentials.find(row=>row.id===id);
   if (!row) return;
-  // A model key reaches computers through Settings > Models (backend/computer_keys.py), not a grant here.
+  // A model key reaches computers through Settings > Models (backend/model_subscriptions.py), not a grant here.
   const choices=[...(VAULT.can_manage ? VAULT.people.map(person=>({subject:'human:'+person.id,label:person.name || person.email})) : []),
     ...VAULT.bots.map(bot=>({subject:'bot:'+bot.id,label:`${bot.name} (bot)`}))];
   const dialog=vaultDialog('Access to '+row.name,`<p class="muted">Revoking access also revokes the access they gave their bots.</p>

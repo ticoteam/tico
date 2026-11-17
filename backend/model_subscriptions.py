@@ -146,14 +146,6 @@ KINDS = {
 }
 RUNTIMES = tuple(dict.fromkeys(k["runtime"] for k in KINDS.values()))
 RUNTIME_LABELS = {"claude": "Claude Code", "codex": "Codex", "cursor": "Cursor", "musecode": "Muse Code"}
-# The kind a model key stored under each variable is (a computer's key, backend/computer_keys.py).
-KEY_KINDS = {
-    "CLAUDE_CODE_OAUTH_TOKEN": "claude_token",
-    "ANTHROPIC_API_KEY": "anthropic_key",
-    "OPENAI_API_KEY": "openai_key",
-    "CURSOR_API_KEY": "cursor_key",
-    "META_API_KEY": "meta_key",
-}
 API_KINDS = tuple(kind for kind, spec in KINDS.items() if spec.get("billing") == "api")
 
 
@@ -278,8 +270,8 @@ def delivered(kind, value):
 
 
 def value_of(c, cipher, sub):
-    """A subscription's value: sealed in its own row, or, for a key kept in the vault (`credential_id`: a key from
-    Settings > Computers, backend/computer_keys.py), its credential's. None when that credential is gone."""
+    """A subscription's value: sealed in its own row, or, for a key kept in the vault (`credential_id`: a key added
+    in Settings > Computers before D11-4, "keys on computers" below), its credential's. None when that credential is gone."""
     if sub["credential_id"]:
         found = c.execute(
             "SELECT * FROM credentials WHERE id=? AND ciphertext IS NOT NULL", (sub["credential_id"],)
@@ -315,11 +307,10 @@ def _given(c):
             "SELECT g.runner_id AS runner_id,g.runtime AS runtime,g.person AS person,s.id,s.name,s.kind,s.revision,"
             "s.status FROM computer_subscriptions g LEFT JOIN model_subscriptions s "
             "ON s.id=g.subscription_id WHERE (s.id IS NOT NULL OR g.person<>'') "
-            # A computer's key follows its login: not while a person cleared it, signed it out or switched it to a
-            # subscription there (backend/model_login.py marks), as GET runner-model-credentials does.
-            "AND NOT (s.credential_id IS NOT NULL AND (EXISTS (SELECT 1 FROM model_login_cleared m "
-            "WHERE m.runner_id=g.runner_id AND m.runtime=g.runtime AND m.profile='') OR EXISTS (SELECT 1 FROM "
-            "model_login_key_off m WHERE m.runner_id=g.runner_id AND m.runtime=g.runtime AND m.profile='')))"
+            # A computer's key follows its login: not while a person cleared it or signed it out there
+            # (backend/model_login.py model_login_cleared), as GET runner-model-credentials does (`keys_for`).
+            "AND NOT (s.credential_id IS NOT NULL AND EXISTS (SELECT 1 FROM model_login_cleared m "
+            "WHERE m.runner_id=g.runner_id AND m.runtime=g.runtime AND m.profile=''))"
         ):
             sub = {k: r[k] for k in ("id", "name", "kind", "revision", "status")}
             if r["person"]:
@@ -1308,22 +1299,6 @@ def save(c, vault, settings, who, body, sid=None, signed_on=""):
     return view(c, row(c, sid))
 
 
-def rekeyed(c, credential_id, preview, runtime):
-    """The vault key `credential_id` keeps took a new value outside `save` (Replace key for every computer a shared key
-    serves): its subscription moves to a new revision and counts again, as a new secret does there, so a refusal of
-    the old value said late leaves the new one alone (`turn_rejected`), and its usage-limit hold ends as Try now does."""
-    from . import login_holds
-
-    now = H.now()
-    for r in c.execute("SELECT id FROM model_subscriptions WHERE credential_id=?", (credential_id,)).fetchall():
-        c.execute(
-            "UPDATE model_subscriptions SET preview=?,revision=revision+1,status='new',status_detail='',status_at=?,"
-            "updated_at=?,credential_at=? WHERE id=?",
-            (preview, now, now, now, r["id"]),
-        )
-        login_holds.try_now(c, "", login_holds.subscription_login(r["id"]), runtime)
-
-
 def remove(c, settings, who, sid, confirm=False):
     """Delete a subscription and take it off every computer given it (`computers`, as Settings counts them): those
     signing in with it stop their live runs on its runtime and start again (confirmed first), their sessions start
@@ -1356,7 +1331,6 @@ def remove(c, settings, who, sid, confirm=False):
         stopped, reset = stopped + done["stopped"], reset + done["sessions_reset"]
     c.execute("DELETE FROM model_subscriptions WHERE id=?", (sid,))
     if sub["credential_id"]:
-        from .computer_keys import drop_credential
         from .model_login import mark_key_cleared
 
         for g in keyed:
@@ -1678,6 +1652,116 @@ def spread(c, settings, sid, actor, signed_on=""):
         for runner_id in dict.fromkeys(r for r in computers if r)
         if lend(c, runner_id, spec["runtime"], actor, shared, others, only=sid)
     ]
+
+
+# ------------------------------------------------------------------------------------------------ keys on computers
+# A key kept in the vault (`credential_id`) is a subscription like any other here. Before D11-4 a key was added from a
+# computer in Settings > Computers (its credential's source is `computer:<runner id>`: that computer's own key); any
+# other key given to computers is shared. Two things still read it that way: runners of v0.6.0-rc.1 on, which fetch
+# their key from `GET runner-model-credentials` and write it to their key files (`keys_for`), and the Computers page,
+# which says which key each computer uses (`key_listing`).
+OWN = "computer:"
+# The key a computer is given for a runtime: its subscription and its vault credential (`id` is the credential's).
+KEY_SQL = (
+    "SELECT cr.*, s.id AS subscription_id, s.revision AS subscription_revision, g.updated_at AS given_at "
+    "FROM computer_subscriptions g JOIN model_subscriptions s ON s.id=g.subscription_id "
+    "JOIN credentials cr ON cr.id=s.credential_id WHERE g.person='' AND cr.ciphertext IS NOT NULL"
+)
+
+
+def drop_credential(c, credential_id):
+    """Delete a key's vault value once no subscription points at it and nobody else holds a grant to it."""
+    if c.execute("SELECT 1 FROM model_subscriptions WHERE credential_id=?", (credential_id,)).fetchone():
+        return
+    if c.execute(
+        "SELECT 1 FROM credential_grants WHERE credential_id=? AND revoked_at IS NULL "
+        "AND subject<>'computers' AND subject NOT LIKE 'computer:%'",
+        (credential_id,),
+    ).fetchone():
+        return
+    c.execute("DELETE FROM credential_grants WHERE credential_id=?", (credential_id,))
+    c.execute("DELETE FROM credentials WHERE id=?", (credential_id,))
+
+
+def before_delete(c, who, credential_id):
+    """Credentials > Delete on a key given to computers: its subscription goes with it, and each computer given it is
+    cleared (`model_login.mark_key_cleared`): told at its next key fetch to delete its copies and log out the login the
+    key made, which a v0.6.0-rc.1 runner keeps for Codex until told so."""
+    if not _present(c):
+        return
+    sub = c.execute("SELECT id FROM model_subscriptions WHERE credential_id=?", (credential_id,)).fetchone()
+    if not sub:
+        return
+    given = c.execute(
+        "SELECT runner_id, runtime FROM computer_subscriptions WHERE subscription_id=? AND person=''", (sub["id"],)
+    ).fetchall()
+    c.execute("DELETE FROM computer_subscriptions WHERE subscription_id=? AND person=''", (sub["id"],))
+    c.execute("DELETE FROM model_subscriptions WHERE id=?", (sub["id"],))
+    from .model_login import mark_key_cleared
+
+    for g in given:
+        mark_key_cleared(c, who, g["runner_id"], g["runtime"])
+        H.event(
+            c,
+            who.actor,
+            "computer_key.deleted",
+            g["runner_id"],
+            {"runtime": g["runtime"], "credential": credential_id, "cleared": True},
+        )
+
+
+def keys_for(c, vault, runner_id, runtime, login_id=""):
+    """What `GET runner-model-credentials` hands this computer for `runtime`: nothing while a person cleared its key
+    or signed its login out (`clear_key` tells one that missed it while offline to clear its copy now), else the key it
+    is given, as `computer` (its own) or `shared`. A fetch for a key job (`login_id`) gets nothing: no job stages a key
+    any more. The reply keeps the shape runners of v0.6.0-rc.1 read. Returns (reply, credential ids sent)."""
+    from . import providers
+
+    if login_id:
+        return {"credentials": []}, []
+    mark = c.execute(
+        "SELECT clear_key FROM model_login_cleared WHERE runner_id=? AND runtime=? AND profile=''", (runner_id, runtime)
+    ).fetchone()
+    if mark:
+        return {"credentials": [], "signed_out": True, **({"clear_key": True} if mark["clear_key"] else {})}, []
+    found = c.execute(KEY_SQL + " AND g.runner_id=? AND g.runtime=?", (runner_id, runtime)).fetchone()
+    if not found or found["env"] not in providers.MODEL_KEYS.get(runtime, ()):
+        return {"credentials": []}, []
+    source = "computer" if found["source"] == OWN + runner_id else "shared"
+    return {"credentials": [{"env": found["env"], "value": vault.cipher.decrypt(c, found), "source": source}]}, [
+        found["id"]
+    ]
+
+
+def key_listing(c):
+    """{runner id: {keys, shared_keys, shared_with}} of every computer given a key, read in one pass for the Computers
+    page (Operations listing); never a value. `keys`: {runtime: {env, preview, since}} of its own keys. `shared_keys`:
+    {runtime: {env, preview}} of the shared key given to it. `shared_with`: {runtime: {id, name, computers}} of the
+    shared key it runs on (not while a person cleared its key or signed it out there) and every live computer that
+    runs on the same one."""
+    if not _present(c):
+        return {}
+    out, served, used = {}, {}, []
+    for row in c.execute(
+        "SELECT g.runner_id, g.runtime, g.updated_at AS given_at, cr.id, cr.name, cr.env, cr.preview, cr.source, "
+        "r.label, r.revoked_at, EXISTS (SELECT 1 FROM model_login_cleared m WHERE m.runner_id=g.runner_id "
+        "AND m.runtime=g.runtime AND m.profile='') AS cleared "
+        "FROM computer_subscriptions g JOIN model_subscriptions s ON s.id=g.subscription_id "
+        "JOIN credentials cr ON cr.id=s.credential_id JOIN runners r ON r.id=g.runner_id "
+        "WHERE g.person='' AND cr.ciphertext IS NOT NULL ORDER BY lower(r.label), r.id, g.runtime"
+    ):
+        rid, runtime = row["runner_id"], row["runtime"]
+        found = out.setdefault(rid, {"keys": {}, "shared_keys": {}, "shared_with": {}})
+        if row["source"] == OWN + rid:
+            found["keys"][runtime] = {"env": row["env"], "preview": row["preview"], "since": row["given_at"]}
+            continue
+        found["shared_keys"][runtime] = {"env": row["env"], "preview": row["preview"]}
+        if row["revoked_at"] is None and not row["cleared"]:
+            served.setdefault(row["id"], []).append({"id": rid, "label": row["label"]})
+            used.append((rid, runtime, row))
+    for rid, runtime, row in used:
+        out[rid]["shared_with"][runtime] = {"id": row["id"], "name": row["name"], "computers": served[row["id"]]}
+    return out
 
 
 # ------------------------------------------------------------------------------------------------ claim and run

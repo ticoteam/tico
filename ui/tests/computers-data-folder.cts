@@ -95,7 +95,7 @@ declare function loadSettings(): void;
     await page.evaluate(() => loadSettings());
     assert.equal(await line.locator('[data-data-problem=musecode]').innerText(), problem);
     assert.equal(await line.locator('.machine-chip-dot').count(), 1);
-    assert.equal(await line.locator('[data-model-login], [data-model-key-add]').count(), 0);
+    assert.equal(await line.locator('[data-model-login]').count(), 0);
 
     assert.deepEqual(errors, []);
     console.log('PASS: a Muse Code data folder its turns cannot write shows on the Computers page, naming the folder');

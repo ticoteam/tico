@@ -1,20 +1,22 @@
-"""One store for the model key (migration 20261117061243, backend/computer_keys.py): keys kept for computers in
-Settings > Computers move into model_subscriptions + computer_subscriptions, seeded here as live installs hold them,
-and a computer keeps signing in with what it ran on before, its own Claude or ChatGPT login included."""
+"""One store for the model key (migrations 20261117061243 and 20261117085930, backend/model_subscriptions.py): keys
+kept for computers in Settings > Computers move into model_subscriptions + computer_subscriptions, seeded here as live
+installs held them, and a computer keeps signing in with what it ran on before, its own Claude or ChatGPT login
+included. The Settings > Computers key store and its jobs are gone; what is left reads the subscriptions."""
 
 import json
 import uuid
 
 from backend import model_subscriptions as MS
 from backend.store import H
-from backend.tests.helpers.computer_keys import (
+from backend.tests.helpers.model_keys import (
+    DROP,
     MOVE,
     SHARED,
     call,
     computer,
     fetch,
-    heartbeat,
-    report,
+    legacy,
+    listed,
     setup,
     shared_before,
 )
@@ -46,6 +48,7 @@ def own_key(api, machine, runtime, env, value, state="active"):
     """A computer's own key as Settings > Computers kept it before: a vault credential and a computer_keys row."""
     cid = store(api, env, value, name=f"{env} for {machine['runner_id']}")
     with api.app.state.store.transaction() as c:
+        legacy(c)
         c.execute("UPDATE credentials SET source=? WHERE id=?", ("computer:" + machine["runner_id"], cid))
         c.execute(
             "INSERT INTO computer_keys(credential_id,runner_id,runtime,state,login_id,created_at,created_by) "
@@ -208,8 +211,8 @@ def test_a_moved_key_reads_from_the_vault_and_a_new_computer_gets_none_by_itself
     assert fetch(api, fresh) == {"credentials": []}
     # Settings > Models lists both, each with its kind; no value leaves.
     body = call(api, "GET", "model-subscriptions")
-    listed = {s["id"]: s for s in body["subscriptions"]}
-    assert {listed[sub["id"]]["kind"], listed[shared["id"]]["kind"]} == {"cursor_key", "openai_key"}
+    kinds = {s["id"]: s["kind"] for s in body["subscriptions"]}
+    assert {kinds[sub["id"]], kinds[shared["id"]]} == {"cursor_key", "openai_key"}
     assert OWN not in json.dumps(body) and "cursor-key" not in json.dumps(body)
     # Given from there, it reaches that computer, from the vault.
     call(
@@ -225,35 +228,6 @@ def test_a_moved_key_reads_from_the_vault_and_a_new_computer_gets_none_by_itself
     assert fetch(api, fresh) == {"credentials": [], "signed_out": True, "clear_key": True}
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM credentials WHERE id=? AND ciphertext IS NOT NULL", (team,)).fetchone()
-
-
-def test_a_computer_key_cannot_go_on_a_computer_given_a_models_subscription(environment):
-    """Add key on a computer given a subscription in Settings > Models is refused, pointing there: a computer has one
-    sign-in per runtime, and it is set in one place."""
-    api = setup(environment)
-    box = computer(api, "Team box", source="terminal")
-    sid = call(
-        api,
-        "POST",
-        "model-subscriptions",
-        {"name": "Company OpenAI", "kind": "openai_key", "secret": "sk-proj-company-0123456789"},
-    )["id"]
-    call(
-        api,
-        "PUT",
-        "computer-subscriptions",
-        {"runner_id": box["runner_id"], "runtime": "codex", "subscription": sid, "confirm": True},
-    )
-    refused = call(
-        api,
-        "POST",
-        f"computers/{box['runner_id']}/keys",
-        {"runtime": "codex", "secret": OWN},
-        expected=409,
-    )
-    assert "Settings > Models" in refused["error"]["detail"]
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM computer_keys").fetchone()[0] == 0
 
 
 def test_cursor_and_meta_keys_are_subscriptions_a_computer_takes(environment):
@@ -296,74 +270,39 @@ def given_to(api, machine, runtime="codex"):
     return found and found["subscription_id"]
 
 
-def test_use_the_shared_key_brings_back_only_the_key_a_member_s_computer_was_given(environment):
-    """Codex review P1-1: Use the shared key with no key named gives a member's computer back the shared key it was
-    given before a Clear key, and nothing else; putting a company key on a computer that had none is a credential
-    administrator's change."""
+def cleared_here(api, machine, runtime="codex", clear_key=0):
+    """A person signed this computer's login out here (or its key was deleted: `clear_key`)."""
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO model_login_cleared(runner_id,runtime,profile,cleared_at,cleared_by,clear_key) "
+            "VALUES(?,?,'',?,'human:ana',?)",
+            (machine["runner_id"], runtime, H.now(), clear_key),
+        )
+
+
+def test_use_the_shared_key_brings_back_only_the_key_the_computer_is_given(environment):
+    """Use the shared key lifts a sign-out, here and on the computer (the job a v0.6.0-rc.1 runner needs to drop its own
+    mark), and the key the computer is given in Settings > Models reaches it again. With none given it hands nothing:
+    no company key is put on a computer from here, by anyone."""
     api = setup(environment)
+    quinn = as_person(api, "quinn")
     mine = computer(api, "Quinn's box", operator="quinn", source="shared")
     shared_before(api)
-    quinn = as_person(api, "quinn")
     laptop = computer(api, "Quinn's laptop", operator="quinn")  # enrolled after the upgrade: no key
     before = given_to(api, mine)
-    # Her box's shared key, cleared there and brought back: the same key.
-    out = call(api, "POST", f"computers/{mine['runner_id']}/keys/clear", {"runtime": "codex"}, who=quinn)
-    assert fetch(api, mine) == {"credentials": [], "signed_out": True, "clear_key": True}
-    report(api, mine, out["computers"][0]["login"]["id"], "signed_out")
-    assert given_to(api, mine) == before, "a Clear key keeps the shared key given, held back"
-    call(api, "POST", f"computers/{mine['runner_id']}/shared-key", {"runtime": "codex"}, who=quinn)
+    cleared_here(api, mine)
+    assert fetch(api, mine) == {"credentials": [], "signed_out": True}
+    assert given_to(api, mine) == before, "a sign-out keeps the key given, held back"
+    used = call(api, "POST", f"computers/{mine['runner_id']}/shared-key", {"runtime": "codex"}, who=quinn)
+    assert used["kind"] == "use_shared_key"
     assert fetch(api, mine)["credentials"] == [{"env": "OPENAI_API_KEY", "value": SHARED, "source": "shared"}]
-    # Her laptop was never given one: Use the shared key lifts its sign-out and hands it no company key.
-    with api.app.state.store.transaction() as c:
-        c.execute(
-            "INSERT INTO model_login_cleared(runner_id,runtime,profile,cleared_at,cleared_by,clear_key) "
-            "VALUES(?,'codex','',?,'human:quinn',0)",
-            (laptop["runner_id"], H.now()),
-        )
-    call(api, "POST", f"computers/{laptop['runner_id']}/shared-key", {"runtime": "codex"}, who=quinn)
-    assert given_to(api, laptop) is None and fetch(api, laptop) == {"credentials": []}
-    # A credential administrator's Use the shared key there gives it the company's.
-    with api.app.state.store.transaction() as c:
-        c.execute(
-            "INSERT INTO model_login_cleared(runner_id,runtime,profile,cleared_at,cleared_by,clear_key) "
-            "VALUES(?,'codex','',?,'human:owner',0)",
-            (laptop["runner_id"], H.now()),
-        )
-    call(api, "POST", f"computers/{laptop['runner_id']}/shared-key", {"runtime": "codex"})
-    assert given_to(api, laptop) == before
-    assert fetch(api, laptop)["credentials"][0]["value"] == SHARED
-
-
-def test_replacing_a_computers_own_key_given_to_other_computers_changes_it_on_that_computer_only(environment):
-    """Codex review P1-2: Replace key, this computer only, on a computer whose own key is given to other computers in
-    Settings > Models makes a new key for it; the others keep the one they were given, unchanged."""
-    api = setup(environment)
-    alpha = computer(api, "Alpha")
-    bravo = computer(api, "Bravo")
-    first = call(api, "POST", f"computers/{alpha['runner_id']}/keys", {"runtime": "codex", "secret": OWN})
-    report(api, alpha, first["id"], "done")
-    sid = given_to(api, alpha)
-    call(
-        api,
-        "PUT",
-        "computer-subscriptions",
-        {"runner_id": bravo["runner_id"], "runtime": "codex", "subscription": sid, "confirm": True},
-    )
-    assert fetch(api, bravo)["credentials"][0]["value"] == OWN
-    with api.app.state.store.read() as c:
-        revision = MS.row(c, sid)["revision"]
-    heartbeat(api, alpha["token"], "computer")
-    new = "sk-proj-alpha-new-0123456789"
-    again = call(api, "POST", f"computers/{alpha['runner_id']}/keys", {"runtime": "codex", "secret": new})
-    report(api, alpha, again["id"], "done")
-    assert fetch(api, alpha)["credentials"] == [{"env": "OPENAI_API_KEY", "value": new, "source": "computer"}]
-    assert given_to(api, alpha) != sid, "a key of its own"
-    assert fetch(api, bravo)["credentials"][0]["value"] == OWN, "Bravo keeps the key it was given"
-    with api.app.state.store.read() as c:
-        assert MS.row(c, sid)["revision"] == revision
-    # Clearing Alpha's key now takes only Alpha's; Bravo's stays in the vault.
-    call(api, "POST", f"computers/{alpha['runner_id']}/keys/clear", {"runtime": "codex"})
-    assert fetch(api, bravo)["credentials"][0]["value"] == OWN
+    for who in (quinn, None):  # the operator, then an administrator
+        cleared_here(api, laptop)
+        job = call(api, "POST", f"computers/{laptop['runner_id']}/shared-key", {"runtime": "codex"}, who=who)
+        assert given_to(api, laptop) is None and fetch(api, laptop) == {"credentials": []}
+        call(api, "POST", f"computers/{laptop['runner_id']}/logins/{job['id']}/cancel", {})
+    # Not signed out: nothing to lift.
+    call(api, "POST", f"computers/{laptop['runner_id']}/shared-key", {"runtime": "codex"}, expected=409)
 
 
 def test_a_bots_own_key_grant_signs_its_turns_in_before_the_computers_key(environment):
@@ -403,24 +342,138 @@ def test_deleting_a_shared_codex_key_in_credentials_clears_it_on_each_computer(e
         assert given_to(api, box) is None
 
 
-def test_replacing_the_shared_key_for_all_moves_its_subscription_to_a_new_revision(environment):
-    """Codex review P2-2: Replace key for every computer a shared key serves is a new value, so its subscription moves
-    to a new revision and counts again; a refusal of the old value said late leaves the new one alone."""
-    api = setup(environment)
-    box = computer(api, "Alpha", source="shared")
-    shared_before(api)
-    sid = given_to(api, box)
+def login_job(api, machine, kind, state, runtime="codex"):
+    """A sign-in job for `machine`, as one was left running before the upgrade."""
+    lid = H.new_id()
     with api.app.state.store.transaction() as c:
-        old = MS.row(c, sid)["revision"]
         c.execute(
-            "INSERT INTO attempt_subscriptions(attempt_id,runtime,subscription_id,revision) VALUES('a-old','codex',?,?)",
-            (sid, old),
+            "INSERT INTO model_logins(id,runner_id,runtime,state,created_at,updated_at,expires_at,requested_by,kind) "
+            "VALUES(?,?,?,?,?,?,?,'human:ana',?)",
+            (lid, machine["runner_id"], runtime, state, H.now(), H.now(), "2999-01-01T00:00:00Z", kind),
         )
-    rotated = "sk-team-rotated-0123456789"
-    call(api, "POST", f"computers/{box['runner_id']}/keys", {"runtime": "codex", "secret": rotated, "scope": "all"})
+    return lid
+
+
+def test_dropping_computer_keys_keeps_each_computer_on_what_it_signs_in_with(environment):
+    """Migration 20261117085930: the Settings > Computers key store goes. A key still in use moves (the move is run
+    again), a computer switched to its own subscription keeps signing in with it, a staged key nothing else holds
+    leaves the vault, and the key jobs still running are canceled."""
+    api = setup(environment)
+    alpha = computer(api, "Alpha", source="computer")
+    bravo = computer(api, "Bravo", beat=False)
+    delta = computer(api, "Delta", source="shared")  # switched to its own ChatGPT login: key off
+    echo = computer(api, "Echo", source="shared")  # putting its own login in place when the upgrade came
+    golf = computer(api, "Golf", source="shared")  # still on the team key
     with api.app.state.store.transaction() as c:
-        sub = MS.row(c, sid)
-        assert (sub["revision"], sub["status"], sub["preview"]) == (old + 1, "new", "sk-…789")
-        MS.turn_rejected(c, api.app.state.store.settings, "a-old", "ops", "codex", "invalid key", "")
-        assert MS.row(c, sid)["status"] == "new", "the old value's refusal says nothing of the new one"
-    assert fetch(api, box)["credentials"][0]["value"] == rotated
+        legacy(c)
+        MOVE.up(c)  # an install that ran the first key migration already
+    staged = own_key(api, alpha, "claude", "ANTHROPIC_API_KEY", "sk-ant-staged-0123456789", state="staged")
+    held = own_key(api, bravo, "claude", "ANTHROPIC_API_KEY", "sk-ant-held-0123456789", state="staged")
+    add_bot(api, "mailer")
+    with api.app.state.store.read() as c:
+        mailer = H.resolve_bot(c, "mailer")["id"]
+    granted(api, held, "bot:" + mailer)
+    team = store(api, "OPENAI_API_KEY", SHARED, name="Team OpenAI")
+    granted(api, team, "computers")
+    with api.app.state.store.transaction() as c:
+        MOVE.up(c)
+        c.execute(
+            "INSERT INTO model_login_key_off(runner_id,runtime,profile,set_at,set_by) VALUES(?,'codex','',?,'human:ana')",
+            (delta["runner_id"], H.now()),
+        )
+    alpha_key = own_key(api, alpha, "codex", "OPENAI_API_KEY", OWN)  # kept after the move ran: moved now
+    assert {k for k, (_, cid) in given(api).items() if cid == team} == {
+        (r["runner_id"], "codex") for r in (delta, echo, golf)
+    }
+    switching = login_job(api, echo, "to_subscription", "finishing")
+    jobs = {kind: login_job(api, golf, kind, "waiting") for kind in ("use_key", "clear_key", "to_key")}
+    sign_in = login_job(api, bravo, "sign_in", "waiting")
+    with api.app.state.store.transaction() as c:
+        DROP.up(c)
+    assert given(api) == {
+        (alpha["runner_id"], "codex"): ("OpenAI API · Alpha", alpha_key),
+        (golf["runner_id"], "codex"): ("Team OpenAI", team),
+    }
+    assert fetch(api, alpha)["credentials"] == [{"env": "OPENAI_API_KEY", "value": OWN, "source": "computer"}]
+    for box in (delta, echo):
+        assert fetch(api, box) == {"credentials": []}, "its own login, as before"
+    with api.app.state.store.read() as c:
+        tables = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type IN ('table','index')")}
+        assert not tables & {"computer_keys", "computer_keys_by_runner", "model_login_key_off"}
+        assert not c.execute("SELECT 1 FROM credentials WHERE id=?", (staged,)).fetchone()
+        assert not c.execute("SELECT 1 FROM credential_grants WHERE credential_id=?", (staged,)).fetchone()
+        assert c.execute("SELECT 1 FROM credentials WHERE id=? AND ciphertext IS NOT NULL", (held,)).fetchone()
+        states = {r["id"]: r["state"] for r in c.execute("SELECT id,state FROM model_logins")}
+    assert [states[lid] for lid in (switching, *jobs.values())] == ["canceled"] * 4
+    assert states[sign_in] == "waiting"
+
+    def state():
+        with api.app.state.store.read() as c:
+            return [
+                sorted(tuple(r) for r in c.execute(f"SELECT * FROM {t}"))
+                for t in ("model_subscriptions", "computer_subscriptions", "credential_grants", "model_logins")
+            ]
+
+    after = state()
+    with api.app.state.store.transaction() as c:
+        DROP.up(c)
+    assert state() == after, "running it again changes nothing"
+
+
+def test_the_computer_key_routes_say_where_keys_are_changed_now(environment):
+    """Add, Replace and Clear key, and attaching a shared key, are gone from Settings > Computers (no v0.6.0-rc.1 runner
+    or CLI calls them): a page drawn before is told once where keys are changed now, and a pasted key is not kept."""
+    api = setup(environment)
+    box = computer(api, "Alpha", source="computer")
+    team = store(api, "OPENAI_API_KEY", SHARED, name="Team OpenAI")
+    with api.app.state.store.read() as c:
+        before = c.execute("SELECT count(*) FROM credentials").fetchone()[0]
+    rid = box["runner_id"]
+    for method, path, body in (
+        ("GET", "keys", None),
+        ("POST", "keys", {"runtime": "codex", "value": "sk-proj-pasted-0123456789"}),
+        ("POST", "keys/clear", {"runtime": "codex"}),
+        ("POST", "shared-key", {"runtime": "codex", "credential": team}),
+    ):
+        refused = call(api, method, f"computers/{rid}/{path}", body, expected=410)
+        assert refused["error"]["code"] == "moved" and "Settings > Models" in refused["error"]["detail"], path
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM credentials").fetchone()[0] == before
+    assert given_to(api, box) is None
+
+
+def test_a_computers_operator_reads_which_computers_share_its_key_but_not_the_key(environment):
+    """Settings > Computers shows the key each computer is given in Settings > Models: its own key with a preview for
+    whoever may change the computer, and the shared one with every live computer it signs in (one read for the page).
+    Someone who is not a credential administrator sees which computers share it, not its name or preview."""
+    api = setup(environment)
+    quinn = as_person(api, "quinn")
+    box = computer(api, "Quinn's box", operator="quinn", source="computer")
+    laptop = computer(
+        api, "Quinn's laptop", operator="quinn", source="shared", runtime="claude", name="ANTHROPIC_API_KEY"
+    )
+    one = computer(api, "alpha", source="shared", runtime="claude", name="ANTHROPIC_API_KEY")
+    two = computer(api, "Bravo", source="shared", runtime="claude", name="ANTHROPIC_API_KEY")
+    gone = computer(api, "Charlie", source="shared", runtime="claude", name="ANTHROPIC_API_KEY")
+    own_key(api, box, "codex", "OPENAI_API_KEY", OWN)
+    team = shared_before(api, store(api, "ANTHROPIC_API_KEY", TEAM, name="Team Claude key"))
+    cleared_here(api, gone, runtime="claude")
+    sharing = [{"id": m["runner_id"], "label": label} for m, label in ((one, "alpha"), (two, "Bravo"))]
+    sharing.append({"id": laptop["runner_id"], "label": "Quinn's laptop"})
+    seen = listed(api, two)
+    assert seen["shared_with"] == {"claude": {"id": team, "name": "Team Claude key", "computers": sharing}}
+    assert seen["shared_keys"]["claude"]["env"] == "ANTHROPIC_API_KEY" and seen["shared_keys"]["claude"]["preview"]
+    assert seen["keys"] == {}
+    # Signed out here: it still shows the key it is given, but it signs nothing in.
+    out = listed(api, gone)
+    assert out["shared_with"] == {} and out["shared_keys"]["claude"]["env"] == "ANTHROPIC_API_KEY"
+    mine = listed(api, box)
+    assert mine["keys"]["codex"]["env"] == "OPENAI_API_KEY" and mine["keys"]["codex"]["preview"]
+    # Quinn's view.
+    page = call(api, "GET", "operations", who=quinn)
+    hers = next(m for m in page["computers"] if m["id"] == laptop["runner_id"])
+    assert hers["may_manage"] is True
+    assert hers["shared_with"] == {"claude": {"computers": sharing}}
+    assert hers["shared_keys"] == {"claude": {"env": "ANTHROPIC_API_KEY"}}
+    assert next(m for m in page["computers"] if m["id"] == box["runner_id"])["keys"]["codex"]["preview"]
+    assert OWN not in json.dumps(page) and TEAM not in json.dumps(page)

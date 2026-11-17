@@ -132,8 +132,6 @@ EMPTY = (
     "compact_first",
     "model_logins",
     "model_login_cleared",
-    "computer_keys",
-    "model_login_key_off",
     # Deletion retries and enrollment failures belong to live HQ machines; a copy must never resume them.
     "cloud_machine_deletions",
     "cloud_machine_enrollment_failures",
@@ -392,6 +390,10 @@ KEEP = (
             "blob_media",
             "blobs",
             "bot_agent_instructions",
+            # Computer keys before migration 20261117085930_drop_computer_keys moves the ones in use into subscriptions
+            # and drops both tables: a copy is pruned before its first start runs it, so emptied here they would be lost.
+            "computer_keys",
+            "model_login_key_off",
             # Run-budget holds before migration 20261117061834_holds_runaway moves them into `holds`: a copy is pruned
             # before its first start runs that migration, so an unlisted table here would be emptied and its holds lost.
             "bot_budget",

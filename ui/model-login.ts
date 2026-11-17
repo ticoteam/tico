@@ -4,13 +4,9 @@
    the CLI keeps it on the computer, and the chip flips when the computer reports it is ready.
    The same module signs a login out (after a confirmation naming the bots that stop), switches it to
    another account (a sign-in on the side: canceling leaves the old account working), and lets the
-   company's shared key sign a signed-out computer login in again. `actionsHTML` draws those buttons for
+   key the computer is given sign a signed-out computer login in again. `actionsHTML` draws those buttons for
    any page that lists a login: Settings > Computers and Manage subscription today.
-   Clear key / Replace key / Add key (backend/computer_keys.py) are here too, for a login a model key signs in: the key
-   is pasted once, stored in the vault for that computer and shown only by its preview. A key the company shares with
-   every computer first asks "this computer only" or "all of them", listing them (`scopeHTML`, `chosenScope`).
-   Switch to API key (`toKey`) is Replace key for the computer's own login on a subscription: the key is checked while the
-   subscription stays signed in and in use, and only once it is in place is the subscription signed out.
+   Model keys are added, replaced and given to computers in Settings > Models (ui/app/subscriptions.ts), not here.
    On a hosted Tico (config `hosted`, TICO_HOSTED) the person has no terminal on the computer, so the sign-in shows only
    the provider's link and code (never what else the CLI printed; a failure gives its message), never points to a
    terminal, and closes by itself once it has signed in or its cancel is confirmed.
@@ -18,7 +14,7 @@
    subscription on a computer it chose. It ends when the server has saved the result, which this page never sees. */
 'use strict';
 (function () {
-  // One sign-in, switch, sign-out or key job as the server's logins routes answer it (backend/model_login.py).
+  // One sign-in, switch or sign-out job as the server's logins routes answer it (backend/model_login.py).
   interface LoginRow {
     id: string;
     state: string;
@@ -56,31 +52,6 @@
     readiness?: {runtimes?: Record<string, {authenticated?: string} | undefined>};
   }
   interface BotRow {name?: string; bot: string}
-  interface KeyComputer {id: string; label: string; online?: boolean; may?: boolean; updated?: boolean; waiting?: boolean; login?: LoginRow}
-  interface KeyInfo {
-    source: string;
-    preview?: string;
-    name?: string;
-    names?: string[];
-    can_replace_all?: boolean;
-    can_share?: boolean;
-    computers?: KeyComputer[];
-    shared?: {env?: string; preview?: string};
-    shared_choices?: {id: string; name: string; preview: string; every?: boolean}[];
-  }
-  // What POST /v2/computers/{id}/keys answers: the key job's row, with the shared key and the computers it reached.
-  interface KeyOut extends LoginRow {
-    computers?: KeyComputer[];
-    shared?: {preview?: string};
-    key?: {preview?: string};
-  }
-  interface KeyClearOut {computers: KeyComputer[]}
-  // The dialog keyDialog makes carries the key job's timer and whether it has closed or ended.
-  interface KeyDialog extends HTMLDialogElement {
-    closed?: boolean;
-    timer?: ReturnType<typeof setTimeout>;
-    ended?: boolean;
-  }
   interface ActionOptions {
     runnerId: string;
     runtime: string;
@@ -90,7 +61,6 @@
     signedOut?: boolean;
     online?: boolean;
     platform?: string;
-    onKey?: boolean;
   }
 
   // An element the markup this file just wrote must hold; missing means the markup and this code disagree.
@@ -139,20 +109,19 @@
   }
 
   // `profile` signs in one of the computer's subscriptions (runner-rs/src/profiles.rs) instead of its default login.
-  // `switchAccount` signs in to another account in place of the one signed in now. `toSubscription` does the same for
-  // the computer's login running on an API key: the key stays in use until the subscription works, then goes.
+  // `switchAccount` signs in to another account in place of the one signed in now.
   // `into` is a pop-up already open (Add connection, ui/app/computer-detail.ts): the sign-in carries on inside it.
   // `connect` {title, first, start, done}: `first` is the sign-in already started, `start` starts another for Try again,
   // `done` is what the toast says once the server has saved the result.
-  function open({runnerId, runtime, machine, profile = '', switchAccount = false, toSubscription = false, into = null, connect = null}: LoginTarget & {switchAccount?: boolean; toSubscription?: boolean; into?: HTMLDialogElement | null; connect?: LoginConnect | null}) {
+  function open({runnerId, runtime, machine, profile = '', switchAccount = false, into = null, connect = null}: LoginTarget & {switchAccount?: boolean; into?: HTMLDialogElement | null; connect?: LoginConnect | null}) {
     const base = () => `/v2/computers/${encodeURIComponent(runnerId)}/logins`;
     const name = (RUNTIME_NAMES[runtime] || runtime) + (profile ? ` · ${profile}` : '');
-    const kept = toSubscription ? ' The API key is still in use.' : switchAccount ? ' The account signed in before still works.' : '';
+    const kept = switchAccount ? ' The account signed in before still works.' : '';
     const where = machine || 'the computer';
     const dialog = into || document.createElement('dialog');
     dialog.className = 'tmodal tmodal-shell model-login';
     dialog.setAttribute('aria-labelledby', 'model-login-title');
-    const title = connect ? text(connect.title) : toSubscription ? `Switch ${text(name)}${machine ? ` on ${text(machine)}` : ''} to a subscription`
+    const title = connect ? text(connect.title)
       : `${switchAccount ? 'Switch account for' : 'Sign in to'} ${text(name)}${machine ? ` on ${text(machine)}` : ''}`;
     dialog.innerHTML = `<header><h2 id="model-login-title">${title}</h2>
         <button class="ghost tmodal-x" type="button" data-close aria-label="Close"><span class="nav-icon" aria-hidden="true">close</span></button></header>
@@ -195,8 +164,7 @@
       } else if (state === 'done') {
         label = connect?.done || 'Done.';
       } else if (state === 'signed_in') {
-        label = toSubscription ? `Switched. ${name} on ${where} now runs on the subscription; its bots keep it, and the API key is off.`
-          : switchAccount ? `Switched. ${name} on ${where} now uses the new account; its bots keep it.`
+        label = switchAccount ? `Switched. ${name} on ${where} now uses the new account; its bots keep it.`
           : `Signed in. ${name} is ready on ${machine || 'the computer'}.`;
       } else if (state === 'failed') {
         label = (login.message || 'The sign-in failed.') + kept;
@@ -294,7 +262,7 @@
           runnerId = login.runner_id; machine = login.computer || machine; elsewhere = Boolean(login.not_yours);
           // Closed while Try again was on its way: nobody is left to finish the sign-in it started.
           if (closed) { await cancel(login); return; }
-        } else login = await post(base(), {runtime, ...(profile ? {profile} : {}), ...(toSubscription ? {to: 'subscription'} : switchAccount ? {switch: true} : {})});
+        } else login = await post(base(), {runtime, ...(profile ? {profile} : {}), ...(switchAccount ? {switch: true} : {})});
       } catch (error) { status.textContent = errorMessage(error, ''); actions.innerHTML = '<button class="ghost" type="button" data-close>Done</button>'; return; }
       draw();
       if (login && active(login.state)) timer = setTimeout(tick, POLL_MS);
@@ -393,11 +361,11 @@
     return dialog;
   }
 
-  // A computer login a person signed out takes the company's shared key again (when there is one).
+  // A computer login a person signed out takes the key it is given in Settings > Models again (when there is one).
   async function useSharedKey({runnerId, runtime}: LoginTarget) {
     try {
       const row: LoginRow = await post(`/v2/computers/${encodeURIComponent(runnerId)}/shared-key`, {runtime});
-      toast('The shared key signs it in at the computer\'s next check, if the company has one for it');
+      toast('The key it is given signs it in at the computer\'s next check, if it has one');
       refreshUntil(runnerId, runtime, '', 'ready', row.created_at);
     } catch (error) { toast(errorMessage(error, ''), true); }
   }
@@ -412,314 +380,30 @@
 
   // The Sign out / Switch account buttons for a signed-in login, and Use the shared key for a computer login a person
   // signed out. Only for a CLI whose manifest has a logout (`sign_out`), to whoever may sign it in (the caller checks:
-  // an admin or the computer's operator), disabled while the computer is offline. The computer's login running on an API key
-  // (`onKey`) offers Switch to subscription instead of Switch account; on a subscription, a runtime Tico keeps a key for
-  // (`api_keys = "computer"`) and can check one (`api_key_login` or `api_key_check`) also offers Switch to API key, except
-  // where its login is in the system keychain (a logout there could not be undone).
+  // an admin or the computer's operator), disabled while the computer is offline. Moving a login between a key and a
+  // subscription is done in Settings > Models: give the key to the computer there, or take it off and sign in.
   // No switch where the CLI keeps the login in the system keychain (`switch_unavailable_on`, by the computer's
   // `platform`): there is no side to sign in on, so a cancel could not keep the old login.
-  function actionsHTML({runnerId, runtime, machine = '', profile = '', signedIn = false, signedOut = false, online = true, platform = '', onKey = false}: ActionOptions) {
+  function actionsHTML({runnerId, runtime, machine = '', profile = '', signedIn = false, signedOut = false, online = true, platform = ''}: ActionOptions) {
     const caps = typeof harnessCaps === 'function' ? harnessCaps(runtime) : {};
     if (!caps.sign_out) return '';
     const data = `data-runner="${text(runnerId)}" data-runtime="${text(runtime)}" data-machine="${text(machine)}"${profile ? ` data-profile="${text(profile)}"` : ''}${offline(online)}`;
     if (signedIn) {
       const switches = !(caps.switch_unavailable_on || []).includes(platform);
-      const toKey = switches && !onKey && !profile && caps.api_keys === 'computer' && (caps.api_key_login || caps.api_key_check);
-      return (onKey && !profile ? toSubscriptionHTML({runnerId, runtime, machine, online, platform})
-        : switches ? ` ${iconButton(LOGIN_ICONS.switch, 'Switch account', `data-model-switch ${data}`)}` : '')
-        + (toKey ? ` <button class="ghost machine-signin" type="button" data-model-to-key ${data}>Switch to API key</button>` : '')
+      return (switches ? ` ${iconButton(LOGIN_ICONS.switch, 'Switch account', `data-model-switch ${data}`)}` : '')
         + ` ${iconButton(LOGIN_ICONS.signOut, 'Sign out', `data-model-sign-out ${data}`)}`;
     }
     return signedOut && !profile ? ` <button class="ghost machine-signin" type="button" data-model-shared-key ${data}>Use the shared key</button>` : '';
   }
 
-  // Switch to subscription for the computer's own login while an API key signs it in: next to Sign out, or to Replace
-  // key / Clear key where the key is one Tico keeps. Same rights and conditions as actionsHTML, and none where the
-  // login lives in the system keychain.
-  function toSubscriptionHTML({runnerId, runtime, machine = '', online = true, platform = ''}: ActionOptions) {
-    const caps = typeof harnessCaps === 'function' ? harnessCaps(runtime) : {};
-    if (!caps.sign_out || !caps.browser_sign_in || (caps.switch_unavailable_on || []).includes(platform)) return '';
-    return ` <button class="ghost machine-signin" type="button" data-model-to-subscription data-runner="${text(runnerId)}" data-runtime="${text(runtime)}" data-machine="${text(machine)}"${offline(online)}>Switch to subscription</button>`;
-  }
-
-  const KEY_SOURCES: Record<string, string> = {computer: 'added from Tico', terminal: 'set on the computer', shared: 'the company\'s shared key'};
-  const keyName = (runtime: string) => RUNTIME_NAMES[runtime] || (typeof harnessRow === 'function' && harnessRow(runtime)?.name) || runtime;
-  const keyBase = (runnerId: string) => `/v2/computers/${encodeURIComponent(runnerId)}`;
-
-  // The "this computer only / all listed computers" ask for a shared key: the company's "Every computer" one, or one
-  // shared with some computers by name (`info` is GET /v2/computers/{id}/keys, `computers` every one it serves). `verb` is what happens to it ('clear', 'replace'). Reused by every page that changes
-  // a shared key; `chosenScope` reads the answer back.
-  function scopeHTML(info: KeyInfo, verb: string, here?: string) {
-    if (info.source !== 'shared') return '';
-    const later = verb === 'clear' ? 'clears its copy when it is next online' : 'gets the new key when it is next online';
-    // An older runner cannot clear its copy, online or not (`updated` false), so All of them waits for its update.
-    const stale = verb === 'clear' ? (info.computers || []).filter(c => c.updated === false) : [];
-    const rows = (info.computers || []).map(c => `<li data-scope-computer="${text(c.id)}">${text(c.label)}${stale.includes(c) ? ' <span class="muted">(needs a runner update to clear it from here)</span>' : c.online ? '' : ` <span class="muted">(offline: ${later})</span>`}${c.may ? '' : ' <span class="muted">(not yours to change)</span>'}</li>`).join('');
-    const all = verb === 'replace' && !info.can_replace_all ? ' disabled' : verb === 'clear' && ((info.computers || []).some(c => !c.may) || stale.length) ? ' disabled' : '';
-    const why = !all ? '' : verb === 'clear' && stale.length && !(info.computers || []).some(c => !c.may)
-      ? `<span class="muted"> Update ${text(stale.map(c => c.label).join(', '))} first, or delete the shared key in Tools.</span>`
-      : `<span class="muted"> Only ${verb === 'replace' ? 'a credential administrator' : 'someone who may change every one of them'} can do this.</span>`;
-    return `<fieldset class="model-key-scope" data-key-scope><legend>This key is shared with ${(info.computers || []).length} computers:</legend>
-      <ul>${rows}</ul>
-      <label><input type="radio" name="key-scope" value="this" checked> This computer only${here ? ` (${text(here)})` : ''}: ${verb === 'clear' ? 'it stops using the shared key; the others keep it' : 'it gets its own key; the others keep the shared one'}</label>
-      <label><input type="radio" name="key-scope" value="all"${all}> All listed computers: ${verb === 'clear' ? 'every computer listed stops using it' : 'the shared key is replaced for every computer, in Credentials too'}${why}</label>
-      <p class="muted" data-key-scope-warn hidden>This changes every listed computer: ${text((info.computers || []).map(c => c.label).join(', '))}.</p></fieldset>`;
-  }
-  // The warning under the ask shows while "All listed computers" is chosen.
-  const scopeWarn = (root: ParentNode) => {
-    const warn = root.querySelector<HTMLElement>('[data-key-scope-warn]');
-    if (warn) warn.hidden = chosenScope(root) !== 'all';
-  };
-  const chosenScope = (root: ParentNode) => root.querySelector<HTMLInputElement>('[name=key-scope]:checked')?.value || 'this';
-
-  // A small dialog shell shared by Clear key and Replace key.
-  function keyDialog(title: string, inner: string, action: string, danger?: boolean) {
-    const dialog: KeyDialog = document.createElement('dialog');
-    dialog.className = 'tmodal tmodal-shell model-login model-key';
-    dialog.setAttribute('aria-labelledby', 'model-key-title');
-    dialog.innerHTML = `<header><h2 id="model-key-title">${text(title)}</h2>
-        <button class="ghost tmodal-x" type="button" data-close aria-label="Close"><span class="nav-icon" aria-hidden="true">close</span></button></header>
-      <form class="model-login-body" data-key-form>${inner}</form>
-      <p class="model-login-status" role="status" aria-live="polite" data-status></p>
-      <div class="model-login-actions" data-actions><button class="ghost" type="button" data-close>Cancel</button>
-        <button class="primary${danger ? ' people-danger' : ''}" type="button" data-key-go disabled>${text(action)}</button></div>`;
-    document.body.appendChild(dialog);
-    dialog.addEventListener('close', () => { dialog.closed = true; clearTimeout(dialog.timer); dialog.remove(); });
-    dialog.addEventListener('click', event => {
-      if (event.target === dialog || eventElement(event)?.closest('[data-close]')) dialog.close();
-    });
-    dialog.showModal();
-    return dialog;
-  }
-
-  // Follow a key job (`clear_key`, `use_key`) on one computer to its end, then redraw.
-  function followKeyJob(dialog: KeyDialog, runnerId: string, runtime: string, row: LoginRow, done: (row: LoginRow) => void) {
-    const tick = async () => {
-      if (dialog.closed) return;
-      try {
-        row = await get<LoginRow>(`${keyBase(runnerId)}/logins/${encodeURIComponent(row.id)}`);
-      } catch (error) { part(dialog, '[data-status]').textContent = errorMessage(error, ''); }
-      if (active(row.state)) { dialog.timer = setTimeout(tick, POLL_MS); return; }
-      done(row);
-      refreshUntil(runnerId, runtime, '', row.state === 'signed_out' ? 'signed_out' : 'ready', row.updated_at);
-    };
-    if (active(row.state)) dialog.timer = setTimeout(tick, POLL_MS); else done(row);
-  }
-
-  // Clear key: confirm first, naming the bots that stop (on every computer, for "all of them"); bots and assignments
-  // stay, and the shared key does not sign it back in until someone adds a key or chooses the shared key.
-  async function clearKey({runnerId, runtime, machine}: LoginTarget) {
-    const name = keyName(runtime), where = machine || 'the computer';
-    const dialog = keyDialog(`Clear the ${name} key on ${where}?`, '<p data-key-info>Checking which key it uses…</p>', 'Clear key', true);
-    const status = part(dialog, '[data-status]'), form = part<HTMLFormElement>(dialog, '[data-key-form]');
-    const go = part<HTMLButtonElement>(dialog, '[data-key-go]');
-    let info: KeyInfo;
-    try { info = await get<KeyInfo>(`${keyBase(runnerId)}/keys?runtime=${encodeURIComponent(runtime)}`); }
-    catch (error) { status.textContent = errorMessage(error, ''); return dialog; }
-    const bots = async (computers: {id: string; label: string}[]) => {
-      const named: string[] = [];
-      for (const c of computers) {
-        const found = await get<{bots?: BotRow[]}>(`${keyBase(c.id)}/logouts/bots?runtime=${encodeURIComponent(runtime)}`);
-        named.push(...(found.bots || []).map(bot => (bot.name || bot.bot) + (computers.length > 1 ? ` (${c.label})` : '')));
-      }
-      return named;
-    };
-    const say = async () => {
-      go.disabled = true;
-      const scope = chosenScope(form);
-      const computers = scope === 'all' ? (info.computers || []).filter(c => c.may) : [{id: runnerId, label: where}];
-      const said = part(form, '[data-key-bots]');
-      said.textContent = 'Checking which bots use it…';
-      try {
-        const named = await bots(computers);
-        said.textContent = named.length
-          ? `${named.length === 1 ? 'This bot stops' : `These ${named.length} bots stop`} until a key is added again: ${named.join(', ')}.`
-          : 'No bot uses this key right now.';
-        go.disabled = false;
-      } catch (error) { said.textContent = `Couldn't check which bots use it (${errorMessage(error, '')}), so it can't be cleared yet.`; }
-    };
-    form.innerHTML = `<p>${info.preview ? `Key <code>${text(info.preview)}</code>, ` : ''}${text(KEY_SOURCES[info.source] || 'a key')}.</p>
-      ${scopeHTML(info, 'clear', where)}
-      <p data-key-bots></p>
-      <p class="muted">The key is deleted from the computer. Bots keep this login, so nothing needs reassigning; the company's shared key won't sign it back in by itself. Add a key or choose Use the shared key to bring it back.</p>`;
-    form.addEventListener('change', () => { scopeWarn(form); void say(); });
-    void say();
-    go.addEventListener('click', async () => {
-      if (go.disabled) return;
-      dialog.querySelectorAll<HTMLButtonElement>('[data-actions] button').forEach(button => { button.disabled = true; });
-      status.textContent = 'Clearing…';
-      try {
-        const out: KeyClearOut = await post(`${keyBase(runnerId)}/keys/clear`, {runtime, scope: chosenScope(form)});
-        const waiting = out.computers.filter(c => c.waiting).map(c => c.label);
-        const later = waiting.length ? ` ${waiting.join(', ')} ${waiting.length === 1 ? 'is' : 'are'} offline and clear${waiting.length === 1 ? 's its copy' : ' their copies'} when next online.` : '';
-        const here = out.computers.find(c => c.id === runnerId)?.login;
-        const end = (row: Pick<LoginRow, 'state' | 'message'>) => {
-          status.dataset.state = row.state;
-          status.textContent = (row.state === 'signed_out' ? `Cleared. ${name} on ${where} has no key until one is added.`
-            : row.message || 'The key could not be cleared on the computer.') + later;
-          part(dialog, '[data-actions]').innerHTML = '<button class="ghost" type="button" data-close>Done</button>';
-        };
-        if (here) followKeyJob(dialog, runnerId, runtime, here, end); else end({state: 'signed_out'});
-        for (const c of out.computers) if (c.login && c.id !== runnerId) refreshUntil(c.id, runtime, '', 'signed_out', c.login.created_at);
-      } catch (error) {
-        status.textContent = errorMessage(error, '');
-        part(dialog, '[data-actions]').innerHTML = '<button class="ghost" type="button" data-close>Done</button>';
-      }
-    });
-    return dialog;
-  }
-
-  // Replace key, or Add key where none signs it in: the key is pasted once and goes to the vault; the computer checks
-  // it before the old one is deleted, so a key that doesn't work leaves the old one in use. `toKey`: Switch to API key
-  // from a subscription, which stays in use until the key is in place (Cancel switch, or closing, cancels the check).
-  async function replaceKey({runnerId, runtime, machine, adding = false, toKey = false, others = null}: LoginTarget & {adding?: boolean; toKey?: boolean; others?: {id: string; label?: string | undefined}[] | null}) {
-    // The other computers it can be shared with: the connected ones Settings > Computers lists.
-    others = others || (typeof SETTINGS_DATA !== 'undefined' ? SETTINGS_DATA.machines || [] : [])
-      .filter((m: LoginMachine) => !m.revoked_at && m.id !== runnerId).map((m: LoginMachine) => ({id: m.id, label: m.label}));
-    const name = keyName(runtime), where = machine || 'the computer';
-    adding = adding || toKey;
-    const dialog = keyDialog(toKey ? `Switch ${name} on ${where} to an API key` : `${adding ? 'Add a' : 'Replace the'} ${name} key on ${where}`,
-      '<p>Checking which key it uses…</p>', toKey ? 'Switch to API key' : adding ? 'Add key' : 'Replace key');
-    const status = part(dialog, '[data-status]'), form = part<HTMLFormElement>(dialog, '[data-key-form]');
-    const go = part<HTMLButtonElement>(dialog, '[data-key-go]');
-    let info: KeyInfo;
-    try { info = await get<KeyInfo>(`${keyBase(runnerId)}/keys?runtime=${encodeURIComponent(runtime)}`); }
-    catch (error) { status.textContent = errorMessage(error, ''); return dialog; }
-    const names = info.names || [];
-    // Add connection > API key, for a credential administrator: share the pasted key with other computers by name, or
-    // use a key already shared ("Every computer" in Credentials, or one shared from another computer).
-    // Switch to API key moves this computer's own login onto a key of its own, so it is not offered there.
-    const share = adding && !toKey && info.can_share;
-    const choices = share ? info.shared_choices || [] : [];
-    const shareHTML = !share ? '' : `<fieldset class="model-key-share" data-key-share><legend>Use it on</legend>
-        <label><input type="radio" name="key-share" value="this" checked> This computer</label>
-        ${others.length ? `<label><input type="radio" name="key-share" value="shared"> Shared with:</label>
-        <div class="model-key-share-list">${others.map(c => `<label><input type="checkbox" name="key-share-computer" value="${text(c.id)}" disabled> ${text(c.label)}</label>`).join('')}</div>` : ''}
-        ${choices.length ? `<label><input type="radio" name="key-share" value="existing"> A shared key: <select name="key-existing" disabled aria-label="Shared key">${choices.map(k => `<option value="${text(k.id)}">${text(k.name)} · ${text(k.preview)}${k.every ? ' · every computer' : ''}</option>`).join('')}</select></label>` : ''}
-      </fieldset>`;
-    form.innerHTML = `${info.preview && !adding ? `<p>Now: key <code>${text(info.preview)}</code>, ${text(KEY_SOURCES[info.source] || '')}.</p>` : ''}
-      ${adding ? shareHTML : scopeHTML(info, 'replace', where)}
-      <label>New key <input name="secret" type="password" autocomplete="off" spellcheck="false" required maxlength="4000" aria-label="New ${text(name)} key"></label>
-      ${names.length > 1 ? `<label>Kind <select name="env">${names.map(n => `<option value="${text(n)}"${n === (info.name || info.shared?.env) ? ' selected' : ''}>${text(n)}</option>`).join('')}</select></label>` : ''}
-      <p class="muted">It is kept in Tico's credential vault and never shown again in full. ${toKey
-        ? `The subscription stays signed in and in use while ${text(where)} checks the key; once it works there the subscription is signed out and the next turn uses the key. Bots keep this login, so nothing needs reassigning.`
-        : 'The next turn uses it once the computer has checked it; the old key is then deleted.'}</p>`;
-    const field = part<HTMLInputElement>(form, '[name=secret]');
-    const shareMode = () => form.querySelector<HTMLInputElement>('[name=key-share]:checked')?.value || 'this';
-    const picked = () => [...form.querySelectorAll<HTMLInputElement>('[name=key-share-computer]:checked')].map(box => box.value);
-    const ready = () => {
-      const mode = shareMode();
-      const fieldLabel = field.closest('label');
-      if (fieldLabel) fieldLabel.hidden = mode === 'existing';
-      form.querySelectorAll<HTMLInputElement>('[name=key-share-computer]').forEach(box => { box.disabled = mode !== 'shared'; });
-      const existing = form.querySelector<HTMLSelectElement>('[name=key-existing]');
-      if (existing) existing.disabled = mode !== 'existing';
-      go.disabled = mode === 'existing' ? false : !field.value.trim() || (mode === 'shared' && !picked().length);
-    };
-    field.addEventListener('input', ready);
-    form.addEventListener('change', () => { scopeWarn(form); ready(); });
-    field.focus();
-    form.addEventListener('submit', event => { event.preventDefault(); go.click(); });
-    go.addEventListener('click', async () => {
-      if (go.disabled) return;
-      const mode = shareMode();
-      const close = () => { part(dialog, '[data-actions]').innerHTML = '<button class="ghost" type="button" data-close>Done</button>'; };
-      const sharedDone = (out: KeyOut) => {
-        const listed = (out.computers || []).map(c => c.label);
-        status.dataset.state = 'done';
-        status.textContent = `Added. ${name} on ${listed.join(', ')} uses the shared key ${out.shared?.preview ?? ''} from each computer's next key check.`;
-        close();
-        for (const c of out.computers || []) refreshUntil(c.id, runtime, '', 'ready', new Date().toISOString());
-      };
-      if (mode === 'existing') {
-        dialog.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>('[data-actions] button, [data-key-form] input, [data-key-form] select').forEach(el => { el.disabled = true; });
-        status.textContent = 'Adding the shared key…';
-        try { sharedDone(await post(`${keyBase(runnerId)}/shared-key`, {runtime, credential: part<HTMLSelectElement>(form, '[name=key-existing]').value})); }
-        catch (error) { status.textContent = errorMessage(error, ''); close(); }
-        return;
-      }
-      if (!field.value.trim()) return;
-      const scope = adding ? 'this' : chosenScope(form);
-      const envField = form.querySelector<HTMLSelectElement>('[name=env]');
-      const body = {runtime, secret: field.value.trim(), scope, ...(envField ? {env: envField.value} : {}),
-        ...(mode === 'shared' ? {share: picked()} : {}), ...(toKey ? {switch: true} : {})};
-      // The key leaves the page with this request and is not kept in it.
-      field.value = '';
-      dialog.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>('[data-actions] button, [data-key-form] input, [data-key-form] select').forEach(el => { el.disabled = true; });
-      status.textContent = scope === 'all' ? 'Replacing the shared key…' : body.share ? 'Sharing the key…' : `Checking the new key on ${where}…`;
-      // Switch to API key: closing the dialog cancels the switch, also while it is being asked for (`job` not back yet).
-      let job: KeyOut | null = null;
-      const cancel = async () => {
-        try {
-          if (!job) throw new Error('No switch is running');
-          await post(`${keyBase(runnerId)}/logins/${encodeURIComponent(job.id)}/cancel`, {});
-        }
-        catch (error) { status.textContent = errorMessage(error, ''); }
-      };
-      if (toKey) dialog.addEventListener('close', () => { if (job && !dialog.ended) void cancel(); });
-      try {
-        const out: KeyOut = await post(`${keyBase(runnerId)}/keys`, body);
-        if (body.share) { sharedDone(out); return; }
-        job = out;
-        if (toKey && dialog.closed) { void cancel(); return; }
-        if (scope === 'all') {
-          const later = (out.computers || []).filter(c => !c.online).map(c => c.label);
-          status.textContent = `Replaced. The shared key is now ${out.shared?.preview ?? ''}; every computer it serves uses it from its next check.${later.length ? ` ${later.join(', ')} ${later.length === 1 ? 'gets' : 'get'} it when next online.` : ''}`;
-          close();
-          for (const c of out.computers || []) refreshUntil(c.id, runtime, '', 'ready', new Date().toISOString());
-          return;
-        }
-        if (toKey) {
-          part(dialog, '[data-actions]').innerHTML = '<button class="ghost" type="button" data-key-cancel>Cancel switch</button>';
-          part(dialog, '[data-key-cancel]').addEventListener('click', () => void cancel());
-        }
-        followKeyJob(dialog, runnerId, runtime, out, row => {
-          dialog.ended = true;
-          status.dataset.state = row.state;
-          // A failure says what the computer reported, which says whether the subscription is still in use: when putting
-          // things back did not work either, it says that instead.
-          const said = String(row.message || '').trim();
-          status.textContent = toKey
-            ? (row.state === 'done' ? `Switched. ${name} on ${where} now uses ${out.key?.preview || 'the API key'}; the subscription is signed out.`
-              : row.state === 'expired' ? `${where} did not finish the switch in time. Check this connection once it reports again.`
-              : row.state === 'canceled' ? 'Canceled. The subscription is still in use.'
-              : said ? said.charAt(0).toUpperCase() + said.slice(1) + (/[.!?]$/.test(said) ? '' : '.')
-              : 'The switch did not finish.')
-            : row.state === 'done' ? `${adding ? 'Added' : 'Replaced'}. ${name} on ${where} now uses ${out.key?.preview || 'the new key'}.`
-            : row.state === 'expired' ? 'The computer did not check the key in time; nothing changed.'
-            : (row.message || 'The new key did not work') + (adding ? '' : '. The old key is still in use.');
-          close();
-        });
-      } catch (error) { status.textContent = errorMessage(error, ''); close(); }
-    });
-    return dialog;
-  }
-
-  // Replace key / Clear key for a login a key signs in (`key`: its readiness `key`, {name, source}), and Add key where
-  // none does: a key runtime (`api_keys = "computer"`) signed out, cleared or never signed in. Same rights and
-  // conditions as actionsHTML: an admin or the computer's operator (the caller checks), disabled while it is offline.
-  function keyActionsHTML({runnerId, runtime, machine = '', key = null, signedIn = false, online = true}: {runnerId: string; runtime: string; machine?: string; key?: {name?: string; source?: string} | null; signedIn?: boolean; online?: boolean}) {
-    const caps = typeof harnessCaps === 'function' ? harnessCaps(runtime) : {};
-    if (caps.api_keys !== 'computer') return '';
-    const data = `data-runner="${text(runnerId)}" data-runtime="${text(runtime)}" data-machine="${text(machine)}"${offline(online)}`;
-    if (signedIn && key) {
-      return ` <button class="ghost machine-signin" type="button" data-model-key-replace ${data}>Replace key</button>`
-        + ` <button class="ghost machine-signin" type="button" data-model-key-clear ${data}>Clear key</button>`;
-    }
-    return signedIn ? '' : ` <button class="ghost machine-signin" type="button" data-model-key-add ${data}>Add key</button>`;
-  }
-
-  window.TicoModelLogin = {open, cancel, signOut, useSharedKey, actionsHTML, toSubscriptionHTML, keyActionsHTML, clearKey, replaceKey, scopeHTML, chosenScope};
+  window.TicoModelLogin = {open, cancel, signOut, useSharedKey, actionsHTML};
   document.addEventListener('click', event => {
-    const button = eventElement(event)?.closest<HTMLElement>('[data-model-login], [data-model-switch], [data-model-to-subscription], [data-model-to-key], [data-model-sign-out], [data-model-shared-key], [data-model-key-replace], [data-model-key-clear], [data-model-key-add]');
+    const button = eventElement(event)?.closest<HTMLElement>('[data-model-login], [data-model-switch], [data-model-sign-out], [data-model-shared-key]');
     if (!button) return;
     event.preventDefault();
     const target = {runnerId: button.dataset.runner ?? '', runtime: button.dataset.runtime ?? '', machine: button.dataset.machine || '', profile: button.dataset.profile || ''};
-    if (button.hasAttribute('data-model-key-clear')) void clearKey(target);
-    else if (button.hasAttribute('data-model-key-replace') || button.hasAttribute('data-model-key-add')) void replaceKey({...target, adding: button.hasAttribute('data-model-key-add')});
-    else if (button.hasAttribute('data-model-to-key')) void replaceKey({...target, toKey: true});
-    else if (button.hasAttribute('data-model-sign-out')) signOut(target);
+    if (button.hasAttribute('data-model-sign-out')) signOut(target);
     else if (button.hasAttribute('data-model-shared-key')) void useSharedKey(target);
-    else open({...target, switchAccount: button.hasAttribute('data-model-switch'), toSubscription: button.hasAttribute('data-model-to-subscription')});
+    else open({...target, switchAccount: button.hasAttribute('data-model-switch')});
   });
 })();
