@@ -700,6 +700,8 @@ impl Runner {
             readiness::changed_agent_instructions(&self.config, &assignments, &published);
         let mut readiness_doc = readiness::document(&runtimes, &checks, &self.state.directory);
         let mut capabilities = crate::lanes::capabilities();
+        // Reads a Claude plan's week on request (subscription_refresh.rs `read_claude_plan`; backend/subscription_refresh.py `request_plan_read`).
+        capabilities.push("plan_usage_v1");
         if computer_logins {
             readiness_doc["computer_profile"] =
                 json!(crate::profiles::computer_login(&config.data)

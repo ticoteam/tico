@@ -323,3 +323,58 @@ environment of every run that holds any level on the tool, on the proxy or on co
 value that looks like one (a key shape, a URL with a password or a token in it) is refused, and a name with TOKEN,
 SECRET, PASSWORD or API_KEY in it belongs under Keys. A key the run holds under the same variable wins. Tico checks each tool with a check path every 30 minutes, on the proxy or on computers; `tico tool check
 <id>` (MCP `tico_tool_check`) checks now. Checks and calls older than 90 days are deleted.
+
+A tool's **Activity** (`GET /api/v2/api-tools/<id>/activity?since=&result=&limit=&cursor=`) lists its calls through the
+proxy (who, method, path with the query's keys only, status, result: `sent` reached the vendor, `refused` was stopped
+by Tico, `failed` never reached it) and, for keys on computers, each caller's last use, newest first, never a value.
+`since` is `24h`, `7d` or an ISO time. A credential administrator and the Tools page's owner bot see every caller;
+anyone else sees their own rows and those of the bots they may see. CLI: `tico tool activity <id> [--since 24h]
+[--result refused]`; MCP: `tico_tool_activity`, which adds a summary of repeated calls and errors (ids in paths folded
+to `:id`) and who added the tool's keys. The Tools Owner reads it daily to learn how each tool is used.
+
+## Every Tools change from the CLI and MCP
+
+Nothing on the Tools page needs the page: each change is a `tico` command and a Tico MCP tool of the same name
+(`tico tool setting add` is `tico_tool_setting_add`) that calls the route the page calls, with the caller's rights.
+BotOps acts as the person who asked it, the Tools Owner as that person on the changes `backend/tools_delegation.py`
+lends it, and everyone else as themselves; `backend/tool_access.py` (`may_change_access`) decides every write, and a
+refusal names who can. A value is never an argument: `--from-env VAR` names a variable and `--from-file PATH` a file on
+the computer that runs the command, read there (those MCP tools run only in a bot's own `tico` MCP server, never the
+server's endpoint), and no answer carries a value or its preview. `backend/tests/test_tools_parity.py` fails when a Tools
+write route has no command, or a command calls another route.
+
+| Action | Route | CLI | MCP |
+|---|---|---|---|
+| List tools, status, who can use each | `GET tool-index` | `tico tool index` | `tico_tool_index` |
+| One tool: keys, levels, settings | `GET api-tools/{id}` | `tico tool detail` | `tico_tool_detail` |
+| One vendor's tools | `GET tool-vendors/{vendor}` | `tico tool vendor` | `tico_tool_vendor` |
+| Add an API tool | `POST api-tools` | `tico tool create` | `tico_tool_create` |
+| Rename; address, auth, check path; vendor (`service`); delivery (Move to proxy); Everyone can read; Only listed | `PATCH api-tools/{id}` | `tico tool edit` | `tico_tool_edit` |
+| Delete a tool | `DELETE api-tools/{id}` | `tico tool delete` | `tico_tool_delete` |
+| Check now | `POST api-tools/{id}/check` | `tico tool check` | `tico_tool_check` |
+| A bot's level | `PUT api-tools/{id}/access/{subject}` | `tico tool level` | `tico_tool_level` |
+| Add a key to a tool | `POST api-tools/{id}/keys` | `tico credential add --tool` | `tico_credential_add` |
+| Change a tool's key (level, name, end date, value) | `PATCH api-tools/{id}/keys/{key}` | `tico credential update` | `tico_credential_update` |
+| Delete a tool's key | `DELETE api-tools/{id}/keys/{key}` | `tico credential delete` | `tico_credential_delete` |
+| Settings | `POST`, `PATCH`, `DELETE api-tools/{id}/settings` | `tico tool setting add`, `change`, `remove` | `tico_tool_setting_*` |
+| Auth templates: list, set, ungroup | `GET tool-templates`, `PUT api-tools/{id}/template`, `POST api-tools/{id}/ungroup` | `tico tool templates`, `tico tool template`, `tico tool ungroup` | `tico_tool_templates`, `tico_tool_template_set`, `tico_tool_ungroup` |
+| A vendor account's values: classify, store in one step (read from a variable or file) | `POST tool-templates/classify`, `POST api-tools/{id}/paste` | `tico tool classify`, `tico tool paste` | `tico_tool_classify`, `tico_tool_paste` |
+| MCP server: probe, add, start its sign-in | `POST mcp-tools/probe`, `POST mcp-tools`, `POST api-tools/{id}/sign-in` | `tico tool mcp probe`, `tico tool mcp add`, `tico tool sign-in` | `tico_tool_mcp_probe`, `tico_tool_mcp_add`, `tico_tool_sign_in` |
+| Website tool | `GET`, `POST`, `PATCH`, `DELETE website-tools` | `tico tool website show`, `add`, `edit`, `delete` | `tico_tool_website_*` |
+| Website account: add, change, delete | `POST`, `PATCH`, `DELETE website-tools/{id}/accounts` | `tico credential login add`, `edit`, `delete` | `tico_credential_login_*` |
+| Share a website account | `PUT website-tools/{id}/accounts/{a}/access/{subject}` | `tico credential login share` | `tico_credential_login_share` |
+| Keys and their grants | `GET credentials`, `POST credentials/{id}/grants`, `…/revoke`, `DELETE credentials/{id}` | `tico credential list`, `grant`, `revoke`, `delete` | `tico_credential_*` |
+| Store a key a caller holds (a bot: as its own key) | `POST credentials`, `POST credential-set` (`--for-bot`) | `tico credential add` | `tico_credential_add` |
+| Change a key on no tool | `POST credentials/{id}` | `tico credential update` | `tico_credential_update` |
+| A person's key: open a card, withdraw it | `POST credential-requests`, `…/{id}/cancel` | `tico credential request`, `cancel` | `tico_credential_request`, `tico_credential_cancel` |
+| A value a person pasted in chat | `POST credential-set` | `tico credential set` | `tico_credential_set` |
+| Move a bot's file secret into the vault | `POST credential-imports` | `tico credential import` | `tico_credential_import` |
+| Propose where dropped keys go | `POST tools-chat/proposals` | `tico tool propose-grant` | `tico_tools_propose_grant` |
+| A bot's `bot.yaml` tool notes | `POST bots/{bot}/tools`, `…/update`, `…/delete` | `tico tool add`, `update`, `remove` | `tico_tool_add`, `tico_tool_update`, `tico_tool_remove` |
+| Learnings | `POST tools/{service}/learnings`, `…/{id}/delete` | `tico tool learn`, `tico tool forget` | `tico_tool_learn`, `tico_tool_forget` |
+| A tool's calls and last uses | `GET api-tools/{id}/activity` | `tico tool activity` | `tico_tool_activity` |
+
+Only a person does these, in the app: reveal a value (`POST credentials/{id}/reveal`), type a value into a key card
+(`…/save`), tap Grant on a key card (`POST tools-chat/proposals/{id}/grant`), and watch or drive a website sign-in's live
+view (`…/accounts/{a}/browser`). The OAuth sign-in itself happens in the person's browser at the address
+`tico tool sign-in` prints.

@@ -441,6 +441,7 @@ async function dashReread(state: DashState | null) {
   if (!state.root) return;
   if (state.menu || state.root.querySelector<HTMLDialogElement>('#dash-dialog')?.open || state.root.querySelector('.dash-pin.dragging')) return;
   state.reading = true;
+  cfPoll();  // the Floor reads with it: drawn again only when its answer differs (company-floor.ts)
   const ticket = taskFeedRead(state.feed);
   try {
     const view = await get<DashView>(dashApi(state.place), {fresh: true});

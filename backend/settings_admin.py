@@ -477,7 +477,13 @@ class SettingsAdmin:
             429,
         )
         if person:
-            refusal.ask = {"actor": who.actor, "title": title, "body": body, "person": person}
+            refusal.ask = {
+                "actor": who.actor,
+                "title": title,
+                "body": body,
+                "person": person,
+                "question": f"Can you {what} for me?",
+            }
         raise refusal
 
     def _report_act(self, c, who, bot, op, do):

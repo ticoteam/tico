@@ -255,6 +255,10 @@ def updated(before):
         botops = next(runner for bot, runner in after["placed"] if bot == "botops")
         after["placed"] = sorted([*after["placed"], ("tools-owner", botops)])
         after["cloud"] = sorted([*after["cloud"], ("tools-owner", "cloud", "shared", None, None)])
+    # onboarding.ensure_builtin_routines: the Tools Owner's daily learn-from-use reaches one from before it, once, on.
+    learn = ("Learn from how tools are used", "tools-owner", "schedule", 1)
+    if learn not in after["automations"]:
+        after["automations"] = sorted([*after["automations"], learn])
     return after
 
 

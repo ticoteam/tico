@@ -115,8 +115,13 @@ def queue(api, *, raw=None, actor="human:ana", **values):
         )
 
 
-def claim(api, token):
-    return post(api, "connectors/email/sends/claim", {"mailbox": BOX}, token=token)["send"]
+def dispatch(api):
+    """One pass of the server's own sends (email_sending.drain) to the fake Gmail: the MIME of each email it sent."""
+    from backend.tests.helpers.fake_gmail import CURRENT
+
+    before = len(CURRENT["fake"].sent)
+    S.drain(api.app.state.store, api.app.state.auth)
+    return [mime for _, mime, _ in CURRENT["fake"].sent[before:]]
 
 
 def approved(api, queued, token="ana-test"):

@@ -642,7 +642,8 @@ def _exchange(
             except (OSError, http.client.HTTPException, ValueError, AttributeError):
                 answer = b""
             return exc.code, answer, _code(answer) or str(exc.code)
-    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError, http.client.HTTPException):
+        # IncompleteRead (a connection closed part way through the answer) is an HTTPException, not an OSError.
         return 0, b"", "unreachable"
     if limit and len(answer) > limit:
         return status, answer[:limit], "too_large"

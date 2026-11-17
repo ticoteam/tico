@@ -15,9 +15,6 @@ RECENT = collections.deque(maxlen=50)
 
 
 def log(line, *, diagnostic=False):
-    from .redact import scrub_log  # a running turn's secrets never reach the log
-
-    line = scrub_log(line)
     print(time.strftime("%Y-%m-%d %H:%M:%S") + " " + line, flush=True)
     if diagnostic or TROUBLE.search(line):
         # The server keeps at most 300 characters per line; the timestamp and space are 21 of them.

@@ -2,7 +2,7 @@
 
 Moved from clients/hubtools.py; clients/commands/__init__.py says how the table is put together."""
 
-from clients.commands import computer_upkeep, connections, pipelines
+from clients.commands import computer_upkeep, connections, pipelines, tools_admin
 from clients.commands import org as hubtools_org
 
 from clients.commands._registry import TOOLS, tool
@@ -115,17 +115,9 @@ ASSISTANT_WRITES = {
 ASSISTANT_WRITES.update('tico_email_' + action for action in EMAIL_ORGANIZE)
 
 
+# The email reads are everyone's: a person, the Assistant and a bot, at the mailbox level the server checks
+# (backend/mail.py), so they take the default audience.
 AUDIENCE = {
-    **{
-        name: HUMANS_AND_ASSISTANT
-        for name in (
-            "tico_email_mailboxes",
-            "tico_email_inbox",
-            "tico_email_search",
-            "tico_email_thread",
-            "tico_email_message",
-        )
-    },
     **{
         name: PEOPLE
         for name in (
@@ -310,7 +302,7 @@ AUDIENCE = {
 
 
 # Modules that keep their own AUDIENCE (and SHELL_ONLY) lines next to their tools.
-for _module in (hubtools_org, connections, computer_upkeep, pipelines):
+for _module in (hubtools_org, connections, computer_upkeep, pipelines, tools_admin):
     AUDIENCE.update(_module.AUDIENCE)
 SHELL_ONLY |= pipelines.SHELL_ONLY
 
@@ -359,7 +351,12 @@ ASSISTANT_HIDDEN = frozenset(
         "tico_tool_call",
         "tico_task_readers_list",  # tico_task_show has the readers; the Assistant's listing is near its size cliff
         "tico_tool_check",  # tico_tool_index has each tool's status; Check now is on the tool's page. Same cliff.
+        "tico_tool_activity",  # the Tools Owner's reading of how tools are used; the tool's page shows it. Same cliff.
         "tico_tool_level",  # a Tools change the Assistant hands the Tools Owner (playbooks/acting-for-them.md)
+        # A message's attachments: the person opens them in Gmail; the Assistant reads the message. Same cliff.
+        "tico_email_attachments",
+        "tico_email_attachment",
+        "tico_email_lint",  # tico_email_draft runs the same lint; same cliff
     }
 )
 

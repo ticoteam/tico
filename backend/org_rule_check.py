@@ -1237,14 +1237,17 @@ def _review_task(c, hold_id, author, rule, reviewer):
         "A message or output was held by an org rule. Open the hold to Keep blocked, Send anyway or Edit rule. "
         "Nothing from the output is copied here.\n\nHold: " + hold_id
     )
-    task = H.task_create(
+    from . import person_asks
+
+    task = person_asks.task_for(
         c,
         H.KEEPER,
         REVIEW_TITLE,
         body,
         reviewer,
+        question="Keep it blocked, send it anyway, or edit the rule?",
+        why="An org rule held a message or output, and you review its holds.",
         labels=[REVIEW_LABEL],
-        lint=False,
         deduplicate=False,
     )
     return task["id"]

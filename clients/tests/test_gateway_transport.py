@@ -3,6 +3,7 @@ caller. urllib is the only thing stubbed, at `OpenerDirector.open`, the one call
 2xx answer is a `Reply`, an error answer is an HTTPError, a Gateway that does not answer is a URLError. Each test checks
 the request the call built too (URL, method, key, body). Nothing is sent anywhere."""
 
+import http.client
 import io
 import json
 import urllib.error
@@ -403,3 +404,18 @@ def test_relay_keeps_at_most_its_limit_and_sends_nothing_to_an_unsafe_address(ne
     assert G.relay("GET", BASE + "/audio") == (200, b"abcd")
     assert G.relay("GET", "http://gateway.example.test/audio") == (0, b"")
     assert len(network.requests) == 1
+
+
+# --- a body cut short: a connection that closes part way makes read() raise IncompleteRead ---------------------------
+
+
+class Truncated(Reply):
+    """A 2xx answer whose body stops short of its length, as a connection that closes part way leaves it."""
+
+    def read(self, size=-1):
+        raise http.client.IncompleteRead(b"partial")
+
+
+def test_a_body_cut_short_is_unreachable_not_an_exception(network):
+    network.answers.append(Truncated())
+    assert G.video_content(BASE, KEY, JOB) == (0, b"", "unreachable")

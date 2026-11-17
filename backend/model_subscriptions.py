@@ -707,8 +707,8 @@ def _plan_usage(c, sub, runtime, ctx):
     The most-used window wins, its freshest report breaking a tie. Otherwise the reason is what the data tells: not on a
     computer, a reconnect due, a computer too old, a plan that sends no percent, readings from before it was added,
     computers offline, or a computer yet to report."""
-    from . import model_login
-    from .subscriptions import WINDOWS, computer_logins
+    from . import model_login, subscription_refresh as SR
+    from .subscriptions import WINDOWS, computer_logins, weekly_snapshot
 
     runners = ctx["runners"]
     computers = [g for g in ctx["grants"].get(sub["id"], []) if g["runtime"] == runtime and g["runner_id"] in runners]
@@ -755,6 +755,20 @@ def _plan_usage(c, sub, runtime, ctx):
                 best = candidate
             if window == "weekly" and reading.get("resets_at") and (weekly is None or reported > weekly[1]):
                 weekly = candidate
+    # The plan's own read (subscription_refresh.request_plan_read): this plan's by its asking, and not from before its token was replaced.
+    own = weekly_snapshot(SR.plan_reading(ctx["meta"].get(SR.plan_key(sub["id"]))))
+    if (
+        own
+        and own["used_percent"] is not None
+        and (not own["resets_at"] or _at(own["resets_at"]) > now)
+        and _at(own["reported_at"]) >= _at(sub["credential_at"] or sub["created_at"])
+    ):
+        taken = _at(own["reported_at"])
+        candidate = (own["used_percent"], taken, "week", own["resets_at"])
+        if best is None or candidate[:2] > best[:2]:
+            best = candidate
+        if own["resets_at"] and (weekly is None or taken > weekly[1]):
+            weekly = candidate
     if best:
         used, _, label, resets = best
         # The weekly window's reset decides where the plan comes in a person's set (`pick_key`), whichever window is
@@ -772,6 +786,8 @@ def _plan_usage(c, sub, runtime, ctx):
 
 def view(c, sub, ctx=None):
     """A subscription as Settings > Models lists it: no value, a preview, its status, the computers given it."""
+    from . import subscription_refresh as SR
+
     ctx = _listing(c, sub["id"]) if ctx is None else ctx
     spec = KINDS.get(sub["kind"]) or {}
     computers = [g["runner_id"] for g in ctx["grants"].get(sub["id"], [])]
@@ -790,6 +806,7 @@ def view(c, sub, ctx=None):
         "revision": sub["revision"],
         "computers": list(dict.fromkeys(computers)),
         "usage": _usage(c, sub, ctx),
+        "usage_refresh": SR.plan_view(ctx["meta"].get(SR.plan_key(sub["id"]))),
         "added_by": sub["added_by"],
         "added_by_name": added.get("name") or added.get("email") or "",
         "owner_id": sub.get("owner_id") or "",
@@ -803,7 +820,8 @@ def listed(c):
     """Every subscription as Settings > Models lists it, each plan with where it comes in its owner's plans for its
     runtime (`order`: the plans in use on a computer given that person's plans first, as they stay put, then the
     other available ones in pick order; None for one held or needing reconnecting) and the computers whose turns sign
-    in with it now (`in_use_on`)."""
+    in with it now (`in_use_on`), and `place`: its place among that person's plans of every tool, those in use first and
+    then by the soonest weekly reset (None when held or needing reconnecting)."""
     if not _present(c):
         return []
     subs = H._rows(
@@ -824,13 +842,22 @@ def listed(c):
     groups = {}
     for v in views:
         v["in_use_on"] = using.get(v["id"], [])
-        v["order"] = None
+        v["order"] = v["place"] = None
         if owned(v["kind"]) and v["owner_id"] and available(c, v, v["runtime"], holds):
             groups.setdefault((v["owner_id"], v["runtime"]), []).append(v)
     for plans in groups.values():
         plans.sort(key=lambda v: (not v["in_use_on"], pick_key(v, v["usage"])))
         for n, v in enumerate(plans, 1):
             v["order"] = n
+    # A person's plans of every tool in one list (`place`): the Settings list groups by person and keeps this order.
+    people = {}
+    for plans in groups.values():
+        for v in plans:
+            people.setdefault(v["owner_id"], []).append(v)
+    for plans in people.values():
+        plans.sort(key=lambda v: (not v["in_use_on"], pick_key(v, v["usage"])))
+        for n, v in enumerate(plans, 1):
+            v["place"] = n
     return views
 
 
@@ -1140,10 +1167,11 @@ def _confirm_reconnect(c, settings, given):
         _confirm({"running": running, "sessions": sum(p["sessions"] for p in plans)}, {"computers": len(given)})
 
 
-def default_name(c, kind):
-    """The name of a new subscription whose adder gave none: its plan or provider ("Claude", "ChatGPT"), numbered from
-    the second of that name on ("Claude 2"). It is renamed under its row's Edit."""
-    base = KINDS[kind]["name"]
+def default_name(c, kind, preview=""):
+    """The name of a new subscription whose adder gave none: a ChatGPT login's account email (its `preview`, when it has
+    one), else its plan or provider ("Claude", "ChatGPT"), numbered from the second of that name on ("Claude 2"). It is
+    renamed under its row's Edit."""
+    base = preview if kind == "codex_login" and "@" in preview else KINDS[kind]["name"]
     taken = {r["name"].strip().lower() for r in c.execute("SELECT name FROM model_subscriptions")}
     n, name = 1, base
     while name.lower() in taken:
@@ -1206,7 +1234,7 @@ def save(c, vault, settings, who, body, sid=None, signed_on=""):
     if c.execute("SELECT count(*) FROM model_subscriptions").fetchone()[0] >= MAX_SUBSCRIPTIONS:
         raise Problem("limit", f"The company has {MAX_SUBSCRIPTIONS} subscriptions; remove one first", 422)
     value, preview = checked(body.kind, body.secret.get_secret_value())
-    name = (body.name or "").strip() or default_name(c, body.kind)
+    name = (body.name or "").strip() or default_name(c, body.kind, preview)
     owner = _default_owner(c, who, body, body.kind)
     sid = H.new_id()
     c.execute(
@@ -1878,7 +1906,8 @@ def connect(c, settings, who, body):
     if target:
         going = c.execute("SELECT * FROM model_logins WHERE id=?", (target["id"],)).fetchone()
         return answer(going, model_login._runner(c, going["runner_id"]))
-    target = {"name": name or ("" if sid else default_name(c, kind))}
+    # A ChatGPT login is named for its account's email once it is saved (`connected`), so it gets no name yet.
+    target = {"name": name or ("" if sid or kind == "codex_login" else default_name(c, kind))}
     computers = _connect_computers(c, spec["runtime"], who)
     if not computers:
         # No computer is online to run it, and the company has a cloud computer: it is started for the sign-in, and
@@ -2040,6 +2069,20 @@ def install(app, store, auth, mutate, settings):
             auth.domain(who)
             _admin(auth, who)
             return remove(c, settings, who, sid, confirm)
+
+        return mutate(request, Empty(), work)
+
+    # Read a Claude plan's week now (subscription_refresh.request_plan_read): admins, as for changing the plan.
+    @app.post("/api/v2/model-subscriptions/{sid}/usage-refresh")
+    def refresh_usage(request: Request, sid: str):
+        from . import subscription_refresh as SR
+
+        who = request.state.identity
+
+        def work(c):
+            auth.domain(who)
+            _admin(auth, who)
+            return SR.request_plan_read(c, sid, who.actor)
 
         return mutate(request, Empty(), work)
 

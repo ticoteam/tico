@@ -353,12 +353,17 @@ def _create_task(c, auto, run_id, args, values, step=None):
     if owner.startswith("person:"):
         owner = "human:" + owner[7:]
     due, marker, refs = _occurrence(c, auto, args, values)
-    row = H.task_create(
+    from . import person_asks
+
+    # A task for a person carries the automation's question to them (person_asks), so it is in their Needs you.
+    row = person_asks.task_for(
         c,
         actor,
         title,
         _text(args, "body") or title,
         owner,
+        question=title[:200],
+        why="An automation filed it for you.",
         due=due,
         lint=False,
         deduplicate=False,

@@ -1905,8 +1905,9 @@ def _briefs(c, ids, visible):
 
 def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
     """Needs you, one list for a person (docs/dev/pipelines-v3-cutover.md, "Needs you"), oldest first:
-    `waiting_on.needs(person)` (every requirement with their name, every task whose work is theirs, every Paused cause
-    they can fix) and every @ of them by a person, on a task or in a channel, until they reply (C28). Only what the
+    `waiting_on.needs(person)` (every OK and question asked of them, a private task they must let someone see, every
+    Paused cause they can fix; never a task that only is theirs) and every @ of them by a person, on a task or in a
+    channel, until they reply (C28). Only what the
     person may read is listed. Each item has `kind` (task, ask, paused, mention), `id`, `line`, `since` and the brief
     `task`; an ask also has the fields of its requirement in `to_leave` (`ask`). `count_only` leaves out the brief
     task and the ask's fields: a count needs neither. `task_view` is the callers' and not read here. An ask the person
@@ -3386,8 +3387,9 @@ def install_views(app, store, auth, mutate, task_view):
         limit: int | None = None,
         cursor: str | None = None,
     ):
-        """Needs you (needs_items): every requirement with the person's name, every task whose work is theirs, every
-        Paused cause they can fix and every @ of them by a person until they reply. `count` is the length of the list,
+        """Needs you (needs_items): every OK and question asked of the person, a private task they must let someone
+        see, every Paused cause they can fix and every @ of them by a person until they reply; a task that only is
+        theirs is in Tasks. `count` is the length of the list,
         the one number on the Tasks badge. The list's `version` changes whenever an item or its place does:
         `version=<the one held>` answers `unchanged` with no items when it still holds, and `ids=a,b` sends only those
         items, with each one's place in the whole list (`positions`), to mend a held copy after a live `needs` event.

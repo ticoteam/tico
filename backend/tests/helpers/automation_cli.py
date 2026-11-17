@@ -2,7 +2,7 @@
 
 from urllib.parse import urlencode
 from backend.tests.helpers.api import headers
-from clients import hubcli, remotecli
+from clients import cli_spec, hubcli, remotecli
 
 
 class Client:
@@ -32,4 +32,10 @@ class Client:
 
 
 def cli(api, token, *argv):
-    return remotecli.automation(Client(api, token), hubcli.parser().parse_args(["automation", *argv]))
+    """One `tico automation` line, dispatched as remotecli.run does: a spec'd leaf is its spec's call, the rest
+    (create, update, inbox) go to remotecli.automation."""
+    args = hubcli.parser().parse_args(["automation", *argv])
+    client = Client(api, token)
+    if (spec := cli_spec.of(args)) is not None:
+        return spec.call(client, args)
+    return remotecli.automation(client, args)

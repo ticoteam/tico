@@ -1316,7 +1316,9 @@ def auto_disable(c, now=None):
         H.event(c, H.KEEPER, "webhook.auto_disabled", hook["id"], {"name": hook["name"], "attempts": row["n"]})
         try:
             c.execute("SAVEPOINT webhook_disable")
-            task = H.task_create(
+            from . import person_asks
+
+            task = person_asks.task_for(
                 c,
                 H.KEEPER,
                 f"Webhook {hook['name']} was turned off",
@@ -1324,7 +1326,8 @@ def auto_disable(c, now=None):
                 f"Fix the address, then turn it on in Tools › Webhooks or `tico webhook enable {hook['id']}`; "
                 f"Tico then offers to send again what it held back.",
                 hook["created_by"],
-                lint=False,
+                question=f"Can you fix webhook {hook['name']}'s address and turn it on?",
+                why=f"Every attempt to reach it failed for {DISABLE_DAYS} days, so Tico stopped sending.",
             )
             c.execute("UPDATE webhooks SET notify_task=? WHERE id=?", (task["id"], hook["id"]))
             c.execute("RELEASE webhook_disable")

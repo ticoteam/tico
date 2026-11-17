@@ -64,7 +64,7 @@ Always:
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/bills.md`, `knowledge/approvals.md`,
    `knowledge/vendor-details.md` and the playbook the task names. A resumed turn already has them.
 3. Collect new bills: attachments on tasks, and the bills mailbox where connected
-   (`$HUB_DIR/scripts/mail.sh search "invoice OR bill newer_than:8d"`; read only).
+   (`tico email search <address> "invoice OR bill newer_than:8d"`; read only).
 
 ## Ending a run
 1. Update `knowledge/bills.md`, leave a short progress note on the task, commit.

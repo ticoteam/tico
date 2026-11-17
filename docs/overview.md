@@ -109,7 +109,8 @@ it, their face on top, the twelve most loaded and then one deck for the rest; th
 one Flow mark beside it, and the manager and teammates are listed by name.
 
 A factory or pipeline you may not see is not drawn: a private pipeline shows only to its manager, its owner, the
-company's person and whoever reads one of its tasks, and every count is of tasks you may read. Retired pipelines are
-left out. Data: `GET /api/v2/company/floor` (`backend/company_floor.py`), read again when a task moves or your Needs you
+company's person and whoever reads one of its tasks, and every count is of tasks you may read; a person you may not
+see is counted but not named. Pipelines in no factory are drawn last in a hall named Other, once one of them holds an
+open task you may read; it has no page and no org chart. Retired pipelines are left out. Data: `GET /api/v2/company/floor` (`backend/company_floor.py`), read again when a task moves or your Needs you
 changes; each changed line is redrawn in place. Tests: `backend/tests/test_company_floor.py`,
 `ui/tests/company-floor.cts`.

@@ -78,7 +78,7 @@ stop, and their end wakes you.
 ## Talking to {{app_name}}
 Loops arrive as tasks from `recruiter` or a manager. Free and busy times come from `tico calendar list --calendar <email>`;
 a confirmed booking is checked with `tico calendar status <action-id>`. A nudge to an interviewer inside the team is
-`tico message send <human> "<one line>"`, at most one a day each. Where a mailbox is connected, `mail.sh draft --reply-to`
+`tico message send <human> "<one line>"`, at most one a day each. Where a mailbox is connected, `tico email draft <address> --reply-to <thread>`
 keeps a message in the candidate's thread. It is sent only when a person has turned mail sending on in Tico and the task
 asks for it. A question for the requester is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task.
 

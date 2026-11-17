@@ -1459,13 +1459,17 @@ class Onboarding:
 
     def ensure_builtin_routines(self, c):
         """At startup (an update): the active Assistant gets its template's routines it has never had, its daily sweep,
-        which a company from before it existed never had. Only keys the bot has never had are created (`_seed_routines`),
-        so a routine a person deleted or changed stays so. No other built-in bot is backfilled: its routines are set up
-        with the bot (`_turn_on`), and a backfill would switch on what nobody asked for (a bookkeeper's monthly report).
+        which a company from before it existed never had, and so does the active Tools Owner (its daily learn-from-use, a
+        cheap read of how tools are used). Only keys the bot has never had are created (`_seed_routines`), so a routine a
+        person deleted or changed stays so. No other built-in bot is backfilled: its routines are set up with the bot
+        (`_turn_on`), and a backfill would switch on what nobody asked for (a bookkeeper's monthly report).
         A planned bot gets them when it is set up; a paused or archived bot is a person's stop and is left alone. Returns
         the (bot, key) pairs it created."""
-        # Only the Assistant (a bootstrap card): its daily sweep is the one routine an install from before it never had.
-        boot = {card["template"] for card in read_cards(self.settings) if card.get("bootstrap")} & {"assistant"}
+        # Only the Assistant and the Tools Owner (bootstrap cards), whose routines every company should run.
+        boot = {card["template"] for card in read_cards(self.settings) if card.get("bootstrap")} & {
+            "assistant",
+            H.TOOLS_OWNER,
+        }
         if not boot:
             return []
         try:

@@ -327,9 +327,13 @@ def test_retiring_a_bet_with_goals_files_one_realign_card_for_the_owner(api):
             "SELECT t.* FROM goal_asks a JOIN tasks t ON t.id=a.task_id WHERE a.kind='proposal' AND a.ref=?",
             (proposal["id"],),
         )
+    # The Strategy Owner's task, with its question to Ana: in her Needs you.
     assert (
-        task and task["owner_id"] == "human:ana" and task["title"] == "Choose what happens to 1 goal after strategy v2"
+        task
+        and task["owner_id"] == "bot:strategy-owner"
+        and task["title"] == "Choose what happens to 1 goal after strategy v2"
     )
+    assert task["id"] in {i.get("task_id") for i in get(api, "needs-you")["items"]}
     assert "Keep as it is, Retire goal, or Move to a bet" in task["body"] and "Confirm" not in task["body"]
     payload = json.loads(proposal["payload"])
     assert [g["goal_id"] for g in payload["goals"]] == [goal["id"]] and payload["bets"][0]["id"] == two["id"]

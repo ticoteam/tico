@@ -3637,8 +3637,6 @@ class Execution:
             readiness.pop('harnesses', None)
         if not readiness.get('mail_key'):
             readiness.pop('mail_key', None)
-        if not readiness.get('shared_env'):
-            readiness.pop('shared_env', None)
         # The platform named at enrollment stands: backend/sql.py decides on it (a heartbeat
         # from a stolen credential must not turn a shared server into a personal Mac).
         # Most beats repeat the last report: then only the contact times move (readiness_at too: the page tells a
@@ -9203,14 +9201,19 @@ class Execution:
         if again:
             job_line += " The earlier review task was closed while the run remained unresolved."
         try:
-            H.task_create(
+            from . import person_asks
+
+            person_asks.task_for(
                 c,
                 H.KEEPER,
                 title,
                 boundary + job_line + "\n\n" + named + "\n" + by_id,
                 owner,
+                question="Resume or dismiss the held run, once you have checked what it did?",
+                why="It stopped partway, so Tico holds it rather than repeat a possible outside action.",
                 private=True,
                 deduplicate=False,
+                lint=True,
             )
         except H.Refused:
             pass

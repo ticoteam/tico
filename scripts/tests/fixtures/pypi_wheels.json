@@ -360,6 +360,7 @@
   "pp311-pypy311_pp80-macosx_11_0_arm64",
   "pp311-pypy311_pp80-win_amd64"
  ],
+ "dkimpy==1.1.8": [],
  "dnspython==2.9.2": [
   "py3-none-any"
  ],

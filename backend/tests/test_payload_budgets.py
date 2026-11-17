@@ -29,9 +29,15 @@ def test_payloads_stay_under_their_budgets(api):
     cid = msg["conversation_id"]
     task = post(api, "tasks", {"owner": "human:ana", "title": "Review the plan", "body": BODY})["task"]
     with store.transaction() as c:
-        # 2,000 tasks: 500 on ana (her Needs you), the rest on bots.
-        for i in range(499):
-            H.task_create(c, "human:ana", f"Review plan {i}", BODY, "human:ana", lint=False)
+        # 2,000 tasks: 500 on ana, each asking her a question (her Needs you), the rest on bots.
+        from backend import task_engine as TE
+
+        mine = [task] + [
+            H.task_create(c, "human:ana", f"Review plan {i}", BODY, "human:ana", lint=False) for i in range(499)
+        ]
+        for row in mine:
+            version = H.task(c, row["id"])["version"]
+            TE.add_requirement(c, row["id"], "human:ana", "answer", "human:ana", "Ready?", seen_version=version)
         for i in range(1500):
             H.task_create(c, "human:ana", f"Bot work {i}", BODY, "bot:ops", lint=False)
         first = dict(
@@ -94,6 +100,7 @@ def test_payloads_stay_under_their_budgets(api):
 
     # Needs you, on the live stream: a change to one item sends ids, not the 500-item list.
     who = auth.authenticate({"authorization": "Bearer ana-test"})
+    [item_id] = [x["id"] for x in get(api, "needs-you")["items"] if x["task_id"] == task["id"]]
     with store.read() as c:
         held = E.needs_baseline(c, auth, who, api.app.state.task_view)
         after, base = E.latest(c), held["version"]
@@ -105,11 +112,11 @@ def test_payloads_stay_under_their_budgets(api):
     # What an older page still gets: the whole list, 500 brief items (about 380 KB).
     assert whole and whole[-1][2]["count"] == 500 and size(whole[-1][2]) > 256 * KB
     event = changes[-1][2]
-    assert size(event) <= 8 * KB and event["changed"] == [task["id"]] and event["base"] == base
-    mended = get(api, f"needs-you?ids={task['id']}")
+    assert size(event) <= 8 * KB and event["changed"] == [item_id] and event["base"] == base
+    mended = get(api, f"needs-you?ids={item_id}")
     assert mended["version"] == event["version"] and [x["id"] for x in mended["items"]] == list(
         mended["positions"]
-    ) == [task["id"]]
+    ) == [item_id]
 
     # Opening a chat as the web app does: 50 messages at most, under 160 KB of them, the run's output capped.
     opened = api.get(f"/api/v2/conversations/{cid}/snapshot?limit=50&max_bytes=163840", headers=headers())

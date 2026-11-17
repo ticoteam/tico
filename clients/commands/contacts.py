@@ -2,6 +2,8 @@
 
 Moved from clients/hubtools.py; clients/commands/__init__.py says how the table is put together."""
 
+from clients import cli_spec
+from clients.cli_spec import Arg, Command, Group
 from clients.commands._registry import tool
 from clients.commands._schemas import _key, _s
 
@@ -363,3 +365,133 @@ def contacts_link_type_add(api, args):
         }
     )
     return api.post("entities/link-types", body, key=_key(args))
+
+
+def _upsert_fields(fields):
+    """The tool takes objects: a KEY=VALUE match is the match object, and the --set pairs the values object."""
+    if "match" in fields:
+        fields["match"] = {fields["match"][0]: fields["match"][1]}
+    if "values" in fields:
+        fields["values"] = dict(fields["values"])
+    return fields
+
+
+# `tico contacts ...` (clients/cli_spec.py): `--text` is the command line's own, a short answer instead of JSON.
+# `contacts attribute add` stays hand-built (clients/hubcli.py): its --value-type takes any text, where the tool's schema
+# lists the types, so a spec would refuse what the server takes.
+_ID = "id|email|domain|name"
+CONTACTS = (
+    Group("contacts", "contacts: people, organizations and places, their links, values and notes, as you see them"),
+    Command(
+        "contacts self",
+        "who we are: our company, where we operate, the obligations that bind us",
+        args=(Arg("as_text", flag="--text", action="store_true", local=True, help="a short summary, not JSON"),),
+        example="tico contacts self --text",
+    ),
+    Command(
+        "contacts types",
+        "the entity types and their descriptions, and who added each",
+        example="tico contacts types",
+    ),
+    Command(
+        "contacts describe",
+        "one type: its attributes (owners, options) and the link types that touch it",
+        example="tico contacts describe company",
+    ),
+    Command(
+        "contacts find",
+        "entities of one type you can see, by name, status or a link to us",
+        args=(Arg("as_text", flag="--text", action="store_true", local=True, help="one line per entity, not JSON"),),
+        example="tico contacts find company --link customer_of",
+    ),
+    Command(
+        "contacts get",
+        "one entity as you see it: values with source, links, records and your notes",
+        args=(
+            Arg("ref", metavar=_ID),
+            Arg("as_text", flag="--text", action="store_true", local=True, help="a short card, not JSON"),
+        ),
+        example="tico contacts get ana@example.com --text",
+    ),
+    Command(
+        "contacts rules",
+        "the rules that apply to an entity (none until rules arrive)",
+        args=(Arg("ref", metavar=_ID), Arg("as_bot", flag="--as", metavar="BOT")),
+        example="tico contacts rules acme.com --as ana-bot --action email",
+    ),
+    Command(
+        "contacts upsert",
+        "create or update one entity: --match names it, --set sets its values",
+        args=(
+            Arg("match", flag="--match", type=cli_spec.pair, required=True, metavar="KEY=VALUE"),
+            Arg("values", flag="--set", type=cli_spec.pair, action="append", metavar="KEY=VALUE"),
+            Arg("evidence_id", flag="--evidence", metavar="EVIDENCE_ID"),
+        ),
+        convert=_upsert_fields,
+        example="tico contacts upsert company --match domain=acme.com --set status=customer --name Acme",
+    ),
+    Command(
+        "contacts link",
+        "a typed, dated link between two entities: a works_at b",
+        args=(
+            Arg("from_ref", metavar="a"),
+            Arg("link_key", metavar="link"),
+            Arg("to_ref", metavar="b"),
+            Arg("valid_from_on", flag="--from", metavar="DATE"),
+            Arg("valid_until_on", flag="--until", metavar="DATE"),
+            Arg("evidence_id", flag="--evidence", metavar="EVIDENCE_ID"),
+        ),
+        example="tico contacts link ana works_at acme --from 2026-01-01",
+    ),
+    Command(
+        "contacts unlink",
+        "end a link: it stops being current today; its history stays",
+        example="tico contacts unlink l1",
+    ),
+    Command(
+        "contacts merge",
+        "merge a duplicate into the entity it copies; unmerge reverses it",
+        example="tico contacts merge acme dup-acme",
+    ),
+    Command(
+        "contacts unmerge",
+        "reverse the last merge of a dropped entity, named by its own id",
+        example="tico contacts unmerge dup-acme",
+    ),
+    Command(
+        "contacts history",
+        "past values of an entity's fields, newest first",
+        args=(Arg("ref", metavar=_ID),),
+        example="tico contacts history acme.com --attribute status",
+    ),
+    Command(
+        "contacts note",
+        "a note on an entity; --audience me keeps it to you",
+        args=(Arg("ref", metavar=_ID), Arg("evidence_id", flag="--evidence", metavar="EVIDENCE_ID")),
+        example="tico contacts note acme.com 'Renewal in March' --audience me",
+    ),
+    Group("contacts type", "add an entity type"),
+    Command(
+        "contacts type add",
+        "add an entity type, with its description",
+        args=(
+            Arg("name", flag="--name"),
+            Arg("description", flag="--description"),
+            Arg("plural_name", flag="--plural"),
+        ),
+        example="tico contacts type add vendor --name Vendor --description 'Who we buy from'",
+    ),
+    Group("contacts link-type", "add a link type"),
+    Command(
+        "contacts link-type add",
+        "add a link type: its name both ways, its description, the ends it may join",
+        args=(
+            Arg("name", flag="--name"),
+            Arg("description", flag="--description"),
+            Arg("inverse_name", flag="--inverse"),
+            Arg("from_type", flag="--from"),
+            Arg("to_type", flag="--to"),
+        ),
+        example="tico contacts link-type add works_at --name 'works at' --inverse employs --description 'Employment'",
+    ),
+)

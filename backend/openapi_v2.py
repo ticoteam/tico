@@ -2452,7 +2452,8 @@ NEEDS_ITEM = obj(
         "kind": {
             "type": "string",
             "enum": ["task", "ask", "paused", "mention"],
-            "description": "task: a task whose work is theirs; ask: a requirement with their name (its fields in "
+            "description": "task: a private task they must let someone see (`task.turn.share`); ask: a requirement "
+            "with their name (its fields in "
             "`ask`); paused: a bot that cannot run, which they can fix; mention: an @ of them by a person they have "
             "not replied to",
         },
@@ -3531,7 +3532,7 @@ SCHEMAS = {
             "factories": items(
                 obj(
                     {
-                        "id": "s",
+                        "id": "n",
                         "name": "s",
                         "manager_id": "n",
                         "pipelines": items(
@@ -9045,7 +9046,7 @@ STABLE.extend(
             'Cards and pins',
             'getPlace',
             'A place\'s pins in order (dashboard, growth, '
-            'team:<group>, bot:<id>, task:<id>, person:me for My dashboard), each card with what it shows the caller; unreadable '
+            'team:<group>, bot:<id>, task:<id>, person:me for Company), each card with what it shows the caller; unreadable '
             'pages are left out. growth takes `month` (YYYY-MM) and answers `month` and `months`, the picker\'s choices',
             'Place',
         ),
@@ -9054,7 +9055,7 @@ STABLE.extend(
             'put',
             'Cards and pins',
             'savePlace',
-            'Save a Dashboard, team page or My dashboard (its '
+            'Save a Dashboard, team page or Company page (its '
             'default cards become pins); a team page\'s audience sets its group\'s Read',
             'Place',
         ),

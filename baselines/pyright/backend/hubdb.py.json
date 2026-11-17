@@ -68,14 +68,6 @@
             {
                 "code": "reportOptionalSubscript",
                 "range": {
-                    "startColumn": 94,
-                    "endColumn": 98,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportOptionalSubscript",
-                "range": {
                     "startColumn": 84,
                     "endColumn": 88,
                     "lineCount": 1

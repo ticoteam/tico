@@ -29,7 +29,7 @@ def vault_ids(api, token):
 def test_a_credential_admin_who_is_not_listed_gets_404_everywhere_and_never_sees_its_keys(api, monkeypatch):
     tid, rw, ro = bank(api)
     grant = post(api, f"credentials/{rw}/grants", {"subject": "bot:ops"})["id"]
-    monkeypatch.setattr(api_tools, "send_check", lambda url, hdrs, params: 200)
+    monkeypatch.setattr(api_tools, "send_check", lambda url, hdrs, params: api_tools.Reply(200))
     assert "api:" + tid not in index(api, "ben-test")
     for path in (f"api-tools/{tid}", f"api-tools/{tid}/activity"):
         r = api.get("/api/v2/" + path, headers=headers("ben-test"))

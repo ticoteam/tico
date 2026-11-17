@@ -86,7 +86,7 @@ def test_a_check_marks_a_401_key_rejected_and_a_2xx_working(api, monkeypatch):
 
     def answer(url, hdrs, params):
         sent.append((url, hdrs, params))
-        return answer.code
+        return api_tools.Reply(answer.code)
 
     monkeypatch.setattr(api_tools, "send_check", answer)
     answer.code = 401
@@ -112,7 +112,7 @@ def test_a_check_marks_a_401_key_rejected_and_a_2xx_working(api, monkeypatch):
 
 def test_no_answer_carries_a_key_value_but_the_vaults_reveal(api, monkeypatch):
     setup(api)
-    monkeypatch.setattr(api_tools, "send_check", lambda url, hdrs, params: 200)
+    monkeypatch.setattr(api_tools, "send_check", lambda url, hdrs, params: api_tools.Reply(200))
     seen = []
     tid = tool(api)["id"]
     seen.append(json.dumps(key(api, tid, SECRET_RW)))

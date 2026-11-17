@@ -117,7 +117,8 @@ async function run(engine: BrowserType, name: string, hub: RealHubSupport.Hub, t
       const open = await cold(browser, hub);
       const {page} = open;
       await page.goto(hub.url + '/#/task/' + task);
-      await page.locator('#main').getByText('Moved code task').first().waitFor({timeout: t(20000)});
+      // The task's page is its dialog over Tasks; an own task with nothing asked is not in the You list under it.
+      await page.locator('#task-modal[open] .tmodal-title', {hasText: 'Moved code task'}).waitFor({timeout: t(20000)});
       await page.waitForFunction(() => ['tfTileHTML', 'tfFromAttachments', 'decideGoThrough', 'bvMount']
         .every(f => typeof (window as unknown as Record<string, unknown>)[f] === 'function'), null, {timeout: t(15000)});
       for (const part of ['task-files', 'decide', 'browser-view', 'stage-rules']) assert.ok(open.parts.includes(part), `${name}: a task's page downloaded ${part}`);
@@ -160,7 +161,7 @@ async function run(engine: BrowserType, name: string, hub: RealHubSupport.Hub, t
       await page.locator('dialog.frv[open]').waitFor({timeout: t(20000)});
       await page.locator('dialog.frv .frv-err').waitFor({timeout: t(15000)});
       assert.ok(open.parts.includes('file-review'), name + ': a file link downloaded the review view');
-      await page.locator('#main').getByText('Moved code task').first().waitFor({timeout: t(20000)});
+      await page.locator('#task-modal[open] .tmodal-title', {hasText: 'Moved code task'}).waitFor({timeout: t(20000)});
       assert.deepEqual(open.errors, [], name + ': errors in the review view');
       await open.close();
     }

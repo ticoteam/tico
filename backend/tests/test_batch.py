@@ -58,19 +58,16 @@ def test_a_batch_holds_what_bots_ask_and_commit_applies_it_through_the_task_call
         choices=["Monday", "Friday"],
         seen_version=other["version"],
     )
+    # A task handed to her with nothing asked is in her Tasks, not Needs you: the batch leaves it out.
     chore = H.task_create(c, FINANCE, "Sign the lease", "Sign it today.", "human:ana", lint=False)
     batch = _start(c)
     keys = [B._items(c.execute("SELECT * FROM batches WHERE id=?", (batch["id"],)).fetchone())]
-    assert batch["total"] == 3 and batch["item"]["key"] == "ask:" + _ask_id(c, ads, ok)
-    assert {i["key"] for i in keys[0]} == {
-        "ask:" + _ask_id(c, ads, ok),
-        "ask:" + _ask_id(c, other, question),
-        "task:" + chore["id"],
-    }
+    assert batch["total"] == 2 and batch["item"]["key"] == "ask:" + _ask_id(c, ads, ok)
+    assert {i["key"] for i in keys[0]} == {"ask:" + _ask_id(c, ads, ok), "ask:" + _ask_id(c, other, question)}
     B.respond(c, ANA.actor, batch["id"], "decide", "Go ahead.", n=1, decision="ok")
     B.respond(c, ANA.actor, batch["id"], "decide", "Friday", n=2, decision="answer")
-    B.respond(c, ANA.actor, batch["id"], "decide", "", n=3, decision="done")
-    assert H.task(c, chore["id"])["status"] == "open"  # nothing is applied while the person talks
+    held = H.task_view(c, ads["id"], "human:ana")["to_leave"]
+    assert not next(r for r in held if r["requirement_id"] == ok["requirement_id"])["met"]  # nothing applied yet
     log = []
     out = B.commit(c, ANA, batch["id"], _sent(log))
     assert out["errors"] == []
@@ -78,7 +75,7 @@ def test_a_batch_holds_what_bots_ask_and_commit_applies_it_through_the_task_call
     assert next(r for r in view["to_leave"] if r["requirement_id"] == ok["requirement_id"])["met"]
     asked = H.task_view(c, other["id"], "human:ana")["to_leave"]
     assert next(r for r in asked if r["requirement_id"] == question["requirement_id"])["answer"]["value"] == "Friday"
-    assert H.task(c, chore["id"])["status"] == "done"
+    assert H.task(c, chore["id"])["status"] == "open"
     assert [to for to, _, _ in log] == [FINANCE]
 
 

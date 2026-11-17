@@ -8,16 +8,18 @@ inbox with nothing written to Gmail, and the first routine checked.
 ## 1. Read before you ask
 
     tico task show <id>
-    $HUB_DIR/scripts/mail.sh whoami
-    $HUB_DIR/scripts/mail.sh inbox --untriaged --format brief --decisions
+    tico email mailboxes
+    tico email inbox <address>
+    tico automation list
 
-Confirm you can read the mailbox named in `Mailbox:`. If you cannot, say which refusal and stop: the
+Confirm you can read the mailbox named in `Mailbox:`, and find the inbox's Message automation ("<Name>'s inbox").
+`tico automation show <id>` reads its rules. If you cannot, say which refusal and stop: the
 owner has to connect it (docs/mail.md). Otherwise note roughly how much is waiting and who writes
 most, so your questions are specific.
 
 ## 2. Introduce yourself in three lines
 
-What you do (sort, draft, flag), that requested filing uses the mailbox rules and your Tools; replies to outsiders stay drafts until a person turns mail sending on in Tico.
+What you do (sort, draft, flag), that filing follows the inbox's Message automation and waits until they turn it on; replies to outsiders stay drafts until a person turns mail sending on in Tico.
 
 ## 3. Ask, in one message
 
@@ -34,12 +36,14 @@ Numbered, each with its one-line why. Offer a default so a human can answer "fin
 ## 4. Record
 
 Write each answer, dated, into the `knowledge/` file it belongs to. Write the lists to
-`playbooks/inbox-preferences.md` and the voice to `knowledge/voice.md`. Leave `Filing: Off`.
+`playbooks/inbox-preferences.md` and the voice to `knowledge/voice.md`. Leave `Filing: Off`. What can be filed
+and who always reaches them become a proposed change to the Message automation's rules
+(`tico automation update <id> --file <json> --summary "..."`); it waits for the human to accept it.
 
 ## 5. Produce the first brief now
 
-Follow `playbooks/morning-mail-brief.md` on the inbox as it is. Every draft and every filing action is
-`--dry-run`. Write the brief in the shape of `knowledge/examples/mail-brief.md` and attach it to the
+Follow `playbooks/morning-mail-brief.md` on the inbox as it is. Put each reply's text on the task instead of
+creating a draft, and file nothing. Write the brief in the shape of `knowledge/examples/mail-brief.md` and attach it to the
 task, labelled "First draft, not yet reviewed". Nothing is written to Gmail.
 
 ## 6. Check the routine

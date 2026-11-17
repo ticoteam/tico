@@ -1570,6 +1570,7 @@ class Heartbeat(Contract):
             "turns_at_once_v1",
             "private_lanes_v1",
             "model_subscriptions_v1",
+            "plan_usage_v1",
             "browser_exit_v1",
             "model_subscription_activation_v1",
             "model_connect_v1",

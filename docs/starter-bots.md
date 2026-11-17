@@ -61,7 +61,9 @@ summary; the Rules Owner (`rules-owner`) reads the documents added to Rules and 
 (`updates-owner`) drafts each period's company update; the Automations Owner (`automations-owner`) reviews the team's
 automations each week; the Tools Owner (`tools-owner`) owns Tools: it connects services, has keys typed into a card or
 dropped in its Tools chat (it never sees one), proposes each bot's level for a person to grant, and reviews the tools each
-week; and the Owners on the core chart each own one result and log readings for the KPI
+week; it ships with guides to common vendors' logins and keys (`knowledge/vendors/`, `knowledge/logins.md`), reads how
+tools are used each day (`tico tool activity`) and keeps what people tell it about their logins in
+`knowledge/company/`; and the Owners on the core chart each own one result and log readings for the KPI
 that measures it with `tico kpi log`. Owning a result does not make a bot the only one who logs it. No other template
 owns a KPI (Product Analyst and FP&A Analyst answer questions and explain numbers, they do not keep them).
 

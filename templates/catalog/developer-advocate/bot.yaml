@@ -3,11 +3,8 @@ display_name: "Developer Advocate"
 labels: [owner:developer-advocate]
 reads: []                        # other bot repositories this one may clone read-only
 
-# This must agree with the bot's settings on the server, or be left out of this file entirely.
 max_run_minutes: 60
 
-# The first routine is declared off (`enabled: false`) and switched on when a human starts the bot's setup
-# (Start setup, go-live). `tico bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
 routines:
   - id: weekly-developer-pulse
     title: Weekly developer pulse
@@ -17,7 +14,7 @@ routines:
     labels: [priority:p3]
     enabled: false
 
-# What this bot may touch. Not listed is not allowed. Public forums are read on the open web and need no entry.
+# What this bot may touch. Public forums are read on the open web and need no entry.
 # The SDK and examples repositories are read with the team's GitHub App token once the owner lists them.
 # Optional, uncomment when connected. These entries start read only. Requested writes need the necessary Tools; public messages stay drafts until a person turns mail sending on in Tico.
 # tools:
