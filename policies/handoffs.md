@@ -99,7 +99,7 @@ Anything else is stopping early, and Tico wakes you again.
 File a task from the one you are working on, with a concrete deliverable:
 
 ```text
-tico task file --parent <task-id> --owner <slug> --body "<what and why>" "<verb-first title>"
+tico task file --parent <task-id> --owner <slug> --message "<what and why>" "<verb-first title>"
 ```
 
 Your task waits until the new one ends, and you are woken once then. Sub-tasks nest at most 5 deep.

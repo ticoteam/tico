@@ -73,7 +73,7 @@ item's link as `--source` and the post's words as `--quote`.
 
 - `tico task list [--owner <id>]`: open tasks, with ids, titles and versions. Check it before you create a task.
 - `tico task show <task id>`: one task: its version, what it waits on, what is missing and what you may do next, with its history.
-- `tico task create --owner <person id> --title "<title>" --body "<text>"`: one task for a person, when a playbook says so.
+- `tico task create --owner <person id> --title "<title>" --message "<text>"`: one task for a person, when a playbook says so.
 - `tico task comment <task id> "<text>"`: adds a note to a task.
 - `tico task done <task id> -m "<result>" --version N`: finishes a task you own.
 - `tico task ask <task id> --to <person> "<one sentence>" --version N`: asks a person on the task. One open ask per task.

@@ -58,7 +58,7 @@ Always:
 - `skills/size-a-price-change/SKILL.md`: read before you write an impact note or put a number on a proposed change.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/our-prices.md`,
    `knowledge/competitor-prices.md`, `knowledge/pricing-practice.md` and the playbook. A resumed turn already has them.
 3. Set `tico bot status set` to one line naming the review or note in progress.

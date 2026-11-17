@@ -1,7 +1,8 @@
 """Dream: a cleanup pass a person starts over a bot's own instructions and memory (docs/learnings.md, Dream).
 
 A dream is an ordinary task: the bot owns it, the person who started it is its requester, it carries the label
-`dream` and its body is INSTRUCTIONS. It runs as a task turn on the bot's computer with the bot's own model, and its
+`dream`, and INSTRUCTIONS reach the bot through its run as the task's instructions (task_wakes), never as a chat
+message: they are Tico's words, not the person's. It runs as a task turn on the bot's computer with the bot's own model, and its
 session resumes across the one ask it may put to its requester on the task (`tico_task_ask`), so the answer lands in
 the same context. The commits it makes are memory updates like any other: the Learnings history names their run's
 task, and the panel filters them by this task. Nothing is stored here beyond the task.
@@ -13,7 +14,7 @@ be asked.
 
 An auto dream (backend/dream_auto.py) is the same task, queued by the Maintenance pass with its wake held on the release
 policy: it starts while the bot's cache is warm, on a fork of the bot's latest session. Its marker is a `dream.auto` event
-under the system actor, and its body opens with the reason line the pass wrote. Its requester is a person who did not
+under the system actor, and its instructions open with the reason line the pass wrote. Its requester is a person who did not
 start it; the question it asks that person goes through the same exemption.
 """
 
@@ -98,7 +99,7 @@ MODES = {
         "remember from it counts as read.",
         "settle": "Apply it as you go.",
         # Nobody watches an auto dream: its questions go to the person's Flow the usual way, each its own task with a
-        # plain title, never on this task, whose body is these instructions.
+        # plain title, never on this task, whose instructions these are.
         "ask": "If something only {requester} can settle, follow Tico's skills/add-to-flow/SKILL.md (under HUB_DIR) "
         "and ask {requester}: each question its own new task with one ask, never on this task (if Tico will not let "
         "you reach them, ask your supervisor, as the skill says). The answer reaches you on that task.",
@@ -308,7 +309,7 @@ def creator(store):
 
 def start(c, who, owner, task_create, reason=None, wake_refs=None):
     """File a dream as POST /api/v2/tasks files one: `who` gives `owner` the task, and the marker goes on it. `reason` is
-    an auto dream's line (the Maintenance pass's), shown first in its body and kept on its `dream.auto` event; None is a
+    an auto dream's line (the Maintenance pass's), first in its instructions and kept on its `dream.auto` event; None is a
     person's start. `wake_refs` go on the bot's wake: an auto dream's release policy, which holds it for a warm window
     (backend/dream_auto.py). Returns (the task's row, None), or (None, what task_create answered) when an org rule held
     it."""
@@ -316,8 +317,12 @@ def start(c, who, owner, task_create, reason=None, wake_refs=None):
     text = instructions(name, since(c, owner), auto=reason is not None)
     if reason is not None:
         text = f"{reason}\n\n{text}"
-    body = M.TaskCreate(title=TITLE, body=text, owner=owner, labels=[LABEL])
-    made = task_create(c, who, body, lint=False, **({"wake_refs": wake_refs} if wake_refs else {}))
+    from . import task_wakes
+
+    # The steps are Tico's, not the person's: they reach the bot in its run (task_wakes), never as the chat's first
+    # message.
+    body = M.TaskCreate(title=TITLE, owner=owner, labels=[LABEL])
+    made = task_create(c, who, body, lint=False, wake_refs={**(wake_refs or {}), task_wakes.INSTRUCTIONS: text})
     task = made.get("task") if isinstance(made, dict) else None
     if not task:
         return None, made  # held by an org rule: its answer, as POST /api/v2/tasks gives it

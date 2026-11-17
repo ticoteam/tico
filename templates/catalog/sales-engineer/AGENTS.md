@@ -58,7 +58,7 @@ Always:
 - `skills/check-a-demo-script-before-it-runs/SKILL.md`: read before a demo, and when a script is reused for a new buyer.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/technical-discovery.md` and the
    playbook the task names. A resumed turn already has them.
 3. Open the deal's technical note, and the Account Executive's deal note, before writing.

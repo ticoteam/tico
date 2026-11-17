@@ -58,7 +58,7 @@ Always:
 - `skills/gather-contractor-tax-forms/SKILL.md`: read before you list contractors whose tax forms are missing.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/tax-calendar.md`,
    `knowledge/thresholds.md` and the playbook. A resumed turn already has them.
 3. Check the tax mailbox where connected for notices since the last run (read only); a notice's deadline goes on the calendar

@@ -58,7 +58,7 @@ Always:
 - `skills/score-an-event-after-it-ends/SKILL.md`: read for the results line of an event that has ended.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/calendar.md`, `knowledge/rules.md` and
    the playbook. A resumed turn already has them.
 3. Set `tico bot status set` to one line naming the event or review in progress.

@@ -17,7 +17,7 @@ description says what changed, why and how it was tested, and the task links the
 
 ---
 
-## 1. Read the task
+## 1. Read the task's chat
 
     tico task show <id>
 

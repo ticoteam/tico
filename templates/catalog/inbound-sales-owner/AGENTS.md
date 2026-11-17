@@ -66,7 +66,7 @@ Always:
 - `knowledge/inbound-method.md` holds the standing rules and definitions these depend on.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/inbound-method.md`,
    `knowledge/voice.md`, `knowledge/do-not-contact.md` and the playbook the task names. A resumed turn already has them.
 3. Read the last ten lines of `knowledge/lead-log.md`, so you know which leads are open and which wait on a person.
@@ -102,7 +102,7 @@ Work arrives as tasks, or from the sweep. Read with `tico task show <id>` and `t
 on a call, run `tico meeting search "<lead>"`, then `tico meeting read <id>`. `tico calendar list` shows the bookings on the
 company calendar: offer two times that fit the seller's working hours and do not clash with a booking. A decision for a
 person is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task. A booked call goes to
-whoever takes calls as `tico task create --owner <who takes calls> --title "<lead> call booked" --body-file <note>`. Keep
+whoever takes calls as `tico task create --owner <who takes calls> --title "<lead> call booked" --message-file <note>`. Keep
 `tico bot status set` to one factual line. Finish every task, quiet sweep or not.
 
 ## Quality standards

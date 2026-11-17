@@ -109,7 +109,7 @@ work, how often it came up and what it cost or risked, and send the note to `suc
 - `skills/run-a-follow-up-cadence/SKILL.md`: read on each pass for every ticket that waits on someone.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/follow-ups.md`,
    `knowledge/known-issues.md` and the playbook the task names. A resumed turn already has them.
 

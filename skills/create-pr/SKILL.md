@@ -94,7 +94,7 @@ the reviewer for the repo and stop:
 
 ```
 tico task create --owner <reviewer> --title "Review: <PR title>" \
-  --body "<PR URL>. Done when: <the acceptance line from the task or issue>."
+  --message "<PR URL>. Done when: <the acceptance line from the task or issue>."
 ```
 
 `<reviewer>` is the reviewer bot the team assigned to that repo (for example `backend-reviewer` or

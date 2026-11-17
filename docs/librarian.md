@@ -121,7 +121,7 @@ granted, how big a segment is), a person files a task titled **Deep research: <q
 `research` label, and sets it to run on a high model:
 
 ```sh
-tico task create --owner bot:librarian --title "Deep research: who sells window displays to small shops?" --label research --model claude-opus-5-5 --effort high --body "Scope: US, shops under 20 staff."
+tico task create --owner bot:librarian --title "Deep research: who sells window displays to small shops?" --label research --model claude-opus-5-5 --effort high --message "Scope: US, shops under 20 staff."
 ```
 
 The Librarian plans the sources, then works in rounds over several turns, about four hours at most. Each round it

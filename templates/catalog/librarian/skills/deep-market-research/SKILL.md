@@ -72,7 +72,7 @@ growth rate, a count), `channel`, `person`, `event`, `rule`. `status` starts `ra
 
 ## 1. Start (first turn only)
 
-1. Read the task: the question, any sources the person named, any scope ("only North America", "only B2B").
+1. Read the task's chat: the question, any sources the person named, any scope ("only North America", "only B2B").
 2. Read what Tico already knows, so you don't buy it twice: `tico strategy show`, `tico market page overview`,
    `coverage-universe`, `theses`, `open-questions`, `customer-themes`, `tico market briefing latest`, and the
    graph around the question (`tico market find`, `tico market show`). Buyer posts Listening

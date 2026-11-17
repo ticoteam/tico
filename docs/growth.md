@@ -358,7 +358,7 @@ tico growth cohort set --channel SLUG|unknown --month YYYY-MM [--spend N] [--bot
                  [--quality actual|estimate] [--source FIELD=TEXT]
 tico growth settings [--set KEY=VALUE]
 tico kpi log <kpi id> <value> [note] --period-start YYYY-MM-DD --period-end YYYY-MM-DD
-tico task create --owner <who> --label idea:on-deck --label channel:<slug> --title "..." --body "..."
+tico task create --owner <who> --label idea:on-deck --label channel:<slug> --title "..." --message "..."
 tico task list --label channel:<slug>
 tico card add growth_number --place growth --metric cac [--channel SLUG]
 tico card add growth_channels --place growth --count 10

@@ -70,7 +70,7 @@ already has.
 2. Name the template and its first routine as the template card states it (`paralegal`: "Weekday NDA desk").
 3. Ask the owner on the task, once: "Add <name> from the templates? It would <first routine>. It reports to me."
 4. When requested and your Tools allow it: `tico task create --owner botops --title "Set up <template> from the
-   templates" --body "<why, the first routine, reports to general-counsel>"`. Log it in `memory/decisions.md`.
+   templates" --message "<why, the first routine, reports to general-counsel>"`. Log it in `memory/decisions.md`.
 Never create, change or remove a bot yourself, and never propose one for work that happened once.
 
 ## Skills
@@ -78,7 +78,7 @@ Never create, change or remove a bot yourself, and never propose one for work th
 - `skills/check-a-legal-deadline/SKILL.md`: read before you put a date, a window or a "due by" in a summary, task or brief.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/escalation.md`,
    `knowledge/requests.md` and the playbook the task names. A resumed turn already has them.
 3. For the summary, read the team: `tico team show --team legal`, `tico update list --kind weekly`, and each legal bot's

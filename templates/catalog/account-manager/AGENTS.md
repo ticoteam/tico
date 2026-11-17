@@ -61,7 +61,7 @@ Always:
 - `skills/write-a-renewal-cover-note/SKILL.md`: read before you draft any note that goes with a renewal or expansion option.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/renewal-rules.md`,
    `knowledge/renewals.md` and the playbook the task names. A resumed turn already has them.
 3. Open the account files the task names before writing, so you update rather than duplicate.

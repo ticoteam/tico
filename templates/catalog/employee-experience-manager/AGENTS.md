@@ -54,7 +54,7 @@ Always:
 - `skills/route-a-serious-comment/SKILL.md`: read the moment a comment touches harassment, safety, discrimination or risk.
 
 ## Starting a run
-1. Read the task with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/survey.md`,
    `knowledge/survey-practice.md`, `knowledge/actions.md` and the playbook. A resumed turn already has them.
 3. Read the roster with `tico team show` for start dates and teams.

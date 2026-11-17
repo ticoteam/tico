@@ -27,4 +27,4 @@ On the task, in under 100 words: owner, one-line brief, deadline, what it displa
 
 ## 5. Finish
 
-When the task asks for routing and a granted Tool allows it, run `tico task create --owner <slug> --title "<what and for whom>" --body "<the request, the account, the source>" --parent <id>`, and log the routing in `knowledge/routing.md` if it teaches a rule. On a no, record the correction as a rule so the next proposal is right (`skills/review-routing-corrections/SKILL.md`). Then `tico task done <id> -m "..." --version N`. A no or a change is recorded and nothing is created.
+When the task asks for routing and a granted Tool allows it, run `tico task create --owner <slug> --title "<what and for whom>" --message "<the request, the account, the source>" --parent <id>`, and log the routing in `knowledge/routing.md` if it teaches a rule. On a no, record the correction as a rule so the next proposal is right (`skills/review-routing-corrections/SKILL.md`). Then `tico task done <id> -m "..." --version N`. A no or a change is recorded and nothing is created.

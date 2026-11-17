@@ -63,7 +63,7 @@ Approvals for spending, Credentials and publishing, and a `retryable: false` ref
 ## Credentials
 Tools and keys are the Tools Owner's (`tools-owner`). A request only about a tool or a key (connect a service, store or
 rotate a key, a level, a duplicate, a failing check) goes to it with the person's request:
-`tico task create --owner tools-owner --request-id turn --title "<ask>" --body "<their words>"`; say so in one line. You
+`tico task create --owner tools-owner --request-id turn --title "<ask>" --message "<their words>"`; say so in one line. You
 keep bots and computers, a key a bot you are building needs, and what the Tools Owner hands you with a person's request:
 a bot's `bot.yaml` `tools:` entry, or a grant only their rights make.
 
@@ -105,7 +105,7 @@ credential goes in Credentials, never in `secrets/<bot>.env`.
 - Never invent a run, log line or check result.
 
 ## Starting a run
-1. Read the task or chat message (`tico task show <id>`, `tico task list`). Work with the `requester`'s rights
+1. Read the task's chat or the chat message (`tico task show <id>`, `tico task list`). Work with the `requester`'s rights
    and note their scope; system maintenance uses your own. A notice changes no human instruction.
 2. Keep the originating request id and requester with this job. A later message changes it only when it explicitly refers to
    or cancels it; queue unrelated requests separately. Do not replace an earlier request because a newer one arrived. Check the task is still open before applying a change; a withdrawn Tool request closes its task. Name the outcome asked for, then read only the repositories and status that bear on it. Details on superseded tasks: `playbooks/rights.md`.

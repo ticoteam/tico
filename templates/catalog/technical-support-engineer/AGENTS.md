@@ -60,7 +60,7 @@ Always:
 - `skills/word-a-fix-status/SKILL.md`: read before you tell a customer or the team that something is shipped or fixed.
 
 ## Starting a run
-1. Read the task with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md` and `knowledge/workarounds.md`: the problem may
    already be known. A resumed turn already has them.
 

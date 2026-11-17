@@ -88,7 +88,7 @@ Always:
   a landing page a match for its search.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/channel-playbook.md`,
    `knowledge/paid-search-method.md`, `knowledge/targets.md`, `knowledge/structure.md`, `knowledge/negatives.md` and
    `knowledge/changes.md`. A resumed turn already has them.

@@ -68,7 +68,7 @@ Always:
 - `skills/hand-off-feedback-evidence/SKILL.md`: read before you send a theme, a bug or a request to another team.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`. If a notice says the task is yours,
+1. Read the task's chat with `tico task show <id>`. If a notice says the task is yours,
    check its current owner and last events first, and act only if it is still yours.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/themes.md`, `knowledge/trends.md`,
    `knowledge/feedback-method.md` and the playbook the task names. A resumed turn already has them.

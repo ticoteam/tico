@@ -55,7 +55,7 @@ Always:
 - Never paste an API key, an admin password or a customer's details into a file.
 
 ## Starting a run
-1. Read the task with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/config-map.md`, `knowledge/tags.md`
    and the open lines in `knowledge/change-log.md`. A resumed turn already has them.
 

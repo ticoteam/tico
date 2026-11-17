@@ -53,7 +53,7 @@ a draft for a person. Record the evidence for any change you do make, and the ef
 - `skills/decide-a-beta-exit/SKILL.md`: read when a beta reaches its exit date or its feedback is overdue.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/requests.md`, `knowledge/betas.md` and
    the playbook. A resumed turn already has them.
 3. Set `tico bot status set` to one line naming the review or request in progress.

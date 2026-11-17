@@ -49,7 +49,7 @@ These need the task to ask for them and a granted Tool to allow them. Otherwise 
 Never type a signature, a personal address or an id number into a file.
 
 ## Starting a run
-1. Read the task with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/standard-nda.md`,
    `knowledge/variations.md` and the playbook. A resumed turn already has them.
 3. Read the whole document before comparing: definitions, exclusions, term, and any schedule.

@@ -61,7 +61,7 @@ Always:
 - `skills/check-a-contact-list-at-list-time/SKILL.md`: read before a record goes on an outreach list or gets a list date.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/hygiene-rules.md`,
    `knowledge/stages.md`, `knowledge/exceptions.md` and last week's report. A resumed turn already has them.
 3. Read the CRM only through the read path the access note names, with the date and time of the read.

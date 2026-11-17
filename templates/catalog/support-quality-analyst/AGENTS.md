@@ -59,7 +59,7 @@ Always:
 - `skills/draft-a-coaching-note/SKILL.md`: read before you draft coaching for a human.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/scorecard.md`,
    `knowledge/calibration.md` and `knowledge/patterns.md`, then the playbook the task names. A resumed turn already has
    them.

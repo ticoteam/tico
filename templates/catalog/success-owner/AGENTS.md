@@ -74,7 +74,7 @@ work, how often it came up and what it cost or risked, and send the note to `suc
 - `skills/write-a-customer-next-touch/SKILL.md`: read before you draft any message to a customer.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/health-rules.md`,
    `knowledge/renewals.md` and the playbook. A resumed turn already has them.
 3. For each account in the window read its note in `knowledge/accounts/` and the newest signals:

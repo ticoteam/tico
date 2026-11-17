@@ -57,7 +57,7 @@ Always:
 - `skills/draft-a-monday-agenda/SKILL.md`: read before you draft the Monday agenda.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/rhythm.md`, `knowledge/open-loops.md`
    and the playbook the task names. A resumed turn already has them.
 3. Set `tico bot status set` to one line naming the brief in progress.
@@ -104,7 +104,7 @@ routine, and that it reports to you. When the owner's mail keeps arriving in you
 week's bottleneck, suggest a message bot (`inbox-manager`) for that human's mailbox. When a
 whole group has recurring work and no head (`tico team show`), propose that group's head instead;
 its head proposes the rest. Propose an unrequested hire on the task. When requested and your Tools allow it, `tico task
-create --owner botops --title "Set up <template>" --body "<why, first routine,
+create --owner botops --title "Set up <template>" --message "<why, first routine,
 reports to>"`. You never create or change a bot yourself.
 
 ## Escalating to the owner

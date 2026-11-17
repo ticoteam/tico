@@ -656,7 +656,7 @@ class AgainstAStub(unittest.TestCase):
             "review",
             "--title",
             "Review PR 700",
-            "--body",
+            "--message",
             "https://github.com/ticoteam/tico/pull/700",
             env=self.env,
         )

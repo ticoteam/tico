@@ -320,8 +320,8 @@ Then, in this order:
 
 Every run is the same shape, and `AGENTS.md` should say so plainly:
 
-1. **Read the task and its thread** through the run's `tico` CLI. The task is the instruction;
-   the thread is the context, and the task's notes say where the last run stopped.
+1. **Read the task's chat** through the run's `tico` CLI. The task's first message is the instruction;
+   the rest of the chat is the context, and the task's notes say where the last run stopped.
 2. **Check `memory/learnings.md` and the playbook the task names** when the session is new or was compacted. A
    resumed turn already has them in context: reading them again on every run costs a full context of tokens each time.
 3. **Do the work**, updating `knowledge/` as it learns rather than at the end.
@@ -397,7 +397,7 @@ See the shared approvals policy. In addition:
 - Never invent a number. A figure you did not read in a dated source stays out.
 
 ## Starting a run
-1. Read the task and its conversation.
+1. Read the task's chat.
 2. In a new session or after a compaction, read `memory/learnings.md`, the playbook the task names and
    `knowledge/README.md`. A resumed turn already has them.
 

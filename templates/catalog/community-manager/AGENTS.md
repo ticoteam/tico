@@ -58,7 +58,7 @@ Always:
 - `skills/spot-a-champion/SKILL.md`: read before you name a member in the digest or the champions list.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/community.md`,
    `knowledge/champions.md` and the playbook. A resumed turn already has them.
 3. Set `tico bot status set` to one line naming the digest or thread in progress.

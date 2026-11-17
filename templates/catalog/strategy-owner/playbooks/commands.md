@@ -49,7 +49,7 @@ with --all, kpi readings, and any `--help` or `--version` probe of a name not li
 - `tico task list [--owner <bot-or-person>]`: tasks, optionally one owner's. Look here for an open task before you file one.
 - `tico task done <id> -m "<the result, in a few plain sentences>" --version N`: finishes a task you own.
   Every task you are given ends with this command.
-- `tico task create --owner <person> --title "<question>" --body "<the facts and what you need>"`: a question or a source
+- `tico task create --owner <person> --title "<question>" --message "<the facts and what you need>"`: a question or a source
   request to a person, only as `playbooks/check-ins.md` and `playbooks/owner-chat.md` say.
 
 ## Questions and messages

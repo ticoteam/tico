@@ -251,8 +251,8 @@ tico task tree <id>
 A bot can have another model look at its work without a second bot:
 
 ```sh
-tico task child <parent-id> --check-model grok --role review --title "Review PR 655" --body "https://github.com/..."
-tico task child <parent-id> --check-model codex:gpt-6.1-sol --title "Check the migration plan" --body "..."
+tico task child <parent-id> --check-model grok --role review --title "Review PR 655" --message "https://github.com/..."
+tico task child <parent-id> --check-model codex:gpt-6.1-sol --title "Check the migration plan" --message "..."
 ```
 
 `--check-model` takes a runtime or `runtime:model`. With no value it takes the company's check model (Settings >
@@ -272,7 +272,7 @@ both tasks can do this; bots cannot.
 
 | Part of the dropped task | After the merge |
 |---|---|
-| Description, files and pages | Added to the kept task under "From #N", with its title. Files and pages are linked, not copied |
+| First message, files and pages | Added to the kept task under "From #N", with its title. Files and pages are linked, not copied |
 | Open sub-tasks | Move under the kept task, before the close, so they stay open |
 | Comments | Stay on the dropped task. The kept task's note says how many |
 | Open asks and OKs | End with it. The kept task's note lists each question, so its owner can ask again |
@@ -528,7 +528,7 @@ tico task give <id> <requirement> --to <person> --version N
 tico task file --parent <id> [--pipeline general] [--owner X] "title"
 tico task snooze <id> [--until date] -m "why" --version N
 tico task create --owner X --title "..." [--pipeline general] [--parent <id>]
-tico task update <id> [--title] [--body] [--due] [--label] [--goal] --version N
+tico task update <id> [--title] [--due] [--label] [--goal] --version N
 tico task list [--status open|done|closed] [--owner X] [--snoozed only|all]
 ```
 
@@ -540,7 +540,7 @@ refusal never counts toward a bot's quarantine.
 
 | Route | Body | Does |
 |---|---|---|
-| `POST /api/v2/tasks` | `title, body, owner, pipeline?, parent?, due?, labels?, private?` | create |
+| `POST /api/v2/tasks` | `title, message, owner, pipeline?, parent?, due?, labels?, private?` | create |
 | `GET /api/v2/tasks/{id}` | | the task, full |
 | `GET /api/v2/tasks` | | brief rows |
 | `POST /api/v2/tasks/{id}` | `version` + fields | field edits only |

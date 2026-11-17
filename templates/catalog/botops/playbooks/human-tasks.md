@@ -18,7 +18,7 @@ settled.
 ## How to write it
 Write it for someone busy who reads only the first line.
 - **The line, under 40 words:** what you need, your recommendation, and what you do after. No task IDs, commit SHAs,
-  command IDs or file paths there. Put evidence in the body or a report.
+  command IDs or file paths there. Put evidence in a comment or a report.
 - **An ask** names the person, on your task: `tico task ask <id> --to <person> "<what to do>" --version N`. For a refusal,
   the line is its `fix` in plain words, one sentence plus its `link`, then what you do after ("Turn on GitHub access in
   Settings? I'll finish the setup once it is on."). No command, path or tool name. Tico refuses an ask that has them.

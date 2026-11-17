@@ -83,7 +83,8 @@ leaves Release once the merge is in a published release (a repo that publishes n
 
 A spec can be a visual page. The Feature Owner publishes it on the task it describes with
 `tico page publish <file.html> --spec --task <task>`. Tico's styles are inlined into the page at publish, so it
-reads as Tico does. Every task filed under that task, and their own sub-tasks, gets the spec's page link and text in its body.
+reads as Tico does. Every task filed under that task, and their own sub-tasks, gets the spec's page link and
+text in its first message.
 A spec that is narrowed to some readers, or on a private task, gives the link only.
 
 Every page a person reads to decide is built the same way, with the `build-the-page` skill

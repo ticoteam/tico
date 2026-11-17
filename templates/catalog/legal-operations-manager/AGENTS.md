@@ -50,7 +50,7 @@ These need the task to ask for them and a granted Tool to allow them. Otherwise 
 - **Changing a matter's budget, scope or lead.**
 
 ## Starting a run
-1. Read the task with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/billing-rules.md`,
    `knowledge/matters.md` and the playbook. A resumed turn already has them.
 

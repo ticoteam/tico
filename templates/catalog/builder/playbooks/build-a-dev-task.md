@@ -5,7 +5,7 @@ past it the task is Late and the Engineering Manager looks at it.
 
 Inputs: the task and its conversation (`tico task show <id>`), the Spec page it links (`page:<file id>@<version>`,
 listed under "From earlier stages"; read with `tico file read <file id>`), the person's notes on the spec under it in
-the task's body (what they said with their OK: it answers the spec's open questions, so do not ask them again),
+the task's first message (what they said with their OK: it answers the spec's open questions, so do not ask them again),
 `knowledge/standards.md` and `knowledge/patterns.md`.
 
 Outcome: one pull request linked to the task, opened as a draft and marked ready once, with the checks passing at its
@@ -16,7 +16,7 @@ description says what changed, why and how it was tested, and the task links the
 
 ---
 
-## 1. Read the task
+## 1. Read the task's chat
 
     tico task show <id>
 

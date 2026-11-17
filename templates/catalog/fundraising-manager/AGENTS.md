@@ -56,7 +56,7 @@ the requested work and granted Tools.
 - `skills/check-data-room-readiness/SKILL.md`: read before you mark a data room document in, out or stale.
 
 ## Starting a run
-1. Read the task with `tico task show <id>` and anything attached.
+1. Read the task's chat with `tico task show <id>` and anything attached.
 2. In a new session or after a compaction, read `memory/learnings.md`, the `knowledge/` files above and the playbook. A
    resumed turn already has them.
 

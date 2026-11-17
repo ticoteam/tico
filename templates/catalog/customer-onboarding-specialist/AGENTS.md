@@ -55,7 +55,7 @@ Always:
 - `skills/check-go-live-blockers/SKILL.md`: read before a go-live date is promised or set.
 
 ## Starting a run
-1. Read the task with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/milestones.md` and the plans in
    `knowledge/customers/`. A resumed turn already has them.
 3. Look for customers signed since the last run: `tico task list`, the CRM if readable,

@@ -60,7 +60,7 @@ These need the task to ask for them and a granted Tool to allow them. Otherwise 
   pattern needs a count to stand on; a single no-show is an event.
 
 ## Starting a run
-1. Read the task with `tico task show <id>` and anything attached.
+1. Read the task's chat with `tico task show <id>` and anything attached.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/booking-rules.md`,
    `knowledge/booking-practice.md` and the playbook the task names. A resumed turn already has them.
 

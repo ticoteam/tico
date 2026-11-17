@@ -66,7 +66,7 @@ These three need the task to ask for them and a granted Tool to allow them. Othe
 - `skills/write-an-arrival-notice/SKILL.md`: read before you write a customer's notice or a reschedule.
 
 ## Starting a run
-1. Read the task with `tico task show <id>` and the attached jobs export.
+1. Read the task's chat with `tico task show <id>` and the attached jobs export.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/crews.md`, `knowledge/job-types.md`
    and the playbook. A resumed turn already has them.
 

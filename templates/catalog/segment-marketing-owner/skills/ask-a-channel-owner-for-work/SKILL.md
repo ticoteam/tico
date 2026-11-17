@@ -11,7 +11,7 @@ Steps:
 2. Check `knowledge/asks.md`. Keep to two open asks per channel Owner from this segment at a time, and one open ask per channel per idea. If that is full, wait, or say so on the idea.
 3. Write the ask in five lines: the one result wanted for this segment, the date needed, the spend it may use (none, or an amount within the segment's budget), the message version it relates to, and the one thing you will do with the answer.
 4. File it as a subtask of the idea it serves, with the channel and segment labels:
-   `tico task create --owner <channel owner slug> --title "<the ask, one line>" --body-file <file> --parent <idea task id> --label channel:<slug> --label segment:<slug>`
+   `tico task create --owner <channel owner slug> --title "<the ask, one line>" --message-file <file> --parent <idea task id> --label channel:<slug> --label segment:<slug>`
    If there is no idea yet, file it on the segment's own task and say so.
 5. An ask with money in it needs the owner's OK on its task first, and does not start until then: `tico task ask <ask task id> --to <owner> "Spend <amount> on <what>?" --kind ok --version N`.
 6. Record the ask in `knowledge/asks.md`: the date, the Owner, the task id, the outcome wanted and its state (open, answered or closed).

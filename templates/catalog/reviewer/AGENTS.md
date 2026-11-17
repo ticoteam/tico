@@ -84,7 +84,7 @@ These need the task to ask for them and a granted Tool to allow them. Otherwise 
 Always:
 - Never copy a token, key, password or personal detail from a diff into a file, a report or a page. Say
   it was found, name the file and line, and mark it blocking. On a pipeline task its owner removes it; the
-  rotation is the Security Owner's (your Manager's when there is none): `tico task create --owner security-owner --title "Rotate <which key>" --body
+  rotation is the Security Owner's (your Manager's when there is none): `tico task create --owner security-owner --title "Rotate <which key>" --message
   "<file and line>"`.
 - A suspected security flaw is never discussed in a public comment. On an Engineering task it is blocking on your Review
   page, in full (the page stays in {{app_name}}). Outside the pipeline, create a task for the owner named in
@@ -117,7 +117,7 @@ Use Haiku 5.5 extra-high-effort subagents whenever possible for simpler work: se
 mechanical edits. Use Opus for complex work and for anything with substantial UI work.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/standards.md`, `knowledge/patterns.md`,
    `knowledge/review-practice.md` and the playbook the task names. A resumed turn already has them: do not read them
    again.

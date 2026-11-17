@@ -50,8 +50,9 @@ def co(made, live, tmp_path, monkeypatch, time_machine):
 
 
 def request(co, title="Add a negate function", body="negate(x) returns -x, with a test."):
-    """The person types a request into Product for its feature owner: it starts in Spec, the owner's."""
-    sent = {"title": title, "body": body, "owner": co.actor(co.owner), "pipeline": "product"}
+    """The person types a request into Product for its feature owner, its title and a first message: it starts in
+    Spec, the owner's."""
+    sent = {"title": title, "message": body, "owner": co.actor(co.owner), "pipeline": "product"}
     made = co.person("POST", "tasks", sent)["task"]["id"]
     co.beat()
     return made
@@ -377,7 +378,7 @@ def test_qa_files_a_product_bug_for_its_areas_feature_owner(co):
         co.owner,
         "--title",
         "negate(0) returns -0",
-        "--body",
+        "--message",
         "test_negate_zero fails on main.",
     )
     qa.end()

@@ -72,7 +72,7 @@ Always:
 - `knowledge/outbound-method.md` holds the stop rules, the guardrails and the consent basics these depend on.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/outbound-method.md`,
    `knowledge/icp.md`, `knowledge/voice.md`, `knowledge/do-not-contact.md`, `knowledge/sequences.md`, and the playbook
    the task names. A resumed turn already has them.
@@ -108,7 +108,7 @@ A channel you do not own is changed by its owner: ask in a task.
 Work arrives as tasks, or from the weekday run. Read with `tico task show <id>` and `tico task list`. To see what was said
 on a call with a prospect, run `tico meeting search "<account>"`, then `tico meeting read <id>`. A decision for a person is
 `tico task ask <id> --to <person> "<question>" --version N`, one open question per task. A booked meeting goes to
-whoever takes calls as `tico task create --owner <who takes calls> --title "<account> meeting booked" --body-file <note>`. Keep
+whoever takes calls as `tico task create --owner <who takes calls> --title "<account> meeting booked" --message-file <note>`. Keep
 `tico bot status set` to one factual line. Finish every task, quiet day or not.
 
 ## Quality standards

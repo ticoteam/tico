@@ -57,7 +57,7 @@ Always:
 - `skills/check-event-counts-before-a-trend/SKILL.md`: read before you call a change in a count or rate a drop, a trend or a launch effect.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/definitions.md`,
    `knowledge/launches.md`, `knowledge/measurement-practice.md` and the playbook. A resumed turn already has them.
 3. `tico db doctor` for each source you will use; a failing source is named in the report, not skipped.

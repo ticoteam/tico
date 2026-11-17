@@ -405,7 +405,7 @@ exception, so the computer keeps reporting the others.
 ## What BotOps does
 
 BotOps works one setup task at a time, following `playbooks/set-up-a-bot.md` in its own repository:
-read the task, `tico bot create --template <template> --name "<Display>"` (Tico picks the slug from the name), put the reviewed
+read the task's chat, `tico bot create --template <template> --name "<Display>"` (Tico picks the slug from the name), put the reviewed
 instructions into `AGENTS.md` (or tailor the template's to the answers), run `tico bot check <slug>`
 and fix every failure, then commit the result.
 

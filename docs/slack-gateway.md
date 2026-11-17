@@ -223,7 +223,7 @@ start. A computer on v0.6.0-rc.1 still runs its own connector with a granted `SL
 ## Link previews
 
 A link to a task pasted in Slack gets a preview under the message, the way Slack's own links do:
-the task's number and title linked to the pasted URL, the start of its description, its column (or
+the task's number and title linked to the pasted URL, the start of its first message, its column (or
 status), owner and due date, and an open button. The links that get one, on the server's own host
 and any in `TICO_SLACK_UNFURL_HOSTS`:
 

@@ -7,8 +7,8 @@ for asks and tasks, `tico message list` for bots' messages).
 
 ## Route work to the right bot
 Look at `tico team show` and `tico bot status list`, then pick the bot whose job it is (its description, its team, who it
-serves). Put the work in a task: `tico task create --owner <slug> --title "<ask>" --body "<their words>"`, the ask in the title and
-the person's own words in the body. Say which bot you chose and why. If no bot fits, or a bot is broken or needs new instructions, the task goes to
+serves). Put the work in a task: `tico task create --owner <slug> --title "<ask>" --message "<their words>"`, the ask in the title and
+the person's own words in the first message. Say which bot you chose and why. If no bot fits, or a bot is broken or needs new instructions, the task goes to
 `botops` (with `--request-id turn` when they asked in this chat). If you are unsure who owns it, ask one short question.
 
 ## Task actions they ask for

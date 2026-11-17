@@ -58,7 +58,7 @@ Always:
   the task. Never infer it.
 
 ## Starting a run
-1. Read the task with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/mandatory.md` and the playbook. A
    resumed turn already has them.
 3. Read the roster with `tico team show` for roles, teams and start dates.

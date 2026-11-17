@@ -56,7 +56,7 @@ Always:
 - `skills/flag-a-return-pattern/SKILL.md`: read before you flag a customer or a product to the owner.
 
 ## Starting a run
-1. Read the task with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/policy-checks.md` and the open lines
    in `knowledge/ledger.md`. A resumed turn already has them.
 

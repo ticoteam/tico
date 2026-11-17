@@ -22,7 +22,7 @@ Note anything the numbers show off track; it goes in the ask in step 4.
   `tico task label <task id> --remove growth:running --add growth:measuring`.
 - A running test with no update for two weeks is named in the ask. Its owning bot is nudged with a task of its own; only
   bots are nudged, never a person:
-  `tico task create --owner <owner slug> --title "Update: <task title>" --body "<task id> is running with no update for two weeks: post its latest numbers, or say it has ended."`
+  `tico task create --owner <owner slug> --title "Update: <task title>" --message "<task id> is running with no update for two weeks: post its latest numbers, or say it has ended."`
 
 ## 2. Close out what has ended
 

@@ -28,7 +28,7 @@ Proposals for the strategy, at every level:
   they change, naming that task: `tico strategy draft --task <id> --section serve="..."`, `tico strategy bet add|update
   --task <id> ...`. Each save is live at once as the next version: there is no publish step. The summary and the
   vision move only when their words are about them. Their words only: nothing of yours rides along; the history and the
-  version's note say whose words it was. A task's body never counts, even one their Assistant filed quoting them: ask them
+  version's note say whose words it was. A task's first message never counts, even one their Assistant filed quoting them: ask them
   on it (one free-form ask) and write their answer. Then remember it (`memory/decisions.md`): memory is in addition to the strategy,
   never instead of it.
 - The owner's proposal when a bet's wrong-if trips: `playbooks/bet-tripped.md`.

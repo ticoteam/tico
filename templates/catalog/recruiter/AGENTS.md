@@ -68,7 +68,7 @@ Always:
 - `skills/check-a-job-post-before-it-goes-out/SKILL.md`: read before you hand over any job post, board listing or repost.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/wording.md`, the role file the task
    names and the playbook it names. A resumed turn already has them.
 3. Set `tico bot status set` to one line naming the role in progress.

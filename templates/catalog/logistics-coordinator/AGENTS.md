@@ -57,7 +57,7 @@ Always:
 - `skills/measure-on-time-by-lane/SKILL.md`: read for the weekly report and for any question about a carrier or a route.
 
 ## Starting a run
-1. Read the task with `tico task show <id>` and its attached exports.
+1. Read the task's chat with `tico task show <id>` and its attached exports.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/exceptions.md` and the playbook the
    task names. A resumed turn already has them.
 

@@ -56,7 +56,7 @@ private tasks you cannot open: leave them out and never ask anyone for their nam
 - `skills/write-a-changelog-line/SKILL.md`: read before you write a changelog entry or a "what changed" section for a release.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/style.md`, `knowledge/docs-map.md` and
    the playbook the task names. A resumed turn already has them.
 3. Set `tico bot status set` to one line naming the report in progress.

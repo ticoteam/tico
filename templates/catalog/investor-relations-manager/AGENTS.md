@@ -49,7 +49,7 @@ Always:
 - `skills/write-the-highlights-and-lowlights/SKILL.md`: read before you choose and word the month's story.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/metrics.md`, `knowledge/asks.md`,
    `knowledge/exclusions.md`, last month's update and the playbook the task names. A resumed turn already has them.
 3. Read the month: `tico goal list --all`, `tico kpi show <kpi id>`, `tico update list --kind weekly`, `tico meeting search --since <first of last month>`.
