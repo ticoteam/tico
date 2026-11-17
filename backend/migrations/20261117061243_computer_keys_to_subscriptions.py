@@ -18,6 +18,9 @@ decrypted: the vault credential keeps it.
 3. A Codex key now signs turns in from a home of its own, so the sessions of Codex on each computer given one start
    fresh, as a change of subscription does (model_subscriptions._reset).
 
+It also indexes a subscription's key (`model_subscriptions_credential`) and a grant's subject (`credential_grants_subject`),
+which the claim now reads for each bot's own key grants.
+
 Staged keys (a check still running) stay in `computer_keys`; the server moves each when its check ends. Running this
 again changes nothing: a credential already pointed at is skipped, and the moved rows and grants are gone.
 """
@@ -147,6 +150,15 @@ def up(conn, now=None):
         return
     if "credential_id" not in [r[1] for r in conn.execute("PRAGMA table_info(model_subscriptions)")]:
         conn.execute("ALTER TABLE model_subscriptions ADD COLUMN credential_id TEXT REFERENCES credentials(id)")
+    # Lookups by key (a key's subscription, Replace key for all) and by grantee (a bot's own key grants, read on each
+    # claim: model_subscriptions.for_claim) seek rather than scan (backend/tests/test_model_key_plan.py).
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS model_subscriptions_credential ON model_subscriptions(credential_id) "
+        "WHERE credential_id IS NOT NULL"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS credential_grants_subject ON credential_grants(subject) WHERE revoked_at IS NULL"
+    )
     if "computer_keys" not in tables:
         return
     now = now or _now()
