@@ -222,10 +222,17 @@ def why_not(c, settings, bot, choice, runner_id, job_id=None, kept=""):
     can = readiness(c, bot, choice, runner_id)
     if can.get("can_run") is False:
         return can.get("problem") or f"{choice['runtime']} cannot run on this bot's computer"
-    login = login_holds.canonical(c, runner_id, "", choice["runtime"])
-    held = login_holds.holding(c, runner_id, login, choice["runtime"], job_id)
+    from .gateway_connection import is_tico
+
+    # A Tico model signs in with the company's one Gateway login wherever it runs.
+    login, runtime = (
+        (login_holds.GATEWAY, login_holds.GATEWAY_RUNTIME)
+        if is_tico(choice["model"])
+        else (login_holds.canonical(c, runner_id, "", choice["runtime"]), choice["runtime"])
+    )
+    held = login_holds.holding(c, runner_id, login, runtime, job_id)
     if held:
-        until = str(login_holds.get(c, runner_id, login, choice["runtime"]).get("until") or "")
+        until = str(login_holds.get(c, runner_id, login, runtime).get("until") or "")
         return (
             f"{choice['runtime']} is at its usage limit until {until[:10]} {until[11:16]} UTC"
             if held == "held" and until

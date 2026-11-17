@@ -147,6 +147,110 @@ SERVICES = {
 }
 
 
+def _f(id, suffix, role="secret", shape="", aliases=(), optional=False):
+    """One field of a vendor's auth template: its variable (`<PREFIX>_<suffix>`, or an alias suffix; an account's label
+    may sit between: POSTHOG_CRO_API_KEY), what it is (`secret`: a vault key; `id`: an identifier the bot sends as it is,
+    a setting when its value says so; `setting`: a host, region or profile) and the shape a pasted value of it has."""
+    return {"id": id, "suffix": suffix, "role": role, "shape": shape, "aliases": tuple(aliases), "optional": optional}
+
+
+# How a vendor's several values reach it, from each vendor's own documentation. `prefix`: the variables' first word(s).
+# `fields`: what the account is made of. `ways`: how a call through the proxy carries them, the first whose fields are
+# all present: `basic` [user field, password field], `headers` {name: "text with {field}"}, `query` {param: "{field}"}.
+# `delivery`: where a new tool's keys go; a vendor with no `ways` signs on the computer (AWS SigV4, Google Ads' OAuth
+# refresh), so its keys go to computers and the proxy carries none of its calls. `sensitive`: grouping that would give
+# anyone a value they did not hold asks a person instead (backend/tool_templates.py).
+TEMPLATES = {
+    # https://www.twilio.com/docs/usage/requests-to-twilio: HTTP Basic, the Account SID and its Auth Token, or an API
+    # Key SID (SK...) and its secret. The Account SID is also in every path (/2010-04-01/Accounts/{AccountSid}/...),
+    # so it is an id the bot holds as it is, never a proxy token.
+    "twilio": {
+        "service": "twilio",
+        "prefix": "TWILIO",
+        "delivery": "proxy",
+        "fields": [
+            _f("account_sid", "ACCOUNT_SID", "id", r"AC[0-9a-fA-F]{32}"),
+            _f("auth_token", "AUTH_TOKEN", "secret", r"[0-9a-fA-F]{32}", optional=True),
+            _f("api_key", "API_KEY", "secret", r"SK[0-9a-fA-F]{32}", ("API_KEY_SID", "API_SID"), optional=True),
+            _f("api_secret", "API_SECRET", "secret", r"[A-Za-z0-9]{32}", ("API_KEY_SECRET",), optional=True),
+        ],
+        "ways": [{"basic": ["api_key", "api_secret"]}, {"basic": ["account_sid", "auth_token"]}],
+    },
+    # https://developers.google.com/google-ads/api/docs/oauth/overview and /concepts/call-structure: a developer token
+    # header, an OAuth access token the client mints from the client id, client secret and refresh token, and the
+    # manager account in login-customer-id. The refresh stays on the computer for now (the client libraries do it), so
+    # the six values go to computers together and the proxy carries none of its calls.
+    "google-ads": {
+        "service": "google-ads",
+        "prefix": "GOOGLE_ADS",
+        "delivery": "computer",
+        "fields": [
+            _f("developer_token", "DEVELOPER_TOKEN", "secret", r"[A-Za-z0-9_-]{22}"),
+            _f("client_id", "CLIENT_ID", "secret", r"[0-9]+-[a-z0-9]+\.apps\.googleusercontent\.com"),
+            _f("client_secret", "CLIENT_SECRET", "secret", r"GOCSPX-[A-Za-z0-9_-]{20,40}"),
+            _f("refresh_token", "REFRESH_TOKEN", "secret", r"1//[A-Za-z0-9_-]{20,}"),
+            _f("login_customer_id", "LOGIN_CUSTOMER_ID", "id", r"\d{3}-?\d{3}-?\d{4}", optional=True),
+            _f("customer_id", "CUSTOMER_ID", "id", r"\d{3}-?\d{3}-?\d{4}", ("CUSTOMER_IDS",), optional=True),
+        ],
+        "ways": [],
+    },
+    # https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_access-keys.html: every call is signed (SigV4)
+    # with the key pair for a region, so the pair and the region go to the computer and the SDK signs there.
+    "aws": {
+        "service": "aws",
+        "prefix": "AWS",
+        "delivery": "computer",
+        "sensitive": True,
+        "fields": [
+            _f("access_key_id", "ACCESS_KEY_ID", "secret", r"(AKIA|ASIA)[A-Z0-9]{16}"),
+            _f("secret_access_key", "SECRET_ACCESS_KEY", "secret", r"[A-Za-z0-9/+=]{40}"),
+            _f("session_token", "SESSION_TOKEN", "secret", optional=True),
+            _f("region", "REGION", "setting", r"[a-z]{2}(-gov)?-[a-z]+-\d", ("DEFAULT_REGION",), optional=True),
+            _f("profile", "PROFILE", "setting", optional=True),
+        ],
+        "ways": [],
+    },
+    # https://posthog.com/docs/api: a personal API key as a Bearer token, at the project's host (US or EU cloud, or
+    # self-hosted), on paths under /api/projects/{project_id}/.
+    "posthog": {
+        "service": "posthog",
+        "prefix": "POSTHOG",
+        "delivery": "proxy",
+        "fields": [
+            _f("api_key", "API_KEY", "secret", r"phx_[A-Za-z0-9]{20,}", ("PERSONAL_API_KEY",)),
+            _f("project_api_key", "PROJECT_API_KEY", "secret", r"phc_[A-Za-z0-9]{20,}", optional=True),
+            _f("host", "HOST", "setting", r"https://[a-z0-9.-]+", ("API_HOST",), optional=True),
+            _f("project_id", "PROJECT_ID", "id", r"\d{1,12}", optional=True),
+        ],
+        "ways": [{"headers": {"Authorization": "Bearer {api_key}"}}],
+    },
+    # https://elevenlabs.io/docs/api-reference/authentication: the key in the xi-api-key header.
+    "elevenlabs": {
+        "service": "elevenlabs",
+        "prefix": "ELEVENLABS",
+        "delivery": "proxy",
+        "fields": [_f("api_key", "API_KEY", "secret", r"sk_[0-9a-f]{48}", ("KEY", "XI_API_KEY"))],
+        "ways": [{"headers": {"xi-api-key": "{api_key}"}}],
+    },
+    # https://developer.calendly.com/how-to-authenticate-with-personal-access-tokens: a Bearer token.
+    "calendly": {
+        "service": "calendly",
+        "prefix": "CALENDLY",
+        "delivery": "proxy",
+        "fields": [
+            _f(
+                "token",
+                "API_KEY",
+                "secret",
+                r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+",
+                ("TOKEN", "API_TOKEN", "ACCESS_TOKEN", "PERSONAL_ACCESS_TOKEN", "PAT"),
+            )
+        ],
+        "ways": [{"headers": {"Authorization": "Bearer {token}"}}],
+    },
+}
+
+
 def _words(text):
     return re.findall(r"[a-z0-9]+", str(text or "").lower())
 

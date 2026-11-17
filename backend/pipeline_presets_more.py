@@ -1,5 +1,5 @@
 # pyright: strict
-"""The default pipelines beyond General, Product and Engineering (docs/pipelines-v3.md "Default pipelines"): Growth
+"""The default pipelines beyond General, Product and Engineering (docs/dev/pipelines-v3.md "Default pipelines"): Growth
 Experiments, Growth Monitoring, Lead and Opportunity in the Growth factory; Customer, Success Experiments and Success
 Monitoring in the Success factory; Legal and Finance, both private, in the Corporate factory.
 

@@ -1,4 +1,4 @@
-// A pipeline on the Tasks page, desktop (docs/pipelines-v3.md S7, S10), offline on the fake server of tasks-page.cts:
+// A pipeline on the Tasks page, desktop (docs/dev/pipelines-v3.md S7, S10), offline on the fake server of tasks-page.cts:
 //  - the columns are the pipeline's work stages, in order (Done and Closed are not columns), and they share the width;
 //  - the pipeline's manager is the Tasks page's chat (pipeline-rail.ts, page-chat.ts, style guide "Where chat lives"):
 //    no face button in a computer's header; too narrow to dock (1150 px) the page chat's tab on the right edge opens the

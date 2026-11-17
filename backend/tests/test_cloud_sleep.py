@@ -38,7 +38,7 @@ def asleep_bot(cloud):
 
 def waiting_task(cloud):
     """A task of ops's set aside by a person (a snooze, with no end), and Tico's notice about it queued 4 hours ago:
-    the claim holds it as `task_wait` until the snooze ends (docs/pipelines-v3.md, rule 7)."""
+    the claim holds it as `task_wait` until the snooze ends (docs/dev/pipelines-v3.md, rule 7)."""
     with cloud.store.transaction() as c:
         task = H.task_create(c, 'human:ana', 'Wait for a decision', '', 'bot:ops', private=False, lint=False)
         c.execute("UPDATE jobs SET state='completed' WHERE bot_id='ops' AND state='queued'")  # its first wake ran

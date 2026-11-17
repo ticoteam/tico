@@ -1,4 +1,4 @@
-"""Product's spec is OK'd by a person once (docs/pipelines-v3.md, "Product"): Jev checks the Spec page in Spec and the
+"""Product's spec is OK'd by a person once (docs/dev/pipelines-v3.md, "Product"): Jev checks the Spec page in Spec and the
 task moves on when Jev passes it; a person OKs it in OK spec. A pair Product (pipeline_settings.LEGACY) reshaped by hand
 into the one-pipeline stages kept its person on the Spec page, so the spec waited on them in Spec and was asked of them
 again in OK spec; migration 20261115192933_spec_ok_once takes that person off where the stage is still the default.

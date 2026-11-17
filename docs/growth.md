@@ -261,7 +261,7 @@ Unknown and the run result carries a note. `sync` runs it.
 ## Marketing tasks
 
 A growth experiment is a task in **Growth Experiments** (Ideas, Building, Running), and a thing that worked and is kept
-is a task in **Growth Monitoring** (Watching, Slipping): docs/pipelines-v3.md "Growth and Success". Each channel has an
+is a task in **Growth Monitoring** (Watching, Slipping): docs/dev/pipelines-v3.md "Growth and Success". Each channel has an
 Owner that files its ideas and owns its tasks in both pipelines from start to finish: SEO, Content, Email, CRO, Search
 Ads and Social Ads (the growth channel packs in the same section).
 

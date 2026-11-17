@@ -1,4 +1,4 @@
-"""The growth channel packs (docs/pipelines-v3.md "Growth and Success"): each channel Owner works its tasks through Growth
+"""The growth channel packs (docs/dev/pipelines-v3.md "Growth and Success"): each channel Owner works its tasks through Growth
 Experiments and Growth Monitoring with the same stage playbooks, runs exactly two routines (Watch and Find ideas) on its
 channel's cadence, and tags its tasks with the channel key the setup chart uses.
 

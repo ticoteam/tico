@@ -1,5 +1,5 @@
 # pyright: strict
-"""Related input: a requirement kind, `related_input` (docs/pipelines-v3.md, "Related input").
+"""Related input: a requirement kind, `related_input` (docs/dev/pipelines-v3.md, "Related input").
 
 Jev reads a task's pitch and spec page against the company's bots (name, job, team) and scores how much the work
 touches each bot's area, 0 to 1. The top MOST (2) at or over the bar (0.8) are each woken once on the task: "comment

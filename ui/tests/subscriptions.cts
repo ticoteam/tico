@@ -146,7 +146,7 @@ async function open(browser: Browser, {viewport = {width: 1440, height: 900}, th
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/operations') return json({machines: data.machines.map(m => ({...m, bot_connections: []})), services: [], agents: []});
     if (p === '/api/v2/models') return json({models: data.models, harnesses, enabled_providers: data.providers.enabled, default: data.providers.default});
-    if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
+    if (p === '/api/v2/settings/history') return json({changes: []});
     if (p === '/api/v2/providers' && method === 'GET') return json(data.providers);
     if (p === '/api/v2/providers' && method === 'PUT') {
       const body = req.postDataJSON() as Body; writes.push({p, method, body});

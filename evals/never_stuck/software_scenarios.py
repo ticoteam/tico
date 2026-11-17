@@ -1,5 +1,5 @@
 """The Product and Engineering cases of the fault rig (plan gap G18, track E): the acceptance case `idea-to-done`, the
-refusals, and the spec scenarios they cover (docs/pipelines-v3.md, "Scenarios the rig and the spot checks must pass").
+refusals, and the spec scenarios they cover (docs/dev/pipelines-v3.md, "Scenarios the rig and the spot checks must pass").
 
 Each case runs on a software company's world (`software.soft_rig`): the real presets, engine and requirement kinds,
 the rig's GitHub and Jev, a check pass and the rig's per-step checks after every step.

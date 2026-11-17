@@ -202,7 +202,7 @@ def register(app, auth, settings, settings_admin, store):
             ]
 
     def cant_run(c, bot, who):
-        """The bot page's top line (docs/pipelines-v3.md S14): why the bot can't run, as the never-stuck check reads it
+        """The bot page's top line (docs/dev/pipelines-v3.md S14): why the bot can't run, as the never-stuck check reads it
         (task_wakes.cannot_run), and the one fix a person makes, or None while it can run. A bot being made on a task
         says what that task waits on instead (`making`)."""
         from . import task_wakes as W

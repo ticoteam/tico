@@ -247,7 +247,9 @@ def sweep_key(refs):
 
 
 def release_quota_resets(c, at=None):
-    """A quota retry keeps its job and becomes claimable at the reset even between scheduler ticks."""
+    """A job an older server held for its login's quota reset (wake_class 'quota-reset') becomes claimable at that
+    reset, even between scheduler ticks. Nothing holds a job so now: the login's hold does the waiting
+    (backend/login_holds.py); this lets go of the rows a database from before still has."""
     c.execute(
         "UPDATE jobs SET held=0 WHERE held=1 AND state='queued' AND wake_class='quota-reset' "
         "AND hold_reason IS NULL AND hold_until<=?",

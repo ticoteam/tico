@@ -325,6 +325,12 @@ def _held(c, sid, runtime, loads=None):
     return login_holds.holding(c, "", login_holds.subscription_login(sid), runtime, loads=loads) == "held"
 
 
+def _hold_end(c, sid, runtime, loads=None):
+    from . import login_holds
+
+    return login_holds.get(c, "", login_holds.subscription_login(sid), runtime, loads).get("until") or ""
+
+
 def available(c, sub, runtime, loads=None):
     """Whether a plan can sign a turn in now: not waiting to be reconnected, not held at its usage limit until a reset,
     and of that runtime."""
@@ -398,6 +404,44 @@ def in_effect(c, runner_id, runtime, loads=None):
 
         runner = one(c, RUNNER_CAPABILITIES_SQL, (runner_id,))
     return sub if runner else None
+
+
+def held_plan(c, runner_id, runtime, loads=None, profile=""):
+    """The login of the company plan (or, for a person's plans, the one whose hold ends first) given this computer for
+    `runtime` while its usage limit passes it over and the computer has no sign-in of its own for that runtime to run on
+    instead (no Gateway either: that is the claim's
+    models_preset.plans_out), or None. A turn then waits on that plan's hold (execution.login_key), and its first turn
+    after the reset is the hold's probe."""
+    from . import login_holds
+    from .models_preset import SIGNED_IN, computer_falls_back
+
+    given = loads.given if loads is not None else _given(c)
+    sub = given.get((runner_id, runtime)) if given else None
+    if sub and sub.get("person"):
+        # A person's set waits on the plan whose hold ends first, while none of its plans can sign the turn in.
+        if not passed_over(c, runner_id, runtime, loads):
+            return None
+        held = [m for m in sub["members"] if m.get("id") and _held(c, m["id"], runtime, loads)]
+        ends = {m["id"]: _hold_end(c, m["id"], runtime, loads) for m in held}
+        sub = min(held, key=lambda m: (ends[m["id"]], m["id"]), default=None)
+    if not sub or not sub.get("id") or not _held(c, sub["id"], runtime, loads):
+        return None
+    if computer_falls_back(c, runner_id):
+        return None  # its turns run on the Gateway meanwhile
+    if loads is not None:
+        runner = loads.runner_of(c, runner_id, live=True)
+    else:
+        from .read_cache import one
+
+        runner = one(c, "SELECT readiness FROM runners_with_state WHERE id=?", (runner_id,))
+    ready = readiness_document(runner["readiness"]) if runner else {}
+    row = ((ready.get("runtimes") or {}).get(runtime) or {}) if runner else {}
+    own = (row.get("profiles") or {}).get(profile) if profile else None
+    # The login the turn would sign in with instead: `profile` (the default home a computer names, or a profile), read
+    # from its own row when the computer reports one, else the runtime's.
+    if not runner or (own if isinstance(own, dict) else row).get("authenticated") == SIGNED_IN:
+        return None
+    return login_holds.subscription_login(sub["id"])
 
 
 def passed_over(c, runner_id, runtime, loads=None):

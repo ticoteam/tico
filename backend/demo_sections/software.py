@@ -1,5 +1,5 @@
 # pyright: strict
-"""Product: Acme builds software (a blank answer is yes), so it has the default Product pipeline (docs/pipelines-v3.md,
+"""Product: Acme builds software (a blank answer is yes), so it has the default Product pipeline (docs/dev/pipelines-v3.md,
 "Product"), with a few tasks across its first stages.
 
 Eli files them, each with its pitch as the body: four wait in Pitch for a person's OK, and one he OK'd has moved on to

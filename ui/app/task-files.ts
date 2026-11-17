@@ -478,7 +478,7 @@ document.addEventListener('click', ev => {
 // ---- questions. An ask: {questions: [{id, header, question, options: [{label, description, file}], multi, other}],
 // who}. On a comment it is that comment's (an 'ask' message, its refs.questions); on a file version it is the
 // version's. It shows the question, its choices and the answers given; a person answers in the thread, and a bot that
-// needs an answer to go on asks on the task (docs/pipelines-v3.md: the ask screen), so there are no controls here.
+// needs an answer to go on asks on the task (docs/dev/pipelines-v3.md: the ask screen), so there are no controls here.
 function askOf(m: TfMessage | null | undefined): TfAsk | null {
   if (!m) throw new Error('The question has no message');
   if (m.ask?.questions) return m.ask;

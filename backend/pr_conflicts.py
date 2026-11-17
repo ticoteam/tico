@@ -1,5 +1,5 @@
 # pyright: strict
-"""A merge conflict on a task's open PR before its pipeline's Merge stage (docs/pipelines-v3.md, "GitHub").
+"""A merge conflict on a task's open PR before its pipeline's Merge stage (docs/dev/pipelines-v3.md, "GitHub").
 
 GitHub says a PR conflicts with its base branch; backend/github.py keeps that on the task's link (`mergeable`
 'conflict', by webhook or by its read of PRs whose base moved). On a stage before the one that queues the PRs, fixing it

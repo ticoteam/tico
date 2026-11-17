@@ -1,4 +1,0 @@
-Integrated PR15 separately after PR13; resolved helper and client field conflicts while preserving number and step-rank arguments.
-Reviewed long custom descriptions, strict bot title lint, rename authorization/history, dedicated conversation names and mixed-version behavior.
-Prepared focused API/MCP/CLI and reporting checks plus the regenerated OpenAPI contract.
-Focused checks passed: five reporting/CLI/OpenAPI cases plus a corrected three-case custom-description/title/rename rerun; combined PR13/PR15 pytest runtime is 114.33 seconds.

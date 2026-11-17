@@ -68,7 +68,7 @@ declare function settingsWireCombos(root: Element, onPick?: unknown): void;
       if (p === '/api/v2/providers') return json({enabled, default: catalog.default, revision: 1,
         auto_fallback: true, providers: [{id: 'openai', label: 'OpenAI'}, {id: 'anthropic', label: 'Anthropic'}, {id: 'meta', label: 'Meta'}]});
       if (p === '/api/v2/usage/limits') return json({bots: {}});
-      if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
+      if (p === '/api/v2/settings/history') return json({changes: []});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));
     });

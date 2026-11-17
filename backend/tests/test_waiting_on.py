@@ -1,4 +1,4 @@
-"""Whose turn a task is (backend/waiting_on.py, docs/pipelines-v3.md "Whose turn it is").
+"""Whose turn a task is (backend/waiting_on.py, docs/dev/pipelines-v3.md "Whose turn it is").
 
 Synthetic rows only (backend/tests/helpers/engine.py).
 """
@@ -255,7 +255,7 @@ def test_every_persons_needs_you_comes_from_one_pass_over_the_tasks(c, general, 
 
 
 def test_an_ok_that_names_a_bot_is_that_bots_turn(c, general):
-    """A stage's OK may name a bot (docs/pipelines-v3.md, kind 2); an OK added to one task is asked of a person."""
+    """A stage's OK may name a bot (docs/dev/pipelines-v3.md, kind 2); an OK added to one task is asked of a person."""
     from backend.hubdb import Refused
 
     ok = {"kind": "ok", "person": "bot:reviewer", "line": "OK the wording"}

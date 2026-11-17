@@ -45,7 +45,10 @@ Tests: `test_bearer_through_the_proxy_httpbin` (httpbin's echo of the real key i
 `test_bearer_on_computers_httpbin`. A GitHub, Linear or Raygun PAT is the same shape (tier B, needs an account).
 
 **Basic, user and password** (`basic_user_pass`). Hand it over: Auth **Basic, key as password**, the key's Username set
-to the user. Proxy. On computers the bot gets only the password, so the task (or a second key) says the user. Candidates:
+to the user. Proxy. On computers the bot gets only the password, so the task (or a second key) says the user. When the
+user is a value the bot also needs (Twilio's Account SID), it is a template field instead (Several fields, below). A
+sign-in to a site stored as two keys (`VPM_USERNAME` and `VPM_PASSWORD`) is offered to the Tools Owner as a website
+account (Website login only). Candidates:
 postman-echo.com `/basic-auth` (postman / password), httpbin.org `/basic-auth/<user>/<password>`. Tests:
 `test_basic_password_through_the_proxy_postman_echo`, `test_basic_on_computers_httpbin`.
 
@@ -57,11 +60,25 @@ address and its key (the password), on computers. The bot answers the challenge 
 `HTTPDigestAuthHandler`, `curl --digest`). Not through the proxy. Candidate: httpbin.org `/digest-auth/auth/<user>/<password>`.
 Test: `test_digest_on_computers_httpbin`.
 
-**Several fields** (`multi_field`). Twilio's SID and secret, an access key pair, Plaid's client id and secret. Hand it
-over: one key per field, each with its own variable (the secret as the tool's key, the others with Tools > Add > Key),
-all granted to the bot. On computers. Non-secret fields (a host, a region, a project id) become tool Settings later;
-today they are keys too, or written in the task. Candidate: play.min.io's published key pair. Test:
-`test_aws_sigv4_key_pair_on_computers_minio_play`.
+**Several fields** (`multi_field`). Twilio's SID and secret, an access key pair, Google Ads' five values, Plaid's client
+id and secret. Hand it over: one tool for the vendor account, with an **auth template** that says how its fields are
+sent ([credential-vault.md](credential-vault.md#auth-templates)). Paste all the values at once (Tools > Add > API's
+Keys box, or Keys > Paste on the tool): Tico names each value as a field of a known template (Twilio, Google Ads, AWS,
+PostHog, ElevenLabs, Calendly) by its name or shape, or marks it secret, id or setting for any other vendor, and one
+click stores secrets as keys and ids and settings as Settings. Every field reaches the run as its own variable: a secret
+as a proxy token (proxy) or its value (on computers), an id or setting as its value. Through the proxy, the template
+builds the vendor's auth from every field the caller holds:
+- **Basic with two fields**: Twilio's Account SID (a plain variable too, since it is in every path) and Auth Token, or
+  its API key SID and secret.
+- **A header pair**: two headers, each from a field (`X-Api-Key` and `X-Api-Secret`).
+- **Query + header**: one field in the query string, another in a header.
+- **Delivered to the computer**: a template with no way through the proxy (AWS's key pair and region, signed with
+  SigV4; Google Ads, whose OAuth refresh the client library does on the computer for now). Its fields go to computers
+  together.
+A vendor that is not one of the six takes a template of its own (`PUT /api/v2/api-tools/<id>/template` with its fields
+and ways). Tests: `test_a_twilio_like_account_sid_is_both_a_plain_variable_and_the_basic_username_through_the_proxy`,
+`test_a_header_pair_reaches_the_vendor_with_both_secrets_while_the_run_holds_two_tokens` (stub suite), and on computers
+`test_aws_sigv4_key_pair_on_computers_minio_play` with play.min.io's published key pair.
 
 **Secret in the URL** (`secret_in_url`). Telegram's `/bot<token>/`, a Discord webhook URL, an MCP URL with `?token=`.
 Hand it over: a key on computers; the bot builds the URL from the variable. The proxy places keys only in a header or
@@ -109,8 +126,8 @@ holding the token (so the key stays on the server) is not supported yet. Tier B.
 
 The bot holds the secret on computers and signs each request itself; the proxy cannot sign.
 
-**AWS Signature Version 4** (`aws_sigv4`). Hand it over: `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` as two keys
-(Several fields, above). The bot's SDK or `curl --aws-sigv4` signs. Short-lived STS credentials and assumed roles are
+**AWS Signature Version 4** (`aws_sigv4`). Hand it over: one AWS tool with the AWS template, `AWS_ACCESS_KEY_ID` and
+`AWS_SECRET_ACCESS_KEY` as its keys and `AWS_REGION` as a setting (Several fields, above), on computers. The bot's SDK or `curl --aws-sigv4` signs. Short-lived STS credentials and assumed roles are
 not supported yet. Candidate: play.min.io. Test: `test_aws_sigv4_key_pair_on_computers_minio_play`.
 
 **OAuth 1.0a** (`oauth1_signed`). Consumer key and secret, optionally a token and token secret; HMAC-SHA1 per request.
@@ -134,8 +151,8 @@ bot gets the secret itself. Candidate: GitHub's documented example (secret "It's
 the tool's address is the tenant's (`https://acme.atlassian.net`). Proxy. Tier B.
 
 **Sandbox and production** (`sandbox_prod_split`). Stripe test and live keys, PayPal sandbox and live hosts. Hand it
-over today: two API tools (or a Read key and a Read and write key on one). Grouping a vendor's connections under one
-vendor comes with the credential model. Tier B.
+over today: two API tools (or a Read key and a Read and write key on one), each its own account, named vendor and label
+("Stripe · Test"); Tools lists both under their vendor. Tier B.
 
 **IP allowlist** (`ip_allowlist`). The service accepts calls only from listed addresses. A proxied call leaves from the
 Tico server's address; a call on computers from that computer's. Allowlist the one the tool uses. Not tested.

@@ -1,4 +1,4 @@
-"""The Release stage cuts its release without a person (docs/pipelines-v3.md "GitHub", Release;
+"""The Release stage cuts its release without a person (docs/dev/pipelines-v3.md "GitHub", Release;
 backend/item_sources/github_release.py): the Release Owner is woken on entering Release, asks with ONE Tico tool
 (`tico task release`), and Tico carries it out through its GitHub App on the Heartbeat. GitHub is
 backend/tests/helpers/fake_github.py; nothing here reaches the real one."""

@@ -1,5 +1,5 @@
 /* ui/app/task-props.ts — A task's facts in its Details, Linear style: one click-to-edit line each (Stage, Owner, Part of,
-   Human, Asked by, Due, Tags, Goal…), their menus and pickers, and the task's ⋯ menu (docs/pipelines-v3.md S4, S5).
+   Human, Asked by, Due, Tags, Goal…), their menus and pickers, and the task's ⋯ menu (docs/dev/pipelines-v3.md S4, S5).
    Used by the task's window (#task-modal); each change saves at once with the task's version.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
@@ -585,7 +585,7 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
       const b = $(`.tw-head [data-fb-rate="${rate}"]`, d) as HTMLElement | null;
       if (b) items.push({text, icon, sep: rate === 'up', checked: b.getAttribute('aria-pressed') === 'true', run: () => b.click()});
     }
-    // A reopen says why (docs/pipelines-v3.md C24): the menu takes the note, and Enter reopens it. The head's way back
+    // A reopen says why (docs/dev/pipelines-v3.md C24): the menu takes the note, and Enter reopens it. The head's way back
     // does the same; this keeps it where it always was.
     if (!r.live && r.reopen) items.push({text: 'Reopen…', icon: 'unarchive', run: () => setTimeout(() => propMenu(d, more, {label: 'Reopen', entry: 'Why reopen it?',
       none: '', onEntry: v => void save('stage', {move: 'reopen', why: v})}))});

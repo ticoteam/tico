@@ -119,7 +119,7 @@ Trigger. NULL refused.
 
 Transitions: only the engine writes it (`backend/task_engine.py` `move`), inside the guard the `tasks_move_only` trigger
 reads. A task is inserted `open` and entered in the first stage of its pipeline in the same transaction. Done, Close and
-Reopen are moves. See [Tasks](tasks.md#done-closed-and-reopen) and [the spec](pipelines-v3.md#how-a-task-moves).
+Reopen are moves. See [Tasks](tasks.md#done-closed-and-reopen) and [the spec](dev/pipelines-v3.md#how-a-task-moves).
 
 ### jobs.state
 

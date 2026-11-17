@@ -1,5 +1,5 @@
 """`tico/merge-ok`: the check only the server posts, so a repo ruleset that requires it lets no PR into the merge queue
-(or merged) unless Tico's Merge stage queued it after the person sign-off (docs/pipelines-v3.md "GitHub")."""
+(or merged) unless Tico's Merge stage queued it after the person sign-off (docs/dev/pipelines-v3.md "GitHub")."""
 
 import pytest
 

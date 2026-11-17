@@ -433,7 +433,6 @@ type RosterPerson = import('./api').Person & {
   bots?: string[];
   my_access?: AccessLevel;
   slack_muted_bots?: string[] | null;
-  notify_slack_task_done?: boolean;
   notify_slack_bot_messages?: boolean;
   notify_browser?: boolean;
   email_digest?: boolean;

@@ -13,6 +13,7 @@ from backend.item_sources import github_release as GR
 from backend.store import H
 from backend.tests.helpers import release_cut as T
 from backend.tests.helpers.fake_github import FakeGitHub
+from backend.tests.helpers.statement_scope import measuring, recorder
 
 REPO = T.REPO
 MERGED = "2026-11-10T00:00:00.000000Z"  # FakeGitHub.merge's merged_at
@@ -167,13 +168,13 @@ def test_the_background_re_read_asks_github_about_the_same_releases_in_the_same_
 
 
 def counted(company, monkeypatch):
-    """Every statement any pooled connection runs while the returned list is live."""
+    """Every statement a pooled connection runs inside `measuring(seen)`, and no other thread's."""
     seen: list[str] = []
     take = company._take
 
     def traced():
         c = take()
-        c.set_trace_callback(seen.append)
+        c.set_trace_callback(recorder(seen))
         return c
 
     monkeypatch.setattr(company, "_take", traced)
@@ -208,7 +209,8 @@ def per_check(company, gh, monkeypatch, count):
                 c.set_trace_callback(None)
             out[name] = release_questions(seen)
         seen = counted(company, m)
-        F._refresh_releases(company, gh, H.now())
+        with measuring(seen):
+            F._refresh_releases(company, gh, H.now())
         out["background"] = release_questions(seen)
     with company.read() as c:
         c.set_trace_callback(None)

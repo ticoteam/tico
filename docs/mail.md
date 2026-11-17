@@ -120,6 +120,8 @@ tico email policy --bot <slug>                         # your sending policy, as
 tico email sends --mailbox ana@acme.example            # what was queued and what went out
 ```
 
+Mail is read live from Gmail on the server, so nothing here needs a sync.
+
 ## Writing: draft, reply, send
 
 `tico email draft` lints the text and writes a Gmail draft. `send` and `reply` (and `tico calendar schedule`'s
@@ -354,9 +356,9 @@ Details of the plan and the reasoning behind it: `docs/mail-service.md`. The rul
 
 ## Works on Linux runners
 
-The mail and calendar sync (the `connectors` job) runs on a Docker runner, so a team whose bots all live
-on cloud Linux can sync mail and calendar with no Mac. It is the same code and behavior as on a Mac; only the places it
-looks are named instead of guessed.
+The calendar sync and the mail actions a computer carries out (the `connectors` job) run on a Docker runner, so a team
+whose bots all live on cloud Linux can run them with no Mac. It is the same code and behavior as on a Mac; only the places
+it looks are named instead of guessed.
 
 Replace `<container-name>` below with this Computer's full Docker container name. The installer's
 `--name mail` creates `tico-runner-mail`; copy the name from the Docker sign-in command in **Add computer**
@@ -397,7 +399,7 @@ and the Assistant. An admin who wants Tico to send turns Send mail on. The conne
 run: a bot's from its mail setting, a person's from their `GET /api/v2/mail/access` answer, and the runner's connector
 job's (`--as connector`, which its sync, mail actions and calendar bookings use) from the runner's own read
 (`GET /api/v2/connectors/mail/targets`), never from the run itself. The connector reads the mailboxes its computer
-syncs and writes only the actions the server leased it, each checked against the automation owner's level. When Tico
+acts for and writes only the actions the server leased it, each checked against the automation owner's level. When Tico
 cannot be asked, writes are refused ("Tico couldn't check the company's mail settings; try again") and reads go on; a
 run without the runner's registration can't ask, so it only reads. Change calendar needs `calendar.events`.
 
@@ -441,13 +443,13 @@ Choose the audience in step 1:
 
 **Remove Google app** turns it off for everyone. A server's Google app can also come from its environment; see [Manual or self-hosted](#manual-or-self-hosted).
 
-### Start the sync on the runner
+### Start the connectors job on the runner
 
-With Whole Workspace set, the `connectors` job on the runner reads the mailboxes below. It gets short-lived tokens from the Tico server, so no key file goes to the runner.
+With Whole Workspace set, the `connectors` job on the runner carries out the mail actions and queued sends for the mailboxes below, and runs the calendar sync. It gets short-lived tokens from the Tico server, so no key file goes to the runner.
 
 1. Wait a minute. `docker logs '<container-name>'` says `Tico side jobs: started connectors (mail, calendar)`. The first start builds
    the Python environment into the runner's volume (`/home/runner/tools/mail-venv`, or `/var/lib/tico-runner/tools/mail-venv`),
-   about a minute, needing outbound access to PyPI once. It is not in the image, so the image stays slim for runners that never sync mail;
+   about a minute, needing outbound access to PyPI once. It is not in the image, so the image stays slim for runners that never run mail tools;
    it is rebuilt when `connectors/mail/requirements.txt` changes.
 2. Check: `python -m runner_support --config <runner.json> connectors-doctor`, then Settings shows the mail and calendar
    tool health.
@@ -455,7 +457,7 @@ With Whole Workspace set, the `connectors` job on the runner reads the mailboxes
 ### Which mailboxes a computer acts for
 
 With **Whole Workspace**, each known active mailbox has one computer that carries out its automation mail actions and
-queued sends (`acts_for` in `GET /api/v2/connectors/mail/targets`; it syncs none): its message bot's non-revoked host,
+queued sends (`acts_for` in `GET /api/v2/connectors/mail/targets`; no computer syncs one: its message bot's non-revoked host,
 else the person's Assistant's online host, else an online isolated company server (owned by a company owner or admin),
 else the person's own online computer. Shared mailboxes without a message-bot host use only a company server. Among
 equally eligible computers, the lowest runner ID wins. Another member's personal computer is never chosen just because
@@ -468,14 +470,12 @@ who left, and an archived bot, are skipped.
 
 This is what lets a team sign in on one domain and keep its Google Workspace on another. If the owner signs in as
 `ana@acme-signin.example` but the Workspace, and so the service account's delegation, is for `acme.example`, the message bot declares
-`ana@acme.example` and that is the mailbox that is watched and read. The calendar sync and the bot's token use the same address.
+`ana@acme.example` and that is the mailbox that the server watches and reads. The calendar sync and the bot's token use the same address.
 
-If the key cannot act for a mailbox's domain (Google answers `unauthorized_client`: no domain-wide delegation there), the job
-does not fail on every cycle. It says so once in the runner's log, skips every mailbox on that domain, tries the domain again
-after an hour, and shows one issue in Settings > General > Health > Details that names the mailbox and the domain, for example
-`Mail can't refresh for ana@acme-signin.example: the Google service account has no domain-wide delegation for the domain acme-signin.example`.
-Fix it by adding the delegation for that domain in the Google Workspace admin console, or by giving the message bot a mailbox on
-a domain the key covers. The issue goes away on its own once the mailbox syncs.
+If the key cannot act for a mailbox's domain (Google answers `unauthorized_client`: no domain-wide delegation there), the server's
+mail watch keeps where it got to, records the reason on that mailbox (`check_error`, shown on Tools > the mailbox) and tries
+again 90 seconds later. Fix it by adding the delegation for that domain in the Google Workspace admin console, or by giving the
+message bot a mailbox on a domain the key covers. The mailbox clears on its own once a check succeeds.
 
 ### Connect your Google account
 
@@ -494,7 +494,7 @@ the account that signed in and cannot reach anyone else in the Workspace.
    nothing that writes or sends is asked for. With the company's own Google app, see below.
 3. Google returns them to Tico. The Tico server trades the one-time code for the grant at once and keeps it sealed with
    its credential key. Settings shows what the grant allows, and Tico reads the mailbox live from Google. No computer
-   holds the grant or a token from it beyond the hour-long token the server gives the computer that syncs the mailbox.
+   holds the grant or a token from it beyond the hour-long token the server gives the computer that acts for the mailbox.
 
 Tico refuses any other account: if the ID token Google returns with the grant names someone else, nothing is stored
 and that grant is revoked at once. A grant with no Gmail access, or more access than the app asks for, is revoked the
@@ -523,7 +523,7 @@ A canceled consent reads as "not approved", and a problem with Tico's own Google
 
 Reconnect and revoke:
 - If the person removes Tico at myaccount.google.com/permissions, changes their password, or the admin blocks the app
-  later, the next sync fails and Settings > General > Health > Details says to reconnect (or names the admin policy). Tico never falls back
+  later, the next check fails and Settings > General > Health > Details says to reconnect (or names the admin policy). Tico never falls back
   to a service account for that mailbox. **Connect Google** again replaces the grant.
 - **Disconnect** in Tools > Settings > Email deletes the grant from the server at once and revokes it at Google. If
   Google cannot be reached, Settings says so and points to myaccount.google.com/permissions to remove Tico there.
@@ -547,7 +547,7 @@ ways to supply it:
   with **Advanced**. The project can never have more than 100 users in total, and Google's API Services User Data
   Policy still applies. Name it honestly as private to that server, never as Tico's public app, and don't share one
   such client across servers to stay under the cap. Google's 7-day limit applies to apps in **Testing**, so an app in
-  production should keep its grants; check that on the real project by seeing a sync still work after the eighth day.
+  production should keep its grants; check that on the real project by seeing mail still read after the eighth day.
 - **Tico's public app** for every team. Lasting grants for anyone need it **In production** and verified by Google.
   `gmail.readonly` is a restricted scope, so verification includes Google's yearly security assessment. Until then an
   app in **Testing** takes at most 100 listed test users, and Google ends each grant after 7 days. That is enough to
@@ -582,7 +582,7 @@ The key can act as any mailbox in the team, so bots must not be able to read it.
   socket, a Gmail or Calendar access token that lasts an hour for one mailbox at a time. The mailboxes it may ask for are the
   ones it holds a level on in Tico (`mailbox_levels` on its turn; a message bot gets its grant when it is set as a
   person's message bot). The server checks the level again on every mint, and a Read level gets the read-only scopes,
-  except on the computer that syncs the mailbox, whose connector holds the full scope. Calendar tokens come from the same
+  except on the computer that acts for the mailbox, whose connector holds the full scope. Calendar tokens come from the same
   list. Any other bot, and any other mailbox, is refused.
   A bot is a message bot to the server when it is its person's `inbox_bot`, which is what the server checks before it names any
   mailbox for a run. Making a bot from the `inbox-manager` template does that itself: adding it in Settings, in the team builder, or

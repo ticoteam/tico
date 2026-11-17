@@ -2434,7 +2434,7 @@ def install_github(app, settings, store):
         with store.transaction() as c:
             from .item_sources import github as GS
 
-            # A delivery GitHub sends again (a retry, a redelivery) is taken once (docs/pipelines-v3.md "GitHub").
+            # A delivery GitHub sends again (a retry, a redelivery) is taken once (docs/dev/pipelines-v3.md "GitHub").
             if GS.seen_delivery(c, headers.get("x-github-delivery"), event):
                 return {"ok": True, "repeat": True}
             metadata = _item_metadata(c, app.state.github_app, event, payload)

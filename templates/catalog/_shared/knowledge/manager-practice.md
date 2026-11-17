@@ -31,4 +31,4 @@ alone does not count.
 - Close: never refused; its open sub-tasks close with it. A task a person asked for is theirs to close.
 
 ## Sources
-- Tico docs/pipelines-v3.md: the never-stuck check, Late, Snooze, the moves, and C1, C4, C5, C6, C8, C24 and C25.
+- Tico docs/dev/pipelines-v3.md: the never-stuck check, Late, Snooze, the moves, and C1, C4, C5, C6, C8, C24 and C25.

@@ -1,5 +1,5 @@
 import type {Route} from 'playwright';
-// Offline browser check of a stage's typed answer on the ask screen (docs/pipelines-v3.md S3, kind 6): the item asks
+// Offline browser check of a stage's typed answer on the ask screen (docs/dev/pipelines-v3.md S3, kind 6): the item asks
 // its question; a number is a whole-number box with its range and a box for words (its note), and a value the server refuses stays typed under the
 // server's own line until a good one is sent; a choice is its buttons, with no free text; text is a box and Send.
 const {chromium} = require('playwright') as typeof import('playwright');

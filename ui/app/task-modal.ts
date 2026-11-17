@@ -354,7 +354,7 @@ function taskModalBind(d: ModalDialog, task: ModalTask, full = false) {
     if (saved && d.open && String(d.dataset.task) === String(task.id)) dismiss();
     else b.disabled = false;
   });
-  // A finished task's way back is where Archive was: it asks why (docs/pipelines-v3.md C24), and Enter reopens it.
+  // A finished task's way back is where Archive was: it asks why (docs/dev/pipelines-v3.md C24), and Enter reopens it.
   const reopen = $('[data-task-reopen]', d);
   if (reopen) reopen.onclick = () => propMenu(d, reopen, {label: 'Reopen', entry: 'Why reopen it?', none: '',
     onEntry: v => void change({move: 'reopen', why: v}, undefined, 'stage')});

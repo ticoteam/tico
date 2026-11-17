@@ -1,4 +1,4 @@
-/* ui/styles/decide.css — Flow, the ask screen (ui/app/decide.ts, docs/pipelines-v3.md S3): one clean bar on top (where
+/* ui/styles/decide.css — Flow, the ask screen (ui/app/decide.ts, docs/dev/pipelines-v3.md S3): one clean bar on top (where
    you are, Flow's mark, the mic, the undo notice, ‹ › ✕), the thing asked about on the left, the sentence and the buttons on the right; the whole screen on a phone, one
    scroll (the thing, then the sentence and Notes) with the buttons in a bar pinned to the bottom.
    The cascade runs in the order index.html links these files; keep rules in order. */

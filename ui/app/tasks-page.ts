@@ -1,4 +1,4 @@
-/* ui/app/tasks-page.ts — the Tasks page (docs/pipelines-v3.md S2, S7): the header, You, a pipeline, the archive, search
+/* ui/app/tasks-page.ts — the Tasks page (docs/dev/pipelines-v3.md S2, S7): the header, You, a pipeline, the archive, search
    and filter, and New task (S6).
    The header, left to right: "Tasks", the view button ("You 7 ▾" or a pipeline's name), the pencil on a pipeline,
    then search, filter, list or columns on a pipeline, archive, Flow (decide.ts) and +.

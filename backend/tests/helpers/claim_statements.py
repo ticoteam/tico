@@ -4,6 +4,7 @@ import contextlib
 from backend import bot_settings as BS
 from backend.store import H
 from backend.tests.helpers.api import assign, post, ready, runner
+from backend.tests.helpers.statement_scope import measuring, recorder
 
 
 CAPABILITIES = [
@@ -43,14 +44,15 @@ def seed(api, prefix, count):
 
 @contextlib.contextmanager
 def traced(api):
-    """Every statement the claim runs, on any connection the store lends it (reads and the write transaction)."""
+    """Every statement the claim runs, on any connection the store lends it (reads and the write transaction). Only the
+    statements the measured block runs count: another thread's read on the store meanwhile is not the claim's."""
     store, seen = api.app.state.store, []
     original = store.read
 
     @contextlib.contextmanager
     def borrowed():
         with original() as c:
-            c.set_trace_callback(seen.append)
+            c.set_trace_callback(recorder(seen))
             try:
                 yield c
             finally:
@@ -58,6 +60,7 @@ def traced(api):
 
     store.read = borrowed
     try:
-        yield seen
+        with measuring(seen):
+            yield seen
     finally:
         del store.read

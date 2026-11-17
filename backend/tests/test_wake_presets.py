@@ -199,7 +199,7 @@ def test_a_usage_limit_with_a_known_reset_waits_for_it(api, monkeypatch):
     monkeypatch.setattr(H, "now", lambda: H.shift(reset, seconds=2))
     scheduler.tick()
     with api.app.state.store.read() as c:
-        assert not cooling_off(c, "ops")
+        assert not cooling_off(c, api.app.state.store.settings, "ops")
         assert c.execute("SELECT count(*) FROM attempts WHERE job_id=?", (attempt["job_id"],)).fetchone()[0] == 1
         assert c.execute("SELECT state FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0] == "queued"
 
@@ -404,7 +404,7 @@ def test_a_persons_message_is_not_delayed_by_a_held_batch(api):
 
 def test_a_persons_done_through_botops_wakes_no_bot_about_the_done_task(api, botops):
     """BotOps marking done, for the person, a task a bot asked them for: the person's act, as the same act from the app
-    is. Pipelines v3 wakes no bot about a Done task (docs/pipelines-v3.md, check rule 7), so nothing is queued or held."""
+    is. Pipelines v3 wakes no bot about a Done task (docs/dev/pipelines-v3.md, check rule 7), so nothing is queued or held."""
     with api.app.state.store.transaction() as c:
         task = H.task_create(c, "bot:ops", "Approve the vendor list", "Please check it.", "human:ana")
     attempt = turn(api, botops, person="ana-test", text="Mark the vendor list done")

@@ -1,5 +1,5 @@
 # pyright: strict
-"""One record for a pipeline, its stages and their requirements (docs/pipelines-v3.md, "Modules", "Stage settings").
+"""One record for a pipeline, its stages and their requirements (docs/dev/pipelines-v3.md, "Modules", "Stage settings").
 
 The same record is what the editor shows, what the API and the hub send, and what MCP reads. This module is the only
 writer of `pipelines`, `stages` and of the requirements set on a stage (`requirements.stage_id`).
@@ -205,7 +205,7 @@ VALIDATE_RUBRIC = (
     "and what it gave. If that version is older than the release that holds this work, it is not yet."
 )
 QA_STAGE = "engineering-qa"  # where a person approves the change before it ships (`_add_qa` brings it to a company)
-# The Product and Engineering presets (docs/pipelines-v3.md "Default pipelines"). Made only for a company that builds
+# The Product and Engineering presets (docs/dev/pipelines-v3.md "Default pipelines"). Made only for a company that builds
 # software (a blank answer is yes), once its setup is finished (ensure_presets).
 PRESETS["engineering"] = {
     "id": "engineering",
@@ -338,7 +338,7 @@ PRESETS["product"] = {
     "done": {"id": "product-done"},
     "closed": {"id": "product-closed"},
 }
-# Product (Nov 14, docs/pipelines-v3.md "Product"): one pipeline from pitch to production, the default for a company that
+# Product (Nov 14, docs/dev/pipelines-v3.md "Product"): one pipeline from pitch to production, the default for a company that
 # builds software from 0.6 on. It replaces the Product and Engineering pair (LEGACY), which stay defined for the
 # companies that have them. One feature owner, the task's assignee, holds it from Pitch to Validate in one task and one
 # session; the reviewers, the QA Owner and the Release Owner hold their stages as on Engineering. Any person clears

@@ -1,5 +1,5 @@
 """Connect GitHub: the first task that needs a repository asks the company's Owner once (docs/github-app.md "Set up",
-docs/pipelines-v3.md "What lands in your list").
+docs/dev/pipelines-v3.md "What lands in your list").
 
 A stage whose requirements read the task's PRs (item_sources.github) cannot be met while the company has no GitHub App
 installed. Its bot is Paused on "Connect GitHub", nobody is woken, and the Owner has one row for every task it holds up.

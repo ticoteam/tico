@@ -90,7 +90,7 @@ def test_a_wake_may_start_only_for_a_bot_whose_turn_it_is(c, general):
 
 
 def test_a_bots_word_to_another_bot_about_a_persons_task_starts_no_run(c, general):
-    """docs/pipelines-v3.md "It only wakes whoever has the turn": a task a person owns wakes no bot, so a bot's message
+    """docs/dev/pipelines-v3.md "It only wakes whoever has the turn": a task a person owns wakes no bot, so a bot's message
     to another bot about it starts no run. It stays in the task's chat for that bot's next run, and the check owes the
     other bot nothing (rule 2 holds: it has no turn)."""
     from backend import never_stuck as NS

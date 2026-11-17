@@ -190,6 +190,19 @@ immediately. Same for legal@acme.example.
 - A bot lists with `tico email inbox`, which carries headers and snippets and no bodies, and opens the threads that
   need reading with `tico email thread`. A full read of a busy inbox's bodies once cost 948K input tokens in one run.
 
+## Reading and hearing mail
+
+The server reads Gmail itself. `backend/gmail_watch.py`, on the server's `gmail_watch` drain worker, checks each watched
+mailbox about every 90 seconds: it hears each new message once, runs the mailbox's message automations, and keeps only
+where it got to. Nothing of a message is stored; an automation run sees the body while it runs. People and bots read mail
+live through the read API (`GET /api/v2/mail/...`, `tico email`, [Message bots](mail.md)), and every body read is audited
+as `mail.read`.
+
+No computer syncs mail or carries out mail any more: `mailboxes` is empty in `GET /api/v2/connectors/mail/targets`, and
+the server itself sends every queued email and carries out every automation mail action (a computer that still asks for
+them gets none). Older computers may still post a copy to `POST /api/v2/connectors/mail/messages`; the server keeps such
+a copy for `TICO_MAIL_RETENTION_DAYS` (default 180). SQL access to `mail_*` is owner-only.
+
 ## Shared sending policy and queue
 
 The server's `backend/email_sending.py` owns the effective company/inbox/bot sending policy, who can OK,
