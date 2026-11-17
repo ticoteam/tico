@@ -1889,7 +1889,7 @@ def progress_mark(conn: "sqlite3.Connection", visit_id: str, standings: Sequence
     `person_spoke`). Nor is a snooze or its end: setting a task aside earns no more runs. Nor is the task's version: it
     says the row changed since someone looked, and a field edit (a new title, a label) raises it. A move and a reassign
     start the ladder again themselves. `standings` saves reading them again when the caller has them."""
-    from . import read_cache
+    from . import question_marks, read_cache
 
     found = cast("Any", read_cache).one(conn, PROGRESS_SQL, (visit_id,))  # a pass reads them for many (never_stuck)
     if not found:
@@ -1901,9 +1901,7 @@ def progress_mark(conn: "sqlite3.Connection", visit_id: str, standings: Sequence
     mark = ".".join(str(part or 0) for part in found[1:]) + "." + hashlib.sha256(stand.encode()).hexdigest()[:12]
     # A person's reply to a ❓ on it is progress too (backend/question_marks.py). Only a task that has one says so,
     # so every other task keeps the mark it had.
-    replies = conn.execute(
-        "SELECT COUNT(*) FROM question_marks WHERE task_id=? AND cleared_message_id IS NOT NULL", (found[0],)
-    ).fetchone()[0]
+    replies = question_marks.replies(conn, found[0])
     return f"{mark}.q{replies}" if replies else mark
 
 
