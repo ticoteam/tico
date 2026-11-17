@@ -69,6 +69,36 @@ def test_a_page_saved_before_the_floor_gets_it_first_once(api):
     delete(api, "pins/" + after["pins"][0]["id"], "cara-test")
 
 
+def test_a_floor_pinned_to_an_unsaved_page_is_refused_and_the_page_holds_one(api):
+    card = post(api, "cards", {"template": "floor"}, "cara-test")["card"]
+    post(api, "pins", {"place": "person:me", "item": "card:" + card["id"]}, "cara-test", expected=409)
+    assert templates(place(api, "person:me", "cara-test")).count("floor") == 1
+
+
+def test_the_floor_migration_leaves_a_page_at_the_pin_limit_alone(api):
+    migration = importlib.import_module("backend.migrations.20261117023225_company_floor_widget")
+    put(api, "places/person:me", {}, "cara-test")
+
+    def seed(c, n):  # a page saved before the Floor was a card, with n pins
+        c.execute("DELETE FROM pins WHERE place='person:cara'")
+        for i in range(n):
+            c.execute(
+                "INSERT INTO pins(id,place,item,position,size,made_by,created_at) "
+                "VALUES(?,'person:cara',?,?,'medium','human:cara','2026-11-01T00:00:00Z')",
+                (f"pin-{i}", f"page:file-{i}", i),
+            )
+
+    with api.app.state.store.transaction() as c:
+        seed(c, 60)
+        migration.up(c)
+        assert c.execute("SELECT count(*) FROM pins WHERE place='person:cara'").fetchone()[0] == 60
+        seed(c, 59)  # one under the limit: the Floor goes on
+        migration.up(c)
+        assert c.execute("SELECT count(*) FROM pins WHERE place='person:cara'").fetchone()[0] == 60
+        floors = "SELECT count(*) FROM pins p JOIN cards k ON p.item='card:'||k.id WHERE k.template='floor'"
+        assert c.execute(floors).fetchone()[0] == 1
+
+
 def test_nobody_else_reads_or_arranges_it_not_even_an_admin(api):
     made = post(api, "cards", {"template": "my_tasks", "settings": {"count": 3}, "place": "person:me"}, "cara-test")
     cid, pid = made["card"]["id"], made["pin"]

@@ -56,9 +56,10 @@ const levels = (page: Page, sel: string) => page.locator(sel).evaluateAll(els =>
 (async () => {
   const browser = await chromium.launch({channel: (process.env.TICO_BROWSER_CHANNEL ?? 'chrome') as string, headless: true});
   try {
-    const open = async (width: number, height: number, hub: Hub, hash = '#/home', touch = false) => {
+    const open = async (width: number, height: number, hub: Hub, hash = '#/home', touch = false, clock = false) => {
       const context = await browser.newContext({viewport: {width, height}, serviceWorkers: 'block', hasTouch: touch, isMobile: touch});
       const page = await context.newPage();
+      if (clock) await page.clock.install({time: new Date('2026-11-16T09:00:00Z')});
       const errors: string[] = [];
       page.on('pageerror', e => errors.push(e.message));
       await page.route('**/*', async (route: Route) => {
@@ -157,6 +158,7 @@ const levels = (page: Page, sel: string) => page.locator(sel).evaluateAll(els =>
       assert.equal(read.searchParams.get('pipeline'), 'features');
       assert.equal(read.searchParams.get('stages'), 'spec');
       assert.equal(read.searchParams.get('owners'), null, 'a company stack lists every holder\'s tasks');
+      assert.equal(read.searchParams.get('snoozed'), 'all', 'and the snoozed ones its count includes');
       await shot(page, 'floor-desktop-card');
       // Away from it, it goes.
       await page.mouse.move(5, 890);
@@ -239,6 +241,46 @@ const levels = (page: Page, sel: string) => page.locator(sel).evaluateAll(els =>
       await page.locator('.cf-stage').first().waitFor();
       assert.equal(await page.locator('.cf-stage[data-cf-stage-id="triage"] .cf-deck').count(), 13);
       assert.equal(await page.locator('.cf-stage[data-cf-stage-id="triage"] .cf-deck[data-cf-actor="+"]').count(), 1);
+      // The overflow deck's card lists the stage's tasks: no owner to filter by, snoozed ones too.
+      hub.reads.length = 0;
+      await page.locator('.cf-stage[data-cf-stage-id="triage"] .cf-deck[data-cf-actor="+"]').click();
+      const card = page.locator('#cf-card');
+      await card.locator('.cf-row').first().waitFor();
+      assert.equal(await card.locator('.cf-card-name').innerText(), '+3');
+      assert.equal(await card.locator('.cf-row').count(), 5);
+      const read = hub.reads.find(u => u.pathname === '/api/v2/tasks')!;
+      assert.equal(read.searchParams.get('pipeline'), 'fixes');
+      assert.equal(read.searchParams.get('stages'), 'triage');
+      assert.equal(read.searchParams.get('owners'), null);
+      assert.equal(read.searchParams.get('snoozed'), 'all');
+      await page.keyboard.press('Escape');
+      assert.deepEqual(errors, []);
+      await close();
+    }
+    // Company's safety read (every 2 minutes, or 5 with the live stream) reads the Floor again: an answer that differs is
+    // drawn, and the same answer leaves the floor as it is.
+    {
+      const hub = fresh();
+      const {page, errors, close} = await open(1440, 900, hub, '#/home', false, true);
+      await page.locator('.cf-hall').first().waitFor();
+      const floorReads = () => hub.reads.filter(u => u.pathname === '/api/v2/company/floor').length;
+      const until = async (done: () => boolean | Promise<boolean>) => {
+        for (let i = 0; i < 100 && !(await done()); i++) await page.waitForTimeout(50);
+        assert.ok(await done());
+      };
+      const build = async () => (await levels(page, '[data-cf-line="features"] .cf-stack[data-cf-stage="build"]'))[0];
+      let reads = floorReads();
+      await page.clock.fastForward(310e3);
+      await until(() => floorReads() > reads);
+      await page.waitForTimeout(200);
+      assert.deepEqual(await levels(page, '[data-cf-line="features"] .cf-stack'), [3, 5, 8, 0, 2], 'the same answer, the same floor');
+      // Build is one task now, not 400: the next read draws it.
+      hub.floor = {factories: [{...FLOOR.factories[0]!, pipelines: [{...FEATURES, stages: FEATURES.stages.map(s => s.id === 'build' ? stage('build', 'Build', [o('bot:b1', 1)]) : s)}]}, FLOOR.factories[1]]};
+      reads = floorReads();
+      await page.clock.fastForward(310e3);
+      await until(async () => (await build()) === 1);
+      assert.deepEqual(await levels(page, '[data-cf-line="features"] .cf-stack'), [3, 5, 1, 0, 2]);
+      assert.ok(floorReads() > reads);
       assert.deepEqual(errors, []);
       await close();
     }
