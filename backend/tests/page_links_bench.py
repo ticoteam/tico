@@ -88,7 +88,11 @@ def main():
             order = ' ORDER BY f.last_activity_at DESC,f.id DESC LIMIT 50'
             library = 'SELECT f.*,p.cadence AS page_cadence,p.archived AS page_archived FROM bot_files f LEFT JOIN pages p ON p.file_id=f.id WHERE f.state<>\'deleted\' AND f.archived=0 AND COALESCE(p.archived,0)=0'
             old_task = "(f.task_id=? OR EXISTS (SELECT 1 FROM pins WHERE place=? AND item='page:' || f.id))"
-            new_task = "(f.task_id=? OR f.id IN (SELECT page_id FROM page_links WHERE target=?) OR EXISTS (SELECT 1 FROM pins WHERE place=? AND item='page:' || f.id))"
+            new_task = (
+                "f.id IN (SELECT id FROM bot_files WHERE task_id=? UNION "
+                "SELECT page_id FROM page_links WHERE target=? UNION "
+                "SELECT substr(item,6) FROM pins WHERE place=? AND item LIKE 'page:%')"
+            )
             cases = [
                 ('pages/task/old', select + ' AND ' + old_task + order, ('t42', 'task:t42')),
                 ('pages/task/new', select + ' AND ' + new_task + order, ('t42', 'task:t42', 'task:t42')),
@@ -100,7 +104,9 @@ def main():
                     ('pages/bot/old', select + ' AND f.bot_id=?' + order, ('ops',)),
                     (
                         'pages/bot/new',
-                        select + ' AND (f.bot_id=? OR f.id IN (SELECT page_id FROM page_links WHERE target=?))' + order,
+                        select
+                        + ' AND f.id IN (SELECT id FROM bot_files WHERE bot_id=? UNION SELECT page_id FROM page_links WHERE target=?)'
+                        + order,
                         ('ops', 'bot:ops'),
                     ),
                     (

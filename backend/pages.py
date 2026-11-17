@@ -297,14 +297,17 @@ class Pages:
         if bot:
             with self.store.read() as c:
                 bot = (H.resolve_bot(c, H.actor_id(bot)) or {}).get("id", H.actor_id(bot))
-            where.append("(f.bot_id=? OR f.id IN (SELECT page_id FROM page_links WHERE target=?))")
+            where.append(
+                "f.id IN (SELECT id FROM bot_files WHERE bot_id=? UNION SELECT page_id FROM page_links WHERE target=?)"
+            )
             params += [bot, "bot:" + bot]
         if task:
             with self.store.read() as c:
                 task = self.auth.resolve_task(c, who, task)
             where.append(
-                "(f.task_id=? OR f.id IN (SELECT page_id FROM page_links WHERE target=?) "
-                "OR EXISTS (SELECT 1 FROM pins WHERE place=? AND item='page:' || f.id))"
+                "f.id IN (SELECT id FROM bot_files WHERE task_id=? UNION "
+                "SELECT page_id FROM page_links WHERE target=? UNION "
+                "SELECT substr(item,6) FROM pins WHERE place=? AND item LIKE 'page:%')"
             )
             params += [task, "task:" + task, "task:" + task]
         sql, args = page_links.filters(linked, role, writer)
