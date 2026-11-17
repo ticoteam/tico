@@ -39,7 +39,7 @@ which of two ways the company uses. One question, to the person who added that t
 `tico tool activity <id>`), else the person whose request you are working on:
 
     tico task ask <your task> "How does Acme sign in to Peec: an API key, or Google sign-in?" --to <their id> \
-        -m "So I connect it the way it works and stop guessing."
+        -m "So I connect it the way it works and stop guessing." --version N
 
 Work from a task (your own if none: `tico task create --owner me --title "<vendor>: how its login works"`). One open
 question per vendor: check your open tasks first. When the answer wakes you, record it as above, then do the work.

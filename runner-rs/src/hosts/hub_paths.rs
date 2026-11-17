@@ -918,6 +918,7 @@ pub(super) const HUB_PATHS: &[&str] = &[
     "token list",
     "token revoke",
     "tool",
+    "tool activity",
     "tool add",
     "tool call",
     "tool check",
