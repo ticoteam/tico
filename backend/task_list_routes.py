@@ -227,7 +227,15 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                             "size",
                         ):
                             row.pop(field, None)
-                        for field in ("done_at", "closed_at", "closed_by_id", "assignee_id", "human_id"):
+                        for field in (
+                            "done_at",
+                            "closed_at",
+                            "closed_by_id",
+                            "assignee_id",
+                            "human_id",
+                            "checkpoint_at",
+                            "checkpoint_by_id",
+                        ):
                             if row.get(field) is None:
                                 row.pop(field, None)
 
