@@ -1020,7 +1020,7 @@ FILE = (
         args=(Arg("path", positional=True),),
         omit=("name", "text", "content_base64"),  # the file's own, read from `path`
         run=files_publish_path,
-        example="tico file publish reports/weekly.md --title 'Weekly review'",
+        example="tico file publish weekly.md --title 'Weekly review'",
     ),
     Command(
         "file link",
@@ -1051,7 +1051,7 @@ FILE = (
     Command(
         "file approved",
         "exit 0 when a person approved this exact version on a review question, 1 when not, 2 on bad input",
-        example="tico file approved reports/weekly.md --by bot:ana",
+        example="tico file approved weekly.md --by bot:ana",
     ),
     Command(
         "file review",
