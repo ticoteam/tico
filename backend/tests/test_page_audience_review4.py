@@ -17,11 +17,13 @@ from backend.tests.helpers.page_audience_review4 import public_page
 
 
 def test_blob_archive_history_keeps_the_page_id_for_old_filename(api):
-    tid, _, fid = public_page(api)
-    uploaded = post(api, f"tasks/{tid}/files", {"name": "weekly.html", "text": HTML.decode() + "<p>Second version</p>"})
+    tid, attempt, fid = public_page(api)
+    uploaded = page(api, attempt, page=fid, data=HTML + b"<p>Second version</p>").json()["page"]
     assert uploaded["file_id"] == fid and uploaded["version"] == 2
-    with api.app.state.store.read() as c:
+    with api.app.state.store.transaction() as c:
         bid = c.execute("SELECT blob_id FROM bot_file_versions WHERE file_id=? AND version=2", (fid,)).fetchone()[0]
+        # A legacy task attachment can still refer to a page version by its blob id.
+        c.execute("INSERT INTO task_assets(task_id,blob_id) VALUES (?,?)", (tid, bid))
     assert (
         api.patch("/api/v2/files/" + fid, json={"title": "Renamed confidential draft"}, headers=headers()).status_code
         == 200

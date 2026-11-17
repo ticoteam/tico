@@ -14,7 +14,7 @@ have a Spec, a QA report and any number of other pages.
 
 - **Targets:** `task:<id>`, `bot:<id>`, `human:<slug>`, `goal:<id>` or `page:<id>`.
 - **Roles:** `writer` (a page's writers), `related` (the default), or a document name on a task: `Spec`, `QA report`,
-  `Release report`, `Invoice`, or any name a bot gives. A task's document is a page linked to that task with the
+  `Release report`, `Invoice`, or another document name. A task's document is a page linked to that task with the
   document's name as its role.
 - **Who may write a version.** The team owner, a linked writer (a person or an active bot), someone who may comment
   on a linked task, or someone who may manage the page. Publishing adds the version's author as a linked writer.
@@ -63,8 +63,8 @@ read. `tico page list` narrows by `--linked TARGET` (any role), `--role ROLE` an
 
 A task's document is a page. `tico page publish spec.html --task ID --as Spec` writes the task's Spec: a new version of
 the page it has with that role, or a new page. Publishing under a document role also submits the version for the task's
-approval. `tico task attach ID spec.html --doc Spec` does the same. Put a change note in a task comment. Ordinary uploads
-continue the ordinary file of that name and leave document pages intact.
+approval. `tico task attach ID spec.html --doc Spec` does the same and returns the file id and version. Put a change
+note in a task comment. Ordinary uploads continue the ordinary file of that name. Use page publishing to version pages.
 
 Task turns receive up to ten pages linked to, filed on or pinned to the task and ten linked meetings, newest first, as ids,
 titles, versions and dates. `tico task context ID` (`tico_task_context`, `GET /api/v2/tasks/{id}/context`) reads that
