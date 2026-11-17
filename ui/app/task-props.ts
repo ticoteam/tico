@@ -109,7 +109,7 @@ function taskPropsHTML(t: PropTask, more: PropMore = {}): string {
   if (from) {
     const said = [`from ${from.name}`, ageShort(taskStageSince(t))].filter(Boolean).join(' · ');
     rows.push(row('stage', 'Stage', `${SIDE_MARK}${txt(stageName)}<span class="prop-txt prop-from">· ${esc(said)}</span>`,
-      {edit: r.edit && !!t.pipeline_id, words: `${stageName} · ${said}`,
+      {edit: r.edit && !!t.pipeline_id, words: `Side stage ${stageName} · ${said}`,
         extra: r.edit ? `<button type="button" class="ghost small prop-back" data-prop-send-back="${esc(from.id)}">Send back</button>` : ''}));
   } else rows.push(row('stage', 'Stage', txt(pipeName && t.status === 'open' ? `${pipeName} › ${stageName}` : stageName),
     {edit: r.edit && !!t.pipeline_id, words: stageName}));
@@ -173,7 +173,8 @@ function taskPropsHTML(t: PropTask, more: PropMore = {}): string {
   }
   return `<div class="props">${rows.join('')}</div><div class="props-msg" data-props-msg role="status" aria-live="polite"></div>`;
 }
-// When a task entered its stage: its own read's, else its row's on the Tasks page while that row is in the same stage.
+// When a task entered its stage: its own read's (stage_since), else its row's on the Tasks page while that row is in the
+// same stage.
 const taskStageSince = (t: PropTask): string | null =>
   t.stage_since || TASKS_ST?.tasks.find(x => x.id === t.id && x.stage_id === t.stage_id)?.stage_since || null;
 // The goal row's title, read once per goal (tasks.ts keeps them in GOAL_TITLES).

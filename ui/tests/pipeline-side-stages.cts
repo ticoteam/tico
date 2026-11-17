@@ -21,18 +21,21 @@ const at = (minutes: number) => new Date(NOW - minutes * 60000).toISOString();
 const done = {id: 'q0', kind: 'owner_done', source: null, condition: null, settings: {}, can_push_past: true, who_oks: 'none', person_id: null, line: ''};
 const stage = (id: string, name: string, extra: Rec = {}) => ({id, name, purpose: '', owner: null, by_hand: false, requests_move_on: false,
   task_limit: null, expected_minutes: null, expected_bots_only: false, side: false, on_enter: {}, requirements: [{...done, id: `q-${id}`}], ...extra});
-const STAGES = () => [stage('build', 'In progress'), stage('qa', 'Bot QA'),
+// Bot QA queues its PRs as a task enters (a stored action: no Side until it is removed and saved).
+const STAGES = () => [stage('build', 'In progress'), stage('qa', 'Bot QA', {on_enter: {act: 'github.queue'}}),
   stage('rejected', 'Rejected', {side: true, by_hand: true, requirements: []}),
-  stage('ship', 'Ship', {task_limit: 4, expected_minutes: 120})];
+  stage('ship', 'Ship', {task_limit: 4, expected_minutes: 120, expected_bots_only: true})];
 const pipelineRec = (): Rec & {stages: Rec[]; settings_version: number} => ({id: 'product', name: 'Product', goal: '', prefix: 'P', manager_id: null,
   owner_id: 'human:ana', private: false, factory_id: null, preset: null, settings_version: 1, retired_at: null, stages: STAGES(),
   done: {id: 'done', name: 'Done'}, closed: {id: 'closed', name: 'Closed'}, may_change: true});
 
 // A task as the fake server keeps it. A list row (TaskBrief) carries stage_since, and came_from only when set; the full
-// read (TaskDetail) has no stage_since, and came_from always (null or {id, name}).
+// read (TaskDetail) has came_from always (null or {id, name}), and stage_since where `read_since` gives it (a server from
+// before it was added sends none).
 interface Task {
   id: string; title: string; number: number; stage_id: string; version: number; stage_since: string;
   came_from: {id: string; name: string} | null;
+  read_since?: string | null;
 }
 const task = (id: string, title: string, stageId: string, extra: Partial<Task> = {}): Task =>
   ({id, title, number: Number(id.slice(1)), stage_id: stageId, version: 1, stage_since: at(30), came_from: null, ...extra});
@@ -41,8 +44,9 @@ const row = (t: Task) => ({id: t.id, title: t.title, number: t.number, status: '
   turn: null, version: t.version, created_at: at(60 * 24), updated_at: at(30), ...(t.came_from ? {came_from: t.came_from} : {})});
 function full(t: Task, rec: {stages: Rec[]}) {
   const {stage_since: _since, ...brief} = row(t);
+  const since = t.read_since === undefined ? {} : {stage_since: t.read_since};
   const s = rec.stages.find(x => x['id'] === t.stage_id)!;
-  return {...brief, came_from: t.came_from, pipeline: {id: 'product', name: 'Product'}, stage: {id: s['id'], name: s['name'], kind: 'work', by_hand: !!s['by_hand']},
+  return {...brief, ...since, came_from: t.came_from, pipeline: {id: 'product', name: 'Product'}, stage: {id: s['id'], name: s['name'], kind: 'work', by_hand: !!s['by_hand']},
     snooze: null, labels: [], links: [], private: false, readers: [], relations: {}, conversation_id: 'c-' + t.id};
 }
 
@@ -145,7 +149,8 @@ const shot = async (page: Page, name: string, selector?: string) => {
     const fake: Fake = {pipeline: pipelineRec(), moves: [], saves: [], tasks: [
       task('t1', 'Refund rounding', 'build'), task('t2', 'Signup copy', 'qa'), task('t4', 'Receipt email', 'qa'),
       task('t3', 'Annual plans', 'rejected', {came_from: {id: 'qa', name: 'Bot QA'}}),
-      task('t5', 'Checkout totals', 'rejected', {came_from: {id: 'qa', name: 'Bot QA'}, stage_since: at(121)})]};
+      // its own read says 3h in the stage, its board row 2h: the read's wins
+      task('t5', 'Checkout totals', 'rejected', {came_from: {id: 'qa', name: 'Bot QA'}, stage_since: at(121), read_since: at(185)})]};
 
     // 1. The board: the side column right after its stage, dashed, no fill, ↳ before its quieter name.
     const page = await open(browser, fake, {width: 1440, height: 900}, '#/tasks?pipeline=product&layout=columns', errors);
@@ -168,20 +173,29 @@ const shot = async (page: Page, name: string, selector?: string) => {
     assert.equal(await page.locator('.pv-col:not(.side) .side-mark').count(), 0, 'no ↳ on a main stage');
     await shot(page, 'board');
 
-    // 2. The task window: "↳ Rejected · from Bot QA · 2h", and Send back moves it to Bot QA.
+    // 2. The task window: "↳ Rejected · from Bot QA · 3h", and Send back moves it to Bot QA.
     // A board's card opens at its conversation: Details shows the task, and its Details tab the facts.
-    await page.locator('.tk-card[data-task="t5"]').click();
-    await page.locator('#task-modal[open]').waitFor();
-    await page.waitForFunction(() => {
-      const m = document.querySelector('#task-modal')!;
-      m.querySelector<HTMLElement>('[data-thread-details]')?.click();
-      m.querySelector<HTMLElement>('[data-task-tab="details"][aria-pressed="false"]')?.click();
-      return !!m.querySelector<HTMLElement>('[data-prop-row="stage"]')?.checkVisibility();
-    }, null, {polling: 250});
+    const details = async (id: string) => {
+      await page.locator(`.tk-card[data-task="${id}"]`).click();
+      await page.locator(`#task-modal[open]`).waitFor();
+      await page.waitForFunction(() => {
+        const m = document.querySelector('#task-modal')!;
+        m.querySelector<HTMLElement>('[data-thread-details]')?.click();
+        m.querySelector<HTMLElement>('[data-task-tab="details"][aria-pressed="false"]')?.click();
+        return !!m.querySelector<HTMLElement>('[data-prop-row="stage"]')?.checkVisibility();
+      }, null, {polling: 250});
+    };
     const stageRow = page.locator('#task-modal[open] [data-prop-row="stage"]');
-    assert.equal(await stageRow.locator('.prop-v').getAttribute('aria-label'), 'Stage: Rejected · from Bot QA · 2h');
+    // A read with no stage_since: the time is the board row's.
+    await details('t3');
+    assert.equal(await stageRow.locator('.prop-v').getAttribute('aria-label'), 'Stage: Side stage Rejected · from Bot QA · 30m');
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#task-modal')?.open);
+    // The read's own stage_since comes first.
+    await details('t5');
+    assert.equal(await stageRow.locator('.prop-v').getAttribute('aria-label'), 'Stage: Side stage Rejected · from Bot QA · 3h');
     assert.equal(await stageRow.locator('.prop-v .side-mark').innerText(), '↳');
-    assert.match((await stageRow.locator('.prop-v').innerText()).replace(/\s+/g, ' '), /↳ ?Rejected ?· from Bot QA · 2h/);
+    assert.match((await stageRow.locator('.prop-v').innerText()).replace(/\s+/g, ' '), /↳ ?Rejected ?· from Bot QA · 3h/);
     await shot(page, 'task', '#task-modal [data-task-props]');
     await stageRow.getByRole('button', {name: 'Send back'}).click();
     await page.waitForFunction(() => !document.querySelector('#task-modal [data-prop-send-back]'));
@@ -216,6 +230,7 @@ const shot = async (page: Page, name: string, selector?: string) => {
       ['build', 'qa', 'rejected:side', 'ship']);
     const tab = phone.locator('.pv-tab.side');
     assert.equal(await tab.locator('.side-mark').innerText(), '↳');
+    assert.match(await tab.getAttribute('aria-label') ?? '', /^Side stage Rejected /, 'its name says it is a side stage');
     assert.equal(await tab.evaluate(el => getComputedStyle(el).borderTopStyle), 'dashed');
     assert.notEqual(await phone.locator('.pv-tab[data-pv-tab="qa"]').evaluate(el => getComputedStyle(el).borderTopStyle), 'dashed');
     assert.ok(await phone.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'nothing scrolls sideways');
@@ -233,6 +248,10 @@ const shot = async (page: Page, name: string, selector?: string) => {
     assert.equal(await sw(0).count(), 0, 'the first stage has no Side');
     assert.ok(await sw(1).isVisible());
     assert.equal(await sw(1).isChecked(), false);
+    assert.equal(await sw(3).getAttribute('aria-label'), 'Side stage: Ship');
+    // Bot QA queues its PRs as a task enters: no Side until that is gone.
+    assert.ok(await sw(1).isDisabled(), 'a stage with an action has no Side');
+    assert.equal(await row_(1).locator('> summary .pe-side').getAttribute('title'), 'Remove the action first');
     assert.equal(await sw(2).isChecked(), true);
     assert.equal(await sw(2).getAttribute('role'), 'switch');
     assert.equal(await row_(2).locator('> summary .side-mark').innerText(), '↳');
@@ -255,14 +274,22 @@ const shot = async (page: Page, name: string, selector?: string) => {
     assert.equal(await row_(3).locator('[data-pe-sf="task_limit"]').count(), 0, 'no Limit');
     assert.equal(await row_(3).locator('[data-pe-leave-row], [data-pe-req-add], [data-pe-sf="requests_move_on"]').count(), 0, 'nothing to leave');
     assert.equal(await row_(3).locator('.pe-stage-reqs').count(), 0, 'the row counts no requirements');
+    // Its owner may change as a task enters, to one: not One of several.
+    await row_(3).locator('[data-pe-enter-add="act"]').click();
+    assert.deepEqual(await ed.locator('[data-pe-enter-pick]').evaluateAll(els => els.map(e => e.getAttribute('data-pe-enter-pick'))), ['owner'],
+      'a side stage opens and queues nothing');
+    await ed.locator('[data-pe-enter-pick="owner"]').click();
+    const owners = await row_(3).locator('[data-pe-sf="owner"] option').evaluateAll(os => os.map(o => (o as HTMLOptionElement).value));
+    assert.ok(owners.length > 0 && !owners.includes('pick'), `no One of several: ${owners.join(', ')}`);
     await shot(ed, 'editor', '#pe-dialog');
     await dialog.locator('[data-pe-save]').click();
     await ed.waitForFunction(() => document.querySelector('#pe-dialog [data-pe-save]:not([disabled])'));
     assert.equal(await dialog.locator('[data-pe-error]:not([hidden])').count(), 0);
     const ship = fake.saves[0]!.stages[3]!;
     assert.deepEqual({side: ship['side'], by_hand: ship['by_hand'], requests_move_on: ship['requests_move_on'], task_limit: ship['task_limit'],
-      expected_minutes: ship['expected_minutes'], requirements: ship['requirements']},
-    {side: true, by_hand: true, requests_move_on: false, task_limit: null, expected_minutes: null, requirements: []});
+      expected_minutes: ship['expected_minutes'], expected_bots_only: ship['expected_bots_only'], requirements: ship['requirements']},
+    {side: true, by_hand: true, requests_move_on: false, task_limit: null, expected_minutes: null, expected_bots_only: false, requirements: []});
+    assert.notEqual(ship['owner'], 'pick');
     assert.deepEqual(fake.saves[0]!.stages.map(s => !!s['side']), [false, false, true, true], 'the others keep theirs');
 
     // Off again: by hand stays on.
@@ -272,6 +299,23 @@ const shot = async (page: Page, name: string, selector?: string) => {
     await ed.waitForFunction(() => document.querySelector('#pe-dialog [data-pe-save]:not([disabled])'));
     const after = fake.saves[1]!.stages[3]!;
     assert.deepEqual({side: after['side'], by_hand: after['by_hand']}, {side: false, by_hand: true});
+    // An action added in the draft takes Side away too.
+    assert.equal(await sw(3).isDisabled(), false);
+    await row_(3).locator('[data-pe-enter-add="act"]').click();
+    await ed.locator('[data-pe-enter-pick="queue"]').click();
+    assert.ok(await sw(3).isDisabled(), 'an action in the draft: no Side');
+    // Bot QA's action removed: still none until that is saved, since the saved stage still has it.
+    if (!await row_(1).evaluate(d => (d as HTMLDetailsElement).open)) await row_(1).locator('> summary .pe-stage-name').click();
+    await row_(1).locator('[data-pe-enter-row="act"] .sr-open').click();
+    await row_(1).locator('[data-pe-row-x="act"]').click();
+    assert.equal(await row_(1).locator('[data-pe-enter-row="act"]').count(), 0);
+    assert.ok(await sw(1).isDisabled(), 'the saved stage still has its action');
+    await dialog.locator('[data-pe-save]').click();
+    await ed.waitForFunction(() => document.querySelector('#pe-dialog [data-pe-save]:not([disabled])'));
+    const qaEnter = (fake.saves[2]!.stages[1]!['on_enter'] ?? {}) as Rec;
+    assert.ok(!qaEnter['act'] && !qaEnter['file_into'], `Bot QA saved with no action: ${JSON.stringify(qaEnter)}`);
+    assert.equal(await sw(1).isDisabled(), false, 'saved without it: Side is there');
+    assert.equal(await row_(1).locator('> summary .pe-side').getAttribute('title'), null);
     await ed.close();
 
     assert.deepEqual(errors, []);

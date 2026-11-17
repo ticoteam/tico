@@ -365,7 +365,8 @@ function peEnterEdHTML(state: PeState, stage: PipelineStageRec, row: 'limit' | '
   const x = `<button type="button" class="ghost pe-row-x" data-pe-row-x="${row}" ${at}>Remove</button>`;
   if (row === 'limit') return `<div class="pe-row-ed" id="${esc(id)}">${peF('Tasks at once', `<input type="number" min="1" step="1" inputmode="numeric" data-pe-sf="task_limit" ${at} value="${stage.task_limit ?? ''}">`, 'short')}${x}</div>`;
   // no empty choice: none set is no row (Remove)
-  const owners = peChoice(peOwners(), stage.owner, '').replace(/^<option value="">.*?<\/option>/, '');
+  // a side stage has one owner or none: no One of several (pipeline_settings refuses a pick there)
+  const owners = peChoice(peOwners().filter(o => !stage.side || o.id !== PE_PICK), stage.owner, '').replace(/^<option value="">.*?<\/option>/, '');
   if (row === 'owner') return `<div class="pe-row-ed" id="${esc(id)}">${peF('Owner', `<select data-pe-sf="owner" ${at}>${owners}</select>`)}${x}`
     + (stage.owner === PE_PICK ? pePickHTML(state, stage, at) : '') + '</div>';
   const into = typeof stage.on_enter['file_into'] === 'string' ? stage.on_enter['file_into'] : null;
@@ -527,9 +528,15 @@ function peMoreClick(ev: Event): boolean {
   return true;
 }
 
-/** A stage's Side switch: on, the stage is a side stage of the stage before it (peInput sets what that means). */
-const peSideHTML = (state: PeState, stage: PipelineStageRec, si: number): string =>
-  `<label class="pe-check pe-side"><input type="checkbox" role="switch" data-pe-sf="side" data-pe-si="${si}"${stage.side ? ' checked' : ''}${state.readOnly ? ' disabled' : ''}> Side</label>`;
+/** A stage's Side switch: on, the stage is a side stage of the stage before it (peInput sets what that means). Off, it
+    waits while the stage opens or queues something as a task enters, in the draft or as saved (pipeline_settings refuses
+    Side on a stage with a stored action): the action is removed and saved first. */
+function peSideHTML(state: PeState, stage: PipelineStageRec, si: number): string {
+  const saved = stage.id ? state.base.stages.find(s => s.id === stage.id) : undefined;
+  const acts = !stage.side && (!!peActOf(state, stage) || (!!saved && !!peActOf(state, saved)));
+  return `<label class="pe-check pe-side"${acts ? ' title="Remove the action first"' : ''}><input type="checkbox" role="switch" data-pe-sf="side" data-pe-si="${si}"`
+    + ` aria-label="Side stage: ${esc(stage.name || 'New stage')}"${stage.side ? ' checked' : ''}${state.readOnly || acts ? ' disabled' : ''}> Side</label>`;
+}
 
 /** A stage, as its phases in the order a task moves (spec "A stage picks its owner from several", 1): its name and goal;
     On entering, one list (its Limit, its actions, the rules that act as a task enters), + Rule and + Action; While here
@@ -687,7 +694,12 @@ function peInput(state: PeState, el: HTMLInputElement | HTMLSelectElement): void
       // A side stage moves by hand alone, with no Limit, no Late after and nothing to leave by (pipeline_settings refuses
       // them): on clears them; off leaves by hand on, for the person to take off.
       stage.side = checked;
-      if (checked) Object.assign(stage, {by_hand: true, requests_move_on: false, task_limit: null, expected_minutes: null, requirements: []});
+      if (checked) {
+        Object.assign(stage, {by_hand: true, requests_move_on: false, task_limit: null, expected_minutes: null, expected_bots_only: false,
+          requirements: []});
+        // nor One of several: its owner is one, or none
+        if (stage.owner === PE_PICK) { stage.owner = null; delete stage.pick; delete stage.pick_next; }
+      }
       state.rowOpen = '';
       peDraw(state);
       document.querySelector<HTMLElement>(`#pe-body [data-pe-sf="side"][data-pe-si="${peIndex(el, 'peSi')}"]`)?.focus();

@@ -29,9 +29,12 @@ interface TaskStageV3 { id: string; name: string; kind: 'work' | 'done' | 'close
 /** Where a task in a side stage came from: the main stage of its pipeline it was last in (`came_from`). A full read
     always has it, null outside a side stage; a list row leaves it out when null, so missing reads as null. */
 interface TaskCameFrom { id: string; name: string }
+const isTaskCameFrom = (v: unknown): v is TaskCameFrom =>
+  typeof v === 'object' && v !== null && 'id' in v && 'name' in v && typeof v.id === 'string' && !!v.id && typeof v.name === 'string';
+/** A task's `came_from` when it is {id, name}; anything else (missing, null, another shape) is null. */
 const taskCameFrom = (t: object | null | undefined): TaskCameFrom | null => {
-  const from = (t as {came_from?: Partial<TaskCameFrom> | null} | null | undefined)?.came_from;
-  return from && typeof from.id === 'string' && from.id ? {id: from.id, name: String(from.name ?? '')} : null;
+  const from: unknown = t && 'came_from' in t ? t.came_from : null;
+  return isTaskCameFrom(from) ? {id: from.id, name: from.name} : null;
 };
 /** A side stage's mark, before its name wherever the stage is named (a column, a tab, a list group, the editor, a task's
     Stage line): ↳, its tooltip the one word for it. */

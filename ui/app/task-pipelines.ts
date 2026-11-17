@@ -284,7 +284,8 @@ function pvPhoneHTML(state: PvState): string {
   const tabs = stages.map(stage => {
     const on = stage.id === shown;
     const waits = stage.id ? needsStageCount(stage.id) : 0;
-    const label = `${stage.name} ${pvStageCount(state, stage)}${waits ? `, ${waits} ${waits === 1 ? 'waits' : 'wait'} on you` : ''}`;
+    // the tab's name is its label, so a side stage's says so (the ↳ inside is not read)
+    const label = `${stage.side ? 'Side stage ' : ''}${stage.name} ${pvStageCount(state, stage)}${waits ? `, ${waits} ${waits === 1 ? 'waits' : 'wait'} on you` : ''}`;
     return `<button type="button" role="tab" class="pv-tab${stage.side ? ' side' : ''}${on ? ' on' : ''}" data-pv-tab="${esc(stage.id ?? '')}" aria-selected="${on}" aria-label="${esc(label)}">`
       + `${stage.side ? SIDE_MARK : ''}${esc(stage.name)} <span class="tnum${pvStageFull(state, stage) ? ' full' : ''}">${pvStageCount(state, stage)}</span>${pvTabDotHTML(stage)}</button>`;
   }).join('');
