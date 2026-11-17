@@ -3532,7 +3532,7 @@ SCHEMAS = {
             "factories": items(
                 obj(
                     {
-                        "id": "s",
+                        "id": "n",
                         "name": "s",
                         "manager_id": "n",
                         "pipelines": items(

@@ -8,8 +8,8 @@ entered a pipeline or reached Done in the last week. A stage lists at most OWNER
 the rest are summed in `more`.
 
 - `count`: open tasks in the stage the reader may read (the task access filter every count uses).
-- `owners`: those grouped by the task's holder (`owner_id`, the `owner` filter of GET /v2/tasks). A task nobody holds
-  counts in `count` and is in no group.
+- `owners`: those grouped by the task's holder (`owner_id`, the `owner` filter of GET /v2/tasks). A task nobody holds,
+  or held by a person the reader may not be told about (teammate_access.Known), counts in `count` and is in no group.
 - `needs_you`: of those, the ones in the reader's own Needs you (the asks, tasks and @s a stage's Flow walks).
 - `manager_id`: the pipeline's manager, which a factory with no manager of its own is drawn under.
 - `in`, `out`: tasks that entered the pipeline (a first visit, `entered_how='new'`) and tasks that reached a Done
@@ -17,16 +17,19 @@ the rest are summed in `more`.
 
 Retired factories and pipelines are left out. A private pipeline is left out unless the reader may read its tasks:
 its manager, its owner, the company's person (private_pipelines.readers), or a reader of one of its open tasks. A
-factory left with no pipeline the reader sees is left out, except one the reader manages.
+factory left with no pipeline the reader sees is left out, except one the reader manages. Pipelines in no factory are
+drawn last in one hall, "Other" (`id` and `manager_id` null), when one of them holds an open task the reader may read.
 """
 
 import json
 from typing import Any
 
 from . import hubdb as _hubdb
+from . import teammate_access as _teammate_access
 from . import views as _views
 
 H: Any = _hubdb
+TA: Any = _teammate_access
 V: Any = _views
 
 OWNERS_MAX = 12  # holders listed per stage; the rest are summed in `more`
@@ -63,9 +66,10 @@ def _rates(c: Any, pipeline_ids: list[str], visible_sql: str) -> dict[str, dict[
         "COUNT(DISTINCT CASE WHEN s.kind='done' THEN v.task_id END) "
         "FROM visits v JOIN stages s ON s.id=v.stage_id "
         "WHERE v.entered_at>=? AND (v.entered_how='new' OR s.kind='done') "
+        "AND s.pipeline_id IN (SELECT value FROM json_each(?)) "
         f"AND EXISTS (SELECT 1 FROM tasks WHERE tasks.id=v.task_id AND ({visible_sql})) "
         "GROUP BY s.pipeline_id",
-        (day, day, week),
+        (day, day, week, json.dumps(pipeline_ids)),
     ).fetchall()
     for pid, in_day, in_week, out_day, out_week in rows:
         if pid in out:
@@ -86,8 +90,14 @@ def _holders(c: Any, visible_sql: str, needs: list[str]) -> dict[str, list[tuple
     return by_stage
 
 
-def _stage(row: Any, held: list[tuple[str | None, int, int]]) -> dict[str, Any]:
-    named = sorted(((who, n, mine) for who, n, mine in held if who), key=lambda x: (-x[1], str(x[0])))
+def _unknown(c: Any, auth: Any, who: Any, held: dict[str, list[tuple[str | None, int, int]]]) -> set[str]:
+    """The holders who are people the reader may not be told about (teammate_access.Known), read once for them all."""
+    people = {h for rows in held.values() for h, _, _ in rows if h and h.startswith("human:")}
+    return set(TA.Known(c, who, auth).unseen_of(sorted(people))) if people else set()
+
+
+def _stage(row: Any, held: list[tuple[str | None, int, int]], unknown: set[str]) -> dict[str, Any]:
+    named = sorted(((w, n, mine) for w, n, mine in held if w and w not in unknown), key=lambda x: (-x[1], str(x[0])))
     shown, rest = named[:OWNERS_MAX], named[OWNERS_MAX:]
     return {
         "id": row[0],
@@ -108,14 +118,15 @@ def floor(c: Any, auth: Any, who: Any) -> dict[str, Any]:
             "SELECT id, name, manager_id FROM factories WHERE retired_at IS NULL ORDER BY position, created_at, id"
         )
     ]
+    other: dict[str, Any] = {"id": None, "name": "Other", "manager_id": None, "pipelines": []}
     by_factory = {f["id"]: f for f in factories}
     pipes: list[Any] = [
         r
         for r in c.execute(
             "SELECT id, name, factory_id, private, manager_id, owner_id FROM pipelines "
-            "WHERE retired_at IS NULL AND factory_id IS NOT NULL ORDER BY created_at, id"
+            "WHERE retired_at IS NULL ORDER BY created_at, id"
         )
-        if r[2] in by_factory
+        if r[2] is None or r[2] in by_factory
     ]
     stages: dict[str, list[Any]] = {}
     for r in c.execute(
@@ -123,22 +134,26 @@ def floor(c: Any, auth: Any, who: Any) -> dict[str, Any]:
     ):
         stages.setdefault(r[1], []).append(r)
     held = _holders(c, visible_sql, _needs_task_ids(c, auth, who))
+    unknown = _unknown(c, auth, who, held)
     person = _company_person(c) if any(p[3] for p in pipes) else None
     shown: list[Any] = []
+    other_reads = False
     for p in pipes:
         reads_some = any(held.get(s[0]) for s in stages.get(p[0], []))
         if p[3] and not reads_some and me not in (p[4], p[5], person):
             continue
         shown.append(p)
+        other_reads = other_reads or p[2] is None and reads_some
     rates = _rates(c, [p[0] for p in shown], visible_sql)
     for p in shown:
-        by_factory[p[2]]["pipelines"].append(
+        (other if p[2] is None else by_factory[p[2]])["pipelines"].append(
             {
                 "id": p[0],
                 "name": p[1],
                 "manager_id": p[4],
                 **rates[p[0]],
-                "stages": [_stage(s, held.get(s[0], [])) for s in stages.get(p[0], [])],
+                "stages": [_stage(s, held.get(s[0], []), unknown) for s in stages.get(p[0], [])],
             }
         )
-    return {"factories": [f for f in factories if f["pipelines"] or f["manager_id"] == me]}
+    halls = [f for f in factories if f["pipelines"] or f["manager_id"] == me]
+    return {"factories": halls + [other] if other_reads else halls}
