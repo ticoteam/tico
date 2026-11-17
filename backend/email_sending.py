@@ -805,7 +805,7 @@ def lint_findings(c, actor, mailbox, snap, reply_id):
 
     bot = (H.bot(c, H.actor_id(actor)) or {}) if str(actor).startswith("bot:") else {}
     groups = snap["recipient_headers"]
-    domains = tuple(access.company_domains(c)) or (mailbox.rpartition("@")[2],)
+    domains = tuple(str(d) for d in access.company_domains(c)) or (str(mailbox).rpartition("@")[2],)
     found = lint.run(
         snap["body"],
         snap["subject"],

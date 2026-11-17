@@ -600,16 +600,19 @@ def test_a_retired_registry_mail_policy_carries_its_safeguards_over_once(inbox):
 
 def test_a_drain_leases_no_new_email_once_its_budget_is_spent(inbox, monkeypatch):
     """The drain worker's budget (backend/drains.py): a slow Gmail ends the pass early; the rest go next pass, once."""
-    import time
+    from types import SimpleNamespace
 
     from backend import drains, gmail_live
 
     autonomous(inbox)
     calls = workspace(monkeypatch, (200, {"id": "gmail-1"}))
     answer = gmail_live.send_call
+    # The budget's clock moves only when Gmail answers, so a loaded machine cannot change what one pass leases.
+    clock = [0.0]
+    monkeypatch.setattr(drains, "time", SimpleNamespace(monotonic=lambda: clock[0]))
 
     def slow(*args, **kwargs):
-        time.sleep(0.5)
+        clock[0] += 0.5
         return answer(*args, **kwargs)
 
     monkeypatch.setattr(gmail_live, "send_call", slow)

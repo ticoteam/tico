@@ -398,7 +398,7 @@ def install(app, store, execution, mutate):
         except Exception:  # noqa: BLE001 - the receipt says unknown; nothing is retried
             error = "Tico did not hear back from Google; check the calendar before booking again"
         classification = raw_mail = None
-        if status == "succeeded" and attendees:
+        if status == "succeeded" and attendees and raw is not None:
             from .mail_lib import compose
             from . import email_sending
 
