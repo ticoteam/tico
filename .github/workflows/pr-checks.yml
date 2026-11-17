@@ -1,6 +1,6 @@
 # PR checks and the merge queue run on GitHub-hosted Ubuntu runners (free for this public repository), so they cost no
 # RunsOn minutes. RunsOn runs only release validation (ci.yml) and remote-run.yml.
-# Two tiers. Each push to a pull request runs the cheap checks (plan, static). A ready pull request from this repository
+# Two tiers. Each push to a pull request runs the cheap checks (plan, static, types). A ready pull request from this repository
 # also runs a light plan's tests (scripts/pr_checks.py NARROW, `plan --light`): the Python tests its change reaches
 # directly, the smoke set when that drops any, capped at ten VMs; the browser scripts and the Caddy job only when it
 # touches their own inputs. A change to a release-only browser script, its helpers or the UI file it is named after
@@ -16,7 +16,7 @@
 # the group's merged change reaches within two levels (release validation runs the rest), and the same Rust lint,
 # desktop, recorder and Caddy jobs. The group's base is the head of the group
 # queued ahead of it (main for the first), so it selects from its own pull request's change, tested on top of everything
-# ahead of it. The static checks job runs on the pull request only; the group's plan job runs every static check again
+# ahead of it. The static checks and types jobs run on the pull request only; the group's plan job runs every static check again
 # on the merge commit that lands on main (scripts/ci/merge_commit_checks.sh), since a change queued ahead can break one
 # (a migration timestamp, a route, a lint rule).
 # A failed `tests` leg cancels its whole run (its last step), in a queue group or a pull request. The
@@ -279,7 +279,7 @@ jobs:
   static:
     # Every push to a pull request that is not a draft (a queue group runs the same list on its merge commit in its plan
     # job instead, scripts/ci/merge_commit_checks.sh): pinned ruff against its baseline (no new findings or
-    # suppressions), basedpyright on the backend against its baseline (strict for new modules), migration names, the UI's generated API types, the
+    # suppressions), migration names (basedpyright runs beside it in the types job), the UI's generated API types, the
     # OpenAPI document, the runner wire contract, shell scripts (shellcheck), workflows (actionlint), and shared gates
     # (scripts/gates.sh: gate scripts and ast-grep rules with fixtures). Seconds each
     # once installed; tools are pinned. The UI's strict TypeScript rule (scripts/check_ui_strict.py) runs here too, and
@@ -323,10 +323,6 @@ jobs:
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" LINT_BASE_REF="$BASE_SHA" bash scripts/lint.sh
       - name: Verification gates (scripts and ast-grep rules with fixtures)
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" bash scripts/gates.sh --base "$BASE_SHA"
-      - name: Types (basedpyright baseline, strict new modules)
-        env:
-          PYRIGHT_BASE_REF: ${{ env.BASE_SHA }}
-        run: PATH="$RUNNER_TEMP/venv/bin:$PATH" bash scripts/check_types.sh
       - name: UI types
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" bash scripts/check_ui_types.sh --base "$BASE_SHA"
       - name: OpenAPI spec (generated, never committed, generates the same bytes twice)
@@ -362,6 +358,37 @@ jobs:
         run: bash scripts/shell_lint.sh
       - name: Workflows (actionlint, pinned)
         run: bash scripts/pinned_tool.sh actionlint
+
+  types:
+    # basedpyright on the backend against its baseline (strict for new modules), the static checks' longest step
+    # (about a minute), on its own VM so it runs beside them. Pull requests only, like static; a queue group's plan runs
+    # it on the merge commit (scripts/ci/merge_commit_checks.sh). The install is the venv alone (no npm or UI build).
+    name: types
+    if: ${{ github.event_name == 'pull_request' && !github.event.pull_request.draft }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - id: python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.15'
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ runner.temp }}/venv
+          key: venv-ubuntu24-${{ runner.arch }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('backend/requirements-dev.txt', 'scripts/ci_install.sh') }}
+      - name: Install (five minutes per attempt, one retry)
+        timeout-minutes: 11
+        run: bash scripts/ci_install.sh types && "$RUNNER_TEMP/venv/bin/python" -m pip install --disable-pip-version-check uv==0.13.0
+      - name: Types (basedpyright baseline, strict new modules)
+        env:
+          PYRIGHT_BASE_REF: ${{ env.BASE_SHA }}
+        run: PATH="$RUNNER_TEMP/venv/bin:$PATH" bash scripts/check_types.sh
 
   rust-lint:
     # Merge queue groups, and a ready pull request from this repository: rustfmt and clippy -D warnings
@@ -449,8 +476,9 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
+          toolchain: stable
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
@@ -561,7 +589,7 @@ jobs:
     # Merge queue groups only. A failed tests leg cancels the run, and a canceled run ends here: a final job
     # queued after the cancellation can wait for a RunsOn runner that never comes. It gates nothing: the receipt is cosmetic.
     if: ${{ !cancelled() && github.event_name == 'merge_group' }}
-    needs: [plan, tests, caddy-linux, static, rust-lint, desktop-app, recorder]
+    needs: [plan, tests, caddy-linux, static, types, rust-lint, desktop-app, recorder]
     runs-on: ubuntu-24.04
     # Four minutes: checkout and the artifact download run before the receipt, which is capped at one minute below.
     # A hang in the receipt canceled the whole job at three minutes on #2487.
@@ -592,7 +620,7 @@ jobs:
     # tests and the Rust, desktop, recorder and Caddy jobs, and a draft pull request skips every job.
     name: checks
     if: ${{ always() && !github.event.pull_request.draft }}
-    needs: [plan, static, tests, rust-lint, desktop-app, recorder, caddy-linux]
+    needs: [plan, static, types, tests, rust-lint, desktop-app, recorder, caddy-linux]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -600,6 +628,7 @@ jobs:
         env:
           PLAN: ${{ needs.plan.result }}
           STATIC: ${{ needs.static.result }}
+          TYPES: ${{ needs.types.result }}
           TESTS: ${{ needs.tests.result }}
           RUST_LINT: ${{ needs.rust-lint.result }}
           DESKTOP_APP: ${{ needs.desktop-app.result }}
@@ -618,6 +647,7 @@ jobs:
           }
           check plan "$PLAN"
           check static "$STATIC"
+          check types "$TYPES"
           check tests "$TESTS"
           check rust-lint "$RUST_LINT"
           check desktop-app "$DESKTOP_APP"

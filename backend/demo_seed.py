@@ -1019,9 +1019,6 @@ class Builder:
                 "INSERT INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
                 (message["id"], "CDEMOTEAM1", timestamp, "support-owner", D.SLACK["draft"], "ready", H.now(), H.now()),
             )
-            c.execute(
-                "INSERT INTO slack_reads VALUES(?,?,?,?,?)", ("CDEMOTEAM1", "support-owner", timestamp, H.now(), 1)
-            )
 
         self.write(work)
 

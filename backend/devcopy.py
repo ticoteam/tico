@@ -565,7 +565,6 @@ KEEP = (
             "settings_changes",
             "slack_channels",
             "slack_digests",
-            "slack_reads",
             "memory_tidy_cards",
             "memory_tidy_keeps",
             "storage_moves",

@@ -19,6 +19,7 @@ from backend import hubdb as H
 from backend import org_rule_check as OR
 from backend import screening
 from backend import slack_bots as SB
+from backend import slack_gateway as SG
 from backend import slack_requests as SR
 from backend.tests.helpers.api import get, headers, post, setup_attempt  # noqa: F401  (fixture)
 from backend.tests.helpers.bot_tools import configure, report
@@ -105,6 +106,13 @@ class FakeAPI:
     def conversations_list(self):
         return list(self.channels.values())
 
+    def users_info(self, user_id):
+        """Ana by her profile name, Ben by his handle; anyone else Slack cannot answer for."""
+        users = {"U1": {"id": "U1", "profile": {"real_name": "Ana Rivera"}}, "U2": {"id": "U2", "name": "Ben"}}
+        if user_id not in users:
+            raise SG.SlackError("users.info", "user_not_found")
+        return users[user_id]
+
     def conversations_info(self, channel):
         self.calls.append(("conversations.info", channel))
         if channel not in self.channels:
@@ -168,7 +176,6 @@ def slack(api, monkeypatch):
         settings=store.settings,
         slack=fake,
         team_url="https://acme.slack.com/",
-        display_name=lambda event: {"U1": "Ana Rivera", "U2": "Ben"}.get(event["user_id"], event["user_id"]),
         stop=threading.Event(),
     )
     thread = threading.Thread(target=SR.serve_forever, args=(gw,), daemon=True)
@@ -218,6 +225,17 @@ def test_history_comes_from_the_gateway_shaped_with_threads_and_names(slack):
     # By id works too, and without threads no replies are fetched.
     plain = call(slack, "GET", "slack/history", params={"channel": GENERAL, "oldest": 0}).json()
     assert all(m["replies"] == [] for m in plain["messages"])
+
+
+def test_a_name_slack_cannot_give_is_left_as_the_persons_id():
+    class Down(FakeAPI):
+        def users_info(self, user_id):
+            if user_id == "U2":
+                raise SG.SlackUnreachable("users.info: no answer")
+            return super().users_info(user_id)
+
+    messages = [{"user": "U1"}, {"user": "U2"}, {"user": "U9"}, {"user": "U3", "bot_id": "B0DEPLOYS"}, {}]
+    assert SR._names(SimpleNamespace(slack=Down()), messages) == {"U1": "Ana Rivera", "U2": "U2", "U9": "U9"}
 
 
 def test_history_is_refused_outside_the_bots_channels_and_for_slack_connect(slack):

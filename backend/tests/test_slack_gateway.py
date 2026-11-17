@@ -35,7 +35,6 @@ from backend.tests.helpers.slack_gateway import (
     add_bots,
     answers,
     channel_message,
-    digests,
     envelope,
     gateway,
     hub,
@@ -351,59 +350,39 @@ def test_a_bot_reply_is_escaped_so_it_cannot_page_the_channel_or_lose_prose(gate
     assert gateway.slack.posts[1]["text"] == "&lt;!everyone&gt; &lt;!here&gt;\n\n(sent from Legal)"
 
 
-def cursors(hub):
-    return {(r["channel"], r["reader"]): r for r in rows(hub, "SELECT * FROM slack_reads")}
+def thread_of(hub, channel):
+    return rows(hub, "SELECT thread_id FROM slack_thread_links WHERE channel_id=?", channel)[0]["thread_id"]
 
 
-def test_a_channel_message_is_stored_and_reaches_the_readers_once_on_the_hourly_pass(readers):
-    gw, hub = readers, readers.store
-    assert set(cursors(hub)) == {(MARKETING, "cmo"), (MARKETING, "seo"), (RELEASE, "cto")}, (
-        "a paused bot, an unknown slug and a channel with no readers get no cursor"
-    )
+def test_a_read_channel_comes_into_its_read_only_thread_and_its_active_readers_wake_once_an_hour(readers):
+    from backend import thread_bot_digest
+
+    gw, hub, slack = readers, readers.store, readers.slack
+    marketing, release = thread_of(hub, MARKETING), thread_of(hub, RELEASE)
+    assert {
+        (r["actor"], r["notify"])
+        for r in rows(hub, "SELECT actor,notify FROM thread_followers WHERE thread_id=? AND following=1", marketing)
+    } == {("bot:cmo", "digest"), ("bot:seo", "digest"), ("bot:finance", "digest")}
     assert gw.receive(channel_message("Launch copy is ready for review")) == "stored"
     assert gw.receive(channel_message("Deploy 4.2 went out", channel=RELEASE, user="U2")) == "stored"
     assert gw.receive(channel_message("Nobody reads this", channel=QUIET)) == "stored"
     assert [e["state"] for e in events(hub)] == ["stored"] * 3 and jobs(hub) == [], "stored is not routed"
-    assert gw.tick()["digests"] is None, "not due yet"
-    gw.clock.advance(3600)
-    out = gw.tick()["digests"]
-    assert [(d["reader"], d["state"], d["count"]) for d in out] == [
-        ("cmo", "sent", 1),
-        ("cto", "sent", 1),
-        ("seo", "sent", 1),
-    ]
-    sent = digests(hub)
-    assert [d["reader"] for d in sent] == ["cmo", "cto", "seo"]
-    cmo = sent[0]
-    assert cmo["sender_id"] == "keeper" and cmo["recipient_id"] == "bot:cmo"
-    assert (
-        "## #marketing — Marketing work log." in cmo["body"]
-        and "Ana Rivera: Launch copy is ready for review" in cmo["body"]
+    said = rows(
+        hub, "SELECT conversation_id,sender_id,body FROM messages WHERE conversation_id IN (?,?)", marketing, release
     )
-    assert "Deploy 4.2" not in cmo["body"] and "Nobody reads this" not in cmo["body"]
-    assert "Ben: Deploy 4.2 went out" in sent[1]["body"]
-    refs = json.loads(cmo["refs"])["slack"]
-    assert refs["channel_name"] == "#marketing" and refs["permalink"] == f"https://acme.slack.com/archives/{MARKETING}"
-    assert refs["digest"]["count"] == 1 and len(refs["digest"]["event_ids"]) == 1
-    assert [j["bot_id"] for j in jobs(hub)] == ["cmo", "cto", "seo"], "each reader gets one turn"
-    assert rows(hub, "SELECT subject,scope,participants FROM conversations ORDER BY created_at")[0] == {
-        "subject": "Slack channels",
-        "scope": "direct",
-        "participants": '["keeper", "bot:cmo"]',
-    }
-    # The cursors moved with the delivery; nothing new means nothing sent and no turn.
-    gw.clock.advance(3600)
-    assert [d["state"] for d in gw.tick()["digests"]] == ["nothing"] * 3
-    assert len(digests(hub)) == 3 and len(jobs(hub)) == 3
-    # The next message lands in the same conversation for that reader.
-    gw.receive(channel_message("Second post"))
-    gw.clock.advance(3600)
+    assert sorted((m["conversation_id"], m["sender_id"], m["body"]) for m in said) == sorted(
+        [(marketing, "human:ana", "Launch copy is ready for review"), (release, "human:ben", "Deploy 4.2 went out")]
+    )
     gw.tick()
-    assert (
-        len({r["conversation_id"] for r in rows(hub, "SELECT conversation_id FROM slack_digests WHERE reader='cmo'")})
-        == 1
+    assert slack.posts == [] and slack.ephemeral == [], "nothing goes back to a read channel"
+    assert thread_bot_digest.sweep(hub) == 2 + 1, "the CMO, SEO and CTO wake; the paused Finance bot waits"
+    woken = rows(
+        hub, "SELECT recipient_id,body FROM messages WHERE sender_id='keeper' AND kind='notice' ORDER BY recipient_id"
     )
-    assert "Second post" in digests(hub)[-1]["body"] and "Launch copy" not in digests(hub)[-1]["body"]
+    assert [w["recipient_id"] for w in woken] == ["bot:cmo", "bot:cto", "bot:seo"]
+    assert f"- {marketing}: 1" in woken[0]["body"] and "Launch copy" not in woken[0]["body"]
+    assert sorted(j["bot_id"] for j in jobs(hub)) == ["cmo", "cto", "seo"], "each reader gets one turn"
+    assert thread_bot_digest.sweep(hub) == 0, "nothing new, nobody woken"
 
 
 def test_a_shared_dm_with_56_active_bots_is_asked_in_2_calls_and_routed(gateway, hub):
@@ -773,9 +752,9 @@ def test_a_slack_thread_reply_links_to_its_own_room_not_the_bots_usual_chat(gate
 
 
 def test_a_stored_channel_message_reaches_a_message_automation_once_and_only_after_it_was_made(readers, monkeypatch):
-    """The readers' copy of a channel message is what a message automation on that channel hears: offered once, only
-    while the redesign is on, and never the backlog from before the automation existed. The row stays `stored`, so
-    the readers, the edit path and an @-mention that promotes it are unchanged."""
+    """The stored copy of a read channel's message is what a message automation on that channel hears: offered once,
+    only while the redesign is on, and never the backlog from before the automation existed. The row stays `stored`,
+    so the edit path and an @-mention that promotes it are unchanged."""
     from backend import automations
 
     gw, hub = readers, readers.store
@@ -806,19 +785,17 @@ def test_a_stored_channel_message_reaches_a_message_automation_once_and_only_aft
     gw.clock.advance(60)
     assert gw.tick()["events"] == [] and len(heard) == 1, "offered once, never again"
     states = rows(hub, "SELECT text,state,processed_at FROM slack_events ORDER BY received_at")
-    assert [s["state"] for s in states] == ["stored", "stored"], "the readers keep the row as it was"
+    assert [s["state"] for s in states] == ["stored", "stored"], "the row stays as it was"
     assert states[0]["processed_at"] is None, "the backlog is not offered"
     assert states[1]["processed_at"] is not None
 
 
-def test_a_linked_channel_is_left_out_of_the_readers_pass_its_backfill_its_digest_and_its_automations(
-    readers, monkeypatch
-):
-    """A channel a thread link carries reaches its thread through the bridge only. The hourly digest, the backfill and
-    the message automations leave it out, including the rows stored before the link (the readers' copies)."""
+def test_a_two_way_linked_channel_is_left_out_of_the_automations_and_a_read_only_one_is_not(readers, monkeypatch):
+    """A channel a two-way link carries is heard in its thread, so the message automations leave it out, including the
+    rows stored before the link. A read-only link only copies the channel, so its automations still hear it."""
     from backend import automations
 
-    gw, hub, slack = readers, readers.store, readers.slack
+    gw, hub = readers, readers.store
     heard = []
     monkeypatch.setattr(
         automations,
@@ -833,34 +810,15 @@ def test_a_linked_channel_is_left_out_of_the_readers_pass_its_backfill_its_diges
             ('{"trigger": {"type": "message", "inbox": "slack:#marketing"}}', gw.clock(), gw.clock()),
         )
     gw.clock.advance(60)
-    assert gw.receive(channel_message("Control message")) == "stored"
+    assert gw.receive(channel_message("Read-only copy")) == "stored"
     gw.offer()
-    assert heard == ["Control message"], "control: an unlinked channel's stored message is offered"
+    assert heard == ["Read-only copy"], "a read-only link's channel is offered"
     gw.clock.advance(60)
-    assert gw.receive(channel_message("Stored before the link")) == "stored"
+    assert gw.receive(channel_message("Stored before the two-way link")) == "stored"
     with hub.transaction() as c:
-        c.execute(
-            "INSERT INTO conversations (id,kind,subject,created_at,audience,root_id,path) "
-            "VALUES ('T-link','thread','Marketing','x','company','T-link','')"
-        )
-        c.execute(
-            "INSERT INTO slack_thread_links (id,thread_id,channel_ref,channel_id,channel_name,audience,state,"
-            "linked_by,created_at,updated_at) VALUES ('L1','T-link',?,?,'marketing','company','active','ana','x','x')",
-            (MARKETING, MARKETING),
-        )
-    assert gw.linked_channels() == {MARKETING}
+        c.execute("UPDATE slack_thread_links SET read_only=0 WHERE channel_id=?", (MARKETING,))
     gw.offer()
-    assert heard == ["Control message"], "the stored row of a linked channel is not offered"
-    slack.calls.clear()
-    gw.backfill()
-    assert not [c for c in slack.calls if c[0] == "conversations.history" and c[1] == MARKETING]
-    assert [c for c in slack.calls if c[0] == "conversations.history" and c[1] == RELEASE], (
-        "the other channels still run"
-    )
-    gw.clock.advance(3600)
-    gw.tick()
-    bodies = " ".join(d["body"] for d in digests(hub))
-    assert "Control message" not in bodies and "Stored before the link" not in bodies
+    assert heard == ["Read-only copy"], "the stored row of a two-way linked channel is not offered"
 
 
 # ----------------------------------------------------------------------------- membership revoked after queueing
@@ -1179,20 +1137,6 @@ def test_an_event_the_gateway_cannot_store_is_not_acknowledged_so_slack_sends_it
         socket.socket_mode_request_listeners[0](socket, socket_request)
     assert f"Event env-1 not persisted: {LOCKED}" in caplog.text
     assert socket.acks == []
-
-
-def test_a_backfill_that_fails_is_logged_scrubbed_and_the_readers_still_get_what_is_stored(
-    readers, monkeypatch, caplog
-):
-    gw, hub = readers, readers.store
-    assert gw.receive(channel_message("Launch copy is ready for review")) == "stored"
-    gw.clock.advance(3600)
-    monkeypatch.setattr(gw, "backfill", locked)
-    with caplog.at_level(logging.ERROR, logger="tico.slack"):
-        out = gw.maybe_digest()
-    assert f"Backfill failed: {LOCKED}" in caplog.text
-    assert ("cmo", "sent", 1) in [(d["reader"], d["state"], d["count"]) for d in out]
-    assert any("Launch copy is ready for review" in d["body"] for d in digests(hub))
 
 
 def test_an_event_that_fails_is_stored_as_failed_with_its_scrubbed_reason(gateway, hub, monkeypatch, caplog):

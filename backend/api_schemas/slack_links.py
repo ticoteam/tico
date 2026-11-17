@@ -14,6 +14,7 @@ SCHEMAS['SlackLink'] = obj(
         'reason': 's',
         'history': obj({'state': {'enum': ['off', 'pending', 'running', 'done', 'failed']}, 'count': 'i'}),
         'linked_by': 's',
+        'read_only': 'b',
         'created_at': 's',
         'updated_at': 's',
     }

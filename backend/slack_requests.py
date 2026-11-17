@@ -281,8 +281,20 @@ def _channel(gateway: Any, ref: str) -> dict[str, Any]:
 
 
 def _names(gateway: Any, messages: list[dict[str, Any]]) -> dict[str, str]:
-    users = {str(m.get("user")) for m in messages if m.get("user") and not m.get("bot_id")}
-    return {uid: str(gateway.display_name({"author": "human", "user_id": uid, "author_name": None})) for uid in users}
+    """Each person's Slack name (`users.info`); one Slack cannot answer for keeps its id."""
+    from .slack_gateway import SlackError, SlackUnreachable
+
+    names: dict[str, str] = {}
+    for uid in {str(m.get("user")) for m in messages if m.get("user") and not m.get("bot_id")}:
+        try:
+            user: dict[str, Any] = gateway.slack.users_info(uid) or {}
+        except (SlackError, SlackUnreachable):
+            user = {}
+        profile: dict[str, Any] = user.get("profile") or {}
+        names[uid] = str(
+            profile.get("real_name") or profile.get("display_name") or user.get("real_name") or user.get("name") or uid
+        )
+    return names
 
 
 def _shape(m: dict[str, Any], cid: str, names: dict[str, str], team_url: str, thread_ts: str = "") -> dict[str, Any]:
