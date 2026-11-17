@@ -3,7 +3,7 @@
 // …/check, GET …/activity) and the mailboxes fake (support/mailboxes-fake.cts) for a mailbox's page and its Limits.
 // Covers: the list in Automations' layout (its rail: search, Kind, Needs you, Who has access; In use and Available;
 // pills only when wrong; a phone's folded filters; empty, failing, 60 rows, a long name, read-only; one vendor's tools
-// under one row; the lock and eye-off marks); an API tool's level change, Settings, Check now and Move to proxy; the Activity
+// under one row; the lock and eye-off marks); an API tool's level change, Settings, Paste keys, Check now and Move to proxy; the Activity
 // tab's filter; Who can see it (Private pills, Only listed's Who | Why, Remove, Add through the audience picker, back
 // to Everyone) and Finance's read-only row; a Google Ads tool's Finance card (bot pick, switching the import on); the
 // mailbox Limits card; the old addresses' redirects (Keys' too); 390px with no sideways scroll; light and dark.
@@ -167,6 +167,12 @@ function apiFake() {
     if (p === '/api/v2/tools') return {integrations: []};
     if (p === '/api/v2/tool-vendors/raygun') return structuredClone(RAYGUN_PAGE);
     if (p === '/api/v2/groups') return {groups: [{id: 'g-books', name: 'Bookkeeping'}]};
+    // Paste to classify (backend/tool_templates.py): names and marks, a secret only by its ends.
+    if (p === '/api/v2/tool-templates/classify' && method === 'POST') {
+      fake.writes.push({method, path: p, body});
+      return {template: 'posthog', items: [{name: 'POSTHOG_API_KEY', field: 'api_key', role: 'secret', preview: 'phx_…0001'},
+        {name: 'POSTHOG_HOST', field: 'host', role: 'setting', preview: 'https://eu.posthog.example'}]};
+    }
     if (p.startsWith('/api/v2/tools/')) return {service: decodeURIComponent(p.split('/').pop() as string), title: 'GitHub', access: '', writes: 'read', owner: 'tico', declared_as: '', body: '', queries: [], learnings: [], read_only: true};
     const m = p.match(/^\/api\/v2\/api-tools\/([^/]+)(\/.*)?$/);
     if (!m) return undefined;
@@ -195,6 +201,7 @@ function apiFake() {
       if (body.level === 'none') t.access = t.access.filter(a => a !== row); else if (row) row.level = body.level;
       return {subject, level: body.level === 'none' ? null : body.level};
     }
+    if (rest === '/paste' && method === 'POST') return {keys: 1, settings: 1, tool: structuredClone(t)};
     if (rest === '/check' && method === 'POST') {
       const rows = t.keys.map(k => ({credential_id: k.id, ok: true, status_code: 200, detail: 'Working', checked_at: at(-5)}));
       t.checks.unshift(...rows);
@@ -499,6 +506,18 @@ async function start(browser: import('playwright').Browser, hash: string, {width
         await page.locator('dialog[open] button[type="submit"]').click();
         await page.locator('#tool-settings [data-ta-setting="s-1"]').waitFor();
         assert.deepEqual(api.writes.at(-1), {method: 'POST', path: '/api/v2/api-tools/t-crm/settings', body: {name: 'ACME_CRM_REGION', value: 'eu'}}, `${tag}: setting write`);
+        // Paste: Check shows each value's variable and mark, never a secret whole; Add stores the same text.
+        const pasted = 'POSTHOG_API_KEY=phx_acmesynthetic0001\nPOSTHOG_HOST=https://eu.posthog.example';
+        await page.locator('#tool-keys [data-ta-key-paste]').click();
+        await page.locator('dialog[open] textarea[name="text"]').fill(pasted);
+        await page.locator('dialog[open] button[type="submit"]').click();
+        await page.locator('dialog[open] [data-ta-paste-row="setting"]').waitFor();
+        const rows = await page.locator('dialog[open] [data-ta-paste-rows]').innerText();
+        assert.match(rows, /PostHog[\s\S]*POSTHOG_API_KEY[\s\S]*POSTHOG_HOST/, `${tag}: what the paste holds`);
+        assert.doesNotMatch(rows, /acmesynthetic0001/, `${tag}: no secret shown`);
+        await page.locator('dialog[open] button[type="submit"]').click();
+        await page.locator('dialog[open]').waitFor({state: 'detached'});
+        assert.deepEqual(api.writes.at(-1), {method: 'POST', path: '/api/v2/api-tools/t-crm/paste', body: {text: pasted}}, `${tag}: paste write`);
         // Read → Read and write calls PUT access.
         await page.locator('[data-ta-subject="bot:support-bot"][data-ta-level="read_write"]').click();
         await page.locator('[data-ta-subject="bot:support-bot"][data-ta-level="read_write"][aria-checked="true"]').waitFor();

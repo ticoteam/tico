@@ -83,6 +83,49 @@ through the proxy too: the runner sends it to `$TICO_TOOL_<ID>_URL` plus the ser
 with the run's proxy token in its header, and the proxy puts the key in its place. A server whose address is not under
 the tool's API address is not passed, and the turn's diagnostics say which address to set.
 
+### Auth templates
+
+A vendor account made of several values is one tool, never one tool per value. Its **auth template**
+(`tools.auth_template`, backend/tool_templates.py) lists the account's fields, each a variable: a **secret** (a key on
+the tool), an **id** (sent as it is: a setting, or a key whose value runs get as it is) or a **setting** (a host, a
+region, a profile). Six vendors have one built in (backend/tool_services.py `TEMPLATES`, from each vendor's docs):
+Twilio (Account SID and Auth Token, or API key SID and secret, as Basic), Google Ads (developer token, client id and
+secret, refresh token, login and customer ids), AWS (key pair, session token, region, profile), PostHog (personal key,
+host, project id), ElevenLabs (`xi-api-key`) and Calendly (Bearer). A variable is a field by its name: the vendor's
+prefix, an account label, the field (`POSTHOG_CRO_API_KEY` is PostHog's CRO account's key). Another vendor's tool takes a
+template of its own (`PUT /api/v2/api-tools/<id>/template`: `{fields: [{id, env, role}], ways: [...]}`).
+
+A tool with a template holds one key per variable per level. A level grants each variable's key for it, the default
+read reads each, and every field the bot holds reaches its run as its own variable: a secret as a proxy token (proxy)
+or its value (computer), an id or setting as its value. Through the proxy the template's **ways** build the vendor's
+auth from every field the caller holds, the first way whose fields are all there: `basic` (two fields as user and
+password), `headers` (a header pair, or one), `query` (with headers: query + header). The caller's token may sit in any
+of those places; the proxy drops what the caller sent there and sends the template's values, and scrubs each from the
+answer. A template with no ways signs on the computer (AWS SigV4; Google Ads, whose OAuth refresh stays with the client
+library on the computer for now), so its keys go to computers together. A check sends the Read and write keys together
+by the first way they fill, as one row.
+
+**Paste.** Tools > Add > API's Keys box and Keys > Paste on a tool take every value at once (lines `NAME=value`,
+`NAME: value`, or bare values). `POST /api/v2/tool-templates/classify` names each as a known template's field by its
+name or its shape (an `AC…` value is Twilio's Account SID) or, for any other vendor, marks it secret, id or setting by
+the rules above, and answers no secret's value; `POST /api/v2/api-tools/<id>/paste` stores the same text in one click:
+secrets as Read and write keys under their variables, ids and settings as Settings, and the template. In the Tools
+chat's key drop, a secret no rule names for its vendor takes the variable of the one known template its shape fits.
+
+**Grouping.** Once, at start, the tools that are one vendor account's values (each tool's every key and setting a field
+of one known template under one label) became one tool named vendor and label ("Twilio", "PostHog · CRO"); a tool named
+after its variable got vendor and label too ("Slack · Sentry bot"). Nothing a bot reads changed: each grouping ran
+between two reads of every bot's run environment and was rolled back if any variable would change or go. A key's
+proxy address variable keeps its old tool's name (`credentials.former_tool_id`), and the proxy answers the old address.
+Whoever held one of the parts explicitly holds every variable of the account at their level (the union of grants); what
+anyone gained is in the event `tool.grouped`. A sensitive vendor (AWS) or an Only listed tool whose grouping would give
+anyone a new value was left apart and asked of the Tools Owner as a task; a vendor whose variable two tools hold (two
+accounts, or copies) was left apart. A credential administrator splits a grouping back (Keys > Split, `POST
+/api/v2/api-tools/<id>/ungroup`): its parts come back with their keys, settings and names, and the grants it made are
+taken back; calls and checks stay on the tool that held them. A USERNAME and PASSWORD stored as two keys
+(`VPM_TIDY_USERNAME`, `VPM_TIDY_PASSWORD`) is a sign-in: the Tools Owner gets one task each to offer it as a website
+account; both variables keep reaching runs until it confirms no bot reads them.
+
 ### MCP servers
 
 **Tools → Add → MCP server** connects a remote MCP server (streamable HTTP) by its address. Tico asks the server first,
