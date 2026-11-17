@@ -709,3 +709,95 @@ NEEDS_YOU = (
         example="tico needs-you show --kind ask --limit 5",
     ),
 )
+
+
+def _propose(client, fields):
+    """`tico assistant propose`: --body is JSON text, refused as the API refuses a bad field, and every field of the
+    card is sent (`for_person` as null when --for is left out), as the hand parser it replaced sent them."""
+    from clients import hubtools
+    from clients.tico import APIError
+
+    try:
+        body = json.loads(fields.get("body") or "{}")
+    except ValueError:
+        raise APIError("body", "--body must be JSON") from None
+    sent = {
+        "summary": fields["summary"],
+        "path": fields["path"],
+        "method": fields["method"],
+        "body": body,
+        "for_person": fields.get("for_person"),
+        "operation_id": fields.get("operation_id"),
+    }
+    return hubtools.BY_NAME["tico_assistant_propose"]["fn"](client, sent)
+
+
+# `tico assistant ...` (clients/cli_spec.py): the person's Assistant chat, its Confirm cards and what it learned.
+ASSISTANT = (
+    Group("assistant", "the Assistant's proposals for a person to confirm"),
+    Command("assistant read", "read your private Assistant chat", example="tico assistant read"),
+    Command("assistant send", "ask your private Assistant", example="tico assistant send 'What is due today?'"),
+    Command(
+        "assistant propose",
+        "ask the person to confirm one side-effecting operation",
+        args=(
+            Arg("summary", flag="--summary"),
+            Arg("method", default="POST"),
+            Arg("path", flag="--path"),
+            Arg("body", type=str, default="{}"),
+            Arg("for_person", flag="--for"),
+        ),
+        run=_propose,
+        example="tico assistant propose --summary 'Archive Ops' --path /api/v2/bots/ops/archive",
+    ),
+    Command(
+        "assistant morning",
+        "the Assistant's one morning message to a person (background run only)",
+        args=(Arg("for_person", flag="--for"), Arg("body", flag="--body")),
+        example="tico assistant morning --for human:ana --body 'Good morning'",
+    ),
+    Command(
+        "assistant learn",
+        "save one thing the person taught you (What it has learned)",
+        args=(Arg("layer", flag="--company", action="store_const", const="company", default="personal"),),
+        example="tico assistant learn 'Launches matter more than hiring news'",
+    ),
+    Command(
+        "assistant learned",
+        "what your chat bot has learned: your layer, and the company's for the owner",
+        example="tico assistant learned",
+    ),
+    Command(
+        "assistant shared",
+        "the people who chose you to view their Assistant chat, read only (a bot's own run)",
+        example="tico assistant shared",
+    ),
+    Command(
+        "assistant shared-read",
+        "read one page of a person's Assistant chat they shared with you",
+        example="tico assistant shared-read human:ana",
+    ),
+    Command(
+        "assistant withdraw",
+        "take back a Confirm card that waits: it never runs (any teammate)",
+        args=(Arg("reason", default=""),),
+        example="tico assistant withdraw a1 --reason 'Wrong person'",
+    ),
+    Group("assistant change", "what your Assistant did for you, and undoing one of those changes"),
+    Command(
+        "assistant change list",
+        "the Assistant's changes for you, newest first, with the words it acted on",
+        example="tico assistant change list --days 7",
+    ),
+    Command(
+        "assistant change restore",
+        "undo one change as you; restoring it again changes nothing",
+        example="tico assistant change restore c1",
+    ),
+    Command(
+        "assistant proposals",
+        "the Confirm cards still waiting for their owner (find one to withdraw)",
+        args=(Arg("proposer", choices=("botops", "assistant")),),
+        example="tico assistant proposals --proposer assistant",
+    ),
+)

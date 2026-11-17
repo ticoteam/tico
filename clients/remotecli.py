@@ -575,14 +575,11 @@ def run(args, who=None):
         return via_tool(client, args)
     if args.cmd == "decision":
         return judge(client, args)
-    if args.cmd == "meeting":
+    if fn == "meeting import":  # the other meeting leaves are specs (clients/commands/calls.py)
         from clients import hubtools
 
         fields = {k: v for k, v in vars(args).items() if k not in ("cmd", "sub", "fn") and v is not None}
-        fields.pop("granola_action", None)
-        if fn == "meeting import":
-            return hubtools.meetings_import_file(client, fields)
-        return hubtools.BY_NAME[tool_name(fn)]["fn"](client, fields)
+        return hubtools.meetings_import_file(client, fields)
     if args.cmd == "grokbot":
         from clients import hubtools
 
@@ -593,37 +590,6 @@ def run(args, who=None):
 
         body = json.loads(Path(args.file).read_text())
         return hubtools.BY_NAME["tico_external_sync"]["fn"](client, {**body, "provider": args.provider})
-    if args.cmd == "assistant":
-        from clients import hubtools
-
-        if args.sub in (
-            "read",
-            "send",
-            "learn",
-            "learned",
-            "withdraw",
-            "proposals",
-            "change",
-            "morning",
-            "shared",
-            "shared-read",
-        ):
-            return via_tool(client, args)
-        try:
-            body = json.loads(args.body or "{}")
-        except ValueError:
-            raise APIError("body", "--body must be JSON") from None
-        return hubtools.BY_NAME["tico_assistant_propose"]["fn"](
-            client,
-            {
-                "summary": args.summary,
-                "path": args.path,
-                "method": args.method,
-                "body": body,
-                "for_person": getattr(args, "for_person", None),
-                "operation_id": os.environ.get("HUB_OPERATION_ID"),
-            },
-        )
     if args.cmd == "db":
         # Runs here, beside the credential; the hub only checks who is asking and keeps the audit.
         from clients import dbquery
