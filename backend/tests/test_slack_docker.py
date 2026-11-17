@@ -119,8 +119,32 @@ def test_tokens_are_sealed_never_returned_and_never_logged(api, caplog, tmp_path
     store.settings.credential_admins = ("ana@acme.example",)
     listed = api.get("/api/v2/credentials", headers=h())
     assert listed.status_code == 200 and slack_app.BOT_ID not in listed.text
-    revealed = api.post(f"/api/v2/credentials/{slack_app.BOT_ID}/reveal", headers=h())
-    assert revealed.status_code in (403, 404) and BOT not in revealed.text
+    path = f"/api/v2/credentials/{slack_app.BOT_ID}"
+    key = {**h(), "Idempotency-Key": "service-row"}
+    for res in (
+        api.post(path + "/reveal", headers=h()),
+        api.post(path, json={"name": "mine", "secret": "x"}, headers=key),
+        api.post(path + "/grants", json={"subject": "bot:ana-bot"}, headers=key),
+        api.post(path + "/grants/g1/revoke", headers=h()),
+        api.delete(path, headers=h()),
+    ):
+        assert res.status_code == 404 and BOT not in res.text, (res.request.url, res.text)
+    # Any path that opens a credential by an id it was handed: a service row opens only through `open_service`.
+    from backend.credentials import Vault
+    from backend.finance.store import tico
+    from backend.store import Problem
+
+    vault = api.app_state.vault
+    with store.read() as c:
+        row = c.execute("SELECT * FROM credentials WHERE id=?", (slack_app.BOT_ID,)).fetchone()
+        with pytest.raises(Problem, match="not found"):
+            vault.cipher.decrypt(c, row)
+        with pytest.raises(Problem, match="not found"):
+            Vault(store).open_login(c, row)
+        assert vault.cipher.open_service(c, row) == BOT
+        assert tico.credential_secret(c, vault, slack_app.BOT_ID) == ""  # never a bank's or Stripe's key
+        with pytest.raises(Problem, match="not found"):
+            vault.cipher.open_service(c, {**dict(row), "kind": "api_key"})  # and that opens nothing else
     assert api.post("/api/v2/slack/disconnect", headers=h()).status_code == 200
     assert slack_app.load(store) is None and api.get("/api/v2/slack/app", headers=h()).json()["configured"] is False
 
@@ -237,6 +261,7 @@ def test_an_older_servers_slack_key_tokens_move_into_the_vault_once(tmp_path, ca
 
 def test_without_slack_key_the_row_is_left_logged_and_the_start_goes_on(tmp_path, caplog):
     store = _older_server(tmp_path)
+    old = (tmp_path / "slack.key").read_bytes()
     (tmp_path / "slack.key").unlink()
     caplog.set_level("INFO")
     assert _start(store) is True
@@ -244,6 +269,12 @@ def test_without_slack_key_the_row_is_left_logged_and_the_start_goes_on(tmp_path
     assert slack_app.load(store) is None
     with store.read() as c:
         assert slack_app.status(c)["configured"] is True  # still there: Disconnect forgets it
+    # A restore puts slack.key back after it migrates: the gateway's next read opens the row with it and moves it.
+    (tmp_path / "slack.key").write_bytes(old)
+    stored = slack_app.load(store)
+    assert stored and (stored["bot_token"], stored["team_id"]) == (BOT, "T0OLD")
+    with store.read() as c:
+        assert slack_app._old(c) is None and slack_app.status(c)["configured"] is True
     slack_app.forget(store)
     with store.read() as c:
         assert slack_app.status(c)["configured"] is False

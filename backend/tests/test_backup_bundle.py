@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.app import create_app
+from backend import backup as backup_module
 from backend.backup import blob_inventory, restore_bundle
 from backend.blobs import Blobs
 from backend.operations import backup
@@ -163,6 +164,53 @@ def test_a_hand_run_backup_carries_the_key_files_and_restore_brings_them_back(ap
         restore_bundle("backup-bucket", "backups/hand.sqlite", again, s3)
     assert not again.db_path.exists() and (again.db_path.parent / "github-app.key").read_bytes() == b"\x09" * 32
     assert not (again.db_path.parent / "credential.key").exists()
+
+
+def test_an_older_bundle_with_the_slack_row_carries_slack_key_and_a_restore_moves_the_tokens(
+    api, tmp_path, monkeypatch
+):
+    """A database whose Slack row is not moved yet (an older one, restored and not started since): its bundle still
+    carries slack.key. The restore migrates before it puts the key files back, so the row is left; the gateway's first
+    read opens it with slack.key and moves it into the vault."""
+    import os
+
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    from backend import slack_app
+    from backend.credentials import Vault
+    from backend.store import Store
+
+    sources(api)
+    store = api.app.state.store
+    data = store.settings.db_path.parent
+    old = os.urandom(32)
+    (data / "slack.key").write_bytes(old)
+    nonce = os.urandom(12)
+    sealed = AESGCM(old).encrypt(
+        nonce, b'{"bot_token":"xoxb-old-0000000000","app_token":"xapp-old"}', slack_app.OLD_AAD
+    )
+    with store.transaction() as c:
+        c.execute(
+            "CREATE TABLE slack_credentials(id TEXT PRIMARY KEY, ciphertext BLOB NOT NULL, nonce BLOB NOT NULL, "
+            "team_id TEXT NOT NULL DEFAULT '', app_id TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, "
+            "created_by TEXT NOT NULL)"
+        )
+        c.execute(
+            "INSERT INTO slack_credentials VALUES('app',?,?,'T0OLD','A0OLD','2026-11-01T00:00:00Z','human:ana')",
+            (sealed, nonce),
+        )
+        c.execute("DELETE FROM schema_migrations WHERE version='20261117075941_slack_tokens_into_vault'")
+    s3 = ObjectStore()
+    hand_run_backup(api, s3, monkeypatch)
+    settings = target(tmp_path)
+    recovered = restore_bundle("backup-bucket", "backups/hand.sqlite", settings, s3)
+    assert recovered["key_files"]["slack.key"] == "restored"
+    restored = Store(settings)
+    stored = slack_app.load(restored, Vault(restored))
+    assert stored and (stored["bot_token"], stored["team_id"]) == ("xoxb-old-0000000000", "T0OLD")
+    with restored.read() as c:
+        assert not c.execute("SELECT 1 FROM slack_credentials").fetchone()  # moved: slack.key is not carried again
+    assert "slack.key" not in backup_module.read_key_files(settings.db_path.parent, settings.db_path)
 
 
 def test_a_hand_run_backup_carries_only_the_key_files_present_and_refuses_a_broken_one(api, tmp_path, monkeypatch):

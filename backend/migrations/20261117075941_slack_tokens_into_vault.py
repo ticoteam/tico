@@ -3,12 +3,11 @@
 Before this, Tools > Slack sealed both tokens in one row with `slack.key` beside the database, or with the vault's data
 key under TICO_CREDENTIAL_KMS_KEY (and a row saved before KMS was set still opened with `slack.key`). Now they are
 `credentials` rows of kind `service` (backend/slack_app.py), sealed with the vault's data key like every credential, and
-the vault's backup covers them. The row is opened the way that server opened it (`credentials.open_or_reseal`), so this
-file is the only reader of `slack.key` left: a restored backup that still has the table needs its `slack.key` beside it.
+the vault's backup covers them. The row is opened the way that server opened it (`credentials.open_or_reseal`).
 
-When the row does not open here (KMS unreachable, or slack.key missing), nothing is changed and the start goes on: the
-table is left, the reason is logged, and the gateway moves a row the vault's key opens on its next read
-(backend/slack_app.py `load`). Otherwise the table is dropped.
+When the row does not open here (KMS unreachable, or slack.key missing: a restore puts the key files back after it
+migrates), nothing is changed and the start goes on: the table is left, the reason is logged, and the gateway moves it
+on its next read (backend/slack_app.py `load`, the only other reader of `slack.key`). Otherwise the table is dropped.
 
 Running this again changes nothing: the table is gone.
 """

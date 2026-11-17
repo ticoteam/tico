@@ -432,6 +432,30 @@ def test_the_other_key_files_go_to_the_bucket_beside_the_credential_key(tmp_path
     assert not (tmp_path / "fresh" / "slack.key").exists()
 
 
+def test_slack_key_is_copied_only_while_an_older_servers_slack_row_is_left(tmp_path):
+    """An older server's slack.key opens a Slack row the gateway has not moved into the vault yet: the loop keeps
+    copying it until that row is gone, then stops."""
+    env = key_env(tmp_path)
+    data, copy = tmp_path / "data", tmp_path / "backups" / "credential-key" / "slack.key"
+    (data / "slack.key").write_bytes(KEY)
+    db = sqlite3.connect(data / "hub.sqlite")
+    db.execute("CREATE TABLE slack_credentials(id TEXT PRIMARY KEY)")
+    db.execute("INSERT INTO slack_credentials VALUES('app')")
+    db.commit()
+    assert replication.old_key_files(data / "hub.sqlite") == ("slack.key",)
+    replication.loop(env, sleep=lambda s: None, rounds=1)
+    assert copy.read_bytes() == KEY
+    copy.unlink()
+    db.execute("DELETE FROM slack_credentials")
+    db.commit()
+    db.close()
+    assert replication.old_key_files(data / "hub.sqlite") == ()
+    replication.loop(env, sleep=lambda s: None, rounds=1)
+    assert not copy.exists()
+    # A database that cannot be read keeps the key: copying it costs nothing, losing it loses the tokens.
+    assert replication.old_key_files(tmp_path / "missing" / "hub.sqlite") == ("slack.key",)
+
+
 def test_a_new_key_never_overwrites_the_backups_only_good_copy(tmp_path):
     """github-app.key did not come back with a restore and a save made a new one: the copy in the backup that opens the
     stored GitHub App is kept aside, by a fresh backup process too. Saves that would orphan sealed rows are refused."""

@@ -17,7 +17,7 @@ from fastapi import Request
 from pydantic import BaseModel, ConfigDict
 
 from . import hubdb as H
-from .credentials import SERVICE, Vault
+from .credentials import SERVICE, Vault, legacy_key
 from .store import Problem
 
 HEALTH = "slack:gateway"
@@ -28,8 +28,9 @@ APP_TOKEN = re.compile(r"^xapp-[A-Za-z0-9-]{10,}$")
 BOT_ID, APP_ID = "slack-bot-token", "slack-app-token"
 ROWS = f"SELECT * FROM credentials WHERE id IN ('{BOT_ID}','{APP_ID}') AND kind='{SERVICE}'"
 # An older server's own table, moved by backend/migrations/20261117075941_slack_tokens_into_vault.py. One it could not
-# open then (KMS unreachable) is still here: under KMS it is sealed with the vault's key, and `load` moves it.
-OLD_TABLE, OLD_AAD = "slack_credentials", b"tico-slack-app:v1"
+# open then is still here (KMS unreachable, or an older backup restored after the migration ran, its slack.key placed
+# after it): `load` moves it. slack.key is read here alone, and only while that row is left.
+OLD_TABLE, OLD_AAD, OLD_KEY = "slack_credentials", b"tico-slack-app:v1", "slack.key"
 log = logging.getLogger("tico.slack_app")
 
 
@@ -65,13 +66,14 @@ def save(store, actor, bot_token, app_token, vault=None):
 
 
 def _move_old(store, vault):
-    """The older server's row, opened with the vault's key and moved into the vault; None when it does not open."""
+    """The older server's row, opened with the vault's key (KMS) or the older server's slack.key and moved into the
+    vault; None when it does not open (it is tried again on the next load)."""
     try:
         with store.transaction() as c:
             row = _old(c)
             if not row:
                 return None
-            data = json.loads(AESGCM(vault.cipher.key(c)).decrypt(row["nonce"], row["ciphertext"], OLD_AAD))
+            data = json.loads(_open_old(c, store, vault, row))
             _put(
                 c,
                 vault.cipher,
@@ -95,6 +97,17 @@ def _move_old(store, vault):
     return True
 
 
+def _open_old(c, store, vault, row):
+    key = vault.cipher.key(c)
+    try:
+        return AESGCM(key).decrypt(row["nonce"], row["ciphertext"], OLD_AAD)
+    except Exception:
+        old = legacy_key(Path(store.settings.db_path).parent / OLD_KEY)
+        if old is None:
+            raise
+    return AESGCM(old).decrypt(row["nonce"], row["ciphertext"], OLD_AAD)
+
+
 def load(store, vault=None):
     """`{"bot_token","app_token","team_id","app_id","created_at"}` or None. Gateway process only."""
     vault = vault or Vault(store)
@@ -107,7 +120,7 @@ def load(store, vault=None):
         return None
     try:
         with store.read() as c:
-            bot, app = (vault.cipher.decrypt(c, rows[cid]) for cid in (BOT_ID, APP_ID))
+            bot, app = (vault.cipher.open_service(c, rows[cid]) for cid in (BOT_ID, APP_ID))
     except Problem:
         return None
     return {

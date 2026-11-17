@@ -295,9 +295,17 @@ SEALED = 'sealed:v1:'  # the prefix of a value `CredentialCipher.seal` made
 _key_file_lock = threading.Lock()
 
 
+def _kind(row):
+    """A row's kind, or None for a table that has none (granola_connections)."""
+    try:
+        return row['kind']
+    except (IndexError, KeyError):
+        return None
+
+
 def legacy_key(path):
     """A key file an install sealed secrets with before TICO_CREDENTIAL_KMS_KEY was set (github-app.key, and slack.key
-    for the one move in backend/migrations/20261117075941_slack_tokens_into_vault.py): its 32 bytes, or None when it is
+    for the move of an older server's row, backend/slack_app.py `_move_old`): its 32 bytes, or None when it is
     absent or not a key. Read only: a read never makes a key file."""
     try:
         data = Path(path).read_bytes()
@@ -508,6 +516,19 @@ class CredentialCipher:
             raise Problem('vault_unavailable', 'A stored secret could not be decrypted', 503) from None
 
     def decrypt(self, c, row):
+        """A credential's sealed value. Never a service row's (404, as if it were absent): those open only through
+        `open_service`, so no caller that picks a credential by id can reach the server's own secrets."""
+        if _kind(row) == SERVICE:
+            raise Problem('not_found', 'Credential not found', 404)
+        return self._open(c, row)
+
+    def open_service(self, c, row):
+        """A service row's sealed value (the Slack app's tokens, backend/slack_app.py), and nothing else's."""
+        if _kind(row) != SERVICE:
+            raise Problem('not_found', 'Credential not found', 404)
+        return self._open(c, row)
+
+    def _open(self, c, row):
         try:
             return (
                 AESGCM(self.key(c))

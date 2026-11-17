@@ -24,12 +24,14 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import signal
 import stat
 import subprocess
 import sys
 import tempfile
 import time
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
@@ -80,7 +82,10 @@ CREDENTIAL_KEY_COPY = "credential-key/" + CREDENTIAL_KEY
 CREDENTIAL_KEY_BYTES = 32
 # The other key files, copied to the same place: credential-key/<name>.
 KEY_FILES = ("github-app.key",)
-OLD_KEY_FILES = ("slack.key",)  # restored from an older backup, never copied now
+# An older server's Slack key: restored from an older backup, and copied only while the row it opens is left
+# (old_key_files).
+OLD_KEY_FILES = ("slack.key",)
+OLD_ROW_TABLE = "slack_credentials"
 # Backup generations. The replica may keep the database's Litestream levels in a folder named for when a new generation was
 # started, gen-<UTC yyyymmddThhmmssZ>/, and environment.json at the root names it. No field there means the root, as every
 # replica had before. files/ and credential-key/ stay at the root for every generation.
@@ -204,6 +209,19 @@ def local_key_in_use(env, path=None):
 
 def key_file_path(env, name):
     return Path(env.get("TICO_DB") or "/data/hub.sqlite").parent / name
+
+
+def old_key_files(db):
+    """OLD_KEY_FILES while the older server's Slack row they open is still in the database at `db` (a restored older
+    backup the gateway has not moved into the vault yet), else (). A database that cannot be read keeps them: copying a
+    key that opens nothing costs nothing, losing the one that opens a row loses the tokens."""
+    try:
+        with closing(sqlite3.connect(Path(db).resolve().as_uri() + "?mode=ro", uri=True)) as c:
+            table = c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (OLD_ROW_TABLE,)).fetchone()
+            left = table and c.execute(f"SELECT 1 FROM {OLD_ROW_TABLE} LIMIT 1").fetchone()
+    except sqlite3.Error:
+        return OLD_KEY_FILES
+    return OLD_KEY_FILES if left else ()
 
 
 def key_files_state(env, recorded):
@@ -1368,7 +1386,7 @@ def loop(env=None, interval=30, warn_every=3600, sleep=time.sleep, rounds=None, 
     warning = status(env, path)["warning"]
     last_warned, done = 0.0, 0
     key_path, key_state, copied = credential_key_path(env), {}, None
-    file_states, files_copied = {name: {} for name in KEY_FILES}, {}
+    file_states, files_copied = {name: {} for name in KEY_FILES + OLD_KEY_FILES}, {}
     db = env.get("TICO_DB") or "/data/hub.sqlite"
     watch = StallWatch()
     # The reset job can move the data to another backup generation while this loop runs, so the volume's cache (a local
@@ -1393,7 +1411,7 @@ def loop(env=None, interval=30, warn_every=3600, sleep=time.sleep, rounds=None, 
                 "tico: warning: could not copy the credential key to the backup location: " + type(exc).__name__,
                 flush=True,
             )
-        for name in KEY_FILES:
+        for name in KEY_FILES + old_key_files(db):
             try:
                 done_copy = sync_credential_key(key_file_path(env, name), mirror, file_states[name], key_copy(name))
                 if done_copy is not None:
