@@ -72,6 +72,16 @@ VERDICTS = {
     "remove": ("done", "failed"),
     "connect": ("failed",),
 }
+# Key jobs from before D11-5 that a runner had already taken up when its server was upgraded: the migration
+# (20261117085930_drop_computer_keys) leaves them running, since the runner may have changed its login already, and
+# their reports are taken as they come (a commit point, then the verdict) and change nothing else here.
+LEGACY_VERDICTS = {
+    "clear_key": ("signed_out", "failed"),
+    "use_key": ("done", "failed"),
+    "to_key": ("done", "failed"),
+    "to_subscription": ("signed_in", "failed"),
+}
+VERDICTS.update(LEGACY_VERDICTS)
 MAX_LINES, MAX_LINE = 12, 200
 # What a page drawn before D11-5, or a client, is told when it asks for a key job from Settings > Computers.
 MOVED = (
@@ -623,7 +633,7 @@ def report(c, runner_id, lid, body, settings=None):
         return {"state": WIRE_STATE.get(row["state"], row["state"])}
     if body.state in ("signed_in", "signed_out", "done") and body.state not in VERDICTS.get(row["kind"], ()):
         raise Problem("state", f"A {row['kind'].replace('_', ' ')} does not end {body.state.replace('_', ' ')}", 422)
-    if body.state == "finishing" and row["kind"] not in COMMIT_KINDS:
+    if body.state == "finishing" and row["kind"] not in (*COMMIT_KINDS, *LEGACY_VERDICTS):
         raise Problem("state", "Only a switch puts a new login in place", 422)
     # A removal's commit point: a bot that came to run on the subscription since it was asked for (moved to this
     # computer, or onto this tool) stops it here, before the runner signs anything out or deletes anything.

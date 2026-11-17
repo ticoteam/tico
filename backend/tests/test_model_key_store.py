@@ -17,6 +17,7 @@ from backend.tests.helpers.model_keys import (
     fetch,
     legacy,
     listed,
+    report,
     setup,
     shared_before,
 )
@@ -44,8 +45,9 @@ def beat(api, machine, runtime, row):
     assert r.status_code == 200, r.text
 
 
-def own_key(api, machine, runtime, env, value, state="active"):
-    """A computer's own key as Settings > Computers kept it before: a vault credential and a computer_keys row."""
+def own_key(api, machine, runtime, env, value, state="active", login="login-1"):
+    """A computer's own key as Settings > Computers kept it before: a vault credential and a computer_keys row (staged
+    for the key job `login`)."""
     cid = store(api, env, value, name=f"{env} for {machine['runner_id']}")
     with api.app.state.store.transaction() as c:
         legacy(c)
@@ -53,7 +55,7 @@ def own_key(api, machine, runtime, env, value, state="active"):
         c.execute(
             "INSERT INTO computer_keys(credential_id,runner_id,runtime,state,login_id,created_at,created_by) "
             "VALUES(?,?,?,?,?,?,'human:ana')",
-            (cid, machine["runner_id"], runtime, state, "login-1" if state == "staged" else None, H.now()),
+            (cid, machine["runner_id"], runtime, state, login if state == "staged" else None, H.now()),
         )
     return cid
 
@@ -356,19 +358,19 @@ def login_job(api, machine, kind, state, runtime="codex"):
 
 def test_dropping_computer_keys_keeps_each_computer_on_what_it_signs_in_with(environment):
     """Migration 20261117085930: the Settings > Computers key store goes. A key still in use moves (the move is run
-    again), a computer switched to its own subscription keeps signing in with it, a staged key nothing else holds
-    leaves the vault, and the key jobs still running are canceled."""
+    again), a computer switched to its own subscription keeps signing in with it, a key staged for a job the runner
+    never took leaves the vault unless someone else holds it, and only those jobs are canceled."""
     api = setup(environment)
     alpha = computer(api, "Alpha", source="computer")
     bravo = computer(api, "Bravo", beat=False)
     delta = computer(api, "Delta", source="shared")  # switched to its own ChatGPT login: key off
-    echo = computer(api, "Echo", source="shared")  # putting its own login in place when the upgrade came
     golf = computer(api, "Golf", source="shared")  # still on the team key
     with api.app.state.store.transaction() as c:
         legacy(c)
         MOVE.up(c)  # an install that ran the first key migration already
-    staged = own_key(api, alpha, "claude", "ANTHROPIC_API_KEY", "sk-ant-staged-0123456789", state="staged")
-    held = own_key(api, bravo, "claude", "ANTHROPIC_API_KEY", "sk-ant-held-0123456789", state="staged")
+    unsent = {kind: login_job(api, golf, kind, "requested") for kind in ("use_key", "clear_key", "to_key")}
+    staged = own_key(api, alpha, "claude", "ANTHROPIC_API_KEY", "sk-ant-staged-0123456789", "staged", unsent["use_key"])
+    held = own_key(api, bravo, "claude", "ANTHROPIC_API_KEY", "sk-ant-held-0123456789", "staged", unsent["to_key"])
     add_bot(api, "mailer")
     with api.app.state.store.read() as c:
         mailer = H.resolve_bot(c, "mailer")["id"]
@@ -383,11 +385,9 @@ def test_dropping_computer_keys_keeps_each_computer_on_what_it_signs_in_with(env
         )
     alpha_key = own_key(api, alpha, "codex", "OPENAI_API_KEY", OWN)  # kept after the move ran: moved now
     assert {k for k, (_, cid) in given(api).items() if cid == team} == {
-        (r["runner_id"], "codex") for r in (delta, echo, golf)
+        (r["runner_id"], "codex") for r in (delta, golf)
     }
-    switching = login_job(api, echo, "to_subscription", "finishing")
-    jobs = {kind: login_job(api, golf, kind, "waiting") for kind in ("use_key", "clear_key", "to_key")}
-    sign_in = login_job(api, bravo, "sign_in", "waiting")
+    sign_in = login_job(api, bravo, "sign_in", "requested")
     with api.app.state.store.transaction() as c:
         DROP.up(c)
     assert given(api) == {
@@ -395,8 +395,7 @@ def test_dropping_computer_keys_keeps_each_computer_on_what_it_signs_in_with(env
         (golf["runner_id"], "codex"): ("Team OpenAI", team),
     }
     assert fetch(api, alpha)["credentials"] == [{"env": "OPENAI_API_KEY", "value": OWN, "source": "computer"}]
-    for box in (delta, echo):
-        assert fetch(api, box) == {"credentials": []}, "its own login, as before"
+    assert fetch(api, delta) == {"credentials": []}, "its own login, as before"
     with api.app.state.store.read() as c:
         tables = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type IN ('table','index')")}
         assert not tables & {"computer_keys", "computer_keys_by_runner", "model_login_key_off"}
@@ -404,8 +403,8 @@ def test_dropping_computer_keys_keeps_each_computer_on_what_it_signs_in_with(env
         assert not c.execute("SELECT 1 FROM credential_grants WHERE credential_id=?", (staged,)).fetchone()
         assert c.execute("SELECT 1 FROM credentials WHERE id=? AND ciphertext IS NOT NULL", (held,)).fetchone()
         states = {r["id"]: r["state"] for r in c.execute("SELECT id,state FROM model_logins")}
-    assert [states[lid] for lid in (switching, *jobs.values())] == ["canceled"] * 4
-    assert states[sign_in] == "waiting"
+    assert [states[lid] for lid in unsent.values()] == ["canceled"] * 3
+    assert states[sign_in] == "requested", "not a key job"
 
     def state():
         with api.app.state.store.read() as c:
@@ -418,6 +417,73 @@ def test_dropping_computer_keys_keeps_each_computer_on_what_it_signs_in_with(env
     with api.app.state.store.transaction() as c:
         DROP.up(c)
     assert state() == after, "running it again changes nothing"
+
+
+def test_a_switch_to_an_api_key_the_runner_committed_keeps_its_key(environment):
+    """A Switch to API key (`to_key`) past its commit point when the server upgrades: the runner may have put the staged
+    key in place and signed the subscription out, with its `done` report still to come. The key stays in the vault and
+    is given to the computer, so the key fetch keeps handing it out, and the report is taken when it arrives."""
+    api = setup(environment)
+    box = computer(api, "Delta", source="shared")
+    with api.app.state.store.transaction() as c:
+        legacy(c)
+        c.execute(
+            "INSERT INTO model_login_key_off(runner_id,runtime,profile,set_at,set_by) VALUES(?,'codex','',?,'human:ana')",
+            (box["runner_id"], H.now()),
+        )
+    lid = login_job(api, box, "to_key", "finishing")
+    key = own_key(api, box, "codex", "OPENAI_API_KEY", OWN, "staged", lid)
+    with api.app.state.store.transaction() as c:
+        DROP.up(c)
+    assert given(api) == {(box["runner_id"], "codex"): ("OpenAI API · Delta", key)}
+    assert fetch(api, box)["credentials"] == [{"env": "OPENAI_API_KEY", "value": OWN, "source": "computer"}]
+    assert report(api, box, lid, "done")["state"] == "done"
+    assert fetch(api, box)["credentials"] == [{"env": "OPENAI_API_KEY", "value": OWN, "source": "computer"}]
+
+
+def test_a_switch_to_a_subscription_with_a_lost_commit_keeps_the_key_it_runs_on(environment):
+    """A Switch to subscription (`to_subscription`) already `finishing` when the server upgrades: the commit's answer may
+    have been lost, or the install failed, and the runner kept or put back its key. The key stays given and handed
+    out, the job keeps running, and its verdict, either way, is taken without taking the key away."""
+    api = setup(environment)
+    boxes = [computer(api, name, source="shared") for name in ("Echo", "Foxtrot")]
+    with api.app.state.store.transaction() as c:
+        legacy(c)
+    team = store(api, "OPENAI_API_KEY", SHARED, name="Team OpenAI")
+    granted(api, team, "computers")
+    jobs = [login_job(api, box, "to_subscription", "finishing") for box in boxes]
+    with api.app.state.store.transaction() as c:
+        DROP.up(c)
+    assert given(api) == {(box["runner_id"], "codex"): ("Team OpenAI", team) for box in boxes}
+    with api.app.state.store.read() as c:
+        assert [c.execute("SELECT state FROM model_logins WHERE id=?", (lid,)).fetchone()[0] for lid in jobs] == [
+            "finishing"
+        ] * 2
+    for box, lid, verdict in zip(boxes, jobs, ("failed", "signed_in")):
+        assert report(api, box, lid, verdict)["state"] == verdict
+        assert fetch(api, box)["credentials"] == [{"env": "OPENAI_API_KEY", "value": SHARED, "source": "shared"}]
+    assert given(api) == {(box["runner_id"], "codex"): ("Team OpenAI", team) for box in boxes}
+
+
+def test_a_key_job_the_runner_never_took_is_canceled_and_its_key_deleted(environment):
+    """A key job still `requested` (no runner has taken it) is canceled, and the key staged for it, which nothing else
+    holds, leaves the vault. The key the computer runs on stays given."""
+    api = setup(environment)
+    box = computer(api, "Alpha", source="computer")
+    key = own_key(api, box, "codex", "OPENAI_API_KEY", OWN)
+    jobs = {kind: login_job(api, box, kind, "requested") for kind in ("to_key", "use_key")}
+    staged = {
+        kind: own_key(api, box, "codex", "OPENAI_API_KEY", f"sk-proj-{kind}-0123456789", "staged", lid)
+        for kind, lid in jobs.items()
+    }
+    with api.app.state.store.transaction() as c:
+        DROP.up(c)
+    assert given(api) == {(box["runner_id"], "codex"): ("OpenAI API · Alpha", key)}
+    assert fetch(api, box)["credentials"] == [{"env": "OPENAI_API_KEY", "value": OWN, "source": "computer"}]
+    with api.app.state.store.read() as c:
+        for cid in staged.values():
+            assert not c.execute("SELECT 1 FROM credentials WHERE id=?", (cid,)).fetchone()
+        assert {r["state"] for r in c.execute("SELECT state FROM model_logins")} == {"canceled"}
 
 
 def test_the_computer_key_routes_say_where_keys_are_changed_now(environment):
