@@ -1084,7 +1084,6 @@ pub(super) const HUB_READ_PATHS: &[&str] = &[
     "growth economics",
     "growth kpis",
     "growth numbers",
-    "growth setup",
     "growth source campaigns",
     "growth source list",
     "gtm show",
