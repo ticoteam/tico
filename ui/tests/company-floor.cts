@@ -39,6 +39,8 @@ const FLOOR = {factories: [
 // `idle` reports to the Product manager and holds no task: it is on the hall's chart all the same.
 const BOTS = ['pm', 'f1', 'f2', 'f3', 'f4', 'f5', 'b1', 'rm', 'em', 'fb', 'qa', 'idle', ...Array.from({length: 12}, (_, i) => `fx${i}`)]
   .map(id => ({id, slug: id, display_name: id.toUpperCase(), state: 'active', ...(id === 'idle' ? {reports_to: 'pm'} : {})}));
+// `ben` reports to Ana, a person, and holds no task; `cy` reports to her too but is hidden, so not on any chart.
+const PEOPLE = [{id: 'ana', name: 'Ana'}, {id: 'ben', name: 'Ben', reports_to: 'ana'}, {id: 'cy', name: 'Cy', reports_to: 'ana', hidden: true}];
 const TASKS = Array.from({length: 5}, (_, i) => ({id: `t${i}`, number: 200 + i, title: `Task ${i}`, status: 'open', stage_id: 'spec',
   pipeline_id: 'features', owner_id: 'bot:f1', stage_since: new Date(Date.now() - (i + 1) * 3600e3).toISOString(), turn: null,
   version: 1, snoozed: false, pushed_past: false, on_person: false, requester_id: null, assignee_id: null, due_at: null, late: null}));
@@ -75,7 +77,7 @@ const levels = (page: Page, sel: string) => page.locator(sel).evaluateAll(els =>
         if (p === '/api/v2/company/floor') { hub.reads.push(url); return hub.fail ? json({error: 'boom'}, 500) : json(hub.floor); }
         if (p === '/api/v2/tasks') { hub.reads.push(url); return json({tasks: TASKS, cursor: 'c1', next_offset: null}); }
         if (p === '/api/employees') return json(BOTS);
-        if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], org_groups: []});
+        if (p === '/api/humans') return json({people: PEOPLE, org_groups: []});
         if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true, config: {company_name: 'Acme Studio'}});
         return json(unrouted(p));
       });
@@ -263,6 +265,18 @@ const levels = (page: Page, sel: string) => page.locator(sel).evaluateAll(els =>
         await page.locator('#dash-grid .cf-host .cf-hall').first().waitFor();
         assert.equal(await page.locator('#main header.ph h1').innerText(), 'Company', old);
       }
+      assert.deepEqual(errors, []);
+      await close();
+    }
+    // A person reporting to a hall's manager, holding no work, is on the hall's roster as a bot reporting to it is; a hidden one is not.
+    {
+      const hub: Hub = {floor: {factories: [{id: 'f-studio', name: 'Studio', manager_id: 'human:ana', pipelines: []}]}, fail: false, reads: []};
+      const {page, errors, close} = await open(1440, 900, hub);
+      await page.locator('.cf-hall[data-cf-factory="f-studio"]').waitFor();
+      const hall = page.locator('.cf-hall[data-cf-factory="f-studio"]');
+      assert.equal(await hall.locator('.cf-org-top [data-cf-mate="human:ana"]').count(), 1);
+      assert.equal(await hall.locator('.cf-org-row .cf-mate').count(), 1, 'Ben, and not Cy');
+      assert.equal(await hall.locator('.cf-org-row .cf-mate').getAttribute('title'), 'Ben');
       assert.deepEqual(errors, []);
       await close();
     }
