@@ -244,7 +244,8 @@ const shot = async (page: Page, name: string, selector?: string) => {
     await ed.locator('#task-mi-edit').click();
     await dialog.locator('[data-pe-pf="goal"]').waitFor();
     const row_ = (si: number) => dialog.locator(`.pe-stage[data-pe-si="${si}"]`);
-    const sw = (si: number) => row_(si).locator('> summary [data-pe-sf="side"]');
+    // a closed row's Side is on the row; an open row's beside Name and Goal (the row has the stage's tools)
+    const sw = (si: number) => row_(si).locator('[data-pe-sf="side"]:visible');
     assert.equal(await sw(0).count(), 0, 'the first stage has no Side');
     assert.ok(await sw(1).isVisible());
     assert.equal(await sw(1).isChecked(), false);
@@ -269,6 +270,8 @@ const shot = async (page: Page, name: string, selector?: string) => {
     assert.equal(await row_(3).evaluate(d => (d as HTMLDetailsElement).open), false, 'the tap did not open the row');
     assert.ok(await row_(3).evaluate(d => d.classList.contains('side')));
     await row_(3).locator('> summary .pe-stage-name').click();
+    assert.equal(await row_(3).locator('> summary .pe-side').isVisible(), false, 'open, the row has its tools, not Side');
+    assert.equal(await sw(3).isChecked(), true, 'Side is beside Name and Goal');
     await row_(3).locator('[data-pe-phase="leave"]').waitFor();
     assert.equal(await row_(3).locator('[data-pe-sf="expected_n"]').count(), 0, 'no Late after');
     assert.equal(await row_(3).locator('[data-pe-sf="task_limit"]').count(), 0, 'no Limit');

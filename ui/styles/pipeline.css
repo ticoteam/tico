@@ -187,10 +187,12 @@
 .pe-tools{display:none;gap:2px}
 .pe-stage[open]>summary .pe-tools{display:inline-flex}
 /* A side stage's row (pipeline-editor.ts): indented under its stage, ↳ before its name in the quieter ink. Its Side
-   switch, on every row but the first, sits before the row's tools. */
+   switch, on every row but the first, is on the closed row; an open row has the stage's tools there instead, and the
+   switch is beside Name and Goal. */
 .pe-stage.side>summary{padding-left:calc(var(--s3) + 20px)}
 .pe-stage.side .pe-stage-name{color:var(--link-quiet);font-weight:500}
 .pe-side{flex:none;color:var(--muted)}
+.pe-stage[open]>summary .pe-side{display:none}
 /* one stage's editor: beside Name and Goal, on their controls' line */
 .pe-row>.pe-side{align-self:flex-end;min-height:var(--ctl)}
 /* One stage's editor: the stage's fields are the dialog's body, with no row around them (pipeline-editor.ts). */

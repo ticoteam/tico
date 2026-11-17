@@ -562,8 +562,9 @@ function peStageHTML(state: PeState, stage: PipelineStageRec, si: number, count:
   const inner = ro(peRow(peF('Name', `<input data-pe-sf="name" ${at} maxlength="80" value="${esc(stage.name)}" required autocomplete="off">`, 'name')
       // the stage's goal, stored as `purpose`
       + peF('Goal', `<input data-pe-sf="purpose" ${at} maxlength="300" value="${esc(stage.purpose)}" autocomplete="off">`)
-      // one stage's editor has no row: its Side is beside its Name and Goal
-      + (state.only && stage.id === state.only ? side : '')))
+      // beside its Name and Goal too: an open row's Side is here, its row holding the stage's tools (one stage's editor
+      // has no row at all)
+      + side))
     + phase('enter', '', peEnterHTML(state, stage, si, sid))
     // a side stage has no Late after: its rules only
     + phase('here', stage.side ? '' : peRow(`<div class="pe-f pe-f-time"><span>Late after</span><span class="pe-pair"><input type="number" min="1" step="1" inputmode="numeric" data-pe-sf="expected_n" ${at} value="${ex.n}" placeholder="Never" aria-label="Late after">`
@@ -702,7 +703,9 @@ function peInput(state: PeState, el: HTMLInputElement | HTMLSelectElement): void
       }
       state.rowOpen = '';
       peDraw(state);
-      document.querySelector<HTMLElement>(`#pe-body [data-pe-sf="side"][data-pe-si="${peIndex(el, 'peSi')}"]`)?.focus();
+      // the same switch again: the row's, or the one beside Name and Goal
+      const where = el.closest('summary') ? 'summary' : '.pe-stage-body';
+      document.querySelector<HTMLElement>(`#pe-body .pe-stage[data-pe-si="${peIndex(el, 'peSi')}"] > ${where} [data-pe-sf="side"]`)?.focus();
     }
     else if (sf === 'on_enter') { stage.on_enter = peOnEnter(value); peEnterSay(state, peIndex(el, 'peSi'), 'act'); }
     else if (sf === 'on_enter_kind') {
