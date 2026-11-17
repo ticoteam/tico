@@ -2,8 +2,10 @@
 
 Moved from clients/hubtools.py; clients/commands/__init__.py says how the table is put together."""
 
+import os
 from urllib.parse import quote
 from clients import s3links
+from clients.cli_spec import NULL, Arg, Command, Group
 
 from clients.commands._registry import tool
 from clients.commands._schemas import STATUSES, TASK_ID, _key, _s, _target
@@ -1045,3 +1047,331 @@ def task_comment_moderate(api, args):
     return api.post(
         f"tasks/{args['id']}/comments/{args['comment_id']}/moderate", {'action': args['action']}, key=_key(args)
     )
+
+
+def _call(client, name, fields, unwrapped=False):
+    """remotecli.call_tool: the tool with the request's operation id, sent only when HUB_OPERATION_ID is set. A write that
+    answers only `{"task": ...}` prints the task alone (remotecli.unwrap) when `unwrapped`."""
+    from clients import hubtools
+    from clients.remotecli import unwrap
+
+    key = os.environ.get("HUB_OPERATION_ID")
+    answer = hubtools.BY_NAME[name]["fn"](client, {**fields, "operation_id": key} if key else fields)
+    return unwrap(answer) if unwrapped else answer
+
+
+def _via(name):
+    """remotecli.via_tool for a write that answers `{"task": ...}` alone: the spec's arguments, the task printed."""
+
+    def run(client, fields):
+        return _call(client, name, fields, unwrapped=True)
+
+    return run
+
+
+def _show(client, fields, **_local):
+    """`tico task show ID ...`: one task, or several in one read (tico_task_show_many). `--json` is local: it shapes
+    what prints (remotecli), so it is taken here and never sent."""
+    from clients import hubtools
+
+    ids = fields["id"] if isinstance(fields["id"], list) else [fields["id"]]
+    if len(ids) > 1:
+        return hubtools.BY_NAME["tico_task_show_many"]["fn"](client, {"ids": ids})
+    return hubtools.task_show(client, {"id": ids[0]})
+
+
+def _label(client, fields):
+    """`tico task label`: --add and --remove take comma-separated lists, and both are always sent."""
+
+    def split(values):
+        return [x.strip() for one in values or [] for x in one.split(",") if x.strip()]
+
+    return _via("tico_task_label")(
+        client, {**fields, "add": split(fields.get("add")), "remove": split(fields.get("remove"))}
+    )
+
+
+def _link(client, fields):
+    """`tico task link`: the URL and title, `kind` session with --session, and the wake switch when it was given."""
+    sent = {"id": fields["id"], "url": fields["url"], "title": fields.get("title")}
+    if fields.get("kind"):
+        sent["kind"] = fields["kind"]
+    if fields.get("wake_once") is not None:  # --no-wake-once sends false, as the hand parser did
+        sent["wake_once"] = fields["wake_once"]
+    if fields.get("on_behalf_of"):
+        sent["on_behalf_of"] = fields["on_behalf_of"]
+    return _call(client, "tico_task_link", sent, unwrapped=True)
+
+
+# `tico task ...` (clients/cli_spec.py): the flags come from each tool's schema. A flag the schema does not name is left
+# out with `omit`. `-m` and `--why` (or `--note`) are one flag spelled twice. A write that answers `{"task": ...}` alone
+# prints the task (`_via`). The hand parser keeps the leaves clients/hubcli.py names: their arguments are not the tool's.
+TASK = (
+    Group("task", aliases=("tasks",)),
+    Command("task tree", "show nested subtasks", example="tico task tree T1"),
+    Command(
+        "task caps",
+        "the task caps: today's count per pair, the tasks closed before the receiver acted, and the changes bots asked for",
+        example="tico task caps",
+    ),
+    Group("task cap", "set a task cap: how many tasks sender may create for receiver a day"),
+    Command(
+        "task cap set",
+        "sender receiver --per-day N; 0 blocks the pair, and with no --per-day the cap is removed",
+        args=(Arg("per_day", "--per-day", default=NULL, required=False),),
+        example="tico task cap set bot:ana bot:ben --per-day 5",
+    ),
+    Command(
+        "task requesters",
+        "a task's requesters: internal contacts and counts, never tokens",
+        example="tico task requesters T1 --limit 5",
+    ),
+    Command(
+        "task requester-save",
+        "save a requester on a task: a person or organization, its contact details and a note",
+        args=(
+            Arg("important", "--important", action="store_const", const=True),
+            Arg("important", "--no-important", action="store_const", const=False),
+        ),
+        example="tico task requester-save T1 --name 'Ana Lopes' --email ana@example.com",
+    ),
+    Command("task requester-remove", "take a requester off a task", example="tico task requester-remove T1 R1"),
+    Command(
+        "task comment-moderate",
+        "hide, show again or delete a public comment on a task you manage",
+        example="tico task comment-moderate T1 C1 hide",
+    ),
+    Command(
+        "task comment-edit",
+        "change the text of a comment you wrote; it wakes nobody",
+        example="tico task comment-edit T1 C1 'Fixed wording'",
+        run=lambda client, f: _call(
+            client,
+            "tico_task_comment_edit",
+            {
+                "id": f["id"],
+                "comment_id": f["comment_id"],
+                "text": f["text"],
+                **({"ok": f["ok"]} if f.get("ok") else {}),
+            },
+        ),
+    ),
+    Command(
+        "task comment-delete",
+        "take back a comment you wrote",
+        example="tico task comment-delete T1 C1",
+        run=lambda client, f: _call(client, "tico_task_comment_delete", {"id": f["id"], "comment_id": f["comment_id"]}),
+    ),
+    Command(
+        "task delete",
+        "delete a task made by mistake: its requester or a mover, never a bot",
+        example="tico task delete T1",
+        run=lambda client, f: _call(client, "tico_task_delete", {"id": f["id"]}, unwrapped=True),
+    ),
+    Command(
+        "task deleted",
+        "deleted tasks you may restore, newest first",
+        example="tico task deleted",
+        run=lambda client, f: _call(client, "tico_task_deleted", {}),
+    ),
+    Command(
+        "task restore",
+        "put a deleted task back: whoever deleted it, its requester or a mover",
+        example="tico task restore T1",
+        run=lambda client, f: _call(client, "tico_task_restore", {"id": f["id"]}, unwrapped=True),
+    ),
+    Group("task readers", "who can see a private task: list, add, remove"),
+    Command("task readers list", "its requester, owner and readers", example="tico task readers list T1"),
+    Command(
+        "task readers add",
+        "let them see it: people, bots or group:<id>s",
+        args=(Arg("readers", action="store", nargs="+"),),
+        example="tico task readers add T1 human:ana",
+    ),
+    Command(
+        "task readers remove",
+        "take them off: they stop seeing it",
+        args=(Arg("readers", action="store", nargs="+"),),
+        example="tico task readers remove T1 human:ana",
+    ),
+    Command("task followers", "who follows a task, each at their level", example="tico task followers T1"),
+    Command(
+        "task follow",
+        "follow a task, or set your level",
+        args=(Arg("who", "--who"),),
+        omit=("unfollow",),
+        example="tico task follow T1 --level digest",
+    ),
+    Command(
+        "task unfollow",
+        "stop following a task",
+        tool="tico_task_follow",
+        fixed=(("unfollow", True),),
+        omit=("level",),
+        args=(Arg("who", "--who"),),
+        example="tico task unfollow T1",
+    ),
+    Command("task context", "readable page and meeting references for a task", example="tico task context T1"),
+    Command("task meetings", "meetings linked to a task", example="tico task meetings T1 --limit 5"),
+    Command(
+        "task list",
+        "the tasks you may see, newest first",
+        args=(
+            Arg("status", "--status", choices=("open", "done", "closed")),
+            Arg("snoozed", "--snoozed", choices=("only", "all")),
+        ),
+        example="tico task list --status open --limit 10",
+    ),
+    Command(
+        "task show",
+        "a task: its state, its asks and the next steps (--json for the whole record)",
+        args=(
+            Arg("id", nargs="+"),
+            Arg("json", "--json", action="store_true", local=True, help="print the whole task as JSON, not text"),
+        ),
+        example="tico task show T1",
+        run=_show,
+    ),
+    Command(
+        "task run",
+        "start a bot's task now, as the task",
+        example="tico task run T1",
+        run=lambda client, f: _call(client, "tico_task_run", {"id": f["id"]}, unwrapped=True),
+    ),
+    Command(
+        "task model",
+        "the model a bot-owned task's runs use; no model shows it",
+        args=(Arg("model", positional=True, nargs="?"),),
+        omit=("on_behalf_of",),
+        example="tico task model T1 gpt-6.1-sol --effort high",
+    ),
+    Command(
+        "task child",
+        "create a subtask",
+        tool="tico_task_child_create",
+        args=(
+            Arg("title", "--title"),
+            Arg("body", default=""),
+            Arg("check_model", "--check-model", nargs="?", const="auto", metavar="RUNTIME[:MODEL]"),
+            Arg("check_role", "--role"),
+        ),
+        example="tico task child T1 --title 'Check the copy'",
+    ),
+    Command(
+        "task snooze",
+        "snooze a task until a time, with why",
+        args=(Arg("why", "-m"), Arg("why", "--why")),
+        example="tico task snooze T1 --until 2026-12-01 -m 'waiting on the vendor'",
+        run=_via("tico_task_snooze"),
+    ),
+    Command(
+        "task unsnooze",
+        "a person brings a snoozed task back now; its owner is woken once",
+        args=(Arg("why", "-m"), Arg("why", "--why")),
+        example="tico task unsnooze T1",
+        run=_via("tico_task_unsnooze"),
+    ),
+    Command(
+        "task queue",
+        "queue again: put the PRs GitHub took out of the merge queue back in it",
+        example="tico task queue T1 --version 3",
+        run=_via("tico_task_queue"),
+    ),
+    Command(
+        "task release",
+        "cut the release a task in Release waits for, the way the repository makes one",
+        example="tico task release T1",
+        run=_via("tico_task_release"),
+    ),
+    Command(
+        "task unlink",
+        "take a link off a task: a PR closed without merging, by its URL or id",
+        example="tico task unlink T1 https://github.com/acme/app/pull/12",
+        run=_via("tico_task_unlink"),
+    ),
+    Command(
+        "task done",
+        "the work of this stage is finished; never pushes past what is missing",
+        args=(Arg("note", "-m"), Arg("note", "--note")),
+        example="tico task done T1 -m 'Shipped the fix'",
+        run=_via("tico_task_done"),
+    ),
+    Command(
+        "task move",
+        "move a task to another stage of its pipeline",
+        args=(Arg("why", "-m"), Arg("why", "--why")),
+        example="tico task move T1 review -m 'Ready for review'",
+        run=_via("tico_task_move"),
+    ),
+    Command(
+        "task close",
+        "close a task with why; its open sub-tasks close with it",
+        args=(Arg("why", "-m"), Arg("why", "--why")),
+        example="tico task close T1 -m 'Duplicate of T2'",
+        run=_via("tico_task_close"),
+    ),
+    Command(
+        "task reassign",
+        "give the task to another bot or person for this stage",
+        args=(Arg("why", "-m"), Arg("why", "--why")),
+        example="tico task reassign T1 bot:ana -m 'Ana has the data'",
+        run=_via("tico_task_reassign"),
+    ),
+    Command(
+        "task answer",
+        "answer what you are asked on a task: ok, no, again or your answer",
+        args=(Arg("note", "-m"), Arg("note", "--note")),
+        example="tico task answer T1 R1 ok",
+        run=_via("tico_task_answer"),
+    ),
+    Command(
+        "task file",
+        "file a task under a parent: it waits until that one ends",
+        args=(
+            Arg("parent", "--parent"),
+            Arg("labels", "--label", action="append"),
+            Arg("private", "--private", action="store_const", const=True),
+        ),
+        example="tico task file 'Write the summary' --parent T1",
+        run=_via("tico_task_file"),
+    ),
+    Command(
+        "task update",
+        "edit a task's fields: title, body, due, labels, privacy, goal; with --version",
+        args=(
+            Arg("note", "-m"),
+            Arg("note", "--note"),
+            Arg("labels", "--label", action="append"),
+            Arg("goal_id", "--goal"),
+            Arg("private", "--private", action="store_const", const=True),
+            Arg("private", "--company", action="store_const", const=False),
+        ),
+        omit=("human",),
+        example="tico task update T1 --title 'Launch the beta' --version 2",
+        run=_via("tico_task_update"),
+    ),
+    Command(
+        "task label",
+        "add or remove labels on a task",
+        args=(Arg("add", "--add", action="append"), Arg("remove", "--remove", action="append")),
+        example="tico task label T1 --add launch",
+        run=_label,
+    ),
+    Command(
+        "task after",
+        "this task merges after another: <id> <task>; Merge waits for it",
+        example="tico task after T1 T2",
+        run=_via("tico_task_after"),
+    ),
+    Command(
+        "task link",
+        "attach a link: the pull request you opened, an issue, a document, a session",
+        args=(
+            Arg("kind", "--session", action="store_const", const="session"),
+            Arg("wake_once", "--wake-once", action="store_const", const=True),
+            Arg("wake_once", "--no-wake-once", action="store_const", const=False),
+        ),
+        example="tico task link T1 https://github.com/acme/app/pull/12 --title 'Fix PR'",
+        run=_link,
+    ),
+)
