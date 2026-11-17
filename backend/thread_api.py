@@ -28,6 +28,7 @@ from . import (
     threads,
 )
 from .store import H, Problem
+from .api_contract import api_v2
 
 # How a person's message reaches the bot across a bot's Home or a DM with it (backend/delivery.py). Optional: with none
 # a post goes as it always has, into the bot's running turn.
@@ -490,7 +491,15 @@ def install(app, store, auth, mutate, rule_check):
         and the reviewer's send are the check)."""
         return _thread_message(threads.edit_message(c, threads.viewer(auth, bot), replay["message_id"], replay["text"]))
 
-    @app.get("/api/v2/threads")
+    @app.get(
+        "/api/v2/threads",
+        **api_v2(
+            "Threads",
+            "listThreads",
+            "The viewer's sidebar, threads and DMs they may read: needs attention, then unread, then recent, one page (`cursor`); a task's thread is listed only while it has unread for the viewer; a root's row sums its sub-threads for the viewer; with `with=<actor>`, only the threads that teammate is a member of",
+            "ThreadSidebar",
+        ),
+    )
     def sidebar(
         request: Request,
         cursor: str | None = None,
@@ -509,7 +518,15 @@ def install(app, store, auth, mutate, rule_check):
                 return _shared(c, v, with_actor, cursor=cursor, limit=limit)
             return threads.sidebar(c, v, cursor=cursor, limit=limit, sort=sort)
 
-    @app.get("/api/v2/threads/search")
+    @app.get(
+        "/api/v2/threads/search",
+        **api_v2(
+            "Threads",
+            "searchThreads",
+            "Messages whose text matches every word of `q`, newest first, only in threads and messages the viewer may read",
+            "ThreadSearch",
+        ),
+    )
     def search(request: Request, q: str = "", before: str | None = None, limit: int | None = None):
         """Messages whose text matches every word of `q`, newest first: only in threads and messages the viewer may
         read (C1, decided for each hit), so a hidden thread's hits and its existence never show."""
@@ -518,7 +535,15 @@ def install(app, store, auth, mutate, rule_check):
             v = threads.viewer(auth, request.state.identity)
             return threads.search(c, v, q, limit=limit or 20, before=before)
 
-    @app.get("/api/v2/threads/rail")
+    @app.get(
+        "/api/v2/threads/rail",
+        **api_v2(
+            "Threads",
+            "listThreadRail",
+            "The threads the viewer is in, by title: `pinned` (at most 200 a page) and `threads`, each going on through `next_cursor` until both are done; `catch_up`, `catch_up_ids`, `unread` (each chat Catch up counts that the rail does not list) and `dms` on the first page. Company, team and members threads and group DMs; never a 1:1 DM, a Home, a task's thread or a meeting",
+            "ThreadRail",
+        ),
+    )
     def rail(request: Request, cursor: str | None = None, limit: int | None = None):
         """The threads the viewer is in, by title: `pinned` (first page), then `threads`, paged. Never a 1:1 DM, a Home,
         a task's thread or a meeting. The first page also has Catch up's count and the unread in each one-teammate DM,
@@ -530,7 +555,15 @@ def install(app, store, auth, mutate, rule_check):
             page = thread_rail.rail(c, v, cursor=cursor, limit=limit if limit is not None else thread_rail.RAIL_LIMIT)
             return page if seq is None else {**page, "seq": seq}
 
-    @app.get("/api/v2/threads/browse")
+    @app.get(
+        "/api/v2/threads/browse",
+        **api_v2(
+            "Threads",
+            "browseThreads",
+            "Company and team threads the viewer may read and is not in, newest activity first; `q` matches the title. Following one puts it in the rail",
+            "ThreadBrowse",
+        ),
+    )
     def browse(request: Request, q: str | None = None, cursor: str | None = None, limit: int | None = None):
         """Company and team threads the viewer may read and is not in, newest activity first, `q` matching the title.
         Following one (PUT .../follow) puts it in the rail."""
@@ -538,7 +571,15 @@ def install(app, store, auth, mutate, rule_check):
         with store.read_transaction() as c:
             return thread_rail.browse(c, v, q=q, cursor=cursor, limit=limit)
 
-    @app.get("/api/v2/threads/match")
+    @app.get(
+        "/api/v2/threads/match",
+        **api_v2(
+            "Threads",
+            "matchThreads",
+            "New message: the open threads the viewer may read whose members, the viewer left out, are exactly the `actor` teammates (human:<id>, bot:<slug>, group:<id>), newest activity first, at most 5; `dm` is the viewer's open DM with the one person or bot named, or null",
+            "ThreadMatch",
+        ),
+    )
     def match(request: Request, actor: Annotated[list[str], Query()] = []):  # noqa: B006 (FastAPI reads the default)
         """New message: the open threads the viewer may read whose members, the viewer left out, are exactly these
         teammates (`actor` once each: human:<id>, bot:<slug>, group:<id>), newest activity first, at most 5; and `dm`,
@@ -547,7 +588,15 @@ def install(app, store, auth, mutate, rule_check):
         with store.read_transaction() as c:
             return _match(c, v, actor)
 
-    @app.get("/api/v2/threads/archived")
+    @app.get(
+        "/api/v2/threads/archived",
+        **api_v2(
+            "Threads",
+            "listArchivedThreads",
+            "The threads the viewer archived and may still manage, newest first: Browse threads' Archived view. Unarchive is PATCH with `archived` false. A deleted thread is not listed",
+            "ThreadBrowse",
+        ),
+    )
     def archived(request: Request, cursor: str | None = None, limit: int | None = None):
         """The threads the viewer archived and may still manage, newest first: Browse threads' Archived view. Unarchive is
         PATCH with `archived` false."""
@@ -555,7 +604,15 @@ def install(app, store, auth, mutate, rule_check):
         with store.read_transaction() as c:
             return thread_rail.archived(c, v, cursor=cursor, limit=limit)
 
-    @app.get("/api/v2/threads/catch-up")
+    @app.get(
+        "/api/v2/threads/catch-up",
+        **api_v2(
+            "Threads",
+            "listThreadCatchUp",
+            "Each thread with something new for the viewer and each open Needs attention item, mentions and asks first, then newest activity, with its new messages in tree order (20 at most, within the page's byte budget, each text cut at 4,000 characters with `clipped`; `more` counts the rest); `count` is the badge",
+            "ThreadCatchUp",
+        ),
+    )
     def catch_up(request: Request, cursor: str | None = None, limit: int | None = None):
         """Each thread with something new for the viewer, and each open Needs attention item, mentions first, with its
         new messages in tree order. `count` (at most 99) is the badge. POST .../read-all reads one."""
@@ -563,7 +620,15 @@ def install(app, store, auth, mutate, rule_check):
         with store.read_transaction() as c:
             return thread_rail.catch_up(c, v, cursor=cursor, limit=limit)
 
-    @app.get("/api/v2/threads/home/{actor}")
+    @app.get(
+        "/api/v2/threads/home/{actor}",
+        **api_v2(
+            "Threads",
+            "getThreadHome",
+            "A teammate's Home (`actor` in the path: bot:<slug>, human:<id> or group:<id>), made on first use; needs Read on that teammate, else the same 404 whether or not they exist",
+            "ThreadView",
+        ),
+    )
     def home_thread(request: Request, actor: str):
         """A teammate's Home (`actor` = bot:<slug>, human:<id> or group:<id>, in the path), made on first use. The viewer
         needs Read on that teammate; without it, or when the teammate does not exist, the answer is the same 404."""
@@ -584,7 +649,15 @@ def install(app, store, auth, mutate, rule_check):
             row = threads.home(c, _home_owner(actor))
             return threads.get(c, v, row["id"])
 
-    @app.get("/api/v2/threads/dm")
+    @app.get(
+        "/api/v2/threads/dm",
+        **api_v2(
+            "Threads",
+            "openThreadDm",
+            "My DM with `with`: the open one with exactly those two, or a new one; needs Write on them (the reply-back rule applies). `create=false` makes nothing and answers 404 `no_dm` when there is none yet",
+            "ThreadView",
+        ),
+    )
     def dm_thread(request: Request, peer: str = Query(..., alias="with"), create: bool = True):
         """My DM with `with`: the open one with exactly us two, or a new one. Only starting one needs Write on them (the
         reply-back rule applies): 404 when I cannot see them, 403 naming Write when I can see them but may not message
@@ -598,14 +671,30 @@ def install(app, store, auth, mutate, rule_check):
         with store.transaction() as c:
             return threads.dm(c, v, [peer])
 
-    @app.get("/api/v2/threads/{thread_id}")
+    @app.get(
+        "/api/v2/threads/{thread_id}",
+        **api_v2(
+            "Threads",
+            "getThread",
+            "A thread as the viewer sees it: its unread count, read mark, what they may do and its first page of members",
+            "ThreadView",
+        ),
+    )
     def get_thread(request: Request, thread_id: str):
         """The thread view, with its first page of members under `members` (the members route's shape, capped)."""
         v = threads.viewer(auth, request.state.identity)
         with store.read() as c:
             return {**threads.get(c, v, thread_id), "members": threads.members(c, v, thread_id, limit=50)}
 
-    @app.get("/api/v2/threads/{thread_id}/timeline")
+    @app.get(
+        "/api/v2/threads/{thread_id}/timeline",
+        **api_v2(
+            "Threads",
+            "getThreadTimeline",
+            "The thread in tree order, a page of its own messages at a time (`cursor` is the seq from next_cursor), each followed by its sub-thread's messages; a long branch has a `collapsed` row with the cursor that reads the rest. With `flat=1`: the thread and every open sub-thread under it the viewer reads, in time order, all at depth 0, paged the same way, with `read_marks`. Each message has `reply_to` and `routed`; the first page has `bot_status`",
+            "ThreadTimeline",
+        ),
+    )
     def timeline(
         request: Request,
         thread_id: str,
@@ -629,7 +718,15 @@ def install(app, store, auth, mutate, rule_check):
                 flat=bool(flat),
             )
 
-    @app.get("/api/v2/threads/{thread_id}/bot-status")
+    @app.get(
+        "/api/v2/threads/{thread_id}/bot-status",
+        **api_v2(
+            "Threads",
+            "getThreadBotStatus",
+            "The bots the thread's root waits on, at most 5, oldest wait first: `working` (its current step), `up_next` (finishing other work first) or `cant_reply` (what stops it, and `fix`)",
+            "ThreadBotStatus",
+        ),
+    )
     def bot_status(request: Request, thread_id: str):
         """The bots the thread's root waits on, and why (threads-contract §4.10): `{"bots": [...]}`, five at most,
         oldest wait first. 404 for a thread the viewer cannot read."""
@@ -643,7 +740,15 @@ def install(app, store, auth, mutate, rule_check):
                 root = threads.require(c, v, root["id"])
             return {"bots": thread_bot_status.status(c, v, root)}
 
-    @app.get("/api/v2/threads/{thread_id}/reach")
+    @app.get(
+        "/api/v2/threads/{thread_id}/reach",
+        **api_v2(
+            "Threads",
+            "getThreadReach",
+            "Who a message would reach, each with its mode, given `text` (its @mentions), `delivery` (steer when none), `defer_for` and `in_reply_to`; `outside` lists @mentions it would not reach, `adds_reader` a private task's new reader. Writes nothing",
+            "ThreadReach",
+        ),
+    )
     def reach_preview(
         request: Request,
         thread_id: str,
@@ -663,14 +768,25 @@ def install(app, store, auth, mutate, rule_check):
                 c, v, thread_id, text[:20000], way=delivery_, defer_for=defer_for, in_reply_to=target
             )
 
-    @app.get("/api/v2/threads/{thread_id}/members")
+    @app.get(
+        "/api/v2/threads/{thread_id}/members",
+        **api_v2("Threads", "listThreadMembers", "Who a thread is for, a page at a time", "ThreadMembers"),
+    )
     def members(request: Request, thread_id: str, cursor: str | None = None, limit: int | None = None):
         with store.read() as c:
             return threads.members(
                 c, threads.viewer(auth, request.state.identity), thread_id, cursor=cursor, limit=limit
             )
 
-    @app.post("/api/v2/threads")
+    @app.post(
+        "/api/v2/threads",
+        **api_v2(
+            "Threads",
+            "createThread",
+            "Start a thread (audience members unless asked otherwise); with `parent_message_id` it is a sub-thread; with `body` its first message is posted too; `pin_for_members` pins it for its starter and every person added. Only a DM with one teammate may have no title (422 `name_required` otherwise)",
+            "ThreadView",
+        ),
+    )
     def create_thread(request: Request, body: ThreadCreate):
         """A root thread (audience `members` unless asked otherwise) or, with `parent_message_id`, a sub-thread. With
         `body`, its first message is posted with it, and a held first message makes neither (core's post checks before
@@ -744,7 +860,31 @@ def install(app, store, auth, mutate, rule_check):
 
         return mutate(request, body, work)
 
-    @app.patch("/api/v2/threads/{thread_id}")
+    # Before PATCH: the API document lists a path's methods in the order they are registered.
+    @app.delete(
+        "/api/v2/threads/{thread_id}",
+        **api_v2(
+            "Threads",
+            "deleteThread",
+            "Delete a thread the viewer manages, when every message in it is deleted and no one else is in it; it leaves every list and reads as not found. Otherwise 409 `not_deletable` with the reason, and nothing is removed",
+            "ThreadDeleted",
+        ),
+    )
+    def delete_thread(request: Request, thread_id: str):
+        """Delete a thread whose messages are all deleted and that no one else is in. Refused with a plain reason (409)
+        otherwise. It leaves every list and reads as not found."""
+        who = request.state.identity
+        return mutate(request, Nothing(), lambda c: threads.delete(c, threads.viewer(auth, who), thread_id))
+
+    @app.patch(
+        "/api/v2/threads/{thread_id}",
+        **api_v2(
+            "Threads",
+            "updateThread",
+            "Rename, archive or unarchive a thread, change who it is for, set how many days a root keeps its messages (`retention_days`, null for good), or pin a root for everyone (`pinned_for_everyone`; never a 1:1 DM, a Home, a task's or a meeting's thread); its managers only",
+            "ThreadView",
+        ),
+    )
     def patch_thread(request: Request, thread_id: str, body: ThreadPatch):
         who = request.state.identity
 
@@ -762,7 +902,15 @@ def install(app, store, auth, mutate, rule_check):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/threads/{thread_id}/messages")
+    @app.post(
+        "/api/v2/threads/{thread_id}/messages",
+        **api_v2(
+            "Threads",
+            "postThreadMessage",
+            "Post a message in a thread, or in a sub-thread with `parent_message_id`; it passes the org rules first. `in_reply_to` answers a message of the same root's open subtree the poster reads (422 `reply_target_invalid` otherwise): the post stays in this thread, quoting it, and a bot replied to is woken",
+            "ThreadMessage",
+        ),
+    )
     def post_message(request: Request, thread_id: str, body: ThreadPost):
         """A message in the thread (in its sub-thread with `parent_message_id`). A person's or a bot's message passes the
         org-rule check first, outside the write; a held one writes nothing but its hold."""
@@ -798,7 +946,15 @@ def install(app, store, auth, mutate, rule_check):
 
         return mutate(request, body, work)
 
-    @app.patch("/api/v2/messages/{message_id}")
+    @app.patch(
+        "/api/v2/messages/{message_id}",
+        **api_v2(
+            "Threads",
+            "editMessage",
+            "Edit one's own message in a thread; the search index and the timeline follow",
+            "ThreadMessage",
+        ),
+    )
     def edit_message(request: Request, message_id: str, body: MessagePatch):
         """An edit of one's own message. Its new text is checked as `threads_edit` in the message's thread; a held edit
         changes nothing and Send anyway makes it."""
@@ -852,18 +1008,37 @@ def install(app, store, auth, mutate, rule_check):
 
         return mutate(request, body, work)
 
-    @app.delete("/api/v2/messages/{message_id}")
+    @app.delete(
+        "/api/v2/messages/{message_id}",
+        **api_v2("Threads", "deleteMessage", "Delete one's own message in a thread", "ThreadMessageDeleted"),
+    )
     def delete_message(request: Request, message_id: str):
         who = request.state.identity
         return mutate(request, Nothing(), lambda c: threads.delete_message(c, threads.viewer(auth, who), message_id))
 
-    @app.post("/api/v2/threads/{thread_id}/read")
+    @app.post(
+        "/api/v2/threads/{thread_id}/read",
+        **api_v2(
+            "Threads",
+            "markThreadRead",
+            "Read up to `seq` in the thread; the highest mark wins, so a device that is ahead keeps its place",
+            "ThreadRead",
+        ),
+    )
     def read(request: Request, thread_id: str, body: ReadMark):
         """The viewer has read up to `seq` here. Max wins, so another device that is ahead keeps its mark."""
         who = request.state.identity
         return mutate(request, body, lambda c: threads.mark_read(c, threads.viewer(auth, who), thread_id, body.seq))
 
-    @app.post("/api/v2/threads/{thread_id}/read-all")
+    @app.post(
+        "/api/v2/threads/{thread_id}/read-all",
+        **api_v2(
+            "Threads",
+            "markThreadAndSubthreadsRead",
+            "Read up to now in the thread and every sub-thread under it",
+            "ThreadReadAll",
+        ),
+    )
     def read_all(request: Request, thread_id: str, body: ReadAll | None = None):
         """Read up to now in the thread and every sub-thread under it (`ago_ms`: up to that long ago)."""
         who = request.state.identity
@@ -872,7 +1047,15 @@ def install(app, store, auth, mutate, rule_check):
             request, body, lambda c: threads.mark_all_read(c, threads.viewer(auth, who), thread_id, ago_ms=body.ago_ms)
         )
 
-    @app.post("/api/v2/threads/{thread_id}/members")
+    @app.post(
+        "/api/v2/threads/{thread_id}/members",
+        **api_v2(
+            "Threads",
+            "addThreadMember",
+            "Add a member to a thread (its managers); the new member reads up to now, so the backfill is not unread",
+            "ThreadMemberChange",
+        ),
+    )
     def add_member(request: Request, thread_id: str, body: MemberAdd):
         who = request.state.identity
 
@@ -882,7 +1065,10 @@ def install(app, store, auth, mutate, rule_check):
 
         return mutate(request, body, work)
 
-    @app.delete("/api/v2/threads/{thread_id}/members/{actor:path}")
+    @app.delete(
+        "/api/v2/threads/{thread_id}/members/{actor:path}",
+        **api_v2("Threads", "removeThreadMember", "Remove a member from a thread (its managers)", "ThreadMemberChange"),
+    )
     def remove_member(request: Request, thread_id: str, actor: str):
         who = request.state.identity
 
@@ -892,38 +1078,66 @@ def install(app, store, auth, mutate, rule_check):
 
         return mutate(request, Nothing(), work)
 
-    @app.put("/api/v2/threads/{thread_id}/follow")
+    @app.put(
+        "/api/v2/threads/{thread_id}/follow",
+        **api_v2(
+            "Threads",
+            "followThread",
+            "Follow a thread so its messages reach the viewer (`notify`: live or digest)",
+            "ThreadFollow",
+        ),
+    )
     def follow(request: Request, thread_id: str, body: Follow):
         who = request.state.identity
         return mutate(
             request, body, lambda c: threads.follow(c, threads.viewer(auth, who), thread_id, notify=body.notify)
         )
 
-    @app.put("/api/v2/threads/{thread_id}/pin")
+    @app.put(
+        "/api/v2/threads/{thread_id}/pin",
+        **api_v2(
+            "Threads",
+            "pinThread",
+            "Pin a root thread for me; reading it is enough (404 otherwise, 422 for a sub-thread)",
+            "ThreadView",
+        ),
+    )
     def pin(request: Request, thread_id: str):
         """Pin a root thread for me. Reading it is enough. The answer is the thread view."""
         who = request.state.identity
         return mutate(request, Nothing(), lambda c: thread_rail.pin(c, threads.viewer(auth, who), thread_id))
 
-    @app.delete("/api/v2/threads/{thread_id}/pin")
+    @app.delete(
+        "/api/v2/threads/{thread_id}/pin",
+        **api_v2(
+            "Threads",
+            "unpinThread",
+            "Unpin a root thread for me, a pin for everyone included (for me alone)",
+            "ThreadView",
+        ),
+    )
     def unpin(request: Request, thread_id: str):
         """Unpin a root thread for me, over a pin for everyone too. The answer is the thread view."""
         who = request.state.identity
         return mutate(request, Nothing(), lambda c: thread_rail.unpin(c, threads.viewer(auth, who), thread_id))
 
-    @app.delete("/api/v2/threads/{thread_id}")
-    def delete_thread(request: Request, thread_id: str):
-        """Delete a thread whose messages are all deleted and that no one else is in. Refused with a plain reason (409)
-        otherwise. It leaves every list and reads as not found."""
-        who = request.state.identity
-        return mutate(request, Nothing(), lambda c: threads.delete(c, threads.viewer(auth, who), thread_id))
-
-    @app.delete("/api/v2/threads/{thread_id}/follow")
+    @app.delete(
+        "/api/v2/threads/{thread_id}/follow",
+        **api_v2("Threads", "unfollowThread", "Stop following a thread", "ThreadFollow"),
+    )
     def unfollow(request: Request, thread_id: str):
         who = request.state.identity
         return mutate(request, Nothing(), lambda c: threads.unfollow(c, threads.viewer(auth, who), thread_id))
 
-    @app.post("/api/v2/threads/dm")
+    @app.post(
+        "/api/v2/threads/dm",
+        **api_v2(
+            "Threads",
+            "createThreadDm",
+            "A DM with these teammates (`members`), the open one or a new one, with an optional first message (`body`); needs Write on each of them, and a bot's or person's first message passes the org rules. A new one with two or more others needs a `title` (422 `name_required`)",
+            "ThreadView",
+        ),
+    )
     def dm_group(request: Request, body: DmCreate):
         """A DM with these teammates: the open one with exactly these people, or a new one, with the first message when
         `body` is given. Starting one needs Write on each of them (the reply-back rule applies), as adding them to a
@@ -973,19 +1187,43 @@ def install(app, store, auth, mutate, rule_check):
 
         return mutate(request, body, work)
 
-    @app.put("/api/v2/messages/{message_id}/reactions/{emoji}")
+    @app.put(
+        "/api/v2/messages/{message_id}/reactions/{emoji}",
+        **api_v2(
+            "Threads",
+            "reactToMessage",
+            "Add my reaction to a message I read (the same emoji twice is one); answers the message's reactions",
+            "ThreadReactions",
+        ),
+    )
     def react(request: Request, message_id: str, emoji: str):
         """My reaction on a message I read (the same emoji twice is one). Answers the message's reactions."""
         who = request.state.identity
         return mutate(request, Nothing(), lambda c: threads.react(c, threads.viewer(auth, who), message_id, emoji))
 
-    @app.delete("/api/v2/messages/{message_id}/reactions/{emoji}")
+    @app.delete(
+        "/api/v2/messages/{message_id}/reactions/{emoji}",
+        **api_v2(
+            "Threads",
+            "unreactToMessage",
+            "Remove my reaction from a message (a no-op without one); answers the message's reactions",
+            "ThreadReactions",
+        ),
+    )
     def unreact(request: Request, message_id: str, emoji: str):
         """Removes my reaction (a no-op without one). Answers the message's reactions."""
         who = request.state.identity
         return mutate(request, Nothing(), lambda c: threads.unreact(c, threads.viewer(auth, who), message_id, emoji))
 
-    @app.post("/api/v2/threads/{thread_id}/open-earlier")
+    @app.post(
+        "/api/v2/threads/{thread_id}/open-earlier",
+        **api_v2(
+            "Threads",
+            "openEarlierMessages",
+            "A manager of a bot opens its Home's earlier shared-room messages to the Home's readers; a bot's Home only (422 otherwise), managers only (403)",
+            "ThreadEarlier",
+        ),
+    )
     def open_earlier(request: Request, thread_id: str):
         """A manager of a bot opens its Home's earlier shared-room messages to the Home's readers. Only a bot's Home has
         them (422 otherwise); a viewer who may not manage the bot gets 403 from the service."""
@@ -1001,7 +1239,16 @@ def install(app, store, auth, mutate, rule_check):
 
         return mutate(request, Nothing(), work)
 
-    @app.post("/api/v2/uploads/threads/{thread_id}/messages", openapi_extra=upload_contract(ThreadUpload))
+    @app.post(
+        "/api/v2/uploads/threads/{thread_id}/messages",
+        **api_v2(
+            "Threads",
+            "uploadThreadMessage",
+            "A person's message with files in a thread (multipart: text, titles and the files, and `in_reply_to` as a post takes it); each file is linked to the message, under the chat upload limit",
+            "ThreadUploaded",
+            openapi_extra=upload_contract(ThreadUpload),
+        ),
+    )
     async def thread_upload(request: Request, thread_id: str):
         """A person's message with files in a thread, stored as a chat's files are: each one linked to the message, under
         the same upload limit. Who may post is checked and the rule check runs before any byte is stored."""

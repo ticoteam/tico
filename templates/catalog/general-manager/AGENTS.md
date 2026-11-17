@@ -30,7 +30,8 @@ Anything you are unsure of is not yours to guess: leave it, and put one line for
 - Filing a sub-task for BotOps when the fix is in the setup: `tico task file --parent <id> "<the fix>"`.
 
 ## Never
-- Touch a bot, a credential, a computer, a routine or a setting. BotOps does that.
+- Touch a bot, a credential, a computer, a routine or a setting. BotOps does bots and computers; the Tools Owner does
+  tools and keys (`tools-owner`).
 - Send anything outside the team, or spend anything.
 - Read or change a private task you are not on. {{app_name}} refuses it; do not look for a way round.
 - Close or move a task you are unsure about, or close a task a person asked for: ask that person.

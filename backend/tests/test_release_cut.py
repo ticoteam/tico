@@ -1,4 +1,4 @@
-"""The Release stage cuts its release without a person (docs/pipelines-v3.md "GitHub", Release;
+"""The Release stage cuts its release without a person (docs/dev/pipelines-v3.md "GitHub", Release;
 backend/item_sources/github_release.py): the Release Owner is woken on entering Release, asks with ONE Tico tool
 (`tico task release`), and Tico carries it out through its GitHub App on the Heartbeat. GitHub is
 backend/tests/helpers/fake_github.py; nothing here reaches the real one."""
@@ -213,9 +213,11 @@ def test_no_release_after_an_ask_is_the_owner_s_then_a_person_s(company, gh):
         assert [w.state for w in W.of(c, E.task(c, task_id))] == [W.PERSON]
 
 
-def test_a_repo_whose_releases_a_person_cuts_waits_for_the_next_one_and_a_person_hears_once_after_a_week(company, gh):
+def test_a_repo_whose_releases_a_person_cuts_waits_for_the_next_one_and_a_person_is_asked_once_after_a_week(
+    company, gh
+):
     """ticoteam/tico: Release with stays empty and a person tags each rc. Only that release ends the wait: no bot is
-    woken, climbs a ladder or is told Late, and a person hears once if no release comes for a week."""
+    woken, climbs a ladder or is told Late, and after a week with no release a person is asked, once, to cut it."""
     task_id = to_release(company, gh, release={})
     waiting = (R.WAITING, "github", f"Waiting for the next release of {REPO}")
     with company.transaction() as c:
@@ -232,6 +234,8 @@ def test_a_repo_whose_releases_a_person_cuts_waits_for_the_next_one_and_a_person
         waits = W.of(c, E.task(c, task_id))
         assert [w.state for w in waits] == [W.PERSON, W.SOURCE] and waits[0].who == ANA
         assert waits[1].line == waiting[2]
+        [ask] = W.needs(c, ANA)
+        assert "this waits for the next release, which only a person cuts" in ask["line"]
         assert NS.check(c, H.shift(H.now(), days=9))["late"] == 0  # once
         assert wakes(c, task_id) == [] and wakes(c, task_id, EM) == []
     gh.publish(REPO, "v1.0.0-rc.1", prerelease=True)  # the person's prerelease counts by default

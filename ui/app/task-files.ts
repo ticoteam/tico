@@ -96,7 +96,7 @@ function tfPicture(v: TfVersion, kind: TfKind): string | null {
     || (kind === 'image' && Number(v.size || 0) <= TF_INLINE_IMAGE ? v.url : null) || null;
 }
 // GET /v2/tasks/{id}/files answers {files: [{id, name, mime, current_version, archived, versions: [newest first]}]}.
-// An older server has no such route: the task's attachments are its files, each at version 1.
+// Before the files read lands, or when it fails, the task's attachments are its files, each at version 1.
 function tfFromAttachments(list: TfAttachment[] | null | undefined): TfFile[] {
   return (list || []).map(a => ({id: a.id, name: a.name || 'file', mime: a.content_type || a.mime || '', current_version: 1, archived: false,
     versions: [{n: 1, size: a.size, mime: a.content_type || a.mime || '', created_at: a.created_at || null, by: null, comment_id: null, note: null,
@@ -478,7 +478,7 @@ document.addEventListener('click', ev => {
 // ---- questions. An ask: {questions: [{id, header, question, options: [{label, description, file}], multi, other}],
 // who}. On a comment it is that comment's (an 'ask' message, its refs.questions); on a file version it is the
 // version's. It shows the question, its choices and the answers given; a person answers in the thread, and a bot that
-// needs an answer to go on asks on the task (docs/pipelines-v3.md: the ask screen), so there are no controls here.
+// needs an answer to go on asks on the task (docs/dev/pipelines-v3.md: the ask screen), so there are no controls here.
 function askOf(m: TfMessage | null | undefined): TfAsk | null {
   if (!m) throw new Error('The question has no message');
   if (m.ask?.questions) return m.ask;

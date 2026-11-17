@@ -1,39 +1,33 @@
 """The one migration authority for the hub database.
 
+A database starts from the baseline, `baseline.sql` here: every table, index, view and trigger a new database had when
+it was written, the rows that schema holds, and a schema_migrations row for each migration file it already contains.
+A new file (no tables) loads it in one transaction; then `apply` runs each migration file the database has not
+recorded, in version order. scripts/schema_baseline.py writes the baseline, and only when the compatibility floor moves.
+
 A schema change that persists is a file in this directory: `YYYYMMDDHHMMSS_name.sql` (its statements, UTC) or `.py`
-(a module whose `up(conn)` makes the change, without committing). `apply` runs each file the database has not recorded,
-in order. Each one runs in its own transaction together with its `schema_migrations` row, so a failure leaves neither
-behind and the next start tries it again. An applied file is never edited: its checksum is recorded, and a start refuses
-a database whose recorded checksum no longer matches its file.
+(a module whose `up(conn)` makes the change, without committing). Each one runs in its own transaction together with
+its `schema_migrations` row, so a failure leaves neither behind and the next start tries it again. An applied file is
+never edited: its checksum is recorded, and a start refuses a database whose recorded checksum no longer matches its
+file. Create one with `python3 scripts/new_migration.py name` (add `--py` for `up(conn)`). Every pending file runs, even
+if a newer version has already run. A migration must not depend on another unmerged migration's schema: each stands
+alone, so parallel PRs may merge in either order. CI requires new files to use unique UTC timestamps.
 
-Create one with `python3 scripts/new_migration.py name` (add `--py` for `up(conn)`). Existing `NNNN_name` files keep
-their names and checksums. Versions sort as full strings, with legacy files before timestamp files. Every pending file
-runs, even if a newer version has already run. A migration must not depend on another unmerged migration's schema:
-each stands alone, so parallel PRs may merge in either order. CI requires new files to use unique UTC timestamps.
-
-`hubdb.migrate` (every hubdb.connect) calls `apply` right after hubdb's numbered steps and before its own startup schema
-code and the module schema code in `Store.initialize` (the SCHEMA scripts, ensure_schema and add_column calls), so a
-rename or move lands before code that uses the new names. On a new file a
-module's tables do not exist yet when the migrations run: a migration that touches one skips it when it is absent, and
-the module's CREATE then makes the new shape.
+The compatibility floor is v0.6.0-rc.1: the oldest database this code opens is one that release made or upgraded,
+which has the newest migration file that release shipped recorded. Those files are gone (`retired.txt` lists them):
+such a database recorded them, a new one has their changes in the baseline, and neither runs them again. A database below
+the floor (Tico 0.5 and older, or a file this Tico did not make) is refused before anything is written to it.
 
 A `.py` migration that rebuilds a table may set `FOREIGN_KEYS_OFF = True`. Foreign keys can only be switched off
 outside a transaction, so the runner turns them off before BEGIN, runs `PRAGMA foreign_key_check` before COMMIT and
 rolls back when the migration left a broken reference the database did not already have, then restores the setting.
 
-The histories a database already has are recorded as applied, not replayed, once, when the file first gets
-`schema_migrations`: `legacy_user_version_<N>` for hubdb's `PRAGMA user_version` steps and `legacy_cloud_<N>` for the
-cloud steps in `Store.initialize`. Those steps still run where they always did, guarded by their own markers, and
-nothing here runs them again. After hubdb's last step (user_version 71, `MIN_BRIDGE_USER_VERSION`) and the last cloud
-step (`CLOUD_VERSION`) neither list grows: every persistent change is a file here.
-
-`preflight` runs before anything writes to a database. It refuses a file newer than this code, a recorded migration this
-code does not know or whose file has changed, and a file below `MIN_BRIDGE_USER_VERSION`, which a release that writes that
-version must open first. `Store.initialize(adopt_legacy=True)`, the legacy import (manage.migrate_legacy), skips only that
-last refusal. A database made by Tico 0.5 (`refuse_old_tasks`) is also refused by `hubdb.migrate`, on every connection,
-before its first migration.
+`preflight` runs before anything writes to a database. It refuses a file below the floor, a recorded migration this
+code does not know (a newer Tico wrote it) and one whose file has changed. `apply` refuses the same on every
+connection, before its first write.
 """
 
+import functools
 import hashlib
 import importlib.util
 import re
@@ -47,53 +41,23 @@ from pathlib import Path
 from .. import hubdb as H
 
 DIRECTORY = Path(__file__).parent
-# The oldest user_version this server opens. Below it the schema is one this code's migrations do not bring up to date.
-MIN_BRIDGE_USER_VERSION = 71
-# The newest user_version a release wrote before hubdb's list ended at 71: steps 72, 73 and 74 are now 0030_growth_segments,
-# 0033_company_page and 0035_growth_rethink, guarded for a file that already ran them. This server opens such a file as
-# it is; the number never grows.
-NEWEST_USER_VERSION = 74
-# The newest cloud_migrations version Store.initialize writes; tests/test_migrations.py keeps it in step with store.py.
-# Steps 76 and 77 came from releases made while this cleanup was open; they use today's names and run after the files.
-CLOUD_VERSION = 77
-# A legacy row has no file to hash, so its checksum says so.
+BASELINE = "baseline.sql"
+RETIRED_LIST = "retired.txt"
+# Older releases recorded their pre-file history as `legacy_user_version_<N>` and `legacy_cloud_<N>` rows with this
+# checksum. They name steps every database at the floor ran; nothing reads them.
 LEGACY = "legacy"
 TABLE = (
     "CREATE TABLE IF NOT EXISTS schema_migrations(version TEXT PRIMARY KEY, checksum TEXT NOT NULL, "
     "applied_at TEXT NOT NULL)"
 )
-NAME = re.compile(r"(\d{4}|\d{14})_[a-z0-9_]+\.(sql|py)")
-LEGACY_USER = re.compile(r"legacy_user_version_(\d+)")
-LEGACY_CLOUD = re.compile(r"legacy_cloud_(\d+)")
-# The Pipelines v3 cut-over. A database that has tasks and has not had it was made by Tico 0.5: this release does not
-# open it (preflight), so nothing in it is changed and it still runs on 0.5.
-CUTOVER = "20261110054000_pipelines_v3_cutover"
-OLD_TASKS = (
-    "This database has tasks from Tico 0.5. Tico 0.6 does not carry tasks over: every company starts on a new "
-    "database. Nothing was changed. Run Tico 0.5 on this database, or set up a new company on 0.6."
+NAME = re.compile(r"(\d{14})_[a-z0-9_]+\.(sql|py)")
+# Tables a database may hold before Tico first writes to it: SQLite's own and Litestream's.
+NOT_TICO = re.compile(r"sqlite_|_litestream_")
+BELOW_FLOOR = (
+    "This database was made by a Tico older than 0.6.0, or not by Tico. Tico 0.6 does not carry tasks over: every "
+    "company starts on a new database. Nothing was changed. Run the release that made it on this database, or set up "
+    "a new company on 0.6."
 )
-# A shipped file whose work no longer applies. It is recorded as applied, with its checksum, and never imported or
-# run: each imports a module that is gone. Its file may be emptied to a stub, so a database that ran the old body is
-# not held to its checksum (_verify).
-# - resend_system_asks imported ask_routing; 20261106131713_asks_to_question_tasks moved every open ask.
-# - blocked_reason_recompute (task_holds) and factory_output_stage (pipeline_setup) worked on the old task engine's
-#   tables, which the Pipelines v3 cut-over deletes; their files are stubs now.
-SUPERSEDED = {
-    "20261105034511_resend_system_asks",
-    "20261107140000_blocked_reason_recompute",
-    "20261107210000_factory_output_stage",
-}
-# A shipped file from before the directory rename reads the market graph's old names (0030_growth_segments reads
-# market_entities and market_edges). A replay of it on a file the rename already moved, as when a database without
-# schema_migrations is adopted, sees those names as temporary views over the new tables for that one run.
-DIRECTORY_RENAME = "20261108011017_directory_core"
-OLD_NAME_VIEWS = {
-    "market_entities": "SELECT id, type, name, status, properties FROM main.entities",
-    "market_edges": (
-        "SELECT id, from_entity_id AS src, link_key AS rel, to_entity_id AS dst, valid_from_on, valid_until_on "
-        "FROM main.entity_links"
-    ),
-}
 
 
 class MigrationError(RuntimeError):
@@ -124,16 +88,13 @@ def _migration(path):
 
 
 def files(directory=None):
-    """The migration files in full string version order. Digit-led names use NNNN_ or YYYYMMDDHHMMSS_ and .sql/.py.
+    """The migration files in full string version order. Digit-led names use YYYYMMDDHHMMSS_ and .sql/.py.
     A name that does not match is an error, not skipped. Only digit-led names are listed, so this module does not
     read every tracked file (a bare "*" listing makes the dependency map treat any change as its input)."""
     found = []
     for path in Path(directory or DIRECTORY).glob("[0-9]*"):
         if not NAME.fullmatch(path.name):
-            raise MigrationError(
-                f"{path.name} is not a migration name: use YYYYMMDDHHMMSS_name.sql or .py "
-                "(NNNN_name.sql or .py for existing legacy files)"
-            )
+            raise MigrationError(f"{path.name} is not a migration name: use YYYYMMDDHHMMSS_name.sql or .py")
         found.append(_migration(path))
     found.sort(key=lambda migration: migration.version)
     numbers = [migration.version.split("_", 1)[0] for migration in found]
@@ -165,32 +126,57 @@ def _module(migration):
     return module
 
 
-def _legacy_known(version):
-    """A legacy row is known when it names a version this code reaches, not a newer one."""
-    user, cloud = LEGACY_USER.fullmatch(version), LEGACY_CLOUD.fullmatch(version)
-    if user:
-        return int(user.group(1)) <= NEWEST_USER_VERSION
-    if cloud:
-        return int(cloud.group(1)) <= CLOUD_VERSION
-    return False
+@functools.cache
+def _retired(path):
+    if not path.is_file():
+        return frozenset()
+    lines = path.read_text(encoding="utf-8").splitlines()
+    return frozenset(line.strip() for line in lines if line.strip() and not line.startswith("#"))
 
 
-def _verify(recorded, known):
+def retired(directory=None):
+    """The versions of the files the floor retired: recorded on a database at the floor, never run again. The newest
+    of them is the floor itself."""
+    return _retired(Path(directory or DIRECTORY) / RETIRED_LIST)
+
+
+def _verify(recorded, known, gone):
     """Refuse a recorded version this code does not know, and a file whose checksum changed after it was applied."""
     by_version = {migration.version: migration for migration in known}
     for version, checksum in recorded:
         if version in by_version:
             current = by_version[version].checksum
-            if checksum != current and version not in SUPERSEDED:  # a retired file never runs: its bytes are moot
+            if checksum != current:
                 raise MigrationError(
                     f"Migration {version} was applied to this database with checksum {checksum[:12]}, but its file now "
                     f"has {current[:12]}. An applied migration is never edited: make the change in a new file."
                 )
-        elif not (checksum == LEGACY and _legacy_known(version)):
+        elif version not in gone and not (checksum == LEGACY and version.startswith("legacy_")):
             raise MigrationError(
                 f"This database has schema migration {version}, which this code does not know. It was written by a "
                 "newer Tico: run that release, or restore a backup taken before it."
             )
+
+
+def _tables(conn):
+    return {
+        row[0]
+        for row in conn.execute("SELECT name FROM main.sqlite_master WHERE type='table'")
+        if not NOT_TICO.match(row[0])
+    }
+
+
+def _at_floor(conn, tables, directory=None):
+    """Refuse a database below the floor: it has tables, but not the floor's migration. A directory that retired no
+    files has no floor."""
+    gone = retired(directory)
+    if not gone:
+        return
+    if (
+        "schema_migrations" not in tables
+        or not conn.execute("SELECT 1 FROM schema_migrations WHERE version=?", (max(gone),)).fetchone()
+    ):
+        raise MigrationError(BELOW_FLOOR)
 
 
 @contextmanager
@@ -220,101 +206,56 @@ def read_only(path):
                 yield conn
 
 
-def preflight(path, *, adopt_legacy=False, directory=None):
+def preflight(path, *, directory=None):
     """Refuse a database this code must not open, before anything writes to it. A missing or empty file is new."""
     path = Path(path)
     if not path.is_file() or path.stat().st_size == 0:
         return
     with read_only(path) as conn:
-        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        tables = _tables(conn)
         if not tables:
             return
-        version = conn.execute("PRAGMA user_version").fetchone()[0]
-        known = files(directory)
-        if "schema_migrations" in tables:
-            _verify(conn.execute("SELECT version, checksum FROM schema_migrations").fetchall(), known)
-        if version > NEWEST_USER_VERSION:
-            raise MigrationError(
-                f"This database is at schema version {version}, newer than this code "
-                f"({NEWEST_USER_VERSION}). Run a newer Tico."
-            )
-        if version < MIN_BRIDGE_USER_VERSION and not adopt_legacy:
-            if version == 0 and not {"cloud_migrations", "schema_migrations"} & tables:
-                # No Tico history: a new file that some module touched first (hubdb.connect builds it), or one this
-                # Tico did not make, which hubdb refuses by name.
-                H._refuse_foreign(conn)
-                return
-            raise MigrationError(
-                f"This database is at schema version {version}, below {MIN_BRIDGE_USER_VERSION}, the oldest this server "
-                f"upgrades. Start it once with Tico v0.5.x (the release that writes version {MIN_BRIDGE_USER_VERSION}), "
-                "then upgrade to this release."
-            )
-        if any(migration.version == CUTOVER for migration in known):
-            refuse_old_tasks(conn)
+        _at_floor(conn, tables, directory)
+        recorded = conn.execute("SELECT version, checksum FROM schema_migrations").fetchall()
+        _verify(recorded, files(directory), retired(directory))
 
 
-def refuse_old_tasks(conn):
-    """Refuse a database made by Tico 0.5: it has tasks and has not had the cut-over. `preflight` runs this on a file
-    before the store starts, and `hubdb.migrate` on every connection before its first migration, so a 0.5 database is
-    never written to, whichever way it is opened."""
-    tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    if "tasks" not in tables:
+@functools.cache
+def _baseline(path):
+    """The baseline's statements, one by one: they run inside a transaction the loader holds, which executescript
+    would commit first."""
+    if not path.is_file():
+        return None
+    out, buffer = [], ""
+    for line in path.read_text(encoding="utf-8").splitlines(keepends=True):
+        buffer += line
+        if sqlite3.complete_statement(buffer):
+            out.append(buffer)
+            buffer = ""
+    if buffer.strip():
+        raise MigrationError(f"{path.name} ends inside a statement")
+    return tuple(out)
+
+
+def _load_baseline(conn, directory=None):
+    """A new file takes the baseline in one transaction: a failure leaves it empty. The write lock comes first and the
+    file is looked at again under it, so of two starts that both found it empty (two processes, or a request beside the
+    start) one loads the baseline and the other finds it loaded. Rows go in before the triggers, so none fires; foreign
+    keys are checked at COMMIT."""
+    script = _baseline(Path(directory or DIRECTORY) / BASELINE)
+    if script is None:
         return
-    cut = (
-        "schema_migrations" in tables
-        and conn.execute("SELECT 1 FROM schema_migrations WHERE version=?", (CUTOVER,)).fetchone()
-    )
-    if not cut and conn.execute("SELECT 1 FROM tasks LIMIT 1").fetchone():
-        raise MigrationError(OLD_TASKS)
-
-
-SCHEMA_ERROR = re.compile(r"error in (trigger|view|index) (.+?)(?: after rename)?: (.+)")
-PROBE = "schema_probe"
-
-
-def schema_errors(conn):
-    """Each trigger, view and index in `main` that names a table or column that is not there, as (type, name, error),
-    for example ("trigger", "changes_attempts_carried", "no such column: carried_by"). Nothing is changed.
-
-    SQLite checks a trigger's or view's names only when it runs, or when an ALTER TABLE ... RENAME or DROP COLUMN
-    re-checks the whole schema, which then fails on the first broken one. So that re-check is what finds them: a column
-    rename on a probe table, inside a savepoint that is rolled back, taking each object it names out of the way until
-    it passes."""
-    found = []
-    conn.execute("SAVEPOINT schema_errors")
+    conn.execute("BEGIN IMMEDIATE")
     try:
-        conn.execute(f"CREATE TABLE main.{PROBE}(a)")
-        while True:
-            try:
-                conn.execute(f"ALTER TABLE main.{PROBE} RENAME COLUMN a TO b")
-                break
-            except sqlite3.OperationalError as exc:
-                match = SCHEMA_ERROR.fullmatch(str(exc))
-                if not match or (match.group(1), match.group(2)) in {(kind, name) for kind, name, _ in found}:
-                    raise
-                found.append((match.group(1), match.group(2), match.group(3)))
-                conn.execute(f'DROP {match.group(1).upper()} main."{match.group(2)}"')
-    finally:
-        conn.execute("ROLLBACK TO schema_errors")
-        conn.execute("RELEASE schema_errors")
-    return found
-
-
-def _record_legacy(conn):
-    """Each history the database already has, recorded as applied when it first gets schema_migrations: its
-    user_version and its newest cloud step. A new file has no cloud steps yet at that point (they run after the
-    migrations), so it records only its user_version."""
-    version = conn.execute("PRAGMA user_version").fetchone()[0]
-    names = [f"legacy_user_version_{version}"] if version else []
-    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='cloud_migrations'").fetchone():
-        newest = conn.execute("SELECT max(version) FROM cloud_migrations").fetchone()[0]
-        if newest:
-            names.append(f"legacy_cloud_{newest}")
-    for name in names:
-        conn.execute(
-            "INSERT OR IGNORE INTO schema_migrations(version,checksum,applied_at) VALUES(?,?,?)",
-            (name, LEGACY, H.now()),
-        )
+        if not _tables(conn):
+            conn.execute("PRAGMA defer_foreign_keys=ON")
+            for statement in script:
+                conn.execute(statement)
+        conn.execute("COMMIT")
+    except BaseException:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
 
 
 def _broken_references(conn):
@@ -322,22 +263,9 @@ def _broken_references(conn):
     return Counter((row[0], row[2]) for row in conn.execute("PRAGMA foreign_key_check"))
 
 
-def _old_name_views(conn, migration):
-    """The old market names as temporary views, for a replay of a migration from before the rename on a moved file."""
-    if migration.version >= DIRECTORY_RENAME:
-        return []
-    present = {row[0] for row in conn.execute("SELECT name FROM main.sqlite_master WHERE type='table'")}
-    if "entities" not in present or "market_entities" in present:
-        return []
-    for name, select in OLD_NAME_VIEWS.items():
-        conn.execute(f"CREATE TEMP VIEW {name} AS {select}")
-    return list(OLD_NAME_VIEWS)
-
-
 def _run(conn, migration):
     """One migration in one transaction with its row, so a failure rolls back both. `conn` must be in autocommit."""
-    superseded = migration.version in SUPERSEDED
-    module = _module(migration) if migration.kind == "py" and not superseded else None
+    module = _module(migration) if migration.kind == "py" else None
     keys_off = bool(module and getattr(module, "FOREIGN_KEYS_OFF", False))
     prior = conn.execute("PRAGMA foreign_keys").fetchone()[0]
     if keys_off:
@@ -346,15 +274,14 @@ def _run(conn, migration):
     try:
         conn.execute("BEGIN IMMEDIATE")
         try:
+            # Another start may have run it since this one read the records: under the write lock, look again.
+            if conn.execute("SELECT 1 FROM schema_migrations WHERE version=?", (migration.version,)).fetchone():
+                conn.execute("ROLLBACK")
+                return
             before = _broken_references(conn) if keys_off else None
             if module:
-                views = _old_name_views(conn, migration)
-                try:
-                    module.up(conn)
-                finally:
-                    for name in views:
-                        conn.execute(f"DROP VIEW IF EXISTS temp.{name}")
-            elif not superseded:
+                module.up(conn)
+            else:
                 for statement in statements(migration.path.read_text(encoding="utf-8")):
                     conn.execute(statement)
             if keys_off:
@@ -381,16 +308,17 @@ def _run(conn, migration):
 
 
 def apply(conn, directory=None):
-    """Record the histories the database already has, then run each migration file it has not, in version order."""
-    adopting = not conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'"
-    ).fetchone()
+    """Load the baseline into a new file, or refuse one below the floor; then run each migration file the database has
+    not recorded, in version order. `conn` must be in autocommit."""
+    tables = _tables(conn)
+    if tables:
+        _at_floor(conn, tables, directory)
+    else:
+        _load_baseline(conn, directory)
     conn.execute(TABLE)
-    if adopting:
-        _record_legacy(conn)
     known = files(directory)
     recorded = conn.execute("SELECT version, checksum FROM schema_migrations").fetchall()
-    _verify(recorded, known)
+    _verify(recorded, known, retired(directory))
     applied = {version for version, _ in recorded}
     for migration in known:
         if migration.version in applied:

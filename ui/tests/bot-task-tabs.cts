@@ -120,7 +120,7 @@ async function open(browser: Browser, viewport: ViewportSize, colorScheme: strin
     if (p === '/api/employees') return json(bots);
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [], schedules: []});
     if (p === '/api/v2/status') return json({bots: bots.map(b => ({bot: b.name, state: 'idle'}))});
-    if (p === '/api/v2/needs-you') return json({items: [], went_away: null});
+    if (p === '/api/v2/needs-you') return json({items: []});
     if (p === '/api/v2/goals') return json({goals: [], chain: [], reports: [], company: []});
     if (p === '/api/v2/updates') return json({updates: q.get('bot') === 'lead' ? [{id: 'u1', bot: 'lead', day: '2026-10-23', kind: 'daily',
       body: 'Shipped the export fix.', read: true, created_at: ago(600)}] : [], missed: [], unread: 0, next_before: null, today: {}});

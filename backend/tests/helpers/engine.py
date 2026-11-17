@@ -109,11 +109,10 @@ def github(condition, **fields):
 def github_installed(c, repository="acme/app"):
     """The company's GitHub App, connected and installed, with `repository` In use (None: none is): a task with no PR
     linked is its bot's to open one, not Paused on Connect GitHub or Choose a repository (item_sources.github
-    first_fix)."""
+    first_fix). The app's own tables are made on first use (backend/github_app.py SCHEMA)."""
     from backend.github_app import SCHEMA
-    from backend.repositories_schema import SCHEMA as REPOSITORIES
 
-    for statement in (SCHEMA + ";" + REPOSITORIES).split(";"):
+    for statement in SCHEMA.split(";"):
         if statement.strip():
             c.execute(statement)
     c.execute(

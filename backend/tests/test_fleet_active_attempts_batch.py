@@ -1,7 +1,7 @@
 """fleet_snapshot loads live attempts once, not once per writable bot."""
 
 from backend.tests.helpers.api import assign, claim, get, post, ready, runner  # noqa: F401
-from backend.tests.helpers.views import as_member
+from backend.tests.helpers.views import as_member, assistant_for
 from backend.tests.helpers.task_privacy_reads import traced
 
 
@@ -13,7 +13,8 @@ def test_fleet_snapshot_reports_active_attempt_from_batched_live_map(api):
     ready(api, machine, ["assistant"])
     attempt = claim(api, machine)
     assert attempt
-    fleet, statements = traced(api, lambda: get(api, "tico/fleet", attempt["token"]))
+    token = assistant_for(api, "human:ben", "ben@acme.example")
+    fleet, statements = traced(api, lambda: get(api, "health/issues", token))
     coo = next(bot for bot in fleet["bots"] if bot["slug"] == "assistant")
     assert coo["active_runs"] >= 1
     assert coo["active_run"]["id"] == attempt["id"]

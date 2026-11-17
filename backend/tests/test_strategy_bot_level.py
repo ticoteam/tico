@@ -191,10 +191,10 @@ def test_why_proposals_reach_the_owner_as_one_item(api):
     assert "Grow rentals" in why["body"] and "Cut churn" in why["body"]
     [item] = [i for i in get(api, "goals/needs-you")["items"] if i["kind"] == "why"]
     assert {g["goal_id"] for g in item["goals"]} == set(goals)
-    post(api, f"goal-proposals/{first['id']}/decide", {"decision": "confirm"})
+    post(api, f"proposals/{first['id']}/decide", {"decision": "confirm"})
     with api.app.state.store.read() as c:
         assert H.task(c, why["id"])["status"] == "open"  # one still waits
-    post(api, f"goal-proposals/{second['id']}/decide", {"decision": "confirm", "why": "Landlords who stay."})
+    post(api, f"proposals/{second['id']}/decide", {"decision": "confirm", "why": "Landlords who stay."})
     with api.app.state.store.read() as c:
         assert H.task(c, why["id"])["status"] == "closed"
         assert c.execute("SELECT count(*) FROM tasks WHERE title=?", (why["title"],)).fetchone()[0] == 1
@@ -365,7 +365,7 @@ def test_with_no_chosen_level_passive_pauses_the_note_and_withdraws_what_waits_a
     }
     waiting = post(
         api,
-        "goal-proposals",
+        "proposals",
         {"kind": "recovery", "goal_id": goal_id, "reason": "Red for a week", "payload": payload},
         token=strategy_token,
     )["proposal"]
@@ -430,7 +430,7 @@ def test_lowering_to_passive_keeps_the_vision_and_why_asks_until_they_are_resolv
     sync(api)
     assert {a["id"] for a in asks(api)} == set(filed.values())  # nothing new at Passive
     post(api, "company", {"vision": "Every small landlord runs their rentals on Tico."})
-    post(api, f"goal-proposals/{why['id']}/decide", {"decision": "confirm"})
+    post(api, f"proposals/{why['id']}/decide", {"decision": "confirm"})
     sync(api)
     with api.app.state.store.read() as c:
         assert [H.task(c, t)["status"] for t in filed.values()] == ["closed", "closed"]

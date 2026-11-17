@@ -31,7 +31,7 @@ def test_same_origin_gateway_preserves_http_streams_socket_paths_and_hides_contr
             assert next(stream.iter_lines()) == "retry: 1000"
         r = service.computer()
         response = client.post(
-            f"/api/v2/runners/{r['runner_id']}/screen/sessions", json={"control": False}, headers=headers()
+            f"/api/v2/computers/{r['runner_id']}/screen/sessions", json={"control": False}, headers=headers()
         )
         assert response.status_code == 200, response.text
         opened = response.json()

@@ -26,7 +26,7 @@ function route(hash: string = location.hash): void {
     DECIDE_STAGE = DECIDE_WANT ? '' : q.get('stage') || '';
     location.replace(NEEDS_YOU); return;
   }
-  overviewStop(); graphStop(); DASH = null;
+  DASH = null;
   $('#main').classList.remove('overview-layout');
   const from = LAST_ROUTE;
   S.route = LAST_ROUTE = hash || UPDATES;
@@ -82,10 +82,10 @@ function route(hash: string = location.hash): void {
   }
   else if (S.route === '#/inbox' || S.route.startsWith('#/inbox?')) { location.hash = MAIL; return; }
   else if (S.route === HOME) pageDashboard('person:me');
-  else if (S.route === OVERVIEW) pageDashboard('dashboard');
-  else if (S.route === OVERVIEW_CAMPUS) pageOverview();
-  else if (S.route === OVERVIEW_GRAPH || S.route.startsWith(OVERVIEW_GRAPH + '?')) pageOverviewGraph();
-  else if (S.route === OVERVIEW_FACTORIES) pageOverviewFactories();
+  // Company is one page: the Dashboard, Floor, Campus, Graph and Factories addresses it once had tabs for land on it, so a
+  // bookmark or an old message's link still opens. One factory's floor keeps its own page.
+  else if (S.route === OVERVIEW || S.route === OVERVIEW_FLOOR || /^#\/overview\/(?:campus|graph|factories)(?:\?|$)/.test(S.route)) { location.replace(HOME); return; }
+  else if (S.route.startsWith(OVERVIEW_FLOOR + '/')) pageFloorFactory(decodeURIComponent(S.route.slice(OVERVIEW_FLOOR.length + 1)));
   else if (S.route === OVERVIEW_COMPANY) pageOverviewCompany();
   else if (S.route.startsWith(TEAM_PAGE)) pageDashboard('team:' + decodeURIComponent(S.route.slice(TEAM_PAGE.length).split('?')[0] ?? ''));
   else if (S.route === WELCOME) pageWelcome();
@@ -125,7 +125,7 @@ function route(hash: string = location.hash): void {
   else if (isTasksRoute(S.route)) pageTasks();   // #/tasks?owner=bot:eng&tag=bug: the filters ride in the query
   else if (S.route === UPDATES || S.route.startsWith(UPDATES + '?')) pageUpdates();
   else if (S.route === SETTINGS) pageSettings();
-  else if (S.route === HELP) { location.replace(OVERVIEW); window.supportOpen?.(); return; }   // Help is the Support pop-up, over Company
+  else if (S.route === HELP) { location.replace(HOME); window.supportOpen?.(); return; }   // Help is the Support pop-up, over Company
   else if (S.route === '#/getting-started') { location.replace(TASKS); return; }   // the checklist is gone
   else if (S.route === '#/repositories') { SETTINGS_TAB = 'repos'; location.replace(SETTINGS); return; }   // Settings > General › Repositories
   // Settings > Webhooks (it was Triggers) and its parts: incoming on Automations, outgoing on Tools, through the
@@ -180,7 +180,7 @@ function route(hash: string = location.hash): void {
   else if (/^#\/computers\/[^/?]+\/performance$/.test(S.route)) pageComputerPerformance(decodeURIComponent(S.route.split('/')[2] ?? ''));
   else if (isAutomationsRoute(S.route)) pageAutomations();
   else if ((S.route.split('?')[0] ?? '') === '#/style-guide') pageStyleGuide();   // out of the navigation (ui/app/style-guide.ts)
-  else location.hash = HOME;           // unknown or empty routes land on My dashboard, home
+  else location.hash = HOME;           // unknown or empty routes land on Company, home
   redesignAfterRoute();
   thvSweep();         // a thread view the new page replaced stops following
   // A new page starts at its top; a query change (a filter, an open row) or a redraw keeps the reader's place.

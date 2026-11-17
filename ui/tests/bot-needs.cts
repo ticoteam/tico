@@ -153,6 +153,9 @@ const LAYOUT: Layout[] = [{builtin: 'needs', name: 'Needs you'}, {builtin: 'acti
           ...(key === 'needs' ? {matched_ids: rows.filter(t => requested.includes(t.id)).map(t => t.id)} : {})})), tasks: all});
       }
       if (p === '/api/v2/conversations') return json({conversations: []});
+      // A task's read names its thread: Flow answers an ask in its chat (decide.ts decideChatMount).
+      const one = p.match(/^\/api\/v2\/tasks\/([^/]+)$/), known = one ? Object.values(T).find(t => t.id === one[1]) : undefined;
+      if (known) return json({task: {...known, conversation_id: 'c-' + known.id}});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));
     });
@@ -195,7 +198,7 @@ const LAYOUT: Layout[] = [{builtin: 'needs', name: 'Needs you'}, {builtin: 'acti
     // An OK or a question opens its Needs you card over the rail; nothing unfolds in the rail.
     assert.equal(await rail.locator('#t-needs details').count(), 0);
     await rail.locator('#t-needs .tk-row', {hasText: 'Send the announcement'}).click();
-    await page.locator('#need-card [data-key="r-announce"] .dc-q', {hasText: 'OK the announcement'}).waitFor();
+    await page.locator('#need-card .dc-q', {hasText: 'OK the announcement'}).waitFor();   // the ask, the last message in its task's chat
     assert.equal(await page.evaluate(() => location.hash), '#/bot/lead/tasks', 'the rail stays where it was');
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#need-card')?.open);
@@ -274,12 +277,12 @@ const LAYOUT: Layout[] = [{builtin: 'needs', name: 'Needs you'}, {builtin: 'acti
     assert.equal(await rail.locator('#bot-needs').isHidden(), true);
     await page.evaluate(() => { const r = document.querySelector<HTMLElement>('#pane-tasks')!; r.style.height = r.style.overflowY = ''; r.scrollTop = 0; });
 
-    // A half-typed answer on a question's card survives a redraw of the rail, and the picked tab stays.
+    // A half-typed reply in a question's chat survives a redraw of the rail, and the picked tab stays.
     await tab('needs').click();
     await rail.locator('#t-needs .tk-row', {hasText: 'Plan the weekly summary'}).click();
-    await page.locator('#need-card [data-key="r-friday"] #dc-other').fill('Friday works');
+    await page.locator('#need-card .dc-chat .p-text').fill('Friday works');
     await page.evaluate(() => botNeedsChanged('lead'));
-    assert.equal(await page.locator('#need-card #dc-other').inputValue(), 'Friday works');
+    assert.equal(await page.locator('#need-card .dc-chat .p-text').inputValue(), 'Friday works');
     assert.equal(await tab('needs').getAttribute('aria-selected'), 'true');
     await page.locator('#need-card [data-dc="close"]').click();
     await page.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#need-card')?.open);

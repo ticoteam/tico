@@ -9,7 +9,7 @@ from backend import subscriptions
 def test_profiles_by_runner_reads_sign_in_cutoffs_refreshes_and_names_like_each_computer(api):
     from backend import subscription_refresh as refresh
     from backend.store import H
-    from backend.subscription_identity import connection_id, display_names
+    from backend.subscription_identity import connection_id
 
     a = runner(api, "ana", "A Mac")
     rid, at = a["runner_id"], H.shift(H.now(), minutes=-30)
@@ -46,4 +46,3 @@ def test_profiles_by_runner_reads_sign_in_cutoffs_refreshes_and_names_like_each_
         assert codex["refresh"]["state"] == "outdated"
         assert codex["weekly"]["used_percent"] == 40
         assert profile["display_name"] == "Work login"
-        assert display_names(c) == {connection_id(rid, "work"): "Work login"}

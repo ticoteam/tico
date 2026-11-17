@@ -27,9 +27,8 @@ its timestamp or size changes. Until then, the bot view shows the published inst
 runner may continue publishing only personal message bot instructions; the page uses that copy as a
 fallback.
 
-The mail tool's cloud snapshot contains message labels and matched rule IDs. Those are
-shown as message evidence. Its detailed local audit remains on the Mac; a source message with
-no bot-specific `hub/handled/<bot>` or `hub/triaged/<bot>` label is never attributed to the bot.
+A message bot's mail is read live from Gmail on the server, newest first, with the Message automations each message
+started a run of shown as its evidence. Tico keeps no copy of the mail.
 Slack digests have exact event IDs, so a check opens the messages delivered to that bot. Slack
 replies come from `slack_posts` with their delivery state. Slack channel message content is
 restricted to the owner in Message bots; everyone else's email view stays within their existing

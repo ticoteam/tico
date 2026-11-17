@@ -101,7 +101,7 @@ def test_the_queue_asks_one_bot_at_a_time_and_moves_on_when_it_posts(api):
 
 
 @pytest.mark.parametrize("delivery", [False, True])
-def test_update_requests_keep_their_readers_through_thread_migration(api, delivery):
+def test_update_requests_are_read_only_by_their_parties(api, delivery):
     store, auth = api.app.state.store, api.app.state.auth
     with store.transaction() as c:
         recipient = bot_id(c, "ops")
@@ -118,7 +118,7 @@ def test_update_requests_keep_their_readers_through_thread_migration(api, delive
         expected = {owner.actor, H.bot_actor(recipient)}
 
         # A request can carry Learn's sources and task facts. Read access to another bot's activity must not
-        # turn its request into a company conversation, either before or after the migration.
+        # turn its request into a company conversation.
         before = set()
         for who in people + bots:
             try:
@@ -127,10 +127,6 @@ def test_update_requests_keep_their_readers_through_thread_migration(api, delive
             except Problem:
                 pass
         assert before == expected
-        c.execute(
-            "DELETE FROM registry_metadata WHERE key IN (?,?)", (threads.MIGRATION_KEY, threads.MIGRATION_PROGRESS_KEY)
-        )
-        assert threads.migrate(c)
         for target in (message["conversation_id"], H.message(c, message["id"])):
             after = {who.actor for who in people + bots if threads.readable(c, threads.viewer(auth, who), target)}
             assert after == expected
@@ -687,13 +683,15 @@ def test_an_updates_replies_are_found_by_index_not_by_scanning_every_message(api
         uid = updates.post(c, bot_id(c, "ops"), "- Shipped the index", kind="daily", day="2026-10-01")["id"]
     for k in range(2):
         post(api, f"updates/{uid}/reply", {"text": f"Thanks {k}"})
+    from backend.tests.helpers.statement_scope import measuring, recorder
+
     seen = []
 
     def traced(opened):
         @contextlib.contextmanager
         def opening():
             with opened() as c:
-                c.set_trace_callback(seen.append)
+                c.set_trace_callback(recorder(seen))
                 try:
                     yield c
                 finally:
@@ -704,9 +702,10 @@ def test_an_updates_replies_are_found_by_index_not_by_scanning_every_message(api
     with monkeypatch.context() as patched:
         for name in ("read", "read_transaction"):
             patched.setattr(store, name, traced(getattr(store, name)))
-        feed = get(api, "updates?limit=40&include_archive=true")
-        with store.read() as c:
-            thread = updates.thread(c, uid)
+        with measuring(seen):
+            feed = get(api, "updates?limit=40&include_archive=true")
+            with store.read() as c:
+                thread = updates.thread(c, uid)
     assert {u["id"]: u["replies"] for u in feed["updates"]}[uid] == 2
     assert [m["body"].endswith(f"Thanks {k}") for k, m in enumerate(thread)] == [True, True]
     reads = {s for s in seen if "FROM messages" in s and "$.update" in s}

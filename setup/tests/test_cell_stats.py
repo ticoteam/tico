@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from backend import flight, flight_file
+from backend import flight_file, migrations
 from setup import cell, cell_stats as cs
 from setup.cell import Result
 
@@ -301,9 +301,11 @@ def busy_minute(ts):
 
 
 def make_db(data, freelist=False):
+    schema = sqlite3.connect(data / "hub.sqlite", isolation_level=None)
+    migrations.apply(schema)  # the server's schema, the flight tables included
+    schema.close()
     c = sqlite3.connect(data / "hub.sqlite")
     c.execute("PRAGMA journal_mode=WAL")
-    c.executescript(flight.SCHEMA)
     hour = int(NOW) // 3600 * 3600
     c.executemany(
         "INSERT INTO flight_sql VALUES(?,?,?,?,?,?,?)",

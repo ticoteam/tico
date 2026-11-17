@@ -171,7 +171,7 @@ function taskCodeHTML(t: CodeTask): string {
 }
 
 // ---- Subtasks: the children (one level shown, each expandable), with the roll-up line
-// GET /v2/tasks/{id}/tree answers the nested children; an older server has only the detail's flat children.
+// GET /v2/tasks/{id}/tree answers the nested children; a failed read leaves the detail's flat children.
 function taskTreeKids(res: TreeReply | null, id: string): SubRow[] {
   let list: SubRow[] | null = Array.isArray(res) ? res : res && (res.tree ?? res.children ?? (res.id ? [res] : []));
   if (!Array.isArray(list)) list = list ? [list] : [];
@@ -259,8 +259,7 @@ async function taskRailLoad(d: TaskRailDialog, t: CodeTask, detail: {children?: 
   taskRailPaint(d, t);
   const has = t.children_summary?.total || flat.length || t.parts?.total;
   if (!has) { st.focus = false; return; }
-  let res: TreeReply | null = null;
-  try { res = await get<TreeReply>(`/v2/tasks/${encodeURIComponent(id)}/tree`); } catch { res = null; }   // an older server: the flat list
+  const res = await get<TreeReply>(`/v2/tasks/${encodeURIComponent(id)}/tree`).catch((): null => null);   // a failed read: the flat list
   if (!d.open || d.dataset.task !== id || d.taskRail !== st || st.seq !== seq) return;
   st.kids = res ? taskTreeKids(res, id) : flat;
   taskRailPaint(d, t);
@@ -309,8 +308,7 @@ function taskRailBind(d: TaskRailDialog, t: CodeTask): void {
       drop.disabled = true;
       const base = `/v2/tasks/${encodeURIComponent(t.id)}/links`;
       try {
-        try { await writeRequest('DELETE', `${base}/${encodeURIComponent(String(drop.dataset.codeDrop))}`); }
-        catch (e) { if (![404, 405].includes(errorStatus(e) ?? 0)) throw e; await post(base, {remove: drop.dataset.codeDrop}); }   // an older server
+        await writeRequest('DELETE', `${base}/${encodeURIComponent(String(drop.dataset.codeDrop))}`);
         if ('codeRetry' in drop.dataset) toast('Cleanup asked again. The worktree goes once its computer saves and removes it.');
         const data = await get<{task: CodeTask}>(`/v2/tasks/${encodeURIComponent(t.id)}`);
         if (TASKS_ST) void tasksCatchUp(TASKS_ST);

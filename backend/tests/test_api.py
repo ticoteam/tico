@@ -246,7 +246,7 @@ def test_run_windows_include_failed_runs_and_hide_private_rooms(api):
     assert run["state"] == "expired" and "attempt_id" not in run
     assert api.get("/api/runs/" + attempt["id"] + "/log", headers=headers()).status_code == 200
     assert api.get("/api/runs/" + attempt["id"] + "/log", headers=headers("ben-test")).status_code == 404
-    issue = next(i for i in get(api, "fleet/check")["issues"] if i["kind"] == "failing_runs")
+    issue = next(i for i in get(api, "health/issues")["issues"] if i["kind"] == "failing_runs")
     assert "expired attempt" in issue["text"] and "last 24 hours" in issue["text"]
 
 

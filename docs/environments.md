@@ -77,7 +77,7 @@ GB), at least 4 and at most 64. Turns mostly wait on their model provider, so th
 number is kept (up to 256), so set `"capacity": 80` to go higher. The `"capacity": 4` that setups before October 14,
 2026 wrote becomes `"auto"` once (`capacity_auto` marks it done); set 4 again to keep it. The owner's **Turns at once**
 for a computer (Settings > Computers) replaces this number for that computer, up to 256: the runner takes it from its
-heartbeat reply, and a runner that predates `turns_at_once_v1` runs at most the capacity it reports. Mode 0600 is
+heartbeat reply. Mode 0600 is
 enforced on every command. Profiles add three more keys:
 
 ```json
@@ -105,7 +105,6 @@ launchd agents live in `~/Library/LaunchAgents`, mode 0600, in the `gui/<uid>` d
 | Job | Legacy label | Environment label | Log |
 |---|---|---|---|
 | bot runs | `team.tico.tico-bot` | `team.tico.tico.<slug>.bot` | `<env>/logs/tico-bot.log` |
-| tool snapshots | `team.tico.tico-connectors` | `team.tico.tico.<slug>.connectors` | `<env>/logs/tico-connectors.log` |
 | local server | not applicable | `team.tico.tico.<slug>.api` | `<env>/logs/api.log` |
 
 Default-environment logs are `~/.config/tico/logs/tico-<job>.log` (older installations may still use `<parent of the checkout>/runtime/tico-<job>.log`). `scripts/tico-computer -e <slug> logs`
@@ -366,7 +365,7 @@ Litestream backup, `litestream restore -o <file>` first and pass that file. The 
 - keeps tasks, docs, people and bots, the last `--days` of messages and events (0 keeps all), and the finished runs
   in that window with their steps, so run details and replay work. Unfinished jobs and runs are removed;
 - has no way in: bot tokens cleared, external agents and computers revoked, run tokens and leases ended;
-- never has the key files beside it (`credential.key`, `github-app.key`, `slack.key`), so nothing in it can be decrypted;
+- never has the key files beside it (`credential.key`, `github-app.key`), so nothing in it can be decrypted;
 - is mode 0600, with `server.env`, a fresh `local-owner.token` and empty `registry/` and `blobs/` beside it. Attachments
   are not copied.
 

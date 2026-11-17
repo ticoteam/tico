@@ -323,7 +323,6 @@ DO = _routes(
     ("DELETE", rf"automations/{_S}/versions/{_S}"),
     ("PATCH", rf"inboxes/{_S}"),
     ("POST", rf"settings/history/{_S}/undo"),
-    ("POST", rf"settings/transitions/{_S}/(apply-without-checkpoint|cancel)"),
     # Goals and KPIs: a goal's or KPI's own rules decide who may change what.
     ("POST", r"goals"),
     ("POST", rf"goals/{_S}"),
@@ -372,7 +371,7 @@ DO = _routes(
     ("PUT", rf"org/order/{_S}"),
     # Which Slack channels bots read and post in: an owner or an admin's call, which the route checks.
     ("POST", r"slack/channels"),
-    ("POST", r"slack/channels/(remove|import)"),
+    ("POST", r"slack/channels/remove"),
     # Linking a thread to a Slack channel, taking the link away and checking a suspended one again: an owner's or an
     # admin's call, which the route checks (backend/slack_threads.py).
     ("POST", r"slack/links"),
@@ -394,8 +393,10 @@ DO = _routes(
     # one is the person's own, in the app), inbox sharing where one owner runs
     # everything (the route says where), its name and how many turns it runs at once (owners and admins, which the routes check). Limits are spending: lowering one is always direct; raising one, and the providers,
     # are direct unless the owner's rule says otherwise (TIGHTENED).
-    ("POST", rf"(runners|computers)/{_S}/(restart|inbox-only|logins|screen|label|turns-at-once)"),
-    ("POST", rf"(runners|computers)/{_S}/logins/{_S}/cancel"),
+    # The rc.1 spelling runners/{rid}/inbox-only is kept (deprecated, same handler); the rest are computers/ only.
+    ("POST", rf"(runners|computers)/{_S}/inbox-only"),
+    ("POST", rf"computers/{_S}/(restart|logins|screen|label|turns-at-once)"),
+    ("POST", rf"computers/{_S}/logins/{_S}/cancel"),
     ("PUT", r"providers"),
     ("PUT", r"usage/limits"),
     ("PUT", rf"usage/limits/{_S}"),
@@ -483,7 +484,7 @@ CONFIRM = _routes(
     ("PUT", r"access/allow"),
     ("DELETE", rf"automations/{_S}"),
     ("POST", rf"automations/{_S}/delete"),
-    ("POST", rf"(runners|computers)/{_S}/(member-bots|revoke|browser-host)"),
+    ("POST", rf"computers/{_S}/(member-bots|revoke|browser-host)"),
     ("POST", rf"(goal-proposals|proposals)/{_S}/decide"),
     ("POST", r"support/tickets"),
     ("PATCH", rf"files/{_S}"),
@@ -519,7 +520,7 @@ ADMIN_ONLY = _routes(
     ("PUT", r"access/(limits|allow)"),
     ("PUT", r"usage/limits"),
     ("PUT", rf"usage/pools/(company|groups/{_S})"),
-    ("POST", rf"(runners|computers)/{_S}/(member-bots|browser-host)"),
+    ("POST", rf"computers/{_S}/(member-bots|browser-host)"),
     ("POST", r"system/update"),
     ("PUT", r"directory"),
     ("POST", r"directory/(sync|preview)"),
@@ -717,6 +718,7 @@ SUMMARIES = [
     ("PATCH", AUDIENCE, "Turn on a Company page audience"),
     ("DELETE", re.compile(API + rf"automations/{_S}"), "Delete an automation"),
     ("POST", re.compile(API + rf"automations/{_S}/delete"), "Delete an automation"),
+    ("POST", re.compile(API + r"support/tickets"), "Report a bug to Tico support"),
 ]
 
 
@@ -867,7 +869,7 @@ def default_delegable(method, path, body=None, query=None):
     if (
         path
         and str(method).upper() in ("GET", "POST")
-        and re.fullmatch(API + rf"(?:runners|computers)/{_S}/logins(?:/{_S}(?:/cancel)?)?", path)
+        and re.fullmatch(API + rf"computers/{_S}/logins(?:/{_S}(?:/cancel)?)?", path)
     ):
         return classify(method, path, body) == "do"
     if path and any(m == str(method).upper() and p.fullmatch(path) for m, p in THREADS):
@@ -899,7 +901,7 @@ def _place(path):
         return "#/task/" + parts[1], "", "the task"
     if parts[0] == "credentials":
         return "#/tools/keys?show=credentials", "", "Tools > Keys"
-    if parts[0] in ("runners", "computers"):
+    if parts[0] == "computers":
         return "#/settings", "", "Settings > Computers"
     return "#/settings", "", "Settings"
 

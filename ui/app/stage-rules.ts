@@ -218,7 +218,7 @@ function srHeadHTML(title: string): string {
     + `<h2>${esc(title)}</h2><span class="spacer"></span><button class="ghost tmodal-x" type="button" data-sr-close aria-label="Close">✕</button></div>`;
 }
 
-/** "The owner changes → owner not on engineering → Block": the rule in one line. `short`: a Jev question reads "Jev
+/** "The owner changes → owner not on engineering → Block": the rule in one line. `short`: a Decision model question reads "Decision model
  * decides" (a row's line; the question itself is in the rule's opened view and its form). */
 function srSentence(r: StageRuleCore, short = false): string {
   const {when, ifs, act} = srParts(r, short);
@@ -252,7 +252,7 @@ function srParts(r: StageRuleCore, short = false): {when: string; ifs: string; a
     if (v === '' || v === null || v === undefined || (v === false && k !== 'requester_person')) return [];
     return [srCond(k, v)];
   });
-  if (r.jev) ifs.push(short ? 'Jev decides' : `Jev: ${r.jev}`);
+  if (r.jev) ifs.push(short ? 'Decision model decides' : `Decision model: ${r.jev}`);
   return {when, ifs: ifs.join(', '), act: SR_THENS.find(([k]) => k === r.then)?.[1] ?? 'it acts'};
 }
 
@@ -397,7 +397,7 @@ const SR_ROW_ICONS = {rule: 'gavel', act: 'play_arrow', req: 'task_alt', lock: '
  * action is a mark at the right, and a model's question is the question itself. */
 function srStageLine(r: StageRuleCore): string {
   const {when, ifs} = srParts(r), q = (r.jev ?? '').trim();
-  const conds = q ? ifs.replace(`Jev: ${r.jev}`, '').replace(/, $/, '') : ifs;
+  const conds = q ? ifs.replace(`Decision model: ${r.jev}`, '').replace(/, $/, '') : ifs;
   const said = [r.event.split(',').includes('enters') ? '' : when, conds, q].filter(Boolean).join(' · ');
   return said ? said.charAt(0).toUpperCase() + said.slice(1) : when;
 }
@@ -578,7 +578,7 @@ function srFormHTML(r: StageRule | null): string {
         <span class="sr-row"><select name="owner_check" aria-label="The owner's team">${srOptions<string>([['', 'Any owner'], ['on', 'Owner on team'], ['not_on', 'Owner not on team']], owner)}</select>
         <input name="owner_team" maxlength="200" placeholder="A team's id; empty: the manager's team" aria-label="Team" value="${esc(team)}"></span>
         <input name="label" maxlength="200" placeholder="Has label" aria-label="Has label" value="${esc(str(cond['label']))}">
-        <textarea name="jev" rows="2" maxlength="1000" placeholder="A question Jev answers" aria-label="A question Jev answers">${esc(r?.jev ?? '')}</textarea></div>
+        <textarea name="jev" rows="2" maxlength="1000" placeholder="A question Decision model answers" aria-label="A question Decision model answers">${esc(r?.jev ?? '')}</textarea></div>
       <label class="ru-fl"><span class="ru-lbl">Then</span><select name="then" required>${srOptions(SR_THENS, r?.then ?? 'block')}</select></label>
       <p class="sr-idle" data-sr-thenline hidden></p>
       <label class="ru-fl"><span class="ru-lbl">Says</span><input name="reason" maxlength="1000" value="${esc(r?.reason ?? '')}" placeholder="What the Block or Tell says"></label>
@@ -670,7 +670,7 @@ function srFormSync(form: HTMLFormElement | null): void {
   // a bot's snooze does). A free rule says nothing about its cost.
   const jev = !!f.jev.value.trim();
   const idle = timer ? '' : !f.then.value ? 'Tell and Move back need a timer in step 1: pick N h in the stage, quiet or waiting on a person.'
-    : jev && !f.event.value.split(',').includes('bot_snoozes') ? 'A Jev question is asked only when a bot snoozes: on entering or an owner change this rule never acts.' : '';
+    : jev && !f.event.value.split(',').includes('bot_snoozes') ? 'A Decision model question is asked only when a bot snoozes: on entering or an owner change this rule never acts.' : '';
   const thenLine = form.querySelector<HTMLElement>('[data-sr-thenline]');
   if (thenLine) {
     thenLine.hidden = !idle;
@@ -679,7 +679,7 @@ function srFormSync(form: HTMLFormElement | null): void {
   const line = form.querySelector<HTMLElement>('[data-sr-costline]');
   if (line) {
     line.hidden = !jev || timer;
-    line.textContent = jev && !timer ? (staged ? '' : 'Cost: one Jev call per event') : '';
+    line.textContent = jev && !timer ? (staged ? '' : 'Cost: one Decision model call per event') : '';
   }
 }
 

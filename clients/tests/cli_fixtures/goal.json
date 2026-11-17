@@ -630,7 +630,7 @@
    "goal",
    "save",
    "POST",
-   "/api/v2/goal-proposals/turned-down",
+   "/api/v2/proposals/turned-down",
    "1",
    "--on-behalf-of",
    "turn"
@@ -643,7 +643,7 @@
      "method": "POST",
      "on_behalf_of": "turn",
      "operation_id": null,
-     "path": "/api/v2/goal-proposals/turned-down"
+     "path": "/api/v2/proposals/turned-down"
     }
    ]
   ],

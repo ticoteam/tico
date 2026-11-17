@@ -2,7 +2,8 @@ import type {Page} from 'playwright';
 // Offline browser check of Flow's way in (ui/app/decide.ts decideFlow, tasks.ts flowTabPaint), against a fake of the new routes:
 // - at phone width the bar is Team, Flow, Assistant, Tasks, More; Flow's mark is the tabs' grey with nothing waiting and
 //   jade with something, with no number, and the Tasks tab has no mark;
-// - with nothing waiting Flow opens on All done with the suggested rules, and Close and ✕ give focus back to the tab;
+// - with nothing waiting Flow opens on All done, with no suggested rules (removed) and no Close of its own, and ✕ gives focus
+//   back to the tab;
 // - with something waiting the tab starts Flow on the first item;
 // - Threads is in More, and More carries its count;
 // - at desktop width Flow's mark beside Tasks is a button: hidden with nothing waiting, and pressed it starts Flow
@@ -29,8 +30,6 @@ const stage = (id: string, name: string) => ({id, name, purpose: '', owner: null
 const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager_id: null, owner_id: 'human:ana', private: false,
   factory_id: null, preset: null, settings_version: 1, retired_at: null, stages: [stage('spec', 'Spec'), stage('build', 'Build')],
   done: {id: 'done', name: 'Done'}, closed: {id: 'closed', name: 'Closed'}, may_change: true};
-const RULE = 'Answer pricing questions with the Starter plan';
-const suggestion = {id: 's1', text: RULE, state: 'open', pending: false, notes_used: 2, notes_of: 3, pipeline: 'Product', stage: 'Spec'};
 const Q = ['Which plan do new signups get?', 'Ship on Monday?'];
 
 (async () => {
@@ -53,12 +52,11 @@ const Q = ['Which plan do new signups get?', 'Ship on Monday?'];
         if (p === '/api/me') return json({...me, config});
         if (p === '/api/v2/config') return json(config);
         if (p === '/api/employees') return json([]);
-        if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
+        if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
         if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
         if (p === '/api/v2/needs-you') return json({actor: 'human:ana', count: needs.length, items: needs, version: 'v' + needs.length, next: null});
         if (p === '/api/v2/threads/rail') return json({pinned: [], threads: [], catch_up: 3, catch_up_ids: ['a', 'b', 'c'], next_cursor: null, dms: {}});
         if (p === '/api/v2/flow/opinions') return json({opinions: []});
-        if (p === '/api/v2/flow/suggestions') return json({state: 'ready', suggestions: [suggestion]});
         if (r.method() !== 'GET' && p.startsWith('/api/') && !p.startsWith('/api/v2/flow/')) writes.push(`${r.method()} ${p}`);
         if (p.endsWith('/watch') || p === '/api/v2/events') return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
         return json(unrouted(p));
@@ -105,17 +103,11 @@ const Q = ['Which plan do new signups get?', 'Ship on Monday?'];
       assert.equal(await more.getAttribute('aria-label'), '3 to catch up');
       await shot(page, 'phone-nothing-waiting');
 
-      // Nothing waiting: All done, with the suggested rules, and Close gives focus back to the tab.
+      // Nothing waiting: All done, with one button (no Close of its own), and ✕ gives focus back to the tab.
       await page.locator('#mobile-flow').tap();
       await dialog(page).locator('.dc-done h2', {hasText: 'All done'}).waitFor();
-      await dialog(page).locator('.dc-sug', {hasText: RULE}).waitFor();
       await shot(page, 'phone-all-done');
-      await dialog(page).locator('.dc-done [data-dc="close"]').tap();
-      await dialog(page).waitFor({state: 'hidden'});
-      assert.equal(await focused(page, '#mobile-flow'), true, 'Close: focus is back on Flow');
-      // ✕ does the same.
-      await page.locator('#mobile-flow').tap();
-      await dialog(page).locator('.dc-done').waitFor();
+      assert.equal(await dialog(page).locator('.dc-done [data-dc="close"]').count(), 0, 'All done has no Close of its own');
       await dialog(page).locator('.dc-nav [data-dc="close"]').tap();
       await dialog(page).waitFor({state: 'hidden'});
       assert.equal(await focused(page, '#mobile-flow'), true, '✕: focus is back on Flow');

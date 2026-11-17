@@ -97,8 +97,9 @@ def _bet_body(args):
 @tool(
     "tico_strategy_show",
     "The team's published strategy: summary, vision, the seven sections, the bets with their "
-    "wrong-ifs, each bet's goals and colour, the team's website, and proof_since (when How we know they want it "
-    "last changed). The owner also gets the draft. With `section`, only that section of the published strategy.",
+    "wrong-ifs, each bet's goals and colour, the website, and proof_since (when How we know they "
+    "want it last changed). The owner also gets the draft. With `section`, only that section of "
+    "the published strategy.",
     {
         "section": {
             "type": "string",
@@ -342,9 +343,9 @@ def brand_publish(api, args):
 
 @tool(
     "tico_brand_check",
-    "Check a draft (a post, an email, an ad) against the published brand: words to avoid, "
-    "wrong spellings of names, claims the brand never makes. Each hit has kind, match, rule, level (block or warn) "
-    "and index. Fix every block before it goes out.",
+    "Check a draft (a post, an email, an ad) against the published brand: words to avoid, wrong "
+    "spellings of names, claims the brand never makes. Each hit has kind, match, rule, level "
+    "(block or warn) and index. Fix every block before it goes out.",
     {"text": _s("The draft, whole (on a command line, a file holding it, or - for standard input)")},
     required=("text",),
 )
@@ -376,9 +377,9 @@ def _channel_body(api, args, keys):
 
 # Every Growth read's answer carries these two (backend/growth_setup.py).
 SETUP_NOTE = (
-    " you_may: what you may do, per action (change settings, add or change any channel, add or change sources, record "
-    "months; a channel's own bot may change its why, stage and budget). setup: while Growth is not set up, "
-    "each step and the next one with its command, its tool and who may do it; then only done."
+    " you_may: what you may do per action (settings, any channel, sources, months; a bot that owns a channel changes its "
+    "own why, stage and budget). setup: while Growth is unset, each step and the next one with its command, tool and who "
+    "may do it; then only done."
 )
 
 

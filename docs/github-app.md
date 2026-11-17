@@ -354,7 +354,7 @@ add the ruleset: every PR of theirs would wait for a check Tico never posts.
 
 What it means: Tico's Merge stage queued this PR at this commit, after the sign-off. It does not mean every commit was
 reviewed: a commit pushed after the person's OK still merges once green when the stage owner queues it again (C22 in
-[Pipelines v3](pipelines-v3.md)), and the check is posted on that new commit then. A commit pushed later has no check
+[Pipelines v3](dev/pipelines-v3.md)), and the check is posted on that new commit then. A commit pushed later has no check
 until the owner queues it again.
 
 What it needs on the App:
@@ -688,7 +688,7 @@ covered.
 
 A review request can also put the reviewer on the task. Set `TICO_GITHUB_REVIEW_ROLE` to a task role
 (for example `reviewer`) and restart the API, then give each person their GitHub login under **GitHub**
-in the Contact card of their profile (or `POST /api/v2/people/{id}` with `{"github": "login"}`).
+in the Contact card of their profile (or `POST /api/v2/humans/{id}` with `{"github": "login"}`).
 A request adds them to that role and a withdrawn request takes them off; a request GitHub drops because
 the review arrived leaves them on. Logins are unique on the team: setting one someone else has returns
 `409 github_taken`, and a login two people already share changes nobody. Unknown logins, people who

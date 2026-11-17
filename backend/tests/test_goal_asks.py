@@ -37,7 +37,7 @@ def test_a_stale_kpi_is_one_task_for_its_owner_closed_by_a_fresh_reading(api):
     assert (task["kind"], task["ref"], task["status"]) == ("kpi_stale", GA.KPIS_REF, "open")
     assert task["title"] == "Add a number for Unreported measure"
     assert task["body"].startswith(task["title"]) and "- Unreported measure: has no reading yet" in task["body"]
-    # In Tasks and Decide (the person's Needs you), and on the Goals page with the task named.
+    # The Strategy Owner's task with its question to her: in her Needs you, and on the Goals page with the task named.
     assert task["id"] in needs_tasks(api, "ana-test")
     [item] = [i for i in get(api, "goals/needs-you")["items"] if i["kind"] == "kpi_stale"]
     assert item["task"]["id"] == task["id"] and [k["kpi_id"] for k in item["kpis"]] == [kpi["id"]]
@@ -145,8 +145,15 @@ def test_a_red_kpi_asks_the_goal_owner_and_closes_once_back_on_track(api):
     assert [(a["ref"], a["title"]) for a in red] == [
         (kpi["id"], "Check why Activation is off track on Raise activation")
     ]
+    # The Strategy Owner asks Ben on its own task: in his Needs you, not Ana's.
     assert red[0]["id"] in needs_tasks(api, "ben-test")
     assert red[0]["id"] not in needs_tasks(api, "ana-test")
+    with api.app.state.store.read() as c:
+        authors = c.execute(
+            "SELECT r.added_by_id FROM requirements r JOIN visits v ON v.id=r.visit_id WHERE v.task_id=?",
+            (red[0]["id"],),
+        ).fetchall()
+    assert [a[0] for a in authors] == [MANAGER]  # only bots write questions: the Strategy Owner, never Tico
     log(api, kpi["id"], 75, token="ben-test", period_end=H.now())
     assert not [a for a in asks(api) if a["kind"] == "kpi_red"]
     assert red[0]["id"] in {t["id"] for t in manager_tasks(api, "closed")}
@@ -158,7 +165,7 @@ def test_a_proposal_asks_whoever_decides_it_and_closes_when_decided(api):
     log(api, kpi["id"], 45, token="ben-test", period_end=H.now())
     proposal = post(
         api,
-        "goal-proposals",
+        "proposals",
         {
             "kind": "kpi_target",
             "goal_id": goal["id"],
@@ -169,7 +176,8 @@ def test_a_proposal_asks_whoever_decides_it_and_closes_when_decided(api):
         token="ben-test",
     )["proposal"]
     [task] = [a for a in asks(api) if a["kind"] == "proposal"]
-    assert (task["ref"], task["owner_id"]) == (proposal["id"], "human:ben")
+    assert (task["ref"], task["owner_id"], task["asked"]) == (proposal["id"], MANAGER, "human:ben")
+    assert task["id"] in needs_tasks(api, "ben-test")  # its question to him
     assert task["title"] == "Use a new Activation target on Raise activation?"
     [item] = [i for i in get(api, "goals/needs-you", "ben-test")["items"] if i["kind"] == "proposal"]
     assert item["task"]["id"] == task["id"] and item["proposal"]["id"] == proposal["id"]
@@ -177,7 +185,7 @@ def test_a_proposal_asks_whoever_decides_it_and_closes_when_decided(api):
     # The environment owner may decide it too: it stays on their Goals page, without the task, which is Ben's.
     [theirs] = [i for i in get(api, "goals/needs-you")["items"] if i["kind"] == "proposal"]
     assert theirs["proposal"]["id"] == proposal["id"] and "task" not in theirs
-    post(api, f"goal-proposals/{proposal['id']}/decide", {"decision": "reject", "note": "Keep it"}, token="ben-test")
+    post(api, f"proposals/{proposal['id']}/decide", {"decision": "reject", "note": "Keep it"}, token="ben-test")
     with api.app.state.store.read() as c:
         row = H.task(c, task["id"])
         assert row["status"] == "closed" and "rejected" in close_note(c, task["id"])
@@ -204,10 +212,10 @@ def test_an_owner_change_moves_the_ask_and_without_a_goal_manager_nothing_is_fil
     goal_manager(api, level=2)
     sync(api)
     [old] = [a for a in asks(api) if a["kind"] == "kpi_red"]
-    assert old["owner_id"] == "human:ben"
+    assert (old["owner_id"], old["asked"]) == (MANAGER, "human:ben")
     post(api, f"goals/{goal['id']}", {"owner": "cara"})
     [new] = [a for a in asks(api) if a["kind"] == "kpi_red"]
-    assert new["owner_id"] == "human:cara" and new["id"] != old["id"]
+    assert new["asked"] == "human:cara" and new["id"] != old["id"]
     assert old["id"] in {t["id"] for t in manager_tasks(api, "closed")}
 
 
@@ -216,12 +224,15 @@ def test_a_task_marked_done_while_the_cause_stands_is_asked_again(api):
     post(api, "kpis", {"name": "Unreported measure", "owner": "me", "cadence": "weekly"})
     [task] = stale_asks(api)
     with api.app.state.store.transaction() as c:
-        H.task_update(c, "human:ana", task["id"], status="done", note="Done")
+        # The Strategy Owner's task with its question to her: she moves it to Done herself.
+        from backend import task_engine as E
+
+        E.move(c, task["id"], E.DONE, "human:ana", "Done", H.task(c, task["id"])["version"])
     sync(api)
     [again] = stale_asks(api)
     assert again["id"] != task["id"] and again["status"] == "open"
     with api.app.state.store.read() as c:
-        assert H.task(c, task["id"])["status"] == "done"  # a person's Done stands: nothing closes it after them
+        assert H.task(c, task["id"])["status"] == "done"  # a Done stands: nothing closes it after it
 
 
 def test_at_passive_nobody_is_asked_anything_and_what_was_asked_still_closes(api):

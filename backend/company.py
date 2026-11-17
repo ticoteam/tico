@@ -21,19 +21,6 @@ DESCRIPTION_MAX = 2000  # a short paragraph
 WHY_MAX = 200  # one line
 FIELDS = ("vision", "description")
 
-SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS company_profile (id TEXT PRIMARY KEY CHECK (id = 'company'), "
-    "vision TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '', updated_at TEXT, updated_by TEXT)",
-)
-
-
-def ensure(c):
-    for statement in SCHEMA:
-        c.execute(statement)
-    H.add_column(c, "goals", "why", "TEXT NOT NULL DEFAULT ''")
-    H.add_column(c, "goals", "why_by_id", "TEXT")
-    H.add_column(c, "goals", "why_at", "TEXT")
-
 
 def _clean(value, limit, what, conn, actor, one_line=False):
     text = " ".join(str(value or "").split()) if one_line else str(value or "").strip()

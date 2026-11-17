@@ -1,4 +1,4 @@
-"""The Product and Engineering pair (docs/pipelines-v3.md "Default pipelines", contract §5, §10 items 1 and 2), as a
+"""The Product and Engineering pair (docs/dev/pipelines-v3.md "Default pipelines", contract §5, §10 items 1 and 2), as a
 company set up before 0.6 has it (pipeline_settings.LEGACY; Product replaced it for new companies,
 test_product_pipeline.py): who fills each role (backend/pipeline_seats.py), its upkeep and retiring
 (pipeline_settings.ensure_presets), the
@@ -170,12 +170,12 @@ def test_the_pair_has_its_roles_and_a_start_keeps_it_with_no_product_made_beside
     assert stages["product-in-development"]["on_enter"] == {"file_into": "engineering"}
     assert stages["engineering-merge"]["on_enter"] == {"act": "github.queue"}
     spec = stages["product-spec"]["requirements"][0]
-    assert (spec["line"], spec["person_id"], spec["who_oks"]) == ("Spec page", ANA, "people_only")
+    assert (spec["line"], spec["person_id"], spec["who_oks"]) == ("Spec", ANA, "people_only")
     assert "acceptance criteria someone can check" in spec["settings"]["rubric"]
     validate = stages["product-validate"]["requirements"][0]
     assert (validate["person_id"], validate["settings"]["with_release"]) == (None, True)  # Jev only; G15
     qa = stages["engineering-qa"]["requirements"][1]
-    assert (qa["line"], qa["person_id"], qa["who_oks"]) == ("QA page", ANA, "people_only")
+    assert (qa["line"], qa["person_id"], qa["who_oks"]) == ("QA report", ANA, "people_only")
     assert "the checks at the newest commit" in qa["settings"]["rubric"]
     assert "what Reviewer 1 and Reviewer 2 each found" in qa["settings"]["rubric"]
     # The two person sign-offs are the only people-only OKs, and the only requirements naming a person.
@@ -730,7 +730,7 @@ def test_when_review_2_found_nothing_the_builder_says_done_and_qa_asks_it_for_th
     qa = E.task(c, row["id"])
     assert (qa["stage_id"], qa["owner_id"]) == ("engineering-qa", "bot:builder")
     (page,) = R.standings(c, qa)
-    assert (R.name_of(page.requirement), page.state, page.on) == ("QA page", R.NOT_MET, "bot:builder")
+    assert (R.name_of(page.requirement), page.state, page.on) == ("QA report", R.NOT_MET, "bot:builder")
     assert all(w.state == W.BOT and w.who == "bot:builder" for w in W.of(c, qa))
     assert not c.execute("SELECT 1 FROM requirements WHERE visit_id IS NOT NULL").fetchone()  # no ask was added
 

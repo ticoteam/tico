@@ -126,9 +126,10 @@ function start(): Promise<Server> {
     assert.equal(await keyDialog.locator('[name=secret]').inputValue(), '', 'the field is emptied once sent');
     await keyDialog.locator('[data-close]').last().click();
     await row(team).locator('[data-chip="own:claude"]').waitFor({timeout: 20000});
-    // These runners predate subscriptions: the Claude Code cell keeps the computer's login chip, with Needs update beside it.
-    assert.equal(await row(team).locator('[data-label="Claude Code"] [data-subs-needs-update]').count(), 1);
-    assert.equal(await row(team).locator('[data-subs-pick]').count(), 0, 'no picker on a computer that cannot take one');
+    // Every computer on this Tico takes subscriptions (the runner floor is the gate), so its Claude Code cell is the picker;
+    // the key keeps its chip beside it (subscriptions.ts subsPickerHTML).
+    assert.equal(await row(team).locator('[data-subs-needs-update]').count(), 0, 'nothing says this computer needs an update');
+    assert.equal(await row(team).locator('[data-subs-pick=claude]').count(), 1, 'a computer on this Tico has a picker');
     assert.deepEqual(received(), [OWN], 'the key reached Team box');
     await openDetail(team);
     await line.waitFor();
@@ -147,9 +148,10 @@ function start(): Promise<Server> {
     await keyDialog.locator('[data-status][data-state=done]').waitFor({timeout: 20000});
     assert.match(await keyDialog.locator('[data-status]').innerText(), /Claude Code on Lab box, Spare box, Team box uses the shared key sk-…789/);
     await keyDialog.locator('[data-close]').last().click();
-    // Team box keeps its own key, which comes before a shared one: clear it there for this computer, then it runs
-    // on the shared key too.
-    await openDetail(team);
+    // Sharing puts Team box on the shared key at once (one key per tool on a computer; its own key stays saved in
+    // Settings > Models). Clear it there for this computer only, then Use the shared key brings back that same key: the
+    // fetch the server holds below.
+    await lineShows(team, '[data-shared]', 'Shared', true);
     await line.locator('[data-model-key-clear]').click();
     await keyDialog.locator('[data-key-go]:not([disabled])').click();
     await keyDialog.locator('[data-status][data-state=signed_out]').waitFor({timeout: 20000}).catch(() => {});

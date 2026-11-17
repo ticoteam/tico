@@ -136,27 +136,3 @@ def normalize_fallback(value):
         # Where it compacts while on the fallback; absent is "Same as bot".
         out["compact_at"] = compact
     return out
-
-
-def backfill_config(config, slug=None, runtime=None):
-    """Set missing `harness` from runtime; seed Tico's Gemini CLI fallback. Returns (config, changed)."""
-    config = dict(config or {})
-    changed = False
-    harness = resolve_harness(config, runtime)
-    if harness and config.get("harness") != harness:
-        config["harness"] = harness
-        changed = True
-    if harness and not config.get("runtime"):
-        config["runtime"] = runtime_of(harness)
-        changed = True
-    # A bot on a runtime's second host (Antigravity) falls back to that runtime's own CLI.
-    if slug == "assistant" and harness and runtime_of(harness) != harness and "fallback" not in config:
-        from .providers import PROVIDER_BY_RUNTIME, recommended
-
-        config["fallback"] = {
-            "harness": runtime_of(harness),
-            "model": config.get("model") or recommended(PROVIDER_BY_RUNTIME[runtime_of(harness)]["id"])["id"],
-            "reasoning_effort": config.get("reasoning_effort") or config.get("effort") or "low",
-        }
-        changed = True
-    return config, changed

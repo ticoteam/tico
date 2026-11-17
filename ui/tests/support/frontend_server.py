@@ -32,6 +32,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa  # noqa: E402
 from backend.app import create_app  # noqa: E402
 from backend.auth import Identity  # noqa: E402
 from backend import bot_settings  # noqa: E402
+from backend import task_engine as E  # noqa: E402
 from backend.config import Settings  # noqa: E402
 from backend.store import H, encode  # noqa: E402
 
@@ -249,9 +250,21 @@ def main():
             "Idempotency-Key": H.new_id(),
         },
     ).raise_for_status()
-    call(
+    made = call(
         "tasks", {"title": "Review the launch plan", "body": "Please review the plan and reply.", "owner": "human:ana"}
-    )
+    ).json()
+    review = made.get("task") or made
+    # Needs you holds only what someone asks of Ana (backend/waiting_on.py needs): Ops asks her about the plan.
+    with app.state.store.transaction() as c:
+        E.add_requirement(
+            c,
+            review["id"],
+            "bot:ops",
+            "answer",
+            "human:ana",
+            "Is the launch plan ready?",
+            seen_version=E.task(c, review["id"])["version"],
+        )
     call("tasks", {"title": "Draft the weekly update", "body": "Summarize the week for the team.", "owner": "bot:ops"})
     call(
         "files/links",

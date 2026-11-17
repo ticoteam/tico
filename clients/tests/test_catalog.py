@@ -386,6 +386,183 @@ class SeatRefresh(unittest.TestCase):
         self.assertIn("## Tone", (self.path / "AGENTS.md").read_text())
 
 
+class Layers(unittest.TestCase):
+    """A template holds only its own files: what every bot starts with is the catalog's `_base/`, and what several
+    templates share is one copy in `_shared/` that each card names. A bot gets them in that order, the template's own
+    file last, and follows each layer on a refresh like any template file."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.catalog = Path(self.tmp.name) / "catalog"
+        card = CARD.replace("template: assistant", "template: sales").replace("bootstrap: true", "bootstrap: false")
+        card += "shared_files: [.claude/skills/page, playbooks/watch.md]\n"
+        self.template = fixture(self.catalog, "sales", card)
+        (self.template / ".gitignore").unlink()
+        self.base = self.catalog / catalog.BASE
+        for rel, text in {
+            ".gitignore": ".env\n.state/\n",
+            ".claude/settings.json": SETTINGS,
+            "knowledge/README.md": "What {{bot_name}} knows.\n",
+            "playbooks/README.md": "The base's playbook index.\n",
+            "memory/learnings.md": "# Learnings\n",
+        }.items():
+            (self.base / rel).parent.mkdir(parents=True, exist_ok=True)
+            (self.base / rel).write_text(text)
+        self.shared = self.catalog / catalog.SHARED
+        for rel, text in {
+            ".claude/skills/page/SKILL.md": "---\nname: page\n---\nBuild the page for {{company_name}}.\n",
+            "playbooks/watch.md": "Watch the channel.\n",
+            "playbooks/unused.md": "Only for a card that names it.\n",
+        }.items():
+            (self.shared / rel).parent.mkdir(parents=True, exist_ok=True)
+            (self.shared / rel).write_text(text)
+
+    def make(self):
+        return catalog.materialize("sales", "sales", Path(self.tmp.name) / "ws", NAMES, ANSWERS, directory=self.catalog)
+
+    def test_a_bot_gets_the_base_then_the_shared_files_its_card_names_then_its_template(self):
+        path = self.make()
+        self.assertEqual((path / ".gitignore").read_text(), ".env\n.state/\n")
+        self.assertEqual((path / "knowledge/README.md").read_text(), "What The Assistant knows.\n")
+        self.assertEqual((path / "memory/learnings.md").read_text(), "# Learnings\n")
+        self.assertEqual((path / ".claude/settings.json").read_text(), SETTINGS)
+        # The template's own file wins over the base's at the same path.
+        self.assertEqual((path / "playbooks/README.md").read_text(), "Playbooks for The Assistant.\n")
+        self.assertEqual(
+            (path / ".claude/skills/page/SKILL.md").read_text().splitlines()[-1], "Build the page for Acme Ltd."
+        )
+        self.assertTrue((path / "playbooks/watch.md").is_file())
+        self.assertFalse((path / "playbooks/unused.md").exists())  # shared, but not named by this card
+        self.assertFalse((path / "card.yaml").exists())
+        stamp = yaml.safe_load((path / catalog.STAMP).read_text())["files"]
+        self.assertLessEqual(
+            {"knowledge/README.md", ".claude/settings.json", ".claude/skills/page/SKILL.md", "playbooks/watch.md"},
+            set(stamp),
+        )
+
+    def test_a_card_leaves_base_paths_out_and_names_only_shared_paths_there_are(self):
+        card = self.template / "card.yaml"
+        card.write_text(card.read_text() + "base_skip: [knowledge/README.md, memory]\n")
+        path = self.make()
+        self.assertFalse((path / "knowledge/README.md").exists())
+        self.assertFalse((path / "memory").exists())
+        self.assertTrue((path / "knowledge/company.md").is_file())
+        for listed in ("[playbooks/gone.md]", "[../secrets]", "playbooks/watch.md"):
+            card.write_text(CARD.replace("template: assistant", "template: sales") + f"shared_files: {listed}\n")
+            with self.assertRaises(ValueError, msg=listed):
+                catalog.files("sales", self.catalog)
+
+    def test_a_bot_follows_a_change_to_the_base_or_a_shared_file_and_a_shared_skill_that_moved(self):
+        path = self.make()
+        refresh = functools.partial(catalog.refresh, "sales", path, NAMES, directory=self.catalog)
+        (self.base / "knowledge/README.md").write_text("What {{bot_name}} knows, dated.\n")
+        (self.shared / ".claude/skills/page/SKILL.md").write_text("---\nname: page\n---\nBuild it.\n")
+        self.assertEqual(refresh(), {**NOTHING, "updated": [".claude/skills/page/SKILL.md", "knowledge/README.md"]})
+        self.assertEqual((path / "knowledge/README.md").read_text(), "What The Assistant knows, dated.\n")
+        # A file from the base is still the template's: an unchanged one is never taken for one the template dropped.
+        self.assertEqual(refresh(), NOTHING)
+        self.assertTrue((path / ".claude/settings.json").is_file())
+
+    def moving_a_skill(self, edit):
+        """A bot made while its template had `skills/check`, then the release that moves it to the shared
+        `.claude/skills/check`. `edit(path)` is what the bot did to its repository in between."""
+        (self.template / "skills/check").mkdir(parents=True)
+        (self.template / "skills/check/SKILL.md").write_text("Check it.\n")
+        (self.template / "skills/check/run.py").write_text("print('check')\n")
+        path = self.make()
+        edit(path)
+        git(path, "add", "-A")
+        git(path, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "The bot's own work")
+        (self.shared / ".claude/skills/check").mkdir()
+        for name in ("SKILL.md", "run.py"):
+            (self.template / "skills/check" / name).rename(self.shared / ".claude/skills/check" / name)
+        (self.template / "AGENTS.md").write_text(AGENT + "Read `.claude/skills/check/SKILL.md` first.\n")
+        card = self.template / "card.yaml"
+        card.write_text(
+            card.read_text().replace("[.claude/skills/page,", "[.claude/skills/page, .claude/skills/check,")
+        )
+        done = catalog.refresh("sales", path, NAMES, directory=self.catalog)
+        self.assertFalse((path / "skills/check").exists())
+        self.assertEqual(git(path, "status", "--porcelain"), "")
+        self.assertEqual(catalog.refresh("sales", path, NAMES, directory=self.catalog), NOTHING)
+        return path, done
+
+    def test_an_unedited_skill_moves_and_kept_instructions_name_its_new_path(self):
+        def edit(path):  # the runner's standing section: AGENTS.md is the bot's own from here on
+            (path / "AGENTS.md").write_text((path / "AGENTS.md").read_text() + "Use `skills/check/SKILL.md`.\n")
+            (path / "playbooks/mine.md").write_text("Run python3 skills/check/run.py; not skills/checker/.\n")
+
+        path, done = self.moving_a_skill(edit)
+        moved = [".claude/skills/check/SKILL.md", ".claude/skills/check/run.py"]
+        self.assertEqual(
+            done,
+            {
+                **NOTHING,
+                "added": moved,
+                "removed": ["skills/check/SKILL.md", "skills/check/run.py"],
+                "kept": ["AGENTS.md"],
+            },
+        )
+        self.assertEqual((path / ".claude/skills/check/SKILL.md").read_text(), "Check it.\n")
+        self.assertIn("Use `.claude/skills/check/SKILL.md`.", (path / "AGENTS.md").read_text())
+        self.assertEqual(
+            (path / "playbooks/mine.md").read_text(), "Run python3 .claude/skills/check/run.py; not skills/checker/.\n"
+        )
+
+    def test_an_edited_skill_moves_as_the_bot_has_it_and_the_stock_copy_does_not_replace_it(self):
+        def edit(path):
+            (path / "skills/check/SKILL.md").write_text("Check it twice.\n")
+            (path / "skills/check/notes.md").write_text("The bot's own notes.\n")
+
+        path, done = self.moving_a_skill(edit)
+        self.assertEqual((path / ".claude/skills/check/SKILL.md").read_text(), "Check it twice.\n")
+        self.assertEqual((path / ".claude/skills/check/notes.md").read_text(), "The bot's own notes.\n")
+        self.assertIn(".claude/skills/check/notes.md", done["added"])
+        self.assertIn("Move skills/check to .claude/skills/check", git(path, "log", "--format=%s"))
+        # The template's next change to the skill reaches the file the bot never edited; its edit stays, reported once.
+        (self.shared / ".claude/skills/check/SKILL.md").write_text("Check it, then report.\n")
+        (self.shared / ".claude/skills/check/run.py").write_text("print('check, again')\n")
+        self.assertEqual(
+            catalog.refresh("sales", path, NAMES, directory=self.catalog),
+            {**NOTHING, "updated": [".claude/skills/check/run.py"], "kept": [".claude/skills/check/SKILL.md"]},
+        )
+        self.assertEqual((path / ".claude/skills/check/SKILL.md").read_text(), "Check it twice.\n")
+
+
+class ShippedLayers(unittest.TestCase):
+    """The shipped catalog keeps one copy of each shared file."""
+
+    directory = catalog.ROOT / "templates/catalog"
+
+    def test_every_shared_file_is_one_copy_more_than_one_template_takes(self):
+        takers = {}
+        for name in read_catalog(self.directory):
+            catalog.files(name, self.directory)  # a card naming a shared path that is not there fails here
+            for rel in read_catalog(self.directory)[name].get("shared_files") or []:
+                takers.setdefault(rel, []).append(name)
+            folder = self.directory / name
+            for layer in (catalog.BASE, catalog.SHARED):
+                for rel in catalog._tree(self.directory / layer):
+                    own = folder / rel
+                    if own.is_file() and own.read_bytes() == (self.directory / layer / rel).read_bytes():
+                        self.fail(f"{name}/{rel} is a copy of {layer}/{rel}: name it in shared_files or delete it")
+        # A shared skill is named by its folder, any other shared file by its path.
+        shared = {
+            "/".join(rel.split("/")[:3]) if rel.startswith(".claude/skills/") else rel
+            for rel in catalog._tree(self.directory / catalog.SHARED)
+        }
+        self.assertEqual(shared, set(takers))
+        self.assertTrue(all(len(names) > 1 for names in takers.values()), takers)
+
+    def test_no_template_ships_a_permission_allow_list(self):
+        # Claude Code runs every turn with bypassPermissions (runner-rs/src/hosts/claude.rs): only `deny` does anything.
+        import json
+
+        for path in sorted(self.directory.glob("**/.claude/settings.json")):
+            self.assertNotIn("allow", json.loads(path.read_text()).get("permissions", {}), path)
+
+
 @functools.lru_cache(maxsize=None)
 def read_catalog(directory):
     """Every card once, by template name: the checks below look cards up a hundred times."""
@@ -414,7 +591,8 @@ class StarterBots(unittest.TestCase):
             self.assertNotIn("approval_required", card, f"{where}: sending follows the sending policy")
             manifest = yaml.safe_load((folder / "bot.yaml").read_text())
             self.assertNotIn("outbound_send", manifest, where)  # sending is the server's policy, never bot.yaml
-            routines = validate_schedules(manifest.get("routines") or [], lambda rel: (folder / rel).read_text())
+            given = catalog.files(name, self.directory)
+            routines = validate_schedules(manifest.get("routines") or [], lambda rel: given[rel].read_text())
             self.assertTrue(
                 all(r["enabled"] is False for r in routines), where
             )  # a bot with no routines has none to arm

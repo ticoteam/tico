@@ -59,6 +59,9 @@ EMPTY = (
     "update_queue",
     "task_reminders",
     "calendar_actions",
+    # The Google calendar watcher's sync tokens and what it saw: a copy's watcher learns its calendars again quietly.
+    "calendar_watches",
+    "calendar_watch_events",
     "suggestions",  # each waiting one is an Update turn the copy would give, and each outcome a report to HQ
     "meeting_deliveries",
     "worktree_waits",
@@ -73,8 +76,6 @@ EMPTY = (
     # reconnect cards: an open one is a wake the copy could send; the refusals only settle those
     "task_reconnects",
     "google_signin_refusals",
-    # refusal holds on one task or chat: their cooldowns belong to the source's runs; the copy starts with none
-    "quarantine_holds",
     # The retired Nightly memory tidy pilot's ledger: history only.
     "memory_tidy_passes",
     "memory_tidy_packets",
@@ -102,7 +103,6 @@ EMPTY = (
     "mail_items",
     "mail_intake",
     "mail_reads",
-    "mail_private_backfill",
     "watcher_runs",
     "watcher_items",
     "watcher_refs",
@@ -172,13 +172,19 @@ EMPTY = (
     "credential_uses",
     "credential_requests",
     "credential_imports",
+    "access_requests",  # an open one posts cards and grants: a copy starts with none
     "directory_credentials",
     "company_storage",
     "tico_storage",
+    # Refresh claims on OAuth sign-ins (backend/oauth_refresh.py): transient. A copy starts with none, so a claim the
+    # source holds never blocks the copy's refresh.
+    "oauth_refresh_claims",
     # API tools: emptied with their keys, so a copy never calls a vendor or shows a real vendor's call log
     "tools",
     "tool_checks",
     "tool_calls",
+    "tool_oauth_states",  # an MCP tool's sign-in on its way: its sealed PKCE verifier
+    "tool_settings",
     # company model subscriptions: the sealed logins (vault values) and which computer or attempt holds which one
     "model_subscriptions",
     "computer_subscriptions",
@@ -190,22 +196,21 @@ EMPTY = (
     "email_send_operations",
     "email_send_previews",
     "email_legacy_automations",
+    "mail_unsubscribes",  # one-click unsubscribes sent from the source: a copy sends none
+    "mail_drafts",  # ids of the source's Gmail drafts
     # mail, Slack, GitHub, Granola, meeting bots, support
-    "mail_mailboxes",
     "mailboxes",
     "mailbox_accesses",
     "google_connects",
-    "google_mail_holders",
     "slack_credentials",
     "slack_posts",
     "slack_events",
     "slack_threads",
-    # Tools > Settings > Email: the Workspace key (sealed), setup codes and the OAuth client secret (sealed), and the health each
-    # computer reported. A copy holds none of them (google_connects.client_id goes with its table).
+    # Tools > Settings > Email: the Workspace key (sealed), setup codes and the OAuth client secret (sealed). A copy holds
+    # none of them (google_connects.client_id goes with its table).
     "google_workspaces",
     "google_setup_codes",
     "google_oauth_clients",
-    "connector_reports",
     "github_app",
     "github_app_states",
     # The owner's GitHub user token (sealed, for a personal account) and its single-use states: a copy holds neither.
@@ -382,7 +387,12 @@ KEEP = (
             "blob_media",
             "blobs",
             "bot_agent_instructions",
+            # Run-budget holds before migration 20261117061834_holds_runaway moves them into `holds`: a copy is pruned
+            # before its first start runs that migration, so an unlisted table here would be emptied and its holds lost.
             "bot_budget",
+            # Quarantines on one task or chat before migration 20261117072054_holds_quarantine moves them into `holds`,
+            # kept for the same reason.
+            "quarantine_holds",
             "bot_config",
             "bot_settings",
             "bot_control",
@@ -410,10 +420,8 @@ KEEP = (
             "strategy_merges",
             "changes",
             "chat_goals",
-            "cloud_migrations",
             "schema_migrations",
             "company_profile",
-            "connector_snapshots",
             "conversations",
             "doc_sources",
             "doc_versions",
@@ -443,6 +451,7 @@ KEEP = (
             "goals",
             "health_findings",
             "health_reports",
+            "holds",  # why a bot may not start work: the copy holds what the source held (runaway runs, quarantines)
             "humans",
             "principals",
             "import_refs",
@@ -477,7 +486,6 @@ KEEP = (
             "live_meeting_windows",
             "live_meetings",
             "mail_agent_instructions",
-            "mail_messages",
             "main_pushes",
             "market_citations",
             "entity_links",
@@ -536,11 +544,13 @@ KEEP = (
             "rule_due_dates",
             "rule_due_status",
             "rule_reads",
-            "rule_suggestions",
             "rules",
             "stage_rules",
             "stage_pick_turns",
+            # Keep-warm's old per-stage setting (removed): unread, left until every install ran the migration that made it.
             "stage_keep_warm",
+            # Failed-run holds before migration 20261117072000_holds_failing moves them into `holds`: a copy is pruned
+            # before its first start runs that migration, so an unlisted table here would be emptied and its holds lost.
             "run_backoff",
             "runners",
             "runner_states",
@@ -552,7 +562,6 @@ KEEP = (
             "slack_reads",
             "memory_tidy_cards",
             "memory_tidy_keeps",
-            "stall_triage",
             "storage_moves",
             "strategy_bets",
             "strategy_versions",
@@ -562,6 +571,7 @@ KEEP = (
             "task_check_models",
             "task_delegations",
             "history_events",
+            "task_documents",
             "task_file_reviews",
             "task_links",
             "task_relations",
@@ -598,12 +608,11 @@ KEEP = (
             "ask_opinions",
             # A person's snooze of one ask in their own Needs you (backend/ask_snoozes.py): kept with its tasks.
             "ask_snoozes",
-            # Flow's suggested rules on each page check (backend/flow_suggestions.py): kept with their pipelines.
+            # Flow's suggested rules (removed): the old rows, read by nothing, kept with their pipelines.
             "flow_suggestions",
             "flow_suggestion_runs",
             # The order runs started in (backend/task_wakes.py): kept with the runs it orders.
             "run_starts",
-            "turns",
             "update_archive_overrides",
             "update_reads",
             "update_settings",
@@ -615,20 +624,6 @@ KEEP = (
             "ci_run_extensions",  # a ticket's one extension of its CI minutes (backend/ci_runs.py)
             "reach_settings",
             "reach_lines",
-            # The five change logs before migration 0064 moved them into history_events. A copy of a database from before that
-            # migration still holds them: kept, so the copy's first start moves their rows (it is pruned before it is migrated).
-            # 0064 drops them, so they are named here only until then.
-            "task_events",
-            "goal_events",
-            "market_events",
-            "company_events",
-            "strategy_events",
-            # A copy of a database from before migrations 0053/0054 still holds these: kept, so the dev server's first start
-            # moves them into usage_facts and budget_nodes (the copy is pruned before it is migrated).
-            # A copy from before migration 0072 still holds turns (the run records, now attempts rows): kept until 0072 moves them.
-            "turn_usage_segments",
-            "usage_limits",
-            "usage_pools",
             "feedbacks",  # 👍/👎 on bot work (backend/feedback.py)
             # Shared records (backend/records): locations, items and projects
             "items",
@@ -764,7 +759,7 @@ def check_destination(source, dest, force):
     holding key files, or a folder git would track."""
     if dest == source or (dest.exists() and os.path.samefile(dest, source)):
         raise SystemExit("devcopy: the destination is the source database")
-    for name in backup.KEY_FILES:
+    for name in backup.KEY_FILES + backup.OLD_KEY_FILES:
         if (dest.parent / name).exists():
             raise SystemExit(f"devcopy: {dest.parent} holds {name}; put the copy in a folder of its own")
     if not ignored_by_git(dest.parent):
@@ -810,26 +805,18 @@ def revoke_automation_secrets(c):
     present = tables(c)
     if "triggers" in present:
         c.execute("UPDATE triggers SET secret_hash='devcopy-revoked:'||id")
-        if "signing_secret" in {r[1] for r in c.execute("PRAGMA table_info(triggers)")}:
-            c.execute("UPDATE triggers SET signing_secret=NULL")
+        c.execute("UPDATE triggers SET signing_secret=NULL")
     if "listening_sources" in present:
         c.execute("UPDATE listening_sources SET token_hash=NULL")  # a push address of the live install opens nothing
     if "webhooks" in present:
-        columns = {r[1] for r in c.execute("PRAGMA table_info(webhooks)")}
-        c.execute(
-            "UPDATE webhooks SET secret='', secret_prev='', secret_prev_until=NULL"
-            + (", headers='[]'" if "headers" in columns else "")
-        )
+        c.execute("UPDATE webhooks SET secret='', secret_prev='', secret_prev_until=NULL, headers='[]'")
 
 
 def open_attempts(c):
     """(WHERE clause, args) for the attempts a copy removes as still open. A run with no job has no lease, so it is open
-    until settled_at; a job-backed attempt is open until finished_at, or while its state is open. A file from before
-    migration 0072 has no settled_at and no run without a job."""
+    until settled_at; a job-backed attempt is open until finished_at, or while its state is open."""
     open_state = "finished_at IS NULL OR state IN (%s)" % ",".join("?" * len(OPEN_ATTEMPTS))
-    if "settled_at" in {row[1] for row in c.execute('PRAGMA table_info("attempts")')}:
-        return "(job_id IS NULL AND settled_at IS NULL) OR (job_id IS NOT NULL AND (%s))" % open_state, OPEN_ATTEMPTS
-    return open_state, OPEN_ATTEMPTS
+    return "(job_id IS NULL AND settled_at IS NULL) OR (job_id IS NOT NULL AND (%s))" % open_state, OPEN_ATTEMPTS
 
 
 def prune(c, days, keep_automations=False):
@@ -888,10 +875,6 @@ def prune(c, days, keep_automations=False):
                 for child, col, key in refs
             )
             delete(table, where, (cutoff,))
-    # A copy from before migration 0072 keeps its turns whole (KEEP). A run the cut removed must not come back through
-    # its turns row as a lease-less run, so the record goes with its attempts row.
-    if "attempts" in present and "turns" in present:
-        delete("turns", "id NOT IN (SELECT id FROM attempts)")
     # Kept rows keep no way in: a value no token hashes to (the columns are NOT NULL UNIQUE where not nullable).
     if "agents" in present:
         c.execute(

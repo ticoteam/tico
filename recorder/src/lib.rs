@@ -9,7 +9,6 @@ pub mod diag;
 #[cfg(feature = "diarize")]
 pub mod diarize;
 pub mod engine;
-pub mod legacy;
 pub mod live;
 pub mod network;
 pub mod notices;

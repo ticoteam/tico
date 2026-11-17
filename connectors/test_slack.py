@@ -271,9 +271,6 @@ class Workspace(unittest.TestCase):
         # bot-<HUB_BOT> is not its folder, HUB_BOT_FOLDER is. Another bot named by slug is still found by its slug.
         import browser
 
-        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-        from connectors import mail
-
         bot = "01a19806-0460-77a7-860b-b797cea3f270"
         with tempfile.TemporaryDirectory() as root:
             workspace = Path(root)
@@ -287,9 +284,7 @@ class Workspace(unittest.TestCase):
                 with mock.patch.dict(os.environ, env):
                     self.assertEqual(slack.manifest_of(bot)[0], workspace / "bot-sales-helper" / "bot.yaml")
                     self.assertEqual(browser.load_manifest(bot), {"tools": ["own"]})
-                    self.assertEqual(mail.repo_dir(workspace, bot), workspace / "bot-sales-helper")
                     self.assertEqual(slack.manifest_of("ops")[0], workspace / "bot-ops" / "bot.yaml")
-                    self.assertEqual(mail.repo_dir(workspace, "ops"), workspace / "bot-ops")
                 with mock.patch.dict(os.environ, {**env, "HUB_BOT_FOLDER": "../outside"}):
                     self.assertEqual(slack.manifest_of(bot)[0], workspace / f"bot-{bot}" / "bot.yaml")
             finally:
@@ -297,7 +292,7 @@ class Workspace(unittest.TestCase):
 
 
 class ChannelList(FakeSlack):
-    """The channel list is the hub's (Settings > Tools > Slack); the old registry file counts only until it is imported."""
+    """The channel list is the hub's (Settings > Tools > Slack)."""
 
     rows = [
         {"id": "C0000000010", "name": "customer_success", "post": True, "readers": ["reader"], "note": ""},
@@ -308,8 +303,7 @@ class ChannelList(FakeSlack):
     def setUp(self):
         super().setUp()
         self.asked = []
-        self.file = Path(self.tmp.name) / "slack-channels.yaml"
-        self.answer = {"channels": self.rows, "registry_file": {"present": False, "channels": 0, "imported": True}}
+        self.answer = {"channels": self.rows}
         slack.HUB_GET = lambda path: (
             {"stage": "active"} if path.startswith("bots/") else (self.asked.append(path), self.answer)[1]
         )
@@ -317,31 +311,19 @@ class ChannelList(FakeSlack):
     def tearDown(self):
         super().tearDown()
 
-    def test_a_run_reads_the_list_from_the_hub_and_the_file_only_until_it_is_imported(self):
-        self.file.write_text("channels:\n  - {id: C0000000012, name: old_one, readers: reader}\n")
-        self.assertEqual(
-            [c["name"] for c in slack.load_channels(self.file)], ["customer_success", "agents", "release_notes"]
-        )
+    def test_a_run_reads_the_list_from_the_hub(self):
+        self.assertEqual([c["name"] for c in slack.load_channels()], ["customer_success", "agents", "release_notes"])
         self.assertEqual(self.asked, ["slack/channels"])
-        slack._CACHE.clear()
-        self.answer["registry_file"]["imported"] = False
-        self.assertEqual(
-            [c["name"] for c in slack.load_channels(self.file)],
-            ["customer_success", "agents", "release_notes", "old_one"],
-        )
 
-    def test_without_the_hub_the_file_is_used_and_with_neither_the_refusal_says_where_the_list_is(self):
+    def test_without_the_hub_there_is_no_list_and_the_refusal_says_where_it_is(self):
         self.answer = None
         with self.assertRaises(slack.Refused) as refused:
-            slack.load_channels(self.file)
+            slack.load_channels()
         self.assertIn("Settings > Tools > Slack", refused.exception.hint)
-        slack._CACHE.clear()
-        self.file.write_text("channels:\n  - {id: C0000000012, name: old_one}\n")
-        self.assertEqual([c["name"] for c in slack.load_channels(self.file)], ["old_one"])
 
     def test_a_reader_on_the_list_may_read_a_channel_outside_its_declared_scope(self):
         manifest = {"tools": [{"service": "slack", "can": ["read"], "channels": ["agents"]}]}
-        rows = slack.load_channels(self.file)
+        rows = slack.load_channels()
         slack.check_history_scope(manifest, "reader", ["#agents", "C0000000010"], rows)
         with self.assertRaises(slack.Refused):  # listed, but its reader is someone else
             slack.check_history_scope(manifest, "other-bot", ["#customer_success"], rows)
@@ -353,7 +335,7 @@ class ChannelList(FakeSlack):
 
     def test_without_channels_a_bot_reads_only_the_channels_that_name_it_as_a_reader(self):
         manifest = {"tools": [{"service": "slack", "can": ["read"]}]}
-        rows = slack.load_channels(self.file)
+        rows = slack.load_channels()
         slack.check_history_scope(manifest, "reader", ["#customer_success", "C0000000010"], rows)
         for refs in (["#agents"], ["#release_notes"], ["#general"]):  # no reader, or not on the list at all
             with self.assertRaises(slack.Refused, msg=refs):
@@ -645,7 +627,7 @@ class PrincipalScope(FakeSlack):
         if path == "me":
             return self.principal  # None: the hub cannot say
         if path == "slack/channels":
-            return {"channels": self.channels, "registry_file": {"present": False, "channels": 0, "imported": True}}
+            return {"channels": self.channels}
         return {"stage": "active"} if path.startswith("bots/") else None
 
     def as_token(self, principal):

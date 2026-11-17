@@ -46,6 +46,7 @@ from fastapi.responses import PlainTextResponse
 from . import hubdb as H
 from . import models as M
 from .store import Problem
+from .api_contract import api_v2
 
 SUMMARY_MAX = 400  # one paragraph: what every bot reads on every run
 VISION_MAX = 400  # one or two sentences, the limit the Goals page has had
@@ -93,29 +94,11 @@ SOURCES = (TRIPPED, LENS, BRIEFING)  # what may prompt a strategy_draft proposal
 PLAYBOOK = "playbooks/bet-tripped.md"
 GUIDES_DIR = Path(__file__).resolve().parent / "strategy_guides"
 
-SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS strategy_versions (id TEXT PRIMARY KEY, n INTEGER UNIQUE, "
-    "status TEXT NOT NULL CHECK (status IN ('draft','published')), guide TEXT NOT NULL DEFAULT 'default', "
-    "summary TEXT NOT NULL DEFAULT '', vision TEXT NOT NULL DEFAULT '', sections TEXT NOT NULL DEFAULT '{}', "
-    "bets TEXT NOT NULL DEFAULT '[]', note TEXT NOT NULL DEFAULT '', revision INTEGER NOT NULL DEFAULT 0, "
-    "updated_at TEXT, updated_by TEXT, published_at TEXT, published_by TEXT)",
-    # The one-draft rule.
-    "CREATE UNIQUE INDEX IF NOT EXISTS strategy_versions_draft ON strategy_versions(status) WHERE status='draft'",
-    "CREATE TABLE IF NOT EXISTS strategy_bets (id TEXT PRIMARY KEY, statement TEXT NOT NULL, "
-    "why TEXT NOT NULL DEFAULT '', rules_out TEXT NOT NULL DEFAULT '', wrong_if TEXT, cites TEXT NOT NULL DEFAULT '[]', "
-    "status TEXT NOT NULL CHECK (status IN ('proposed','active','retired')), since_n INTEGER, until_n INTEGER, "
-    "rank INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, updated_by TEXT NOT NULL)",
-)
-
 
 def ensure(c):
-    """The tables, the goals column, and once the draft: from the company profile's vision (the vision) and
-    description (what we sell) where an install has them, empty otherwise. Every start brings
+    """Once, the draft: from the company profile's vision (the vision) and description (what we sell) where an
+    install has them, empty otherwise. Every start brings
     company_profile.vision in line with the team's vision (sync_vision), whatever an older release left there."""
-    for statement in SCHEMA:
-        c.execute(statement)
-    H.add_column(c, "goals", "bet_id", "TEXT")
-    c.execute("CREATE INDEX IF NOT EXISTS goals_bet ON goals(bet_id) WHERE bet_id IS NOT NULL")
     if c.execute("SELECT 1 FROM strategy_versions LIMIT 1").fetchone():
         try:
             sync_vision(c)
@@ -1003,7 +986,15 @@ def file_card(c, owner, proposal):
     requester = G.AUTO_ACTOR if GA.manager_ready(c) else H.KEEPER
     title, body = GA._ask(c, {"kind": "proposal", "proposal": proposal})
     # A realign card is urgent (goal_asks.urgent): past the daily cap, so publishing never rolls back on it.
-    made = H.task_create(c, requester, title, body, owner, lint=False, lane="company")
+    if H.is_human(owner):
+        # The Strategy Owner's task with its question to the owner (backend/person_asks.py): in their Needs you.
+        from . import person_asks
+
+        made = person_asks.ask(
+            c, requester, owner, title, body, title, GA.WHYS["proposal"], bot=G.AUTO_ACTOR, lane="company"
+        )
+    else:
+        made = H.task_create(c, requester, title, body, owner, lint=False, lane="company")
     c.execute(
         "INSERT INTO goal_asks (kind, ref, owner, task_id, created_at) VALUES ('proposal',?,?,?,?)",
         (proposal["id"], owner, made["id"], H.now()),
@@ -1112,8 +1103,8 @@ def save_asked_vision(c, actor, task_id, text):
 
 def owners_words(c, actor, task_id):
     """The Strategy Owner writes the draft or publishes only on what the owner told it: a task of its own on which the
-    owner wrote at least VISION_MIN_WORDS words: their own comments and answers to its asks, such as a get-aligned
-    question. Never the task's body: the bot can write that (filed "for" them, or edited after). Returns whose words,
+    owner wrote on: any comment or answer of their own, a tapped choice or "Yes" included (the answer to a add-to-flow
+    question). Never the task's body: the bot can write that (filed "for" them, or edited after). Returns whose words,
     for the history: {task, person}."""
     from . import goals as G
     from . import reach
@@ -1128,11 +1119,11 @@ def owners_words(c, actor, task_id):
         not person
         or not task
         or actor not in (task.get("owner_id"), task.get("requester_id"))
-        or not _vision_long_enough(_owner_wrote(c, task["id"], person))
+        or not _owner_wrote(c, task["id"], person).strip()
     ):
         raise Problem(
             "invalid",
-            f"Name a task of yours (`task`) where {who} told you what to change; write only what they said",
+            f"Name a task of yours (`task`) that {who} answered or commented on; write only what they said",
             422,
         )
     return {"task": task["id"], "person": person}
@@ -1367,12 +1358,19 @@ def install(app, store, auth, mutate):
             raise Problem(
                 "forbidden",
                 "A bot proposes a change to the strategy and the owner confirms it "
-                "(POST /api/v2/goal-proposals, kind strategy_draft)",
+                "(POST /api/v2/proposals, kind strategy_draft)",
                 403,
             )
         raise Problem("forbidden", "Only the owner writes the strategy and its bets, on their own click", 403)
 
-    @app.get("/api/v2/strategy")
+    @app.get(
+        "/api/v2/strategy",
+        **api_v2(
+            "Strategy",
+            "getStrategy",
+            "The published strategy, its bets with their goals and colour, the website; the owner also gets the draft",
+        ),
+    )
     def strategy_show(request: Request):
         """The published version and its bets, each bet's goals and colour; for the owner the draft and every bet."""
         who = request.state.identity
@@ -1380,7 +1378,14 @@ def install(app, store, auth, mutate):
         with store.read() as c:
             return view(c, auth, who)
 
-    @app.put("/api/v2/strategy/draft")
+    @app.put(
+        "/api/v2/strategy/draft",
+        **api_v2(
+            "Strategy",
+            "updateStrategyDraft",
+            "The owner, or the Strategy Owner naming `task`, a task of its own the owner wrote on (their words; the history keeps whose): change the draft, only the fields sent; a stale revision answers 409",
+        ),
+    )
     def strategy_draft(request: Request, body: M.StrategyDraft):
         """Owner only. Only the fields sent change; "" clears one. `revision` is the draft's as read: another answers
         409 with the current one."""
@@ -1396,7 +1401,14 @@ def install(app, store, auth, mutate):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/strategy/vision")
+    @app.post(
+        "/api/v2/strategy/vision",
+        **api_v2(
+            "Strategy",
+            "saveAskedVision",
+            "The Strategy Owner only: save the vision the owner sent on its vision question, in their words",
+        ),
+    )
     def strategy_vision(request: Request, body: M.StrategyVision):
         """The Strategy Owner only: save the vision the owner sent on its vision question, in their words
         (save_asked_vision). Saving it closes the question."""
@@ -1408,7 +1420,14 @@ def install(app, store, auth, mutate):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/strategy/publish")
+    @app.post(
+        "/api/v2/strategy/publish",
+        **api_v2(
+            "Strategy",
+            "publishStrategy",
+            "The owner, or the Strategy Owner naming `task` as for the draft: the draft becomes the next numbered version, and its note says whose words it was",
+        ),
+    )
     def strategy_publish(request: Request, body: M.StrategyPublish):
         """Owner only: the draft becomes the next numbered version."""
         who = request.state.identity
@@ -1419,14 +1438,16 @@ def install(app, store, auth, mutate):
 
         return mutate(request, body, work)
 
-    @app.get("/api/v2/strategy/versions")
+    @app.get(
+        "/api/v2/strategy/versions", **api_v2("Strategy", "listStrategyVersions", "Published versions, newest first")
+    )
     def strategy_versions(request: Request, limit: int = VERSIONS_PAGE):
         """The published versions, newest first: n, note, published, published_by, guide, summary."""
         reader(request.state.identity)
         with store.read() as c:
             return versions(c, limit)
 
-    @app.get("/api/v2/strategy/versions/{n}")
+    @app.get("/api/v2/strategy/versions/{n}", **api_v2("Strategy", "getStrategyVersion", "One published version whole"))
     def strategy_version(request: Request, n: int):
         """One published version, whole: its sections and its bets as they were."""
         reader(request.state.identity)
@@ -1436,7 +1457,10 @@ def install(app, store, auth, mutate):
             raise Problem("not_found", f"There is no strategy version {n}", 404)
         return row
 
-    @app.get("/api/v2/strategy/diff")
+    @app.get(
+        "/api/v2/strategy/diff",
+        **api_v2("Strategy", "diffStrategyVersions", "What changed between two published versions"),
+    )
     def strategy_diff(request: Request):
         """`?from=&to=`: what changed between two published versions."""
         reader(request.state.identity)
@@ -1447,7 +1471,14 @@ def install(app, store, auth, mutate):
         with store.read() as c:
             return diff(c, a, b)
 
-    @app.post("/api/v2/strategy/bets")
+    @app.post(
+        "/api/v2/strategy/bets",
+        **api_v2(
+            "Strategy",
+            "addStrategyBet",
+            "Owner only, or the Strategy Owner on the owner's words (`task`: its task they wrote them on): a new bet",
+        ),
+    )
     def strategy_bet_add(request: Request, body: M.StrategyBetCreate):
         """Owner only, or the Strategy Owner on the owner's words (`task`): a new bet, proposed unless said otherwise."""
         who = request.state.identity
@@ -1471,7 +1502,14 @@ def install(app, store, auth, mutate):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/strategy/bets/{bet_id}")
+    @app.post(
+        "/api/v2/strategy/bets/{bet_id}",
+        **api_v2(
+            "Strategy",
+            "updateStrategyBet",
+            "Owner only, or the Strategy Owner on the owner's words (`task`): change a bet, only the fields sent",
+        ),
+    )
     def strategy_bet_update(request: Request, bet_id: str, body: M.StrategyBetUpdate):
         """Owner only, or the Strategy Owner on the owner's words (`task`): change a bet, only the fields sent, its rank
         and its status included."""
@@ -1497,7 +1535,14 @@ def install(app, store, auth, mutate):
 
         return mutate(request, body, work)
 
-    @app.get("/api/v2/strategy/summary")
+    @app.get(
+        "/api/v2/strategy/summary",
+        **api_v2(
+            "Strategy",
+            "getStrategySummary",
+            "The published strategy as the text every run carries; {text, n} with Accept: application/json",
+        ),
+    )
     def strategy_summary(request: Request):
         """Plain text: what every run's context carries. A caller that asks for JSON (the hub client) gets
         {text, n}."""
@@ -1512,7 +1557,10 @@ def install(app, store, auth, mutate):
             return {"text": text, "n": published["n"]}
         return PlainTextResponse(text)
 
-    @app.get("/api/v2/strategy/guides")
+    @app.get(
+        "/api/v2/strategy/guides",
+        **api_v2("Strategy", "listStrategyGuides", "The question guides the Strategy Owner drafts with"),
+    )
     def strategy_guides(request: Request):
         """Deprecated: the Strategy Owner's drafting questions, the default guide only. The exercises run against a
         strategy are lenses (GET /lenses)."""

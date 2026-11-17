@@ -4,11 +4,10 @@
    screen (GET /v2/tasks/{id}, as Open task reads it), and the next item's is read ahead; Needs you itself carries
    nothing new. "Go to … ↗" opens the place the text names: an app link (#/strategy, or a link to this team's app), else
    a "Page → Tab" phrase that matches a sidebar page and one of its tabs (Finance → Access). No model is asked.
-   The heading on the right is short: a person's own task is its title. A question is itself, once, in full; its task's
-   title and text are the background under it (decideBgHTML), one line until it is opened (#3786).
-   Reply (a person's own task) and Ask back (a question) post a comment on the task that @mentions whoever asked, which
-   wakes that bot or notifies that person; the item stays in Needs you. A task Tico filed itself has no one to reply to:
-   the box is a note on the task, which reaches the bots following it.
+   A question's heading is itself, once, in full; its task's title and text are the background under it (decideBgHTML),
+   one line until it is opened (#3786).
+   Ask back (a question) posts a comment on the task that @mentions whoever asked, which wakes that bot or notifies that
+   person; the item stays in Needs you.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -22,6 +21,8 @@ interface DecAboutTask {
   attachments?: {id: string; name?: string | null}[] | null;
   links?: {url: string; title?: string | null; kind?: string | null}[] | null;
   tags?: {owner?: string | null}[] | null;
+  conversation_id?: string | null;   // its thread: Flow's chat on an ask (decide.ts decideChatMount)
+  documents?: TaskDoc[] | null;      // its documents: a phone's tabs on an ask (decide.ts decideTabsOf)
 }
 /** One task's read for this screen, by task id: loading (a skeleton), ready, or failed with its words. */
 interface DecAbout {
@@ -30,36 +31,39 @@ interface DecAbout {
   error: string;
 }
 const DEC_ABOUT = new Map<string, DecAbout>();   // held while the screen is open (decideStop clears it)
-let DEC_SENT = '';                               // the item whose reply was just sent: "Sent" shows under its box
+let DEC_SENT = '';                               // the item whose Ask back was just sent: "Sent" shows under its box
 /** A reply an org rule held (the comment's answer, `held`): shown under its box as the task page shows it, with the
     rule and the actions the sender may take. Nothing was written; an "Ask first" hold may still be sent by a reviewer. */
-interface DecHeld { item: string; box: '#dc-reply' | '#dc-other'; hold: RuleHold; words: string; }
+interface DecHeld { item: string; box: '#dc-other' | '#dc-other-note'; hold: RuleHold; words: string; }
 /** Kept per item while the screen is open, so a reply held after the person moved on still shows when they come back. */
 const DEC_HELD = new Map<string, DecHeld>();
 /** The items whose reply is on its way: a second Send waits for the first (the walk may move on meanwhile). */
 const DEC_SENDING = new Set<string>();
 let DEC_RESUME = '';                             // the item Go to left from: ▶ picks up there
-/** A question shorter than this opens with its task's background shown on a phone: it may need the context. */
-const DEC_BG_OPEN_UNDER = 40;
 
 // ---- reading
-/** The task behind an item, read once while the screen is open; on arrival the item on screen draws again. */
-function decideAboutLoad(taskId: string) {
-  if (!taskId || DEC_ABOUT.has(taskId)) return;
-  const v: DecAbout = {state: 'loading', task: null, error: ''};
+/** The task behind an item, read once while the screen is open; on arrival the item on screen draws again. `fresh`
+    reads it again and keeps the task read before until the new one arrives, so its tabs stay where they are. */
+function decideAboutLoad(taskId: string, fresh = false) {
+  const was = taskId ? DEC_ABOUT.get(taskId) : undefined;
+  if (!taskId || (was && !fresh)) return;
+  const v: DecAbout = was?.task ? {state: 'ready', task: was.task, error: ''} : {state: 'loading', task: null, error: ''};
   DEC_ABOUT.set(taskId, v);
   void (async () => {
     try {
       const r = await get<{task?: DecAboutTask | null}>(`/v2/tasks/${encodeURIComponent(taskId)}`);
       v.task = r?.task || null; v.state = v.task ? 'ready' : 'failed';
       if (!v.task) v.error = 'This task could not be read.';
-    } catch (e) { v.state = 'failed'; v.error = errorMessage(e, 'This task could not be read.'); }
+    } catch (e) {
+      // A read again that fails keeps the task read before.
+      if (!v.task) { v.state = 'failed'; v.error = errorMessage(e, 'This task could not be read.'); }
+    }
     if (DEC_ABOUT.get(taskId) !== v) return;
     const st = DEC, it = st ? decideCurrent(st) : null;
     if (!st || !it || decideTaskId(it) !== taskId) return;
     // An OK shows its own content; one with nothing attached shows the task's text (decidePaintBody), and its side stays.
     decidePaintBody(st);
-    if (decideKind(it) !== 'ok') decidePaintSideKeepGive(st, it);
+    if (decideKind(it) !== 'ok' || decideChatOf(it)) decidePaintSideKeepGive(st, it);
   })();
 }
 /** The item on screen, and ahead of it the next item that shows a task's text. An OK shows its own content; one that
@@ -101,8 +105,8 @@ function decideHandle(actor: string): string {
 /** "From Strategy Owner · 2h ago" (a task, a mention). A question says who asked on its own meta line. */
 function decideAboutWho(it: NeedsEntry, kind: AskKind, t: DecAboutTask | null): string {
   const title = t?.title || it.task?.title || '';
-  // A person's own task and a bare OK carry the title as their heading already.
-  const on = kind !== 'yours' && kind !== 'ok' && title ? ` · on <b>${esc(title)}</b>` : '';
+  // A bare OK carries the title as its heading already.
+  const on = kind !== 'ok' && title ? ` · on <b>${esc(title)}</b>` : '';
   const from = kind === 'mention' ? it.from_id || '' : t?.requester_id || it.task?.requester_id || '';
   const name = !from || from === 'keeper' || !/^(bot|human):/.test(from) ? 'Tico' : from === myActor() ? 'you' : actorLabel(from);
   const when = kind === 'mention' ? it.since : t?.created_at;
@@ -123,18 +127,14 @@ function decideAboutHTML(it: NeedsEntry, kind: AskKind, head = ''): string {
   const chips = decideAboutChips(t!, text), bare = !head && !text && !chips && !quote ? ' dc-bare' : '';
   return `<div class="dc-doc${bare}">${head}${decideAboutWho(it, kind, t)}${quote}${body}${chips}</div>`;
 }
-/** A question's background: its task's title, cut to one line, which opens to the task's text, links and files.
-    `open` as it was drawn last for this item, else open on a wide screen (the left pane is there for it) and on a
-    phone only under a short question. A task with no text or chips is its title alone, nothing to open. */
-function decideBgHTML(it: NeedsEntry, open: boolean | undefined): string {
+/** A question's task: its title, then its text, links and files, open (the left pane; a phone's Task tab). */
+function decideBgHTML(it: NeedsEntry): string {
   const v = decideAboutOf(it), t = v?.task || null, title = t?.title || it.task?.title || '';
   const text = decideAboutText(t), chips = t ? decideAboutChips(t, text) : '';
-  const summary = `<span class="dc-bg-t">${esc(title)}</span>`;
   const inner = !v || v.state === 'loading' ? skelRows(3) : v.state === 'failed' ? `<p class="muted">${esc(v.error)}</p>`
     : (text ? `<div class="md dc-md">${md(text)}</div>` : '') + chips;
-  if (!inner) return `<div class="dc-bg dc-bg-only">${summary}</div>`;
-  const shown = open ?? (!decidePhone() || decideQuestionOf(it).length < DEC_BG_OPEN_UNDER);
-  return `<details class="dc-bg"${shown ? ' open' : ''}><summary>${summary}</summary><div class="dc-bg-body">${inner}</div></details>`;
+  // The task open, never behind a chevron: its title, then its text, links and files.
+  return `<div class="dc-bg"><h3 class="dc-bg-t">${esc(title)}</h3>${inner ? `<div class="dc-bg-body">${inner}</div>` : ''}</div>`;
 }
 /** A question as its asker wrote it: a stage's typed question, else the ask's own sentence. */
 const decideQuestionOf = (it: NeedsEntry): string => String(it.ask?.typed?.question || it.ask?.line || it.line || '').trim();
@@ -209,26 +209,11 @@ function decideGoThere(st: DecState, href: string) {
   location.hash = href;
 }
 
-// ---- the heading
-/** A person's own task's heading: its title. Null for an item whose heading decide.ts draws (an OK, a question, a
-    stuck task, a mention). */
-function decideHeadOf(it: NeedsEntry, kind: AskKind): {head: string} | null {
-  return kind === 'yours' ? {head: it.task?.title || decideAboutOf(it)?.task?.title || it.line} : null;
-}
-
-// ---- the reply
-/** The reply box under a person's own task: "Reply to <who asked>", or "Note on the task" when Tico filed it. */
-function decideReplyHTML(st: DecState, it: NeedsEntry): string {
-  const to = decideReplyTo(it), label = to ? `Reply to ${actorLabel(to)}` : 'Note on the task';
-  const off = st.busy ? ' disabled' : '';
-  return `<div class="dc-reply"><label class="dc-notes"><span>${esc(label)}</span><textarea id="dc-reply" data-dc-grow rows="3" maxlength="4000"></textarea></label>
-    ${decideFilesHTML(st)}<div class="dc-reply-row">${decideBtn('reply', 'Send', false, ` data-dc-needs="#dc-reply" disabled${off}`)}`
-    + `${DEC_SENT === it.id ? '<span class="dc-sent" role="status">Sent</span>' : ''}</div>${decideHeldHTML(it, '#dc-reply')}</div>`;
-}
-/** Reply and Ask back: the words (and the files added with 📎) as a comment on the task that @mentions whoever asked,
-    or, given `ask` (a bot's question), that names the question, which the server writes to the bot that asked. The item stays; the box clears and says Sent. A comment an org rule holds writes nothing: the words
+// ---- Ask back
+/** Ask back: the words (and the files added with 📎) as a comment on the task that @mentions whoever asked, or, given
+    `ask` (a bot's question), that names the question, which the server writes to the bot that asked. The item stays; the box clears and says Sent. A comment an org rule holds writes nothing: the words
     stay. */
-async function decideReplySend(st: DecState, it: NeedsEntry, box: '#dc-reply' | '#dc-other', ask = '') {
+async function decideReplySend(st: DecState, it: NeedsEntry, box: '#dc-other' | '#dc-other-note', ask = '') {
   const words = decideNote(box), taskId = decideTaskId(it);
   if (!words || !taskId || st.busy || DEC_SENDING.has(it.id)) return;
   const files = await decideFilesReady(st, it.id);
@@ -263,7 +248,7 @@ async function decideReplySend(st: DecState, it: NeedsEntry, box: '#dc-reply' | 
   decidePaintSide(st);
 }
 /** The held reply under its box: what happened in one line, then the hold's card (rule, and Edit and resend). */
-function decideHeldHTML(it: NeedsEntry, box: '#dc-reply' | '#dc-other'): string {
+function decideHeldHTML(it: NeedsEntry, box: '#dc-other' | '#dc-other-note'): string {
   const held = DEC_HELD.get(it.id), h = held?.box === box ? held.hold : null;
   if (!h) return '';
   const line = h.outcome === 'escalated' ? 'Held for a reviewer: a rule asks first. It is posted if they send it anyway.'

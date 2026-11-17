@@ -112,6 +112,9 @@ def test_a_body_that_is_not_a_list_of_readings_is_refused(hub):
 
 def test_over_a_persons_minute_allowance_readings_are_dropped_and_counted(hub):
     app, client = hub
+    # One minute throughout: a run that crossed a minute boundary started a fresh allowance and kept the 121st reading.
+    still = time.time()
+    app.state.web_allowance.clock = lambda: still
     batch = [{"metric": "inp", "route": "/chat", "ms": 40}] * flight.WEB_BATCH
     for _ in range(flight.WEB_PER_MINUTE // flight.WEB_BATCH):
         assert post(client, "ben-test", batch).json() == {"kept": flight.WEB_BATCH, "dropped": 0}

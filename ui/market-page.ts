@@ -395,7 +395,7 @@ function marketQuestionHtml(setup: MarketSetupState) {
   const [key, question, hint, placeholder] = MARKET_QUESTIONS[setup.step]!;
   const last = setup.step === MARKET_QUESTIONS.length - 1;
   return `<form class="market-start" data-market-setup data-step="${setup.step}" novalidate>
-      <h1><label for="market-answer">${esc(question)}</label></h1>
+      <h1><label for="market-answer">${esc(question)}</label>${needsMarkHTML(18)}</h1>
       <p class="market-hint" id="market-hint">${esc(hint)} <span class="market-count">${setup.step + 1} of ${MARKET_QUESTIONS.length}</span></p>
       <textarea id="market-answer" name="answer" rows="4" maxlength="4000" autocomplete="off" aria-describedby="market-hint" placeholder="${esc(placeholder)}">${esc(setup.answers[key] || '')}</textarea>
       <p class="err" data-market-error role="alert" hidden></p>
@@ -411,11 +411,11 @@ function marketBlankHtml(row: MarketResearchRow | null, setup: MarketSetupState 
       <span class="market-spin" aria-hidden="true"></span>
       <div><strong>Researching your market.</strong>
         <p>This usually takes 5–10 minutes.${row.task ? ` <a href="#/task/${esc(row.task)}">View task</a>` : ''}</p></div></div>`;
-  if (!(S.me?.cloud && S.me.role === 'owner') || !setup) return '<p class="market-none">Nothing here yet.</p>';
+  if (S.me?.role !== 'owner' || !setup) return '<p class="market-none">Nothing here yet.</p>';
   if (!setup.skipped) return marketQuestionHtml(setup);
   const answered = MARKET_QUESTIONS.filter(([key]) => setup.answers[key]).length;
   return `<div class="market-start" data-market-resume>
-      <h1>Set up Market</h1>
+      <h1>Set up Market${needsMarkHTML(18)}</h1>
       <p class="market-hint">${MARKET_QUESTIONS.length} questions about your market set what Market tracks. You've answered ${answered}.</p>
       <div class="market-start-actions"><button class="primary" type="button" data-market-continue>Continue</button>
         <a href="#/docs?import=1">Attach files</a></div>
@@ -433,7 +433,7 @@ async function mountBlank(shell: HTMLElement): Promise<MarketMounted> {
   // An empty market has no map to open: the header's ⋯ keeps only its Copy link (Market's own header only).
   const head = marketPageHead(shell);
   if (head) pageHeadSet(head, 'more', PAGE_HEAD_COPY);
-  if (S.me?.cloud && S.me.role === 'owner') {
+  if (S.me?.role === 'owner') {
     try { setup = (await get<{market: MarketSetupState | null}>('/v2/librarian/setup')).market; } catch { setup = null; }
     if (setup) setup = {...setup, answers: {...setup.answers}};
     // Filed from another browser and still being worked on: the notice, not the questions. Its thirty minutes
@@ -451,6 +451,8 @@ async function mountBlank(shell: HTMLElement): Promise<MarketMounted> {
     const row = marketResearchGet();
     shell.className = 'market-shell market-shell-blank';
     shell.innerHTML = marketBlankHtml(row, setup);
+    // The questions (or their resume) are the owner's to answer; a research notice is not.
+    strategyTabNeeds('market', !row && S.me?.role === 'owner' && !!setup);
     watch(!!row);
     if (!row) shell.querySelector<HTMLElement>('#market-answer')?.focus();
   };

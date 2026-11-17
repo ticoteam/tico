@@ -1,5 +1,5 @@
 # pyright: strict
-"""Jev's verdicts on pages: one per page version and rubric (docs/pipelines-v3.md "The nine requirement kinds", 3).
+"""Jev's verdicts on pages: one per page version and rubric (docs/dev/pipelines-v3.md "The nine requirement kinds", 3).
 
 A page attached to a page requirement (backend/task_pages.py) is owed a verdict. The Jev step on the Heartbeat (`run`)
 judges what is owed through `pipeline_judges.judge_many`, with no write transaction held during the model call, and
@@ -59,6 +59,26 @@ def get(conn: "sqlite3.Connection", file_id: str, version: int, key: str) -> Row
         "SELECT * FROM page_verdicts WHERE file_id=? AND version=? AND rubric_hash=?",
         (file_id, int(version), key),
     )
+
+
+def checks_of(conn: "sqlite3.Connection", file_id: str, version: int | None = None) -> list[str]:
+    """The check rows of a page version (its newest, with no version) that Jev passed: one short line per part of the
+    check it was judged by (pipeline_judges.CHECKS, `Part.found`). An OK that shows the page lists them under its
+    question; [] when no verdict on it passed, or its check is a company's own."""
+    from . import pipeline_judges as PJ
+    from . import task_requirements as R
+
+    found = conn.execute(
+        "SELECT p.requirement_id FROM requirement_pages p JOIN page_verdicts v ON v.file_id = p.file_id "
+        "AND v.version = p.version AND v.rubric_hash = COALESCE(p.rubric_hash, '') WHERE p.file_id=? "
+        "AND (? IS NULL OR p.version=?) "
+        "AND v.verdict='met' ORDER BY p.version DESC, v.updated_at DESC LIMIT 1",
+        (file_id, version, version),
+    ).fetchone()
+    requirement: Row = (R.get(conn, str(found[0])) if found else None) or {}
+    settings: Row = requirement.get("settings") or {}
+    check = PJ.check_of(settings.get("rubric"))
+    return [part.found for part in PJ.CHECKS[check] if part.found] if check else []
 
 
 def owe(conn: "sqlite3.Connection", file_id: str, version: int, key: str) -> Row:
@@ -260,9 +280,9 @@ def _nudge(conn: "sqlite3.Connection", verdict: Row, pages: list[Row]) -> None:
         E.changed(conn, task_id, E.SYSTEM)
         if said == "not_met" and R.jev_gates(requirement):
             line = (
-                f'Jev sent back "{R.name_of(requirement)}": {reasons}'
+                f'Decision model sent back "{R.name_of(requirement)}": {reasons}'
                 if reasons
-                else (f'Jev sent back "{R.name_of(requirement)}"')
+                else (f'Decision model sent back "{R.name_of(requirement)}"')
             )
             E.tell_owner(conn, task_id, line, f"jev:{verdict['id']}")
         elif said in ("unsure", "failed"):
@@ -287,7 +307,7 @@ def _unsure_wake(conn: "sqlite3.Connection", task_id: str, page: Row, what: str)
     standing = R.standing(conn, row, requirement, answer)
     name = R.name_of(requirement)
     if standing.state == R.WAITING and standing.line.startswith(R.DECIDE) and standing.on:
-        what_jev = "could not check" if "Jev couldn't check" in standing.line else "is unsure of"
+        what_jev = "could not check" if "Decision model couldn't check" in standing.line else "is unsure of"
         lead = f'Jev {what_jev} "{name}": you decide it, as the pipeline\'s manager.'
         task_wakes.add(
             conn,

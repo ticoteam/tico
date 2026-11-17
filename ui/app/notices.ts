@@ -333,7 +333,6 @@ const namedRoster = (rows: Employee[]): Employee[] => rows.map(row => {
 });
 // Small compatibility hook for separately loaded UI modules. It exposes only deployment mode,
 // never identity or credentials.
-window.ticoIsCloud = () => !!S.me?.cloud;
 // Modules loaded on their own still need the environment's names for anything a person reads.
 window.ticoAppName = () => appName();
 window.ticoAssistantName = () => assistantName();

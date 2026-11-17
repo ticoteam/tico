@@ -3,33 +3,19 @@
 Settings > Tools > Slack (an owner or an admin), `tico slack channel`, the MCP tools and BotOps all change this one
 list. An entry names the channel (its name, its id, or both), the bots that read it, whether bots may post there
 (on by default, like every internal channel) and a note. The Slack gateway's readers' pass and the `connectors/slack.py`
-connector read it; nobody edits a file.
-
-An install that still has `registry/slack-channels.yaml` keeps working: its channels are listed too, marked as coming
-from the file, until an owner or admin imports them once (`POST /api/v2/slack/channels/import`). After the import the
-file is ignored, so removing a channel here removes it for good. A channel shared outside the workspace is refused by
-the gateway and the connector whatever this list says: neither can be overridden here.
+connector read it; nobody edits a file. A channel shared outside the workspace is refused by the gateway and the
+connector whatever this list says: neither can be overridden here.
 """
 
 import json
 import re
-from pathlib import Path
 
-import yaml
 from fastapi import Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from . import hubdb as H
 from .store import Problem
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS slack_channels(
- key TEXT PRIMARY KEY, channel_id TEXT NOT NULL DEFAULT '', name TEXT NOT NULL DEFAULT '',
- readers TEXT NOT NULL DEFAULT '[]', post INTEGER NOT NULL DEFAULT 1, note TEXT NOT NULL DEFAULT '',
- digest_hours REAL NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, updated_by TEXT NOT NULL DEFAULT '');
-"""
-FILE = "slack-channels.yaml"
-IMPORTED = "slack_channels_imported"
 ID_RE = re.compile(r"^[CG][A-Z0-9]{8,}$")
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,79}$")
 HOW = "Give a channel name like #customer_success, or its id like C0123456789."
@@ -91,54 +77,6 @@ def _readers(value):
     return seen
 
 
-def file_rows(registry_dir):
-    """The channels in the old `registry/slack-channels.yaml`, normalised; [] when there is none."""
-    try:
-        data = yaml.safe_load((Path(registry_dir) / FILE).read_text()) or {}
-    except (OSError, yaml.YAMLError):
-        return []
-    rows = data.get("channels") if isinstance(data, dict) else data
-    out = []
-    for raw in rows or []:
-        if not isinstance(raw, dict):
-            continue
-        cid = str(raw.get("id") or "").strip()
-        name = str(raw.get("name") or "").strip().lstrip("#").lower()
-        if not cid and not name:
-            continue
-        try:
-            hours = max(0.0, float(raw.get("digest_hours") or 0))
-        except (TypeError, ValueError):
-            hours = 0.0
-        out.append(
-            {
-                "key": entry_key(cid, name),
-                "id": cid,
-                "name": name,
-                "readers": _readers(raw.get("readers")),
-                "post": raw.get("post") is not False,
-                "note": str(raw.get("purpose") or raw.get("note") or ""),
-                "digest_hours": hours,
-            }
-        )
-    return out
-
-
-def file_channels(registry_dir):
-    """The shape the gateway used to read from the file: {channel id: {name, purpose, post, digest_hours, readers}}."""
-    return {
-        row["id"]: {
-            "name": row["name"],
-            "purpose": row["note"],
-            "post": row["post"],
-            "digest_hours": row["digest_hours"],
-            "readers": row["readers"],
-        }
-        for row in file_rows(registry_dir)
-        if row["id"]
-    }
-
-
 # ----------------------------------------------------------------------------- the stored list
 def _stored(c):
     out = []
@@ -159,22 +97,13 @@ def _stored(c):
     return out
 
 
-def imported(c):
-    return bool(c.execute("SELECT 1 FROM registry_metadata WHERE key=?", (IMPORTED,)).fetchone())
-
-
 def _same(a, b):
     return bool((a["id"] and a["id"] == b["id"]) or (a["name"] and a["name"] == b["name"]))
 
 
 def listing(c, settings):
-    """Every channel that counts, with where it came from: `app` (stored here) or `file` (not imported yet)."""
-    rows = [_entry(r, "app") for r in _stored(c)]
-    if not imported(c):
-        for raw in file_rows(settings.registry_dir):
-            if not any(_same(raw, r) for r in rows):
-                rows.append(_entry(raw, "file"))
-    return rows
+    """Every channel on the list."""
+    return [_entry(r, "app") for r in _stored(c)]
 
 
 def channel_map(c, settings):
@@ -279,7 +208,7 @@ def _check_readers(c, readers):
 
 def add(c, settings, who, ref, readers=None, post=None, note=None, digest_hours=None, name=""):
     """Add a channel, or change the one already listed: readers are added to the ones it has, `post`, `note` and
-    `digest_hours` replace theirs when given. A channel that only the old file lists is stored now."""
+    `digest_hours` replace theirs when given."""
     cid, label = parse_ref(ref, name)
     readers = _check_readers(c, _readers(readers))
     rows = listing(c, settings)
@@ -308,12 +237,7 @@ def add(c, settings, who, ref, readers=None, post=None, note=None, digest_hours=
             "note": have["note"] if note is None else note.strip(),
             "digest_hours": have["digest_hours"] if digest_hours is None else max(0.0, float(digest_hours)),
         }
-        stored = any(r["key"] == have["key"] for r in _stored(c))
-        if stored:
-            _save(c, who, entry, False)
-        else:
-            entry["key"] = entry_key(entry["id"], entry["name"])
-            _save(c, who, entry, True)
+        _save(c, who, entry, False)
         created = False
     H.event(
         c,
@@ -332,13 +256,6 @@ def remove(c, settings, who, ref, reader=""):
     have = _find(rows, cid, label)
     if have is None:
         raise Problem("not_found", "That channel is not on the list.", 404)
-    if have["source"] == "file":
-        raise Problem(
-            "slack_file",
-            "That channel is only in registry/slack-channels.yaml. Import the file first "
-            "(Settings > Tools > Slack, or `tico slack channel import`), then change it here.",
-            409,
-        )
     if reader:
         slug = _readers([reader])[0]
         bot_id = (H.resolve_bot(c, slug) or {}).get("id", slug)
@@ -351,30 +268,6 @@ def remove(c, settings, who, ref, reader=""):
     c.execute("DELETE FROM slack_channels WHERE key=?", (have["key"],))
     H.event(c, who.actor, "slack.channel_removed", have["key"], {})
     return {**have, "removed": True, "deleted": True}
-
-
-def import_file(c, settings, who):
-    """Store the channels the old file lists (the ones already stored win) and stop reading the file."""
-    if imported(c):
-        raise Problem("slack_file", "The file was imported already; the list here is the one that counts.", 409)
-    rows = file_rows(settings.registry_dir)
-    if not rows:
-        raise Problem("not_found", "There is no registry/slack-channels.yaml with channels in it.", 404)
-    stored = _stored(c)
-    added = skipped = 0
-    for raw in rows:
-        if any(_same(raw, r) for r in stored):
-            skipped += 1
-            continue
-        _save(c, who, raw, True)
-        stored.append(raw)
-        added += 1
-    c.execute(
-        "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        (IMPORTED, _dump({"at": H.now(), "by": who.actor, "added": added})),
-    )
-    H.event(c, who.actor, "slack.channels_imported", "", {"added": added, "skipped": skipped})
-    return {"imported": added, "skipped": skipped}
 
 
 # ----------------------------------------------------------------------------- the API
@@ -396,10 +289,6 @@ class ChannelRemove(BaseModel):
     operation_id: str | None = None
 
 
-class Nothing(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-
 def install(app, settings, store, auth):
     def person(request, manage=False):
         who = request.state.identity
@@ -415,12 +304,9 @@ def install(app, settings, store, auth):
         """The list bots' Slack reads and posts follow. Anyone signed in may read it (a bot reads it for its own checks)."""
         who = person(request)
         with store.read() as c:
-            present = file_rows(settings.registry_dir)
-            done = imported(c)
             return {
                 "channels": listing(c, settings),
                 "can_manage": auth.bot_admin(who),
-                "registry_file": {"present": bool(present), "channels": len(present), "imported": done},
                 "bots": [
                     {"id": b["id"], "name": b.get("name") or b["slug"]}
                     for b in H.bots(c)
@@ -441,9 +327,3 @@ def install(app, settings, store, auth):
         who = person(request, manage=True)
         with store.transaction() as c:
             return remove(c, settings, who, body.channel, body.reader)
-
-    @app.post("/api/v2/slack/channels/import")
-    def channel_import(request: Request, body: Nothing):
-        who = person(request, manage=True)
-        with store.transaction() as c:
-            return import_file(c, settings, who)

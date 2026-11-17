@@ -16,6 +16,7 @@ from backend.tests.helpers.api import assign, claim, get, headers, post, put, ru
 from backend.tests.helpers.credentials import FakeKMS  # noqa: F401
 from backend.tests.helpers.decide_gateway import answer_all  # noqa: F401
 from backend.tests.helpers.judge import QUESTIONS  # noqa: F401
+from backend.tests.helpers.run_failures import wait_over
 from clients import gateway as G
 from backend import bot_settings as BS
 
@@ -1097,7 +1098,7 @@ def test_a_refusal_for_want_of_isolation_is_shown_only_to_who_may_read_its_run(a
     post(api, "tasks", {"owner": "ops", "title": "Ana only", "body": "Private work.", "private": True})
     ready(api, machine, ["ops"])
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE run_backoff SET wait_until=NULL")  # the fast failure's wait is over
+        wait_over(c)  # the fast failure's wait is over
     refused = claim(api, machine, "ops")
     assert refused and refused["id"] != ordinary["id"]
     error = (
@@ -1149,8 +1150,7 @@ def test_an_unavailable_gateway_says_try_again(api, monkeypatch, acted):
 def test_a_gateway_outage_retries_a_run_a_few_times_each_later_then_ends_it(api, monkeypatch):
     """An outage can't loop a run forever: each retry waits longer (and the bot's other work waits with it), and the
     last try ends the run with the Gateway's plain words."""
-    from backend import execution
-    from backend.repositories import metadata
+    from backend import execution, login_holds
 
     machine, attempt = tico_run(api, monkeypatch)
     waits = []
@@ -1162,13 +1162,11 @@ def test_a_gateway_outage_retries_a_run_a_few_times_each_later_then_ends_it(api,
         assert job == "queued" and "retries after" in status["focus"] and f"try {n} of 3" in status["focus"]
         assert claim(api, machine, "ops") is None, "the bot waits before it asks the Gateway again"
         with api.app.state.store.transaction() as c:
-            wait = metadata(c, execution.GATEWAY_WAIT + "ops")
+            # The Gateway's one login waits (login_holds.GATEWAY), not the bot alone.
+            wait = login_holds.get(c, "", login_holds.GATEWAY, login_holds.GATEWAY_RUNTIME)
             waits.append((H.parse_ts(wait["until"]) - H.parse_ts(wait["since"])).total_seconds())
             # The wait has passed.
-            c.execute(
-                "UPDATE registry_metadata SET value=? WHERE key=?",
-                (json.dumps({**wait, "until": H.shift(H.now(), seconds=-1)}), execution.GATEWAY_WAIT + "ops"),
-            )
+            login_holds._save(c, {**wait, "until": H.shift(H.now(), seconds=-1)})
         attempt = claim(api, machine, "ops")
         assert attempt, "after the wait the run is tried again"
     assert waits == [execution.GATEWAY_BACKOFF, 2 * execution.GATEWAY_BACKOFF]

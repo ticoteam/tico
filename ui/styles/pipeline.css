@@ -154,7 +154,7 @@
   .tl-pipeline-edit::before { content: ""; position: absolute; inset: -7px -8px; }
 }
 
-/* The pipeline editor (ui/app/pipeline-editor.ts, docs/pipelines-v3.md S11), its only styles: labels left-aligned above
+/* The pipeline editor (ui/app/pipeline-editor.ts, docs/dev/pipelines-v3.md S11), its only styles: labels left-aligned above
    their controls as in every form, short fields short, and each stage one dense row with a thin divider, opened by a
    click. Fields take the shared field look (forms.css): 44 px on a phone. */
 .pe-dialog{width:min(640px,calc(100vw - 32px))}
@@ -245,6 +245,9 @@
 .pe-foot .err{margin:0 0 8px}
 .pe-foot .err[hidden]{display:none}
 .pe-foot-row{display:flex;justify-content:space-between;align-items:center;gap:var(--s2)}
+/* A removed stage's tasks: where they go, on one line above Save (wraps on a phone). */
+.pe-move-out{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2);margin:0 0 8px}
+.pe-move-out select{min-width:0;max-width:100%}
 /* Someone saved first (pipeline-editor.ts peClashHTML): what they changed, Load theirs and Save mine. */
 .pe-clash{display:flex;flex-wrap:wrap;gap:var(--s2);align-items:center;padding:10px;border-radius:var(--r-ctl);background:var(--wait-bg);color:var(--wait-ink)}
 .pe-clash p{flex:1 1 260px;margin:0}

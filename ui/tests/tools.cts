@@ -2,7 +2,8 @@
 // /api/v2/tool-index (rows, counts), one API tool (GET/PATCH /api/v2/api-tools/<id>, PUT …/access/<subject>, POST
 // …/check, GET …/activity) and the mailboxes fake (support/mailboxes-fake.cts) for a mailbox's page and its Limits.
 // Covers: the list in Automations' layout (its rail: search, Kind, Needs you, Who has access; In use and Available;
-// pills only when wrong; a phone's folded filters; empty, failing, 60 rows, a long name, read-only); an API tool's level change, Check now and Move to proxy; the Activity
+// pills only when wrong; a phone's folded filters; empty, failing, 60 rows, a long name, read-only; one vendor's tools
+// under one row; the lock and eye-off marks); an API tool's level change, Settings, Paste keys, Check now and Move to proxy; the Activity
 // tab's filter; Who can see it (Private pills, Only listed's Who | Why, Remove, Add through the audience picker, back
 // to Everyone) and Finance's read-only row; a Google Ads tool's Finance card (bot pick, switching the import on); the
 // mailbox Limits card; the old addresses' redirects (Keys' too); 390px with no sideways scroll; light and dark.
@@ -17,10 +18,11 @@ const {mailboxesFake, open} = require('./support/mailboxes-fake.cts') as Mailbox
 const {googleFake} = require('./support/google-fake.cts') as GoogleFake.Api;
 
 interface Audience {everyone: boolean; people: string[]; teams: string[]; bots: string[]}
-interface ApiAccess {subject: string; kind: string; id: string; name: string; initials: string; level: string; last_used_at: string | null; fixed?: boolean}
+interface ApiAccess {subject: string; kind: string; id: string; name: string; initials: string; level: string; last_used_at: string | null; fixed?: boolean; read_not_enforced?: boolean}
 interface ApiTool {
   tool: {id: string; private?: boolean; [k: string]: unknown};
   keys: {id: string; [k: string]: unknown}[];
+  settings?: {id: string; name: string; value: string}[];
   access: ApiAccess[];
   checks: {ok: boolean; status_code: number; detail: string; checked_at: string; credential_id: string | null}[];
   recent: unknown[];
@@ -80,6 +82,19 @@ const ROWS = [
     who: [], who_total: 0, needs_you: false, href: '#/tools/github'},
 ];
 const COUNTS = {all: 6, needs_you: 2, api: 2, mail: 2, websites: 0};
+// One vendor, three things Tico holds for it: its website login and two API tools (an MCP token and a key), as
+// backend/api_tools.py index_rows sends them with their `vendor`; GET /api/v2/tool-vendors/raygun adds an API tool's
+// keys, levels and settings.
+const raygun = (id: string, kind: string, name: string, extra: Record<string, unknown> = {}) => ({id, kind, name, detail: 'raygun.com', way: kind === 'api' ? 'Proxy' : 'Browser',
+  status: {tone: 'ok', text: 'Working'}, who: [who('bot', 'ops', 'Ops')], who_total: 1, needs_you: false, href: kind === 'api' ? '#/tools/api/' + id.slice(4) : '#/tools/website/' + id.slice(8),
+  vendor: 'raygun', vendor_name: 'Raygun', ...extra});
+const RAYGUN = [raygun('website:raygun-com', 'website', 'raygun.com'),
+  raygun('api:t-rg-prod', 'api', 'Raygun production', {delivery: 'proxy', status: {tone: 'fail', text: 'Key rejected'}, needs_you: true}),
+  raygun('api:t-rg-dev', 'api', 'Raygun dev and staging', {delivery: 'computer'})];
+const RAYGUN_PAGE = {vendor: 'raygun', name: 'Raygun', rows: RAYGUN.map(r => r.kind !== 'api' ? r : {...r, can_manage: true,
+  keys: [{id: 'k-' + r.id.slice(4), name: r.id === 'api:t-rg-prod' ? 'RAYGUN_MCP_TOKEN' : 'RAYGUN_PAT', access_level: 'read_write'}],
+  access: [{subject: 'bot:ops', kind: 'bot', name: 'Ops', level: 'read'}],
+  settings: r.id === 'api:t-rg-dev' ? [{id: 's-region', name: 'RAYGUN_REGION', value: 'eu'}] : []})};
 
 // One API tool's document as GET /api/v2/api-tools/<id> sends it (backend/api_tools.py detail), and the writes that
 // change it, answered as the hub answers them. A logged path keeps the query's keys only.
@@ -97,8 +112,9 @@ function apiFake() {
       keys: [key('k-read', 'Read key', 'sk_…4f2a', 'read', {expires_on: '2027-01-31', last_used_at: at(4), last_used_by: 'support-bot'}),
         key('k-write', 'Write key', 'sk_…9c1d', 'read_write', {created_at: at(60 * 24 * 20), last_used_at: at(90), last_used_by: 'sales'})],
       access: [{subject: 'human:ana', kind: 'person', id: 'ana', name: 'Ana', initials: 'A', level: 'read_write', last_used_at: at(200)},
-        {subject: 'bot:support-bot', kind: 'bot', id: 'support-bot', name: 'Support bot', initials: 'SB', level: 'read', last_used_at: at(4)},
+        {subject: 'bot:support-bot', kind: 'bot', id: 'support-bot', name: 'Support bot', initials: 'SB', level: 'read', last_used_at: at(4), read_not_enforced: true},
         {subject: 'bot:sales', kind: 'bot', id: 'sales', name: 'Sales', initials: 'S', level: 'read_write', last_used_at: at(90)}],
+      settings: [{id: 's-host', name: 'ACME_CRM_HOST', value: 'eu.crm.acme.example'}],
       checks: checks(24, 'k-read'), recent: [call(1, 'sent'), refused(2), call(3, 'sent')],
       status: {tone: 'ok', text: 'Working'}, needs_you: false, can_manage: true, private: false, can_set_audience: false},
     't-billing': {tool: {id: 't-billing', name: 'Acme Billing', service: 'acme-billing', base_url: 'https://billing.acme.example', auth_scheme: 'header:X-Api-Key', check_path: '/status', delivery: 'computer'},
@@ -111,7 +127,7 @@ function apiFake() {
   };
   tools['t-gads'] = {tool: {id: 't-gads', name: 'Google Ads', service: 'google-ads', base_url: '', auth_scheme: 'bearer', check_path: '', delivery: 'computer'},
     keys: [key('k-gads', 'Google Ads · GOOGLE_ADS_DEVELOPER_TOKEN', 'dt_…01ab', 'read_write', {env: 'GOOGLE_ADS_DEVELOPER_TOKEN'})],
-    access: [], checks: [], recent: [], status: {tone: 'idle', text: 'Key on computers'}, needs_you: false, can_manage: true, private: false, can_set_audience: false};
+    access: [], checks: [], recent: [], status: {tone: 'idle', text: 'Not checked'}, needs_you: false, can_manage: true, private: false, can_set_audience: false};
   // Who can see it as backend/api_tools.py seen_by lists it: the owner, the list, then whoever can use it.
   const NAMES: Record<string, string> = {ana: 'Ana', cara: 'Cara', 'g-books': 'Bookkeeping'};
   const seenBy = (t: ApiTool) => !t.audience ? [] : [{subject: 'human:ana', kind: 'person', id: 'ana', name: 'Ana', why: 'Owner'},
@@ -149,7 +165,14 @@ function apiFake() {
       {name: 'paid-rental-ads', display_name: 'Paid rental ads', status: 'active'}];
     if (p === '/api/v2/tool-index') return {rows: structuredClone(ROWS), counts: COUNTS, next: null};
     if (p === '/api/v2/tools') return {integrations: []};
+    if (p === '/api/v2/tool-vendors/raygun') return structuredClone(RAYGUN_PAGE);
     if (p === '/api/v2/groups') return {groups: [{id: 'g-books', name: 'Bookkeeping'}]};
+    // Paste to classify (backend/tool_templates.py): names and marks, a secret only by its ends.
+    if (p === '/api/v2/tool-templates/classify' && method === 'POST') {
+      fake.writes.push({method, path: p, body});
+      return {template: 'posthog', items: [{name: 'POSTHOG_API_KEY', field: 'api_key', role: 'secret', preview: 'phx_…0001'},
+        {name: 'POSTHOG_HOST', field: 'host', role: 'setting', preview: 'https://eu.posthog.example'}]};
+    }
     if (p.startsWith('/api/v2/tools/')) return {service: decodeURIComponent(p.split('/').pop() as string), title: 'GitHub', access: '', writes: 'read', owner: 'tico', declared_as: '', body: '', queries: [], learnings: [], read_only: true};
     const m = p.match(/^\/api\/v2\/api-tools\/([^/]+)(\/.*)?$/);
     if (!m) return undefined;
@@ -163,12 +186,22 @@ function apiFake() {
       if ('audience' in body) { t.audience = audience; t.private = t.tool.private = !!audience; t.seen_by = seenBy(t); }
       return structuredClone(t.tool);
     }
+    // Settings: added, changed and removed as backend/tool_settings.py answers.
+    const set = rest.match(/^\/settings(?:\/(.+))?$/);
+    if (set) {
+      t.settings ||= [];
+      const id = set[1] ? decodeURIComponent(set[1]) : '', row = t.settings.find(v => v.id === id);
+      if (method === 'POST') { const made = {id: 's-' + t.settings.length, name: String(body.name), value: String(body.value)}; t.settings.push(made); return made; }
+      if (row && method === 'PATCH') { Object.assign(row, body); return row; }
+      if (row && method === 'DELETE') { t.settings = t.settings.filter(v => v !== row); return {deleted: true, id}; }
+    }
     const acc = rest.match(/^\/access\/(.+)$/);
     if (acc && method === 'PUT') {
       const subject = decodeURIComponent(acc[1] as string), row = t.access.find(a => a.subject === subject);
       if (body.level === 'none') t.access = t.access.filter(a => a !== row); else if (row) row.level = body.level;
       return {subject, level: body.level === 'none' ? null : body.level};
     }
+    if (rest === '/paste' && method === 'POST') return {keys: 1, settings: 1, tool: structuredClone(t)};
     if (rest === '/check' && method === 'POST') {
       const rows = t.keys.map(k => ({credential_id: k.id, ok: true, status_code: 200, detail: 'Working', checked_at: at(-5)}));
       t.checks.unshift(...rows);
@@ -330,6 +363,60 @@ async function start(browser: import('playwright').Browser, hash: string, {width
         await page.close();
       }
     }
+    // One row a vendor: Raygun's website and its two API tools are one row, its pill its worst tool's, its faces
+    // everyone's; it opens the vendor's page, which shows each with its keys, levels and settings and opens each page.
+    // A lock marks a tool whose key Tico holds, an eye-off one only those listed can see; neither is a word.
+    for (const width of [1440, 390]) {
+      const tag = width < 500 ? 'phone' : 'desktop';
+      const {page, seen} = await start(browser, '#/tools', {width, ready: 'tr[data-tl-row]'});
+      const rows = [...ROWS.map(x => x.id === 'api:t-crm' ? {...x, delivery: 'proxy'} : x.id === 'api:t-billing' ? {...x, delivery: 'computer'} : x), ...RAYGUN];
+      await page.route('**/api/v2/tool-index', r => r.fulfill({contentType: 'application/json', body: JSON.stringify({rows, counts: COUNTS, next: null})}));
+      await page.evaluate(() => { pageTools(); });
+      const vendor = page.locator('tr[data-tl-row="vendor:raygun"]');
+      await vendor.waitFor();
+      assert.equal(await page.locator('tr[data-tl-row*="t-rg-"], tr[data-tl-row^="website:"]').count(), 0, `${tag}: its tools are not rows of their own`);
+      assert.equal((await vendor.locator('.au-nm').innerText()).trim(), 'Raygun', `${tag}: named for the vendor`);
+      assert.equal(await vendor.locator('.tt-pill').innerText(), 'Key rejected', `${tag}: its worst tool's pill`);
+      assert.equal(await vendor.locator('a').getAttribute('href'), '#/tools/vendor/raygun', `${tag}: opens the vendor`);
+      assert.equal(await page.locator('tr[data-tl-grp="In use"] .au-fn').innerText(), '5', `${tag}: a vendor counts once`);
+      const marked = (sel: string) => page.locator(`tr[data-tl-row] ${sel}`).evaluateAll(p => p.map(x => x.closest('tr')!.dataset.tlRow).sort());
+      assert.deepEqual(await marked('[data-proxy]'), ['api:t-crm'], `${tag}: a lock where Tico holds the key`);
+      assert.equal(await page.locator('tr[data-tl-row] [data-proxy]').getAttribute('title'), 'Tico holds the key', `${tag}: the lock's tooltip`);
+      assert.deepEqual(await marked('[data-private]'), ['api:t-billing'], `${tag}: the eye-off on the Only listed tool`);
+      assert.equal(await page.locator('tr[data-tl-row="api:t-billing"] [data-private]').getAttribute('title'), 'Only listed', `${tag}: its tooltip`);
+      assert.equal(await page.locator('tr[data-tl-row="api:t-billing"] [data-private] svg').count(), 1, `${tag}: an eye, not a lock`);
+      assert.equal(/Key on computers/.test(await page.locator('[data-tl-table]').innerText()), false, `${tag}: no delivery badge`);
+      // Search reads tool and vendor names; a vendor with one tool left in the list is that tool's own row.
+      const q = page.locator('[data-tl-q]');
+      await q.fill('raygun');
+      await page.waitForFunction(() => document.querySelectorAll('tr[data-tl-row]').length === 1);
+      assert.equal(await vendor.count(), 1, `${tag}: found by the vendor's name`);
+      await q.fill('staging');
+      await page.waitForFunction(() => document.querySelector('tr[data-tl-row]')?.getAttribute('data-tl-row') === 'api:t-rg-dev');
+      assert.equal(await page.locator('tr[data-tl-row="api:t-rg-dev"] .au-nm').innerText(), 'Raygun dev and staging', `${tag}: under its own name`);
+      await q.fill('');
+      assert.equal(await sideways(page), false, `${tag}: the list has no sideways scroll`);
+      await shot(page, `list-vendors-${tag}`);
+      // The vendor's page: one card a tool, each with its keys, who can use it and its settings, in one read.
+      await vendor.locator('a').click();
+      await page.waitForFunction(() => location.hash === '#/tools/vendor/raygun');
+      await page.locator('#tool-vendor [data-tv-item]').first().waitFor();
+      assert.equal(await page.locator('#tool-vendor h1').innerText(), 'Raygun', `${tag}: the vendor's page`);
+      assert.deepEqual(await page.locator('#tool-vendor [data-tv-item]').evaluateAll(c => c.map(x => (x as HTMLElement).dataset.tvItem)),
+        ['website:raygun-com', 'api:t-rg-prod', 'api:t-rg-dev'], `${tag}: its website, MCP token and key`);
+      const dev = page.locator('[data-tv-item="api:t-rg-dev"]');
+      assert.match(await dev.locator('[data-tv-list="keys"]').innerText(), /RAYGUN_PAT\s*Read and write/, `${tag}: its key at its level`);
+      assert.match(await dev.locator('[data-tv-list="access"]').innerText(), /Ops\s*Read/, `${tag}: who can use it`);
+      assert.match(await dev.locator('[data-tv-list="settings"]').innerText(), /RAYGUN_REGION\s*eu/, `${tag}: its settings`);
+      assert.equal(await page.locator('[data-tv-item="api:t-rg-prod"] .pill.fail').innerText(), 'Key rejected', `${tag}: what needs someone`);
+      assert.equal(await page.locator('[data-tv-item="api:t-rg-prod"] [data-proxy]').count(), 1, `${tag}: the lock on the proxied one`);
+      assert.equal(await sideways(page), false, `${tag}: the vendor's page has no sideways scroll`);
+      await shot(page, `vendor-${tag}`);
+      await page.locator('[data-tv-item="api:t-rg-dev"] h2 a').click();
+      await page.waitForFunction(() => location.hash === '#/tools/api/t-rg-dev');
+      assert.deepEqual(seen.errors, [], `${tag}: vendor errors`);
+      await page.close();
+    }
     // Empty, failing, many, long and read-only lists (a computer and a phone each).
     for (const width of [1440, 390]) {
       const tag = width < 500 ? 'phone' : 'desktop';
@@ -399,6 +486,8 @@ async function start(browser: import('playwright').Browser, hash: string, {width
       {
         const {page, seen, api} = await start(browser, '#/tools/api/t-crm', {width, ready: '#tool-access tr'});
         assert.equal(await page.locator('#tool-access tr').count(), 3, `${tag}: who can use it`);
+        assert.deepEqual(await page.locator('#tool-access [data-ta-read-not-enforced]').evaluateAll(m => m.map(x => [x.closest('tr')!.dataset.taSubjectRow, x.getAttribute('title')])),
+          [['bot:support-bot', 'Read not enforced: this key can write']], `${tag}: the warning on a Read bot its key does not hold to reads`);
         assert.equal(await page.locator('#tool-recent tbody tr').count(), 3, `${tag}: recent calls`);
         assert.equal(await page.locator('#tool-keys [data-ta-key]').count(), 2, `${tag}: keys`);
         assert.match(await page.locator('#tool-keys').innerText(), /Through Tico · logged/, `${tag}: proxied`);
@@ -409,6 +498,26 @@ async function start(browser: import('playwright').Browser, hash: string, {width
         assert.equal(await page.locator('#tool-see').count(), 0, `${tag}: Who can see it only for whoever may change it`);
         assert.equal(await page.locator('#tool-api [data-private]').count(), 0, `${tag}: no Private pill on an Everyone tool`);
         assert.equal(await page.locator('#tool-limits input').isDisabled(), true, `${tag}: Limits switch off`);
+        // Settings: plain values in the clear; Add posts a name and a value.
+        assert.match(await page.locator('#tool-settings [data-ta-setting="s-host"]').innerText(), /ACME_CRM_HOST\s+eu\.crm\.acme\.example/, `${tag}: a setting in the clear`);
+        await page.locator('[data-ta-setting-add]').click();
+        await page.locator('dialog[open] input[name="name"]').fill('ACME_CRM_REGION');
+        await page.locator('dialog[open] input[name="value"]').fill('eu');
+        await page.locator('dialog[open] button[type="submit"]').click();
+        await page.locator('#tool-settings [data-ta-setting="s-1"]').waitFor();
+        assert.deepEqual(api.writes.at(-1), {method: 'POST', path: '/api/v2/api-tools/t-crm/settings', body: {name: 'ACME_CRM_REGION', value: 'eu'}}, `${tag}: setting write`);
+        // Paste: Check shows each value's variable and mark, never a secret whole; Add stores the same text.
+        const pasted = 'POSTHOG_API_KEY=phx_acmesynthetic0001\nPOSTHOG_HOST=https://eu.posthog.example';
+        await page.locator('#tool-keys [data-ta-key-paste]').click();
+        await page.locator('dialog[open] textarea[name="text"]').fill(pasted);
+        await page.locator('dialog[open] button[type="submit"]').click();
+        await page.locator('dialog[open] [data-ta-paste-row="setting"]').waitFor();
+        const rows = await page.locator('dialog[open] [data-ta-paste-rows]').innerText();
+        assert.match(rows, /PostHog[\s\S]*POSTHOG_API_KEY[\s\S]*POSTHOG_HOST/, `${tag}: what the paste holds`);
+        assert.doesNotMatch(rows, /acmesynthetic0001/, `${tag}: no secret shown`);
+        await page.locator('dialog[open] button[type="submit"]').click();
+        await page.locator('dialog[open]').waitFor({state: 'detached'});
+        assert.deepEqual(api.writes.at(-1), {method: 'POST', path: '/api/v2/api-tools/t-crm/paste', body: {text: pasted}}, `${tag}: paste write`);
         // Read → Read and write calls PUT access.
         await page.locator('[data-ta-subject="bot:support-bot"][data-ta-level="read_write"]').click();
         await page.locator('[data-ta-subject="bot:support-bot"][data-ta-level="read_write"][aria-checked="true"]').waitFor();

@@ -1114,7 +1114,7 @@
    "department": "product",
    "lead": false,
    "core": false,
-   "summary": "Owns one area of the product, or the whole product as plain Feature Owner, and takes each feature from pitch to production in one task: a pitch of 280 characters a person OKs, the Spec page a person OKs, the build on a branch with a test that proves it, the fixes for what two reviewers found, the QA page and the check in production. Each week it reads its area's activation and retention and ranks the problems. It never merges: the Merge stage queues the pull request.",
+   "summary": "Owns one area of the product, or the whole product as plain Feature Owner, and takes each feature from a chat to production in one task: the Spec a person approves, the build on a branch with a test that proves it, the fixes for what two reviewers found, the QA report, the Release report a person approves and the check in production. Each week it reads its area's activation and retention and ranks the problems. It never merges: the Merge stage queues the pull request.",
    "when": "A software team that turns ideas into code. One per product area (Tasks, Files) or customer segment, or one for the whole product.",
    "tags": [
     "product",
@@ -4058,6 +4058,22 @@
    "recommend_when": [
     "never"
    ],
+   "first_routine": "",
+   "tools": [],
+   "default": false
+  },
+  {
+   "slug": "tools-owner",
+   "template": "tools-owner",
+   "name": "Tools Owner",
+   "department": "core",
+   "lead": false,
+   "core": true,
+   "summary": "Owns the Tools page and the keys bots use. It connects a service the way that fits (an API tool through the Tico proxy, a website login, the vendor's MCP server), has each key typed into a card or dropped in its Tools chat so it never sees a value, proposes which bots get Read or Read and write, keeps one shared key per value instead of a copy per bot, and follows up a key that is rejected, expiring or never used. A person grants every key; it holds none.",
+   "when": "Built in: owns Tools. It adds tools (APIs, website logins, MCP servers), has keys typed into a card or dropped in its chat rather than pasted, proposes who gets which level, and fixes keys that stop working. A person grants every key.",
+   "tags": [],
+   "pains": [],
+   "recommend_when": [],
    "first_routine": "",
    "tools": [],
    "default": false

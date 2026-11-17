@@ -10,7 +10,7 @@ Those live in the person's `preferences` row, so each person has their own.
 import json
 import sqlite3
 
-from . import cloud_machines, model_login, providers
+from . import cloud_machines, model_login, providers, runner_online
 from .statuses import PARKED_SQL
 from .store import H, Problem, encode, readiness_document
 from . import bot_settings as BS
@@ -19,7 +19,6 @@ PREFERENCE = "onboarding.progress"
 BOTOPS = "botops"
 LIBRARIAN = "librarian"
 MARKET_TASK = "Set up the market map"
-ONLINE_SECONDS = 120
 # The checklist items a person may skip. GitHub is not one: without it a bot's repository cannot be made.
 OPTIONAL = ("subscription",)
 
@@ -72,15 +71,6 @@ def change_state(c, who, body):
 
 
 # ------------------------------------------------------------------ live checks
-def _online_runners(c):
-    since = H.shift(H.now(), seconds=-ONLINE_SECONDS)
-    return c.execute(
-        "SELECT id,label,readiness FROM runners_with_state WHERE revoked_at IS NULL "
-        "AND last_seen_at>? ORDER BY last_seen_at DESC",
-        (since,),
-    ).fetchall()
-
-
 _wanted_runtimes = providers.wanted_runtimes
 
 
@@ -152,7 +142,7 @@ def _saved_plan_or_key(c):
 
 def built_in(settings):
     """The bots every install starts with: the four a person talks to, the General Manager (docs/general-manager.md), the
-    Finance Owner (docs/bookkeeper.md), the Design Owner, the Updates and Automations Owners, and the Rules Owner, which
+    Finance Owner (docs/bookkeeper.md), the Design Owner, the Updates, Automations and Tools Owners, and the Rules Owner, which
     onboarding.ensure_counsel adds once a computer enrolls. The Rules Owner is built in, so it is not one of the company's own
     bots (own_bots)."""
     return {
@@ -166,6 +156,7 @@ def built_in(settings):
         H.RULES_OWNER,
         "updates-owner",
         "automations-owner",
+        H.TOOLS_OWNER,
     }
 
 
@@ -222,7 +213,7 @@ def _item(key, label, done, why, href="", tab="", optional=False, action="", log
 
 def checklist(c, who, settings, github):
     record = providers.load(c, settings)
-    runners = _online_runners(c)
+    runners = runner_online.online_rows(c)
     wanted = _wanted_runtimes(record)
     signed = _signed_in_runtime(runners, wanted, c)
     login = (providers.PROVIDER_BY_RUNTIME.get(next(iter(sorted(wanted)), ""), {}) or {}).get("login", "")
@@ -431,7 +422,8 @@ def install(app, store, auth, mutate, settings):
 
     from . import models as M
 
-    @app.get("/api/v2/getting-started")
+    @app.get("/api/v2/setup/getting-started")
+    @app.get("/api/v2/getting-started", deprecated=True)  # rc.1 CLI (`tico` setup status)
     def read(request: Request):
         who = request.state.identity
         _person(who)
@@ -439,12 +431,12 @@ def install(app, store, auth, mutate, settings):
         with store.read() as c:
             return view(c, who, settings, auth, github.row(c) if github else None)
 
-    @app.post("/api/v2/getting-started/state")
+    @app.post("/api/v2/setup/getting-started/state")
     def state(request: Request, body: M.GettingStartedState):
         who = request.state.identity
         return mutate(request, body, lambda c: change_state(c, who, body))
 
-    @app.post("/api/v2/getting-started/market")
+    @app.post("/api/v2/setup/getting-started/market")
     def market(request: Request, body: M.GettingStartedMarket):
         who = request.state.identity
         _person(who)

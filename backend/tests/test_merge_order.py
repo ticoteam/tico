@@ -253,9 +253,17 @@ def test_the_migration_lets_an_old_table_take_after_and_keeps_its_rows():
     conn = sqlite3.connect(":memory:")
     conn.execute("CREATE TABLE tasks(id TEXT PRIMARY KEY)")
     conn.executemany("INSERT INTO tasks VALUES(?)", [("a",), ("b",)])
-    # The table before it: no `after`, and no `until` (20261113070100 adds that column later).
-    until = "  until TEXT CHECK (until IS NULL OR (kind = 'depends_on' AND until = 'released')),\n"
-    conn.executescript(TR.SCHEMA.replace(",'after'", "").replace(until, ""))
+    # The table as v0.6.0-rc.1 made it (backend/tests/fixtures/schema_floor.sql): no `after`, no `until`.
+    conn.executescript(
+        "CREATE TABLE task_relations("
+        "from_task TEXT NOT NULL REFERENCES tasks(id), to_task TEXT NOT NULL REFERENCES tasks(id), "
+        "kind TEXT NOT NULL CHECK (kind IN ('parent','blocks','related','duplicate_of','follow_up')), "
+        "created_by TEXT, created_at TEXT NOT NULL, PRIMARY KEY(from_task, to_task, kind), "
+        "CHECK (from_task <> to_task), CHECK (kind <> 'related' OR from_task < to_task));"
+        "CREATE INDEX task_relations_to ON task_relations(to_task, kind);"
+        "CREATE INDEX task_relations_from ON task_relations(from_task, kind);"
+        "CREATE UNIQUE INDEX task_relations_one_parent ON task_relations(from_task) WHERE kind='parent';"
+    )
     conn.execute("INSERT INTO task_relations VALUES('a','b','follow_up','human:ana','2026-11-12T00:00:00Z')")
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute("INSERT INTO task_relations VALUES('b','a','after','human:ana','2026-11-12T00:00:00Z')")

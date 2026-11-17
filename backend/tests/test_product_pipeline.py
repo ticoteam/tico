@@ -1,6 +1,6 @@
-"""Product, one pipeline from pitch to production (docs/pipelines-v3.md "Product"; pipeline_settings.PRODUCT): what a
-company that builds software gets in place of the Product and Engineering pair, its person gates (any person, never a
-bot), the 280-character pitch, the stages its feature owner holds, Validate's send back to Build, and adding it by hand
+"""Product, one pipeline from the Spec to production (docs/dev/pipelines-v3.md "Product"; pipeline_settings.PRODUCT): what
+a company that builds software gets in place of the Product and Engineering pair, its approvals (any person, never a
+bot, each of a document), the stages its feature owner holds, Validate's send back to Build, and adding it by hand
 beside the pair a company set up before 0.6 keeps (`add_preset`, POST /api/v2/pipelines/{id}/from-preset).
 
 Synthetic rows only (backend/tests/helpers/engine.py): the fictional company, where Ana owns it, and its role bots.
@@ -11,19 +11,19 @@ import pytest
 from backend import answers as A
 from backend import pipeline_presets_more as more
 from backend import pipeline_settings as PS
+from backend import stage_rules as SR
 from backend import task_engine as E
 from backend import task_requirements as R
 from backend import validate_gate as G
 from backend.store import H
 from backend.tests.helpers import engine as X
 from backend.tests.helpers.product_engineering_presets import PPM, _answers, _role_bot, _seat, _team, legacy_pair
-from backend.tests.helpers.sample_company import booted, environment, rows, signed_in  # noqa: F401
+from backend.tests.helpers.fresh_install import booted, environment, rows, signed_in  # noqa: F401
 from backend.tests.helpers.stage_inputs import _link_pr, _push
 
 ANA, BEN = X.ANA, "human:ben"
 OWNER = "bot:pm"  # the Product Owner of _team, as the feature owner the tasks are given to
 STAGES = [
-    "Pitch",
     "Spec",
     "Related input",
     "OK spec",
@@ -37,7 +37,7 @@ STAGES = [
     "Merge",
     "Validate",
 ]
-HELD_BY_THE_OWNER = {"Pitch", "Spec", "Related input", "OK spec", "Build", "Fixes 1", "Fixes 2"}
+HELD_BY_THE_OWNER = {"Spec", "Related input", "OK spec", "Build", "Fixes 1", "Fixes 2"}
 HELD_BY_THE_OWNER |= {"OK release", "Validate"}
 PITCH = "Shoppers lose their cart when the tab closes. Keep it for 30 days."
 
@@ -91,7 +91,7 @@ def test_a_company_that_builds_software_gets_product_and_no_engineering(c):
         PS.PRODUCT,
         "product",
     )
-    assert (product["manager_id"], product["keep_warm_hours"]) == ("bot:" + PPM, 8)
+    assert product["manager_id"] == "bot:" + PPM
     assert [s["name"] for s in product["stages"]] == STAGES
     owners = {s["name"]: s["owner"] for s in product["stages"]}
     assert {name for name, owner in owners.items() if owner == PS.ASSIGNEE} == HELD_BY_THE_OWNER
@@ -100,18 +100,15 @@ def test_a_company_that_builds_software_gets_product_and_no_engineering(c):
     stages = {s["name"]: s for s in product["stages"]}
     assert stages["Related input"]["expected_minutes"] >= 240  # never Late before it moves on by itself
     assert stages["Merge"]["on_enter"] == {"act": "github.queue"}
-    # The person gates: people only, nobody named, so any person clears them; QA's page names its person.
+    # The approvals: people only, each of a document; nobody named, so any person approves, but QA's names its person.
     gates = {name: r for name, s in stages.items() for r in s["requirements"] if r["who_oks"] == "people_only"}
-    assert sorted(gates) == ["OK release", "OK spec", "Pitch", "QA"]
-    assert {name: r["person_id"] for name, r in gates.items()} == {
-        "Pitch": None,
-        "OK spec": None,
-        "OK release": None,
-        "QA": ANA,
+    assert {name: (r["kind"], R.document_of(r), r["person_id"]) for name, r in gates.items()} == {
+        "OK spec": ("page", "Spec", None),
+        "QA": ("page", "QA report", ANA),
+        "OK release": ("page", "Release report", None),
     }
-    pitch = stages["Pitch"]["requirements"]
-    assert [(r["kind"], r["settings"]) for r in pitch] == [("ok", {"body_max": 280})]
-    assert stages["Pitch"]["id"] == "product-ideas", "Pitch keeps the id Tico Team's Product has"
+    assert R.document_of(stages["Spec"]["requirements"][0]) == "Spec", "the decision model checks the Spec first"
+    assert PS.IDEAS_STAGE not in {s["id"] for s in product["stages"]}, "no pitch: a feature starts as a chat"
 
 
 def test_a_new_company_waits_for_setup_and_one_that_builds_no_software_gets_product_retired(c):
@@ -137,46 +134,26 @@ def test_a_role_bot_that_appears_later_takes_its_stage_from_the_manager(c):
     assert {s["name"]: s["owner"] for s in PS.read(c, "product")["stages"]}["QA"] == "bot:qa"
 
 
-# ----------------------------------------------------------------------------- the pitch and the person gates
-def test_a_pitch_over_280_characters_is_its_owners_to_shorten_before_a_person_is_asked(c):
-    _product(c)
-    task = _task(c, body="x" * 281)
-    ok = _requirement(c, task["id"], "ok")
-    (standing,) = R.unmet(c, E.task(c, task["id"]))
-    assert (standing.on, standing.line) == (OWNER, "The pitch is 281 characters, over 280: shorten the task's body")
-    with pytest.raises(H.Refused, match="over 280"):
-        A.answer(c, task["id"], ok["id"], ANA, "ok")
-    c.execute("UPDATE tasks SET body=? WHERE id=?", ("x" * 280, task["id"]))
-    (standing,) = R.unmet(c, E.task(c, task["id"]))
-    assert (standing.state, standing.on) == (R.WAITING, None), "now any person is asked"
-    A.answer(c, task["id"], ok["id"], ANA, "ok")
-    assert R.unmet(c, E.task(c, task["id"])) == []
-
-
-def test_a_bots_pitch_is_not_set_aside_but_waits_for_a_persons_ok(c):
-    """In the pair's Ideas a bot's own idea starts snoozed; Pitch asks a person's OK, so it waits in their list."""
+# ----------------------------------------------------------------------------- the approvals
+def test_a_bots_feature_starts_in_spec_and_is_not_set_aside(c):
+    """In the pair's Ideas a bot's own idea starts snoozed; Product has no pitch, so its feature starts in Spec."""
     _product(c)
     row = H.task_create(c, OWNER, "Saved carts", PITCH, OWNER, pipeline="product", lint=False)
     task = E.task(c, row["id"])
-    assert task["stage_id"] == PS.IDEAS_STAGE and not task.get("snooze")
-    assert c.execute("SELECT 1 FROM idea_checks WHERE task_id=?", (row["id"],)).fetchone(), (
-        "the duplicate check is owed"
-    )
+    assert task["stage_id"] == "product-spec" and not task.get("snooze")
 
 
-@pytest.mark.parametrize("stage", ["product-ideas", "product-ok-release"])
-def test_any_person_clears_a_gate_and_no_bot_does(c, stage):
+@pytest.mark.parametrize("stage", ["product-ok-spec", "product-ok-release"])
+def test_no_bot_adds_an_ok_of_its_own_where_a_person_approves_a_document(c, stage):
+    """Who approves the written version is test_stage_approvals.py; here, the preset's approvals take no bot's OK."""
     _product(c)
     _past_merge(c)
-    task = _task(c, stage=None if stage == PS.IDEAS_STAGE else stage)
-    ok = _requirement(c, task["id"], "ok")
-    standing = next(s for s in R.unmet(c, E.task(c, task["id"])) if s.requirement["kind"] == "ok")
-    assert standing.state == R.WAITING and standing.on is None  # nobody named: it falls to the task's person
+    task = _task(c, stage=stage)
+    standing = next(s for s in R.unmet(c, E.task(c, task["id"])) if s.requirement["kind"] == "page")
+    assert (standing.state, standing.on) == (R.NOT_MET, OWNER), "the owner writes the document first"
     for bot in (OWNER, "bot:" + PPM):
-        with pytest.raises(H.Refused):
-            A.answer(c, task["id"], ok["id"], bot, "ok", seen_version=E.task(c, task["id"])["version"])
-    A.answer(c, task["id"], ok["id"], BEN, "ok")
-    assert all(s.requirement["kind"] != "ok" for s in R.unmet(c, E.task(c, task["id"]))), "Ben, any person, cleared it"
+        with pytest.raises(H.Refused, match="approve the"):
+            E.add_requirement(c, task["id"], bot, "ok", ANA, "OK it", seen_version=E.task(c, task["id"])["version"])
 
 
 def test_the_feature_owner_holds_build_and_both_fixes(c):
@@ -189,7 +166,7 @@ def test_the_feature_owner_holds_build_and_both_fixes(c):
 
 def test_the_owner_the_manager_picks_in_pitch_holds_build_the_fixes_and_validate_whoever_holds_a_stage_between(c):
     """Tico Team, Nov 14: a task with no assignee fell to the Engineering Manager in Build. The owner it has when it
-    leaves Pitch is its feature owner: a stand-in the manager names later holds that stage only."""
+    leaves Spec is its feature owner: a stand-in the manager names later holds that stage only."""
     _product(c)
     _past_merge(c)
     _role_bot(c, "fo-2", "segment-product-owner")
@@ -234,6 +211,65 @@ def test_not_validated_sends_the_task_back_to_build_in_the_same_task(c):
     assert not c.execute("SELECT 1 FROM links WHERE from_task_id=?", (task["id"],)).fetchone(), "nothing is filed"
 
 
+# ----------------------------------------------------------------------------- Owner on the team
+BUILD_STAGES = ["product-build", "product-fixes-1", "product-fixes-2"]
+
+
+def _in_groups(c, placed):
+    """Each bot in its group, as the org chart places it: {group id: (name, [slugs])}."""
+    from backend import groups as GR
+
+    roster = GR._roster(c)
+    for gid, (name, _) in placed.items():
+        GR.ensure(roster, gid, name)
+    GR._save(c, roster)
+    for gid, (_, slugs) in placed.items():
+        for slug in slugs:
+            GR.move_bot(c, slug, gid)
+
+
+def test_a_new_company_gets_owner_on_the_team_on_products_build_and_fixes_and_it_acts(c):
+    """Owner on the team was made only on Engineering, which a company set up from 0.6 never has: it had no such rule.
+    It is made on Product's build stages, and a bot outside the Product team loses Build as the task enters it."""
+    _product(c)
+    rule = SR.get(c, SR.OWNER_ON_TEAM)
+    assert (rule["pipeline_id"], rule["stages"], rule["status"]) == ("product", BUILD_STAGES, "active")
+    _role_bot(c, "grower", "growth-owner")
+    _in_groups(c, {"product": ("Product", [PPM, "pm"]), "growth": ("Growth", ["grower"])})
+    _past_merge(c)
+    outside = H.task_create(c, ANA, "Saved carts", PITCH, "bot:grower", pipeline="product", lint=False)
+    moved = E.move(c, outside["id"], "product-build", ANA, "On")
+    assert moved["owner_id"] is None
+    assert E.move(c, _task(c)["id"], "product-build", ANA, "On")["owner_id"] == OWNER  # the feature owner keeps it
+
+
+def test_a_company_that_started_without_the_rule_gets_it_at_its_next_start(c):
+    _product(c)
+    c.execute("DELETE FROM stage_rules WHERE id=?", (SR.OWNER_ON_TEAM,))  # as a start before this fix left it
+    PS.ensure_presets(c)
+    assert SR.get(c, SR.OWNER_ON_TEAM)["stages"] == BUILD_STAGES
+
+
+def test_owner_on_the_team_on_a_retired_engineering_moves_to_product_unless_its_stages_were_changed(c):
+    _pair_company(c)
+    assert SR.get(c, SR.OWNER_ON_TEAM)["pipeline_id"] == "engineering"
+    PS.add_preset(c, ANA, PS.PRODUCT, "features", "Features", "F")
+    PS.ensure_presets(c)
+    assert SR.get(c, SR.OWNER_ON_TEAM)["pipeline_id"] == "engineering", "Engineering is still in use"
+    PS.retire(c, ANA, "product")  # the pair's Product first: it files into Engineering
+    PS.retire(c, ANA, "engineering")
+    PS.ensure_presets(c)
+    rule = SR.get(c, SR.OWNER_ON_TEAM)
+    assert (rule["pipeline_id"], rule["stages"]) == ("features", BUILD_STAGES)
+    # One whose stages a company changed is its own: it stays.
+    c.execute(
+        "UPDATE stage_rules SET pipeline_id='engineering', stages=? WHERE id=?",
+        ('["engineering-review-1"]', SR.OWNER_ON_TEAM),
+    )
+    PS.ensure_presets(c)
+    assert SR.get(c, SR.OWNER_ON_TEAM)["pipeline_id"] == "engineering"
+
+
 # ----------------------------------------------------------------------------- a company that has the pair
 def _pair_company(c):
     _team(c)
@@ -262,7 +298,7 @@ def test_a_person_adds_product_beside_the_pair_and_nothing_of_the_pair_changes(c
     added = PS.add_preset(c, ANA, PS.PRODUCT, "features", "Features", "F")
     ids = [s["id"] for s in added["stages"]]
     # Ids the pair's Product has get a number; the rest are the preset's.
-    assert ids[:4] == ["product-ideas-2", "product-spec-2", "product-related", "product-ok-spec"]
+    assert ids[:3] == ["product-spec-2", "product-related", "product-ok-spec"]
     assert ids[-1] == "product-validate-2" and G.is_stage(ids[-1])
     assert (added["preset"], added["name"], added["prefix"], added["factory_id"]) == (
         PS.PRODUCT,

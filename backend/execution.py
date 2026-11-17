@@ -15,7 +15,6 @@ from clients import gateway, sessions
 from . import (
     start_places,
     org_turns,
-    app_delivery,
     check_models,
     learned,
     rooms,
@@ -34,6 +33,7 @@ from . import (
     wake_presets,
     wake_rules,
 )
+from . import runner_online
 from . import task_privacy as privacy
 from . import (
     browser_exit,
@@ -44,7 +44,7 @@ from . import (
     model_subscriptions,
     quarantine_stops,
     reconnects,
-    run_backoff,
+    run_failures,
     runner_states,
     runner_wire,
     runs,
@@ -57,7 +57,7 @@ from .auth import Identity
 from .batch_work import isolated, report, shared_check, shared_scope, storage_error
 from .harnesses import bot_keyed, reports_tool_calls
 from .run_diagnostics import HANDED_BACK, LAPSED, RESTART_TEXT, UNSTARTED_CATEGORIES, clean_stop_reported
-from . import company_pause, lifecycle, start_holds
+from . import holds, lifecycle, start_holds
 from .store import H, P, Problem, bot_readiness, digest, encode, readiness_document
 from .config import Settings
 from . import bot_settings as BS
@@ -142,26 +142,6 @@ class ClaimFaults:
             self.new_bots.append((bot, exc))
 
 
-# A runner that advertises this runs a bot's task-keyed turns in their own lanes, side by side;
-# for any other runner every turn is in the main lane, one at a time per bot. `task_lanes_v1` was
-# advertised by unreleased main-built runners whose session key treats an unset `session` as the
-# bot thread, so the task-session default would give their lanes one shared provider thread: it
-# is still accepted but means no lanes, and those runners run serially.
-LANES = "task_lanes_v2"
-
-# A runner that advertises this keys a task turn's session and worktree on the claimed task's
-# `session_task_id` (H.session_root: a subtask continues its parent's session). Any other runner keys
-# on the task itself, so for it the server keeps every task, subtasks included, its own lane and session.
-ROOTS = "session_roots_v1"
-
-# A runner that advertises this runs a task's goal as the harness's native goal (chat_goals.task_goal_row):
-# it sets it in the task's session beside the turn's prompt. Any other runner is handed no task-room goal.
-TASK_GOALS = "task_goals_v1"
-
-# A runner that advertises this continues the thread a claim names in `continue_thread` (capacity_continuation). Any
-# other runner ignores the field and would start the job on a fresh thread, so it is never handed such a job.
-CAPACITY_CONTINUE = "capacity_continue_v1"
-
 # A runner that advertises this starts a turn whose claim names `fork_thread` on a fork of that session
 # (`claude --resume <thread> --fork-session`), leaving the original untouched (backend/wake_presets.py, session `fork`).
 # Any other runner is handed no fork and starts the job on a fresh session.
@@ -170,20 +150,6 @@ FORK_SESSION = "fork_session_v1"
 # conversation's saved session as it was (backend/wake_presets.py, session `fresh`). Any other runner is not told,
 # resumes as usual, and the run record then says the session was resumed.
 FRESH_SESSION = "fresh_session_v1"
-
-# A runner that advertises this runs a private live meeting's turns in that meeting's own checkout, read-only on GitHub
-# (runner-rs/src/sessions.rs, private lanes). Any other runner would run them in the bot's checkout and push what they
-# wrote, so it is never handed one: the turn waits for an updated runner (live_meetings `meeting.bot_turn_waiting`).
-PRIVATE_LANES = "private_lanes_v1"
-SOURCE_CONTINUE = "source_continue_v1"
-
-# A runner that advertises this keeps the threads of a bot's chats apart: a public thread's turn never resumes a direct
-# message's provider thread (runner-rs session_key). Any other runner keys a `session: bot` chat on the bot's one thread,
-# so the server gives it each chat's own session instead (start_claimed).
-THREADS = "threads_v1"
-
-# These requests need a fresh provider session and disposable scratch.
-MAKE_PAGE = "make_page"
 
 
 def oks_used(c, bot, since, until=None):
@@ -328,40 +294,10 @@ def capability_set(capabilities_json):
     return frozenset(H._json(capabilities_json, []) or [])
 
 
-def lanes_on(runner):
-    return bool(runner) and LANES in capability_set(runner["capabilities"])
-
-
-def private_lanes_on(runner):
-    return bool(runner) and PRIVATE_LANES in capability_set(runner["capabilities"])
-
-
-def private_job(c, job):
-    """Whether a queued job is a private live meeting's turn (private_lane): only a private_lanes_on runner takes it."""
-    message = H.message(c, job["message_id"])
-    return bool(message and private_lane(c, H.conversation(c, message["conversation_id"])))
-
-
-def roots_on(runner):
-    return bool(runner) and ROOTS in capability_set(runner["capabilities"])
-
-
-def threads_on(runner):
-    return bool(runner) and THREADS in capability_set(runner["capabilities"])
-
-
-def task_goals_on(runner):
-    return bool(runner) and TASK_GOALS in capability_set(runner["capabilities"])
-
-
-def capacity_continue_on(runner):
-    return bool(runner) and CAPACITY_CONTINUE in capability_set(runner["capabilities"])
-
-
-def session_task_id(c, bot, config, task_id, roots):
-    """The task a turn on `task_id` keys its session and lane on: its session root for a runner that reads
-    `session_task_id`, the task itself for any other."""
-    return H.session_root(c, bot, task_id, config) if roots and task_id else task_id
+def session_task_id(c, bot, config, task_id):
+    """The task a turn on `task_id` keys its session and lane on: its session root (H.session_root), so a subtask
+    continues its parent's session."""
+    return H.session_root(c, bot, task_id, config) if task_id else task_id
 
 
 def reply_target(message, conversation, task):
@@ -399,18 +335,16 @@ def work_task_id(message, conversation=None):
     return H.message_task_id(message, conversation)
 
 
-def job_lane(c, bot, config, message, conversation, lanes, roots=False):
-    """The lane a queued message would run in (clients/sessions.py), `main` for a runner without lanes.
-    `config` is the bot's followed config, the one its runner keys sessions on. A subtask's turn runs in
-    its session root's lane, so it and its parent's turns take turns in one session."""
-    if not lanes:
-        return sessions.MAIN_LANE
+def job_lane(c, bot, config, message, conversation):
+    """The lane a queued message would run in (clients/sessions.py). `config` is the bot's followed config, the one
+    its runner keys sessions on. A subtask's turn runs in its session root's lane, so it and its parent's turns take
+    turns in one session."""
     if private := private_lane(c, conversation):
         return private
     return sessions.lane(
         config,
         bot,
-        session_task_id(c, bot, config, work_task_id(message, conversation), roots),
+        session_task_id(c, bot, config, work_task_id(message, conversation)),
         conversation["id"] if conversation else None,
     )
 
@@ -487,121 +421,82 @@ def model_choice(c, settings, bot):
 
 def model_change_hold(c, settings, bot):
     """Why the model a limited bot was just moved to waits too, or "": its login on the bot's computer is held
-    (backend/login_holds.py), or the bot's last limit was the Tico AI Gateway's and the new model is a Tico model on
-    the same company key. Only then does the bot stay Rate limited after the move (Dev 353)."""
+    (backend/login_holds.py), "gateway" when that login is the Tico AI Gateway's (the new model is a Tico model on the
+    same company key). Only then does the bot stay Rate limited after the move (Dev 353)."""
     hold = own_login_hold(c, settings, bot)
     if (hold.get("until") or "") > H.now():
-        return "login"
-    model = model_choice(c, settings, bot)[1]
-    last = last_limit(c, bot)
-    if (
-        last
-        and gateway_connection.is_tico(model)
-        and any(
-            gateway.cap_reached(e) or gateway.out_of_credit(e) or gateway.run_code(e) == gateway.RATE_LIMITED
-            for e in limit_errors(c, last["id"])
-        )
-    ):
-        return "gateway"
+        return "gateway" if hold.get("profile") == login_holds.GATEWAY else "login"
     return ""
 
 
 def lift_after_model_change(c, settings, actor, bot, was):
     """A person moved the bot from `was` (model_choice before the change) to another model: a usage limit that was the
     old model's lifts, and the new model starts on the queued work now. A turn still out on the old model keeps the bot
-    at work (settle_status). When the new model waits on the same spent login or Gateway key (model_change_hold), the
-    bot stays Rate limited and says so. An effort-only change leaves the bot on the spent model: nothing lifts."""
-    status = H.status(c, bot) or {}
-    if status.get("state") != "limited" or model_choice(c, settings, bot) == tuple(was):
+    at work. When the new model waits on the same spent login or Gateway key (model_change_hold), the bot stays Rate
+    limited and says so. An effort-only change leaves the bot on the spent model: nothing lifts."""
+    if (H.status(c, bot) or {}).get("state") != "limited" or model_choice(c, settings, bot) == tuple(was):
         return
     why = model_change_hold(c, settings, bot)
-    if why:
-        shared = "the same login" if why == "login" else "the same Tico AI Gateway key"
-        H.status_set(
-            c,
-            actor,
-            bot,
-            state="limited",
-            focus=f"Model changed; the new model uses {shared}, which is still at its usage limit",
-            reason="Model changed",
-        )
-        return
-    out = c.execute(
-        "SELECT 1 FROM attempts WHERE bot_id=? AND state IN ('leased','running') LIMIT 1", (bot,)
-    ).fetchone()
-    H.status_set(
+    shared = "the same Tico AI Gateway key" if why == "gateway" else "the same login"
+    relieve(
         c,
+        settings,
         actor,
         bot,
-        state="running" if out else "idle",
-        focus="Working on other tasks" if out else "Model changed; queued work resumes",
-        reason="Model changed",
+        "Model changed",
+        held=f"Model changed; the new model uses {shared}, which is still at its usage limit",
+        free="Model changed; queued work resumes",
     )
 
 
 def lift_after_connection_change(c, settings, actor, bot):
     """The bot's connection changed (it moved to another computer, so another login; a computer's login was switched
     to another account): a usage limit it showed was the previous login's. Only a hold on the login it runs on now
-    counts (backend/login_holds.py): with none the bot is free and its queued work starts now; with one it stays
-    Rate limited and names that hold's end. A turn still out keeps the bot at work (settle_status)."""
-    if (H.status(c, bot) or {}).get("state") != "limited":
-        return
-    why = model_change_hold(c, settings, bot)
-    if why == "login" and fallback_takes(c, settings, bot):
-        why = ""  # the named or default fallback runs the turn now (fallback_choice), so the held login does not
-    if why:
-        until = own_login_hold(c, settings, bot).get("until") or ""
-        if why == "login" and until:
-            # The bot stays held on its own login until that login's hold ends (a replaced plan's later deadline is no
-            # longer the one): the claim releases these at this time (wake_presets.release_quota_resets).
-            c.execute(
-                "UPDATE jobs SET hold_until=? WHERE bot_id=? AND state='queued' AND held=1 "
-                "AND wake_class='quota-reset' AND hold_reason IS NULL",
-                (until, bot),
-            )
-        H.status_set(
-            c,
-            actor,
-            bot,
-            state="limited",
-            focus=(
-                "Connection changed; the new login is at its usage limit"
-                + (f" until {until[11:16]} UTC" if why == "login" and until else "")
-                if why == "login"
-                else "Connection changed; the Tico AI Gateway key is still at its usage limit"
-            ),
-            reason="Connection changed",
-        )
-        return
+    counts (backend/login_holds.py): with none the bot is free and its queued work starts now; with one (and no
+    fallback to take the turn) it shows Rate limited and names that hold's end."""
+    hold = own_login_hold(c, settings, bot)
+    until = hold.get("until") or ""
+    held = (
+        "Connection changed; the Tico AI Gateway key is still at its usage limit"
+        if hold.get("profile") == login_holds.GATEWAY
+        else "Connection changed; the new login is at its usage limit"
+        + (f" until {until[11:16]} UTC" if until > H.now() else "")
+    )
+    relieve(c, settings, actor, bot, "Connection changed", held=held, free="Connection changed; queued work resumes")
+
+
+def relieve(c, settings, actor, bot, reason, held="", free=""):
+    """The one way a bot's usage-limit status follows the login holds after something changed them (Try now, another
+    connection or model, a hold that ran out): it shows Rate limited exactly while cooling_off says its next turn
+    waits. `held` is its line while a hold still keeps it waiting (empty: its status is left as it is), `free` its line
+    once none does. Returns whether it is free. A queued job an older server held for its login's reset (wake_class
+    'quota-reset', no longer written) is let go here as well: the login's hold does that waiting now."""
     c.execute(
         "UPDATE jobs SET held=0,hold_until=NULL WHERE bot_id=? AND state='queued' AND wake_class='quota-reset' "
         "AND hold_reason IS NULL",
         (bot,),
     )
-    out = c.execute(
-        "SELECT 1 FROM attempts WHERE bot_id=? AND state IN ('leased','running') LIMIT 1", (bot,)
-    ).fetchone()
-    H.status_set(
-        c,
-        actor,
-        bot,
-        state="running" if out else "idle",
-        focus="Working on other tasks" if out else "Connection changed; queued work resumes",
-        reason="Connection changed",
-    )
-
-
-def fallback_takes(c, settings, bot):
-    """Whether the bot's named or default fallback takes its turn on its computer now: the same answer the claim gives
-    (fallback_choice), on the config a claim runs (shared_bots.follow)."""
-    from .shared_bots import follow
-
-    place = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchone()
-    if not place or not place["runner_id"]:
+    if cooling_off(c, settings, bot):
+        if held:
+            H.status_set(c, actor, bot, state="limited", focus=held, reason=reason)
         return False
-    row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
-    config = follow(c, bot, json.loads(row[0]) if row and row[0] else {})
-    return fallback_choice(c, settings, place["runner_id"], bot, config) is not None
+    if (H.status(c, bot) or {}).get("state") == "limited":
+        out = c.execute(
+            "SELECT 1 FROM attempts WHERE bot_id=? AND state IN ('leased','running') LIMIT 1", (bot,)
+        ).fetchone()
+        until = own_login_hold(c, settings, bot).get("until") or ""
+        if free and until > H.now():
+            # Its own login is still held, but a fallback takes its turns (login_refusal).
+            free = f"Its login is at its usage limit until {until[11:16]} UTC; queued work runs on its fallback"
+        H.status_set(
+            c,
+            actor,
+            bot,
+            state="running" if out else "idle",
+            focus="Working on other tasks" if out else free,
+            reason=reason,
+        )
+    return True
 
 
 def lift_limited_on_computer(c, settings, actor, runner_id, runtime):
@@ -635,7 +530,7 @@ def lift_after_login_switch(c, settings, actor, runner_id, runtime):
 HISTORY_PAGE = 50
 
 
-def lane_history(c, bot, config, history, conversation, lane, roots=False):
+def lane_history(c, bot, config, history, conversation, lane):
     """The part of a room's page a turn in `lane` reads: the messages whose own lane (job_lane) is that
     lane, so the main session never reads task traffic and a task's session never reads the main chat or
     another task. The main chat's quiet task lines (`refs.task_started`, `refs.task_report`) are the main
@@ -653,7 +548,7 @@ def lane_history(c, bot, config, history, conversation, lane, roots=False):
             memo[task_id] = sessions.lane(
                 config,
                 bot,
-                session_task_id(c, bot, config, task_id, roots),
+                session_task_id(c, bot, config, task_id),
                 conversation["id"] if conversation else None,
             )
         return memo[task_id]
@@ -1227,11 +1122,6 @@ def retry_facts(c, job, started, finished):
     # Its harness process died under it (killed or crashed): not the bot's choice, so it resumes once (auto_reconcile).
     died = None if timeout or update else harness_died(c, job['attempt_id'])
     attempt = c.execute('SELECT state,thread_id,runner_id FROM attempts WHERE id=?', (job['attempt_id'],)).fetchone()
-    computer = (
-        c.execute('SELECT capabilities FROM runners_with_state WHERE id=?', (attempt['runner_id'],)).fetchone()
-        if attempt
-        else None
-    )
     # Only a negotiated strict continuation may bypass the legacy late-result grace. Unknown tools and
     # an already-final answer still need their original safety/settlement path.
     final = c.execute(
@@ -1244,7 +1134,6 @@ def retry_facts(c, job, started, finished):
         and attempt['state'] == 'expired'
         and started
         and attempt['thread_id']
-        and capacity_continue_on(computer)
         and reported
         and not acted
         and not final
@@ -2003,11 +1892,8 @@ def reset_cooldown(c, attempt_id, finished, cooldown, resets_at=None):
     return cooldown
 
 
-LOGIN_CLASS_LABELS = {"release-blocker": "release", "critical-path": "review"}
-
-
 def finished_before_start(c, row):
-    """Whether a turn that has not started (it waits for its shared login: runner-rs/src/login_turns.rs) is for a task
+    """Whether a turn that has not started (it waits before it starts: start_places) is for a task
     that was marked done or closed after the message that started it: it is skipped rather than run. A person's own
     message is never skipped: their words still get an answer."""
     if row["state"] != "leased":
@@ -2062,41 +1948,6 @@ def held_before_start(c, row):
     return bool(message) and not task_wakes.may_start(c, message[0], attempt=row["id"])
 
 
-def login_class(c, task, msg, routine):
-    """The class a turn waits in for a shared login that serves one turn at a time: "release" for a task labelled
-    release-blocker, "review" for one labelled critical-path and for a turn a person's own message started, "other"
-    for the rest. A routine's or a timed wake's turn is "other" whatever its labels, so standing watches never jump the
-    queue. The labels count on the task or on the work it serves (its parents)."""
-    msg = msg or {}
-    person = H.in_person_name(msg)
-    if routine or (not person and (msg.get("refs") or {}).get("wake")):
-        return "other"
-    labels = set(H.task_labels(task))
-    if task:
-        # Tags are set when a task is made, so a sub-task filed without one takes its class from the work it
-        # serves: its parents, and the same for the task whose session it continues.
-        from .task_relations import ancestors
-
-        ids = set()
-        for one in {task["id"], task.get("session_task_id") or task["id"]}:
-            ids |= {one, *ancestors(c, one)}
-        ids.discard(task["id"])
-        if ids:
-            marks = ",".join("?" * len(ids))
-            labels |= {
-                r[0]
-                for r in c.execute(
-                    f"SELECT tags.key FROM task_tags JOIN tags ON tags.id=task_tags.tag_id "
-                    f"WHERE task_tags.task_id IN ({marks})",
-                    tuple(ids),
-                )
-            }
-    for label, cls in LOGIN_CLASS_LABELS.items():
-        if label in labels:
-            return cls
-    return "review" if person else "other"
-
-
 def limit_until(c, bot, since):
     """An absolute provider deadline wins over a later status refresh on another lane."""
     last = last_limit(c, bot)
@@ -2104,14 +1955,14 @@ def limit_until(c, bot, since):
     return hold.get('until') or H.shift(since, seconds=limit_cooldown(c, bot))
 
 
-def release_limits(c):
-    """Lift each usage limit whose hold has passed: the bot shows it is back, and the status change tells
-    its computer to ask for the queued work now rather than at its next backup poll."""
+def release_limits(c, settings):
+    """Lift each Rate limited status no hold keeps waiting any more (cooling_off): the bot shows it is back, and the
+    status change tells its computer to ask for the queued work now rather than at its next backup poll."""
     for row in c.execute("SELECT bot,changed_at FROM bot_status WHERE state='limited'").fetchall():
-        if row["changed_at"] and limit_until(c, row["bot"], row["changed_at"]) > H.now():
-            continue
-        settle_status(c, row["bot"], "idle", "Usage limit lifted; queued work resumes")
-        H.event(c, H.KEEPER, "limit.released", row["bot"], {"since": row["changed_at"]})
+        if relieve(
+            c, settings, H.KEEPER, row["bot"], "Usage limit lifted", free="Usage limit lifted; queued work resumes"
+        ):
+            H.event(c, H.KEEPER, "limit.released", row["bot"], {"since": row["changed_at"]})
 
 
 def hop_failed(c, attempt_id, result, began, ended):
@@ -2190,15 +2041,13 @@ def empty_fallback_interruption(c, settings, row, result):
     )
 
 
-def hold_job_until_reset(c, row, hold, reason):
-    """Keep an established empty retry visibly held until its known reset, outside wake batching."""
+def note_reset_wait(c, row, hold, reason):
+    """Record that a requeued turn waits for its login's known reset. The login's hold is what keeps it waiting
+    (login_refusal): the bot's own login with no fallback for it (`stuck`, `failed_fallback`), or the saved session's
+    own login (source_continuation). The job itself is never held: one hold, one probe after it."""
     until = hold.get('until') or ''
     if not hold.get('reset') or until <= H.now():
         return
-    c.execute(
-        "UPDATE jobs SET held=1,hold_until=?,wake_class='quota-reset' WHERE id=? AND state='queued'",
-        (until, row['job_id']),
-    )
     # A claim that ran nowhere inherits the existing deadline, not another default cooldown.
     c.execute("UPDATE attempts SET result=json_set(result,'$.limit_resets_at',?) WHERE id=?", (until, row['id']))
     H.event(
@@ -2227,7 +2076,7 @@ def limit_lifted(c, settings, bot, attempt_id, finished):
     hold = own_login_hold(c, settings, bot)
     named = [login_holds.reset_from_text(error, finished) for error in limit_errors(c, attempt_id)]
     if (
-        not cooling_off(c, bot)
+        not cooling_off(c, settings, bot)
         and (hold.get("until") or "") <= now
         and not any(at and at > H.parse_ts(now) for at in named)
     ):
@@ -2262,34 +2111,65 @@ def person_wrote_since(c, bot, since):
     )
 
 
-def cooling_off(c, bot, loads=None):
-    """Whether a usage limit, or the wait after the Tico AI Gateway was unavailable, still holds the bot: its status is
-    `limited` and the cooldown has not passed (or the Gateway's wait has not), and no person has written to it since
-    (a person's message is worth one try). Asked once a bot in a snapshot: Health asks for a limited bot's twice.
-    `loads`: the claim's rows (claim_loads), which are read once per pass and so are not memoized here."""
-    if loads is not None:
-        return _cooling_off(c, bot, loads)
-    from .read_cache import value
+def cooling_off(c, settings, bot, loads=None):
+    """Whether a usage limit keeps the bot's next turn waiting: the claim's own answer (claim_refusal), from the login
+    holds alone (backend/login_holds.py). The login its turn would sign in with (its own, a company subscription's, or
+    the Gateway's) is held, or another job's probe turn is out on it, and no fallback is ready to take the turn; or the
+    turn would run on the Gateway while its subscription is not signed in here (gateway_wait) and the Gateway is held.
+    A person who has written since a hold with no named reset began gets one try (primary_hold). The bot's Rate limited
+    status is this answer's display: release_limits lifts it when this turns False."""
+    from .read_cache import one
+    from .shared_bots import follow
 
-    return value(c, ("cooling_off", bot), lambda: _cooling_off(c, bot))
-
-
-def _cooling_off(c, bot, loads=None):
-    from .repositories import metadata
-
-    status = (loads.status_of(c, bot) if loads is not None else H.status(c, bot)) or {}
-    wait = loads.wait_of(c, bot) if loads is not None else metadata(c, GATEWAY_WAIT + bot)
-    if wait.get("until") and wait["until"] > H.now() and not person_wrote_since(c, bot, wait.get("since") or ""):
-        return True
-    return bool(
-        status.get("state") == "limited"
-        and status.get("changed_at")
-        and limit_until(c, bot, status["changed_at"]) > H.now()
-        and not person_wrote_since(c, bot, status["changed_at"])
-    )
+    place = one(c, "SELECT runner_id FROM assignments WHERE bot=?", (bot,))
+    row = c.execute(BS.ONE_SQL, (bot,)).fetchone()  # not the read cache: pages prime it with other columns first
+    if not place or not place["runner_id"] or not row:
+        return False
+    runner = loads.runner_of(c, place["runner_id"]) if loads is not None else one(c, RUNNER_SQL, (place["runner_id"],))
+    config = follow(c, bot, json.loads(row[0] or "{}"))
+    if runner is not None and gateway_waits(c, settings, runner, config, loads):
+        return bool(gateway_wait(c, runner["id"], bot, loads))
+    return bool(login_refusal(c, settings, place["runner_id"], bot, config, loads=loads))
 
 
-GATEWAY_WAIT = "gateway-unavailable:"
+def gateway_admit(c, runner_id, config, job_id):
+    """`config` with the Gateway as a fallback (`gateway_fallback`, or a Tico model the bot names as its fallback) only
+    when the Gateway may take a turn: the runner hops there mid-turn with the credentials the claim hands it
+    (gateway_connection.hand_out), and an older runner reads no Gateway hold, so the claim decides. While the Gateway
+    is held, or another job's probe is out on it, the turn gets no Gateway fallback (a named one is turned off); after
+    a hold ends, the first turn handed one is the Gateway's one probe, whether or not it hops."""
+    named = config.get("fallback") if isinstance(config.get("fallback"), dict) else {}
+    tico_named = bool(named.get("harness")) and not named.get("off") and gateway_connection.is_tico(named.get("model"))
+    if gateway_connection.is_tico(config.get("model")) or not (config.get("gateway_fallback") or tico_named):
+        return config  # on the Gateway itself (admitted by its own login), or no Gateway to hop to
+    gw, rt = login_holds.GATEWAY, login_holds.GATEWAY_RUNTIME
+    if login_holds.holding(c, runner_id, gw, rt, job_id):
+        config = {k: v for k, v in config.items() if k != "gateway_fallback"}
+        return {**config, "fallback": {"off": True}} if tico_named else config
+    login_holds.take_probe(c, runner_id, gw, rt, job_id)
+    return config
+
+
+def gateway_waits(c, settings, runner, config, loads=None):
+    """Whether the claim runs the bot's next turn on the Gateway because its subscription is not signed in on `runner`
+    yet (models_preset.waiting), and its plans there have not run out: _claim_refusal's `waits`."""
+    record = loads.record if loads is not None else providers.load(c, settings)
+    filled = providers.fill(record, config)
+    ready = readiness_document(runner["readiness"])
+    ready = model_subscriptions.covered(ready, model_subscriptions.covered_runtimes(c, runner, filled, loads))
+    return models_preset.waiting(record, ready, filled) and not models_preset.plans_out(c, runner["id"], filled, loads)
+
+
+def gateway_wait(c, runner_id, bot, loads=None, strict=False):
+    """Why a turn on the Gateway waits ("held", "probing"), or None: its one login's hold (login_holds.GATEWAY), as
+    primary_hold judges a bot's own login, a person's message being worth one try. `strict` (the claim, which answers
+    for all of the bot's jobs at once here): a probe out on the Gateway holds every other turn, the bot's own too."""
+    gw, rt = login_holds.GATEWAY, login_holds.GATEWAY_RUNTIME
+    why = login_holds.holding(c, runner_id, gw, rt, loads=loads) if strict else login_wait(c, runner_id, gw, rt, bot)
+    hold = login_holds.get(c, runner_id, login_holds.GATEWAY, login_holds.GATEWAY_RUNTIME, loads)
+    if why == "held" and not hold.get("reset") and person_wrote_since(c, bot, hold.get("since") or ""):
+        return None
+    return why
 
 
 def clear_limits(c, settings, actor, bot):
@@ -2318,18 +2198,16 @@ def clear_limits(c, settings, actor, bot):
             )
             if runtime(r[0]) == mine
         ]
+    runner = c.execute(RUNNER_SQL, (place["runner_id"],)).fetchone() if place and place["runner_id"] else None
     for slug in bots:
-        if place and place["runner_id"]:
+        if runner:
             # The plan behind the login was just renewed: its hold ends for every bot on it, but only one queued job
             # tries it until that turn's result (login_holds.try_now), so a plan still spent sees one turn, not a burst.
-            login_holds.try_now(c, *login_key(c, settings, place["runner_id"], slug, config(slug)))
-        if (H.status(c, slug) or {}).get("state") == "limited":
-            H.status_set(c, actor, slug, state="idle", focus="", reason="Try now")
-        c.execute(
-            "UPDATE jobs SET held=0,hold_until=NULL WHERE bot_id=? AND state='queued' "
-            "AND wake_class='quota-reset' AND hold_reason IS NULL",
-            (slug,),
-        )
+            login_holds.try_now(c, *login_key(c, settings, runner["id"], slug, config(slug)))
+            if gateway_waits(c, settings, runner, config(slug)):
+                # Its turns run on the Gateway until its subscription is signed in here: that is the login to try.
+                login_holds.try_now(c, runner["id"], login_holds.GATEWAY, login_holds.GATEWAY_RUNTIME)
+        relieve(c, settings, actor, slug, "Try now")
         H.event(c, actor, "limit.cleared", slug, {"from": bot, "runtime": mine})
     return len(bots)
 
@@ -2521,14 +2399,13 @@ def claim_refusal(
     subscription_context=None,
     default=None,
     *,
-    caps=None,
     loads=None,
     ignore_refusals=(),
 ):
     """Why `runner`'s claim passes over all of `bot`'s queued work, or (None, config) when it may look at the bot's
     jobs. A bot at its own "Turns at once" holds its work on every computer ("bot_limit") once nothing else holds it.
-    `caps`: the runner's capability set (capability_set), and `loads`: the rows the checks read for the runner's bots
-    (claim_loads.read), when the caller has them; without them each check reads its own rows as before.
+    `loads` is the rows the checks read for the runner's bots (claim_loads.read), when the caller has them; without
+    them each check reads its own rows as before.
     `ignore_refusals`: diagnostics skip last-boot predicates but still check later holds; admission never uses it."""
     why, config = _claim_refusal(
         c,
@@ -2541,7 +2418,6 @@ def claim_refusal(
         held_bots,
         subscription_context,
         default,
-        caps=caps,
         loads=loads,
         ignore_refusals=ignore_refusals,
     )
@@ -2566,7 +2442,6 @@ def _claim_refusal(
     subscription_context=None,
     default=None,
     *,
-    caps=None,
     loads=None,
     ignore_refusals=(),
 ):
@@ -2574,24 +2449,15 @@ def _claim_refusal(
     (None, config) when it may look at the bot's jobs. The claim (Execution.candidate) and Health (bot_refusal) use
     this one rule, so Health never calls work the claim holds on purpose a Tico bug. `held_bots`: bots the runner
     says are busy (a lane runner sends only the bots whose worktrees it is maintaining) and, for a runner without
-    lanes, every bot with a running turn. `ready` is the computer's readiness document. `caps`, `loads`: see claim_refusal."""
-    if caps is None:
-        caps = capability_set(runner["capabilities"])
+    lanes, every bot with a running turn. `ready` is the computer's readiness document. `loads`: see claim_refusal."""
     if draining:
         return ("moving" if draining == 2 else "draining"), None
-    company = loads.company if loads is not None else company_pause.record(c)
-    if company is not None:
-        # The company pause: nothing new starts until someone resumes (backend/company_pause.py).
-        return "company_paused", None
-    if cloud_access.locked(c, loads.access if loads is not None else cloud_access.access(c)):
-        return "cloud_locked", None  # a locked Tico Cloud company runs no bot (backend/cloud_access.py)
-    if bot in held_bots:
-        why = "maintaining" if lanes_on(runner) else "lane_held"
-        if why not in ignore_refusals:
-            return why, None
-    state = loads.backoff_of(c, bot) if loads is not None else None
-    if (why := run_backoff.refusal(c, bot, state)) and not (why == "backoff" and run_backoff.person_waiting(c, bot)):
-        return why, None  # waiting out failed runs, or held until a person releases it (backend/run_backoff.py)
+    # The company pause, a locked Tico Cloud company, and the bot's failed runs: held, or waiting out a back-off that a
+    # person's waiting message goes past (backend/holds.py).
+    if why := holds.why(c, bot, kinds=holds.CLAIM_BOT, claim=True, loads=loads):
+        return why, None
+    if bot in held_bots and "maintaining" not in ignore_refusals:
+        return "maintaining", None
     try:
         config = json.loads(config_json)
     except (ValueError, TypeError):
@@ -2602,17 +2468,14 @@ def _claim_refusal(
 
     if login_upgrade(runner, ready, bot=bot):
         return "login_upgrade", None
-    if browser_exit.CAPABILITY not in caps and (
-        loads.exit_of(c, bot) if loads is not None else browser_exit.bot_exit(c, bot)
-    ):
-        return "browser_exit_update", None
     record = loads.record if loads is not None else providers.load(c, settings)
     filled = providers.fill(record, config)
     # A runtime this computer's subscription signs in needs no sign-in here (backend/model_subscriptions.py).
     covers = model_subscriptions.covered_runtimes(c, runner, filled, loads)
     ready = model_subscriptions.covered(ready, covers)
     # Its plans here ran out and the computer does not fall back to the Gateway: it waits for a plan, as if the
-    # company's choice did not run the Gateway before sign-in (backend/models_preset.py plans_out).
+    # company's choice did not run the Gateway before sign-in (backend/models_preset.py plans_out). Read the same way
+    # as gateway_waits.
     waits = models_preset.waiting(record, ready, filled) and not models_preset.plans_out(c, runner["id"], filled, loads)
     access = loads.access if loads is not None else cloud_access.access(c)
     if cloud_access.frozen(c, access) and (gateway_connection.is_tico(filled.get("model")) or waits):
@@ -2641,9 +2504,8 @@ def _claim_refusal(
         mine = loads.limit_of(c, bot) if loads is not None else None
         if usage_limits.blocked(c, bot, default=usage_limits.company(c) if default is None else default, mine=mine):
             return "limit", None
-        return (
-            ("cooling_off", None) if cooling_off_here(c, settings, runner, bot, config, loads=loads) else (None, config)
-        )
+        # The turn runs on the Gateway: its hold, and its one probe, decide (gateway_wait).
+        return ("cooling_off", None) if gateway_wait(c, runner["id"], bot, loads, strict=True) else (None, config)
     if check.get("ready") is not True:
         reported = check.get("ready") is False and bot in (ready.get("bots") or {})
         why = "not_ready" if reported else "readiness_unknown"
@@ -2660,13 +2522,8 @@ def _claim_refusal(
     mine = loads.limit_of(c, bot) if loads is not None else None
     if usage_limits.blocked(c, bot, default=usage_limits.company(c) if default is None else default, mine=mine):
         return "limit", None
-    # While the bot's own login is held, that hold decides (login_refusal), so a ready fallback can take the turn;
-    # otherwise the bot's own cooldown does, as for a limit its fallback met.
-    if (
-        cooling_off_here(c, settings, runner, bot, config, subscription_context, loads=loads)
-        and not primary_hold(c, settings, runner["id"], bot, config, ctx=subscription_context, loads=loads)
-        or login_refusal(c, settings, runner["id"], bot, config, ctx=subscription_context, loads=loads)
-    ):
+    # A hold on the login the turn would sign in with decides (login_refusal), so a ready fallback can take the turn.
+    if login_refusal(c, settings, runner["id"], bot, config, ctx=subscription_context, loads=loads):
         # Already-started fallback work continues its own login even if new fallbacks have since been disabled.
         pending = c.execute("SELECT id FROM jobs WHERE bot_id=? AND state='queued' AND held=0", (bot,))
         if not any(
@@ -2693,20 +2550,6 @@ def signed_in_by_lapsed_plan(ready, check, covers):
     own = (row.get("profiles") or {}).get("")
     row = own if isinstance(own, dict) else row
     return check.get("sign_in") == "ready" and row.get("authenticated") == "missing"
-
-
-def cooling_off_here(c, settings, runner, bot, config, ctx=None, loads=None):
-    """cooling_off for a turn of `bot` on `runner`, judged on the login that turn would sign in with. A limit met on a
-    company subscription holds that subscription (backend/login_holds.py `sub:<id>`), which the computer then passes
-    over (model_subscriptions.in_effect): the turn runs on the computer's own login or the Gateway instead, so the
-    subscription's cooldown does not keep it waiting. That login's own hold, if any, still decides (login_refusal)."""
-    if not cooling_off(c, bot, loads):
-        return False
-    last = last_limit(c, bot)
-    held = str((login_holds.for_attempt(c, last["id"]) if last else {}).get("profile") or "")
-    if held.startswith(login_holds.SUBSCRIPTION) and runner:
-        return login_key(c, settings, runner["id"], bot, config, ctx, loads)[1] == held
-    return True
 
 
 def login_refusal(c, settings, runner_id, bot, config, job_id=None, ctx=None, loads=None):
@@ -2797,11 +2640,14 @@ def fallback_choice(c, settings, runner_id, bot, config, job_id=None, ctx=None):
         ]
     for choice in rows:
         if providers.gateway_model(choice["model"]):
-            # Signs in with the turn's relay: no login of its own to hold, but only where bots run as their own user
-            # (a company row is listed only then; one the bot names is checked here).
+            # Signs in with the turn's relay, on the company's Gateway login, only where bots run as their own user (a
+            # company row is listed only then; one the bot names is checked here).
             if not models_preset.runs_gateway(ready):
                 continue
-            return "", choice["runtime"]
+            why = login_wait(c, runner_id, login_holds.GATEWAY, login_holds.GATEWAY_RUNTIME, bot, job_id)
+            if why == "held":
+                continue
+            return None if why else (login_holds.GATEWAY, login_holds.GATEWAY_RUNTIME)
         signed = (ready.get("runtimes") or {}).get(choice["runtime"]) or {}
         subscribed = model_subscriptions.in_effect(c, runner_id, choice["runtime"])
         if signed.get("installed") is not True or (not subscribed and signed.get("authenticated") != "ready"):
@@ -2815,9 +2661,18 @@ def fallback_choice(c, settings, runner_id, bot, config, job_id=None, ctx=None):
 
 
 def login_key(c, settings, runner_id, bot, config, ctx=None, loads=None):
-    """(runner, login, runtime) of the bot's own login, as holds key it (login_holds.canonical)."""
-    runtime = providers.bot_choice(c, settings, config, record=loads.record if loads is not None else None)[0]
-    return runner_id, login_holds.canonical(c, runner_id, "", runtime, loads=loads), runtime
+    """(runner, login, runtime) of the bot's own login, as holds key it (login_holds.canonical): the Gateway's one login
+    (login_holds.GATEWAY) for a bot on a Tico model, and a company plan held at its limit while the computer has no
+    login of its own for the runtime (model_subscriptions.held_plan)."""
+    runtime, model = providers.bot_choice(c, settings, config, record=loads.record if loads is not None else None)
+    if gateway_connection.is_tico(model):
+        return runner_id, login_holds.GATEWAY, login_holds.GATEWAY_RUNTIME
+    login = login_holds.canonical(c, runner_id, "", runtime, loads=loads)
+    if not login.startswith(login_holds.SUBSCRIPTION):
+        # A held plan passed over for a computer login (its own, or the default home it names) that is not signed in:
+        # the turn waits on the plan's hold.
+        login = model_subscriptions.held_plan(c, runner_id, runtime, loads, profile=login) or login
+    return runner_id, login, runtime
 
 
 def unfenced_sql():
@@ -2931,7 +2786,7 @@ def job_message_readable(c, bot, message):
     return privacy.message_readable(c, privacy.make_page_actor(c, "bot:" + bot, message), message)
 
 
-def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *, runner=None):
+def job_refusal(c, job, followed, ready, busy, live=frozenset(), *, runner=None):
     """Why the claim passes over one queued job of a bot claim_refusal let through, or None when it hands it out.
     `followed` is the bot's followed config; `busy` the taken (bot, lane) pairs; `live` the (bot, task) pairs with a
     turn out (live_tasks); `runner` the computer's row, whose company subscription signs a check's runtime in."""
@@ -2941,17 +2796,15 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *
     # The bot's budget and back-off are the bot's own state: an error reading them is shared_check's, and the whole
     # bot is passed over. The checks below depend on this job, so an error in them holds this job alone.
     with shared_check():
-        if why := turn_budgets.refusal(c, job["bot_id"], message) or run_backoff.job_refusal(c, job["bot_id"], message):
+        if why := holds.why(c, job["bot_id"], kinds=holds.CLAIM_JOB, message=message, claim=True):
             return why  # over its run budget or waiting out failed runs: except for a person's message
     conversation = H.conversation(c, message["conversation_id"])
     task_id = work_task_id(message, conversation)
     if task_id and message.get("sender_id") == H.KEEPER and not H.in_person_name(message) and task_snoozed(c, task_id):
-        # Tico wakes no bot about a snoozed task (docs/pipelines-v3.md, rule 7); a person still can, through the
+        # Tico wakes no bot about a snoozed task (docs/dev/pipelines-v3.md, rule 7); a person still can, through the
         # keeper's carrier of their own message too (task_wakes.may_start).
         return "task_wait"
     refs = message.get("refs") or {}
-    if "make_page" in refs and (not runner or MAKE_PAGE not in capability_set(runner["capabilities"])):
-        return "make_page_upgrade"
     # Whose turn a task is the engine's to say: it writes a task's wake only for the bot whose turn it is and cancels
     # it when the turn moves on (backend/task_wakes.py), so the claim does not judge a task's waits again.
     wanted = check_models.of(c, task_id, job["bot_id"])
@@ -2964,18 +2817,23 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *
         return "check_model"
     if wanted and not H.in_person_name(message) and check_models.dropped(c, task_id):
         return "check_model"  # hold_unrunnable cancels it on the scheduler's next tick
+    if (
+        wanted
+        and runner is not None
+        and gateway_connection.is_tico(wanted.get("model"))
+        and login_holds.holding(c, runner["id"], login_holds.GATEWAY, login_holds.GATEWAY_RUNTIME, job["id"])
+    ):
+        return "cooling_off"  # a check on a Tico model waits on the Gateway's hold and its one probe
     config = check_models.apply(followed, wanted)
     if (
-        (job["bot_id"], job_lane(c, job["bot_id"], config, message, conversation, lanes, roots)) in busy
+        (job["bot_id"], job_lane(c, job["bot_id"], config, message, conversation)) in busy
         or (job["bot_id"], task_id) in live
         or filer_live(c, message)
     ):
         return "lane_held"
     if turn_moved_on(c, job["bot_id"], task_id, refs, live or None):  # Health passes no live set: read it
         return "task_turn_out"
-    if (until := handed_back_until(c, job)) and until > H.now():
-        return "handed_back"
-    return None
+    return holds.why(c, job["bot_id"], kinds=(holds.HANDED_BACK,), job=job)
 
 
 def turn_moved_on(c, bot, task_id, refs, live=None):
@@ -3017,7 +2875,7 @@ def obsolete_notices_sql(c):
     still owes that person its answer; on the engine nothing wakes a bot about a Done or Closed task, and
     task_wakes.may_start holds it, so Health and the claim say the same), a pull request's checks result for a head no open pull request on the task is at any more (a newer push
     supersedes it), and a self-filed task's "New task" notice while the task is snoozed and its filing turn has ended.
-    A turn that started and yielded (a drain's time limit, a shared login's hold cap) is never one of them: it is the
+    A turn that started and yielded (a drain's time limit) is never one of them: it is the
     rest of a turn already under way, often the one that finished the task, and canceling it left the bot's status on
     "queued to continue" with nothing queued (Dev 684). The idle claim asks the same question: when it counted notices
     the claim keeps, every claim from that computer went on to the write lock for nothing. It goes from this computer's
@@ -3255,6 +3113,32 @@ def quiet_recheck(c, aid, body, task, msg):
     )
 
 
+def told_only(c, aid, msg, text, task, conv, actor):
+    """Whether turn `aid`, woken by Tico's notice `msg` on `task` (H.run_notice), ends with words for nobody: the notice
+    is not the task's request (its first wake, refs.news "assignment", whose answer is the requester's), no person's act
+    is behind it, no person's message was folded into the turn, the turn did not finish the task, and the text names
+    no one. Its text is then the bot's own account of its turn, kept on the run (attempts.final_text), not a message in
+    the room: the chat is for people and bots talking."""
+    from . import threads, wake_rules
+
+    refs = msg.get("refs") if isinstance(msg.get("refs"), dict) else H._json(msg.get("refs"), {}) or {}
+    if refs.get("news") == "assignment" or str(refs.get(wake_rules.CAUSED_BY) or "").startswith("human:"):
+        return False
+    if c.execute(
+        "SELECT 1 FROM attempt_inputs i JOIN messages m ON m.id=i.message_id WHERE i.attempt_id=? "
+        f"AND m.deleted_at IS NULL AND ({H.in_person_name_sql()} "
+        f"OR json_extract(m.refs,'$.{wake_rules.CAUSED_BY}') LIKE 'human:%') LIMIT 1",
+        (aid,),
+    ).fetchone():
+        return False
+    started = c.execute("SELECT coalesce(started_at, created_at) FROM attempts WHERE id=?", (aid,)).fetchone()
+    finished = max(task.get("done_at") or "", task.get("closed_at") or "")
+    if task["status"] in ("done", "closed") and started and finished >= str(started[0] or ""):
+        return False  # its last word on the task: what it did
+    thread = threads.thread_row(c, conv["id"]) if "@" in str(text or "") else None
+    return not (thread and threads.mentions(c, thread, text, author=actor))
+
+
 # How long a queued job waits before it is claimed ahead of task rank, oldest first. Rank alone let a job with no
 # task (a plain message to the bot) wait behind every newer task job: on Nov 13 a bot at its turns-at-once limit left
 # four such messages queued 97+ minutes while task work kept arriving.
@@ -3368,6 +3252,8 @@ def prime_job_checks(c, jobs):
             continue
         pairs.add((work_task_id(message, H.conversation(c, message["conversation_id"])), job["bot_id"]))
     check_models.prime(c, pairs)
+    # The session root each job's lane is keyed on (session_task_id), with every ancestor the walk reaches.
+    H.prime_session_roots(c, [task_id for task_id, _ in pairs])
     tasks = sorted({task_id for task_id, _ in pairs if task_id})
     snoozed = {}
     for part in H.chunks(tasks):
@@ -3435,22 +3321,12 @@ def bot_claimable(
             first = min(rows(c, queued_jobs_sql(), (bot,)), key=lambda j: (j["created_at"], j["id"]), default=None)
             return result(why, first["created_at"] if first else None, job=first["id"] if first else None)
         return result(why)
-    lanes, roots = lanes_on(runner), roots_on(runner)
     busy = set(live_lanes(c)) | held_lanes
     followed, refused = follow(c, bot, config), None  # refused: (created, reason) of the oldest held job
     queue = rows(c, queued_jobs_sql(), (bot,))
     for job in sorted(queue, key=lambda j: (j["created_at"], j["id"])) if oldest else queue:
         person = bool(job["person_sent"])
-        if not job["in_scope"]:
-            why = "scoped"
-        elif not job["free"]:
-            why = "uncertain" if job["quarantine_free"] else "task_quarantine"
-        elif not private_lanes_on(runner) and private_job(c, job):
-            why = "private_update"
-        else:
-            why = job_refusal(c, job, followed, ready, busy, lanes, roots, runner=runner) or (
-                "cooling_off" if login_refusal(c, settings, runner_id, bot, followed, job["id"], loads=loads) else None
-            )
+        why = job_reason(c, settings, runner, job, followed, ready, busy, frozenset(), loads)
         if why is None or why in ignore_refusals or (oldest and why != "lane_held"):
             return result(None if why in ignore_refusals else why, job["created_at"], person, job["id"])
         if refused is None or job["created_at"] < refused[0]:
@@ -3494,22 +3370,27 @@ def queued_reasons(c, settings, runner_id, bot, default=None, *, oldest=False, l
         for job in queue:
             yield job, why
         return
-    lanes, roots = lanes_on(runner), roots_on(runner)
     busy = set(live_lanes(c)) | held_lanes
     followed = follow(c, bot, config)
     live = live_tasks(c)
     for job in queue:
-        if not job["in_scope"]:
-            why = "scoped"
-        elif not job["free"]:
-            why = "uncertain" if job["quarantine_free"] else "task_quarantine"
-        elif not private_lanes_on(runner) and private_job(c, job):
-            why = "private_update"
-        else:
-            why = job_refusal(c, job, followed, ready, busy, lanes, roots, live, runner=runner) or (
-                "cooling_off" if login_refusal(c, settings, runner_id, bot, followed, job["id"], loads=loads) else None
-            )
+        why = job_reason(c, settings, runner, job, followed, ready, busy, live, loads)
         yield job, None if why in ignore_refusals else why
+
+
+def job_reason(c, settings, runner, job, followed, ready, busy, live, loads):
+    """Why the claim passes over one queued job (a queued_jobs_sql row) of a bot claim_refusal let through, or None:
+    the one per-job answer bot_claimable and queued_reasons give. A claim scope, the interrupted-work fence and a
+    quarantine on its task or chat come from the row; the rest is job_refusal's, then the job's own login hold."""
+    if not job["in_scope"]:
+        return "scoped"
+    if not job["free"]:
+        return "uncertain" if job["quarantine_free"] else holds.TASK_QUARANTINE
+    return job_refusal(c, job, followed, ready, busy, live, runner=runner) or (
+        "cooling_off"
+        if login_refusal(c, settings, runner["id"], job["bot_id"], followed, job["id"], loads=loads)
+        else None
+    )
 
 
 # Stop and redirect (Execution._redirect_job) reads the caller's own job in this turn's conversation. jobs.message_id is
@@ -3750,8 +3631,6 @@ class Execution:
             readiness.pop('harnesses', None)
         if not readiness.get('mail_key'):
             readiness.pop('mail_key', None)
-        if not readiness.get('shared_env'):
-            readiness.pop('shared_env', None)
         # The platform named at enrollment stands: backend/sql.py decides on it (a heartbeat
         # from a stolen credential must not turn a shared server into a personal Mac).
         # Most beats repeat the last report: then only the contact times move (readiness_at too: the page tells a
@@ -3880,7 +3759,7 @@ class Execution:
             "browser_exit": browser_exit.sharing(c, who.runner_id),
             # The bots here with an exit set: the runner stops the proxies of the rest.
             "browser_exit_bots": browser_exit.bots_on(c, who.runner_id),
-            # The owner's "Turns at once" (null: automatic). Only a runner with turns_at_once_v1 takes a raised one.
+            # The owner's "Turns at once" (null: automatic, the computer's own capacity).
             "turns_at_once": restart["turns_at_once"] if restart else None,
             **({"worktree_actions_skipped": skipped} if skipped else {}),
             **({"restart": True} if restart and restart["restart_requested_at"] else {}),
@@ -3931,9 +3810,7 @@ class Execution:
             )
             if row['owner_id'] != runner['owner_id'] and runner['owner_id'] != owner and not takes:
                 continue
-            config = app_delivery.job_config(
-                providers.fill(company, follow(c, row['bot'], json.loads(row['config']), configs.get))
-            )
+            config = providers.fill(company, follow(c, row['bot'], json.loads(row['config']), configs.get))
             # Runner wire (backend/runner_wire.py): the stored text under its old name, beside the decoded `config`.
             result.append(
                 {
@@ -4553,14 +4430,8 @@ class Execution:
         ClaimFaults, which takes each job whose checks raise and moves on to the next candidate, passes over the bot of
         a bot-wide check that raises, and stops picking once CLAIM_HOLDS jobs are held; without it the error
         propagates. `skip`: the job ids a claim has already dropped, which are passed over."""
-        # The runner's flags, parsed once for this pass: every check below reads this set.
-        caps = capability_set(runner["capabilities"])
-        lanes, roots, continues = LANES in caps, ROOTS in caps, CAPACITY_CONTINUE in caps
-        private_lanes = PRIVATE_LANES in caps
-        # Taken lanes, each "bot|lane": the server's active attempts and the runner's own busy list. A runner
-        # without lanes runs one turn per bot, so any active attempt takes the whole bot.
+        # Taken lanes, each "bot|lane": the server's active attempts and the runner's own busy list.
         busy = set(live_lanes(c))
-        busy_bots = {bot for bot, _ in busy} if not lanes else set()
         mine = {tuple(entry.split("|", 1)) for entry in (body.busy_lanes or ()) if "|" in entry}
         busy |= mine
         # Prefer the bot holding the fewest real places; waiting workers still fence their lanes,
@@ -4576,7 +4447,7 @@ class Execution:
         from .shared_bots import follow
 
         subscription_context = context(c)
-        held_bots = set(body.busy_bots or ()) | busy_bots
+        held_bots = set(body.busy_bots or ())
         # The runner may name its bot by id or slug, as everywhere a bot is named from outside.
         only = (H.resolve_bot(c, body.bot) or {}).get("id", body.bot) if body.bot is not None else None
         bots = []
@@ -4597,13 +4468,7 @@ class Execution:
         # What the per-bot checks read for every one of these bots, in fixed set queries, before the first check
         # (claim_loads). No queued bot, no reads.
         loads = (
-            claim_loads.read(
-                c,
-                self.store.settings,
-                {runner["id"]: runner},
-                [row["bot"] for row in assigned],
-                exits=browser_exit.CAPABILITY not in caps,
-            )
+            claim_loads.read(c, self.store.settings, {runner["id"]: runner}, [row["bot"] for row in assigned])
             if assigned
             else None
         )
@@ -4626,7 +4491,6 @@ class Execution:
                         held_bots,
                         subscription_context,
                         default,
-                        caps=caps,
                         loads=loads,
                     )
                     if why:
@@ -4688,13 +4552,7 @@ class Execution:
                 part = candidates[i : i + PRIME_QUEUED]
                 privacy.prime_queued(c, H.prime_messages(c, [job["message_id"] for job in part]).values())
             try:
-                if source_continuation(c, row["id"]) and SOURCE_CONTINUE not in caps:
-                    continue  # old strict-primary runners cannot route a saved fallback
-                if not continues and continuation_thread(c, row["id"]):
-                    continue  # left queued for a runner that continues its thread: this one would start it afresh
-                if not private_lanes and private_job(c, row):
-                    continue  # a private meeting's turn waits for a runner that keeps it out of the bot's checkout
-                why = job_refusal(c, row, followed[row["bot_id"]], ready, busy, lanes, roots, live, runner=runner)
+                why = job_refusal(c, row, followed[row["bot_id"]], ready, busy, live, runner=runner)
                 if why != "unreadable":
                     # The bot's checks ran for this job without raising: the back-off their last failure started ends.
                     self.check_backoff.pop(row["bot_id"], None)
@@ -4779,8 +4637,7 @@ class Execution:
             if (
                 not target
                 or (remote and not claiming(rid, CLAIMED_WAITING_FRESH))
-                or not target['last_seen_at']
-                or target['last_seen_at'] < H.shift(H.now(), seconds=-90)
+                or not runner_online.is_online(target['last_seen_at'])
                 or not self.awake(target['awake_since'], H.now())
                 or runner_versions.paused(c, rid)
                 or cloud_machines.held(c, rid)
@@ -5115,7 +4972,7 @@ class Execution:
         with shared_check():
             if turn_budgets.enforce(c, self.store.settings, row, msg):
                 return {"attempt": None}  # the bot is over its run budget: held now, its queue kept
-            if run_backoff.probe(c, row["bot_id"]):
+            if run_failures.probe(c, row["bot_id"], row["id"]):
                 return {"attempt": None}  # held for failed runs and its next try is not due, or another took it
         if finance_run_hold(c, row["bot_id"], row["id"]):
             return {"attempt": None}  # a Finance budget at its cutoff refuses the run (usage_limits holds the bot)
@@ -5163,7 +5020,6 @@ class Execution:
         # A check subtask's turns run on its own model, in its own session (backend/check_models.py).
         check = check_models.of(c, task["id"], row["bot_id"]) if task else None
         # Starting a run does not change the task: it is being worked on while the run is live (task_wakes.live_run).
-        roots, lanes = roots_on(runner), lanes_on(runner)
         # A turn in a task's own session runs on the bot's task model when it has one, or on its own model when that
         # cannot run here; a check keeps its check model (backend/task_models.py).
         followed, model_record = task_models.pick(
@@ -5172,7 +5028,7 @@ class Execution:
             row["bot_id"],
             followed,
             task["id"] if task else None,
-            session_task_id(c, row["bot_id"], followed, task["id"], roots) if task else None,
+            session_task_id(c, row["bot_id"], followed, task["id"]) if task else None,
             conv["id"],
             who.runner_id,
             row["id"],
@@ -5182,7 +5038,7 @@ class Execution:
         # What really runs this turn: the task's or check's model, or the bot's own after a fallback. A change to
         # the bot's model while the turn is out is told from an effort change by these (ran_another_model).
         handed = providers.bot_choice(c, self.store.settings, followed)
-        lane = job_lane(c, row["bot_id"], followed, msg, conv, lanes, roots)
+        lane = job_lane(c, row["bot_id"], followed, msg, conv)
         token = secrets.token_urlsafe(32)
         until = H.shift(H.now(), seconds=self.store.settings.lease_seconds)
         woke, source = run_triggers.of_message(msg)
@@ -5272,7 +5128,7 @@ class Execution:
         here = readiness_document(runner["readiness"])
         # The computer's subscription for this runtime signs the turn in, so a missing or
         # refused sign-in here does not move it to the Gateway (backend/model_subscriptions.py).
-        subscribed = model_subscriptions.for_claim(c, runner, config)
+        subscribed = model_subscriptions.for_claim(c, runner, config, bot=row["bot_id"])
         # A computer given a person's plans moves to the next one here, between turns (its sessions start fresh).
         model_subscriptions.settle(c, self.store.settings, runner["id"], subscribed)
         here = model_subscriptions.covered(here, [x["runtime"] for x in subscribed])
@@ -5287,30 +5143,23 @@ class Execution:
             tier,
             falls_back=models_preset.computer_falls_back(c, runner["id"]),
         )
+        if config.get("waiting_for_sign_in") or check and gateway_connection.is_tico(check.get("model")):
+            # Moved to the Gateway for this turn, or a check on a Tico model: after a hold on it ends, this is the
+            # Gateway's one probe.
+            login_holds.take_probe(c, runner["id"], login_holds.GATEWAY, login_holds.GATEWAY_RUNTIME, row["id"])
+        config = gateway_admit(c, runner["id"], config, row["id"])
         config = models_preset.with_gateway_inputs(config)
         # Where it compacts: its own size, or its model's default when none is saved (providers.compact_default).
         config = providers.with_compact_default(config)
-        # A bot delivered through a desktop app: who it is in the app, beside `app_delivery` (backend/app_delivery.py).
-        config = app_delivery.job_config(config)
         if held:
             config = {**config, "primary_held": held.get("until") or H.now()}
         # The thread's last run failed on a prompt too large to send: this one compacts its session before it runs, once
-        # (backend/run_backoff.py). An older runner ignores it, fails the same way, and the next run starts anew.
-        if run_backoff.take_compact(c, row["bot_id"], conv["id"], aid):
+        # (backend/run_failures.py). An older runner ignores it, fails the same way, and the next run starts anew.
+        if run_failures.take_compact(c, row["bot_id"], conv["id"], aid):
             config = {**config, "compact_first": True}
         # A stateless bot (the Rules Owner): its runner starts each task fresh, reads and keeps no memory (hubdb.stateless).
         if H.stateless(followed):
             config = {**config, "stateless": True}
-        # A runner without threads_v1 keys every bot-keyed turn on the bot's one provider thread (`session: bot`), so a
-        # chat's turn would resume another thread's session. Its chats get a session each instead (`session: task` with no
-        # task keys on the conversation, runner-rs session_key); a task keeps its own session as before.
-        if (
-            not threads_on(runner)
-            and task is None
-            and config.get("session") in (None, "", "bot")
-            and not config.get("stateless")
-        ):
-            config = {**config, "session": "task"}
         gateway_connection.hand_out(c, aid, config)
         # The room's recent page. The runner forwards only what arrived since the bot last
         # answered; the bot reads further back itself with `tico conversation show` when it wants to. The
@@ -5332,11 +5181,10 @@ class Execution:
             c,
             bot_who,
             conv["id"],
-            limit=HISTORY_PAGE * (2 if lanes else 1),
+            limit=HISTORY_PAGE * 2,
             since=epoch["updated_at"] if epoch else None,
         )["messages"]
-        if lanes:
-            history = lane_history(c, row["bot_id"], followed, history, conv, lane, roots)[-HISTORY_PAGE:]
+        history = lane_history(c, row["bot_id"], followed, history, conv, lane)[-HISTORY_PAGE:]
         conversation = thread_payload(c, conv, msg)
         if conversation and conversation.get("audience_class") == "public":
             from . import threads
@@ -5393,20 +5241,19 @@ class Execution:
             if goal:
                 # Worked as a goal: the runner tells the bot to keep at it until the objective holds.
                 task["goal"] = goal
-            if roots:
-                # The task whose session and worktree this turn continues (H.session_root); the runner keys on it.
-                task["session_task_id"] = session_task_id(c, row["bot_id"], followed, task["id"], roots)
-                root = H.task(c, task["session_task_id"]) if task["session_task_id"] != task["id"] else None
-                if root and readable(root):
-                    # The checkpoint lives on the root: a fresh session starts from where the root stood.
-                    kept = root.get("checkpoint") if not root.get("checkpoint_blocked") else None
-                    task.update(
-                        {
-                            "checkpoint": kept,
-                            "checkpoint_at": root.get("checkpoint_at") if kept else None,
-                            "checkpoint_by_id": root.get("checkpoint_by_id") if kept else None,
-                        }
-                    )
+            # The task whose session and worktree this turn continues (H.session_root); the runner keys on it.
+            task["session_task_id"] = session_task_id(c, row["bot_id"], followed, task["id"])
+            root = H.task(c, task["session_task_id"]) if task["session_task_id"] != task["id"] else None
+            if root and readable(root):
+                # The checkpoint lives on the root: a fresh session starts from where the root stood.
+                kept = root.get("checkpoint") if not root.get("checkpoint_blocked") else None
+                task.update(
+                    {
+                        "checkpoint": kept,
+                        "checkpoint_at": root.get("checkpoint_at") if kept else None,
+                        "checkpoint_by_id": root.get("checkpoint_by_id") if kept else None,
+                    }
+                )
             own_room = conv and conv.get("kind") == "task" and conv.get("task_id") == task["id"]
             from .chat_goals import clear_task_goal, task_goal_row
 
@@ -5419,7 +5266,6 @@ class Execution:
                 goal
                 and own_room
                 and lane != sessions.MAIN_LANE
-                and task_goals_on(runner)
                 and task.get("session_task_id", task["id"]) == task["id"]
             ):
                 # Its own session runs it as the harness's native goal; the runner sets it once per session.
@@ -5440,7 +5286,7 @@ class Execution:
                 + recovery['note'],
             }
         if task and recovery:
-            msg = self.fold_behind(c, row, aid, msg, task["id"], followed, lanes, roots, lane)
+            msg = self.fold_behind(c, row, aid, msg, task["id"], followed, lane)
         # The model's capacity stopped this job's turn after it acted: the runner continues that same thread, or holds
         # the run for review when it no longer has it (runner-rs/src/execute.rs CONTINUE_LOST).
         continue_thread = continuation_thread(c, row['id'])
@@ -5534,8 +5380,7 @@ class Execution:
         make_page_task = self.auth.task(c, acting or bot_who, making_page["task"]) if making_page else None
         if making_page:
             history = [msg]
-        # A runner from before task goals would treat a task room's goal as running without ever setting it.
-        chat_goal = current(c, conv["id"]) if not (conv.get("kind") == "task" and not task_goals_on(runner)) else None
+        chat_goal = current(c, conv["id"])
         if chat_goal and (making_page or chat_goal["bot"] != row["bot_id"]):
             # Another bot's turn in the room (the requester answering) works without the owner's goal.
             chat_goal = None
@@ -5551,8 +5396,8 @@ class Execution:
                 "routine": routine,
                 "id": aid,
                 "deferred": deferred,
-                # Which waiting turn takes a shared one-turn login first (runner-rs/src/login_turns.rs).
-                "login_class": login_class(c, task, msg, routine),
+                # The retired login queue's class: 0.6.x runners require the field (contracts/runner/wire.json).
+                "login_class": "other",
                 "recovery": {
                     "resume_session": restart_reported(c, row["attempt_id"])
                     or bool(cut_by_update(c, row["attempt_id"]))
@@ -6099,8 +5944,6 @@ class Execution:
         # The runner renews every few seconds, so a person's Stop rides on the answer it already reads. A turn whose
         # task ended meanwhile, or that the engine holds now, is stopped while it waits before starting; one preparing
         # or under way runs on.
-        from .login_waits import wait
-
         benched = quarantine_stops.stopped_by(c, row)
         return {
             "lease_until": until,
@@ -6110,7 +5953,7 @@ class Execution:
                 if row["stop_requested_at"]
                 or row["state"] == "leased"
                 and start_refused(c, aid)
-                or (wait(c, aid) or start_places.is_waiting(c, aid))
+                or start_places.is_waiting(c, aid)
                 and held_before_start(c, row)
                 else {}
             ),
@@ -6294,7 +6137,7 @@ class Execution:
         return msg
 
     @staticmethod
-    def fold_behind(c, row, aid, msg, task_id, followed, lanes, roots, lane):
+    def fold_behind(c, row, aid, msg, task_id, followed, lane):
         """A resumed run takes the work that queued behind it on its task while it was held (verdicts, subtask
         results, comments: the claim's fence, unfenced_sql, kept them back), so no separate turn waits after it to
         read them again (Dev 543). Each joins this turn as an input given in its prompt, already acknowledged, and its
@@ -6318,13 +6161,7 @@ class Execution:
             message = H.message(c, queued["id"])
             if not threads.still_addressed(c, message, "bot:" + row["bot_id"]):
                 continue  # left queued: its own claim settles it
-            if (
-                lanes
-                and job_lane(
-                    c, row["bot_id"], followed, message, H.conversation(c, queued["conversation_id"]), lanes, roots
-                )
-                != lane
-            ):
+            if job_lane(c, row["bot_id"], followed, message, H.conversation(c, queued["conversation_id"])) != lane:
                 continue
             prior = c.execute(
                 "SELECT i.attempt_id,a.state FROM attempt_inputs i JOIN attempts a ON a.id=i.attempt_id "
@@ -6383,11 +6220,6 @@ class Execution:
         if row["state"] != "running":
             raise Problem("not_running", "This attempt is not running", 409)
         if body.source_pending or body.source_continuation:
-            computer = c.execute(
-                'SELECT capabilities FROM runners_with_state WHERE id=?', (row['runner_id'],)
-            ).fetchone()
-            if SOURCE_CONTINUE not in json.loads(computer[0] or '[]'):
-                raise Problem('capability', 'Saved fallback sessions require source continuation support', 409)
             if body.source_pending:
                 # The primary's thread is no proof of where the fallback is. Fence recovery before launching it.
                 c.execute(
@@ -6459,16 +6291,9 @@ class Execution:
         if "make_page" in (origin.get("refs") or {}):
             return {"messages": []}
         origin_task = work_task_id(origin, H.conversation(c, origin["conversation_id"]))
-        capabilities = c.execute(
-            "SELECT capabilities FROM runners_with_state WHERE id=?", (attempt["runner_id"],)
-        ).fetchone()
-        lanes, roots = lanes_on(capabilities), roots_on(capabilities)
-        if lanes:
-            from .shared_bots import follow
+        from .shared_bots import follow
 
-            followed = follow(
-                c, attempt["bot_id"], json.loads(c.execute(BS.ONE_SQL, (attempt["bot_id"],)).fetchone()[0])
-            )
+        followed = follow(c, attempt["bot_id"], json.loads(c.execute(BS.ONE_SQL, (attempt["bot_id"],)).fetchone()[0]))
         # A task turn whose message stayed in the chat the task moved out of (H.give_task_room) also takes
         # follow-ups from the task's own room; the lane and privacy checks below apply to both.
         task_room = (
@@ -6519,10 +6344,7 @@ class Execution:
             if incoming_task and incoming_task != origin_task and row["kind"] == "notice":
                 continue  # a new task gets its own run, even in the same bot room
             if (
-                lanes
-                and job_lane(
-                    c, attempt["bot_id"], followed, H.message(c, row["id"]), incoming_conversation, lanes, roots
-                )
+                job_lane(c, attempt["bot_id"], followed, H.message(c, row["id"]), incoming_conversation)
                 != attempt["lane"]
             ):
                 continue  # another lane's work is that lane's turn, never folded into this one
@@ -6658,8 +6480,6 @@ class Execution:
 
         revoked = row["bot_id"] == H.RULES_OWNER and counsel.revoked_page_run(c, aid)
         seq = row["last_seq"]
-        from .login_waits import stored
-
         # Fetch only the sequences in this bounded request, not the attempt's output history.
         existing_events = {
             r["seq"]: (r["kind"], r["payload"])
@@ -6674,7 +6494,7 @@ class Execution:
         last_event = None
         now = H.now()
         for event in body.events:
-            clean = {"text": counsel.REMOVED_PAGE} if revoked else stored(event.kind, event.payload)
+            clean = {"text": counsel.REMOVED_PAGE} if revoked else event.payload
             payload = encode(clean)
             existing = existing_events.get(event.seq)
             if existing:
@@ -6695,18 +6515,12 @@ class Execution:
         c.executemany("INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) VALUES(?,?,?,?,?)", inserts)
         # A big output's few fields the status line reads, so it never decodes the output (backend/step_briefs.py).
         step_briefs.record(c, aid, briefs)
-        # Managed workers report waits through start-place. Their delayed status stream cannot revoke a grant.
-        # Legacy workers use the same latest-event predicate here as on restart, including clears and opt-outs.
+        # Managed workers report waits through start-place. Their delayed status stream cannot revoke a grant; a legacy
+        # worker's event clears the wait it reported before.
         if row["state"] == "leased" and row["lease_until"] > now and not start_places.managed(c, aid):
-            from .login_waits import wait
-
-            pending = wait(c, aid)
-            if pending:
-                start_places.waiting(c, aid, "shared login" if pending.get("login") else "pre-start requirements")
-            else:
-                c.execute(
-                    "UPDATE start_places SET wait_reason='',waiting_since=NULL WHERE attempt_id=? AND managed=0", (aid,)
-                )
+            c.execute(
+                "UPDATE start_places SET wait_reason='',waiting_since=NULL WHERE attempt_id=? AND managed=0", (aid,)
+            )
         if last_event is not None:
             from . import run_diagnostics
 
@@ -6912,8 +6726,8 @@ class Execution:
         # NOT_ISOLATED). Settled now, so the bot says why once rather than its lease lapsing into a retry.
         # Likewise a turn sent away from a held login (`primary_held`) that found no fallback ready after all: nothing
         # ran, and it goes back to wait out the hold (backend/login_holds.py after_turn).
-        # And a turn stopped while it waited for its shared login: older runners report failed, newer ones interrupted.
-        # Either settles the Stop. A task done or closed meanwhile (`skipped`) also ends its waiting turn.
+        # And a turn stopped while it waited before it started, failed or interrupted: either settles the Stop.
+        # A task done or closed meanwhile (`skipped`) also ends its waiting turn.
         skipped = body.outcome == "interrupted" and not row["stop_requested_at"] and held_before_start(c, row)
         # A private meeting's turn its computer could make no copy of the repository for (runner-rs
         # sessions::PRIVATE_COPY_FAILED) never started, and would fail alike on every retry: it ends here, and the
@@ -6994,8 +6808,12 @@ class Execution:
         # A turn a carrier started answers the message it carries (reply_source): its sender, in its thread.
         source = reply_source(c, msg)
         carried = source is not None and source["id"] != msg["id"]
+        # Keep-warm turns are gone. One still out on a computer at the upgrade answers its hidden notice ("ok"): nothing
+        # is posted for it, and its text stays on the run.
+        kept_warm = row["purpose"] == "keep warm"
         if (
             body.text
+            and not kept_warm
             and body.outcome == "completed"
             and msg["deleted_at"] is None
             and source is not None
@@ -7023,8 +6841,6 @@ class Execution:
                 ),
             ).fetchone()
             task = H.task(c, work_task_id(source, conv)) if work_task_id(source, conv) else None
-            # A bot delivered through a desktop app: the computer may have reported the reply from the app first.
-            same = same or app_delivery.echoes(c, conv["id"], actor, text, any_source=False)
             # A reply the turn already sent (a tool message) is not posted again; the rule check's verdict on the final
             # text still applies (held, the run keeps only the note), so `posting` decides only the post.
             posting = not already and not same
@@ -7068,6 +6884,16 @@ class Execution:
                             "reply.withheld",
                             aid,
                             {"bot": row["bot_id"], "task": task["id"], "to": target, "reason": "no_change"},
+                        )
+                    # Woken by Tico's notice alone, a turn whose text is for nobody (told_only) keeps it on the run.
+                    elif posting and replyable and told_only(c, aid, msg, text, task, conv, actor):
+                        replyable = False
+                        H.event(
+                            c,
+                            H.KEEPER,
+                            "reply.withheld",
+                            aid,
+                            {"bot": row["bot_id"], "task": task["id"], "to": target, "reason": "notice_only"},
                         )
                 # A turn a Stop reached after its task was closed (end_task_work) files its answer on the run
                 # instead: the closed room takes no more posts from work that was stopped.
@@ -7179,10 +7005,11 @@ class Execution:
         # restart safety judgement: local work may continue, while used OKs and outside actions stay held.
         failure = None
         source_pause = False
+        worked = False  # set only when source_pause is; read only under it
         quota_acted = False
         notice_only = False
         if body.outcome in ('failed', 'interrupted') and not row['stop_requested_at']:
-            failure = run_backoff.classify(c, aid, body)
+            failure = run_failures.classify(c, aid, body)
             errors = limit_errors(c, aid)
             notice_only = only_a_notice(c, aid, row, body)
             if notice_only and body.continues and errors and all(login_holds.capacity(e) for e in errors):
@@ -7234,16 +7061,9 @@ class Execution:
                 aid,
             ),
         )
-        quota_continue = False
-        if source_pause and not body.fallback and row['thread_id'] and worked:
-            computer = c.execute(
-                'SELECT capabilities FROM runners_with_state WHERE id=?', (row['runner_id'],)
-            ).fetchone()
-            quota_continue = capacity_continue_on(computer)
-            if quota_continue:
-                c.execute(
-                    "UPDATE attempts SET result=json_set(result,'$.quota_continue',json('true')) WHERE id=?", (aid,)
-                )
+        quota_continue = bool(source_pause and not body.fallback and row['thread_id'] and worked)
+        if quota_continue:
+            c.execute("UPDATE attempts SET result=json_set(result,'$.quota_continue',json('true')) WHERE id=?", (aid,))
         if body.outcome == "completed":
             H.notes_settle(c, aid)  # read for good; a failed or interrupted run gives its notes back
         from .performance import stamp_attempt
@@ -7258,7 +7078,7 @@ class Execution:
         # A quarantine's Stop is no choice to drop the work: what it held back waits for review, not canceled.
         held_back = bool(benched) and not quarantine_stops.requeues(c, row)
         # A provider limit inside any error is the usage limit's, whatever the runner flagged; a prompt too large to
-        # send starts the next run in a fresh session (backend/run_backoff.py).
+        # send starts the next run in a fresh session (backend/run_failures.py).
         if body.outcome == "failed" and not stopped:
             H.hook(
                 c,
@@ -7318,13 +7138,7 @@ class Execution:
             and source.harness == body.fallback
             and not notice_only
         ):
-            computer = c.execute(
-                'SELECT capabilities FROM runners_with_state WHERE id=?', (row['runner_id'],)
-            ).fetchone()
-            if computer and SOURCE_CONTINUE in json.loads(computer[0] or '[]'):
-                c.execute(
-                    "UPDATE attempts SET result=json_set(result,'$.source_continue',json('true')) WHERE id=?", (aid,)
-                )
+            c.execute("UPDATE attempts SET result=json_set(result,'$.source_continue',json('true')) WHERE id=?", (aid,))
         limited = limited and not busy_acted or continues
         if repeated_capacity:
             limited = False
@@ -7366,6 +7180,11 @@ class Execution:
             tico_error = next((error for error in limit_errors(c, aid) if gateway.run_code(error)), "")
             if tico_error and gateway_connection.ran_tico(gateway_connection.handed(c, aid), body):
                 tico_code = gateway.run_code(tico_error)
+        # What the claim handed the turn, not what the bot is set to now: whether it started on a Tico model, and
+        # whether a Tico model ended it. Its limit, or its success, is the Gateway login's (login_holds.after_turn).
+        gateway_handed = gateway_connection.handed(c, aid)
+        started_gateway = gateway_connection.is_tico(gateway_handed.get("model"))
+        ran_gateway = gateway_connection.ran_tico(gateway_handed, body)
         gateway_connection.forget(c, aid)
         silent = False
         # A continuation already acted in its earlier turn: a quiet missing-session failure is held, never retried.
@@ -7650,16 +7469,9 @@ class Execution:
                 (int(body.tokens_in), H.now(), row["bot_id"], runtime, model, row["thread_id"]),
             )
         login_hold = {}
-        # The Tico AI Gateway's cap and address block are the company key's, not a provider login's: they keep their
-        # own waits (reset_cooldown).
-        gateway_wait = tico_code == gateway.RATE_LIMITED or any(gateway.cap_reached(e) for e in limit_errors(c, aid))
-        if (
-            not check
-            and not superseded
-            and not stopped
-            and not gateway_wait
-            and (limited or body.outcome == "completed")
-        ):
+        if not check and not superseded and not stopped and (limited or body.outcome == "completed"):
+            # The Tico AI Gateway's cap, rate limit and pause for want of credit hold the Gateway's one login, for its
+            # own wait (login_holds.gateway_until), never the computer's.
             login_hold = login_holds.after_turn(
                 c,
                 row["runner_id"],
@@ -7670,17 +7482,30 @@ class Execution:
                 aid,
                 H.now(),
                 hopped=fallback_mark(json.loads(config[0] or "{}") if config else {}) if hopped else None,
+                primary_gateway=started_gateway,
+                ended_gateway=ran_gateway,
             )
-        elif check and not stopped and not gateway_wait and (limited or body.outcome == "completed"):
+        elif check and not stopped and (limited or body.outcome == "completed"):
             # A check's own schedule stays its own (check_models.hold below), but a company subscription it signed in
             # with is one login on every computer given it: its limit holds it there too, and a check that worked on it
             # clears it.
             login_holds.after_turn(
-                c, row["runner_id"], row["bot_id"], "", runtime, body, aid, H.now(), subscriptions_only=True
+                c,
+                row["runner_id"],
+                row["bot_id"],
+                "",
+                runtime,
+                body,
+                aid,
+                H.now(),
+                subscriptions_only=True,
+                primary_gateway=started_gateway,
+                ended_gateway=ran_gateway,
             )
         if reset_wait or unstarted and body.primary_held and body.limited and not body.fallback:
+            # The primary's hold keeps the bot off that fallback until it ends (`failed_fallback`, `stuck`).
             login_hold = (
-                hold_job_until_reset(
+                note_reset_wait(
                     c,
                     row,
                     own_login_hold(c, self.store.settings, row['bot_id']),
@@ -7703,9 +7528,7 @@ class Execution:
                 )
             )
         ):
-            hold_job_until_reset(
-                c, row, login_hold, 'Provider quota paused this turn; continue its saved session at reset.'
-            )
+            note_reset_wait(c, row, login_hold, 'Provider quota paused this turn; continue its saved session at reset.')
         # A turn signed in with a company subscription: a refusal is that subscription's, never the computer's login.
         subscription = (
             model_subscriptions.turn_rejected(
@@ -7848,7 +7671,7 @@ class Execution:
                     "retry_after": retry,
                 },
             )
-        elif limited and ran and not gateway_wait:
+        elif limited and ran:
             # The task model's limit is not the bot's: its login is held (after_turn above), the bot's chat, routines
             # and other work go on on its own model, and its next task turns run there until the hold ends.
             hit = H.now()
@@ -8024,12 +7847,21 @@ class Execution:
                 stop=aid if not requeue else None,
             )
         elif silent and tico_code == gateway.UNAVAILABLE:
-            from .repositories import save_metadata
-
             hit = H.now()
             tries = c.execute("SELECT count(*) FROM attempts WHERE job_id=?", (row["job_id"],)).fetchone()[0]
             retry = H.shift(hit, seconds=GATEWAY_BACKOFF * 2 ** max(tries - 1, 0))
-            save_metadata(c, GATEWAY_WAIT + row["bot_id"], {"since": hit, "until": retry})
+            # The Gateway is down for every Tico turn, not this bot's alone: its one login waits, then one probe.
+            login_holds.record(
+                c,
+                row["runner_id"],
+                login_holds.GATEWAY,
+                login_holds.GATEWAY_RUNTIME,
+                hit,
+                attempt_id=aid,
+                bot=row["bot_id"],
+                error=tico_error,
+                until=retry,
+            )
             settle_status(
                 c,
                 row["bot_id"],
@@ -8071,9 +7903,9 @@ class Execution:
                 claimed=row['created_at'],
             )
         elif yielded:
-            # Paused at its hold cap so another turn could use the shared login: it is back in the queue and
-            # continues next, so the bot is idle with the pause line, not crashed until the continuation starts.
-            from .login_waits import paused
+            # Paused for an update: it is back in the queue and continues next, so the bot is idle with the pause
+            # line, not crashed until the continuation starts.
+            from .run_diagnostics import paused
 
             settle_status(
                 c,
@@ -8116,7 +7948,7 @@ class Execution:
                 claimed=row["created_at"],
                 stop=aid if not healthy else None,
             )
-        # A Gateway outage keeps its own doubling wait (GATEWAY_WAIT) and is Tico's, not the bot's: it never holds a bot.
+        # A Gateway outage holds the Gateway's login for its doubling wait and is Tico's, not the bot's: no run backoff.
         outage = silent and tico_code == gateway.UNAVAILABLE
         self.account_failure(
             c, row, body, aid, conv, failure, counts=not (stopped or limited or busy or yielded or outage)
@@ -8132,22 +7964,22 @@ class Execution:
         }
 
     def account_failure(self, c, row, body, aid, conv, failure, counts):
-        """What a finished run means for the bot's next ones (backend/run_backoff.py): a run that completed starts the
+        """What a finished run means for the bot's next ones (backend/run_failures.py): a run that completed starts the
         count over; a failure within a minute of starting makes the bot wait, and holds it after five in a row; a
         prompt too large to send makes the next run compact its session first, and only a second one in a row starts a fresh
         session. A Stop, a usage limit, a busy model, a
         yield and a Gateway outage (`counts` False) are none of that."""
-        too_long = body.outcome == "failed" and counts and failure == run_backoff.PROMPT_TOO_LONG
+        too_long = body.outcome == "failed" and counts and failure == run_failures.PROMPT_TOO_LONG
         if not too_long:
-            run_backoff.compact_settle(c, aid, body.outcome == "completed")
+            run_failures.compact_settle(c, aid, body.outcome == "completed")
         if body.outcome == "completed":
-            run_backoff.reset(c, row["bot_id"])
+            run_failures.reset(c, row["bot_id"])
             return
         if body.outcome != "failed" or not counts:
             return
         if too_long:
-            run_backoff.too_long(c, self.store.settings, row, conv["id"], aid)
-        run_backoff.failed(c, self.store.settings, row, body, aid)
+            run_failures.too_long(c, self.store.settings, row, conv["id"], aid)
+        run_failures.failed(c, self.store.settings, row, body, aid)
 
     def retry(self, c, who, job_id, body):
         row = c.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
@@ -8574,7 +8406,7 @@ class Execution:
 
     def release_limits(self, c):
         """Runs from the scheduler's tick: lift each usage limit whose hold has passed."""
-        release_limits(c)
+        release_limits(c, self.store.settings)
 
     def release_deploy_drains(self, c):
         """Undrain the bots a deploy drained and never gave back.
@@ -9363,14 +9195,19 @@ class Execution:
         if again:
             job_line += " The earlier review task was closed while the run remained unresolved."
         try:
-            H.task_create(
+            from . import person_asks
+
+            person_asks.task_for(
                 c,
                 H.KEEPER,
                 title,
                 boundary + job_line + "\n\n" + named + "\n" + by_id,
                 owner,
+                question="Resume or dismiss the held run, once you have checked what it did?",
+                why="It stopped partway, so Tico holds it rather than repeat a possible outside action.",
                 private=True,
                 deduplicate=False,
+                lint=True,
             )
         except H.Refused:
             pass

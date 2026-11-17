@@ -1,4 +1,4 @@
-"""One record for a pipeline, its stages and requirements (backend/pipeline_settings.py, docs/pipelines-v3.md "Stage
+"""One record for a pipeline, its stages and requirements (backend/pipeline_settings.py, docs/dev/pipelines-v3.md "Stage
 settings", "Default pipelines", S11).
 
 Synthetic rows only (backend/tests/helpers/engine.py): the fictional company, where Ana owns it, Ben is an Admin and
@@ -54,7 +54,6 @@ def _ops(**fields):
         "private": False,
         "factory_id": None,
         "preset": None,
-        "keep_warm_hours": 8,
         "stages": [
             {
                 "name": "Intake",
@@ -66,7 +65,6 @@ def _ops(**fields):
                 "expected_minutes": 60,
                 "expected_bots_only": True,
                 "on_enter": {},
-                "keep_warm_hours": 2,
                 "requirements": [
                     {
                         "kind": "owner_done",
@@ -91,7 +89,6 @@ def _ops(**fields):
                 "expected_minutes": None,
                 "expected_bots_only": False,
                 "on_enter": {},
-                "keep_warm_hours": None,
                 "requirements": [
                     {
                         "kind": "ok",
@@ -176,32 +173,6 @@ def test_a_saved_pipeline_reads_back_as_it_was_saved_with_done_and_closed_after_
     assert [s["name"] for s in E.stages(c, saved["id"])] == ["Intake", "Sign off", "Done", "Closed"]
     assert (saved["done"]["name"], saved["closed"]["name"]) == ("Done", "Closed")
     assert [s["id"] for s in saved["stages"]] == [f"{saved['id']}-intake", f"{saved['id']}-sign-off"]
-
-
-def test_keep_warm_is_set_on_the_pipeline_and_a_stage_and_a_save_that_leaves_it_out_keeps_it(c):
-    """ "Keep warm for up to N hours" (backend/keep_warm.py): 8 on a new pipeline, 0 off; a stage's own, or None for the
-    pipeline's. A caller that never names it (an older editor) changes neither."""
-    record = _ops()
-    del record["keep_warm_hours"]
-    for stage in record["stages"]:
-        del stage["keep_warm_hours"]
-    saved = PS.save(c, ANA, record)
-    assert saved["keep_warm_hours"] == PS.KEEP_WARM_DEFAULT
-    assert [s["keep_warm_hours"] for s in saved["stages"]] == [None, None]
-    saved["keep_warm_hours"] = 0
-    saved["stages"][1]["keep_warm_hours"] = 3
-    saved = PS.save(c, ANA, saved)
-    assert saved["keep_warm_hours"] == 0 and [s["keep_warm_hours"] for s in saved["stages"]] == [None, 3]
-    left_out = copy.deepcopy(saved)
-    del left_out["keep_warm_hours"]
-    del left_out["stages"][1]["keep_warm_hours"]
-    left_out["goal"] = "Keep the office running well"
-    saved = PS.save(c, ANA, left_out)
-    assert saved["keep_warm_hours"] == 0 and saved["stages"][1]["keep_warm_hours"] == 3
-    saved["stages"][1]["keep_warm_hours"] = None  # back to the pipeline's
-    assert PS.save(c, ANA, saved)["stages"][1]["keep_warm_hours"] is None
-    for bad in (-1, 25, 1.5, True, "8"):
-        assert PS.check(c, _ops(keep_warm_hours=bad))[0] == "Keep warm is a whole number of hours from 0 to 24."
 
 
 def test_defaults_fill_in_the_switches_by_kind(c):
@@ -312,6 +283,10 @@ CASES = {
         "Intake files into a pipeline that does not exist",
     ),
     "a manager nobody is": (lambda r: r.update(manager_id="bot:nobody"), "The manager must be a bot or a person"),
+    "a rubric that is not text": (
+        lambda r: _req(r).update(kind="page", settings={"rubric": 5}),
+        "What the Decision model checks on Intake must be text.",
+    ),
 }
 
 

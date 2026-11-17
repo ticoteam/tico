@@ -1,10 +1,10 @@
 # pyright: strict
-"""Ping: a person asks bots for the questions they have for them (docs/tasks.md, "Needs you"; skills/get-aligned).
+"""Ping: a person asks bots for the questions they have for them (docs/tasks.md, "Needs you"; skills/add-to-flow).
 
-Each bot gets one message from the person, in its chat with them, pointing at the get-aligned skill. The bot does the
+Each bot gets one message from the person, in its chat with them, pointing at the add-to-flow skill. The bot does the
 thinking: its questions come back as ordinary tasks of its own, each with one ask to that person, in their Needs you
 (reach.pinged lets a bot ask the person who pinged it for a day). Nothing here calls a model or keeps a table: the
-message's `refs.get_aligned` is the record, and a bot the same person pinged in the last COOLDOWN_MINUTES is skipped,
+message's `refs.add_to_flow` is the record, and a bot the same person pinged in the last COOLDOWN_MINUTES is skipped,
 so a double press asks once.
 
 Scopes: `reports` (the bots whose manager is the caller), `bot` (one bot) or `group` (a team's bots, the teams under it
@@ -18,15 +18,16 @@ from . import hubdb as H_
 from . import reach as R_
 from . import views as views_
 from .store import Problem
+from .api_contract import api_v2
 
 Row = dict[str, Any]
-# Untyped helpers, as Any so this strict module checks its own code (as backend/flow_suggestions.py does).
+# Untyped helpers, as Any so this strict module checks its own code (as backend/flow_opinions.py does).
 H: Any = H_
 R: Any = R_
 views: Any = views_
 
-REF = "get_aligned"
-SKILL = "skills/get-aligned/SKILL.md"
+REF = "add_to_flow"
+SKILL = "skills/add-to-flow/SKILL.md"
 COOLDOWN_MINUTES = 10
 SCOPES = ("reports", "bot", "group")
 
@@ -74,7 +75,7 @@ def _recent(c: Any, person: str, bot: str) -> bool:
     return (
         c.execute(
             "SELECT 1 FROM messages WHERE sender_id=? AND recipient_id=? AND created_at>=? "
-            "AND json_extract(refs, '$.get_aligned') IS NOT NULL LIMIT 1",
+            "AND json_extract(refs, '$.add_to_flow') IS NOT NULL LIMIT 1",
             (person, bot, since),
         ).fetchone()
         is not None
@@ -119,7 +120,15 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
         scope: str = Field(default="reports", max_length=20)
         id: str | None = Field(default=None, max_length=200)
 
-    @app.post("/api/v2/flow/ping")
+    @app.post(
+        "/api/v2/flow/ping",
+        **api_v2(
+            "Needs you",
+            "pingFlowBots",
+            "Ask bots for the questions they have for you (people only): `scope` `reports` (default: the bots you manage), `bot` (`id`: one bot) or `group` (`id`: a team's bots, the teams under it included). Only bots you may read; never BotOps or the Assistant. Each gets one message from you pointing at the add-to-flow skill; its questions come back as tasks of its own, each with one ask to you, in your Needs you. A bot you pinged in the last 10 minutes is listed in `recent` and not messaged again. Calls no model",
+            "FlowPinged",
+        ),
+    )
     def flow_ping(request: Request, body: FlowPing) -> Row:  # pyright: ignore[reportUnusedFunction]
         """Ask bots for their questions for the caller: their reports by default, one bot, or one team's bots."""
         who = request.state.identity

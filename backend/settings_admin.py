@@ -13,9 +13,9 @@ from . import strategy_bot
 from . import message_bots as MessageBots
 from . import bot_access as BA
 from . import models as M
+from . import runner_online
 from . import placement
 from . import providers
-from . import app_delivery
 from . import rooms
 from . import shared_bots
 from . import profiles, start_places, task_models, task_run_models, update_feeds, wake_presets
@@ -340,7 +340,6 @@ class SettingsAdmin:
             "update_feeds": update_feeds.status(),
             "harness": resolve_harness(effective, effective.get("runtime")),
             "fallback": normalize_fallback(effective.get("fallback")),
-            "app_delivery": app_delivery.view(c, _json(config["config"], {}) or {}),
         }
 
     refuse_retired = staticmethod(task_models.refuse_retired)
@@ -478,7 +477,13 @@ class SettingsAdmin:
             429,
         )
         if person:
-            refusal.ask = {"actor": who.actor, "title": title, "body": body, "person": person}
+            refusal.ask = {
+                "actor": who.actor,
+                "title": title,
+                "body": body,
+                "person": person,
+                "question": f"Can you {what} for me?",
+            }
         raise refusal
 
     def _report_act(self, c, who, bot, op, do):
@@ -901,7 +906,7 @@ class SettingsAdmin:
     def archive(self, c, who, bot, body):
         CA.gate(c, who.actor, "bots", f"remove {(H.bot(c, bot) or {}).get('slug', bot)}")
         # The assistant, BotOps, the Librarian, the Strategy Owner, the General Manager, the Finance Owner, the Design Owner, the Updates
-        # Owner and the Automations Owner are built in: nobody archives them, the owner included.
+        # Owner, the Automations Owner and the Tools Owner are built in: nobody archives them, the owner included.
         if bot in (
             self.settings.assistant_bot,
             "botops",
@@ -912,6 +917,7 @@ class SettingsAdmin:
             H.DESIGN_OWNER,
             "updates-owner",
             "automations-owner",
+            H.TOOLS_OWNER,
         ):
             raise Problem(
                 "system_bot",
@@ -932,6 +938,8 @@ class SettingsAdmin:
                     if bot == "updates-owner"
                     else "The Automations Owner"
                     if bot == "automations-owner"
+                    else "The Tools Owner"
+                    if bot == H.TOOLS_OWNER
                     else "The " + strategy_bot.name(c)
                 )
                 + " is built in to every team and cannot be archived or deleted; you can pause or rename it",
@@ -1131,8 +1139,6 @@ class SettingsAdmin:
                 from .stream_capture import forget_bot
 
                 forget_bot(c, bot)
-        if "app_delivery" in body.model_fields_set:
-            app_delivery.change(c, who, self.auth, bot, body.app_delivery, declared, config["owner_id"])
         if "update_subscriptions" in body.model_fields_set:
             # Its cursors live beside the definition: delivering an update never rewrites the bot (update_feeds).
             picked = [name for name in update_feeds.CATEGORIES if name in (body.update_subscriptions or [])]
@@ -1312,7 +1318,7 @@ class SettingsAdmin:
             raise Problem("not_found", "Computer is not registered", 404)
         if who.role != "owner" and runner["owner_id"] != H.actor_id(who.actor):
             raise Problem("forbidden", "Bot administrators may use only their own registered computers", 403)
-        if not runner["last_seen_at"] or runner["last_seen_at"] <= H.shift(H.now(), seconds=-60):
+        if not runner_online.is_online(runner["last_seen_at"]):
             raise Problem("runner_not_ready", "The destination computer is offline", 409)
         # A runner reports only on bots already assigned to it, so a bot's first placement has
         # nothing to be ready yet: assigning it is what makes the runner set its repository up.
@@ -1390,11 +1396,6 @@ class SettingsAdmin:
         )
         if unchanged:
             raise Problem("unchanged", "That setting is already selected", 409)
-        existing = c.execute(
-            "SELECT id FROM bot_transitions WHERE bot=? AND state IN ('preparing','blocked','prepared')", (bot,)
-        ).fetchone()
-        if existing:
-            raise Problem("transition_pending", "Finish or cancel the existing prepared change first", 409)
         if field == "placement" and current["generation"] != body.expected_generation:
             raise Problem("version_conflict", "Machine assignment changed; refresh before preparing the move", 409)
 
@@ -1424,11 +1425,10 @@ class SettingsAdmin:
         self._apply(c, who, c.execute("SELECT * FROM bot_transitions WHERE id=?", (transition_id,)).fetchone())
         return self.get(c, who, transition_id)
 
-    def _apply(self, c, who, transition, *, without_checkpoint=False):
+    def _apply(self, c, who, transition):
         self._manager(c, who, transition["bot"], report=self._transition_scope(transition))
+        # begin checked the revision in this same write, just before it made the transition.
         config = self._config(c, transition["bot"])
-        if config["revision"] != transition["expected_revision"]:
-            raise Problem("version_conflict", "Bot settings changed while the checkpoint was being prepared", 409)
         self.execution.expire(c)
         target, bot, field = _json(transition["target"], {}), transition["bot"], transition["kind"]
         field = "model" if field == "model" else "placement"
@@ -1479,7 +1479,7 @@ class SettingsAdmin:
                 generation = current["generation"] if current else 0
                 if generation != transition["expected_generation"]:
                     raise Problem(
-                        "version_conflict", "Machine assignment changed while the checkpoint was being prepared", 409
+                        "version_conflict", "Machine assignment changed while the change was being prepared", 409
                     )
                 c.execute("UPDATE bot_config SET owner_id=? WHERE bot=?", (runner["owner_id"], bot))
                 self.execution.assign(
@@ -1496,9 +1496,8 @@ class SettingsAdmin:
                 )
             now = H.now()
             c.execute(
-                "UPDATE bot_transitions SET state='applied',error=NULL,without_checkpoint=?,"
-                "updated_at=?,applied_at=? WHERE id=?",
-                (int(without_checkpoint), now, now, transition["id"]),
+                "UPDATE bot_transitions SET state='applied',error=NULL,updated_at=?,applied_at=? WHERE id=?",
+                (now, now, transition["id"]),
             )
             H.event(
                 c,
@@ -1508,7 +1507,6 @@ class SettingsAdmin:
                 {
                     "transition": transition["id"],
                     "kind": transition["kind"],
-                    "checkpointed": not without_checkpoint,
                     "sessions_reset": reset,
                 },
             )
@@ -1523,30 +1521,8 @@ class SettingsAdmin:
         if not transition:
             raise Problem("not_found", "Prepared change not found", 404)
         self._manager(c, who, transition["bot"], report=self._transition_scope(transition))
-        # A checkpoint holds what a conversation decided and did. A manager bot may follow its report's model change,
-        # not read the conversations it checkpoints: it sees only each one's state.
-        full = who.role == "owner" or self.auth.bot_manager(c, who, transition["bot"])
-        checkpoints = []
-        for row in c.execute(
-            "SELECT * FROM bot_transition_checkpoints WHERE transition_id=? ORDER BY conversation_id", (transition_id,)
-        ):
-            checkpoints.append(
-                {
-                    "conversation_id": row["conversation_id"],
-                    "state": row["state"],
-                    "checkpoint": _json(row["checkpoint"]),
-                    "error": row["error"],
-                }
-                if full
-                else {"conversation_id": None, "state": row["state"], "checkpoint": None, "error": None}
-            )
         value = dict(transition)
         value["target"] = _json(value.pop("target"), {})
-        value["checkpoints"] = checkpoints
-        value["progress"] = {
-            "prepared": sum(row["state"] == "prepared" for row in checkpoints),
-            "total": len(checkpoints),
-        }
         if value["state"] == "applied":
             # What the bot runs on now, checked on the computer it is on now (a model change or a move).
             effective = providers.fill(
@@ -1564,59 +1540,12 @@ class SettingsAdmin:
             )
         return value
 
-    def force(self, c, who, transition_id):
-        transition = c.execute("SELECT * FROM bot_transitions WHERE id=?", (transition_id,)).fetchone()
-        if transition:
-            self._manager(c, who, transition["bot"], report=self._transition_scope(transition))
-        if not transition or transition["state"] in ("applied", "canceled"):
-            raise Problem("state", "This prepared change is no longer pending", 409)
-        active = c.execute(
-            "SELECT 1 FROM bot_transition_checkpoints p JOIN jobs j ON j.message_id=p.message_id "
-            "WHERE p.transition_id=? AND j.state IN ('leased','running','input')",
-            (transition_id,),
-        ).fetchone()
-        if active:
-            raise Problem("busy", "A checkpoint is currently running; wait for it to finish", 409)
-        c.execute(
-            "UPDATE jobs SET state='canceled' WHERE message_id IN "
-            "(SELECT message_id FROM bot_transition_checkpoints WHERE transition_id=?) AND state='queued'",
-            (transition_id,),
-        )
-        self._apply(c, who, transition, without_checkpoint=True)
-        return self.get(c, who, transition_id)
-
-    def cancel(self, c, who, transition_id):
-        transition = c.execute("SELECT * FROM bot_transitions WHERE id=?", (transition_id,)).fetchone()
-        if transition:
-            self._manager(c, who, transition["bot"], report=self._transition_scope(transition))
-        if not transition or transition["state"] in ("applied", "canceled"):
-            raise Problem("state", "This prepared change is no longer pending", 409)
-        if c.execute(
-            "SELECT 1 FROM bot_transition_checkpoints p JOIN jobs j ON j.message_id=p.message_id "
-            "WHERE p.transition_id=? AND j.state IN ('leased','running','input')",
-            (transition_id,),
-        ).fetchone():
-            raise Problem("busy", "A checkpoint is currently running; wait for it to finish", 409)
-        c.execute(
-            "UPDATE jobs SET state='canceled' WHERE message_id IN "
-            "(SELECT message_id FROM bot_transition_checkpoints WHERE transition_id=?) AND state='queued'",
-            (transition_id,),
-        )
-        c.execute(
-            "UPDATE bot_transition_checkpoints SET state='canceled' WHERE transition_id=? AND state='queued'",
-            (transition_id,),
-        )
-        c.execute("UPDATE bot_transitions SET state='canceled',updated_at=? WHERE id=?", (H.now(), transition_id))
-        H.event(c, who.actor, "bot.transition_canceled", transition["bot"], {"transition": transition_id})
-        return self.get(c, who, transition_id)
-
     def history(self, c, who, limit=100, bot="", before=""):
         """One page of the settings changes the caller may see, newest first, and `next_before` for the page after it.
-        The owner sees every change, and the newest `limit` transitions on the first page. A person who manages a bot
-        sees only the changes its manager bots made to the bots they manage (via `report_manager`), and no transitions.
-        Anyone else sees none. `bot` keeps to one bot; `before` (a page's `next_before`) keeps to older changes. The
-        page is at most HISTORY_PAGE_BYTES as it is sent: its transitions come first, newest first, and
-        `transitions_truncated` says when some were left out; its changes take what is left."""
+        The owner sees every change. A person who manages a bot sees only the changes its manager bots made to the bots
+        they manage (via `report_manager`). Anyone else sees none. `bot` keeps to one bot; `before` (a page's
+        `next_before`) keeps to older changes. The page is at most HISTORY_PAGE_BYTES as it is sent; a change too big
+        for a page comes without its values."""
         if who.role not in ("owner", "human"):
             raise Problem(
                 "forbidden", "Only the owner, or a person who manages the bot, sees its settings changes", 403
@@ -1630,30 +1559,14 @@ class SettingsAdmin:
         changes = [self._history_change(c, row, owner) for row in rows[:limit]]
         actor_names.annotate(c, changes)
         # What the page takes besides its changes: its keys, and a cursor as long as an id.
-        room = HISTORY_PAGE_BYTES - _bytes(
-            {"changes": [], "next_before": H.new_id(), "transitions": [], "transitions_truncated": True}
-        )
+        room = HISTORY_PAGE_BYTES - _bytes({"changes": [], "next_before": H.new_id()})
         for value in changes:
             if _bytes(value) + 1 > room:
                 # Bigger than a page on its own (a long list of people, say): sent without its values. It is still
                 # taken, so the page moves on past it.
                 value.update(before=None, after=None, truncated=True)
-        transitions, cut, used = [], False, 0
-        if owner and not before:
-            ids = c.execute(
-                "SELECT id FROM bot_transitions"
-                + (" WHERE bot=?" if bot else "")
-                + " ORDER BY created_at DESC LIMIT ?",
-                ([bot] if bot else []) + [limit + 1],
-            ).fetchall()
-            transitions = [self.get(c, who, row[0]) for row in ids[:limit]]
-            actor_names.annotate(c, transitions)
-            # The first change keeps its room, so a page that has transitions still takes a change.
-            transitions, used, cut = _fit(transitions, room - (_bytes(changes[0]) + 1 if changes else 0))
-            # More than `limit` transitions: the older ones are left out as surely as those the bytes cut.
-            cut = cut or len(ids) > limit
-        changes = _fit(changes, room - used)[0]
-        return self._page(c, rows, changes, transitions, cut)
+        changes = _fit(changes, room)[0]
+        return self._page(c, rows, changes)
 
     def _history_change(self, c, row, owner):
         """A settings change with what the page says about it (`can_undo`); `history` fits it afterwards."""
@@ -1676,15 +1589,12 @@ class SettingsAdmin:
         value["truncated"] = False
         return value
 
-    def _page(self, c, rows, changes, transitions, cut):
+    def _page(self, c, rows, changes):
         """The page as it is sent: its names are added (they are bytes too), then, while it is over a page, its last
-        change goes to the next page, then its last transition. A lone change still over a page comes without its
-        values."""
+        change goes to the next page. A lone change still over a page comes without its values."""
         while True:
             page = {
                 "changes": changes,
-                "transitions": transitions,
-                "transitions_truncated": cut,
                 "next_before": changes[-1]["id"] if len(rows) > len(changes) else None,
             }
             actor_names.annotate(c, page)
@@ -1692,9 +1602,6 @@ class SettingsAdmin:
                 return page
             if len(changes) > 1:
                 changes.pop()
-            elif transitions:
-                transitions.pop()
-                cut = True
             elif changes[0]["truncated"]:
                 return page
             else:

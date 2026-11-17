@@ -1,11 +1,11 @@
 """The status page reads each table once for every bot, and says exactly what each bot's own status line says."""
 
-from backend import task_engine as E
+from backend import holds, task_engine as E
 from backend import task_privacy as privacy, usage_limits
 from backend.events import prime_status_lines, status_line
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, post, ready  # noqa: F401
-from backend.tests.helpers.run_backoff import hold_bot, setup
+from backend.tests.helpers.run_failures import failing, hold_bot, setup
 from backend import usage_limits
 from backend.tests.helpers.status_reads import busy, page
 
@@ -36,10 +36,10 @@ def test_primed_status_lines_match_each_bots_own_and_read_each_table_once(api, m
     with api.app.state.store.transaction() as c:
         for slug, state in (("cpo", "idle"), ("finance", "idle"), ("assistant", "crashed"), ("inbox", "idle")):
             H.status_set(c, H.KEEPER, slug, state=state, focus="Checked the queue")
-        c.execute("INSERT INTO bot_budget(bot,held_at,window,runs,budget) VALUES('cpo',?,'hour',301,300)", (H.now(),))
-        c.execute(
-            "INSERT INTO run_backoff(bot,fails,wait_until) VALUES('finance',2,?)", (H.shift(H.now(), seconds=600),)
+        holds.put(
+            c, holds.RUNAWAY, "bot", "cpo", actor=H.KEEPER, details={"window": "hour", "runs": 301, "budget": 300}
         )
+        failing(c, "finance", 2, until_at=H.shift(H.now(), seconds=600))
         usage_limits.save_own(c, "assistant", {"daily_usd": 0.000001}, "human:ana")
     slugs = ["assistant", "cpo", "doc-updater", "finance", "inbox", "ops", "product-design"]
     each, plain = lines(api, slugs, primed=False)

@@ -225,7 +225,7 @@ def org(environment):
     # The older file name is still read (backend/recruit.py).
     (Path(api.app.state.store.settings.catalog_dir).parent / "departments.yaml").write_text(yaml.safe_dump(DEPARTMENTS))
     api.put(
-        "/api/v2/onboarding",
+        "/api/v2/setup",
         headers=signed_in(),
         json={
             "answers": {
@@ -240,7 +240,7 @@ def org(environment):
 
 def ask(api, share=True, briefing="Mostly resellers", department="sales", who=None):
     return api.post(
-        "/api/v2/onboarding/recruit",
+        "/api/v2/setup/recruit",
         headers=who or signed_in(),
         json={"department": department, "briefing": briefing, "share": share},
     )
@@ -250,7 +250,7 @@ def test_the_install_sends_an_answer_to_hq_only_when_the_toggle_is_on_and_keeps_
     environment, hq, monkeypatch
 ):
     api = org(environment)
-    listing = api.get("/api/v2/onboarding/departments", headers=signed_in()).json()
+    listing = api.get("/api/v2/setup/groups", headers=signed_in()).json()
     assert listing["hq"] == {"available": True, "off_by": ""}
     assert {row["id"] for row in listing["departments"]} == {"sales", "finance", "engineering"}
     assert {"template", "department", "icon", "suggest", "summary", "lead"} <= set(listing["cards"][0])
@@ -315,7 +315,7 @@ def test_the_install_sends_an_answer_to_hq_only_when_the_toggle_is_on_and_keeps_
         monkeypatch.setenv(name, value)
         off = ask(api).json()
         assert (off["source"], off["shared"], off["off_by"]) == ("local", False, reason)
-        assert api.get("/api/v2/onboarding/departments", headers=signed_in()).json()["hq"] == {
+        assert api.get("/api/v2/setup/groups", headers=signed_in()).json()["hq"] == {
             "available": False,
             "off_by": reason,
         }

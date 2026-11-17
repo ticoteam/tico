@@ -18,6 +18,7 @@ from .harnesses import resolve_harness, runtime_of
 from .providers import MODEL_BY_ID
 from .readiness import absolute as absolute_link, can_run
 from .store import H, Problem
+from .api_contract import api_v2
 
 
 def register(
@@ -222,7 +223,14 @@ def register(
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
         return mutate(request, body, lambda c: settings_admin.set_fallback(c, request.state.identity, bot, body))
 
-    @app.post("/api/v2/bots/{bot}/turns-at-once")
+    @app.post(
+        "/api/v2/bots/{bot}/turns-at-once",
+        **api_v2(
+            "Bots",
+            "setBotTurnsAtOnce",
+            "Set the most turns the bot runs at once on every computer: null is no limit, 1 to 256 otherwise",
+        ),
+    )
     def bot_turns_at_once(request: Request, bot: str, body: M.BotTurnsAtOnce):
         """How many turns the bot runs at once across every computer; null is no limit (start_places.bot_limit)."""
         with store.read() as c:
@@ -243,7 +251,14 @@ def register(
 
         return mutate(request, body, settings_admin.as_report_manager(who, bot, "task_model", work))
 
-    @app.post("/api/v2/bots/{bot}/manages-reports")
+    @app.post(
+        "/api/v2/bots/{bot}/manages-reports",
+        **api_v2(
+            "Bots",
+            "setBotManagesReports",
+            "Whether the bot's manager bot may change its direct reports: true is on (the default), false is off; the owner's team rule overrides it",
+        ),
+    )
     def bot_manages_reports(request: Request, bot: str, body: M.BotManagesReports):
         """Whether this bot changes its direct reports (backend/report_managers.py). A person who manages this bot sets
         it; with the owner's team rule `managers_manage_reports` off, no bot does, whatever this says."""
@@ -293,14 +308,6 @@ def register(
         with store.read() as c:
             return settings_admin.get(c, request.state.identity, transition_id)
 
-    @app.post("/api/v2/settings/transitions/{transition_id}/apply-without-checkpoint")
-    def force_transition(request: Request, transition_id: str, body: M.BotTransitionApply):
-        return mutate(request, body, lambda c: settings_admin.force(c, request.state.identity, transition_id))
-
-    @app.post("/api/v2/settings/transitions/{transition_id}/cancel")
-    def cancel_transition(request: Request, transition_id: str, body: M.Empty):
-        return mutate(request, body, lambda c: settings_admin.cancel(c, request.state.identity, transition_id))
-
     @app.get("/api/v2/settings/history")
     def settings_history(request: Request, limit: int = 100, bot: str = "", before: str = ""):
         # One snapshot for the bots and the changes, so the people and bot rules it reads are computed once for it.
@@ -343,7 +350,14 @@ def register(
             request, body, lambda c: execution.stop(c, request.state.identity, bot, body.run_id, body.redirect)
         )
 
-    @app.get("/api/v2/bots/{bot}/pause-state")
+    @app.get(
+        "/api/v2/bots/{bot}/pause-state",
+        **api_v2(
+            "Bots",
+            "getBotPauseState",
+            "Pause state and recorded person/time, readable open-task count and company billing pause; no billing amounts",
+        ),
+    )
     def bot_pause_state(request: Request, bot: str):
         """The public pause banner, without billing amounts or unreadable task counts."""
         who = request.state.identity

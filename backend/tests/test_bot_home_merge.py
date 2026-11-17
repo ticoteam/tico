@@ -11,7 +11,8 @@ import json
 import pytest
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
-from backend import bot_home_merge, rooms, threads, visuals
+from backend import rooms, threads, visuals
+from backend.tests.helpers import bot_home_merge
 from backend.auth import Identity
 from backend.blobs import register
 from backend.files import series

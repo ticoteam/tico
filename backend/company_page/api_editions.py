@@ -10,6 +10,7 @@ from ..models import Contract
 from ..store import Problem
 from . import editions as E
 from . import schedule as S
+from ..api_contract import api_v2
 
 NOTE = Field(default="", max_length=E.NOTE_CHARS)
 
@@ -87,7 +88,10 @@ def register(app, store, auth, mutate):
         with store.read() as c:
             return E.full_view(c, edition_id)
 
-    @app.get("/api/v2/editions")
+    @app.get(
+        "/api/v2/editions",
+        **api_v2("Company page", "listEditions", "The editions, paged, newest first, filtered by audience or status"),
+    )
     def editions_list(
         request: Request,
         audience: str | None = None,
@@ -99,7 +103,10 @@ def register(app, store, auth, mutate):
         with store.read() as c:
             return {**E.listing(c, audience, status, before, limit), "schedule_problems": S.problems(c)}
 
-    @app.post("/api/v2/editions")
+    @app.post(
+        "/api/v2/editions",
+        **api_v2("Company page", "draftEdition", "Draft an edition now for one audience and period, out of cycle"),
+    )
     def edition_draft_now(request: Request, body: DraftNow):
         """Draft now: an edition out of cycle. The model call runs after the row is committed, holding no lock."""
         who = admin(request)
@@ -115,23 +122,43 @@ def register(app, store, auth, mutate):
             return E.run_draft(store, claimed["edition_id"], judge(request))
         return shown(claimed["edition_id"])
 
-    @app.get("/api/v2/editions/{edition_id}")
+    @app.get(
+        "/api/v2/editions/{edition_id}",
+        **api_v2("Company page", "getEdition", "One edition: its text, checks and status"),
+    )
     def edition_get(request: Request, edition_id: str):
         admin(request)
         return shown(edition_id)
 
-    @app.patch("/api/v2/editions/{edition_id}")
+    @app.patch(
+        "/api/v2/editions/{edition_id}",
+        **api_v2(
+            "Company page",
+            "updateEdition",
+            "Change an edition's title and sections; it is checked again before it can publish",
+        ),
+    )
     def edition_edit(request: Request, edition_id: str, body: EditionBody):
         who = admin(request)
         mutate(request, body, lambda c: E.edit(c, who, edition_id, body.model_dump(exclude_none=True)))
         return E.check(store, edition_id, judge(request))
 
-    @app.post("/api/v2/editions/{edition_id}/check")
+    @app.post(
+        "/api/v2/editions/{edition_id}/check",
+        **api_v2("Company page", "checkEdition", "Run the checks on an edition's text now"),
+    )
     def edition_check(request: Request, edition_id: str, body: Empty):
         admin(request)
         return E.check(store, edition_id, judge(request))
 
-    @app.post("/api/v2/editions/{edition_id}/approval")
+    @app.post(
+        "/api/v2/editions/{edition_id}/approval",
+        **api_v2(
+            "Company page",
+            "requestEditionApproval",
+            "Ask the approver to approve an edition; a person's ask, never BotOps' own",
+        ),
+    )
     def edition_approval(request: Request, edition_id: str, body: Empty):
         who = admin(request)
         E.require_person(who)
@@ -143,37 +170,73 @@ def register(app, store, auth, mutate):
             E.check(store, edition_id, judge(request))
         return mutate(request, body, lambda c: E.request_approval(c, who, edition_id))
 
-    @app.post("/api/v2/editions/{edition_id}/publish")
+    @app.post(
+        "/api/v2/editions/{edition_id}/publish",
+        **api_v2(
+            "Company page",
+            "publishEdition",
+            "Publish an approved edition: the person's own click in Tico, never a token, the Assistant or BotOps",
+        ),
+    )
     def edition_publish(request: Request, edition_id: str, body: Publish):
         who = admin(request)
         published = mutate(request, body, lambda c: E.publish(c, who, edition_id, body.approval_id))
         return E.release_published(store, published)
 
-    @app.post("/api/v2/editions/{edition_id}/retract")
+    @app.post(
+        "/api/v2/editions/{edition_id}/retract",
+        **api_v2(
+            "Company page",
+            "retractEdition",
+            "Take a published edition back, with a note; a person in the app, never BotOps",
+        ),
+    )
     def edition_retract(request: Request, edition_id: str, body: Note):
         who = admin(request)
         return mutate(request, body, lambda c: E.retract(c, who, edition_id, body.note))
 
-    @app.post("/api/v2/editions/{edition_id}/correct")
+    @app.post(
+        "/api/v2/editions/{edition_id}/correct",
+        **api_v2(
+            "Company page",
+            "correctEdition",
+            "The next version of a published or retracted edition, with what changed; a person in the app",
+        ),
+    )
     def edition_correct(request: Request, edition_id: str, body: Correction):
         who = admin(request)
         fields = body.model_dump(exclude_none=True, exclude={"note"})
         made = mutate(request, body, lambda c: E.correct(c, who, edition_id, fields, body.note))
         return E.check(store, made["id"], judge(request))
 
-    @app.post("/api/v2/editions/{edition_id}/override")
+    @app.post(
+        "/api/v2/editions/{edition_id}/override",
+        **api_v2(
+            "Company page", "overrideEdition", "Clear a held edition with a kept note: the person's own click in Tico"
+        ),
+    )
     def edition_override(request: Request, edition_id: str, body: Note):
         who = admin(request)
         return mutate(request, body, lambda c: E.override(c, who, edition_id, body.note))
 
-    @app.get("/api/v2/audiences/{audience_id}/stats/approval")
+    @app.get(
+        "/api/v2/audiences/{audience_id}/stats/approval",
+        **api_v2("Company page", "getBoardApproval", "The approval of which stats one audience sees, and in what form"),
+    )
     def board_approval_get(request: Request, audience_id: str):
         admin(request)
         with store.read() as c:
             E._audience(c, audience_id)
             return {"approval": E.board_approval(c, audience_id)}
 
-    @app.post("/api/v2/audiences/{audience_id}/stats/approval")
+    @app.post(
+        "/api/v2/audiences/{audience_id}/stats/approval",
+        **api_v2(
+            "Company page",
+            "requestBoardApproval",
+            "Ask the approver to approve which stats one audience sees; a person's ask, never BotOps' own",
+        ),
+    )
     def board_approval_request(request: Request, audience_id: str, body: Empty):
         who = admin(request)
         return mutate(request, body, lambda c: E.request_board_approval(c, who, audience_id))

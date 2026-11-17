@@ -30,14 +30,6 @@ from .migrations import renames
 
 # The trash keeps `owner` and `requester` until the second release; an audience clause names the tasks table's columns.
 READABLE = "(SELECT *, task_id AS id, owner AS owner_id, requester AS requester_id FROM task_trash) tasks"
-TRASH = """CREATE TABLE IF NOT EXISTS task_trash(
- task_id TEXT PRIMARY KEY, number INTEGER, title TEXT, requester TEXT, owner TEXT, status TEXT,
- private INTEGER NOT NULL DEFAULT 1, deleted_at TEXT NOT NULL, deleted_by TEXT NOT NULL,
- rows TEXT NOT NULL, purged_at TEXT, readers TEXT)"""
-# The files attached when a deleted task was made, kept past a purge: no foreign key, the task is gone.
-TRASH_ASSETS = """CREATE TABLE IF NOT EXISTS task_trash_assets(
- task_id TEXT NOT NULL, blob_id TEXT NOT NULL, PRIMARY KEY(task_id, blob_id))"""
-
 # Rows that only describe the task: kept with it in the trash.
 TASK_ROWS = (
     "history_events",
@@ -48,21 +40,23 @@ TASK_ROWS = (
     "service_key_tasks",
     "task_roles",
     "task_assets",
+    "task_documents",
     "task_requesters",
     "task_check_models",
     "task_run_models",
     "meeting_task_links",
     "maintenance_listings",
     "maintenance_handoffs",
-    "quarantine_holds",
+    "holds",
 )
 # Where a task stands in its pipeline is not kept: its visits, answers, asks and snooze go with it
 # (task_engine.on_delete), and a restore starts it on a new visit (task_engine.restore). The tasks it filed, and the
 # task that filed it, keep their link to it: a deleted task counts as closed for the work that waited on it.
 # A table whose rows name the task other than by `task_id`: its column and the rows of it that are a task's. A task's
-# history is the shared history table's task rows (backend/migrations/0064_history_events.py).
+# history is the shared history table's task rows (backend/migrations/baseline.sql).
 TASK_KEYS = {
     "history_events": ("subject_id", "subject_type='task'"),
+    "holds": ("holdable_id", "holdable_type='task'"),  # what holds a bot on the task (backend/holds.py)
 }
 # Rows that are work done on the task: any one of them refuses the run.
 TASK_WORK = (
@@ -125,25 +119,6 @@ CORE = ("tasks", "conversations", "messages")
 NOT_COLUMNS = {"_rowid"}
 # What a restore does not put back as it was: the engine places the task (task_engine.restore).
 PLACED = ("status", "pipeline_id", "stage_id", "owner_id", "assignee_id", "done_at", "closed_at", "closed_by_id")
-
-
-def ensure(c):
-    # A private task's readers (hubdb "a private task's readers") see it in the trash as its two parties do
-    # (auth.task_sql); migration 20261105213649_task_readers gave an older trash the column.
-    c.execute(TRASH)
-    c.execute(TRASH_ASSETS)
-    c.execute("CREATE INDEX IF NOT EXISTS task_trash_assets_blob ON task_trash_assets(blob_id)")
-    # A task deleted before this table existed has its attachments only in its trash row. Only the rows that
-    # mention attachments and have none listed are parsed: every delete runs this, and parsing all of the trash's
-    # rows grows with the trash.
-    c.execute(
-        "INSERT OR IGNORE INTO task_trash_assets(task_id, blob_id) "
-        "SELECT t.task_id, json_extract(a.value, '$.blob_id') FROM task_trash t, "
-        "json_each(t.rows, '$.rows.task_assets') a "
-        "WHERE t.purged_at IS NULL AND instr(t.rows, '\"task_assets\"') > 0 "
-        "AND NOT EXISTS (SELECT 1 FROM task_trash_assets x WHERE x.task_id=t.task_id) "
-        "AND json_extract(a.value, '$.blob_id') IS NOT NULL"
-    )
 
 
 def _columns(c, table):
@@ -353,7 +328,6 @@ def delete_tasks(c, ids, apply=False, actor=None, keep_work=False):
             ),
             [*kept, *kept],
         )
-    ensure(c)
     actor = actor or H.KEEPER
     now = H.now()
     from . import task_engine
@@ -442,7 +416,6 @@ def trash(c, actor=None, audience=None):
     """Deleted tasks, newest first. `audience` is the reader's task-visibility SQL (auth.task_sql),
     so a private task's title never shows to someone who could not open it; with `actor`, only the
     ones that person deleted or asked for."""
-    ensure(c)
     sql = (
         "SELECT task_id AS id, number, title, requester, owner, status, deleted_at, deleted_by "
         f"FROM {READABLE} WHERE purged_at IS NULL"
@@ -458,7 +431,6 @@ def trash(c, actor=None, audience=None):
 
 def trashed(c, ref, audience=None):
     """The restorable trash row for a task id or number (`42` or `#42`) the reader may see, or None."""
-    ensure(c)
     where = "purged_at IS NULL" + (f" AND ({audience})" if audience else "")
     row = c.execute(f"SELECT * FROM {READABLE} WHERE task_id=? AND {where}", (ref,)).fetchone()
     if not row and str(ref).lstrip("#").isdigit():
@@ -533,7 +505,6 @@ def restore_tasks(c, ids, actor=None):
     (task_engine.restore): an open task on a new visit in the stage it was in while that stage may take it, else the
     first one; a done or closed one as it ended. A private task no stage may take is not restored (`not_shared`, with
     its cause and fix) and stays in the trash. What it was asked, and the wakes written for it, are not replayed."""
-    ensure(c)
     actor = actor or H.KEEPER
     entries = []
     for tid in dict.fromkeys(ids):
@@ -690,7 +661,6 @@ def purge_trash(c, older_than_days, apply=False, actor=None):
     """Remove for good what has been in the trash longer than `older_than_days`. Lists it unless apply.
     The trash row stays as a bare tombstone (number, title, who and when) so its number is never reused.
     The report and each `task.purged` event name the task files left behind (`files_left`)."""
-    ensure(c)
     cutoff = (datetime.now(timezone.utc) - timedelta(days=older_than_days)).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
     rows = [
         dict(r)

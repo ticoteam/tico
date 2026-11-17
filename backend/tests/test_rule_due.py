@@ -1,9 +1,13 @@
-"""Due dates on rules (docs/rules-plan.md §1, §4): occurrences, the month-end clamp, and when an occurrence turns overdue.
+"""Due dates on rules (docs/dev/rules-plan.md §1, §4): occurrences, the month-end clamp, and when an occurrence turns overdue.
 These are pure: the day "today" is passed in, so no test depends on the clock."""
 
 from datetime import date
 
+import pytest
+
+from backend import automation_due
 from backend import rule_due as D
+from backend.store import Problem
 
 
 def row(first, repeats="once", zone="America/Los_Angeles"):
@@ -12,25 +16,36 @@ def row(first, repeats="once", zone="America/Los_Angeles"):
 
 def test_monthly_from_the_31st_falls_on_each_month_end_and_never_drifts_back():
     first = date(2026, 1, 31)
-    assert [D.occurrence(first, "monthly", n).isoformat() for n in range(4)] == [
+    assert [automation_due.occurrence(first, "monthly", n).isoformat() for n in range(4)] == [
         "2026-01-31",
         "2026-02-28",
         "2026-03-31",
         "2026-04-30",
     ]
     # The 31st comes back in March: the repeat counts from the first date, not from the month before.
-    assert D.occurrence(first, "monthly", 2) == date(2026, 3, 31)
+    assert automation_due.occurrence(first, "monthly", 2) == date(2026, 3, 31)
 
 
 def test_yearly_from_29_february_falls_on_the_28th_in_other_years():
     first = date(2024, 2, 29)
-    assert D.occurrence(first, "yearly", 1) == date(2025, 2, 28)
-    assert D.occurrence(first, "yearly", 4) == date(2028, 2, 29)
+    assert automation_due.occurrence(first, "yearly", 1) == date(2025, 2, 28)
+    assert automation_due.occurrence(first, "yearly", 4) == date(2028, 2, 29)
 
 
 def test_quarterly_and_weekly_steps():
-    assert D.occurrence(date(2026, 1, 15), "quarterly", 1) == date(2026, 4, 15)
-    assert D.occurrence(date(2026, 1, 1), "weekly", 2) == date(2026, 1, 15)
+    assert automation_due.occurrence(date(2026, 1, 15), "quarterly", 1) == date(2026, 4, 15)
+    assert automation_due.occurrence(date(2026, 1, 1), "weekly", 2) == date(2026, 1, 15)
+
+
+def test_the_walk_of_occurrences_is_automation_dues_days_and_it_names_the_same_repeats():
+    first = date(2026, 1, 31)
+    walk = D.occurrences(first, "monthly", date(2026, 3, 1))  # Jan 31, Feb 28, then Mar 31: the first one past the day
+    assert walk == [automation_due.occurrence(first, "monthly", n) for n in range(3)]
+    assert D.is_occurrence(first, "monthly", date(2026, 3, 31))
+    assert not D.is_occurrence(first, "monthly", date(2026, 3, 30))
+    assert D.parse_repeats("quarterly") == "quarterly"
+    with pytest.raises(Problem):
+        D.parse_repeats("fortnightly")
 
 
 def test_an_occurrence_is_overdue_only_after_the_end_of_its_day_in_the_zone():

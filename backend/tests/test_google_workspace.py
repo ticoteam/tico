@@ -447,11 +447,11 @@ def test_authority_follows_a_live_personal_grant_then_the_key_then_legacy(api, p
     assert who("eve@acme.example") == "legacy"
     connected(api, private)
     assert who("eve@acme.example") == "workspace" and who("x@other.example") == "legacy"
-    personal(api, "cara", "cara@acme.example", holder="r1", grant="g1")
+    personal(api, "cara", "cara@acme.example", grant="g1")
     assert who("cara@acme.example") == "personal"  # a live grant always wins
-    personal(api, "dan", "dan@acme.example", status="disconnected", holder=None, grant=None)
+    personal(api, "dan", "dan@acme.example", status="disconnected", grant=None)
     assert who("dan@acme.example") == "workspace"  # not live: the key covers the domain
-    personal(api, "fay", "fay@acme.example", status="failed", holder="r1", grant="g2", client="old")
+    personal(api, "fay", "fay@acme.example", status="failed", grant="g2", client="old")
     assert who("fay@acme.example") == "personal"  # a failed reconnect keeps the earlier grant
     with store.transaction() as c:
         c.execute("UPDATE google_workspaces SET status='failing'")
@@ -459,26 +459,6 @@ def test_authority_follows_a_live_personal_grant_then_the_key_then_legacy(api, p
     with store.transaction() as c:
         c.execute("UPDATE google_workspaces SET status='pending', connected_at=NULL")
     assert who("eve@acme.example") == "legacy"  # a pending key alone does not
-
-
-def test_a_cloud_computer_publishes_the_workspace_mailboxes_its_bots_run_on(api, private, covered, google):
-    covered((MAILBOX, "inbox-cara"))
-    store = api.app.state.store
-    with store.transaction() as c:
-        H.sync_registry(
-            c, {"inbox-cara": {"name": "inbox-cara", "runtime": "fake", "status": "active"}}, {"people": []}
-        )
-        for runner_id in ("cloud-1", "box-2"):
-            c.execute(
-                "INSERT INTO runners(id,label,owner_id,token_hash,created_at) VALUES(?,?,'ana',?,?)",
-                (runner_id, runner_id, "h-" + runner_id, H.now()),
-            )
-        c.execute("INSERT INTO assignments VALUES('inbox-cara','cloud-1',1,?,'human:ana')", (H.now(),))
-    connected(api, private)
-    personal(api, "cara", "cara@acme.example", holder="cloud-1", grant="g1")
-    with store.read() as c:
-        assert W.owned_mailboxes(c, "cloud-1") == {MAILBOX, "cara@acme.example"}
-        assert W.owned_mailboxes(c, "box-2") == set()
 
 
 def test_a_token_is_minted_per_mailbox_and_service_and_cached_until_near_expiry(api, private, covered, google):

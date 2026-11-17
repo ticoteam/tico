@@ -21,6 +21,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
 from .store import H, Problem
+from .api_contract import api_v2
 
 Item = dict[str, Any]
 _is_human = cast(Callable[[object], bool], H.is_human)
@@ -137,7 +138,14 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
     class AskUnsnooze(Contract):
         id: str = Field(min_length=3, max_length=200)
 
-    @app.post("/api/v2/needs-you/snooze")
+    @app.post(
+        "/api/v2/needs-you/snooze",
+        **api_v2(
+            "Needs you",
+            "snoozeNeedsYouAsk",
+            "Snooze one ask for yourself (`id`: its Needs-you id, `until`: a date-time to come, at most a year on): it leaves your Needs you, its count and Flow until then, or until it is asked again, and stays in everyone else's. The task and its bot are not changed or told. Only a person the ask waits on, or their own Assistant",
+        ),
+    )
     def needs_snooze(request: Request, body: AskSnooze) -> dict[str, Any]:  # pyright: ignore[reportUnusedFunction]
         """Snooze one ask for yourself: it leaves your Needs you until `until`, and stays in everyone else's."""
         who = request.state.identity
@@ -149,7 +157,10 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
 
         return mutate(request, body, run)
 
-    @app.post("/api/v2/needs-you/unsnooze")
+    @app.post(
+        "/api/v2/needs-you/unsnooze",
+        **api_v2("Needs you", "unsnoozeNeedsYouAsk", "Bring an ask you snoozed (`id`) back into your Needs you now"),
+    )
     def needs_unsnooze(request: Request, body: AskUnsnooze) -> dict[str, Any]:  # pyright: ignore[reportUnusedFunction]
         """Bring an ask you snoozed back into your Needs you now."""
         who = request.state.identity
@@ -160,7 +171,14 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
 
         return mutate(request, body, run)
 
-    @app.get("/api/v2/needs-you/snoozed")
+    @app.get(
+        "/api/v2/needs-you/snoozed",
+        **api_v2(
+            "Needs you",
+            "getNeedsYouSnoozed",
+            "The asks you snoozed for yourself that are still snoozed, as Needs you lists them, each with `snoozed_until`, and `next`, when the first comes back",
+        ),
+    )
     def needs_snoozed(request: Request) -> dict[str, Any]:  # pyright: ignore[reportUnusedFunction]
         """The asks you snoozed for yourself that are still snoozed, as Needs you lists them, each with `snoozed_until`,
         and when the first one comes back (`next`)."""

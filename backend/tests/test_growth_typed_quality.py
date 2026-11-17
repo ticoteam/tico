@@ -141,7 +141,6 @@ def test_c7_months_saved_before_this_release_keep_their_marks_through_the_migrat
     again.close()
     assert after == before
     writes = re.compile(r"UPDATE\s+growth_(cohorts|origins)\s+SET[^;]*quality", re.I | re.S)
-    assert not [i for i, m in enumerate(H.MIGRATIONS) if writes.search(m)]
     folder = Path(H.__file__).parent / "migrations"
     assert not [p.name for p in folder.glob("*.py") if writes.search(p.read_text())]
 

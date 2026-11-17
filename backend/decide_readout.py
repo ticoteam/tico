@@ -316,7 +316,7 @@ def text(data):
         tiers = "".join(f", {name} {n}" for name, n in row["tiers"].items())
         head = (
             f"{row['set']}{' v' + '/'.join(row['versions']) if row['versions'] else ''}: {row['calls']} calls, "
-            f"{_usd(row['cost_usd'])}; Jev {row['jev']} ({_pct(row['jev_share'])}){tiers}, "
+            f"{_usd(row['cost_usd'])}; Decision model {row['jev']} ({_pct(row['jev_share'])}){tiers}, "
             f"fallback {row['fallback']}" + (f", failed {failed}" if failed else "")
         )
         if row["ceiling_priced"]:
@@ -343,7 +343,7 @@ def text(data):
             )
     if total["calls"]:
         lines.append(
-            f"All sets: {total['calls']} calls, {_usd(total['cost_usd'])}; Jev answered "
+            f"All sets: {total['calls']} calls, {_usd(total['cost_usd'])}; Decision model answered "
             f"{_pct(total['jev_share'])} (target 90%), fallback {total['fallback']}, failed {total['failed']}"
         )
     month = data["month"]

@@ -1,10 +1,34 @@
 {
  "//": "Page parts: files a cold open does not download, fetched the first time a person goes to one of their pages (backend/ui_bundle.py, ui/app/parts.ts). Each part's entries are the names code outside it calls: pages (the router's, drawn only while the person stays on that route), calls (load the part, then call) and idle (do nothing until the part is loaded). deps load with the part. events are selectors of controls drawn outside the part whose click or change its own document listener answers: their first use loads the part. scripts/check_ui_parts.cjs checks every use from outside.",
+ "library-files": {
+  "files": [
+   "app/library-files.ts"
+  ],
+  "deps": [],
+  "pages": [
+   "pageLibraryFiles"
+  ],
+  "calls": [
+   "lfLoad"
+  ],
+  "idle": []
+ },
+ "thread-connect": {
+  "files": [
+   "app/thread-connect.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [],
+  "idle": []
+ },
  "thread-settings": {
   "files": [
    "app/threads-page.ts"
   ],
-  "deps": [],
+  "deps": [
+   "thread-connect"
+  ],
   "pages": [],
   "calls": [
    "threadMembersOpen",
@@ -12,6 +36,72 @@
    "threadEarlierOpen"
   ],
   "idle": []
+ },
+ "access-requests": {
+  "files": [
+   "app/access-requests.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [
+   "arMount"
+  ],
+  "idle": []
+ },
+ "thread-library": {
+  "files": [
+   "app/thread-library.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [
+   "thvLibOpen"
+  ],
+  "idle": []
+ },
+ "thread-pin-archive": {
+  "files": [
+   "app/thread-pin-archive.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [
+   "thvPinToggle",
+   "thvArchive"
+  ],
+  "idle": []
+ },
+ "thread-reactions": {
+  "files": [
+   "app/thread-reactions.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [
+   "thvReact",
+   "thvEmojiPick",
+   "thvSheet"
+  ],
+  "idle": []
+  },
+ "threads-rail": {
+  "files": [
+   "app/thread-rail.ts",
+   "app/catch-up.ts",
+   "app/new-message.ts"
+  ],
+  "deps": [],
+  "pages": [
+   "pageThreads",
+   "pageThread",
+   "pageNewMessage"
+  ],
+  "calls": [],
+  "idle": [
+   "railRender",
+   "cuReconcile",
+   "catchUpGone"
+  ]
  },
  "browser-view": {
   "files": [
@@ -231,13 +321,24 @@
   "calls": [],
   "idle": []
  },
+ "task-docs": {
+  "files": [
+   "app/task-docs.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [],
+  "idle": []
+ },
  "decide": {
   "files": [
    "app/decide.ts",
-   "app/decide-about.ts"
+   "app/decide-about.ts",
+   "app/decide-content.ts"
   ],
   "deps": [
-   "browser-view"
+   "browser-view",
+   "task-docs"
   ],
   "pages": [],
   "calls": [
@@ -281,6 +382,7 @@
   ],
   "deps": [
    "task-files",
+   "task-docs",
    "decide",
    "tags",
    "stage-rules"
@@ -298,6 +400,7 @@
    "taskCommentsRender",
    "taskModalOpen",
    "taskModalShow",
+   "taskMoveToMenu",
    "taskPropsMsgPaint",
    "taskRunCatalog",
    "taskThreadOpen"
@@ -307,6 +410,17 @@
    "taskChatStop",
    "taskModalRouteClose"
   ]
+ },
+ "task-pick": {
+  "files": [
+   "app/task-pick.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [
+   "pvPick"
+  ],
+  "idle": []
  },
  "bot": {
   "files": [
@@ -424,12 +538,8 @@
    "strategy-page.ts",
    "lenses-page.ts",
    "goals-kpis.ts",
-   "app/overview-factories.ts",
    "app/org-factories.ts",
    "app/goals.ts",
-   "app/overview.ts",
-   "app/overview-hours.ts",
-   "app/overview-graph.ts",
    "app/strategy-budget.ts",
    "app/company-page.ts",
    "app/redesign-org.ts",
@@ -450,10 +560,7 @@
    "pageGoals",
    "pageLenses",
    "pageMarket",
-   "pageOverview",
    "pageOverviewCompany",
-   "pageOverviewFactories",
-   "pageOverviewGraph",
    "pageRdOrg",
    "pageRules",
    "pageStrategy"
@@ -466,16 +573,12 @@
    "goalsRefresh",
    "headGoalsLoad",
    "openGoal",
-   "overviewNeedsDraw"
+   "strategyBrandSaved"
   ],
   "idle": [
    "companyPageStop",
-   "graphStop",
    "lensesStop",
    "marketStop",
-   "overviewRefresh",
-   "overviewStop",
-   "overviewStuckDraw",
    "rulesStop",
    "strategyStop",
    "goalsFollowRoster"
@@ -528,6 +631,7 @@
    "app/vault.ts",
    "app/tools.ts",
    "app/tools-api.ts",
+   "app/tools-mcp.ts",
    "app/redesign-library.ts",
    "app/tools-website.ts",
    "app/who-picker.ts"
@@ -536,7 +640,8 @@
    "finance",
    "webhooks",
    "docs-editor",
-   "browser-view"
+   "browser-view",
+   "thread-connect"
   ],
   "pages": [
    "pageCompanyDocs",
@@ -547,6 +652,7 @@
    "pageSkillProposal",
    "pageSkills",
    "pageToolApi",
+   "pageToolVendor",
    "pageToolService",
    "pageTools",
    "toolsInboxPage",
@@ -642,7 +748,6 @@
    "app/assistant-page.ts",
    "app/learned.ts",
    "app/learnings.ts",
-   "app/new-message.ts",
    "app/mail.ts",
    "app/messaging.ts",
    "app/sql.ts"
@@ -656,7 +761,6 @@
    "pageLearnings",
    "pageMail",
    "pageMessaging",
-   "pageNewMessage",
    "pagePerson",
    "pageSql"
   ],
@@ -724,6 +828,21 @@
   "pages": [],
   "calls": [
    "giveToOpen"
+  ],
+  "idle": []
+ },
+ "stage-menu": {
+  "files": [
+   "app/stage-menu.ts"
+  ],
+  "deps": [
+   "task",
+   "give-to",
+   "task-pick"
+  ],
+  "pages": [],
+  "calls": [
+   "pvColMenu"
   ],
   "idle": []
  },

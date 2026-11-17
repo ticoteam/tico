@@ -111,9 +111,8 @@ function vaultShare(id: string) {
   if (!VAULT) return;
   const row = VAULT.credentials.find(row=>row.id===id);
   if (!row) return;
-  const modelKey=['OPENAI_API_KEY','ANTHROPIC_API_KEY','CLAUDE_CODE_OAUTH_TOKEN','CURSOR_API_KEY'].includes(row.env ?? '')&&['api_key','token'].includes(row.kind)&&row.stored;
-  const choices=[...(VAULT.can_manage&&modelKey?[{subject:'computers',label:'Every computer (signs models in)'}]:[]),
-    ...(VAULT.can_manage ? VAULT.people.map(person=>({subject:'human:'+person.id,label:person.name || person.email})) : []),
+  // A model key reaches computers through Settings > Models (backend/computer_keys.py), not a grant here.
+  const choices=[...(VAULT.can_manage ? VAULT.people.map(person=>({subject:'human:'+person.id,label:person.name || person.email})) : []),
     ...VAULT.bots.map(bot=>({subject:'bot:'+bot.id,label:`${bot.name} (bot)`}))];
   const dialog=vaultDialog('Access to '+row.name,`<p class="muted">Revoking access also revokes the access they gave their bots.</p>
     <div>${row.grants.map(grant=>`<div class="row"><span>${esc(vaultSubject(grant.subject))}${grant.parent_id?' · delegated':''}</span>${grant.can_revoke?`<button class="ghost" type="button" data-revoke="${esc(grant.id)}">Revoke</button>`:''}</div>`).join('') || '<p>Owners only.</p>'}</div>

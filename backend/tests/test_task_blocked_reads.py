@@ -1,7 +1,7 @@
 """What the screens read of a dependency (backend/task_depends.py, part 3 of "A blocked task shows as Blocked, never
 Snoozed"): a board row says which tasks block it (`blocked_by`) and which it blocks (`blocks`), the task's relations
-say since when, and a person who owns a blocker reads "Blocks #307, #308" in their Needs you. No list says Snoozed for
-a blocked task."""
+say since when, and a blocker a person owns is in Tasks, not their Needs you (nothing is asked of them). No list says
+Snoozed for a blocked task."""
 
 import pytest
 
@@ -87,49 +87,18 @@ def test_a_dependency_says_since_when_from_both_ends(c):
     assert [e["since"] for e in both[blocker]["depends_on"]] == [since]
 
 
-def test_a_person_who_owns_a_blocker_reads_blocks_in_needs_you(c):
+def test_a_blocker_a_person_owns_is_in_nobodys_needs_you_and_neither_are_the_tasks_it_blocks(c):
+    """Its row says what it blocks (`blocks`); Needs you holds only what is asked of a person."""
     build(c)
     mine = task(c, "Write the copy", "general", assignee=X.ANA)
     first, second = task(c, "Part 2"), task(c, "Part 3")
     TR.relate(c, X.ANA, first, mine, "depends_on")
-    entries = [e for e in W.needs(c, X.ANA) if e.get("task_id") == mine]
-    assert [e["kind"] for e in entries] == ["task"]
-    assert entries[0]["line"].endswith(f"Blocks {ref(c, first)}.")
-    assert entries[0]["blocks"] == [ref(c, first)]
     TR.relate(c, X.ANA, second, mine, "depends_on")
-    entries = [e for e in W.needs(c, X.ANA) if e.get("task_id") == mine]
-    assert entries[0]["line"].endswith(f"Blocks {ref(c, first)}, {ref(c, second)}.")
-    # The blocked tasks are not in anyone's list, and nothing in it says Snoozed.
+    assert rows(c, mine)[mine]["blocks"]
     everyone = W.needs_by_person(c)
     listed = [e for items in everyone.values() for e in items]
-    assert not any(e.get("task_id") in (first, second) for e in listed)
-    assert not any("Snoozed" in (e.get("line") or "") for e in listed)
-    assert everyone[X.ANA] == W.needs(c, X.ANA)
-
-
-def test_a_person_blocker_that_is_not_their_turn_still_shows_blocks(c):
-    """A bot set the blocker aside, so its own work is out of the owner's list; they still read that it holds others
-    up."""
-    build(c)
-    mine = task(c, "Write the copy", "general", assignee=X.ANA)
-    first = task(c, "Part 2")
-    TR.relate(c, X.ANA, first, mine, "depends_on")
-    row = E.task(c, mine)
-    E.snooze(c, mine, B, "Vendor replies by Nov 14", "2026-11-14T00:00:00.000000Z", row["version"])
-    entries = [e for e in W.needs(c, X.ANA) if e.get("task_id") == mine]
-    assert [(e["kind"], e["line"], e["missing"]) for e in entries] == [("task", f"Blocks {ref(c, first)}.", [])]
-
-
-def test_a_blocker_owned_by_a_bot_or_itself_blocked_lists_no_blocks(c):
-    build(c)
-    blocker, blocked = task(c, "Part 1"), task(c, "Part 2")
-    TR.relate(c, X.ANA, blocked, blocker, "depends_on")
-    assert not any("Blocks" in (e.get("line") or "") for e in W.needs(c, X.ANA))
-    # A person's blocker that is itself blocked is not theirs to move: the end of the chain is.
-    mine = task(c, "Write the copy", "general", assignee=X.ANA)
-    TR.relate(c, X.ANA, task(c, "Part 3"), mine, "depends_on")
-    TR.relate(c, X.ANA, mine, blocker, "depends_on")
-    assert not any(e.get("task_id") == mine for e in W.needs(c, X.ANA))
+    assert not any(e.get("task_id") in (mine, first, second) for e in listed)
+    assert not any("Snoozed" in (e.get("line") or "") or "Blocks" in (e.get("line") or "") for e in listed)
 
 
 def test_a_blocked_task_a_bot_snoozed_is_listed_as_blocked_never_snoozed(c):

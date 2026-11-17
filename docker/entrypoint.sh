@@ -164,7 +164,7 @@ seed() {
     fi
     if [ -s "$TICO_DB" ]; then
       python -m backend.replication restore-blobs || log "could not restore attachments; run: docker compose run --rm server restore --force"
-      # The key files that decrypt the stored secrets (credential.key, github-app.key, slack.key; docs/install.md); a
+      # The key files that decrypt the stored secrets (credential.key, github-app.key, and an older backup's slack.key; docs/install.md); a
       # database without them cannot.
       python -m backend.replication restore-credential-key || log "could not restore every key file; see docs/install.md#backups-and-restore"
     else

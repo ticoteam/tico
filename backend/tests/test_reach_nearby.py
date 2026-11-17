@@ -600,7 +600,7 @@ def test_a_bot_asks_the_person_who_pinged_it_for_a_day(api):
     with pytest.raises(reach.Refused):
         ask()
     with api.app.state.store.transaction() as c:  # the ping route's message (backend/flow_ping.py)
-        H.say(c, "human:ben", "bot:ops", "Any questions for me?", refs={"get_aligned": True})
+        H.say(c, "human:ben", "bot:ops", "Any questions for me?", refs={"add_to_flow": True})
     ask()
     with api.app.state.store.read() as c:
         day_later = (datetime.now(timezone.utc) + timedelta(hours=25)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")

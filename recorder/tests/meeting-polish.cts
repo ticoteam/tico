@@ -61,7 +61,7 @@ const rows = (page: import('playwright').Page): Promise<string[]> => page.locato
     // Type filter.
     await search.fill('pricing');
     await page.waitForFunction(() => document.querySelectorAll('#sheet [data-act="task-pick"]').length === 3 && !document.querySelector('#sheet .pop-list.stale'));
-    await page.getByRole('combobox', {name:'Type'}).selectOption('bug');
+    await page.getByRole('combobox', {name:'Pipeline'}).selectOption('product');
     await page.waitForFunction(() => document.querySelectorAll('#sheet [data-act="task-pick"]').length === 1);
     assert.deepEqual(await rows(page), ['#45 Fix pricing rounding · open']);
     // Picks are marked, counted on Link, and stay listed while the search moves on.
@@ -71,7 +71,7 @@ const rows = (page: import('playwright').Page): Promise<string[]> => page.locato
     await page.click('#sheet [data-id="t45"]');
     assert.equal(await page.locator('#sheet [data-id="t45"].on[aria-pressed="true"]').count(), 1);
     assert.equal(await link.innerText(), 'Link 1');
-    await page.getByRole('combobox', {name:'Type'}).selectOption('');
+    await page.getByRole('combobox', {name:'Pipeline'}).selectOption('');
     await search.fill('property');
     await page.waitForFunction(() => document.querySelector('#sheet [data-id="t44"]') && !document.querySelector('#sheet .pop-list.stale'));
     assert.deepEqual(await rows(page), ['#45 Fix pricing rounding · open', '#44 Property manager bots: pricing page · doing']);

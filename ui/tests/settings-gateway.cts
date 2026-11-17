@@ -101,7 +101,7 @@ declare function modelWords(id: string | null | undefined): string;
       }
       if (p === '/api/v2/providers/gateway/check') { sent.push({method: 'CHECK'}); return json(shown(true)); }
       if (p === '/api/v2/usage/limits') return json({bots: {}});
-      if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
+      if (p === '/api/v2/settings/history') return json({changes: []});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));
     });

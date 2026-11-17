@@ -34,7 +34,10 @@ from .store import H, Problem
 # Rows and seconds per query; `max_rows` in the request may only lower the cap.
 LIMITS = {"owner": (5000, 20.0), "human": (500, 5.0), "bot": (500, 5.0)}
 # Readable as they are, by everyone: nothing personal, nothing secret, plus the schema.
-OPEN = {"cloud_migrations", "rate_limits", "service_health", "learnings", "sqlite_master"}
+OPEN = {"rate_limits", "service_health", "learnings", "sqlite_master"}
+# A message's own read rule (guarded), as a view of the unfiltered messages that no caller reads by name: the views of
+# the tables read it, `messages` among them with the timeline's cut (a person's timeline shows only messages with a seq).
+READABLE_MESSAGES = "readable_messages"
 # The Company page's tables the owner reads as the page's API does; the readers' own tables are not here at all.
 COMPANY_PAGE_OWNER_TABLES = (
     "company_page_settings",
@@ -464,9 +467,22 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
     )
 
     by_task = "task_id IN (SELECT id FROM tasks)"
+    # A message's own rule: what the API lets the caller read of it. It is the hidden view READABLE_MESSAGES, which
+    # runs' jobs, attempts, mentions and files read by name: they follow the message whether or not a person's timeline
+    # shows it (the task's Runs show a notice the run acted on). Inlining the rule instead nests it too deep for
+    # SQLite's parser in CI (parser stack overflow).
+    readable_message = (
+        "conversation_id IN (SELECT id FROM conversations) AND deleted_at IS NULL AND "
+        + legacy_messages
+        + " AND "
+        + msg_gate
+        + " AND "
+        + function("page_message")
+        + "(refs)"
+    )
     # Correlate large history tables by primary key. An IN subquery materializes
     # every readable message/job/attempt before even a LIMIT 1 can return.
-    by_message = "EXISTS (SELECT 1 FROM messages readable WHERE readable.id=source.message_id)"
+    by_message = f"EXISTS (SELECT 1 FROM {inner(READABLE_MESSAGES)} readable WHERE readable.id=source.message_id)"
     by_schedule = "schedule_id IN (SELECT id FROM schedules)"
     by_attempt = "EXISTS (SELECT 1 FROM attempts readable WHERE readable.id=source.attempt_id)"
     by_job = "EXISTS (SELECT 1 FROM jobs readable WHERE readable.id=source.job_id)"
@@ -475,7 +491,6 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
     # hides its reply columns): its tool steps stay readable.
     unsettled = unsettled_watched(c, inner)
     mine = f"actor={me}" if bot else "1"
-    person = H.actor_id(who.actor)
     # Meetings are the company's; typed notes are their owner's (backend/media.py). A private
     # meeting narrows to the people its invite or its importer names, spelled either way.
     # A meeting saved "Participants only" is read only by the people it names, owner too.
@@ -524,20 +539,21 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
     # Imported drafts do not enter company search, exports or the audit feed.
     meetings = f"({meetings}) AND review_state='live'"
     events = f"({events}) AND target NOT IN (SELECT id FROM {inner('meetings')} WHERE review_state<>'live')"
+    # A person reads a room's messages through its timeline: the ones with a seq (task_privacy.page, threads.timeline).
+    # Tico's notices to a bot have none; they are the bot's run input (H.run_notice), so only a bot's view holds them.
+    timeline = "1" if bot else "seq IS NOT NULL"
     rules = {
         "conversations": conversations,
+        # The message rule itself, read by name below; connect builds it as a hidden view, never a table.
+        READABLE_MESSAGES: readable_message,
         # Rooms are the small authorization set, unlike message/run history.
         # Build their id set once rather than re-evaluate the room view per message.
-        "messages": (
-            "conversation_id IN (SELECT id FROM conversations) AND deleted_at IS NULL AND "
-            + legacy_messages
-            + " AND "
-            + msg_gate
-        ),
+        "messages": f"EXISTS (SELECT 1 FROM {inner(READABLE_MESSAGES)} readable WHERE readable.id=source.id) AND "
+        + timeline,
         # Thread membership and follows are read with their thread; mentions with their message.
         "thread_members": "thread_id IN (SELECT id FROM conversations)",
         "thread_followers": "thread_id IN (SELECT id FROM conversations)",
-        "message_mentions": "EXISTS (SELECT 1 FROM messages readable WHERE readable.id=source.message_id)",
+        "message_mentions": by_message,
         "tasks": tasks,
         "tags": tag_gate,
         "task_tags": by_task,
@@ -545,6 +561,7 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         "task_requesters": by_task,
         "task_reminders": by_task,
         "task_assets": by_task,
+        "task_documents": by_task,
         "task_links": by_task,
         "task_roles": by_task,
         # A relation is read only when the caller may read both of its tasks.
@@ -614,7 +631,7 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         # team watches and what the Librarian wrote about them, the market's to read.
         "entity_watches": "1",
         "market_briefings": "1",
-        # One history table (backend/migrations/0064_history_events.py), each row read as its subject is: a task's
+        # One history table (backend/migrations/baseline.sql), each row read as its subject is: a task's
         # with the task (and its words through the content gate), a goal's with the goal, the company's and the
         # market's by everyone, the strategy's by the owner (its draft's words may be unpublished).
         "history_events": (
@@ -687,12 +704,7 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         + "id IN (SELECT blob_id FROM message_assets) OR id IN (SELECT blob_id FROM task_assets) "
         "OR id IN (SELECT blob_id FROM media_assets))",
         "archives": "1" if owner else "0" if bot else f"owner={me}",
-        "connector_snapshots": "1" if owner else "0" if bot else f"owner={q(person)}",
         "service_jobs": "1" if owner else "0" if bot else f"requested_by={me}",
-        # Mail copies are read through /api/v2/mail. SQL stays owner-only.
-        "mail_mailboxes": "1" if owner else "0",
-        "mail_messages": "1" if owner else "0",
-        "mail_fts": "1" if owner else "0",
         # The Company page's own rules, drafts, stats and approvals: the owner's, as the page's API shows them. The
         # readers' tables (who they are, their sessions and invites, what they wrote, what they read) are not listed, so
         # they are denied to everyone, the owner included.
@@ -718,8 +730,8 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         )
         rules[table] = "(" + rules[table] + ") AND " + content_gate(cols)
     rules["task_assets"] += " AND " + function("blob") + "(blob_id)"
-    rules["messages"] += " AND " + function("page_message") + "(refs)"
     rules["task_file_reviews"] = "file_id IN (SELECT id FROM bot_files) OR file_id IN (SELECT id FROM blobs)"
+    rules["task_documents"] += " AND file_id IN (SELECT id FROM bot_files)"
     rules["bot_file_activity"] += (
         " AND (task_id IS NULL OR " + by_task + ") AND (attempt_id IS NULL OR " + by_attempt + ")"
     )
@@ -1037,6 +1049,7 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement=""):
         columns = schema_columns(conn, path)
         unseen = TA.hidden(conn, who, "see", ("human", "group"), auth)
         tables = guarded(conn, auth, who, inner, function, columns, unseen=unseen)
+        readable = tables.pop(READABLE_MESSAGES)
         # Page visibility traverses letter proofs and current agent standing through trusted callbacks only.
         source_tables = set(tables) | {
             "pages",
@@ -1183,7 +1196,12 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement=""):
         conn.execute(f'CREATE TEMP VIEW {inner("pages")} AS SELECT file_id,audience FROM main.pages')
         if deadline is not None:
             conn.set_progress_handler(lambda: int(time.monotonic() > deadline), 2000)
-        tables = materialize(conn, index, tables, inner, function, private)
+        tables = materialize(conn, index, {**tables, READABLE_MESSAGES: readable}, inner, function, private)
+        readable = tables.pop(READABLE_MESSAGES)
+        # The rule over the unfiltered messages: each row is `source`, as materialize's gates read it.
+        conn.execute(
+            f"CREATE TEMP VIEW {inner(READABLE_MESSAGES)} AS SELECT * FROM {inner('messages')} AS source WHERE {readable[0]}"
+        )
         conn.set_progress_handler(None, 0)
         masks = {**MASKED, **live_masks(unsettled_watched(conn, inner))}
         masks["messages"] = {**masks.get("messages", {}), "refs": function("page_refs") + "(source.refs)"}
@@ -1245,7 +1263,7 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement=""):
     except BaseException:
         conn.close()
         raise
-    inner_names = {prefix + table for table in set(tables) | sources | {"pages"}}
+    inner_names = {prefix + table for table in set(tables) | sources | {"pages", READABLE_MESSAGES}}
     sets = {private(name) for name in SETS}
 
     def fts_parent(name):
@@ -1255,11 +1273,16 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement=""):
         return None
 
     def authorize(action, table, column, schema, context):
+        # Who may read a private object: a table's view, or the message rule's view (which reads the same sets and
+        # functions the table views read on its behalf).
+        def reads(view):
+            return view in tables or view == prefix + READABLE_MESSAGES
+
         if action in (sqlite3.SQLITE_SELECT, sqlite3.SQLITE_RECURSIVE):
             return sqlite3.SQLITE_OK
         if action == sqlite3.SQLITE_FUNCTION:
             if column and column.startswith(prefix + "privacy_"):
-                return sqlite3.SQLITE_OK if context in tables else sqlite3.SQLITE_DENY
+                return sqlite3.SQLITE_OK if reads(context) else sqlite3.SQLITE_DENY
             return sqlite3.SQLITE_DENY if column in DENIED_FUNCTIONS else sqlite3.SQLITE_OK
         # FTS5 checks main.data_version before reading; nothing else may PRAGMA.
         if action == sqlite3.SQLITE_PRAGMA:
@@ -1298,7 +1321,7 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement=""):
             if (table in tables or table in sources or table == "pages") and context == prefix + table:
                 return sqlite3.SQLITE_OK
             # FTS5 reads the virtual table and its shadow tables with no view
-            # context. Allow that only for the owner: mail_fts is owner-only.
+            # context. Allow that only for the owner.
             parent = fts_parent(table or "")
             if who.role == "owner" and table in tables and str(table).endswith("_fts"):
                 return sqlite3.SQLITE_OK
@@ -1307,12 +1330,12 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement=""):
             return sqlite3.SQLITE_DENY
         if schema == "temp":
             if table in sets:
-                return sqlite3.SQLITE_OK if context in tables else sqlite3.SQLITE_DENY
+                return sqlite3.SQLITE_OK if reads(context) else sqlite3.SQLITE_DENY
             if table in tables or table in views or table in worked_out:
                 return sqlite3.SQLITE_OK
             if table in inner_names and context in views:
                 return sqlite3.SQLITE_OK if table[len(prefix) :] in views[context][0] else sqlite3.SQLITE_DENY
-            return sqlite3.SQLITE_OK if table in inner_names and context in tables else sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_OK if table in inner_names and reads(context) else sqlite3.SQLITE_DENY
         return sqlite3.SQLITE_DENY
 
     conn.set_authorizer(authorize)

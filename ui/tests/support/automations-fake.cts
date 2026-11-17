@@ -406,7 +406,7 @@ async function openAutomations(browser: Browser, {viewport = PHONE, hash = '#/au
     role: 'member', company_role: 'member', cloud: true};
   const config = {};
   const db: AutomationsDb = {
-    list: fx.automations.map(a => asAuto({...sortFlow(a), can_edit: owner && a.can_edit !== false, ...(a.can_pause != null ? {can_pause: owner && a.can_pause} : {})})),
+    list: fx.automations.map(a => asAuto({...sortFlow(a), can_edit: owner && a.can_edit !== false, can_pause: owner && (a.can_pause ?? a.can_edit !== false)})),
     versions: {}, runs: {au_inbox: inboxRuns(), au_market: listenRuns(), ...(system ? {[String(SYSTEM.id)]: systemRuns()} : {})}, conv: null, messages: [],
     held: {},   // id → {wait, fail}: an automation's GET or Maintenance's PATCH waits for release()
   };
@@ -493,6 +493,9 @@ async function openAutomations(browser: Browser, {viewport = PHONE, hash = '#/au
     if (p === '/api/v2/groups') return json({groups: fx.groups});
     const body = (method === 'GET' ? null : req.postDataJSON?.() ?? null) as Json | null;
     const b: Json = body ?? {};
+    // The browser's own speed readings (ui/observability.ts) are not the page's writes: they come whenever the browser
+    // sends them, so a count of writes would depend on timing.
+    if (p === '/api/v2/web-timings') return json({kept: 0, dropped: 0}, 202);
     if (method !== 'GET') writes.push({method, path: p, body});
 
     // System jobs beside Maintenance (ui/app/settings-recurring.ts draws them): two of Tico's own jobs.
@@ -590,7 +593,7 @@ async function openAutomations(browser: Browser, {viewport = PHONE, hash = '#/au
       // A new one (Blank, or New inbox's): version 1.
       const bad = flowProblem(b.steps);
       if (bad) return refuse(422, 'invalid_flow', bad);
-      const a = asAuto({...sortFlow(b), owner_id: b.owner, id: 'au_' + (db.list.length + 1), version: 1, can_edit: true});
+      const a = asAuto({...sortFlow(b), owner_id: b.owner, id: 'au_' + (db.list.length + 1), version: 1, can_edit: true, can_pause: true});
       db.list.push(a);
       db.versions[a.id] = [{n: 1, actor: 'person:' + me.id, at: new Date().toISOString(), status: 'active', flow: flowOf(a)}];
       return json(full(a));
@@ -744,7 +747,7 @@ async function openAutomations(browser: Browser, {viewport = PHONE, hash = '#/au
         reply = `Saved v${a.version}: receipts are archived first.`;
       } else if (!/\?/.test(String(b.text))) {
         const on = /turn it on/i.test(String(b.text));
-        db.list.push(sortFlow({id: 'au_new', name: 'Sales leads', owner_id: 'person:' + me.id, enabled: on, builtin: false, version: 1, can_edit: true,
+        db.list.push(sortFlow({id: 'au_new', name: 'Sales leads', owner_id: 'person:' + me.id, enabled: on, builtin: false, version: 1, can_edit: true, can_pause: true,
           trigger: {type: 'message', inbox: 'sales@acme.example', filters: []},
           steps: [{id: 'f1', type: 'filter', enabled: true, rules: [{when: [{field: 'message.subject', op: 'contains', value: 'demo'}], match: 'all', then: [{do: 'label', args: {name: 'Lead'}}], stop: false}]}]}) as Auto);
         const created = db.list.at(-1)!;

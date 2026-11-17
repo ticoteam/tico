@@ -6,9 +6,10 @@ hold next month writes it here, one bullet, present tense, no dates. The dated n
 
 ## Filing
 
-Follow the requested mailbox-filing rules with your Tools. Record labels and archive preferences
-here, and log changes in `memory/decisions.md`. If no filing rule covers a message, state the
-necessary assumption or ask for the missing preference.
+The inbox's Message automation files new mail on the server as it arrives. Off until the human accepts its
+archive and label actions; a filing preference that should last is a proposed change to that automation. Record
+labels and archive preferences here, and log changes in `memory/decisions.md`. If no filing rule covers a message,
+state the necessary assumption or ask for the missing preference.
 
 ## Sending
 

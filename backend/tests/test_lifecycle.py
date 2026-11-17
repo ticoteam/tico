@@ -110,7 +110,7 @@ def test_an_onboarding_bot_learns_only_and_every_other_attempt_is_refused_plainl
     said = api.post(f"/api/v2/tasks/{task['id']}/comments", json={"text": "I can help"}, headers=headers(token))
     assert said.status_code >= 400 and "still onboarding" in said.text, said.text
 
-    # Its mail connector refuses every message while it learns, approval or not (connectors/mail/policy.py).
+    # Tico refuses every message it would send while it learns, approval or not (backend/email_sending.py).
     mail = get(api, "bots/ops/mail-settings", token=token)
     assert mail["outbound_send"] is False and mail["onboarding"] is True
 
@@ -140,13 +140,9 @@ def test_a_person_above_marks_onboarding_complete_and_its_automation_turns_start
     assert meeting(api, aid, "rec-2") == 1
 
 
-def test_any_number_onboard_at_once_and_an_upgrade_maps_set_up_to_onboarding(api):
+def test_any_number_onboard_at_once(api):
     onboarding(api, "ops", "finance", "cpo")
     with api.app.state.store.transaction() as c:
-        # A row an older release wrote, before bot_config.onboarding_state had its CHECK: readers still park it.
-        c.execute("PRAGMA ignore_check_constraints=ON")
-        c.execute("UPDATE bot_config SET onboarding_state='needs_onboarding' WHERE bot='cpo'")
-        c.execute("PRAGMA ignore_check_constraints=OFF")
         c.execute("UPDATE bot_config SET onboarding_state='onboarded' WHERE bot='assistant'")
         c.execute("UPDATE bots SET state='planned' WHERE slug='doc-updater'")
     stages = {b["slug"]: (b["stage"], b["state"]) for b in get(api, "bots")}
@@ -207,7 +203,7 @@ def test_a_seat_may_report_to_an_open_seat_and_hangs_under_it_until_that_seat_cl
     shown = {s["id"]: s for s in get(api, "org")["seats"]}
     assert shown[agent["id"]]["org_parent"] == "s:" + lead["id"] and shown[lead["id"]]["org_parent"] == "b:assistant"
     people = {
-        s["id"]: s for s in api.get("/api/people", headers=headers()).json()["seats"]
+        s["id"]: s for s in api.get("/api/humans", headers=headers()).json()["seats"]
     }  # the sidebar's team chart reads these
     assert people[agent["id"]]["org_parent"] == "s:" + lead["id"] and people[agent["id"]]["stage"] == "recruiting"
 
@@ -226,7 +222,7 @@ def test_a_seat_may_report_to_an_open_seat_and_hangs_under_it_until_that_seat_cl
     assert {s["id"]: s for s in get(api, "org")["seats"]}[agent["id"]]["org_parent"] == "b:assistant"
     # The sidebar refreshes its seats from GET /api/v2/seats (ui/app/refresh.ts): those rows hang the same way.
     listed = {s["id"]: s["org_parent"] for s in get(api, "seats")["seats"]}
-    people = {s["id"]: s["org_parent"] for s in api.get("/api/people", headers=headers()).json()["seats"]}
+    people = {s["id"]: s["org_parent"] for s in api.get("/api/humans", headers=headers()).json()["seats"]}
     assert listed == people and listed[agent["id"]] == "b:assistant"
 
     # A line through a closed seat still counts: B <- A (closed) <- C, so B cannot move under C.

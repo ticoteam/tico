@@ -15,6 +15,7 @@ import pytest
 import yaml
 
 from backend import pipeline_seats
+from clients import catalog
 
 CATALOG = Path(__file__).resolve().parents[2] / "templates" / "catalog"
 SIX = sorted(set(pipeline_seats.TEMPLATES.values()))
@@ -34,7 +35,11 @@ def agent(template):
 
 
 def settings(template):
-    return json.loads((CATALOG / template / ".claude" / "settings.json").read_text())["permissions"]
+    """The permissions a bot from `template` is given (its own file, else the catalog's base). Only `deny` counts: Claude
+    Code runs with bypassPermissions (runner-rs/src/hosts/claude.rs), so a template ships no `allow` list."""
+    rules = json.loads(catalog.files(template)[".claude/settings.json"].read_text())["permissions"]
+    assert set(rules) == {"deny"}, template
+    return rules
 
 
 def card(template):
@@ -43,9 +48,7 @@ def card(template):
 
 @pytest.mark.parametrize("template", ["builder", "feature-owner", "reviewer", "release-owner"])
 def test_no_github_bot_may_merge(template):
-    rules = settings(template)
-    assert "Bash(gh pr merge *)" in rules["deny"]
-    assert not any("gh pr merge" in rule for rule in rules["allow"])
+    assert "Bash(gh pr merge *)" in settings(template)["deny"]
 
 
 def test_the_feature_owner_reads_ci_by_repository_and_never_writes_it():
@@ -53,10 +56,9 @@ def test_the_feature_owner_reads_ci_by_repository_and_never_writes_it():
     # the pull request's link or -R to know which repository to read.
     rules = settings("feature-owner")
     for read in ("gh pr checks", "gh pr diff", "gh run list", "gh run view"):
-        assert f"Bash({read} *)" in rules["allow"], read
+        assert not any(read in rule for rule in rules["deny"]), read
     for write in ("gh pr merge", "gh pr review", "gh run rerun", "gh run cancel", "gh workflow run"):
         assert f"Bash({write} *)" in rules["deny"], write
-        assert not any(write in rule for rule in rules["allow"]), write
     playbook = (CATALOG / "feature-owner" / "playbooks" / "validate-in-production.md").read_text()
     assert "gh pr checks <pull request link>" in playbook and "-R <owner/name>" in playbook
 
@@ -101,15 +103,12 @@ def test_the_builder_and_release_manager_may_push_a_rebased_branch_and_never_a_t
     # A conflict wake tells the Builder to rebase and push with a lease; the Release Owner rebases in Merge. A tag is a
     # release on a repository that releases from tags, and only a person or the approved rollout makes one.
     rules = settings(template)
-    lease = "Bash(git push --" + "force-with-lease *)"
-    assert lease in rules["allow"]
     # A bare force push stays denied, and the lease is not swallowed by a wider deny.
     assert "Bash(git push --" + "force *)" in rules["deny"]
     assert not any(rule.startswith("Bash(git push --" + "force*") for rule in rules["deny"])
     for tag in ("Bash(git tag *)", "Bash(git push*--tags*)", "Bash(git push* refs/tags/*)"):
         assert tag in rules["deny"], (template, tag)
-    assert lease not in settings("reviewer")["allow"]
-    assert "Bash(gh pr checkout *)" in settings("release-owner")["allow"]
+    assert not any("gh pr checkout" in rule for rule in settings("release-owner")["deny"])
 
 
 @pytest.mark.parametrize("template", ["builder", "feature-owner", "reviewer", "qa-owner", "release-owner"])
@@ -136,14 +135,13 @@ def test_every_bot_that_meets_a_red_main_finds_the_one_task_waits_on_it_and_reba
         assert "Not after `failed_checks`, which is choice 3, except a main-red failure" in text
 
 
-def test_the_feature_owner_takes_a_feature_from_pitch_to_production_in_one_session():
+def test_the_feature_owner_takes_a_feature_from_a_chat_to_production_in_one_session():
     # Nov 14 (one Product pipeline): the Product Owner and the Builder are one bot, so the code and the reasons are in
-    # context when it builds. It pitches in 280 characters, owns Build and both Fixes, and never passes a person's gate.
+    # context when it builds. It writes the Spec, owns Build and both Fixes, and never passes a person's approval.
     text = agent("feature-owner")
     assert card("feature-owner")["session"] == "task"
     assert yaml.safe_load((CATALOG / "feature-owner" / "bot.yaml").read_text())["session"] == "task"
     for stage in (
-        "Pitch",
         "Spec",
         "Related input",
         "OK spec",
@@ -154,18 +152,18 @@ def test_the_feature_owner_takes_a_feature_from_pitch_to_production_in_one_sessi
         "Validate",
     ):
         assert f"**{stage}" in text, stage
-    assert "280 characters at most" in text
-    assert "A person OKs the pitch, the spec and the release: you never pass those yourself." in text
-    for playbook in ("write-a-pitch", "write-a-spec-page", "build-a-dev-task", "fix-what-review-found", "qa"):
+    assert "Pitch" not in text  # a feature starts as a chat; its first approval is the Spec (Nov 16)
+    assert "A person approves the Spec and the Release report: you never pass those yourself." in text
+    assert '--doc "Release report"' in text
+    for playbook in ("write-a-spec-page", "build-a-dev-task", "fix-what-review-found", "qa"):
         assert f"`playbooks/{playbook}.md`" in text, playbook
         assert (CATALOG / "feature-owner" / "playbooks" / f"{playbook}.md").is_file(), playbook
     # Nov 14, Tico Team trial: owners made from the Product Owner's settings could not edit or open a pull request.
     rules = settings("feature-owner")
     for write in ("gh pr create", "gh pr edit", "gh pr ready", "gh pr comment"):
-        assert f"Bash({write} *)" in rules["allow"], write
         assert not any(write in rule for rule in rules["deny"]), write
     for read in ("gh release list", "gh release view", "gh issue view", "gh run view"):
-        assert f"Bash({read} *)" in rules["allow"] and "Bash(gh release *)" not in rules["deny"], read
+        assert not any(read in rule for rule in rules["deny"]) and "Bash(gh release *)" not in rules["deny"], read
     # Token rules: files once per session, learnings once per task.
     assert "A resumed turn already has them: do not read them again." in text
     assert "When the task reaches Done or is closed, once per task and not every run" in text
@@ -183,15 +181,17 @@ PAGE_KINDS = ("bug-spec", "screen-spec", "change-spec", "validation", "review", 
 
 
 def page_skill(template="feature-owner"):
-    folder = CATALOG / template / "skills" / PAGE_SKILL
-    return {str(p.relative_to(folder)): p.read_bytes() for p in sorted(folder.rglob("*")) if p.is_file()}
+    """The page skill's files as a bot from `template` is given them, by their path in the skill's folder."""
+    prefix = f".claude/skills/{PAGE_SKILL}/"
+    given = catalog.files(template)
+    return {rel[len(prefix) :]: path.read_bytes() for rel, path in given.items() if rel.startswith(prefix)}
 
 
 def page_tool():
     import importlib.util
 
     spec = importlib.util.spec_from_file_location(
-        "page_tool", CATALOG / "feature-owner" / "skills" / PAGE_SKILL / "page.py"
+        "page_tool", catalog.files("feature-owner")[f".claude/skills/{PAGE_SKILL}/page.py"]
     )
     module = importlib.util.module_from_spec(spec)
     # No __pycache__ in the template's folder: a bot would be given it.
@@ -203,16 +203,15 @@ def page_tool():
 
 def test_every_bot_that_writes_a_page_a_person_reads_uses_the_one_page_skill():
     # Spec, Validate, Review and QA pages were each written their own way, as text or drawn mock-ups, and
-    # were sent back as unreadable. One skill builds them all; a copy that drifts teaches one bot an older page.
+    # were sent back as unreadable. One skill builds them all, from one copy every page writer takes (_shared).
     canonical = page_skill()
     assert {"SKILL.md", "page.py"} <= set(canonical)
     assert {f"templates/{k}.html" for k in PAGE_KINDS} <= set(canonical)
     for template, playbooks in PAGE_WRITERS.items():
         assert page_skill(template) == canonical, template
-        assert f"skills/{PAGE_SKILL}/SKILL.md" in agent(template), template
         for playbook in playbooks:
             text = " ".join((CATALOG / template / playbook).read_text().split())
-            assert f"skills/{PAGE_SKILL}/SKILL.md" in text, playbook
+            assert f".claude/skills/{PAGE_SKILL}/SKILL.md" in text, playbook
             assert "tico page publish" in text and "tico file publish" not in text, playbook
             assert "render" in text, playbook
     validate = " ".join((CATALOG / "feature-owner" / "playbooks" / "validate-in-production.md").read_text().split())

@@ -2,7 +2,8 @@ import type {Page, Route} from 'playwright';
 // Offline browser check that every OK opens on what will happen, in words, before Approve (spec #427, "Approvals say
 // what will happen"; ui/app/decide-content.ts):
 // - a Finance payment: Finance's own sentence first, the amount in dollars (not cents), the bank it is paid from and the
-//   line it posts to by name, and no id, key or brace above Approve, at 390 px;
+//   line it posts to by name, and no id, key or brace above Approve, at 390 px, where the ask in the chat holds it
+//   as a small receipt (the amount large) and the forward button says "Pay $1,920.00";
 // - a Finance rule: its examples with amounts in dollars and the line they post to;
 // - an email: To, From, subject, body, attachments with sizes, and no hash anywhere;
 // - a Company page edition: title, who it goes to, period, link, text; its content_sha256 only under Details;
@@ -108,7 +109,7 @@ async function firstScreenClean(page: Page, label: string) {
       if (p === '/api/me') return json({...me, config});
       if (p === '/api/v2/config') return json(config);
       if (p === '/api/employees') return json([]);
-      if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
+      if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
       if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
       if (p === '/api/v2/needs-you') return json({actor: 'human:ana', count: needs.length, items: needs, version: '1', next: null});
       const ok = /^\/api\/v2\/oks\/(r\d+)$/.exec(p);
@@ -134,11 +135,18 @@ async function firstScreenClean(page: Page, label: string) {
     await page.locator('#task-play').click();
     const dialog = page.locator('#need-card');
     const ready = () => dialog.locator('[data-dc="approve"]:not([disabled])').waitFor();
-    const open = async (rid: string) => {
+    // On a phone an OK opens on its second tab, the full content; its ask is in the Chat tab.
+    const taskTab = dialog.locator('[data-dc="tab"][data-dc-tab="task"]'), chatTab = dialog.locator('[data-dc="tab"][data-dc-tab="chat"]');
+    const second = () => taskTab.click();
+    const open = async (rid: string, chat = false) => {
       const line = OKS[rid]!.line;
+      // The item on screen first: a count taken before it is drawn would step past the one asked for.
+      await dialog.locator('.dc-q').first().waitFor({state: 'attached'});
       if (!(await dialog.locator('.dc-q', {hasText: line}).count())) await dialog.locator('[data-dc="next"]').click();
-      await dialog.locator('.dc-q', {hasText: line}).waitFor();
+      await dialog.locator('.dc-q', {hasText: line}).waitFor({state: 'attached'});
       await ready();
+      assert.equal(await taskTab.getAttribute('aria-selected'), 'true', `${rid}: an OK opens on its document`);
+      if (chat) await chatTab.click();
     };
     const details = async (rid: string) => {
       const toggle = dialog.locator('.dc-details > summary');
@@ -151,6 +159,26 @@ async function firstScreenClean(page: Page, label: string) {
 
     // r1, at 390 px: Finance's sentence first, dollars, names; the content under Details.
     await open('r1');
+    if (process.env.FLOW_SHOTS) {
+      await dialog.locator('.dc-start').waitFor({state: 'detached'});
+      await page.waitForTimeout(400);
+      await page.screenshot({path: require('node:path').join(process.env.FLOW_SHOTS, 'phone-action-invoice-tab.png')});
+    }
+    await chatTab.click();
+    // On a phone what will happen is a small receipt in the ask, on Chat: the amount large, then the line and its facts;
+    // the forward button says it: Pay $1,920.00. The second tab is the Invoice, with Details.
+    const receipt = dialog.locator('.dc-chat .dc-msg-ask .dc-receipt');
+    assert.ok(await receipt.isVisible(), 'payment: the receipt shows in the ask on a phone');
+    assert.equal(await receipt.locator('.dc-amt').innerText(), '$1,920.00');
+    assert.match(await receipt.innerText(), /Operating ••1010/);
+    assert.equal((await dialog.locator('[data-dc="approve"]').innerText()).trim(), 'Pay $1,920.00', 'the forward button says what it does');
+    assert.equal(await dialog.locator('[data-dc="tab"][data-dc-tab="task"]').innerText(), 'Invoice');
+    if (process.env.FLOW_SHOTS) {
+      await dialog.locator('.dc-start').waitFor({state: 'detached'});
+      await page.waitForTimeout(400);
+      await page.screenshot({path: require('node:path').join(process.env.FLOW_SHOTS, 'phone-action-receipt.png')});
+    }
+    await second();
     let text = await firstScreenClean(page, 'payment');
     assert.equal(await dialog.locator('.dc-doc .dc-title').first().innerText(), 'Pay Keelson Freight Forwarding $1,920.00 for bill B-1042');
     assert.match(text, /\$1,920\.00/);
@@ -207,8 +235,9 @@ async function firstScreenClean(page: Page, label: string) {
 
     // r8: a stats board: its tico:stat-board link and the hash in it are not on the first screen. Approve moves on to it
     // by itself; clicking Next before it shows would skip it.
-    await dialog.locator('.dc-q', {hasText: OKS.r8!.line}).waitFor();
+    await dialog.locator('.dc-q', {hasText: OKS.r8!.line}).waitFor({state: 'attached'});
     await ready();
+    await second();
     text = await firstScreenClean(page, 'board');
     for (const s of ['Investors stats board', 'Investors', 'Revenue: monthly, rounded']) assert.ok(text.includes(s), `board shows ${s}`);
     assert.doesNotMatch(text, /tico:|Link/);

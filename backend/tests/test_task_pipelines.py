@@ -1,6 +1,5 @@
 """A database from before pipelines that has tasks, in every legacy status, is refused as it is: Tico 0.6 carries no
-task over (docs/dev/pipelines-v3-cutover.md), so the old General backfill, Dev tickets steps and Won't do retirement
-are gone with the old engine, and the file keeps every task, status, body and note it had."""
+task over (docs/dev/pipelines-v3-cutover.md), and the file keeps every task, status, body and note it had."""
 
 import sqlite3
 
@@ -16,8 +15,8 @@ def test_a_database_from_before_pipelines_with_tasks_in_every_status_is_refused_
     path = tmp_path / "legacy.db"
     c = sqlite3.connect(path, isolation_level=None)
     c.row_factory = sqlite3.Row
-    for script in H.MIGRATIONS[:13]:
-        H._apply(c, script)
+    # The old engine's task table, as a Tico 0.5 file has it: no schema_migrations record of the floor.
+    c.execute("CREATE TABLE tasks(id TEXT PRIMARY KEY, title TEXT, status TEXT, body TEXT, note TEXT)")
     c.execute("PRAGMA user_version=13")
     for status in STATUSES:
         c.execute(
@@ -31,16 +30,4 @@ def test_a_database_from_before_pipelines_with_tasks_in_every_status_is_refused_
     assert c.execute("PRAGMA user_version").fetchone()[0] == 13
     assert [dict(row) for row in c.execute("SELECT * FROM tasks ORDER BY id")] == before
     assert c.execute("SELECT name, sql FROM sqlite_master ORDER BY name").fetchall() == schema
-    c.close()
-
-
-def test_the_same_database_without_tasks_migrates_to_today(tmp_path):
-    c = sqlite3.connect(tmp_path / "legacy.db", isolation_level=None)
-    c.row_factory = sqlite3.Row
-    for script in H.MIGRATIONS[:13]:
-        H._apply(c, script)
-    c.execute("PRAGMA user_version=13")
-    H.migrate(c)
-    assert c.execute("PRAGMA user_version").fetchone()[0] == len(H.MIGRATIONS)
-    assert c.execute("PRAGMA foreign_key_check").fetchall() == []
     c.close()

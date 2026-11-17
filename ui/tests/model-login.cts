@@ -24,7 +24,7 @@ async function loginHosted(browser: import('playwright').Browser) {
     const CLAUDE_URL = 'https://claude.com/cai/oauth/authorize?code=true&client_id=fixture';
 
     async function open(hosted: string) {
-      const box = {id: 'box', label: 'Server', owner_id: 'sam', bots: [], platform: 'linux', last_seen_at: at(-3000), readiness_at: at(-3000),
+      const box = {id: 'box', label: 'Server', owner_id: 'sam', bots: [], platform: 'linux', last_seen_at: at(-3000), online: true, readiness_at: at(-3000),
         needed_runtimes: ['claude', 'codex'], bot_runtimes: [], signed_out: {}, profiles: [],
         readiness: {runtimes: {codex: {installed: true, authenticated: 'missing'}, claude: {installed: true, authenticated: 'missing'}},
           harnesses: {codex: chip('Codex', 'codex'), claude: chip('Claude Code', 'claude')}}};
@@ -46,13 +46,13 @@ async function loginHosted(browser: import('playwright').Browser) {
         if (p === '/api/v2/config') return json(config);
         if (p === '/api/employees') return json([]);
         if (p === '/api/issues') return json([]);
-        if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'sam', name: 'Sam'}], teams: {}});
+        if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'sam', name: 'Sam'}], teams: {}});
         if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
         if (p === '/api/v2/status') return json({bots: []});
         if (p === '/api/v2/needs-you') return json({items: []});
         if (p === '/api/v2/operations') return json({machines: [box], services: []});
         if (p === '/api/v2/models') return json({models: [], harnesses});
-        if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
+        if (p === '/api/v2/settings/history') return json({changes: []});
         if (p === '/api/v2/subscriptions') return json({profiles_by_computer: [{runner_id: 'box', label: 'Server', profiles: []}], assignments: []});
         if (p === '/api/v2/computers/box/logins' && method === 'POST') {
           const body = req.postDataJSON(), id = `in${++seq}`; writes.push({p, body});
@@ -234,7 +234,7 @@ async function toKey(browser: import('playwright').Browser) {
     const chip = (name: string, runtime: string) => ({name, runtime, installed: true, version: '1.0.0', managed: true, state: 'idle', wanted: true,
       pinned: false, update_available: false, detail: ''});
     const subscription = () => ({installed: true, authenticated: 'ready', account: {email: 'dev@acme.example', plan: 'pro', checked_at: at(-60000)}});
-    const fixture = () => ({id: 'box', label: 'Team box', owner_id: 'sam', bots: ['writer'], platform: 'linux', last_seen_at: at(-3000),
+    const fixture = () => ({id: 'box', label: 'Team box', owner_id: 'sam', bots: ['writer'], platform: 'linux', last_seen_at: at(-3000), online: true,
       readiness_at: at(-3000), needed_runtimes: ['codex', 'claude'], bot_runtimes: ['codex', 'claude'], signed_out: {}, keys: {}, shared_keys: {},
       bot_connections: [{bot: 'writer', runtime: 'codex', profile: ''}],
       readiness: {runtimes: {codex: subscription(), claude: subscription()},
@@ -264,13 +264,13 @@ async function toKey(browser: import('playwright').Browser) {
         if (p === '/api/v2/config') return json(config);
         if (p === '/api/employees') return json([]);
         if (p === '/api/issues') return json([]);
-        if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'sam', name: 'Sam'}], teams: {}});
+        if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'sam', name: 'Sam'}], teams: {}});
         if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
         if (p === '/api/v2/status') return json({bots: []});
         if (p === '/api/v2/needs-you') return json({items: []});
         if (p === '/api/v2/operations') return json({machines: [box], services: []});
         if (p === '/api/v2/models') return json({models: [], harnesses});
-        if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
+        if (p === '/api/v2/settings/history') return json({changes: []});
         if (p === '/api/v2/subscriptions') return json({profiles_by_computer: [], assignments: []});
         const keys = p.match(/^\/api\/v2\/computers\/(\w+)\/keys$/);
         if (keys && method === 'GET') {
@@ -400,6 +400,7 @@ async function toKey(browser: import('playwright').Browser) {
     // Offline: Switch to API key stays, disabled, saying why.
     const offered = await detail.locator('[data-model-to-key]').count();
     box.last_seen_at = at(-3 * 3600000);
+    box.online = false;
     await page.evaluate(() => loadSettings());
     await own('claude').locator('.computer-conn-signin', {hasText: 'last checked'}).waitFor();
     assert.ok(offered > 0);

@@ -16,7 +16,7 @@ Mirrors scripts/check_pyright_ratchet.py. The rules:
    piece under ui/baselines/strict/<path>.json, {"count": N}, its findings today. A piece only goes down; a file at zero
    has no piece.
 3. A piece may be added for one case only: a .ts file that is a rename of a .js file at REF (same path, .js -> .ts).
-   scripts/ui_flip.py writes those. Any other new .ts file must be at zero.
+   Any other new .ts file must be at zero.
 4. Counts never rise against REF. REF may hold the pieces, or the single list from before them (ui/strict-legacy.json).
 5. Shift-left, in .ts files with no piece: a repeated cast (`x as T`), a repeated non-null assertion (`x!`), or `any`
    (`: any`, `as any`, `<any>`, `, any`). Comments and strings are not read. Each hit is a failure: a strict file is clean,
@@ -79,7 +79,6 @@ WORKER_TSC = ["npx", "--yes", "-p", "typescript@5.9.3", "tsc", "-p", WORKER_CONF
 # The one generated bundle (npm run build:observability): the only JavaScript that may sit under ui/ outside tests/.
 ALLOWED_JS = {"ui/assets/observability-vendors.js"}
 # Classic scripts that stay JavaScript, each with its reason (path: reason). None is left: every UI script is a .ts file.
-# scripts/ui_flip.py keeps any listed here as they are.
 KEPT_JS: dict[str, str] = {}
 SKIP_TS = ("ui/vendor/", "ui/assets/", "ui/node_modules/")
 DIRECTIVE = re.compile(r"@ts-(nocheck|ignore)\b")
@@ -194,7 +193,7 @@ def base_counts(ref):
 
 
 def is_rename_of_js(ref, rel):
-    """Whether rel is a .ts file that is the .js file of the same path at REF, renamed (scripts/ui_flip.py)."""
+    """Whether rel is a .ts file that is the .js file of the same path at REF, renamed."""
     return rel.endswith(".ts") and exists_at(ref, rel[:-3] + ".js") and not exists_at(ref, rel)
 
 

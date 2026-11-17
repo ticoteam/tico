@@ -18,7 +18,7 @@ due follow-up has its nudge or its closed-quiet line, the watermark is moved, an
     tico task show <id>
 
 Then the source setup named: tasks routed to you (`tico task list --owner me`),
-the support mailbox (`$HUB_DIR/scripts/mail.sh inbox --untriaged --format brief`), a Slack channel. Read
+the support mailbox (`tico email inbox <address>`), a Slack channel. Read
 what arrived since the watermark in `knowledge/follow-ups.md` and nothing older. If a source refuses you, name it
 and go on. An unread queue and an empty queue must never read the same.
 

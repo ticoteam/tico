@@ -1,4 +1,4 @@
-// No browser: the pipeline screens' drawing and decisions (docs/pipelines-v3.md S7, S8, S11, S12, S17.3). The classic
+// No browser: the pipeline screens' drawing and decisions (docs/dev/pipelines-v3.md S7, S8, S11, S12, S17.3). The classic
 // scripts are compiled with esbuild's transform and run in one vm context, with the few shared globals they read stubbed:
 // - the pipeline view's hook draws columns, the list and the phone's tabs from the tasks the page gives it, with each
 //   stage's count out of its limit, and a stage header that opens settings only for whoever may change the pipeline;
@@ -6,8 +6,8 @@
 //   (`on_person`) are said in the count's tooltip and name ("5 of 20 slots used. 15 more wait on a person and hold no
 //   slot."), and on a phone in one muted line above the open stage's cards; no person pill;
 // - a refused move reads as the engine said it: a push past asks why, anything else is the engine's line;
-// - Company › Factories orders a factory's pipelines by where they file, joins them with an arrow, and puts pipelines in
-//   no factory under Other with no count;
+// - Strategy › Org's Factories section orders a factory's pipelines by where they file, and puts pipelines in no factory
+//   in one group after them;
 // - the editor names what someone else changed when its save is refused as out of date;
 // - the editor offers every kind, a page's and In a release's settings, and a stage's On entering list (its Limit and
 //   actions, the owner change among them, as rows; + Rule and + Action), and saves them as the record stores them; an answer's name follows its title until edited, and its type keeps only its own fields;
@@ -54,7 +54,7 @@ const ctx = vm.createContext({
   srMarkHTML: (cls: string, icon: string) => `<span class="sr-m ${cls}">${icon}</span>`,   // stage-rules.ts: one mark for a rule, one for an action
   needsStageCount: () => 0,   // nothing waits on the person here: no stage's ▶ (stage-review.cts draws them)
 });
-for (const file of ['task-api.ts', 'task-row.ts', 'pipeline-api.ts', 'task-pipelines.ts', 'overview-factories.ts', 'pipeline-editor.ts', 'task-requirements.ts']) {
+for (const file of ['task-api.ts', 'task-row.ts', 'pipeline-api.ts', 'task-pipelines.ts', 'org-factories.ts', 'pipeline-editor.ts', 'task-requirements.ts']) {
   vm.runInContext(transformSync(fs.readFileSync(path.join(APP, file), 'utf8'), {loader: 'ts', target: 'es2022'}).code, ctx, {filename: file});
 }
 const plain = <T,>(x: T): T => JSON.parse(JSON.stringify(x));   // out of the vm's realm, for deepEqual
@@ -196,7 +196,7 @@ if (!view) throw new Error('the view sets its hook on the page');
   assert.equal(other.text, 'Refund flow: Not moved.');
 }
 
-// ---- Company › Factories (read through factoriesRead, so this part waits)
+// ---- Strategy › Org's Factories section (read through factoriesRead, so this part waits)
 const factories = (async () => {
   const recs = [
     rec({id: 'eng', name: 'Engineering', factory_id: 'f-product', stages: [stage('b', 'Build')]}),
@@ -208,19 +208,12 @@ const factories = (async () => {
     pipelines: [{id: 'product', name: 'Product', factory_id: 'f-product', open: 17, files_into: ['eng'], mark: 'needs_person'},
       {id: 'eng', name: 'Engineering', factory_id: 'f-product', open: 9, files_into: [], mark: null},
       {id: 'general', name: 'General', factory_id: null, open: 31, files_into: [], mark: 'cant_run'}]};
-  // The server's answer, read as factoriesRead reads it: its marks become the task mark's names.
   ctx.get = async () => map;
   const read = await ctx.factoriesRead('7d');
-  assert.deepEqual(plain(read.pipelines.map((p: {mark: string | null}) => p.mark)), ['person', null, 'cant']);
-  const groups = plain(ctx.ofGroups(read, recs));
-  assert.deepEqual(groups.map((g: {name: string; done: number | null; pipelines: {id: string}[]}) => [g.name, g.done, g.pipelines.map(p => p.id)]),
-    [['Product', 4, ['product', 'eng']], ['Other', null, ['general']]], 'a pipeline comes before the one it files into; retired ones go');
-  const html = ctx.ofGroupHTML(groups[0]);
-  assert.match(html, /<span class="of-done tnum">4 done<\/span>/);
-  assert.match(html, /Product<\/span><span class="of-box-n tnum">17<\/span><span class="tk-mark tk-mark-person"[^>]*>!<\/span><\/a><span class="of-arrow"[^>]*>→<\/span><a class="of-box" href="#\/tasks\?pipeline=eng"/);
-  const other = ctx.ofGroupHTML(groups[1]);
-  assert.doesNotMatch(other, /done/, 'Other has no count');
-  assert.match(other, /tk-mark-cant/);
+  assert.deepEqual(plain(read.pipelines.map((p: {files_into: string[]}) => p.files_into)), [['eng'], [], []]);
+  const groups = plain(ctx.orgFacGroups(read, recs));
+  assert.deepEqual(groups.map((g: {id: string; pipelines: {id: string}[]}) => [g.id, g.pipelines.map(p => p.id)]),
+    [['f-product', ['product', 'eng']], ['', ['general']]], 'a pipeline comes before the one it files into; retired ones go');
 })();
 
 // ---- the editor's out-of-date save
@@ -246,7 +239,7 @@ const factories = (async () => {
   assert.match(kinds, /<span>Page<\/span><input data-pe-rf="line"/);
   assert.match(kinds, /data-pe-row-x="req:0"[^>]*>Remove</);
   // + Requirement's list, in plain words: an OK from anyone (by hand) first, In a release among them
-  assert.deepEqual(plain((vm.runInContext('PE_REQ_PICKS', ctx) as string[][]).map(k => k[0]).slice(0, 3)), ['by_hand', 'ok_person', 'ok_bot']);
+  assert.deepEqual(plain((vm.runInContext('PE_REQ_PICKS', ctx) as string[][]).map(k => k[0]).slice(0, 3)), ['by_hand', 'approval', 'ok_bot']);
   assert.ok((vm.runInContext('PE_REQ_PICKS', ctx) as string[][]).some(k => k[0] === 'in_release'));
   assert.match(kinds, /<span>Then OK from<\/span><select[^>]*><option value="">Nobody<\/option>/, 'a page needs no person');
   assert.match(kinds, /data-pe-rs="at_head"[^>]*> Newest commit only/);
@@ -255,6 +248,16 @@ const factories = (async () => {
   assert.match(release, /data-pe-rf="release_repo"/);
   assert.match(release, /data-pe-rf="release_with"[^>]*placeholder="workflow:release.yml or tag"/);
   assert.match(release, /data-pe-rs="prereleases"[^>]* checked> Pre-releases count/, 'omission renders the enabled default');
+  // An approval names its document and its approver (any person, or one), and has no page switches.
+  const approval = {kind: 'page', source: null, condition: null, settings: {document: 'QA report'}, can_push_past: true, who_oks: 'people_only',
+    person_id: null, line: 'QA report', choices: null};
+  const approves = ctx.peReqEdHTML(state, approval, 0, 1, 'ed-a') as string;
+  assert.match(approves, /<span>Document<\/span><select data-pe-rf="document"[^>]*>.*<option value="QA report" selected>QA report<\/option>/);
+  assert.match(approves, /<span>Approver<\/span><select data-pe-rf="approver"[^>]*><option value="">Any person<\/option>/);
+  assert.doesNotMatch(approves, /data-pe-rs="at_head"|data-pe-rf="line"/, 'no page switches, no title: the document is its name');
+  assert.equal(ctx.peReqText(approval), 'Approve QA report');
+  assert.deepEqual(plain(ctx.peReqNew(state, 'approval')), {kind: 'page', source: null, condition: null, settings: {document: 'Spec'},
+    can_push_past: true, who_oks: 'people_only', person_id: null, line: 'Spec', choices: null});
   assert.match(release, /data-pe-rf="can_push_past"[^>]*disabled/, 'In a release is never pushed past');
 
   const field = (kind: 'HTMLInputElement' | 'HTMLSelectElement', data: Record<string, string>, value = '', checked = false) =>
@@ -434,7 +437,7 @@ const factories = (async () => {
   for (const f of ['data-pe-sf="expected_n"', 'data-sr-phase="here"']) assert.ok(at(f) > works && at(f) < leave, `${f} is under While here`);
   for (const f of ['data-pe-req-add']) assert.ok(at(f) > leave && at(f) < at('data-pe-more='), `${f} is under To leave`);
   assert.match(body, /<span>Late after<\/span>/);
-  assert.doesNotMatch(body, /keep_warm_hours|data-pe-seg="by_hand"|Expected time/, 'no Keep warm, no Tasks leave switch');
+  assert.doesNotMatch(body, /data-pe-seg="by_hand"|Expected time/, 'no Tasks leave switch');
   at('data-pe-sf="expected_unit"');
   // On entering, one list: the rules first (the Limit, then the rules acting there), then the actions (the owner
   // change), then + Rule and + Action; the other phases' rules come after their fields

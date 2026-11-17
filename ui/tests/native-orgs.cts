@@ -21,7 +21,7 @@ async function open(browser: import('playwright').Browser, {features, many}: {fe
   const errors: string[] = [];
   page.on('pageerror', (e: Error) => errors.push(e.message));
   await page.addInitScript(({features, many}: {features: string[] | null; many: boolean}) => {
-    (window as unknown as {EventSource: unknown}).EventSource = undefined;
+    (window as unknown as {EventSource: unknown}).EventSource = class { readyState = 0; onerror: unknown = null; addEventListener() {} removeEventListener() {} close() {} } as unknown as typeof EventSource;
     Object.defineProperty(navigator, 'platform', {get: () => 'MacIntel'});
     (window as unknown as PageWin).__posted = [];
     if (!features) return;

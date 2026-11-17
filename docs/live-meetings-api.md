@@ -144,7 +144,7 @@ schemas; nullable values are present as JSON `null` where noted:
 | `meeting.bot_turn_claimed` | `{turn_id:<turn-id>,bot:<slug>}` |
 | `meeting.bot_turn_failed` | `{turn_id:<turn-id>,bot:<slug>,reason:"private_checkout",detail:<string>}`: once per private meeting and bot, when the bot's computer could make no private copy of its repository; that turn and later ones that fail alike end without an answer (also `meeting.bot_turn_skipped`, reason `bot_execution_private_checkout`) instead of being retried. |
 | `meeting.bot_turn_skipped` | `{turn_id:<turn-id>,bot:<slug>,reason:<string>}`; `steered_into_turn` means the bot took the turn in as a follow-up to the reply it was giving, which answers it; `claim_abandoned` means a turn claimed through the API got no reply within 5 minutes. |
-| `meeting.bot_turn_waiting` | `{turn_id:<turn-id>,bot:<slug>,reason:"runner_update",detail:<string>}`: once per private meeting and bot, when no computer running the bot can take a private meeting's turn yet; the turns wait for its update (see Router timing, private meetings). |
+| `meeting.bot_turn_waiting` | Retired: no longer sent. Every computer the server accepts takes a private meeting's turn. |
 | `meeting.bot_turn_deferred` | `{turn_id:<turn-id>,bot:<slug>,reason:"replying_in_meeting"|"busy",behind:<turn-id|null>,source_key:<string>}`: a bot named while busy keeps its turn; it runs after the current work (see Router timing). |
 | `meeting.bot_turn_retried` | `{turn_id:<turn-id>,bot:<slug>,reason:"empty_bot_reply",retry:1|2,model:<meeting model|null>}`: an empty reply is asked again in the same conversation as a fresh run: once on the model that gave it (`model`), and, when that was a meeting model, once more on the bot's own (`model:null`). After that an empty reply is a hidden PASS (`empty_bot_reply`). |
 | `meeting.model` | `{model:<first choice>,bot:<slug>,turn_id:<turn-id|null>,fallback:"openrouter"|"bot_model",ran:<model>,reason:<first reason>,steps:[{model,reason},...]}`: the meeting model could not run on the bot's computer and the reply ran on `ran`; `steps` lists each model tried that could not. Said once per turn: a claim of the same turn that falls back the same way adds none. |
@@ -254,12 +254,7 @@ review. Enforced, not left to the bot, on any harness:
   the worktree cannot be made (the bot has no checkout, git refuses), the turn never runs in the bot's
   checkout: the runner tags the failure `private_checkout`, the server ends the turn rather than hand it
   back or resume it, and the meeting gets one `meeting.bot_turn_failed` notice.
-- **Older runners.** Only a runner that advertises the `private_lanes_v1` capability in its heartbeat
-  (runner-rs `lanes::CAPABILITIES`) is handed a private meeting's turn; any other would run it in the bot's
-  checkout with write tokens. The turn stays queued for the bot's next updated runner, Health says
-  "<computer> needs a Tico update before it can join private meetings" (reason `private_update`), and when
-  no computer running the bot has the capability, the meeting gets one `meeting.bot_turn_waiting` event per
-  bot. Team meetings' turns go to any runner.
+- **Older runners.** A computer below the minimum release (0.6.0-rc.1) is paused and takes no work, so a private meeting's turn only goes to a runner that runs it in a private copy of the bot's checkout.
 - **The prompt** says so: the bot cannot save or share anything from the meeting, and when asked to, it says
   the owner can share the meeting's notes and action items after the meeting. Team meetings get no such line.
 

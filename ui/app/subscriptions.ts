@@ -6,7 +6,7 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-// GET /v2/model-subscriptions: an older server answers without the lists (`listed` false), and a failed read is {error}.
+// GET /v2/model-subscriptions: a reply without the lists (`listed` false), and a failed read is {error}.
 type SubsListAnswer = Partial<import('../types/api').ModelSubscriptionList> & {connect?: string[]; error?: unknown};
 // A kind: the server's rows, or SUBS_KINDS when it sends none.
 interface SubsKindRow {kind: string; label: string; runtime: string; secret_label?: string; owned?: boolean; connect?: boolean; help?: string}
@@ -15,7 +15,7 @@ interface SubsUsage {used_pct?: number | null; resets_at?: string | null; window
 type SubsComputer = string | {runner_id: string; label?: string};
 // `order`: where a plan comes in its owner's plans for its tool (the plan in use first, then the pick order; null when
 // held or waiting to be reconnected). `in_use_on`: the computers whose turns sign in with it now.
-interface SubsRow {id: string; name: string; kind: string; label?: string; runtime?: string; owner_id?: string; owner_name?: string; computers?: SubsComputer[]; status?: string; status_detail?: string; usage?: SubsUsage | null; order?: number | null; in_use_on?: string[]}
+interface SubsRow {id: string; name: string; kind: string; label?: string; runtime?: string; owner_id?: string; owner_name?: string; computers?: SubsComputer[]; status?: string; status_detail?: string; usage?: SubsUsage | null; usage_refresh?: {state?: string | null; requested_at?: string | null} | null; order?: number | null; place?: number | null; in_use_on?: string[]}
 // A computer given a person's plans: the plan in use (`on`) and why (backend model_subscriptions.set_state).
 interface SubsSetWhy {kind: 'soonest' | 'held' | 'reconnect' | 'all_held' | 'none' | string; plan?: string | null; until?: string | null}
 interface SubsSet {person: string; person_name: string; plans: number; on: string | null; on_name: string | null; why: SubsSetWhy}
@@ -125,6 +125,15 @@ function subsUsageHTML(sub: SubsRow) {
   if (usage.reason || subsOwned(sub.kind)) return `<span class="subs-usage muted subs-none"${usage.reason ? ` title="${esc(usage.reason)}"` : ''}>No reading yet</span>`;
   return '';
 }
+// A Claude plan's week, read now: a small button beside its menu, for admins. Busy while the computer answers. A
+// ChatGPT plan has none: its week comes from its computers' runs.
+function subsRefreshHTML(sub: SubsRow) {
+  if (!subsMayEdit() || sub.kind !== 'claude_token' || sub.status === 'needs_reconnect') return '';
+  const busy = sub.usage_refresh?.state === 'requested';
+  const failed = ['failed', 'unavailable', 'expired'].includes(String(sub.usage_refresh?.state));
+  const label = `Read usage for ${sub.name}`;
+  return `<button type="button" class="ghost subs-refresh" data-subs-refresh="${esc(sub.id)}"${busy ? ' disabled aria-busy="true"' : ''} aria-label="${esc(label)}" title="${esc(failed ? 'No reading came back. Try again.' : 'Read this plan’s usage now')}">${busy ? '…' : '↻'}</button>`;
+}
 // The plan's own state, which stops any reading: its sign-in expired.
 function subsStatusHTML(sub: SubsRow) {
   if (sub.status !== 'needs_reconnect') return '';
@@ -179,7 +188,7 @@ function subsRowHTML(sub: SubsRow, next = false) {
     <td class="muted subs-kind">${esc(subsKindLabel(sub))}</td>
     ${subsCountHTML(sub)}
     <td class="subs-use">${subsStatusHTML(sub) || subsUsageHTML(sub)}</td>
-    <td class="subs-more-cell">${subsMayEdit() ? `<button type="button" class="ghost subs-more" data-subs-more="${esc(sub.id)}" aria-haspopup="menu" aria-expanded="false" aria-label="More for ${esc(sub.name)}">⋯</button>` : ''}</td></tr>`;
+    <td class="subs-more-cell">${subsRefreshHTML(sub)}${subsMayEdit() ?`<button type="button" class="ghost subs-more" data-subs-more="${esc(sub.id)}" aria-haspopup="menu" aria-expanded="false" aria-label="More for ${esc(sub.name)}">⋯</button>` : ''}</td></tr>`;
 }
 async function renderSettingsSubs() {
   const el = $('#set-subs'); if (!el) return;
@@ -200,12 +209,15 @@ async function renderSettingsSubs() {
     if (eventElement(event)?.closest('[data-subs-offline]')) { settingsShow('computers'); return; }
     const reconnect = eventElement(event)?.closest<HTMLElement>('[data-subs-reconnect]');
     if (reconnect) { const sub = subsById(reconnect.dataset.subsReconnect); if (sub) planSignIn({sub}); return; }
+    const refresh = eventElement(event)?.closest<HTMLElement>('[data-subs-refresh]');
+    if (refresh) { void subsRequestUsage(refresh.dataset.subsRefresh!); return; }
     const more = eventElement(event)?.closest<HTMLElement>('[data-subs-more]');
     if (more) subsMenu(more, subsById(more.dataset.subsMore));
   };
 }
 // The list grouped by owner: the viewer's own group first, then the others by name, then "No owner" (API keys, and any
-// plan without one). Inside a group, each tool's plans in pick order (`order`), then the held ones and keys by name.
+// plan without one). Inside a group, the plans in one list: in use first, then the soonest weekly reset (`place`, every
+// tool together); then the held ones and keys by tool, pick order and name.
 interface SubsGroup {owner: string; name: string; rows: SubsRow[]}
 function subsGroups(): SubsGroup[] {
   const me = S.me?.id ? 'human:' + S.me.id : '';
@@ -217,7 +229,8 @@ function subsGroups(): SubsGroup[] {
   }
   const tools = subsTools();
   for (const group of groups.values()) group.rows.sort((a, b) =>
-    Number(typeof a.order !== 'number') - Number(typeof b.order !== 'number') || tools.indexOf(subsRuntime(a)) - tools.indexOf(subsRuntime(b))
+    Number(typeof a.place !== 'number') - Number(typeof b.place !== 'number') || (a.place ?? 0) - (b.place ?? 0)
+    || Number(typeof a.order !== 'number') - Number(typeof b.order !== 'number') || tools.indexOf(subsRuntime(a)) - tools.indexOf(subsRuntime(b))
     || (a.order ?? 0) - (b.order ?? 0) || a.name.localeCompare(b.name));
   return [...groups.values()].sort((a, b) => Number(!a.owner) - Number(!b.owner) || Number(b.owner === me) - Number(a.owner === me) || a.name.localeCompare(b.name));
 }
@@ -236,6 +249,24 @@ function subsGroupHTML(group: SubsGroup) {
   return `<tbody class="subs-group" data-subs-group="${esc(group.owner || 'none')}"><tr class="subs-group-head"><th colspan="6" scope="rowgroup"><span class="subs-group-title">${avatar}<span class="subs-group-name">${esc(group.name)}</span><span class="muted">· ${esc(count)}</span>${me ? '<span class="pill subs-you">You</span>' : ''}</span></th></tr>
     ${group.rows.map(sub => subsRowHTML(sub, next.has(sub.id))).join('')}</tbody>`;
 }
+// Read a Claude plan's week now (backend/subscription_refresh.py `request_plan_read`): the server asks one of its computers, which reads it and
+// reports back. The row is reloaded every two seconds while the read is pending, for at most its lifetime.
+async function subsRequestUsage(id: string) {
+  try { await post(`/v2/model-subscriptions/${encodeURIComponent(id)}/usage-refresh`, {}); }
+  catch (error) { toast(errorMessage(error, ''), true); return; }
+  await subsRefresh();
+  subsWatchUsage(id, 60);
+}
+function subsWatchUsage(id: string, left: number) {
+  if (subsById(id)?.usage_refresh?.state !== 'requested' || left <= 0) return;
+  setTimeout(async () => {
+    await subsRefresh();
+    const state = subsById(id)?.usage_refresh?.state;
+    if (state === 'requested') { subsWatchUsage(id, left - 1); return; }
+    toast(state === 'succeeded' ? 'Usage read' : 'No usage came back from its computer', state !== 'succeeded');
+  }, 2000);
+}
+
 // Edit, Reconnect, Remove: the shared menu pop-over (styles/task-list.css .tl-pop; a sheet on a phone).
 function subsMenu(anchor: HTMLElement, sub: SubsRow | undefined) {
   if (!sub) return;
@@ -386,6 +417,10 @@ function subsPickerHTML(machine: SubsMachine, runtime: string) {
   const set = given?.person ? given.set : null;
   const current = set ? null : subsAssigned(machine.id, runtime);
   const value = given?.person ? SUBS_PERSON + given.person : current?.id || '';
+  // A key (the computer's own, or a shared one) keeps its chip beside the picker: the picker reads "This computer's own
+  // login" for either, and the chip says which it is. A plain login has no chip here; the picker already says it.
+  const keys = machineShown(machine).filter(conn => conn.runtime === runtime && (conn.shared || conn.value?.key));
+  const keyChips = keys.length ? `<span class="machine-chips">${keys.map(conn => machineChipHTML(machine, conn)).join('')}</span>` : '';
   // People first (each one who owns a plan for this tool, with their count), single plans next with their owner, this
   // computer's own login (or what runs it without one) last.
   const people = SUBS.people.filter(person => Number(person[runtime]) > 0);
@@ -396,8 +431,8 @@ function subsPickerHTML(machine: SubsMachine, runtime: string) {
     ${people.length ? `<optgroup label="People">${people.map(person => option(SUBS_PERSON + person.id, subsPersonPlans(person.name, Number(person[runtime])))).join('')}</optgroup>` : ''}
     ${options.length ? `<optgroup label="Single plans">${options.map(sub => option(sub.id, sub.owner_name && subsOwned(sub.kind) ? `${sub.name} · ${sub.owner_name}` : sub.name)).join('')}</optgroup>` : ''}
     ${option('', subsNoneWords(machine, runtime) === 'Signed in here' ? "This computer's own login" : subsNoneWords(machine, runtime))}</select>`;
-  if (set) return `<span class="subs-cell subs-cell-set">${select}<span class="subs-set-line muted" data-subs-set-line>${esc(subsSetLine(machine, runtime, set))}</span></span>`;
-  return `<span class="subs-cell">${select}${current?.status === 'needs_reconnect' ? subsStatusHTML(current) : ''}</span>`;
+  if (set) return `<span class="subs-cell subs-cell-set">${keyChips}${select}<span class="subs-set-line muted" data-subs-set-line>${esc(subsSetLine(machine, runtime, set))}</span></span>`;
+  return `<span class="subs-cell">${keyChips}${select}${current?.status === 'needs_reconnect' ? subsStatusHTML(current) : ''}</span>`;
 }
 // A change: PUT, and when runs would stop, an in-page confirm with the counts, then PUT again with confirm.
 async function subsPick(select: HTMLSelectElement) {

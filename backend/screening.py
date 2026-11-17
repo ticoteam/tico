@@ -43,6 +43,7 @@ from clients import judge as J
 from .judge import audit_detail, daily_cap, over_spend_cap, server_engine, used_today
 from .models import Contract
 from .store import H, Problem
+from .api_contract import api_v2
 
 log = logging.getLogger("tico.screening")
 # How long a screening waits for the model's answer: Jev's one 8 s try, then a little for the company's model.
@@ -71,17 +72,6 @@ WAIT_HOURS = 1  # the longest an item waits here before it goes to a person
 KEEP_DAYS = 30  # model verdicts kept per key
 RECENT = 50  # holds and warnings Settings lists
 HOLD_AT, WARN_AT = 0.85, 0.5  # used only when the set cannot be read
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS screening_verdicts(
- source TEXT NOT NULL, key TEXT NOT NULL, score REAL NOT NULL, kind TEXT NOT NULL DEFAULT '', label TEXT NOT NULL,
- created_at TEXT NOT NULL, PRIMARY KEY(source, key));
-CREATE TABLE IF NOT EXISTS screening_pending(
- source TEXT NOT NULL, bot TEXT NOT NULL, key TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL,
- text TEXT NOT NULL, cache_key TEXT NOT NULL DEFAULT '', actor TEXT NOT NULL DEFAULT '', person TEXT NOT NULL DEFAULT '',
- incident INTEGER NOT NULL DEFAULT 0, later TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL,
- PRIMARY KEY(source, bot, key));
-"""
 
 # Set by `install`: the app (its decision model) and the store a webhook rule's write belongs to.
 _state = {"app": None, "store": None, "auth": None}
@@ -448,6 +438,11 @@ def warning_line(v):
     )
 
 
+# A held item is the person's task with BotOps' question on it (backend/person_asks.py), so it is in their Needs you.
+HELD_ASK = "Is this held item real work for the bot?"
+HELD_WHY = "Screening held it as a likely prompt injection, and only a person lets it through."
+
+
 def held_title(title):
     return ("Held: " + str(title or "").strip())[:300]
 
@@ -644,8 +639,19 @@ def _open_task(c, auth, row, v, owner, title, body):
         from .watchers import _open
 
         return _open(c, auth, row["bot"], title, body, owner=owner, incident=bool(row["incident"]))
-    return H.task_create(
-        c, row["actor"] or H.KEEPER, title[:300], body, owner or H.bot_actor(row["bot"]), lint=False, deduplicate=False
+    from . import person_asks
+
+    return person_asks.task_for(
+        c,
+        row["actor"] or H.KEEPER,
+        title[:300],
+        body,
+        owner or H.bot_actor(row["bot"]),
+        question=HELD_ASK,
+        why=HELD_WHY,
+        asker=person_asks.botops(),  # never the sender of what was held
+        lint=False,
+        deduplicate=False,
     )
 
 
@@ -948,14 +954,28 @@ def install(app, store, auth, mutate):
         if not auth.bot_admin(who):
             raise Problem("forbidden", "Only an owner or an admin " + what, 403)
 
-    @app.get("/api/v2/screening")
+    @app.get(
+        "/api/v2/screening",
+        **api_v2(
+            "Screening",
+            "getScreening",
+            "Each door's mode, the two detector switches, the defaults, whether a decision model answers and the newest holds and warnings, never their text (an owner or an admin)",
+        ),
+    )
     def screening_view(request: Request):
         """The modes per source, whether the decision model is there, and the newest holds and warnings."""
         admin(request.state.identity, "sees screening")
         with store.read() as c:
             return view(c, store)
 
-    @app.put("/api/v2/screening")
+    @app.put(
+        "/api/v2/screening",
+        **api_v2(
+            "Screening",
+            "setScreening",
+            "Change door modes (off, warn, hold; mail off or warn) and the patterns and model switches; an owner or an admin",
+        ),
+    )
     def screening_save(request: Request, body: ScreeningModes):
         """Set a source's mode (off, warn or hold) or switch the patterns or the decision model on or off. An owner or
         an admin; only what is sent changes."""
@@ -965,7 +985,14 @@ def install(app, store, auth, mutate):
         with store.read() as c:
             return view(c, store)
 
-    @app.post("/api/v2/screening/test")
+    @app.post(
+        "/api/v2/screening/test",
+        **api_v2(
+            "Screening",
+            "testScreening",
+            "Run the built-in samples through the check; nothing is held or kept (an owner or an admin; each sample counts against their decision budget)",
+        ),
+    )
     def screening_test(request: Request, body: ScreeningTest):
         """Run the built-in samples: four attacks and four lookalikes. Nothing is held or kept."""
         who = request.state.identity

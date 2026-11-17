@@ -108,8 +108,7 @@ function taskPagesAdopt(d: TaskPagesHost, task: {id?: unknown}) {
     if (['making', 'update_required'].includes(slot.tpMaking?.state) && e.conversation_id === slot.tpMaking.conversation_id)
       liveSoon('task-pages:' + d.id + ':' + id, refresh, 200);
   }), liveOn('reset', refresh)];
-  const poll = liveFallback(() => { if (['making', 'update_required'].includes(slot.tpMaking?.state)) refresh(); }, 5000);
-  d.tpOff = () => { for (const off of offs) off(); slot.tpFollow?.(); clearInterval(poll); };
+  d.tpOff = () => { for (const off of offs) off(); slot.tpFollow?.(); };
   void taskPagesLoad(d);
 }
 // ⋯ › Make a page (task-props.ts): the Describe box, focused.

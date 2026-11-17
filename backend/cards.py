@@ -5,7 +5,8 @@ when it is read, for the reader, from what the reader may already see: the same 
 their own Needs you and only the tasks they could open. A card the reader may see nothing of reads as `hidden`.
 
 A pin puts a page (`page:<file id>`) or a card (`card:<id>`) at a place, in order and at a size:
-- `dashboard`, Overview › Dashboard: everyone sees it; the owner and admins arrange it.
+- `dashboard`, the company's shared grid: everyone sees it and the owner and admins arrange it, through the API, CLI and
+  tools only (no page in the app shows it).
 - `growth`, the Growth page (`#/growth`): everyone who may see the Dashboard sees it; the owner, admins and a bot acting
   as itself arrange it, and a bot pins only its own cards there. Its growth cards read the month picked there.
 - `team:<group>`, the team page: its audience (Everyone unless narrowed) sees it; the owner, admins and the people who
@@ -15,18 +16,19 @@ A pin puts a page (`page:<file id>`) or a card (`card:<id>`) at a place, in orde
 - `task:<id>`, the top of a task: its owner, requester, people who may move tasks, and the org owner arrange it.
   Readers (people, or bots acting as themselves) may link pages they can read. Unpinning is for whoever pinned it,
   the task's owner or requester, or the org owner. A task pin widens nothing.
-- `person:<id>`, a person's My dashboard (the landing page): theirs alone. Only they read and arrange it, BotOps and
-  the Assistant only when acting for them; an admin has no way in, and a card pinned there is known to no one else.
-  `person:me` is the caller's own. Its cards are cards they made.
+- `person:<id>`, a person's Company (`#/home`, the landing page): theirs alone. Only they read and arrange it,
+  BotOps and the Assistant only when acting for them; an admin has no way in, and a card pinned there is known to no one
+  else. `person:me` is the caller's own. Its cards are cards they made. Its first default card is the Floor (`floor`),
+  which goes on no other place and once only.
 
-A Dashboard, team page, Growth page or My dashboard nobody saved shows its default cards (DEFAULTS) as pins without
+A Dashboard, team page, Growth page or Company page nobody saved shows its default cards (DEFAULTS) as pins without
 ids; saving it (PUT) makes them real, and every write saves it first.
 
 The pinning rule keeps a page's data from spreading on its own: a bot pins only its own pages to its sidebar, and its
 own cards to its sidebar or a task it holds or asked for. At a task it can read, it may link any page it can read.
 A page a person pins to the Dashboard or a team page is readable by that place's audience (`widened`, read by
 backend/files.py file_visible), so a private task's file is never pinned there, and every
-pin and unpin of a page is in the file's activity. A pin on My dashboard widens nothing: its owner is its only reader,
+pin and unpin of a page is in the file's activity. A pin on Company widens nothing: its owner is its only reader,
 and each card and page there is still read with their own rights.
 """
 
@@ -44,18 +46,7 @@ from . import models as M
 from . import people as P
 from . import read_cache
 from .store import H, Problem, encode
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS cards (
-  id TEXT PRIMARY KEY, template TEXT NOT NULL, settings TEXT NOT NULL DEFAULT '{}', title TEXT NOT NULL DEFAULT '',
-  made_by_id TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, updated_by_id TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS pins (
-  id TEXT PRIMARY KEY, place TEXT NOT NULL, item TEXT NOT NULL, position INTEGER NOT NULL,
-  size TEXT NOT NULL DEFAULT 'medium', made_by TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(place, item));
-CREATE INDEX IF NOT EXISTS pins_item ON pins(item);
-CREATE TABLE IF NOT EXISTS pin_places (
-  place TEXT PRIMARY KEY, audience TEXT, saved_at TEXT NOT NULL, saved_by TEXT NOT NULL);
-"""
+from .api_contract import api_v2
 
 SIZES = ("small", "medium", "large")
 PLACE_MAX = 60  # pins at one place: a page of cards, not an archive
@@ -73,7 +64,7 @@ TEMPLATES = {
     "kpi": {"name": "KPI", "fields": {"kpi": "kpi"}},
     "automation_runs": {"name": "Automation runs", "fields": {"team": "team"}},
     "latest_pages": {"name": "Latest pages", "fields": {"team": "team", "count": (1, 10, 5)}},
-    # The reader's own Needs you list on My dashboard: the product's one name for it (Overview's card is needs_you).
+    # The reader's own Needs you list on Company: the product's one name for it (the team card is needs_you).
     "needs_attention": {"name": "Needs you", "fields": {}},
     "unread_threads": {"name": "Unread threads", "fields": {"count": (1, 10, 5)}},
     "my_tasks": {"name": "My tasks", "fields": {"count": (1, 10, 5)}},
@@ -84,7 +75,11 @@ TEMPLATES = {
     "growth_channels": {"name": "Channels", "place": "growth", "fields": {"count": (1, 20, 10)}},
     "growth_retention": {"name": "Retention", "place": "growth", "fields": {"months": (3, 12, 6)}},
     "growth_board": {"name": "Growth board", "place": "growth", "fields": {"count": (1, 5, 3)}},
+    # The Company page's Floor: the page draws it from GET /api/v2/company/floor (backend/company_floor.py).
+    "floor": {"name": "Floor", "place": "person", "fields": {}},
 }
+# Where a template homed to one place (`place` above) goes, in words.
+HOMES = {"growth": "the Growth page", "person": "Company"}
 # A metric: (label, format, the good direction or None, carried back over a month with none).
 METRICS = {
     "new_customers": ("New customers", "count", "up", False),
@@ -112,6 +107,7 @@ DEFAULTS = {
     ],
     "team": [("tasks_by_status", "medium"), ("done_per_week", "medium"), ("needs_you", "medium")],
     "person": [
+        ("floor", "large"),
         ("needs_attention", "medium"),
         ("unread_threads", "medium"),
         ("my_tasks", "medium"),
@@ -351,7 +347,7 @@ def homed_elsewhere(template, kind):
     """A template that goes on one place only (`place` in TEMPLATES) is refused at any other."""
     home = TEMPLATES.get(template, {}).get("place")
     if home and home != kind:
-        raise bad(TEMPLATES[template]["name"] + " goes on the Growth page")
+        raise bad(TEMPLATES[template]["name"] + " goes on " + HOMES[home])
 
 
 def kpi_record(ctx, kid):
@@ -409,18 +405,16 @@ def needs_list(ctx):
 
 
 def needs_act(it):
-    """What a Needs you row asks of the reader, as ui/app/decide.ts decideKind sorts it: done, ok, answer, reply, fix."""
-    kind, task = it.get("kind"), it.get("task") or {}
+    """What a Needs you row asks of the reader, as ui/app/decide.ts decideKind sorts it: ok, answer, reply, fix. Only an
+    OK or a page's OK is ok; an ask of any other kind is answered. A task row is one a person must fix before it can
+    move (a private task to let someone see): Needs you lists no task only because it is the reader's
+    (waiting_on.needs)."""
+    kind = it.get("kind")
     if kind == "ask":
-        return "answer" if (it.get("ask") or {}).get("kind") == "answer" else "ok"
-    if kind == "paused":
-        return "fix"
+        return "ok" if (it.get("ask") or {}).get("kind") in ("ok", "page") else "answer"
     if kind == "mention":
         return "reply"
-    turn = task.get("turn") or {}
-    late = (task.get("late") or {}).get("level") == "person"
-    stuck = turn.get("state") == "paused" or late or bool(task.get("stuck")) or bool(turn.get("share"))
-    return "fix" if stuck else "done"
+    return "fix"
 
 
 def needs_brief(items, n):
@@ -706,7 +700,7 @@ def pinned_places(ctx, fid):
         elif kind == "bot":
             label = names.lookup(ctx.c, {"bot:" + ident}).get("bot:" + ident) or ident
         elif kind == "person":
-            label = "My dashboard"
+            label = "Company"
         else:
             label = (H.task(ctx.c, ident) or {}).get("title") or "Task"
         out.append({"place": place, "label": label})
@@ -1145,6 +1139,11 @@ def typed_retention(ctx, kept):
     return out
 
 
+def floor(ctx, s):
+    """Always shown: the page reads the floor itself, with the reader's rights (GET /api/v2/company/floor)."""
+    return {}
+
+
 def growth_board(ctx, s):
     """Open marketing tasks by stage: Live, Working, Measuring, In development, then On deck; each lane's count and
     newest few."""
@@ -1197,6 +1196,7 @@ DATA = {
     "growth_channels": growth_channels,
     "growth_retention": growth_retention,
     "growth_board": growth_board,
+    "floor": floor,
 }
 
 
@@ -1282,13 +1282,13 @@ def audience_of(c, place):
 
 
 def own_person(ctx, ident):
-    """Whether `person:<ident>` is the reader's own My dashboard: the person, or BotOps or the Assistant acting for
+    """Whether `person:<ident>` is the reader's own Company page: the person, or BotOps or the Assistant acting for
     them (both carry the person's actor)."""
     return ctx.person and ctx.who.actor == H.human_actor(ident)
 
 
 def someone_elses(ctx, places):
-    """Whether any of these places is another person's My dashboard, which no admin right reaches."""
+    """Whether any of these places is another person's Company page, which no admin right reaches."""
     for place in places:
         kind, _, ident = place.partition(":")
         if kind == "person" and not own_person(ctx, ident):
@@ -1382,7 +1382,7 @@ def require_manage(ctx, place):
                 "team": "The owner, admins and the team's leads arrange a team page",
                 "bot": "The bot and the people who manage it arrange its sidebar",
                 "task": "A task's people arrange what is pinned to it",
-                "person": "Only its person arranges My dashboard",
+                "person": "Only its person arranges this page",
             }[kind],
             403,
         )
@@ -1502,7 +1502,7 @@ def place_timing(timings):
 
 
 def view_home(ctx):
-    """A bot's read-only view (backend/app_view.py) opening My dashboard (person:me, a person's own page): one card of
+    """A bot's read-only view (backend/app_view.py) opening Company page (person:me, a person's own page): one card of
     the bot's own open tasks, headed with its name, which nobody arranges."""
     row = {"id": None, "template": "my_tasks", "settings": {"count": 10}, "title": "", "made_by_id": None}
     card = {**card_view(ctx, row), "heading": f"{H.actor_name(ctx.c, ctx.who.actor)}'s tasks"}
@@ -1564,8 +1564,8 @@ def place_view(ctx, place, timings=None):
 
 
 def log(ctx, action, target, detail, private=False):
-    """The event a write leaves. A write to someone's My dashboard names nothing: no card, page or place, since the
-    event log is the company's (the owner reads it whole, `tico sql` included) and the dashboard is its person's alone."""
+    """The event a write leaves. A write to someone's Company page names nothing: no card, page or place, since the
+    event log is the company's (the owner reads it whole, `tico sql` included) and the Company page is its person's alone."""
     if private:
         H.event(ctx.c, ctx.who.actor, action, "", {})
     else:
@@ -1635,7 +1635,7 @@ def check_item(ctx, kind, item):
         if not card_readable(ctx, row):
             raise Problem("not_found", "No such card", 404)
         if kind == "person" and row["made_by_id"] != who.actor:
-            raise Problem("forbidden", "My dashboard holds only cards you made", 403)
+            raise Problem("forbidden", "This page holds only cards you made", 403)
         return
     if what != "page":
         raise bad("An item is page:<file id> or card:<id>")
@@ -1663,7 +1663,7 @@ def insert_pin(ctx, place, item, size, position=None):
         "INSERT INTO pins(id,place,item,position,size,made_by,created_at) VALUES(?,?,?,?,?,?,?)",
         (pid, place, item, position, size_of(size), ctx.who.actor, H.now()),
     )
-    if item.startswith("page:") and not place.startswith("person:"):  # My dashboard is its person's alone
+    if item.startswith("page:") and not place.startswith("person:"):  # a person's Company page is theirs alone
         file_activity(ctx.c, item[5:], ctx.who.actor, "pinned", place)
     return pid
 
@@ -1696,6 +1696,13 @@ def add_pin(ctx, place, item, size="medium", position=None):
         require_manage(ctx, place)
     check_item(ctx, kind, item)
     place = canonical(kind, ident)
+    ensure(ctx, kind, ident)  # an unsaved page's defaults are real first: they may hold the Floor
+    if (
+        item.startswith("card:")
+        and (card_row(ctx.c, item[5:]) or {}).get("template") == "floor"
+        and floor_at(ctx.c, place)
+    ):
+        raise Problem("conflict", "The Floor is already on this page", 409)
     if kind == "bot":
         from . import bot_task_tabs as T
 
@@ -1704,10 +1711,18 @@ def add_pin(ctx, place, item, size="medium", position=None):
         if size != "medium":
             ctx.c.execute("UPDATE pins SET size=? WHERE id=?", (size_of(size), pin["id"]))
         return pin["id"]
-    ensure(ctx, kind, ident)
     pid = insert_pin(ctx, place, item, size, position)
     log(ctx, "pin.added", place, {"item": item}, kind == "person")
     return pid
+
+
+def floor_at(c, place):
+    """Whether the place already holds a Floor card."""
+    return bool(
+        c.execute(
+            "SELECT 1 FROM pins p JOIN cards k ON p.item='card:'||k.id WHERE p.place=? AND k.template='floor'", (place,)
+        ).fetchone()
+    )
 
 
 def pin_or_404(ctx, pid):
@@ -1805,7 +1820,7 @@ def card_places(ctx, row):
 
 
 def may_edit_card(ctx, row):
-    """The owner and admins, unless it is on another person's My dashboard; else whoever may arrange every place it is
+    """The owner and admins, unless it is on another person's Company page; else whoever may arrange every place it is
     pinned to (its maker when it is nowhere)."""
     places = card_places(ctx, row)
     if ctx.admin and not someone_elses(ctx, places):
@@ -1830,7 +1845,7 @@ def card_or_404(ctx, cid):
 
 
 def card_readable(ctx, row):
-    """A card is known to whoever made it, may edit it, or sees a place it is pinned to. Another person's My dashboard
+    """A card is known to whoever made it, may edit it, or sees a place it is pinned to. Another person's Company page
     is no way in, an admin's included."""
     places = card_places(ctx, row)
     if row["made_by_id"] == ctx.who.actor or (ctx.admin and not someone_elses(ctx, places)):
@@ -1896,12 +1911,12 @@ def remove_card(ctx, cid):
 def save_place(ctx, place, audience=None):
     kind, ident = require_manage(ctx, place)
     if kind not in DEFAULTS:
-        raise bad("Only the Dashboard, team pages and My dashboard are saved whole")
+        raise bad("Only the Dashboard, team pages and Company are saved whole")
     ensure(ctx, kind, ident)
     place = canonical(kind, ident)
     if audience is not None:
         if kind == "person":
-            raise bad("My dashboard is yours alone")
+            raise bad("Company is yours alone")
         if kind != "team":
             raise bad("Everyone sees the Growth page" if kind == "growth" else "Everyone sees the Dashboard")
         # The page's audience is its group's Read (See, being on the chart, is left as it is): set there, with the
@@ -1958,11 +1973,13 @@ def choices(ctx, team="", place=""):
         for r in ctx.c.execute("SELECT id, name, owner_id FROM kpis WHERE archived_at IS NULL ORDER BY name LIMIT 500")
         if r["owner_id"] not in hidden
     ]
-    # The Growth page offers its own templates plus custom numbers (kpi) and pages; other places leave growth's out.
+    # The Growth page offers its own templates plus custom numbers (kpi) and pages; another place offers the general
+    # templates and its own (the Company page's Floor, person:me).
+    kind = place.partition(":")[0]
     offered = (
         (lambda k, v: v.get("place") == "growth" or k in GROWTH_GENERAL)
         if place == "growth"
-        else (lambda k, v: v.get("place") is None)
+        else (lambda k, v: v.get("place") in (None, kind or None))
     )
     templates = [
         {"id": k, "name": v["name"], "fields": [f for f in v["fields"]]} for k, v in TEMPLATES.items() if offered(k, v)
@@ -1983,10 +2000,18 @@ def install(app, store, auth, mutate, settings, task_view):
         auth.domain(who)
         return Ctx(c, auth, who, settings, task_view, getattr(app.state, "pages", None), month)
 
-    @app.get("/api/v2/places/{place}")
+    @app.get(
+        "/api/v2/places/{place}",
+        **api_v2(
+            "Cards and pins",
+            "getPlace",
+            "A place's pins in order (dashboard, growth, team:<group>, bot:<id>, task:<id>, person:me for Company), each card with what it shows the caller; unreadable pages are left out. growth takes `month` (YYYY-MM) and answers `month` and `months`, the picker's choices",
+            "Place",
+        ),
+    )
     def place_show(request: Request, place: str, month: str | None = None):
         """A place's pins in order, each card with what it shows the caller; pages the caller may not read are left
-        out. A Dashboard, team page or My dashboard nobody saved shows its default cards, pins without ids (`saved`
+        out. A Dashboard, team page or Company page nobody saved shows its default cards, pins without ids (`saved`
         false). The Growth page takes `month` (YYYY-MM): the month its cards read, and the months it may pick from."""
         timings = {}
         with store.read_transaction() as c:
@@ -1998,9 +2023,17 @@ def install(app, store, auth, mutate, settings, task_view):
             return attach(store, auth, request.state.identity, out, seen=True)
         return out
 
-    @app.put("/api/v2/places/{place}")
+    @app.put(
+        "/api/v2/places/{place}",
+        **api_v2(
+            "Cards and pins",
+            "savePlace",
+            "Save a Dashboard, team page or Company page (its default cards become pins); a team page's audience sets its group's Read",
+            "Place",
+        ),
+    )
     def place_save(request: Request, place: str, body: PlaceSave):
-        """Save a Dashboard, team page or My dashboard (its default cards become real pins) and, for a team page, who
+        """Save a Dashboard, team page or Company page (its default cards become real pins) and, for a team page, who
         sees it."""
 
         def work(c):
@@ -2009,7 +2042,10 @@ def install(app, store, auth, mutate, settings, task_view):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/places/{place}/order")
+    @app.post(
+        "/api/v2/places/{place}/order",
+        **api_v2("Cards and pins", "orderPlace", "Put every pin at a place in this order", "Place"),
+    )
     def place_order(request: Request, place: str, body: PlaceOrder):
         """Put every pin at the place in this order."""
 
@@ -2022,7 +2058,15 @@ def install(app, store, auth, mutate, settings, task_view):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/pins")
+    @app.post(
+        "/api/v2/pins",
+        **api_v2(
+            "Cards and pins",
+            "addPin",
+            "Pin page:<file id> or card:<id> at a place: a bot its own, to its sidebar or task; any person who may read a task there, without widening page access; a person who arranges the Dashboard or a team page there",
+            "Place",
+        ),
+    )
     def pin_add(request: Request, body: PinAdd):
         """Pin a page or a card at a place (the pinning rule: module docstring)."""
 
@@ -2033,7 +2077,7 @@ def install(app, store, auth, mutate, settings, task_view):
 
         return mutate(request, body, work)
 
-    @app.patch("/api/v2/pins/{pid}")
+    @app.patch("/api/v2/pins/{pid}", **api_v2("Cards and pins", "updatePin", "Resize or move a pin", "Place"))
     def pin_edit(request: Request, pid: str, body: PinEdit):
         def work(c):
             ctx = context(c, request)
@@ -2042,7 +2086,14 @@ def install(app, store, auth, mutate, settings, task_view):
 
         return mutate(request, body, work)
 
-    @app.delete("/api/v2/pins/{pid}")
+    @app.delete(
+        "/api/v2/pins/{pid}",
+        **api_v2(
+            "Cards and pins",
+            "removePin",
+            "Unpin; on a task, whoever pinned it, its owner or requester, or the org owner; a card pinned nowhere else goes with it",
+        ),
+    )
     def pin_remove(request: Request, pid: str):
         """Unpin. A card pinned nowhere else goes with its pin."""
 
@@ -2051,7 +2102,15 @@ def install(app, store, auth, mutate, settings, task_view):
 
         return mutate(request, M.Empty(), work)
 
-    @app.get("/api/v2/cards")
+    @app.get(
+        "/api/v2/cards",
+        **api_v2(
+            "Cards and pins",
+            "listCards",
+            "Cards the caller made or sees pinned, with their data; `ids` reads up to 50",
+            "CardList",
+        ),
+    )
     def cards_list(request: Request, ids: str = "", limit: int = 50, cursor: str = ""):
         """Cards the caller made or sees pinned, newest first, each with what it shows them. `ids` reads up to 50."""
         with store.read_transaction() as c:
@@ -2076,14 +2135,23 @@ def install(app, store, auth, mutate, settings, task_view):
                     last = row
             return {"cards": out, "next": None}
 
-    @app.get("/api/v2/cards/choices")
+    @app.get(
+        "/api/v2/cards/choices",
+        **api_v2(
+            "Cards and pins",
+            "getCardChoices",
+            "Card templates and their settings, the teams, the KPIs and pages the caller may pick, the Growth page's metrics and channels; `place=growth` adds its templates",
+        ),
+    )
     def cards_choices(request: Request, team: str = "", place: str = ""):
         """The card templates and their settings, the teams, and the KPIs and pages the caller may pick. `place`
-        (growth) adds the Growth page's templates."""
+        (growth, or person:me) adds that place's own templates."""
         with store.read_transaction() as c:
             return choices(context(c, request), team, place)
 
-    @app.post("/api/v2/cards")
+    @app.post(
+        "/api/v2/cards", **api_v2("Cards and pins", "addCard", "A built-in card, pinned at `place` in the same write")
+    )
     def card_add(request: Request, body: CardAdd):
         """A new card; with `place` it is pinned there in the same write (who may arrange the place)."""
 
@@ -2104,14 +2172,14 @@ def install(app, store, auth, mutate, settings, task_view):
 
         return mutate(request, body, work)
 
-    @app.patch("/api/v2/cards/{cid}")
+    @app.patch("/api/v2/cards/{cid}", **api_v2("Cards and pins", "updateCard", "Change a card's heading or settings"))
     def card_edit(request: Request, cid: str, body: CardEdit):
         def work(c):
             return {"card": edit_card(context(c, request), cid, body.title, body.settings)}
 
         return mutate(request, body, work)
 
-    @app.delete("/api/v2/cards/{cid}")
+    @app.delete("/api/v2/cards/{cid}", **api_v2("Cards and pins", "removeCard", "Remove a card and every pin of it"))
     def card_remove(request: Request, cid: str):
         """Remove a card and every pin of it."""
 

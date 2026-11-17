@@ -1,8 +1,8 @@
-"""A ticket's whole journey on the default company, in one Product task held by its feature owner (docs/pipelines-v3.md
-"Product"): a person types a request, the owner pitches it and the person OKs the pitch, the owner writes the spec,
-the bots it touches comment, and the person OKs the spec; the owner builds it, two reviewers review it and the owner
-fixes what they found; the QA Owner builds the QA page and the person OKs it; the person OKs the release, the Release
-Owner merges it, and the owner checks it in production.
+"""A ticket's whole journey on the default company, in one Product task held by its feature owner (docs/dev/pipelines-v3.md
+"Product"): a person types a request, the owner writes the Spec, the bots it touches comment, and the person approves
+the Spec; the owner builds it, two reviewers review it and the owner fixes what they found; the QA Owner writes the QA
+report and the person approves it; the owner writes the Release report and the person approves it, the Release Owner
+merges it, and the owner checks it in production. Each approval is of the version the bot wrote in that stage.
 
 The company is the one setup makes (one Manager per team, the built-ins under the General Manager, reach Nearby). Every
 bot acts through the real `tico` CLI inside a run the computer claimed for it; the person acts through the API; only
@@ -12,7 +12,7 @@ import pytest
 
 from backend.tests.helpers import ticket_journey as J
 from backend.tests.helpers.fake_github import FakeGitHub
-from backend.tests.helpers.sample_company import booted, environment  # noqa: F401
+from backend.tests.helpers.fresh_install import booted, environment  # noqa: F401
 from backend.tests.live import live  # noqa: F401
 from evals.never_stuck.fake_jev import FakeJev
 
@@ -50,24 +50,17 @@ def co(made, live, tmp_path, monkeypatch, time_machine):
 
 
 def request(co, title="Add a negate function", body="negate(x) returns -x, with a test."):
-    """The person types a request into Product for its feature owner. The task's body is the pitch."""
+    """The person types a request into Product for its feature owner: it starts in Spec, the owner's."""
     sent = {"title": title, "body": body, "owner": co.actor(co.owner), "pipeline": "product"}
     made = co.person("POST", "tasks", sent)["task"]["id"]
     co.beat()
     return made
 
 
-def pitch(co, task):
-    """The pitch (the task's body, short enough) goes straight to the person, who OKs it."""
-    co.sign_off(task)
-    co.beat()
-
-
 def spec(co, task, text="Goal, scope in and out, acceptance criteria."):
-    """The owner writes the Spec page in Spec and Jev passes it. Returns the page's file id."""
+    """The owner writes the Spec in Spec and the decision model passes it. Returns the document's file id."""
     owner = co.handoff(task, "Spec", co.owner)
-    page, _ = owner.page("spec.html", "Spec: negate", text)
-    owner.attach("Spec page", page)
+    page = owner.write("Spec", "spec.html", "Spec: negate", text)
     owner.end()
     co.beat()
     return page
@@ -89,18 +82,17 @@ def related(co, task):
 
 
 def ok_spec(co, task, page):
-    """In OK spec the owner attaches the spec page as the comments left it, for the person's OK."""
+    """In OK spec the owner writes the Spec's next version as the comments left it: that version is submitted for the
+    person's approval."""
     owner = co.handoff(task, "OK spec", co.owner)
-    owner.attach("Spec page", page)
+    assert owner.write("Spec", "spec.html", "Spec: negate", "Goal, scope, acceptance criteria; no comments.") == page
     owner.end()
     co.beat()
 
 
 def to_spec(co, title="Add a negate function"):
-    """A request pitched and its pitch OK'd: the task, in Spec."""
-    task = request(co, title)
-    pitch(co, task)
-    return task
+    """A request typed: the task, in Spec."""
+    return request(co, title)
 
 
 def to_build(co, title="Add a negate function"):
@@ -157,14 +149,22 @@ def qa(co, task, head):
     owner.end()
     co.beat()
     checker = co.handoff(task, "QA", "qa-owner")
-    built, _ = checker.page("qa.html", "QA: negate", f"Built at {head}; checks pass; both reviews done.")
-    checker.attach("QA page", built)
+    checker.write("QA report", "qa.html", "QA: negate", f"Built at {head}; checks pass; both reviews done.")
     checker.end()
     co.beat()
 
 
+def release(co, task, head):
+    """In OK release the owner writes the Release report: that version is submitted for the person's approval."""
+    owner = co.handoff(task, "OK release", co.owner)
+    owner.write("Release report", "release.html", "Release: negate", f"Ships negate(x). {REPO}#1 at {head[:7]}.")
+    owner.end()
+    co.beat()
+
+
 def to_release(co, task):
-    """A task taken from Build through QA and the person's QA OK, to OK release. Returns the PR's head commit."""
+    """A task taken from Build through QA and the person's QA OK, to OK release with the Release report written.
+    Returns the PR's head commit."""
     head = build(co, task)
     review(co, task, "Review 1", "reviewer-1", head, "One blocking issue: no test for negate(0).")
     head = fix(co, task, "Fixes 1")
@@ -173,6 +173,7 @@ def to_release(co, task):
     co.sign_off(task, "Looks right.")
     co.beat()
     assert co.task(task)["stage"]["name"] == "OK release", f"the QA OK did not reach OK release. {co.line(task)}"
+    release(co, task, head)
     return head
 
 
@@ -183,17 +184,10 @@ def test_a_request_goes_from_typed_to_production_in_one_task_with_the_persons_ok
     co.webhooks = webhooks
     before = co.needs_you()
 
-    # Pitch: the body is the pitch; it reaches the person, who OKs it, and nothing else reaches them.
+    # Spec: a feature starts as a chat, so there is no pitch to OK; the owner writes the Spec, the bots it touches
+    # comment, and the person approves the version written in OK spec.
     task = request(co)
-    assert co.new_in_list(before) == [("ask", task)], "the person's list should hold the pitch OK and no more"
-    assert not [bot for bot, queued in co.queued() if queued == task], (
-        "a bot is woken on a pitch that waits on a person"
-    )
-    co.sign_off(task)
-    co.beat()
-    assert co.new_in_list(before) == [], "the pitch OK is still in the person's list after they OK'd it"
-
-    # Spec: the same owner writes it; the bots it touches comment; the person OKs it.
+    assert co.new_in_list(before) == [], "the person was asked something before the Spec was written"
     spec_page = spec(co, task)
     related(co, task)
     ok_spec(co, task, spec_page)
@@ -204,7 +198,7 @@ def test_a_request_goes_from_typed_to_production_in_one_task_with_the_persons_ok
 
     # Build: the same owner, in the same task, builds what it specified. No other task is filed.
     owner = co.handoff(task, "Build", co.owner)
-    assert spec_page in owner.wake + owner.show(), "the owner is not told where the Spec page is"
+    assert spec_page in owner.wake + owner.show(), "the owner is not told where the Spec is"
     head = co.github.open_pr(REPO, 1, head=co.commit())
     co.github.set_checks(REPO, head, "pending")
     owner.cli("task", "link", task, PR)
@@ -212,7 +206,7 @@ def test_a_request_goes_from_typed_to_production_in_one_task_with_the_persons_ok
     co.heard(1)
     co.github.set_checks(REPO, head, "success")
     co.heard(1)
-    assert not co.task(task)["filed"], "Product filed a second task: one task goes from pitch to production"
+    assert not co.task(task)["filed"], "Product filed a second task: one task goes from the Spec to production"
 
     # Two reviews, each sent back to the owner; the QA Owner's QA page, which the person OKs.
     review(co, task, "Review 1", "reviewer-1", head, "One blocking issue: no test for negate(0).")
@@ -223,8 +217,10 @@ def test_a_request_goes_from_typed_to_production_in_one_task_with_the_persons_ok
     co.sign_off(task, "Looks right.")
     co.beat()
 
-    # The release OK, then the merge queue.
+    # The Release report, then the merge queue.
     assert co.task(task)["stage"]["name"] == "OK release", f"the QA OK did not reach OK release. {co.line(task)}"
+    assert co.new_in_list(before) == [], "the release was asked before its report was written"
+    release(co, task, head)
     assert co.new_in_list(before) == [("ask", task)], "the person's list should hold the release OK only"
     co.sign_off(task, "Ship it.")
     co.beat()
@@ -242,20 +238,6 @@ def test_a_request_goes_from_typed_to_production_in_one_task_with_the_persons_ok
     co.beat(2)
     assert co.task(task)["status"] == "done", f"the request is not done after it was checked. {co.line(task)}"
     assert co.new_in_list(before) == [], "the person's list holds something new after the request was released"
-    co.clean()
-
-
-def test_a_pitch_over_280_characters_goes_to_its_owner_to_shorten_before_a_person_sees_it(co):
-    """The task's body is the pitch: over 280 characters it is its owner's to shorten, and nobody is asked to OK it."""
-    before = co.needs_you()
-    task = request(co, body="negate(x) returns -x. " * 20)
-    assert co.new_in_list(before) == [], "a long pitch reached the person"
-    owner = co.handoff(task, "Pitch", co.owner)
-    assert "over 280" in owner.wake + owner.show(), "the owner is not told the pitch is too long"
-    owner.cli("task", "update", task, "--body", "negate(x) returns -x, with a test.", "--version", owner.version())
-    owner.end()
-    co.beat()
-    assert co.new_in_list(before) == [("ask", task)], "the short pitch did not reach the person once"
     co.clean()
 
 
@@ -316,8 +298,7 @@ def test_the_person_sends_the_spec_back_and_the_owner_writes_it_again(co):
     assert co.new_in_list(before) == [], "a spec sent back is still in the person's list"
     owner = co.handoff(task, "OK spec", co.owner)
     assert "Say what is out of scope." in owner.wake + owner.show(), "the owner is not shown why it came back"
-    page, _ = owner.page("spec.html", "Spec: negate", "Goal, scope in and out (no floats), acceptance criteria.")
-    owner.attach("Spec page", page)
+    owner.write("Spec", "spec.html", "Spec: negate", "Goal, scope in and out (no floats), acceptance criteria.")
     owner.end()
     co.beat()
     assert co.new_in_list(before) == [("ask", task)], "the rewritten spec did not come back to the person once"
@@ -349,8 +330,21 @@ def test_an_owner_that_keeps_stopping_goes_to_the_manager_who_can_settle_it(co):
     def settle(*argv):
         manager.cli("task", *argv, "--version", manager.version(task))
 
-    settle("reassign", task, "reviewer-1", "-m", "The owner is stuck.")
-    assert co.task(task)["owner_id"] == co.actor("reviewer-1"), f"the reassign did not take. {co.line(task)}"
+    # Owner on the team refuses a bot outside Product (a reviewer); the Manager may take it itself.
+    code, out, err = manager.cli(
+        "task",
+        "reassign",
+        task,
+        "reviewer-1",
+        "-m",
+        "The owner is stuck.",
+        "--version",
+        manager.version(task),
+        ok=False,
+    )
+    assert code != 0 and "Owner on the team" in out + err, f"a reviewer took Build: {out}{err}"
+    settle("reassign", task, "product-manager", "-m", "The owner is stuck.")
+    assert co.task(task)["owner_id"] == co.actor("product-manager"), f"the reassign did not take. {co.line(task)}"
     settle("reassign", task, co.owner, "-m", "Back to its owner.")
     settle("snooze", task, "--until", "2099-01-01", "-m", "Waits for a grant.")
     manager.cli("task", "unsnooze", task)
@@ -364,13 +358,13 @@ def test_an_owner_that_keeps_stopping_goes_to_the_manager_who_can_settle_it(co):
     )
     assert code != 0 and "only a person can close it" in out + err, f"the Manager closed a person's request: {out}{err}"
     manager.end()
-    co.clean(expected=("only a person can close it",))
+    co.clean(expected=("only a person can close it", "Owner on the team"))
 
 
 def test_qa_files_a_product_bug_for_its_areas_feature_owner(co):
     """No Builders: the QA Owner files a product bug a test exposes as a Product task for the feature owner of its
-    area. A bot's pitch is not set aside: it reaches the person's list, and once they OK it the owner is woken in
-    Spec."""
+    area. It is not set aside: it starts in Spec, where its owner is woken to write the Spec, and nothing reaches the
+    person's list before that."""
     before = co.needs_you()
     qa = co.turn("qa-owner")
     assert qa, "the QA Owner has no run on a new company"
@@ -390,9 +384,7 @@ def test_qa_files_a_product_bug_for_its_areas_feature_owner(co):
     found = co.rows("SELECT id FROM tasks WHERE title='negate(0) returns -0'")
     assert len(found) == 1, f"QA's report made {len(found)} tasks, not one"
     co.beat(2)
-    assert co.new_in_list(before) == [("ask", found[0]["id"])], "the bot's pitch did not reach the person's list"
-    co.sign_off(found[0]["id"])
-    co.beat()
+    assert co.new_in_list(before) == [], "the bot's task reached the person's list before its Spec was written"
     co.handoff(found[0]["id"], "Spec", co.owner).end()
     co.clean()
 
@@ -510,6 +502,8 @@ def test_after_the_oks_a_rebase_is_queued_again_and_a_conflict_fix_is_read_by_re
     assert co.task(task)["stage"]["name"] == "OK release", (
         f"Reviewer 2's OK did not take it on to OK release. {co.line(task)}"
     )
+    assert co.new_in_list(before) == [], "the release was asked again before its report was written again"
+    release(co, task, fixed)
     assert co.new_in_list(before) == [("ask", task)], "the release OK was not asked once more"
     co.sign_off(task, "Ship it again.")
     co.beat()
@@ -522,7 +516,7 @@ def test_after_the_oks_a_rebase_is_queued_again_and_a_conflict_fix_is_read_by_re
 
 def test_the_person_sends_the_qa_page_back_and_the_owner_fixes_it_in_fixes_2(co):
     """The person sends the build back at the QA OK: the QA Owner is woken with the reason and moves the task back to
-    Fixes 2, where its owner fixes it in the same task; the QA Owner attaches the page again, Reviewer 2 reads the new
+    Fixes 2, where its owner fixes it in the same task; the QA Owner writes the QA report again, Reviewer 2 reads the new
     commit, and the person is asked once more."""
     before = co.needs_you()
     task = to_build(co)
@@ -553,8 +547,7 @@ def test_the_person_sends_the_qa_page_back_and_the_owner_fixes_it_in_fixes_2(co)
     owner.end()
     co.beat()
     checker = co.handoff(task, "QA", "qa-owner")
-    built, _ = checker.page("qa.html", "QA: negate", f"Built at {head}; negate(None) raises.")
-    checker.attach("QA page", built)
+    checker.write("QA report", "qa.html", "QA: negate", f"Built at {head}; negate(None) raises.")
     checker.end()
     co.beat()
     assert co.new_in_list(before) == [], "the person was asked before Reviewer 2 read the new commit"

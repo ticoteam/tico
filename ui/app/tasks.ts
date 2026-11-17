@@ -101,12 +101,6 @@ function actorFace(actor: string | null | undefined, size = 18) {
 }
 // The goal a task serves is a link with the goal's title; the row only carries the id.
 const GOAL_TITLES: Record<string, string> = {};
-async function taskGoalTitle(root: ParentNode) {
-  const a = root.querySelector<HTMLAnchorElement>('a.task-goal[data-goal-title]'); if (!a) return;
-  const id = String(a.dataset.goalTitle);
-  if (!GOAL_TITLES[id]) { const r: {goal?: GoalOption | null} | null = await v2Get('/v2/goals/' + encodeURIComponent(id)); GOAL_TITLES[id] = r?.goal?.title || ''; }
-  if (GOAL_TITLES[id] && a.isConnected) a.textContent = 'serves: ' + GOAL_TITLES[id];
-}
 // Live goals for the "Serves" pick on a new task; fetched once a page, never blocks the form.
 let GOAL_OPTIONS: GoalOption[] | null = null;
 async function goalOptions() {
@@ -124,14 +118,16 @@ let DECIDE_WANT = '';                       // a deep link's item (#/decide?item
 let DECIDE_STAGE = '';                      // a deep link's stage review (#/decide?stage=<id>), opened once Tasks has read
 const DEC_OTHER = '-';                      // the walk of what is in no stage (Tasks › You's Other chip)
 // The server sorts Home's Needs you rows by the same rule (backend/cards.py needs_act): a new kind here changes both.
+// Only an OK or a page's OK is approved: an ask of any other kind, one Flow does not know included, is answered, so
+// it never offers Approve or Send back.
 function decideKind(it: NeedsEntry): AskKind {
-  if (it.kind === 'ask') return it.ask?.kind === 'answer' ? 'question' : 'ok';
+  if (it.kind === 'ask') return it.ask?.kind === 'ok' || it.ask?.kind === 'page' ? 'ok' : 'question';
   if (it.kind === 'paused') return 'fix';
   if (it.kind === 'mention') return 'mention';
-  // Stuck: the ladder brought it to the person (stuck or late with them), a bot is Paused on it, or it waits on someone
-  // being let in (turn.share). Its buttons are the stuck card's, never Done, Snooze or Give to (task #392).
-  const t = it.task;
-  return t?.turn?.state === 'paused' || t?.late?.level === 'person' || t?.stuck || t?.turn?.share?.length ? 'stuck' : 'yours';
+  // A task item is one thing a person must fix before it can move: a private task that waits on someone being let in
+  // (turn.share). Needs you never lists a task only because it is the person's (backend/waiting_on.py needs). Its
+  // buttons are the stuck card's, never Done, Snooze or Give to (task #392).
+  return 'stuck';
 }
 // ---- the count, and the lists that show Needs you
 /** A bot, or a bot's read-only view of the app (view-only.ts), has no Needs you and never opens Flow. */
@@ -150,15 +146,14 @@ function needsBadgePaint() {
   flowTabPaint();
 }
 /** The phone bar's second slot: Flow, its mark grey like the other tabs and jade while something needs the person (no
-    number). A bot has no Flow: the slot keeps Threads, or Search on a server without threads (threads.ts THREADS.on). A
-    person's Threads and Search are in More (threads.ts threadsSideRender carries the count there). */
+    number). A bot has no Flow: the slot keeps Threads. A person's Threads and Search are in More (threads.ts
+    threadsSideRender carries the count there). */
 function flowTabPaint() {
-  const off = decideNoFlow(), threads = typeof THREADS === 'undefined' || THREADS.on !== false;
+  const off = decideNoFlow();
   const flow = document.querySelector<HTMLElement>('#mobile-flow');
   if (flow) { flow.hidden = off; flow.toggleAttribute('data-waiting', decideCount() > 0); }
-  const tab = document.querySelector<HTMLElement>('#mobile-threads'), search = document.querySelector<HTMLElement>('#mobile-search');
-  if (tab) tab.hidden = !off || !threads;
-  if (search) search.hidden = !off || threads;
+  const tab = document.querySelector<HTMLElement>('#mobile-threads');
+  if (tab) tab.hidden = !off;
 }
 // Flow's taps: decideFlow is in the ask screen's page part (decide.ts), whose stand-in loads it on the first tap.
 for (const el of document.querySelectorAll<HTMLElement>('#mobile-flow, #side .nav-flow')) el.addEventListener('click', () => void decideFlow(el));

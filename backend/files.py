@@ -37,6 +37,7 @@ from . import file_library
 from . import read_cache
 from . import task_privacy as privacy
 from . import task_wakes
+from .api_contract import api_v2, error
 from clients import bot_files as BF
 
 LOG = logging.getLogger("tico.files")
@@ -77,36 +78,6 @@ def raw_media(request, imported=False):
     """True for a bot's raw upload of a video or audio file. It streams to disk up to the server's upload limit."""
     return BF.is_media(raw_name(dict(request.query_params), imported))
 
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS bot_files(
- id TEXT PRIMARY KEY, bot_id TEXT NOT NULL REFERENCES bots(id), scope TEXT NOT NULL,
- identity TEXT NOT NULL, title TEXT NOT NULL, kind TEXT NOT NULL, mime TEXT NOT NULL DEFAULT '',
- locator TEXT NOT NULL, url TEXT, provider TEXT, current_version INTEGER NOT NULL DEFAULT 0,
- state TEXT NOT NULL DEFAULT 'ready', task_id TEXT, conversation_id TEXT,
- first_activity_at TEXT NOT NULL, last_activity_at TEXT NOT NULL, archived INTEGER NOT NULL DEFAULT 0,
- UNIQUE(bot_id, scope, identity));
-CREATE INDEX IF NOT EXISTS bot_files_recent ON bot_files(bot_id, archived, last_activity_at, id);
-CREATE INDEX IF NOT EXISTS bot_files_task ON bot_files(task_id, archived, locator);
-CREATE TABLE IF NOT EXISTS bot_file_versions(
- file_id TEXT NOT NULL REFERENCES bot_files(id), version INTEGER NOT NULL,
- blob_id TEXT NOT NULL REFERENCES blobs(id), digest TEXT NOT NULL, source_digest TEXT,
- size INTEGER NOT NULL, name TEXT NOT NULL, mime TEXT NOT NULL, commit_sha TEXT, repo_path TEXT,
- attempt_id TEXT, actor TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(file_id, version));
-CREATE TABLE IF NOT EXISTS bot_file_activity(
- id INTEGER PRIMARY KEY AUTOINCREMENT, file_id TEXT NOT NULL REFERENCES bot_files(id),
- actor TEXT NOT NULL, action TEXT NOT NULL, attempt_id TEXT, task_id TEXT, version INTEGER,
- digest TEXT, created_at TEXT NOT NULL, detail TEXT);
-CREATE INDEX IF NOT EXISTS bot_file_activity_file ON bot_file_activity(file_id, id);
-CREATE TRIGGER IF NOT EXISTS bot_file_activity_append_only BEFORE UPDATE ON bot_file_activity
- BEGIN SELECT RAISE(ABORT, 'bot_file_activity is append-only'); END;
-CREATE TRIGGER IF NOT EXISTS bot_file_activity_no_delete BEFORE DELETE ON bot_file_activity
- BEGIN SELECT RAISE(ABORT, 'bot_file_activity is append-only'); END;
-CREATE TRIGGER IF NOT EXISTS bot_file_versions_immutable BEFORE UPDATE ON bot_file_versions
- BEGIN SELECT RAISE(ABORT, 'file versions are immutable'); END;
-CREATE TRIGGER IF NOT EXISTS bot_file_versions_no_delete BEFORE DELETE ON bot_file_versions
- BEGIN SELECT RAISE(ABORT, 'file versions are immutable'); END;
-"""
 
 # pinned / unpinned: a page put on or taken off a place (backend/cards.py), with the place in its detail.
 # reviewed: a verdict on one version from an answer to a review question (backend/file_reviews.py), in its detail.
@@ -1174,14 +1145,16 @@ def comment_file(c, auth, files, who, task_id, fid, number):
     return copy, file_version(c, task_id, copy, current)
 
 
-def file_added(c, who, task_id, item, number, poster=None):
-    """What a file added to a task records, uploaded or shared from a chat: the task's own "file" activity line,
-    the task.file audit event and the preview worker's row. The caller wakes the media worker once it commits."""
+def file_added(c, who, task_id, item, number, poster=None, *, document=None):
+    """What a file added to a task records, uploaded or shared from a chat: the task's own "file" activity line (a
+    "document" line naming it for a task's document), the task.file audit event and the preview worker's row. The
+    caller wakes the media worker once it commits."""
     provenance = {"file": item["id"], "version": number}
     if pages := page_references(item["id"], c):
         provenance["page_files"] = sorted(pages)
-    name, data = H.sourced_text(item["name"], [provenance], provenance)
-    H._task_event(c, task_id, who.actor, "file", None, name, "" if number == 1 else f"version {number}", data=data)
+    name, data = H.sourced_text(document or item["name"], [provenance], provenance)
+    note = "" if number == 1 else f"version {number}"
+    H._task_event(c, task_id, who.actor, "document" if document else "file", None, name, note, data=data)
     H.event(c, who.actor, "task.file", task_id, {**data, "name": name, "size": item["size"]})
     c.execute("INSERT OR IGNORE INTO blob_media(blob_id,poster_blob_id) VALUES(?,?)", (item["id"], poster))
 
@@ -1573,35 +1546,41 @@ class Files:
         fid, _ = self.attach_task(c, who, task_id, item, digest, bot)
         return fid
 
-    def attach_task(self, c, who, task_id, item, digest, bot):
-        """A visible file with the same task and display name continues its series."""
-        row = c.execute(
-            "SELECT f.* FROM bot_files f JOIN bot_file_versions v "
-            "ON v.file_id=f.id AND v.version=f.current_version "
-            "WHERE f.task_id=? AND f.archived=0 AND v.name=? "
-            "ORDER BY f.last_activity_at DESC",
-            (task_id, item["name"]),
-        ).fetchall()
-        row = next((r for r in row if self.visible(c, who, r, {})), None)
+    def attach_task(self, c, who, task_id, item, digest, bot, *, file=None, series=True):
+        """A visible file with the same task and display name continues its series, unless it is one of the task's
+        documents: those get versions only by name, through `file` (backend/task_documents.py), which cleans them. With
+        `series` off and no `file`, a new one starts."""
+        row = file
+        if row is None and series:
+            rows = c.execute(
+                "SELECT f.* FROM bot_files f JOIN bot_file_versions v "
+                "ON v.file_id=f.id AND v.version=f.current_version "
+                "WHERE f.task_id=? AND f.archived=0 AND v.name=? "
+                "AND NOT EXISTS (SELECT 1 FROM task_documents d WHERE d.file_id=f.id) "
+                "ORDER BY f.last_activity_at DESC",
+                (task_id, item["name"]),
+            ).fetchall()
+            row = next((r for r in rows if self.visible(c, who, r, {})), None)
         created = row is None
         legacy = None
         if row is None:
-            legacy = c.execute(
-                "SELECT b.* FROM blobs b JOIN task_assets a ON a.blob_id=b.id "
-                "WHERE a.task_id=? AND b.name=? AND b.id<>? AND NOT EXISTS "
-                "(SELECT 1 FROM bot_file_versions v WHERE v.blob_id=b.id) "
-                "ORDER BY b.created_at DESC",
-                (task_id, item["name"], item["id"]),
-            ).fetchall()
-            legacy = next(
-                (
-                    b
-                    for b in legacy
-                    if not page_ref_denials(c, self.auth, who, b["id"])
-                    and privacy.blob_readable(c, privacy.actor(who), b["id"])
-                ),
-                None,
-            )
+            if series:
+                found = c.execute(
+                    "SELECT b.* FROM blobs b JOIN task_assets a ON a.blob_id=b.id "
+                    "WHERE a.task_id=? AND b.name=? AND b.id<>? AND NOT EXISTS "
+                    "(SELECT 1 FROM bot_file_versions v WHERE v.blob_id=b.id) "
+                    "ORDER BY b.created_at DESC",
+                    (task_id, item["name"], item["id"]),
+                ).fetchall()
+                legacy = next(
+                    (
+                        b
+                        for b in found
+                        if not page_ref_denials(c, self.auth, who, b["id"])
+                        and privacy.blob_readable(c, privacy.actor(who), b["id"])
+                    ),
+                    None,
+                )
             fid, stamp = (legacy["id"] if legacy else new_id()), H.now()
             c.execute(
                 "INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,mime,locator,task_id,"
@@ -2504,12 +2483,40 @@ class Files:
         return serve(request, self.blobs, blob, version is not None)
 
 
+MENTIONS_DESCRIPTION = (
+    "Turns the file paths and names a bot wrote (in a message, a page, a report) into its files, for links. "
+    "A value with a folder (`reports/pack.docx`, `/home/bot/checkout/reports/pack.docx`) matches the file published "
+    "from that path in the bot's checkout, else the one file whose path it ends with or that ends with it. A bare name "
+    "(`pack.docx`) matches only when exactly one of the bot's files has that name. Only the files the caller may see "
+    "count, by each file's current version; archived files and links never match. A value that is not exactly one "
+    "file is absent from `files`: none, two or more (never a guess), or one the caller may not read all look the same. "
+    "Tico's web app also tries a bare name inside a folder named earlier in the same paragraph; this route does not, "
+    "so send the joined path yourself. A caller who may see the bot but none of its files gets 200 with `files` "
+    "empty, as does a request with no m. Errors: 401 not signed in, 404 no such bot or one the caller may not see, "
+    "422 more than 60 m values."
+)
+
+
 def install_files(app, store, auth, blobs, mutate):
     from . import file_reviews
 
     file_reviews.AUTH = auth  # an OK's giver is checked against the file at the OK, its use and its verdict
     files = Files(app, store, auth, blobs, mutate)
     app.state.files = files
+
+    # Before the library's DELETE /api/v2/files/{fid}: the API document lists a path's methods in this order.
+    @app.patch(
+        "/api/v2/files/{fid}",
+        **api_v2(
+            "Files",
+            "editBotFile",
+            "Change a file's title or task, remove it from the list (archive) or promote it bot-wide (owner and bot administrators)",
+            "BotFileResult",
+        ),
+    )
+    def edit(request: Request, fid: str, body: FileEdit):
+        return files.edit(request, fid, body)
+
     # Before media.py's GET /api/v2/files/{bid}, which would otherwise take /api/v2/files/search.
     file_library.install_library(app, store, auth, files)
     from .pages import install_pages
@@ -2537,7 +2544,16 @@ def install_files(app, store, auth, blobs, mutate):
         }
     }
 
-    @app.post("/api/v2/files/uploads", openapi_extra=upload_doc)
+    @app.post(
+        "/api/v2/files/uploads",
+        **api_v2(
+            "Files",
+            "uploadBotFile",
+            "A bot (or its computer) publishes a file: raw bytes with the fields in the query, or JSON text/content_base64",
+            "BotFileResult",
+            openapi_extra=upload_doc,
+        ),
+    )
     async def upload(request: Request):
         """A bot (or the computer running its turn) publishes a file. Raw bytes with the fields in
         the query, or JSON with text or content_base64. Up to 25 MB raw, 2 MB as JSON. Video and audio
@@ -2549,7 +2565,16 @@ def install_files(app, store, auth, blobs, mutate):
         )
         return await asyncio.to_thread(files.publish, request, request.state.identity, fields, data)
 
-    @app.post("/api/v2/files/imports", openapi_extra=upload_doc)
+    @app.post(
+        "/api/v2/files/imports",
+        **api_v2(
+            "Files",
+            "importFile",
+            "Bytes the bot's computer copied from an S3 object; a changed etag is a new version",
+            "BotFileResult",
+            openapi_extra=upload_doc,
+        ),
+    )
     async def imported(request: Request):
         """Bytes the bot's computer copied from an S3 object (`tico file import`), with its `source`
         (s3://bucket/key) and `etag`. A changed etag is a new version. Video and audio stream, as uploads do."""
@@ -2564,7 +2589,15 @@ def install_files(app, store, auth, blobs, mutate):
             raise Problem("validation", "Say the s3:// source", 422)
         return await asyncio.to_thread(files.publish, request, request.state.identity, fields, data, imported=True)
 
-    @app.post("/api/v2/files/links")
+    @app.post(
+        "/api/v2/files/links",
+        **api_v2(
+            "Files",
+            "addFileLink",
+            "Register or touch an https document (Google, Notion, Figma, any site); Tico keeps the address only",
+            "BotFileResult",
+        ),
+    )
     def links(request: Request, body: LinkBody):
         """Register or touch an https document (Google, Notion, Figma, anything). Tico stores the
         address only: it never fetches the document or holds a provider token."""
@@ -2575,7 +2608,15 @@ def install_files(app, store, auth, blobs, mutate):
         """When files the bot's computer already published were written, by digest and without their bytes."""
         return files.dates(request, body)
 
-    @app.get("/api/v2/bots/{bot}/files")
+    @app.get(
+        "/api/v2/bots/{bot}/files",
+        **api_v2(
+            "Files",
+            "listBotFiles",
+            "A bot's files the caller may see, newest activity first, with the visible total; limit and cursor page; q (every word, in the name, text or path) and kind (a Library kind: page, document, image, data, media, other) narrow the same list",
+            "BotFileList",
+        ),
+    )
     def bot_files(
         request: Request,
         bot: str,
@@ -2586,17 +2627,31 @@ def install_files(app, store, auth, blobs, mutate):
     ):
         return files.listing(request.state.identity, bot, max(1, min(limit, LIST_MAX)), cursor, q=q, kind=kind)
 
-    @app.get("/api/v2/bots/{bot}/files/mentions")
+    @app.get(
+        "/api/v2/bots/{bot}/files/mentions",
+        **api_v2(
+            "Files",
+            "resolveBotFileMentions",
+            "The bot's files that the paths and names it wrote name (m, up to 60): each name that is exactly one file the caller may see, keyed by the name as sent; any other name is absent",
+            "BotFileMentions",
+            description=MENTIONS_DESCRIPTION,
+            parameters={
+                "m": "A path or file name as the bot wrote it; repeat for each (m=a&m=b), at most 60. Values are "
+                "trimmed, a repeat counts once, and one over 300 characters is ignored. Before matching, "
+                "\\ becomes / and a leading ./ is dropped; the answer keeps the value as sent (trimmed)"
+            },
+            responses={"404": error("not_found: no such bot, or one the caller may not see")},
+        ),
+    )
     def bot_file_mentions(
         request: Request, bot: str, m: Annotated[list[str] | None, Query(max_length=MENTIONS_MAX)] = None
     ):
         return files.mentions(request.state.identity, bot, m or [])
 
-    @app.patch("/api/v2/files/{fid}")
-    def edit(request: Request, fid: str, body: FileEdit):
-        return files.edit(request, fid, body)
-
-    @app.patch("/api/v2/files/{fid}/versions/{number}")
+    @app.patch(
+        "/api/v2/files/{fid}/versions/{number}",
+        **api_v2("Files", "editFileVersion", "Edit a version's note or question as its author", "VersionReview"),
+    )
     def edit_version(request: Request, fid: str, number: int, body: M.FileVersionEdit):
         who = request.state.identity
 
@@ -2671,20 +2726,45 @@ def install_files(app, store, auth, blobs, mutate):
             ),
         )
 
-    @app.get("/api/v2/files/{fid}/activity")
+    @app.get(
+        "/api/v2/files/{fid}/activity",
+        **api_v2("Files", "listFileActivity", "A file's append-only activity, newest first", "FileActivity"),
+    )
     def activity(request: Request, fid: str):
         return files.activity_log(request.state.identity, fid)
 
-    @app.get("/api/v2/files/{fid}/info")
+    @app.get(
+        "/api/v2/files/{fid}/info",
+        **api_v2(
+            "Files",
+            "getBotFile",
+            "One file as its bot's Files list shows it (404 when the viewer cannot see it)",
+            "BotFileResult",
+        ),
+    )
     def info(request: Request, fid: str):
         return files.info(request.state.identity, fid)
 
-    @app.get("/api/v2/files/{fid}/versions")
+    @app.get(
+        "/api/v2/files/{fid}/versions",
+        **api_v2("Files", "listFileVersions", "A file's versions, newest first", "FileVersions"),
+    )
     def versions(request: Request, fid: str):
         return files.versions(request.state.identity, fid)
 
     @app.head("/api/v2/files/{fid}/versions/{number}", include_in_schema=False)
-    @app.get("/api/v2/files/{fid}/versions/{number}")
+    @app.get(
+        "/api/v2/files/{fid}/versions/{number}",
+        **api_v2(
+            "Files",
+            "getFileVersion",
+            "The bytes of one version (a download, never a storage address)",
+            answer={
+                "description": "The file's bytes (application/octet-stream, sent as an attachment)",
+                "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}},
+            },
+        ),
+    )
     def version_bytes(request: Request, fid: str, number: int):
         return files.serve(request.state.identity, fid, number, request=request)
 

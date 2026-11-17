@@ -82,7 +82,7 @@ const SIZES = ['100K', '150K', '200K', '250K', '300K', '400K', '500K', '600K', '
           }
           return json({name: e.id, revision: e.revision});
         }
-        if (p === '/api/v2/settings/transitions/t1') return json({id: 't1', kind: 'model', state: 'applied', bot: 'researcher', progress: {prepared: 1, total: 1}});
+        if (p === '/api/v2/settings/transitions/t1') return json({id: 't1', kind: 'model', state: 'applied', bot: 'researcher'});
         if (p === '/api/me') return json({id: 'ana', role, name: 'Ana', email: 'ana@example.com', cloud: true, registered: true});
         if (p === '/api/v2/config') return json({version: '0.1.0', app_name: 'Tico', local: true});
         if (p === '/api/employees') return json(role === 'owner' ? bots : bots.map(b => ({...b, can_manage: false})));
@@ -92,7 +92,7 @@ const SIZES = ['100K', '150K', '200K', '250K', '300K', '400K', '500K', '600K', '
         if (p === '/api/v2/operations') return json({machines: [{id: 'r1', label: 'Box', owner_id: 'ana', bots: bots.map(b => b.id)}], services: []});
         if (p === '/api/v2/models') return json({...catalog, enabled_providers: ['openai', 'anthropic']});
         if (p === '/api/v2/usage/limits') return json({bots: {}});
-        if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
+        if (p === '/api/v2/settings/history') return json({changes: []});
         if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
         return json(unrouted(p));
       });

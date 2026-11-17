@@ -6,7 +6,7 @@ import json
 import pytest
 
 from backend import gmail_live as G
-from backend import google_workspace as W
+from backend import google_tokens
 from backend.mail import gmail_query
 from backend.store import Problem
 from backend.tests.helpers.gmail_live import BOX, NEXT, gmail_http
@@ -14,13 +14,14 @@ from backend.tests.helpers.gmail_live import BOX, NEXT, gmail_http
 
 @pytest.fixture
 def minted(monkeypatch):
+    """The token door (backend/google_tokens.py), recording (mailbox, service, write) for each token asked."""
     calls = []
 
-    def mint(c, mailbox, service, row=None, scopes=None):
-        calls.append((mailbox, service, scopes))
-        return {"access_token": "readonly-token"}
+    def token(c, mailbox, service, write=False):
+        calls.append((mailbox, service, write))
+        return "readonly-token"
 
-    monkeypatch.setattr(W, "mint", mint)
+    monkeypatch.setattr(google_tokens, "token", token)
     return calls
 
 
@@ -36,7 +37,7 @@ def test_list_search_and_opaque_paging_use_metadata_and_readonly_scopes(gmail_ht
     assert calls[2][1]["pageToken"] == [NEXT] and calls[2][1]["maxResults"] == ["1"]
     assert calls[1][1]["format"] == ["metadata"] and "Subject" in calls[1][1]["metadataHeaders"]
     assert all(token == "readonly-token" for _, _, token in calls)
-    assert minted == [(BOX, "gmail", W.READ_ONLY_SCOPES["gmail"])] * 2
+    assert minted == [(BOX, "gmail", False)] * 2
 
 
 def test_thread_and_message_fetch_full_and_normalize_bodies_and_attachments(gmail_http, minted):
@@ -46,7 +47,7 @@ def test_thread_and_message_fetch_full_and_normalize_bodies_and_attachments(gmai
     assert message["body"] == "Live contract body." and message["from"] == "sender@acme.example"
     assert message["attachments"] == [{"name": "contract.pdf", "type": "application/pdf", "size": 123}]
     assert all(query["format"] == ["full"] for _, query, _ in gmail_http["calls"])
-    assert minted == [(BOX, "gmail", W.READ_ONLY_SCOPES["gmail"])] * 2
+    assert minted == [(BOX, "gmail", False)] * 2
 
 
 @pytest.mark.parametrize("status, expected", [(400, 422), (403, 403), (404, 404), (429, 503), (503, 502)])
@@ -118,7 +119,7 @@ def test_batch_modify_chunks_and_uses_only_the_write_scope(gmail_http, minted):
         and body["removeLabelIds"] == ["UNREAD"]
         for path, body, _ in writes
     )
-    assert minted == [(BOX, "gmail", W.WORKSPACE_SCOPES["gmail"])]
+    assert minted == [(BOX, "gmail", True)]
 
 
 def test_only_safe_system_labels_or_existing_user_labels_can_change(gmail_http, minted):

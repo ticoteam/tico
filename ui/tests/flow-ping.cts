@@ -6,7 +6,8 @@ import type {Route} from 'playwright';
 // - Flow narrowed to one bot (its page's Flow mark, decideBotsFlow) shows that bot's items alone, names it in the
 //   crumb, and its ping asks that bot;
 // - a ping that found no bots says so and offers the button again;
-// - a team with no bots opens on All done, not on everyone's items.
+// - a team with no bots opens on All done, not on everyone's items;
+// - ⋯'s Close task shows only to someone who may close the task (the manager of the bot that asked).
 // FLOW_SHOTS=<folder> saves All done, Asking your bots and the narrowed Flow at phone size.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
@@ -45,14 +46,13 @@ const question = (n: number, bot: string, line: string): Item => {
       if (p === '/api/me') return json({...me, config});
       if (p === '/api/v2/config') return json(config);
       if (p === '/api/employees') return json([{slug: 'pm', display_name: 'PM', status: 'active'}, {slug: 'ops', display_name: 'Ops', status: 'active'}]);
-      if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
+      if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
       if (p === '/api/v2/pipelines') return json({pipelines: []});
       if (p === '/api/v2/needs-you') return json({actor: 'human:ana', count: needs.length, items: needs, version: needs.map(x => x.id).join(',') || '0', next: null});
       if (p.startsWith('/api/v2/oks/')) return json({error: 'not_found'}, 404);
       const t = p.match(/^\/api\/v2\/tasks\/(t\d+)$/);
       if (t) return json({task: {...(needs.find(x => x.task_id === t[1])?.task as object), created_at: '2026-11-15T09:00:00Z', attachments: [], links: [], body: ''}});
       if (p === '/api/v2/flow/opinions') return json({opinions: []});
-      if (p === '/api/v2/flow/suggestions') return json({state: 'ready', suggestions: []});
       if (p === '/api/v2/flow/ping') { pings.push(JSON.parse(r.postData() || '{}')); return json({pinged, recent: []}); }
       const m = p.match(/^\/api\/v2\/tasks\/(t\d+)\/asks\/(r\d+)\/answer$/);
       if (m && r.method() === 'POST') { needs = needs.filter(x => x.id !== m[2]); return json({task: {id: m[1]}, answer_id: 'a-' + m[2], requirement_id: m[2]}); }
@@ -85,7 +85,7 @@ const question = (n: number, bot: string, line: string): Item => {
     // ---- 2. The pinged bot's question comes in and comes on screen by itself.
     needs = [question(2, 'bot:pm', 'Price per seat or per company?')];
     await page.evaluate('v2Refresh()');
-    await dialog.getByText('Price per seat or per company?').first().waitFor();
+    await dialog.locator('.dc-q', {hasText: 'Price per seat or per company?'}).waitFor();
     await dialog.locator('[data-dc-choice="Yes"]').click();
     await dialog.getByText('All done').waitFor();
     await dialog.locator('[data-dc="close"]').first().click();
@@ -95,10 +95,20 @@ const question = (n: number, bot: string, line: string): Item => {
     await page.evaluate('v2Refresh()');
     await page.locator('[data-need="r4"]').waitFor();
     await page.evaluate("decideBotsFlow(document.body, ['bot:pm'], 'PM', {scope: 'bot', id: 'pm'})");
-    await dialog.getByText('Drop the free plan?').first().waitFor();
+    await dialog.locator('.dc-q', {hasText: 'Drop the free plan?'}).waitFor();
     assert.equal(await dialog.getByText('Move the backup to Sunday?').count(), 0, 'another bot’s item stays out');
     assert.ok((await dialog.locator('.dc-head').innerText()).includes('PM'), 'the crumb names the bot');
     await shot('narrowed');
+    // ⋯'s Close task shows only to someone who may close the task: here, once PM reports to Ana (not a task mover).
+    const more = dialog.locator('[data-dc="ask-more"]'), closeIt = dialog.locator('[role="menuitem"][data-dc="close-task"]');
+    await page.evaluate('S.me.mover = false; decidePaintSide(DEC)');
+    assert.equal(await more.count(), 0, 'not theirs to close: in the task\'s chat ⋯ holds nothing else');
+    await page.evaluate("S.emps.find(e => e.slug === 'pm').reports_to = 'human:ana'; decidePaintSide(DEC)");
+    await more.click();
+    await closeIt.waitFor();
+    await page.keyboard.press('Escape');   // on a phone ⋯ is a sheet over its own button
+    await closeIt.waitFor({state: 'detached'});
+    await page.evaluate('S.me.mover = true');
     await dialog.locator('[data-dc-choice="Yes"]').click();
     await dialog.getByText('All done').waitFor();
     pinged = [];

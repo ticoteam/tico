@@ -1,18 +1,16 @@
 import type {Locator, Page, Route} from 'playwright';
 // Offline browser check of a question on Flow's ask screen (#3786; Tasks spec "Bots ask people a question with
-// choices"), against a fake of the routes, on a 390 px phone and a 1280 px desktop. On Tico Team a bot's question read
-// "extremely confusing": its task's long text on top, the question twice, "Something else, or tell it what's wrong"
-// and three answers in a row. Now:
-// - the question once, in full (no short heading, no "…"), then one meta line: who asked, the date, #N ↗;
-// - under it the bot's why line and choices (each with its line, Recommended on the one it recommends), a box that
-//   says Answer and Send, the main button, which answers it; Snooze and ⋯ end that row, ⋯ last;
-// - ⋯ holds "I don't know, explain" and "Give it back" (a bot's question) and Ask back (to whoever asked): it opens
-//   and moves by keyboard, Esc closes it onto ⋯; Ask back with an empty box asks for words and sends nothing;
-// - the task is the background: one line, its title, that opens to the text. A wide screen has it on the left, open;
-//   a phone puts it under the question and the answer, shut unless the question is short;
-// - nothing is said twice: the question and the task's title each show once;
-// - Tico's line on a question leaves Send the main button unless it picks one of the choices.
-// FLOW_SHOTS_DIR=build/flow-shots writes question-phone.png, question-phone-open.png and question-desktop.png.
+// choices"), against a fake of the routes, on a 390 px phone and a 1280 px desktop. The question is answered in its
+// task's chat (decide.ts decideChatMount):
+// - the question once, in full, as the asker's last message: who asked, the date, #N ↗ at the right;
+// - in it the bot's why line and its choices (each with its line, Recommended on the one it recommends) to tap;
+// - under the chat's box only Snooze and ⋯ (Close task, Give to…), ⋯ last; it opens and moves by keyboard, Esc closes
+//   it onto ⋯;
+// - the composer's arrow sends a reply named for the question and leaves it with the bot (snoozed for the person);
+//   a person's question takes the words as its answer;
+// - the task, open (no chevron), on the left on a wide screen; on a phone, with no documents, no tabs: just the chat;
+// - nothing is said twice: the question and the task's title each show once.
+// FLOW_SHOTS_DIR=build/flow-shots writes question-phone.png and question-desktop.png.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -77,19 +75,20 @@ const times = (all: string, part: string) => all.split(part).length - 1;
         if (p === '/api/me') return json({...me, config});
         if (p === '/api/v2/config') return json(config);
         if (p === '/api/employees') return json([{name: 'reviewer-2', display_name: 'Reviewer 2'}, {name: 'growth', display_name: 'Growth Owner'}]);
-        if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'ben', name: 'Ben'}], teams: {}});
+        if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'ben', name: 'Ben'}], teams: {}});
         if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
         if (p === '/api/v2/needs-you') return json({actor: 'human:ana', count: needs.length, items: needs, version: String(needs.length), next: null});
-        // Tico's line on the Growth question says what kind of answer is wanted and picks nothing.
+        // Tico's opinion on the Growth question is ready and says what kind of answer is wanted: it picks nothing and shows no line.
         if (p === '/api/v2/flow/opinions') {
           const ids = (JSON.parse(r.postData() || '{}') as {items?: string[]}).items || [];
           return json({opinions: ids.map(id => id === 'r2' ? {id, state: 'ready', pick: '', line: WANTS, note: '', score: 50}
             : {id, state: 'none', pick: '', line: '', note: '', score: null})});
         }
         const read = r.method() === 'GET' ? p.match(/^\/api\/v2\/tasks\/t(\d)$/) : null;
-        if (read) return json({task: {...brief(Number(read[1])), body: read[1] === '3' ? '' : BODY, requester_id: 'human:ana'}});
-        if (r.method() !== 'GET' && p.startsWith('/api/')) {
+        if (read) return json({task: {...brief(Number(read[1])), body: read[1] === '3' ? '' : BODY, requester_id: 'human:ana', conversation_id: 'c' + read[1]}});
+        if (r.method() !== 'GET' && p.startsWith('/api/') && !p.startsWith('/api/v2/threads/')) {
           writes.push({p, body: JSON.parse(r.postData() || '{}') as Record<string, unknown>});
+          if (p === '/api/v2/needs-you/snooze') { const id = (JSON.parse(r.postData() || '{}') as {id: string}).id; needs = needs.filter(n => n.id !== id); return json({id}); }
           const m = p.match(/^\/api\/v2\/tasks\/(t\d)\/asks\/(r\d)\/answer$/);
           if (m) { needs = needs.filter(n => n.id !== m[2]); return json({task: brief(Number(m[1]!.slice(1))), answer_id: 'a-' + m[2], requirement_id: m[2]}); }
           if (/^\/api\/v2\/tasks\/t\d\/comments$/.test(p)) return json({comment: {id: 'c1'}, comments: []});
@@ -106,142 +105,81 @@ const times = (all: string, part: string) => all.split(part).length - 1;
       await dialog.locator('.dc-q', {hasText: Q[0]!}).waitFor();
       await bg.locator('.dc-md').waitFor({state: 'attached'});   // the task's read has come
 
-      // The question once, in full: no short title, no "…", no repeat; the task's title once, in the background.
-      const all = await dialog.evaluate(el => (el as HTMLElement).innerText + ' ' + [...el.querySelectorAll('details:not([open]) .dc-bg-body')].map(d => d.textContent).join(' '));
+      // The question once, in full, as the asker's last message; the task's title once, on the left.
+      const all = await dialog.evaluate(el => (el as HTMLElement).innerText + ' ' + '');
       assert.equal(await dialog.locator('.dc-q').count(), 1, label);
-      assert.equal(await dialog.locator('.dc-q').innerText(), Q[0], `${label}: the question as asked`);
+      assert.equal(await dialog.locator('.dc-chat .dc-msg-ask .dc-q').innerText(), Q[0], `${label}: the question as asked`);
       assert.equal(times(all, Q[0]!), 1, `${label}: the question shows once`);
-      assert.equal(times(all, TITLES[0]!), 1, `${label}: the task's title shows once`);
       assert.equal(times(all, 'Short title 1'), 0, `${label}: the ask's short title is not a heading`);
-      assert.equal(await dialog.locator('.dc-who').count(), 0, `${label}: no "Asked by … on …" line beside the meta line`);
-      assert.match(await dialog.locator('.dc-ask-meta').evaluate(el => el.textContent || ''), /^Reviewer 2·.+·#1 ↗$/, label);
-
-      // The bot's why line and choice cards, then the answer box (Answer) and Send, the main button.
-      assert.equal(await dialog.locator('.dc-why').innerText(), `Why it matters: ${WHY}`, label);
+      assert.match(await dialog.locator('.dc-ask-meta').evaluate(el => el.textContent || ''), /^Reviewer 2·.+#1 ↗$/, label);
+      assert.equal(await dialog.locator('.dc-why').innerText(), WHY, label);
       assert.deepEqual(await dialog.locator('.dc-choice .dc-choice-name').allInnerTexts(), CHOICES, label);
       assert.deepEqual(await dialog.locator('.dc-choice .dc-choice-line').allInnerTexts(), DETAILS, label);
       assert.deepEqual(await dialog.locator('.dc-rec-tag').allInnerTexts(), ['Recommended'], label);
-      const answer = dialog.locator('#dc-other'), send = dialog.locator('[data-dc="other"]');
-      assert.equal(await answer.getAttribute('placeholder'), 'Answer', label);
-      assert.equal(await send.innerText(), 'Send', label);
-      assert.ok(await send.evaluate(el => el.classList.contains('primary')), `${label}: Send is the main button`);
-      assert.equal(await send.isDisabled(), true, `${label}: Send waits for words`);
-      const q = await box(dialog.locator('.dc-q')), list = await box(dialog.locator('.dc-choice-list')), field = await box(answer);
-      assert.ok(q.y < list.y && list.y < field.y, `${label}: question, choices, then the box`);
+      const answer = dialog.locator('.dc-chat .p-text'), arrow = dialog.locator('.dc-chat .p-send');
+      await answer.waitFor();
+      assert.equal(await dialog.locator('[data-dc="other"], #dc-other, [data-dc="approve"]').count(), 0, `${label}: the chat's arrow sends: no Send, no Approve`);
 
-      // One row: Send, Snooze, ⋯ last at its far end; Tico's two answers are not on it.
-      const row = await Promise.all(['other', 'snooze', 'ask-more'].map(k => box(dialog.locator(`[data-dc="${k}"]`))));
-      for (const b of row) {
-        assert.ok(Math.abs(b.y + b.height / 2 - (row[0]!.y + row[0]!.height / 2)) <= 1, `${label}: one row (${JSON.stringify(row)})`);
-        assert.ok(b.height >= (phone ? 44 : 40) && b.x >= 0 && b.x + b.width <= viewport.width && b.y + b.height <= viewport.height, `${label}: tappable, in view`);
-      }
-      assert.ok(row[0]!.x < row[1]!.x && row[1]!.x < row[2]!.x, `${label}: Send · Snooze · ⋯`);
+      // Under the box: Snooze, then ⋯ last at the row's far end.
+      const row = await Promise.all(['snooze', 'ask-more'].map(k => box(dialog.locator(`.dc-side [data-key] [data-dc="${k}"]`))));
+      for (const b of row) assert.ok(b.height >= (phone ? 44 : 40) && b.x >= 0 && b.x + b.width <= viewport.width && b.y + b.height <= viewport.height, `${label}: tappable, in view`);
       const end = await box(dialog.locator('.dc-side [data-key] > .dc-acts'));
-      assert.ok(row[2]!.x - (row[1]!.x + row[1]!.width) <= 12, `${label}: ⋯ sits beside Snooze`);
-      assert.ok(end.x + end.width - (row[2]!.x + row[2]!.width) <= 20, `${label}: ⋯ is last, at the row's far end`);
-      assert.equal(await dialog.locator('[data-dc="dont-know"], [data-dc="give-back"], [data-dc="askback"], [data-dc="write"]').count(), 0, `${label}: in ⋯ only`);
+      assert.ok(row[0]!.x < row[1]!.x && end.x + end.width - (row[1]!.x + row[1]!.width) <= 20, `${label}: Snooze · ⋯, ⋯ last`);
 
-      // The background: on the left and open on a wide screen; on a phone under the answer, one line, shut.
-      assert.equal(await bg.locator('summary .dc-bg-t').innerText(), TITLES[0], label);
-      const thing = await box(dialog.locator('.dc-thing')), side = await box(dialog.locator('.dc-side'));
+      // The task: on the left, open, on a wide screen. On a phone a task with no documents has no tabs, not even
+      // Chat (ui/app/task-docs.ts): the question opens on its chat, the task behind its #N.
       if (phone) {
-        assert.equal(await bg.evaluate(el => (el as HTMLDetailsElement).open), false, `${label}: a long question's background is shut`);
-        assert.ok(thing.y >= field.y + field.height, `${label}: the background comes after the question and its box`);
-        const sum = await box(bg.locator('summary'));
-        assert.ok(sum.height >= 44 && sum.height <= 56, `${label}: one line (${sum.height} px)`);
-        await bg.locator('summary').evaluate(el => el.scrollIntoView({block: 'nearest'}));
-        await bg.locator('summary').click();
-        await bg.locator('.dc-md').waitFor();
-        assert.match(await bg.locator('.dc-md').innerText(), /Needs from the owner/, `${label}: it opens to the task's text`);
-        await page.evaluate(() => document.querySelector('.dc-main')?.scrollTo(0, 0));
+        assert.equal(await dialog.locator('[data-dc="tab"]').count(), 0, `${label}: no documents, no tabs`);
+        assert.equal(await dialog.locator('.dc-thing').isVisible(), false, `${label}: it opens on its chat`);
       } else {
-        assert.equal(await bg.evaluate(el => (el as HTMLDetailsElement).open), true, `${label}: open on the left`);
-        assert.ok(thing.x + thing.width <= side.x + 1, `${label}: the background is the left pane`);
-        assert.ok(await bg.locator('.dc-md').isVisible(), label);
+        const thing = await box(dialog.locator('.dc-thing')), side = await box(dialog.locator('.dc-side'));
+        assert.ok(await bg.locator('.dc-md').isVisible(), `${label}: open on the left, no chevron`);
+        assert.ok(thing.x + thing.width <= side.x + 1, `${label}: the task is the left pane`);
       }
       const sideways = await page.evaluate(() => Math.max(document.documentElement.scrollWidth, document.querySelector('#need-card')!.scrollWidth) - innerWidth);
       assert.ok(sideways <= 0, `${label}: nothing scrolls sideways (${sideways} px)`);
 
-      // ⋯ by keyboard: Enter opens it on its first answer, ↓ ↑ move and wrap, Esc closes it back onto ⋯.
+      // ⋯ by keyboard: Enter opens it on Close task, ↓ ↑ move and wrap, Esc closes it back onto ⋯.
       const more = dialog.locator('[data-dc="ask-more"]'), focused = () => page.evaluate(() => document.activeElement?.textContent || '');
       await more.focus();
       await page.keyboard.press('Enter');
       await dialog.locator('.dc-askw [role="menu"]').waitFor();
-      assert.equal(await more.getAttribute('aria-expanded'), 'true', label);
-      assert.deepEqual(await dialog.locator('.dc-askw [role="menuitem"]').allInnerTexts(), ["I don't know, explain", 'Give it back', 'Ask back'], label);
-      assert.equal(await focused(), "I don't know, explain", label);
-      await page.keyboard.press('ArrowDown');
-      assert.equal(await focused(), 'Give it back', label);
+      assert.deepEqual(await dialog.locator('.dc-askw [role="menuitem"]').allInnerTexts(), ['Close task', 'Give to…'], label);
+      assert.equal(await focused(), 'Close task', label);
       await page.keyboard.press('ArrowUp');
-      await page.keyboard.press('ArrowUp');
-      assert.equal(await focused(), 'Ask back', `${label}: ↑ wraps`);
-      const menu = await box(dialog.locator('.dc-askw [role="menu"]'));
-      assert.ok(menu.x >= 0 && menu.x + menu.width <= viewport.width && menu.y >= 0, `${label}: the menu is in view (${JSON.stringify(menu)})`);
+      assert.equal(await focused(), 'Give to…', `${label}: ↑ wraps`);
       await page.keyboard.press('Escape');
       await dialog.locator('.dc-askw [role="menu"]').waitFor({state: 'detached'});
-      assert.equal(await dialog.evaluate(el => (el as HTMLDialogElement).open), true, `${label}: Esc closes the menu, not Flow`);
       assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('data-dc')), 'ask-more', `${label}: focus back on ⋯`);
+      if (SHOTS) { await page.waitForTimeout(200); await page.screenshot({path: path.join(SHOTS, phone ? 'question-phone.png' : 'question-desktop.png')}); }
 
-      // Ask back with nothing typed asks for the words and sends nothing; with words it writes to the bot, naming
-      // the question, which stays open.
-      await more.click();
-      await dialog.locator('.dc-askw [role="menuitem"]', {hasText: 'Ask back'}).click();
-      assert.equal(await answer.getAttribute('placeholder'), 'Ask what they mean', label);
-      assert.equal(await page.evaluate(() => document.activeElement?.id), 'dc-other', label);
-      assert.equal(writes.length, 0, `${label}: nothing sent`);
+      // The arrow: a reply named for the question, which leaves it with the bot until it writes back; the next comes.
       await answer.fill('Why not show it on the first page instead?');
-      await more.click();
-      await dialog.locator('.dc-askw [role="menuitem"]', {hasText: 'Ask back'}).click();
-      await dialog.locator('.dc-sent', {hasText: 'Sent'}).waitFor();
-      assert.deepEqual(writes, [{p: '/api/v2/tasks/t1/comments', body: {text: 'Why not show it on the first page instead?', ask: 'r1'}}], label);
-      assert.equal(await dialog.locator('.dc-q').innerText(), Q[0], `${label}: the question stays`);
-
-      // Send answers it in the person's words; the next question comes.
-      await answer.fill('No, show the notice first. Half a day is fine.');
-      await send.click();
+      await arrow.click();
       await dialog.locator('.dc-q', {hasText: Q[1]!}).waitFor();
-      assert.deepEqual(writes[1], {p: '/api/v2/tasks/t1/asks/r1/answer', body: {value: 'No, show the notice first. Half a day is fine.', version: 3}}, label);
+      assert.equal(writes[0]!.p, '/api/v2/needs-you/snooze', `${label}: the snooze first`);
+      assert.deepEqual(writes[1], {p: '/api/v2/tasks/t1/comments', body: {text: 'Why not show it on the first page instead?', ask: 'r1'}}, label);
       await calm();
 
-      // The Growth question: Tico's line says what is wanted; Send stays the main button, nothing else is lit.
-      await page.locator('.dc-say', {hasText: WANTS}).waitFor();
+      // The Growth question: its opinion is ready, and no line shows; nothing on the row is lit.
+      await page.waitForFunction("DEC_OP.state.get('r2') === 'ready'");
+      assert.equal(await dialog.locator('.dc-say').textContent(), '', label);
       assert.equal(await dialog.locator('.dc-choice, .dc-choices').count(), 0, label);
-      assert.ok(await send.evaluate(el => el.classList.contains('primary')), `${label}: Tico picks nothing on a question it only explains`);
-      assert.equal(await dialog.locator('.dc-acts .primary').count(), 1, label);
-      assert.equal(times(await dialog.innerText(), Q[1]!), 1, `${label}: the question shows once`);
-      // The pictures are of this one, the question Tico Team's owner found confusing.
-      if (SHOTS) {
-        await page.waitForTimeout(200);
-        await page.screenshot({path: path.join(SHOTS, phone ? 'question-phone.png' : 'question-desktop.png')});
-        if (phone) {
-          await bg.locator('summary').click();
-          await page.waitForTimeout(200);
-          await page.screenshot({path: path.join(SHOTS, 'question-phone-open.png')});
-          await bg.locator('summary').click();
-        }
-      }
-      // A bot's other answers from ⋯: I don't know, explain on a phone, Give it back on a desktop.
-      const [k, value] = phone ? ['dont-know', "I don't know, explain"] : ['give-back', 'Give it back'];
-      await more.click();
-      await dialog.locator(`.dc-askw [data-dc="${k}"]`).focus();
-      await page.keyboard.press('Enter');
+      assert.equal(await dialog.locator('.dc-side [data-key] .primary').count(), 0, label);
+      await answer.waitFor();
+      await answer.fill('Shopify and Amazon; spend in Meta Ads; customers in HubSpot.');
+      await arrow.click();
       await dialog.locator('.dc-q', {hasText: Q[2]!}).waitFor();
-      assert.deepEqual(writes[2], {p: '/api/v2/tasks/t2/asks/r2/answer', body: {value, version: 3}}, label);
       await calm();
 
-      // A person's short question: its background opens on a phone too; ⋯ holds Ask back alone; a choice answers it.
-      await bg.waitFor();
-      assert.equal(await bg.evaluate(el => el.matches('.dc-bg-only') || (el as HTMLDetailsElement).open), true, `${label}: a short question shows its task`);
-      assert.match(await dialog.locator('.dc-ask-meta').evaluate(el => el.textContent || ''), /^Ben·.+·#3 ↗$/, label);
-      await more.click();
-      assert.deepEqual(await dialog.locator('.dc-askw [role="menuitem"]').allInnerTexts(), ['Ask back'], `${label}: a person's question`);
-      await page.keyboard.press('Escape');
+      // A person's question: its choices answer it.
+      assert.match(await dialog.locator('.dc-ask-meta').evaluate(el => el.textContent || ''), /^Ben·.+#3 ↗$/, label);
       await dialog.locator('[data-dc-choice="Green"]').click();
       await page.waitForFunction(() => !document.querySelector('#need-card [data-dc-choice="Green"]'));
-      assert.deepEqual(writes[3], {p: '/api/v2/tasks/t3/asks/r3/answer', body: {value: 'Green', version: 3}}, label);
+      assert.deepEqual(writes.find(w => w.p.endsWith('/r3/answer')), {p: '/api/v2/tasks/t3/asks/r3/answer', body: {value: 'Green', version: 3}}, label);
       assert.deepEqual(errors, [], label);
       await page.close();
     }
-    console.log('PASS: a question shows once in full with who asked; its choices, Answer and Send under it; ⋯ holds the bot\'s two answers and Ask back by keyboard; the task is one line that opens.');
+    console.log('PASS: a question in its task\'s chat: once, in full, with who asked; its choices to tap; the arrow replies and leaves it with the bot; ⋯ by keyboard; the task open on the left or in a phone\'s Task tab.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

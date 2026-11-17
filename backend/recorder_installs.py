@@ -26,6 +26,7 @@ import httpx
 
 from . import hubdb as H
 from . import releases
+from .api_contract import api_v2
 
 log = logging.getLogger("tico.recorder_installs")
 VERSION_HEADER = "x-tico-recorder-version"
@@ -195,7 +196,15 @@ def install(app, store):
 
     app.state.recorder_seen = Seen(store)
 
-    @app.get("/api/v2/meetings/recorder")
+    @app.get(
+        "/api/v2/meetings/recorder",
+        **api_v2(
+            "Meetings",
+            "getMyRecorder",
+            "Your most recently used Tico Recorder, the newest release's version and the download",
+            "MyRecorder",
+        ),
+    )
     def my_recorder(request: Request):
         """Your most recently used Tico Recorder, the newest release's version and the download."""
         who = request.state.identity

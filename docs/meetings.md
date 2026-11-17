@@ -672,7 +672,7 @@ stays is everything that was ever imported or recorded. An upgrading install kee
 - The desktop app no longer captures audio or shows a meeting prompt; it is Tico in a window
   (with no menu-bar item since a later release). It no longer asks for microphone or system-audio permission.
 - `TICO_GEMINI_SECRET_ARN` and `TICO_XAI_SECRET_ARN` are no longer read;
-  `TICO_PROCESSING_OPERATORS` still names the computers that may run importers and calendar publishers.
+  `TICO_PROCESSING_OPERATORS` still names the computers that may run importers.
 
 Recorder Save replays interrupted item uploads before applying current local fields with the item's version.
 If another teammate has changed or sent the item, the Recorder keeps the local draft with Copy and Close.

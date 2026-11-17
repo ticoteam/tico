@@ -687,7 +687,7 @@ function orgHistoryStore(items: string[], at: number) {
 }
 let orgHistoryTimer: ReturnType<typeof setTimeout> | undefined;
 function orgHistorySave() {
-  if (!S.me?.cloud) return;
+  if (!S.me) return;
   clearTimeout(orgHistoryTimer);
   orgHistoryTimer = setTimeout(() => { void post('/v2/preferences/' + ORG_HISTORY_PREF,
     {value: {items: orgHistory(), at: orgHistoryAt()}}).catch(() => {}); }, 800);
@@ -702,13 +702,13 @@ function orgMineStore(on: boolean, at: number) { try { localStorage.setItem(ORG_
 const orgMineKeep = (e: Employee) => !orgMineOn() || !e.my_access || e.my_access.read || e.my_access.write;
 let orgMineTimer: ReturnType<typeof setTimeout> | undefined;
 function orgMineSave() {
-  if (!S.me?.cloud) return;
+  if (!S.me) return;
   clearTimeout(orgMineTimer);
   orgMineTimer = setTimeout(() => { void post('/v2/preferences/' + ORG_MINE_PREF,
     {value: {on: orgMineOn(), at: orgMineAt()}}).catch(() => {}); }, 800);
 }
 async function orgMineSync() {
-  if (!S.me?.cloud) return;
+  if (!S.me) return;
   const v = (await v2Get('/v2/preferences/' + ORG_MINE_PREF))?.value;
   const at = Number(v?.at) || 0;
   if (v && typeof v.on === 'boolean' && at > orgMineAt()) { orgMineStore(v.on, at); renderTree(); }
@@ -716,7 +716,7 @@ async function orgMineSync() {
 }
 async function orgHistorySync() {
   void orgMineSync();
-  if (!S.me?.cloud) return;
+  if (!S.me) return;
   const v = (await v2Get('/v2/preferences/' + ORG_HISTORY_PREF))?.value;
   const items = Array.isArray(v?.items) ? v.items.filter((x: unknown) => typeof x === 'string') : null;
   if (items && (Number(v.at) || 0) > orgHistoryAt()) {
@@ -990,7 +990,7 @@ function renderTree() {
   document.querySelectorAll<HTMLElement>('[data-nav]').forEach(a => {
     // More is current only for pages the bottom bar does not have its own button for (Updates is in More, and so is
     // Threads but for a bot, whose bar keeps its tab: tasks.ts flowTabPaint).
-    const inOverview = S.route === HOME || rdUnder(S.route, OVERVIEW) || rdUnder(S.route, CP_ROUTE);   // Company's tabs, Graph included
+    const inOverview = S.route === HOME || rdUnder(S.route, OVERVIEW) || rdUnder(S.route, CP_ROUTE);   // Company, a factory's floor and Share
     const mobilePrimary = inOverview || isTasksRoute(S.route) || S.route.startsWith('#/task/') || S.route === '#/roadmap'
       || ((S.route.startsWith(THREADS_ROUTE) || S.route.startsWith(THREAD_ROUTE)) && document.querySelector<HTMLElement>('#mobile-threads')?.hidden === false);
     const isCurrent = (a.dataset.nav === 'overview' && inOverview) ||

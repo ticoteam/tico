@@ -1,4 +1,4 @@
-"""Product's spec is OK'd by a person once (docs/pipelines-v3.md, "Product"): Jev checks the Spec page in Spec and the
+"""Product's spec is OK'd by a person once (docs/dev/pipelines-v3.md, "Product"): Jev checks the Spec page in Spec and the
 task moves on when Jev passes it; a person OKs it in OK spec. A pair Product (pipeline_settings.LEGACY) reshaped by hand
 into the one-pipeline stages kept its person on the Spec page, so the spec waited on them in Spec and was asked of them
 again in OK spec; migration 20261115192933_spec_ok_once takes that person off where the stage is still the default.
@@ -66,7 +66,10 @@ def _reshaped(c, spec_who="none", person=ANA):
     spec["who_oks"] = spec_who
     shipped = {s["id"]: s for s in PS.PRESETS[PS.PRODUCT]["stages"]}
     added = [copy.deepcopy(shipped["product-related"]), copy.deepcopy(shipped["product-ok-spec"])]
-    added[1]["requirements"][0]["person_id"] = person
+    # Both pages as they were named then, before stage approvals named a document (migration 20261117061626).
+    spec["line"] = "Spec page"
+    spec["settings"] = {k: v for k, v in (spec.get("settings") or {}).items() if k != "document"}
+    added[1]["requirements"][0].update(line="Spec page", settings=dict(spec["settings"]), person_id=person)
     for stage in added:
         stage["owner"] = OWNER
     record["stages"] = [*stages[: at + 1], *added, *stages[at + 1 :]]
@@ -77,7 +80,7 @@ def _in_spec_with_a_met_page(c, store):
     row = H.task_create(c, ANA, "Saved carts", PITCH, OWNER, pipeline="product", lint=False)
     task = E.move(c, row["id"], "product-spec", ANA, "On for this test")
     fid, _ = _page(c, store)
-    made = P.attach(c, task["id"], "Spec page", "page:" + fid, ANA)
+    made = P.attach(c, task["id"], _spec_page(c)["line"], "page:" + fid, ANA)
     _say(c, made, "met")
     return task
 
@@ -93,8 +96,8 @@ def test_a_new_companys_spec_names_nobody_and_ok_spec_is_the_one_person_ok(c):
     spec = _spec_page(c)
     assert (spec["person_id"], R.people_only(spec)) == (None, False), "Jev checks Spec; no person is named"
     ok_spec = _spec_page(c, stage="product-ok-spec")
-    assert (ok_spec["who_oks"], ok_spec["person_id"], ok_spec["line"]) == ("people_only", None, "Spec page")
-    pages = [r for s in PS.read(c, "product")["stages"] for r in s["requirements"] if r["line"] == "Spec page"]
+    assert (ok_spec["who_oks"], ok_spec["person_id"], ok_spec["line"]) == ("people_only", None, "Spec")
+    pages = [r for s in PS.read(c, "product")["stages"] for r in s["requirements"] if r["line"] == "Spec"]
     assert [R.people_only(r) or bool(r["person_id"]) for r in pages] == [False, True], "one person OK of the spec"
 
 
@@ -102,7 +105,7 @@ def test_a_spec_jev_passes_leaves_spec_without_a_person(c, store):
     PS.ensure_presets(c)
     task = _in_spec_with_a_met_page(c, store)
     (standing,) = R.standings(c, E.task(c, task["id"]))
-    assert (standing.state, standing.line) == (R.MET, "Jev passed it")
+    assert (standing.state, standing.line) == (R.MET, "Decision model passed it")
     _beat(c)
     assert E.task(c, task["id"])["stage_id"] == "product-related"
 
@@ -112,7 +115,9 @@ def test_the_migration_takes_the_person_off_a_reshaped_pair_spec_and_its_waiting
     _reshaped(c)
     task = _in_spec_with_a_met_page(c, store)
     (standing,) = R.standings(c, E.task(c, task["id"]))
-    assert (standing.state, standing.on) == (R.WAITING, ANA), "before: Jev passed it, yet it waits on Ana in Spec"
+    assert (standing.state, standing.on) == (R.WAITING, ANA), (
+        "before: Decision model passed it, yet it waits on Ana in Spec"
+    )
     version = PS.read(c, "product")["settings_version"]
     ok_spec = _spec_page(c, stage="product-ok-spec")
 

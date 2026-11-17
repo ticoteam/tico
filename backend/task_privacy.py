@@ -590,6 +590,10 @@ def page(c, who, cid, *, before=None, since=None, limit=200, task_id=None, max_b
     its messages come to that many bytes as JSON (the newest message is always sent); the rest pages back."""
     snapshot(c)
     clauses, args = ["conversation_id=?"], [cid]
+    if not H.is_bot(getattr(who, "actor", who)):
+        # A person reads the room's timeline: the messages with a seq. Tico's notices to a bot and its carriers are
+        # the bot's run input (H.run_notice), read by the bot alone.
+        clauses.append("seq IS NOT NULL")
     if before:
         anchor = c.execute("SELECT rowid,* FROM messages WHERE id=? AND conversation_id=?", (before, cid)).fetchone()
         if not anchor or not message_readable(c, actor(who), anchor):

@@ -36,6 +36,7 @@ from pydantic import Field
 from . import hubdb as H
 from .models import Contract
 from . import bot_settings as BS
+from .api_contract import api_v2
 
 DOER, REVIEWER, LEAD, MANAGER, RESPONDER, MONITOR, CUSTOM = (
     "doer",
@@ -649,7 +650,7 @@ def mismatches(c):
         elif name == DOER:
             seen = c.execute(
                 "SELECT count(*) AS n, sum(coalesce(did_nothing,0)=1) AS idle FROM attempts WHERE bot_id=? "
-                "AND created_at>? AND settled_at IS NOT NULL AND coalesce(purpose,'')<>'keep warm'",
+                "AND created_at>? AND settled_at IS NOT NULL",
                 (bot, since),
             ).fetchone()
             created = c.execute("SELECT created_at FROM bots WHERE id=?", (bot,)).fetchone()
@@ -673,13 +674,24 @@ def install(app, store, auth, mutate, settings_admin):
             raise Problem("not_found", "Bot not found", 404)
         auth.require_see(c, who, bot)
 
-    @app.get("/api/v2/profiles")
+    @app.get(
+        "/api/v2/profiles",
+        **api_v2(
+            "Bots",
+            "listProfiles",
+            "Every bot profile with its one-line description, its values and the wake rows it adds, for a picker",
+            "ProfileChoices",
+        ),
+    )
     def profile_choices(request: Request):
         """Every profile with its one-line description, its values and the wake rows it adds, for a picker."""
         auth.domain(request.state.identity)
         return {"profiles": choices()}
 
-    @app.get("/api/v2/bots/{bot}/profile")
+    @app.get(
+        "/api/v2/bots/{bot}/profile",
+        **api_v2("Bots", "getBotProfile", "A bot's profile and the values it runs on", "BotProfileState"),
+    )
     def bot_profile(request: Request, bot: str):
         """The bot's profile and the values it runs on."""
         who = request.state.identity
@@ -688,7 +700,15 @@ def install(app, store, auth, mutate, settings_admin):
             seeing(c, who, bot)
             return view(c, bot, settings_admin._config(c, bot))
 
-    @app.post("/api/v2/bots/{bot}/profile")
+    @app.post(
+        "/api/v2/bots/{bot}/profile",
+        **api_v2(
+            "Bots",
+            "setBotProfile",
+            "Set the bot's profile (doer, reviewer, lead, manager, responder, monitor, custom); leaving custom deletes the wake rules it copied and needs confirm_drop_rules",
+            "BotProfileState",
+        ),
+    )
     def bot_profile_set(request: Request, bot: str, body: BotProfile):
         """Set the bot's profile; the revision you read must still be current (409 version_conflict otherwise)."""
         who = request.state.identity

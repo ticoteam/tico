@@ -1,6 +1,8 @@
-"""Stored legacy mail is browsable by people, never by bots. Live Workspace coverage is in test_mail_live."""
+"""Mail is read live from Gmail by people and bots at their own level, never by runners; no copy is kept. Workspace
+coverage is in test_mail_live."""
 
 from backend.tests.helpers.api import get, runner, setup_attempt  # noqa: F401
+from backend.tests.helpers.fake_gmail import fake_gmail  # noqa: F401
 from backend.tests.helpers.mail_api import put_mail, seed_org
 
 
@@ -79,10 +81,11 @@ def subjects(api, token, **params):
     return [row["subject"] for row in get(api, path, token)["messages"]]
 
 
-def test_steven_sees_only_his_mailbox_and_bots_and_runners_see_none(api):
+def test_steven_sees_only_his_mailbox_a_bot_without_a_level_sees_none_and_runners_are_refused(api, fake_gmail):
     seed_mail(api)
     assert boxes(api, "ben-test") == {"ben@acme.example"}
-    assert subjects(api, "ben-test") == ["Ben standup"]
+    assert subjects(api, "ben-test", mailbox="ben@acme.example") == ["Ben standup"]
+    get(api, "mail/messages", "ben-test", expected=422)  # Gmail is read one mailbox at a time
     get(api, "mail/messages?mailbox=ana@acme.example", "ben-test", expected=403)
     get(api, "mail/messages/c1?mailbox=ana@acme.example", "ben-test", expected=403)
     msg = get(api, "mail/messages/s1?mailbox=ben@acme.example", "ben-test")
@@ -90,5 +93,5 @@ def test_steven_sees_only_his_mailbox_and_bots_and_runners_see_none(api):
     machine = runner(api)
     get(api, "mail/messages", machine["token"], expected=403)
     _, _, attempt = setup_attempt(api)
-    get(api, "mail/mailboxes", attempt["token"], expected=403)
+    assert get(api, "mail/mailboxes", attempt["token"])["mailboxes"] == []  # a bot holds no level on any of them
     get(api, "mail/messages/c1?mailbox=ana@acme.example", attempt["token"], expected=403)

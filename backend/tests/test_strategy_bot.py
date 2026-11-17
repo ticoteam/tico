@@ -250,13 +250,10 @@ def test_the_strategy_bot_heads_the_chart_gains_no_access_and_answers_to_its_old
     names = labels(api)
     access = {names.get(b["id"], b["id"]): b["access"] for b in after["bots"]}
     assert access["eng-lead"]["write"] is False and access["eng-lead"]["read"] is False
-    # the old ceo bot paths answer as the strategy bot paths and stay out of the api document
-    old, new = api.get("/api/v2/ceo-bot", headers=signed_in()), api.get("/api/v2/strategy-bot", headers=signed_in())
-    assert old.status_code == new.status_code == 200 and old.json() == new.json()
-    changed = api.post("/api/v2/ceo-bot/level", json={"level": 2}, headers=signed_in())
+    changed = api.post("/api/v2/strategy-bot/level", json={"level": 2}, headers=signed_in())
     assert changed.status_code == 200 and changed.json()["level"] == 2
     assert api.get("/api/v2/strategy-bot", headers=signed_in()).json()["level"] == 2
-    assert api.get("/api/v2/ceo-bot/log", headers=signed_in()).status_code == 200
+    assert api.get("/api/v2/strategy-bot/log", headers=signed_in()).status_code == 200
     paths = api.get("/api/v2/openapi.json", headers=signed_in()).json()["paths"]
     assert "/api/v2/strategy-bot" in paths and not [p for p in paths if "ceo-bot" in p]
 
@@ -277,15 +274,13 @@ def test_the_name_sticks_and_only_the_owner_renames_it(environment):
 
     with api.app.state.store.read() as c:
         assert names.lookup(c, {"bot:strategy-owner"}) == {"bot:strategy-owner": "Strategy Owner"}
-    assert api.post("/api/v2/onboarding/complete", json={}, headers=signed_in()).status_code == 200
+    assert api.post("/api/v2/setup/complete", json={}, headers=signed_in()).status_code == 200
     from backend.app import create_app
     from fastapi.testclient import TestClient
 
     with TestClient(create_app(api.app.state.store.settings)):  # a restart is an update
         pass
     assert stored(api)[1]["strategy-owner"] == "Strategy Owner"
-    refused = api.post("/api/v2/strategy-owner/turn-on", json={}, headers=as_person(api, "quinn"))
-    assert refused.status_code == 403 and "Strategy Owner" in refused.json()["error"]["detail"]
     # only the owner renames it and the new name shows everywhere
     for headers in (as_person(api, "riley"), as_person(api, "quinn"), as_bot(api, "botops")):
         refused = definition(api, {"display_name": "Atlas"}, headers)
@@ -304,7 +299,7 @@ def test_the_name_sticks_and_only_the_owner_renames_it(environment):
     with api.app.state.store.read() as c:
         assert names.lookup(c, {"bot:strategy-owner"}) == {"bot:strategy-owner": "Atlas"}
         assert strategy_bot.name(c) == "Atlas"
-    assert api.post("/api/v2/onboarding/complete", json={}, headers=signed_in()).status_code == 200
+    assert api.post("/api/v2/setup/complete", json={}, headers=signed_in()).status_code == 200
     from backend.app import create_app
     from fastapi.testclient import TestClient
 

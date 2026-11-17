@@ -18,7 +18,11 @@ def page(path, key=None, **query):
 
 # Nav page -> (list endpoint, key of the list in the body or None when the body is the list, query).
 PAGES = {
+    # Company (#/home), the reader's own cards (person:me), the Floor first.
     "overview": page("places/person%3Ame", "pins"),
+    # Company's Floor card (ui/app/company-floor.ts): stacks in the Growth, Success and Product halls
+    # (demo_sections/floor.py).
+    "floor": page("company/floor", "factories"),
     "updates": page("updates", "updates"),
     "tasks": page("tasks", "tasks"),
     "docs": page("docs", "docs"),
@@ -38,6 +42,8 @@ PAGES = {
     "inbox": page("threads", "threads"),
     "strategy": page("strategy", "bets"),
     "growth": page("growth/numbers", "months", months=24),
+    # Not a nav row: the Growth page's Retention card, computed from the demo's customers (backend/demo_sections/growth.py).
+    "growth-retention": page("growth/computed", "cohorts", by="plan"),
     "finance": page("finance/transactions", "rows"),
     "rules": page("rules", "rules"),
     # The Rules section's tabs, one row each under Rules (ui/app/org-rules.ts reads).

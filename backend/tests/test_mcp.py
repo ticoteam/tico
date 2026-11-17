@@ -85,7 +85,9 @@ def test_every_thread_tool_is_listed_with_a_schema_a_caller_can_check(api):
     assert THREAD_READS | THREAD_WRITES <= set(tools)
     for name in THREAD_READS | THREAD_WRITES:
         schema = tools[name]["inputSchema"]
-        assert schema["additionalProperties"] is False, name
+        # The listing leaves out `additionalProperties: false` for room (#3935); the tool's own schema keeps it, and a
+        # call with an unknown argument is still refused.
+        assert hubtools.BY_NAME[name]["inputSchema"]["additionalProperties"] is False, name
         assert set(schema.get("required", [])) <= set(schema["properties"]), name
         assert ("operation_id" in schema["properties"]) == (name in THREAD_WRITES), name
     assert "kind" not in tools["tico_thread_post"]["inputSchema"]["properties"]  # asks are gone: a post is a say
@@ -205,7 +207,8 @@ def test_tools_write_through_the_same_rules_as_http(api):
     )
     assert not err and out["ok"] is True and any("verb" in w for w in out["warnings"])
     err, out = call(api, "tico_task_create", {"owner": "ana", "title": "The thing", "body": wordy}, token=token)
-    assert not err and out["task"]["owner_id"] == "human:ana" and any("words outside" in w for w in out["warnings"])
+    # The bot's own task, with its question to Ana (backend/person_asks.py).
+    assert not err and out["task"]["owner_id"] == "bot:ops" and any("words outside" in w for w in out["warnings"])
     wordy_task = out["task"]["id"]
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM tasks WHERE requester_id='bot:ops'").fetchone()[0] == 1
@@ -364,7 +367,7 @@ SUMMARY_FIELDS = {
 }
 
 
-def heavy_heartbeat(api, r, bots, n, release="0.4.56", update=None, huge=""):
+def heavy_heartbeat(api, r, bots, n, release="0.6.0-rc.2", update=None, huge=""):
     """What a busy computer reports: runtime catalogs, every bot's readiness with instruction warnings, a long error
     history and its repositories (synthetic, at the sizes the models allow)."""
     models = ["model-" + str(m) for m in range(30)]
@@ -461,10 +464,10 @@ def eleven_computers(api):
             r,
             mine,
             n,
-            release="0.4.50" if n == 1 else "0.4.56",
+            release="0.6.0-rc.1" if n == 1 else "0.6.0-rc.2",
             update={"state": "failed", "error": "download refused"}
             if n == 2
-            else {"state": "updating", "target": "0.4.56"}
+            else {"state": "updating", "target": "0.6.0-rc.2"}
             if n == 3
             else None,
             huge="bot-13",
@@ -474,7 +477,7 @@ def eleven_computers(api):
 
 
 def test_the_computer_list_is_a_short_summary_and_one_computer_reads_in_capped_pages(api, monkeypatch):
-    monkeypatch.setenv("TICO_VERSION", "0.4.56")
+    monkeypatch.setenv("TICO_VERSION", "0.6.0-rc.2")
     computers = eleven_computers(api)
     add_bots(api, [f"helper-with-a-long-name-{k:03d}" for k in range(300)], computers[5]["runner_id"])
     assert len(json.dumps(get(api, "computers"))) > 200_000  # the Computers page keeps everything

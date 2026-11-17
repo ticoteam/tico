@@ -1,6 +1,6 @@
 """`tico bot check-names <bot>`: the names a bot's own checkout still uses from before the renames.
 
-The map is clients/renames.json (written by scripts/cleanup/export_names.py): the column renames that have shipped, with
+The map is clients/renames.json (frozen when the renames shipped): the column renames that have shipped, with
 the tables each one moved on and the tables that keep the old name, the API fields that moved, and the tico CLI commands
 that were renamed or removed. The command runs on this computer, beside the bot's files: no Tico server, no credential,
 nothing is sent.

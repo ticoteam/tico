@@ -126,7 +126,7 @@ def sync(c, settings):
             counts[key] = counts.get(key, 0) + row['n']
     for row in queued:
         # Reuse wake batching's history/digest carrier; retries retain their own jobs and checkpoints.
-        if execution.cooling_off(c, row['bot_id']):
+        if execution.cooling_off(c, settings, row['bot_id']):
             batch_waiters(c, row['bot_id'])
     for (raw,) in c.execute(
         'SELECT value FROM registry_metadata WHERE key LIKE ?', (login_holds.PREFIX + '%',)
@@ -136,8 +136,11 @@ def sync(c, settings):
             continue
         source = login_holds.key(hold['runner_id'], hold.get('profile'), hold['runtime'])
         count = counts.get((hold['runner_id'], hold.get('profile') or '', hold['runtime']), 0)
-        kind = f"{hold['runtime'].capitalize()} " + (
-            'provider capacity' if hold.get('capacity') else 'subscription quota'
+        kind = (
+            'Tico AI Gateway'
+            if hold.get('profile') == login_holds.GATEWAY
+            else f"{hold['runtime'].capitalize()} "
+            + ('provider capacity' if hold.get('capacity') else 'subscription quota')
         )
         observe(c, source, kind, waiting=count, until=hold.get('until'), since=hold.get('since'))
         seen.add(PREFIX + hashlib.sha256(source.encode()).hexdigest()[:32])

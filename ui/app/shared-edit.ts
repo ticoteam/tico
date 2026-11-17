@@ -129,22 +129,20 @@ function sharedPlaceStart(state: SharedPlaceState, options: SharedPlaceOptions):
   shared.timer = setInterval(() => { if (!document.hidden && current()) void heartbeat(false); }, 15000);
   shared.safety = setInterval(() => { if (!document.hidden) refresh(); }, 180000);
   if (!document.hidden) void heartbeat(false);
-  if (typeof EventSource !== 'undefined') {
-    const query = new URLSearchParams({topics: topic + ',presence', [filter]: id, place});
-    if (after != null) query.set('after', String(after));
-    const source = shared.source = new EventSource(API + '/v2/events?' + query);
-    source.addEventListener(topic, (event: MessageEvent) => {
-      if (!current()) return;
-      const data = JSON.parse(event.data);
-      if (data.gone) { gone(); return; }
-      getForget(); changed(data);
-    });
-    source.addEventListener('presence', () => { if (current()) void presence(); });
-    // A connect reads the item and who is here again, for what changed while no stream carried it; the first one of a
-    // stream that resumes from before the item was read replays those changes instead, so it reads nothing.
-    let resumed = after != null;
-    source.addEventListener('ready', () => { if (resumed) resumed = false; else refresh(); });
-    source.addEventListener('reset', refresh);
-    source.addEventListener('expired', () => { if (current()) gone(); });
-  }
+  const query = new URLSearchParams({topics: topic + ',presence', [filter]: id, place});
+  if (after != null) query.set('after', String(after));
+  const source = shared.source = new EventSource(API + '/v2/events?' + query);
+  source.addEventListener(topic, (event: MessageEvent) => {
+    if (!current()) return;
+    const data = JSON.parse(event.data);
+    if (data.gone) { gone(); return; }
+    getForget(); changed(data);
+  });
+  source.addEventListener('presence', () => { if (current()) void presence(); });
+  // A connect reads the item and who is here again, for what changed while no stream carried it; the first one of a
+  // stream that resumes from before the item was read replays those changes instead, so it reads nothing.
+  let resumed = after != null;
+  source.addEventListener('ready', () => { if (resumed) resumed = false; else refresh(); });
+  source.addEventListener('reset', refresh);
+  source.addEventListener('expired', () => { if (current()) gone(); });
 }

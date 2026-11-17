@@ -10,12 +10,9 @@ import re
 from . import brand_icons
 from . import ui_build
 from . import ui_bundle
-from .route_renames import install as install_route_renames
 
 
 def register(app, auth, settings):
-    install_route_renames(app)  # after every route: the new spellings canonical, the old ones deprecated
-
     # The two icons browsers ask for at the root (backend/brand_icons.py). Before the static mounts below, which would
     # otherwise answer first.
     @app.api_route("/favicon.ico", methods=["GET", "HEAD"], include_in_schema=False)
@@ -190,39 +187,6 @@ def register(app, auth, settings):
         except ui_build.StaleBuild as exc:
             raise Problem("ui_not_built", str(exc), 503) from None
         return compiled_reply(request, path, "application/json")
-
-    # three.js is ~790 KB of text and StaticFiles sends it as is; the Overview waits on it. Gzipped once in
-    # memory it is ~200 KB.
-    three_dir, three_cache = settings.ui_dir / "vendor" / "three", {}
-
-    @app.api_route("/tico/ui/vendor/three/{name}", methods=["GET", "HEAD"], include_in_schema=False)
-    @app.api_route("/vendor/three/{name}", methods=["GET", "HEAD"], include_in_schema=False)
-    async def ui_three(request: Request, name: str):
-        import gzip, hashlib
-        from .json_response import accepts_gzip
-
-        path = three_dir / name
-        if not re.fullmatch(r"[A-Za-z0-9_.-]+\.js", name) or not path.is_file():
-            raise Problem("not_found", "Not found", 404)
-        stat = path.stat()
-        entry = three_cache.get(name)
-        if not entry or entry[0] != (stat.st_mtime_ns, stat.st_size):
-            raw = path.read_bytes()
-            tag = hashlib.sha1(raw).hexdigest()[:20]
-            entry = three_cache[name] = ((stat.st_mtime_ns, stat.st_size), raw, gzip.compress(raw, 6, mtime=0), tag)
-        _, raw, gz, tag = entry
-        zipped = accepts_gzip(request.headers)
-        etag = f'"{tag}{"-gz" if zipped else ""}"'
-        headers = {"ETag": etag, "Vary": "Accept-Encoding"}
-        if zipped:
-            headers["Content-Encoding"] = "gzip"
-        if etag in [t.strip().removeprefix("W/") for t in request.headers.get("if-none-match", "").split(",")]:
-            return Response(status_code=304, headers=headers)
-        return Response(
-            (gz if zipped else raw) if request.method == "GET" else None,
-            media_type="text/javascript; charset=utf-8",
-            headers=headers,
-        )
 
     app.mount("/tico/ui", StaticFiles(directory=settings.ui_dir, html=True), name="ui-prefixed")
     app.mount("/", StaticFiles(directory=settings.ui_dir, html=True), name="ui")

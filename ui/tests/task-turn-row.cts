@@ -40,7 +40,6 @@ const CASES: [string, ReturnType<typeof turn>, string | null][] = [
           await page.evaluate(h => { location.hash = h; }, '#/task/' + id);
           const win = page.locator(`#task-modal[open][data-task="${id}"]`);
           await win.locator('.task-chat .task-comments').waitFor({state: 'attached'});
-          await win.getByRole('tab', {name: 'Chat'}).click();
           const row = win.locator('.task-comments .th-status-turn');
           if (want === null) { assert.equal(await row.count(), 0, `${id}: no row when the turn has no words`); continue; }
           await row.waitFor();

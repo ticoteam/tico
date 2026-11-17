@@ -9,10 +9,9 @@ import time_machine
 
 from backend import automations
 from backend import hubdb as H
-from backend.store import sweep_mail
 from backend.tests.helpers.api import assign, get, headers, post, ready, runner  # noqa: F401
 from backend.tests.helpers.automation_turns import finish
-from backend.tests.helpers.connectors import mail_message
+from backend.tests.helpers.fake_gmail import fake_gmail  # noqa: F401
 
 WAKE = {"id": "tell", "type": "action", "do": "wake_bot", "args": {"bot": "ops", "text": "{{task.title}}"}}
 
@@ -110,7 +109,7 @@ def test_a_paused_automation_starts_nothing(api):
 
 
 # ---------------------------------------------------------------------------------------------- mail and the send switch
-def test_mail_runs_the_inboxs_automation_and_queues_mail_actions_for_its_computer(api):
+def test_mail_runs_the_inboxs_automation_and_the_server_carries_out_its_mail_actions(api, fake_gmail):
     archive = {
         "id": "gate",
         "type": "filter",
@@ -121,10 +120,10 @@ def test_mail_runs_the_inboxs_automation_and_queues_mail_actions_for_its_compute
     aid = make(api, {"type": "message", "inbox": "ana@acme.example"}, [archive])
     assert len(fire(api, automations.on_mail, "ANA@acme.example", mail())) == 1
     assert fire(api, automations.on_mail, "ben@acme.example", mail("m2")) == []
-    assert runs(api, aid)["runs"][0]["status"] == "waiting"  # until the mail computer reports the archive
+    assert runs(api, aid)["runs"][0]["status"] == "ok"  # the server archived it in Gmail
     with api.app.state.store.read() as c:
         queued = [dict(r) for r in c.execute("SELECT mailbox, msg_id, action, state FROM automation_mail_actions")]
-    assert queued == [{"mailbox": "ana@acme.example", "msg_id": "m1", "action": "archive", "state": "queued"}]
+    assert queued == [{"mailbox": "ana@acme.example", "msg_id": "m1", "action": "archive", "state": "done"}]
 
 
 def test_send_reply_follows_the_inbox_send_switch(api):
@@ -229,8 +228,8 @@ def test_a_new_schedule_runs_at_the_next_run_it_showed_even_if_the_first_pass_co
     assert len(done) == 1 and done[0]["trigger_ref"] == "schedule:2026-10-21T07:00:00.000000Z"
 
 
-def test_a_batched_inbox_filters_on_receipt_and_runs_the_rest_at_the_batch_time(api):
-    gate = {"id": "gate", "type": "filter", "rules": [{"when": [], "then": [{"do": "label"}]}]}
+def test_a_batched_inbox_filters_on_receipt_and_runs_the_rest_at_the_batch_time(api, fake_gmail):
+    gate = {"id": "gate", "type": "filter", "rules": [{"when": [], "then": [{"do": "label", "args": {"name": "x"}}]}]}
     with time_machine.travel(datetime(2026, 10, 28, 9, 0, tzinfo=timezone.utc), tick=False):
         aid = make(
             api,
@@ -244,9 +243,9 @@ def test_a_batched_inbox_filters_on_receipt_and_runs_the_rest_at_the_batch_time(
     with time_machine.travel(datetime(2026, 10, 28, 13, 0, 5, tzinfo=timezone.utc), tick=False):
         automations.tick(api.app.state.store)
         done = runs(api, aid)["runs"][0]
-    # Every step ran; the run still waits for the mail computer to report the label.
-    assert [(s["id"], s["status"]) for s in done["steps"]] == [("gate", "waiting"), ("tell", "ok")]
-    assert done["status"] == "waiting"
+    # Every step ran, and the server labelled the message in Gmail.
+    assert [(s["id"], s["status"]) for s in done["steps"]] == [("gate", "ok"), ("tell", "ok")]
+    assert done["status"] == "ok"
 
 
 # ---------------------------------------------------------------------------------------------- retention
@@ -358,108 +357,6 @@ def test_on_mail_sets_the_fields_on_the_payload(api):
 T0 = datetime(2026, 10, 28, 12, 0, tzinfo=timezone.utc)
 
 
-def sync(api, machine, messages, synced_at, mailbox="ana@acme.example"):
-    """One batch of the runner's mail sync (runner_support/connectors.py `_post_mail`), sent at the time given."""
-    post(
-        api,
-        "connectors/mail/messages",
-        {"mailbox": mailbox, "messages": messages, "deleted": [], "synced_at": synced_at.isoformat()},
-        machine["token"],
-    )
-
-
-def test_a_first_sync_acts_on_the_last_day_of_mail_and_passes_the_days_before_it_over(api):
-    aid = make(api, {"type": "message", "inbox": "ana@acme.example"}, [NOOP])
-    machine = runner(api)
-    ages = [timedelta(hours=5.3 * i) for i in range(45)]  # 45 messages over about ten days, newest first
-    messages = [
-        mail_message(msg_id=f"f{i:02d}", epoch=int((T0 - age).timestamp()), subject="Invoice")
-        for i, age in enumerate(ages)
-    ]
-    with time_machine.travel(T0, tick=False):
-        sync(api, machine, messages, T0)
-    assert ran(api, aid) == {f"f{i:02d}" for i, age in enumerate(ages) if age < timedelta(hours=24)}
-    assert len(ran(api, aid)) == 5
-    assert runs(api, aid)["daily"][0]["dropped"] == 0  # passed over, not dropped: it was never news
-
-
-def test_a_later_sync_acts_on_the_mail_that_arrives_after_the_first(api):
-    aid = make(api, {"type": "message", "inbox": "ana@acme.example"}, [NOOP])
-    machine = runner(api)
-    with time_machine.travel(T0, tick=False):
-        sync(api, machine, [mail_message(msg_id="old", epoch=int((T0 - timedelta(days=3)).timestamp()))], T0)
-    later = T0 + timedelta(minutes=10)
-    arrivals = [
-        mail_message(msg_id="n1", epoch=int((T0 + timedelta(minutes=1)).timestamp())),
-        mail_message(msg_id="n2", epoch=int((T0 + timedelta(minutes=5)).timestamp())),
-    ]
-    with time_machine.travel(later, tick=False):
-        sync(api, machine, arrivals, later)
-    assert ran(api, aid) == {"n1", "n2"}
-
-
-def watch_of(api, mailbox="ana@acme.example"):
-    with api.app.state.store.read() as c:
-        return c.execute("SELECT watching_since_at FROM mail_mailboxes WHERE address=?", (mailbox,)).fetchone()[0]
-
-
-def test_a_sync_after_a_long_gap_runs_the_gap_once_and_the_watch_does_not_move(api):
-    """A reconnect after days offline brings back the mail that arrived meanwhile, and it is news: it runs once each,
-    and the mail from before the watch (set by the first sync) stays passed over."""
-    aid = make(api, {"type": "message", "inbox": "ana@acme.example"}, [NOOP])
-    machine = runner(api)
-    with time_machine.travel(T0, tick=False):
-        sync(
-            api,
-            machine,
-            [
-                mail_message(msg_id="before", epoch=int((T0 - timedelta(hours=1)).timestamp())),
-                mail_message(msg_id="ancient", epoch=int((T0 - timedelta(days=3)).timestamp())),
-            ],
-            T0,
-        )
-    back = T0 + timedelta(days=3)
-    gap = [mail_message(msg_id=f"gap{d}", epoch=int((T0 + timedelta(days=d, hours=6)).timestamp())) for d in (1, 2)]
-    with time_machine.travel(back, tick=False):
-        sync(api, machine, gap, back)  # the reconnect: the gap's mail comes back now
-    later = back + timedelta(minutes=10)
-    with time_machine.travel(later, tick=False):
-        sync(
-            api,
-            machine,
-            gap[:1] + [mail_message(msg_id="after", epoch=int((back + timedelta(minutes=2)).timestamp()))],
-            later,
-        )
-    assert ran(api, aid) == {"before", "gap1", "gap2", "after"}  # "gap1" again in the last batch is not news twice
-    refs = [r["trigger_ref"] for r in runs(api, aid)["runs"]]
-    assert len(refs) == len(set(refs))
-    assert watch_of(api) == "2026-10-27T12:00:00.000000Z"  # the first sync's day back, kept
-
-
-def test_a_mailbox_from_before_the_watch_was_kept_starts_its_watch_at_its_first_sync(api):
-    """Its last sync is no guide: a day back from the first sync after the upgrade, so mail older than that is passed
-    over even when the mailbox last synced long before."""
-    aid = make(api, {"type": "message", "inbox": "ana@acme.example"}, [NOOP])
-    machine = runner(api)
-    old = T0 - timedelta(days=10)
-    with time_machine.travel(old, tick=False):
-        sync(api, machine, [mail_message(msg_id="earlier", epoch=int((old - timedelta(hours=1)).timestamp()))], old)
-    with api.app.state.store.transaction() as c:  # the row as the release before this one left it
-        c.execute("UPDATE mail_mailboxes SET watching_since_at=NULL WHERE address=?", ("ana@acme.example",))
-    with time_machine.travel(T0, tick=False):
-        sync(
-            api,
-            machine,
-            [
-                mail_message(msg_id="two_days", epoch=int((T0 - timedelta(days=2)).timestamp())),
-                mail_message(msg_id="hour", epoch=int((T0 - timedelta(hours=1)).timestamp())),
-            ],
-            T0,
-        )
-    assert ran(api, aid) == {"earlier", "hour"}
-    assert watch_of(api) == "2026-10-27T12:00:00.000000Z"
-
-
 DRAFT = {"id": "draft", "type": "llm", "as": "bot:ops", "prompt": "Sort this mail", "out": "reply"}
 
 
@@ -471,12 +368,6 @@ def test_forty_five_mail_turns_run_ten_at_a_time_through_the_real_executor(api):
     ready(api, r, ["ops"])
     aid = make(api, {"type": "message", "inbox": "ana@acme.example"}, [DRAFT])
     store = api.app.state.store
-    messages = [
-        mail_message(
-            msg_id=f"m{i:02d}", subject="Invoice", epoch=int((T0 - timedelta(minutes=10 * (i + 1))).timestamp())
-        )
-        for i in range(45)
-    ]
 
     def counts():
         with store.read() as c:
@@ -487,7 +378,9 @@ def test_forty_five_mail_turns_run_ten_at_a_time_through_the_real_executor(api):
         return queued, holds
 
     with time_machine.travel(T0, tick=False):
-        sync(api, r, messages, T0)
+        with store.transaction() as c:
+            for i in range(45):  # the server's check of the mailbox hears 45 new messages
+                automations.on_mail(c, "ana@acme.example", mail(msg_id=f"m{i:02d}", subject="Invoice"))
         store.automations.drain()
         assert counts() == (35, 10)  # ten turns out, the other 35 wait queued
         finish(api, r)  # one turn answers: its slot is free
@@ -498,30 +391,6 @@ def test_forty_five_mail_turns_run_ten_at_a_time_through_the_real_executor(api):
         assert counts() == (24, 20)  # ten more start; the old holds wait for the sweep
         with store.read() as c:
             assert c.execute("SELECT count(*) FROM automation_runs WHERE automation_id=?", (aid,)).fetchone()[0] == 45
-
-
-def test_a_mail_message_runs_once_even_after_its_row_is_swept_and_exported_again(api):
-    """Retention sweeps the message's row and a label change exports it again: it is news only the first time, so the
-    run it started is still the only one (the run's trigger ref outlives the row)."""
-    aid = make(api, {"type": "message", "inbox": "ana@acme.example"}, [NOOP])
-    machine = runner(api)
-    with time_machine.travel(T0, tick=False):
-        sync(api, machine, [mail_message(msg_id="m1", epoch=int((T0 - timedelta(hours=1)).timestamp()))], T0)
-    assert ran(api, aid) == {"m1"}
-    later = T0 + timedelta(days=400)  # past any retention window
-    sweep_mail(api.app.state.store, now=later.isoformat())
-    with api.app.state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM mail_messages WHERE msg_id='m1'").fetchone()
-    with time_machine.travel(later, tick=False):
-        sync(
-            api,
-            machine,
-            [mail_message(msg_id="m1", labels=("INBOX", "STARRED"), epoch=int((T0 - timedelta(hours=1)).timestamp()))],
-            later,
-        )
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT 1 FROM mail_messages WHERE msg_id='m1'").fetchone()  # stored again: it is fresh
-    assert len(runs(api, aid)["runs"]) == 1
 
 
 def test_a_long_mailbox_keeps_each_message_distinct_and_each_runs_once(api):
@@ -545,7 +414,7 @@ def test_a_long_mailbox_keeps_each_message_distinct_and_each_runs_once(api):
     assert len(refs) == 2 and len(set(refs)) == 2 and max(map(len, refs)) <= 200
 
 
-def test_a_sync_stamped_with_an_offset_sets_the_watch_at_the_same_instant_as_utc(api):
+def test_a_check_stamped_with_an_offset_sets_the_watch_at_the_same_instant_as_utc(api):
     with api.app.state.store.read() as c:
         utc = automations.mail_watch(c, "ana@acme.example", "2026-10-28T12:00:00+00:00")
         local = automations.mail_watch(c, "ana@acme.example", "2026-10-29T02:00:00+14:00")

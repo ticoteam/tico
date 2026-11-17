@@ -148,63 +148,6 @@ def test_cached_comment_response_cannot_bypass_reassignment(api):
     assert response.status_code == 404 and 'Sensitive response.' not in response.text
 
 
-def test_cloud_upgrade_classifies_legacy_identity_and_keeps_files_intact(api):
-    ordinary = post(api, 'tasks', {'owner': 'cmo', 'title': 'Review ordinary work', 'body': 'Ordinary content.'})
-    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Review the older work', 'body': 'Older content.'})
-    child = post(
-        api,
-        'tasks',
-        {
-            'owner': 'ben',
-            'title': 'Review related work',
-            'body': 'Related content.',
-            'parent': task['id'],
-        },
-    )
-    routine = post(api, 'tasks', {'owner': 'cmo', 'title': 'Review scheduled work', 'body': 'Scheduled content.'})
-    orphan = post(api, 'tasks', {'owner': 'priya', 'title': 'Review orphaned work', 'body': 'Orphan content.'})
-    post(api, 'tasks/' + task['id'] + '/files', {'name': 'legacy-brief.md', 'text': 'Legacy attachment bytes.'})
-    with api.app.state.store.transaction() as c:
-        counts = {
-            name: c.execute('SELECT count(*) FROM ' + name).fetchone()[0]
-            for name in ('tasks', 'blobs', 'task_assets', 'bot_files')
-        }
-        BS.write(c, 'cpo', {'template': 'general-counsel'})
-        c.execute("UPDATE tasks SET requester_id='human:missing' WHERE id=?", (orphan['id'],))
-        c.execute("UPDATE tasks SET requester_id='keeper' WHERE id=?", (routine['id'],))
-        # A database from before task privacy had no change log (backend/events.py) or parties counter (backend/row_clock.py).
-        for (name,) in c.execute(
-            "SELECT name FROM sqlite_master WHERE type='trigger' AND "
-            "(name LIKE 'changes_%' OR name LIKE 'row_clock_parties_%')"
-        ).fetchall():
-            c.execute('DROP TRIGGER ' + name)
-        c.execute('DROP INDEX IF EXISTS tasks_private_parties')
-        c.execute('DROP INDEX IF EXISTS tasks_private_status')
-        c.execute('DROP INDEX IF EXISTS tasks_queue_cover')
-        c.execute('DROP INDEX IF EXISTS tasks_owner_status_cover')
-        c.execute('DROP INDEX IF EXISTS tasks_requester_status_cover')
-        # Needs you's open-task index (I39) names private too, and came later: the upgrade makes it again.
-        c.execute('DROP INDEX IF EXISTS tasks_open_pipeline')
-        c.execute("DELETE FROM schema_migrations WHERE version='20261112080000_needs_you_per_person'")
-        c.execute('ALTER TABLE tasks DROP COLUMN private')
-        c.execute('DELETE FROM cloud_migrations WHERE version=57')
-    api.app.state.store.initialize(seed_market=False)
-    with api.app.state.store.read() as c:
-        assert H.task(c, task['id'])['private'] == 1
-        assert H.task(c, child['id'])['private'] == 1
-        assert H.task(c, orphan['id'])['private'] == 1
-        assert H.task(c, ordinary['id'])['private'] == 0
-        assert H.task(c, routine['id'])['private'] == 0
-        assert c.execute('SELECT 1 FROM cloud_migrations WHERE version=57').fetchone()
-        assert c.execute("SELECT 1 FROM sqlite_master WHERE type='index' AND name='tasks_open_pipeline'").fetchone()
-        assert all(c.execute('SELECT count(*) FROM ' + name).fetchone()[0] == count for name, count in counts.items())
-        assert c.execute('SELECT 1 FROM cloud_migrations WHERE version=53').fetchone()
-    # Task reads name tasks_private_status: the upgrade's first start makes it, not only the next restart.
-    get(api, 'tasks')
-    api.app.state.store.initialize(seed_market=False)
-    assert get(api, 'tasks/' + task['id'])['task']['private']
-
-
 def test_private_dependency_and_refusal_audit_never_copy_sensitive_content(api):
     private = post(
         api, 'tasks', {'owner': 'cpo', 'title': 'Review sensitive evidence', 'body': 'Review it.', 'private': True}
@@ -256,41 +199,6 @@ def test_acted_duplicate_diagnostics_keep_private_ids_out_of_responses_and_audit
             H.VIA.reset(token)
         diagnostics = c.execute("SELECT detail FROM events WHERE action='refused'").fetchall()
         assert private['id'] not in str([tuple(row) for row in diagnostics])
-
-
-def test_native_hub_upgrade_from_23_is_atomic_and_preserves_tasks_messages(tmp_path):
-    path = tmp_path / 'native-hub.db'
-    c = H.connect(path)
-    H.sync_registry(
-        c, {}, {'people': [{'id': 'ana', 'email': 'ana@acme.example'}, {'id': 'ben', 'email': 'ben@acme.example'}]}
-    )
-    ordinary = H.task_create(c, 'human:ana', 'Review ordinary work', 'Review it.', 'human:ben', lint=False)
-    orphan = H.task_create(c, 'human:ana', 'Review orphan work', 'Review it.', 'human:ben', lint=False)
-    comment = H.task_comment(c, 'human:ana', orphan['id'], 'Preserved tracked comment.', wake=False)
-    c.execute("UPDATE tasks SET requester_id='human:missing' WHERE id=?", (orphan['id'],))
-    c.execute('DROP INDEX IF EXISTS tasks_private_parties')
-    c.execute('DROP INDEX IF EXISTS tasks_private_status')
-    c.execute('DROP INDEX IF EXISTS tasks_queue_cover')
-    c.execute('DROP INDEX IF EXISTS tasks_owner_status_cover')
-    c.execute('DROP INDEX IF EXISTS tasks_requester_status_cover')
-    # Needs you's open-task index (I39) names private too, and came later: the upgrade makes it again.
-    c.execute('DROP INDEX IF EXISTS tasks_open_pipeline')
-    c.execute("DELETE FROM schema_migrations WHERE version='20261112080000_needs_you_per_person'")
-    c.execute('ALTER TABLE tasks DROP COLUMN private')
-    c.execute('PRAGMA user_version=23')
-    ids = {row[0] for row in c.execute('SELECT id FROM messages')}
-    c.close()
-    c = H.connect(path)
-    try:
-        assert c.execute('PRAGMA user_version').fetchone()[0] == len(H.MIGRATIONS)
-        assert not H.task_private(c, H.task(c, ordinary['id']))
-        assert H.task_private(c, H.task(c, orphan['id']))
-        assert {row[0] for row in c.execute('SELECT id FROM messages')} == ids
-        assert H.message(c, comment['id'])['body'] == 'Preserved tracked comment.'
-        H.migrate(c)
-        assert c.execute('PRAGMA foreign_key_check').fetchall() == []
-    finally:
-        c.close()
 
 
 def test_a_visuals_line_link_to_a_private_task_message_opens_only_for_its_readers(api):

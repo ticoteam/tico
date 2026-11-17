@@ -1,4 +1,4 @@
-"""Whose turn a task is (backend/waiting_on.py, docs/pipelines-v3.md "Whose turn it is").
+"""Whose turn a task is (backend/waiting_on.py, docs/dev/pipelines-v3.md "Whose turn it is").
 
 Synthetic rows only (backend/tests/helpers/engine.py).
 """
@@ -77,9 +77,6 @@ def test_a_bot_that_cannot_run_shows_paused_with_the_cause(c, general):
 
 
 def test_a_task_waiting_for_a_worktree_is_paused_and_nobody_is_woken_for_it(c, general):
-    from backend import worktree_waits
-
-    worktree_waits.ensure(c)
     row = X.new_task(c, ANA, "Fix the login page", assignee="bot:builder")
     other = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
     c.execute(
@@ -96,17 +93,17 @@ def test_a_task_waiting_for_a_worktree_is_paused_and_nobody_is_woken_for_it(c, g
     assert W.headline(c, row["id"]).state == "bot"
 
 
-def test_the_ladder_hands_the_turn_to_the_manager_bot_and_then_to_a_person(c, general):
+def test_the_ladder_hands_the_turn_to_the_manager_bot_and_then_rests_with_the_bot(c, general):
     row = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
     c.execute("UPDATE visits SET level='manager' WHERE id=?", (row["visit"]["id"],))
     assert _states(c, row["id"]) == [("bot", "bot:manager")]
     c.execute("UPDATE visits SET level='person' WHERE id=?", (row["visit"]["id"],))
-    waits = W.waiting_on(c, row["id"])  # the manager bot's owner has it, and the first thing it says is why
-    assert [(w.state, w.who, w.line) for w in waits] == [
-        ("person", ANA, "Stuck in To do"),
-        ("person", ANA, "Say when the work is done"),
-    ]
-    assert [(n["kind"], n["line"]) for n in W.needs(c, ANA)] == [("task", "Stuck in To do")]
+    # The ladder rests: the task stays with its bot, which nothing wakes now, and it is in no person's list.
+    waits = W.waiting_on(c, row["id"])
+    assert [(w.state, w.who, w.line) for w in waits] == [("bot", "bot:builder", "Say when the work is done")]
+    assert W.turn(c, E.task(c, row["id"]), waits) is None
+    assert W.turn(c, E.task(c, row["id"]), waits, resting=True) == "bot:builder"
+    assert W.needs(c, ANA) == []
 
 
 def test_snoozed_is_the_headline_and_the_rest_is_still_listed(c, general):
@@ -178,29 +175,30 @@ def test_an_ended_task_waits_on_nothing_and_an_open_one_never_does(c, build):
     assert W.waiting_on(c, "no-such-task") == []
 
 
-def test_needs_you_lists_what_is_a_persons_to_act_on_oldest_first_and_leaves_out_snoozed(c, build):
+def test_needs_you_lists_what_is_asked_of_a_person_oldest_first_and_leaves_out_snoozed(c, build):
     mine = X.new_task(c, ANA, "Call the bank", assignee=ANA)
     bots = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
     asked = E.add_requirement(c, bots["id"], "bot:builder", "ok", ANA, "OK the headline", seen_version=bots["version"])
     set_aside = X.new_task(c, ANA, "Renew the lease", assignee=ANA)
     E.snooze(c, set_aside["id"], ANA)
-    listed = W.needs(c, ANA)
+    asked_mine = E.add_requirement(
+        c, mine["id"], "bot:builder", "answer", ANA, "Which bank?", seen_version=mine["version"]
+    )
+    listed = W.needs(c, ANA)  # her own tasks' work is not listed: only what she is asked
     assert [(n["kind"], n["task_id"], n["line"]) for n in listed] == [
-        ("task", mine["id"], "Say when the work is done"),
         ("ask", bots["id"], "OK the headline"),
+        ("ask", mine["id"], "Which bank?"),
     ]
-    assert listed[1]["requirement_id"] == asked["requirement_id"]
+    assert [n["requirement_id"] for n in listed] == [asked["requirement_id"], asked_mine["requirement_id"]]
     assert W.needs(c, "human:nobody") == []
 
 
-def test_a_persons_own_task_is_listed_once_however_much_is_missing(c, general):
+def test_a_persons_own_task_is_their_turn_but_not_in_their_needs_you(c, general):
     stages = ({"name": "Plan", "owner": "assignee", "requirements": [{"kind": "owner_done"}, {"kind": "linked_done"}]},)
     X.pipeline(c, "plans", "Plans", stages)
     row = X.new_task(c, ANA, "Plan the launch", "plans", assignee=ANA)
     assert [w.state for w in W.waiting_on(c, row["id"])] == ["person", "person"]
-    listed = W.needs(c, ANA)
-    assert [(n["kind"], n["task_id"]) for n in listed] == [("task", row["id"])]
-    assert listed[0]["missing"] == ["Say when the work is done", "No task filed yet"]
+    assert W.needs(c, ANA) == []
 
 
 def test_a_person_who_left_or_was_removed_is_never_chosen(c, general):
@@ -213,19 +211,15 @@ def test_a_person_who_left_or_was_removed_is_never_chosen(c, general):
     c.execute("UPDATE visits SET level='person', person_id='human:nobody' WHERE task_id=?", (stuck,))  # removed
     paused = X.new_task(c, ANA, "Check the facts", assignee="bot:reviewer")["id"]
     c.execute("UPDATE bots SET state='paused' WHERE id='reviewer'")
-    assert {(n["kind"], n.get("task_id")) for n in W.needs(c, ben)} == {
-        ("task", his),
-        ("ask", asked["id"]),
-        ("paused", None),
-    }
+    assert {(n["kind"], n.get("task_id")) for n in W.needs(c, ben)} == {("ask", asked["id"]), ("paused", None)}
     X.left(c, ben)
     assert W.needs(c, ben) == []
     # Each falls through to the next person who is here: the first person above the manager bot, Ana.
     assert _states(c, his) == [("person", ANA)]
     assert [(w.state, w.who, w.ask) for w in W.waiting_on(c, asked["id"])] == [("person", ANA, True)]
-    assert _states(c, stuck) == [("person", ANA), ("person", ANA)]
+    assert _states(c, stuck) == [("bot", "bot:builder")]  # the ladder rested: its bot has it, in no list
     listed = {(n["kind"], n.get("task_id")) for n in W.needs(c, ANA)}
-    assert {("task", his), ("ask", asked["id"]), ("task", stuck)} <= listed
+    assert ("ask", asked["id"]) in listed and not {("task", his), ("task", stuck)} & listed
     assert [n["tasks"] for n in W.needs(c, ANA) if n["kind"] == "paused"] == [[paused]]  # the company owner fixes it
 
 
@@ -247,18 +241,14 @@ def test_every_persons_needs_you_comes_from_one_pass_over_the_tasks(c, general, 
     every = W.needs_by_person(c)
     assert sorted(reads) == sorted({his, hers, asked["id"], paused})  # each open task once
     assert set(every) == {ANA, ben}
-    assert {(n["kind"], n.get("task_id")) for n in every[ben]} == {
-        ("task", his),
-        ("ask", asked["id"]),
-        ("paused", None),
-    }
-    assert {(n["kind"], n.get("task_id")) for n in every[ANA]} == {("task", hers), ("ask", his)}
+    assert {(n["kind"], n.get("task_id")) for n in every[ben]} == {("ask", asked["id"]), ("paused", None)}
+    assert {(n["kind"], n.get("task_id")) for n in every[ANA]} == {("ask", his)}  # not her own task's work
     for person in (ANA, ben, "human:nobody"):
         assert W.needs(c, person) == every.get(person, [])
 
 
 def test_an_ok_that_names_a_bot_is_that_bots_turn(c, general):
-    """A stage's OK may name a bot (docs/pipelines-v3.md, kind 2); an OK added to one task is asked of a person."""
+    """A stage's OK may name a bot (docs/dev/pipelines-v3.md, kind 2); an OK added to one task is asked of a person."""
     from backend.hubdb import Refused
 
     ok = {"kind": "ok", "person": "bot:reviewer", "line": "OK the wording"}
@@ -269,7 +259,7 @@ def test_an_ok_that_names_a_bot_is_that_bots_turn(c, general):
         E.add_requirement(c, row["id"], ANA, "ok", "bot:reviewer", "OK the wording")
     waits = W.waiting_on(c, row["id"])
     assert [(w.state, w.who, w.ask) for w in waits] == [("person", ANA, False), ("bot", "bot:reviewer", True)]
-    assert [n["kind"] for n in W.needs(c, ANA)] == ["task"]  # the reviewer's OK is not in Ana's list
+    assert W.needs(c, ANA) == []  # the reviewer's OK is not in Ana's list, and her own work is in Tasks
 
 
 def test_a_person_who_cannot_sign_in_is_never_chosen_and_someone_who_can_always_is(c, general, monkeypatch):
@@ -290,7 +280,7 @@ def test_a_person_who_cannot_sign_in_is_never_chosen_and_someone_who_can_always_
     who = W.person_for(c, E.task(c, task_id))
     assert who and who != ben and R.active_person(c, who)
     assert _states(c, task_id) == [("person", who)]
-    assert [n["task_id"] for n in W.needs(c, who) if n["kind"] == "task"] == [task_id]
+    assert W.needs(c, who) == []  # their turn, with nothing asked of them: in Tasks
     assert NS.rules_hold(c) == []
     monkeypatch.setattr(W, "person_for", lambda conn, row: None)  # a turn that names nobody is a broken rule
     assert NS.rules_hold(c) == [f"3: task {task_id} is a person's turn that names nobody"]
@@ -328,18 +318,19 @@ def test_the_top_of_the_ladder_is_the_first_person_above_the_manager_bot_on_the_
 
 def test_priming_bots_reads_their_run_back_off_once_for_all_of_them(c, general):
     # Perf I38: `prime_bots` read each bot's state, settings, computer and onboarding together, but `cannot_run` still
-    # read each bot's run_backoff row on its own (about 300 point reads a pass). One read for all now, misses included,
+    # read each bot's failed-runs hold on its own (about 300 point reads a pass). One read for all now, misses included,
     # and a bot held for failing runs still says so.
-    from backend import run_backoff, task_wakes
+    from backend import task_wakes
+    from backend.tests.helpers.run_failures import failing
 
     bots = [X.bot(c, f"worker-{k}") for k in range(8)]
-    c.execute("INSERT INTO run_backoff(bot, fails, held_at) VALUES('worker-3', 5, ?)", (X.H.now(),))
+    failing(c, "worker-3", 5, held_at=X.H.now())
     reads = []
-    c.set_trace_callback(lambda sql: reads.append(sql) if "FROM run_backoff" in sql else None)
+    c.set_trace_callback(lambda sql: reads.append(sql) if "FROM holds" in sql else None)
     try:
         task_wakes.prime_bots(c, bots)
         causes = [task_wakes.cannot_run(c, b) for b in bots]
     finally:
         c.set_trace_callback(None)
     assert causes == [task_wakes.RUNS_FAILING if b == "bot:worker-3" else None for b in bots]
-    assert len(reads) == 1, reads  # eight before: one a bot
+    assert len(reads) == 2, reads  # one for failed runs, one for run budgets: eight before, one a bot

@@ -1,6 +1,6 @@
 # Pipelines v3: build contract
 
-The spec is `docs/pipelines-v3.md`. This file is what the spec leaves to the build: table and column names, function
+The spec is `docs/dev/pipelines-v3.md`. This file is what the spec leaves to the build: table and column names, function
 signatures, refusal names, and the order things land in. Code follows this file. A change to a name or a signature changes
 this file in the same PR.
 
@@ -26,8 +26,7 @@ touched by anything in this file.
 ## Rules for every new module
 
 - `# pyright: strict` in the first 10 lines. `scripts/check_pyright_ratchet.py` refuses a new backend module without it.
-- A new table gets a row shape in `backend/rows.py`, a line in `backend/tests/test_rows_schema.py` and a class in
-  `backend/devcopy.py` (keep, history or empty).
+- A new table gets a class in `backend/devcopy.py` (keep, history or empty).
 - No foreign key from a new table to `tasks`.
 - Every function takes the caller's open write transaction `conn` and never commits, unless it says otherwise.
 
@@ -37,13 +36,12 @@ All in `backend/migrations/20261110010000_pipelines_v3.py`. Times are `H.now()` 
 
 ```
 pipelines     id, name, goal, prefix, manager_id, owner_id, private (0|1), factory_id, preset,
-              settings_version, created_at, updated_at, retired_at, keep_warm_hours (0-24, default 8)
+              settings_version, created_at, updated_at, retired_at
               unique name and unique prefix among rows not retired
 stages        id, pipeline_id, position, kind (work|done|closed), name, purpose, owner, by_hand (0|1),
               requests_move_on (0|1, by-hand stages only), task_limit, expected_minutes, expected_bots_only (0|1),
               on_enter (json), created_at, updated_at, retired_at
               every pipeline has exactly one done stage and one closed stage, after its work stages
-stage_keep_warm stage_id, hours (0-24): a stage's own keep-warm hours; no row is the pipeline's (backend/keep_warm.py)
 requirements  id, stage_id | visit_id (exactly one), kind, source, condition, settings (json), can_push_past (0|1),
               who_oks (none|people_only|people_with_exceptions), person_id, added_by_id, by_bot (0|1),
               line, shows (json), choices (json), position, created_at, withdrawn_at
@@ -123,6 +121,10 @@ def enter(conn, task_id, pipeline_id, by, *, assignee=None, parent=None, link="s
 def move(conn, task_id, to, by, why=None, seen_version=None, *, cascade=False) -> dict
     # Forward, push past, back, done, close, reopen. `to` is a stage id or a stage name, or NEXT, DONE, CLOSED, REOPEN.
     # `cascade` is the engine closing a task with the one that filed it.
+def refile(conn, task_id, to_pipeline, to, by, why=None, seen_version=None, *, batch=None, turn_check=True) -> dict
+    # Move to another pipeline: the same task (number, label, history) into the work stage `to` names there (None: the
+    # first); a Done or Closed one into its Done or Closed. The old visit ends `moved`; a normal entry into the new one.
+    # Refused task_turn_running while another bot's turn on the task runs, task_stage_full into a full stage.
 def advance(conn, task_id) -> dict | None
     # Forward, by the engine: moves the task on if everything is met and there is room. None when it stays.
 def fill_open_slots(conn, stage_ids=None) -> list[str]
@@ -358,7 +360,7 @@ through `hubdb._wake`, whose holds belong to the old engine.
 `cannot_run` reads saved state only, and asks no computer. Its causes, first that applies: the bot was removed; its
 state is not active ("is paused", "is quarantined", "has not started yet"); "The company is paused"; "Tico Cloud is
 locked"; "Tico Cloud is out of credit" (a bot on Tico's model only); "has no computer" (no assignment, or a revoked
-computer; a computer that is offline is not a cause); "keeps failing its runs" (held by `run_backoff`). The three whole
+computer; a computer that is offline is not a cause); "keeps failing its runs" (held by `run_failures`). The three whole
 sentences stop every bot they touch and are one Needs-you row for the company owner. Still to add: a login to
 reconnect, and over a limit.
 
@@ -665,8 +667,8 @@ With many PRs the first unmet one, in link order, gives the line.
   when its save would remove a people-only OK or its stage, move it to another stage, change its kind, open it to
   bots, name a bot on it, put a later stage before it, add or change an on-enter action at or before it, or replace
   the stages wholesale (`pipeline_settings._loosens_people_only`); and when it retires a pipeline that has one. A
-  forward move counts every jumped stage as not met, so no bot jumps one; a task never moves into another pipeline;
-  and a bot never files a task straight into a stage past one (`task_engine.enter`'s `start`). The rubric, the push-
+  forward move counts every jumped stage as not met, so no bot jumps one; a bot never moves a task into another
+  pipeline past one (`task_engine.refile`); and a bot never files a task straight into a stage past one (`task_engine.enter`'s `start`). The rubric, the push-
   past switch and the stages after it stay a bot's to change. An untouched preset made before is tightened by `_fill`.
 - **Closing a Product task** closes the Engineering tasks it filed, except one whose PR merged: its work is in the code,
   so it stays open to reach a release or be closed by its owner (`stage_effects.merged_work`, scenario 24). Undoing a

@@ -42,7 +42,7 @@ def build(out):
     from backend.tests.helpers.botops_parity import act
     from backend.tests.helpers.cloud_access import signals
     from backend.tests.helpers.cloud_machines import FakeHQ
-    from backend.tests.helpers.sample_company import OWNER_EMAIL, rows, settings_for, signed_in
+    from backend.tests.helpers.fresh_install import OWNER_EMAIL, rows, settings_for, signed_in
     from backend.tests.helpers.template_renames import CHARTS, employees_file
     from clients.environments import seed_registry
 
@@ -96,7 +96,7 @@ def build(out):
     # ---- day one: the first start applies HQ's chart, the person finishes setup, the shared cloud computer enrolls
     with TestClient(create_app(settings)) as api:
         assert call(api, "GET", "setup")["company_import_failed"] is None
-        call(api, "POST", "onboarding/complete", {})
+        call(api, "POST", "setup/complete", {})
         cloud(api)
         api.app.state.cloud_machines.tick()
         created = [c for c in hq.calls if c[0] == "create"]

@@ -11,7 +11,6 @@ from backend.finance.actions import FinanceError
 from backend.finance.context import load
 from backend.finance.core import tax as T
 from backend.finance.store import banking as SK
-from backend.finance.store import schema
 from backend.tests.helpers.finance_fixtures import (
     AT,
     OWNER,
@@ -258,7 +257,9 @@ def test_the_1099_threshold_is_2000_from_2026_and_600_before(keeper):
 def test_a_tin_is_never_written_to_the_finance_tables(keeper):
     with keeper.transaction() as c:
         _contact(c, "Acme Consulting", is_1099=True, tax_id=TIN)
-        for table in schema.table_names():
+        tables = [r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'fin%'")]
+        assert len(tables) > 30
+        for table in tables:
             for row in c.execute(f"SELECT * FROM {table}").fetchall():
                 assert "0000001" not in " ".join(str(v) for v in row), table
 

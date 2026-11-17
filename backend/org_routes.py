@@ -4,7 +4,6 @@ import json
 from fastapi import Request
 from . import (
     agents,
-    app_delivery,
     lifecycle,
     profiles,
     report_managers,
@@ -18,10 +17,12 @@ from . import (
     views,
     wake_presets,
 )
+from . import runner_online
 from .bot_rows import BotRows
 from .harnesses import resolve_harness
 from .settings_admin import compact_at as compact_at_of
 from .store import H, P, Problem, repo_url
+from .api_contract import api_v2
 
 
 def register(app, auth, settings, settings_admin, store):
@@ -152,25 +153,26 @@ def register(app, auth, settings, settings_admin, store):
         row["status"] = privacy.status(c, who, dict(status), **rows.status_inputs[slug]) if status else status
         row["assignment"] = dict(assignment) if assignment else None
         row["online"] = bool(
-            assignment
-            and not assignment["revoked_at"]
-            and assignment["last_seen_at"]
-            and assignment["last_seen_at"] > H.shift(H.now(), seconds=-60)
+            assignment and not assignment["revoked_at"] and runner_online.is_online(assignment["last_seen_at"])
         )
         row["queued"] = rows.queued[slug]
         row["notes"] = rows.notes[slug]
         harness = rows.external_harness(slug)
         external = agents.presence(c, slug, harness) if harness else None
         row["agent"] = external["agent"] if external else None
-        # Delivered through a desktop app (backend/app_delivery.py): where, and online is that computer's.
-        # `app_delivery_app`: the desktop app the bot could be delivered through, for its settings.
-        row["app_delivery"] = app_delivery.view(c, declared) if config and harness else None
-        row["app_delivery_app"] = app_delivery.HARNESS_APP.get(row.get("harness"))
-        if external and not (row["app_delivery"] or {}).get("active"):
+        if external:
             row["online"] = external["online"]
         return row
 
-    @app.get("/api/v2/bots")
+    @app.get(
+        "/api/v2/bots",
+        **api_v2(
+            "Bots",
+            "listBots",
+            "Bots the caller can see, each with the caller's own access; ?can=read|write keeps the ones they can read or write to",
+            "BotList",
+        ),
+    )
     def bots(request: Request, include_archived: str | None = None, can: str | None = None):
         """The bots the caller may see, each with `access` (their own see, read and write on it).
         `?can=read` or `?can=write` keeps only the bots they hold that level on."""
@@ -209,7 +211,7 @@ def register(app, auth, settings, settings_admin, store):
             ]
 
     def cant_run(c, bot, who):
-        """The bot page's top line (docs/pipelines-v3.md S14): why the bot can't run, as the never-stuck check reads it
+        """The bot page's top line (docs/dev/pipelines-v3.md S14): why the bot can't run, as the never-stuck check reads it
         (task_wakes.cannot_run), and the one fix a person makes, or None while it can run. A bot being made on a task
         says what that task waits on instead (`making`)."""
         from . import task_wakes as W
@@ -234,6 +236,7 @@ def register(app, auth, settings, settings_admin, store):
             W.CLOUD_STARTING: "open_computers",
             W.CLOUD_FAILED: "open_computers",
             W.RUNS_FAILING: "release_hold",
+            W.RUNAWAY: "release_hold",
             W.LOGIN: "reconnect",
             W.COMPANY_PAUSED: "resume_company",
             W.CLOUD_LOCKED: "unlock_cloud",
@@ -275,7 +278,15 @@ def register(app, auth, settings, settings_admin, store):
             out = {"cause": f"{H.actor_name(c, row['owner_id'])} is still setting up {name}", "fix": None}
         return {**out, **({"task": task} if task else {})}
 
-    @app.get("/api/v2/bots/{bot}")
+    @app.get(
+        "/api/v2/bots/{bot}",
+        **api_v2(
+            "Bots",
+            "getBot",
+            "One bot: its profile for anyone who can see it; status, computer, queue and goals too for anyone who can read it",
+            "BotDetail",
+        ),
+    )
     def bot_detail(request: Request, bot: str):
         """One bot: the profile a caller who can see it gets (name, role, who runs it, who it reports
         to, who it works for), and for one who can read it also its status, machine, queue, goals and
@@ -318,7 +329,15 @@ def register(app, auth, settings, settings_admin, store):
                 value["owner_name"] = (H.human(c, value["owner_id"]) or {}).get("name") or value["owner_id"]
             return teammate_access.bot_redactor(c, who, auth)(value)
 
-    @app.get("/api/v2/org")
+    @app.get(
+        "/api/v2/org",
+        **api_v2(
+            "Team chart",
+            "getOrg",
+            "Humans, the bots the caller can see and reports_to; ?can=read|write keeps the bots they can read or write to",
+            "Org",
+        ),
+    )
     def org(request: Request, person: str | None = None, team: str | None = None, can: str | None = None):
         """The mixed people-and-bots org chart. Bots use this (and `tico team show` / `tico_team_show`) to
         find who handles a kind of work and how to reach them. Only the bots the caller may see,

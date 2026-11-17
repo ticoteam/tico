@@ -52,12 +52,12 @@ async function open(browser: Browser, {viewport = {width: 1280, height: 900}, co
     if (p === '/api/me') return json({id: owner ? 'ana' : 'cara', role: owner ? 'owner' : 'human', name: owner ? 'Ana' : 'Cara',
       email: 'ana@example.test', cloud: true, registered: true, config});
     if (p === '/api/v2/config') return json(config);
-    if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
+    if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
     if (p === '/api/employees') return json(BOTS);
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [], schedules: []});
     if (p === '/api/v2/status') return json({bots: BOTS.map(b => ({bot: b.name, state: 'idle'}))});
     if (p === '/api/v2/repositories') return json({repositories: [], new_bot_default: null, github_connected: connected, github_installed: connected});
-    if (p === '/api/v2/needs-you') return json({items: [], went_away: null});
+    if (p === '/api/v2/needs-you') return json({items: []});
     // Tools › GitHub, the page the card and the setup row link to: a whole tool page, as the server sends it.
     if (p === '/api/v2/tools/github') return json({service: 'github', title: 'GitHub', access: '', writes: 'read', owner: 'tico', declared_as: '', body: '', queries: [], learnings: [], read_only: true});
     if (p === '/api/v2/tool-index') return json({rows: [{id: 'api:crm', kind: 'api', name: 'CRM', href: '#/tools/api/crm', status: {tone: 'ok', text: 'Working'}}], counts: null});

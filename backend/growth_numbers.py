@@ -37,6 +37,7 @@ from . import marketing_tasks as MT
 from . import models as M
 from .brand import admin
 from .store import Problem
+from .api_contract import api_v2
 
 MONTHS_DEFAULT, MONTHS_MIN, MONTHS_MAX = 12, 1, 24
 MONTH_RE = re.compile(r"\d{4}-(0[1-9]|1[0-2])")
@@ -313,7 +314,18 @@ def numbers(c, auth, who, months, hidden, until=None, with_line=False):
 def install(app, store, auth, mutate):
     from .goal_routes import _hidden_owners
 
-    @app.get("/api/v2/growth/numbers")
+    @app.get(
+        "/api/v2/growth/numbers",
+        **api_v2(
+            "KPIs",
+            "getGrowthNumbers",
+            "The Growth page's numbers: the newest months (1 to 24, default 12) up to `month` (YYYY-MM, default the newest "
+            "with numbers), every channel's and the total's CAC, LTV and retention, revenue and margin per month (null "
+            "where not recorded), the KPI tree with each KPI's last 24 readings, the marketing tests that started or "
+            "finished, newest first, and `line`: that month joined source to KPI as the page draws it (null with no channel)",
+            "GrowthNumbers",
+        ),
+    )
     def growth_numbers(request: Request, months: int = MONTHS_DEFAULT, month: str | None = None):
         """The Growth page's numbers: the months, every channel's and the total's CAC, LTV, retention, revenue and
         margin, the KPI tree with its last readings, the marketing ideas whose test started or that finished, and the

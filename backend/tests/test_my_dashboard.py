@@ -1,8 +1,10 @@
-"""My dashboard, the `person:<id>` place (backend/cards.py): its person alone reads and arranges it, an admin has no
-way in, BotOps arranges it only for its person, and its cards widen nothing: each shows its reader only what they may
-already read.
+"""Company, the `person:<id>` place (backend/cards.py): its person alone reads and arranges it, an admin has no way in,
+BotOps arranges it only for its person, and its cards widen nothing: each shows its reader only what they may already
+read. The Floor is its first card, once, on this place only, and a page saved before the Floor was a card gets it once.
 
 Ana owns the company, Ben is an admin, Cara is a member (the base fixture)."""
+
+import importlib
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend.store import H
@@ -19,12 +21,61 @@ def templates(view):
 def test_my_dashboard_starts_with_its_defaults_and_is_the_callers_own(api):
     mine = place(api, "person:me", "cara-test")
     assert mine["place"] == "person:cara" and mine["kind"] == "person" and mine["can_edit"] is True
-    assert templates(mine) == ["needs_attention", "unread_threads", "my_tasks", "updates", "latest_pages"]
+    assert templates(mine) == ["floor", "needs_attention", "unread_threads", "my_tasks", "updates", "latest_pages"]
+    assert mine["pins"][0]["size"] == "large" and mine["pins"][0]["card"]["hidden"] is False
     assert all(not p["card"]["settings"].get("team") for p in mine["pins"])
     assert place(api, "person:cara", "cara-test")["place"] == "person:cara"
     saved = put(api, "places/person:me", {}, "cara-test")
     assert saved["saved"] is True and all(p["id"] for p in saved["pins"])
-    put(api, "places/person:me", {"audience": {"everyone": False, "groups": []}}, "cara-test", expected=422)
+    refused = put(api, "places/person:me", {"audience": {"everyone": False}}, "cara-test", expected=422)
+    assert "Company is yours alone" in str(refused)
+    refused = put(api, "places/task:" + task(api, "human:ana", "A task's pins"), {}, expected=422)
+    assert "are saved whole" in str(refused)
+
+
+def test_the_floor_goes_on_this_page_once_and_comes_back_like_any_card(api):
+    saved = put(api, "places/person:me", {}, "cara-test")
+    floor = saved["pins"][0]
+    assert floor["card"]["template"] == "floor"
+    # Once only, and on no other place.
+    post(api, "cards", {"template": "floor", "place": "person:me"}, "cara-test", expected=409)
+    refused = post(api, "cards", {"template": "floor", "place": "dashboard"}, expected=422)
+    assert "Floor goes on Company" in str(refused)
+    choices = get(api, "cards/choices?place=person:me", "cara-test")["templates"]
+    assert "floor" in [t["id"] for t in choices]
+    assert "floor" not in [t["id"] for t in get(api, "cards/choices?place=dashboard")["templates"]]
+    # Moved under another card, removed, then added back: like any other card.
+    others = [p["id"] for p in saved["pins"][1:]]
+    moved = post(api, "places/person:me/order", {"ids": [others[0], floor["id"], *others[1:]]}, "cara-test")
+    assert templates(moved)[:2] == ["needs_attention", "floor"]
+    delete(api, "pins/" + floor["id"], "cara-test")
+    assert "floor" not in templates(place(api, "person:me", "cara-test"))
+    post(api, "cards", {"template": "floor", "place": "person:me", "size": "large"}, "cara-test")
+    back = place(api, "person:me", "cara-test")
+    assert templates(back)[-1] == "floor" and back["pins"][-1]["size"] == "large"
+
+
+def test_a_page_saved_before_the_floor_gets_it_first_once(api):
+    migration = importlib.import_module("backend.migrations.20261117023225_company_floor_widget")
+    saved = put(api, "places/person:me", {}, "cara-test")
+    delete(api, "pins/" + saved["pins"][0]["id"], "cara-test")  # as a page saved before the Floor was a card
+    before = templates(place(api, "person:me", "cara-test"))
+    put(api, "places/person:me", {})  # Ana's page, saved with its Floor
+    with api.app.state.store.transaction() as c:
+        migration.up(c)
+        migration.up(c)
+    after = place(api, "person:me", "cara-test")
+    assert templates(after) == ["floor", *before] and after["pins"][0]["size"] == "large"
+    assert templates(place(api, "person:me")).count("floor") == 1, "a page that holds its Floor is left as it is"
+    # The card is Cara's own, so she may edit and remove it as hers.
+    patch(api, "cards/" + after["pins"][0]["card"]["id"], {"title": "Work"}, "cara-test")
+    delete(api, "pins/" + after["pins"][0]["id"], "cara-test")
+
+
+def test_a_floor_pinned_to_an_unsaved_page_is_refused_and_the_page_holds_one(api):
+    card = post(api, "cards", {"template": "floor"}, "cara-test")["card"]
+    post(api, "pins", {"place": "person:me", "item": "card:" + card["id"]}, "cara-test", expected=409)
+    assert templates(place(api, "person:me", "cara-test")).count("floor") == 1
 
 
 def test_nobody_else_reads_or_arranges_it_not_even_an_admin(api):
@@ -146,13 +197,13 @@ def test_home_builds_thread_attention_once_for_both_cards_and_rechecks_on_the_ne
     tid = members_thread(api)
     mention = say(api, tid, "@ana please check.")
     say(api, tid, "Which lease?")  # a second message from Cara that names no one: unread for Ana, never needs-you
-    calls, addressed = [], thread_attention._addressed
+    calls, build = [], thread_attention._items
 
-    def counted(c, me):
-        calls.append(me)
-        return addressed(c, me)
+    def counted(c, viewer):
+        calls.append(viewer.actor)
+        return build(c, viewer)
 
-    monkeypatch.setattr(thread_attention, "_addressed", counted)
+    monkeypatch.setattr(thread_attention, "_items", counted)
     cards = {p["card"]["template"]: p["card"]["data"] for p in place(api, "person:me")["pins"]}
     assert calls == ["human:ana"]
     # Needs you keeps the mention once, while the sidebar's separate projection still sees the thread.
@@ -173,7 +224,7 @@ def test_home_builds_thread_attention_once_for_both_cards_and_rechecks_on_the_ne
 
 
 def test_its_writes_leave_events_that_name_nothing(api):
-    """The event log is the company's (the owner reads it whole, `tico sql` included): a write to My dashboard leaves
+    """The event log is the company's (the owner reads it whole, `tico sql` included): a write to someone's Company page leaves
     its event and names no card, page, template or place, before or after the card is gone."""
     from backend.tests.helpers.api import headers
 
@@ -219,12 +270,20 @@ def test_the_library_does_not_say_a_page_is_on_someone_elses_dashboard(api):
 
 def test_needs_attention_rows_lead_with_the_task_title(api):
     # Two tasks of Cara's ask the same thing of her: each row reads its own task's title, with the ask as its line.
-    task(api, "human:cara", "Fix the invoice export")
-    task(api, "human:cara", "Ship the pricing page")
+    from backend import task_engine as E
+
+    for title in ("Fix the invoice export", "Ship the pricing page"):
+        tid = task(api, "human:cara", title)
+        with api.app.state.store.transaction() as c:
+            E.add_requirement(
+                c, tid, "human:ana", "answer", "human:cara", "Is it done?", seen_version=H.task(c, tid)["version"]
+            )
+    task(api, "human:cara", "Book the venue")  # hers, with nothing asked: in Tasks, not here
     cards = {p["card"]["template"]: p["card"]["data"] for p in place(api, "person:me", "cara-test")["pins"]}
-    rows = [it for it in cards["needs_attention"]["items"] if it["kind"] == "task"]
+    rows = [it for it in cards["needs_attention"]["items"] if it["kind"] == "ask"]
     assert sorted(it["title"] for it in rows) == ["Fix the invoice export", "Ship the pricing page"]
-    assert all(it["line"] and it["line"] != it["title"] and it["act"] == "done" for it in rows), rows
+    assert all(it["line"] and it["line"] != it["title"] and it["act"] == "answer" for it in rows), rows
+    assert not [it for it in cards["needs_attention"]["items"] if it.get("title") == "Book the venue"]
     assert len({it["line"] for it in rows}) == 1  # the same ask, two different rows
 
 
@@ -235,23 +294,19 @@ def test_needs_brief_titles_by_task_and_words_what_is_needed():
         return {"id": kind + line, "kind": kind, "line": line, "task_id": "t1", "task": {"title": title, **more}}
 
     items = [
-        item("task", "Say when the work is done"),
         item("ask", "Send this email?") | {"ask": {"kind": "ok"}},
         item("ask", "Which date works?", "Pick a launch date") | {"ask": {"kind": "answer"}},
         item("mention", "@ana can you look?"),
-        item("task", "Say when the work is done", "Stuck one", turn={"state": "paused"}),
-        item("task", "Say when the work is done", "Late one", late={"level": "person"}),
+        item("task", "Stuck in Build: Ben can't see this task", "Shared one", turn={"share": ["human:ben"]}),
         item("paused", "Connect Google", "Sync the calendar"),
         {"id": "m2", "kind": "mention", "line": "@ana in Launch", "task_id": None, "task": None},
     ]
     rows = needs_brief(items, len(items))
     assert [(r["title"], r["act"]) for r in rows] == [
-        ("Send an email", "done"),
         ("Send an email", "ok"),
         ("Pick a launch date", "answer"),
         ("Send an email", "reply"),
-        ("Stuck one", "fix"),
-        ("Late one", "fix"),
+        ("Shared one", "fix"),  # a task item is one to let someone see: never "done"
         ("Connect Google", "fix"),  # a Paused cause is not about one task: its own line
         ("@ana in Launch", "reply"),  # a mention outside a task: its own line
     ]

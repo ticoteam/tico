@@ -1,4 +1,4 @@
-/* ui/app/task-row.ts — a task row in every look (docs/pipelines-v3.md, S1), the mark, the Late tag, the one line, and
+/* ui/app/task-row.ts — a task row in every look (docs/dev/pipelines-v3.md, S1), the mark, the Late tag, the one line, and
    the search and filter every task list shares.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them.
    A row is its title: mark, title, Late, anything after it, avatar, age. The words are on the task (taskLine), shown when
@@ -169,14 +169,18 @@ function taskFilterMatch(t: TaskAny, q: string, f: TaskFilters = {}): boolean {
 }
 /** How a pipeline is drawn on the Tasks page (task-pipelines.ts sets it as it loads). The page (tasks-page.ts) owns the
     header, reading the pipeline and its open tasks, search, filter, the archive and opening a task (any [data-task]);
-    it calls `html` again whenever it has read again. `bind` wires the root once drawn, `rail` makes the pipeline's
+    it calls `draw` (else `html`) again whenever it has read again. `bind` wires the root once drawn, `rail` makes the pipeline's
     manager the page's chat (pipeline-rail.ts), `ask` the phone's floating face into its own (pipeline-ask.ts), `edit` opens the pipeline's settings. */
 interface PipelineViewHooks {
   html(p: PipelineRec, tasks: TaskAny[], opts: {layout: 'list' | 'columns'; phone: boolean; q: string; filters: TaskFilters}): string;
+  /** Draws into `root` what `html` would, changing only what changed since its last draw there. */
+  draw?(root: HTMLElement, p: PipelineRec, tasks: TaskAny[], opts: {layout: 'list' | 'columns'; phone: boolean; q: string; filters: TaskFilters}): void;
   bind?(root: HTMLElement, p: PipelineRec): void;
   rail?(p: PipelineRec, drawn: boolean): void;   // drawn: the board is on screen (not loading, not failed)
   ask?(host: HTMLElement, p: PipelineRec, phone: boolean): void;
   edit?(p: PipelineRec): void;
+  /** ⋯ › Select: pick tasks to move many at once (Move to…); again, stop. */
+  select?(p: PipelineRec): void;
 }
 const TASK_PAGE_HOOKS: {pipeline?: PipelineViewHooks} = {};
 const taskFiltersOn = (f: TaskFilters | null | undefined) =>

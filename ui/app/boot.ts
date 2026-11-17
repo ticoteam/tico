@@ -81,7 +81,7 @@ const BOOT_ROSTER_WAIT_MS = 10000;
     $('#main').innerHTML = `<section class="card"><h2>Tico server not running</h2><p>Start it with <code>scripts/tico-computer server start</code> in the Tico repo, or install it with <code>scripts/tico-computer server install</code> so it runs at login.</p><p class="err">${esc(errorMessage(e, ''))}</p></section>`;
     return;
   }
-  if (S.me?.cloud) {
+  if (S.me) {
     // Its settings change seldom (an owner turning telemetry on or off): read again every ten minutes, and when a
     // tab that was hidden is shown, not every 30 s from every open tab.
     window.TicoObservability?.start();
@@ -108,10 +108,9 @@ const BOOT_ROSTER_WAIT_MS = 10000;
   void Promise.all([status, counts]).then(() => {
     renderTree(); renderHeartbeat(); pausedRender(); botAvatarsSync();
     botAlertDraw();
-    overviewRefresh();                 // a campus opened before the first status answer shows it now, not at the next poll
     if (TASKS_ST && isTasksRoute(S.route)) tasksRender(TASKS_ST);
   });
-  if (S.me?.cloud) void updUnreadRefresh();
+  if (S.me) void updUnreadRefresh();
   // Tasks, bot status and Needs you arrive as they change (ui/app/live.ts). The roster, computers and
   // Updates are not on that stream: they still refresh every 2 minutes. When the live stream is down the
   // previous 30 s poll multiplied /api/status load across tabs while the hub was already busy; visibility

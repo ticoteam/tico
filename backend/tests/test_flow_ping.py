@@ -21,7 +21,7 @@ def names(found):
 def pings(api, bot):
     with api.app.state.store.read() as c:
         rows = c.execute(
-            "SELECT sender_id, body FROM messages WHERE recipient_id=? AND json_extract(refs, '$.get_aligned') IS NOT NULL",
+            "SELECT sender_id, body FROM messages WHERE recipient_id=? AND json_extract(refs, '$.add_to_flow') IS NOT NULL",
             ("bot:" + bot,),
         ).fetchall()
     return [dict(r) for r in rows]
@@ -33,7 +33,7 @@ def test_a_person_pings_their_reports_once_and_the_message_names_them(api):
     assert names(first["pinged"]) == ["cpo"] and first["recent"] == []  # only cpo reports to Ben
     [sent] = pings(api, "cpo")
     assert sent["sender_id"] == "human:ben"
-    assert "skills/get-aligned/SKILL.md" in sent["body"] and "Ben" in sent["body"]
+    assert "skills/add-to-flow/SKILL.md" in sent["body"] and "Ben" in sent["body"]
     again = ping(api, "ben-test")  # a double press asks once
     assert again["pinged"] == [] and names(again["recent"]) == ["cpo"]
     assert len(pings(api, "cpo")) == 1

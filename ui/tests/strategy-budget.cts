@@ -481,7 +481,7 @@ const editorFits = (page: Page) => page.locator('dialog.bt-panel[open]').evaluat
     {
       const {page, errors} = await open(browser, {hash: '#/strategy/budget/bot:sdr'});
       await page.locator('dialog.bt-panel[open][aria-label="SDR"]').waitFor();
-      await page.evaluate(() => { location.hash = '#/overview'; });
+      await page.evaluate(() => { location.hash = '#/home'; });
       await page.locator('dialog.bt-panel').waitFor({state: 'detached'});
       assert.deepEqual(errors, [], 'link: no page errors');
       await page.close();

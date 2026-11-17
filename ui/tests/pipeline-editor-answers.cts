@@ -1,5 +1,5 @@
 import type {Route} from 'playwright';
-// Offline browser check of a stage's typed answer in the pipeline editor (docs/pipelines-v3.md kind 6, C30): To leave is
+// Offline browser check of a stage's typed answer in the pipeline editor (docs/dev/pipelines-v3.md kind 6, C30): To leave is
 // a list of requirement rows; + Requirement opens one plain pick list (Esc closes it and + Requirement has the focus
 // back; what is not ready yet is listed, off, with Soon); a pick with something to choose opens its editor under its
 // row, the focus in its first field; one editor is open at a time and Remove is in it; an answer's name follows its
@@ -42,7 +42,7 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
       if (p === '/api/me') return json({...me, config});
       if (p === '/api/v2/config') return json(config);
       if (p === '/api/employees') return json([]);
-      if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
+      if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
       if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
       // As pipeline_settings.save answers: the record as stored, each new requirement with its id.
       if (p === '/api/v2/pipelines/product' && r.method() === 'POST') {
@@ -90,13 +90,13 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
     await dialog.locator('[data-pe-req-add]').click();
     await pick.waitFor();
     assert.equal(await pick.locator('.tl-menu-h').count(), 0, 'no group headings');
-    assert.deepEqual((await pick.locator('[data-pe-req-kind]').allTextContents()).slice(0, 3), ['OK from anyone', 'OK from a person…', 'A page, checked by Jev…'],
+    assert.deepEqual((await pick.locator('[data-pe-req-kind]').allTextContents()).slice(0, 3), ['OK from anyone', 'Approval…', 'A page, checked by Decision model…'],
       'by hand is an OK from anyone; a bot\'s OK only where there is a bot');
     assert.equal(await pick.locator('[data-pe-req-kind="answer"]').count(), 1);
     assert.equal(await pick.locator('[data-pe-req-kind="owner_done"]').count(), 0, 'one Owner says done is enough: not offered again');
     // not ready yet: listed, off, each with a small Soon
     assert.deepEqual(await pick.locator('.pe-mi-soon').evaluateAll(els => els.map(e => [e.firstChild?.textContent, e.querySelector('.pill.soon')?.textContent, (e as HTMLButtonElement).disabled])),
-      [['A question Jev answers…', 'Soon', true], ['In your own words…', 'Soon', true]]);
+      [['A question Decision model answers…', 'Soon', true], ['In your own words…', 'Soon', true]]);
     // the list never covers its button and stays in the window
     const placed = await page.evaluate(() => {
       const b = document.querySelector('#pe-dialog [data-pe-req-add]')!.getBoundingClientRect(), l = document.querySelector('#pe-req-pick')!.getBoundingClientRect();

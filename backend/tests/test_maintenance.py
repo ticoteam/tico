@@ -1,12 +1,10 @@
 """Maintenance foundation (docs/maintenance.md; plan 1-3 and Amendment v2 A, B, G, H, I): the fixed step order, each
 "How often" on its own clock, Run now and the schedule as one run, the abandoned-run recovery, cursors that move only on
-`ran`, a failing step that does not stop the run, the switch migration, the wake limiter and the API rights.
+`ran`, a failing step that does not stop the run, the wake limiter and the API rights.
 Synthetic fixtures: the api fixture's people (backend/tests/helpers/api_app.py; Ana owns the company, Ben is an admin, Cara is a
 member)."""
 
-import importlib
 import json
-import sqlite3
 from datetime import datetime, timedelta, timezone
 
 from backend import hubdb as H
@@ -14,8 +12,6 @@ from backend import maintenance as M
 from backend import maintenance_limits as L
 from backend.maintenance_steps import collect
 from backend.tests.helpers.api import get, headers  # noqa: F401  (fixtures and helpers)
-
-mig = importlib.import_module("backend.migrations.0090_maintenance")
 
 
 def la(day, hour, minute=0):
@@ -184,56 +180,6 @@ def test_a_failing_step_is_recorded_and_the_run_goes_on(api, monkeypatch):
     assert steps["collect"]["status"] == "failed" and steps["collect"]["reason"] == "RuntimeError"
     assert steps["clean_up"]["status"] == "ran", "the run goes on past a failed step"
     assert run["ok"] == 0 and run["finished_at"] and "failed" in run["result"], run
-
-
-def test_the_switch_migration_keeps_an_explicit_choice_and_gives_an_inherited_one_the_new_default():
-    assert mig.switches({}) == {}, "nothing chosen: every step takes its default, and Learn's default is off"
-    assert mig.switches({"learnings": {"on": False}}) == {"learn": False}
-    assert mig.switches({"learnings": {"on": True}}) == {"learn": True}
-    assert mig.switches({"auto_dream": {"on": False}, "health_scan": {"on": True}}) == {
-        "dream": False,
-        "check_health": True,
-    }
-    assert mig.switches({"task_roundup": {"on": False}}) == {"find_stuck": False}
-    assert mig.switches({"task_roundup": {"on": True}}) == {"find_stuck": True}
-    assert mig.switches({"stall_triage": {"on": False}}) == {}, "stall_triage is gone"
-
-
-def _migrated_rows(registry, rules):
-    """The step rows after the migration runs on a bare database holding these two registry rows and an events table:
-    {key: (enabled, frequency, custom every, custom unit)}."""
-    conn = sqlite3.connect(":memory:")
-    conn.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value TEXT)")
-    conn.execute("CREATE TABLE events(actor TEXT, action TEXT, created_at TEXT)")
-    conn.executemany(
-        "INSERT INTO registry_metadata VALUES(?,?)",
-        [("system_routines", json.dumps(registry)), ("rules", json.dumps(rules))],
-    )
-    mig.up(conn)
-    return {
-        key: tuple(row)
-        for key, *row in conn.execute(
-            "SELECT key, enabled, frequency, custom_every, custom_unit FROM maintenance_steps"
-        )
-    }
-
-
-def test_replaying_the_migration_changes_nothing(api):
-    store = api.app.state.store
-
-    def rows():
-        with store.read() as c:
-            return [
-                tuple(r)
-                for r in c.execute(
-                    "SELECT key,enabled,frequency,max_bots,updated_by_id FROM maintenance_steps ORDER BY key"
-                )
-            ]
-
-    before = rows()
-    with store.transaction() as c:
-        mig.up(c)
-    assert rows() == before
 
 
 def test_the_limiter_allows_one_wake_per_bot_per_run_three_per_task_a_day_and_fifty_an_hour(api):
@@ -538,68 +484,6 @@ def test_a_request_key_replays_the_run_it_made_after_that_run_was_recovered(api,
     assert again["id"] == first["id"] and started_again is False, "the repeat replays the recovered run, starts nothing"
     with store.read() as c:
         assert c.execute("SELECT count(*) FROM maintenance_runs").fetchone()[0] == runs_before
-
-
-def test_a_saved_roundup_preset_sets_how_often_find_stuck_runs_and_an_inherited_one_keeps_six_hours():
-    def find_stuck(registry, rules=None):
-        return _migrated_rows(registry, rules or {})["find_stuck"][1:]
-
-    assert find_stuck({}) == ("custom", 6, "hours"), "inherited: the seeded custom 6 hours"
-    assert find_stuck({"task_roundup": {"on": True}}) == ("custom", 6, "hours"), (
-        "a saved switch alone keeps the cadence"
-    )
-    assert find_stuck({"task_roundup": {"preset": "daily"}}) == ("day", None, None), "saved daily is a daily run"
-    assert find_stuck({"task_roundup": {"preset": "three_daily"}}) == ("custom", 8, "hours"), (
-        "three a day is every 8 hours"
-    )
-    assert find_stuck({"task_roundup": {"preset": "hourly"}}) == ("run", None, None), "saved hourly is every run"
-    assert find_stuck({"task_roundup": {"preset": "bogus"}}) == ("custom", 6, "hours"), (
-        "an unknown preset keeps the default"
-    )
-    saved = _migrated_rows({"task_roundup": {"on": False, "preset": "daily"}}, {})["find_stuck"]
-    assert saved == (0, "day", None, None), "the switch and the cadence both carry over"
-
-
-def test_the_replaced_jobs_mirrors_are_retired_once():
-    import importlib.util
-    from pathlib import Path
-
-    path = Path(__file__).resolve().parents[1] / "migrations" / "20261105214334_retire_replaced_job_mirrors.py"
-    spec = importlib.util.spec_from_file_location("retire_mirrors", path)
-    migration = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(migration)
-    with sqlite3.connect(":memory:") as c:
-        c.execute(
-            "CREATE TABLE automations(id TEXT PRIMARY KEY,builtin INTEGER,flow TEXT,enabled INTEGER,deleted_at TEXT,"
-            "updated_at TEXT)"
-        )
-        c.execute("CREATE TABLE automation_runs(id TEXT PRIMARY KEY,automation_id TEXT,status TEXT,finished_at TEXT)")
-        mirror = lambda key, readonly=1: json.dumps(
-            {"readonly": readonly, "trigger": {"name": "tico.builtin.job." + key}}
-        )
-        for aid, key, readonly in (
-            ("a", "auto_dream", 1),
-            ("b", "cleanup", 1),
-            ("c", "stall_triage", 1),
-            ("d", "memory_tidy", 1),
-            ("e", "cleanup", 0),
-        ):
-            c.execute("INSERT INTO automations VALUES(?,1,?,1,NULL,'then')", (aid, mirror(key, readonly)))
-        c.execute("INSERT INTO automation_runs VALUES('r1','a','queued',NULL)")
-        c.execute("INSERT INTO automation_runs VALUES('r2','b','ok','then')")
-        c.execute("INSERT INTO automation_runs VALUES('r3','d','queued',NULL)")
-        migration.up(c)
-        gone = {r[0] for r in c.execute("SELECT id FROM automations WHERE deleted_at IS NOT NULL AND enabled=0")}
-        assert gone == {"a", "b", "c"}, "only the replaced jobs' read-only mirrors"
-        runs = dict(c.execute("SELECT id, status FROM automation_runs"))
-        assert runs == {"r1": "skipped", "r2": "ok", "r3": "queued"}
-        when = c.execute("SELECT deleted_at FROM automations WHERE id='a'").fetchone()[0]
-        migration.up(c)
-        assert c.execute("SELECT deleted_at FROM automations WHERE id='a'").fetchone()[0] == when, (
-            "a second run changes nothing"
-        )
-    with sqlite3.connect(":memory:") as c:
-        migration.up(c)  # a file with no automations yet
 
 
 def test_maintenance_has_one_monthly_cap_and_ignores_a_saved_rules_cap(api, monkeypatch):

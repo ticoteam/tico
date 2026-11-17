@@ -22,26 +22,17 @@ from types import SimpleNamespace
 from fastapi import Request
 from pydantic import Field
 
-from . import diagnostics, login_holds, models_preset, providers, runner_versions, team_rules
+from . import diagnostics, login_holds, models_preset, providers, runner_online, runner_versions, team_rules
 from . import models as M
 from .models import Contract
 from .store import H, Problem
 from . import bot_settings as BS
+from .api_contract import api_v2
 
 log = logging.getLogger("tico.maintenance_health")
 
 BOTOPS = "botops"  # the bot that takes every setup finding (a task per signature), and asks a person for it
 RULE = "health_monitor_reports"
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS health_findings(
- key TEXT PRIMARY KEY, signature TEXT NOT NULL, check_id TEXT NOT NULL, kind TEXT NOT NULL, title TEXT NOT NULL,
- detail TEXT NOT NULL DEFAULT '', fix TEXT NOT NULL DEFAULT '', first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL,
- present INTEGER NOT NULL DEFAULT 1, occurrences INTEGER NOT NULL DEFAULT 1, last_woke_at TEXT NOT NULL DEFAULT '',
- severity TEXT NOT NULL DEFAULT 'warn', pending INTEGER NOT NULL DEFAULT 0);
-CREATE TABLE IF NOT EXISTS health_reports(
- signature TEXT PRIMARY KEY, ticket_id TEXT, approval_id TEXT, created_at TEXT NOT NULL, reported_occurrences INTEGER NOT NULL DEFAULT 1,
- reported_at TEXT NOT NULL DEFAULT '');
-"""
 SETUP, BUG = "setup", "tico-bug"
 # A finding's severity, lowest first. `bad` where the Health page says bad for the same thing; a rise wakes the bot.
 WARN, BAD = "warn", "bad"
@@ -196,7 +187,7 @@ def _runner_checks(c, settings):
     from .store import readiness_document
 
     out = []
-    online = health._online_runners(c)
+    online = runner_online.online_rows(c)
     computers = health._computers(c, online, settings)
     # Work a computer holds while it waits to update or restart is said here, never as a queue_idle Tico bug.
     held, restarting = {}, {}
@@ -622,7 +613,7 @@ def _bot_checks(c, settings=None):
                 f"BotOps: finish {name}'s setup with the person it serves, or pause it so its work is not held.",
             )
         )
-    online_ids = {r["id"] for r in health._online_runners(c)}
+    online_ids = {r["id"] for r in runner_online.online_rows(c)}
     for row in health.refused_queues(c, settings):
         out.append(
             _finding(
@@ -728,11 +719,16 @@ def _profile_checks(c):
 def _stop_checks(c):
     """A bot Tico stopped for failed runs or for running away (backend/bot_stops.py): one finding per bot until it is
     released. The signature carries the error class or the window, never the bot."""
-    from . import claim_holds, run_backoff, turn_budgets
+    from . import claim_holds, run_failures, turn_budgets
 
     out = []
-    for hold in run_backoff.held(c):
-        bot, kind = hold["bot"], hold["error_class"] or run_backoff.OTHER
+    words = run_failures.CLASS_WORDS
+    for hold in run_failures.held(c):
+        bot, kind, details = (
+            hold["holdable_id"],
+            hold["details"].get("error_class") or run_failures.OTHER,
+            hold["details"],
+        )
         row = H.bot(c, bot) or {}
         name = row.get("display_name") or row.get("slug") or bot
         out.append(
@@ -740,10 +736,10 @@ def _stop_checks(c):
                 f"run_hold:{bot}",
                 "run_hold",
                 SETUP,
-                f"{name} was stopped after {hold['fails']} failed runs in a row",
-                f"{name}'s last {hold['fails']} runs each failed within a minute of starting, with "
-                f"{run_backoff.CLASS_WORDS.get(kind, run_backoff.CLASS_WORDS[run_backoff.OTHER])}. Held "
-                f"since {str(hold['held_at'])[:16]} UTC. Last error: {hold['error'] or 'none reported'}.",
+                f"{name} was stopped after {hold['streak']} failed runs in a row",
+                f"{name}'s last {hold['streak']} runs each failed within a minute of starting, with "
+                f"{words.get(kind, words[run_failures.OTHER])}. Held "
+                f"since {str(details.get('held_at'))[:16]} UTC. Last error: {details.get('error') or 'none reported'}.",
                 f"BotOps: read {name}'s last runs, fix the cause, then release it (tico bot release {row.get('slug', bot)}). "
                 "Tico also tries one run on its own at growing intervals and releases it when one completes. "
                 "Its queued work is kept.",
@@ -752,7 +748,7 @@ def _stop_checks(c):
             )
         )
     for hold in turn_budgets.held(c):
-        bot = hold["bot_id"]
+        bot = hold["bot"]
         row = H.bot(c, bot) or {}
         name = row.get("display_name") or row.get("slug") or bot
         out.append(
@@ -1262,7 +1258,14 @@ def findings_view(c):
 
 
 def install(app, store, auth, mutate, settings):
-    @app.get("/api/v2/health/findings")
+    @app.get(
+        "/api/v2/health/findings",
+        **api_v2(
+            "Health",
+            "getHealthFindings",
+            "What Check health found on this install: each open problem with its count, last seen time and Tico-bug report, plus botops (whether BotOps is there to take findings) and reports_without_asking (the team rule)",
+        ),
+    )
     def health_findings(request: Request):
         who = request.state.identity
         if who.role not in ("owner", "human") and who.actor != "bot:" + BOTOPS:
@@ -1272,7 +1275,14 @@ def install(app, store, auth, mutate, settings):
                 raise Problem("forbidden", "Owners and admins read the health findings", 403)
             return findings_view(c)
 
-    @app.post("/api/v2/health/findings/{key}/report")
+    @app.post(
+        "/api/v2/health/findings/{key}/report",
+        **api_v2(
+            "Health",
+            "reportHealthFinding",
+            "People and BotOps: report a finding (key or signature) as a Tico bug: one ticket per problem with the redacted diagnostics, a message on it when it comes back, or a support approval when the team rule is off",
+        ),
+    )
     def report_finding(request: Request, key: str, body: M.Empty):
         who = request.state.identity
         if who.actor != "bot:" + BOTOPS and who.role != "owner":

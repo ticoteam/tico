@@ -7,7 +7,7 @@ import pytest
 from backend import redesign_migration
 from backend import system_routines as SR
 from backend.maintenance_steps import check_health
-from backend.tests.helpers.sample_company import booted, environment, machine, rows, settings_for, signed_in  # noqa: F401
+from backend.tests.helpers.fresh_install import booted, environment, machine, rows, settings_for, signed_in  # noqa: F401
 
 SOFTWARE = ("product", "engineering")
 # The Managers of the teams every company has: each runs its team's pipelines.
@@ -32,8 +32,8 @@ def _set_up(api, software="no", provider=True):
         },
         "selected": {},
     }
-    assert api.put("/api/v2/onboarding", json=body, headers=signed_in()).status_code == 200
-    done = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+    assert api.put("/api/v2/setup", json=body, headers=signed_in()).status_code == 200
+    done = api.post("/api/v2/setup/complete", json={}, headers=signed_in())
     assert done.status_code == 200, done.text
 
 

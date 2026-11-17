@@ -113,28 +113,13 @@ import httpx
 from clients import gateway as G
 from clients.gateway import user_agent
 
-from . import cloud_access, outbound_tls, releases
+from . import cloud_access, outbound_tls, releases, runner_online
 from .store import H, Problem, digest, encode
 from . import bot_settings as BS
+from .api_contract import api_v2, error
 
 log = logging.getLogger(__name__)
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS cloud_machines(
- bot TEXT PRIMARY KEY, mode TEXT NOT NULL DEFAULT 'cloud', placement TEXT NOT NULL DEFAULT 'shared',
- size TEXT NOT NULL DEFAULT 'default',
- always_on INTEGER NOT NULL DEFAULT 0, pause_minutes INTEGER, machine_id TEXT, runner_id TEXT,
- state TEXT NOT NULL DEFAULT 'none',
- machine_size TEXT, started_at TEXT, stopped_at TEXT, cost_month_usd REAL NOT NULL DEFAULT 0,
- starts_month INTEGER NOT NULL DEFAULT 0, last_error TEXT NOT NULL DEFAULT '',
- active_at REAL, heartbeat_at REAL, ttl_s INTEGER, next_try_at REAL, failures INTEGER NOT NULL DEFAULT 0,
- problem TEXT NOT NULL DEFAULT '', problem_at TEXT, wake_key TEXT, woke_at REAL,
- enroll_by REAL, enroll_fails INTEGER NOT NULL DEFAULT 0, changed_by TEXT, updated_at TEXT, stop_until REAL,
- start_asked_at REAL, create_asked_at REAL, grow_storage INTEGER, grow_note TEXT NOT NULL DEFAULT '',
- grow_refused_size TEXT, drain_started_at REAL, grow_blocked_until REAL, move_drain REAL);
-CREATE TABLE IF NOT EXISTS cloud_machine_codes(
- code_hash TEXT PRIMARY KEY, bot TEXT NOT NULL, created_at TEXT NOT NULL, replacement_for TEXT);
-"""
 MODES = ("cloud", "computer")
 PLACEMENTS = ("shared", "own")
 SHARED = "_shared"  # the shared machine's row and HQ key: no bot id has an underscore
@@ -537,13 +522,11 @@ def replacement_runner(c, key, old_id):
 
 def visible_rows(c):
     """Live runner contact proves a boot finished, but cannot undo HQ's stop or deletion."""
-    from .getting_started import ONLINE_SECONDS
-
     online = {
         r["id"]
         for r in c.execute(
             "SELECT id FROM runners_with_state WHERE revoked_at IS NULL AND last_seen_at>?",
-            (H.shift(H.now(), seconds=-ONLINE_SECONDS),),
+            (runner_online.cutoff(),),
         )
     }
     return {
@@ -1280,8 +1263,6 @@ def signin_wake(c, settings):
     for as long as the page keeps asking. Returns whether it is on its way: never out of credit, off a cloud company,
     after machines that never enrolled, once it is up (it is online and still cannot run the sign-in), or SIGNIN_START
     after the first ask."""
-    from .getting_started import ONLINE_SECONDS
-
     if not offered(c, settings) or cloud_access.frozen(c):
         return False
     ensure_shared(c)
@@ -1292,7 +1273,7 @@ def signin_wake(c, settings):
         current["runner_id"]
         and c.execute(
             "SELECT 1 FROM runners_with_state WHERE id=? AND revoked_at IS NULL AND last_seen_at>?",
-            (current["runner_id"], H.shift(H.now(), seconds=-ONLINE_SECONDS)),
+            (current["runner_id"], runner_online.cutoff()),
         ).fetchone()
     ):
         return False
@@ -3113,6 +3094,21 @@ class CloudSupportView(BaseModel):
     machines: list[CloudSupportMachine] = Field(max_length=1000)
 
 
+CLOUD_SUPPORT_DESCRIPTION = (
+    "HQ is the source of the switch and helper states; no local copy is kept. "
+    "GET returns available false, on null and an empty machines list off Tico Cloud "
+    "or when HQ answers 404 not_cloud. Demo and rehearsal never contact HQ. "
+    "PUT accepts a boolean on, needs the owner and refuses support sessions. "
+    "Core assigns an increasing revision and keeps it for retries of the same "
+    "Idempotency-Key. A 409 stale_revision is final and carries HQ's current boolean "
+    "on in the error. After an uncertain PUT, read HQ again before showing a saved state."
+)
+CLOUD_SUPPORT_ERRORS = {
+    "403": error("People only; changing the switch needs the owner"),
+    "502": error("Didn't reach Tico HQ, or HQ's answer could not be used"),
+}
+
+
 def install(app, settings, store, auth, execution, mutate):
     service = Manager(store, settings, execution)
     service.vault_of = lambda: getattr(app.state, "vault", None)
@@ -3141,7 +3137,17 @@ def install(app, settings, store, auth, execution, mutate):
             raise Problem("not_cloud", "Tico support on cloud machines is not available here", 404)
         return {"available": False, "on": None, "machines": []}
 
-    @app.get("/api/v2/cloud-machines/support", response_model=CloudSupportView)
+    @app.get(
+        "/api/v2/cloud-machines/support",
+        response_model=CloudSupportView,
+        **api_v2(
+            "Computers",
+            "getCloudMachineSupport",
+            "Read Tico support's cloud-machine switch and helper states from HQ; unavailable off Tico Cloud",
+            description=CLOUD_SUPPORT_DESCRIPTION,
+            responses=CLOUD_SUPPORT_ERRORS,
+        ),
+    )
     def cloud_machine_support(request: Request):
         """The switch and each machine's helper state, read from HQ every time. Unavailable off Tico Cloud.
         Signed-in people only; demo and rehearsal never contact HQ."""
@@ -3151,7 +3157,20 @@ def install(app, settings, store, auth, execution, mutate):
             raise Problem("forbidden", "Only people see Tico support on cloud machines", 403)
         return support_state()
 
-    @app.put("/api/v2/cloud-machines/support", response_model=CloudSupportView)
+    @app.put(
+        "/api/v2/cloud-machines/support",
+        response_model=CloudSupportView,
+        **api_v2(
+            "Computers",
+            "setCloudMachineSupport",
+            "Let Tico support reach the company's cloud machines, or stop it; owner only",
+            description=CLOUD_SUPPORT_DESCRIPTION,
+            responses={
+                **CLOUD_SUPPORT_ERRORS,
+                "404": error("not_cloud: cloud-machine support is not available"),
+            },
+        ),
+    )
     def cloud_machine_support_set(request: Request, body: CloudSupportChange):
         """Let Tico support reach this company's cloud machines, or stop it, at HQ. Owner only; support sessions
         cannot change their own access. Retries keep the same revision; HQ refuses a change older than its latest."""

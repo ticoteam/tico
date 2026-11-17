@@ -56,7 +56,7 @@ async function open(browser: import('playwright').Browser, server: Server, width
     if (p === '/api/v2/models') return json({models: [], harnesses: [], enabled_providers: []});
     if (p === '/api/v2/operations') return json({machines: [], services: [], agents: []});
     if (p === '/api/v2/usage/limits') return json({bots: {}});
-    if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
+    if (p === '/api/v2/settings/history') return json({changes: []});
     if (p === '/api/status') return json({active: [], employees: []});
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/goals/tree') return json({goals: [], owners: {}, other_kpis: [], proposals: []});

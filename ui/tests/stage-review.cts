@@ -23,6 +23,11 @@ type Task = import('./tasks-page.cts').Task;
 type Requirement = import('../types/api').TaskRequirement;
 
 const PHONE = {width: 390, height: 844};
+/** A phone's Chat tab, where an OK's chat is (it opens on its document); nothing on a wide screen. */
+async function chatTab(page: import('playwright').Page) {
+  const tab = page.locator('#need-card [data-dc="tab"][data-dc-tab="chat"]');
+  if (await tab.isVisible()) await tab.click();
+}
 const ago = (minutes: number) => new Date(Date.now() - minutes * 60000).toISOString();
 const waiting = {state: 'person' as const, who: 'human:ana', line: 'Waiting on Ana', since: ago(60), until: null, ask: true, requirement_id: null};
 
@@ -108,11 +113,21 @@ async function nothingMoves(browser: Browser) {
     release();
     await page.locator('[data-pv-play]').first().waitFor();
     assert.deepEqual(await layoutOf(page), before, `${layout}: the counts and ▶'s slot stay where they were`);
+    // ▶ sits just before its stage's ⋯, the header's last part, which ends it at the right edge (task-pipelines.ts,
+    // pvColMenuHTML). The ⋯'s own margin takes 4 px of the header's 8 px gap, so ▶ is 4 px left of it; a gap past that
+    // (or one that overlaps) is a layout bug.
     const right = await page.locator('.pv-play').evaluateAll(els => els.map(e => {
-      const h = e.parentElement!.getBoundingClientRect(), r = e.getBoundingClientRect();
-      return {gap: Math.round(h.right - r.right - parseFloat(getComputedStyle(e.parentElement!).paddingRight)), w: Math.round(r.width)};
+      const h = e.parentElement!, hb = h.getBoundingClientRect(), r = e.getBoundingClientRect();
+      const menu = h.lastElementChild, mb = menu?.getBoundingClientRect();
+      return {
+        menu: !!menu?.matches('[data-pv-col-menu]'),
+        edge: mb ? Math.round(hb.right - parseFloat(getComputedStyle(h).paddingRight) - mb.right) : null,
+        gap: mb ? Math.round(mb.left - r.right) : null,
+        w: Math.round(r.width),
+      };
     }));
-    assert.ok(right.every(x => x.gap === 0 && x.w >= 40), `${layout}: ▶ at the header's right edge, 40 px or more: ${JSON.stringify(right)}`);
+    assert.ok(right.every(x => x.menu && x.edge === 0 && x.gap !== null && x.gap >= 0 && x.gap <= 8 && x.w >= 40),
+      `${layout}: ▶ just before the stage's ⋯, which ends the header, 40 px or more: ${JSON.stringify(right)}`);
     assert.deepEqual(errors, []);
     await page.close();
   }
@@ -190,10 +205,11 @@ async function walkOnAPhone(browser: Browser) {
     line: 'OK the late spec'}]; decideRefresh(DEC, S.v2.needs)`);
   assert.equal(await left(page), 2, 'the new one joins the walk');
   assert.equal(await question(page), before, 'and the item on screen stays');
-  // Send back with a note. The server never had the late OK, so the read after the answer takes it out (answered
-  // elsewhere, it leaves): the stage is done, and the menu walks Review's items.
-  await page.locator('#dc-notes').fill('Name the stage in the top bar.');
-  await page.locator('#need-card [data-dc="sendback"]').click();
+  // A reply in the task's chat sends it back with the words. The server never had the late OK, so the read after the
+  // answer takes it out (answered elsewhere, it leaves): the stage is done, and the menu walks Review's items.
+  await chatTab(page);
+  await page.locator('#need-card .dc-chat .p-text').fill('Name the stage in the top bar.');
+  await page.locator('#need-card .dc-chat .p-send').click();
   await page.locator('#need-card .dc-done h2').waitFor();
   assert.ok(posts.some(x => x.p === '/api/v2/tasks/t-2/asks/r2/answer' && x.body.value === 'no' && x.body['note'] === 'Name the stage in the top bar.'));
   await walkTo(page, 'review');
@@ -282,8 +298,9 @@ async function phonePolish(browser: Browser) {
     await page.locator('#need-card[open] [data-dc="approve"]:not([disabled])').waitFor();
     r = await smallTargets(page, '#need-card');
     assert.deepEqual(r.small, [], 'the review screen, an OK: 44 px');
-    // With the keyboard up (the visible height cut to 420 px), Approve and Send back stay on screen.
-    await page.locator('#dc-notes').focus();
+    // With the keyboard up (the visible height cut to 420 px), Approve stays on screen.
+    await chatTab(page);
+    await page.locator('#need-card .dc-chat .p-text').focus();
     await page.evaluate(`document.documentElement.style.setProperty('--chat-viewport-height', '420px')`);
     const acts = await page.locator('#need-card [data-dc="approve"]').boundingBox();
     assert.ok(acts && acts.y + acts.height <= 420, `Approve above the keyboard: ${JSON.stringify(acts)}`);

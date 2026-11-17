@@ -281,22 +281,9 @@ def kind_for(e, body):
     return e.kind
 
 
-def _bot_target(c, e, target):
-    """Resolve id-addressed bot settings to their owning bot before checking manager rights."""
-    target = target or {}
-    if target.get("bot"):
-        return target["bot"]
-    object_id = target.get("id")
-    if not object_id:
-        return ""
-    if e.route.startswith("routines/{id}"):
-        table = "schedules"
-    elif e.route.startswith("settings/transitions/{id}/"):
-        table = "bot_transitions"
-    else:
-        return ""
-    found = c.execute(f"SELECT bot FROM {table} WHERE id=?", (object_id,)).fetchone()
-    return found["bot"] if found else ""
+def _bot_target(target):
+    """The bot a bot setting names: every bot entry is addressed by its bot, none by another object's id."""
+    return (target or {}).get("bot") or ""
 
 
 def _whose(c, e, target):
@@ -334,7 +321,7 @@ def may(c, auth, who, e, target=None):
 
         return who.role == "human" and H.can_move(c, who.actor)
     if e.who == "bot":
-        return auth.bot_manager(c, who, _bot_target(c, e, target))
+        return auth.bot_manager(c, who, _bot_target(target))
     if e.who == "self":
         return who.role == "human" and (
             e.target != "person" or who.actor == "human:" + str((target or {}).get("person"))
@@ -358,9 +345,9 @@ def raw_refusal(c, auth, who, method, path, body=None, base=""):
     `tico settings` gives for that setting (`refusal`), as `{"fix", "link", "who_may"}`, when the request is one entry's
     (or its route is only entries with the same who), that who is not everyone, and the entry's own check refuses this
     person too (so a refusal for another reason keeps the route's words); else None."""
-    from .route_renames import new_path
+    from .legacy_spellings import canonical
 
-    path = new_path(path) or path  # `/runners/<id>/revoke` is `computers/{computer}/revoke`
+    path = canonical(path) or path  # a kept old spelling (`/api/v2/runners/<id>/inbox-only`) is checked as its route
     found = matched(method, path, body)
     rows = [found[:2]] if found else routed(method, path)
     if not rows or len({e.who for e, _ in rows}) != 1 or rows[0][0].who in ("anyone", "self"):

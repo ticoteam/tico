@@ -25,6 +25,7 @@ from fastapi import Request
 from . import models as M
 from . import rooms
 from .store import H, Problem, digest
+from .api_contract import api_v2
 
 PREFIX = "tico_sk_"
 INBOUND_PATH = "/api/v2/inbound/tasks"
@@ -232,12 +233,22 @@ def _apply(c, body, row, footer, label):
 
 
 def install_service_keys(app, store, auth, mutate):
-    @app.get("/api/v2/service-keys")
+    @app.get(
+        "/api/v2/service-keys",
+        **api_v2("Session", "listServiceKeys", "Service keys, never the secret (owner and admins)"),
+    )
     def list_service_keys(request: Request):
         with store.read() as c:
             return {"keys": listing(c, auth, request.state.identity)}
 
-    @app.post("/api/v2/service-keys")
+    @app.post(
+        "/api/v2/service-keys",
+        **api_v2(
+            "Session",
+            "createServiceKey",
+            "Make a key another system uses to file, update and close tasks (scope tasks), or to update this install (scope update, owner only), and nothing else; shown once (owner and admins; a key made with a personal token ends with it)",
+        ),
+    )
     def create_service_key(request: Request, body: M.ServiceKeyCreate):
         who = request.state.identity
         _admin(auth, who)
@@ -252,11 +263,21 @@ def install_service_keys(app, store, auth, mutate):
         made = mutate(request, body, work)
         return {**made, "key": secret[0]} if secret else made
 
-    @app.post("/api/v2/service-keys/{key_id}/revoke")
+    @app.post("/api/v2/service-keys/{key_id}/revoke", **api_v2("Session", "revokeServiceKey", "Revoke a service key"))
     def revoke_service_key(request: Request, key_id: str, body: M.Empty):
         return mutate(request, body, lambda c: revoke(c, auth, request.state.identity, key_id))
 
-    @app.post(INBOUND_PATH)
+    @app.post(
+        INBOUND_PATH,
+        **api_v2(
+            "Tasks",
+            "upsertInboundTask",
+            "Another system's work as it is now, by its own key: files, updates, closes or reopens one task (service key only; docs/service-keys.md)",
+            "InboundTaskResult",
+            security=[{"serviceKey": []}],
+            idempotency="Not needed: the pair (service key, `key`) makes a repeated call harmless, and the header is ignored.",
+        ),
+    )
     def inbound_task(request: Request, body: M.InboundTask):
         """No Idempotency-Key: the pair is the idempotency, and a stored answer replayed after a
         later call for the same work would undo that call."""

@@ -1,4 +1,4 @@
-"""Related input (backend/related_input.py, docs/pipelines-v3.md "Related input"): Jev scores the company's bots against
+"""Related input (backend/related_input.py, docs/dev/pipelines-v3.md "Related input"): Jev scores the company's bots against
 a task's pitch and spec, the top 1 to 2 at the bar are asked once to comment, and the stage is met on their comments,
 when nobody clears the bar, or after its wait. It never blocks.
 
@@ -138,7 +138,7 @@ def test_jev_scores_the_bots_and_the_top_two_over_the_bar_are_asked_once(feature
     row = _related(features)
     with features.read() as c:
         (wait,) = W.of(c, E.task(c, row["id"]))
-        assert (wait.state, wait.line) == (W.JEV, "Jev is picking related bots")
+        assert (wait.state, wait.line) == (W.JEV, "Decision model is picking related bots")
     _beat(features)
     (state, questions, label) = jev.calls[0]
     assert label == "related-bots@1" and len(jev.calls) == 1
@@ -159,7 +159,7 @@ def test_jev_scores_the_bots_and_the_top_two_over_the_bar_are_asked_once(feature
         assert "comment on the task once from your area" in wake and f"tico task comment {row['id']}" in wake
         (wait,) = W.of(c, E.task(c, row["id"]))
         assert (wait.state, wait.line) == (W.JEV, "Waiting on comments from billing and mail")
-    assert _events(features, row) == [("picked", "Related input: Jev picked billing (0.95), mail (0.86)")]
+    assert _events(features, row) == [("picked", "Related input: Decision model picked billing (0.95), mail (0.86)")]
     with features.transaction() as c:
         # A pick has no turn on the task, yet its one wake may start its run; the rules that hold at all times hold.
         message = c.execute(
@@ -244,7 +244,10 @@ def test_a_jev_that_fails_is_tried_again_then_the_stage_is_met(features, jev, ti
     assert len(jev.calls) == RI.TRIES
     assert _asked(features, row) == []
     assert _stage(features, row) == "features-ok-spec"
-    assert _events(features, row)[-1] == ("done", "Related input: Jev couldn't pick related bots, so nobody was asked")
+    assert _events(features, row)[-1] == (
+        "done",
+        "Related input: Decision model couldn't pick related bots, so nobody was asked",
+    )
 
 
 def test_a_private_task_asks_only_the_bots_who_can_read_it(features, jev):
@@ -332,3 +335,11 @@ def test_the_migration_adds_the_kind_and_keeps_every_row():
     assert [r[0] for r in conn.execute("SELECT id FROM requirements ORDER BY id")] == ["r1", "r2"]
     assert conn.execute("SELECT 1 FROM sqlite_master WHERE name='requirements_stage'").fetchone()
     assert conn.execute("SELECT COUNT(*) FROM related_inputs").fetchone()[0] == 0
+
+
+def test_a_stage_whose_time_runs_out_with_nobody_picked_moves_on(features, jev, time_machine):
+    row = _related(features)
+    time_machine.move_to(START + timedelta(hours=4, minutes=1), tick=False)
+    _beat(features)
+    assert _asked(features, row) == []
+    assert _stage(features, row) == "features-ok-spec"

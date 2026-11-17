@@ -105,7 +105,7 @@ def test_a_held_turn_is_not_a_failed_run_and_the_never_stuck_check_wakes_no_one_
         wakes = c.execute("SELECT count(*) FROM messages WHERE wake_key LIKE ?", (tid + ":%",)).fetchone()[0]
         tries = c.execute("SELECT tries FROM visits WHERE task_id=? AND left_at IS NULL", (tid,)).fetchone()[0]
         attempts = c.execute("SELECT count(*) FROM attempts WHERE bot_id='ops'").fetchone()[0]
-        failed = c.execute("SELECT fails FROM run_backoff WHERE bot='ops'").fetchone()
+        failed = c.execute("SELECT streak FROM holds WHERE kind='failing' AND holdable_id='ops'").fetchone()
         waits = H.task_view(c, tid)["waits"]
     assert wakes == before, "no wake is written while paused"
     assert tries == 0, "no try is counted while paused"

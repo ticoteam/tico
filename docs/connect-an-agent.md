@@ -171,11 +171,11 @@ What the agent can do from there, for each part of **Finish setup**:
 | Step | How |
 |---|---|
 | See where setup stands | `tico_setup_show`: whether the welcome wizard is finished, its saved answers, the people the company file names, and the getting-started checklist |
-| Finish the welcome wizard | `tico_setup_complete` (the wizard's Create my team); the picks are saved first with `tico_api` `PUT /api/v2/setup`, or come from the company file or sample company the install was given |
+| Finish the welcome wizard | `tico_setup_complete` (the wizard's Create my team); the picks are saved first with `tico_api` `PUT /api/v2/setup`, or come from the company file the install was given |
 | Invite the people from the company file | `tico_setup_invite` with `person_key` (from `tico_setup_show`) and `email`. They go on the roster, and Tico mails them when the install signs people in with a Tico account |
 | Choose models (your subscriptions or the Gateway default) | `tico_settings_set` on `models.providers` (`tico_settings_find` and `tico_settings_show` read it first); the Gateway's own setting is `models.gateway` |
 | Add a Tico Cloud computer | `tico_api` `POST /api/v2/bots/<bot>/cloud-machine` with `{"mode": "cloud", "placement": "shared"}`: the company's shared cloud machine is made when its first bot runs there. `tico_bot_place` puts a bot on a computer that is already connected |
-| Skip an optional getting-started step | `tico_api` `POST /api/v2/getting-started/state` with `{"skip": "subscription"}`, the one optional step (not on Tico Cloud). GitHub is required: bots need it for their repositories. The other steps tick by themselves as they come true |
+| Skip an optional getting-started step | `tico_api` `POST /api/v2/setup/getting-started/state` with `{"skip": "subscription"}`, the one optional step (not on Tico Cloud). GitHub is required: bots need it for their repositories. The other steps tick by themselves as they come true |
 | Recommend a Claude or ChatGPT subscription | Not the agent's step: the person signs it in on their computer (**Settings > Computers**). Say it is recommended, for their own bots and within the provider's terms. `tico_setup_show` lists it as `subscription` in the getting-started items until it is signed in |
 
 ## An agent that is a bot, not you

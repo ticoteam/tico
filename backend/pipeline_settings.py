@@ -1,5 +1,5 @@
 # pyright: strict
-"""One record for a pipeline, its stages and their requirements (docs/pipelines-v3.md, "Modules", "Stage settings").
+"""One record for a pipeline, its stages and their requirements (docs/dev/pipelines-v3.md, "Modules", "Stage settings").
 
 The same record is what the editor shows, what the API and the hub send, and what MCP reads. This module is the only
 writer of `pipelines`, `stages` and of the requirements set on a stage (`requirements.stage_id`).
@@ -52,7 +52,6 @@ PIPELINE_FIELDS = (
     "private",
     "factory_id",
     "preset",
-    "keep_warm_hours",
 )
 STAGE_FIELDS = (
     "name",
@@ -65,7 +64,6 @@ STAGE_FIELDS = (
     "expected_bots_only",
     "on_enter",
     "pick",
-    "keep_warm_hours",
 )
 REQUIREMENT_FIELDS = (
     "kind",
@@ -87,9 +85,6 @@ REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 BUILT_IN = ("done", "closed")
 PREFIX = re.compile(r"^[A-Za-z]{1,2}$")
 ASSIGNEE = "assignee"
-# "Keep warm for up to N hours" (backend/keep_warm.py): the pipeline's N, and a stage's own (None: the pipeline's).
-KEEP_WARM_DEFAULT = 8
-KEEP_WARM_MAX = 24
 
 PRESETS: dict[str, Row] = {
     "general": {
@@ -151,6 +146,12 @@ def _page(line: str, rubric: str, **settings: bool) -> Row:
     return {"kind": "page", "line": line, "settings": {"rubric": rubric, **settings}}
 
 
+def _approval(document: str, rubric: str) -> Row:
+    """A stage's document a person approves (task_requirements.APPROVED): the bot writing it in the stage submits it,
+    the decision model checks it, then any person approves that version."""
+    return {"kind": "page", "line": document, "settings": {"document": document, "rubric": rubric}}
+
+
 def _people_only(requirement: Row) -> Row:
     """A person's OK no bot can give or push past: the two person sign-offs, on the spec and before release."""
     return {**requirement, "who_oks": "people_only"}
@@ -209,8 +210,13 @@ VALIDATE_RUBRIC = (
     "Names the version production runs and shows the change working in that version: what was run or looked at there, "
     "and what it gave. If that version is older than the release that holds this work, it is not yet."
 )
+# The Release report a person approves before the PRs merge: what is shipping, judged from the report alone.
+RELEASE_RUBRIC = (
+    "Says what is shipping: the change in a few plain lines, the PRs it merges at their newest commits, and anything a "
+    "person should know before it merges (a migration, a setting, what is left out)."
+)
 QA_STAGE = "engineering-qa"  # where a person approves the change before it ships (`_add_qa` brings it to a company)
-# The Product and Engineering presets (docs/pipelines-v3.md "Default pipelines"). Made only for a company that builds
+# The Product and Engineering presets (docs/dev/pipelines-v3.md "Default pipelines"). Made only for a company that builds
 # software (a blank answer is yes), once its setup is finished (ensure_presets).
 PRESETS["engineering"] = {
     "id": "engineering",
@@ -264,14 +270,14 @@ PRESETS["engineering"] = {
         _stage(
             QA_STAGE,
             "QA",
-            "Build the QA page: what changed, before and after screenshots of the running app (or the output that "
-            "proves a change with nothing to see), the checks at the newest commit and what both reviewers found. A "
-            "person approves it to ship. To change it, attach the new version; Tico asks the person again when there "
-            "are new commits or it is another page. Never ask your own OK of it.",
+            "Write the QA report: what changed, before and after screenshots of the running app (or the output that "
+            "proves a change with nothing to see), the checks at the newest commit and what both reviewers found. "
+            "Writing it here submits it; a person approves it to ship. To change it, write the next version; Tico asks "
+            "the person again when there are new commits.",
             240,
             [
                 github("checks_pass"),
-                _people_only(_page("QA page", QA_RUBRIC)),
+                _people_only(_approval("QA report", QA_RUBRIC)),
             ],
         ),
         _stage(
@@ -321,7 +327,7 @@ PRESETS["product"] = {
             "Spec",
             "A spec a builder can build from.",
             2880,
-            [_people_only(_page("Spec page", SPEC_RUBRIC))],
+            [_people_only(_approval("Spec", SPEC_RUBRIC))],
             task_limit=20,  # room for every owner; a spec waiting only on a person's OK holds no slot (has_room)
         ),
         _stage(
@@ -343,13 +349,13 @@ PRESETS["product"] = {
     "done": {"id": "product-done"},
     "closed": {"id": "product-closed"},
 }
-# Product (Nov 14, docs/pipelines-v3.md "Product"): one pipeline from pitch to production, the default for a company that
-# builds software from 0.6 on. It replaces the Product and Engineering pair (LEGACY), which stay defined for the
-# companies that have them. One feature owner, the task's assignee, holds it from Pitch to Validate in one task and one
-# session; the reviewers, the QA Owner and the Release Owner hold their stages as on Engineering. Any person clears
-# the pitch, spec and release gates (people only, nobody named), and a bot never does.
-IDEAS_STAGE = "product-ideas"  # Pitch keeps the id of the pair's Ideas, as Tico Team's Product does (idea_checks)
-PITCH_MAX = 280  # the task's body is the pitch: a person is asked to OK it only once it is this short or shorter
+# Product (Nov 14, docs/dev/pipelines-v3.md "Product"): one pipeline from the Spec to production, the default for a
+# company that builds software from 0.6 on. It replaces the Product and Engineering pair (LEGACY), which stay defined for
+# the companies that have them. One feature owner, the task's assignee, holds it from Spec to Validate in one task and
+# one session; the reviewers, the QA Owner and the Release Owner hold their stages as on Engineering. A feature starts as
+# a chat and its first approval is the Spec (no pitch, Nov 16). Any person approves the Spec and the Release report
+# (people only, nobody named), and a bot never does.
+IDEAS_STAGE = "product-ideas"  # the pair's Ideas, and the Pitch stage Product had until Nov 16 (idea_checks)
 # Related input (backend/related_input.py): Jev picks 1 to 2 bots over the bar, each adds one round of comments to the
 # spec page; it never blocks and moves on after 4 hours.
 RELATED_INPUT = "related_input"
@@ -357,30 +363,21 @@ PRODUCT = "features"  # the preset's key and `preset` column: "product" is the P
 PRESETS[PRODUCT] = {
     "id": "product",
     "name": "Product",
-    "goal": "From a pitch to something checked in production",
+    "goal": "From a spec to something checked in production",
     "prefix": "P",
     "manager_id": None,
     "owner_id": None,
     "private": False,
     "factory_id": "product",
     "preset": PRODUCT,
-    "keep_warm_hours": KEEP_WARM_DEFAULT,
     "stages": [
-        _stage(
-            IDEAS_STAGE,
-            "Pitch",
-            f"The task's body is the pitch: the problem, who has it and the fix, in up to {PITCH_MAX} characters "
-            "(skill write-a-pitch). Any person OKs it; a longer one is the owner's to shorten first.",
-            1440,
-            [_people_only({"kind": "ok", "line": "OK the pitch", "settings": {"body_max": PITCH_MAX}})],
-            owner=ASSIGNEE,
-        ),
         _stage(
             "product-spec",
             "Spec",
-            "Write the spec page with the person who OK'd the pitch (skill write-a-spec).",
+            "A feature starts as a chat. Write the Spec from it (skill write-a-spec): tico task attach <id> spec.html "
+            "--doc Spec. The decision model checks it.",
             2880,
-            [_page("Spec page", SPEC_RUBRIC)],
+            [_approval("Spec", SPEC_RUBRIC)],
             owner=ASSIGNEE,
         ),
         _stage(
@@ -394,9 +391,10 @@ PRESETS[PRODUCT] = {
         _stage(
             "product-ok-spec",
             "OK spec",
-            "Attach the spec page with what the comments changed (skill write-a-spec). Any person OKs it.",
+            "Write the next version of the Spec with what the comments changed (skill write-a-spec): writing it here "
+            "submits it. Any person approves it.",
             2880,
-            [_people_only(_page("Spec page", SPEC_RUBRIC))],
+            [_people_only(_approval("Spec", SPEC_RUBRIC))],
             owner=ASSIGNEE,
         ),
         _stage(
@@ -442,19 +440,20 @@ PRESETS[PRODUCT] = {
         _stage(
             "product-qa",
             "QA",
-            "Build the QA page (skill make-the-qa-page): what changed, before and after screenshots of the running app (or the output that "
-            "proves a change with nothing to see), the checks at the newest commit and what both reviewers found. A "
-            "person approves it. To change it, attach the new version; Tico asks the person again when there are new "
-            "commits or it is another page. Never ask your own OK of it.",
+            "Write the QA report (skill make-the-qa-page): what changed, before and after screenshots of the running "
+            "app (or the output that proves a change with nothing to see), the checks at the newest commit and what "
+            "both reviewers found. Writing it here submits it; a person approves it. To change it, write the next "
+            "version; Tico asks the person again when there are new commits.",
             240,
-            [github("checks_pass"), _people_only(_page("QA page", QA_RUBRIC))],
+            [github("checks_pass"), _people_only(_approval("QA report", QA_RUBRIC))],
         ),
         _stage(
             "product-ok-release",
             "OK release",
-            "Any person OKs the release. Then it merges.",
+            "Write the Release report: what is shipping. Writing it here submits it; any person approves it. Then it "
+            "merges.",
             1440,
-            [_people_only({"kind": "ok", "line": "OK the release"})],
+            [_people_only(_approval("Release report", RELEASE_RUBRIC))],
             owner=ASSIGNEE,
         ),
         _stage(
@@ -533,8 +532,28 @@ EARLIER: dict[str, tuple[str, ...]] = {
         "Build the QA page: what changed, before and after screenshots of the running app (or the output that proves a "
         "change with nothing to see), the checks at the newest commit and what both reviewers found. A person approves "
         "it to ship. To change it, attach the new version; Tico asks the person. Never ask your own OK of it.",
+        "Build the QA page: what changed, before and after screenshots of the running app (or the output that proves a "
+        "change with nothing to see), the checks at the newest commit and what both reviewers found. A person approves "
+        "it to ship. To change it, attach the new version; Tico asks the person again when there are new commits or it "
+        "is another page. Never ask your own OK of it.",
     ),
-    "engineering-qa/page/line": ("Review page",),
+    # Nov 16: stage approvals name a document; Product has no pitch (a feature starts as a chat).
+    "product/goal": ("From a pitch to something checked in production",),
+    "product-spec/purpose": ("Write the spec page with the person who OK'd the pitch (skill write-a-spec).",),
+    "product-spec/page/line": ("Spec page",),
+    "product-ok-spec/purpose": (
+        "Attach the spec page with what the comments changed (skill write-a-spec). Any person OKs it.",
+    ),
+    "product-ok-spec/page/line": ("Spec page",),
+    "product-qa/purpose": (
+        "Build the QA page (skill make-the-qa-page): what changed, before and after screenshots of the running app (or "
+        "the output that proves a change with nothing to see), the checks at the newest commit and what both reviewers "
+        "found. A person approves it. To change it, attach the new version; Tico asks the person again when there are "
+        "new commits or it is another page. Never ask your own OK of it.",
+    ),
+    "product-qa/page/line": ("QA page",),
+    "product-ok-release/purpose": ("Any person OKs the release. Then it merges.",),
+    "engineering-qa/page/line": ("Review page", "QA page"),
     "engineering-qa/page/rubric": _FIXES_2_RUBRICS,
     "engineering-merge/purpose": (
         "The PRs are in the merge queue. If GitHub takes one out, queue it again, fix it on its branch, or send the "
@@ -593,7 +612,7 @@ ROLES[PRODUCT] = {
         "product-qa": S.QA_OWNER,
         "product-merge": S.RELEASE_MANAGER,
     },
-    "ok": ("product-qa",),  # the QA page's person, as on Engineering; the pitch, spec and release gates name nobody
+    "ok": ("product-qa",),  # the QA report's person, as on Engineering; the Spec and Release report name nobody
 }
 # Growth Experiments, Lead, Opportunity, Customer and Success Experiments, with their Growth and Success factories.
 PRESETS.update(more.PRESETS)
@@ -651,16 +670,9 @@ def _stage_out(conn: "sqlite3.Connection", row: Row) -> Row:
         "expected_minutes": row.get("expected_minutes"),
         "expected_bots_only": bool(row.get("expected_bots_only")),
         "on_enter": _loads(row.get("on_enter")) or {},
-        "keep_warm_hours": stage_keep_warm(conn, row["id"]),
         "requirements": [_requirement_out(r) for r in R.on_stage(conn, row["id"])],
         **_pick_out(conn, row),
     }
-
-
-def stage_keep_warm(conn: "sqlite3.Connection", stage_id: str) -> int | None:
-    """A stage's own "Keep warm for up to N hours", or None when it takes the pipeline's."""
-    found = conn.execute("SELECT hours FROM stage_keep_warm WHERE stage_id=?", (stage_id,)).fetchone()
-    return int(found[0]) if found else None
 
 
 def _pick_out(conn: "sqlite3.Connection", row: Row) -> Row:
@@ -684,7 +696,6 @@ def read(conn: "sqlite3.Connection", pipeline_id: str) -> Row | None:
     out: Row = {"id": row["id"], **{key: row.get(key) for key in PIPELINE_FIELDS}}
     out["goal"] = out["goal"] or ""
     out["private"] = bool(out["private"])
-    out["keep_warm_hours"] = int(row.get("keep_warm_hours", KEEP_WARM_DEFAULT) or 0)
     out["settings_version"] = int(row.get("settings_version") or 1)
     out["retired_at"] = row.get("retired_at")
     out["stages"] = [_stage_out(conn, s) for s in order if s["kind"] == "work"]
@@ -727,20 +738,6 @@ def _count(value: object, sentence: str, problems: list[str]) -> int | None:
         return value
     problems.append(sentence)
     return None
-
-
-def _hours(item: Row, what: str, problems: list[str]) -> Row:
-    """`keep_warm_hours` as given: {"keep_warm_hours": N} for a whole number of hours from 0 (off) to KEEP_WARM_MAX, or
-    None (a stage: the pipeline's); {} when the record leaves it out, so a save that never names it keeps what is set."""
-    if "keep_warm_hours" not in item:
-        return {}
-    value = item["keep_warm_hours"]
-    if value is None or value == "":
-        return {"keep_warm_hours": None}
-    if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= KEEP_WARM_MAX:
-        return {"keep_warm_hours": value}
-    problems.append(f"{what} is a whole number of hours from 0 to {KEEP_WARM_MAX}.")
-    return {}
 
 
 def _dict(value: object, sentence: str, problems: list[str]) -> Row:
@@ -826,7 +823,6 @@ def _stage_in(raw: object, position: int, problems: list[str]) -> Row:
             _requirement_in(r, label, problems)
             for r in _list(item.get("requirements"), f"The requirements on {label} are not a list.", problems)
         ],
-        **_hours(item, f"Keep warm on {label}", problems),
     }
 
 
@@ -845,7 +841,6 @@ def _parse(record: object) -> tuple[Row, list[str]]:
         "private": _flag(item.get("private"), "Private", problems),
         "factory_id": _ref(item.get("factory_id"), "The factory", problems),
         "preset": _ref(item.get("preset"), "The preset", problems),
-        **_hours(item, "Keep warm", problems),
     }
     out["stages"] = [
         _stage_in(s, i, problems)
@@ -890,10 +885,10 @@ def _check_settings(req: Row, label: str, problems: list[str]) -> None:
             problems.append(f"{name} has no setting {key} (on {label}).")
         elif key in ("at_head", "with_release", "prereleases") and not isinstance(value, bool):
             problems.append(f"{key} on {label} is on or off.")
-        elif key == "body_max" and (not isinstance(value, int) or isinstance(value, bool) or value < 1):
-            problems.append(f"The most characters of the task's body on {label} is a whole number above zero.")
+        elif key == "document" and value not in R.APPROVED:
+            problems.append(f"The document approved on {label} is one of {', '.join(R.APPROVED)}.")
         elif key == "rubric" and not isinstance(value, str):
-            problems.append(f"What Jev checks on {label} must be text.")
+            problems.append(f"What the Decision model checks on {label} must be text.")
         elif key == "release_repo" and (
             not isinstance(value, str) or (value.strip() and not REPO.match(value.strip()))
         ):
@@ -980,7 +975,7 @@ def _check_requirement(conn: "sqlite3.Connection", stage: Row, req: Row, problem
     elif person and not _actor_exists(conn, person):
         problems.append(f"{person} is not a person or a bot here (on {label}).")  # removed, or left
     elif kind == "ok" and not person and req["who_oks"] != "people_only":
-        # People only with nobody named is any person's OK, never a bot's (Product's pitch, spec and release gates).
+        # People only with nobody named is any person's OK, never a bot's.
         problems.append(f"An OK from someone on {label} names the person or bot who OKs it, or is people only.")
     if req["id"]:
         found = _h()._one(
@@ -1302,21 +1297,18 @@ def _write_pipeline(conn: "sqlite3.Connection", record: Row, existing: Row | Non
         1 if record["private"] else 0,
         record["factory_id"],
     ]
-    # Left out, or None: what is set stays (a new pipeline: KEEP_WARM_DEFAULT).
-    hours = record.get("keep_warm_hours")
     if existing:
         conn.execute(
             "UPDATE pipelines SET name=?, goal=?, prefix=?, manager_id=?, owner_id=?, private=?, factory_id=?, "
-            "keep_warm_hours=COALESCE(?, keep_warm_hours), settings_version = settings_version + 1, updated_at=? "
-            "WHERE id=?",
-            (*values, hours, ts, existing["id"]),
+            "settings_version = settings_version + 1, updated_at=? WHERE id=?",
+            (*values, ts, existing["id"]),
         )
         return str(existing["id"])
     pid = record["id"] or H.new_id()
     conn.execute(
         "INSERT INTO pipelines (id, name, goal, prefix, manager_id, owner_id, private, factory_id, preset, "
-        "keep_warm_hours, settings_version, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,1,?,?)",
-        (pid, *values, record["preset"], KEEP_WARM_DEFAULT if hours is None else hours, ts, ts),
+        "settings_version, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,1,?,?)",
+        (pid, *values, record["preset"], ts, ts),
     )
     return pid
 
@@ -1417,15 +1409,6 @@ def _write_stages(conn: "sqlite3.Connection", by: str, pid: str, record: Row, ts
                 "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'work',?,?)",
                 (*values, sid, pid, ts, ts),
             )
-        if "keep_warm_hours" in stage:  # left out of the record, what is set stays
-            if stage["keep_warm_hours"] is None:
-                conn.execute("DELETE FROM stage_keep_warm WHERE stage_id=?", (sid,))
-            else:
-                conn.execute(
-                    "INSERT INTO stage_keep_warm (stage_id, hours) VALUES (?,?) "
-                    "ON CONFLICT(stage_id) DO UPDATE SET hours=excluded.hours",
-                    (sid, stage["keep_warm_hours"]),
-                )
         loosened = _write_requirements(conn, by, sid, stage["requirements"], ts) or loosened
     end = len(record["stages"])
     for offset, kind in enumerate(BUILT_IN):
@@ -1513,10 +1496,86 @@ def _changes_release(conn: "sqlite3.Connection", pipeline_id: str, parsed: Row) 
     return None
 
 
-def save(conn: "sqlite3.Connection", by: str, record: Row, seen_version: int | str | None = None) -> Row:
+def holding(conn: "sqlite3.Connection", record: Row) -> list[Row]:
+    """The work stages a save of `record` removes that still hold open tasks, each as {"id", "name", "tasks"}, in the
+    pipeline's order. Empty for a new pipeline."""
+    parsed, _ = _parse(record)
+    pid = str(parsed["id"] or "")
+    if not pid or not task_engine.pipeline(conn, pid):
+        return []
+    kept = {str(s["id"]) for s in parsed["stages"] if s["id"]}
+    out: list[Row] = []
+    for gone in task_engine.stages(conn, pid):
+        if gone["kind"] == "work" and gone["id"] not in kept:
+            held = _open_tasks(conn, gone["id"])
+            if held:
+                out.append({"id": gone["id"], "name": gone["name"], "tasks": held})
+    return out
+
+
+def move_to_hint(conn: "sqlite3.Connection", record: Row) -> Row | None:
+    """Where the tasks of the stages a save removes would go by default: the kept stage before the first one removed,
+    else the first kept stage, as {"pipeline", "stage"}."""
+    parsed, _ = _parse(record)
+    pid = str(parsed["id"] or "")
+    kept = {str(s["id"]) for s in parsed["stages"] if s["id"]}
+    order = [s for s in task_engine.stages(conn, pid) if s["kind"] == "work"]
+    before: Row | None = None
+    for stage in order:
+        if stage["id"] not in kept:
+            break
+        before = stage
+    found = before or next((s for s in order if s["id"] in kept), None)
+    return {"pipeline": pid, "stage": found["id"]} if found else None
+
+
+def _move_out(conn: "sqlite3.Connection", by: str, pid: str, gone: list[Row], to: Row) -> None:
+    """Move the open tasks of the stages a save removes to `to` ({"pipeline", "stage"}, each an id or a name): a stage of
+    this pipeline that stays, or of any other (task_engine.refile). Any task that cannot go (a bot's turn on it runs, no
+    room, one the saver can't read) refuses the whole save."""
+    target = str(to.get("stage") or "").strip() or None
+    pipe = task_engine.pipeline_named(conn, by, str(to.get("pipeline") or ""))
+    leaving = {str(g["id"]) for g in gone} | {str(g["name"]).lower() for g in gone}
+    if pipe["id"] == pid and (not target or target in leaving or target.lower() in leaving):
+        # The first stage, when none is named, is one that stays: only a named one that goes is refused.
+        first = next((s for s in task_engine.stages(conn, pid) if s["kind"] == "work"), None)
+        if target or (first and first["id"] in leaving):
+            _refuse(conn, by, "task_settings", "Move the tasks to a stage that stays.")
+    for stage in gone:
+        ids = [
+            r[0]
+            for r in conn.execute(
+                "SELECT id FROM tasks WHERE pipeline_id IS NOT NULL AND stage_id=? AND status='open' ORDER BY created_at, id",
+                (stage["id"],),
+            )
+        ]
+        for task_id in ids:
+            row = task_engine.task(conn, task_id) or {}
+            if by != task_engine.SYSTEM and not _h().task_private_readable(conn, by, row):
+                # Changing the pipeline is not reading its tasks: one they can't read is moved by someone who can.
+                _refuse(
+                    conn,
+                    by,
+                    "task_settings",
+                    f"{stage['name']} holds a task you can't read. Ask someone who can to move it.",
+                )
+            task_engine.refile(
+                conn, task_id, str(pipe["id"]), target, by, f"{stage['name']} was removed", row.get("version")
+            )
+
+
+def save(
+    conn: "sqlite3.Connection",
+    by: str,
+    record: Row,
+    seen_version: int | str | None = None,
+    move_tasks_to: Row | None = None,
+) -> Row:
     """Create a pipeline (no id, or an id that does not exist yet) or change one. Returns the record as `read` gives
     it. Refuses `task_settings` with the first problem `check` finds, and `task_changed` when `seen_version` is not the
-    pipeline's `settings_version`; a bot must give it to change a pipeline, a person may leave it out."""
+    pipeline's `settings_version`; a bot must give it to change a pipeline, a person may leave it out. A stage it
+    removes that holds open tasks is refused, unless `move_tasks_to` ({"pipeline", "stage"}) says where they go: they
+    move there first (`_move_out`)."""
     parsed, problems = _parse(record)
     existing = task_engine.pipeline(conn, parsed["id"]) if parsed["id"] else None
     _may_change(conn, by, existing, seen_version)
@@ -1529,6 +1588,10 @@ def save(conn: "sqlite3.Connection", by: str, record: Row, seen_version: int | s
         release = _changes_release(conn, str(existing["id"]), parsed)
         if release:
             _refuse(conn, by, "task_settings", RELEASE_PEOPLE_ONLY.format(release))
+    if existing and move_tasks_to:
+        gone = holding(conn, record)
+        if gone:
+            _move_out(conn, by, str(existing["id"]), gone, move_tasks_to)
     problems += _problems(conn, parsed)
     if problems:
         _refuse(conn, by, "task_settings", problems[0])
@@ -1574,13 +1637,27 @@ def save(conn: "sqlite3.Connection", by: str, record: Row, seen_version: int | s
     return after
 
 
-def retire(conn: "sqlite3.Connection", by: str, pipeline_id: str, seen_version: int | str | None = None) -> Row:
-    """Take a pipeline out of use. Its tasks that ended stay where they are. Refused while it holds an open task, or
-    while another pipeline files tasks into it."""
+def retire(
+    conn: "sqlite3.Connection",
+    by: str,
+    pipeline_id: str,
+    seen_version: int | str | None = None,
+    move_tasks_to: Row | None = None,
+) -> Row:
+    """Take a pipeline out of use. Its tasks that ended stay where they are. Refused while it holds an open task, unless
+    `move_tasks_to` ({"pipeline", "stage"}: another pipeline) says where they go, or while another pipeline files tasks
+    into it."""
     row = task_engine.pipeline(conn, pipeline_id)
     if not row:
         _refuse(conn, by, "not-found", "No such pipeline")
     _may_change(conn, by, row, seen_version)
+    if move_tasks_to and not row.get("retired_at"):
+        if task_engine.pipeline_named(conn, by, str(move_tasks_to.get("pipeline") or ""))["id"] == pipeline_id:
+            _refuse(conn, by, "task_settings", "Move the tasks to another pipeline.")
+        gone = [
+            {"id": s["id"], "name": s["name"]} for s in task_engine.stages(conn, pipeline_id) if s["kind"] == "work"
+        ]
+        _move_out(conn, by, pipeline_id, gone, move_tasks_to)
     if not row.get("retired_at") and is_bot(by):
         for stage in task_engine.stages(conn, pipeline_id):
             if any(R.people_only(r) for r in R.on_stage(conn, stage["id"])):

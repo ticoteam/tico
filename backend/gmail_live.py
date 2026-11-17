@@ -1,8 +1,12 @@
-"""Read, organize and send Workspace mail in Gmail, without retaining messages on the server.
+"""Read, organize and send mail in Gmail, without retaining messages on the server.
 
-Callers check mailbox access before minting. `send` delivers one frozen email the send queue has already permitted
-(backend/email_sending.py `drain`); it never retries. Only the token cache in google_workspace survives a call;
+Callers check mailbox access before asking for a token. Every token comes from the one door, backend/google_tokens.py:
+the Workspace key or the person's own Connect Google grant. `send` delivers one frozen email the send queue has already
+permitted (backend/email_sending.py `drain`); it never retries. Only the token caches survive a call;
 the connector's pure normalizer supplies the same message fields without loading Google client libraries.
+
+Drafts are found again by the Message-ID Tico gave them (`draft_find`, Gmail's `rfc822msgid:` search over drafts), so a
+retried draft or automation action finds the draft it made instead of making a second one.
 """
 
 import base64
@@ -14,9 +18,8 @@ import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
-from connectors.mail.gmail import normalize
-
-from . import google_workspace
+from . import google_tokens
+from .mail_lib.gmail import normalize
 from .store import Problem
 
 BASE = "https://gmail.googleapis.com/gmail/v1/users/"
@@ -26,12 +29,18 @@ INLINE_RAW_MAX = 4 * 1024 * 1024  # a bigger email goes up as a multipart upload
 SECONDS = 10
 LIMIT_MAX = 50
 WORKERS = 10
+HISTORY_MAX = 100  # message ids one history call returns (whole records); the rest wait for the next
+HISTORY_PAGES = 20
+SCAN_MAX = 20000  # message ids `all_ids` lists
 HTTP_MAX_BYTES = 8 * 1024 * 1024
 PAGE_MAX_BYTES = 256 * 1024
 OPEN_MAX_BYTES = 2 * 1024 * 1024
 METADATA_HEADERS = ("From", "To", "Cc", "Subject", "Date", "List-Id", "List-Unsubscribe")
 MUTABLE_SYSTEM_LABELS = frozenset(("INBOX", "UNREAD", "STARRED", "IMPORTANT"))
 PROTECTED_LABELS = frozenset(("TRASH", "SPAM", "SENT", "DRAFT", "DRAFTS"))
+
+
+ATTACHMENT_MAX_BYTES = 6 * 1024 * 1024  # one attachment read through Tico; a bigger one is opened in Gmail
 
 
 def gmail_call(url, *, token, data=None):
@@ -60,6 +69,20 @@ def gmail_call(url, *, token, data=None):
     return (status, body) if isinstance(body, dict) else (0, {})
 
 
+def gmail_delete_call(url, *, token):
+    """The HTTP status of one DELETE, or 0 when Gmail cannot answer. Tests replace this function."""
+    request = urllib.request.Request(url, method="DELETE", headers={"Authorization": "Bearer " + token})
+    try:
+        with urllib.request.urlopen(request, timeout=SECONDS) as answer:
+            return answer.status
+    except urllib.error.HTTPError as refused:
+        with refused:
+            refused.close()
+            return refused.code
+    except (OSError, ValueError):
+        return 0
+
+
 def _call(mailbox, path, token, *, data=None, **query):
     url = BASE + urllib.parse.quote(mailbox, safe="") + "/" + path
     if query:
@@ -85,8 +108,8 @@ def _get(mailbox, path, token, **query):
     return _call(mailbox, path, token, **query)
 
 
-def _token(c, mailbox):
-    return google_workspace.mint(c, mailbox, "gmail", scopes=google_workspace.READ_ONLY_SCOPES["gmail"])["access_token"]
+def _token(c, mailbox, write=False):
+    return google_tokens.token(c, mailbox, "gmail", write=write)
 
 
 def _message(raw):
@@ -121,11 +144,16 @@ def list(c, mailbox, q="", page_token="", limit=50):
     ):
         raise Problem("gmail_unavailable", "Gmail returned an incomplete page; try again", 502, retryable=True)
 
-    def metadata(item):
+    messages = _metadata(mailbox, token, [item["id"] for item in ids])
+    return _bounded({"messages": messages, "next_cursor": nxt, "q": q}, PAGE_MAX_BYTES)
+
+
+def _metadata(mailbox, token, ids):
+    def one(mid):
         return _message(
             _get(
                 mailbox,
-                "messages/" + urllib.parse.quote(item["id"], safe=""),
+                "messages/" + urllib.parse.quote(mid, safe=""),
                 token,
                 format="metadata",
                 metadataHeaders=METADATA_HEADERS,
@@ -133,8 +161,23 @@ def list(c, mailbox, q="", page_token="", limit=50):
         )
 
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-        messages = [item for item in pool.map(metadata, ids)]
-    return _bounded({"messages": messages, "next_cursor": nxt, "q": q}, PAGE_MAX_BYTES)
+        return builtins.list(pool.map(one, ids))
+
+
+def metadata(c, mailbox, ids):
+    """These messages' headers and snippets (no bodies), in the order given; at most LIMIT_MAX."""
+    if len(ids) > LIMIT_MAX:
+        raise Problem("gmail_size", "Read at most 50 messages at once", 422)
+    return _bounded(_metadata(mailbox, _token(c, mailbox), builtins.list(ids)), PAGE_MAX_BYTES)
+
+
+def first(c, mailbox, q):
+    """The newest message the query finds, as {id, threadId}, or None: one list call, no message read."""
+    page = _get(mailbox, "messages", _token(c, mailbox), q=q, maxResults=1, fields="messages(id,threadId)")
+    rows = page.get("messages") or []
+    if not isinstance(rows, builtins.list) or any(not isinstance(row, dict) or not row.get("id") for row in rows):
+        raise Problem("gmail_unavailable", "Gmail returned an incomplete page; try again", 502, retryable=True)
+    return {"id": str(rows[0]["id"]), "threadId": str(rows[0].get("threadId") or "")} if rows else None
 
 
 def thread(c, mailbox, thread_id):
@@ -186,6 +229,82 @@ def message_ids(c, mailbox, query, limit=100):
     return ids
 
 
+def profile(c, mailbox):
+    """The mailbox's current Gmail history id: where a first watch starts following it."""
+    found = _get(mailbox, "profile", _token(c, mailbox), fields="historyId").get("historyId")
+    if not isinstance(found, (str, int)) or not str(found).isdigit():
+        raise Problem("gmail_unavailable", "Gmail returned an incomplete profile; try again", 502, retryable=True)
+    return str(found)
+
+
+def history(c, mailbox, start, limit=HISTORY_MAX):
+    """The history records since history id `start`, oldest first, as [(record id, [message ids added])], and the
+    newest history id once every record was returned (None when more wait). A record is never split: records are added
+    until they hold `limit` message ids, so a record of more than `limit` messages comes whole, alone. The caller
+    saves a record's id once it has heard all its messages. An expired `start` is Problem `not_found` (404)."""
+    token, records, cursor, count, pages = _token(c, mailbox), [], "", 0, 0
+    while True:
+        query = {"startHistoryId": start, "historyTypes": "messageAdded", "maxResults": 500}
+        if cursor:
+            query["pageToken"] = cursor
+        page = _get(mailbox, "history", token, **query)
+        rows, cursor, newest = page.get("history") or [], page.get("nextPageToken") or "", page.get("historyId")
+        if not isinstance(rows, builtins.list) or not isinstance(cursor, str):
+            raise Problem("gmail_unavailable", "Gmail returned an incomplete history; try again", 502, retryable=True)
+        for row in rows:
+            if not isinstance(row, dict) or not str(row.get("id") or "").isdigit():
+                raise Problem(
+                    "gmail_unavailable", "Gmail returned an incomplete history; try again", 502, retryable=True
+                )
+            if records and count >= limit:
+                return records, None
+            added = row.get("messagesAdded")
+            ids = []
+            for item in added if isinstance(added, builtins.list) else ():
+                mid = ((item or {}).get("message") or {}).get("id") if isinstance(item, dict) else None
+                if isinstance(mid, str) and mid and mid not in ids:
+                    ids.append(mid)
+            records.append((str(row["id"]), ids))
+            count += len(ids)
+        pages += 1
+        if not cursor:
+            newest = str(newest or "")
+            return records, newest if newest.isdigit() else None
+        if pages >= HISTORY_PAGES:
+            return records, None
+
+
+def all_ids(c, mailbox, query, cap=SCAN_MAX):
+    """Every message id the query finds, newest first (Gmail's order), paging through: at most `cap`."""
+    token, ids, cursor, seen = _token(c, mailbox), [], "", set()
+    while len(ids) < cap:
+        params = {"q": query, "maxResults": 500, "fields": "messages(id),nextPageToken"}
+        if cursor:
+            params["pageToken"] = cursor
+        page = _get(mailbox, "messages", token, **params)
+        rows, cursor = page.get("messages") or [], page.get("nextPageToken") or ""
+        if (
+            not isinstance(rows, builtins.list)
+            or any(not isinstance(row, dict) or not isinstance(row.get("id"), str) or not row["id"] for row in rows)
+            or not isinstance(cursor, str)
+            or cursor in seen
+        ):
+            raise Problem("gmail_unavailable", "Gmail returned an incomplete page; try again", 502, retryable=True)
+        ids.extend(row["id"] for row in rows)
+        if not cursor:
+            break
+        seen.add(cursor)
+    return ids[:cap]
+
+
+def label_total(c, mailbox, label_id):
+    """How many messages carry this label now (Gmail's own count; nothing is listed)."""
+    found = _get(
+        mailbox, "labels/" + urllib.parse.quote(label_id, safe=""), _token(c, mailbox), fields="messagesTotal"
+    ).get("messagesTotal", 0)
+    return found if isinstance(found, int) and found >= 0 else 0
+
+
 def labels(c, mailbox):
     rows = _get(mailbox, "labels", _token(c, mailbox)).get("labels")
     if not isinstance(rows, builtins.list) or any(
@@ -213,9 +332,7 @@ def resolve_label(c, mailbox, name, *, create=False):
             return row["id"]
     if not create:
         raise Problem("not_found", "Gmail could not find this label", 404)
-    token = google_workspace.mint(c, mailbox, "gmail", scopes=google_workspace.WORKSPACE_SCOPES["gmail"])[
-        "access_token"
-    ]
+    token = _token(c, mailbox, write=True)
     row = _call(mailbox, "labels", token, data={"name": name})
     if not row.get("id") or row.get("type") != "user":
         raise Problem("gmail_unavailable", "Gmail returned an incomplete label; try again", 502)
@@ -232,9 +349,7 @@ def organize(c, mailbox, ids, add=(), remove=()):
         raise Problem("gmail_label", "Tico may only change INBOX, UNREAD, STARRED, IMPORTANT or user labels", 422)
     if not ids:
         return
-    token = google_workspace.mint(c, mailbox, "gmail", scopes=google_workspace.WORKSPACE_SCOPES["gmail"])[
-        "access_token"
-    ]
+    token = _token(c, mailbox, write=True)
     for start in range(0, len(ids), 1000):
         _call(
             mailbox,
@@ -309,3 +424,97 @@ def send(mailbox, token, raw, thread_id=""):
     if 400 <= status < 500:
         return "failed", "", f"Gmail refused the email (HTTP {status}); nothing was sent"
     return "unknown", "", "Gmail did not confirm delivery"
+
+
+def payload(c, mailbox, message_id):
+    """One message as Gmail has it (format full): its parts tree, for the attachments a message carries."""
+    raw = _get(mailbox, "messages/" + urllib.parse.quote(message_id, safe=""), _token(c, mailbox), format="full")
+    if not isinstance(raw, dict) or not raw.get("id"):
+        raise Problem("gmail_unavailable", "Gmail returned an incomplete message; try again", 502, retryable=True)
+    return raw
+
+
+def raw_message(c, mailbox, message_id):
+    """The message's own bytes (format raw): what a DKIM check reads."""
+    found = _get(mailbox, "messages/" + urllib.parse.quote(message_id, safe=""), _token(c, mailbox), format="raw").get(
+        "raw"
+    )
+    if not isinstance(found, str) or not found:
+        raise Problem("gmail_unavailable", "Gmail returned no raw message; try again", 502, retryable=True)
+    try:
+        return base64.urlsafe_b64decode(found + "=" * (-len(found) % 4))
+    except (ValueError, TypeError) as bad:
+        raise Problem("gmail_unavailable", "Gmail returned an unreadable message", 502) from bad
+
+
+def attachment(c, mailbox, message_id, attachment_id):
+    """One attachment's base64url data and size, at most ATTACHMENT_MAX_BYTES."""
+    found = _get(
+        mailbox,
+        "messages/"
+        + urllib.parse.quote(message_id, safe="")
+        + "/attachments/"
+        + urllib.parse.quote(attachment_id, safe=""),
+        _token(c, mailbox),
+    )
+    data, size = found.get("data"), found.get("size")
+    if not isinstance(data, str):
+        raise Problem("gmail_unavailable", "Gmail returned an attachment without data; try again", 502, retryable=True)
+    return {"data": data, "size": size if isinstance(size, int) and size >= 0 else 0}
+
+
+def _draft(found):
+    message = found.get("message") if isinstance(found, dict) else None
+    if not isinstance(message, dict) or not found.get("id") or not message.get("id"):
+        raise Problem("gmail_unavailable", "Gmail returned an incomplete draft; try again", 502, retryable=True)
+    return {"id": str(found["id"]), "message": str(message["id"]), "thread": str(message.get("threadId") or "")}
+
+
+def draft_find(c, mailbox, message_id):
+    """The draft whose Message-ID header is `message_id` (with its angle brackets), as {id, message, thread}, or None."""
+    page = _get(mailbox, "drafts", _token(c, mailbox), q="rfc822msgid:" + message_id.strip("<>"), maxResults=1)
+    rows = page.get("drafts") or []
+    if not isinstance(rows, builtins.list):
+        raise Problem("gmail_unavailable", "Gmail returned an incomplete page; try again", 502, retryable=True)
+    return _draft(rows[0]) if rows else None
+
+
+def draft_get(c, mailbox, draft_id):
+    """The draft with this id as {id, message, thread}, or None when Gmail no longer has it."""
+    try:
+        found = _get(mailbox, "drafts/" + urllib.parse.quote(draft_id, safe=""), _token(c, mailbox), format="minimal")
+    except Problem as missing:
+        if missing.code == "not_found":
+            return None
+        raise
+    return _draft(found)
+
+
+def draft_create(c, mailbox, raw, thread_id=""):
+    """A new Gmail draft of this MIME (base64url), in `thread_id` when it answers one: {id, message, thread}."""
+    if len(raw) > INLINE_RAW_MAX:
+        raise Problem("gmail_size", "This draft is too large to write through Tico; write it in Gmail", 413)
+    message = {"raw": raw, **({"threadId": thread_id} if thread_id else {})}
+    return _draft(_call(mailbox, "drafts", _token(c, mailbox, write=True), data={"message": message}))
+
+
+def draft_raw(c, mailbox, draft_id):
+    """A draft's MIME (base64url) and thread, as Gmail holds it now: what a send of the draft freezes."""
+    found = _get(mailbox, "drafts/" + urllib.parse.quote(draft_id, safe=""), _token(c, mailbox), format="raw")
+    message = found.get("message") if isinstance(found, dict) else None
+    if not isinstance(message, dict) or not isinstance(message.get("raw"), str) or not message["raw"]:
+        raise Problem("gmail_unavailable", "Gmail returned an incomplete draft; try again", 502, retryable=True)
+    return {"raw": message["raw"].rstrip("="), "thread": str(message.get("threadId") or "")}
+
+
+def draft_delete(c, mailbox, draft_id):
+    """Discard one draft. True when Gmail deleted it, False when it was already gone."""
+    url = BASE + urllib.parse.quote(mailbox, safe="") + "/drafts/" + urllib.parse.quote(draft_id, safe="")
+    status = gmail_delete_call(url, token=_token(c, mailbox, write=True))
+    if status in (200, 204):
+        return True
+    if status == 404:
+        return False
+    if status in (401, 403):
+        raise Problem("gmail_refused", "Gmail refused this change; check the connection and Gmail access", 403)
+    raise Problem("gmail_unavailable", "Gmail did not answer; try again", 502, retryable=True)

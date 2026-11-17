@@ -2,8 +2,8 @@
 
 import json
 import re
+from typing import TypedDict
 
-from .rows import AttemptRow
 from .store import H
 from . import bot_settings as BS
 
@@ -27,6 +27,61 @@ LAPSED = 'Its computer took the run and never started it, renewed its lease or h
 UNSTARTED_CATEGORIES = {HANDED_BACK: 'handed_back', LAPSED: 'lapsed_unstarted'}
 # A silent lapse as Runs says it: the computer by its name, so a person sees which machine to look at.
 LAPSED_NAMED = '{computer} took it and never started it'
+
+
+class AttemptRow(TypedDict):
+    """One `attempts` row (SELECT *): a run, its lease and its record. The lease columns are NULL together on a run
+    recorded with no lease (migration 0072); the record's columns are NULL on one that failed before it had one."""
+
+    id: str
+    job_id: str | None
+    bot_id: str
+    runner_id: str | None
+    generation: int | None
+    token_hash: str | None
+    state: str | None
+    lease_until: str | None
+    created_at: str
+    started_at: str | None
+    finished_at: str | None
+    thread_id: str | None
+    result: str | None
+    final_text: str | None
+    last_seq: int
+    stop_requested_at: str | None
+    gateway_key_id: str | None
+    handed_runtime: str | None
+    handed_model: str | None
+    acting_person: str | None
+    lane: str
+    wake: str | None
+    model: str | None
+    settled_at: str | None
+    trigger: str | None
+    message_id: str | None
+    task_id: str | None
+    exit: str | None
+    summary: str | None
+    trigger_kind: str | None
+    trigger_source: str | None
+    purpose: str | None
+    rule_id: str | None
+    writes: int | None
+    outcome: str | None
+    did_nothing: int | None
+    rotated: str | None
+    session_kind: str | None
+    session_why: str | None
+    input_tokens: int | None
+    cached_tokens: int | None
+    cache_write_tokens: int | None
+    output_tokens: int | None
+    prompt_tokens: int | None
+    usage_model: str | None
+    provider: str | None
+    est_cost_usd: float | None
+    billing: str | None
+    usage_reason: str | None
 
 
 def clean_stop_reported(c, attempt_id):
@@ -86,7 +141,11 @@ def keep(c, row: AttemptRow, body):
     both."""
     kept: dict[str, object] = dict(keep_stderr(c, row, body.tail)) if body.tail is not None else {'kept': False}
     if body.failed_tools:
-        kept['failed_tools'] = keep_failed_tools(c, row, [t.model_dump() for t in body.failed_tools])
+        calls = [t.model_dump() for t in body.failed_tools]
+        kept['failed_tools'] = keep_failed_tools(c, row, calls)
+        from . import reconnect_tasks
+
+        reconnect_tasks.diagnosed(c, row, calls)  # a key the vendor refused gets its tool's Reconnect task
     return kept
 
 
@@ -144,6 +203,39 @@ def stop_supersedes(stop_requested_at, outcome):
     return bool(stop_requested_at) and outcome != 'completed'
 
 
+# What a run that gave its place up for an update says when the runner's own line is missing.
+PAUSED = "Paused while its computer updated; continues right after it"
+
+
+def paused(c, aid, state, result_json, stop_requested_at):
+    """Why a run paused for an update (runner-rs/src/drain.rs), including a hand-back reported after lease expiry: the
+    runner's `status` `{"yielded": line}` event, else PAUSED when its completion says it yielded."""
+    from .turns import clip
+
+    if state not in ("interrupted", "expired") or stop_supersedes(stop_requested_at, state):
+        return None
+    try:
+        result = json.loads(result_json or "{}") or {}
+    except (TypeError, ValueError):
+        result = {}
+    # A completion can withdraw the earlier pause when its fallback session cannot resume. Without a completion,
+    # the saved event still explains a lease that expired before the runner could hand the turn back.
+    if isinstance(result, dict) and ("yielded" in result or "outcome" in result) and not result.get("yielded"):
+        return None
+    row = c.execute(
+        "SELECT payload FROM attempt_events WHERE attempt_id=? AND kind='status' "
+        "AND json_extract(payload,'$.yielded') IS NOT NULL ORDER BY seq DESC LIMIT 1",
+        (aid,),
+    ).fetchone()
+    try:
+        line = (json.loads(row[0]) if row else {}).get("yielded")
+    except (TypeError, ValueError, AttributeError):
+        line = None
+    if isinstance(line, str) and line.strip():
+        return clip(line, 200)
+    return PAUSED if isinstance(result, dict) and result.get("yielded") else None
+
+
 def reason(c, row: AttemptRow, outcome, summary=''):
     if stop_supersedes(row['stop_requested_at'], outcome):
         from .quarantine_stops import stopped_by
@@ -160,8 +252,6 @@ def reason(c, row: AttemptRow, outcome, summary=''):
     if result.get('text') == RESTART_TEXT:
         return RESTART_TEXT
     # A saved pause event or late yield report explains even an expired lease. Stop above still takes precedence.
-    from .login_waits import paused
-
     yielded = paused(c, row['id'], row['state'], row['result'], row['stop_requested_at'])
     if yielded:
         return scrub(yielded)[:500]

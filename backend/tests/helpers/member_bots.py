@@ -15,7 +15,7 @@ def call(api, method, path, token, body=None):
 def close_computer(api, machine):
     """An admin closes a computer to members' bots (a new one takes them by default)."""
     assert (
-        call(api, "post", f"runners/{machine['runner_id']}/member-bots", "ben-test", {"accepts": False}).status_code
+        call(api, "post", f"computers/{machine['runner_id']}/member-bots", "ben-test", {"accepts": False}).status_code
         == 200
     )
     return machine

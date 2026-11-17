@@ -14,30 +14,30 @@ they stay greppable.
 ## Value lists
 
 <!-- status-values:start -->
-| Column | Enforced by | NULL | Values | Retired spelling (mapped to) |
-|---|---|---|---|---|
-| [`tasks.status`](#tasksstatus) | trigger | refused | `open`, `done`, `closed` |  |
-| [`jobs.state`](#jobsstate) | trigger | refused | `queued`, `leased`, `running`, `input`, `completed`, `failed`, `uncertain`, `canceled` | `cancelled` (`canceled`), `done` (`completed`) |
-| [`attempts.state`](#attemptsstate) | trigger | allowed | `leased`, `running`, `input`, `completed`, `failed`, `interrupted`, `expired` |  |
-| [`automation_runs.status`](#automation_runsstatus) | trigger | refused | `queued`, `running`, `waiting`, `ok`, `partial`, `failed`, `empty`, `skipped`, `held` |  |
-| [`webhook_sends.state`](#webhook_sendsstate) | trigger | refused | `ready`, `sending`, `delivered`, `failed`, `canceled`, `withheld` | `cancelled` (`canceled`) |
-| [`bots.state`](#botsstate) | check | allowed | `active`, `paused`, `planned`, `quarantined`, `archived` |  |
-| [`bot_config.onboarding_state`](#bot_configonboarding_state) | check | allowed | `needs_setup`, `onboarded` | `needs_onboarding` (`needs_setup`) |
-| [`bot_status.state`](#bot_statusstate) | check | allowed | `idle`, `running`, `waiting_human`, `waiting_bot`, `blocked`, `limited`, `crashed`, `paused`, `quarantined` |  |
-| [`automation_versions.status`](#automation_versionsstatus) | check | refused | `active`, `pending` |  |
-| [`goals.status`](#goalsstatus) | check | allowed | `red`, `yellow`, `green`, `gray`, `done`, `dropped` |  |
-| [`goals.status_source`](#goalsstatus_source) | check | allowed | `person`, `auto` |  |
-| [`goals.suggest_status`](#goalssuggest_status) | check | allowed | `red`, `yellow`, `green` |  |
-| [`goal_proposals.status`](#goal_proposalsstatus) | check | refused | `pending`, `confirmed`, `rejected` |  |
-| [`bot_files.state`](#bot_filesstate) | check | refused | `ready`, `deleted`, `not_synced` |  |
-| [`doc_sources.status`](#doc_sourcesstatus) | check | refused | `link_only`, `queued`, `preparing`, `updating`, `ready`, `empty`, `failed`, `access_needed` |  |
-| [`model_subscriptions.status`](#model_subscriptionsstatus) | check | refused | `new`, `working`, `needs_reconnect` |  |
-| [`strategy_actions.state`](#strategy_actionsstate) | check | refused | `proposed`, `done`, `undone` |  |
-| [`google_connects.status`](#google_connectsstatus) | check | refused | `signing_in`, `ready`, `finishing`, `revoking`, `disconnecting`, `connected`, `disconnected`, `failed` |  |
-| [`google_workspaces.status`](#google_workspacesstatus) | check | refused | `pending`, `connected`, `failing` |  |
-| [`fin_cards.status`](#fin_cardsstatus) | check | refused | `active`, `frozen`, `canceled` | `cancelled` (`canceled`) |
-| [`fin_payments.status`](#fin_paymentsstatus) | check | refused | `queued`, `sending`, `awaiting_bank_approval`, `submitted`, `settled`, `returned`, `failed`, `canceled`, `unknown` | `cancelled` (`canceled`) |
-| [`fin_transfers.status`](#fin_transfersstatus) | check | refused | `queued`, `submitted`, `unknown`, `failed`, `posted`, `canceled` | `cancelled` (`canceled`) |
+| Column | Enforced by | NULL | Values |
+|---|---|---|---|
+| [`tasks.status`](#tasksstatus) | trigger | refused | `open`, `done`, `closed` |
+| [`jobs.state`](#jobsstate) | trigger | refused | `queued`, `leased`, `running`, `input`, `completed`, `failed`, `uncertain`, `canceled` |
+| [`attempts.state`](#attemptsstate) | trigger | allowed | `leased`, `running`, `input`, `completed`, `failed`, `interrupted`, `expired` |
+| [`automation_runs.status`](#automation_runsstatus) | trigger | refused | `queued`, `running`, `waiting`, `ok`, `partial`, `failed`, `empty`, `skipped`, `held` |
+| [`webhook_sends.state`](#webhook_sendsstate) | trigger | refused | `ready`, `sending`, `delivered`, `failed`, `canceled`, `withheld` |
+| [`bots.state`](#botsstate) | check | allowed | `active`, `paused`, `planned`, `quarantined`, `archived` |
+| [`bot_config.onboarding_state`](#bot_configonboarding_state) | check | allowed | `needs_setup`, `onboarded` |
+| [`bot_status.state`](#bot_statusstate) | check | allowed | `idle`, `running`, `waiting_human`, `waiting_bot`, `blocked`, `limited`, `crashed`, `paused`, `quarantined` |
+| [`automation_versions.status`](#automation_versionsstatus) | check | refused | `active`, `pending` |
+| [`goals.status`](#goalsstatus) | check | allowed | `red`, `yellow`, `green`, `gray`, `done`, `dropped` |
+| [`goals.status_source`](#goalsstatus_source) | check | allowed | `person`, `auto` |
+| [`goals.suggest_status`](#goalssuggest_status) | check | allowed | `red`, `yellow`, `green` |
+| [`goal_proposals.status`](#goal_proposalsstatus) | check | refused | `pending`, `confirmed`, `rejected` |
+| [`bot_files.state`](#bot_filesstate) | check | refused | `ready`, `deleted`, `not_synced` |
+| [`doc_sources.status`](#doc_sourcesstatus) | check | refused | `link_only`, `queued`, `preparing`, `updating`, `ready`, `empty`, `failed`, `access_needed` |
+| [`model_subscriptions.status`](#model_subscriptionsstatus) | check | refused | `new`, `working`, `needs_reconnect` |
+| [`strategy_actions.state`](#strategy_actionsstate) | check | refused | `proposed`, `done`, `undone` |
+| [`google_connects.status`](#google_connectsstatus) | check | refused | `signing_in`, `finishing`, `connected`, `disconnected`, `failed` |
+| [`google_workspaces.status`](#google_workspacesstatus) | check | refused | `pending`, `connected`, `failing` |
+| [`fin_cards.status`](#fin_cardsstatus) | check | refused | `active`, `frozen`, `canceled` |
+| [`fin_payments.status`](#fin_paymentsstatus) | check | refused | `queued`, `sending`, `awaiting_bank_approval`, `submitted`, `settled`, `returned`, `failed`, `canceled`, `unknown` |
+| [`fin_transfers.status`](#fin_transfersstatus) | check | refused | `queued`, `submitted`, `unknown`, `failed`, `posted`, `canceled` |
 <!-- status-values:end -->
 
 ## How the lists are enforced
@@ -49,7 +49,7 @@ Two kinds of enforcement, both refusing a new write outside the list:
   attempts, automation_runs, webhook_sends), where a CHECK would mean rebuilding a large table. They check new writes
   only; rows already stored are not read.
 - **check**: a named table constraint `CONSTRAINT status_values_<column> CHECK (<column> IN (...))`, installed by
-  rebuilding the small table. A rebuild renames the old table aside, copies every row (mapping retired spellings), checks
+  rebuilding the small table. A rebuild renames the old table aside, copies every row, checks
   the row count, then drops the old table. Foreign keys are off for the rebuild, so child rows are not cascaded.
 
 Changing a list is a code change in `backend/status_values.py`. `Store.initialize` calls `enforce` on every start: it
@@ -57,8 +57,7 @@ replaces a trigger whose text differs and rebuilds a CHECK whose list differs. A
 
 ### A stored value outside its list
 
-Nothing stops the server for a value outside a list. Migration 0002 (`upgrade`) and every later start (`enforce`) do
-this instead:
+Nothing stops the server for a value outside a list. Every start (`enforce`) does this instead:
 
 | Column kind | Rows that hold the value | New writes | What is logged |
 |---|---|---|---|
@@ -68,32 +67,8 @@ this instead:
 So removing a value from a CHECK column's list while rows still hold it leaves that column enforcing the old list, and
 says so in the log. Remediation: read the rows with `status_values.unknown_values(conn)` (or the warning), write a
 migration that maps or refuses them, and the next start's `enforce` installs the CHECK. Tests:
-`test_status_values.py::test_the_upgrade_keeps_values_it_cannot_map_logs_them_and_still_guards_new_writes`,
-`::test_a_check_column_with_an_unknown_value_keeps_its_rows_and_gets_no_check` and
+`test_status_values.py::test_a_check_column_with_an_unknown_value_keeps_its_rows_and_gets_no_check` and
 `::test_a_later_start_logs_a_check_column_it_cannot_enforce`.
-
-## Retired spellings and the upgrade
-
-Migration `backend/migrations/0002_status_values.py` runs `backend/status_values.py` `upgrade`, with foreign keys off
-(`FOREIGN_KEYS_OFF`) so a CHECK rebuild does not cascade:
-
-1. Counts every stored value outside the list (retired spellings are accepted, they are mapped next) and logs what it
-   finds (see above). It never stops for them.
-2. Rewrites retired spellings on trigger columns with `UPDATE`, and maps them on CHECK columns while the table is copied.
-3. Installs the triggers, and the CHECKs for every column whose rows are all in its list.
-
-The retired spellings are the last column of the value table. `cancelled` was also moved to `canceled` outside the
-stable set by migration 0032: `assistant_actions.status`, `automation_mail_actions.state`, `bot_tool_requests.state`,
-`bot_transitions.state`, `bot_transition_checkpoints.state`, `credential_requests.status`, `fin_cards.provider_status`,
-`model_logins.state`, `seats.request_state` (with `cancelling` to `canceling`), `service_jobs.state`, `slack_posts.state`,
-`task_reconnects.ended`, `worktree_waits.state`. `jobs.state` `done` is the spelling older hubs stored for a finished
-job.
-
-Readers of `bot_config.onboarding_state` still accept `needs_onboarding` for one release (`backend/statuses.py`).
-New writes can only be `needs_setup` or `onboarded`.
-
-On a fresh file the migration runs before the module schema code creates most tables, so `Store.initialize` calls
-`enforce` last, on every start: a new database has the constraints and no retired spelling.
 
 ## Same word, different meanings (kept apart)
 
@@ -125,7 +100,7 @@ fix adds; its race test is the example to follow.
 |---|---|---|---|---|---|
 | SM-01 | statement upload preview and agent pairing (UI) | `ui/app` | none: the latest reply wins | a phase and a request revision; only the current revision may submit | `ui/tests/finance-statement-race-unit.cts`, `ui/tests/agent-pair-race-unit.cts` |
 | SM-02 | merge-queue act and undo | `source_actions.py` | the item's state | the undo checks the current visit's intent before it dequeues | `test_merge_queue_undo_intent.py::test_back_and_forward_while_the_queue_call_is_out_leaves_the_pr_queued` |
-| SM-03 | `google_connects.status` | `google_connect.py` | the person's row | an operation id per connect or disconnect, required at exchange and result | `test_google_connect.py::test_a_late_result_from_an_earlier_connect_does_not_finish_the_next_one` |
+| SM-03 | `google_connects.status` | `google_connect.py` | the person's row | an operation id per connect or disconnect; the exchange keeps its grant only while its operation is current | `test_google_connect.py::test_an_exchange_answered_after_its_connect_was_replaced_keeps_nothing_and_revokes_nothing` |
 | SM-04 | `automation_runs.status`, `webhook_sends.state` | `automations.py`, `webhook_delivery.py` | the state (`running`, `sending`) | a claim token; a reclaimed worker cannot settle | `test_automation_reclaimed_worker.py::test_an_old_automation_worker_cannot_save_while_the_new_claim_holds_the_run`, `test_webhook_reclaimed_worker.py` |
 | SM-05 | direct meeting-turn claims (`live_meeting_turns.status`) | `live_meetings.py` | the claim | a recoverable claim: returned on reconnect, or abandoned | `test_live_meeting_claims.py::test_a_lost_claim_answer_is_shown_to_its_bot_again_and_the_same_claim_is_returned` |
 | SM-07 | AI Gateway spending cap | `finance/gateway_sync.py` | the cap record | the key and destination the cap was set for | `test_finance_gateway_cap_target.py::test_a_reply_for_a_key_replaced_meanwhile_does_not_satisfy_the_new_key` |
@@ -144,7 +119,7 @@ Trigger. NULL refused.
 
 Transitions: only the engine writes it (`backend/task_engine.py` `move`), inside the guard the `tasks_move_only` trigger
 reads. A task is inserted `open` and entered in the first stage of its pipeline in the same transaction. Done, Close and
-Reopen are moves. See [Tasks](tasks.md#done-closed-and-reopen) and [the spec](pipelines-v3.md#how-a-task-moves).
+Reopen are moves. See [Tasks](tasks.md#done-closed-and-reopen) and [the spec](dev/pipelines-v3.md#how-a-task-moves).
 
 ### jobs.state
 
@@ -179,7 +154,7 @@ Transitions:
 | open | the attempt's outcome, or `canceled` | the attempt ends (`execution.py`) | job still on this attempt |
 | `uncertain`, `canceled`, `queued` | `completed` | a late result (`settleable`, `settles_late`) | see the operation-identity table |
 | `queued` | `completed` | a person answers before any bot runs (`bot_status_routes.py`) | `AND state='queued'` |
-| open | `canceled` | stop, task closed, duplicate wake, quota or wake presets (`app_delivery.py`, `delivery.py`, `demo.py`, `chat_goals.py`, `execution.py`) | |
+| open | `canceled` | stop, task closed, duplicate wake, quota or wake presets (`delivery.py`, `demo.py`, `chat_goals.py`, `execution.py`) | |
 
 ### attempts.state
 
@@ -440,21 +415,17 @@ Transitions (`backend/strategy_acts.py`): insert `proposed`; `proposed` to `done
 CHECK. NOT NULL, no default.
 
 - `signing_in`: the sign-in started and waits for its callback. `oauth_state` holds the one-time nonce.
-- `ready`: the callback arrived, the code is stored, and the connection waits to be finished.
-- `finishing`: tokens are being exchanged and saved (a claim with a time limit).
-- `connected`: working.
-- `revoking`: the grant is being revoked at the provider (a claim).
-- `disconnecting`: a local disconnect was asked for, waiting to be claimed.
-- `disconnected`: removed.
+- `finishing`: the callback arrived and the server is trading the code for the grant (a request with a time limit).
+- `connected`: working. The grant is sealed on the server (`grant_sealed`).
+- `disconnected`: removed, or ended by the move of grants to the server (`kind` `reconnect`).
 - `failed`: the step failed.
 
-Transitions (`backend/google_connect.py`): (none) to `signing_in` on start; `signing_in` to `ready` on callback (clears
-`oauth_state`); `ready` to `finishing`; `finishing` to `connected` or `failed`; `connected` or `ready` to `disconnecting`;
-`disconnecting` to `revoking`; `revoking` to `disconnected` or `failed`. A row stuck in `signing_in`, `ready`, `finishing`
-or `revoking` past its time limit is reset by a sweep. Each start (connect or disconnect) sets a new `operation_id` and
-clears the pending grant; the claim, `/exchange` and `/result` name that operation, and every write after the claim is
-conditional on it, so an answer for an earlier operation changes nothing. `answered` records the computer's result for
-the current operation, and a repeat of it is answered the same way.
+Transitions (`backend/google_connect.py`): (none) to `signing_in` on start; `signing_in` to `finishing` on callback
+(clears `oauth_state` and `verifier`); `finishing` to `connected` or `failed`; any to `disconnected` on disconnect. A row
+stuck in `signing_in` or `finishing` past its time limit is reset by a sweep. Each start (connect or disconnect) sets a
+new `operation_id`, and the exchange's write is conditional on it, so a connect replaced meanwhile keeps nothing. A
+grant connected before stays (`grant_sealed`, `grant_operation_id`) until a new connect replaces it or a disconnect
+clears it.
 
 The column `google_connects.state` was renamed to `oauth_state`. `ensure_schema` renames it on an existing database and
 recreates its index as `google_connects_oauth_state`.
@@ -552,11 +523,11 @@ Without a CHECK (values are whatever the code writes):
   `bot_transition_checkpoints.state`, `model_logins.state`, `oauth_grants.state`, `cloud_machines.state`, `computer_keys.state`,
   `seats.request_state`, `seat_requests.state`, `service_jobs.state`, `slack_events.state`, `slack_posts.state`,
   `worktree_waits.state`, `check_waits.state`, `calendar_actions.status`, `listening_items.status`, `support_tickets.status`,
-  `rule_suggestions.status`, `runner_versions.update_state`, `runner_harness_actions.state`, `update_queue.state`,
+  `runner_versions.update_state`, `runner_harness_actions.state`, `update_queue.state`,
   `mail_items.state`, `mail_items.status`, `market_*.status`, `inbound_inboxes.state`, `bills_inbound.state`,
   `learning_runs.status`, `lens_runs.status`, `listening_sources.status`, `flight_slow.status`, `redesign_migrations.state`,
   `task_trash.status`, `assistant_actions.status`, `automation_mail_actions.state`, `ask_ingest_items.outcome`,
-  `batches.state`, `attempts.outcome`, `schedule_occurrences.outcome`, `stale_suggestions.verdict`, `stall_triage.outcome`,
+  `batches.state`, `attempts.outcome`, `schedule_occurrences.outcome`, `stale_suggestions.verdict`,
   `trigger_bodies.outcome`, `trigger_deliveries.outcome`, `webhook_attempts.status`, `org_rule_holds.reviewer`, `kpis.stage`
   (the funnel stage from `backend/growth.py`), `status_source` and `status_by` in a goal's `history_events.data` (event history).
 

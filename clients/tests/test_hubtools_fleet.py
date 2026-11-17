@@ -133,9 +133,8 @@ def test_tool_add_and_remove_are_the_requesters_when_botops_calls_them():
         ("POST", "bots/inbox-manager/tools", True),
         ("POST", "bots/inbox-manager/tools/gmail/delete", True),
     ]
-    assert "botops" in hubtools.offered_to(fn["tico_tool_add"]) and "bot" not in hubtools.offered_to(
-        fn["tico_tool_add"]
-    )
+    # Since #3844 a bot may register and change its own tools (the server decides whose), so bots are offered it too.
+    assert {"botops", "bot"} <= set(hubtools.offered_to(fn["tico_tool_add"]))
 
 
 def test_tool_update_changes_only_what_is_sent_and_is_the_requesters_when_botops_calls_it():
@@ -165,9 +164,8 @@ def test_tool_update_changes_only_what_is_sent_and_is_the_requesters_when_botops
         raise AssertionError("an update that changes nothing is refused")
     except ValueError as exc:
         assert "Say what changes" in str(exc)
-    assert "botops" in hubtools.offered_to(fn["tico_tool_update"]) and "bot" not in hubtools.offered_to(
-        fn["tico_tool_update"]
-    )
+    # Since #3844 a bot may register and change its own tools (the server decides whose), so bots are offered it too.
+    assert {"botops", "bot"} <= set(hubtools.offered_to(fn["tico_tool_update"]))
 
 
 def test_task_list_asks_for_the_callers_own_requests_with_requester_me():

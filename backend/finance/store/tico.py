@@ -205,7 +205,7 @@ def queue_email(
     from pathlib import Path
     from ...auth import Auth
     from ... import email_sending
-    from connectors.mail import compose
+    from ...mail_lib import compose
     from ...store import Problem
 
     sending: Any = email_sending
@@ -453,7 +453,21 @@ def needs_you(c: sqlite3.Connection, person: str, title: str, body: str, *, priv
     person cannot be given one. `private` (True for a notice that names an amount) keeps it to the person and its
     requester; left None, Tico's default applies."""
     try:
-        made: Any = _H.task_create(c, _H.KEEPER, title[:200], body, person, deduplicate=True, private=private)
+        from ... import person_asks
+
+        # BotOps' question to the person on their task (person_asks), so the item is in their Needs you.
+        made: Any = person_asks.task_for(
+            c,
+            _H.KEEPER,
+            title[:200],
+            body,
+            person,
+            question=title[:200],
+            why=person_asks.first_sentence(body) or "Finance needs a person to act on this.",
+            deduplicate=True,
+            private=private,
+            lint=True,
+        )
     except _H.Refused:
         return None
     task: Mapping[str, Any] = cast(Mapping[str, Any], made) if isinstance(made, Mapping) else {}
@@ -514,8 +528,9 @@ def _bound(fingerprint: object, base: object) -> str:
 def credential_secret(c: sqlite3.Connection, vault: object, credential_id: str) -> str:
     """A stored credential's secret, read at use time ("" when it is gone or holds none). Never logged or kept."""
     row = c.execute("SELECT * FROM credentials WHERE id=?", (credential_id,)).fetchone()
-    # A website login (backend/website_tools.py) is never a provider key: its value goes to a browser only.
-    if row is None or row["ciphertext"] is None or vault is None or row["kind"] == "login":
+    # A website login (backend/website_tools.py) is never a provider key: its value goes to a browser only. Nor is a
+    # secret the server itself uses (the Slack app's tokens): the vault never opens one by an id it was handed.
+    if row is None or row["ciphertext"] is None or vault is None or row["kind"] in ("login", "service"):
         return ""
     return str(cast(Any, vault).cipher.decrypt(c, row) or "")
 

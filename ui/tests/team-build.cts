@@ -64,12 +64,12 @@ async function scenario(browser: Browser, {name, viewport, theme}: {name: string
     if (ui && fs.existsSync(uiFile(ui[1]!))) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true});
-    if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana', org_parent: ''}], seats: [], org_groups: [group]});
+    if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana', org_parent: ''}], seats: [], org_groups: [group]});
     if (p === '/api/employees') return json([]);
     if (p === '/api/issues') return json([]);
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [], schedules: []});
     if (p === '/api/v2/status') return json({bots: []});
-    if (p === '/api/v2/needs-you') return json({items: [], went_away: null});
+    if (p === '/api/v2/needs-you') return json({items: []});
     if (p === '/api/v2/goals') return json({goals: [], chain: [], reports: [], company: []});
     if (p === '/api/v2/updates') return json({updates: [], missed: [], unread: 0, next_before: null, today: {}});
     if (p === '/api/v2/tasks') return json({tasks: []});

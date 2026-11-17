@@ -18,7 +18,7 @@ async function check(engine: BrowserType, native: boolean) {
   const errors: string[] = [], waiting: ((value: void) => void)[] = [];
   let hold = true, failPeople = false, failStatus = false;
   page.on('pageerror', (e: Error) => errors.push(e.message));
-  await page.addInitScript(() => { (window as unknown as {EventSource?: unknown}).EventSource = undefined; });
+  await page.addInitScript(() => { (window as unknown as {EventSource?: unknown}).EventSource = class { readyState = 0; onerror: unknown = null; addEventListener() {} removeEventListener() {} close() {} } as unknown as typeof EventSource; });
   await page.route('**/*', async (route: Route) => {
     const p = new URL(route.request().url()).pathname;
     const json = (body: unknown, status = 200) => route.fulfill({status,contentType:'application/json',body:JSON.stringify(body)});

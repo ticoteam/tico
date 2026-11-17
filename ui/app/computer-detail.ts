@@ -24,7 +24,8 @@ type DetailAddStep = {at?: string | undefined; runtime?: string | undefined};
 type DetailDialog = HTMLDialogElement & {restoreOpener?: () => void};
 type DetailExitUsage = import('../types/api').BrowserExitUsage;
 
-const machineOnline = (machine: DetailMachine) => !machine.revoked_at && !!machine.last_seen_at && (SETTINGS_PRESENCE.at || Date.now()) - new Date(machine.last_seen_at).getTime() < 60000;
+// The server decides online (backend/runner_online.py) and says so on each machine in /v2/operations.
+const machineOnline = (machine: DetailMachine) => !machine.revoked_at && machine.online === true;
 const machinePresenceStale = () => SETTINGS_PRESENCE.checking || SETTINGS_PRESENCE.failed
   || !!SETTINGS_PRESENCE.at && Date.now() - SETTINGS_PRESENCE.at > SETTINGS_PRESENCE.interval;
 const machinePresenceWords = (machine: DetailMachine) => machine.revoked_at ? 'revoked'
@@ -195,15 +196,13 @@ function machineConnectionHTML(machine: DetailMachine, conn: DetailConnection, o
     ? `<span class="err machine-rejected" data-rejected="${esc(conn.runtime)}">${value.rejected_at ? esc(agoSaid(value.rejected_at)) + '. ' : ''}${value.rejected_reason ? esc(value.rejected_reason) + '. ' : ''}${hlCredentialFix(value.credential_source)}. It takes no work that needs ${esc(conn.runtime)} until then.</span>` : '';
   const usage = conn.state.signed_in === false ? '' : machineUsageHTML(conn.runtime, conn.state, `${conn.tool} ${conn.name}`, 'this computer');
   const bots = conn.bots.length ? `Bots: ${conn.bots.map(settingsBotName).join(', ')}` : 'No bots run on it';
-  // Bots that take turns on one sign-in say so.
-  const shared = machineSharedLoginHTML(machine, conn.runtime);
   return `<div class="computer-conn${conn.attention ? ' attention' : ''}" data-connection="${esc(conn.key)}" data-machine-tool="${esc(conn.runtime)}">
     <div class="computer-conn-head">${conn.attention ? '<span class="machine-chip-dot" aria-hidden="true"></span>' : ''}<strong>${esc(conn.tool)}</strong>${kind ? `<span>${esc(kind)}</span>` : ''}${tags}</div>
     <div class="computer-conn-signin">${signIn}${action}${rejected}</div>
     ${usage ? `<div class="computer-conn-usage">${usage}</div>` : ''}
     ${conn.warning ? `<p class="computer-conn-warning" role="note" data-login-warning="${esc(conn.runtime)}">${esc(conn.warning)}</p>` : ''}
     ${conn.shared ? `<div class="computer-conn-shared-with muted" data-shared-with>${esc(machineSharedWords(conn.shared))}</div>` : ''}
-    <div class="computer-conn-bots muted">${esc(bots)}</div>${shared}
+    <div class="computer-conn-bots muted">${esc(bots)}</div>
   </div>`;
 }
 // A tool with no sign-in in the browser: the command to run in a terminal on the computer (Tico need not reach it), or
@@ -346,9 +345,8 @@ function machineVersionsHTML(machine: DetailMachine, online: boolean) {
   const names = [...new Set([...Object.keys(runtimes), ...tools.filter(tool => tool.installed).map(tool => tool.runtime)])]
     .filter(name => !needed || needed.has(name) || runtimes[name]?.installed || toolFor(name).installed);
   const choices = machine.harness_choices || {};
-  // What its bots run on, fallbacks included, stays on (the server refuses an off for it); an older server sends
-  // no bot_runtimes, only its bots' own runtimes.
-  const botRuntimes = new Set(machine.bot_runtimes || ((machine.bots || []).length ? machine.needed_runtimes || [] : []));
+  // What its bots run on, fallbacks included, stays on (the server refuses an off for it).
+  const botRuntimes = new Set(machine.bot_runtimes || []);
   const rows = names.map(name => {
     const tool = toolFor(name), value: DetailRuntime = runtimes[name] || {};
     const installed = value.installed || tool.installed, version = installed ? (tool.version || value.version || '') : '';
@@ -389,7 +387,7 @@ function machineVersionsHTML(machine: DetailMachine, online: boolean) {
   const facts = [`Tico ${release || 'version not reported'}`, machine.platform || '',
     engine?.name ? `<span title="${esc(engine.note || engine.build || '')}">${engine.name === 'rust' ? 'Rust' : 'Python'} runner</span>` : ''].filter(Boolean);
   return `<p class="computer-detail-facts">${facts.map((fact, i) => i === 2 ? fact : esc(fact)).join(' · ')}</p>${window.runnerUpdateHtml?.(machine.update, release) || ''}
-    ${table}${machineAppsHtml(machine)}${harnesses ? `<details data-machine-details="${esc(machine.id)}:tools"><summary>Installation and updates</summary><div class="machine-harnesses">${harnesses}</div></details>` : ''}`;
+    ${table}${harnesses ? `<details data-machine-details="${esc(machine.id)}:tools"><summary>Installation and updates</summary><div class="machine-harnesses">${harnesses}</div></details>` : ''}`;
 }
 function machineScreenSectionHTML(machine: DetailMachine, online: boolean) {
   return screenControlHTML(machine, online);
@@ -499,7 +497,7 @@ async function machineGatewayFallbackSave(box: HTMLInputElement) {
   const id = box.dataset.gatewayFallback || '', on = box.checked;
   box.disabled = true;
   try {
-    await post(`/v2/runners/${encodeURIComponent(id)}/gateway-fallback`, {on});
+    await post(`/v2/computers/${encodeURIComponent(id)}/gateway-fallback`, {on});
     toast(on ? 'Falls back to Tico Gateway' : 'Waits for a plan');
     await loadSettings();
   } catch (error) {
@@ -514,7 +512,7 @@ async function machineBrowserHostSave(box: HTMLInputElement) {
   const id = box.dataset.browserHost || '', on = box.checked;
   box.disabled = true;
   try {
-    await post(`/v2/runners/${encodeURIComponent(id)}/browser-host`, {on});
+    await post(`/v2/computers/${encodeURIComponent(id)}/browser-host`, {on});
     toast(on ? 'Browser host' : 'Not the browser host');
     await loadSettings();
   } catch (error) {

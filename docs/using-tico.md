@@ -124,8 +124,7 @@ in the address, so a filtered view can be shared; whoever opens it sees only the
 Admins get **Export CSV**: time, actor, kind, subject, result and link for up to the newest 20,000 rows the filters
 show in one file. Narrow the dates when more remain.
 
-Not in the Log, because Tico does not record them in one place: a bot's mail send that the mail connector turned into a
-draft (kept in that connector's own log on the bot's computer), and a webhook send refused while the send switch is off.
+Not in the Log, because Tico does not record it in one place: a webhook send refused while the send switch is off.
 
 **What does the line on a task mean?**
 An open task always says whose turn it is: a bot working, a person asked, Paused (a bot that can't run, with the fix),
@@ -333,9 +332,6 @@ for that thread (up to ten files of 10 MB). A file a bot produces for you is att
 task the same way (`tico task attach`) and linked from its note; open it from the task or the link
 while signed in. Other files a bot publishes are listed on its page under Files ([Files](files.md)); a bot's own
 record stays in its repo's `reports/`. Meeting transcripts come from the tools that made them ([Meetings](meetings.md)).
-
-When someone finishes or closes a task you requested, Tico DMs your linked Slack account; turn off **Task results in
-Slack** on your human page under **Profile → Notifications**.
 
 **How do I review message bots?**
 Choose a mailbox or Slack channel under **Message bots** in the sidebar. The bot's instructions and

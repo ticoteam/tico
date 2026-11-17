@@ -8,7 +8,7 @@ import json
 import pytest
 from datetime import datetime, timedelta, timezone
 
-from backend import blobs as B, file_library, market, pages as P
+from backend import blobs as B, file_library, pages as P
 from backend.store import H, encode
 from backend.tests.helpers.api import get, headers, post  # noqa: F401  (fixtures)
 from backend.tests.helpers.groups import send
@@ -295,8 +295,11 @@ def share_task_file(api, attempt, data):
 
 
 def share_market_evidence(api, attempt, data):
+    from types import SimpleNamespace
+
     with api.app.state.store.transaction() as c:
-        bid = market._store_blob(c, api.app.state.blobs, "evidence.txt", data)
+        digest = api.app.state.blobs.put(data, "text/plain")
+        bid = B.register(c, SimpleNamespace(actor="seed"), digest, len(data), "evidence.txt", "text/plain")["id"]
     return lambda: api.app.state.blobs.get(hashlib.sha256(data).hexdigest()) == data and bid
 
 

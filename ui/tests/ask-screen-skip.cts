@@ -1,9 +1,9 @@
 import type {Route} from 'playwright';
 // Offline browser check of Skip on the ask screen (task #181), against a fake of the new routes, on a 390 px phone and
 // on a desktop:
-// - your own task has Skip in its ⋯ (the row an ask has: Done, snooze icon, ⋯): ⋯ at least 40 px, Skip a menu item
-//   44 px tall on a phone; an ask, a typed choice with no answer row of its own included, shows Snooze and no Skip
-//   (#3769, ask-screen-snooze.cts); the phone has ‹ › too (task #454);
+// - a task to let someone see (the stuck card) has Skip at the end of its row, 44 px tall on a phone; an ask, a typed
+//   choice with no answer row of its own included, shows Snooze and no Skip (#3769, ask-screen-snooze.cts); the phone
+//   has ‹ › too (task #454);
 // - Skip goes to the next item and sends nothing: the skipped item is not answered or changed;
 // - at the last item, Skip wraps to the first, which is still waiting;
 // - on a desktop ‹ › and the arrow keys still step through.
@@ -25,8 +25,9 @@ const question = (n: number, line: string, choices: string[], typed = false) => 
   ask: {requirement_id: `r${n}`, kind: 'answer', line, who: 'human:ana', asked_by: 'bot:pm', choices, may: ['answer', 'thumbs'],
     met: false, shows: [], standing: 'waiting', answer: null,
     typed: typed ? {name: 'region', type: 'choice', min: null, max: null, question: line} : undefined}});
+// A private task of Ana's that waits on Ben being let in: the one task item Needs you has (backend/waiting_on.py needs).
 const mine = (n: number, title: string) => ({kind: 'task', id: `t${n}`, task_id: `t${n}`, line: title, since: `2026-11-09T1${n}:00:00Z`,
-  task: {...brief(`t${n}`, title), owner_id: 'human:ana', turn: {...brief(`t${n}`, title).turn, ask: false}}});
+  task: {...brief(`t${n}`, title), owner_id: 'human:ana', turn: {...brief(`t${n}`, title).turn, ask: false, share: ['human:ben']}}});
 const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager_id: null, owner_id: 'human:ana', private: false,
   factory_id: null, preset: null, settings_version: 1, retired_at: null,
   stages: [{id: 'spec', name: 'Spec', purpose: '', owner: null, by_hand: false, task_limit: null, expected_minutes: null,
@@ -52,7 +53,7 @@ const Q = ['Write the plan note', 'Which region first?', 'Book the venue'];
         if (p === '/api/me') return json({...me, config});
         if (p === '/api/v2/config') return json(config);
         if (p === '/api/employees') return json([]);
-        if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
+        if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
         if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
         if (p === '/api/v2/needs-you') return json({actor: 'human:ana', count: needs.length, items: needs, version: String(needs.length), next: null});
         if (p === '/api/v2/flow/opinions') return json({opinions: []});   // Tico has none: Flow as without it
@@ -76,20 +77,16 @@ const Q = ['Write the plan note', 'Which region first?', 'Book the venue'];
         assert.equal(await dialog.locator('[data-dc="prev"]').isDisabled(), n === 1, `${label}: ‹ at ${n} of ${of}`);
         assert.equal(await dialog.locator('[data-dc="next"]').isDisabled(), n === of, `${label}: › at ${n} of ${of}`);
       };
-      const skip = dialog.locator('[data-dc="skip"]'), snooze = dialog.locator('[data-dc="snooze"]'), more = dialog.locator('[data-dc="ask-more"]');
+      const skip = dialog.locator('[data-dc="skip"]'), snooze = dialog.locator('[data-dc="snooze"]');
       const skipBox = async () => {
-        assert.equal(await skip.count(), 0, `${label}: Skip waits in ⋯`);
-        const mb = (await more.boundingBox())!;
-        assert.ok(mb.width >= 40 && mb.height >= 40 && mb.y + mb.height <= viewport.height, `${label}: ⋯ is ${mb.width}x${mb.height}, in view`);
-        await more.click();
         assert.equal(await skip.count(), 1, `${label}: one Skip on the card`);
         assert.ok(await skip.isVisible(), `${label}: Skip shows`);
         const box = (await skip.boundingBox())!;
-        // A menu item: 44 px tall on a phone, a menu's 36 on a desktop (the snooze menu's own sizes).
-        assert.ok(box.width >= 40 && box.height >= (label === 'phone' ? 44 : 36), `${label}: Skip's tap area is ${box.width}x${box.height}`);
+        // At the end of the card's row: 44 px tall on a phone.
+        assert.ok(label !== 'phone' || box.height >= 44, `${label}: Skip's tap area is ${box.width}x${box.height}`);
         assert.ok(box.y >= 0 && box.y + box.height <= viewport.height, `${label}: Skip is in view`);
       };
-      // Answers come first in the walk: the typed choice, then your two tasks.
+      // Answers come first in the walk: the typed choice, then the two tasks to let Ben see.
       await at(2, 3, 1);
       assert.ok(await dialog.locator('[data-dc="next"]').isVisible(), `${label}: › shows`);
       await dialog.locator('[data-dc-choice="EU"]').waitFor();          // the typed choice: its buttons, then Snooze

@@ -14,9 +14,9 @@ def test_a_module_shares_a_fixture_by_its_own_scope_or_a_helper_it_imports():
     assert shares_fixture(SHARED, set())
     assert shares_fixture(SHARED.replace("module", "session"), set())
     assert not shares_fixture(PLAIN, set())
-    assert shares_fixture("from backend.tests.helpers.sample_company import (\n    sample,\n)\n", {"sample_company"})
-    assert shares_fixture("from backend.tests.helpers import sample_company\n", {"sample_company"})
-    assert not shares_fixture("from backend.tests.helpers.sample_company_rows import x\n", {"sample_company"})
+    assert shares_fixture("from backend.tests.helpers.fresh_install import (\n    sample,\n)\n", {"fresh_install"})
+    assert shares_fixture("from backend.tests.helpers import fresh_install\n", {"fresh_install"})
+    assert not shares_fixture("from backend.tests.helpers.fresh_install_rows import x\n", {"fresh_install"})
 
 
 class Node:

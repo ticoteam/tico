@@ -19,6 +19,19 @@ from backend.tests.helpers import engine as X
 B = "bot:builder"
 # The column the until-released migration (20261113070100) adds: a table from before it has no such line.
 UNTIL_COLUMN = "  until TEXT CHECK (until IS NULL OR (kind = 'depends_on' AND until = 'released')),\n"
+# task_relations as a new database has it; the migration tests take pieces away to make the shapes before them.
+RELATIONS = """
+CREATE TABLE IF NOT EXISTS task_relations(
+  from_task TEXT NOT NULL REFERENCES tasks(id), to_task TEXT NOT NULL REFERENCES tasks(id),
+  kind TEXT NOT NULL CHECK (kind IN ('parent','related','duplicate_of','follow_up','after','depends_on')),
+  created_by TEXT, created_at TEXT NOT NULL,
+  until TEXT CHECK (until IS NULL OR (kind = 'depends_on' AND until = 'released')),
+  PRIMARY KEY(from_task, to_task, kind),
+  CHECK (from_task <> to_task), CHECK (kind <> 'related' OR from_task < to_task));
+CREATE INDEX IF NOT EXISTS task_relations_to ON task_relations(to_task, kind);
+CREATE INDEX IF NOT EXISTS task_relations_from ON task_relations(from_task, kind);
+CREATE UNIQUE INDEX IF NOT EXISTS task_relations_one_parent ON task_relations(from_task) WHERE kind='parent';
+"""
 
 
 @pytest.fixture
@@ -198,14 +211,16 @@ def test_a_blocked_task_holds_no_slot_is_never_late_and_is_not_handed_on(c):
     assert (E.task(c, blocked)["visit"].get("level") or "owner") == "owner"
 
 
-def test_a_blocked_task_leaves_its_person_owners_needs_you(c):
+def test_a_blocked_task_leaves_its_person_owners_plate(c):
+    """Its own work leaves the load ask ingest weighs (`own_work`); it was never in Needs you, which holds only asks."""
     build(c)
     X.pipeline(c)  # General: To do, the assignee's
     blocker = task(c, "Part 1")
     mine = X.new_task(c, X.ANA, "Write the copy", assignee=X.ANA)["id"]
-    assert any(item.get("task_id") == mine for item in W.needs(c, X.ANA))
-    TR.relate(c, X.ANA, mine, blocker, "depends_on")
+    assert any(item.get("task_id") == mine for item in W.needs(c, X.ANA, own_work=True))
     assert not any(item.get("task_id") == mine for item in W.needs(c, X.ANA))
+    TR.relate(c, X.ANA, mine, blocker, "depends_on")
+    assert not any(item.get("task_id") == mine for item in W.needs(c, X.ANA, own_work=True))
 
 
 def test_blocked_time_does_not_count_toward_late():
@@ -220,7 +235,7 @@ def test_the_migration_lets_an_old_table_take_depends_on_and_keeps_its_rows():
     conn = sqlite3.connect(":memory:")
     conn.execute("CREATE TABLE tasks(id TEXT PRIMARY KEY)")
     conn.executemany("INSERT INTO tasks VALUES(?)", [("a",), ("b",)])
-    conn.executescript(TR.SCHEMA.replace("'after','depends_on'", "'after','blocks'").replace(UNTIL_COLUMN, ""))
+    conn.executescript(RELATIONS.replace("'after','depends_on'", "'after','blocks'").replace(UNTIL_COLUMN, ""))
     conn.execute("INSERT INTO task_relations VALUES('a','b','after','human:ana','2026-11-12T00:00:00Z')")
     conn.execute("INSERT INTO task_relations VALUES('b','a','blocks','human:ana','2026-11-12T00:00:01Z')")
     with pytest.raises(sqlite3.IntegrityError):
@@ -603,7 +618,7 @@ def test_the_until_migration_adds_the_column_and_keeps_every_row():
     conn = sqlite3.connect(":memory:")
     conn.execute("CREATE TABLE tasks(id TEXT PRIMARY KEY)")
     conn.executemany("INSERT INTO tasks VALUES(?)", [("a",), ("b",)])
-    conn.executescript(TR.SCHEMA.replace(UNTIL_COLUMN, ""))
+    conn.executescript(RELATIONS.replace(UNTIL_COLUMN, ""))
     conn.execute(
         "INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES('a','b','depends_on','2026-11-13T00:00:00Z')"
     )
@@ -634,7 +649,7 @@ def test_the_until_and_depends_on_migrations_give_one_table_in_either_order():
         conn = sqlite3.connect(":memory:")
         conn.execute("CREATE TABLE tasks(id TEXT PRIMARY KEY)")
         conn.executemany("INSERT INTO tasks VALUES(?)", [("a",), ("b",), ("c",)])
-        conn.executescript(TR.SCHEMA.replace("'after','depends_on'", "'after','blocks'").replace(UNTIL_COLUMN, ""))
+        conn.executescript(RELATIONS.replace("'after','depends_on'", "'after','blocks'").replace(UNTIL_COLUMN, ""))
         for row in (("a", "b", "after"), ("b", "a", "blocks"), ("c", "a", "follow_up")):
             conn.execute("INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,?,'t')", row)
         for migration in order:

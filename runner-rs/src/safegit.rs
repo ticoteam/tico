@@ -81,11 +81,12 @@ pub fn machine_environment(source: &Env) -> Env {
             trusted.insert(key.into(), v.clone());
         }
     }
-    // The turn's `gh` shim is this binary: not the machine's GitHub sign-in, so out of PATH here.
+    // The turn's `gh` shim is a runner binary (gitcred::shim_dir), not the machine's GitHub sign-in, so out of PATH
+    // here: this binary, or another copy when the turn's `tico task worktree` started a different `tico-runner`.
     let me = std::env::current_exe()
         .ok()
         .and_then(|p| p.canonicalize().ok());
-    let shim = |dir: &Path| me.is_some() && dir.join("gh").canonicalize().ok() == me;
+    let shim = |dir: &Path| is_shim(&dir.join("gh"), me.as_deref());
     let dirs: Vec<PathBuf> = std::env::split_paths(&env.get("PATH").cloned().unwrap_or_default())
         .filter(|d| !shim(d))
         .collect();
@@ -153,6 +154,13 @@ pub fn machine_environment(source: &Env) -> Env {
         .unwrap_or_else(|| "ssh".into());
     env.insert("GIT_SSH_COMMAND".into(), ssh);
     env
+}
+
+/// Whether `gh` is a turn's shim: it resolves to `me` or to a file named `tico-runner`.
+fn is_shim(gh: &Path, me: Option<&Path>) -> bool {
+    gh.canonicalize().is_ok_and(|real| {
+        Some(real.as_path()) == me || real.file_name().is_some_and(|n| n == "tico-runner")
+    })
 }
 
 /// The environment for runner git in a turn's checkout (safe_git.environment): a clean environment, then only
@@ -673,6 +681,27 @@ mod tests {
         fn drop(&mut self) {
             SUPERVISOR_ENV.with(|e| e.borrow_mut().take());
         }
+    }
+
+    #[test]
+    fn a_gh_linked_to_any_runner_binary_is_the_turns_shim_and_a_real_gh_is_not() {
+        let dir = std::env::temp_dir().join(format!("tico-shim-{}", uuid::Uuid::new_v4().simple()));
+        let (runner, other, real) = (dir.join("dist"), dir.join("shim"), dir.join("tools"));
+        for d in [&runner, &other, &real] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(runner.join("tico-runner"), "").unwrap();
+        std::fs::write(real.join("gh"), "").unwrap();
+        std::os::unix::fs::symlink(runner.join("tico-runner"), other.join("gh")).unwrap();
+        // The shim the supervisor made points at its own copy; the CLI may have started another one.
+        assert!(is_shim(&other.join("gh"), None));
+        assert!(is_shim(
+            &other.join("gh"),
+            Some(Path::new("/elsewhere/tico-runner"))
+        ));
+        assert!(!is_shim(&real.join("gh"), None));
+        assert!(!is_shim(&dir.join("missing").join("gh"), None));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

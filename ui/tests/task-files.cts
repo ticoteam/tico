@@ -76,7 +76,7 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
       };
     });
     const now = Date.now(), at = (mins: number) => new Date(now - mins * 60000).toISOString();
-    const me = {id: 'ana', name: 'Ana', email: 'ana@acme.example', role: 'owner', mover: true, cloud: false};
+    const me = {id: 'ana', name: 'Ana', email: 'ana@acme.example', role: 'owner', mover: true};
     const bots = [{name: 'editor', display_name: 'Editor', host: 'keeper', status: 'active', can_chat: true}];
     const url = (id: string, n: number, part = '') => `/api/v2/files/${id}${part}?v=${n}`;
     const version = (id: string, n: number, over: Record<string, unknown>) => ({n, size: 2048, mime: '', sha256: 'x' + n, created_at: at(200 - n * 30), by: 'bot:editor', comment_id: null, note: null,
@@ -278,7 +278,11 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
     await page.evaluate(() => tfLoad($('#task-modal'), 't1'));
     await modal.locator('.tf-tile .tf-name', {hasText: 'mockup.png'}).waitFor({state: 'detached'});
     // a comment that carried files: a small thumb for the image, a chip for the video at its version
-    const tab = (name: string) => modal.locator(`[data-task-tab="${name}"]`).click();
+    // Details (what the task is first) is the head's icon, pressed while it shows; pressed again, the chat.
+    const tab = async (name: string) => {
+      const pressed = (await modal.locator('[data-task-tab="details"]').getAttribute('aria-pressed')) === 'true';
+      if (pressed !== (name !== 'chat')) await modal.locator('[data-task-tab="details"]').click();
+    };
     await tab('chat');
     const m1 = modal.locator('.tcomment', {hasText: 'Second pass and a frame grab.'});
     await m1.locator('.tc-thumb[data-tf-jump="f-frame"]').waitFor();

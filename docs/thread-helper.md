@@ -9,14 +9,16 @@ Threads that need the person sit in the same [Needs you](tasks.md#needs-you) lis
 
 | Item | Listed when | Cleared when |
 |---|---|---|
-| **Question** | A bot or a person asked them something in a thread, and they have not answered it | They post in that thread after the ask, or the ask is answered or deleted |
-| **Mention** | Someone @mentioned them (a bot's mention counts too), or addressed a message to them | They post in that thread after it, or it is deleted |
+| **Mention** | A person @mentioned them (a bot's @ only marks the thread unread unless it replies to them, and a bot that needs a person asks through a requirement or a question task) | They post in that thread after it, or it is deleted |
+| **Reply** | A person or a bot replied to a message of theirs | They post in that thread after it |
 | **Direct message** | A DM (a one-to-one or a migrated group DM) has a message past their read point that they may read and that is unread for them: from a person, addressed to them, or a bot's post in a group DM they are in | They read the DM |
 | **Held** | A write held for review (org rules, `org_rule_holds`) that they review, their own held post, or one their bot posted for them (the person its bot reports up to) | The reviewer sends or keeps it; the person withdraws it (keeps it blocked) |
 | **Paused** | A thread's bot replies were held back by the loop guard (`TICO_THREAD_LOOP_GUARD`, 6 an hour by default) | Its held replies resume, when a person posts in the thread or the hour passes |
 
-Bot posts that name nobody are activity, not attention. A paused thread is listed once, to the people who can manage
-it. Items the Needs you list already shows are not listed twice.
+Bot posts that name nobody are activity, not attention. A message addressed to a person without an @ is unread in its
+thread, not attention. A mention or a reply is the one definition Needs you reads too (`backend/open_mentions.py`), so a
+thread listed here has the same item on Needs you. A paused thread is listed once, to the people who can manage it.
+Items the Needs you list already shows are not listed twice.
 
 The thread items are not cut from the list: they page with the rest of Needs you, in the same order. A held item is
 listed to its reviewer and to the person its author bot reports up to. The reviewer sees the card with Send anyway and Keep

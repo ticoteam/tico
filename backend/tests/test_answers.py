@@ -1,4 +1,4 @@
-"""Answers to what a task needs (backend/answers.py, docs/pipelines-v3.md "Asks" and "What your answer does").
+"""Answers to what a task needs (backend/answers.py, docs/dev/pipelines-v3.md "Asks" and "What your answer does").
 
 Synthetic rows only (backend/tests/helpers/engine.py): a General pipeline, a two-stage Build pipeline, the fictional
 company's two people and three bots.
@@ -326,7 +326,7 @@ def test_a_bot_that_cannot_run_still_gets_the_wake(c, general):
 
 
 def test_a_bot_answers_an_ask_only_when_the_requirement_names_it(c, general):
-    """An OK added to one task is asked of a person (docs/pipelines-v3.md, "A requirement on one task"); a bot is
+    """An OK added to one task is asked of a person (docs/dev/pipelines-v3.md, "A requirement on one task"); a bot is
     asked for an answer."""
     row = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
     with _refused("task_requirement"):
@@ -392,10 +392,10 @@ def test_give_a_stage_ok_to_another_person_and_needs_you_follows(c, build):
 
 def test_give_your_own_task_to_someone_else_is_a_reassign(c, general):
     row = X.new_task(c, ANA, "Call the bank", assignee=ANA)
-    assert [n["task_id"] for n in W.needs(c, ANA)] == [row["id"]]
+    assert [w.who for w in W.waiting_on(c, row["id"])] == [ANA]
     given = A.give_to(c, row["id"], _owner_done(c, row), ANA, BEN)
     assert (given["owner_id"], given["version"]) == (BEN, row["version"] + 1)
-    assert W.needs(c, ANA) == [] and [n["task_id"] for n in W.needs(c, BEN)] == [row["id"]]
+    assert [w.who for w in W.waiting_on(c, row["id"])] == [BEN]  # his turn now, in his Tasks (not Needs you)
 
 
 def test_an_ask_is_given_or_named_only_to_a_person_who_is_here(c, build):
@@ -594,34 +594,6 @@ def test_thumbs_down_count_is_one_bots_in_the_last_thirty_days(c, general):
     )
     assert A.thumbs_down_count(c, "bot:builder") == 2
     assert A.thumbs_down_count(c, "bot:builder", days=60) == 3
-
-
-def test_the_ask_migration_keeps_every_feedback_row_index_and_unique_key():
-    folder = Path(__file__).resolve().parents[1] / "migrations"
-    spec = importlib.util.spec_from_file_location("feedback_ask", folder / "20261110020000_feedback_ask_subject.py")
-    migration = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(migration)
-    insert = (
-        "INSERT INTO feedbacks(id,person_id,subject_type,subject_id,bot_id,rating,created_at,updated_at) "
-        "VALUES(?,?,?,?,'bot:builder','down','then','then')"
-    )
-    with sqlite3.connect(":memory:") as conn:
-        conn.executescript((folder / "0041_feedbacks.sql").read_text())
-        conn.execute(insert, ("f1", ANA, "task", "t1"))
-        with pytest.raises(sqlite3.IntegrityError):
-            conn.execute(insert, ("f2", ANA, "ask", "v1:r1"))
-        indexes = conn.execute("SELECT name, sql FROM sqlite_master WHERE type='index' ORDER BY name").fetchall()
-        migration.up(conn)
-        migration.up(conn)  # a table that takes ask already is left as it is
-        assert conn.execute("SELECT rowid, id, subject_type FROM feedbacks").fetchall() == [(1, "f1", "task")]
-        assert (
-            conn.execute("SELECT name, sql FROM sqlite_master WHERE type='index' ORDER BY name").fetchall() == indexes
-        )
-        conn.execute(insert, ("f2", ANA, "ask", "v1:r1"))
-        with pytest.raises(sqlite3.IntegrityError):
-            conn.execute(insert, ("f3", ANA, "ask", "v1:r1"))  # one row per person and subject
-        with pytest.raises(sqlite3.IntegrityError):
-            conn.execute(insert, ("f4", ANA, "page", "p1"))
 
 
 def test_a_thumb_on_an_ask_shows_in_the_feedback_routes_to_whoever_reads_its_task(api, monkeypatch):

@@ -154,7 +154,6 @@ interface ChatState {
   liveCid?: string | null | undefined;
   waitTimer?: number | undefined;
   openFolds?: Set<string> | undefined;
-  openSide?: Set<string | undefined> | undefined;
   openSteps?: Set<string | null | undefined> | undefined;
   steps?: Record<string, string> | undefined;
   dismissed?: string | undefined;
@@ -277,7 +276,7 @@ async function v2ChatLoad(slug: string, room: ChatRoom | null = null) {
   if (room) {
     const x = room.execution;
     Object.assign(state, {conv: room.conv, messages: room.messages || [], nextBefore: room.nextBefore, execution: x,
-                          live: S.me?.cloud && v2RunLive(x) ? {text: x.text || ''} : null, listed: true, loaded: true});
+                          live: S.me && v2RunLive(x) ? {text: x.text || ''} : null, listed: true, loaded: true});
     v2ChatRender(state);
   } else if (seen && seen.mode === mode && !chatJumpRoom(slug)) {
     Object.assign(state, {conv: seen.conv, messages: seen.messages, nextBefore: seen.nextBefore, execution: seen.execution,
@@ -311,7 +310,7 @@ async function v2ChatLoad(slug: string, room: ChatRoom | null = null) {
       return;
     }
     // Live events carry every change to this chat (ui/app/live.js); the poll reads it only without them.
-    if (state.liveOff && liveAvailable()) return;
+    if (state.liveOff) return;
     v2ChatMessages(state).then(() => v2ChatRender(state));
     void chatGoalLoad(state);
   }, 15000);
@@ -382,14 +381,14 @@ async function v2BotsOpen(state: ChatState, cid: string) {
 async function v2ChatMessages(state: ChatState) {
   if (!state.conv) return false;
   const sent = state.mine.length;
-  const d: ChatPage | null = await v2Get(`/v2/conversations/${encodeURIComponent(state.conv.id)}/${S.me?.cloud ? 'snapshot' : 'messages'}?${CHAT_PAGE}`);
+  const d: ChatPage | null = await v2Get(`/v2/conversations/${encodeURIComponent(state.conv.id)}/snapshot?${CHAT_PAGE}`);
   if (V2C !== state || !d) return false;
   // A message sent while this was loading is newer than the copy that came back: keep it, and leave the
   // live turn to the stream (this copy has not seen it start).
   const late = state.mine.slice(sent).filter(m => !(d.messages || []).some(x => x.id === m.id));
   state.messages = [...(d.messages || []), ...late];
   state.nextBefore = d.next_before;
-  if (S.me?.cloud && !late.length) {
+  if (S.me && !late.length) {
     state.execution = d.execution;
     state.live = v2RunLive(d.execution) ? {text: d.execution.text} : null;
   }
@@ -536,7 +535,7 @@ function v2RunHTML(m: ChatMessage, state: Pick<ChatState, 'openSteps' | 'steps' 
 }
 const chatLine = (text: unknown, n: number) => { const t = String(text || '').replace(/\s+/g, ' ').trim(); return t.length > n ? t.slice(0, n - 1) + '…' : t; };
 // ---- times and lines every chat shares (the style guide's chat window, #sg-chat): a message's time is its clock on
-// its name line; one line names the day wherever it changes; a long message stops at ten lines with Show more.
+// its name line; one line names the day wherever it changes.
 const chatDate = (iso: string | null | undefined) => { const d = new Date(iso || ''); return Number.isNaN(Number(d)) ? null : d; };
 const chatClock = (iso: string | null | undefined) => chatDate(iso)?.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'}) || '';
 const chatDayKey = (iso: string | null | undefined) => chatDate(iso)?.toDateString() || '';
@@ -571,37 +570,6 @@ const CHAT_WAY_MARK = {
   steer: (tip: string) => `<span class="chat-way nav-icon" role="img" aria-label="${esc(tip)}" title="${esc(tip)}">bolt</span>`,
   queue: (tip: string) => `<span class="chat-way" role="img" aria-label="${esc(tip)}" title="${esc(tip)}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 5v8h13M14 9l4 4-4 4"/></svg></span>`,
 };
-// A long message stops at ten lines with Show more. Only a message that might be that long carries the stop; once
-// drawn, chatClampSync lets one that fits show in full with no button. Opened ones stay open across redraws.
-const CHAT_LONG_OPEN = new Set<string>();
-const chatLong = (text: string | null | undefined) => { const t = String(text || ''); return t.length > 560 || t.split('\n').length > 9; };
-const chatClampCls = (id: string | null | undefined, text: string | null | undefined) => chatLong(text) && !CHAT_LONG_OPEN.has(String(id || '')) ? ' msg-clamp' : '';
-const chatMoreHTML = (id: string | null | undefined, text: string | null | undefined) => {
-  if (!id || !chatLong(text)) return '';
-  const open = CHAT_LONG_OPEN.has(id);
-  return `<button type="button" class="link cs-more msg-more" data-msg-more="${esc(id)}" aria-expanded="${open}">${open ? 'Show less' : 'Show more'}</button>`;
-};
-function chatClampSync(root: ParentNode) {
-  for (const el of root.querySelectorAll<HTMLElement>('.msg-clamp')) {
-    // Drawn out of sight (a task window's Chat tab while another tab shows) it measures nothing: it keeps its Show more
-    // until it is measured in sight.
-    if (!el.getClientRects().length) continue;
-    const more = el.parentElement?.querySelector<HTMLElement>(':scope > .msg-more');
-    const fits = el.scrollHeight <= el.clientHeight + 2;
-    if (fits) el.classList.remove('msg-clamp');
-    if (more) more.hidden = fits;
-  }
-}
-document.addEventListener('click', ev => {
-  const b = eventElement(ev)?.closest<HTMLButtonElement>('[data-msg-more]');
-  if (!b) return;
-  const id = b.dataset.msgMore!, open = !CHAT_LONG_OPEN.has(id);
-  CHAT_LONG_OPEN[open ? 'add' : 'delete'](id);
-  const body = b.parentElement?.querySelector<HTMLElement>(':scope > .md');
-  body?.classList.toggle('msg-clamp', !open);
-  b.textContent = open ? 'Show less' : 'Show more';
-  b.setAttribute('aria-expanded', String(open));
-});
 // Folded lines stay as the reader left them across redraws.
 const v2FoldOpen = (m: {id?: string | undefined}, state: Pick<ChatState, 'openFolds'> | null = V2C) => !!(m.id && state?.openFolds?.has(m.id));
 const v2FoldAttrs = (m: ChatMessage) => `data-fold="${esc(m.id || '')}"${v2FoldOpen(m) ? ' open' : ''}`;
@@ -710,18 +678,18 @@ function v2MessageHTML(m: ChatMessage) {
   const fresh = mine && m.refs?.topic_changed ? CHAT_COMPACTED : '';
   // Every message is the same row (the style guide's chat window): avatar, then name, time and its marks on one line,
   // what the run did (one closed line), the words, then what came with them. Nobody's words sit on the right.
-  const text = m.body || '', clamp = chatClampCls(m.id, text);
+  const text = m.body || '';
   return `${fresh}<div class="conv-run chat cw-msg${me ? ' from-me' : ''}" data-message="${esc(m.id || '')}">
     <div class="th-av">${relay ? avatar(assistantBot(), 28) : actorAvatar(m.sender_id, 28)}</div>
     <div class="th-main"><div class="th-head"><span class="th-who">${who}</span>${m.kind && m.kind !== 'say' ? `<span class="pill">${esc(m.kind)}</span>` : ''}${chatTimeHTML(m.created_at)}${v2DeliveryHTML(m)}</div>
     ${mine ? '' : v2RunHTML(m)}<div class="bubble ${mine ? 'you' : 'bot reply'}"${fb ? ` data-fb-press="${esc(fb)}"` : ''}>${
-      mine ? `<div class="md cw-plain${clamp}">${esc(text)}</div>`
+      mine ? `<div class="md cw-plain">${esc(text)}</div>`
         // The Assistant's read-back of what it will approve is shown exactly as written, never formatted: a requesting
         // bot's fields can't hide part of what the person says yes to.
         : m.refs?.read_back ? `<div class="read-back" style="white-space:pre-line">${esc(text)}</div>`
-        : messageMd('md' + clamp, text, m.sender_id, {shortLinks: true})}${m.refs?.read_back ? '' : chatMoreHTML(m.id, text)}${chatCopyHTML(m.body, fb)}</div>
+        : messageMd('md', text, m.sender_id, {shortLinks: true})}${chatCopyHTML(m.body, fb)}</div>
     ${(m.refs?.warnings || []).map(w => `<div class="chat-warn" title="From the runner, not the bot">${esc(w.charAt(0).toUpperCase() + w.slice(1))}</div>`).join('')}
-    ${S.me?.cloud ? chatAttachmentsHTML(m.refs?.attachments || [], m.id || '') : ''}
+    ${S.me ? chatAttachmentsHTML(m.refs?.attachments || [], m.id || '') : ''}
     ${mine ? v2RunHTML(m) : ''}${v2MessageCards(m)}</div></div>`;
 }
 // A message sent while the bot answers here is written into that turn, or held for the next one (`delivery`, from the
@@ -783,18 +751,15 @@ function chatSideHeadHTML(m: ChatMessage) {
   const head = chatSideHead(m);
   return head ? `<b>${esc(head)}</b>` : '';
 }
-// About two lines at phone width: longer text, or more than one line of it, gets "Show more".
-const CHAT_SIDE_SHORT = 110;
-// One side item, at most two lines; a longer one opens in place with "Show more", with its files.
+// One side item: its words in full, then its files on cloud (as a message's are), then "Earlier messages" where a
+// bot-to-bot preview has older messages behind it.
 function chatSideItemHTML(m: ChatMessage) {
-  const text = plainActors(m.body || ''), long = text.length > CHAT_SIDE_SHORT || /\n/.test(text.trim());
-  const open = long && V2C?.openSide?.has(m.id);
+  const text = plainActors(m.body || '');
   const when = m.created_at ? `<time class="chat-time" data-ago="${esc(m.created_at)}" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time>` : '';
-  return `<div class="cs-item${open ? ' open' : ''}" data-message="${esc(m.id || '')}">
+  return `<div class="cs-item" data-message="${esc(m.id || '')}">
     <div class="cs-head">${chatSideHeadHTML(m)}${when}</div>
-    ${messageMd(`cs-text md${open ? '' : ' clamp'}`, text, m.sender_id, {shortLinks: true})}${open && S.me?.cloud ? chatAttachmentsHTML(m.refs?.attachments || [], m.id || '') : ''}
-    ${long ? `<button type="button" class="link cs-more" data-cs-more="${esc(m.id || '')}" aria-expanded="${open}">${open ? 'Show less' : 'Show more'}</button>` : ''}${
-      m.elsewhere?.preview ? `<button type="button" class="link cs-more" data-bots-open="${esc(m.elsewhere.id)}">Earlier messages</button>` : ''}</div>`;
+    ${messageMd('cs-text md', text, m.sender_id, {shortLinks: true})}${S.me ? chatAttachmentsHTML(m.refs?.attachments || [], m.id || '') : ''}
+    ${m.elsewhere?.preview ? `<button type="button" class="link cs-more" data-bots-open="${esc(m.elsewhere.id)}">Earlier messages</button>` : ''}</div>`;
 }
 // A run of side items is one muted line: one item reads as itself, more as "12 updates · Dots, BotOps, tasks · 2h".
 function chatSideHTML(messages: ChatMessage[], slug: string | undefined) {
@@ -861,7 +826,7 @@ const REPLY_WAIT_MS = 20 * 60000;
 // {word, tip, mode}: mode 'run' animates the dots, 'wait' breathes them slowly.
 function v2PendingText(state: ChatState) {
   const x = state.execution, name = botDisplayName(state.slug);
-  if (!S.me?.cloud) return {word: '', tip: `${name} is thinking`, mode: 'run'};
+  if (!S.me) return {word: '', tip: `${name} is thinking`, mode: 'run'};
   if (state.live?.interrupted) return SESSION.out ? {word: 'Signed out', tip: "You've been signed out", mode: 'wait'}
     : {word: 'Reconnecting', tip: 'Connection interrupted — reconnecting', mode: 'wait'};
   return pendingRunText(x, state.slug);
@@ -877,7 +842,7 @@ function pendingRunText(x: ChatExecution | null | undefined, slug: string | unde
     return {word: 'Queued', mode: 'wait', tip: s?.state === 'running' && s.focus
       ? `${name} is on another run: ${s.focus}` : 'Starts when its computer picks it up'};
   }
-  // Its ChatGPT login is busy with another turn (backend/login_waits.py): waiting, not failed.
+  // Waiting for memory on its computer (backend/views.py conversation_execution): waiting, not failed.
   if (x.waiting && ['leased', 'running'].includes(x.state)) return {word: x.waiting, tip: x.waiting, mode: 'wait'};
   if (x.state === 'leased') return {word: 'Starting', tip: `${name} is starting`, mode: 'run'};
   if (x.state === 'running') return x.label && x.label !== 'Working'
@@ -897,8 +862,8 @@ function v2PendingHTML(state: ChatState) {
   if (state.dismissed === key) return '';
   const sent = Date.parse(state.messages.find(m => m.id === x?.message_id)?.created_at || '') || state.sentAt || 0;
   clearTimeout(state.waitTimer);
-  const late = S.me?.cloud && sent && Date.now() - sent >= REPLY_WAIT_MS;
-  if (S.me?.cloud && sent && !late) state.waitTimer = setTimeout(() => v2ChatRender(state), sent + REPLY_WAIT_MS - Date.now() + 50);
+  const late = S.me && sent && Date.now() - sent >= REPLY_WAIT_MS;
+  if (S.me && sent && !late) state.waitTimer = setTimeout(() => v2ChatRender(state), sent + REPLY_WAIT_MS - Date.now() + 50);
   const hint = pendingHintHTML(x);
   // A quiet bot (the style guide's chat window): still dots, the words, and Dismiss.
   if (late && !hint) return `<div class="thinking late" data-pending="${esc(key)}"><span class="typing wait" aria-hidden="true"><i></i><i></i><i></i></span>
@@ -924,7 +889,6 @@ function v2WithBotTalk(state: ChatState, messages: ChatMessage[]) {
   }
   return out.concat(talk.slice(t));
 }
-const shownById = (state: ChatState, id: string | undefined) => state.messages.find(m => m.id === id) || (state.botTalk || []).find(m => m.id === id);
 // Scrolled up when something new lands: a small pill above the composer takes you to it (ui/app/stick-scroll.ts).
 // Only the conversation counts, and a reply as it streams in; a side item joins its folded line without a pill.
 const v2Latest = (state: ChatState) => state.lastMain ? state.lastMain.id + (state.live?.text ? ':live' : '') : '';
@@ -956,15 +920,6 @@ function v2ChatRender(state: ChatState) {
       if (conv && V2C === state) {
         conv.disabled = true;
         void v2BotsOpen(state, String(conv.dataset.botsOpen)).catch(error => { conv.disabled = false; toast(errorMessage(error, ''), true); });
-        return;
-      }
-      const more = target?.closest<HTMLElement>('[data-cs-more]');
-      if (more && V2C === state) {
-        const id = more.dataset.csMore, item = more.closest('.cs-item'), shown = shownById(state, id);
-        state.openSide ||= new Set();
-        state.openSide[state.openSide.has(id) ? 'delete' : 'add'](id);
-        if (!item || !shown) throw new Error('the side item is gone');
-        item.outerHTML = chatSideItemHTML(shown);
         return;
       }
       if (!target?.closest('[data-pending-dismiss]') || V2C !== state) return;
@@ -1000,7 +955,6 @@ function v2ChatRender(state: ChatState) {
       const focused = thread.contains(document.activeElement) && document.activeElement instanceof HTMLElement ? document.activeElement : null;
       // Only the messages that changed are redrawn; cards both trees share keep their node (ui/app/visual-cards.js).
       patchHTML(thread, html, visualSwap);
-      chatClampSync(thread);
       if (thread.querySelector('[data-hold]')) ruleChatWire(state, thread);
       if (thread.querySelector('[data-action-host]')) void assistantCards(thread, {get, post, esc, toast,
         reload: () => v2ChatMessages(state).then(() => { if (V2C === state) v2ChatRender(state); })});
@@ -1312,7 +1266,6 @@ const CHAT_SOON_MS = 30;
 interface ChatLiveEvent { conversation_id?: string | undefined; goal_id?: string | undefined; output?: unknown }
 function v2ChatStream(state: ChatState, loaded = false) {
   if (!state.conv) return;
-  if (!liveAvailable()) return;                   // the 15 s poll reads it instead
   const cid = state.conv.id;
   if (!loaded) liveSoon('chat:' + cid, () => v2ChatSnapshot(state), 120);
   if (state.liveOff && state.liveCid === cid) return;
@@ -1355,7 +1308,6 @@ function v2ChatStream(state: ChatState, loaded = false) {
 }
 
 const ICON_CHAT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4c-4.7 0-8.5 3.1-8.5 7 0 2 1 3.8 2.6 5.1L5 20.5l4.3-1.6c.9.2 1.8.4 2.7.4 4.7 0 8.5-3.1 8.5-7S16.7 4 12 4z"/></svg>';
-const taskConversationButton = (task: string) => `<button class="chat-btn" type="button" data-task-conversation="${esc(task)}" aria-label="Open task conversation" title="Open task conversation">${ICON_CHAT}</button>`;
 document.addEventListener('click', async ev => {
   const button = eventElement(ev)?.closest<HTMLElement>('[data-task-conversation]'); if (!button) return;
   ev.preventDefault(); ev.stopPropagation();

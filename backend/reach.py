@@ -17,7 +17,7 @@
   own write is checked: a person's, the keeper's and the hub's own hand-offs (step flows, routines, rule wakes) never
   come through here. Task caps (backend/task_caps.py) are still their own table.
 
-Tables: backend/migrations/0040_reach.sql (0045_reach_nearby.sql adds the `nearby` mode).
+Tables: backend/migrations/baseline.sql.
 """
 
 import dataclasses
@@ -962,7 +962,7 @@ PINGED_HOURS = 24  # how long a person's ping lets the bot ask them questions
 
 
 def pinged(c, sender, receiver, before=None):
-    """`receiver`, a person, pinged `sender` for questions (refs.get_aligned) in the last PINGED_HOURS."""
+    """`receiver`, a person, pinged `sender` for questions (refs.add_to_flow) in the last PINGED_HOURS."""
     until = before or H.now()
     at = H.parse_ts(until)
     if at is None:
@@ -971,7 +971,7 @@ def pinged(c, sender, receiver, before=None):
     return (
         c.execute(
             "SELECT 1 FROM messages WHERE sender_id=? AND recipient_id=? AND created_at>=? AND created_at<? "
-            "AND json_extract(refs, '$.get_aligned') IS NOT NULL LIMIT 1",
+            "AND json_extract(refs, '$.add_to_flow') IS NOT NULL LIMIT 1",
             (receiver, sender, since, until),
         ).fetchone()
         is not None

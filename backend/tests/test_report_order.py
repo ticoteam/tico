@@ -146,13 +146,13 @@ def test_reports_that_join_go_last_in_the_order_they_came_whatever_their_names(a
     ], "the chart reloads the same places"
     # Humans the same: added to the team, or moved under the manager, each goes last.
     put(api, "org/order/ana", {"reports": ["cara", "ben"]})
-    zed = post(api, "access/people", {"name": "Zed", "email": "zed@acme.example", "reports_to": "ana"})["person"]
-    abe = post(api, "access/people", {"name": "Abe", "email": "abe@acme.example", "reports_to": "ana"})["person"]
-    post(api, "people/cara", {"reports_to": "ben"})
-    post(api, "people/cara", {"reports_to": "ana"})
+    zed = post(api, "access/humans", {"name": "Zed", "email": "zed@acme.example", "reports_to": "ana"})["person"]
+    abe = post(api, "access/humans", {"name": "Abe", "email": "abe@acme.example", "reports_to": "ana"})["person"]
+    post(api, "humans/cara", {"reports_to": "ben"})
+    post(api, "humans/cara", {"reports_to": "ana"})
     assert [r for r in order(api, "human:ana") if r in ("cara", "ben", zed, abe)] == ["ben", zed, abe, "cara"]
     places = {
-        p["id"]: p.get("report_position") for p in api.get("/api/people", headers=headers("cara-test")).json()["people"]
+        p["id"]: p.get("report_position") for p in api.get("/api/humans", headers=headers("cara-test")).json()["people"]
     }
     assert sorted(("cara", "ben", zed, abe), key=places.get) == ["ben", zed, abe, "cara"], (
         "the chart reloads the same places"

@@ -1,4 +1,4 @@
-"""Counsel over the API (docs/rules-plan.md §2, §5): a document becomes a Files version and one Counsel task, a bot's
+"""Counsel over the API (docs/dev/rules-plan.md §2, §5): a document becomes a Files version and one Counsel task, a bot's
 suggestion lands as suggested with a cite that must be in the file, a link's cite keeps pointing at the version it was
 read as, and a can-I question is answered with the rules that apply. Acme is the fictional company here."""
 
@@ -1332,7 +1332,6 @@ def test_the_server_refuses_counsel_outward_routes_and_comments_only_on_its_own_
         ("POST", "/api/v2/assistant/messages", {"text": "hello"}),
         ("POST", "/api/v2/webhooks/hook-1/send", {"text": "hello"}),
         ("POST", "/api/v2/slack/channels", {"name": "general"}),
-        ("POST", "/api/v2/automations/mail-actions/claim", {}),
     ]
     for method, path, body in refused:
         r = api.request(method, path, headers=token, json=body)

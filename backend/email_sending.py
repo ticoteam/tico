@@ -8,9 +8,10 @@ that lets a held send go is an OK bound to this exact frozen send (backend/task_
 asked of someone who may approve it under the inbox's rule (`can_ok`), given by their own click after the server showed
 them this exact email, still theirs to give when it is sent, and used once (`approved`).
 
-A Workspace mailbox (the server can mint its Gmail token) is sent by the server itself once the undo window and
-pacing allow (`drain`). A mailbox only a computer holds a grant for (a person's own Google) is leased to that computer
-(`claim`, `/dispatch`, `/result`). A lost provider response is unknown, never an invitation to send a second copy.
+Every email is sent by the server itself once the undo window and pacing allow (`drain`), with the Workspace key or the
+person's own Connect Google grant (backend/google_tokens.py); one from a mailbox neither covers fails with why. A
+computer of an older release still asks to lease sends (`claim`) and gets none. A lost provider response is unknown,
+never an invitation to send a second copy.
 Classification and review are triage, not a security boundary: permissions, OKs and limits still apply.
 """
 
@@ -27,6 +28,7 @@ from . import task_asks
 from .models import Contract, Empty
 from .email_content import MAX_RAW, attachment, digest, snapshot
 from .store import H, Problem
+from .api_contract import api_v2
 
 DEFAULTS = {
     "mode": "ask_first",
@@ -127,7 +129,8 @@ class PolicyUpdate(Contract):
 
 class Enqueue(Contract):
     mailbox: str = Field(min_length=3, max_length=320)
-    raw: str = Field(min_length=1, max_length=MAX_RAW * 4 // 3 + 8)
+    # The frozen MIME (base64url), or none with `draft_id`: the server freezes the draft as Gmail holds it now.
+    raw: str = Field(default="", max_length=MAX_RAW * 4 // 3 + 8)
     draft_id: str = Field(default="", max_length=200)
     thread_id: str = Field(default="", max_length=200)
     reply_to_id: str = Field(default="", max_length=200)
@@ -135,23 +138,6 @@ class Enqueue(Contract):
     automation_action_id: str = Field(default="", max_length=100)
     calendar_action_id: str = Field(default="", max_length=100)
     operation_id: str = Field(default="", max_length=200)
-
-
-class Claim(Contract):
-    mailbox: str = Field(min_length=3, max_length=320)
-    lease_id: str = Field(default="", max_length=100)
-
-
-class CalendarPreflight(Contract):
-    mailbox: str = Field(min_length=3, max_length=320)
-    calendar_action_id: str = Field(min_length=1, max_length=100)
-
-
-class Receipt(Contract):
-    lease_id: str = Field(default="", max_length=100)
-    status: str
-    message: str = Field(default="", max_length=200)
-    detail: str = Field(default="", max_length=1000)
 
 
 def saved(c, scope):
@@ -354,53 +340,61 @@ def approved(c, auth, row, policy):
     )
 
 
+REFERENCES_READ = 5  # the newest Message-IDs of a reply's References that are looked up in Gmail
+
+
 def _original(c, row):
+    """The message a send answers, as Gmail has it now (backend/mail_facts.py), or None."""
     if not row["reply_to_id"]:
         return None
-    found = c.execute(
-        "SELECT * FROM mail_messages WHERE mailbox=? AND msg_id=? AND deleted_at IS NULL",
-        (row["mailbox"], row["reply_to_id"]),
-    ).fetchone()
-    return dict(found) if found else None
+    from . import mail_facts
+
+    return mail_facts.message(c, row["mailbox"], row["reply_to_id"])
 
 
 def resolve_reply(c, mailbox, snap, supplied_reply="", supplied_thread=""):
+    """The (Gmail id, thread) of the message a reply's In-Reply-To or References names, found in Gmail by its
+    Message-ID; ('', '') for an email that answers nothing."""
+    from . import mail_facts
+
     ids = re.findall(r"<[^<>\s]+>", snap["in_reply_to"] or snap["references"])
     original = None
-    for reference in reversed(ids):
-        found = c.execute(
-            "SELECT msg_id,thread_id FROM mail_messages WHERE mailbox=? AND deleted_at IS NULL "
-            "AND json_extract(send_facts,'$.message-id')=? LIMIT 1",
-            (mailbox, reference),
-        ).fetchone()
+    for reference in list(reversed(ids))[:REFERENCES_READ]:
+        found = mail_facts.by_message_id(c, mailbox, reference)
         if found:
-            original = found
+            original = {"msg_id": found["id"], "thread_id": found["threadId"]}
             break
     if (supplied_reply and (not original or supplied_reply != original["msg_id"])) or (
         supplied_thread and (not original or supplied_thread != original["thread_id"])
     ):
-        raise Problem("reply", "Reply identifiers must match the frozen MIME headers and synced message", 422)
+        raise Problem("reply", "Reply identifiers must match the frozen MIME headers and the Gmail message", 422)
     if (snap["in_reply_to"] or snap["references"]) and not original:
-        raise Problem("reply", "Sync the original message's headers before sending this reply", 422)
+        raise Problem("reply", "Gmail has no message in this mailbox that this reply answers", 422)
     return (original["msg_id"], original["thread_id"]) if original else ("", "")
 
 
 def known(c, mailbox, address):
-    return bool(
-        c.execute(
-            "SELECT 1 FROM mail_messages WHERE mailbox=? AND deleted_at IS NULL "
-            "AND (lower(from_addr)=? OR (lower(from_addr)=? "
-            "AND EXISTS (SELECT 1 FROM json_each(labels) WHERE value='SENT') "
-            "AND (EXISTS (SELECT 1 FROM json_each(to_addresses) WHERE lower(value)=?) "
-            "OR EXISTS (SELECT 1 FROM json_each(cc) WHERE lower(value)=?)))) LIMIT 1",
-            (mailbox, address, mailbox, address, address),
-        ).fetchone()
-        or c.execute(
-            "SELECT 1 FROM email_sends WHERE mailbox=? AND state='sent' "
-            "AND EXISTS (SELECT 1 FROM json_each(recipients) WHERE value=?) LIMIT 1",
-            (mailbox, address),
-        ).fetchone()
-    )
+    """Whether this inbox knows `address`: Tico sent it mail, or (in Gmail) it wrote to the inbox or the inbox to it."""
+    if c.execute(
+        "SELECT 1 FROM email_sends WHERE mailbox=? AND state='sent' "
+        "AND EXISTS (SELECT 1 FROM json_each(recipients) WHERE value=?) LIMIT 1",
+        (mailbox, address),
+    ).fetchone():
+        return True
+    from . import mail_facts
+
+    return mail_facts.known(c, mailbox, address)
+
+
+def warm(c, row):
+    """Ask Gmail, under a read, what deciding this send will ask (the message it answers, whether its recipients are
+    known), so the decision inside the write finds it cached and holds the write lock for no Gmail call."""
+    _original(c, row)
+    policy = effective(c, row["mailbox"], row["bot"])
+    if policy["ask_new_address"] or any(rule["value"] == "known_addresses" for rule in policy["recipient_rules"]):
+        for address in json.loads(row["recipients"]):
+            if not known(c, row["mailbox"], address):
+                break  # the decision stops at the first unknown address too
 
 
 def own_writing(row):
@@ -417,9 +411,26 @@ def why(found):
     )
 
 
-def decision(c, auth, row, *, dispatch=False):
+def decision(c, auth, row, *, dispatch=False, wait_for_gmail=False):
+    """The send rules' outcome for this frozen email: allow, ask or blocked. A Gmail fact it needs (the message it
+    answers, whether a recipient is known) that Gmail cannot give now raises its retryable Problem; with
+    `wait_for_gmail` it is `wait` instead (reason `gmail_unchecked`) unless a rule blocks it anyway: the email is queued
+    and the drain decides it again, with Gmail's answer, before it can go."""
     policy = effective(c, row["mailbox"], row["bot"])
-    reasons, blocked = [], []
+    reasons, blocked, unchecked = [], [], []
+
+    def fact(read, default):
+        try:
+            return read()
+        except Problem as unread:
+            if not (wait_for_gmail and unread.retryable):
+                raise
+            unchecked.append(unread.code)
+            return default
+
+    def known_to(address):
+        return fact(lambda: known(c, row["mailbox"], address), True)
+
     if policy["mode"] == "never":
         blocked.append("never")
     if not access.may(c, row["actor"], row["mailbox"])["send"]:
@@ -443,7 +454,7 @@ def decision(c, auth, row, *, dispatch=False):
         blocked.append("blocked_recipient")
     if row["bot"] and any(listed(policy["owner_handles"], a) for a in recipients):
         blocked.append("owner_handles_personally")
-    original = _original(c, row)
+    original = fact(lambda: _original(c, row), None)
     is_reply = bool(
         original
         and row["thread_id"] == original["thread_id"]
@@ -455,9 +466,9 @@ def decision(c, auth, row, *, dispatch=False):
         reasons.append("legal_or_money_or_unclassified")
     if policy["mode"] == "ask_first":
         reasons.append("ask_first")
-    if policy["what"] == "replies_only" and not is_reply:
+    if policy["what"] == "replies_only" and not is_reply and not (row["reply_to_id"] and unchecked):
         reasons.append("new_message")
-    if policy["ask_new_address"] and any(not known(c, row["mailbox"], a) for a in recipients):
+    if policy["ask_new_address"] and any(not known_to(a) for a in recipients):
         reasons.append("new_address")
     if policy["ask_attachments"] and json.loads(row["attachments"]):
         reasons.append("attachments")
@@ -474,7 +485,7 @@ def decision(c, auth, row, *, dispatch=False):
     if own_writing(row) and policy["second_review"] and checks.get("review") is not True:
         reasons.append("second_review")
     if any(rule["value"] == "known_addresses" for rule in policy["recipient_rules"]) and any(
-        not known(c, row["mailbox"], a) for a in recipients
+        not known_to(a) for a in recipients
     ):
         blocked.append("known_addresses_only")
     if any(rule["value"] == "internal" for rule in policy["recipient_rules"]) and outside:
@@ -508,10 +519,10 @@ def decision(c, auth, row, *, dispatch=False):
     ).fetchone():
         blocked.append("bounce_suppression")
     if original:
-        headers = json.loads(original.get("send_facts") or "{}")
+        headers = original.get("send_facts") or {}
         auto = str(headers.get("auto-submitted") or "").lower()
         sender = original["from_addr"].lower()
-        # Header facts are populated by sync; sender and subject checks also catch old synced bounces.
+        # Header facts come from Gmail; the sender check also catches a bounce without them.
         if (
             (auto and auto != "no")
             or sender.startswith(("mailer-daemon@", "postmaster@"))
@@ -525,6 +536,14 @@ def decision(c, auth, row, *, dispatch=False):
         ).fetchone():
             blocked.append("already_replied")
     lifted = approved(c, auth, row, policy)
+    if unchecked and not blocked:
+        return {
+            "outcome": "wait",
+            "reasons": ["gmail_unchecked", *reasons],
+            "policy": policy,
+            "approval_id": row["approval_id"],
+            "approved": False,
+        }
     if reasons and not lifted:
         return {
             "outcome": "blocked" if blocked else "ask",
@@ -655,9 +674,11 @@ def ok_given(c, grant, ctx):
         raise Problem("forbidden", "This send follows its inbox's approval rule", 403)
 
 
-def enqueue(c, auth, actor, body, classification, via="", operation_key="", rules=None):
+def enqueue(c, auth, actor, body, classification, via="", operation_key="", rules=None, wait_for_gmail=False):
     """Freeze, decide and queue one send. `rules` is the org rule check's in-write half (`rule_gate`): a held email is
-    queued blocked with the hold's text, and a warned one carries the warning line in its frozen copy."""
+    queued blocked with the hold's text, and a warned one carries the warning line in its frozen copy. With
+    `wait_for_gmail` (an email Tico composes inside another write, a calendar invitation), Gmail not answering the
+    decision's questions queues it pending and unchecked (`decision`) instead of refusing it."""
     mailbox = body.mailbox.strip().lower()
     bot = H.actor_id(actor) if actor.startswith("bot:") else ""
     if not access.may(c, actor, mailbox)["send"]:
@@ -706,7 +727,7 @@ def enqueue(c, auth, actor, body, classification, via="", operation_key="", rule
         checks["rules"] = gate["outcome"]
         if gate.get("warning_line"):
             # A Warn rule: the recipient's copy carries the line, and that copy is what is frozen and approved.
-            from connectors.mail.compose import with_warning
+            from .mail_lib.compose import with_warning
 
             raw = with_warning(raw, gate["warning_line"])
             checks["source_sha256"] = snap["content_sha256"]
@@ -744,11 +765,13 @@ def enqueue(c, auth, actor, body, classification, via="", operation_key="", rule
         "created_at": now,
         "send_after": H.shift(now, seconds=effective(c, mailbox, bot)["undo_seconds"]),
     }
-    found = decision(c, auth, row)
+    found = decision(c, auth, row, wait_for_gmail=wait_for_gmail)
     if gate and gate["outcome"] == "held":
         found = {**found, "outcome": "blocked", "reasons": ["org_rule", *found["reasons"]], "held": gate.get("held")}
     row["decision"] = dump(found)
-    row["state"] = {"allow": "pending", "ask": "waiting_approval", "blocked": "blocked"}[found["outcome"]]
+    row["state"] = {"allow": "pending", "wait": "pending", "ask": "waiting_approval", "blocked": "blocked"}[
+        found["outcome"]
+    ]
     if row["state"] == "blocked":
         text = (gate or {}).get("held", {}).get("text") if found.get("held") else ""
         row.update(raw="", finished_at=now, detail=text or why(found))
@@ -776,13 +799,14 @@ def enqueue(c, auth, actor, body, classification, via="", operation_key="", rule
     return public(c.execute("SELECT * FROM email_sends WHERE id=?", (ident,)).fetchone())
 
 
-def lint_errors(c, actor, mailbox, snap, reply_id):
-    """The deterministic lint's error ids on a bot's own email (connectors/mail/lint.py), read on the frozen copy."""
-    from connectors.mail import lint
+def lint_findings(c, actor, mailbox, snap, reply_id):
+    """The deterministic lint (backend/mail_lib/lint.py) on an email's frozen copy: {errors, warnings}, each finding
+    {id, severity, message, fix}. A bot's signature is checked against its own name."""
+    from .mail_lib import lint
 
-    bot = H.bot(c, H.actor_id(actor)) or {}
+    bot = (H.bot(c, H.actor_id(actor)) or {}) if str(actor).startswith("bot:") else {}
     groups = snap["recipient_headers"]
-    domains = tuple(access.company_domains(c)) or (mailbox.rpartition("@")[2],)
+    domains = tuple(str(d) for d in access.company_domains(c)) or (str(mailbox).rpartition("@")[2],)
     found = lint.run(
         snap["body"],
         snap["subject"],
@@ -793,21 +817,32 @@ def lint_errors(c, actor, mailbox, snap, reply_id):
         is_reply=bool(reply_id),
         internal_domains=domains,
     )
-    return sorted({item["id"] for item in found["errors"]})
+    keep = ("id", "severity", "message", "fix")
+    return {
+        "errors": [{k: item.get(k, "") for k in keep} for item in found["errors"]],
+        "warnings": [{k: item.get(k, "") for k in keep} for item in found["warnings"]],
+    }
+
+
+def lint_errors(c, actor, mailbox, snap, reply_id):
+    """The deterministic lint's error ids on a bot's own email, read on the frozen copy."""
+    return sorted({item["id"] for item in lint_findings(c, actor, mailbox, snap, reply_id)["errors"]})
 
 
 def review_context(c, auth, actor, body, mailbox, snap):
-    """What the second reviewer reads beside the email: the synced thread it answers and the approver's instruction,
-    when the send names a person's message that may approve it. Both bounded."""
+    """What the second reviewer reads beside the email: the thread it answers, read from Gmail now, and the approver's
+    instruction, when the send names a person's message that may approve it. Both bounded."""
+    from . import gmail_live
+
+    # A thread is only ever resolved through Gmail (mail_facts), so a server credential covers it here. A Gmail failure
+    # propagates as retryable rather than the email being reviewed against a thread the reviewer never saw.
     _reply, thread_id = resolve_reply(c, mailbox, snap, body.reply_to_id, body.thread_id)
-    rows = c.execute(
-        "SELECT from_addr,subject,body,snippet FROM mail_messages WHERE mailbox=? AND thread_id=? "
-        "AND deleted_at IS NULL AND ?<>'' ORDER BY epoch DESC LIMIT 5",
-        (mailbox, thread_id, thread_id),
-    ).fetchall()
+    found = gmail_live.thread(c, mailbox, thread_id)[-5:] if thread_id else []
+    rows = [
+        {"from_addr": r["from"], "subject": r["subject"], "body": r["body"], "snippet": r["snippet"]} for r in found
+    ]
     thread = "\n\n----\n\n".join(
-        "From: " + r["from_addr"] + "\nSubject: " + r["subject"] + "\n\n" + (r["body"] or r["snippet"])
-        for r in reversed(rows)
+        "From: " + r["from_addr"] + "\nSubject: " + r["subject"] + "\n\n" + (r["body"] or r["snippet"]) for r in rows
     )[:THREAD_CHARS]
     instruction = ""
     message = H.message(c, body.approval_id) if body.approval_id else None
@@ -870,6 +905,21 @@ def classify(app, store, snap, review=None):
         }
     except (JudgeError, ValueError, TypeError):
         return {"legal_or_money": None, "review": None, "status": "unavailable"}
+
+
+def _queued(c, mailbox, lease=True):
+    """The sends `_lease` decides in its next pass over this inbox: the waiting ones it reconciles, and the due ones."""
+    rows = c.execute(
+        "SELECT * FROM email_sends WHERE mailbox=? AND state='waiting_approval' ORDER BY checked_at,rowid LIMIT 100",
+        (mailbox,),
+    ).fetchall()
+    if lease:
+        rows += c.execute(
+            "SELECT * FROM email_sends WHERE mailbox=? AND state='pending' AND send_after<=? "
+            "ORDER BY created_at,rowid LIMIT 20",
+            (mailbox, H.now()),
+        ).fetchall()
+    return rows
 
 
 def _lease(c, auth, mailbox, runner_id, *, permit=False, lease=True):
@@ -1012,26 +1062,21 @@ def _finish(c, row, status, message="", detail=""):
     _outcome(c, row, status, detail)
 
 
-def server_sends(c, mailbox):
-    """Whether the server sends this inbox's mail itself: the Workspace key covers it and no person's own grant does."""
-    from . import google_workspace
-
-    return google_workspace.authority(c, mailbox) == "workspace"
-
-
 # inbox -> when the drain last reached it (monotonic): the inbox waiting longest goes first. One small entry per
 # Workspace inbox the process has sent from, so it is never pruned; it only orders inboxes, never decides a send.
 _SERVED = {}
 
 
 def drain(store, auth, limit=20, budget=None):
-    """The server's own dispatch, on its drain worker (backend/drains.py): each Workspace inbox with queued mail is
-    reconciled, and its due sends go to Gmail one at a time (pacing usually allows one a pass). A token is minted before
-    any permit, so a credential that fails leaves the email pending, never unknown. Gmail is called under no write lock.
-    With a `budget`, nothing new is leased once it is spent; the inboxes not reached go first in the next pass."""
+    """The server's own dispatch, on its drain worker (backend/drains.py): each inbox the server holds a credential for
+    (the Workspace key, or a person's own grant) with queued mail is reconciled, and its due sends go to Gmail one at a
+    time (pacing usually allows one a pass). A token is taken before any permit, so a credential that fails leaves the
+    email pending, never unknown; a grant that can only read fails its due emails, which it can never send. Gmail is
+    called under no write lock. With a `budget`, nothing new is leased once it is spent; the inboxes not reached go
+    first in the next pass."""
     import time
 
-    from . import drains, gmail_live, google_workspace
+    from . import drains, gmail_live, google_tokens
 
     if store.settings.rehearsal or store.settings.demo:
         return 0
@@ -1042,30 +1087,50 @@ def drain(store, auth, limit=20, budget=None):
                 "SELECT DISTINCT mailbox FROM email_sends WHERE state IN ('waiting_approval','pending','dispatching')"
             ).fetchall()
         ]
-        boxes = [box for box in boxes if server_sends(c, box)]
     boxes.sort(key=lambda box: _SERVED.get(box, 0.0))
     sent = 0
     for mailbox in boxes:
         if not drains.left(budget):
             break
         _SERVED[mailbox] = time.monotonic()
-        token = None
+        token = refused = None
         with store.read() as c:
             if c.execute(
                 "SELECT 1 FROM email_sends WHERE mailbox=? AND state='pending' AND send_after<=? LIMIT 1",
                 (mailbox, H.now()),
             ).fetchone():
                 try:
-                    token = google_workspace.mint(
-                        c, mailbox, "gmail", scopes=google_workspace.WORKSPACE_SCOPES["gmail"]
-                    )["access_token"]
-                except Problem:
-                    token = None  # the key is failing: the email waits; Tools > Settings > Email says why
+                    token = google_tokens.token(c, mailbox, "gmail", write=True)
+                except Problem as problem:
+                    # A failing key or a grant Google refused: the email waits; Tools > Settings > Email says why.
+                    # A grant that can only read, or no credential at all, can never send it: it fails.
+                    gone = problem.code == "not_connected" and not google_tokens.covered(c, mailbox)
+                    refused = problem if problem.code == "read_only" or gone else None
+        if refused is not None:
+            with store.transaction(durable=True) as c:
+                for row in c.execute(
+                    "SELECT * FROM email_sends WHERE mailbox=? AND state='pending' AND send_after<=? LIMIT ?",
+                    (mailbox, H.now(), limit),
+                ).fetchall():
+                    _finish(c, row, "failed", "", refused.detail)
+            continue
+        try:
+            with store.read() as c:
+                for queued in _queued(c, mailbox, lease=token is not None):
+                    warm(c, queued)
+        except Problem as unread:
+            # Gmail could not tell a decision what it needs: this inbox's mail waits, as it was, for a later pass.
+            LOG.info("email drain left an inbox for later: %s", unread.code)
+            continue
         for _ in range(limit):
             if not drains.left(budget):
                 break  # the rest waits for the next pass
-            with store.transaction(durable=True) as c:
-                row = _lease(c, auth, mailbox, SERVER, permit=True, lease=token is not None)
+            try:
+                with store.transaction(durable=True) as c:
+                    row = _lease(c, auth, mailbox, SERVER, permit=True, lease=token is not None)
+            except Problem as unread:
+                LOG.info("email drain left an inbox for later: %s", unread.code)
+                break
             if not row:
                 break
             status, message, detail = gmail_live.send(mailbox, token, row["raw"], row["thread_id"])
@@ -1221,18 +1286,6 @@ def install(app, store, auth, mutate):
             auth.require_read(c, who, bot)
         return bot
 
-    def reader(c, who, mailbox):
-        if store.settings.rehearsal or store.settings.demo:
-            raise Problem("rehearsal", "This install does not dispatch email", 403)
-        from . import google_rights
-
-        runner = google_rights.runner_of(app.state.execution, c, who)
-        google_rights.check(c, runner["id"], google_rights.publishes(store, app.state.execution, c, runner), mailbox)
-        published = c.execute("SELECT runner_id FROM mail_mailboxes WHERE address=?", (mailbox,)).fetchone()
-        if published and published["runner_id"] and published["runner_id"] != runner["id"]:
-            raise Problem("forbidden", "Another computer reads this inbox", 403)
-        return runner
-
     def can_cancel(c, who, row):
         if who.actor == row["actor"] or (
             row["bot"] and who.role in ("owner", "human") and auth.bot_manager(c, who, row["bot"])
@@ -1244,13 +1297,24 @@ def install(app, store, auth, mutate):
         except (Problem, TypeError):
             return False
 
-    @app.get("/api/v2/email/sending-policy")
+    @app.get(
+        "/api/v2/email/sending-policy",
+        **api_v2("Email sending", "getEmailSendingPolicy", "Company sending policy", "EmailSendingPolicy"),
+    )
     def read_company(request: Request):
         company(request.state.identity)
         with store.read() as c:
             return policy_view(c)
 
-    @app.put("/api/v2/email/sending-policy")
+    @app.put(
+        "/api/v2/email/sending-policy",
+        **api_v2(
+            "Email sending",
+            "setEmailSendingPolicy",
+            "Set company sending policy (an admin, acting as themselves)",
+            "EmailSendingPolicy",
+        ),
+    )
     def write_company(request: Request, body: PolicyUpdate):
         company(request.state.identity, write=True)
         return mutate(
@@ -1260,7 +1324,15 @@ def install(app, store, auth, mutate):
             durable=True,
         )
 
-    @app.get("/api/v2/email/inboxes/{mailbox}/sending-policy")
+    @app.get(
+        "/api/v2/email/inboxes/{mailbox}/sending-policy",
+        **api_v2(
+            "Email sending",
+            "getInboxSendingPolicy",
+            "Inbox policy with effective rule and inheritance",
+            "EmailSendingPolicy",
+        ),
+    )
     def read_inbox(request: Request, mailbox: str):
         with store.read() as c:
             return policy_view(
@@ -1269,7 +1341,15 @@ def install(app, store, auth, mutate):
                 H.actor_id(request.state.identity.actor) if request.state.identity.actor.startswith("bot:") else "",
             )
 
-    @app.put("/api/v2/email/inboxes/{mailbox}/sending-policy")
+    @app.put(
+        "/api/v2/email/inboxes/{mailbox}/sending-policy",
+        **api_v2(
+            "Email sending",
+            "setInboxSendingPolicy",
+            "Set inbox policy (its person or a shared inbox admin)",
+            "EmailSendingPolicy",
+        ),
+    )
     def write_inbox(request: Request, mailbox: str, body: PolicyUpdate):
         def work(c):
             address = inbox(c, mailbox, request.state.identity, manage=True)
@@ -1278,7 +1358,15 @@ def install(app, store, auth, mutate):
 
         return mutate(request, body, work, durable=True)
 
-    @app.get("/api/v2/bots/{bot}/email-sending-policy")
+    @app.get(
+        "/api/v2/bots/{bot}/email-sending-policy",
+        **api_v2(
+            "Email sending",
+            "getBotEmailSendingPolicy",
+            "Bot policy, optionally resolved for an inbox",
+            "EmailSendingPolicy",
+        ),
+    )
     def read_bot(request: Request, bot: str, mailbox: str = ""):
         with store.read() as c:
             ref = bot_ref(c, request.state.identity, bot)
@@ -1286,7 +1374,15 @@ def install(app, store, auth, mutate):
                 raise Problem("forbidden", "The bot cannot use this inbox", 403)
             return policy_view(c, mailbox.strip().lower(), ref)
 
-    @app.put("/api/v2/bots/{bot}/email-sending-policy")
+    @app.put(
+        "/api/v2/bots/{bot}/email-sending-policy",
+        **api_v2(
+            "Email sending",
+            "setBotEmailSendingPolicy",
+            "Set bot override (a person who manages it)",
+            "EmailSendingPolicy",
+        ),
+    )
     def write_bot(request: Request, bot: str, body: PolicyUpdate):
         def work(c):
             ref = bot_ref(c, request.state.identity, bot, write=True)
@@ -1295,56 +1391,61 @@ def install(app, store, auth, mutate):
 
         return mutate(request, body, work, durable=True)
 
-    def calendar_actor(c, who, mailbox, action_id):
-        runner = reader(c, who, mailbox)
-        action = c.execute("SELECT * FROM calendar_actions WHERE id=?", (action_id,)).fetchone()
-        if (
-            not action
-            or action["runner_id"] != runner["id"]
-            or action["status"] != "running"
-            or action["calendar_email"] != mailbox
-        ):
-            raise Problem("forbidden", "No calendar action leased to this computer", 403)
-        return action["requested_by"]
+    def frozen_draft(who, body):
+        """The request with the draft's MIME and thread as Gmail holds them now: what is sent is what was frozen here,
+        whatever the draft says later. The caller must be able to read the mailbox to read its draft."""
+        from . import gmail_live
 
-    @app.post("/api/v2/connectors/email/sends/preflight")
-    def calendar_preflight(request: Request, body: CalendarPreflight):
+        mailbox = body.mailbox.strip().lower()
         with store.read() as c:
-            mailbox = body.mailbox.strip().lower()
-            actor = calendar_actor(c, request.state.identity, mailbox, body.calendar_action_id)
-            policy = effective(c, mailbox, H.actor_id(actor) if actor.startswith("bot:") else "")
-            return {"effective": policy}
+            if not access.may(c, who, mailbox)["read"]:
+                raise Problem("forbidden", "The sender cannot use this inbox", 403)
+            found = gmail_live.draft_raw(c, mailbox, body.draft_id)
+        if len(found["raw"]) > MAX_RAW * 4 // 3 + 8:
+            raise Problem("raw", "This draft is too large to send through Tico; send it from Gmail", 413)
+        # Gmail files every draft in a thread, a new email in a thread of its own: only a draft that answers a message
+        # (In-Reply-To or References) is sent in its thread.
+        snap = snapshot(found["raw"], mailbox)
+        answers = snap["in_reply_to"] or snap["references"]
+        return body.model_copy(
+            update={"raw": found["raw"], "thread_id": body.thread_id or (found["thread"] if answers else "")}
+        )
 
-    @app.post("/api/v2/email/sends")
+    @app.post(
+        "/api/v2/email/sends",
+        **api_v2(
+            "Email sending",
+            "queueEmail",
+            "Freeze email content for approval and the undo window; identical content and recipients deduplicate",
+            "EmailSendResult",
+        ),
+    )
     def queue(request: Request, body: Enqueue):
         who = request.state.identity
+        if not body.raw:
+            if not body.draft_id:
+                raise Problem("raw", "Send the frozen MIME (raw) or name a Gmail draft (draft_id)", 422)
+            body = frozen_draft(who, body)
         with store.read() as c:
-            if body.calendar_action_id:
-                actor = calendar_actor(c, who, body.mailbox.strip().lower(), body.calendar_action_id)
-            elif body.automation_action_id:
-                runner = reader(c, who, body.mailbox.strip().lower())
-                action = c.execute(
-                    "SELECT a.*,m.owner_id,m.flow FROM automation_mail_actions a JOIN automations m "
-                    "ON m.id=a.automation_id WHERE a.id=?",
-                    (body.automation_action_id,),
-                ).fetchone()
-                if (
-                    not action
-                    or action["claimed_by"] != runner["id"]
-                    or action["state"] != "claimed"
-                    or action["mailbox"] != body.mailbox.strip().lower()
-                    or action["action"] not in ("send", "forward")
-                ):
-                    raise Problem("forbidden", "No send action leased to this computer", 403)
-                from .automation_actions import acts_as
-
-                actor = acts_as(c, {"flow": json.loads(action["flow"])})
-            else:
-                actor = who.actor
+            if body.calendar_action_id or body.automation_action_id:
+                # Tico books calendars and runs automations on the server; it enqueues those emails itself.
+                raise Problem("forbidden", "Only the server sends a calendar or automation email", 403)
+            actor = who.actor
             if not access.may(c, actor, body.mailbox.strip().lower())["send"]:
                 raise Problem("forbidden", "The sender cannot send from this inbox", 403)
             mailbox = body.mailbox.strip().lower()
             snap = snapshot(body.raw, mailbox)
+            # What deciding it inside the write will ask Gmail, asked here, under no write lock.
+            reply_id, _thread = resolve_reply(c, mailbox, snap, body.reply_to_id, body.thread_id)
+            warm(
+                c,
+                {
+                    "mailbox": mailbox,
+                    "bot": H.actor_id(actor) if actor.startswith("bot:") else "",
+                    "reply_to_id": reply_id,
+                    "recipients": dump(snap["recipients"]),
+                },
+            )
             # A bot's own email (not one Tico composed for an automation or the calendar) is linted and reviewed.
             writing = actor.startswith("bot:") and not body.automation_action_id and not body.calendar_action_id
             review = review_context(c, auth, actor, body, mailbox, snap) if writing else None
@@ -1379,7 +1480,15 @@ def install(app, store, auth, mutate):
             durable=True,
         )
 
-    @app.get("/api/v2/email/sends")
+    @app.get(
+        "/api/v2/email/sends",
+        **api_v2(
+            "Email sending",
+            "listEmailSends",
+            "Pending sends or the inbox send audit, paged and byte capped",
+            "EmailSendList",
+        ),
+    )
     def sends(request: Request, mailbox: str, pending: bool = False, cursor: str = "", limit: int = 50):
         with store.read() as c:
             address = inbox(c, mailbox, request.state.identity)
@@ -1415,7 +1524,15 @@ def install(app, store, auth, mutate):
             inbox(c, row["mailbox"], request.state.identity)
         return row
 
-    @app.get("/api/v2/email/sends/{sid}")
+    @app.get(
+        "/api/v2/email/sends/{sid}",
+        **api_v2(
+            "Email sending",
+            "getEmailSend",
+            "Frozen preview and audit (inbox readers, the sender or an authorized approver)",
+            "EmailSendDetail",
+        ),
+    )
     def send_detail(request: Request, sid: str, response: Response):
         response.headers["Cache-Control"] = "no-store"
         who = request.state.identity
@@ -1432,7 +1549,14 @@ def install(app, store, auth, mutate):
                 "shown_hash": shown,
             }
 
-    @app.get("/api/v2/email/sends/{sid}/attachments/{part}")
+    @app.get(
+        "/api/v2/email/sends/{sid}/attachments/{part}",
+        **api_v2(
+            "Email sending",
+            "getFrozenEmailAttachment",
+            "Download the exact frozen attachment (the send's readers or approvers)",
+        ),
+    )
     def send_attachment(request: Request, sid: str, part: int):
         with store.read() as c:
             row = preview_row(c, request, sid)
@@ -1451,7 +1575,12 @@ def install(app, store, auth, mutate):
                 },
             )
 
-    @app.get("/api/v2/email/inboxes/{mailbox}/suppressed-recipients")
+    @app.get(
+        "/api/v2/email/inboxes/{mailbox}/suppressed-recipients",
+        **api_v2(
+            "Email sending", "listEmailSuppressions", "Inbox admin's bounce suppression list", "EmailSuppressionList"
+        ),
+    )
     def suppressed(request: Request, mailbox: str, cursor: str = "", limit: int = 50):
         with store.read() as c:
             address = inbox(c, mailbox, request.state.identity, manage=True)
@@ -1466,7 +1595,10 @@ def install(app, store, auth, mutate):
                 "next_cursor": rows[cap - 1]["address"] if len(rows) > cap else None,
             }
 
-    @app.delete("/api/v2/email/inboxes/{mailbox}/suppressed-recipients/{address}")
+    @app.delete(
+        "/api/v2/email/inboxes/{mailbox}/suppressed-recipients/{address}",
+        **api_v2("Email sending", "removeEmailSuppression", "Restore sending to a bounced address (inbox admin)"),
+    )
     def unsuppress(request: Request, mailbox: str, address: str):
         def work(c):
             box = inbox(c, mailbox, request.state.identity, manage=True)
@@ -1476,7 +1608,15 @@ def install(app, store, auth, mutate):
 
         return mutate(request, Empty(), work, durable=True)
 
-    @app.post("/api/v2/email/sends/{sid}/cancel")
+    @app.post(
+        "/api/v2/email/sends/{sid}/cancel",
+        **api_v2(
+            "Email sending",
+            "cancelEmailSend",
+            "Cancel before dispatch; delivered mail cannot be recalled",
+            "EmailSendResult",
+        ),
+    )
     def cancel(request: Request, sid: str):
         def work(c):
             row = c.execute("SELECT * FROM email_sends WHERE id=?", (sid,)).fetchone()
@@ -1494,90 +1634,3 @@ def install(app, store, auth, mutate):
             return {"send": public(c.execute("SELECT * FROM email_sends WHERE id=?", (sid,)).fetchone())}
 
         return mutate(request, Empty(), work, durable=True)
-
-    @app.post("/api/v2/connectors/email/sends/claim")
-    def claim(request: Request, body: Claim):
-        """A computer leases the next due send of an inbox only it can send from. A Workspace inbox's mail is the
-        server's own (`drain`): its computer gets nothing, so no email can go out twice."""
-
-        def work(c):
-            mailbox = body.mailbox.strip().lower()
-            runner = reader(c, request.state.identity, mailbox)
-            if server_sends(c, mailbox):
-                return {"send": None}
-            row = _lease(c, auth, mailbox, runner["id"])
-            return {
-                "send": {
-                    "id": row["id"],
-                    "mailbox": mailbox,
-                    "thread_id": row["thread_id"],
-                    "lease_id": row["lease_id"],
-                }
-                if row
-                else None
-            }
-
-        return mutate(request, body, work, durable=True)
-
-    @app.post("/api/v2/connectors/email/sends/{sid}/dispatch")
-    def dispatch(request: Request, sid: str, body: Claim):
-        def work(c):
-            runner = reader(c, request.state.identity, body.mailbox.strip().lower())
-            row = c.execute("SELECT * FROM email_sends WHERE id=?", (sid,)).fetchone()
-            if (
-                not row
-                or row["runner_id"] != runner["id"]
-                or row["mailbox"] != body.mailbox.strip().lower()
-                or not body.lease_id
-                or row["lease_id"] != body.lease_id
-            ):
-                raise Problem("forbidden", "This send belongs to another connector", 403)
-            if row["state"] != "dispatching" or row["provider_attempted_at"]:
-                return {"send": None}
-            found = decision(c, auth, row, dispatch=True)
-            if found["outcome"] != "allow":
-                c.execute(
-                    "UPDATE email_sends SET state='blocked',decision=?,detail=?,finished_at=?,raw='' WHERE id=?",
-                    (dump(found), why(found), H.now(), sid),
-                )
-                settle_automation(c, row, "blocked", why(found))
-                return {"send": None}
-            _permit(c, row, found)
-            return {
-                "send": {
-                    "id": sid,
-                    "raw": row["raw"],
-                    "thread_id": row["thread_id"],
-                    "actor": row["actor"],
-                    "recipients": json.loads(row["recipients"]),
-                    "subject": row["subject"],
-                    "draft_id": row["draft_id"],
-                }
-            }
-
-        # A permit is never cached as an idempotency response: even the same request key cannot replay it.
-        with store.transaction(durable=True) as c:
-            return work(c)
-
-    @app.post("/api/v2/connectors/email/sends/{sid}/result")
-    def receipt(request: Request, sid: str, body: Receipt):
-        if body.status not in ("sent", "failed", "unknown"):
-            raise Problem("receipt", "Receipt status must be sent, failed or unknown", 422)
-        if body.status == "sent" and not body.message:
-            raise Problem("receipt", "Confirmed delivery needs the provider's message id", 422)
-
-        def work(c):
-            from . import google_rights
-
-            runner = google_rights.runner_of(app.state.execution, c, request.state.identity)
-            row = c.execute("SELECT * FROM email_sends WHERE id=?", (sid,)).fetchone()
-            if not row or row["runner_id"] != runner["id"] or not body.lease_id or row["lease_id"] != body.lease_id:
-                raise Problem("forbidden", "Only the current dispatch lease reports this receipt", 403)
-            if row["state"] not in ("dispatching", "unknown"):
-                return {"send": public(row)}
-            if not row["provider_attempted_at"]:
-                raise Problem("state", "This lease has not received a dispatch permit", 409)
-            _finish(c, row, body.status, body.message, body.detail)
-            return {"send": public(c.execute("SELECT * FROM email_sends WHERE id=?", (sid,)).fetchone())}
-
-        return mutate(request, body, work, durable=True)

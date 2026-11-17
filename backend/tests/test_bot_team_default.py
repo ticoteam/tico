@@ -1,18 +1,13 @@
 """A bot made under a person takes that person's group by default, and the chart shows it under them (backend/people.py
-`manager_team`, settings_admin `_team`). A team the bot names wins. Bots made before the default get their manager's
-group from migration 0061, once, and only the ones it should (backend/migrations/0061_bot_team_from_manager.py)."""
+`manager_team`, settings_admin `_team`). A team the bot names wins."""
 
-import importlib
 import json
-import sqlite3
 
 from backend import bot_settings as BS
 from backend import groups as Groups
 from backend import people as P
 from backend.store import H, encode
 from backend.tests.helpers.api import get, post  # noqa: F401  (the api fixture)
-
-MIGRATION = importlib.import_module("backend.migrations.0061_bot_team_from_manager")
 
 
 def set_groups(api, groups, teams):
@@ -140,113 +135,3 @@ def test_a_team_a_bot_names_still_wins_over_its_manager_when_the_bot_is_edited(a
     )
     assert team_row(api, "scout") == ("engineering", "engineering", "engineering")
     assert chart_row(api, "scout")["team"] == "engineering"
-
-
-# ----------------------------------------------------------------------------- migration 0061
-def _db():
-    conn = sqlite3.connect(":memory:")
-    conn.executescript("""
-        CREATE TABLE bots(id TEXT PRIMARY KEY, slug TEXT);
-        CREATE TABLE bot_config(bot TEXT PRIMARY KEY, config TEXT NOT NULL, team TEXT, reports_to TEXT);
-        CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value TEXT);
-    """)
-    roster = {
-        "default_user": "arthur",
-        "groups_migrated": True,
-        "people": [
-            {"id": "arthur", "team": "engineering"},
-            {"id": "luiz", "team": "sales", "inbox_bot": "inbox-luiz"},
-            {"id": "nico", "team": ""},
-            {"id": "ghost", "team": "retired"},
-        ],
-        "org_groups": {
-            "engineering": {"name": "Engineering"},
-            "sales": {"name": "Sales"},
-            "qa": {"name": "QA", "root": "qa-lead"},
-        },
-    }
-    conn.execute("INSERT INTO registry_metadata VALUES('people', ?)", (encode(roster),))
-    return conn
-
-
-def _bot(conn, bot, reports_to="", column=None, config=None, slug=None):
-    """A bot as the database holds it: `column` is bot_config.team, `config` is what its config names (a `team` key only
-    when given)."""
-    conn.execute("INSERT INTO bots VALUES(?,?)", (bot, slug or bot))
-    conn.execute(
-        "INSERT INTO bot_config VALUES(?,?,?,?)",
-        (bot, json.dumps({"name": slug or bot, **(config or {})}), column, reports_to),
-    )
-
-
-def _seed(conn):
-    _bot(conn, "arthur-dev-orchestrator", "human:arthur")
-    _bot(conn, "arthur-frontend-reviewer", "arthur-dev-orchestrator")
-    _bot(conn, "qa-lead", "human:arthur")
-    _bot(conn, "funnel-daily", "qa-lead")
-    _bot(conn, "luiz-stats", "human:luiz")
-    _bot(conn, "nico-bot", "human:nico")
-    _bot(conn, "ghost-bot", "human:ghost")
-    _bot(conn, "orphan", "")
-    _bot(conn, "explicit-empty", "human:arthur", config={"team": ""})
-    _bot(conn, "already-sales", "human:arthur", column="sales", config={"team": "sales"})
-    _bot(conn, "assistant", "human:arthur", slug="assistant")
-    _bot(conn, "book-helper", "human:arthur", config={"template": "bookkeeper"})
-    _bot(conn, "inbox-luiz", "human:luiz")
-
-
-def _state(conn):
-    return {
-        bot: (team, json.loads(config).get("team", "<absent>"))
-        for bot, team, config in conn.execute("SELECT bot, team, config FROM bot_config ORDER BY bot")
-    }
-
-
-def test_migration_gives_a_team_less_bot_its_managers_group_and_leaves_the_others():
-    conn = _db()
-    _seed(conn)
-    MIGRATION.up(conn)
-    state = _state(conn)
-    assert state["arthur-dev-orchestrator"] == ("engineering", "engineering")
-    assert state["arthur-frontend-reviewer"] == ("engineering", "engineering")  # up the chain, through a bot
-    assert state["luiz-stats"] == ("sales", "sales")
-    assert state["funnel-daily"] == ("qa", "<absent>")  # under a root bot: its column follows the chain, no copy
-    assert state["qa-lead"] == ("qa", "<absent>")
-    assert state["nico-bot"] == (None, "<absent>")  # a manager with an empty team
-    assert state["ghost-bot"] == (None, "<absent>")  # a manager whose team is not a group
-    assert state["orphan"] == (None, "<absent>")
-    assert state["explicit-empty"] == (None, "")  # kept out of groups on purpose: left as it is
-    assert state["already-sales"] == ("sales", "sales")
-    assert state["assistant"] == (None, "<absent>")  # built-ins stay out of groups
-    assert state["book-helper"] == (None, "<absent>")  # helpers too
-    assert state["inbox-luiz"] == (None, "<absent>")  # and the inbox bots
-
-
-def test_migration_runs_again_and_changes_nothing():
-    conn = _db()
-    _seed(conn)
-    MIGRATION.up(conn)
-    once = _state(conn)
-    MIGRATION.up(conn)
-    assert _state(conn) == once
-
-
-def test_migration_keeps_the_install_assistant_out_of_groups_even_without_its_template(monkeypatch):
-    """With TICO_ASSISTANT_BOT=ace the Assistant is `ace` (Groups.outside reads the same setting). A template-less `ace`
-    under a person in a group stays out, and `coo` is an ordinary bot on that install."""
-    monkeypatch.setenv("TICO_ASSISTANT_BOT", "ace")
-    conn = _db()
-    _bot(conn, "ace", "human:arthur", slug="ace")
-    _bot(conn, "coo", "human:arthur", slug="coo")
-    MIGRATION.up(conn)
-    state = _state(conn)
-    assert state["ace"] == (None, "<absent>")
-    assert state["coo"] == ("engineering", "engineering")
-
-
-def test_migration_keeps_coo_out_of_groups_when_no_assistant_is_named(monkeypatch):
-    monkeypatch.delenv("TICO_ASSISTANT_BOT", raising=False)
-    conn = _db()
-    _bot(conn, "coo", "human:arthur", slug="coo")
-    MIGRATION.up(conn)
-    assert _state(conn)["coo"] == (None, "<absent>")

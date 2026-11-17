@@ -75,7 +75,6 @@ def test_recommended_writes_the_choices_and_the_invite_and_never_shows_the_invit
         k: env.get(k)
         for k in (
             "TICO_INSTALL_PRESET",
-            "TICO_SAMPLE_COMPANY",
             "TICO_MODELS_PRESET",
             "TICO_SUPPORT",
             "TICO_GATEWAY_INVITE",
@@ -84,11 +83,10 @@ def test_recommended_writes_the_choices_and_the_invite_and_never_shows_the_invit
         )
     } == {
         "TICO_INSTALL_PRESET": "recommended",
-        "TICO_SAMPLE_COMPANY": "on",
         "TICO_MODELS_PRESET": "subscriptions-gateway",
         "TICO_SUPPORT": "on",
         "TICO_GATEWAY_INVITE": INVITE,
-        "TICO_TEAM_NAME": '"Sample Co"',
+        "TICO_TEAM_NAME": '"My Team"',
         "TICO_OWNER_EMAIL": "ana@example.com",
     }
     # Quick-start sign-in: no domain, no sign-in proxy, no OAuth client, and no hosted mark on a self-hosted install.
@@ -197,7 +195,6 @@ def test_support_off_is_written_for_the_server_and_the_quick_start_and_byo_choic
     assert not {
         "TICO_SUPPORT",
         "TICO_INSTALL_PRESET",
-        "TICO_SAMPLE_COMPANY",
         "TICO_MODELS_PRESET",
         "TICO_GATEWAY_INVITE",
         "TICO_HOSTED",

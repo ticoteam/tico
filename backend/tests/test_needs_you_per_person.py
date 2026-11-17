@@ -55,8 +55,8 @@ def _same_for_everyone(c):
 
 
 def test_each_persons_list_is_the_one_every_persons_pass_gives_them(c):
-    """AC-5: asks, own work, Paused bots, a cause the Owner fixes first, snoozes by a bot and by a person, a private
-    task asking someone who may not read it, tasks that fall to a person by the ladder, and a person who left."""
+    """AC-5: asks, own work (in no list), Paused bots, a cause the Owner fixes first, snoozes by a bot and by a person, a
+    private task asking someone who may not read it, tasks that fall to a person by the ladder, and a person who left."""
     for slug in ("builder", "reviewer", "manager", "helper", "orphan"):
         X.bot(c, slug)
     X.pipeline(c, manager="bot:manager")
@@ -105,7 +105,8 @@ def test_each_persons_list_is_the_one_every_persons_pass_gives_them(c):
 
     every = _same_for_everyone(c)
     kinds = {person: sorted({n["kind"] for n in items}) for person, items in every.items()}
-    assert kinds[ANA] == ["ask", "paused", "task"] and kinds[BEN] == ["ask", "paused", "task"]
+    # Own work, and a task the ladder rested on, are in no list (Cara left, so her OK on the private task is Ana's ask).
+    assert kinds[ANA] == ["ask", "paused"] and kinds[BEN] == ["ask", "paused"]
     assert any("href" in n for n in every[ANA] if n["kind"] == "paused")  # Connect GitHub reached the Owner
 
 
@@ -172,7 +173,7 @@ def test_a_person_reads_only_the_tasks_that_can_reach_them(c, monkeypatch):
     reads: list[str] = []
     of = W.of
     monkeypatch.setattr(W, "of", lambda conn, row, *a, **k: reads.append(row["id"]) or of(conn, row, *a, **k))
-    assert [n["task_id"] for n in W.needs(c, BEN)] == [mine]
+    assert W.needs(c, BEN) == []  # his own task, with nothing asked of him, is in Tasks
     assert reads == [mine]
     reads.clear()
     assert W.needs(c, CARA) == [] and reads == []

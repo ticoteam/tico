@@ -341,12 +341,6 @@ pub fn held_note(primary: &str, until: &str, hop: Option<&Hop>) -> String {
     }
 }
 
-/// The turn's note when its ChatGPT login was busy with another turn (crate::login_turns) and its own fallback took
-/// it: `why` is the login's line ("ChatGPT login busy with builder").
-pub fn busy_diagnostic(why: &str, hop: &Hop) -> String {
-    format!("{why}; running this turn on {}", hop.harness)
-}
-
 /// What the agent is told on a fallback turn: its configured model is not doing this work, so whatever it records
 /// about who did it (a review's provenance, a pull request, a task note) names the model that is. `because` says why
 /// ("claude hit its usage limit").
@@ -815,10 +809,6 @@ mod tests {
         let note = prompt_note("claude hit its usage limit", "claude", &codex);
         assert!(note.starts_with("This turn runs on the fallback codex with model gpt-test because claude hit its usage limit"));
         assert!(note.contains("name gpt-test, not claude"));
-        assert_eq!(
-            busy_diagnostic("ChatGPT login busy with builder", &codex),
-            "ChatGPT login busy with builder; running this turn on codex"
-        );
         // A login the server holds is never tried; the note is not a limit met on this turn (backend/login_holds.py
         // reads "usage limit; running this turn on" as one, and would hold the login longer).
         let held = held_note("claude", "2026-10-19T02:40:00.000000Z", Some(&codex));

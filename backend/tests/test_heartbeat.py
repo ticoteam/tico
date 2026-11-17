@@ -639,3 +639,17 @@ def test_a_dead_worker_hands_the_release_check_back_to_the_loops_rest_pass():
     now[0] = 30.0
     worker.rest_fallback()
     assert calls == [0.0, 10.0], "not while stopping"
+
+
+def test_the_decision_model_steps_name_what_they_checked(monkeypatch):
+    """The page verdict and idea check steps say how many they checked, in the Decision model's name."""
+    from types import SimpleNamespace
+
+    from backend import idea_checks as IC
+    from backend import page_verdicts as PV
+
+    ctx = SimpleNamespace(at=datetime(2026, 11, 16, tzinfo=timezone.utc), store=None)
+    monkeypatch.setattr(PV, "run", lambda store, at: 2)
+    monkeypatch.setattr(IC, "run", lambda store, at: 3)
+    assert HB.jev_verdicts(ctx) == ("Decision model gave 2 verdicts", False)
+    assert HB.idea_checks(ctx) == ("Decision model checked 3 ideas", False)

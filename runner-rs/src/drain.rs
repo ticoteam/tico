@@ -1,5 +1,5 @@
 //! A graceful drain owns only turns that already started. Unstarted claims return immediately; at the
-//! deadline the same yielded completion used for login handoffs preserves the session and queues a continuation,
+//! deadline a yielded completion preserves the session and queues a continuation,
 //! unless the harness cannot resume the interrupted turn: execute.rs then settles it held for review.
 
 use std::collections::HashMap;

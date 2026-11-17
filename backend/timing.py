@@ -3,7 +3,7 @@
 Per route, the last 300 requests: how long signing in took (it waits for a worker thread) and how
 long the whole answer took on the server. Also how late the event loop wakes up (a blocked loop
 delays every request) and how many requests are in flight. Numbers only: no paths with ids, no
-bodies, no people. `GET /api/v2/ops/timing` reads it; every answer carries `Server-Timing`. When the
+bodies, no people. `GET /api/v2/operations/timing` reads it; every answer carries `Server-Timing`. When the
 flight recorder is on (backend/flight.py), every request and loop wake is also handed to it, which keeps
 history in the database.
 """

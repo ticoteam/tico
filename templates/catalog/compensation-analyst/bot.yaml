@@ -3,11 +3,8 @@ display_name: "Compensation Analyst"
 labels: [owner:compensation-analyst]
 reads: []                        # other bot repositories this one may clone read-only
 
-# This must agree with the bot's settings on the server, or be left out of this file entirely.
 max_run_minutes: 45
 
-# The first routine is declared off (`enabled: false`) and switched on when a human starts the bot's setup
-# (Start setup, go-live). `tico bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
 routines:
   - id: weekly-pay-check
     title: Weekly offer and pay change check
@@ -17,9 +14,6 @@ routines:
     labels: [priority:p2]
     enabled: false
 
-# What this bot may touch. Not listed is not allowed. `env:` names the variable a credential
-# arrives in, never the value; declaring access here does not create it. Changing access is an
-# owner decision, so the bot files a task for the owner rather than editing this file.
 tools: []
 # There is deliberately no payroll or HR-system entry: pay data arrives as exports on tasks, person-level results
 # go back as task attachments for the owners, and nothing with a named person's pay is kept here.

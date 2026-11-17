@@ -23,16 +23,8 @@ from . import read_cache
 from . import visuals
 from .store import H, Problem
 from . import visual_specs
+from .api_contract import api_v2
 from clients import bot_files as BF
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS pages(
- file_id TEXT PRIMARY KEY REFERENCES bot_files(id),
- cadence TEXT NOT NULL DEFAULT 'none' CHECK(cadence IN ('none','daily','weekly','monthly')),
- as_of TEXT, replaced_by_id TEXT, audience TEXT, deleted_at TEXT, archived INTEGER NOT NULL DEFAULT 0,
- created_at TEXT NOT NULL, updated_at TEXT NOT NULL, spec TEXT);
-CREATE INDEX IF NOT EXISTS pages_replaced ON pages(replaced_by_id) WHERE replaced_by_id IS NOT NULL;
-"""
 
 CADENCES = {"none": 0, "daily": 1, "weekly": 7, "monthly": 30}
 # A page is stale once 1.5x its cadence has passed without a new version.
@@ -40,13 +32,6 @@ STALE_FACTOR = 1.5
 LIST_MAX = 50
 IDS_MAX = 50
 AS_OF = re.compile(r"\d{4}-\d{2}-\d{2}")
-
-
-def ensure(c):
-    """Unversioned, like the trash: an older release never reads the table. Runs inside initialize's transaction."""
-    for statement in SCHEMA.split(";"):
-        if statement.strip():
-            c.execute(statement)
 
 
 class PageEdit(M.Contract):
@@ -568,7 +553,16 @@ def install_pages(app, store, auth, files):
         }
     }
 
-    @app.post("/api/v2/pages", openapi_extra=publish_doc)
+    @app.post(
+        "/api/v2/pages",
+        **api_v2(
+            "Pages",
+            "publishPage",
+            "A bot publishes an .html page (raw with fields in the query, or JSON); scripts and outside loads are removed",
+            "PagePublished",
+            openapi_extra=publish_doc,
+        ),
+    )
     async def publish(request: Request):
         """A bot (or the computer running its turn) publishes a page: an .html file, raw with its fields in the
         query, or JSON with text or content_base64. Scripts and anything that would load from elsewhere are removed
@@ -578,7 +572,15 @@ def install_pages(app, store, auth, files):
         )
         return await asyncio.to_thread(pages.publish, request, request.state.identity, fields, data)
 
-    @app.get("/api/v2/pages")
+    @app.get(
+        "/api/v2/pages",
+        **api_v2(
+            "Pages",
+            "listPages",
+            "Pages the caller may read: `ids` (up to 50) in that order, leaving out the unreadable; else newest first by bot or task (filed on or pinned to it)",
+            "PageList",
+        ),
+    )
     def listing(
         request: Request,
         ids: str = "",
@@ -597,11 +599,22 @@ def install_pages(app, store, auth, files):
             who, bot=bot, task=task, archived=archived, limit=max(1, min(limit, LIST_MAX)), cursor=cursor
         )
 
-    @app.get("/api/v2/pages/{fid}")
+    @app.get(
+        "/api/v2/pages/{fid}",
+        **api_v2("Pages", "getPage", "One page and its status line; 404 when the caller may not read it", "PageShown"),
+    )
     def read(request: Request, fid: str):
         return pages.read(request.state.identity, fid)
 
-    @app.patch("/api/v2/pages/{fid}")
+    @app.patch(
+        "/api/v2/pages/{fid}",
+        **api_v2(
+            "Pages",
+            "editPage",
+            "Change a page's audience, cadence, data date or replacement, or archive or restore it (the bot, owner and bot managers)",
+            "PageShown",
+        ),
+    )
     def edit(request: Request, fid: str, body: PageEdit):
         """Change a page's cadence, data date or replacement, or archive (`archived: true`) or restore it."""
         return pages.edit(request, fid, body)

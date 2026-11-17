@@ -51,3 +51,5 @@ first_routine:
   draft_only: true
 reasoning_effort: medium
 recommend_when: [publishes_content, sells_software, sells_to_consumers]
+# Base files (templates/catalog/_base) this template does not take.
+base_skip: [knowledge/README.md, playbooks/README.md]

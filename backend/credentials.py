@@ -19,9 +19,9 @@ from fastapi import Request
 from pydantic import ConfigDict, Field, SecretStr
 
 from . import providers
+from . import tool_access as TA
 from .auth import validate_identity
 from .models import Contract, ID
-from .bot_access import owner_ids
 from .store import H, Problem, encode
 
 CONTEXT = {'application': 'tico-credentials'}
@@ -29,11 +29,24 @@ CONTEXT = {'application': 'tico-credentials'}
 # run, a computer's environment or a list with a value: only a signed-in person's reveal (the password alone) and the
 # browser commands that type it. The 2FA key never leaves this process.
 LOGIN = 'login'
+# An MCP tool's OAuth sign-in (backend/mcp_connect.py): its tokens are sealed here, never revealed or edited, and reach a
+# run only as a proxy token.
+OAUTH = 'oauth'
+# A secret the server itself uses (the Slack app's tokens, backend/slack_app.py): sealed here, never listed, granted,
+# revealed or handed to a run (`Vault.row` answers 404 for one).
+SERVICE = 'service'
+# The credentials a run or a watcher may be handed: never a website account, and a sign-in only through the proxy.
+RUN_ROWS = (
+    "SELECT * FROM credentials WHERE kind NOT IN ('login','service') AND (kind!='oauth' OR tool_id IN "
+    "(SELECT id FROM tools WHERE delivery='proxy')) ORDER BY id"
+)
 # A shared website account available to current and future bots, without releasing its value to their turns.
 BOTS = 'bots'
 # A grant to every computer, present and future: a model API key or token that signs each computer's model CLI in
 # (runner-rs/src/signin.rs `team_model_keys`). Never a bot's: a bot still gets only what is granted to it.
 COMPUTERS = 'computers'
+# A model key for computers is a subscription now (backend/computer_keys.py), given in Settings > Models.
+MODELS_FOR_COMPUTERS = 'Give model keys to computers in Settings > Models'
 FILE_MIGRATION = 'credential-file-migration-v1'
 # 0.2.30 reserved every HUB_ name, so a team's own HUB_ keys (HUB_BUCKET) were left out of v1. v2 adds only those.
 HUB_MIGRATION = 'credential-file-migration-v2-hub'
@@ -102,6 +115,22 @@ def effective_grant(c, credential, subject):
 
 
 def granted(c, subject):
+    """The credential ids `subject` uses: its explicit grants (`explicitly_granted`) and, for a bot, the keys of the
+    tools it reads by default (backend/default_read.py), which reach its runs as a grant at Read does."""
+    from . import default_read, read_cache
+
+    values = read_cache.cache(c)
+    key = ("credential_granted", subject)
+    if values is not None and key in values:
+        return values[key]
+    explicit = explicitly_granted(c, subject)
+    found = explicit | frozenset(default_read.reads(c, subject, explicit)) if subject.startswith('bot:') else explicit
+    if values is not None:
+        values[key] = found
+    return found
+
+
+def explicitly_granted(c, subject):
     """The credential ids `subject` holds an effective grant to, in one query: `effective_grant` for each of them.
     The runner endpoints poll every few seconds for every bot, so one query per credential was most of a server's SQL.
 
@@ -111,7 +140,7 @@ def granted(c, subject):
     from . import read_cache
 
     values = read_cache.cache(c)
-    key = ("credential_granted", subject)
+    key = ("credential_granted_explicit", subject)
     if values is not None and key in values:
         return values[key]
     found = frozenset(
@@ -119,7 +148,8 @@ def granted(c, subject):
         for r in c.execute(
             'SELECT g.credential_id FROM credential_grants g '
             'LEFT JOIN credential_grants p ON p.id=g.parent_id '
-            "LEFT JOIN bot_config bc ON g.subject='bot:'||bc.bot "
+            # By the bot's key, so each grant seeks its bot rather than scanning bot_config.
+            "LEFT JOIN bot_config bc ON substr(g.subject,1,4)='bot:' AND bc.bot=substr(g.subject,5) "
             'WHERE g.subject=? AND g.revoked_at IS NULL '
             "AND (g.parent_id IS NULL OR (p.revoked_at IS NULL AND p.id IS NOT NULL "
             "AND p.subject='human:'||bc.owner_id))",
@@ -132,20 +162,23 @@ def granted(c, subject):
 
 
 def prime_granted(c, subjects):
-    """`granted` for many subjects in one read per 500, seeded into the snapshot so each later `granted(c, subject)`
-    reads nothing. Outside a snapshot nothing is kept."""
-    from . import read_cache
+    """`explicitly_granted` for many subjects in one read per 500, seeded into the snapshot so each later
+    `granted(c, subject)` reads no grant again. Outside a snapshot nothing is kept."""
+    from . import default_read, read_cache
 
+    subjects = list(subjects)
     values = read_cache.cache(c)
     if values is None:
         return
-    wanted = sorted({s for s in subjects if ("credential_granted", s) not in values})
+    default_read.prime_readers(c, subjects)  # each bot's default reads ask whether it is live: one read for all
+    wanted = sorted({s for s in subjects if ("credential_granted_explicit", s) not in values})
     found = {s: set() for s in wanted}
     for part in H.chunks(wanted):
         for subject, credential in c.execute(
             'SELECT g.subject,g.credential_id FROM credential_grants g '
             'LEFT JOIN credential_grants p ON p.id=g.parent_id '
-            "LEFT JOIN bot_config bc ON g.subject='bot:'||bc.bot "
+            # By the bot's key, so each grant seeks its bot rather than scanning bot_config.
+            "LEFT JOIN bot_config bc ON substr(g.subject,1,4)='bot:' AND bc.bot=substr(g.subject,5) "
             f"WHERE g.subject IN ({','.join('?' * len(part))}) AND g.revoked_at IS NULL "
             "AND (g.parent_id IS NULL OR (p.revoked_at IS NULL AND p.id IS NOT NULL "
             "AND p.subject='human:'||bc.owner_id))",
@@ -153,7 +186,7 @@ def prime_granted(c, subjects):
         ):
             found[subject].add(credential)
     for subject in wanted:
-        values[("credential_granted", subject)] = frozenset(found[subject])
+        values[("credential_granted_explicit", subject)] = frozenset(found[subject])
 
 
 def key_hidden(c, who, credential, admins):
@@ -194,10 +227,12 @@ def owned(c, who):
     see their metadata and share them with bots they manage, never their value unless it is also granted to them.
     `created_by` alone is not enough: it names whoever added any credential, an administrator's company credentials too,
     and a person demoted since must not keep those. A value someone else has since saved makes it no longer theirs, and
-    the team rule "Members store credentials for their bots" off ends it for everyone."""
+    the team rule "Members store credentials for their bots" off ends it for everyone. A bot acting as itself owns the
+    keys it stored for itself (backend/tool_access.py `_itself`), the same way and whatever the team rule."""
     from . import team_rules
 
-    if who.role not in ('human', 'owner') or not team_rules.load(c)['members_store_credentials']:
+    own_bot = who.role == 'bot' and not getattr(who, 'via', '')
+    if not own_bot and (who.role not in ('human', 'owner') or not team_rules.load(c)['members_store_credentials']):
         return set()
     return {
         r[0]
@@ -264,9 +299,18 @@ SEALED = 'sealed:v1:'  # the prefix of a value `CredentialCipher.seal` made
 _key_file_lock = threading.Lock()
 
 
+def _kind(row):
+    """A row's kind, or None for a table that has none (granola_connections)."""
+    try:
+        return row['kind']
+    except (IndexError, KeyError):
+        return None
+
+
 def legacy_key(path):
-    """A key file an install sealed secrets with before TICO_CREDENTIAL_KMS_KEY was set (github-app.key, slack.key):
-    its 32 bytes, or None when it is absent or not a key. Read only: a read never makes a key file."""
+    """A key file an install sealed secrets with before TICO_CREDENTIAL_KMS_KEY was set (github-app.key, and slack.key
+    for the move of an older server's row, backend/slack_app.py `_move_old`): its 32 bytes, or None when it is
+    absent or not a key. Read only: a read never makes a key file."""
     try:
         data = Path(path).read_bytes()
     except OSError:
@@ -476,6 +520,19 @@ class CredentialCipher:
             raise Problem('vault_unavailable', 'A stored secret could not be decrypted', 503) from None
 
     def decrypt(self, c, row):
+        """A credential's sealed value. Never a service row's (404, as if it were absent): those open only through
+        `open_service`, so no caller that picks a credential by id can reach the server's own secrets."""
+        if _kind(row) == SERVICE:
+            raise Problem('not_found', 'Credential not found', 404)
+        return self._open(c, row)
+
+    def open_service(self, c, row):
+        """A service row's sealed value (the Slack app's tokens, backend/slack_app.py), and nothing else's."""
+        if _kind(row) != SERVICE:
+            raise Problem('not_found', 'Credential not found', 404)
+        return self._open(c, row)
+
+    def _open(self, c, row):
         try:
             return (
                 AESGCM(self.key(c))
@@ -536,7 +593,7 @@ class Vault:
 
     @staticmethod
     def row(c, cid):
-        row = c.execute('SELECT * FROM credentials WHERE id=?', (cid,)).fetchone()
+        row = c.execute('SELECT * FROM credentials WHERE id=? AND kind!=?', (cid, SERVICE)).fetchone()
         if not row:
             raise Problem('not_found', 'Credential not found', 404)
         return row
@@ -571,28 +628,19 @@ class Vault:
             )
         } | {'stored': row['ciphertext'] is not None, 'env': model_env(row['name'], row['kind'], row['env'])}
 
-    def member_stores(self, c, who, bot):
-        """Whether this person, not a credential administrator, may store a credential for `bot`: the team rule
-        "Members store credentials" is on and they own or manage the bot. It is granted to that bot at once."""
-        from . import team_rules
-
-        return (
-            who.role in ('human', 'owner')
-            and team_rules.load(c)['members_store_credentials']
-            and bool(self.manages_bot(c, who, 'bot:' + bot))
-        )
-
     def write(self, c, who, body, cid=None, for_bot=None):
         """`for_bot`: storing it for that bot (backend/credential_cards.py `store_for_bot`), which a member who manages the bot
-        may do too, for a new credential or one they stored themselves; everything else is an administrator's."""
+        may do too, and the bot itself for its own key, for a new credential or one they stored themselves
+        (backend/tool_access.py STORE); everything else is an administrator's."""
         member = bool(
             for_bot
-            and not administrator(c, who, self.admins)
-            and self.member_stores(c, who, for_bot)
-            and (not cid or creator(c, who, cid))
+            and not TA.admin(c, who, self.admins)
+            and TA.may_change_access(
+                c, who, TA.key(cid), 'bot:' + for_bot, TA.STORE, admins=self.admins, auth=self.auth
+            )
         )
         if not member:
-            require_admin(c, who, self.admins)
+            TA.require(c, who, TA.key(), action=TA.EDIT if cid else TA.CREATE, admins=self.admins, auth=self.auth)
         if cid and who.role in ('human', 'owner', 'bot'):
             require_seen(c, who, cid, self.admins)
         old = self.row(c, cid) if cid else None
@@ -600,6 +648,8 @@ class Vault:
             raise Problem(
                 'website_account', "This is a website account; use Replace login on its website tool in Tools.", 409
             )
+        if old and old['kind'] == OAUTH:
+            raise Problem('sign_in', 'This is a sign-in; sign in again on its tool in Tools.', 409)
         if old and body.expected_revision != old['revision']:
             raise Problem('version_conflict', 'Credential changed; refresh before saving', 409)
         if not old and body.expected_revision is not None:
@@ -657,75 +707,8 @@ class Vault:
             key_grants.drop_owner(
                 c, who, cid
             )  # the Tools owner never holds a key dropped in its chat, Replace included
-        api_tools.ensure_tool(c, who, cid)  # a tool's key shows on Tools however it was stored
+        api_tools.ensure_tool(c, who, cid, value=secret)  # a tool's key shows on Tools however it was stored
         return self.brief(self.row(c, cid))
-
-    def manages_bot(self, c, who, subject):
-        """Whether `subject` is a bot this person owns or manages (`Auth.bot_manager`)."""
-        return (
-            subject.startswith('bot:') and self.auth is not None and self.auth.bot_manager(c, who, H.actor_id(subject))
-        )
-
-    def grant_authority(self, c, who, cid, subject):
-        require_seen(c, who, cid, self.admins)
-        if subject.startswith('bot:'):
-            subject = 'bot:' + (H.resolve_bot(c, subject) or {}).get('id', H.actor_id(subject))
-        if subject == COMPUTERS or subject.startswith('group:'):
-            require_admin(c, who, self.admins)
-            return None
-        if administrator(c, who, self.admins):
-            return None
-        if creator(c, who, cid):
-            # The person who added a credential shares it with their own bots, as a direct grant; anyone else's bot, a
-            # person, or every computer stays an administrator's call.
-            if self.manages_bot(c, who, subject):
-                return None
-            raise Problem(
-                'forbidden',
-                'You can share a credential you added only with bots you own or manage. '
-                + ask_admin_detail(
-                    c,
-                    self.admins,
-                    f'give it to {(H.bot(c, H.actor_id(subject)) or {}).get("slug") or H.actor_id(subject)}',
-                ),
-                403,
-            )
-        parent = effective_grant(c, cid, who.actor) if who.role in ('human', 'owner') else None
-        bot = (
-            c.execute('SELECT owner_id,bot_owners FROM bot_config WHERE bot=?', (H.actor_id(subject),)).fetchone()
-            if subject.startswith('bot:')
-            else None
-        )
-        # A bot's owners (its creator and co-owners, and its operator) attach credentials they hold themselves.
-        if (
-            not parent
-            or not bot
-            or (bot['owner_id'] != H.actor_id(who.actor) and H.actor_id(who.actor) not in owner_ids(bot['bot_owners']))
-        ):
-            raise Problem(
-                'forbidden',
-                ask_admin_detail(c, self.admins, 'give a bot a credential')
-                + (', or give a bot you manage a credential you added or were granted' if not parent else ''),
-                403,
-            )
-        return parent['id']
-
-    def may_revoke(self, c, who, cid, grant):
-        """An administrator takes any grant away; the person who added the credential, or who made this grant, takes it
-        away from a bot they own or manage."""
-        return administrator(c, who, self.admins) or bool(
-            (creator(c, who, cid) or grant['granted_by'] == who.actor) and self.manages_bot(c, who, grant['subject'])
-        )
-
-    def revoke_authority(self, c, who, cid, grant):
-        if self.may_revoke(c, who, cid, grant):
-            return
-        raise Problem(
-            'forbidden',
-            ask_admin_detail(c, self.admins, 'take this away')
-            + ', or take a credential you added away from a bot you manage',
-            403,
-        )
 
     def grant(self, c, who, cid, subject):
         row = self.row(c, cid)
@@ -746,7 +729,9 @@ class Vault:
         elif subject.startswith('group:'):
             # Groups take a website login only: never an API key or any other credential.
             raise Problem('subject', 'Choose a registered person or bot.', 422)
-        parent = self.grant_authority(c, who, cid, subject)
+        # One rule (backend/tool_access.py): All bots, a group, every computer are an administrator's; `parent` is the
+        # grant a holder passing it on to a bot they own hangs it on.
+        parent = TA.require(c, who, TA.key(cid), subject, TA.GRANT, admins=self.admins, auth=self.auth).parent
         inferred = model_env(row['name'], row['kind'], row['env'])
         if inferred and not row['env']:
             # Older name-only model keys gain a variable only when someone grants them.
@@ -756,22 +741,9 @@ class Vault:
             )
             row = self.row(c, cid)
         if subject == BOTS:
-            require_admin(c, who, self.admins)
             exists = row['kind'] == LOGIN
         elif subject == COMPUTERS:
-            if (
-                row['env'] not in providers.MODEL_KEY_NAMES
-                or row['kind'] not in ('api_key', 'token')
-                or row['ciphertext'] is None
-            ):
-                raise Problem(
-                    'subject',
-                    'Only a stored model API key or token, named '
-                    + ', '.join(sorted(providers.MODEL_KEY_NAMES))
-                    + ', can be given to every computer',
-                    422,
-                )
-            exists = True
+            raise Problem('subject', MODELS_FOR_COMPUTERS, 422)
         elif subject.startswith('human:'):
             exists = c.execute('SELECT 1 FROM humans WHERE id=?', (H.actor_id(subject),)).fetchone()
         elif subject.startswith('bot:'):
@@ -803,7 +775,9 @@ class Vault:
                         raise Problem('grant_refused', f"You can't give {bot} this credential. Ask the owner", 409)
                     ask = (
                         ''
-                        if self.may_revoke(c, who, other['id'], held)
+                        if TA.may_change_access(
+                            c, who, TA.key(other['id'], held), action=TA.REVOKE, admins=self.admins, auth=self.auth
+                        )
                         else ' ' + ask_admin_detail(c, self.admins, f"take {other['name']} away from {bot}")
                     )
                     raise Problem(
@@ -829,6 +803,11 @@ class Vault:
             from . import reconnects
 
             reconnects.secret_stored(c, H.actor_id(subject), row['env'])
+        if subject.startswith('bot:'):
+            # An access request this grant answers closes itself (backend/access_requests.py).
+            from . import access_requests
+
+            access_requests.settled(c, who, subject=subject)
         return {'id': gid, 'subject': subject, 'credential': row['name'], 'env': row['env']}
 
     def reveal_login(self, c, who, row):
@@ -868,6 +847,8 @@ class Vault:
         found = c.execute('SELECT * FROM credentials WHERE id=?', (cid,)).fetchone()
         if found is not None and found['kind'] == LOGIN:
             return self.reveal_login(c, who, found)
+        if found is not None and found['kind'] == OAUTH:
+            raise Problem('forbidden', 'A sign-in is never shown: its tokens stay with Tico', 403)
         if who.role in ('human', 'owner', 'bot') and effective_grant(c, cid, who.actor) is None:
             require_seen(c, who, cid, self.admins)
         if not permitted(c, who, cid, self.admins):
@@ -926,9 +907,60 @@ def last_used(c, cid):
     }
 
 
-def install_credentials(app, store, delegate=None, propose=None):
-    from . import runner_versions
+def same_value(c, cipher, env, value):
+    """The id of the oldest stored credential under `env` holding exactly `value`, for the computer file migration to
+    share by grant instead of storing a copy; None when there is none. Not a login, not a key of an Only listed tool
+    (whoever runs the migration may not see that tool), and not a key on the proxy: the bot used the value itself from
+    its file (an MCP header, an SDK), and a proxy token in its place would break that. The value is only compared,
+    never logged or returned."""
+    rows = c.execute(
+        'SELECT v.* FROM credentials v LEFT JOIN tools t ON t.id=v.tool_id '
+        "WHERE v.env=? AND v.kind!='login' AND v.ciphertext IS NOT NULL AND t.audience IS NULL "
+        "AND (t.id IS NULL OR t.delivery='computer') "
+        'ORDER BY v.created_at,v.id',
+        (env,),
+    ).fetchall()
+    for row in rows:
+        try:
+            held = cipher.decrypt(c, row)
+        except Problem:
+            continue  # a row this key cannot open is never a match
+        if hmac.compare_digest(held.encode(), value.encode()):
+            return row['id']
+    return None
 
+
+def held_at_read(c, proxied, row, subject, cipher=None):
+    """(tool row or None, way) for a held key: the tool when the run gets a proxy token for it, either because the
+    tool is proxied or because `subject` holds this Read and write key at Read only and the proxy can hold it to
+    reads (backend/api_tools.py `computer_way`). way `skip`: a read key of the same tool goes instead. An id stored
+    as a key (`tool_settings.is_setting`: its name and its value both say id, POSTHOG_PROJECT_ID, TWILIO_ACCOUNT_SID)
+    goes as its value, never as a proxy token: a bot sends it as it is, in a path or as a username."""
+    if cipher is not None and _is_id(c, cipher, row):
+        return None, 'key'
+    tool = proxied.get(row['tool_id'])
+    if tool is not None:
+        return tool, 'proxy'
+    from . import api_tools
+
+    way = api_tools.computer_way(c, row, subject)
+    if way == 'proxy':
+        return c.execute('SELECT * FROM tools WHERE id=?', (row['tool_id'],)).fetchone(), way
+    return None, way
+
+
+def _is_id(c, cipher, row):
+    from . import tool_settings
+
+    if not row['tool_id'] or not tool_settings.known_name(row['env']):
+        return False
+    try:
+        return tool_settings.is_setting(row['env'], cipher.decrypt(c, row))
+    except Problem:
+        return False
+
+
+def install_credentials(app, store, delegate=None, propose=None):
     vault = app.state.vault = Vault(store, auth=getattr(app.state, 'auth', None))
 
     def migration_runner(c, who):
@@ -949,8 +981,7 @@ def install_credentials(app, store, delegate=None, propose=None):
                 )
             )
             row = c.execute('SELECT value FROM registry_metadata WHERE key=?', (HUB_MIGRATION,)).fetchone()
-            if runner_versions.at_least(c, who.runner_id, '0.2.31'):
-                pending |= set(json.loads(row[0])) if row else set()
+            pending |= set(json.loads(row[0])) if row else set()
             return {
                 'bots': [
                     r[0]
@@ -968,9 +999,12 @@ def install_credentials(app, store, delegate=None, propose=None):
             stored = c.execute(
                 "SELECT id,env FROM credentials WHERE ciphertext IS NOT NULL AND env!='' AND kind!='login'"
             ).fetchall()
+            from . import tool_settings
+
             for bot, names in bots.items():
                 held = granted(c, 'bot:' + bot)
                 names.extend(r['env'] for r in stored if r['id'] in held)
+                names.extend(n for n in tool_settings.names(c, held) if n not in names)
             return {'bots': bots}
 
     @app.post('/api/v2/runner-credential-migration')
@@ -991,36 +1025,39 @@ def install_credentials(app, store, delegate=None, propose=None):
             if bot not in pending and bot not in hub_pending:
                 return {'migrated': True}
             first = bot in pending
-            supports_hub = runner_versions.at_least(c, who.runner_id, '0.2.31')
-            if not first and not supports_hub:
-                return {'migrated': False, 'min_runner': '0.2.31'}
-            if first and not supports_hub and bot not in hub_pending:
-                hub_pending.append(bot)
-                c.execute('UPDATE registry_metadata SET value=? WHERE key=?', (encode(hub_pending), HUB_MIGRATION))
             subject = 'bot:' + bot
             label = (H.bot(c, bot) or {}).get('slug') or bot
-            for item in body.credentials:
-                if item.env.startswith('HUB_') and not supports_hub:
-                    continue
-                if not first and not item.env.startswith('HUB_'):
-                    continue  # the bot migrated before: only the HUB_ keys 0.2.30 could not take
-                if item.env in RESERVED_ENV or item.env.startswith(RESERVED_PREFIXES):
-                    raise Problem('env', 'A Computer setting cannot be granted as a Credential', 422)
-                # Even a revoked grant wins over an old file: migration never resurrects access.
-                if c.execute(
-                    'SELECT 1 FROM credentials v JOIN credential_grants g ON g.credential_id=v.id '
-                    'WHERE v.env=? AND g.subject=?',
-                    (item.env, subject),
-                ).fetchone():
-                    continue
-                cid, gid, now = H.new_id(), H.new_id(), H.now()
-                ciphertext, nonce = vault.cipher.encrypt(c, cid, item.value.get_secret_value())
+            from . import api_tools, tool_settings
+
+            def keep(item):
+                """The variable as a key the bot is granted: one credential per value, shared by grant."""
+                value, gid, now = item.value.get_secret_value(), H.new_id(), H.now()
+                # Bots on one computer often hold the same value (one Slack token, one AWS profile): it becomes ONE
+                # credential, shared by grant, never a copy per bot. Never on a key of an Only listed tool.
+                shared = same_value(c, vault.cipher, item.env, value)
+                if shared:
+                    c.execute(
+                        'INSERT INTO credential_grants(id,credential_id,subject,granted_by,created_at) VALUES(?,?,?,?,?)',
+                        (gid, shared, subject, who.actor, now),
+                    )
+                    H.event(
+                        c,
+                        who.actor,
+                        'credential.migrated',
+                        shared,
+                        {'env': item.env, 'bot': bot, 'grant': gid, 'shared': True},
+                    )
+                    api_tools.ensure_tool(c, who, shared, from_computer=True, value=value)
+                    return
+                cid = H.new_id()
+                ciphertext, nonce = vault.cipher.encrypt(c, cid, value)
+                taken = c.execute('SELECT 1 FROM credentials WHERE name=?', (item.env,)).fetchone()
                 c.execute(
                     'INSERT INTO credentials(id,name,kind,env,preview,ciphertext,nonce,source,created_at,updated_at,updated_by) '
                     'VALUES(?,?,?,?,?,?,?,?,?,?,?)',
                     (
                         cid,
-                        f'{item.env} ({label})',
+                        f'{item.env} ({label})' if taken else item.env,
                         item.kind,
                         item.env,
                         '••••••',
@@ -1037,13 +1074,32 @@ def install_credentials(app, store, delegate=None, propose=None):
                     (gid, cid, subject, who.actor, now),
                 )
                 H.event(c, who.actor, 'credential.migrated', cid, {'env': item.env, 'bot': bot, 'grant': gid})
-                from . import api_tools
+                api_tools.ensure_tool(c, who, cid, from_computer=True, value=value)  # already in use from the computer
 
-                api_tools.ensure_tool(c, who, cid, from_computer=True)  # already in use from the computer
+            later = []
+            for item in body.credentials:
+                if not first and not item.env.startswith('HUB_'):
+                    continue  # the bot migrated before: only the HUB_ keys 0.2.30 could not take
+                if item.env in RESERVED_ENV or item.env.startswith(RESERVED_PREFIXES):
+                    raise Problem('env', 'A Computer setting cannot be granted as a Credential', 422)
+                # Even a revoked grant wins over an old file: migration never resurrects access.
+                if c.execute(
+                    'SELECT 1 FROM credentials v JOIN credential_grants g ON g.credential_id=v.id '
+                    'WHERE v.env=? AND g.subject=?',
+                    (item.env, subject),
+                ).fetchone():
+                    continue
+                if item.kind != 'file' and tool_settings.is_setting(item.env, item.value.get_secret_value()):
+                    later.append(item)  # after the keys: a setting goes on a tool one of them is a key of
+                    continue
+                keep(item)
+            for item in later:
+                if not tool_settings.import_for_bot(c, who, bot, item.env, item.value.get_secret_value()):
+                    keep(item)
             if first:
                 pending.remove(bot)
                 c.execute('UPDATE registry_metadata SET value=? WHERE key=?', (encode(pending), FILE_MIGRATION))
-            if bot in hub_pending and supports_hub:
+            if bot in hub_pending:
                 hub_pending.remove(bot)
                 c.execute('UPDATE registry_metadata SET value=? WHERE key=?', (encode(hub_pending), HUB_MIGRATION))
             return {'migrated': True}
@@ -1080,7 +1136,9 @@ def install_credentials(app, store, delegate=None, propose=None):
                 ids = granted(c, who.actor)
                 mine = [
                     {k: v for k, v in vault.brief(row).items() if k != 'preview'} | {'can_reveal': False, 'grants': []}
-                    for row in c.execute("SELECT * FROM credentials WHERE kind!='login' ORDER BY lower(name),id")
+                    for row in c.execute(
+                        "SELECT * FROM credentials WHERE kind NOT IN ('login','service') ORDER BY lower(name),id"
+                    )
                     if row['id'] in ids
                 ]
                 return {
@@ -1102,7 +1160,9 @@ def install_credentials(app, store, delegate=None, propose=None):
 
             hidden = api_tools.hidden_keys(c, who, vault.admins)  # keys of tools this person may not see
             # A website account is listed on its website tool (backend/website_tools.py), never here.
-            for row in c.execute("SELECT * FROM credentials WHERE kind!='login' ORDER BY lower(name),id"):
+            for row in c.execute(
+                "SELECT * FROM credentials WHERE kind NOT IN ('login','service') ORDER BY lower(name),id"
+            ):
                 if row['id'] in hidden:
                     continue
                 # A credential this person added is listed for sharing (its grants too), never revealed unless granted.
@@ -1119,7 +1179,9 @@ def install_credentials(app, store, delegate=None, propose=None):
                     dict(g)
                     | {
                         'can_revoke': admin
-                        or ((mine or g['granted_by'] == who.actor) and bool(vault.manages_bot(c, who, g['subject'])))
+                        or TA.may_change_access(
+                            c, who, TA.key(row['id'], g), action=TA.REVOKE, admins=vault.admins, auth=vault.auth
+                        )
                     }
                     for g in c.execute(
                         'SELECT id,subject,granted_by,parent_id,created_at FROM credential_grants WHERE credential_id=? AND revoked_at IS NULL',
@@ -1137,7 +1199,7 @@ def install_credentials(app, store, delegate=None, propose=None):
                 )
                 if admin
                 or r['owner_id'] == H.actor_id(who.actor)
-                or (added and vault.manages_bot(c, who, 'bot:' + r['id']))
+                or (added and TA.manages(c, who, 'bot:' + r['id'], vault.auth))
             ]
             # The computers a model key is shared with by name (Settings > Computers, "Shared with"), named on its grants.
             computers = (
@@ -1161,7 +1223,7 @@ def install_credentials(app, store, delegate=None, propose=None):
             request.url.path,
             request.headers.get('idempotency-key'),
             body,
-            lambda c, w: require_admin(c, w, vault.admins),
+            lambda c, w: TA.require(c, w, TA.key(), action=TA.CREATE, admins=vault.admins, auth=vault.auth),
             lambda c: vault.write(c, who, body),
         )
 
@@ -1176,41 +1238,51 @@ def install_credentials(app, store, delegate=None, propose=None):
             request.url.path,
             request.headers.get('idempotency-key'),
             body,
-            lambda c, w: require_admin(c, w, vault.admins),
+            lambda c, w: TA.require(c, w, TA.key(), action=TA.EDIT, admins=vault.admins, auth=vault.auth),
             lambda c: vault.write(c, who, body, cid),
         )
 
     @app.post('/api/v2/credentials/{cid}/grants')
     def grant(request: Request, cid: str, body: CredentialGrant):
         who = acting(request, body)
-        if who.via == 'botops' and not who.confirmed and propose:
+        from .tools_delegation import DELEGATE_VIAS
+
+        if body.subject == COMPUTERS:
+            # A model key for computers is a subscription now (backend/computer_keys.py), given in Settings > Models.
+            raise Problem('subject', MODELS_FOR_COMPUTERS, 422)
+        if who.via in DELEGATE_VIAS and not who.confirmed and propose:
             # BotOps giving a bot a stored credential for a credential administrator who asked in chat runs at once, as
             # them: their own rights allow it, and a bot only ever gets what is explicitly granted to it. Anyone else is
-            # refused here in plain words (`grant_authority`); a click stays for a person's access, every computer's, and
-            # a holder passing on what they were granted.
+            # refused here in plain words (backend/tool_access.py); a click stays for a person's access, every computer's,
+            # and a holder passing on what they were granted.
             with store.transaction() as c:
                 validate_identity(c, who)
-                vault.grant_authority(c, who, cid, body.subject)
-                if not (
-                    body.subject.startswith('bot:') and (administrator(c, who, vault.admins) or creator(c, who, cid))
-                ):
+                found = TA.require(c, who, TA.key(cid), body.subject, TA.GRANT, admins=vault.admins, auth=vault.auth)
+                if not body.subject.startswith('bot:') or found.parent:
                     name = vault.row(c, cid)['name']
+                    if who.via != 'botops':
+                        # The Tools Owner gives bots keys for the person who asked; anyone else's access is their tap.
+                        raise Problem(
+                            'forbidden',
+                            f"Giving {body.subject} the stored credential {name} is the person's own tap in Tools: "
+                            'open the key and add them under Who can use it',
+                            403,
+                            extra={'fix': 'Add them under Who can use it', 'link': '#/tools/keys?show=credentials'},
+                        )
                     return propose(
                         c,
                         who,
                         'POST',
                         request.url.path,
                         {'subject': body.subject},
-                        f"Give every computer the stored credential {name}, to sign its model in"
-                        if body.subject == COMPUTERS
-                        else f"Give {body.subject} the stored credential {name}",
+                        f"Give {body.subject} the stored credential {name}",
                     )
         return vault.change(
             who,
             request.url.path,
             request.headers.get('idempotency-key'),
             body,
-            lambda c, w: vault.grant_authority(c, w, cid, body.subject),
+            lambda c, w: TA.require(c, w, TA.key(cid), body.subject, TA.GRANT, admins=vault.admins, auth=vault.auth),
             lambda c: vault.grant(c, who, cid, body.subject),
         )
 
@@ -1224,9 +1296,9 @@ def install_credentials(app, store, delegate=None, propose=None):
                 'SELECT subject,granted_by FROM credential_grants WHERE id=? AND credential_id=?', (gid, cid)
             ).fetchone()
             if not row:
-                require_admin(c, who, vault.admins)
+                TA.require(c, who, TA.key(), action=TA.REVOKE, admins=vault.admins, auth=vault.auth)
                 raise Problem('not_found', 'Grant not found', 404)
-            vault.revoke_authority(c, who, cid, row)
+            TA.require(c, who, TA.key(cid, row), action=TA.REVOKE, admins=vault.admins, auth=vault.auth)
             c.execute(
                 'UPDATE credential_grants SET revoked_at=coalesce(revoked_at,?),revoked_by=? WHERE id=?',
                 (H.now(), who.actor, gid),
@@ -1243,7 +1315,7 @@ def install_credentials(app, store, delegate=None, propose=None):
         who = request.state.identity
         with store.transaction() as c:
             validate_identity(c, who)
-            require_admin(c, who, vault.admins)
+            TA.require(c, who, TA.key(), action=TA.DELETE, admins=vault.admins, auth=vault.auth)
             require_seen(c, who, cid, vault.admins)
             from . import api_tools
 
@@ -1267,22 +1339,24 @@ def install_credentials(app, store, delegate=None, propose=None):
             return vault.reveal(c, request.state.identity, cid)
 
     @app.get('/api/v2/credential-runtime')
-    def runtime(request: Request, subscription_runtime: Literal["claude", "codex"] | None = None):
+    def runtime(request: Request, subscription_runtime: Literal["claude", "codex", "cursor", "musecode"] | None = None):
         who = request.state.identity
         if who.role != 'bot':
             raise Problem('forbidden', 'An active bot run is required', 403)
         with store.transaction() as c:
             validate_identity(c, who)
             values = []
-            held = granted(c, who.actor)
+            held, explicit = granted(c, who.actor), explicitly_granted(c, who.actor)
             # A proxied tool's key stays here: the run gets a token for the proxy instead (backend/tool_proxy.py).
             from . import tool_proxy
 
             proxied = tool_proxy.proxied_tools(c)
             # A website account never reaches a run: its browser commands type it (backend/website_tools.py).
-            for row in c.execute("SELECT * FROM credentials WHERE kind!='login' ORDER BY id"):
+            for row in c.execute(RUN_ROWS):
                 if row['ciphertext'] is not None and row['id'] in held:
-                    tool = proxied.get(row['tool_id'])
+                    tool, way = held_at_read(c, proxied, row, who.actor, vault.cipher)
+                    if way == 'skip':
+                        continue
                     if tool is not None:
                         values.append(
                             tool_proxy.runtime_item(
@@ -1305,22 +1379,39 @@ def install_credentials(app, store, delegate=None, propose=None):
                             windowed=bool(who.attempt_id),
                         )
                         continue
+                    if row['id'] in explicit:
+                        value = vault.reveal(c, who, row['id'])
+                    else:
+                        # A key the bot reads by default (backend/default_read.py) is a Read key: its value goes to
+                        # the run as a granted one's does, and never to a reveal.
+                        value = {'id': row['id'], 'value': vault.cipher.decrypt(c, row)}
+                        record_use(
+                            c,
+                            who.actor,
+                            'credential.revealed',
+                            row['id'],
+                            {'attempt': who.attempt_id or None, 'default_read': True},
+                            windowed=bool(who.attempt_id),
+                        )
                     values.append(
-                        {
-                            'id': row['id'],
-                            'name': row['name'],
-                            'env': row['env'],
-                            'kind': row['kind'],
-                            **vault.reveal(c, who, row['id']),
-                        }
+                        {'id': row['id'], 'name': row['name'], 'env': row['env'], 'kind': row['kind'], **value}
                     )
             # Never the Tico AI Gateway's key: a run reaches it through its runner (runner-gateway-credentials below).
             # The company subscriptions its claim handed it, for this run only (backend/model_subscriptions.py).
             from .model_subscriptions import run_values
 
             subscriptions = run_values(c, vault, who, subscription_runtime)
+            # Each held key of an MCP tool brings its server, with no bot.yaml entry (backend/mcp_connect.py).
+            from .mcp_connect import runtime_servers
+
+            servers = runtime_servers(c, values)
+            # The settings of each tool it holds a key of (backend/tool_settings.py): plain values, after the keys.
+            from . import tool_settings
+
+            values += tool_settings.runtime_items(c, held, {v['env'] for v in values if v.get('env')})
             return {
                 'credentials': values,
+                **({'mcp_servers': servers} if servers else {}),
                 **({'subscriptions': subscriptions} if subscriptions else {}),
                 **(
                     {'subscription_activated': any(s['runtime'] == subscription_runtime for s in subscriptions)}
@@ -1373,7 +1464,9 @@ def install_credentials(app, store, delegate=None, propose=None):
                     "SELECT id FROM credentials WHERE ciphertext IS NOT NULL AND env!='' AND kind!='login'"
                 )
             ):
-                return {'credentials': []}
+                from . import tool_settings
+
+                return {'credentials': tool_settings.runtime_items(c, held)}
         with store.transaction() as c:
             placed(c)
             values = []
@@ -1381,9 +1474,11 @@ def install_credentials(app, store, delegate=None, propose=None):
             from . import tool_proxy
 
             proxied = tool_proxy.proxied_tools(c)
-            for row in c.execute("SELECT * FROM credentials WHERE kind!='login' ORDER BY id"):
+            for row in c.execute(RUN_ROWS):
                 if row['ciphertext'] is not None and row['env'] and row['id'] in held:
-                    tool = proxied.get(row['tool_id'])
+                    tool, way = held_at_read(c, proxied, row, 'bot:' + bot, vault.cipher)
+                    if way == 'skip':
+                        continue
                     if tool is not None:
                         values.append(
                             tool_proxy.runtime_item(
@@ -1410,12 +1505,17 @@ def install_credentials(app, store, delegate=None, propose=None):
                         {'bot': bot, 'runner': who.runner_id, 'use': 'watcher'},
                         windowed=True,
                     )
+            from . import tool_settings
+
+            values += tool_settings.runtime_items(c, held, {v['env'] for v in values})
             return {'credentials': values}
 
     @app.get('/api/v2/runner-model-credentials')
     def model_credentials(request: Request, runtime: str, login: str = ''):
-        """The model key or token this computer signs `runtime` in with: its own, stored from Settings > Computers, or
-        the one the company gave every computer. Only those, named for this runtime: never one granted to a bot."""
+        """The model key or token this computer signs `runtime` in with: the key subscription it is given (its own,
+        stored from Settings > Computers, or a shared one). Only those, named for this runtime: never one granted to a
+        bot, never a subscription saved in Settings > Models. Runners of v0.6.0-rc.1 on poll it, so the reply keeps
+        its shape (backend/computer_keys.py keys_for)."""
         who = request.state.identity
         names = providers.MODEL_KEYS.get(runtime)
         if who.role != 'runner':
@@ -1427,8 +1527,8 @@ def install_credentials(app, store, delegate=None, propose=None):
         def chosen(c):
             if not c.execute('SELECT 1 FROM runners WHERE id=? AND revoked_at IS NULL', (who.runner_id,)).fetchone():
                 raise Problem('forbidden', 'Only a registered computer may ask for this', 403)
-            # Which key, in the one order (backend/computer_keys.py): a key staged for its `use_key` job, its own,
-            # else the shared one; none once a person cleared it or signed it out (model_login).
+            # Which key, in the one order (backend/computer_keys.py): a key staged for its `use_key` job, else the
+            # key it is given; none once a person cleared it or signed it out (model_login).
             return keys_for(c, vault, who.runner_id, runtime, login)
 
         # Most computers poll with no key to send (signed out, switching, subscription): answer those from a read,

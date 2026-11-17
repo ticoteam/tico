@@ -7,10 +7,19 @@ const vm: typeof import('node:vm') = require('node:vm');
 const path: typeof import('node:path') = require('node:path');
 
 const root = path.join(__dirname, '../..');
+// The page loads the SHA-256 fallback (ui/app/sha256.ts) before secret-drop.ts, so each context gets both, in that order.
+const sha256 = fs.readFileSync(path.join(root, 'build/ui/app/sha256.js'), 'utf8');
+const secretDrop = fs.readFileSync(path.join(root, 'build/ui/app/secret-drop.js'), 'utf8');
+const exported = ';globalThis.sd = {sdScan, sdPreview, sdDigest};';
 const context = vm.createContext({get: () => Promise.reject(new Error('no network in this test')), crypto: globalThis.crypto, TextEncoder});
-vm.runInContext(fs.readFileSync(path.join(root, 'build/ui/app/secret-drop.js'), 'utf8') + ';globalThis.sd = {sdScan, sdPreview, sdDigest};', context);
+vm.runInContext(sha256 + ';' + secretDrop + exported, context);
+// A plain-http page: no crypto.subtle, so the digest comes from sha256Digest.
+const plain = vm.createContext({get: () => Promise.reject(new Error('no network in this test')), TextEncoder, Uint8Array, Uint32Array, DataView, ArrayBuffer, Math});
+vm.runInContext(sha256 + ';' + secretDrop + exported, plain);
 type Item = {tier: string; value: string; name: string; [k: string]: string | number};
-const sd = (context as unknown as {sd: {sdScan(r: unknown, t: string): Item[]; sdPreview(i: {type: string; value: string}): string; sdDigest(r: unknown, v: string): Promise<string>}}).sd;
+type SecretDrop = {sdScan(r: unknown, t: string): Item[]; sdPreview(i: {type: string; value: string}): string; sdDigest(r: unknown, v: string): Promise<string>};
+const sd = (context as unknown as {sd: SecretDrop}).sd;
+const plainSd = (plain as unknown as {sd: SecretDrop}).sd;
 const rules: unknown = JSON.parse(fs.readFileSync(path.join(root, 'backend/secret_rules.json'), 'utf8'));
 type Case = {id: string; text: string | string[]; expect: Record<string, string | string[]>[]};
 const fx = JSON.parse(fs.readFileSync(path.join(root, 'backend/tests/fixtures/secret_drop_cases.json'), 'utf8')) as {cases: Case[]; ordinary: string[]};
@@ -32,8 +41,12 @@ assert.ok(ordinary.filter(i => i.tier === 'suspect').length <= 2, 'at most 2 sus
 assert.equal(sd.sdPreview({type: 'token', value: 'abcdefghijklmnop'}), 'abc…nop');
 assert.equal(sd.sdPreview({type: 'password', value: 'abcdefghijklmnop'}), '••••••');
 assert.equal(sd.sdPreview({type: 'api_key', value: 'short1234'}), '••••••');
-// The un-mark digest is the server's (secret_drop.digest: sha256 of the normalized value).
-void sd.sdDigest(rules, 'k3J​dP9').then(d => {
-  assert.equal(d, require('node:crypto').createHash('sha256').update('k3JdP9').digest('hex'));
+// The un-mark digest is the server's (secret_drop.digest: sha256 of the normalized value), on a secure page and on a
+// plain-http one, which has no crypto.subtle. The pasted value carries a zero-width space, which the digest drops.
+const expected = require('node:crypto').createHash('sha256').update('k3JdP9').digest('hex');
+const pasted = 'k3J\u200bdP9';
+void Promise.all([sd.sdDigest(rules, pasted), plainSd.sdDigest(rules, pasted)]).then(([secure, insecure]) => {
+  assert.equal(secure, expected, 'digest with crypto.subtle');
+  assert.equal(insecure, expected, 'digest without crypto.subtle (plain http)');
   console.log('secret-drop-unit: ok');
 });

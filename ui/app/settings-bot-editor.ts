@@ -16,8 +16,6 @@ type BotEditRow = Employee & {
   turns_at_once?: number | null;
   manages_reports?: boolean;
   browser_exit?: string | null;
-  app_delivery_app?: string | null;
-  app_delivery?: {computer?: string | null; computer_label?: string} | null;
   reasoning_effort?: string | null;
   effort?: string | null;
   update_subscriptions?: string[];
@@ -27,7 +25,6 @@ type BotEditRow = Employee & {
   shared_from?: string | null;
 };
 // A computer as the editor reads it: the settings roster's row plus the fields its rows draw.
-type AppReport = MachineApp;
 type MachineRow = DeviceMachine;
 // The model a new bot starts on: a catalogue row, or the empty fallback.
 type FallbackModel = Partial<SettingsModel & {default_effort?: string; harnesses?: string[]; runtime?: string}>;
@@ -43,7 +40,7 @@ type UpdateFeeds = {unreleased?: boolean; templates?: {feed?: string | null; sta
 type ControlField = {value: string; disabled: boolean; defaultValue?: string};
 // A bot's transition (GET /v2/settings/transitions/<id>), as the dialog draws it.
 type TransitionTarget = {harness?: string; runtime?: string; model?: string; effort?: string; label?: string};
-type TransitionRow = {id: string; kind: string; state: string; bot: string; target?: TransitionTarget | null; progress: {prepared: number; total: number}; error?: string; without_checkpoint?: boolean};
+type TransitionRow = {id: string; kind: string; state: string; bot: string; target?: TransitionTarget | null; error?: string};
 
 const settingsOwnerChips = (list: BriefPerson[] | null | undefined) => (list || []).map(o => `<span class="pchip">${personCircle(o.name || o.id, 16)}<span>${esc(firstName(o.name) || o.id)}</span></span>`).join('');
 function settingsBotEditorRows(e: BotEditRow) {
@@ -58,7 +55,7 @@ function settingsBotEditorRows(e: BotEditRow) {
     ${settingsTurnsAtOnceRow(e)}
     ${settingsManagesReportsRow(e)}
     ${budgetRowHTML(e)}
-    ${e.agent ? `<div class="sb-row"><span>Computer</span>${settingsAgentCell(e)}</div>${settingsAppDeliveryRow(e)}`
+    ${e.agent ? `<div class="sb-row"><span>Computer</span>${settingsAgentCell(e)}</div>`
       : `<div class="sb-row"><span>Model</span>${settingsChoiceCombo(e, 'model')}<span></span></div>
     <div class="sb-row"><span>Fallback</span>${settingsChoiceCombo(e, 'fallback')}<span></span></div>
     <div class="sb-row"><span>Task model</span><div>${settingsChoiceCombo(e, 'task')}${settingsTaskWarning(e)}</div><span></span></div>
@@ -116,39 +113,6 @@ function settingsManagesReportsRun(box: HTMLInputElement): BotRun {
   const slug = String(box.dataset.botManagesReports), manages_reports = box.checked;
   return async rev => (await post(`/v2/bots/${encodeURIComponent(slug)}/manages-reports`,
     {manages_reports, expected_revision: rev}))?.revision ?? rev + 1;
-}
-// A synced bot whose platform has a desktop app a Mac's runner drives (backend/app_delivery.py APPS) can be delivered
-// through that app on one of its person's computers instead of waiting for the daily sync. Only that person chooses a
-// computer, one of their own where the app is ready (the rest are listed, disabled, with why); they or an admin turn it
-// off. Everyone else reads the current value. It saves on its own, like the computer.
-function settingsAppDeliveryRow(e: BotEditRow) {
-  // The server names the app a synced bot can be delivered through; none means the bot has no app.
-  const app = e.agent?.synced && e.app_delivery_app;
-  if (!app) return '';
-  const current = e.app_delivery?.computer || '', name = machineAppName(app);
-  const label = (id: string) => SETTINGS_DATA.machines.find(machine => machine.id === id)?.label || e.app_delivery?.computer_label || 'a computer';
-  const mine = !!S.me?.id && e.owner_id === S.me.id;
-  const off = 'Off (daily sync)';
-  if (!mine && !(current && settingsIsAdmin())) {
-    return `<div class="sb-row"><span>Deliver through the app on</span><span data-app-delivery-value="${esc(e.id)}">${current ? `${esc(label(current))} <span class="muted">· ${esc(name)} app</span>` : `<span class="muted">${off}</span>`}</span><span></span></div>`;
-  }
-  const own: MachineRow[] = mine ? SETTINGS_DATA.machines.filter(machine => !machine.revoked_at && machine.owner_id === S.me?.id) : [];
-  const options = own.map(machine => {
-    const report = machine.readiness?.appdriver?.apps?.[app];
-    const why = report?.ready === true ? '' : report ? [machineAppState(report), report.detail].filter(Boolean).join(': ') : `${name} not reported`;
-    // The chosen computer stays selectable even when its app stops being ready, so the select shows it.
-    return `<option value="${esc(machine.id)}" ${machine.id === current ? 'selected' : why ? 'disabled' : ''}>${esc(machine.label)}${why ? ` · ${esc(why)}` : ''}</option>`;
-  });
-  if (current && !own.some(machine => machine.id === current)) options.push(`<option value="${esc(current)}" selected>${esc(label(current))}</option>`);
-  return `<div class="sb-row"><span>Deliver through the app on</span><select class="settings-inline-select" data-bot-app-delivery="${esc(e.id)}" data-app="${esc(app)}" data-current="${esc(current)}" aria-label="Deliver ${esc(e.display_name)} through the ${esc(name)} app on">
-      <option value="" ${current ? '' : 'selected'}>${off}</option>${options.join('')}
-    </select><span></span></div>`;
-}
-function settingsAppDeliveryRun(select: HTMLSelectElement): BotRun {
-  const slug = String(select.dataset.botAppDelivery), chosen = select.value, app = select.dataset.app;
-  // The server refuses (422, with why) a computer that isn't the person's own or where the app isn't ready.
-  return async rev => (await post(`/v2/bots/${encodeURIComponent(slug)}/definition`, {
-    app_delivery: chosen ? {computer: chosen, app} : null, expected_revision: rev}))?.revision ?? rev + 1;
 }
 // The slug the server would pick for this name (clients/catalog.py slug_from_name), shown under Advanced.
 function slugFromName(name: string) {
@@ -347,8 +311,6 @@ function settingsEditBot(slug = '', inline = false) {
       if (managesReports) stage('manages', 'manages its reports', managesReports.checked !== (managesReports.dataset.current === 'true') && settingsManagesReportsRun(managesReports));
       const taskEffort = eventElement(event);
       if (taskEffort instanceof HTMLElement && taskEffort.matches('[data-task-effort]')) taskEffort.dataset.touched = '1';
-      const delivery = eventElement(event)?.closest<HTMLSelectElement>('[data-bot-app-delivery]');
-      if (delivery) stage('delivery', 'app delivery', changed(delivery) && settingsAppDeliveryRun(delivery));
       paintPending();
     });
     // A task model picked here changes the Task effort choices: the efforts of the model that would run tasks.
@@ -669,8 +631,8 @@ function settingsConfirmTransition(e: BotEditRow, kind: string, target: string |
     dialog.innerHTML = `<div class="tmodal-head"><h2 id="transition-title">${label} · ${esc(e.display_name)}</h2><span class="spacer"></span><button class="ghost" type="button" data-confirm-cancel aria-label="Close"><span class="nav-icon" aria-hidden="true">close</span></button></div>
       <div class="transition-body"><p>Destination: <strong>${esc(target)}</strong></p>
         <div class="transition-progress"><strong>This starts a fresh provider session.</strong>
-          <p>The bot saves a checkpoint first. History is kept; session-only context is lost.</p></div>
-        <div class="transition-actions"><button class="ghost" type="button" data-confirm-cancel>Cancel</button><button class="primary settings-go" type="button" data-confirm-prepare>Prepare change</button></div></div>`;
+          <p>History is kept; session-only context is lost.</p></div>
+        <div class="transition-actions"><button class="ghost" type="button" data-confirm-cancel>Cancel</button><button class="primary settings-go" type="button" data-confirm-prepare>Change</button></div></div>`;
     dialog.querySelector('[data-confirm-prepare]').onclick = () => finish(true);
     dialog.querySelectorAll('[data-confirm-cancel]').forEach((button: HTMLElement) => button.onclick = () => finish(false));
     dialog.oncancel = (event: Event) => { event.preventDefault(); finish(false); };
@@ -697,21 +659,12 @@ function settingsTransitionTarget(t: TransitionRow) {
     : t.target?.label || 'another computer';
 }
 function settingsTransitionHTML(t: TransitionRow) {
-  const name = settingsBotName(t.bot), progress = t.progress || {prepared:0,total:0};
-  const status = t.state === 'preparing' ? `Checkpointing ${progress.prepared} of ${progress.total} current conversation${progress.total === 1 ? '' : 's'}…`
-    : t.state === 'blocked' ? `Current-session checkpoint blocked: ${t.error || 'The current computer is unavailable.'}`
-    : t.state === 'failed' ? t.error || 'The checkpoint could not be completed.'
-    : t.state === 'applied' ? `${name} now uses ${settingsTransitionTarget(t)}.${t.without_checkpoint ? ' No prepared checkpoint was created.' : t.progress.total ? ' Its conversation checkpoint is saved.' : ' It had no active session to checkpoint.'}`
-    : t.state === 'canceled' ? 'This change was canceled.' : 'Preparing the change…';
-  const pending = ['preparing','blocked','failed','prepared'].includes(t.state);
-  const force = ['blocked','failed'].includes(t.state);
+  const name = settingsBotName(t.bot);
+  const status = t.state === 'applied' ? `${name} now uses ${settingsTransitionTarget(t)}.` : t.error || 'Preparing the change…';
   return `<div class="tmodal-head"><h2 id="transition-title">${t.kind === 'model' ? 'Change model settings' : 'Move bot'} · ${esc(name)}</h2><span class="spacer"></span><button class="ghost" type="button" data-transition-close aria-label="Close"><span class="nav-icon" aria-hidden="true">close</span></button></div>
     <div class="transition-body"><p>Destination: <strong>${esc(settingsTransitionTarget(t))}</strong></p>
-      <div class="transition-progress"><strong>${esc(status)}</strong>${t.state === 'preparing' ? '<p class="muted">It applies when checkpoints are saved. You can close this.</p>' : ''}</div>
-      ${force ? `<p class="err">Without a checkpoint the new session starts with no handoff. History is kept.</p>` : ''}
-      <div class="transition-actions">${force ? '<button class="fail" type="button" data-transition-force>Change without checkpoint</button>' : ''}
-        ${pending ? '<button class="ghost" type="button" data-transition-cancel>Cancel change</button>' : ''}
-        ${t.state === 'applied' ? '<button class="primary" type="button" data-transition-done>Done</button>' : ''}</div></div>`;
+      <div class="transition-progress"><strong>${esc(status)}</strong></div>
+      <div class="transition-actions">${t.state === 'applied' ? '<button class="primary" type="button" data-transition-done>Done</button>' : ''}</div></div>`;
 }
 function settingsWatchTransition(id: string, origin: {control?: HTMLElement; current?: string} = {}) {
   const dialog = settingsTransitionDialog();
@@ -724,26 +677,10 @@ function settingsWatchTransition(id: string, origin: {control?: HTMLElement; cur
     dialog.innerHTML = settingsTransitionHTML(t);
     dialog.querySelector('[data-transition-close]')?.addEventListener('click', () => dialog.close());
     dialog.querySelector('[data-transition-done]')?.addEventListener('click', () => dialog.close());
-    dialog.querySelector('[data-transition-force]')?.addEventListener('click', async (button: MouseEvent & {currentTarget: HTMLButtonElement}) => {
-      const control = button.currentTarget;
-      if (!await settingsConfirm({title: 'Change without a checkpoint?', ok: 'Change without checkpoint',
-        text: `Raw conversation history stays in ${appName()}, but persistent session context will be lost.`})) return;
-      control.disabled = true;
-      try { await post(`/v2/settings/transitions/${encodeURIComponent(id)}/apply-without-checkpoint`, {change_without_checkpoint:true}); await paint(); }
-      catch (error) {toast(errorMessage(error, ''), true); control.disabled = false;}
-    });
-    dialog.querySelector('[data-transition-cancel]')?.addEventListener('click', async (button: MouseEvent & {currentTarget: HTMLButtonElement}) => {
-      button.currentTarget.disabled = true;
-      try { await post(`/v2/settings/transitions/${encodeURIComponent(id)}/cancel`, {}); await paint(); }
-      catch (error) {toast(errorMessage(error, ''), true); button.currentTarget.disabled = false;}
-    });
-    if (['applied','canceled'].includes(t.state)) {
+    if (t.state === 'applied') {
       clearInterval(SETTINGS_TRANSITION_TIMER ?? undefined);
       await loadSettings();
-      if (t.state === 'applied') {
-        const suffix = t.without_checkpoint ? ' · changed without checkpoint' : t.progress.total ? ' · checkpoint saved' : '';
-        toast(`${settingsBotName(t.bot)} ${t.kind === 'model' ? 'now uses' : 'now runs on'} ${settingsTransitionTarget(t)}${suffix}`);
-      }
+      toast(`${settingsBotName(t.bot)} ${t.kind === 'model' ? 'now uses' : 'now runs on'} ${settingsTransitionTarget(t)}`);
     }
   };
   dialog.onclose = () => {

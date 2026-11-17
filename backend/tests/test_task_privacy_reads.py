@@ -175,7 +175,7 @@ def test_private_relations_tags_and_events_do_not_leak_to_owner(api):
 def test_shared_room_message_snapshot_sql_and_inbox_filter_private_refs(api):
     hidden = task(api, requester="human:ben", owner="bot:ops")
     conv, msg = legacy_message(api, hidden["id"])
-    for path in (f"conversations/{conv['id']}/messages", f"conversations/{conv['id']}/snapshot", "inbox"):
+    for path in (f"conversations/{conv['id']}/messages", f"conversations/{conv['id']}/snapshot", "messages?unread=1"):
         assert "Private legacy comment" not in json.dumps(get(api, path))
     get(api, "messages/" + msg["id"], expected=404)
     assert not sql(api, "SELECT body FROM messages WHERE id='" + msg["id"] + "'")
@@ -265,7 +265,7 @@ def test_private_execution_cannot_publish_public_task_or_wider_reply(api):
     )
     post(api, "messages", {"to": "ana", "text": "Private derived output"}, attempt["token"], expected=403)
     post(api, "updates", {"body": "Private derived output"}, attempt["token"], expected=403)
-    post(api, "integrations/github/learnings", {"text": "Private derived output"}, attempt["token"], expected=403)
+    post(api, "tools/github/learnings", {"text": "Private derived output"}, attempt["token"], expected=403)
     assert not sql(api, "SELECT id FROM tasks WHERE id='" + row["id"] + "'")
 
 
@@ -695,7 +695,8 @@ def test_needs_you_reads_a_fixed_number_of_statements_and_hides_private_items(ap
     def cards(size):
         with store.transaction() as c:
             for n in range(size):
-                H.task_create(c, "bot:ops", f"Step {size}-{n}", "Do it.", "human:ben", lint=False)
+                step = H.task_create(c, "bot:ops", f"Step {size}-{n}", "Do it.", "bot:ops", lint=False)
+                H.task_ask(c, "bot:ops", step["id"], "human:ben", f"Which step for {n}?", seen_version=step["version"])
                 work = H.task_create(c, "human:ana", f"Release {size}-{n}", "Checklist", "human:ana", lint=False)
                 H.task_ask(c, "human:ana", work["id"], "human:ben", f"Which region for {n}?")
 
@@ -705,7 +706,7 @@ def test_needs_you_reads_a_fixed_number_of_statements_and_hides_private_items(ap
         total += 2 * size
         page, counts[size] = traced_get(api, "needs-you", "ben-test")
         assert len(page["items"]) == total
-        assert {x["kind"] for x in page["items"]} == {"task", "ask"}
+        assert {x["kind"] for x in page["items"]} == {"ask"}
         assert hidden["id"] not in json.dumps(page) and "Private plan" not in json.dumps(page)
     assert counts[30] <= counts[3] + 5
 
@@ -963,7 +964,7 @@ def test_bot_inbox_reads_a_fixed_number_of_statements_and_hides_private_messages
         unread(size, start)
         start = size
         busy(api)
-        inbox, statements = traced(api, lambda: get(api, "inbox", attempt["token"]))
+        inbox, statements = traced(api, lambda: get(api, "messages?unread=1", attempt["token"]))
         counts[size] = len(statements)
         shown = {m["id"] for m in inbox["messages"]}
         assert {f"note-{n}" for n in range(0, size, 2)} <= shown and not {

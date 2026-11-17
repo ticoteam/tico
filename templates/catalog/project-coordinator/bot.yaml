@@ -3,13 +3,10 @@ display_name: "Project Coordinator"
 labels: [owner:project-coordinator]
 reads: []                        # other bot repositories this one may clone read-only
 
-# This must agree with the bot's settings on the server, or be left out of this file entirely.
 max_run_minutes: 45
 
-# The first routine is declared but not armed (`enabled: false`). It runs on Tico's
-# `meeting.ready` event: one task per imported team meeting, carrying the notes and transcript.
+# It runs on Tico's `meeting.ready` event: one task per imported team meeting, carrying the notes and transcript.
 # The bot arms it with `tico automation update <id> --enable` when Setup starts; setup-done allows normal work.
-# `tico bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
 routines:
   - id: meeting-notes
     title: Meeting notes draft

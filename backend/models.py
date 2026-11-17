@@ -146,17 +146,6 @@ class ChangelogRead(Contract):
     ids: list[Annotated[str, Field(min_length=1, max_length=100)]] = Field(max_length=250)
 
 
-class TaskChat(Contract):
-    text: Text
-    expected_recipient: ID | None = None
-
-
-class PageChat(Contract):
-    page: Literal["tasks"]
-    text: str = Field(default="", max_length=200_000)
-    task_id: str | None = None
-
-
 Lane = Literal["company", "product"]
 # A task's number: one sequence for the whole team, like one board's ticket numbers.
 TaskNumber = Annotated[int, Field(ge=1, le=999_999_999)]
@@ -314,15 +303,65 @@ class TaskDone(Contract):
 
 
 class TaskMove(Contract):
-    """`to` is next, done, closed, reopen, or a stage's id or name (H.task_move)."""
+    """`to` is next, done, closed, reopen, or a stage's id or name (H.task_move). With `to_pipeline` (another
+    pipeline's id or name) it moves there (H.task_move_to): `to` names that pipeline's stage, its first when left out."""
 
-    to: Annotated[str, Field(min_length=1, max_length=200)]
+    to: Annotated[str, Field(min_length=1, max_length=200)] | None = None
+    to_pipeline: Annotated[str, Field(min_length=1, max_length=200)] | None = None
     why: Why | None = None
     version: Version | None = None
     on_behalf_of: ID | None = None
     # A person lets exactly this one see a private task and moves it on (the stuck card's one fix, task #392): `to` is
     # next. Refused when the task now waits on someone else (H.task_let_see).
     let_see: list[ID] | None = Field(default=None, min_length=1, max_length=50)
+
+
+class TaskMovePlace(Contract):
+    """A stage of a pipeline, each by id or name."""
+
+    pipeline: Annotated[str, Field(min_length=1, max_length=200)]
+    stage: Annotated[str, Field(min_length=1, max_length=200)]
+
+
+class TaskManyOf(Contract):
+    """The tasks a write to many names: `ids`, or every open task in the stage `from` names (a board's column)."""
+
+    ids: list[ID] | None = Field(default=None, min_length=1, max_length=500)
+    from_: TaskMovePlace | None = Field(default=None, alias="from")
+    why: Why | None = None
+    on_behalf_of: ID | None = None
+
+    @model_validator(mode="after")
+    def one_selection(self):
+        if (self.ids is None) == (self.from_ is None):
+            raise ValueError("name the tasks: ids, or from (a pipeline and a stage), not both")
+        return self
+
+
+class TaskMoveMany(TaskManyOf):
+    """Move many tasks (`POST /api/v2/tasks/move`): with `to_pipeline`, to its stage `to` (its first when left out);
+    without, each in its own pipeline, as a single move's `to` says (next, done, closed, reopen or a stage)."""
+
+    to_pipeline: Annotated[str, Field(min_length=1, max_length=200)] | None = None
+    to: Annotated[str, Field(min_length=1, max_length=200)] | None = None
+
+    @model_validator(mode="after")
+    def somewhere(self):
+        if not self.to_pipeline and not self.to:
+            raise ValueError("say where they go: to, or to_pipeline")
+        return self
+
+
+class TaskOwnerMany(TaskManyOf):
+    """Give many tasks to one owner for their stage (`POST /api/v2/tasks/owner`)."""
+
+    owner: ID
+
+
+class TaskSnoozeMany(TaskManyOf):
+    """Snooze many tasks in their stages (`POST /api/v2/tasks/snooze`): until a date, or with none (On ice)."""
+
+    until: str | None = Field(default=None, min_length=10, max_length=40)
 
 
 class TaskQueue(Contract):
@@ -413,12 +452,15 @@ class OkUse(Contract):
 
 class TaskAskAnswer(Contract):
     """ok, no (send it back, with a note), again (look again), or the answer to a question (H.task_answer).
-    `page_version`: on a page, the `<file id>@<version>` the person was shown; refused when another is attached now."""
+    `page_version`: on a page, the `<file id>@<version>` the person was shown; refused when another is attached now.
+    `visit_id`: on a document approval, the visit it was asked on: with `page_version`, the approval's key. A stale key
+    is refused (`task_changed`) with the version submitted now in `approval`."""
 
     value: Annotated[str, Field(min_length=1, max_length=20_000)]
     note: str | None = Field(default=None, max_length=20_000)
     version: Version | None = None
     page_version: Annotated[str, Field(pattern=r"^[^@\s]+@[1-9][0-9]{0,8}$", max_length=200)] | None = None
+    visit_id: ID | None = None
     on_behalf_of: ID | None = None
 
 
@@ -507,6 +549,8 @@ class PipelineRecord(Contract):
 
 class PipelineRetire(Contract):
     settings_version: int | None = None
+    # Where its open tasks go first (another pipeline's stage); without it a pipeline that holds one is refused.
+    move_tasks_to: TaskMovePlace | None = None
 
 
 class PipelineFromPreset(Contract):
@@ -971,25 +1015,6 @@ class MarketEdgeCreate(Contract):
     insight_id: str | None = Field(default=None, max_length=80)
 
 
-class MarketEdgeUpdate(Contract):
-    rel: str | None = Field(default=None, max_length=40)
-    since: str | None = None
-    until: str | None = None
-    set_since: bool = False
-    set_until: bool = False
-    confidence: Literal["high", "medium", "low"] | None = None
-    properties: dict | None = None
-    evidence_ids: list[str] | None = None
-    insight_id: str | None = Field(default=None, max_length=80)
-
-
-class MarketCitation(Contract):
-    claim_kind: Literal["entity", "edge", "evidence", "document"]
-    claim_id: str = Field(min_length=1, max_length=200)
-    evidence_id: str = Field(min_length=1, max_length=80)
-    insight_id: str | None = Field(default=None, max_length=80)
-
-
 class MarketResolve(Contract):
     status: Literal["applied", "merged", "rejected", "needs-human"]
     resolution: str = Field(default="", max_length=2000)
@@ -1387,8 +1412,10 @@ AppState = Literal[
 APP_STATES = AppState.__args__
 
 
+# The retired desktop-app driver's readiness: today's runner never sends it, but a 0.6.x runner may
+# (contracts/runner/releases/0.6.0), so it is accepted and ignored until 0.6.0 leaves the supported window.
 class AppDriverApp(Contract):
-    """One desktop app the computer's app driver can operate for a synced bot (backend/app_delivery.py)."""
+    """One desktop app the computer's app driver could operate for a synced bot."""
 
     installed: StrictBool = False
     version: Annotated[str, _cut(100), Field(max_length=100)] = ""
@@ -1445,7 +1472,8 @@ class StructuredReadiness(Contract):
     runtimes: dict[str, RuntimeReadiness] = Field(default_factory=dict)
     bots: dict[str, BotReadiness] = Field(default_factory=dict)
     harnesses: dict[str, HarnessReadiness] = Field(default_factory=dict, max_length=50)
-    mail_key: Literal["exposed"] | None = None  # the mail key is where bots can read it (runner_support/mail_key.py)
+    # A 0.6 computer's Google key is where its bots can read it; a newer one deletes the key (runner-rs/src/mail_retire.rs)
+    mail_key: Literal["exposed"] | None = None
     shared_env: Literal[True] | None = None  # secrets/_shared.env holds keys every bot there receives
     container_exec: ContainerExecReadiness | None = None
     # A bot's GitHub App token asked GitHub who it is, and Playwright's Chromium started (runner-rs/src/readiness_extra.rs).
@@ -1453,7 +1481,7 @@ class StructuredReadiness(Contract):
     browser_launch: ContainerExecReadiness | None = None
     engine: EngineReadiness | None = None
     screen: ScreenReadiness | None = None
-    appdriver: AppDriverReadiness | None = None
+    appdriver: AppDriverReadiness | None = None  # retired: accepted from 0.6.x runners, read by nothing
     browser: BrowserReadiness | None = None
     # The runner's last WARN/ERROR-like log lines, for a support bundle a person chooses to send (backend/diagnostics.py).
     # Long lines are cut, never refused: a refused report would hide the computer (0.3.2 runners sent 301 characters).
@@ -1572,9 +1600,9 @@ class Heartbeat(Contract):
     platform: str = Field(max_length=100)
     device_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     capacity: int = Field(default=4, ge=1, le=256)
-    # The assignment_* values name the retired temporary assignments (#420), and memory_tidy_packets_v1 the retired
-    # Nightly memory tidy pilot's packet path: today's runner no longer sends it, but the 0.6.x runners
-    # (contracts/runner/releases/0.6.0) do, so it is accepted and ignored until 0.6.0 leaves the supported window
+    # The assignment_* values name the retired temporary assignments (#420), and memory_tidy_packets_v1 and
+    # memory_tidy_keep_v1 the retired Nightly memory tidy pilot: today's runner sends neither, but the 0.6.x runners
+    # (contracts/runner/releases/0.6.0) do, so they are accepted and ignored until 0.6.0 leaves the supported window
     # (docs/runner-wire-contract.md).
     capabilities: list[
         Literal[
@@ -1598,6 +1626,7 @@ class Heartbeat(Contract):
             "turns_at_once_v1",
             "private_lanes_v1",
             "model_subscriptions_v1",
+            "plan_usage_v1",
             "browser_exit_v1",
             "model_subscription_activation_v1",
             "model_connect_v1",
@@ -2015,49 +2044,6 @@ class BotArchive(Contract):
     on_behalf_of: ID | None = None
 
 
-class AppDelivery(Contract):
-    """Where a synced bot's messages are delivered: through `app` on the computer (runner) `computer`."""
-
-    computer: ID
-    app: Literal["grok"] = "grok"
-
-
-class AppDeliveryMessage(Contract):
-    """One message the app shows in the bot's conversation. `key` is the driver's own stable id for it."""
-
-    key: Annotated[str, Field(min_length=1, max_length=200)]
-    role: Literal["bot", "user"]
-    text: Annotated[str, Field(min_length=1, max_length=40_000)]
-    at: Annotated[str, Field(max_length=50)] | None = None
-    needs_human: StrictBool = False
-
-
-class AppDeliveryError(Contract):
-    code: Literal[
-        "needs_human",
-        "no_permission",
-        "not_signed_in",
-        "needs_foreground",
-        "ui_changed",
-        "not_installed",
-        "not_running",
-        "bot_not_found",
-        "timeout",
-        "send_failed",
-        "busy",
-    ]
-    detail: Annotated[str, _cut(300), Field(max_length=300)] = ""
-    text: Annotated[str, Field(max_length=40_000)] = ""
-
-
-class AppDeliveryReport(Contract):
-    """What a computer read from a bot's conversation in the app, newest last (POST /api/v2/runners/me/app-delivery)."""
-
-    app: Literal["grok"] = "grok"
-    messages: list[AppDeliveryMessage] = Field(default_factory=list, max_length=50)
-    error: AppDeliveryError | None = None
-
-
 class BotDefinitionUpdate(Contract):
     private_tasks_default: StrictBool | None = None
     # A new slug: the label people type (@slug) and read. The bot's id, its history and every reference keep as they are.
@@ -2083,9 +2069,6 @@ class BotDefinitionUpdate(Contract):
     review_model: Literal["check", "own"] | None = None
     # `on`: each run's raw provider stream is kept a week for replay fixtures (backend/stream_capture.py); owner only.
     capture_stream: Literal["on", "off"] | None = None
-    # A Grok Bot answered through the Grok app on one of its person's computers; null turns it off
-    # (backend/app_delivery.py). Unset leaves it as it is.
-    app_delivery: AppDelivery | None = None
     # Subscribe to updates: which feeds it hears about as quiet notes (backend/update_feeds.py); empty is none.
     update_subscriptions: list[Literal["templates", "tico"]] | None = Field(default=None, max_length=2)
     expected_revision: int = Field(ge=1)
@@ -2136,7 +2119,6 @@ class PersonUpdate(Contract):
     about: str | None = Field(default=None, max_length=2000)
     goals: str | None = Field(default=None, max_length=8000)
     notes: str | None = Field(default=None, max_length=20_000)
-    notify_slack_task_done: bool | None = None
     # Their GitHub login ("" clears it): a review request naming it puts them on the linked task.
     github: str | None = Field(default=None, pattern=r"^@?[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})?$|^$")
     notify_slack_bot_messages: bool | None = None
@@ -2160,7 +2142,7 @@ class PersonUpdate(Contract):
     def has_change(self):
         if not (self.model_fields_set - {"on_behalf_of"}):
             raise ValueError(
-                "Provide title, about, goals, notes, notify_slack_task_done, notify_slack_bot_messages, update_draft, notify_browser, email_digest, slack_muted_bots, github, reports_to or left"
+                "Provide title, about, goals, notes, notify_slack_bot_messages, update_draft, notify_browser, email_digest, slack_muted_bots, github, reports_to or left"
             )
         return self
 
@@ -2314,10 +2296,6 @@ class BotTransitionCreate(Contract):
         if self.kind == "machine" and (not self.runner_id or self.model or self.effort or self.harness):
             raise ValueError("A machine transition requires only runner_id")
         return self
-
-
-class BotTransitionApply(Contract):
-    change_without_checkpoint: Literal[True]
 
 
 class SettingsUndo(Contract):
@@ -2902,8 +2880,8 @@ class Completion(Contract):
     # When the provider said that limit lifts (its own reset time); work resumes then instead of after a default wait.
     limit_resets_at: str | None = Field(default=None, max_length=40)
     retryable: bool = False  # the runtime could not renew its sign-in; the turn never started
-    # The turn gave a shared one-turn login to a waiting turn at its hold cap (runner-rs/src/login_turns.rs): it stopped
-    # at a safe point and its job goes back in the queue to continue, neither answered nor held for review.
+    # The turn gave its place up for an update (runner-rs/src/drain.rs): its job goes back in the queue to continue,
+    # neither answered nor held for review.
     yielded: bool = False
     # The model was at capacity after the turn acted, and the runner kept its thread: the job continues that thread
     # after the capacity hold instead of being held for review (backend/execution.py capacity_continuation).

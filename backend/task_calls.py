@@ -20,10 +20,11 @@ engine's modules reach back to hubdb and the store.
 
 import functools
 import json
+import re
 from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING, Any, Concatenate, NoReturn, ParamSpec, TypeVar, cast
 
-from . import hubdb_core, task_effects
+from . import ask_shape, hubdb_core, task_effects
 
 if TYPE_CHECKING:
     import sqlite3
@@ -273,6 +274,34 @@ def task_move(
 
 
 @_task_write()
+def task_move_to(
+    conn: "sqlite3.Connection",
+    actor: str,
+    task_id: str,
+    to_pipeline: str,
+    to: str | None = None,
+    why: str | None = None,
+    seen_version: int | str | None = None,
+    *,
+    mover: bool | None = None,
+    batch: str | None = None,
+) -> Row:
+    """Move a task to a stage of another pipeline (`task_engine.refile`): `to` names the stage (none: the first), and a
+    Done or Closed task lands in that pipeline's Done or Closed. Anyone who reads the task may (docs/pipelines-v3.md,
+    "Who may move"): anyone may add tasks to any pipeline, a private one too. A bot says why. `to_pipeline` naming the
+    task's own pipeline is a move inside it (`task_move`)."""
+    from . import task_engine as E
+
+    row = _open(conn, actor, task_id, mover, work=False)
+    pipe = E.pipeline_named(conn, actor, to_pipeline, task_id)
+    if pipe["id"] == row.get("pipeline_id"):
+        first = next((str(s["id"]) for s in E.stages(conn, str(pipe["id"])) if s["kind"] == "work"), "")
+        return task_move(conn, actor, task_id, str(to or "").strip() or first, why, seen_version, mover=mover)
+    with task_effects.because(actor):
+        return E.refile(conn, task_id, str(pipe["id"]), to, actor, why, seen_version, batch=batch)
+
+
+@_task_write()
 def task_let_see(
     conn: "sqlite3.Connection",
     actor: str,
@@ -439,8 +468,13 @@ def task_ask(
         reach.check(conn, SimpleNamespace(role="bot", actor=actor), target, "task", task_id=task_id)
     bring_in(conn, actor, row, target)
     if is_bot(actor) and is_human(target):
-        # What a bot puts in front of a person is plain: one or two short sentences, no ids or paths (rule 7).
-        H.require_person_ask(conn, actor, target, line, "ask")
+        # What a bot puts in front of a person is plain: a first line of one or two short sentences, no ids or paths
+        # (rule 7), that stands on its own; a list of questions may follow it, and its why is one line. Every path that
+        # asks a person comes through here, whatever the bot was told (backend/ask_shape.py).
+        H.require_person_ask(conn, actor, target, str(line or "").strip().split("\n", 1)[0], "ask")
+        shape = ask_shape.line_refusal(line, (brief or {}).get("why"))
+        if shape:
+            H.refuse(conn, actor, "lint", shape)
     return E.add_requirement(
         conn,
         task_id,
@@ -490,10 +524,13 @@ def task_answer(
     *,
     own_click: bool = False,
     page_version: str | None = None,
+    visit_id: str | None = None,
+    keyed: bool = False,
 ) -> Row:
     """Answer what is asked: `ok`, `no` with a note (send back) or `again` (look again) on an OK; `ok` or `no` on a
-    page, for the page shown (`page_version`, `<file id>@<version>`); the choice or the text on a question; `done` on
-    the owner's own work. If that was the last thing missing the task moves on. The result carries `answer_id`. `own_click` says the
+    page, for the page shown (`page_version`, `<file id>@<version>`; a document approval's key adds `visit_id`, and
+    a person's answer from a client, `keyed`, must carry it); the choice or the text on a question; `done` on the
+    owner's own work. If that was the last thing missing the task moves on. The result carries `answer_id`. `own_click` says the
     request is the person's own click in their own session (task_asks.own_click): only that OKs an OK the person
     asked themself."""
     from . import answers as A
@@ -512,6 +549,8 @@ def task_answer(
             seen_version=seen_version,
             own_click=own_click,
             page_version=page_version,
+            visit_id=visit_id,
+            keyed=keyed,
         )
 
 
@@ -744,6 +783,16 @@ def _page_of(conn: "sqlite3.Connection", visit_id: str, requirement: Row) -> Row
     return {"file_id": found["file_id"], "version": int(found["version"]), "ref": ref}
 
 
+def _page_checks(conn: "sqlite3.Connection", ref: object) -> list[str]:
+    """The check rows (page_verdicts.checks_of) of a `page:<id>[@<version>]` ref, [] for any other ref."""
+    from . import page_verdicts
+
+    found = re.fullmatch(r"page:([A-Za-z0-9_-]+)(?:@([0-9]{1,9}))?", str(ref or ""))
+    if not found:
+        return []
+    return page_verdicts.checks_of(conn, found.group(1), int(found.group(2)) if found.group(2) else None)
+
+
 def earlier_page(conn: "sqlite3.Connection", task_id: str, visit_id: str, requirement: Row) -> Row | None:
     """What a stage's OK that names nothing to show shows instead (#3784): the page that counted last on an earlier
     visit of its task (the QA page at OK release), {file_id, version, ref, stage_id, stage, source}, or None. Only for
@@ -761,6 +810,7 @@ def earlier_page(conn: "sqlite3.Connection", task_id: str, visit_id: str, requir
     ref = f"page:{found['file_id']}@{int(found['version'])}"
     stage_id = str(found["stage_id"])
     stage = str((E.stage(conn, stage_id) or {}).get("name") or stage_id)
+    checks = _page_checks(conn, ref)
     return {
         "file_id": found["file_id"],
         "version": int(found["version"]),
@@ -768,6 +818,7 @@ def earlier_page(conn: "sqlite3.Connection", task_id: str, visit_id: str, requir
         "stage_id": stage_id,
         "stage": stage,
         "source": [ref],
+        **({"checks": checks} if checks else {}),
     }
 
 
@@ -1014,7 +1065,7 @@ def ask_shown(conn: "sqlite3.Connection", row: Row, requirement: Row) -> Row:
     typed, brief, title = _typed_view(requirement), _brief_of(requirement), _title_of(requirement)
     return {
         "kind": requirement["kind"],
-        "line": R.name_of(requirement),
+        "line": R.approval_line(requirement),
         "choices": requirement.get("choices"),
         **({"typed": typed} if typed else {}),
         **({"brief": brief} if brief else {}),
@@ -1049,6 +1100,9 @@ def _leave_entry(
     shows: list[Any] = [page["ref"]] if page else [] if private else asked["shows"]
     # An OK that names nothing to show: the task's page from an earlier stage, for its parties alone.
     earlier = None if private else earlier_page(conn, task_id, row["visit"]["id"], requirement)
+    # An OK that shows a page first (Validate's): what Jev passed on that page, as its check rows.
+    checks = _page_checks(conn, shows[0]) if requirement["kind"] == "ok" and not page and shows else []
+    approval = _approval_of(row, standing, page)
     return {
         "requirement_id": requirement["id"],
         "kind": requirement["kind"],
@@ -1067,8 +1121,29 @@ def _leave_entry(
         **({"source": shows} if shows else {}),
         **({"page": page} if page else {}),
         **({"earlier": earlier} if earlier else {}),
+        **({"checks": checks} if checks else {}),
+        **({"approval": approval} if approval else {}),
         "answer": _answer_view(conn, task_id, answer, private) if answer else None,
         "may": _may(conn, row, standing, answer, str(viewer), holder, works) if viewer else [],
+    }
+
+
+def _approval_of(row: Row, standing: Any, page: Row | None) -> Row | None:
+    """A document approval's key and marks, as Flow shows it on the document's tab: the document, the visit and the
+    version submitted (an OK sends `visit_id` and `<file id>@<version>` back, answers._page_version), and `unchecked`
+    when the decision model could not check it. None for any other requirement."""
+    from . import task_requirements as R
+
+    document = R.document_of(standing.requirement)
+    if not document:
+        return None
+    visit: Row = row.get("visit") or {}
+    return {
+        "document": document,
+        "visit_id": visit.get("id"),
+        "file_id": page["file_id"] if page else None,
+        "version": page["version"] if page else None,
+        "unchecked": bool(getattr(standing, "unchecked", False)),
     }
 
 

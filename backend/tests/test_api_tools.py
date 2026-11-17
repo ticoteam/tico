@@ -1,93 +1,21 @@
-"""API tools (backend/api_tools.py): the data migration keeps every grant and leaves each key on its computers, a level
-picks its key, a check tells a rejected key from a working one, a member sees only what they hold, and no key value is
-ever in an answer except the vault's reveal.
+"""API tools (backend/api_tools.py): a level picks its key, a check tells a rejected key from a working one, a member
+sees only what they hold, and no key value is ever in an answer except the vault's reveal.
 
 Ana owns the company and Ben is an admin (both credential administrators); Cara is a member."""
 
 import json
-import sqlite3
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from backend import api_tools
-from backend.config import Settings
-from backend.store import Problem, Store
+from backend.store import Problem
 from backend.tests.helpers.api import get, headers, post
-from backend.tests.helpers.credentials import setup
+from backend.tests.helpers.credentials import explicit_only, setup
 from backend.tests.helpers.api_tools import key, level, tool
 
-FIXTURE = Path(__file__).parent / "fixtures" / "schema_old_main.sql"
 SECRET_RW = "acme-close-synthetic-rw-0011223344"
 SECRET_R = "acme-close-synthetic-ro-5566778899"
-
-
-def test_the_migration_makes_a_computer_tool_per_service_key_and_keeps_every_grant(tmp_path):
-    path = tmp_path / "old.sqlite"
-    conn = sqlite3.connect(path)
-    conn.executescript(FIXTURE.read_text())
-    now = "2026-10-01T00:00:00Z"
-    rows = (
-        ("c-close", "Close API key", "api_key", "CLOSE_API_KEY", ""),
-        ("c-own", "Acme internal", "token", "ACME_TOKEN", ""),
-        ("c-model", "OpenAI", "api_key", "OPENAI_API_KEY", ""),
-        ("c-computer", "Claude on the Mac", "api_key", "ANTHROPIC_API_KEY", "computers:r1"),
-        ("c-bank", "Bank login", "password", "", "finance"),
-        ("c-empty", "Stripe", "api_key", "STRIPE_API_KEY", ""),
-    )
-    for cid, name, kind, env, source in rows:
-        conn.execute(
-            "INSERT INTO credentials(id,name,kind,env,preview,ciphertext,nonce,source,created,updated,"
-            "updated_by,created_by) VALUES(?,?,?,?,'',?,?,?,?,?,'human:ana','human:ana')",
-            (
-                cid,
-                name,
-                kind,
-                env,
-                None if cid == "c-empty" else b"x",
-                None if cid == "c-empty" else b"n",
-                source,
-                now,
-                now,
-            ),
-        )
-    grants = (
-        ("g1", "c-close", "bot:ops", None),
-        ("g2", "c-close", "human:cara", "2026-10-02T00:00:00Z"),
-        ("g3", "c-own", "bot:assistant", None),
-        ("g4", "c-model", "computers", None),
-    )
-    for gid, cid, subject, revoked in grants:
-        conn.execute(
-            "INSERT INTO credential_grants(id,credential_id,subject,granted_by,created,revoked) "
-            "VALUES(?,?,?,'human:ana',?,?)",
-            (gid, cid, subject, now, revoked),
-        )
-    conn.commit()
-    conn.close()
-    Store(Settings(db_path=path)).initialize()
-    conn = sqlite3.connect(path)
-    conn.row_factory = sqlite3.Row
-    tools = {r["id"]: dict(r) for r in conn.execute("SELECT * FROM tools")}
-    keys = {r["id"]: dict(r) for r in conn.execute("SELECT id, tool_id, access_level FROM credentials")}
-    after = {r["id"]: dict(r) for r in conn.execute("SELECT * FROM credential_grants")}
-    conn.close()
-    assert set(tools) == {"close-crm", "acme-internal"}
-    close = tools["close-crm"]
-    assert (close["delivery"], close["base_url"], close["auth_scheme"], close["check_path"]) == (
-        "computer",
-        "https://api.close.com",
-        "basic_user",
-        "/api/v1/me/",
-    )
-    assert tools["acme-internal"]["delivery"] == "computer" and tools["acme-internal"]["base_url"] == ""
-    assert keys["c-close"] == {"id": "c-close", "tool_id": "close-crm", "access_level": "read_write"}
-    assert all(keys[k]["tool_id"] is None for k in ("c-model", "c-computer", "c-bank", "c-empty"))
-    # Every grant is there, revoked or not, at the level it always had.
-    assert set(after) == {"g1", "g2", "g3", "g4"}
-    assert after["g2"]["revoked_at"] == "2026-10-02T00:00:00Z" and after["g1"]["revoked_at"] is None
-    assert {g["access_level"] for g in after.values()} == {"read_write"}
 
 
 def choose(api, tid, subject):
@@ -102,6 +30,7 @@ def test_a_level_picks_its_key_and_setting_one_takes_the_others_away(api):
     tid = made["id"]
     assert (made["base_url"], made["delivery"]) == ("https://api.close.com", "proxy")
     full = key(api, tid, SECRET_RW)["id"]
+    explicit_only(api)  # what explicit grants alone give
     # One key: Read is that key held at Read (the proxy then allows only reads).
     level(api, tid, "bot:ops", "read")
     assert choose(api, tid, "bot:ops") == (full, "read", "read")
@@ -157,7 +86,7 @@ def test_a_check_marks_a_401_key_rejected_and_a_2xx_working(api, monkeypatch):
 
     def answer(url, hdrs, params):
         sent.append((url, hdrs, params))
-        return answer.code
+        return api_tools.Reply(answer.code)
 
     monkeypatch.setattr(api_tools, "send_check", answer)
     answer.code = 401
@@ -171,19 +100,19 @@ def test_a_check_marks_a_401_key_rejected_and_a_2xx_working(api, monkeypatch):
     assert get(api, f"api-tools/{tid}")["status"] == {"tone": "ok", "text": "Working"}
     answer.code = 500
     assert post(api, f"api-tools/{tid}/check", {})["detail"].startswith("Check failed")
-    # The background loop checks a proxied tool once its last check is old; a computer tool never.
+    # The background loop checks a tool once its last check is old, its key on the proxy or on computers alike.
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tool_checks SET checked_at='2000-01-01T00:00:00Z'")
     with api.app.state.store.read() as c:
         assert api_tools.due(c) == [tid]
     api.patch(f"/api/v2/api-tools/{tid}", json={"delivery": "computer"}, headers=headers())
     with api.app.state.store.read() as c:
-        assert api_tools.due(c) == []
+        assert api_tools.due(c) == [tid]
 
 
 def test_no_answer_carries_a_key_value_but_the_vaults_reveal(api, monkeypatch):
     setup(api)
-    monkeypatch.setattr(api_tools, "send_check", lambda url, hdrs, params: 200)
+    monkeypatch.setattr(api_tools, "send_check", lambda url, hdrs, params: api_tools.Reply(200))
     seen = []
     tid = tool(api)["id"]
     seen.append(json.dumps(key(api, tid, SECRET_RW)))
@@ -216,6 +145,22 @@ def test_no_answer_carries_a_key_value_but_the_vaults_reveal(api, monkeypatch):
         assert c.execute("SELECT count(*) FROM credentials WHERE tool_id=?", (tid,)).fetchone()[0] == 0
 
 
+def test_a_webhook_or_signing_secret_of_a_known_service_is_no_tools_key_and_reaches_the_bot_as_itself(api):
+    """A bot checks a delivery's signature with the secret itself: put on GitHub's or Stripe's proxied tool, the run
+    would hold a proxy token in its place and every signature would fail."""
+    setup(api)
+    made = [
+        post(api, "credentials", {"name": "GitHub webhook secret", "env": "GITHUB_WEBHOOK_SECRET", "secret": SECRET_R}),
+        post(api, "credentials", {"name": "Stripe", "env": "STRIPE_WEBHOOK_SECRET", "secret": SECRET_R + "-2"}),
+        post(api, "credentials", {"name": "Slack signing secret", "env": "ACME_SLACK", "secret": SECRET_R + "-3"}),
+    ]
+    with api.app.state.store.read() as c:
+        assert [c.execute("SELECT tool_id FROM credentials WHERE id=?", (m["id"],)).fetchone()[0] for m in made] == [
+            None
+        ] * 3
+        assert c.execute("SELECT count(*) FROM tools").fetchone()[0] == 0
+
+
 def test_a_key_stored_outside_tools_gets_a_tool_on_the_proxy_only_for_a_known_service(api):
     """Settings' vault (and a chat card, and a computer's migration) store through the vault: each tool key lands on a
     tool in the same write. A known service's key fills that service's tool while it has no Read and write key."""
@@ -241,7 +186,7 @@ def test_a_key_stored_outside_tools_gets_a_tool_on_the_proxy_only_for_a_known_se
     assert len(tools) == 3  # the password and the model keys are no tool's
     rows = {r["id"]: r for r in get(api, "tool-index")["rows"]}
     assert {"api:" + tid, "api:" + keys[own], "api:" + keys[second]} <= set(rows)
-    assert rows["api:" + keys[own]]["status"]["text"] == "Key on computers"
+    assert rows["api:" + keys[own]]["status"]["text"] == "Not checked" and not rows["api:" + keys[own]]["needs_you"]
     # A key a bot already uses from its computer's files (the file migration) stays on computers, known service or not.
     with api.app.state.store.transaction() as c:
         c.execute(

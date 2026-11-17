@@ -2,7 +2,10 @@ import type {Route} from 'playwright';
 // Offline browser check of a stage's OK that names nothing to show (#3784): Product's OK release, which follows QA.
 // Tico Team's task #72 showed only its title, and Tico's line said "Ask shows no release content".
 // - It shows the task's page from the earlier stage (the QA page, at its version), not the task's title and text;
-// - its one meta line says who asked, that stage, the page's version and the task (#72 ↗), on desktop and phone;
+// - the ask, as the asker's last message in the task's chat, says who asked, when, that stage, the page's version and
+//   the task (#72 ↗), on desktop and phone, where the OK opens on its Proof tab; under the question the verdict, as up to
+//   3 short check rows (what Jev passed on that page, never the ask's brief), and on a phone Proof, which opens the
+//   Proof tab;
 // - Approve stays on and answers the OK alone (no page version: it is not a page's OK);
 // - an OK the server gave no earlier page (none, or one the reader may not open) shows the task's title and text.
 // TICO_UI_SHOTS=<dir> saves ok-release-page-desktop.png and ok-release-page-phone.png.
@@ -24,7 +27,8 @@ const need = (task: string, title: string, number: number, hour: number, earlier
   kind: 'ask', id: `v-${task}:${RID}`, task_id: task, requirement_id: RID, line: 'OK the release', since: `2026-11-15T${hour}:00:00Z`,
   task: brief(task, title, number),
   ask: {requirement_id: RID, kind: 'ok', line: 'OK the release', who: 'human:chris', asked_by: null, choices: null, may: ['ok', 'no'],
-    met: false, shows: [], standing: 'waiting', answer: null, ...(earlier ? {earlier} : {})}});
+    met: false, shows: [], standing: 'waiting', answer: null, ...(earlier ? {earlier} : {}),
+    brief: {why: 'QA passed on the release candidate.', details: ['Not a check row'], recommend: null}}});
 const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager_id: null, owner_id: 'human:chris', private: false,
   factory_id: null, preset: null, settings_version: 1, retired_at: null,
   stages: ['product-qa:QA', 'product-ok-release:OK release'].map(s => ({id: s.split(':')[0], name: s.split(':')[1], purpose: '', owner: null,
@@ -37,7 +41,8 @@ const QA = '<h1>QA: saved carts</h1><p>Before and after: the cart is kept when t
   const errors: string[] = [];
   const shots = process.env.TICO_UI_SHOTS;
   const needs = [
-    need('t-72', 'Saved carts', 72, 10, {file_id: 'pq', version: 2, ref: 'page:pq@2', stage_id: 'product-qa', stage: 'QA', source: ['page:pq@2']}),
+    need('t-72', 'Saved carts', 72, 10, {file_id: 'pq', version: 2, ref: 'page:pq@2', stage_id: 'product-qa', stage: 'QA', source: ['page:pq@2'],
+      checks: ['Checks pass at 9f3c2a1', 'Cart kept when the tab closes', 'No console errors', 'Phone layout holds']}),
     need('t-73', 'Dark mode toggle', 73, 11, {removed: true, label: "A page you can't open"}),
   ];
   const writes: {p: string; body: Record<string, unknown>}[] = [];
@@ -56,7 +61,7 @@ const QA = '<h1>QA: saved carts</h1><p>Before and after: the cart is kept when t
         if (p === '/api/me') return json({...me, config});
         if (p === '/api/v2/config') return json(config);
         if (p === '/api/employees') return json([]);
-        if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'chris', name: 'Chris'}, {id: 'ana', name: 'Ana'}], teams: {}});
+        if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'chris', name: 'Chris'}, {id: 'ana', name: 'Ana'}], teams: {}});
         if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
         if (p === '/api/v2/needs-you') return json({actor: 'human:chris', count: needs.length, items: needs, version: '1', next: null});
         if (p === `/api/v2/oks/${RID}`) return json({error: 'not_found'}, 404);     // a stage's OK: no grant
@@ -67,7 +72,7 @@ const QA = '<h1>QA: saved carts</h1><p>Before and after: the cart is kept when t
           writes.push({p, body: JSON.parse(r.postData() || '{}') as Record<string, unknown>});
           const m = /^\/api\/v2\/tasks\/(t-7[23])\/asks\/([^/]+)\/answer$/.exec(p);
           if (m) return json({task: brief(m[1]!, 'x', 72), answer_id: 'a-' + m[1], requirement_id: m[2]});
-          if (p === '/api/v2/flow/opinions' || p === '/api/v2/flow/suggestions') return json({opinions: [], suggestions: []});
+          if (p === '/api/v2/flow/opinions') return json({opinions: []});
         }
         if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
         return json(unrouted(p));
@@ -77,20 +82,26 @@ const QA = '<h1>QA: saved carts</h1><p>Before and after: the cart is kept when t
       const dialog = page.locator('#need-card');
       const frame = dialog.locator('iframe.dc-page');
 
-      // OK release on #72: the QA page, under the ask, with one meta line.
+      // OK release on #72: the QA page, and the ask's one byline in the chat. On a phone an OK opens on its Proof tab.
+      if (label === 'phone') {
+        await frame.waitFor();
+        assert.equal(await dialog.locator('[role="tab"][data-dc-tab="task"]').getAttribute('aria-selected'), 'true', 'an OK opens on its Proof tab');
+        await dialog.locator('[role="tab"][data-dc-tab="chat"]').click();
+      }
       await dialog.locator('.dc-q', {hasText: 'OK the release'}).waitFor();
+      // The verdict in the ask: up to 3 short check rows, no long review; Proof (a phone's) opens the Proof tab.
+      assert.deepEqual(await dialog.locator('.dc-msg-ask .dc-checks li').allInnerTexts(), ['Checks pass at 9f3c2a1', 'Cart kept when the tab closes', 'No console errors']);
+      if (label === 'phone') {
+        if (process.env.TICO_UI_SHOTS) { await page.waitForTimeout(900); await page.screenshot({path: path.join(process.env.TICO_UI_SHOTS, 'ok-release-chat-phone.png')}); }
+        await dialog.locator('.dc-msg-ask .dc-proof-link').click();
+        assert.equal(await dialog.locator('[role="tab"][data-dc-tab="task"]').getAttribute('aria-selected'), 'true', 'Proof selects the Proof tab');
+      }
       await frame.waitFor();
       assert.match(await frame.getAttribute('srcdoc') ?? '', /QA: saved carts/);
       assert.equal(await dialog.locator('.dc-thing .dc-title').count(), 0, `${label}: the page, not the task's title and text`);
-      const meta = dialog.locator('.dc-side .dc-meta');
-      assert.equal((await meta.innerText()).replace(/\s+/g, ' ').trim(), 'Ana · QA · v2 · #72 ↗');
-      assert.equal(await dialog.locator('.dc-owner').count(), 0, 'who asked is said once, on the meta line');
-      const link = (await meta.locator('.dc-task-link').boundingBox())!;
-      if (label === 'phone') {
-        assert.ok(link.height >= 44, `phone: the task link is a 44 px target (${link.height})`);
-        const acts = (await dialog.locator('.dc-side .dc-acts').first().boundingBox())!, line = (await meta.boundingBox())!;
-        assert.ok(line.y + line.height <= acts.y + 1, 'phone: the meta line sits above the buttons, never over them');
-      }
+      const meta = dialog.locator('.dc-side .dc-msg-by');
+      assert.match((await meta.innerText()).replace(/\s*·\s*/g, '·').trim(), /^Ana·.+·QA·v2\s*#72 ↗$/);
+      assert.equal(await dialog.locator('.dc-owner').count(), 0, 'who asked is said once, on the byline');
       const pane = (await dialog.locator('.dc-thing').boundingBox())!, box = (await frame.boundingBox())!;
       assert.ok(box.height >= pane.height - 60, `${label}: the page fills the pane (${box.height} of ${pane.height})`);
       await dialog.locator('[data-dc="approve"]:not([disabled])').waitFor();
@@ -102,10 +113,11 @@ const QA = '<h1>QA: saved carts</h1><p>Before and after: the cart is kept when t
       // #73: the server gave no page this reader may open: the task's title and text, as before.
       if (label === 'phone') await page.keyboard.press('ArrowRight');
       else await dialog.locator('[data-dc="next"]').click();
+      // (On a phone it opens on its Task tab.)
       await dialog.locator('.dc-thing .dc-title', {hasText: 'Dark mode toggle'}).waitFor();
       assert.equal(await frame.count(), 0);
       assert.match(await dialog.locator('.dc-thing').innerText(), /A toggle in Settings for dark mode/);
-      assert.equal(await dialog.locator('.dc-side .dc-meta').count(), 0);
+      assert.doesNotMatch(await dialog.locator('.dc-side .dc-msg-by').innerText(), /QA/, 'no earlier page, no stage or version');
 
       if (label === 'desktop') {
         await dialog.locator('[data-dc="prev"]').click();

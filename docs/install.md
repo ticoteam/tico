@@ -18,9 +18,8 @@ browser -> caddy (HTTPS) or cloudflared --> server :8765 (data volume)
 
 ## Recommended setup
 
-The quick start below with the recommended choices already made: a **sample company** (Sample Co: the Assistant and
-four role bots with short starter tasks), models on **your Claude and ChatGPT subscriptions, plus Tico Gateway**, **Tico
-Support on**, and a computer on this server that runs the bots (a Docker runner on the server's network, named *Server
+The quick start below with the recommended choices already made: models on **your Claude and ChatGPT subscriptions,
+plus Tico Gateway**, **Tico Support on**, and a computer on this server that runs the bots (a Docker runner on the server's network, named *Server
 computer*). There is no domain, DNS or sign-in provider to set up:
 
 ```
@@ -29,8 +28,8 @@ curl -fsSL https://github.com/ticoteam/tico/releases/latest/download/install.sh 
 
 Run on a terminal with no options, the installer asks which setup you want and offers this one first (press Enter); with
 any option, or piped without a terminal, it asks nothing and installs as before. It
-prints the owner sign-in link, as the quick start does. What is left is one step: open the link, then **Settings >
-Computers > Server computer > Sign in**, to Claude and to ChatGPT.
+prints the owner sign-in link, as the quick start does. Open the link and set up your team in the app, as on any new
+install, then **Settings > Computers > Server computer > Sign in**, to Claude and to ChatGPT.
 
 A local install has no public address, and it can still link to your Tico company (**Settings > General > Tico company**,
 with a server code from app.tico.dev Hosting > **Connect your own server**) for Tico models and billing. It shows there as
@@ -50,7 +49,7 @@ a local server, with no Open link.
   ([Handed over from setup](connect-an-agent.md#handed-over-from-setup)). Without the variable, nothing changes.
 - If the server computer cannot start, Tico keeps running and the installer says how to add it from **Settings >
   Computers > Add computer**.
-- It writes `TICO_INSTALL_PRESET=recommended`, `TICO_SAMPLE_COMPANY=on`, `TICO_MODELS_PRESET=subscriptions-gateway` and
+- It writes `TICO_INSTALL_PRESET=recommended`, `TICO_MODELS_PRESET=subscriptions-gateway` and
   `TICO_SUPPORT` into `.env`; the server reads them on its first start. Every other choice below (the quick start, your own
   domain with Google, Microsoft or Cloudflare Access, your own API keys) installs as before.
 
@@ -68,8 +67,7 @@ The same flag works with the non-interactive cloud setup. The company YAML file 
 fit within 512 KiB (524,288 bytes). Setup refuses larger files or plans before provisioning. It validates the file, uses its
 company name, and carries the normalized plan privately to the server. On first startup the app creates the selected
 AI employees and reporting lines, adds its built-in roles once, and leaves employees marked **later** paused.
-It preserves the plan across retries and refuses to replace an existing company. A selected file takes precedence
-over the recommended sample company. Charts up to 300 seats fit. AWS setup creates a private, encrypted bucket in
+It preserves the plan across retries and refuses to replace an existing company. Charts up to 300 seats fit. AWS setup creates a private, encrypted bucket in
 your account, with public access blocked and a one-day expiry rule. It copies the plan to the server and deletes the
 bucket's copy once the app reads it. SSH and local setup write the plan to a private file, checking its checksum before
 starting Tico. The chart stays out of the server's environment and AWS Parameter Store size limit.
@@ -93,7 +91,7 @@ run `sudo apt-get install -y curl` first. That installs the newest release; to p
 Files go to `/opt/tico` on Linux (it uses `sudo`) and to `~/tico` on a Mac (no `sudo`); `--dir` changes it. Port 8765 is the default; use `--port 8877` if it is occupied. By hand, set `TICO_PORT=8877` in `.env`.
 The public, runner and MCP addresses follow this port. `TICO_PUBLIC_URL` and `TICO_RUNNER_URL` override their defaults.
 To prefill Finish setup, add `--owner-name "Ana" --team-name "Acme"` to the local installer command; `--company` remains an alias.
-To start with a team exported from tico.team/setup, add `--company-file ~/tico.company.yaml`: the installer packs it with the server's own code and the team loads on the first start (with `--recommended` it replaces the sample company).
+To start with a team exported from tico.team/setup, add `--company-file ~/tico.company.yaml`: the installer packs it with the server's own code and the team loads on the first start (with `--recommended` too).
 
 It prints a reusable private owner sign-in link. Keep it private: anyone with the link on this computer can sign in as you.
 Recover the token any time with `docker compose exec server cat /data/local-owner.token` in the install directory.
@@ -109,8 +107,8 @@ Open the link in your browser: the app opens on **Finish setup**. Then:
    below, pick **Marketing** and keep **Content Owner** (`content-owner`) checked; untick the other suggestions if you want only it.
 3. **Add computer**: choose *A Linux or cloud server (Docker)*, press **Add computer**, and run the line it shows on this computer.
    It joins the server's own Docker network, so it needs no domain, and the computer shows online in a few seconds.
-4. **Create my team.** Ten built-in bots are created automatically: Assistant, BotOps, Librarian, Strategy Owner, General Manager,
-   Finance Owner, Rules Owner, Design Owner, Updates Owner and Automations Owner. Each other role you picked waits as a Recruiting seat;
+4. **Create my team.** Eleven built-in bots are created automatically: Assistant, BotOps, Librarian, Strategy Owner, General Manager,
+   Finance Owner, Rules Owner, Design Owner, Updates Owner, Automations Owner and Tools Owner. Each other role you picked waits as a Recruiting seat;
    recruiting one creates a bot in **Needs setup** until you talk to it. A switched-on Inbox Manager is the exception: it is made as a bot linked to its mailbox.
 5. **Sign in to your models.** For either Claude and ChatGPT subscription choice, sign in to each model subscription you chose:
    Claude Code and Codex (ChatGPT through Codex). One signed-in model is enough for the first result; Health lists the others
@@ -709,8 +707,8 @@ curl -fsSL https://github.com/ticoteam/tico/releases/latest/download/install.sh 
   sh install.sh --runner --url http://server:8765 --server-network tico_default --code <code> --label "This computer"
 ```
 
-**Add a second computer on the same host (for a message bot).** A message bot must have a computer of its
-own, so a second one on the same host is the usual next step ([mail](mail.md)). Give it a name and run the installer again with
+**Add a second computer on the same host.** A second computer on the same host keeps some bots apart from the others,
+for example a message bot. Give it a name and run the installer again with
 a new code from Settings > Computers > Add computer; the first computer is not touched:
 
 ```
@@ -823,17 +821,10 @@ and only while they are wanted:
 `docker logs '<container-name>'` carries the jobs' lines (`Tico side jobs: started importers`), and each importer's health
 shows on its Settings card and the Meetings Sources strip.
 
-*Mail and calendar (`connectors`)* run on a Linux runner the same way, from the team's Google service-account
-key ([Message bots](mail.md#works-on-linux-runners) has the Google Workspace setup). Put the key in the runner's state directory,
-where only the runner can read it, and keep it on one computer only:
-`docker exec -i -u ticorun '<container-name>' sh -c 'umask 077; cat > "$(ls -d /home/runner/state-* | head -1)/google-sa.json"' < google-sa.json`
-(the runner refuses a key that is not mode 0600). A key an older install kept in `workspace/secrets/google-sa.json` is moved
-there once, automatically. Bots cannot read it; a message bot asks the runner for a token for its own mailbox, and a message bot
-gets a computer to itself ([Message bots](mail.md#who-can-read-the-key)).
-The job starts within a minute of the file appearing, builds its Python environment into the volume the first time
-(about a minute; `docker logs` shows it), and stops when the file is removed. Instead of the key, an owner who
-sets `TICO_PROCESSING_OPERATORS` on the server assigns the job to that owner's runners. `docker exec '<container-name>'
-python -m runner_support --config /home/runner/runner.json connectors-doctor` says whether the key is found.
+*Mail and calendar* need nothing on a computer: the Tico server reads and acts on Gmail and Google Calendar itself,
+with the key or grants set up in Tools > Settings > Email ([Message bots](mail.md#set-up-google-in-settings)). The first
+start after the update deletes a Google key, connected-account file and mail database an older install left on the
+runner.
 `TICO_SIDE_JOBS=0` in the container's environment turns the supervisor off.
 
 Update a runner with `docker pull ghcr.io/ticoteam/tico-runner:latest`, then remove and re-run the container
@@ -954,7 +945,7 @@ in Add computer and **Use a Tico checkout instead**, then in the Tico checkout o
 `https://<TICO_DOMAIN>`, runs under launchd, and reconnects on its own after the server restarts.
 
 **Mac updates.** The runner follows the server's release by itself ([updates.md](updates.md#a-mac-or-linux-checkout)).
-After a healthy update it also restarts the side jobs installed beside it (`connectors`, `close-calls`, `importers`), and
+After a healthy update it also restarts the side jobs installed beside it (`close-calls`, `importers`), and
 each side job exits and restarts when it sees the checkout move to another revision (checked about once a minute), so no job
 keeps old code in memory. `scripts/tico-computer restart` does the same by hand.
 
@@ -986,7 +977,7 @@ systemd **user** units instead of launchd; no root is needed:
 
 ```
 scripts/tico-computer -e <env> enroll --code-file <file> --label "Build box"     # or scripts/setup-runner.sh
-scripts/tico-computer -e <env> install            # tico-bot, tico-connectors, tico-close-calls, tico-importers: Restart=always
+scripts/tico-computer -e <env> install            # tico-bot, tico-close-calls, tico-importers: Restart=always
 scripts/tico-computer -e <env> status
 ```
 
@@ -1096,7 +1087,6 @@ database stores. A database restored without them cannot open those secrets:
 |---|---|---|
 | `credential.key` | every saved credential ([Credentials](credential-vault.md)) | no `TICO_CREDENTIAL_KMS_KEY` |
 | `github-app.key` | the GitHub App's private key, client secret and webhook secret, and the directory sync credentials | no `TICO_CREDENTIAL_KMS_KEY` (or GitHub connected, or directory sync saved, before it was set) |
-| `slack.key` | the Slack tokens pasted in Settings > Slack | no `TICO_CREDENTIAL_KMS_KEY` (or Slack tokens saved before it was set) |
 
 The backup loop copies each to the same place as the rest (the bucket and prefix in `TICO_BACKUP_URL`, else the
 `tico-backups` volume), as `credential-key/<file>`, when it first appears and whenever it changes. A different copy already there (the key that
@@ -1152,9 +1142,10 @@ docker compose run --rm --no-deps server restore    # database, attachments and 
 docker compose up -d
 ```
 
-**The key files are backed up with the database.** `restore` puts `credential.key`, `github-app.key` and `slack.key` back
-in `/data` (mode 0600) when the backup has them, and says which it does not have. A key already on the volume is left
-alone (with `--force` it is kept beside the restored one as `<file>.before-restore.<time>`). If the database was restored
+**The key files are backed up with the database.** `restore` puts `credential.key`, `github-app.key` (and an older backup's
+`slack.key`, which the first start reads once to move the Slack tokens into the vault) back in `/data` (mode 0600)
+when the backup has them, and says which it does not have. A key already on the volume is left alone
+(with `--force` it is kept beside the restored one as `<file>.before-restore.<time>`). If the database was restored
 by itself on first start, or from a backup made before a file was copied, run `restore` again or copy the object
 `credential-key/<file>` from the backup location to `/data/<file>` by hand (32 bytes, mode 0600, owned by the server's
 user), then restart. Health's **Stored secrets** check names any secret a missing or wrong key file cannot open, and the
@@ -1164,21 +1155,21 @@ credentials again: Tico asks you to confirm replacing the lost key, then drops t
 credentials sealed with it (recorded as `github.lost_key_replaced`), and you enter them again (in the API: `POST
 /api/v2/github/app/replace-lost-key`, or `replace_lost_key` on `PUT /api/v2/directory`; never through a proposal card). With
 `TICO_CREDENTIAL_KMS_KEY` set, credentials, the GitHub App and Slack use the KMS-wrapped key in the database, and only a
-`github-app.key` or `slack.key` from before KMS was set needs keeping.
+`github-app.key` from before KMS was set needs keeping.
 
 **Setting `TICO_CREDENTIAL_KMS_KEY` after GitHub, directory sync or Slack were connected** needs nothing else: a secret
-sealed with `github-app.key` or `slack.key` before then still opens with that file, and the first time the server reads
-it (a GitHub token, a webhook, a directory sync, the Slack gateway starting) it is re-sealed with the KMS-wrapped key, once,
+sealed with `github-app.key` before then still opens with that file, and the first time the server reads
+it (a GitHub token, a webhook, a directory sync) it is re-sealed with the KMS-wrapped key, once,
 and the server log says which (`Re-sealed github_app app ...`, never a secret). Until every one has been re-sealed,
-Health's **Stored secrets** says how many still need each file ("2 secrets still need github-app.key and 1 still needs
-slack.key"): keep the files until that line clears, and keep them in the backup after that too, since a backup from
+Health's **Stored secrets** says how many still need each file ("2 secrets still need
+github-app.key"): keep the files until that line clears, and keep them in the backup after that too, since a backup from
 before KMS still needs them. Reading never makes a new one. If a file is gone, **Stored secrets** warns and names what
 it sealed; enter those again.
 
 **Hand-run and scheduled bundle backups carry the key files too.** The bundle that `python -m backend.manage backup`
 uploads, and the scheduled AWS backup (`backups/<tier>/...`, the same bundle code), holds the database at its key, its
-manifest and the attachments, and also each of `credential.key`, `github-app.key` and
-`slack.key` present beside the database, as `<key>.keys/<file>`, each read back after upload; a key file that is not 32
+manifest and the attachments, and also each of `credential.key` and `github-app.key`
+present beside the database, as `<key>.keys/<file>`, each read back after upload; a key file that is not 32
 bytes stops the backup before its manifest is published. `python -m backend.backup --bucket ... --key ... --database
 <new path> ...` restores them beside the new database (mode 0600) after checking each against the manifest, and refuses,
 before restoring anything, when a different key of that name is already in the target directory. A bundle made before
@@ -1196,7 +1187,7 @@ no other reader; turn on versioning, and never share it with the attachment buck
 **`manage.py restore` is in place, on the same machine.** `python -m backend.manage restore <snapshot> <new database>`
 restores a local snapshot file next to the key files already on this computer; it does not read or move key files. To
 restore on another machine, use the bundle restore (`python -m backend.backup`, which brings the key files back) or
-`docker compose run --rm server restore`, or copy `credential.key`, `github-app.key` and `slack.key` across yourself
+`docker compose run --rm server restore`, or copy `credential.key` and `github-app.key` across yourself
 (32 bytes each, mode 0600, owned by the server's user).
 
 **Restore an existing install.** `restore` refuses a volume that already holds data. Stop the server and add `--force`
@@ -1227,7 +1218,7 @@ first; two servers writing to one bucket corrupt the replica. A fresh volume tha
 database by itself on first start, but run `restore` so attachments, the key files and any error are visible. This
 needs the bucket, so with the default local-only backups you can only rebuild on the same computer; that is the reason
 to set `TICO_BACKUP_URL`. Moving the volume by hand instead (a `docker cp` or a disk copy) needs every file in `/data`,
-not only `hub.sqlite`: `credential.key`, `github-app.key` and `slack.key` with it, or the secrets they seal are lost.
+not only `hub.sqlite`: `credential.key` and `github-app.key` with it, or the secrets they seal are lost.
 
 Runners hold no team data that is not in a git remote, but back up their volume if bots keep local work.
 
@@ -1334,7 +1325,7 @@ install directory; this keeps its repositories and sign-in. Re-register it with 
 The hourly cleanup automatically revokes only replaced self-hosted computers: one with no bots assigned and more than
 24 hours without contact (or since enrollment if it never connected), when a newer, unrevoked computer with the same
 owner, machine name and platform enrolled or checked in after its last contact. Sharing browser exits, cloud machines,
-app delivery computers, and computers with model subscriptions, stored keys, login records, profiles or reported
+and computers with model subscriptions, stored keys, login records, profiles or reported
 signed-in AI tools are kept. A computer without a matching replacement is kept however long it is offline.
 The event records why it was retired and names its replacement. Retired computers leave Health and the active computer
 list; they can be registered again with a new code.

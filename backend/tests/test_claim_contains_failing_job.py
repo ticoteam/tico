@@ -22,15 +22,16 @@ from backend import (
     providers,
     read_cache,
     read_deps,
-    run_backoff,
+    run_failures,
     task_privacy as privacy,
     turn_budgets,
     wake_presets,
 )
+from backend import runner_online
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner, setup_attempt
 from backend.tests.helpers.held_runs import task_held
-from backend.tests.helpers.run_backoff import at, complete, setup as budget_setup
+from backend.tests.helpers.run_failures import at, complete, setup as budget_setup
 
 
 @pytest.fixture(autouse=True)
@@ -380,7 +381,7 @@ def test_a_bot_check_that_raises_passes_its_bot_over_and_the_claim_hands_out_the
     if check == "budget":
         calls = bot_check_raising(monkeypatch, turn_budgets, "refusal", "ops")
     else:
-        calls = bot_check_raising(monkeypatch, run_backoff, "refusal", "ops")
+        calls = bot_check_raising(monkeypatch, run_failures, "get", "ops")
     turn = claim(api, machine)
     assert turn["bot"] == "cpo"
     assert claim(api, machine) is None
@@ -541,20 +542,6 @@ def test_a_wake_preset_release_and_replan_leave_a_claim_hold_to_its_own_wait(api
         wake_presets.tick(c, at=H.shift(before["hold_until"], hours=1))
         wake_presets.replan(c, "ops")
     assert hold_of(api, job["id"]) == before
-
-
-def test_a_database_from_before_the_hold_count_keeps_its_held_runs_and_counts_their_tries_from_zero(api, monkeypatch):
-    machine, task_id = held_refresh(api, monkeypatch)
-    [job] = task_jobs(api, task_id)
-    store = api.app.state.store
-    with store.transaction() as c:  # a database from before the column
-        c.execute("ALTER TABLE jobs DROP COLUMN hold_streak")
-    store.initialize()
-    held = hold_of(api, job["id"])
-    assert (held["held"], held["hold_reason"], held["hold_streak"]) == (1, claim_holds.REASON, 0)
-    wait_ends(api, monkeypatch, job["id"])
-    assert claim(api, machine) is None
-    assert hold_of(api, job["id"])["hold_streak"] == 1
 
 
 @pytest.mark.parametrize("obsolete_ahead", [execution.CLAIM_PICKS - 2, execution.CLAIM_PICKS - 1])
@@ -790,12 +777,12 @@ def test_health_lists_waiting_bots_while_a_claim_check_raises(api, monkeypatch, 
     machine = runner(api, "ana")
     two_bots_with_chats(api, machine)
     if check == "bot":
-        bot_check_raising(monkeypatch, run_backoff, "refusal", "ops")
+        bot_check_raising(monkeypatch, run_failures, "get", "ops")
     else:
         monkeypatch.setattr(execution, "job_refusal", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("unreadable")))
     store = api.app.state.store
     with store.transaction() as c:
         c.execute("UPDATE jobs SET created_at=? WHERE state='queued'", (H.shift(H.now(), minutes=-30),))
-        online = {r["id"] for r in health._online_runners(c)}
+        online = {r["id"] for r in runner_online.online_rows(c)}
         waiting, slow, stuck = health._waiting(c, online, store.settings)
     assert "ops" not in {r["bot"] for r in stuck}

@@ -58,19 +58,16 @@ def test_a_batch_holds_what_bots_ask_and_commit_applies_it_through_the_task_call
         choices=["Monday", "Friday"],
         seen_version=other["version"],
     )
+    # A task handed to her with nothing asked is in her Tasks, not Needs you: the batch leaves it out.
     chore = H.task_create(c, FINANCE, "Sign the lease", "Sign it today.", "human:ana", lint=False)
     batch = _start(c)
     keys = [B._items(c.execute("SELECT * FROM batches WHERE id=?", (batch["id"],)).fetchone())]
-    assert batch["total"] == 3 and batch["item"]["key"] == "ask:" + _ask_id(c, ads, ok)
-    assert {i["key"] for i in keys[0]} == {
-        "ask:" + _ask_id(c, ads, ok),
-        "ask:" + _ask_id(c, other, question),
-        "task:" + chore["id"],
-    }
+    assert batch["total"] == 2 and batch["item"]["key"] == "ask:" + _ask_id(c, ads, ok)
+    assert {i["key"] for i in keys[0]} == {"ask:" + _ask_id(c, ads, ok), "ask:" + _ask_id(c, other, question)}
     B.respond(c, ANA.actor, batch["id"], "decide", "Go ahead.", n=1, decision="ok")
     B.respond(c, ANA.actor, batch["id"], "decide", "Friday", n=2, decision="answer")
-    B.respond(c, ANA.actor, batch["id"], "decide", "", n=3, decision="done")
-    assert H.task(c, chore["id"])["status"] == "open"  # nothing is applied while the person talks
+    held = H.task_view(c, ads["id"], "human:ana")["to_leave"]
+    assert not next(r for r in held if r["requirement_id"] == ok["requirement_id"])["met"]  # nothing applied yet
     log = []
     out = B.commit(c, ANA, batch["id"], _sent(log))
     assert out["errors"] == []
@@ -78,7 +75,7 @@ def test_a_batch_holds_what_bots_ask_and_commit_applies_it_through_the_task_call
     assert next(r for r in view["to_leave"] if r["requirement_id"] == ok["requirement_id"])["met"]
     asked = H.task_view(c, other["id"], "human:ana")["to_leave"]
     assert next(r for r in asked if r["requirement_id"] == question["requirement_id"])["answer"]["value"] == "Friday"
-    assert H.task(c, chore["id"])["status"] == "done"
+    assert H.task(c, chore["id"])["status"] == "open"
     assert [to for to, _, _ in log] == [FINANCE]
 
 
@@ -175,3 +172,29 @@ def test_a_comment_that_fails_halfway_leaves_nothing_of_itself_and_the_batch_goe
     applied, errors = B._comment_instead(c, ANA, FINANCE, [(f"task:{task['id']}", "Run the ads\nGo.")], "test")
     assert applied == [] and "failed after writing" in errors[0]
     assert c.execute("SELECT COUNT(*) FROM events").fetchone()[0] == before
+
+
+def test_the_cli_and_the_mcp_tool_offer_the_decisions_the_server_takes():
+    """`tico needs-you respond --decision` and tico_needs_you_respond send what models.BatchRespond accepts: an MCP
+    agent that said approve or decline was refused on every item."""
+    import argparse
+    from typing import get_args
+
+    from backend import models as M
+    from clients import hubcli, hubtools
+
+    (literal,) = [arg for arg in get_args(M.BatchRespond.model_fields["decision"].annotation) if get_args(arg)]
+    taken = set(get_args(literal))
+    assert taken == set(B.DECISIONS)
+    schema = hubtools.BY_NAME["tico_needs_you_respond"]["inputSchema"]["properties"]["decision"]
+    assert set(schema["enum"]) == taken
+
+    def sub(parser, *names):
+        for name in names:
+            action = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction))
+            parser = action.choices[name]
+        return parser
+
+    respond = sub(hubcli.parser(), "needs-you", "respond")
+    (decision,) = [a for a in respond._actions if a.dest == "decision"]
+    assert set(decision.choices) == taken

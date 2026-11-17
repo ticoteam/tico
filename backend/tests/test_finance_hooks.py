@@ -54,7 +54,6 @@ def test_only_a_finance_admin_manages_a_mercury_trigger_and_no_trigger_route_sho
         _post(api, "triggers/mercury/signing", {"secret": SECRET}, "ben-test"),
         _post(api, "triggers/mercury", {"name": "Not Finance"}, "ben-test"),
         _post(api, "triggers/mercury/delete", {}, "ben-test"),
-        _get(api, "finance/webhook-deliveries", "ben-test"),
     ]
     assert [r.status_code for r in refused] == [403] * len(refused), [r.text for r in refused]
     assert "Finance" in refused[0].text
@@ -63,13 +62,10 @@ def test_only_a_finance_admin_manages_a_mercury_trigger_and_no_trigger_route_sho
     assert [t for t in listed if t["id"] == "mercury"] == [] and "evt-0002" not in json.dumps(listed)
     owners = _get(api, "triggers").json()["triggers"]
     assert [t["preset"] for t in owners if t["id"] == "mercury"] == ["mercury"]
-    # The owner (a finance admin who sees everything) manages it, but reads its bodies only in Finance.
+    # The owner (a finance admin who sees everything) manages it; triggers never list its bodies.
     assert _get(api, "triggers/mercury/deliveries/evt-0002").status_code == 403
     assert [d["delivery"] for d in _get(api, "triggers/mercury/deliveries").json()["deliveries"]] == ["evt-0002"]
     assert _post(api, "triggers/mercury/deliveries/evt-0002/replay", {}).status_code == 200
-    found = _get(api, "finance/webhook-deliveries").json()["deliveries"]
-    assert [(d["trigger"], d["delivery"], d["outcome"]) for d in found] == [("mercury", "evt-0002", "accepted")]
-    assert json.loads(found[0]["body"])["id"] == "evt-0002" and found[0]["received_at"]
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM fin_inbox").fetchone()[0] == 1  # the replay was kept once
 
@@ -80,14 +76,12 @@ def test_only_a_finance_admin_manages_a_mercury_trigger_and_no_trigger_route_sho
     assert [t["preset"] for t in _get(api, "triggers", "ben-test").json()["triggers"] if t["id"] == "mercury"] == [
         "mercury"
     ]
-    assert _get(api, "finance/webhook-deliveries", "ben-test").status_code == 403
     assert _get(api, "triggers/mercury/deliveries/evt-0002", "ben-test").status_code == 403
 
     # Moved off Mercury, the trigger is ordinary again and keeps no bank payload behind.
     assert _post(api, "triggers/mercury/signing", {"off": True}, "ben-test").status_code == 200
     shown = _get(api, "triggers/mercury/deliveries/evt-0002", "ben-test").json()["delivery"]
     assert shown["expired"] and "body" not in shown
-    assert _get(api, "finance/webhook-deliveries").json()["deliveries"] == []
 
 
 def test_a_trigger_is_finance_s_by_its_consumer_not_its_preset(api):

@@ -112,6 +112,7 @@ function fixtures() {
          task_model: {source: 'fallback', note: "Ran on the bot's model claude-opus-5-5 (high): task model grok-4.6 (low) could not run (grok is not signed in on this bot's computer)"}},
        lease: [], reason: null, next: null,
        wake: {class: 'batched', reason: 'Review comments', preset: 'token_saver', preset_label: 'Token saver', held_until: ago(125)},
+       told: 'You stopped before this task was finished. Try 2 of 3.',
        subagents: [{id: 'g1', parent_id: null, type: 'general-purpose', model: null, status: 'completed', background: true, tool_uses: 3, duration_ms: 42000, running: false},
          {id: 'g2', parent_id: 'g1', type: 'Explore', model: 'claude-haiku-5-5', status: null, background: false, tool_uses: null, duration_ms: null, running: true}],
        background: [{id: 'b1', tool: 'Bash', summary: 'npm', status: null, started_at: ago(60), ended: null, running: true},
@@ -388,6 +389,9 @@ async function desktop(browser: Browser) {
   assert.equal(await tries.first().evaluate(x => (x as HTMLDetailsElement).open), true);
   assert.match(await tries.first().locator('.truns-wake').innerText(), /^Woke for: Review comments · Token saver · held until /);
   assert.equal(await tries.nth(1).locator('.truns-wake').count(), 0, 'a run from before presets says nothing about its wake');
+  // The notice it acted on is in no chat: one tap away on its run.
+  assert.equal(await tries.first().locator('.truns-told-text').innerText(), 'You stopped before this task was finished. Try 2 of 3.');
+  assert.equal(await tries.nth(1).locator('.truns-told').count(), 0, 'a run no notice woke has none');
   assert.equal(await runs.locator('.truns-release').count(), 2, 'only a job the release policy let go has a release line');
   // A released job: warm or cold, fresh or forked, how long it waited, and the cache use the run reported.
   await tries.nth(3).locator('summary').click();
@@ -489,7 +493,7 @@ async function phone(browser: Browser) {
   const modal = page.locator('#task-modal'), rail = modal.locator('[data-task-rail]');
   // A phone shows the same tabs: Subtasks are on Details, under the facts; the chat is its own tab.
   await rail.locator('.task-subs .sub-row').first().waitFor({state: 'attached'});
-  await modal.getByRole('tab', {name: /^Details/}).click();
+  await modal.getByRole('button', {name: /^Details/}).click();
   await rail.locator('.task-subs .sub-row').first().waitFor();
   const main = (await modal.locator('[data-task-props]').boundingBox())!, side = (await rail.boundingBox())!;
   assert.ok(side.y >= main.y + main.height - 1, 'details, then the rail');

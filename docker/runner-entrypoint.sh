@@ -56,25 +56,12 @@ separate_users() {
   # Sticky, so a turn running as another user of the group cannot rename a bot's checkout or the secrets aside.
   as_supervisor chmod 1770 "$HOME/workspace"
   chown "$SUPERVISOR_UID:$SUPERVISOR_GID" "$HOME/workspace/secrets" && as_supervisor chmod 0700 "$HOME/workspace/secrets"
-  # The mail tool's folder, <workspace>/runtime/mail: a bot's first `mail.sh` builds its venv there, and the
-  # supervisor's connectors job keeps mail.db there. The job made these folders as ticorun (0755) on a new
-  # computer, so the bot user could not create the venv ("permission denied", run blocked). They are the bot
-  # user's, setgid and group-writable, so both users can write in them. Only these two folders change hands:
-  # the state directory, runner.json and the mail key stay 0600/0700 for ticorun.
-  local mail_runtime="$HOME/workspace/runtime"
-  if [ ! -L "$mail_runtime" ] && [ ! -L "$mail_runtime/mail" ]; then
-    mkdir -p "$mail_runtime/mail" && chown "$BOT_UID:$SUPERVISOR_GID" "$mail_runtime" "$mail_runtime/mail" \
-      && as_bot chmod 2770 "$mail_runtime" "$mail_runtime/mail"
-    # The files in it too: the job wrote mail.db and audit.jsonl as ticorun with umask 022 (0644), so a bot's
-    # `mail.sh search` failed with "attempt to write a readonly database". Both users need to write them
-    # (mail.db and its -wal/-shm/-journal, audit.jsonl). Root has no CAP_FOWNER here, so the mode is set by
-    # whichever of the two owns the file. Nothing outside this folder changes.
-    local mail_file
-    for mail_file in "$mail_runtime"/mail/mail.db "$mail_runtime"/mail/mail.db-* "$mail_runtime"/mail/audit.jsonl; do
-      if [ -f "$mail_file" ] && [ ! -L "$mail_file" ]; then
-        as_supervisor chmod g+rw "$mail_file" 2>/dev/null || as_bot chmod g+rw "$mail_file" 2>/dev/null || true
-      fi
-    done
+  # Mail runs on the server now, so the mail tool's old folder (<workspace>/runtime/mail: its venv, mail.db and
+  # audit log) goes. The bot user made most of it, so it removes it; the runner removes what is left on start
+  # (runner-rs/src/mail_retire.rs). A one-time step that 0.7 removes.
+  local mail_runtime="$HOME/workspace/runtime/mail"
+  if [ -d "$mail_runtime" ] && [ ! -L "$mail_runtime" ] && [ ! -L "$HOME/workspace/runtime" ]; then
+    as_bot rm -rf "$mail_runtime" 2>/dev/null || as_supervisor rm -rf "$mail_runtime" 2>/dev/null || true
   fi
   # The Codex login lives in the bot user's setgid, group-writable home, so `codex login` as `bot` works and the
   # supervisor can still read the 0600 files Codex leaves there (`codex login status`, the model list).
@@ -209,10 +196,11 @@ fi
 as_user() { if [ "$ISOLATED" = 1 ]; then as_bot "$@"; else "$@"; fi; }
 as_user git config --global user.name >/dev/null 2>&1 || as_user git config --global user.name "Tico runner"
 as_user git config --global user.email >/dev/null 2>&1 || as_user git config --global user.email "tico-runner@$(uname -n)"
-# The mail and calendar connectors have no checkout-sibling layout here: point them at the volume. The venv
-# is built into the volume on first use (scripts/mail.sh), so the image stays slim and it survives restarts.
+# The side jobs have no checkout-sibling layout here: point them at the volume.
 export TICO_PROJECTS_DIR="${TICO_PROJECTS_DIR:-$HOME/workspace}"
-export TICO_MAIL_VENV="${TICO_MAIL_VENV:-${TICO_TOOLS_DIR:-$HOME/tools}/mail-venv}"
+# The retired connectors job's venv (mail runs on the server now). A one-time step that 0.7 removes.
+mail_venv="${TICO_TOOLS_DIR:-$HOME/tools}/mail-venv"
+[ ! -d "$mail_venv" ] || [ -L "$mail_venv" ] || rm -rf "$mail_venv" 2>/dev/null || true
 export TICO_SUPERVISED=1 TICO_RUNNER_SELF_UPDATE=0
 # The runner also supervises the meeting-importer and Close jobs the hub assigns here (runner-rs/src/sidejobs.rs).
 export TICO_SIDE_JOBS="${TICO_SIDE_JOBS:-1}"

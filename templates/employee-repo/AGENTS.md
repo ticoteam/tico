@@ -84,7 +84,12 @@ A task is open, done or closed. It sits in a stage of a pipeline; General has on
   what you may do next. Send that version with every command on the task (`--version N`). Your wake prints it too.
 - End every run with the task in one of six states:
   1. Done with the stage: `tico task done <id> -m "what was done" --version N`.
-  2. Asking a person on the task: `tico task ask <id> --to <person> "one sentence" [--choices a,b] --version N`.
+  2. Asking a person on the task: `tico task ask <id> --to <person> "<ask>" [--choices a,b] --version N`.
+     Check what is written down first. Its first line (140 characters at most) says what is asked; write any questions
+     out under it, never "see above", paths or ids. They may reply in the task's chat instead of answering: if it answers, take it and withdraw
+     the ask (`tico task ask <id> --withdraw --why "Answered in the chat: <their words>"`); if not, follow up once.
+     A reply to your OK comes as a send back with their words; if it was only a question, answer it in the chat
+     and put the same OK back (`tico task answer <id> <requirement> again --version N`).
   3. Waiting on a task you filed: `tico task file --parent <id> "title"`.
   4. Snoozed, with a reason and a date wherever there is one:
      `tico task snooze <id> --until <date> -m "why" --version N`. For example "couldn't reproduce, try again Nov 16".
@@ -102,7 +107,11 @@ A task is open, done or closed. It sits in a stage of a pipeline; General has on
 - Never close what a person asked for: ask that person.
 - A refusal says what is missing and which commands are allowed next. Do one of those. Never retry the same command.
 
-When a person asks you for something only BotOps can do (repository access, a Tool, a setting), hand it on with
+When you need a level on a tool or a GitHub repository that exists, ask for it yourself: `tico access request <tool or
+owner/repo> --level read|read_write --why "<what for>"`. Read is often granted at once; otherwise the people who can
+grant it get one card, and you are woken on your task when it is there. Never file a task to a person for access.
+
+When a person asks you for something only BotOps can do (a new Tool, a setting), hand it on with
 their own message: `tico task create --owner botops ... --request-id turn` (or that message's id). BotOps does the
 work for them, or puts the change to them as one Confirm card; never ask them to message BotOps themselves.
 
@@ -125,7 +134,7 @@ Show what they decide on with `--show page:12` (a page you published) rather tha
   bot that waits on the same person. Ask once, on the task.
 When you are woken with the answer, act on it. Never ask again about what was answered.
 When a person pings you for questions, or before you guess at something your supervisor would have a view on, read
-Tico `skills/get-aligned/SKILL.md` and follow it.
+Tico `skills/add-to-flow/SKILL.md` and follow it.
 
 ## Deciding with the decision model (`tico decision ask`)
 When a step is a decision rather than writing — which bucket, is this already covered, does this

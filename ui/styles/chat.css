@@ -84,13 +84,9 @@
 .chat-side .cs-text.md{font-size:inherit;line-height:var(--lh);max-width:none}
 .cs-text.md>:first-child{margin-top:0}
 .cs-text.md>:last-child{margin-bottom:0}
-.cs-text.clamp{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden;max-height:2.8em}
-.cs-text.clamp>*{margin:0;display:inline}
-.cs-text.clamp>*+*::before{content:" "}
-.cs-item.open .cs-text{color:var(--ink)}
+.cs-item .cs-text{color:var(--ink)}
 .cs-more{padding:2px 0;font-size:var(--t-sm);color:var(--muted);text-decoration:underline;background:none;border:0;cursor:pointer;min-height:28px}
 .cs-more:hover{color:var(--ink)}
-.cs-more+.cs-more{margin-left:12px}
 .conv-bots-one{margin:8px 0 12px;padding:8px 10px;border:1px solid var(--line);border-radius:10px}
 .conv-bots-one .bubble{margin:6px 0;max-width:100%}
 /* a long-lived thread is tall: scroll it inside the card so the rest of the bot page stays reachable */
@@ -452,10 +448,6 @@ body:has(#app-nudge:not([hidden])) #main.bot-split-layout>#bot-top{margin-top:8p
 .chat-day.chat-quiet::before,.chat-day.chat-quiet::after{flex:0 0 32px}
 /* steered and queued: a small mark beside the time */
 .chat-way{display:inline-grid;place-items:center;flex:none;align-self:center;width:14px;height:14px;font-size:14px;color:var(--muted)}
-/* a long message: ten lines, then Show more */
-.msg-clamp{max-height:10lh;overflow:hidden}
-.msg-more{display:block;margin-top:2px}
-.msg-more[hidden]{display:none}
 /* Your messages (ui/app/chat-index.ts): one faint tick per message the reader sent, in a narrow strip on the feed's
    right edge, inset from its top and bottom. Ticks on screen are brighter; the one pointed at and its two neighbours
    grow a little, like a dock, and the message shows beside it. Only the ticks take the pointer, never the strip. */

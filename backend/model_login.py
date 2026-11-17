@@ -44,6 +44,7 @@ import re
 
 from clients import harness_manifests as manifests
 
+from . import runner_online
 from .store import H, Problem
 from . import bot_settings as BS
 
@@ -53,8 +54,7 @@ RUNTIMES = manifests.with_capability("browser_sign_in")
 PASTE_RUNTIMES = manifests.with_capability("paste_code")
 SIGN_OUT_RUNTIMES = manifests.with_capability("sign_out")
 CONNECT_RUNTIMES = manifests.with_capability("subscription_connect")
-# What a row asks the runner to do. A runner without SIGN_OUT_CAPABILITY knows only `sign_in`, so it is never
-# handed another kind: it would start a sign-in instead.
+# What a row asks the runner to do.
 KINDS = (
     "sign_in",
     "switch",
@@ -67,21 +67,10 @@ KINDS = (
     "to_key",
     "connect",
 )
-SIGN_OUT_CAPABILITY = "model_sign_out_v1"
-# A runner that clears and uses a computer's key (runner-rs/src/login.rs); an older one is asked to update first.
-KEYS_CAPABILITY = "model_keys_v1"
 KEY_KINDS = ("clear_key", "use_key", "to_key")
 # The kinds that check a key staged in the vault for them (backend/computer_keys.py store/confirm/discard).
 KEY_JOBS = ("use_key", "to_key")
 KEY_JOBS_SQL = "kind IN ('use_key','to_key')"
-# A runner that can take a computer login off its key once a subscription works there (runner-rs/src/login.rs).
-SWITCH_TYPE_CAPABILITY = "model_switch_type_v1"
-# A runner that can take a named subscription off the computer (runner-rs/src/login.rs run_remove).
-REMOVE_CAPABILITY = "model_remove_v1"
-# A runner that can move a computer login off its subscription onto a key (`to_key`, runner-rs/src/login.rs).
-SWITCH_TO_KEY_CAPABILITY = "model_switch_to_key_v1"
-# A runner that can sign a plan in for a company subscription (`connect`, runner-rs/src/login.rs).
-CONNECT_CAPABILITY = "model_connect_v1"
 # The kinds that sign in on the side and have a commit point (`finishing`).
 SIDE_KINDS = ("switch", "to_subscription")
 # A removal has a commit point too: the bots check is made again there, before anything is signed out or deleted.
@@ -112,7 +101,6 @@ VERDICTS = {
     "connect": ("failed",),
 }
 MAX_LINES, MAX_LINE = 12, 200
-ONLINE_SECONDS = 60
 PASTE_RE = re.compile(r"^[A-Za-z0-9_\-#.~%+=/]{6,600}$")
 
 # The runner redacts before it reports; this is the same rule again because the server does not
@@ -285,32 +273,8 @@ def _login(c, rid, lid):
     return row
 
 
-def _signs_out(runner):
-    return SIGN_OUT_CAPABILITY in set(H._json(runner["capabilities"], []) or [])
-
-
-def _switches_type(runner):
-    return SWITCH_TYPE_CAPABILITY in set(H._json(runner["capabilities"], []) or [])
-
-
-def _switches_to_key(runner):
-    return SWITCH_TO_KEY_CAPABILITY in set(H._json(runner["capabilities"], []) or [])
-
-
-def _handles_keys(runner):
-    return KEYS_CAPABILITY in set(H._json(runner["capabilities"], []) or [])
-
-
 def _online(runner):
-    return bool(runner["last_seen_at"]) and runner["last_seen_at"] >= H.shift(H.now(), seconds=-ONLINE_SECONDS)
-
-
-def _removes(runner):
-    return REMOVE_CAPABILITY in set(H._json(runner["capabilities"], []) or [])
-
-
-def connects(runner):
-    return CONNECT_CAPABILITY in set(H._json(runner["capabilities"], []) or [])
+    return runner_online.is_online(runner["last_seen_at"])
 
 
 def _queue(c, who, runner, runtime, profile, kind, what):
@@ -346,21 +310,6 @@ def _queue(c, who, runner, runtime, profile, kind, what):
         raise Problem("state", f"Something else is running on {profile} on that computer; wait for it to finish", 409)
     if not _online(runner):
         raise Problem("offline", f"That computer is offline, so it cannot {what}", 409)
-    if (
-        kind != "sign_in"
-        and not _signs_out(runner)
-        or kind in KEY_KINDS
-        and not _handles_keys(runner)
-        or kind == "to_subscription"
-        and not _switches_type(runner)
-        or kind == "remove"
-        and not _removes(runner)
-        or kind == "to_key"
-        and not _switches_to_key(runner)
-        or kind == "connect"
-        and not connects(runner)
-    ):
-        raise Problem("runner_version", f"Update {runner['label']} to {what} from here", 409)
     now = H.now()
     lid = H.new_id()
     c.execute(
@@ -522,8 +471,14 @@ def sign_out(c, who, rid, runtime, profile="", auth=None):
     return view(row)
 
 
-def use_shared_key(c, who, rid, runtime, auth=None):
-    """Let the company's shared key sign a signed-out computer login in again."""
+def use_shared_key(c, who, rid, runtime, auth=None, vault=None):
+    """Let the company's shared key sign a signed-out computer login in again: the one it is given (a Clear key keeps a
+    shared key given, held back). With none given, a credential administrator's choice puts the shared key for that
+    runtime the most computers run on there (backend/computer_keys.py `shared_keys`); anyone else only lifts the
+    sign-out, since handing a company key to another computer is an administrator's change (`attach_shared_key`)."""
+    from . import computer_keys
+    from .credentials import administrator
+
     _operator(c, who, rid, auth)
     if runtime not in SIGN_OUT_RUNTIMES:
         raise Problem("kind", "Signing out from here isn't available for " + runtime, 422)
@@ -533,17 +488,20 @@ def use_shared_key(c, who, rid, runtime, auth=None):
     row, _ = _queue(c, who, runner, runtime, "", "use_shared_key", "use the shared key")
     c.execute("DELETE FROM model_login_cleared WHERE runner_id=? AND runtime=? AND profile=''", (rid, runtime))
     c.execute("DELETE FROM model_login_key_off WHERE runner_id=? AND runtime=? AND profile=''", (rid, runtime))
+    given = c.execute("SELECT 1 FROM computer_subscriptions WHERE runner_id=? AND runtime=?", (rid, runtime)).fetchone()
+    if not given and vault is not None and administrator(c, who, vault.admins):
+        for key in computer_keys.shared_keys(c, runtime)[:1]:
+            computer_keys.assign(c, rid, runtime, computer_keys.subscription_for(c, key, who.actor), who.actor)
     H.event(c, who.actor, "runner.login.use_shared_key", rid, {"runtime": runtime})
     return view(row)
 
 
 def _share_with(c, who, runner_ids, credential_id, here, runtime):
-    """Grant `credential_id` to each computer in `runner_ids` by name ("Shared with: [computers]"): on each, the key
-    `runtime` runs on from now. A computer listed is one a person just gave this key, so another key shared with it by
-    name for `runtime` is taken off it (the choice decides, not which key is older), and a Clear key or a Switch to
-    subscription there no longer holds it back (`_resume`). The grant rows themselves tell every runner to fetch its
-    keys again (backend/events.py)."""
-    from .computer_keys import SHARED_WITH, names
+    """Give the shared key `credential_id` to each computer in `runner_ids` ("Shared with: [computers]"): on each, the
+    key `runtime` runs on from now, in place of the key it was given (its own key stays saved in Settings > Models), and
+    a Clear key or a Switch to subscription there no longer holds it back (`_resume`). A computer given a subscription
+    from Settings > Models is refused. The change tells every runner to fetch its keys again (backend/events.py)."""
+    from . import computer_keys
 
     rows = []
     for rid in dict.fromkeys([here, *runner_ids]):
@@ -560,29 +518,12 @@ def _share_with(c, who, runner_ids, credential_id, here, runtime):
                 "subscription from here, so it cannot take the shared key until it is back",
                 409,
             )
-        if not _signs_out(row):
-            raise Problem("runner_version", f"Update {row['label']} to use the shared key from here", 409)
-    now = H.now()
-    allowed = names(runtime)
     for row in rows:
-        subject = SHARED_WITH + row["id"]
-        for other in c.execute(
-            "SELECT g.id FROM credential_grants g JOIN credentials cr ON cr.id=g.credential_id "
-            "WHERE g.subject=? AND g.revoked_at IS NULL AND g.credential_id<>? AND cr.env IN (%s)"
-            % ",".join("?" * len(allowed)),
-            (subject, credential_id, *allowed),
-        ).fetchall():
-            c.execute(
-                "UPDATE credential_grants SET revoked_at=?, revoked_by=? WHERE id=?", (now, who.actor, other["id"])
-            )
-        if not c.execute(
-            "SELECT 1 FROM credential_grants WHERE credential_id=? AND subject=? AND revoked_at IS NULL",
-            (credential_id, subject),
-        ).fetchone():
-            c.execute(
-                "INSERT INTO credential_grants(id,credential_id,subject,granted_by,created_at) VALUES(?,?,?,?,?)",
-                (H.new_id(), credential_id, subject, who.actor, now),
-            )
+        computer_keys._refuse_models_plan(c, row["id"], runtime)
+    key = c.execute("SELECT * FROM credentials WHERE id=?", (credential_id,)).fetchone()
+    sid = computer_keys.subscription_for(c, key, who.actor)
+    for row in rows:
+        computer_keys.assign(c, row["id"], runtime, sid, who.actor)
     for row in marked:
         _resume(c, who, row, runtime)
     # In the order every list of computers here uses.
@@ -599,9 +540,9 @@ def _resume(c, who, runner, runtime):
 
 def share_key(c, who, rid, runtime, key, env="", share=(), auth=None, vault=None):
     """Add connection > API key > "Shared with: [computers]": the pasted key is stored once, as a shared key, and
-    granted to this computer and each one listed. Like an "Every computer" key in Credentials, it widens a company
-    secret to more computers, so it is a credential administrator's change; it is used at each computer's next key
-    fetch, as a new "Every computer" key is (no per-computer check: that queue is one computer's)."""
+    given to this computer and each one listed. It widens a company secret to more computers, so it is a credential
+    administrator's change; it is used at each computer's next key fetch (no per-computer check: that queue is one
+    computer's)."""
     from . import computer_keys
     from .credentials import require_admin
 
@@ -655,26 +596,18 @@ def share_key(c, who, rid, runtime, key, env="", share=(), auth=None, vault=None
 
 
 def attach_shared_key(c, who, rid, runtime, credential_id, auth=None, vault=None):
-    """Add connection > API key > "Use a shared key": this computer runs `runtime` on a key already shared (with every
-    computer, or with others by name). A credential administrator's change, as sharing it was."""
+    """Add connection > API key > "Use a shared key": this computer runs `runtime` on a key already shared with
+    computers. A credential administrator's change, as sharing it was."""
     from . import computer_keys
-    from .credentials import COMPUTERS, require_admin
+    from .credentials import require_admin
 
     _person_only(who, "use a shared key")
     _operator(c, who, rid, auth)
     _key_runtime(runtime)
     require_admin(c, who, vault.admins)
     runner = _runner(c, rid)
-    row = c.execute("SELECT * FROM credentials WHERE id=? AND ciphertext IS NOT NULL", (credential_id,)).fetchone()
-    shared = (
-        row
-        and c.execute(
-            "SELECT 1 FROM credential_grants WHERE credential_id=? AND revoked_at IS NULL AND "
-            "(subject=? OR subject LIKE ?)",
-            (credential_id, COMPUTERS, computer_keys.SHARED_WITH + "%"),
-        ).fetchone()
-    )
-    if not shared or row["env"] not in computer_keys.names(runtime):
+    row = next((k for k in computer_keys.shared_keys(c, runtime) if k["id"] == credential_id), None)
+    if not row:
         raise Problem("credential", f"Choose a shared {runtime} key", 422)
     _share_with(c, who, (), credential_id, rid, runtime)
     H.event(c, who.actor, "computer_key.attached", rid, {"runtime": runtime, "credential": credential_id})
@@ -688,27 +621,17 @@ def shared_choices(c, runtime):
     """The shared keys a credential administrator can attach to a computer for `runtime`: [{id, name, env, preview,
     every}], never a value."""
     from . import computer_keys
-    from .credentials import COMPUTERS
 
-    out = []
-    for row in c.execute(
-        "SELECT cr.id, cr.name, cr.env, cr.preview, max(g.subject=?) AS every FROM credentials cr "
-        "JOIN credential_grants g ON g.credential_id=cr.id AND g.revoked_at IS NULL "
-        "WHERE cr.ciphertext IS NOT NULL AND (g.subject=? OR g.subject LIKE ?) GROUP BY cr.id "
-        "ORDER BY lower(cr.name), cr.id",
-        (COMPUTERS, COMPUTERS, computer_keys.SHARED_WITH + "%"),
-    ):
-        if row["env"] in computer_keys.names(runtime):
-            out.append(
-                {
-                    "id": row["id"],
-                    "name": row["name"],
-                    "env": row["env"],
-                    "preview": row["preview"],
-                    "every": bool(row["every"]),
-                }
-            )
-    return out
+    return [
+        {
+            "id": row["id"],
+            "name": row["name"],
+            "env": row["env"],
+            "preview": row["preview"],
+            "every": False,  # no key covers every computer any more (D11-5 drops the field)
+        }
+        for row in sorted(computer_keys.shared_keys(c, runtime), key=lambda r: (r["name"].lower(), r["id"]))
+    ]
 
 
 def affected_bots(c, who, rid, runtime, profile, settings, auth=None, every=False):
@@ -933,7 +856,7 @@ def report(c, runner_id, lid, body, settings=None):
             # key from now, so a key fetch made meanwhile hands it out, not the one it replaces.
             from . import computer_keys
 
-            computer_keys.confirm(c, row["runner_id"], lid)
+            computer_keys.confirm(c, row["runner_id"], lid, settings)
     state = body.state if ORDER[body.state] >= ORDER[row["state"]] else row["state"]
     terminal = state in ("signed_in", "signed_out", "done", "failed")
     # Finishing, the person has nothing left to open or enter.
@@ -974,7 +897,7 @@ def report(c, runner_id, lid, body, settings=None):
         from . import computer_keys
 
         if state == "done":
-            computer_keys.confirm(c, row["runner_id"], lid)
+            computer_keys.confirm(c, row["runner_id"], lid, settings)
         else:
             computer_keys.discard(c, lid)
     # A person signed this login in again: it is no longer signed out on purpose. A sign-out that did not take
@@ -1055,7 +978,7 @@ def key_info(c, who, rid, runtime, auth=None, vault=None):
     shared key, every computer it serves (the "this computer only / all of them" ask), each with whether it is online
     and whether this person may change it there. Previews only, never a value."""
     from . import computer_keys
-    from .credentials import COMPUTERS, administrator, granted
+    from .credentials import administrator
 
     _operator(c, who, rid, auth)
     _key_runtime(runtime)
@@ -1086,18 +1009,17 @@ def key_info(c, who, rid, runtime, auth=None, vault=None):
         "names": list(computer_keys.names(runtime)),
         "computers": [],
     }
-    if source == "shared":
+    if source == "shared" and shared:
         out["computers"] = [
             {
                 "id": row["id"],
                 "label": row["label"],
                 "online": _online(row),
-                "updated": _handles_keys(row),
                 "may": _may(c, who, row, auth),
             }
             for row in _shared_users(c, runner, runtime)
         ]
-        out["shared"] = {"env": shared["env"], "every": shared["id"] in granted(c, COMPUTERS)}
+        out["shared"] = {"env": shared["env"], "every": False}
         if key_admin:
             out["shared"].update(id=shared["id"], name=shared["name"])
         out["can_replace_all"] = key_admin
@@ -1169,14 +1091,6 @@ def clear_key(c, who, rid, runtime, scope="this", auth=None):
             "forbidden",
             "You cannot change the key on " + ", ".join(refused) + "; clear it on this computer only, or ask an admin",
             403,
-        )
-    # Offline too: an older runner has no clear_key handler, so a mark left for it would never clear its copy.
-    stale = [row["label"] for row in rows if not _handles_keys(row)]
-    if stale:
-        raise Problem(
-            "runner_version",
-            "Update " + ", ".join(stale) + " to clear its key from here, or delete the shared key in Tools > Keys",
-            409,
         )
     out = []
     for row in rows:
@@ -1253,6 +1167,9 @@ def replace_key(c, who, rid, runtime, key, env="", scope="this", auth=None, vaul
             "WHERE id=?",
             (ciphertext, nonce, preview, H.now(), who.actor, row["id"]),
         )
+        from . import model_subscriptions
+
+        model_subscriptions.rekeyed(c, row["id"], preview, runtime)
         H.event(c, who.actor, "credential.updated", row["id"], {"secret_changed": True, "via": "computers"})
         return {
             "shared": {"id": row["id"], "env": row["env"], "preview": preview},

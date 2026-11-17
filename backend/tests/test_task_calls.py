@@ -65,13 +65,13 @@ def test_a_new_task_is_open_in_the_first_stage_of_general_with_one_visit_and_its
     assert refs["version"] == row["version"]
 
 
-def test_a_task_for_a_person_wakes_nobody_and_is_in_their_needs_you(c):
+def test_a_task_for_a_person_wakes_nobody_and_is_their_turn_in_tasks_not_needs_you(c):
     from backend import waiting_on as W
 
     row = _new(c, by=BUILDER, owner=ANA, title="Pick the launch date")
     assert X.wakes(c, row["id"]) == []
-    mine = [item for item in W.needs(c, ANA) if item["task_id"] == row["id"]]
-    assert [item["kind"] for item in mine] == ["task"]
+    assert [(w.state, w.who) for w in W.waiting_on(c, row["id"])] == [("person", ANA)]
+    assert not [item for item in W.needs(c, ANA) if item["task_id"] == row["id"]]  # nothing is asked of her
 
 
 def test_a_sub_task_is_linked_both_ways_and_its_parent_waits_on_nothing_it_did_not_ask_for(c):
@@ -308,6 +308,37 @@ def test_reassign_gives_the_task_to_its_new_owner_and_tells_the_automations_once
     assert H.task_reassign(c, ANA, row["id"], HELPER)["version"] == version + 1  # the same owner: no change
     with _refused("task_requirement|identity|reach"):
         H.task_reassign(c, ANA, row["id"], "bot:nobody")
+
+
+def test_reassign_keeps_the_tasks_place_in_its_stage(c):
+    """Seen on TIDY (D-20021): a person put a task at the top of On Deck (rank 1.0, the next at 556 and 564). Giving it
+    to someone else set its rank to the end of the new owner's queue (200225.0), so it dropped to the bottom of the
+    stage. A reassignment keeps the task in its stage, so it keeps its rank and its place there."""
+    top, second, third = (
+        _new(c, title="Top of the stage"),
+        _new(c, title="Second"),
+        _new(c, owner=HELPER, title="Third"),
+    )
+    for task_id, rank in ((top["id"], 1.0), (second["id"], 556.0), (third["id"], 564.0)):
+        c.execute("UPDATE tasks SET rank=? WHERE id=?", (rank, task_id))
+    for n in range(3):  # the new owner's queue already ends far below the stage's top
+        c.execute("UPDATE tasks SET rank=? WHERE id=?", (200224.0 - n, _new(c, owner=HELPER, title=f"Later {n}")["id"]))
+    X.settled(c)
+
+    def stage_order():
+        return [t["id"] for t in H.tasks(c, status="open") if t["stage_id"] == top["stage_id"]]
+
+    assert stage_order()[:3] == [top["id"], second["id"], third["id"]]
+    out = H.task_reassign(c, ANA, top["id"], HELPER, "Helper has the numbers.", _version(c, top["id"]))
+    assert (out["owner_id"], out["stage_id"], out["rank"]) == (HELPER, top["stage_id"], 1.0)
+    assert stage_order()[:3] == [top["id"], second["id"], third["id"]]
+    assert [t["id"] for t in H.tasks(c, owner=HELPER, status="open")][0] == top["id"]  # first in its new owner's queue
+
+    # A task with no rank yet still takes the end of the new owner's queue.
+    unranked = _new(c, title="Never ranked")
+    c.execute("UPDATE tasks SET rank=NULL WHERE id=?", (unranked["id"],))
+    out = H.task_reassign(c, ANA, unranked["id"], HELPER, "Helper has the numbers.", _version(c, unranked["id"]))
+    assert out["rank"] == 200225.0
 
 
 def _pr(c, task_id, number, repo="acme/app"):

@@ -27,8 +27,6 @@ hidden, and the anonymous usage-count notice is not shown; it appears on the fir
 Tasks), and counting starts only once it has been shown ([PRIVACY.md](../PRIVACY.md)). The owner's tour is marked seen
 when the team is created; **Take the tour** in the account menu replays it.
 
-The [sample company](sample-company.md) is not offered in setup; it is an install option (`TICO_SAMPLE_COMPANY`).
-
 ### A company file
 
 If you already chose a team on the public setup page, **I have a company file** on the Your team step takes its YAML.
@@ -217,8 +215,8 @@ second). It reaches no computer.
 - **Everything else picked is a Recruiting seat** (`seats` on the record: `{pick: seat id}`), with the reviewed name as its
   title, a job description from the card and the reviewed instructions, the reporting line picked (a pick under another pick
   reports to that seat) and the pick's group. No bot, repository, computer slot or BotOps task exists for it. The bullets
-  below about starters and other templates describe a bot made from a template: the sample company's, and from a seat once
-  someone picks a bot for it.
+  below about starters and other templates describe a bot made from a template: from a seat once someone picks a bot for
+  it.
 - **No AI provider and no computer are needed.** The team is created first. With no provider chosen a bot names no runtime or model and
   follows the team default, so it runs once a provider is added in Settings > Models. With no computer enrolled the bots stay
   `planned`; when the owner's computer enrolls, the bots are placed on it and activated.
@@ -239,7 +237,7 @@ second). It reaches no computer.
   - it does not count toward a member's bot limit while parked.
 - A **seat bot** setup made (one that goes live with no person step) gets its own "Set yourself up" task once, at go-live
   (`backend/setup_live.py`). When the bot reports to the owner (a default company's team managers), that task ends with
-  the setup's one automatic ping, the button's default scope: run Tico's `skills/get-aligned/SKILL.md` for the owner, so
+  the setup's one automatic ping, the button's default scope: run Tico's `skills/add-to-flow/SKILL.md` for the owner, so
   its first questions (zero to three) wait in their Flow. The owner's ping is recorded then, with no run of its own, so
   the bot may ask them. The bots under a manager get none, so the owner is not asked by every bot at once, and nothing
   pings a bot automatically again ([Tasks](tasks.md#needs-you)).
@@ -550,7 +548,7 @@ the same template is one of the two command line routes; Tico gives it a slug of
 
 ## Adding a template
 
-Tico ships 108 role templates, by group, each with a card. `templates/catalog/` holds 119 folders in all: those 108, four built-in bots (`assistant`, `botops`, `strategy-owner`, `librarian`) and seven helper bots (`finance-owner`, `design-owner`, `inbox-manager`, `general-manager`, `rules-owner`, `updates-owner`, `automations-owner`). [Starter bots](starter-bots.md) lists the 108.
+Tico ships 108 role templates, by group, each with a card. `templates/catalog/` holds 120 folders in all: those 108, four built-in bots (`assistant`, `botops`, `strategy-owner`, `librarian`) and eight helper bots (`finance-owner`, `design-owner`, `inbox-manager`, `general-manager`, `rules-owner`, `updates-owner`, `automations-owner`, `tools-owner`). [Starter bots](starter-bots.md) lists the 108.
 
 `templates/catalog/<template>/` is one template. The folder name is what `--template` takes.
 

@@ -1,5 +1,5 @@
 """The Product and Engineering cases of the fault rig (plan gap G18, track E): the acceptance case `idea-to-done`, the
-refusals, and the spec scenarios they cover (docs/pipelines-v3.md, "Scenarios the rig and the spot checks must pass").
+refusals, and the spec scenarios they cover (docs/dev/pipelines-v3.md, "Scenarios the rig and the spot checks must pass").
 
 Each case runs on a software company's world (`software.soft_rig`): the real presets, engine and requirement kinds,
 the rig's GitHub and Jev, a check pass and the rig's per-step checks after every step.
@@ -73,12 +73,12 @@ def idea_to_done(r: SoftRig) -> None:
     spec = r.page(PM, "Spec: export to CSV")
     r.attach(p, spec, PM)
     expect([s for s, _ in r.waits(p)] == ["jev"], f"after the attach it waits on {r.waits(p)}, not Jev")
-    r.says(p, "Jev is checking")
+    r.says(p, "Decision model is checking")
     r.jev()
     r.check()
     person = r.person_on(p)
     expect(person.startswith("human:"), f"the spec's OK is {person}'s")
-    r.says(p, f"version {spec.version}")
+    r.says(p, "Spec")  # the approval's row is its document; the version is its key
     r.ok_page(p, person)
 
     # 2. In development files one Engineering task, linked, with the spec at the version that was OK'd.
@@ -200,7 +200,7 @@ def idea_to_done(r: SoftRig) -> None:
     r.attach(p, older, PM)
     r.jev()
     r.check()
-    r.says(p, "Jev sent it back")
+    r.says(p, "Decision model sent it back")
     expect(r.waits(p) == [("bot", PM)], f"Jev's not yet waits on {r.waits(p)}")
     expect(r.filed(p) == [e], f"a not yet filed {r.filed(p)[1:]}")
     until = S._h().shift(r.w.now(), seconds=3600)
@@ -715,7 +715,7 @@ def jev_fails_three_times(r: SoftRig) -> None:
         r.w.shift(gap + 1)
         r.jev()
         r.check()
-    r.says(p, "OK ")
+    r.says(p, "Spec")
     expect(r.fake_jev.counts[FAIL] == 3, f"Jev was called {r.fake_jev.counts[FAIL]} times, not 3")
     person = r.person_on(p)
     r.ok_page(p, person)
@@ -729,7 +729,7 @@ def jev_unsure(r: SoftRig) -> None:
     r.attach(p, r.page(PM, "Spec: audit trail", verdict=UNSURE), PM)
     r.jev()
     r.check()
-    r.says(p, "OK ")
+    r.says(p, "Spec")
     r.ok_page(p)
     r.at(p, "In development")
 
@@ -790,7 +790,7 @@ def conflict_in_review(r: SoftRig) -> None:
     r.attach(e, r.page(REVIEWER_2, "Review 2: bulk export", verdict=NOT_MET), REVIEWER_2)
     r.jev()
     r.check()
-    r.says(e, "Jev sent it back")
+    r.says(e, "Decision model sent it back")
 
     # The PR conflicts (Acme, Nov 11): the Builder is woken at once; the reviewer, who cannot push, gets a quiet line.
     before = len(r.wakes(e, REVIEWER_2))

@@ -9,8 +9,10 @@ running this.
   (clients/cli_spec.py) is one when none of the tools it can run writes (`writes` on the tool) or runs on this computer
   (`local`: it saves files), and it is not a paid lookup (PAID). The commands the hand parser still builds are listed in
   HAND_READ_PATHS, which shrinks as they move to specs. Left out on purpose: reads that mark something (`inbox`,
-  `message list`, `update read`, `changelog list`), reads with a writing flag (`rules read --from`), paid lookups
-  (`gateway search`, `doc fetch`), checks, and every group or alias of a group (`status`, `org`, `docs`).
+  `message list`, `update read`, `changelog list`, and the MARKS commands such as `growth setup`), reads with a writing
+  flag (`rules read --from`), paid lookups
+  (`gateway search`, `doc fetch`), checks, spec'd reads not yet decided (UNDECIDED), and every group or alias of a
+  group (`status`, `org`, `docs`).
 """
 
 import argparse
@@ -26,7 +28,6 @@ RUST = ROOT / "runner-rs" / "src" / "hosts" / "hub_paths.rs"
 
 HAND_READ_PATHS = (
     "agent pair show",
-    "alerts show",
     "assistant change list",
     "automation guide",
     "automation list",
@@ -43,47 +44,18 @@ HAND_READ_PATHS = (
     "automations templates",
     "automations versions",
     "board",
-    "bot list",
-    "bot recent",
-    "bot show",
-    "bot status history",
-    "bot status list",
-    "bots list",
-    "bots recent",
-    "bots show",
-    "bots status history",
-    "bots status list",
     "calendar free",
     "calendar list",
     "calendar search",
     "calendar status",
     "calendar upcoming",
-    "call list",
-    "call show",
     "catalog",
     "computers",
-    "contacts describe",
-    "contacts find",
-    "contacts get",
-    "contacts history",
-    "contacts rules",
-    "contacts self",
-    "contacts types",
     "context search",
     "context show",
     "conversation show",
     "credential list",
-    "doc history",
-    "doc list",
-    "doc read",
-    "doc search",
     "docs links",
-    "feedback list",
-    "feedback markers",
-    "feedback reasons",
-    "file list",
-    "file read",
-    "file search",
     "goal checkin list",
     "goals",
     "group list",
@@ -97,7 +69,6 @@ HAND_READ_PATHS = (
     "meeting granola status",
     "meeting read",
     "meeting search",
-    "needs-you show",
     "note list",
     "notes",
     "origin show",
@@ -106,8 +77,6 @@ HAND_READ_PATHS = (
     "repo list",
     "run list",
     "service-key list",
-    "settings find",
-    "settings show",
     "slack channel list",
     "task caps",
     "task context",
@@ -173,15 +142,59 @@ def spec_paths():
 
 
 # Spec'd commands whose tools neither write nor run on this computer, but spend: from the company's Gateway cap, or
-# (`market ask`) a model call on the server's key.
-PAID = ("gateway search", "gateway fetch", "gateway digest", "market ask")
+# (`market ask`, `feedback rule-draft`) a model call on the server's key.
+PAID = ("gateway search", "gateway fetch", "gateway digest", "market ask", "feedback rule-draft")
+# Spec'd reads that also mark something: their first call records a team date (`growth setup` records the first open and
+# the step dates, backend/growth_setup.py), so the runner asks before running them.
+MARKS = ("growth setup",)
+# Spec'd reads the runner did not run without asking before they became specs, so the hand list left them out. They stay
+# out so the runner list does not widen; each one needs its own decision. `call token` mints a token, a POST that its
+# tool does not mark as a write; `file approved` reads a checkout file's bytes; the automation reads (and their
+# `automations` spellings), `changelog list` and `general-manager status` were never in the hand list; the others are
+# Librarian and link reads. `task run` starts a
+# bot's task, but its tool (tico_task_run) is not marked a write, so it stays out until that tool says so. The Assistant
+# reads (a person's own chat, what it learned, a shared chat, the waiting cards) were never in the hand list either;
+# `meeting granola sync` starts a sync, a POST its tool does not mark as a write, and `meeting pending` was not listed.
+# The `tool`, `github` and `repo` reads were never in the hand list; `tool check` POSTs a fresh check of a tool's keys.
+UNDECIDED = (
+    "assistant learned",
+    "assistant proposals",
+    "assistant read",
+    "assistant shared",
+    "assistant shared-read",
+    "call token",
+    "changelog list",
+    "doc ask-status",
+    "doc link-list",
+    "file approved",
+    "general-manager status",
+    "meeting granola sync",
+    "meeting pending",
+    "automation question-sets",
+    "automation recent-runs",
+    "automation template",
+    "automations question-sets",
+    "automations recent-runs",
+    "automations template",
+    "task run",
+    "tasks run",
+    "github installed",
+    "github status",
+    "repo show",
+    "tool activity",
+    "tool check",
+    "tool index",
+    "tool query-search",
+)
 
 
 def read_paths():
     reads = set(HAND_READ_PATHS)
     for path, command in spec_paths().items():
         tools = [hubtools.BY_NAME[name] for name in (command.tool, *command.tools)]
-        if path not in PAID and not any(tool["writes"] or tool["local"] for tool in tools):
+        if path in PAID or path in MARKS or path in UNDECIDED:
+            continue
+        if not any(tool["writes"] or tool["local"] for tool in tools):
             reads.add(path)
     return sorted(reads)
 

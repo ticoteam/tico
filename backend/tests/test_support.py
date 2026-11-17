@@ -757,7 +757,7 @@ def test_a_setup_request_starts_from_a_snapshot_and_keeps_its_kind_even_at_an_ol
         )
         BS.write(c, 'payroll', {})
         c.execute("UPDATE bots SET display_name='Payroll for Acme Corp' WHERE slug='payroll'")
-    owner_items = api.get("/api/v2/getting-started", headers=signed_in()).json()["items"]
+    owner_items = api.get("/api/v2/setup/getting-started", headers=signed_in()).json()["items"]
     assert any("Payroll for Acme Corp" in item["label"] for item in owner_items)
     snapshot = api.get("/api/v2/support/setup-snapshot?asked_from=bot", headers=signed_in()).json()
     assert "Payroll" not in snapshot["message"] and "- Bots in Needs setup: 1" in snapshot["message"]

@@ -1,4 +1,4 @@
-"""Org rules (docs/rules-plan.md §1, §5, §6): one sentence each, internal (between teammates) or external (what someone outside
+"""Org rules (docs/dev/rules-plan.md §1, §5, §6): one sentence each, internal (between teammates) or external (what someone outside
 requires of us). A rule says who follows it and, for an internal rule, with whom. Due dates live in backend/rule_due.py.
 
 - Records: `org_rules` (its From, `source_entity_id`, is an organization entity: a rule source, see
@@ -40,6 +40,7 @@ from .models import Contract
 from .entities import store as ES
 from .store import Problem
 from . import bot_settings as BS
+from .api_contract import api_v2
 
 KINDS = ("internal", "external")
 SOURCE_KINDS = ("vendor", "customer", "government", "other")
@@ -57,34 +58,6 @@ SCOPE_MAX = 100  # the names one Who or With may hold, in all
 DUE_PER_RULE = 20  # the due dates a rule's view names; the rest are counted (`due_more`)
 SETTINGS_TASK_CAPS = 20  # the task limits a bot's settings name; the rest are counted
 SCOPE_KEYS = ("everyone", "all_bots", "outside_editions", "groups", "bots", "people", "names")
-
-SCHEMA = (
-    # Rule sources are organization entities now (store.rule_sources; migration 20261108044824 moved the rows).
-    "CREATE TABLE IF NOT EXISTS org_rules(id TEXT PRIMARY KEY, "
-    "kind TEXT NOT NULL CHECK (kind IN ('internal','external')), text TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', "
-    "source_entity_id TEXT, cite TEXT, who TEXT NOT NULL, with_scope TEXT NOT NULL DEFAULT '{}', "
-    "where_terms TEXT NOT NULL DEFAULT '[]', "
-    "if_broken TEXT NOT NULL DEFAULT 'block' CHECK (if_broken IN ('block','escalate','warn')), reviewer TEXT, "
-    "status TEXT NOT NULL CHECK (status IN ('suggested','active','retired')), suggested_by TEXT NOT NULL, "
-    "decided_by TEXT, decided_at TEXT, via TEXT NOT NULL DEFAULT '', version INTEGER NOT NULL DEFAULT 1, "
-    "created_at TEXT NOT NULL, updated_at TEXT NOT NULL, "
-    "document_entity_id TEXT, toward_scope TEXT NOT NULL DEFAULT '[]', applies_when TEXT, "
-    "party_side TEXT CHECK (party_side IN ('our_side', 'their_side')))",
-    "CREATE INDEX IF NOT EXISTS org_rules_status ON org_rules(status, kind, created_at)",
-    "CREATE TABLE IF NOT EXISTS org_rule_holds(id TEXT PRIMARY KEY, operation TEXT NOT NULL, payload TEXT NOT NULL, "
-    "author TEXT NOT NULL, destinations TEXT NOT NULL DEFAULT '[]', rule_ids TEXT NOT NULL DEFAULT '[]', "
-    "verdict TEXT NOT NULL DEFAULT '{}', why TEXT NOT NULL DEFAULT '', nonce TEXT NOT NULL, "
-    "state TEXT NOT NULL CHECK (state IN ('held','sent','kept')), reviewer TEXT, task_id TEXT, created_at TEXT NOT NULL, "
-    "decided_at TEXT, decided_by TEXT, check_kind TEXT NOT NULL DEFAULT 'judged')",
-    "CREATE INDEX IF NOT EXISTS org_rule_holds_author ON org_rule_holds(author, state)",
-)
-
-
-def ensure(c):
-    for statement in SCHEMA:
-        c.execute(statement)
-    # A database made before `where:` got org_rules.where_terms from migration 0047.
-    D.ensure(c)
 
 
 # ----------------------------------------------------------------------------- small helpers
@@ -1251,10 +1224,12 @@ def seed_external(c, who, text, source_name, source_kind):
 # The built-in rule "Asks to a person" (Tasks spec "Bots ask people a question with choices", AC-7 and AC-8): added
 # once to every team, on, followed by all bots and met only by a bot's question to a person (`kind:ask`). The team edits
 # it or turns it off on the Rules page like any rule; the marker stays, so it is never added again.
+# Its tone only: the ask's shape (a short first line that stands on its own, no paths or ids) is checked in code
+# (backend/ask_shape.py). A team's stored copy still in earlier built-in words is brought up to date by migration
+# 20261116234252_asks_to_a_person_choices_optional; one the team edited keeps its words.
 ASKS_TO_A_PERSON = (
-    "A bot's ask or task for a person says in plain words why it matters, gives 2 to 4 choices with the bot's "
-    "recommendation, says what happens on each, and uses no Markdown or file paths. Otherwise it is refused, and the "
-    "bot rewrites it."
+    "A bot's ask or task for a person is in plain words, says in one line why it matters, and uses no Markdown or "
+    "file paths. Choices are optional. Otherwise it is refused, and the bot rewrites it."
 )
 ASKS_TO_A_PERSON_ADDED = "rules.asks_to_a_person"  # registry_metadata: added once; never again
 
@@ -1623,13 +1598,23 @@ def install(app, store, auth, mutate):
             data["with"] = None if body.with_ is None else body.with_.model_dump()
         return data
 
-    @app.get("/api/v2/rules/counts")
+    @app.get(
+        "/api/v2/rules/counts",
+        **api_v2(
+            "Rules", "getRulesCounts", "Internal and external rules in force, due dates open, suggestions waiting"
+        ),
+    )
     def rules_counts(request: Request):
         """The tab counts: internal and external rules in force, the due dates kept, the suggestions waiting."""
         with store.read() as c:
             return counts(c, auth, request.state.identity)
 
-    @app.get("/api/v2/rules/due")
+    @app.get(
+        "/api/v2/rules/due",
+        **api_v2(
+            "Rules", "listRuleDue", "Due dates of rules in force: overdue, then those falling due within next days"
+        ),
+    )
     def rules_due(
         request: Request, next: str = "90d", status: str | None = None, cursor: str | None = None, limit: int = 100
     ):
@@ -1640,14 +1625,27 @@ def install(app, store, auth, mutate):
             return due_list(c, auth, request.state.identity, args)
 
     # Declared before /api/v2/rules/{rule_id}, which would otherwise take "by-teammate" for a rule id.
-    @app.get("/api/v2/rules/by-teammate")
+    @app.get(
+        "/api/v2/rules/by-teammate",
+        **api_v2(
+            "Rules",
+            "listRulesByTeammate",
+            "The rules in force the caller may read, each with can_edit; and per bot and per person the caller may see, the ids of the rules whose Who (who) or With (with) names it, only those with one",
+            "RulesByTeammate",
+        ),
+    )
     def rules_by_teammate(request: Request):
         """The rules in force, and for each bot and person the caller may see, the ids of the rules whose Who or With names
         it (only those with one). `can_edit` says whether the caller may change a rule."""
         with store.read() as c:
             return teammate_rules(c, auth, request.state.identity)
 
-    @app.get("/api/v2/rules")
+    @app.get(
+        "/api/v2/rules",
+        **api_v2(
+            "Rules", "listRules", "The org rules, newest first, paged; mine=true adds the bot's settings as sentences"
+        ),
+    )
     def rules_list(
         request: Request,
         kind: str | None = None,
@@ -1678,7 +1676,10 @@ def install(app, store, auth, mutate):
         with store.read() as c:
             return _list_rules(c, auth, request.state.identity, args)
 
-    @app.post("/api/v2/rules")
+    @app.post(
+        "/api/v2/rules",
+        **api_v2("Rules", "addRule", "Add an org rule: a bot's is a suggestion; only owners and admins add Everyone"),
+    )
     def rules_add(request: Request, body: RuleCreate):
         """Add a rule: internal (Who, optionally With) or external (Who and From). A bot's add lands as suggested; a
         person's lands active when they may manage the rule, and as a suggestion when they may not. Only the owner and
@@ -1707,7 +1708,14 @@ def install(app, store, auth, mutate):
             return result
         return fresh(who, result["rule"]["id"])
 
-    @app.get("/api/v2/rule-due/{due_id}")
+    @app.get(
+        "/api/v2/rule-due/{due_id}",
+        **api_v2(
+            "Rules",
+            "getRuleDue",
+            "One due date in full: its status, open occurrences, and its chain of edits (ended and removed rows included)",
+        ),
+    )
     def rule_due_show(request: Request, due_id: str):
         """One due date in full: its first date, repeat, zone, owner and routine, its status today, the occurrences still
         open, and its chain of edits. An edit ends a row and starts the next, which points back at it (`replaces`); ended
@@ -1715,7 +1723,10 @@ def install(app, store, auth, mutate):
         with store.read() as c:
             return due_show(c, auth, request.state.identity, due_id)
 
-    @app.get("/api/v2/rules/{rule_id}")
+    @app.get(
+        "/api/v2/rules/{rule_id}",
+        **api_v2("Rules", "getRule", "One rule, its due dates, and the quote it cites where its file is readable"),
+    )
     def rules_show(request: Request, rule_id: str):
         """One rule, with its due dates and, where its file is readable, the quote it cites."""
         who = request.state.identity
@@ -1723,7 +1734,9 @@ def install(app, store, auth, mutate):
             auth.domain(who)
             return view(c, auth, who, _get(c, rule_id), _ctx(c))
 
-    @app.post("/api/v2/rules/{rule_id}")
+    @app.post(
+        "/api/v2/rules/{rule_id}", **api_v2("Rules", "updateRule", "Edit a rule against its version; a bot cannot edit")
+    )
     def rules_edit(request: Request, rule_id: str, body: RuleEdit):
         """Edit a rule: only the fields sent. `version` is the rule's as read; another answers 409. A bot cannot edit;
         a party named in With cannot edit."""
@@ -1736,7 +1749,10 @@ def install(app, store, auth, mutate):
         mutate(request, body, work)
         return fresh(who, rule_id)
 
-    @app.post("/api/v2/rules/{rule_id}/accept")
+    @app.post(
+        "/api/v2/rules/{rule_id}/accept",
+        **api_v2("Rules", "acceptRule", "Accept a suggestion, optionally changing its Who; a person only"),
+    )
     def rules_accept(request: Request, rule_id: str, body: RuleDecide):
         """Accept a suggestion, optionally changing its Who first. Bots never accept."""
         who = request.state.identity
@@ -1748,7 +1764,7 @@ def install(app, store, auth, mutate):
         result = mutate(request, body, work)
         return {"rule": fresh(who, rule_id), "due": result["due"]}
 
-    @app.post("/api/v2/rules/{rule_id}/skip")
+    @app.post("/api/v2/rules/{rule_id}/skip", **api_v2("Rules", "skipRule", "Set a suggestion aside"))
     def rules_skip(request: Request, rule_id: str, body: RuleDecide):
         """Skip a suggestion: it is set aside, not in force."""
         who = request.state.identity
@@ -1759,7 +1775,10 @@ def install(app, store, auth, mutate):
         result = mutate(request, body, work)
         return {"rule": fresh(who, rule_id), "due": result["due"]}
 
-    @app.post("/api/v2/rules/{rule_id}/retire")
+    @app.post(
+        "/api/v2/rules/{rule_id}/retire",
+        **api_v2("Rules", "retireRule", "Retire a rule in force; its due dates come back"),
+    )
     def rules_retire(request: Request, rule_id: str, body: RuleDecide):
         """Retire a rule. Its due dates come back, so the caller can ask whether to remove them too."""
         who = request.state.identity
@@ -1770,7 +1789,10 @@ def install(app, store, auth, mutate):
         result = mutate(request, body, work)
         return {"rule": fresh(who, rule_id), "due": result["due"]}
 
-    @app.post("/api/v2/rules/{rule_id}/due")
+    @app.post(
+        "/api/v2/rules/{rule_id}/due",
+        **api_v2("Rules", "addRuleDue", "Add a due date to a rule: first day, repeat, owner, routine lead time"),
+    )
     def rules_due_add(request: Request, rule_id: str, body: DueAdd):
         """Add a due date to a rule: a first day, a repeat, an owner (a bot or a person), and the routine's lead time."""
         who = request.state.identity
@@ -1780,7 +1802,10 @@ def install(app, store, auth, mutate):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/rule-due/{due_id}")
+    @app.post(
+        "/api/v2/rule-due/{due_id}",
+        **api_v2("Rules", "updateRuleDue", "Edit a due date; a change to first day or repeat starts a new row"),
+    )
     def rules_due_edit(request: Request, due_id: str, body: DueEdit):
         """Edit a due date. A change to first_due or repeats ends this row and starts a new one, so its history stays."""
         who = request.state.identity
@@ -1790,7 +1815,9 @@ def install(app, store, auth, mutate):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/rule-due/{due_id}/remove")
+    @app.post(
+        "/api/v2/rule-due/{due_id}/remove", **api_v2("Rules", "removeRuleDue", "Remove a due date; its history is kept")
+    )
     def rules_due_remove(request: Request, due_id: str, body: DueSatisfied):
         """Remove a due date. Its history is kept."""
         who = request.state.identity
@@ -1800,7 +1827,10 @@ def install(app, store, auth, mutate):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/rule-due/{due_id}/satisfied")
+    @app.post(
+        "/api/v2/rule-due/{due_id}/satisfied",
+        **api_v2("Rules", "markRuleDueSatisfied", "Mark the current occurrence satisfied; due_on when two are open"),
+    )
     def rules_due_satisfied(request: Request, due_id: str, body: DueSatisfied):
         """Mark an occurrence Satisfied. With more than one open occurrence, `due_on` says which one. `due_id` may be the
         rule's id when it has exactly one due date."""
@@ -1811,7 +1841,9 @@ def install(app, store, auth, mutate):
 
         return mutate(request, body, work)
 
-    @app.get("/api/v2/rule-sources")
+    @app.get(
+        "/api/v2/rule-sources", **api_v2("Rules", "listRuleSources", "Where external rules come from (From), by name")
+    )
     def rule_sources_list(request: Request, cursor: str | None = None, limit: int = LIST_DEFAULT):
         """Where external rules come from (From), by name."""
         auth.domain(request.state.identity)
@@ -1820,7 +1852,9 @@ def install(app, store, auth, mutate):
         page, nxt = _page(rows, cursor, _limit(limit))
         return {"sources": page, "next_cursor": nxt}
 
-    @app.post("/api/v2/rule-sources")
+    @app.post(
+        "/api/v2/rule-sources", **api_v2("Rules", "addRuleSource", "Add a From; one that exists by name is returned")
+    )
     def rule_sources_add(request: Request, body: RuleSourceCreate):
         """Add a From (a vendor, customer, government or other). Adding one that exists by name returns it."""
         who = request.state.identity
@@ -1830,7 +1864,14 @@ def install(app, store, auth, mutate):
 
         return mutate(request, body, work)
 
-    @app.get("/api/v2/bots/{bot}/rules")
+    @app.get(
+        "/api/v2/bots/{bot}/rules",
+        **api_v2(
+            "Rules",
+            "getBotRules",
+            "A bot's Rules tab: its settings as sentences, then internal and external rules, each paged by its own cursor",
+        ),
+    )
     def bot_rules_show(
         request: Request,
         bot: str,
@@ -1848,7 +1889,6 @@ def install(app, store, auth, mutate):
 
 
 __all__ = [
-    "ensure",
     "matching",
     "applies_to",
     "may_manage",

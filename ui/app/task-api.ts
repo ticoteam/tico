@@ -56,8 +56,6 @@ interface PipelineStageRec {
   pick?: PipelinePickRec;
   /** Who gets the next task, in one sentence, as last saved: the server writes it and a save never sends it. */
   pick_next?: string;
-  /** This stage's own "Keep warm for up to N hours" (backend/keep_warm.py); null takes the pipeline's. */
-  keep_warm_hours?: number | null;
 }
 /** A stage's "One of several". `families` is each listed bot's model family ("Claude", "GPT"; "" when unknown), read only. */
 interface PipelinePickRec {
@@ -80,8 +78,6 @@ interface PipelineRec {
   preset: string | null;
   settings_version: number;
   retired_at: string | null;
-  /** "Keep warm for up to N hours" (backend/keep_warm.py): 0 to 24, 0 is off. */
-  keep_warm_hours?: number;
   /** Each active bot's model family ("Claude", "GPT"; "" when unknown), for a stage's One of several: read only. */
   bot_families?: Record<string, string>;
   stages: PipelineStageRec[];
@@ -155,7 +151,7 @@ async function taskChanges(query: Omit<TaskBriefQuery, 'limit' | 'offset' | 'sor
 // ---- lists fed by the live stream
 // Each list puts an event's task in place by its own rule and never reads the whole list because an event came (Chris,
 // Nov 3). Its catch-up is a changed_after delta from the cursor its last read gave. The Tasks page, a bot's page, a
-// person's page and My dashboard share these.
+// person's page and Company share these.
 /** A row a live list holds: a list row, or a task as an event or a write carries it. */
 type TaskLiveRow = {id: string};
 /** A task as a write's reply carries it (Task), in a list row's terms (TaskBrief): a full task says `snooze`, not
@@ -332,9 +328,10 @@ const taskAsk = (id: string, b: TaskAskNew, version: number | null): Promise<Tas
 const taskWithdrawAsk = (id: string, rid: string, why?: string): Promise<TaskMoved> =>
   writeRequest('DELETE', `/v2/tasks/${encodeURIComponent(id)}/asks/${encodeURIComponent(rid)}`, why ? {why} : {});
 /** ok, no (send back, with a note), again (look again), or the answer to a question. On a page, `pageVersion` is the
-    page the person was shown (`<file id>@<version>`): refused when another is attached now. */
-const taskAnswer = (id: string, rid: string, value: string, version: number | null, note?: string, pageVersion?: string): Promise<TaskMoved> =>
-  post(`${askPath(id, rid)}/answer`, withVersion(version, {value, ...(note ? {note} : {}), ...(pageVersion ? {page_version: pageVersion} : {})}), newRequestId());
+    page the person was shown (`<file id>@<version>`): refused when another is attached now. With `visitId` it is a
+    document approval's whole key: a stale one is refused with the version submitted now (decide.ts). */
+const taskAnswer = (id: string, rid: string, value: string, version: number | null, note?: string, pageVersion?: string, visitId?: string): Promise<TaskMoved> =>
+  post(`${askPath(id, rid)}/answer`, withVersion(version, {value, ...(note ? {note} : {}), ...(pageVersion ? {page_version: pageVersion} : {}), ...(visitId ? {visit_id: visitId} : {})}), newRequestId());
 const answerUndo = (answerId: string): Promise<TaskMoved> => post(`/v2/answers/${encodeURIComponent(answerId)}/undo`, {}, newRequestId());
 
 // ---- an OK bound to what was shown
@@ -353,7 +350,8 @@ async function pipelinesAll(): Promise<PipelineRec[]> {
 /** One pipeline's settings record (the server answers {pipeline: record}, to a read and to a save). */
 const pipelineRec = async (id: string): Promise<PipelineRec> =>
   (await get<{pipeline: PipelineRec}>(`/v2/pipelines/${encodeURIComponent(id)}`, {fresh: true})).pipeline;
-const pipelineSave = async (id: string, rec: Omit<PipelineRec, 'id'> | PipelineRec): Promise<PipelineRec> =>
+/** `move_tasks_to`: where the tasks of a stage the save removes go (a 409 stage_has_tasks asks for it). */
+const pipelineSave = async (id: string, rec: (Omit<PipelineRec, 'id'> | PipelineRec) & {move_tasks_to?: {pipeline: string; stage: string}}): Promise<PipelineRec> =>
   ((await post(`/v2/pipelines/${encodeURIComponent(id)}`, rec, newRequestId())) as {pipeline: PipelineRec}).pipeline;
 const pipelineRetire = (id: string, settingsVersion: number): Promise<unknown> =>
   post(`/v2/pipelines/${encodeURIComponent(id)}/retire`, {settings_version: settingsVersion}, newRequestId());

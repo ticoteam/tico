@@ -1,6 +1,6 @@
 """The tool table as a package (clients/commands/, re-exported by clients/hubtools.py) and the script that moves it there.
 
-These hold before and after the move: scripts/cleanup/split_commands.py runs this file on its moved copy (check g).
+These hold before and after the move.
 """
 
 import ast
@@ -17,7 +17,7 @@ import pytest
 
 from clients import hubtools
 
-ROOT = Path(__file__).absolute().parents[2]  # not resolve(): split_commands runs this file in a linked copy
+ROOT = Path(__file__).absolute().parents[2]  # not resolve(): ROOT is the tree the test runs in, even a linked copy
 PACKAGE = ROOT / "clients" / "commands"
 MAX_LINES = 1200
 MOVED = (PACKAGE / "__init__.py").is_file()

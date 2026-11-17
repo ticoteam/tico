@@ -1,4 +1,4 @@
-# GH_TOKEN, when an operator puts one in the runner's secrets/_shared.env, is the credential for git over https.
+# GH_TOKEN, when a bot is granted one in Tools, is the credential for git over https.
 [credential "https://github.com"]
 	helper = "!f() { [ -n \"$GH_TOKEN\" ] && { echo username=x-access-token; echo \"password=$GH_TOKEN\"; }; }; f"
 [init]

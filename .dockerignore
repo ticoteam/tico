@@ -18,3 +18,12 @@ compose.yaml
 runner-rs/target
 
 relay-rs/target
+
+# Dev-only trees. The server and runner never read them: backend/code_hash.py hashes backend, clients, runner,
+# runner_support, runner-rs/harnesses and ui, and the manual reads docs/*.md alone.
+bench
+baselines
+e2e
+evals
+recorder
+docs/images

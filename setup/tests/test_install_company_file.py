@@ -106,7 +106,7 @@ def test_local_packs_the_file_in_the_server_image_and_puts_the_packed_plan_in_en
     assert r.returncode == 0, r.stdout + r.stderr
     env = env_of(company["dir"] / ".env")
     assert env["TICO_COMPANY_FILE_B64"] == PACKED
-    assert "TICO_SAMPLE_COMPANY" not in env and "TICO_COMPANY_FILE" not in env
+    assert "TICO_COMPANY_FILE" not in env
     assert stat.S_IMODE((company["dir"] / ".env").stat().st_mode) == 0o600
     assert company["input"].read_bytes() == COMPANY  # the file itself went to the packer's stdin
     calls = company["log"].read_text().splitlines()
@@ -133,7 +133,6 @@ def test_a_plan_too_big_for_the_env_is_a_private_file_the_server_container_reads
     assert (plan_dir / "plan.b64").read_text() == big
     assert stat.S_IMODE((plan_dir / "plan.b64").stat().st_mode) == 0o600
     assert f"chown 10001:10001 {plan_dir / 'plan.b64'}" in company["log"].read_text()  # the container's user reads it
-    assert "TICO_SAMPLE_COMPANY" not in env
 
 
 def test_a_file_the_server_cannot_pack_installs_nothing_and_says_why(company):
@@ -196,15 +195,13 @@ def test_a_company_file_does_not_go_with_a_docker_or_runner_install(company, arg
     assert r.returncode == 2 and "--company-file goes with --local, --recommended or a team install." in r.stderr
 
 
-def test_recommended_with_a_company_file_loads_that_team_instead_of_the_sample_company(company):
+def test_recommended_with_a_company_file_loads_that_team(company):
     r = run(company, "--recommended", "--owner-email", "ana@example.com", "--company-file", str(company["file"]))
     assert r.returncode == 0, r.stdout + r.stderr
     env = env_of(company["dir"] / ".env")
     assert env["TICO_INSTALL_PRESET"] == "recommended" and env["TICO_COMPANY_FILE_B64"] == PACKED
-    assert "TICO_SAMPLE_COMPANY" not in env
-    assert env["TICO_TEAM_NAME"] == '"My Team"'  # the file names the team, not the sample
+    assert env["TICO_TEAM_NAME"] == '"My Team"'  # the file names the team
     assert f"Your team from {company['file']} is loaded, and Tico Support is on." in r.stdout
-    assert "The sample company is loaded" not in r.stdout
     assert "One step is left" in r.stdout
 
 

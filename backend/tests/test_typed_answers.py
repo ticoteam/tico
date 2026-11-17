@@ -1,4 +1,4 @@
-"""Typed answers on a stage (backend/answers.py, backend/task_requirements.py `typed` and `values`, docs/pipelines-v3.md
+"""Typed answers on a stage (backend/answers.py, backend/task_requirements.py `typed` and `values`, docs/dev/pipelines-v3.md
 "The six requirement kinds", kind 6).
 
 Synthetic rows only (backend/tests/helpers/engine.py): the fictional company's two people and three bots, and a

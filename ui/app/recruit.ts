@@ -623,6 +623,6 @@ async function recruitClose(seat: RecruitSeatRow, button: HTMLButtonElement) {
     delete RECRUIT.found[seat.id]; delete RECRUIT.counts[seat.id];
     await refresh(true);
     toast(`${seat.title} closed.`);
-    location.hash = seat.team ? TEAM_PAGE + encodeURIComponent(seat.team) : OVERVIEW;
+    location.hash = seat.team ? TEAM_PAGE + encodeURIComponent(seat.team) : HOME;
   } catch (e) { button.disabled = false; toast(errorMessage(e, ''), true); }
 }

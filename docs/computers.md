@@ -8,7 +8,7 @@ Re-enrolling the same physical computer can leave an older registration behind. 
 registration after more than 24 hours offline only when a newer, active registration has the same reported device
 identity, owner, name and platform, and was enrolled or contacted Tico after the old registration's last contact.
 The old registration must have no assigned bots, cloud machine, shared browser access, saved or reported sign-ins,
-keys, subscriptions, profiles or app delivery. Computers with an unknown device identity stay listed. The runner
+keys, subscriptions or profiles. Computers with an unknown device identity stay listed. The runner
 reports an app-salted hash of the OS device identity; the raw identity stays on the computer.
 
 **Settings → Models** holds the company's model settings:
@@ -57,8 +57,8 @@ behind the sign-in, is the fallback when no computer can run it: the token from 
 
 Switching a computer's subscription stops that tool's running tasks on that computer and starts them again, and every
 session of that tool there starts fresh. When tasks are running, Tico asks first and says how many. Removing a
-subscription does the same on each computer that had it. A computer on an older Tico says **Needs update** instead of a
-picker until it updates.
+subscription does the same on each computer that had it. A computer below the minimum release (0.6.0-rc.1) is paused, and shows no
+picker, until it updates.
 
 Settings → Models lists subscriptions under each owner's avatar and name, yours first, with API keys under **No
 owner**. Inside a group each tool's plans are in the order a person's plans are used: the plan in use names its computer,
@@ -91,7 +91,7 @@ a claim ends. A turn claimed past the limit holds no place: its start is refused
 login, quota or other pre-start wait is parked: the turn keeps its claim but takes no start place, so
 other work can start beside it. Waiting for
 a lane or login releases only the start reservation; continuing requires a fresh atomic reservation. Two turns cannot
-take the last start reservation together. Codex's shared ChatGPT login does not normally queue turns
+take the last start reservation together. Codex's shared ChatGPT login does not queue turns
 ([sharing a sign-in](#bots-sharing-one-chatgpt-sign-in-run-side-by-side)).
 
 ### Builds at once
@@ -133,8 +133,7 @@ allocated process on start-place and started requests, so neither the runner nor
 allocation’s memory use. The boundary stays crossed through fallback. If a lazy harness acknowledges its start but
 fails to launch, its fallback checks memory locally until it allocates a process, keeping the running turn's place.
 It does not request pre-start admission again. Runners advertise allocation reporting through the
-`harness_allocation_v1` heartbeat capability. For runners without it, memory pressure never revokes an existing
-start grant. A runner talking to an older hub drops the new field or capability if that hub refuses it.
+`harness_allocation_v1` heartbeat capability. Every runner the server accepts advertises it (the minimum release is 0.6.0-rc.1). A runner talking to an older hub drops the new field or capability if that hub refuses it.
 The Mac runner never parks a turn on local memory readings;
 macOS's Memory Used includes memory it can reclaim through compression and swap. This does not cap the memory of
 tools already running inside a turn, or change your account, model or computer size.
@@ -307,7 +306,7 @@ changes.
   else wait. A bot waiting on the old plan's limit resumes on the new plan at once when a computer is switched to it.
 - If the provider refuses it, it shows **Needs reconnect** and is passed over (the computer's own login, then the
   Gateway) until someone saves a new value with **Reconnect**. The computer's own login is left alone.
-- A computer on an older runner does not take subscriptions; its bots run as before until it updates.
+- A computer below the minimum release (0.6.0-rc.1) is paused and takes no subscriptions until it updates.
 
 One computer is one trust group ([SECURITY.md](../SECURITY.md#bots-on-one-computer-share-a-trust-boundary-on-purpose)):
 while a turn runs on a subscription, another bot's turn on the same computer could read it.
@@ -321,7 +320,7 @@ plan, nothing moves. An API key is not a plan.
 
 | Role | | Claude only | ChatGPT only | Both |
 | --- | --- | --- | --- | --- |
-| Builder, Reviewer 1, every Owner, Product Owner and manager, every other role | bot | Haiku 5.5, extra high | GPT-6.1 Terra, medium | Haiku 5.5, extra high |
+| Builder, Reviewer 1, every Owner, Feature Owner and manager, every other role | bot | Haiku 5.5, extra high | GPT-6.1 Terra, medium | Haiku 5.5, extra high |
 | | tasks | Opus 5.5, medium | GPT-6.1 Sol, high | Opus 5.5, medium |
 | The Assistant (it chats; no task model) | bot | Opus 5.5, medium | GPT-6.1 Sol, high | Opus 5.5, medium |
 | Reviewer 2 (no task model) | bot | Haiku 5.5, extra high | GPT-6.1 Terra, medium | GPT-6.1 Sol, high |
@@ -346,6 +345,13 @@ lowers it. Tico never estimates it from its own token counts. A reading has a re
 one older than a day is marked as possibly out of date, and after its reset it reads as the previous week, never as a
 fresh 100%. An API key has no plan, so it shows "No plan usage (API key)". Details are in
 [Signed-in account and usage windows](#signed-in-account-and-usage-windows).
+
+An admin can read a Claude plan's week now: the **↻** beside its row's **⋯** menu on the Subscriptions page asks one
+computer that has the plan. That computer sends a one-line prompt to Haiku with the plan's token, in a temporary home it
+deletes after, and sends back the week's percent and reset from that reply. A setup-token can only run prompts, so
+Claude Code's `/usage` cannot read it; the prompt uses a few tokens of the plan. The token is used for that one read and
+is not kept there. One read runs at a time, and a plan can be read again a minute after the last. ChatGPT plans have no
+such button.
 
 ## The computers list
 
@@ -503,7 +509,7 @@ refused too. Each view, and each time the setting changes, is a line in the audi
 The page a view shows offers nothing that writes, so a screenshot never suggests the bot could act: New task, Follow,
 the page + and answer buttons are not shown, the message box is a grey "Read-only view" line, and other controls that
 change something show greyed out. Tasks lists the bot's own open tasks by stage (Needs you is a person's list), and
-Company › Mine is one card of them.
+Company is one card of them.
 
 API: `GET/POST /api/v2/bots/{bot}/app-view`, `POST /api/v2/app-view` ([OpenAPI](api.md#the-contract)).
 
@@ -646,13 +652,13 @@ and on a current runner; an older one answers `Update <computer> to sign out fro
   the Keychain and a logout could not be undone (sign out, then **Add key**). It needs a runner that knows it
   (`Update <computer> to switch to an API key from here` otherwise).
 
-None of this restarts the runner. `POST /api/v2/runners/{runner_id}/logouts` with `{"runtime":"codex"}` (and
-`"profile"` for a named subscription left from an earlier release) signs out; `GET /api/v2/runners/{runner_id}/logouts/bots?runtime=codex` lists the
-bots it stops; `POST /api/v2/runners/{runner_id}/logins` with `"switch": true` switches (with `"to": "subscription"`,
-switches the Computer's own login off its API key); `POST /api/v2/runners/{runner_id}/keys` with `"switch": true`
+None of this restarts the runner. `POST /api/v2/computers/{runner_id}/logouts` with `{"runtime":"codex"}` (and
+`"profile"` for a named subscription left from an earlier release) signs out; `GET /api/v2/computers/{runner_id}/logouts/bots?runtime=codex` lists the
+bots it stops; `POST /api/v2/computers/{runner_id}/logins` with `"switch": true` switches (with `"to": "subscription"`,
+switches the Computer's own login off its API key); `POST /api/v2/computers/{runner_id}/keys` with `"switch": true`
 switches it from its subscription to the key in `secret`; `POST
-/api/v2/runners/{runner_id}/shared-key` with `{"runtime":"codex"}` lets the shared key back. Each is followed like a
-sign-in, with `GET /api/v2/runners/{runner_id}/logins/{id}` (`kind` says which; a sign-out ends `signed_out`). BotOps
+/api/v2/computers/{runner_id}/shared-key` with `{"runtime":"codex"}` lets the shared key back. Each is followed like a
+sign-in, with `GET /api/v2/computers/{runner_id}/logins/{id}` (`kind` says which; a sign-out ends `signed_out`). BotOps
 cannot sign a login out, because it stops bots. A turn already running when the account changes is not stopped and
 may finish on the old account. On a Mac, Claude Code keeps its login in the Keychain rather than in files, so there is
 no side to sign in on: Switch account isn't offered for it there (the server and the runner refuse it too); sign out,
@@ -719,10 +725,10 @@ Computer: its next key fetch deletes its copies and logs out the login the key m
 Add key**. A key a Computer is still checking cannot be deleted there; cancel **Replace key** or let the check
 end first.
 
-`GET /api/v2/runners/{runner_id}/keys?runtime=codex` says which key signs it in (`source`, `preview`) and, for the
-shared key, the Computers it serves. `POST /api/v2/runners/{runner_id}/keys` with `{"runtime":"codex","secret":"…",
+`GET /api/v2/computers/{runner_id}/keys?runtime=codex` says which key signs it in (`source`, `preview`) and, for the
+shared key, the Computers it serves. `POST /api/v2/computers/{runner_id}/keys` with `{"runtime":"codex","secret":"…",
 "scope":"this"}` adds or replaces a key and returns a `use_key` row to follow with `GET …/logins/{id}` (it ends `done`
-or `failed`); `"scope":"all"` replaces the shared key. `POST /api/v2/runners/{runner_id}/keys/clear` with
+or `failed`); `"scope":"all"` replaces the shared key. `POST /api/v2/computers/{runner_id}/keys/clear` with
 `{"runtime":"codex","scope":"this"}` (or `"all"`) clears it and returns each Computer's `clear_key` row, or `waiting`
 for one that is offline.
 
@@ -732,9 +738,9 @@ Earlier releases let a computer sign in named subscriptions besides its own logi
 computer now has one login per AI tool for all its bots. Upgrading deletes the bots' choices (the bot then runs on its
 computer's login), and nothing signs a named subscription in or runs on one. A computer that still has some keeps
 reporting them, unread and unshown, for one release; their folders stay on the computer. The computer's operator or an
-admin can take one off with `POST /api/v2/runners/{runner_id}/removals` (`{"runtime":"codex","profile":"team-chatgpt"}`,
+admin can take one off with `POST /api/v2/computers/{runner_id}/removals` (`{"runtime":"codex","profile":"team-chatgpt"}`,
 online computers on a runner that knows it, `model_remove_v1`) or sign it out with `POST
-/api/v2/runners/{runner_id}/logouts` (`{"runtime":"codex","profile":"team-chatgpt"}`).
+/api/v2/computers/{runner_id}/logouts` (`{"runtime":"codex","profile":"team-chatgpt"}`).
 
 The server and runner negotiate this change with `computer_logins_v1` in config, assignments and attempts, and an
 acknowledgement in the runner's capabilities and readiness. An updated runner keeps an older server's
@@ -793,7 +799,7 @@ state. Unknown sign-in state is `null`.
 ### Sign-in and profiles on the computer
 
 The Computer operator can manage sign-in on their own Computer; owners and admins can manage it on any Computer. A
-sign-in, switch or switch to a subscription is for the Computer's login: `POST /api/v2/runners/{runner_id}/logins`
+sign-in, switch or switch to a subscription is for the Computer's login: `POST /api/v2/computers/{runner_id}/logins`
 with `{"runtime":"codex"}` (or `claude`). One with a named `"profile"` is refused (422 `one_login`), and so is
 `tico-runner profile login <name>` for any profile but the computer's own. The browser relays the provider's link and
 code; the provider writes its credentials locally. A Computer's login can itself be a profile folder: the one named

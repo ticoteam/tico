@@ -5,7 +5,7 @@ import type {Page, Route} from 'playwright';
 //   phone), and no Skip;
 // - its menu: 1 hour, 1 day, 1 week, 1 month, Other; Enter opens it on its first choice, ↑ ↓ move (round), Esc closes
 //   it with Flow still open and focus back on the icon;
-// - open, it covers neither Approve nor Send back (it opens upward from the bar on a phone), and a tap on Approve then
+// - open, it covers no part of Approve (it opens upward from the bar on a phone), and a tap on Approve then
 //   only closes it: nothing is approved;
 // - 1 hour sends POST /v2/needs-you/snooze {id, until: an hour on}; the next item comes, the top bar says Snoozed, and
 //   ↩ sends unsnooze and brings it back;
@@ -62,7 +62,7 @@ const meets = (a: Box, b: Box) => a.x < b.x + b.width && b.x < a.x + a.width && 
         if (p === '/api/me') return json({...me, config});
         if (p === '/api/v2/config') return json(config);
         if (p === '/api/employees') return json([]);
-        if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'bo', name: 'Bo'}], teams: {}});
+        if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'bo', name: 'Bo'}], teams: {}});
         if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
         const ends = [...snoozed.values()].sort();
         const items = open.filter(n => !snoozed.has(n.id));
@@ -78,7 +78,6 @@ const meets = (a: Box, b: Box) => a.x < b.x + b.width && b.x < a.x + a.width && 
             shown_hash: String(n).repeat(64), standing: 'waiting', task_id: `t${n}`});
         }
         if (p === '/api/v2/flow/opinions') return json({opinions: []});
-        if (p === '/api/v2/flow/suggestions') return json({suggestions: []});   // the end screen's suggested rules: none
         if (r.method() !== 'GET' && p.startsWith('/api/')) {
           const body = JSON.parse(r.postData() || '{}') as Record<string, unknown>;
           writes.push({p, body});
@@ -94,18 +93,22 @@ const meets = (a: Box, b: Box) => a.x < b.x + b.width && b.x < a.x + a.width && 
       await page.locator('[data-need="v1:r1"]').waitFor();
       await page.locator('#task-play').click();
       const dialog = page.locator('#need-card');
-      const at = (n: number) => dialog.locator('.dc-q', {hasText: Q[n - 1]!}).waitFor();
+      // An OK opens on its document tab on a phone: its ask, in the Chat tab, may be out of sight.
+      const at = (n: number) => dialog.locator('.dc-q', {hasText: Q[n - 1]!}).waitFor({state: 'attached'});
       const icon = dialog.locator('.dc-side [data-dc="snooze"]'), menu = dialog.locator('.dc-snz');
-      const approve = dialog.locator('[data-dc="approve"]'), sendback = dialog.locator('[data-dc="sendback"]');
+      const approve = dialog.locator('[data-dc="approve"]');
       const focused = () => page.evaluate(() => document.activeElement?.textContent?.trim() || document.activeElement?.getAttribute('aria-label') || '');
       await at(1);
       await approve.and(page.locator(':not([disabled])')).waitFor();
 
-      // The icon: no word, named Snooze, last in the answer row, at least 40 px (44 on a phone); no Skip.
+      // The icon: no word, named Snooze, last in the answer row but for ⋯, at least 40 px (44 on a phone); no Skip.
       assert.equal(await dialog.locator('[data-dc="skip"]').count(), 0, `${label}: an ask has no Skip`);
       assert.equal(await icon.getAttribute('aria-label'), 'Snooze');
       assert.equal((await icon.textContent())!.trim(), '', `${label}: no word beside it`);
-      assert.ok(await icon.evaluate(b => { const row = b.closest('.dc-acts')!; return row.lastElementChild!.contains(b); }), `${label}: last in the row`);
+      assert.ok(await icon.evaluate(b => {
+        const row = b.closest('.dc-acts')!, last = row.lastElementChild!;
+        return last.contains(b) || (!!last.querySelector('[data-dc="ask-more"]') && last.previousElementSibling!.contains(b));
+      }), `${label}: last in the row, ⋯ after it`);
       const ib = (await icon.boundingBox())!, min = label === 'phone' ? 44 : 40;
       assert.ok(ib.width >= min && ib.height >= min, `${label}: Snooze is ${ib.width}x${ib.height}`);
 
@@ -126,11 +129,11 @@ const meets = (a: Box, b: Box) => a.x < b.x + b.width && b.x < a.x + a.width && 
       assert.equal(await focused(), 'Snooze', `${label}: focus is back on the icon`);
       assert.equal(await icon.getAttribute('aria-expanded'), 'false');
 
-      // Open, it covers neither Approve nor Send back, and is all on screen; on a phone it opens upward from the bar.
+      // Open, it covers neither Approve nor the chat's box, and is all on screen; on a phone it opens upward from the bar.
       await icon.click();
       await menu.waitFor();
       const mb = (await menu.boundingBox())!;
-      for (const [name, b] of [['Approve', approve], ['Send back', sendback]] as const) {
+      for (const [name, b] of [['Approve', approve]] as const) {
         const bb = (await b.boundingBox())!;
         assert.ok(!meets(mb, bb), `${label}: the menu is clear of ${name} (${JSON.stringify(mb)} vs ${JSON.stringify(bb)})`);
       }
@@ -167,7 +170,7 @@ const meets = (a: Box, b: Box) => a.x < b.x + b.width && b.x < a.x + a.width && 
       assert.ok(await box.evaluate(e => e === document.activeElement), `${label}: Other focuses its box`);
       assert.equal(await box.getAttribute('type'), 'datetime-local');
       const ob = (await menu.boundingBox())!;
-      for (const b of [approve, sendback]) assert.ok(!meets(ob, (await b.boundingBox())!), `${label}: Other is clear of the buttons`);
+      for (const b of [approve]) assert.ok(!meets(ob, (await b.boundingBox())!), `${label}: Other is clear of the buttons`);
       if (shots && label === 'desktop') { await page.waitForTimeout(300); await page.screenshot({path: path.join(shots, 'snooze-other.png')}); }
       await box.fill('2026-11-13T09:00');
       await box.press('Enter');

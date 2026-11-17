@@ -32,7 +32,7 @@ API key. One signed-in model is enough for the first result; Health lists the ot
 
 1. In **Finish setup**, choose an AI provider, name your team and pick **Marketing** with **Content Owner** (`content`) checked.
    With no provider yet, write one bet and one line under **What we won't do**; any short sentence works.
-   Ten built-in bots are created: Assistant, BotOps, Librarian, Strategy Owner, General Manager, Finance Owner, Rules Owner, Design Owner, Updates Owner and Automations Owner.
+   Eleven built-in bots are created: Assistant, BotOps, Librarian, Strategy Owner, General Manager, Finance Owner, Rules Owner, Design Owner, Updates Owner, Automations Owner and Tools Owner.
 2. Use **Add computer** to join this computer, run the command shown, then **Create my team**.
 3. Open **Settings > Computers** and **Sign in** beside Codex or Claude Code; finish the provider's browser flow.
    Other harnesses and API credentials are covered in [Harnesses](docs/harnesses.md). Choose the bot's model in **Settings > Bots**.
@@ -228,8 +228,8 @@ named team must also carry a permanent id, or the process refuses to start.
 | `TICO_CREDENTIAL_ADMINS` | Comma-separated emails allowed to write shared credentials. The owner and the Admins when empty | `you@example.com` |
 | `TICO_UNSOLICITED_PER_DAY` | How many messages a bot may start to one human in a day before it must file a task instead. Default 10; lower it to tighten | `3` |
 | `TICO_STYLE_LINT` | What a writing problem in a bot's question to a person or in its update does: `warn` (the default: written, with a warning), `refuse`, or `off` | `refuse` |
-| `TICO_BLOCK_EXTERNAL_INVITES` | Set to `1` to limit bots to inviting humans on the team roster to calendar events (default: any address). Set it on computers too for `mail calendar add` | `1` |
-| `TICO_PROCESSING_OPERATORS` | Humans whose computers may run the Close transcript importer and tool publishers | `dana` |
+| `TICO_BLOCK_EXTERNAL_INVITES` | Set to `1` to limit bots to inviting humans on the team roster to calendar events (default: any address) | `1` |
+| `TICO_PROCESSING_OPERATORS` | Humans whose computers may run the Close transcript importer and meeting importers | `dana` |
 | `TICO_SCHEDULER` | `1` runs the routine scheduler and the other timed loops (webhook pulls from Tico Gateway, sleep when idle) in this process | `1` |
 | `TICO_CREDENTIAL_KMS_KEY` | Optional AWS KMS key for the credential vault. Unset (the default), the vault works with a key in `/data/credential.key`: back that file up with the database ([docs/credential-vault.md](docs/credential-vault.md)) | `alias/tico-acme` |
 | `TICO_EXPECTED_AWS_ACCOUNT` and `TICO_EXPECTED_AWS_ROLE` | Optional: the Docker server, Slack gateway and `restore` refuse to start unless STS GetCallerIdentity reports this 12-digit account and, when set, this role (a name or role ARN). Unset, nothing is checked. See [docs/install.md](docs/install.md#check-the-aws-identity) | `123456789012`, `tico-server` |
@@ -378,4 +378,4 @@ Open **Settings > Tasks** (under **Task tags**) or use `tico tag list|show|creat
 
 Every task sits in a pipeline, at one stage, and always shows whose turn it is. A new team has one pipeline, General,
 with one stage, To do. A task is open, done or closed; a person is asked through an ask on the task, in Needs you.
-See [Tasks](docs/tasks.md) for the UI, CLI, MCP and API, and [the spec](docs/pipelines-v3.md) for the whole design.
+See [Tasks](docs/tasks.md) for the UI, CLI, MCP and API, and [the spec](docs/dev/pipelines-v3.md) for the whole design.

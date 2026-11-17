@@ -16,7 +16,6 @@ import re
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 import yaml
 from fastapi import Query, Request
@@ -146,11 +145,6 @@ PAGES = (
     ),
 )
 
-LINK = re.compile(r"\[([^\]]*)\]\(([^)]+)\)")
-SUBREDDIT = re.compile(r"(?<![\w/])r/([A-Za-z0-9_]+)\b")
-DOMAIN = re.compile(r"^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$", re.I)
-SKIP_HEADINGS = {"who to skip", "observed detail", "sources", "buyer personas"}
-
 
 # ----------------------------------------------------------------------------- small helpers
 def slug(text):
@@ -233,18 +227,6 @@ def _event(conn, kind, subject, actor, field, old, new, insight_id=None, note=""
             with isolated(conn, "strategy_watch", subject):
                 strategy.watch(conn, market_id=subject)
     return eid
-
-
-TURN_SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS market_turn_sources (event_id TEXT PRIMARY KEY, subject_kind TEXT NOT NULL, "
-    "subject_id TEXT NOT NULL, source TEXT NOT NULL, created_at TEXT NOT NULL)",
-    "CREATE INDEX IF NOT EXISTS market_turn_sources_of ON market_turn_sources(subject_kind, subject_id, created_at)",
-)
-
-
-def ensure_turn_sources(c):
-    for statement in TURN_SCHEMA:
-        c.execute(statement)
 
 
 def _from_turn(conn, eid, kind, subject):
@@ -1601,7 +1583,20 @@ def _file_owner_task(conn, actor, owner, body):
     for _ in range(5):
         title = _free_owner_title(conn, actor, owner)
         try:
-            return H.task_create(conn, actor, title, body, owner, deduplicate=False)
+            from . import person_asks
+
+            return person_asks.task_for(
+                conn,
+                actor,
+                title,
+                body,
+                owner,
+                question="Decide these market insights?",
+                why="Only a person can settle these claims.",
+                bot=actor,
+                deduplicate=False,
+                lint=True,
+            )
         except H.Refused as exc:
             if exc.rule != "duplicate":
                 raise
@@ -1884,37 +1879,6 @@ def seed_pages(conn, actor=SEED_ACTOR):
     return written
 
 
-def mark_seeded_pages(conn):
-    """One-time, idempotent startup fix for installs made before pages carried `seeded`: a market page whose
-    content is still exactly what the seed wrote (the "None in the seed." text) is marked `seeded`, so the Market
-    page hides it while the graph is empty. A page anyone has written or edited, or one the graph has since
-    outgrown, is left alone. Returns the ids it marked; a second run marks none."""
-    marked = []
-    weekly = re.compile(r"^# Weekly delta\n\nChanges since (\d{4}-\d{2}-\d{2})\.")
-    rows = conn.execute(
-        "SELECT * FROM market_pages WHERE id IN (%s)" % ",".join("?" * len(PAGES)), [page[0] for page in PAGES]
-    ).fetchall()
-    pages = {row["id"]: row for row in rows}
-    if not pages:
-        return marked
-    fresh = narrative(conn, datetime.now(timezone.utc).date())
-    for doc_id, row in pages.items():
-        if row["seeded"]:
-            continue
-        body = row["body"]
-        if doc_id == "market/weekly-delta":
-            since = weekly.match(body)
-            if not since:
-                continue
-            # The seed wrote it before it wrote the other pages' own events, so it says nothing changed.
-            fresh[doc_id] = f"# Weekly delta\n\nChanges since {since.group(1)}.\n\nNo market changes in this week."
-        if body != fresh.get(doc_id):
-            continue
-        conn.execute("UPDATE market_pages SET seeded=1 WHERE id=?", (doc_id,))
-        marked.append(doc_id)
-    return marked
-
-
 def refresh_delta(conn, actor, today=None):
     """Monday rewrites the weekly delta from the market's history. Any other day leaves it alone."""
     if actor != SEED_ACTOR:
@@ -1930,192 +1894,6 @@ def refresh_delta(conn, actor, today=None):
         conn, actor, "market/weekly-delta", "Weekly delta", body, "Market / Delta", replace=True, record=False
     )
     return {"updated": True, "document": document}
-
-
-# ----------------------------------------------------------------------------- seed from the live files
-def _read(path):
-    if not path:
-        return ""
-    path = Path(path)
-    return path.read_text(errors="replace") if path.is_file() else ""
-
-
-def persona_sections(text):
-    """## sections that are buyers. 'Who to skip', 'Observed detail' and 'Sources' are not."""
-    matches = list(re.finditer(r"^## (.+)$", text or "", re.M))
-    out = []
-    for index, match in enumerate(matches):
-        title = match.group(1).strip()
-        plain = re.sub(r"^\d+\.\s*", "", title)
-        plain = re.split(r"\s+[—–-]\s+", plain, maxsplit=1)[0].strip()
-        if plain.lower() in SKIP_HEADINGS or title.lower() in SKIP_HEADINGS:
-            continue
-        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
-        paragraph = re.sub(r"\s+", " ", (text[match.end() : end].strip().split("\n\n") or [""])[0]).strip()
-        out.append({"id": "segment/" + slug(plain), "name": plain, "summary": paragraph[:2000]})
-    return out
-
-
-def channel_names(*texts):
-    found, seen = [], set()
-
-    def add(name):
-        name = re.sub(r"\s+", " ", str(name or "")).strip(" -")
-        if not name or len(name) > 160:
-            return
-        ident = "channel/" + slug(name)
-        if ident in seen:
-            return
-        seen.add(ident)
-        found.append({"id": ident, "name": name})
-
-    for text in texts:
-        for sub in SUBREDDIT.findall(text or ""):
-            add("r/" + sub)
-        for match in re.finditer(r"^\s*-\s+\*\*([^*]+)\*\*", text or "", re.M):
-            add(match.group(1))
-    return found
-
-
-def _domain(queries):
-    for query in queries:
-        bare = str(query).strip().strip('"').strip("'").lower()
-        if DOMAIN.fullmatch(bare):
-            return bare
-    return None
-
-
-def companies_from_watchlist(document):
-    """Every competitor, plus the company itself (`company/self`, named by the watchlist's `company`,
-    default "Our company"). Queries become aliases. Tier is the watchlist's own word."""
-    rows = []
-    for entry in (document or {}).get("competitors") or []:
-        if not isinstance(entry, dict) or not entry.get("name"):
-            continue
-        queries = [str(q) for q in (entry.get("queries") or [entry["name"]])]
-        external = {}
-        domain = _domain(queries)
-        if domain:
-            external["domain"] = domain
-        rows.append(
-            {
-                "id": "company/" + slug(entry["name"]),
-                "type": "organization",
-                "name": str(entry["name"]).strip(),
-                "tier": entry.get("tier"),
-                "aliases": queries,
-                "external_ids": external,
-                "summary": "",
-            }
-        )
-    own_aliases = [str(q) for q in (document or {}).get("own_queries") or []]
-    own_name = str((document or {}).get("company") or "Our company").strip()
-    own_domain = str((document or {}).get("company_domain") or "").strip()
-    rows.append(
-        {
-            "id": OWN_COMPANY_ID,
-            "type": "organization",
-            "name": own_name,
-            "tier": None,
-            "aliases": own_aliases,
-            "external_ids": {"domain": own_domain} if own_domain else {},
-            "summary": own_name + ".",
-        }
-    )
-    return rows
-
-
-def community_rows(index_text):
-    rows = []
-    for line in (index_text or "").splitlines():
-        if not line.startswith("|"):
-            continue
-        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
-        if len(cells) < 7:
-            continue
-        if cells[0].lower().startswith("source") or set(cells[0]) <= set("-: "):
-            continue
-        source = LINK.search(cells[0])
-        raw = LINK.search(cells[4])
-        url = source.group(2) if source else ""
-        title = source.group(1) if source else cells[0]
-        raw_path = raw.group(2) if raw else ""
-        key = url or raw_path or title
-        kind = "other"
-        host = urlparse(url).netloc.lower()
-        if "reddit.com" in host:
-            kind = "reddit"
-        elif host.endswith("x.com") or "twitter.com" in host:
-            kind = "x"
-        captured = ""
-        stamp = re.search(r"(20\d{2}-\d{2}-\d{2})", raw_path)
-        if stamp:
-            captured = stamp.group(1)
-        rows.append(
-            {
-                "id": evidence_id(key),
-                "source_url": url,
-                "source_kind": kind,
-                "captured_at": captured,
-                "quote": title,
-                "our_read": cells[3],
-                "raw": raw_path,
-            }
-        )
-    return rows
-
-
-def extract(sources):
-    """The seed document, from the live files. Missing files contribute nothing."""
-    sources = sources or {}
-    watch = yaml.safe_load(_read(sources["watchlist"])) if sources.get("watchlist") else {}
-    companies = companies_from_watchlist(watch) if watch else []
-    personas = persona_sections(_read(sources.get("personas"))) if sources.get("personas") else []
-    channels = channel_names(_read(sources.get("mention_sources")), _read(sources.get("outreach_venues")))
-    evidence_rows = community_rows(_read(sources.get("community_index"))) if sources.get("community_index") else []
-    watch_evidence = None
-    edges = []
-    if companies:
-        watch_evidence = {
-            "id": evidence_id("emp-listening/watchlist.yaml"),
-            "source_url": "https://github.com/acme/emp-listening/blob/main/watchlist.yaml",
-            "source_kind": "other",
-            "captured_at": None,
-            "quote": "",
-            "our_read": "Core and lookalike names on the listening watchlist, each treated as competing with the company until the curator verifies it.",
-            "raw": "",
-        }
-        for company in companies:
-            if company["id"] == OWN_COMPANY_ID or company.get("tier") not in ("core", "lookalike"):
-                continue
-            edges.append(
-                {
-                    "id": "edge-competes-" + company["id"].split("/", 1)[1] + "-self",
-                    "src": company["id"],
-                    "rel": "competes_with",
-                    "dst": OWN_COMPANY_ID,
-                    "confidence": "medium",
-                    "evidence_id": watch_evidence["id"],
-                }
-            )
-    return {
-        "companies": companies,
-        "segments": personas,
-        "channels": channels,
-        "watch_evidence": watch_evidence,
-        "evidence": evidence_rows,
-        "edges": edges,
-    }
-
-
-def _store_blob(conn, blobs, name, data):
-    from .blobs import register
-
-    class Owner:
-        actor = SEED_ACTOR
-
-    digest_ = blobs.put(data, "text/plain")
-    return register(conn, Owner(), digest_, len(data), name, "text/plain")["id"]
 
 
 def _import_entity(conn, row):
@@ -2145,22 +1923,20 @@ def _import_entity(conn, row):
     return True
 
 
-def seed(conn, sources=None, blobs=None, document=None):
-    """Import once by id. An id that already exists is left unchanged. Day-one events use actor `seed`."""
-    extracted = extract(sources)
+def seed(conn, document=None):
+    """Import the document once by id. An id that already exists is left unchanged. Day-one events use actor `seed`."""
     document = document or {}
     added = []
-    companies = extracted["companies"] or document.get("companies") or []
-    for row in companies:
+    for row in document.get("companies") or []:
         if _import_entity(conn, row):
             added.append(row["id"])
-    for row in extracted["segments"] or document.get("segments") or []:
+    for row in document.get("segments") or []:
         if _import_entity(conn, {**row, "type": "segment", "tier": None, "aliases": row.get("aliases") or []}):
             added.append(row["id"])
-    for row in extracted["channels"] or document.get("channels") or []:
+    for row in document.get("channels") or []:
         if _import_entity(conn, {**row, "type": "channel", "tier": None, "aliases": [], "summary": ""}):
             added.append(row["id"])
-    watch = extracted["watch_evidence"] or document.get("watch_evidence")
+    watch = document.get("watch_evidence")
     if watch and not evidence(conn, watch["id"]):
         create_evidence(
             conn,
@@ -2174,29 +1950,7 @@ def seed(conn, sources=None, blobs=None, document=None):
             captured_by=SEED_ACTOR,
         )
         added.append(watch["id"])
-    raw_root = Path(sources["community_index"]).parent if sources and sources.get("community_index") else None
-    for row in extracted["evidence"]:
-        if evidence(conn, row["id"]):
-            continue
-        blob_id = None
-        if blobs is not None and raw_root is not None and row.get("raw"):
-            path = (raw_root / row["raw"]).resolve()
-            if path.is_file() and raw_root.resolve() in path.parents:
-                blob_id = _store_blob(conn, blobs, path.name, path.read_bytes())
-        create_evidence(
-            conn,
-            SEED_ACTOR,
-            evidence_key=row["id"],
-            source_url=row.get("source_url") or "",
-            source_kind=row.get("source_kind") or "other",
-            captured_at=row.get("captured_at"),
-            quote=row.get("quote") or "",
-            our_read=row.get("our_read") or "",
-            blob_id=blob_id,
-            captured_by=SEED_ACTOR,
-        )
-        added.append(row["id"])
-    for row in extracted["edges"] or document.get("edges") or []:
+    for row in document.get("edges") or []:
         if edge(conn, row["id"]):
             continue
         if not entity(conn, row["src"]) or not entity(conn, row["dst"]):
@@ -2210,7 +1964,7 @@ def seed(conn, sources=None, blobs=None, document=None):
             dst=row["dst"],
             confidence=row.get("confidence") or "medium",
         )
-        # The watchlist is the evidence. Seed does not go through the writer's evidence check.
+        # Seed does not go through the writer's evidence check: the document cites its evidence directly.
         if row.get("evidence_id") and evidence(conn, row["evidence_id"]):
             conn.execute(
                 "INSERT OR IGNORE INTO market_citations VALUES (?,?,?)", ("edge", row["id"], row["evidence_id"])
@@ -2219,34 +1973,6 @@ def seed(conn, sources=None, blobs=None, document=None):
     for doc_id in seed_pages(conn):
         added.append(doc_id)
     return added
-
-
-def locate_sources(root):
-    """Local checkouts next to the hub, else nothing. The test fetches GitHub when these are absent."""
-    root = Path(root)
-    found = {}
-    community = root / "docs" / "community-research" / "index.md"
-    if community.is_file():
-        found["community_index"] = community
-    candidates = [root.parent / "emp-listening", root / "emp-listening", root.parent.parent / "emp-listening"]
-    sales = [root.parent / "emp-sales", root / "emp-sales", root.parent.parent / "emp-sales"]
-    for directory in candidates:
-        watch = directory / "watchlist.yaml"
-        if watch.is_file():
-            found["watchlist"] = watch
-            mention = directory / "knowledge" / "mention-sources.md"
-            venues = directory / "knowledge" / "outreach-venues.md"
-            if mention.is_file():
-                found["mention_sources"] = mention
-            if venues.is_file():
-                found["outreach_venues"] = venues
-            break
-    for directory in sales:
-        personas = directory / "knowledge" / "buyer-personas.md"
-        if personas.is_file():
-            found["personas"] = personas
-            break
-    return found
 
 
 def load_snapshot(registry_dir):
@@ -2615,40 +2341,6 @@ def install(app, store, auth, mutate):
                 edge_id=body.id,
             )
             return {"edge": row}
-
-        return mutate(request, body, work)
-
-    @app.post("/api/v2/market/edges/{edge_id}")
-    def edge_update(request: Request, edge_id: str, body: M.MarketEdgeUpdate):
-        who = request.state.identity
-
-        def work(c):
-            require_writer(who)
-            row, _events = update_edge(
-                c,
-                who.actor,
-                edge_id,
-                since=body.since,
-                until=body.until,
-                confidence=body.confidence,
-                properties=body.properties,
-                rel=body.rel,
-                evidence_ids=body.evidence_ids,
-                insight_id=body.insight_id,
-                set_since=body.set_since,
-                set_until=body.set_until or body.until is not None,
-            )
-            return {"edge": row}
-
-        return mutate(request, body, work)
-
-    @app.post("/api/v2/market/citations")
-    def citation_create(request: Request, body: M.MarketCitation):
-        who = request.state.identity
-
-        def work(c):
-            require_writer(who)
-            return {"citation": cite(c, who.actor, body.claim_kind, body.claim_id, body.evidence_id, body.insight_id)}
 
         return mutate(request, body, work)
 

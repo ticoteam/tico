@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 from urllib.parse import quote
 
+from clients.cli_spec import Arg, Command, Group
 from clients.commands._registry import tool
 from clients.commands._schemas import _key, _s
 
@@ -30,9 +31,9 @@ def assistant_send(api, args):
 # ----------------------------------------------------------------------------- updates
 @tool(
     "tico_changelog_list",
-    "Product announcements, with your own read state and full change bullets. "
-    "Use unread=true to catch up since your last look; reading does not mark anything read. "
-    "next_offset reads the next page; unread_count counts all unread product entries, independently of filters.",
+    "Product announcements, with your own read state and full change bullets. Use unread=true to "
+    "catch up since your last look; reading does not mark anything read. next_offset reads the "
+    "next page; unread_count counts all unread product entries, independently of filters.",
     {
         "kind": _s("product (default), activity, or all", enum=["product", "activity", "all"]),
         "unread": {"type": "boolean", "description": "Only product changes you have not acknowledged"},
@@ -54,9 +55,9 @@ def changelog_list(api, args):
 
 @tool(
     "tico_changelog_mark_read",
-    "Acknowledge only the product entry ids you have shown the user. "
-    "Read status belongs to the signed-in person and is shared with the web app; other people are unaffected. "
-    "Newer or unseen entries stay unread.",
+    "Acknowledge only the product entry ids you have shown the user. Read status belongs to the "
+    "signed-in person and is shared with the web app; other people are unaffected. Newer or "
+    "unseen entries stay unread.",
     {
         "ids": {
             "type": "array",
@@ -199,9 +200,9 @@ def update_redo(api, args):
 
 @tool(
     "tico_update_list",
-    "Updates from bots and people, newest first, with your read state: what each did, does "
-    "next and needs from you. `unread` for what you have not read; `missed` lists bots that did not report; "
-    "`scope` direct for only your direct reports on the org chart.",
+    "Updates from bots and people, newest first, with your read state: what each did, does next "
+    "and needs from you. `unread` for what you have not read; `missed` lists bots that did not "
+    "report; `scope` direct for only your direct reports on the org chart.",
     {
         "kind": _s("daily or weekly", enum=["daily", "weekly"]),
         "bot": _s("One author's updates: a bot slug or human:<id>"),
@@ -282,8 +283,9 @@ def update_settings(api, args):
 
 @tool(
     "tico_run_list",
-    "A bot's recent runs, failed and expired ones included, each with its `state` (run.state), end_reason, last_event_at, stalled, tokens and "
-    "estimated cost (`est_cost_usd`) and start/end load snapshots (`load_start`, `load_end`). Yours, and those of the bots that report to you.",
+    "A bot's recent runs, failed and expired ones included, each with its `state` (run.state), "
+    "end_reason, last_event_at, stalled, tokens and estimated cost (`est_cost_usd`) and start/end "
+    "load snapshots (`load_start`, `load_end`). Yours, and those of the bots that report to you.",
     {"bot": _s("Bot slug"), "since": _s("Window like `24h` or an ISO timestamp")},
     required=("bot",),
 )
@@ -294,8 +296,8 @@ def turns(api, args):
 @tool(
     "tico_run_export",
     "Owners and engineering bots: whether a run's raw provider stream was captured, and its size. "
-    "Write the replay fixture with `tico run export <run> --fixture`. A bounded stderr tail is available even without a stream; streams require capture_stream on, "
-    "kept a week.",
+    "Write the replay fixture with `tico run export <run> --fixture`. A bounded stderr tail is "
+    "available even without a stream; streams require capture_stream on, kept a week.",
     {"run": _s("The run id, from tico_run_list")},
     required=("run",),
 )
@@ -331,22 +333,21 @@ def write_fixture(found, parent):
 # ----------------------------------------------------------------------------- the Assistant
 @tool(
     "tico_assistant_propose",
-    "Assistant only: ask the person you are acting for to confirm something with "
-    "side effects that matter: approving a Needs-you item, anything that leaves the team, "
-    "spending, changing people, access or settings, archiving or deleting, activating a bot. Give the exact "
-    "API operation; it is shown to them as a Confirm / Cancel card and runs only when they click, as them. "
-    "Several actions go on ONE card, never one card each: path /api/v2/assistant/batch, body {\"actions\": "
-    "[{\"path\": \"/api/v2/tasks/<id>/move\", \"body\": {\"to\": \"closed\", \"why\": \"<reason>\", \"version\": N}}, "
-    "{\"path\": \"/api/v2/tasks/<id>/asks/<requirement_id>/answer\", \"body\": {\"value\": \"ok\" | \"no\" | "
-    "\"<answer>\", \"note\": \"<their words>\", \"version\": N}}, {\"path\": \"/api/v2/tasks/<id>/comments\", "
-    "\"body\": {\"text\": \"<their words>\"}}, ...]} (up to 100); N is the version tico_task_show printed. An OK goes "
-    "on a card only when the person's message names it (approve, merge, publish, send, spend); 'clear my queue' never "
-    "OKs anything. "
-    "The Strategy Owner may propose one owner-confirmed org-chart change as POST /api/v2/seats/batch with body "
-    "{\"seats\":[{\"title\":\"...\",\"description\":\"...\",\"reports_to\":\"...\",\"team\":\"...\"}]} . "
-    "Use tico_org_models for published recommendations; no seat is added before the owner confirms. "
-    "A task action or answer the person clearly asked for needs no card: pass on_behalf_of to that tool instead. "
-    "Nothing here runs until they confirm.",
+    "Assistant only: ask the person you are acting for to confirm a side effect that matters "
+    "(approving a Needs-you item, anything leaving the team, spending, changing people, access or "
+    "settings, archiving or deleting, activating a bot). Give the exact API operation: it shows "
+    "them a Confirm / Cancel card, and it runs only when they click, as them. Several actions "
+    "share ONE card: path /api/v2/assistant/batch, body {\"actions\": [{\"path\": "
+    "\"/api/v2/tasks/<id>/move\", \"body\": {\"to\": \"closed\", \"why\": \"...\", \"version\": N}}, {\"path\": "
+    "\"/api/v2/tasks/<id>/asks/<requirement_id>/answer\", \"body\": {\"value\", \"note\", \"version\"}}, "
+    "{\"path\": \"/api/v2/tasks/<id>/comments\", \"body\": {\"text\"}}, ...]} (up to 100; N is the "
+    "version tico_task_show printed). An OK goes on a card only when the person's message names "
+    "it (approve, merge, publish, send, spend); 'clear my queue' never OKs anything. The Strategy "
+    "Owner may propose one owner-confirmed org change as POST /api/v2/seats/batch with "
+    "{\"seats\":[{\"title\":\"..\",\"description\":\"..\",\"reports_to\":\"..\",\"team\":\"..\"}]}; use "
+    "tico_org_models for published recommendations, and no seat is added before the owner "
+    "confirms. A task action the person clearly asked for needs no card: pass on_behalf_of "
+    "instead.",
     {
         "summary": _s("One plain sentence saying what will happen if they confirm"),
         "method": {"enum": ["POST", "PUT", "PATCH", "DELETE"], "default": "POST"},
@@ -392,8 +393,9 @@ def assistant_morning(api, args):
 @tool(
     "tico_assistant_withdraw",
     "Take back a Confirm card that still waits for the person (its id from "
-    "tico_assistant_proposals): it is marked withdrawn and never runs, and the card owner's chat says who withdrew it, "
-    "with the reason if you give one. Any teammate may withdraw; only the card's owner can confirm it.",
+    "tico_assistant_proposals): it is marked withdrawn and never runs, and the card owner's chat "
+    "says who withdrew it, with the reason if you give one. Any teammate may withdraw; only the "
+    "card's owner can confirm it.",
     {
         "id": _s("The proposal's id"),
         "reason": _s("Why, in one short sentence (optional; the person reads it in their chat)"),
@@ -408,8 +410,8 @@ def assistant_withdraw(api, args):
 @tool(
     "tico_assistant_proposals",
     "The Confirm cards still waiting for their owner: id, owner, proposer, summary and what "
-    "confirming does. Filter by proposer (botops, assistant) and/or owner (a person's id). Use it to find a card's id "
-    "to withdraw it.",
+    "confirming does. Filter by proposer (botops, assistant) and/or owner (a person's id). Use it "
+    "to find a card's id to withdraw it.",
     {"proposer": _s("botops or assistant (optional)"), "owner": _s("The card owner's id, e.g. human:ana (optional)")},
 )
 def assistant_proposals(api, args):
@@ -419,11 +421,11 @@ def assistant_proposals(api, args):
 
 @tool(
     "tico_assistant_learn",
-    "In a person's own chat: save one thing they taught you about how they like things ranked "
-    "and summarised (\"launches matter more than hiring news\"), as one short line in their words, then tell them "
-    "what you saved. It is theirs alone and shows on What it has learned, "
-    "where they edit or delete it. The Strategy Owner "
-    "in the owner's chat saves what the owner teaches it about the company with layer company.",
+    "In a person's own chat: save one thing they taught you about how they like things ranked and "
+    "summarised (\"launches matter more than hiring news\"), as one short line in their words, then "
+    "tell them what you saved. It is theirs alone and shows on What it has learned, where they "
+    "can edit or delete it. The Strategy Owner, in the owner's chat, saves what the owner teaches "
+    "about the company (layer company).",
     {
         "text": _s("One short line, in their words"),
         "layer": {
@@ -482,11 +484,11 @@ def assistant_shared_read(api, args):
 # on commit (backend/batch.py). These are a person's tools: a bot calling them is refused.
 @tool(
     "tico_brief",
-    "Catch the person up in one call, for talking on the go: bots that are down "
-    "(`alerts`), who is waiting on them and how many items (`lineup`), how many bots replied to "
-    "something they said (`replies_waiting`), the latest things bots said to them (`said`, since "
-    "`since`, default 12 hours) and how many bot tasks are stuck. Call it first in a voice "
-    "session and again when they ask what's new; pass the previous reply's `now` as `since`.",
+    "Catch the person up in one call, for talking on the go: bots that are down (`alerts`), who "
+    "is waiting on them and how many items (`lineup`), how many bots replied to something they "
+    "said (`replies_waiting`), the latest things bots said to them (`said`, since `since`, "
+    "default 12 hours), and how many bot tasks are stuck (`stuck`). Call it first in a voice "
+    "session, and again when they ask what's new, passing the previous reply's `now` as `since`.",
     {"since": _s("ISO date-time with timezone; only what bots said after it")},
 )
 def live_brief(api, args):
@@ -558,6 +560,11 @@ def batch_next(api, args):
     return spoken(api.post("batch/" + args["batch"] + "/next", {}, key=_key(args)))
 
 
+# The decisions the server takes (backend/batch.py DECISIONS; the request model is backend/models.py BatchRespond).
+# backend/tests/test_batch.py asserts that this tuple, the server's list and the model stay equal.
+NEEDS_YOU_DECISIONS = ("ok", "send_back", "done", "close", "answer")
+
+
 @tool(
     "tico_needs_you_respond",
     "Record the person's response to the current item (or another, by number). Nothing is applied until commit.",
@@ -569,8 +576,9 @@ def batch_next(api, args):
         ),
         "text": _s("The person's own words"),
         "decision": _s(
-            "With decide: approve | decline | done | close | answer",
-            enum=["approve", "decline", "done", "close", "answer"],
+            "With decide: ok or send_back on an OK, answer on a question, done or close on a task. "
+            "send_back and answer need text.",
+            enum=list(NEEDS_YOU_DECISIONS),
         ),
         "item": {"type": "integer", "description": "Another item's number"},
         "until": _s("With later: an ISO date-time"),
@@ -585,8 +593,8 @@ def batch_respond(api, args):
 
 @tool(
     "tico_needs_you_commit",
-    "Apply every recorded response of the batch. Only after the person confirmed the "
-    "summary. Decisions apply as the person; questions, instructions and rules go to the bot each item "
+    "Apply every recorded response of the batch. Only after the person confirmed the summary. "
+    "Decisions apply as the person; questions, instructions and rules go to the bot each item "
     "came from, whose reply comes back on those items. Returns `up_next`: the next bot to offer.",
     {"batch": _s("The batch id")},
     required=("batch",),
@@ -610,9 +618,10 @@ def batch_abandon(api, args):
 
 @tool(
     "tico_needs_you_show",
-    "What is on the person's Needs you: the total, the number per kind (task: a task of theirs; ask: an OK or a "
-    "question with their name; paused: a bot that cannot run until they fix it; mention: an @ of them by a person), "
-    "and the items, oldest first, each with its task. Use it to see the pile before closing or stopping anything.",
+    "What is on the person's Needs you: the total, the number per kind (task: a private task they "
+    "must let someone see; ask: an OK or question with their name; paused: a bot that cannot run "
+    "until they fix it; mention: an @ of them by a person), and the items, oldest first, each "
+    "with its task. Use it to see the pile before closing or stopping anything.",
     {
         "kind": {"type": "string", "enum": ["task", "ask", "paused", "mention"], "description": "Only this kind"},
         "limit": {
@@ -636,10 +645,10 @@ def needs_you_show(api, args):
 
 @tool(
     "tico_assistant_change_list",
-    "What the person's Assistant did for them, newest first (last 30 days by default): "
-    "each change's `what` in one line, the `words` of the person it acted on, its `object` (task:, approval:, "
-    "automation:, org_rule:, message:), and `undoable` with `why_not` when it cannot be taken back. Use it when the "
-    "person asks what was done for them or wants something undone.",
+    "What the person's Assistant did for them, newest first (last 30 days by default): each "
+    "change's `what`, the `words` of the person it acted on, its `object` (task:, approval:, "
+    "automation:, org_rule:, message:), and `undoable` with `why_not` when it cannot be taken "
+    "back. Use it when the person asks what was done for them or wants something undone.",
     {
         "days": {"type": "integer", "minimum": 1, "maximum": 90, "description": "How far back (default 30)"},
         "limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": "Changes per page (default 50)"},
@@ -653,12 +662,195 @@ def assistant_change_list(api, args):
 @tool(
     "tico_assistant_change_restore",
     "Undo one change the person's Assistant made for them (its id from "
-    "tico_assistant_change_list): a task's status or owner goes back to what it was, an approval goes back to waiting "
-    "for the person, an automation goes back to its earlier version, an org rule it added is retired. A message sent "
-    "stays sent. Restoring one again changes nothing.",
+    "tico_assistant_change_list): a task's status or owner goes back, an approval goes back to "
+    "waiting for the person, an automation goes back to its earlier version, an org rule it added "
+    "is retired. A message sent stays sent. Restoring one again changes nothing.",
     {"id": _s("The change's id from tico_assistant_change_list")},
     required=("id",),
     writes=True,
 )
 def assistant_change_restore(api, args):
     return api.post(f"assistant/changes/{args['id']}/restore", {}, key=_key(args))
+
+
+# `tico needs-you ...` (clients/cli_spec.py): the walk through what needs the person, one bot's batch at a time. The
+# respond leaf's --decision choices are the tool's enum, so they are the server's list (NEEDS_YOU_DECISIONS).
+NEEDS_YOU = (
+    Group("needs-you", "a person's walk through what needs them: respond, commit (backend/batch.py)"),
+    Command(
+        "needs-you start",
+        "start the batch of the bot that most needs you, or resume the one in progress",
+        example="tico needs-you start --bot ana",
+    ),
+    Command(
+        "needs-you next",
+        "the next item; at the end, the summary to read back",
+        example="tico needs-you next b1",
+    ),
+    Command(
+        "needs-you respond",
+        "record a response to the current item; nothing applies until commit",
+        args=(Arg("text", default=""),),
+        example="tico needs-you respond b1 decide --decision ok",
+    ),
+    Command(
+        "needs-you commit",
+        "apply every recorded response",
+        example="tico needs-you commit b1",
+    ),
+    Command(
+        "needs-you abandon",
+        "drop the batch without applying anything",
+        example="tico needs-you abandon b1",
+    ),
+    Command(
+        "needs-you show",
+        "what needs you: the count per kind and the items, oldest first",
+        example="tico needs-you show --kind ask --limit 5",
+    ),
+)
+
+
+def _propose(client, fields):
+    """`tico assistant propose`: --body is JSON text, refused as the API refuses a bad field, and every field of the
+    card is sent (`for_person` as null when --for is left out), as the hand parser it replaced sent them."""
+    from clients import hubtools
+    from clients.tico import APIError
+
+    try:
+        body = json.loads(fields.get("body") or "{}")
+    except ValueError:
+        raise APIError("body", "--body must be JSON") from None
+    sent = {
+        "summary": fields["summary"],
+        "path": fields["path"],
+        "method": fields["method"],
+        "body": body,
+        "for_person": fields.get("for_person"),
+        "operation_id": fields.get("operation_id"),
+    }
+    return hubtools.BY_NAME["tico_assistant_propose"]["fn"](client, sent)
+
+
+# `tico assistant ...` (clients/cli_spec.py): the person's Assistant chat, its Confirm cards and what it learned.
+ASSISTANT = (
+    Group("assistant", "the Assistant's proposals for a person to confirm"),
+    Command("assistant read", "read your private Assistant chat", example="tico assistant read"),
+    Command("assistant send", "ask your private Assistant", example="tico assistant send 'What is due today?'"),
+    Command(
+        "assistant propose",
+        "ask the person to confirm one side-effecting operation",
+        args=(
+            Arg("summary", flag="--summary"),
+            Arg("method", default="POST"),
+            Arg("path", flag="--path"),
+            Arg("body", type=str, default="{}"),
+            Arg("for_person", flag="--for"),
+        ),
+        run=_propose,
+        example="tico assistant propose --summary 'Archive Ops' --path /api/v2/bots/ops/archive",
+    ),
+    Command(
+        "assistant morning",
+        "the Assistant's one morning message to a person (background run only)",
+        args=(Arg("for_person", flag="--for"), Arg("body", flag="--body")),
+        example="tico assistant morning --for human:ana --body 'Good morning'",
+    ),
+    Command(
+        "assistant learn",
+        "save one thing the person taught you (What it has learned)",
+        args=(Arg("layer", flag="--company", action="store_const", const="company", default="personal"),),
+        example="tico assistant learn 'Launches matter more than hiring news'",
+    ),
+    Command(
+        "assistant learned",
+        "what your chat bot has learned: your layer, and the company's for the owner",
+        example="tico assistant learned",
+    ),
+    Command(
+        "assistant shared",
+        "the people who chose you to view their Assistant chat, read only (a bot's own run)",
+        example="tico assistant shared",
+    ),
+    Command(
+        "assistant shared-read",
+        "read one page of a person's Assistant chat they shared with you",
+        example="tico assistant shared-read human:ana",
+    ),
+    Command(
+        "assistant withdraw",
+        "take back a Confirm card that waits: it never runs (any teammate)",
+        args=(Arg("reason", default=""),),
+        example="tico assistant withdraw a1 --reason 'Wrong person'",
+    ),
+    Group("assistant change", "what your Assistant did for you, and undoing one of those changes"),
+    Command(
+        "assistant change list",
+        "the Assistant's changes for you, newest first, with the words it acted on",
+        example="tico assistant change list --days 7",
+    ),
+    Command(
+        "assistant change restore",
+        "undo one change as you; restoring it again changes nothing",
+        example="tico assistant change restore c1",
+    ),
+    Command(
+        "assistant proposals",
+        "the Confirm cards still waiting for their owner (find one to withdraw)",
+        args=(Arg("proposer", choices=("botops", "assistant")),),
+        example="tico assistant proposals --proposer assistant",
+    ),
+)
+
+# `tico update ...` and `tico changelog ...` (clients/cli_spec.py). `update create` is still built in
+# clients/hubcli.py: its tool reads the week in review from a file on this computer (--slides-file).
+UPDATE = (Group("update", "create, read and reply to the bots' daily and weekly updates"),)
+# After the hand-built `update create`, so `tico update` lists its leaves in the order it always has.
+UPDATE_AFTER_CREATE = (
+    Command(
+        "update redo",
+        "ask the bots again for a past day's update in the current shape (owner)",
+        args=(Arg("day", flag="--day"), Arg("bots", flag="--bot"), Arg("managers", flag="--with-managers")),
+        example="tico update redo --day 2026-11-14 --bot builder",
+    ),
+    Command(
+        "update list",
+        "updates from bots and people, newest first",
+        example="tico update list --unread",
+    ),
+    Command("update show", example="tico update show u1"),
+    Command(
+        "update mark-read",
+        "mark updates read (--unread to mark them unread)",
+        args=(
+            Arg("ids", positional=True, nargs="*", action="store"),
+            Arg("read", flag="--unread", action="store_false"),
+        ),
+        example="tico update mark-read u1 u2",
+    ),
+    Command("update reply", example="tico update reply u1 'Thanks, ship it'"),
+    Command(
+        "update settings",
+        "turn a bot's daily or weekly update on or off",
+        args=(
+            Arg("daily", choices=("on", "off"), action="store"),
+            Arg("weekly", choices=("on", "off"), action="store"),
+        ),
+        example="tico update settings builder --weekly off",
+    ),
+)
+CHANGELOG = (
+    Group("changelog", "shipped product changes and your own read state"),
+    Command(
+        "changelog list",
+        "what changed; --unread catches up since your last look",
+        args=(Arg("kind", default="product"),),
+        example="tico changelog list --unread",
+    ),
+    Command(
+        "changelog mark-read",
+        "acknowledge only the changes you have reviewed",
+        args=(Arg("ids", positional=True, nargs="+", action="store"),),
+        example="tico changelog mark-read c1 c2",
+    ),
+)

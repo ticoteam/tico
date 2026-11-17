@@ -1,4 +1,4 @@
-"""Org rule checks (backend/org_rule_check.py, docs/rules-plan.md §3): a bot's output is checked against the rules that
+"""Org rule checks (backend/org_rule_check.py, docs/dev/rules-plan.md §3): a bot's output is checked against the rules that
 apply to it before it lands. One Decide call outside the write's transaction; a held write answers 200 with `held`
 and writes nothing but its hold; Escalate files one review task for a person; Warn delivers with a line; any
 failure lets the output through with `rules.unchecked`, except an output too large to check, which is held.
@@ -330,35 +330,6 @@ def test_the_third_block_in_a_day_escalates_with_one_review_task(ruled):
     assert len(tasks) == 1
 
 
-def test_an_old_rule_review_row_takes_the_plain_title_and_no_other_held_row_does(ruled):
-    api, _ = ruled
-    color_rule(api)
-    [say(api, f"Try {n}: our favorite color is gold") for n in range(3)]
-    [review] = sql(
-        api,
-        "SELECT id, conversation_id FROM tasks WHERE id IN "
-        "(SELECT task_id FROM org_rule_holds WHERE task_id IS NOT NULL)",
-    )
-    with api.app.state.store.transaction() as c:
-        # Rows as main wrote them: the review's thread took the task's "Held: ..." title, and a screening hold keeps its own.
-        c.execute(
-            "UPDATE conversations SET subject=? WHERE id=?", ("Held: ops and the rule 'old'", review["conversation_id"])
-        )
-        screening = c.execute(
-            "INSERT INTO conversations(id, kind, subject, participants, scope, created_at) "
-            "VALUES('screen-held', 'task', 'Held: Order', '[]', 'task', '2026-11-01')"
-        ).rowcount
-        assert screening == 1
-        assert threads.rename_rule_reviews(c) == 1
-    subjects = {
-        r["id"]: r["subject"]
-        for r in sql(
-            api, "SELECT id, subject FROM conversations WHERE id IN (?, 'screen-held')", (review["conversation_id"],)
-        )
-    }
-    assert subjects == {review["conversation_id"]: "Rule review", "screen-held": "Held: Order"}
-
-
 def test_cache_hits_count_toward_repeats(ruled):
     api, judge = ruled
     color_rule(api)
@@ -645,7 +616,7 @@ def test_keep_blocked_and_only_the_reviewer_author_or_owner_reads_a_hold(ruled):
     assert "nonce" not in get(api, f"rule-holds/{held['id']}", token="ops-test")
     # The held text is in no conversation, comment or inbox, and makes no work.
     assert bodies(api, "gold") == [] and sql(api, "SELECT id FROM jobs WHERE bot_id='ana'") == []
-    assert "gold" not in api.get("/api/v2/inbox", headers=headers()).text
+    assert "gold" not in api.get("/api/v2/messages?unread=1", headers=headers()).text
     kept = post(api, f"rule-holds/{held['id']}/keep", {}, token="ben-test")
     assert kept["state"] == "kept"
     post(api, f"rule-holds/{held['id']}/keep", {}, token="ben-test", expected=409)
@@ -2314,7 +2285,7 @@ def test_a_rule_checks_judge_call_names_the_rules_it_asked(ruled):
 
 
 def test_a_bots_ask_a_rule_covers_is_refused_with_the_rules_words(ruled):
-    """docs/pipelines-v3.md, "How a rule stops the next one": the rule check that reads what bots send also reads their
+    """docs/dev/pipelines-v3.md, "How a rule stops the next one": the rule check that reads what bots send also reads their
     asks; an ask a rule covers is refused back to the bot with the rule's words (tick list 49)."""
     api, judge = ruled
     color_rule(api)
