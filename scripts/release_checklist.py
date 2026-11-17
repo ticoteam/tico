@@ -29,6 +29,20 @@ except ModuleNotFoundError:  # Direct script invocation.
 VERDICT = re.compile(r"^VERDICT: (approve|changes) PR #(\d+) head ([0-9a-f]{40})\s*$", re.M)
 ROLE = re.compile(r"^(Review [12]|QA|Docs|Documentation|Technical Writer)(?:\s+(?:delta|re-check|recheck))?\s*:", re.I)
 MAX_PAGES = 100
+BEFORE_ROLLOUT = [
+    "Replay the candidate migrations on Tico Team's and TIDY's cells before rollout; require passing REPLAY results "
+    "and review dropped tables and any --allow-loss exceptions.",
+    "SSM: aws ssm start-session --target <cell-instance-id>. On each cell, use the candidate checkout and pull "
+    "its validated server image by digest. Customer data stays on the cell.",
+    "Run as root on the cell host. The script uses docker inspect's /data mount Source and SQLite's read-only "
+    "online backup into host scratch; hub.sqlite, hub.sqlite-wal and hub.sqlite-shm must exist and be readable. "
+    "Scratch must have free space >= 2 x (database + WAL size) + 10 GiB by default. "
+    "Only the copy is mounted into the throwaway container, with networking disabled.",
+    "On Tico Team's cell: sudo python3 scripts/migration_replay.py --container tico-co-tico-team-server-1 "
+    "--image ghcr.io/ticoteam/tico@sha256:<candidate-digest>",
+    "On TIDY's cell: sudo python3 scripts/migration_replay.py --container tico-tidy-server-1 "
+    "--image ghcr.io/ticoteam/tico@sha256:<candidate-digest>",
+]
 
 
 def command(*args):
@@ -223,6 +237,7 @@ def build(prs, tickets, *, head, previous, previous_sha):
         "previous": previous,
         "previous_sha": previous_sha,
         "security": "Outside the release pipeline; no Security result required",
+        "before_rollout": BEFORE_ROLLOUT,
         "prs": rows,
         "gaps": sum(len(row["gaps"]) for row in rows),
     }
@@ -289,6 +304,8 @@ def markdown(result):
         result["security"],
         "",
         "Evidence snapshot only; gaps require resolution by the Release Owner.",
+        "",
+        *["- [ ] " + step for step in result["before_rollout"]],
         "",
         "| PR | Ticket / step | Review 1 | Review 2 | Tests | QA | Docs | Gaps |",
         "| --- | --- | --- | --- | --- | --- | --- | --- |",
