@@ -153,7 +153,7 @@ def test_a_bots_ask_and_a_page_ok_never_borrow_an_earlier_page(api):
     task_id, _ = _released(api)
     with api.app.state.store.transaction() as c:
         row = E.task(c, task_id)
-        shows = ["https://example.com/spend"]
+        shows = X.shown(c)
         asked = H.task_ask(
             c, "bot:writer", task_id, BEN, "OK the spend?", kind="ok", shows=shows, seen_version=row["version"]
         )

@@ -1,12 +1,13 @@
 """The status page reads each table once for every bot, and says exactly what each bot's own status line says."""
 
-from backend import holds, task_engine as E
-from backend import task_privacy as privacy, usage_limits
+from backend import holds, usage_limits
+from backend import task_engine as E
+from backend import task_privacy as privacy
 from backend.events import prime_status_lines, status_line
 from backend.store import H
+from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import assign, claim, post, ready  # noqa: F401
 from backend.tests.helpers.run_failures import failing, hold_bot, setup
-from backend import usage_limits
 from backend.tests.helpers.status_reads import busy, page
 
 
@@ -375,7 +376,7 @@ def test_a_bots_open_asks_count_in_its_needs_human_only_on_tasks_the_reader_may_
         secret = H.task_create(c, "human:ana", "Acme acquisition", "Look into it.", "bot:ops", private=True)
         for task in (shared, secret):
             version = H.task(c, task["id"])["version"]
-            shows = ["https://example.com/test-budget"]
+            shows = X.shown(c)
             H.task_ask(
                 c,
                 "bot:ops",

@@ -1056,6 +1056,7 @@ def s39(r: Rig) -> None:
 @scenario(41, "A task with an open ask moves back")
 def s41(r: Rig) -> None:
     from backend import task_engine as E
+    from backend.tests.helpers.engine import shown
 
     task = r.task(ANA, "Choose the font", WORK, assignee=WRITER)
     r.to_deck(task)
@@ -1070,7 +1071,7 @@ def s41(r: Rig) -> None:
             "ok",
             BEN,
             "OK to use Inter?",
-            shows=["https://example.com/font-sample"],
+            shows=shown(c, "Font sample", bot="writer"),
             seen_version=version,
         ),
         "the ask",
@@ -1130,12 +1131,14 @@ def s46(r: Rig) -> None:
 
 def _ask(r: Rig, task: str, line: str = "OK to send?") -> str:
     from backend import task_engine as E
+    from backend.tests.helpers.engine import shown
 
     version = r.row(task)["version"]
-    shows = ["https://example.com/mailing"]
     out = r.ok(
         WRITER,
-        lambda c: E.add_requirement(c, task, WRITER, "ok", BEN, line, shows=shows, seen_version=version),
+        lambda c: E.add_requirement(
+            c, task, WRITER, "ok", BEN, line, shows=shown(c, "Mailing", bot="writer"), seen_version=version
+        ),
         "the ask",
     )
     return str(out["requirement_id"])

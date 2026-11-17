@@ -74,6 +74,7 @@ def _asked_before(c, row, monkeypatch, **kw):
 
     with monkeypatch.context() as m:
         m.setattr(G, "check_ask", then)
+        m.setattr(E, "shows_a_file", lambda *_: True)  # the page is rows of the test's own (_attach), no file
         return _ask(c, row, PM, "ok", ANA, CHECKED, **kw)
 
 

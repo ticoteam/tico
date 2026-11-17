@@ -5,12 +5,14 @@ import time
 
 import pytest
 
-from backend import read_cache, sql as SQL, task_privacy, views
-from backend.auth import Identity
-from backend.store import H, Problem, encode
-from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner, setup_attempt  # noqa: F401
-from backend.enqueue import enqueue_stored
 from backend import bot_settings as BS
+from backend import read_cache, task_privacy, views
+from backend import sql as SQL
+from backend.auth import Identity
+from backend.enqueue import enqueue_stored
+from backend.store import H, Problem, encode
+from backend.tests.helpers import engine as X
+from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner, setup_attempt  # noqa: F401
 from backend.tests.helpers.task_privacy_reads import sql, traced, traced_get
 
 
@@ -40,7 +42,7 @@ def legacy_message(api, tid, *, body="Private legacy comment"):
 def test_participant_permission_is_never_reused_for_another_tasks_content(api, monkeypatch):
     from backend import read_deps, row_clock
     from backend.privacy_index import ReadIndex
-    from backend.tests.helpers.meeting_items import record, add, push
+    from backend.tests.helpers.meeting_items import add, push, record
 
     rid = record(api, {'private': True, 'participants': ['ben@acme.example']})
     iid = add(api, rid, {'section': 'task', 'text': 'Participant task', 'detail': {'owner': 'human:ana'}})['item']['id']
@@ -306,7 +308,8 @@ def test_live_events_stop_when_private_owner_loses_access(api):
 def test_a_task_event_says_what_moved_only_to_who_could_read_it_and_nothing_to_who_never_could(api):
     """`was` (owner and status before the batch) goes to a viewer who read the task before and does now; one who
     could never read it gets no row of it at all, not its id."""
-    from backend import events, task_engine as E
+    from backend import events
+    from backend import task_engine as E
 
     store, auth = api.app.state.store, api.app.state.auth
     ben, cara = (Identity(f"human:{n}", "human", f"{n}@acme.example") for n in ("ben", "cara"))
@@ -696,7 +699,7 @@ def test_needs_you_reads_a_fixed_number_of_statements_and_hides_private_items(ap
         with store.transaction() as c:
             for n in range(size):
                 step = H.task_create(c, "bot:ops", f"Step {size}-{n}", "Do it.", "bot:ops", lint=False)
-                shows = [f"https://example.com/step-{n}"]
+                shows = X.shown(c)
                 H.task_ask(
                     c,
                     "bot:ops",

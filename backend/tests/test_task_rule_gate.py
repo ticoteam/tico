@@ -7,22 +7,23 @@ import json
 import pytest
 
 from backend.store import H
+from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import get, headers, post
 from backend.tests.helpers.company import with_strategy_bot
 from backend.tests.helpers.engine import old_question
-from backend.tests.helpers.org_rules import rule
-from backend.tests.helpers.strategy_bot_level import level
 from backend.tests.helpers.org_rule_check import (  # noqa: F401 - fixtures
     COLOR,
     LAUNCH,
-    hand_over,
     color_rule,
+    hand_over,
     hold_row,
     not_a_friday,
     ruled,
     sql,
     task_for_ops,
 )
+from backend.tests.helpers.org_rules import rule
+from backend.tests.helpers.strategy_bot_level import level
 
 
 def row(api, task_id):
@@ -108,7 +109,7 @@ def test_withdrawing_an_ask_with_a_forbidden_why_is_held(ruled):
             "to": "ana",
             "line": "OK the launch note?",
             "kind": "ok",
-            "show": [NOTE],
+            "show": X.shown_on(api),
             "version": 1,
             "why": "It sets what goes out on launch day.",
         },
@@ -222,9 +223,6 @@ def all_slots_busy(monkeypatch):
     monkeypatch.setattr(K, "_ask", lambda *a, **k: (None, "busy"))
 
 
-NOTE = "https://example.com/launch-note"  # what a bot's OK shows: a bot's OK names what it approves
-
-
 def bots_ask(api, task, line="May I say our favorite color is red?", expected=200):
     """bot:ops asks Ana to OK what it shows (a question is a ❓ message now, checked on its own route)."""
     r = api.post(
@@ -233,7 +231,7 @@ def bots_ask(api, task, line="May I say our favorite color is red?", expected=20
             "to": "ana",
             "line": line,
             "kind": "ok",
-            "show": [NOTE],
+            "show": X.shown_on(api),
             "version": task["version"],
             "why": "It sets what goes out on launch day.",
         },
@@ -261,7 +259,7 @@ def test_a_bots_ask_whose_short_title_alone_breaks_a_rule_is_refused(ruled):
             "line": "OK the launch post's lead line?",
             "title": "Our favorite color is red: say it?",
             "kind": "ok",
-            "show": [NOTE],
+            "show": X.shown_on(api),
             "version": task["version"],
             "why": "It sets what goes out on launch day.",
         },

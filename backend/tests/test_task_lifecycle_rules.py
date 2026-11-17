@@ -79,7 +79,7 @@ def test_the_person_a_bots_task_asks_does_not_close_it(c):
     """A bot's task that asks a person is still the bot's: they answer the ask, they do not end the task."""
     t = _make(c, CMO, "Book the launch ads", CMO)
     line = "Approve the launch budget? I'll book the ads after."
-    shows = ["https://example.com/launch-budget"]
+    shows = X.shown(c)
     H.task_ask(c, CMO, t["id"], CARA, line, kind="ok", shows=shows, seen_version=_version(c, t["id"]))
     with _refused("This task is worked by"):
         H.task_close(c, CARA, t["id"], "Not now")

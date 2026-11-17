@@ -56,7 +56,7 @@ def test_an_open_question_and_an_ok_asked_of_a_person_are_in_their_needs_you(c):
         ANA,
         "OK the headline",
         seen_version=ok["version"],
-        shows=["https://example.com/press-note"],
+        shows=X.shown(c),
     )
     # A question on her own task is hers to answer, though the task's own work is not listed.
     Q.ask(c, "bot:builder", mine["id"], ANA, "Which landlord?")

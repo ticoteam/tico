@@ -9,12 +9,24 @@ from urllib.parse import urlencode
 
 import pytest
 
-from backend.mcp import ApiProblem, InProcessApi
-from backend.tests.helpers.api import assign, claim, get, headers, post, ready, restrict, runner, setup_attempt  # noqa: F401
-from clients import bot_files as BF, hubcli, hubtools
-from clients.tico import MultipartBody
 from backend import bot_settings as BS
+from backend.mcp import ApiProblem, InProcessApi
+from backend.tests.helpers import engine as X
+from backend.tests.helpers.api import (  # noqa: F401
+    assign,
+    claim,
+    get,
+    headers,
+    post,
+    ready,
+    restrict,
+    runner,
+    setup_attempt,
+)
 from backend.tests.helpers.mcp import call, rpc
+from clients import bot_files as BF
+from clients import hubcli, hubtools
+from clients.tico import MultipartBody
 
 
 def test_initialize_lists_every_tool_and_ignores_notifications(api):
@@ -332,7 +344,7 @@ def test_a_bot_asks_a_person_on_its_own_task_and_the_ask_is_in_their_needs_you(a
         "to": "ana",
         "line": "OK the vendor trial plan?",
         "kind": "ok",
-        "show": ["https://example.com/vendor-trial"],
+        "show": X.shown_on(api),
         "title": "Vendor trial plan",
     }
     err, refused = call(api, "tico_task_ask", {**ask, "version": version - 1}, token=attempt["token"])

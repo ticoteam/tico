@@ -37,7 +37,6 @@ FINISH, STOP, COMMENT, MENTION, CRASH, ASK, SNOOZE_UNTIL, SNOOZE_ICE, FILE, HANG
 REASSIGN, CLOSE, BACK = "reassign", "close", "move back"
 # What a fake person does with an item in their Needs you.
 SILENT = "stay silent"
-PLAN = "https://example.com/plan"  # what a bot's OK shows
 LEASE_S = 90  # a run's lease, renewed while its computer checks in
 RUN_CAP_S = 3600  # a run is cut off at 60 minutes
 MAX_RUNS = 7  # bot runs one task may use without a change before a person is asked (docs/dev/pipelines-v3.md)
@@ -554,7 +553,7 @@ class Sim:
                     bot,
                     f"asks {person} for an OK",
                     lambda c: E.add_requirement(
-                        c, task, bot, "ok", person, "OK to go ahead?", shows=[PLAN], seen_version=seen
+                        c, task, bot, "ok", person, "OK to go ahead?", shows=_plan(c, bot), seen_version=seen
                     ),
                     task,
                 )
@@ -1118,3 +1117,10 @@ def run_seed(seed: int, *, explain: bool = False, steps: int | None = None) -> d
             "ended": sim.stats.ended,
             "restarts": world.restarts,
         }
+
+
+def _plan(c: Any, bot: str) -> list[str]:
+    """What a bot's OK shows: a page of the bot's own (task_engine.shows_a_file)."""
+    from backend.tests.helpers.engine import shown
+
+    return shown(c, "Plan", bot=bot.split(":", 1)[-1])

@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import assign, claim, headers, post, ready, runner  # noqa: F401  (fixture)
 
 REPLAY = Path(__file__).resolve().parents[2] / "evals" / "replay"
@@ -309,7 +310,7 @@ def test_replay_answers_the_bots_asks_the_way_the_server_asks_them(api):
             "to": "ana",
             "line": "OK this week's summary?",
             "kind": "ok",
-            "show": ["https://example.com/weekly-summary"],
+            "show": X.shown_on(api),
             "version": version,
         },
     )

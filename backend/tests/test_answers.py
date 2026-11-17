@@ -65,9 +65,6 @@ def _question(c, task_id, by, person, line, choices=None):
     return X.old_question(c, task_id, by, person, line, choices=choices)
 
 
-SHOWS = ["https://example.com/launch-note"]
-
-
 def _owner_done(c, row):
     return R.on_stage(c, row["stage_id"])[0]["id"]
 
@@ -310,7 +307,7 @@ def test_a_bot_saying_done_keeps_a_snooze_a_person_set(c, general):
 
 def test_done_while_something_else_is_missing_keeps_the_owners_snooze(c, general):
     row = X.new_task(c, ANA, "Pick the signup plan", assignee="bot:builder")
-    _bot_ask(c, row["id"], "bot:builder", "ok", ANA, "OK the plan?", shows=SHOWS)  # still waits on Ana
+    _bot_ask(c, row["id"], "bot:builder", "ok", ANA, "OK the plan?", shows=X.shown(c))  # still waits on Ana
     seen = E.task(c, row["id"])["version"]
     E.snooze(c, row["id"], "bot:builder", "waiting on Ana", seen_version=seen)
     seen = E.task(c, row["id"])["version"]
@@ -342,7 +339,7 @@ def test_a_bot_answers_an_ask_only_when_the_requirement_names_it(c, general):
 # ----------------------------------------------------------------------------- refused
 def test_an_answer_on_a_withdrawn_requirement_or_a_stage_the_task_left_is_refused(c, build):
     row = X.new_task(c, ANA, "Build the importer", "eng")
-    asked = _bot_ask(c, row["id"], "bot:builder", "ok", ANA, "OK three retries?", shows=SHOWS)
+    asked = _bot_ask(c, row["id"], "bot:builder", "ok", ANA, "OK three retries?", shows=X.shown(c))
     E.withdraw_requirement(c, asked["requirement_id"], "bot:builder", "Found it in the docs")
     with _refused("task_requirement"):
         A.answer(c, row["id"], asked["requirement_id"], ANA, "ok")
@@ -361,7 +358,7 @@ def test_an_answer_on_a_withdrawn_requirement_or_a_stage_the_task_left_is_refuse
 # ----------------------------------------------------------------------------- give to
 def test_give_a_requirement_added_to_one_task_to_another_person_and_needs_you_follows(c, general):
     row = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
-    asked = _bot_ask(c, row["id"], "bot:builder", "ok", ANA, "OK the headline", shows=SHOWS)
+    asked = _bot_ask(c, row["id"], "bot:builder", "ok", ANA, "OK the headline", shows=X.shown(c))
     rid = asked["requirement_id"]
     assert [n["requirement_id"] for n in W.needs(c, ANA)] == [rid]
     with _refused("task_requirement"):
@@ -403,7 +400,7 @@ def test_an_ask_is_given_or_named_only_to_a_person_who_is_here(c, build):
     review = _in_review(c, build)
     stage_ok = build["requirements"]["Review"][0]
     row = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
-    rid = _bot_ask(c, row["id"], "bot:builder", "ok", ANA, "OK the headline", shows=SHOWS)["requirement_id"]
+    rid = _bot_ask(c, row["id"], "bot:builder", "ok", ANA, "OK the headline", shows=X.shown(c))["requirement_id"]
     mine = X.new_task(c, ANA, "Call the bank", assignee=ANA)
     X.left(c, "human:cara")
     for nobody in ("human:missing", "human:cara"):  # never on the roster; on it, and left
@@ -444,7 +441,7 @@ def test_an_answered_ask_is_not_given_away(c, build):
 # ----------------------------------------------------------------------------- undo
 def test_undo_before_the_move_takes_the_answer_back(c, general):
     row = X.new_task(c, ANA, "Pick the signup plan", assignee="bot:builder")
-    _bot_ask(c, row["id"], "bot:builder", "ok", ANA, "OK the plan?", shows=SHOWS)
+    _bot_ask(c, row["id"], "bot:builder", "ok", ANA, "OK the plan?", shows=X.shown(c))
     said = A.answer(c, row["id"], _owner_done(c, row), "bot:builder", "done", seen_version=row["version"])
     with _refused("identity"):
         A.undo(c, said["answer_id"], "bot:reviewer")  # not who answered
@@ -527,7 +524,7 @@ def test_undo_of_one_answer_takes_only_its_words_out_of_the_wake_they_were_folde
 # ----------------------------------------------------------------------------- thumbs
 def test_thumbs_up_goes_on_the_bots_record_and_rating_again_replaces_it(c, general):
     row = X.new_task(c, ANA, "Archive the newsletters", assignee="bot:builder")
-    asked = _bot_ask(c, row["id"], "bot:builder", "ok", ANA, "Archive 14 newsletters?", shows=SHOWS)
+    asked = _bot_ask(c, row["id"], "bot:builder", "ok", ANA, "Archive 14 newsletters?", shows=X.shown(c))
     rid = asked["requirement_id"]
     with _refused("task_requirement"):
         A.thumbs_up(c, row["id"], rid, "bot:reviewer")  # only a person rates
@@ -544,7 +541,7 @@ def test_thumbs_up_goes_on_the_bots_record_and_rating_again_replaces_it(c, gener
 
 def test_thumbs_down_sends_a_bots_ask_back_and_wakes_it_once_with_the_words(c, general):
     row = X.new_task(c, ANA, "Archive the newsletters", assignee="bot:builder")
-    asked = _bot_ask(c, row["id"], "bot:builder", "ok", ANA, "Archive 14 newsletters?", shows=SHOWS)
+    asked = _bot_ask(c, row["id"], "bot:builder", "ok", ANA, "Archive 14 newsletters?", shows=X.shown(c))
     rid = asked["requirement_id"]
     X.settled(c)
     with _refused("task_why"):
@@ -579,11 +576,11 @@ def test_a_thumb_needs_a_bots_ask(c, general):
 def test_thumbs_down_count_is_one_bots_in_the_last_thirty_days(c, general):
     row = X.new_task(c, ANA, "Archive the newsletters", assignee="bot:builder")
     for n in range(3):
-        asked = _bot_ask(c, row["id"], "bot:builder", "ok", ANA, f"Archive batch {n}?", shows=SHOWS)
+        asked = _bot_ask(c, row["id"], "bot:builder", "ok", ANA, f"Archive batch {n}?", shows=X.shown(c))
         A.thumbs_down(c, row["id"], asked["requirement_id"], ANA, "Don't ask")
-    other = _bot_ask(c, row["id"], "bot:reviewer", "ok", ANA, "Archive batch 4?", shows=SHOWS)
+    other = _bot_ask(c, row["id"], "bot:reviewer", "ok", ANA, "Archive batch 4?", shows=X.shown(c))
     A.thumbs_down(c, row["id"], other["requirement_id"], ANA, "Don't ask")
-    liked = _bot_ask(c, row["id"], "bot:builder", "ok", ANA, "Archive batch 5?", shows=SHOWS)
+    liked = _bot_ask(c, row["id"], "bot:builder", "ok", ANA, "Archive batch 5?", shows=X.shown(c))
     A.thumbs_up(c, row["id"], liked["requirement_id"], ANA)
     assert A.thumbs_down_count(c, "bot:builder") == 3  # the third opens the rule sheet (C21)
     assert A.thumbs_down_count(c, "bot:reviewer") == 1
@@ -603,7 +600,7 @@ def test_a_thumb_on_an_ask_shows_in_the_feedback_routes_to_whoever_reads_its_tas
         X.bot(conn, "builder")
         X.pipeline(conn)
         row = X.new_task(conn, ANA, "Archive the newsletters", assignee="bot:builder")
-        rid = _bot_ask(conn, row["id"], "bot:builder", "ok", ANA, "Archive 14 newsletters?", shows=SHOWS)[
+        rid = _bot_ask(conn, row["id"], "bot:builder", "ok", ANA, "Archive 14 newsletters?", shows=X.shown(conn))[
             "requirement_id"
         ]
         rated = A.thumbs_down(conn, row["id"], rid, ANA, "Don't ask", send_back=False)

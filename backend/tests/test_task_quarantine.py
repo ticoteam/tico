@@ -3,6 +3,7 @@
 import pytest
 
 from backend import hubdb as H
+from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import claim, get, headers, post, ready, settled  # noqa: F401 (fixture)
 from backend.tests.helpers.execution_review import job_state
 from backend.tests.helpers.held_runs import botops
@@ -44,7 +45,7 @@ def test_external_asks_fence_their_task(api, external_work):
             "to": "ana",
             "line": "OK to merge the export fix?",
             "kind": "ok",
-            "show": ["https://example.com/export-fix"],
+            "show": X.shown_on(api),
             "version": version,
         }
         return post(api, f"tasks/{row['id']}/asks", body, token, expected=expected)
@@ -1005,7 +1006,8 @@ def _task_mutation(api, token, mutation, n):
 
 
 def _held_notes(api, machine, source, n):
-    from backend import bot_to_bot as B, task_quarantine as Q
+    from backend import bot_to_bot as B
+    from backend import task_quarantine as Q
 
     with api.app.state.store.transaction() as c:
         if source.startswith("chat"):

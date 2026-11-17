@@ -5,10 +5,10 @@ import json
 
 import pytest
 
+from backend import bot_settings as BS
 from backend import hubdb as H
 from backend.tests.helpers import engine as X
 from backend.tests.helpers.tasks_board import api, bot_token, get, headers, post  # noqa: F401
-from backend import bot_settings as BS
 
 
 def _manager(api, kind):
@@ -350,7 +350,7 @@ def test_managing_a_task_never_answers_an_ok_that_names_someone_else(chart):
         ANA,
         "OK to send the packet?",
         kind="ok",
-        shows=["https://example.com/permission-packet"],
+        shows=X.shown(c),
         seen_version=_version(c, task),
     )
     with pytest.raises(H.Refused) as refused:

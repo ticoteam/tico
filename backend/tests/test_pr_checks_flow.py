@@ -3,9 +3,10 @@ task_engine.tell_owner): a wake on the owner bot's turn, a quiet note for its ne
 person first."""
 
 from backend import github as G
+from backend import hubdb as H
 from backend import question_marks
 from backend.repositories import metadata, save_metadata
-from backend import hubdb as H
+from backend.tests.helpers import engine as X
 from backend.tests.helpers.rules import plain_task
 from backend.tests.helpers.wake_rules import jobs, setup
 
@@ -38,7 +39,7 @@ def asked(c, task, person="human:ana", kind="question"):
     if kind == "question":
         question_marks.ask(c, "bot:cpo", task["id"], person, "Which color?")
     else:
-        shows = ["https://example.com/color"]
+        shows = X.shown(c)
         H.task_ask(
             c, "bot:cpo", task["id"], person, "OK the color?", kind=kind, shows=shows, seen_version=task["version"]
         )

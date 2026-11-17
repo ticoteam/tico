@@ -8,12 +8,13 @@ import httpx
 import pytest
 
 from backend import assistant, support
-from backend.tests.helpers.api import as_member, assign, claim, get, headers, post, put, ready, runner  # noqa: F401
-from backend.tests.helpers.support import FakeHQ
-from backend.store import H
 from backend import bot_settings as BS
+from backend.store import H
+from backend.tests.helpers import engine as X
+from backend.tests.helpers.api import as_member, assign, claim, get, headers, post, put, ready, runner  # noqa: F401
 from backend.tests.helpers.assistant import asked, assistant_turn, room, say, turn_message
 from backend.tests.helpers.engine import old_question
+from backend.tests.helpers.support import FakeHQ
 
 
 def jobs(api):
@@ -626,7 +627,7 @@ def test_a_group_of_task_actions_is_one_card_and_one_click(api):
             "human:ben",
             "Spend $500 on ads?",
             kind="ok",
-            shows=["https://example.com/ads-plan"],
+            shows=X.shown(c),
             seen_version=ads["version"],
         )
     r, attempt = assistant_turn(api, "ben-test", "Clear out all my old tasks")
