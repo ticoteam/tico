@@ -18,7 +18,7 @@ or org owner may remove it. Writes require an `Idempotency-Key`.
 `GET /api/v2/tasks/{id}/meetings` returns `{meetings, next_cursor}`, newest meeting first, using its start time
 normalized to UTC (or creation time when no start is recorded). Cursors use the same UTC key.
 Both lists take `limit` (20 by default, at most 50) and `cursor`, cap titles at 200 characters and answers at 64 KB,
-and return no totals. Pending meetings cannot have links. Deleted meetings disappear until restored.
+and return no totals. Pending meetings cannot have links. Deleted meetings disappear for good: there is no restore for a deleted meeting.
 
 The web meeting's **Tasks** section shows linked tasks under pending items. A task's **Meetings** section shows
 its readable meetings and is hidden when empty. Search existing tasks with `GET /api/v2/tasks?q=<title words or #N>`
@@ -30,9 +30,10 @@ The meeting's task rows also follow title and status changes. Link events carry 
 null after unlink). Delivery checks access to both resources for each viewer, so hidden meeting activity sends
 no link event or meeting reference. An ordinary task change carries no hidden link kinds or references.
 
-**Meetings** is where the team's meeting transcripts live. Tico does not record: humans already
-have Granola, Zoom, Google Meet, Otter, Fireflies or Close for that. Tico takes what those tools
-produce, keeps it in one list, and turns it into work. How the pieces fit:
+**Meetings** is where the team's meeting transcripts live. They come from two places: calls held in
+Tico Meet, which Tico records and transcribes itself ([Calls](meet.md)), and the tools the team already
+uses (Granola, Zoom, Google Meet, Otter, Fireflies or Close), whose transcripts Tico imports. Tico
+keeps them in one list and turns them into work. How the pieces fit:
 [How Tico works](how-it-works.md).
 
 A meeting is a title, when it started, who was in it, a transcript (a list of segments: speaker,
@@ -69,7 +70,8 @@ does, and the row shows **Processing** while it works and then what it created. 
 the select-all box) for Share and Dismiss on all of them; they apply only to ticked meetings shown by the current
 search and filters. Hidden meetings are never included, even if previously selected. Bulk sharing
 keeps each meeting's source privacy. Restore in Dismissed
-returns a meeting to Pending. **Settings** controls future imports and, for the owner, the Team default.
+returns a meeting to Pending. Two words sound alike: a dismissed meeting can be restored; a deleted
+meeting is gone for good, with no restore. **Settings** controls future imports and, for the owner, the Team default.
 Human **Add notes** stays live, including a pasted or uploaded transcript; a human API caller
 can also choose `review: "live"`. Computer importers keep using the same payloads: the server
 decides the review state for the person named in `owner_email`.
@@ -636,8 +638,10 @@ def file_meeting(meeting, vtt):
 
 ## Upgrading from Recordings
 
-Tico used to record meetings itself. That is gone: no browser or desktop capture, no live captions,
-no live meeting brain, no processing worker on the Mac, no xAI or Gemini keys on the server. What
+Tico's browser and desktop app used to record meetings themselves. That recording is gone: the browser
+and desktop-app capture, their live captions, the live meeting brain, the processing worker on the Mac
+and the server's xAI and Gemini keys. Tico now records only calls held in Tico Meet ([Calls](meet.md)).
+What
 stays is everything that was ever imported or recorded. An upgrading install keeps all of it:
 
 - The tables are unchanged (`meetings`, `meeting_versions`, `meeting_items`, `meeting_comments`,
