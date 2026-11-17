@@ -11,8 +11,8 @@
 - Separate from a bot's own pause (bots.state 'paused', set by `bot_settings_routes`): resuming the company does not
   lift a bot paused on its own. `read` counts those bots.
 - Separate from the billing pause (`company_billing.paused`): this module never reads or writes it.
-- This record does not yet stop a turn, a queued message or a send. Enforcement is the next ticket; until it lands, a
-  paused company only shows in `GET /api/v2/company/pause`, and bots keep running.
+- While it is on record no new turn starts: the claim refuses every bot (`company_paused`, read through
+  backend/holds.py), queued work waits with a held line on its task, and task cards say the company is paused.
 """
 
 import json

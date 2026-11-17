@@ -1313,10 +1313,12 @@ def _lists(
                 continue  # BotOps is setting it up, and its task starts when the bot is live: no person row
             if wait.line.endswith(task_wakes.RUN_HELD) and _botops_reviews(conn, wait.who):
                 continue  # BotOps has the held run's review task (execution._hand_to_maintainer): no person row
-            if wait.line.endswith(task_wakes.CANT_START):
-                continue  # BotOps has the task to find why its runs can't start (start_holds.file): no person row
-            if task_wakes.cannot_run(conn, wait.who, seen) == task_wakes.CLOUD_STARTING:
-                continue  # its cloud machine is on its way, and its work starts once it is up: no person row
+            if wait.line.endswith(task_wakes.ENDS_BY_ITSELF):
+                # BotOps has the task to find why its runs can't start (start_holds.file), or the hold on its run or
+                # on this task lifts by itself (a claim hold's wait, a quarantine's cooldown): no person row
+                continue
+            if task_wakes.cannot_run(conn, wait.who, seen) in task_wakes.STARTS_BY_ITSELF:
+                continue  # its cloud machine is on its way, or its login's usage limit resets: no person row
             if wait.fix:
                 # A cause of the company's (Connect GitHub): its Owner fixes it, once for every task it holds up.
                 fixer = company_person(conn)
