@@ -28,10 +28,30 @@ UI_MAP = {
 }
 # Browser scripts a UI file runs as well as what the rules pick for it (rule 6): a check whose name does not hold the
 # file's stem. UI_MAP would replace the rest of the file's selection (its smoke set and named scripts); this adds.
+PIPELINE_VIEW = [
+    "board-flood",
+    "pipeline-ask",
+    "pipeline-blocked",
+    "pipeline-cards",
+    "pipeline-drag",
+    "pipeline-drop",
+    "pipeline-move",
+    "pipeline-rail",
+    "pipeline-snoozed",
+    "stage-column-menu",
+    "stage-review",
+    "stage-rules",
+    "tasks-header",
+]
 UI_ALSO = {
     # A 1,000-task board in a flood of live changes: how the board draws, and how live task and Needs you changes reach it.
     "ui/app/tasks-page.js": ["board-flood"],
-    "ui/app/task-pipelines.js": ["board-flood", "pipeline-move", "stage-column-menu"],
+    # The pipeline view's own markup (.pv-*): every script that draws a board, its list or a phone's stage tabs. They name
+    # tasks-page.cts or a pipeline, not this file, so rule 4 alone picked three of them (main went red on stage-review,
+    # Nov 17: the stage ⋯ moved ▶ and a phone's tabs, and no check that measures them ran).
+    "ui/app/task-pipelines.js": PIPELINE_VIEW,
+    "ui/styles/task-pipelines.css": PIPELINE_VIEW,
+    "ui/styles/stage-rules.css": ["stage-rules", "stage-review", "stage-column-menu"],
     # Move to… and picking many on a board (the picker is task-props.ts's).
     "ui/app/task-props.js": ["pipeline-move", "stage-column-menu"],
     # A stage's ⋯ on a board: Move all to…, Close all, Assign all to…, Snooze all….
