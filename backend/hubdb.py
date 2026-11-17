@@ -543,7 +543,7 @@ def wal_mode(conn, wait=30.0):
             conn.execute("PRAGMA journal_mode=WAL")
             return
         except sqlite3.OperationalError as exc:
-            if "locked" not in str(exc) or time.monotonic() > deadline:
+            if "locked" not in str(exc) or time.monotonic() >= deadline:
                 raise
             time.sleep(0.01)
 
