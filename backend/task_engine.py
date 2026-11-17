@@ -1349,7 +1349,9 @@ def refile(
         )
     ts = H.now()
     if row["status"] == "open":
-        stage_effects.undo(conn, row, by, f"{row.get('title') or 'The task that filed it'} moved", sub_tasks=False)
+        # Why a hand-off it filed closes, kept on that task: a private task that filed it is not named (as in `move`).
+        named = not H.task_private(conn, row) and row.get("title")
+        stage_effects.undo(conn, row, by, f"{named or 'The task that filed it'} moved", sub_tasks=False)
     if row.get("visit"):
         _close_visit(conn, row["visit"], MOVED, by, why, ts)
     if row.get("snooze"):

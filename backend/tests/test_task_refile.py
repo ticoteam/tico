@@ -147,6 +147,18 @@ def test_open_asks_end_with_the_old_visit_and_sub_tasks_stay_open(c, boards):
     assert c.execute("SELECT 1 FROM links WHERE to_task_id=?", (sub["id"],)).fetchone(), "the link stays"
 
 
+def test_the_hand_off_the_old_stage_filed_closes_as_after_back_and_a_sub_task_stays(c, boards):
+    X.pipeline(c, "sales", "Sales", ({"name": "Contract", "on_enter": {"file_into": "general"}},))
+    deal = X.new_task(c, ANA, "Acme deal", "sales", assignee=ANA)
+    handoff = c.execute(
+        "SELECT to_task_id FROM links WHERE from_task_id=? AND kind='handoff'", (deal["id"],)
+    ).fetchone()
+    sub = X.new_task(c, ANA, "Call Acme", "general", assignee=ANA, parent=deal["id"])
+    E.refile(c, deal["id"], "backlog", None, ANA, "Not this quarter")
+    assert handoff and E.task(c, handoff[0])["status"] == "closed", "what the stage did on entering is undone"
+    assert E.task(c, sub["id"])["status"] == "open"
+
+
 def test_a_task_made_without_a_prefix_keeps_no_label_after_it_moves(c, boards):
     row = X.new_task(c, ANA, "Untitled", "general", assignee=ANA)
     c.execute("UPDATE tasks SET prefix=NULL WHERE id=?", (row["id"],))  # made before prefixes were kept
