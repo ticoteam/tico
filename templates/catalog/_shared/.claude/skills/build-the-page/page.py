@@ -63,6 +63,21 @@ FIGURE = re.compile(r"<figure\b(?:[^>\"]|\"[^\"]*\")*>(.*?)</figure>", re.S | re
 ATTRS = r"((?:[^>\"]|\"[^\"]*\")*?)"
 SHOT = re.compile(r"<figure\b" + ATTRS + r"\bdata-shot=\"([^\"]+)\"" + ATTRS + r">(.*?)</figure>", re.S | re.I)
 ARROW = re.compile(r"(\d+)\s*:\s*(\d+)\s*,\s*(\d+)\s*->\s*(\d+)\s*,\s*(\d+)")
+STYLE_BLOCK = re.compile(r"<style\b[^>]*>(.*?)</style\s*>", re.S | re.I)
+STYLE_ATTR = re.compile(r"""\sstyle\s*=\s*(?:"([^"]*)"|'([^']*)')""", re.I)
+# A colour or background declaration, and a literal colour in its value (#hex, rgb(), hsl(), a colour name). page.py's own
+# red arrows are fill and stroke, which are not here, so they never count.
+COLOUR_DECL = re.compile(
+    r"(?:^|[^\w-])(?:color|background(?:-color|-image)?|border(?:-(?:top|right|bottom|left))?(?:-color)?|outline-color)"
+    r"\s*:([^;{}]*)",
+    re.I,
+)
+LITERAL_COLOUR = re.compile(
+    r"#[0-9a-f]{3,8}\b|\b(?:rgba?|hsla?)\("
+    r"|(?:^|[^\w-])(?:white|black|gray|grey|silver|red|green|blue|yellow|orange|purple|pink|brown|navy|teal|maroon"
+    r"|olive|lime|aqua|fuchsia|cyan|magenta)\b",
+    re.I,
+)
 CHROMES = (
     "google-chrome",
     "google-chrome-stable",
@@ -157,6 +172,19 @@ def words(fragment):
     return re.findall(r"[\w'’-]+", html.unescape(re.sub(r"<[^>]+>", " ", fragment)))
 
 
+def own_css(text):
+    """The CSS the page carries itself: its <style> blocks and its style= attributes."""
+    return "\n".join(STYLE_BLOCK.findall(text)) + "\n" + "\n".join(a or b for a, b in STYLE_ATTR.findall(text))
+
+
+def own_colours(css):
+    """The literal colours the CSS writes in a colour or background declaration. A token (var(), its fallback included)
+    and a picture's url() are not the page's own colours, so they do not count."""
+    css = re.sub(r"url\((?:\"[^\"]*\"|'[^']*'|[^)\"'])*\)", "", css, flags=re.I)
+    css = re.sub(r"var\([^()]*\)", "", css, flags=re.I)
+    return [m.group(0) for m in COLOUR_DECL.finditer(css) if LITERAL_COLOUR.search(m.group(1))]
+
+
 def problems_in(text, kind):
     out = []
     low = text.lower()
@@ -203,6 +231,11 @@ def problems_in(text, kind):
         out.append("a screen spec shows before and after: at least two screenshots")
     if re.search(r"class=\"[^\"]*\bmock", text, re.I):
         out.append("a drawn mock-up: show the real app instead")
+    css = own_css(text)
+    if own_colours(css) and not re.search(r"prefers-color-scheme", css, re.I):
+        out.append(
+            "colours are light-only: use the template's tokens (var(--ink)...) or add dark values under prefers-color-scheme"
+        )
     if kind == "change-spec":
         behaviour = section(text, "behaviour")
         if behaviour and len(re.findall(r"<pre\b", behaviour, re.I)) < 2:
