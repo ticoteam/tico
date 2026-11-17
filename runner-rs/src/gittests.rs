@@ -3369,7 +3369,7 @@ async fn the_old_templates_state_md_steps_go_in_the_move_and_the_bots_own_lines_
         for line in [
             "If setup has not finished (Tico marks you Needs setup), do this before any other work:",
             "3. Record each answer in `knowledge/` the moment it arrives, dated, and write `knowledge/standards.md`.",
-            "1. Read the task's chat with `tico task show <id>`, with its version and what is missing.",
+            "1. Read the task with `tico task show <id>`, including its conversation, its version and what is missing.",
             "1. Note progress on the task, record durable decisions in `memory/decisions.md`, add any repeated mistake to",
             "Our own rule: the owner keeps a copy of state.md in the wiki.",
         ] {
