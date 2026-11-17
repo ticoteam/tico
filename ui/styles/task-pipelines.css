@@ -10,6 +10,7 @@ button.pv-stage-h{cursor:pointer}
 button.pv-stage-h:hover .pv-stage-name{text-decoration:underline}
 .pv-stage-name{font-weight:600}
 .pv-stage-n{color:var(--muted);font-size:var(--t-sm)}
+.pv-stage-n.full{color:var(--wait-ink);font-weight:600}
 
 /* Columns: one per work stage, side by side, sharing the width (300px to 480px each), scrolling sideways past that. */
 .pv-cols{display:flex;gap:12px;align-items:flex-start;overflow-x:auto;padding:0 2px 12px;min-height:0}

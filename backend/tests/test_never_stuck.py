@@ -11,6 +11,8 @@ import pytest
 from backend import answers as A
 from backend import never_stuck as NS
 from backend import task_engine as E
+from backend import task_match as TM
+from backend import task_reads
 from backend import task_wakes
 from backend import waiting_on as W
 from backend.store import H
@@ -63,6 +65,19 @@ def _settled(c):
     for task_id, bot in rows:
         X.ran(c, task_id, H.bot_actor(bot))
     X.settled(c)
+
+
+def _list_row(c, task_id):
+    """The task's row on the Tasks list, as the list reads it (task_reads.brief)."""
+    return task_reads.brief(c, [dict(E.task(c, task_id))], "1")[0]
+
+
+def _late_filter(c, task_id):
+    """Whether the Tasks page's Late filter finds the task: the SQL it runs (task_match.parse), over the task's row."""
+    m = TM.parse(H.now(), late=True)
+    where = " AND ".join(f"({sql})" for sql, _values in m.sql)
+    args = [value for _sql, values in m.sql for value in values]
+    return c.execute(f"SELECT 1 FROM tasks WHERE id=? AND {where}", [task_id, *args]).fetchone() is not None
 
 
 def _ladder(c, task_id):
@@ -502,6 +517,35 @@ def test_a_persons_task_is_late_only_past_its_due_date_and_nobody_is_chased(c, g
     assert later(days=30) == {}  # once
     assert _visit(c, undated)["late_told_at"] is None  # no due date: never Late
     assert _states(c, mine) == [("person", ANA)]
+
+
+def test_a_late_mark_a_bot_left_does_not_follow_the_task_to_a_person(c, general, later):
+    # A bot's task went Late. A person takes it: the list row, the task's own read and the Late filter stop calling it
+    # Late, since a person's own task is Late by its due date only (late_rule.is_late). The mark stays on the visit.
+    task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
+    X.ran(c, task_id, BUILDER)
+    later(hours=25)
+    assert _list_row(c, task_id)["late"] and _late_filter(c, task_id)
+    E.reassign(c, task_id, ANA, by=ANA)
+    assert _visit(c, task_id)["late_told_at"]
+    row = _list_row(c, task_id)
+    assert row["late"] is None and row["turn"]["who"] == ANA
+    assert H.task_view(c, task_id, ANA)["late"] is None
+    assert not _late_filter(c, task_id)
+
+
+def test_a_bot_late_mark_on_a_persons_task_is_late_once_its_due_date_is_over(c, general, later):
+    # A day with no time is Late from the end of that day, as a person's own task is (late_rule.due_instant).
+    task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
+    X.ran(c, task_id, BUILDER)
+    later(hours=25)
+    E.reassign(c, task_id, ANA, by=ANA)
+    c.execute("UPDATE tasks SET due_at=? WHERE id=?", ("2030-02-06", task_id))
+    later(days=29, hours=13)  # 2030-02-06 23:00: the day is not over
+    assert _list_row(c, task_id)["late"] is None and not _late_filter(c, task_id)
+    later(hours=2)  # 2030-02-07 01:00
+    assert _list_row(c, task_id)["late"]["level"] == "told" and _late_filter(c, task_id)
+    assert H.task_view(c, task_id, ANA)["late"]
 
 
 def test_a_late_look_whose_wake_was_lost_is_written_again_once(c, general, later):

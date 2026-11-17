@@ -15,7 +15,9 @@
 //    "Nothing waits on you in Product" without walking anything (AC-10);
 //  - nothing on the row moves when Needs you arrives 2 s late (AC-6, the header's part);
 //  - the phone search opens over the row with one ✕, which empties it and closes it (AC-11, in a browser);
-//  - Tasks › You shows its count once, in Flow, and the picker reads "You" (AC-13).
+//  - Tasks › You shows its count once, in Flow, and the picker reads "You" (AC-13);
+//  - a long pipeline name is whole on a computer at 1040 px (the picker keeps its width, the search gives way), and cut
+//    with an ellipsis only on a phone (320 px).
 // Run: node scripts/ui-tests.cts tasks-header
 import type {Page} from 'playwright';
 const {chromium} = require('playwright') as typeof import('playwright');
@@ -253,6 +255,26 @@ async function menu(page: Page): Promise<string[]> {
         assert.deepEqual(narrow.errors, []);
         await narrow.page.close();
       } finally { (product as {manager_id: string | null}).manager_id = null; }
+    }
+    {
+      // A long pipeline name is whole on a computer: the picker keeps its natural width and the search gives way. At
+      // 1040 px, with the manager's chat folded to its tab, a picker that shrank with the search read "Growth Monitori…".
+      const name = product.name;
+      (product as {name: string}).name = 'Growth Monitoring';
+      (product as {manager_id: string | null}).manager_id = 'bot:pm';
+      try {
+        const {page, errors} = await open(browser, {viewport: {width: 1040, height: 800}, hash: '#/tasks?pipeline=product&layout=columns'});
+        await page.locator('#task-body .pv').waitFor();
+        await page.locator('body > .pgc-edge:not([hidden]) .pgc-tab').waitFor();
+        assert.deepEqual(await oneRow(page, 56), []);
+        const scope = await page.locator('#task-scope .tl-scope-l').evaluate(el => ({text: el.textContent, cut: el.scrollWidth > el.clientWidth}));
+        assert.deepEqual(scope, {text: 'Growth Monitoring', cut: false}, 'the picker shows its whole name at a computer width');
+        assert.deepEqual(errors, []);
+        await page.close();
+      } finally {
+        (product as {name: string}).name = name;
+        (product as {manager_id: string | null}).manager_id = null;
+      }
     }
     {
       // Tasks › You: the count once, in Flow; the picker reads "You". No List/Columns off a pipeline; New task on the row.

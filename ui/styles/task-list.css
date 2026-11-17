@@ -21,7 +21,7 @@
 /* ---- the header is the shared page header (ui/app/page-head.ts, hook .tl-head): the title, the scope ▾ after it, the
    view tools (a pipeline's List/Columns switch among them), the quiet + for New task, and ⋯. Below: the scope button, the
    icon buttons and the search it holds. */
-.tl-scope{flex:0 1 auto;display:inline-flex;align-items:center;gap:6px;min-width:56px;height:var(--ctl);padding:0 8px 0 10px;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface);color:var(--ink);font:500 var(--t-base)/var(--lh-none) var(--sans);white-space:nowrap;cursor:pointer}
+.tl-scope{flex:0 0 auto;display:inline-flex;align-items:center;gap:6px;min-width:56px;height:var(--ctl);padding:0 8px 0 10px;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface);color:var(--ink);font:500 var(--t-base)/var(--lh-none) var(--sans);white-space:nowrap;cursor:pointer}
 .tl-scope:hover,.tl-scope[aria-expanded=true]{background:var(--surface2)}
 .tl-scope:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 .tl-scope-l{min-width:0;overflow:hidden;text-overflow:ellipsis}
@@ -319,7 +319,7 @@ button.linkish.tl-clear:hover{color:var(--ink)}
   #task-body.has-sel .tl-check-room{display:block;width:18px}
   .tl-chips .tlabel{display:none}
   .tl-bar{overflow-x:auto;scrollbar-width:none;flex-wrap:nowrap}
-  .tl-scope{padding:0 6px 0 8px;gap:4px}
+  .tl-scope{flex:0 1 auto;padding:0 6px 0 8px;gap:4px}
   .tl-who{padding:0 2px 0 4px}
   .tl-bar.more{-webkit-mask-image:linear-gradient(to left,transparent,#000 28px);mask-image:linear-gradient(to left,transparent,#000 28px)}
   .tl-filters{flex-wrap:nowrap;flex:none}

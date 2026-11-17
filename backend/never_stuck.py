@@ -36,10 +36,18 @@ Names and signatures are in docs/dev/pipelines-v3-build.md.
 """
 
 from collections.abc import Callable, Iterable
-from datetime import timedelta, timezone
 from typing import TYPE_CHECKING, Any, cast
 
-from . import batch_work, hubdb_core, merge_order, question_marks, stage_rule_timers, task_depends, task_wakes
+from . import (
+    batch_work,
+    hubdb_core,
+    late_rule,
+    merge_order,
+    question_marks,
+    stage_rule_timers,
+    task_depends,
+    task_wakes,
+)
 from . import task_engine as E
 from . import task_requirements as R
 from . import waiting_on as W
@@ -910,9 +918,7 @@ def _late_by_due(conn: "sqlite3.Connection", row: Row, at: str, done: dict[str, 
     visit = row["visit"]
     if visit.get("late_told_at") or not row.get("due_at"):
         return
-    due, now = H.parse_ts(row["due_at"]), H.parse_ts(at)
-    if due and len(str(row["due_at"])) == 10:
-        due = due.replace(tzinfo=timezone.utc) + timedelta(days=1)  # a due date with no time: Late once the day is over
+    due, now = late_rule.due_instant(row["due_at"]), H.parse_ts(at)
     if not due or not now or now < due:
         return
     conn.execute("UPDATE visits SET late_told_at=? WHERE id=?", (at, visit["id"]))

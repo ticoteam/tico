@@ -119,34 +119,38 @@ function pvPersonCount(state: PvState, stage: PipelineStageRec): number {
   return state.tasks.filter(t => pvShown(state, t).stage_id === stage.id && pvOnPerson(t) && !pvSnoozed(t) && !pvBlocked(t)).length;
 }
 
-/** "Ideas 12", "Spec 2/2": the stage's name and its number of open tasks that are not snoozed, out of its limit when it
- * has one. Against a limit it counts the tasks that hold a slot: one waiting only on a person's OK or answer does not
- * (`pvPersonCount`), nor does a snoozed one (task_engine.has_room). */
-function pvStageCount(state: PvState, stage: PipelineStageRec): string {
-  const here = state.tasks.filter(t => pvShown(state, t).stage_id === stage.id && !pvSnoozed(t));
-  if (!stage.task_limit) return String(here.length);
-  // A blocked task holds no slot either (task_depends): the limit counts the others.
-  const held = here.filter(t => !pvBlocked(t)).length;
-  return `${held - pvPersonCount(state, stage)}/${stage.task_limit}`;
+/** "Ideas 12", "Spec 20": the number of tasks the stage lists, the ones a person sees in its column or on its phone tab
+ * (snoozed and blocked ones included, search and filters applied), so the number is what is below it. */
+function pvStageCount(state: PvState, stage: PipelineStageRec): number {
+  return pvInStage(state, stage.id ?? '').length;
 }
+
+/** The slots a limited stage's tasks hold: awake, not blocked, and not waiting only on a person's OK or answer
+ * (task_engine.has_room; a blocked task holds no slot either, task_depends). */
+function pvSlotsUsed(state: PvState, stage: PipelineStageRec): number {
+  const holding = state.tasks.filter(t => pvShown(state, t).stage_id === stage.id && !pvSnoozed(t) && !pvBlocked(t));
+  return holding.length - holding.filter(pvOnPerson).length;
+}
+
+/** A limited stage with every slot used: the one time its limit is shown, on its number (pvStageCount). */
+const pvStageFull = (state: PvState, stage: PipelineStageRec): boolean => !!stage.task_limit && pvSlotsUsed(state, stage) >= stage.task_limit;
 
 /** S8: a stage's header. It opens the stage's editor (its fields, then its Rules) for whoever may change the pipeline,
  * and is plain text otherwise; the rules mark at the header's right opens the same editor at its Rules, for anyone.
  * Beside a limited stage's number, a person mark and a count keeps the tasks that hold no slot in view. */
 function pvStageHeadHTML(state: PvState, stage: PipelineStageRec): string {
   const tip = pvLimitTip(state, stage);
-  const inner = `<span class="pv-stage-name">${esc(stage.name)}</span><span class="pv-stage-n tnum"${tip ? ` title="${esc(tip)}" aria-label="${esc(tip)}"` : ''}>${esc(pvStageCount(state, stage))}</span>`;
+  const inner = `<span class="pv-stage-name">${esc(stage.name)}</span><span class="pv-stage-n tnum${pvStageFull(state, stage) ? ' full' : ''}"${tip ? ` title="${esc(tip)}" aria-label="${esc(tip)}"` : ''}>${pvStageCount(state, stage)}</span>`;
   return state.rec.may_change
     ? `<button type="button" class="pv-stage-h" data-pv-settings="${esc(stage.id ?? '')}" title="${esc(`Edit ${stage.name}`)}">${inner}</button>`
     : `<span class="pv-stage-h">${inner}</span>`;
 }
 
-/** A limited stage's count, in words: "6 of 20 slots used. 7 more wait on a person and hold no slot." */
+/** A limited stage's slots, in its number's tooltip: "5 of 20 slots used. 15 more wait on a person and hold no slot." */
 function pvLimitTip(state: PvState, stage: PipelineStageRec): string {
   if (!stage.task_limit) return '';
   const person = pvPersonCount(state, stage);
-  const n = state.tasks.filter(t => pvShown(state, t).stage_id === stage.id && !pvSnoozed(t)).length - person;
-  return `${n} of ${stage.task_limit} slots used.` + (person ? ` ${person} more ${person === 1 ? 'waits' : 'wait'} on a person and ${person === 1 ? 'holds' : 'hold'} no slot.` : '');
+  return `${pvSlotsUsed(state, stage)} of ${stage.task_limit} slots used.` + (person ? ` ${person} more ${person === 1 ? 'waits' : 'wait'} on a person and ${person === 1 ? 'holds' : 'hold'} no slot.` : '');
 }
 
 /** Flow n: Flow on the stage, with how many of its items wait on the person; '' when none do. */
@@ -274,7 +278,7 @@ function pvPhoneHTML(state: PvState): string {
     const waits = stage.id ? needsStageCount(stage.id) : 0;
     const label = `${stage.name} ${pvStageCount(state, stage)}${waits ? `, ${waits} ${waits === 1 ? 'waits' : 'wait'} on you` : ''}`;
     return `<button type="button" role="tab" class="pv-tab${on ? ' on' : ''}" data-pv-tab="${esc(stage.id ?? '')}" aria-selected="${on}" aria-label="${esc(label)}">`
-      + `${esc(stage.name)} <span class="tnum">${esc(pvStageCount(state, stage))}</span>${pvTabDotHTML(stage)}</button>`;
+      + `${esc(stage.name)} <span class="tnum${pvStageFull(state, stage) ? ' full' : ''}">${pvStageCount(state, stage)}</span>${pvTabDotHTML(stage)}</button>`;
   }).join('');
   // The column's cards (task #220); an empty stage says so in one line (style guide: empty lists say so in one line).
   const rows = pvStageItemsHTML(state, shown, pvInStage(state, shown), pvCardHTML)

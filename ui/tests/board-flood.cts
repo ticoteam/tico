@@ -123,14 +123,14 @@ function burstOf(): Sent[] {
   return out;
 }
 
-/** Each stage's cards as the page orders them (rank, then oldest first; snoozed last), and its header's number. */
+/** Each stage's cards as the page orders them (rank, then oldest first; snoozed last), and its header's number: the
+ * tasks the stage lists. */
 function expected(): Map<string, {ids: string[]; count: string}> {
   const order = (a: Task, b: Task) => String(a.created_at).localeCompare(String(b.created_at)) || a.id.localeCompare(b.id);
   return new Map(STAGES.map(s => {
     const here = [...OPEN.values()].filter(d => d.stage_id === s.id).sort(order);
     const awake = here.filter(d => !d.snoozed);
-    const limit = LIMIT[s.id];
-    return [s.id, {ids: [...awake, ...here.filter(d => d.snoozed)].map(d => d.id), count: limit ? `${awake.length}/${limit}` : String(awake.length)}];
+    return [s.id, {ids: [...awake, ...here.filter(d => d.snoozed)].map(d => d.id), count: String(here.length)}];
   }));
 }
 

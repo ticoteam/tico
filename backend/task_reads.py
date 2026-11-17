@@ -218,6 +218,9 @@ def brief(c, rows, visible_sql="1"):
     named by neither its title nor its id in a turn's line, as in the task's own read (waiting_on.unnamed). A snoozed
     turn's line is the snooze's why, which may be any length: a row clips it to SNOOZE_LINE_BYTES, and the task's own read
     keeps it whole."""
+    from datetime import datetime, timezone
+
+    from . import late_rule
     from . import waiting_on as W
     from .store import H
 
@@ -226,20 +229,23 @@ def brief(c, rows, visible_sql="1"):
         return rows
     waits = H.task_waits(c, ids)
     marks = json.dumps(ids)
-    late, pushed, entered, stuck = {}, set(), {}, set()
+    marked, pushed, entered, stuck = {}, set(), {}, set()
     for r in c.execute(
-        "SELECT task_id, late_told_at, late_person_at, entered_how, entered_at, level FROM visits "
-        "WHERE left_at IS NULL "
-        "AND task_id IN (SELECT value FROM json_each(?))",
+        "SELECT v.task_id, v.late_told_at, v.late_person_at, v.entered_how, v.entered_at, v.level, s.expected_minutes "
+        "FROM visits v LEFT JOIN stages s ON s.id=v.stage_id "
+        "WHERE v.left_at IS NULL "
+        "AND v.task_id IN (SELECT value FROM json_each(?))",
         (marks,),
     ):
         entered[r[0]] = r[4]
         if r[5] == "person":
             stuck.add(r[0])
         if r[1]:
-            late[r[0]] = {"since": r[1], "level": "person" if r[2] else "told"}
+            # Late is read against the owner who holds the task now (late_rule), not the owner the mark was written for.
+            marked[r[0]] = ({"late_told_at": r[1], "late_person_at": r[2], "entered_at": r[4]}, r[6])
         if r[3] == "pushed_past":
             pushed.add(r[0])
+    now = datetime.now(timezone.utc)
     snoozed = {
         r[0]
         for r in c.execute(
@@ -272,7 +278,8 @@ def brief(c, rows, visible_sql="1"):
             if turn["state"] == W.SNOOZED:
                 turn["line"] = clip_line(turn["line"])
         row["turn"] = turn
-        row["late"] = late.get(row["id"])
+        mark = marked.get(row["id"])
+        row["late"] = late_rule.late_of(row, mark[0], mark[1], now) if mark else None
         if row["id"] in stuck:
             row["stuck"] = True  # only when true: every list row carries the brief, under its payload budget
         # Blocked wins over a snooze: no list says Snoozed for a blocked task (hubdb.tasks' snoozed filter agrees).
