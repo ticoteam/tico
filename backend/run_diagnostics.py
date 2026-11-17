@@ -112,7 +112,7 @@ TAIL_BYTES = 64 * 1024
 TAIL_LINES = 200
 # Defense in depth after the runner's literal/encoded granted-secret redactor.
 SECRET = re.compile(
-    r"(?i)(?:bearer|basic)\s+\S+|\b(?:sk|pk|xai|gsk|ghp|github_pat)[-_][\w-]{6,}|\b[A-Za-z0-9_+=-]{32,}\b|(?i:password|token|api[_ -]?key|secret)\s*[:=]\s*\S+"
+    r"(?i)(?:bearer|basic)\s+\S+|\b(?:sk|pk|xai|gsk|ghp|github_pat|xox[a-z]|xapp)[-_][\w-]{6,}|\b[A-Za-z0-9_+=-]{32,}\b|(?i:password|token|api[_ -]?key|secret)\s*[:=]\s*\S+"
 )
 
 
@@ -121,7 +121,7 @@ FAILED_TEXT = {'item_id': 200, 'tool': 200, 'command': 4000, 'output_tail': 8192
 FAILED_KEPT = 20
 
 
-def scrub(text):
+def scrub(text: object) -> str:
     return SECRET.sub('[redacted]', str(text or ''))
 
 

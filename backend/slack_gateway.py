@@ -76,6 +76,7 @@ from . import org_rule_check as OR
 from . import screening
 from . import slack_app
 from . import slack_channels as SC
+from . import slack_errors as SE
 from . import slack_unfurl as SU
 from .config import Settings, slack_credentials
 from clients import judge as J
@@ -423,7 +424,7 @@ class SlackAPI:
                 try:
                     on_envelope(payload)
                 except Exception as exc:  # a bad event never takes the socket down
-                    LOG.error("Event %s not persisted: %s", request.envelope_id, type(exc).__name__)
+                    LOG.error("Event %s not persisted: %s", request.envelope_id, SE.describe(exc))
                     return  # no ack: Slack redelivers, dedupe absorbs it
                 if early:
                     return
@@ -1816,6 +1817,7 @@ class Gateway:
                 opened_ch = self.slack.conversations_open(slack_id)
                 channel = str(opened_ch.get("id") or "")
             except Exception as exc:
+                # A Slack API error can echo a message, so the class alone is logged.
                 LOG.warning("Could not open a Slack DM with %s: %s", pid, type(exc).__name__)
                 continue
             if not channel:
@@ -2069,7 +2071,7 @@ class Gateway:
                 else:
                     state, error = "failed", exc.code
             except Exception as exc:  # unreachable, unreadable, or anything unexpected
-                state, error = "uncertain", f"{type(exc).__name__}: {exc}"[:300]
+                state, error = "uncertain", SE.describe(exc)
             with self.store.transaction() as c:
                 c.execute(
                     "UPDATE slack_posts SET state=?,slack_ts=?,error=?,next_attempt_at=?,updated_at=? WHERE message_id=?",
@@ -2488,7 +2490,7 @@ class Gateway:
         try:
             self.backfill()
         except Exception as exc:  # the pass still delivers what is stored
-            LOG.error("Backfill failed: %s: %s", type(exc).__name__, exc)
+            LOG.error("Backfill failed: %s", SE.describe(exc))
         return self.digest()
 
     # ------------------------------------------------------------------ the loop
@@ -2500,9 +2502,9 @@ class Gateway:
             try:
                 out.append(self.process(event))
             except Exception as exc:  # one bad event never stops the rest
-                LOG.error("Event %s failed: %s", event["event_id"], type(exc).__name__)
+                LOG.error("Event %s failed: %s", event["event_id"], SE.describe(exc))
                 with self.store.transaction() as c:
-                    self.finish(c, event, "failed", reason=f"{type(exc).__name__}: {exc}")
+                    self.finish(c, event, "failed", reason=SE.describe(exc))
                 out.append({"event_id": event["event_id"], "state": "failed"})
         out.extend(self.offer())
         self.originate()
@@ -2512,7 +2514,7 @@ class Gateway:
         try:
             threads = self.bridge.tick()
         except Exception as exc:  # one bad link never stops the readers
-            LOG.error("Slack thread links failed: %s", type(exc).__name__)
+            LOG.error("Slack thread links failed: %s", SE.describe(exc))
             threads = {"error": type(exc).__name__}
         return {"events": out, "posts": posts, "digests": digests, "threads": threads}
 
@@ -2526,12 +2528,12 @@ class Gateway:
             try:
                 self.tick()
             except Exception as exc:
-                LOG.error("Gateway tick failed: %s", type(exc).__name__)
+                LOG.error("Gateway tick failed: %s", SE.describe(exc))
             if self.heartbeat:
                 try:
                     self.heartbeat()
                 except Exception as exc:
-                    LOG.error("Gateway heartbeat failed: %s", type(exc).__name__)
+                    LOG.error("Gateway heartbeat failed: %s", SE.describe(exc))
             self.wake.wait(TICK_SECONDS)
             self.wake.clear()
 
@@ -2688,6 +2690,7 @@ def main(argv=None, make_slack=None):
         try:
             gateway.slack.connect(lambda payload: gateway.receive(payload))
         except Exception as exc:
+            # A Slack connection error can echo a message, so the class alone is logged.
             LOG.error("Socket Mode did not connect: %s", type(exc).__name__)
             if not wait:
                 return 1
