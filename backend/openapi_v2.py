@@ -2191,6 +2191,7 @@ SCHEMAS = {
                                                 "needs_you": "i",
                                                 "owners": items(obj({"actor": "s", "count": "i", "needs_you": "i"})),
                                                 "more": obj({"owners": "i", "count": "i"}),
+                                                "into": "n",
                                             }
                                         )
                                     ),

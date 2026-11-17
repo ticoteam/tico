@@ -11,6 +11,8 @@ the rest are summed in `more`.
 - `owners`: those grouped by the task's holder (`owner_id`, the `owner` filter of GET /v2/tasks). A task nobody holds,
   or held by a person the reader may not be told about (teammate_access.Known), counts in `count` and is in no group.
 - `needs_you`: of those, the ones in the reader's own Needs you (the asks, tasks and @s a stage's Flow walks).
+- `into`: the pipeline a stage files a linked task into (its `on_enter.file_into`, a handoff), when the reader sees
+  that pipeline here; else null. The Floor joins a pipeline to the one it hands off to only where this is set.
 - `manager_id`: the pipeline's manager, which a factory with no manager of its own is drawn under.
 - `in`, `out`: tasks that entered the pipeline (a first visit, `entered_how='new'`, or an open one moved in from another
   pipeline) and tasks that reached a Done stage (not one moved there already done), in the last 24 hours (`day`) and 7
@@ -101,7 +103,15 @@ def _unknown(c: Any, auth: Any, who: Any, held: dict[str, list[tuple[str | None,
     return set(TA.Known(c, who, auth).unseen_of(sorted(people))) if people else set()
 
 
-def _stage(row: Any, held: list[tuple[str | None, int, int]], unknown: set[str]) -> dict[str, Any]:
+def _into(on_enter: Any, drawn: set[str]) -> str | None:
+    try:
+        target = json.loads(on_enter or "{}").get("file_into")
+    except (ValueError, AttributeError):
+        return None
+    return target if isinstance(target, str) and target in drawn else None
+
+
+def _stage(row: Any, held: list[tuple[str | None, int, int]], unknown: set[str], drawn: set[str]) -> dict[str, Any]:
     named = sorted(((w, n, mine) for w, n, mine in held if w and w not in unknown), key=lambda x: (-x[1], str(x[0])))
     shown, rest = named[:OWNERS_MAX], named[OWNERS_MAX:]
     return {
@@ -111,6 +121,7 @@ def _stage(row: Any, held: list[tuple[str | None, int, int]], unknown: set[str])
         "needs_you": sum(mine for _, _, mine in held),
         "owners": [{"actor": who, "count": n, "needs_you": mine} for who, n, mine in shown],
         "more": {"owners": len(rest), "count": sum(n for _, n, _ in rest)},
+        "into": _into(row[3], drawn),
     }
 
 
@@ -135,7 +146,7 @@ def floor(c: Any, auth: Any, who: Any) -> dict[str, Any]:
     ]
     stages: dict[str, list[Any]] = {}
     for r in c.execute(
-        "SELECT id, pipeline_id, name FROM stages WHERE retired_at IS NULL AND kind='work' ORDER BY pipeline_id, position"
+        "SELECT id, pipeline_id, name, on_enter FROM stages WHERE retired_at IS NULL AND kind='work' ORDER BY pipeline_id, position"
     ):
         stages.setdefault(r[1], []).append(r)
     held = _holders(c, visible_sql, _needs_task_ids(c, auth, who))
@@ -150,6 +161,7 @@ def floor(c: Any, auth: Any, who: Any) -> dict[str, Any]:
         shown.append(p)
         other_reads = other_reads or p[2] is None and reads_some
     rates = _rates(c, [p[0] for p in shown], visible_sql)
+    seen = {str(p[0]) for p in shown}
     for p in shown:
         (other if p[2] is None else by_factory[p[2]])["pipelines"].append(
             {
@@ -157,7 +169,7 @@ def floor(c: Any, auth: Any, who: Any) -> dict[str, Any]:
                 "name": p[1],
                 "manager_id": p[4],
                 **rates[p[0]],
-                "stages": [_stage(s, held.get(s[0], []), unknown) for s in stages.get(p[0], [])],
+                "stages": [_stage(s, held.get(s[0], []), unknown, seen) for s in stages.get(p[0], [])],
             }
         )
     halls = [f for f in factories if f["pipelines"] or f["manager_id"] == me]
