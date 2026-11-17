@@ -1,4 +1,4 @@
-"""The three `runner` module paths still in use, forwarded to runner_support/.
+"""The two `runner` entry points still in use, forwarded to runner_support/.
 
 - `python -m runner ...` (runner/__main__.py): the launchd plists and systemd units that scripts/tico-computer and
   runner_support/systemd_units.py write, which run `run`, `connectors`, `close-calls` and `importers`.
