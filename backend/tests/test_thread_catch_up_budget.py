@@ -215,15 +215,15 @@ def test_statements_stay_flat_as_threads_grow(api, path):
 
 
 def test_each_batch_of_roots_costs_a_fixed_number_of_statements(api):
-    """AC-9, batches: roots whose new messages are all hidden make the walk read on, 100 roots a batch. Each batch
-    costs the same fixed number of statements, however many of its roots hold messages to check."""
+    """AC-9, batches (as amended 2026-11-17): roots whose new messages are all hidden make the walk read on, 100 roots
+    a batch. Each extra batch adds at most 10 statements, however many of its roots hold messages to check."""
     seed(api, [1], title="Shown")
     seed(api, [1] * 99, title="H", hidden=1)  # 100 roots: one batch
     one = _statements(api, "badge")
     seed(api, [1] * 200, title="M", hidden=1)  # 300 roots: three batches
     three = _statements(api, "badge")
     print(f"walk: 1 batch {one}, 3 batches {three} statements")
-    assert (three - one) / 2 <= 20, (one, three)
+    assert (three - one) / 2 <= 10, (one, three)
 
 
 @pytest.mark.slow
