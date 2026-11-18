@@ -1181,6 +1181,9 @@ class Store:
 
                 c.provenance_start = provenance_clock.current(c)
                 yield c
+                from . import threads
+
+                threads.restamp_dirty(c)
                 message_links.refresh_dirty(c)
                 H.owed_sync(c)
                 c.commit()

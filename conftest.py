@@ -226,6 +226,25 @@ def no_cached_calendar_reads():
     connectors.forget_live()
 
 
+@pytest.fixture(autouse=True)
+def plain_messages_read_as_their_thread(request):
+    """Across the privacy suite (a test module named *privacy*, and the task-thread plain rule's own): after each test
+    with an `api` or `company` store, every plain message in a task's own thread answers the per-message check, for
+    every human and bot, as its task does (backend/tests/helpers/plain_property.py). The import stays in the body."""
+    name = request.module.__name__.rsplit(".", 1)[-1]
+    holder = next((f for f in ("api", "company") if f in request.fixturenames), None)
+    if holder is None or not ("privacy" in name or name == "test_task_thread_plain"):
+        yield
+        return
+    value = request.getfixturevalue(holder)
+    yield
+    from backend.tests.helpers.plain_property import mismatches
+
+    store = value.app.state.store if holder == "api" else value
+    found = mismatches(store)
+    assert not found, f"plain task-thread messages read unlike their task: {found[:5]}"
+
+
 def pytest_runtest_logreport(report):
     """Under xdist the workers' teardown reports reach the controller here, so the check's cost is summed over them."""
     if report.when == "teardown":
