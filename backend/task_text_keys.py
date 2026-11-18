@@ -6,8 +6,9 @@ before anything is stored, from any client, person or bot:
 
 - Typed in Tico (web, CLI, MCP, API): the request guard (backend/app.py) calls `refusal` on the buffered body of every
   task write route (`TASK_WRITES`) and of a message write into a task's conversation, with files (multipart: its text
-  fields) or without, before any route runs. A name in front of a value counts only when the value looks generated
-  (`generated`), so `max_tokens: 4096` is ordinary text. A key
+  fields) or without, before any route runs. A name in front of a value does not count when every piece
+  of the value reads as ordinary (`ordinary`) or it is an id of this team's (`known_id`), so `max_tokens: 4096` and
+  `token: <a task's id>` are ordinary text. A key
   is refused with 422 `looks_like_key` and one line a bot can act on; the value is never repeated and the task is left
   unchanged at the same version, a hand-off (done with a note, an answer) included. The server keeps no request body
   in its logs (uvicorn's access log is off), and this runs before any route reads one.
@@ -29,6 +30,7 @@ from . import secret_drop
 
 if TYPE_CHECKING:
     import sqlite3
+    from collections.abc import Callable
 
 ACTION = "secret_drop.task_text"
 CODE = "looks_like_key"
@@ -50,30 +52,62 @@ TASK_ID = re.compile(r"/api/v2/tasks/([^/]+)")
 
 
 # Rules that find a value by the word in front of it (`max_tokens: 4096`, `auth: OAuth2`, `hotkey: Ctrl-K`), not by its
-# own shape. Task text is full of such pairs, so there the value must also look generated, unless the word names a
-# password, which can be any string. `env` (an UPPER_CASE= line) keeps the detector's own test.
+# own shape. Task text is full of such pairs, so there a value whose every piece reads as ordinary (a word, a number,
+# a name with a version, short hex) is not a key. A password word, and `env` (an UPPER_CASE= line), keep the detector's
+# own test: a password can be any string.
 NAMED = ("key_value", "context_space", "bearer")
-RANDOM = re.compile(r"(?=[A-Za-z]*[0-9])(?=[0-9]*[A-Za-z])[A-Za-z0-9]{8,}|(?=[^0-9]*[0-9])[0-9a-fA-F-]{32,}")
+PIECES = re.compile(r"[-_./:@+,]+")
+# A word up to 15 letters, a number, a word with a short number (OAuth2, v2, build2026), or 3 characters. A longer
+# run of letters is no word (a letters-only key). Short hex is a piece of a name (sha1-30c1714c9), never the whole
+# value: `token=a1b2c3d4` is a key.
+PLAIN = re.compile(r"[A-Za-z]{1,15}|[0-9]+|[A-Za-z]{1,15}[0-9]{1,4}|.{1,3}")
+SHORT_HEX = re.compile(r"[0-9a-fA-F]{1,12}")
+# Tico's own ids, which notes name all the time. A file id has its own shape; a UUID can be a key too (a Heroku key
+# is one), so it is ordinary only when it names a task, a chat, a message, a bot, a person or a run here (`known`).
+FILE_ID = re.compile(r"file-[0-9a-f]{24}")
+UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 
 
-def generated(value: str) -> bool:
-    """A value that reads as made by a machine: 8+ letters and digits run together, a UUID or long hex, or the suspect
-    tier's own test (long, mixed characters). Words, numbers and dotted or dashed names (`--dur-fast`, `tasks:list:v2`)
-    are not."""
-    return bool(RANDOM.fullmatch(value)) or secret_drop._suspect(value)  # pyright: ignore[reportPrivateUsage]
+def ordinary(value: str) -> bool:
+    """Whether a value found by the word in front of it reads as everyday text, not a key (see PLAIN)."""
+    if FILE_ID.fullmatch(value):
+        return True
+    if UUID.fullmatch(value):
+        return False
+    pieces = [p for p in PIECES.split(value) if p]
+    return bool(pieces) and all(PLAIN.fullmatch(p) or (len(pieces) > 1 and SHORT_HEX.fullmatch(p)) for p in pieces)
 
 
-def _kept(item: dict[str, Any]) -> bool:
+def known_id(c: "sqlite3.Connection", value: str) -> bool:
+    """Whether a UUID is the id of something in this team, so a note naming it is not handing out a key."""
+    row = c.execute(
+        "SELECT 1 FROM tasks WHERE id=? OR conversation_id=? UNION ALL SELECT 1 FROM conversations WHERE id=? "
+        "UNION ALL SELECT 1 FROM messages WHERE id=? UNION ALL SELECT 1 FROM bots WHERE id=? "
+        "UNION ALL SELECT 1 FROM humans WHERE id=? UNION ALL SELECT 1 FROM attempts WHERE id=? LIMIT 1",
+        (value,) * 7,
+    ).fetchone()
+    return row is not None
+
+
+def _kept(item: dict[str, Any], known: "Callable[[str], bool] | None") -> bool:
     if item["tier"] != "certain":
         return False
     if item["rule"] not in NAMED or item.get("type") == "password":
         return True
-    return generated(str(item.get("value") or ""))
+    value = str(item.get("value") or "")
+    if known and UUID.fullmatch(value) and known(value):
+        return False
+    return not ordinary(value)
 
 
-def found(text: str) -> list[dict[str, Any]]:
-    """The certain-tier keys in `text`: rule, start and end (offsets in the normalized text). Never the value."""
-    return [{"rule": i["rule"], "start": i["start"], "end": i["end"]} for i in secret_drop.scan(text or "") if _kept(i)]
+def found(text: str, known: "Callable[[str], bool] | None" = None) -> list[dict[str, Any]]:
+    """The certain-tier keys in `text`: rule, start and end (offsets in the normalized text). Never the value.
+    `known` says whether a UUID names something here (`known_id`)."""
+    return [
+        {"rule": i["rule"], "start": i["start"], "end": i["end"]}
+        for i in secret_drop.scan(text or "")
+        if _kept(i, known)
+    ]
 
 
 def _strings(value: Any, path: str = "") -> list[tuple[str, str]]:
@@ -124,7 +158,7 @@ def _form_fields(raw: bytes, content_type: str) -> dict[str, list[str]]:
     return fields
 
 
-def keys_in(raw: bytes, content_type: str = "") -> list[tuple[str, str]]:
+def keys_in(raw: bytes, content_type: str = "", known: "Callable[[str], bool] | None" = None) -> list[tuple[str, str]]:
     """(field, rule) for each certain-tier key in a JSON body or a multipart form's text fields. A body that is
     neither is checked as one text."""
     body: Any
@@ -137,7 +171,7 @@ def keys_in(raw: bytes, content_type: str = "") -> list[tuple[str, str]]:
             body = raw.decode("utf-8", "replace") if raw else None
     hits: list[tuple[str, str]] = []
     for field, text in _strings(body):
-        hits.extend((field, f["rule"]) for f in found(text))
+        hits.extend((field, f["rule"]) for f in found(text, known))
     return hits
 
 
@@ -199,14 +233,17 @@ def refusal(store: Any, author: str, method: str, path: str, raw: bytes, content
         task = target(c, kind, path)
         if task is None:
             return  # a message outside a task's conversation: the Tools chat's own backstop covers its case
+        hits = keys_in(raw, content_type, lambda value: known_id(c, value))  # a task's own id after `token:`
+        if not hits:
+            return
         audit(c, author, task, [rule for _, rule in hits], "refused")
     raise Problem(CODE, REFUSED, 422, extra={"fields": sorted({field for field, _ in hits if field})})
 
 
-def masked(text: str) -> tuple[str, list[str]]:
+def masked(text: str, known: "Callable[[str], bool] | None" = None) -> tuple[str, list[str]]:
     """`text` with each certain-tier key replaced by MARK, and the rules that matched. The text is normalized first
     (the detector's offsets are in the normalized text) only when a key is found."""
-    hits = found(text)
+    hits = found(text, known)
     if not hits:
         return text, []
     flat = secret_drop.normalize(text)
@@ -228,7 +265,7 @@ def mask_outside(c: "sqlite3.Connection", thread: dict[str, Any] | None, author:
     task = task_of_thread(c, str(thread.get("id") or ""))
     if task is None:
         return text
-    out, rules = masked(text)
+    out, rules = masked(text, lambda value: known_id(c, value))
     if rules:
         audit(c, author, task, rules, "masked")
     return out
