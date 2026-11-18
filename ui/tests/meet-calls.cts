@@ -491,6 +491,20 @@ let browser: import('playwright').Browser | null = null;
       assert.deepEqual(seen.starts.at(-1), body);
       await room.close();
     }
+    let memberLookups = 0;
+    await page.route(url => url.pathname === '/api/v2/threads/t-pair/members', route => {
+      if (new URL(route.request().url()).searchParams.get('limit') === '3') memberLookups++;
+      return route.fulfill({status: 500, json: {error: 'Members unavailable'}});
+    });
+    await page.goto('https://tico-ui.test/#/thread/t-pair');
+    const opened = context.waitForEvent('page');
+    await start.click();
+    const room = await opened;
+    await room.waitForURL(url => url.hash === '#/call/ct?join=1');
+    assert.equal(memberLookups, 2);
+    assert.deepEqual(seen.starts.at(-1), {provider: 'auto'});
+    await page.getByText('Could not check for a bot. Tap its face to add it.').waitFor();
+    await room.close();
     assert.deepEqual(seen.errors, []);
     await context.close();
   }

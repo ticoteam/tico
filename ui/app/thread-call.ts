@@ -91,11 +91,13 @@ interface CallStartTiming {
   id?: string;
   timer?: number;
   reported?: boolean;
+  membersUnavailable?: true;
 }
 const CALL_START_KEY = 'tico.call-start';
 const CALL_START_MAX_AGE = 600_000;
 const CALL_START_MARKS: CallStartMark[] = ['click', 'created', 'window-opened', 'boot-done', 'token', 'connected', 'mic-published', 'first-remote'];
-type CallStartHandoff = [id: string, click: number, created: number, opened: number];
+type CallStartHandoff = [id: string, click: number, created: number, opened: number, membersUnavailable?: true];
+const CALL_MEMBERS_WARNING = 'Could not check for a bot. Tap its face to add it.';
 
 function callStartMark(timing: CallStartTiming | undefined, mark: CallStartMark): void {
   if (!timing || timing.marks[mark] !== undefined) return;
@@ -109,8 +111,8 @@ function callStartTiming(): CallStartTiming {
   callStartMark(timing, 'click');
   return timing;
 }
-// The browser's new tab and the desktop webview have their own clocks. Share only recent timing data, using their
-// common time origin conversion. Reading a handoff consumes it so a reload cannot reuse it.
+// The browser's new tab and the desktop webview have their own clocks. Use their common time origin conversion.
+// Reading a handoff consumes it so a reload cannot reuse its timing or replay the warning.
 function callStartHandoffs(): CallStartHandoff[] {
   const rows = JSON.parse(localStorage.getItem(CALL_START_KEY) || '[]') as CallStartHandoff[];
   const now = performance.timeOrigin + performance.now();
@@ -124,7 +126,9 @@ function callStartSend(id: string, timing: CallStartTiming): void {
   if (click === undefined || created === undefined || opened === undefined) return;
   try {
     const rows = callStartHandoffs().filter(([key]) => key !== id);
-    localStorage.setItem(CALL_START_KEY, JSON.stringify([...rows.slice(-7), [id, click, created, opened]]));
+    const row: CallStartHandoff = [id, click, created, opened];
+    if (timing.membersUnavailable) row.push(true);
+    localStorage.setItem(CALL_START_KEY, JSON.stringify([...rows.slice(-7), row]));
   } catch { /* storage is optional for timing */ }
 }
 function callStartTake(id: string): CallStartTiming | undefined {
@@ -133,8 +137,8 @@ function callStartTake(id: string): CallStartTiming | undefined {
     const row = rows.find(([key]) => key === id);
     if (!row) return undefined;
     localStorage.setItem(CALL_START_KEY, JSON.stringify(rows.filter(([key]) => key !== id)));
-    const [, click, created, opened] = row;
-    return {id, marks: {click, created, 'window-opened': opened}};
+    const [, click, created, opened, membersUnavailable] = row;
+    return {id, marks: {click, created, 'window-opened': opened}, ...(membersUnavailable === true ? {membersUnavailable} : {})};
   } catch { return undefined; }
 }
 function callStartReport(timing: CallStartTiming | undefined): void {
@@ -352,14 +356,22 @@ async function callAction(view: ThvView, kind: string | undefined, from?: HTMLEl
     let call: CallRecord | null | undefined = info.call;
     if (starting) {
       if (memberThread && !view.memberList) {
-        const members = await get<{members?: {actor: string}[]; next_cursor?: string | null}>(thvPath(id) + '/members?limit=3').catch(() => null);
+        const path = thvPath(id) + '/members?limit=3';
+        type Members = {members?: {actor: string}[]; next_cursor?: string | null};
+        const members = await get<Members>(path)
+          .catch(() => gen === CALL_GEN ? get<Members>(path, {fresh: true}) : null)
+          .catch(() => null);
         if (gen !== CALL_GEN) return;
         bot = callMemberBot(members?.members, !!members?.next_cursor);
+        if (!members && timing) timing.membersUnavailable = true;
       }
       const made: CallRecord | null = await post(`/v2/threads/${encodeURIComponent(id)}/calls`,
         bot ? {provider: 'tico', bots: [bot]} : {provider: kind === 'meet' ? 'google_meet' : 'auto'});
       call = made?.call || made;
       if (call?.id) callStartMark(timing, 'created');
+      if (call?.id && gen === CALL_GEN && timing?.membersUnavailable) {
+        toast(call.provider === 'google_meet' ? 'Could not check for a bot before starting the call.' : CALL_MEMBERS_WARNING, true);
+      }
       if (call?.provider === 'google_meet') {
         CALL_THREADS.set(id, {...CALL_THREADS.get(id), call});
         const opened = tab; tab = null;

@@ -134,6 +134,7 @@ function pageCallWindow(id: string): void {
   callWindowDraw();
   const timing = join ? callStartTake(id) : undefined;
   callStartMark(timing, 'boot-done');
+  if (timing?.membersUnavailable) cwToast(CALL_MEMBERS_WARNING, true);
   void cwLoad(st, timing);
 }
 // Leaving the page: the view and what it follows go. The call goes on (its bar shows) until it is left.
@@ -575,9 +576,8 @@ liveOn('reset', () => { if (CW) cwBriefSoon(CW); });
 function cwBarDraw(st: CwState, v: CallRecord | null): void {
   const bar = st.el.querySelector<HTMLElement>('.cw-bar'); if (!bar) return;
   const here = cwHere(st);
-  if (v?.state !== 'live') { patchHTML(bar, ''); return; }
-  if (!here?.connected) {
-    if (st.joining) { patchHTML(bar, ''); return; }
+  if (!here) {
+    if (v?.state !== 'live' || st.joining) { patchHTML(bar, ''); return; }
     patchHTML(bar, `<span class="spacer"></span><button type="button" class="primary cw-join" data-cw="join">Join</button>`);
     return;
   }
@@ -586,8 +586,11 @@ function cwBarDraw(st: CwState, v: CallRecord | null): void {
   // Share: Stop while this person shows something, else the menu (Screen, Show a Tico file).
   const showing = here.sharing || callStageMine(here);
   const [shareIcon, shareLabel] = callShareable() ? [CW_ICONS.share, 'Share'] : [CW_ICONS.file, 'Show a Tico file'];
-  patchHTML(bar, `${btn('mute', here.muted ? CW_ICONS.muted : CW_ICONS.mic, here.muted ? 'Unmute' : 'Mute', here.muted, here.micPending ? ' disabled' : '')}${
-    showing ? btn('stop', CW_ICONS.stop, 'Stop sharing', true) : btn('share', shareIcon, shareLabel, false, ` aria-haspopup="dialog" aria-expanded="${!!st.pop}"`)}
+  const share = showing ? btn('stop', CW_ICONS.stop, 'Stop sharing', true)
+    : btn('share', shareIcon, shareLabel, false, ` aria-haspopup="dialog" aria-expanded="${!!st.pop}"`);
+  const mic = !here.connected ? btn('mute', CW_ICONS.muted, 'Connecting microphone', false, ' disabled')
+    : btn('mute', here.muted ? CW_ICONS.muted : CW_ICONS.mic, here.muted ? 'Unmute' : 'Mute', here.muted, here.micPending ? ' disabled' : '');
+  patchHTML(bar, `${mic}${here.connected ? share : ''}
     <span class="spacer"></span><button type="button" class="cw-leave" data-cw-ctl="leave"${here.leaving ? ' disabled' : ''}>Leave</button>`);
 }
 // The wide layout while someone else's screen shows. The desktop app's window grows to fit it and goes back after
@@ -670,10 +673,10 @@ function cwFull(st: CwState): void {
   else video?.webkitEnterFullscreen?.();
 }
 async function cwControl(st: CwState, k: string, button: HTMLElement): Promise<void> {
-  const here = cwHere(st); if (!here) return;
+  const here = cwHere(st); if (!here || here.leaving) return;
   if (k === 'leave') {
     // Whoever started the call may also end it for everyone.
-    if (here.connector && here.connector === myActor()) {
+    if (here.connected && here.connector && here.connector === myActor()) {
       thvMenuShow(button, [['leave', 'Leave'], ['end', 'End for everyone']], pick => {
         void (async () => { await callBarAct(pick, button); if (pick === 'leave' && !CALL) cwClose(st); })();
       });

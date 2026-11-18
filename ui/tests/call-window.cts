@@ -103,7 +103,7 @@ async function open(browser: import('playwright').Browser, {phone = false, big =
     };
     if (startup && location.hash === '#/call/c1?join=1') {
       const now = performance.timeOrigin;
-      localStorage.setItem('tico.call-start', JSON.stringify([['c1', now - 100, now - 50, now]]));
+      localStorage.setItem('tico.call-start', JSON.stringify([['c1', now - 100, now - 50, now, true]]));
     }
   }, startup);
   await page.route('**/*', async route => {
@@ -253,6 +253,10 @@ let browser: import('playwright').Browser | null = null;
     await page.waitForFunction(() => !!window.__finishConnect && !!window.__finishMic);
     assert.equal(seen.joins, 1);
     assert.equal(seen.callReads, 0, 'the new window uses the authorized view in the join reply');
+    await page.getByText('Could not check for a bot. Tap its face to add it.').waitFor();
+    await page.getByRole('button', {name: 'Leave', exact: true}).waitFor();
+    assert.equal(await page.getByRole('button', {name: 'Leave', exact: true}).isEnabled(), true);
+    assert.equal(await page.getByRole('button', {name: 'Connecting microphone'}).isDisabled(), true);
     await page.evaluate(() => window.__finishConnect?.());
     await page.locator('.cw-live-dot').waitFor();
     assert.equal(await page.locator('[data-cw-ctl="mute"]').isDisabled(), true);

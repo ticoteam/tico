@@ -41,7 +41,8 @@ const BOOT_ROSTER_WAIT_MS = 10000;
   // Try again, rather than a page that waits for ever.
   const late = new Promise<never>((_, fail) => setTimeout(() => fail(Object.assign(new Error('Tico took too long to answer.'),
     {timedOut: true})), BOOT_ROSTER_WAIT_MS));
-  const roster = Promise.race([Promise.all([employees, humans]), late]);
+  // Bound the wait for boot, while letting a call window use the roster whenever it arrives.
+  const roster = Promise.all([employees, humans]);
   if (openingCall) void roster.catch(() => {});
   bootSnapShow(meRead);              // the last screen, as soon as /me says it is this person's (boot-snap.js)
   if (!openingCall) { updPrefetch(); dashPrefetch(); }
