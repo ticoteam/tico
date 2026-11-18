@@ -120,14 +120,24 @@ def cache_writes(usage):
     return int(value) if isinstance(value, int | float) and _count(value) else 0
 
 
+def cache_write_split(usage):
+    """(5-minute, 1-hour) of `cache_writes(usage)`, from Anthropic's `cache_creation.ephemeral_1h_input_tokens`; a call
+    that does not say is an API-key call, whose writes are 5-minute unless asked otherwise."""
+    writes = cache_writes(usage)
+    split = usage.get("cache_creation") if isinstance(usage, dict) else None
+    hour = split.get("ephemeral_1h_input_tokens") if isinstance(split, dict) else None
+    hour = min(int(hour), writes) if _count(hour) else 0
+    return writes - hour, hour
+
+
 def _list_cost(model, fresh, cached, out, usage):
-    """The list-price USD of one call to a priced `model`, or None when it has no price. A model in
-    `providers.PER_REQUEST_LONG_TIER` is one request: its prompt is the uncached input, the cache writes and the cache
-    reads, and it pays the long tier when over the limit."""
-    if providers.per_request_long_tier(model):
-        prompt = fresh + cache_writes(usage)
-        return providers.estimate_cost(model, prompt, cached, out, [(prompt, cached, out)])
-    return providers.estimate_cost(model, fresh, cached, out)
+    """The list-price USD of one call to a priced `model`, or None when it has no price. Cache writes are input, plus
+    Anthropic's write premium on a Claude model (providers.CACHE_WRITE). A model in `providers.PER_REQUEST_LONG_TIER` is
+    one request: its prompt is the uncached input, the cache writes and the cache reads, and it pays the long tier when
+    over the limit."""
+    prompt, split = fresh + cache_writes(usage), cache_write_split(usage)
+    requests = [(prompt, cached, out)] if providers.per_request_long_tier(model) else None
+    return providers.estimate(model, prompt, cached, out, requests, cache_writes=split)[0]
 
 
 # The dearest list price in `providers.PRICES` (USD per 1M input, output tokens): what a call to a model with no known

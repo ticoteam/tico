@@ -563,6 +563,8 @@ struct Usage {
     /// The part of `cache_write` written with the 1-hour TTL (`cache_creation.ephemeral_1h_input_tokens`); None until a
     /// result reports the split (an older Claude Code reports none), so the server guesses it.
     cache_write_1h: Option<i64>,
+    /// A result wrote to the cache without saying for how long: the turn's split is unknown and is not reported.
+    cache_write_unsplit: bool,
     cost: Option<f64>,
     texts: Vec<String>,
     /// Each model request this turn, the bot's and its subagents', in the order Claude made them ([`request_usage`]);
@@ -584,11 +586,14 @@ impl Usage {
         self.input += input;
         self.output += output;
         self.cached += count(usage, "cache_read_input_tokens");
-        self.cache_write += count(usage, "cache_creation_input_tokens");
+        let writes = count(usage, "cache_creation_input_tokens");
+        self.cache_write += writes;
         let split = &usage["cache_creation"];
-        if split.is_object() {
+        if !split["ephemeral_1h_input_tokens"].is_null() {
             self.cache_write_1h =
                 Some(self.cache_write_1h.unwrap_or(0) + count(split, "ephemeral_1h_input_tokens"));
+        } else if writes > 0 {
+            self.cache_write_unsplit = true;
         }
     }
 
@@ -630,7 +635,7 @@ impl Usage {
                     .collect::<Vec<_>>()
             }
         });
-        if let Some(hour) = self.cache_write_1h {
+        if let Some(hour) = self.cache_write_1h.filter(|_| !self.cache_write_unsplit) {
             tokens["usage"]["cache_write_1h"] = json!(hour);
         }
         tokens

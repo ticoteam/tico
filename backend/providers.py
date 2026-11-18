@@ -689,17 +689,18 @@ def estimate(model, input_tokens, cached_tokens, output_tokens, requests=None, c
     LONG_PROMPT rate each of `requests` ((input, cached, output) per model request, as the runner counted
     them) pays its own tier. Tokens no request accounts for pay the lower rate, and the estimate may be low.
     `cache_writes` is (5-minute, 1-hour) cache-write tokens already counted in `input_tokens`: on a Claude model
-    (prices_cache_writes) each pays the rest of its CACHE_WRITE multiple at the standard input rate (a Claude Haiku 5.5
-    request over its long-prompt limit writes at its higher rate, so there the premium reads a little low)."""
+    (prices_cache_writes) each pays the rest of its CACHE_WRITE multiple at the standard input rate. Which request wrote
+    them is not known, so on a model with a LONG_PROMPT rate a run with a request over the limit may be low."""
     price = price_of(model)
     if not price:
         return None, False
-    premium = 0.0
-    if cache_writes and prices_cache_writes(model):
-        five, hour = (int(n or 0) for n in cache_writes)
-        premium = (five * (CACHE_WRITE["5m"] - 1) + hour * (CACHE_WRITE["1h"] - 1)) * price[0] / 1_000_000
     cost, low = _estimate(model, price, input_tokens, cached_tokens, output_tokens, requests)
-    return cost + premium, low
+    five, hour = (int(n or 0) for n in cache_writes or (0, 0))
+    if (five or hour) and prices_cache_writes(model):
+        cost += (five * (CACHE_WRITE["5m"] - 1) + hour * (CACHE_WRITE["1h"] - 1)) * price[0] / 1_000_000
+        long = LONG_PROMPT.get(str(model or "").strip().lower())
+        low = low or bool(long and any(int(r[0] or 0) + int(r[1] or 0) > long[0] for r in requests or ()))
+    return cost, low
 
 
 def _estimate(model, price, input_tokens, cached_tokens, output_tokens, requests):

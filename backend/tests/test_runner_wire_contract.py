@@ -440,7 +440,8 @@ def test_one_hour_cache_writes_are_an_optional_field_a_new_runner_sends_only_whe
     for key in gated:
         del ungated["wire"]["gated"][key]
     assert any(
-        p.startswith("new runner, old server: complete.request.usage") for p in W.breaks(ungated, W.load(kept()[0]))
+        p.startswith("new runner, old server") and "complete.request.usage" in p
+        for p in W.breaks(ungated, W.load(kept()[0]))
     )
     computer, attempt = turn(api)
     features = api.get("/api/v2/runners/desired", headers=headers(computer["token"])).json()["features"]

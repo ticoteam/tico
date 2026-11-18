@@ -404,6 +404,34 @@ def test_without_a_split_a_claude_plan_sign_in_is_read_as_one_hour_writes(api, b
     assert turn(api, attempt["id"])["est_cost_usd"] == pytest.approx(AS_INPUT + 30_000 * 4.0 * (rate - 1) / 1e6)
 
 
+def test_a_claude_plan_run_that_names_no_runtime_is_read_as_five_minute_writes(api):
+    """The fallback trusts only the runtime the runner named, not the model's catalog runtime: Cursor on a Claude model
+    is not Claude Code."""
+    r, _, attempt = setup_attempt(api)
+    part = {"model": "claude-opus-5-5", "harness": "cursor-agent", "billing": "subscription", **TURN}
+    complete(api, r, attempt, {**part, "segments": [part]})
+    assert turn(api, attempt["id"])["est_cost_usd"] == pytest.approx(AS_INPUT + 30_000 * 4.0 * 0.25 / 1e6)
+
+
+def test_haiku_writes_in_a_run_with_a_long_prompt_say_the_estimate_may_be_low():
+    """The write premium is at the standard rate; which request wrote is not known, so a long one makes it may-be-low."""
+    short, long = [1_000, 50_000, 800], [5_000, 115_000, 2_000]
+    assert providers.estimate("claude-haiku-5-5", 6_000, 165_000, 2_800, [short], cache_writes=(0, 900))[1] is False
+    assert providers.estimate("claude-haiku-5-5", 6_000, 165_000, 2_800, [short, long], cache_writes=(0, 900))[1]
+    assert providers.estimate("claude-haiku-5-5", 6_000, 165_000, 2_800, [short, long])[1] is False
+
+
+def test_a_claude_judge_calls_cache_writes_are_priced_by_their_ttl():
+    from backend import judge
+
+    usage = {"input_tokens": 100, "cache_creation_input_tokens": 30_000, "output_tokens": 0}
+    hourly = {**usage, "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 30_000}}
+    assert judge._list_cost("claude-opus-5-5", 100, 0, 0, usage) == pytest.approx((100 + 30_000 * 1.25) * 4.0 / 1e6)
+    assert judge._list_cost("claude-opus-5-5", 100, 0, 0, hourly) == pytest.approx((100 + 30_000 * 2) * 4.0 / 1e6)
+    # gpt-6.1-terra (one request, long tier) keeps pricing writes as input.
+    assert judge._list_cost("gpt-6.1-terra", 100, 0, 0, hourly) == pytest.approx(30_100 * 1.25 / 1e6)
+
+
 def test_a_split_larger_than_the_writes_is_capped_at_them(api):
     r, _, attempt = setup_attempt(api)
     complete(api, r, attempt, opus(**TURN, cache_write_1h_tokens=90_000, billing="api"))

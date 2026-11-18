@@ -5842,15 +5842,16 @@ class Execution:
         return "usage_limited" if body.limited else "usage_unreported"
 
     @staticmethod
-    def cache_write_split(item, runtime):
+    def cache_write_split(item):
         """(5-minute, 1-hour) cache-write tokens of one usage part, for pricing (providers.CACHE_WRITE). A runner that
         reads the harness's split sends `cache_write_1h_tokens`. Without it (an older runner, or a harness that does
         not report one) the run's sign-in decides: Claude Code on a Claude plan writes 1-hour entries, so a `claude`
-        runtime billed `subscription` counts every write as 1-hour; anything else (an API key) as 5-minute."""
+        runtime billed `subscription` counts every write as 1-hour; anything else (an API key, another harness, a
+        runtime the runner did not name) as 5-minute."""
         writes = item.cache_write_tokens or 0
         hour = item.cache_write_1h_tokens
         if hour is None:
-            hour = writes if runtime == "claude" and item.billing == "subscription" else 0
+            hour = writes if item.runtime == "claude" and item.billing == "subscription" else 0
         hour = min(hour, writes)
         return writes - hour, hour
 
@@ -5876,7 +5877,7 @@ class Execution:
                 item.cached_tokens,
                 item.output_tokens,
                 item.requests,
-                cache_writes=self.cache_write_split(item, runtime or catalog.get("runtime")),
+                cache_writes=self.cache_write_split(item),
             )
             return {
                 "input_tokens": item.input_tokens,

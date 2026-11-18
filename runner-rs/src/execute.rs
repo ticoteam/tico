@@ -135,6 +135,8 @@ pub(crate) struct Meter {
     /// The part of `cache_write` written with the 1-hour TTL, when a host reports the split (Claude); None from one
     /// that does not, so the server guesses it from the sign-in.
     cache_write_1h: Option<i64>,
+    /// An event wrote to the cache without a split: the segment's split is unknown and is not reported.
+    cache_write_unsplit: bool,
     output: i64,
     model: String,
     requests: Option<Vec<Value>>,
@@ -165,6 +167,8 @@ impl Meter {
             if !u["cache_write_1h"].is_null() {
                 self.cache_write_1h =
                     Some(self.cache_write_1h.unwrap_or(0) + count(&u["cache_write_1h"]));
+            } else if count(&u["cache_write"]) > 0 {
+                self.cache_write_unsplit = true;
             }
             self.output += count(&u["output"]);
             if let Some(more) = u["requests"].as_array() {
@@ -216,7 +220,7 @@ impl Meter {
         );
         m.insert("cached_tokens".into(), json!(cached));
         m.insert("cache_write_tokens".into(), json!(cache_write));
-        if let Some(hour) = self.cache_write_1h {
+        if let Some(hour) = self.cache_write_1h.filter(|_| !self.cache_write_unsplit) {
             m.insert("cache_write_1h_tokens".into(), json!(hour.min(cache_write)));
         }
         m.insert("output_tokens".into(), json!(self.output));
@@ -8472,18 +8476,13 @@ for line in sys.stdin:
     #[test]
     fn meter_reports_one_hour_cache_writes_only_to_a_server_that_takes_them() {
         let mut m = Meter::default();
-        m.add(&json!({"usage": {"input": 100, "cached": 0, "cache_write": 60, "output": 3}}));
-        let r = m.report("m", "claude", "subscription").unwrap();
-        assert!(
-            r.get("cache_write_1h_tokens").is_none(),
-            "no split reported: {r:?}"
-        );
         m.add(&json!({"usage": {"input": 100, "cached": 0, "cache_write": 40, "cache_write_1h": 40, "output": 2}}));
         m.add(&json!({"usage": {"input": 10, "cached": 0, "cache_write": 5, "cache_write_1h": "5", "output": 1}}));
+        m.add(&json!({"usage": {"input": 10, "cached": 0, "cache_write": 0, "output": 1}}));
         let r = m.report("m", "claude", "subscription").unwrap();
         assert_eq!(
             (&r["cache_write_tokens"], &r["cache_write_1h_tokens"]),
-            (&json!(105), &json!(45))
+            (&json!(45), &json!(45))
         );
         let server = |takes: &'static [&'static str]| move |name: &str| takes.contains(&name);
         let current = served(
@@ -8504,9 +8503,14 @@ for line in sys.stdin:
         )
         .unwrap();
         assert!(older.get("cache_write_1h_tokens").is_none(), "{older:?}");
-        assert_eq!(older["cache_write_tokens"], json!(105));
+        assert_eq!(older["cache_write_tokens"], json!(45));
         let oldest = served(&m, "m", "claude", "subscription", server(&[])).unwrap();
         assert!(oldest.get("cache_write_1h_tokens").is_none(), "{oldest:?}");
+        // Writes with no split make the whole segment's split unknown: the server guesses it.
+        m.add(&json!({"usage": {"input": 100, "cached": 0, "cache_write": 60, "output": 3}}));
+        let r = m.report("m", "claude", "subscription").unwrap();
+        assert!(r.get("cache_write_1h_tokens").is_none(), "{r:?}");
+        assert_eq!(r["cache_write_tokens"], json!(105));
     }
 
     #[test]
