@@ -9,7 +9,8 @@
    PUT …/accounts/<aid>/access/<subject> {on} (a person, bot or group; answers the account's access, which the rows
    repaint from); GET /api/v2/website-tools/groups (groups' member counts, for the who picker, ui/app/who-picker.ts); GET …/accounts/<aid>/code (Show code); POST /api/v2/credentials/<aid>/reveal
    (Reveal password, people only, logged). Add tool › Website (toolsWebsiteCreate) is POST /api/v2/website-tools, then
-   the account, then its grants. Open browser is the live view (ui/app/browser-view.ts).
+   the account, then its grants. Open browser is the live view (ui/app/browser-view.ts), for whoever may open it
+   (`can_open`); while a bot's account needs the caller, the Needs you pill and the account's dot open it too.
    Passwords and 2FA keys are write-only: a form never shows a stored one, and a blank field on Replace login keeps it.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
@@ -22,7 +23,7 @@ interface TwGroup {id: string; name?: string; members?: number; actors?: string[
 interface TwSession {state?: string; where?: string | null; computer?: string | null; by?: TwWho | null}
 interface TwAccount {
   id: string; kind: string; username?: string | null; has_password?: boolean; has_totp?: boolean; all_bots?: boolean; holder?: TwWho | null; access?: TwWho[];
-  session?: TwSession | null; can_use?: boolean; can_manage?: boolean; can_remove?: boolean;
+  session?: TwSession | null; can_use?: boolean; can_manage?: boolean; can_open?: boolean; can_remove?: boolean;
 }
 interface TwHost {runner_id: string; label: string; online: boolean}
 interface TwRow {id?: string; at?: string | null; who?: TwWho | null; verb: string; page?: string | null; account?: string; where?: string; result?: string}
@@ -51,8 +52,14 @@ const twName = (w: TwWho | null | undefined) => w ? w.name || w.id : '';
 // An account's line: a shared login's username (the tool's name when it has none); an own one's holder.
 const twAcctName = (a: TwAccount) => a.kind === 'own' ? twName(a.holder) || a.username || '' : a.username || TW?.data?.tool.name || '';
 const twMine = (a: TwAccount) => a.kind === 'own' && a.holder?.subject === 'human:' + (S.me?.id || '');
-// The account a person's Open browser uses: their own, else a shared one they can use.
-const twOpenable = (d: TwData | null): TwAccount | undefined => (d?.accounts || []).filter(a => a.can_use).sort((a, b) => Number(twMine(b)) - Number(twMine(a)))[0];
+// Whether the caller may open the account's live view (the browser routes' own rule, `can_open`): one who uses it, or
+// manages it or the bot that holds it (an older server sends only can_use).
+const twCanOpen = (a: TwAccount) => !!(a.can_open ?? a.can_use);
+// An account whose bot asked for a person ("needs you") that the caller may open: a tap opens its live view.
+const twAsking = (a: TwAccount) => a.session?.state === 'needs_you' && twCanOpen(a);
+// The account a person's Open browser uses: one that needs them, else their own, else one they use, else one they manage.
+const twRank = (a: TwAccount) => (twAsking(a) ? 8 : 0) + (twMine(a) ? 4 : 0) + (a.can_use ? 2 : 0);
+const twOpenable = (d: TwData | null): TwAccount | undefined => (d?.accounts || []).filter(twCanOpen).sort((a, b) => twRank(b) - twRank(a))[0];
 
 // ----------------------------------------------------------------- the page
 async function pageToolWebsite(id: string, tab?: string): Promise<void> {
@@ -88,7 +95,7 @@ async function twRedraw(state: TwState): Promise<void> {
 function twDrawHead(): void {
   const state = TW, root = twRoot();
   if (!state?.data || !root) return;
-  const {tool, status, can_manage: manage} = state.data, base = '#/tools/website/' + encodeURIComponent(state.id);
+  const {tool, can_manage: manage} = state.data, base = '#/tools/website/' + encodeURIComponent(state.id);
   const crumb = root.querySelector('[data-tw-crumb]');
   if (crumb) crumb.textContent = tool.name;
   const head = root.querySelector('[data-tw-head]');
@@ -96,10 +103,16 @@ function twDrawHead(): void {
   const site = (tool.sites || [])[0] || '';
   head.innerHTML = `<header class="tt-title"><span class="tt-tile lg" aria-hidden="true"><span class="nav-icon">travel_explore</span></span>
       <div class="tt-title-text"><h1>${esc(tool.name)}${state.data.private ? TOOLS_PRIVATE : ''}</h1>${site && site !== tool.name ? `<p class="muted mono">${esc(site)}</p>` : ''}</div>
-      <div class="tt-title-act">${twPill(status)}${twOpenable(state.data) ? '<button type="button" class="ghost small" data-tw-open>Open browser</button>' : ''}${
+      <div class="tt-title-act">${twHeadPill(state.data)}${twOpenable(state.data) ? '<button type="button" class="ghost small" data-tw-open>Open browser</button>' : ''}${
         manage ? `<button type="button" class="ghost small tw-more" data-tw-tool-menu aria-haspopup="menu" aria-expanded="false" aria-label="More" title="More"><span class="nav-icon" aria-hidden="true">more_horiz</span></button>` : ''}</div></header>
     <nav class="tt-tabs" aria-label="${esc(tool.name)}">${[['overview', base, 'Overview'], ['activity', base + '/activity', 'Activity']].map(([k, href, label]) =>
       `<a href="${href}" data-tw-tab="${k}"${state.tab === k ? ' class="ph-tab cur" aria-current="page"' : ' class="ph-tab"'}>${label}</a>`).join('')}</nav>`;
+}
+
+// The status pill; while an account the caller may open needs them it is a button that opens that account's live view.
+function twHeadPill(d: TwData): string {
+  const asking = d.status?.label === 'Needs you' ? (d.accounts || []).find(twAsking) : undefined;
+  return asking ? `<button type="button" class="tw-ask" data-tw-open="${esc(asking.id)}" aria-label="Needs you: open browser" title="Open browser">${twPill(d.status)}</button>` : twPill(d.status);
 }
 
 // ----------------------------------------------------------------- Overview
@@ -120,7 +133,8 @@ function twAccountsCard(d: TwData): string {
       <span class="pill tw-kind${a.kind === 'own' ? '' : ' in-progress'}">${a.kind === 'own' ? 'Own' : 'Shared'}</span>
       <span class="tw-acct-name">${a.kind === 'own' ? twFace(a.holder) : ''}<span class="tw-acct-text">${esc(twAcctName(a))}</span>${
         a.has_totp ? '<span class="nav-icon tw-2fa" data-tw-2fa role="img" aria-label="2FA" title="2FA">lock</span>' : ''}${
-        said ? `<span class="tw-ses" data-state="${esc(st)}" role="img" aria-label="${esc(said + by)}" title="${esc(said + by)}"></span>` : ''}</span>
+        said ? twAsking(a) ? `<button type="button" class="tw-ses" data-state="${esc(st)}" data-tw-open="${esc(a.id)}" aria-label="${esc(said + ': open browser')}" title="${esc(said + ' · Open browser')}"></button>`
+          : `<span class="tw-ses" data-state="${esc(st)}" role="img" aria-label="${esc(said + by)}" title="${esc(said + by)}"></span>` : ''}</span>
       <span class="tw-acct-who">${right}</span>
       <button type="button" class="ghost tw-more" data-tw-acct-menu="${esc(a.id)}" aria-haspopup="menu" aria-expanded="false" aria-label="More for ${esc(twAcctName(a))}" title="More"><span class="nav-icon" aria-hidden="true">more_horiz</span></button></div>`;
   }).join('');
@@ -244,7 +258,7 @@ function twToolMenu(state: TwState, anchor: HTMLElement): void {
 function twAcctMenu(state: TwState, a: TwAccount, anchor: HTMLElement): void {
   const items: [string, string, boolean?][] = [];
   if (a.has_totp && (a.can_use || a.can_manage)) items.push(['code', 'Show code']);
-  if (a.can_use) items.push(['open', 'Open browser']);
+  if (twCanOpen(a)) items.push(['open', 'Open browser']);
   if (a.can_manage) {
     items.push(['replace', 'Replace login']);
     if (a.kind === 'shared') items.push(['access', 'Who can use it']);
@@ -281,7 +295,11 @@ async function twClick(ev: Event): Promise<void> {
     if (a) twAcctMenu(state, a, b);
     return;
   }
-  if (b.hasAttribute('data-tw-open')) { const a = twOpenable(state.data); if (a) twOpenBrowser(state, a); return; }
+  if (b.hasAttribute('data-tw-open')) {
+    const a = b.dataset.twOpen ? (state.data.accounts || []).find(x => x.id === b.dataset.twOpen) : twOpenable(state.data);
+    if (a) twOpenBrowser(state, a);
+    return;
+  }
   if (b.hasAttribute('data-tw-acct-add')) return twAccountDialog(state);
   if (b.hasAttribute('data-tw-sites')) return twSitesDialog(state);
   if (b.dataset.twSee && b.getAttribute('aria-pressed') !== 'true') {
@@ -307,8 +325,9 @@ async function twChange(ev: Event): Promise<void> {
   catch (e) { box.checked = !box.checked; toast(errorMessage(e, ''), true); }
   finally { if (box.isConnected) box.disabled = false; }
 }
+// Done answers the bot's ❓ when Needs you holds one for this account (needs-you.ts), then the page reads again.
 function twOpenBrowser(state: TwState, a: TwAccount): void {
-  browserView.open({toolId: state.id, accountId: a.id, title: state.data?.tool.name || ''});
+  needsBrowserOpen(state.id, a.id, state.data?.tool.name || '', () => { if (TW === state) void twRedraw(state).catch(() => {}); });
 }
 async function twRemove(state: TwState, a: TwAccount): Promise<void> {
   if (!await settingsConfirm({title: `Remove ${twAcctName(a) || 'this account'}?`, text: 'Bots and people stop signing in with it.', ok: 'Remove'})) return;

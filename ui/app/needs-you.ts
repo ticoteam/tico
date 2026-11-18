@@ -29,6 +29,24 @@ async function needsReadAll(): Promise<void> {
   }
 }
 
+/** The `browser:<tool>/<account>` a bot's "needs you" ❓ shows (backend/browser_commands.py), '' for any other item. */
+const needsBrowserRef = (it: NeedsEntry): string =>
+  it.kind === 'question' ? (it.ask?.shows || it.shows || []).find(r => r.startsWith('browser:') && r.includes('/')) || '' : '';
+/** The held ❓ that asks the person to sign in on this account's browser, if Needs you holds it. */
+const needsBrowserAsk = (toolId: string, accountId: string): NeedsEntry | undefined =>
+  needsHeld().find(it => needsBrowserRef(it) === `browser:${toolId}/${accountId}`);
+/** The live view of a ❓'s browser outside Flow (Tools, Tasks › You): its Done replies "Done" in the ❓'s chat, which
+    clears it and wakes the bot, as Flow's Done does (decide.ts decideBrowserMount). Without an ask Done only closes. */
+function needsBrowserOpen(toolId: string, accountId: string, title: string, after?: () => unknown): void {
+  const it = needsBrowserAsk(toolId, accountId), room = it ? it.root_id || it.conversation_id || '' : '';
+  browserView.open({toolId, accountId, title: it?.line || title, onDone: async () => {
+    const r = room ? await post(thvPath(room) + '/messages', {text: 'Done'}) as {held?: RuleHold | null} | undefined : undefined;
+    if (r?.held) throw new Error(decideHeldSaid(r.held));
+    await after?.();
+    return true;
+  }});
+}
+
 // Finishing a bot's request is one tap: no prompt. What the person typed in the box they are looking at (the task
 // window's comment box) goes with Done as the outcome; otherwise nothing extra is sent. Closing never takes one.
 function taskOutcomeNote(task: {owner_id?: string | null | undefined; requester_id?: string | null | undefined} | null | undefined, action: {close?: boolean | undefined}, typed: string | null | undefined) {

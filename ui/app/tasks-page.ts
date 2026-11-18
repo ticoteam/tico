@@ -648,13 +648,15 @@ function needsTitle(it: NeedsEntry): string {
 function needsAsk(it: NeedsEntry): string {
   return needsGroup(it) === 'answer' && needsTitle(it) !== it.line ? it.line : '';
 }
-/** One row of You: its task's title (needsTitle), an Answer row's question under it. */
+/** One row of You: its task's title (needsTitle), an Answer row's question under it. A bot's ❓ to sign in on a
+    website carries Open browser, its live view without going through Flow. */
 function needsRowHTML(it: NeedsEntry): string {
-  const ask = it.ask;
+  const ask = it.ask, browser = needsBrowserRef(it);
   const who = it.kind === 'mention' || it.kind === 'question' ? it.from_id || '' : ask?.asked_by || it.task?.owner_id || (it.bots?.[0] ? 'bot:' + it.bots[0] : '');
   const tip = it.kind !== 'task' && needsTitle(it) !== it.line && !needsAsk(it) ? ` title="${esc(it.line)}"` : '';
   return `<div class="tk-row" data-need="${esc(it.id)}" role="button" tabindex="0"${tip}>`
     + `<span class="tk-two"><span class="tk-title">${esc(needsTitle(it))}</span>${needsAsk(it) ? `<span class="tk-ask">${esc(needsAsk(it))}</span>` : ''}</span>${it.task ? lateTagHTML(it.task) : ''}`
+    + (browser ? `<button type="button" class="ghost small" data-need-browser="${esc(it.id)}">Open browser</button>` : '')
     + `<span class="tk-who">${who ? actorFace(who, 16) : ''}</span><span class="tk-age">${esc(ageShort(it.since))}</span></div>`;
 }
 /** Needs you by stage: a chip per stage with items for the person, in the pipelines' order, then Other; each opens that
@@ -719,6 +721,13 @@ async function tasksBodyClick(state: TasksPageState, ev: MouseEvent) {
   if (el?.closest('[data-reload]')) { state.failed = ''; state.loading = true; tasksRender(state); void tasksLoad(state); return; }
   const chip = el?.closest<HTMLElement>('[data-need-stage]');
   if (chip) { void decideStageOpen(chip.dataset.needStage || ''); return; }
+  const browse = el?.closest<HTMLElement>('[data-need-browser]');
+  const asking = browse ? state.needs.find(n => n.id === browse.dataset.needBrowser) : null;
+  if (asking) {
+    const [toolId = '', accountId = ''] = needsBrowserRef(asking).slice(8).split('/');
+    needsBrowserOpen(toolId, accountId, needsTitle(asking));
+    return;
+  }
   const row = el?.closest<HTMLElement>('[data-need]');
   const it = row ? state.needs.find(n => n.id === row.dataset.need) : null;
   if (it) { decideOpen(it.id); return; }
