@@ -1807,8 +1807,9 @@ function decideTabsPaint(st: DecState, it: NeedsEntry, host: HTMLElement) {
   else if (!active) DEC_TAB = 'chat';
   if (bar.dataset.tabs !== said) {
     bar.dataset.tabs = said;
+    const place = docTabsPlace(bar, b => b.dataset.dcTab);
     bar.querySelector('.doc-tabs')?.remove();
-    bar.insertAdjacentHTML('beforeend', docTabsHTML(tabs, DEC_TAB, k => `data-dc="tab" data-dc-tab="${esc(k)}"`));
+    bar.insertAdjacentHTML('beforeend', docTabsHTML(tabs, DEC_TAB, k => `data-dc="tab" data-dc-tab="${esc(k)}"`, 'Show', place));
     const row = bar.querySelector<HTMLElement>('.doc-tabs');
     if (row) docTabsKeys(row, b => decideTabShow(it, b.dataset.dcTab || 'chat'));
   }

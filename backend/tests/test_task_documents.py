@@ -58,8 +58,12 @@ def test_documents_list_newest_change_first(api):
     write(api, tid, "Spec", SPEC)
     write(api, tid, "QA report", "<h1>QA</h1><p>All rows match.</p>")
     assert [d["name"] for d in documents(api, tid)] == ["QA report", "Spec"]
+    created = {d["name"]: d["created"] for d in documents(api, tid)}
+    assert created["Spec"] <= created["QA report"]
     write(api, tid, "Spec", SPEC + "<p>Dates are UTC.</p>")
     assert [(d["name"], d["version"]) for d in documents(api, tid)] == [("Spec", 2), ("QA report", 1)]
+    # A new version keeps when the document first appeared: the order its tabs keep (ui/app/task-docs.ts docTabs).
+    assert {d["name"]: d["created"] for d in documents(api, tid)} == created
 
 
 def test_fixed_names_keep_their_spelling_and_a_bot_may_name_its_own(api, monkeypatch):

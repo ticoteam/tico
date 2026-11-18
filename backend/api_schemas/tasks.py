@@ -574,7 +574,7 @@ SCHEMAS.update(
 SCHEMAS["Task"]["properties"]["tags"] = items(ref("Tag"))
 
 # A task's documents (backend/task_documents.py), on GET /api/v2/tasks/{id} only: newest change first, each version
-# readable at /api/v2/files/{file_id}?v=<n>. Written with POST /api/v2/tasks/{id}/files and `document`.
+# readable at /api/v2/files/{file_id}?v=<n>; `created` is when the document first appeared, the order its tabs keep. Written with POST /api/v2/tasks/{id}/files and `document`.
 SCHEMAS["TaskDocument"] = obj(
     {
         "name": {
@@ -591,9 +591,10 @@ SCHEMAS["TaskDocument"] = obj(
         "version": "i",
         "by": "s",
         "at": "s",
+        "created": "s",
         "versions": items(obj({"n": "i", "by": "s", "at": "s", "note": "n"})),
     },
-    required=["name", "file_id", "version", "by", "at", "versions"],
+    required=["name", "file_id", "version", "by", "at", "created", "versions"],
 )
 
 SCHEMAS["Task"]["properties"]["documents"] = items(ref("TaskDocument"))
