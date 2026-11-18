@@ -203,12 +203,28 @@ pub async fn heal_checkout(path: &Path, env: &Env) -> String {
 
 /// heal_checkout for the runner's readiness check. The fetch (up to 120 s) runs without the bot's checkout lock, so
 /// a turn is never queued behind it. Then the lock is taken, and the conditions are rechecked against the fetched
-/// upstream before anything is merged. A busy checkout is skipped.
+/// upstream before anything is merged. A busy checkout is skipped. The readiness check calls heal_or_replace.
+#[cfg(test)]
 pub async fn heal_free_checkout(
     lanes: &crate::sessions::Lanes,
     bot: &str,
     path: &Path,
     env: &Env,
+) -> String {
+    heal_or_replace(lanes, bot, path, env, "", None).await
+}
+
+/// heal_free_checkout, then, when the fast-forward cannot bring the file back (no upstream, local commits, a
+/// refused merge, an upstream branch without it), replace_checkout from `repository` (`url` overrides GitHub's
+/// address, for tests). No replacement when GitHub cannot be fetched (a clone would fail the same way) or when
+/// `repository` is empty. "" when the checkout has its instructions file afterwards, else why it has not.
+pub async fn heal_or_replace(
+    lanes: &crate::sessions::Lanes,
+    bot: &str,
+    path: &Path,
+    env: &Env,
+    repository: &str,
+    url: Option<&str>,
 ) -> String {
     if crate::instructions::present(&path) {
         return String::new();
@@ -218,14 +234,120 @@ pub async fn heal_free_checkout(
     if lanes.try_checkout(bot).is_none() {
         return busy();
     }
-    let env = crate::safegit::environment(env);
-    if let Err(why) = fetch_origin(path, &env).await {
+    let safe = crate::safegit::environment(env);
+    if let Err(why) = fetch_origin(path, &safe).await {
         return why;
     }
     let Some(_checkout) = lanes.try_checkout(bot) else {
         return busy();
     };
-    finish_heal(path, &env).await
+    let why = finish_heal(path, &safe).await;
+    if why.is_empty() || repository.is_empty() {
+        return why;
+    }
+    match replace_checkout(path, repository, env, url).await {
+        Ok(aside) => {
+            log(&format!(
+                "Tico runner: {bot}'s checkout at {} could not fast-forward ({why}); cloned {repository} again and kept the old copy at {}",
+                path.display(),
+                aside.display()
+            ));
+            String::new()
+        }
+        Err(more) => format!("{why}; {more}"),
+    }
+}
+
+/// A checkout with no instructions file that cannot fast-forward: clone `repository` fresh beside it, and only when
+/// that clone has the file, rename the old checkout aside (`<name>.set-aside-<unix seconds>`, nothing in it is
+/// deleted) and put the clone in its place. A checkout with live task worktrees is never replaced: a task turn only
+/// reuses a worktree of the bot's current checkout (sessions::ensure), so their branches and unpushed work would
+/// be cut off from the task. The set-aside folder, or why the checkout was left as it is.
+pub async fn replace_checkout(
+    path: &Path,
+    repository: &str,
+    env: &Env,
+    url: Option<&str>,
+) -> Result<std::path::PathBuf, String> {
+    if path
+        .symlink_metadata()
+        .map_or(true, |m| m.file_type().is_symlink() || !m.is_dir())
+    {
+        return Err("it is not a plain folder, so it is not replaced".into());
+    }
+    let linked = linked_worktrees(path);
+    if !linked.is_empty() {
+        let list: Vec<String> = linked.iter().map(|p| p.display().to_string()).collect();
+        return Err(format!(
+            "it has task worktrees ({}), so it is not replaced: finish or remove those tasks' worktrees first",
+            list.join(", ")
+        ));
+    }
+    let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+        return Err("it has no parent folder to clone beside".into());
+    };
+    let name = name.to_string_lossy();
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let fresh = parent.join(format!(".{name}.fresh-{stamp}"));
+    let mut aside = parent.join(format!("{name}.set-aside-{stamp}"));
+    let mut n = 1;
+    while aside.symlink_metadata().is_ok() {
+        aside = parent.join(format!("{name}.set-aside-{stamp}-{n}"));
+        n += 1;
+    }
+    if fresh.symlink_metadata().is_ok() {
+        return Err(format!(
+            "{} is in the way of a fresh clone; left as it is",
+            fresh.display()
+        ));
+    }
+    match clone_repository(&fresh, repository, env, url).await {
+        ("cloned", _) => {}
+        (_, detail) => {
+            discard_partial(&fresh, true);
+            return Err(format!("a fresh clone of {repository} failed: {detail}"));
+        }
+    }
+    if !crate::instructions::present(&fresh) {
+        discard_partial(&fresh, true);
+        return Err(format!(
+            "a fresh clone of {repository} has no AGENTS.md either"
+        ));
+    }
+    if let Err(e) = std::fs::rename(path, &aside) {
+        discard_partial(&fresh, true);
+        return Err(format!("could not set the old checkout aside: {e}"));
+    }
+    if let Err(e) = std::fs::rename(&fresh, path) {
+        let _ = std::fs::rename(&aside, path);
+        discard_partial(&fresh, true);
+        return Err(format!("could not put the fresh clone in place: {e}"));
+    }
+    Ok(aside)
+}
+
+/// The folders of `checkout`'s linked worktrees that still exist (`.git/worktrees/<name>/gitdir` names each one's
+/// `.git` file). A registration whose folder is gone holds no work and does not count.
+fn linked_worktrees(checkout: &Path) -> Vec<std::path::PathBuf> {
+    let Ok(entries) = std::fs::read_dir(checkout.join(".git").join("worktrees")) else {
+        return Vec::new();
+    };
+    let mut out: Vec<std::path::PathBuf> = entries
+        .flatten()
+        .filter_map(|e| {
+            // An absolute gitdir wins in join; a relative one (worktree.useRelativePaths) is from the admin folder.
+            let admin = e.path();
+            std::fs::read_to_string(admin.join("gitdir"))
+                .ok()
+                .map(|g| admin.join(g.trim()))
+        })
+        .filter(|g| g.symlink_metadata().is_ok())
+        .map(|g| g.parent().map_or(g.clone(), Path::to_path_buf))
+        .collect();
+    out.sort();
+    out
 }
 
 /// The heal's fetch, run outside the repository's command gate (gitrun::fetch_ungated_as_bot) for the reason given there.
@@ -385,8 +507,10 @@ impl Runner {
             discard_partial(path, true); // an older runner's clone of the still-empty repository
         }
         let mut problem = if path.join(".git").exists() {
+            // A personal copy of a shared bot is cloned from its original's address: it only fast-forwards.
+            let source = if personal { "" } else { repository.as_str() };
             let healed = match self.github_access(bot, entry).await {
-                Ok(env) => heal_free_checkout(&self.lanes, bot, path, &env).await,
+                Ok(env) => heal_or_replace(&self.lanes, bot, path, &env, source, None).await,
                 Err(why) => why,
             };
             if healed.is_empty() {
