@@ -177,7 +177,8 @@ SCHEMAS.update(
                     "description": "The latest run: state, label, "
                     "text (the reply so far; separate messages are joined by a blank line), parts, bot",
                 },
-            }
+            },
+            required=["messages", "has_more", "next_before", "execution"],
         ),
         "MessageResult": obj({"message": ref("Message")}),
         "ChatResult": obj({"conversation": ref("Conversation"), "message": ref("Message")}),
