@@ -396,10 +396,10 @@ function propMenu<T extends PropMenuItem>(d: HTMLElement, anchor: HTMLElement, {
   return pop;
 }
 // A redraw replaces the dialog's content; one that lands while a menu is open waits for it to close.
-// What a redraw must not pull away: a row's menu, the Runs on form (task-modal.ts) or the Pages search (pages.ts). Each
+// What a redraw must not pull away: a row's menu, the Runs on panel (settings-bots-choice.ts) or the Pages search (pages.ts). Each
 // says `menuclosed` when it closes.
 function taskMenuOpen(d: TaskDialog): HTMLElement | null {
-  const pop = [...d.querySelectorAll<HTMLElement>('.prop-pop, [data-run-model-pop]')].find(p => p.matches(':popover-open'));
+  const pop = [...d.querySelectorAll<HTMLElement>('.prop-pop, #sb-choice-pop')].find(p => p.matches(':popover-open'));
   return pop || d.querySelector<HTMLElement>('[data-task-pages] .tp-picker:not([hidden])');
 }
 function taskMenuSettled(d: TaskDialog) {

@@ -13,7 +13,6 @@ interface ModalDeferred { state: string; resume?: unknown; run?: string | null; 
 // The model a task's runs use (`run_model`), one row of GET /v2/models, and what a Runs on form has picked.
 interface ModalRunModel { model?: string; harness?: string; reasoning_effort?: string; compact_at?: number | null; }
 interface ModalModelRow { id: string; label?: string; harnesses?: string[]; efforts?: string[]; default_effort?: string; context_tokens?: number | null; deprecated?: boolean; meeting?: boolean; }
-interface ModalRunPick { model: string; harness: string; effort: string; compact: number | null; }
 interface ModalTask extends TaskRow {
   links?: ModalLink[];
   children?: unknown[];
@@ -485,117 +484,35 @@ function taskRunCatalog() {
   }, () => { TASK_RUN_LOADING = null; return []; });
   return TASK_RUN_LOADING;
 }
-const taskRunOpts = (list: [string, string][], val: string) => list.map(([k, label]) => `<option value="${esc(k)}"${k === val ? ' selected' : ''}>${esc(label)}</option>`).join('');
-// The choice a form starts on: the task's own model, harness, effort and window, or none (the bot's task model).
-const taskRunPick = (run: ModalRunModel | null | undefined): ModalRunPick => ({model: run?.model || '', harness: run?.harness || '',
-  effort: run?.reasoning_effort || '', compact: run?.compact_at || null});
-function taskRunWords(run: ModalRunModel | null | undefined, rows: ModalModelRow[] | null) {
-  const compact = run?.compact_at ? `compacts at ${compactWords(run.compact_at)}` : '';
-  if (!run?.model) return ['Same as bot', compact].filter(Boolean).join(' · ');
-  const row = (rows || []).find(m => m.id === run.model);
-  return [row?.label || run.model, (row?.harnesses || []).length > 1 ? harnessWords(run.harness) : '', run.reasoning_effort,
-    modelContextWords(row?.context_tokens), compact].filter(Boolean).join(' · ');
-}
-// Only whoever the server says may set the task's model gets the form (`can_set_run_model`, the answer POST
+// Only whoever the server says may set the task's model may pick (`can_set_run_model`, the answer POST
 // /v2/tasks/{id}/model gives); anyone else reads what it runs on.
 const taskRunMay = (t: ModalTask) => t.can_set_run_model === true;
-function taskRunModelBody(_run: ModalRunModel | null | undefined, rows: ModalModelRow[] | null, pick: ModalRunPick) {
-  if (!rows) return '<p class="muted">Loading the models…</p>';
-  const row = rows.find(m => m.id === pick.model), harnesses = (row?.harnesses || []).length > 1 ? row!.harnesses! : [];
-  return `<form class="task-run-form" data-run-model-form aria-label="Runs on">
-    <label><span>Model</span><select data-run-model>${taskRunOpts([['', 'Same as bot'], ...rows.map((m): [string, string] => [m.id, [m.label || m.id, modelContextWords(m.context_tokens)].filter(Boolean).join(' · ')])], pick.model)}</select></label>
-    ${harnesses.length ? `<label><span>Harness</span><select data-run-harness>${taskRunOpts(harnesses.map((h): [string, string] => [h, harnessWords(h) || h]), pick.harness)}</select></label>` : ''}
-    ${row?.efforts?.length ? `<label><span>Effort</span><select data-run-effort>${taskRunOpts(row.efforts.map((e): [string, string] => [e, e]), pick.effort)}</select></label>` : ''}
-    ${compactsOn(pick.harness || row?.harnesses?.[0]) ? `<label><span>Compact</span><select data-run-compact>${compactOptions(pick.compact, row?.context_tokens)}</select></label>` : ''}
-    <button type="submit" class="ghost" data-run-model-apply disabled>Apply</button></form>`;
-}
 // Runs on, one line among the facts (shown on a bot's task once GET /v2/tasks/{id} has answered; list rows leave out
-// run_model): "Same as bot" or the model. For whoever may set it, the line opens the model form in a popover.
+// run_model): the shared model picker (settings-bots-choice.ts), "Same as bot" first; closed it reads "Same as bot" or
+// "GPT 6 Sol HIGH 400K".
 function taskRunModelRowHTML(t: ModalTask) {
   if (!String(t.owner_id || '').startsWith('bot:') || t.run_model === undefined) return '';
-  const words = esc(taskRunWords(t.run_model, TASK_RUN_ROWS));
-  const value = taskRunMay(t)
-    ? `<button type="button" class="prop-v prop-link" data-run-model-open aria-haspopup="dialog" aria-expanded="false" aria-label="Runs on: ${words}"><span class="prop-txt" data-run-model-now>${words}</span></button>`
-    : `<span class="prop-v ro" aria-label="Runs on: ${words}"><span class="prop-txt" data-run-model-now>${words}</span></span>`;
-  return `<div class="prop" data-prop-row="runs-on" data-task-run-model><span class="prop-k" aria-hidden="true">Runs on</span><span class="prop-vwrap">${value}</span>${
-    taskRunMay(t) ? '<div class="tl-pop task-run-pop" popover="auto" data-run-model-pop aria-label="Runs on"></div>' : ''}</div>`;
+  return `<div class="prop" data-prop-row="runs-on" data-task-run-model><span class="prop-k" aria-hidden="true">Runs on</span><span class="prop-vwrap">
+    <span class="task-run-pick" data-run-picker><span class="muted">Loading the models…</span></span></span></div>`;
 }
-// A model change redraws the harness and effort it offers, starting on that model's own (or the task's saved ones when
-// it is the model already saved). Apply saves what is picked; a blank model clears the task's own choice.
+// Apply saves the pick at once: a model with its harness, effort and window; Same as bot with a window alone keeps the
+// bot's model ("Same as bot 150K"); Same as bot with none clears the task's own choice.
 function taskRunModelBind(d: ModalDialog, task: ModalTask) {
-  const sec = $('[data-task-run-model]', d);
-  if (!sec) return;
-  const id = String(task.id), run = task.run_model || null, state = {pick: taskRunPick(run)};
-  const open = $('[data-run-model-open]', sec) as HTMLButtonElement | null, pop = $('[data-run-model-pop]', sec) as HTMLElement | null;
-  const same = () => state.pick.model === (run?.model || '') && (state.pick.compact || null) === (run?.compact_at || null)
-    && (!state.pick.model || (state.pick.harness === (run?.harness || '') && state.pick.effort === (run?.reasoning_effort || '')));
-  const paint = () => {
-    const now = $('[data-run-model-now]', sec);
-    if (now) now.textContent = taskRunWords(run, TASK_RUN_ROWS);
-    if (!pop) return;
-    pop.innerHTML = taskRunModelBody(run, TASK_RUN_ROWS, state.pick);
-    const apply = pop.querySelector<HTMLButtonElement>('[data-run-model-apply]'); if (apply) apply.disabled = same();
-  };
-  if (!TASK_RUN_ROWS) void taskRunCatalog().then(() => { if (sec.isConnected && TASK_RUN_ROWS) paint(); });
-  if (!open || !pop) return;
-  paint();
-  // The form opens under the line (a sheet on a phone, task-code.css), its first field focused; Esc or a press outside
-  // closes it and the focus goes back to the line.
-  open.onclick = () => {
-    if (pop.matches(':popover-open')) { pop.hidePopover(); return; }
-    state.pick = taskRunPick(run); paint();
-    pop.showPopover();
-    if (!matchMedia('(max-width:760px)').matches) {
-      const a = open.getBoundingClientRect();
-      const below = a.bottom + 4 + pop.offsetHeight <= innerHeight - 8;
-      pop.style.top = `${Math.max(8, below ? a.bottom + 4 : a.top - pop.offsetHeight - 4)}px`;
-      pop.style.left = `${Math.max(8, Math.min(a.left, innerWidth - pop.offsetWidth - 8))}px`;
-    } else pop.style.top = pop.style.left = '';
-    open.setAttribute('aria-expanded', 'true');
-    pop.querySelector<HTMLElement>('select')?.focus();
-  };
-  pop.addEventListener('toggle', (ev: Event) => {
-    if ((ev as ToggleEvent).newState !== 'closed') return;
-    pop.dispatchEvent(new Event('menuclosed'));      // a redraw held for it goes on (taskMenuSettled)
-    open.setAttribute('aria-expanded', 'false');
-    if (pop.contains(document.activeElement) || document.activeElement === document.body) open.focus();
-  });
-  pop.onchange = (ev: Event) => {
-    const t = ev.target;
-    if (!(t instanceof HTMLSelectElement)) return;
-    if (t.matches('[data-run-model]')) {
-      const row = (TASK_RUN_ROWS || []).find(m => m.id === t.value);
-      // The window picked stays, lowered to the largest size the new model holds (spec scope 8).
-      const compact = state.pick.compact, window = row?.context_tokens || 0;
-      const fit = compact && window && compact > window ? (COMPACT_SIZES.filter(([size]) => size <= window).pop()?.[0] || null) : compact;
-      state.pick = !row ? {...taskRunPick(null), compact} : row.id === run?.model ? taskRunPick(run)
-        : {model: row.id, harness: row.harnesses?.[0] || '', effort: row.default_effort || row.efforts?.[0] || '', compact: fit};
-      paint(); pop.querySelector<HTMLElement>('[data-run-model]')?.focus();
-      return;
-    }
-    if (t.matches('[data-run-harness]')) state.pick.harness = t.value;
-    if (t.matches('[data-run-effort]')) state.pick.effort = t.value;
-    if (t.matches('[data-run-compact]')) state.pick.compact = Number(t.value) || null;
-    const apply = pop.querySelector<HTMLButtonElement>('[data-run-model-apply]'); if (apply) apply.disabled = same();
-  };
-  pop.onsubmit = async (ev: SubmitEvent) => {
-    ev.preventDefault();
-    const apply = pop.querySelector<HTMLButtonElement>('[data-run-model-apply]');
-    if (!apply || apply.disabled) return;
-    apply.disabled = true;
-    const {model, harness, effort, compact} = state.pick;
-    // No model keeps the bot's; a window alone is still the task's own ("Same as bot 150K"), and null is the bot's.
-    const body = {...(model ? Object.fromEntries(Object.entries({model, harness, effort}).filter(([, v]) => v)) : {model: null}),
-      compact_at: compact};
-    try {
-      const saved = await post(`/v2/tasks/${encodeURIComponent(id)}/model`, body);
-      if (saved.warning) toast(saved.warning);
-      if (pop.matches(':popover-open')) pop.hidePopover();
-      const data = await get(`/v2/tasks/${encodeURIComponent(id)}`);
-      if (TASKS_ST) void tasksCatchUp(TASKS_ST);
-      if (d.open && String(d.dataset.task) === id && data.task) void taskModalShow(data.task, d);
-    } catch (e) { toast(errorMessage(e, ''), true); apply.disabled = same(); }
-  };
+  const host = $('[data-task-run-model] [data-run-picker]', d);
+  if (!host) return;
+  const id = String(task.id), run = task.run_model || null;
+  void settingsRunPickerMount(host, {bot: String(task.owner_id), name: 'Runs on', readonly: !taskRunMay(task),
+    run: run ? {model: run.model || '', harness: run.harness || '', effort: run.reasoning_effort || '', compact_at: run.compact_at || null} : null,
+    onPick: async pick => {
+      const body = pick.model ? {model: pick.model, harness: pick.harness, effort: pick.effort, compact_at: pick.compact_at} : {model: null, compact_at: pick.compact_at};
+      try {
+        const saved = await post(`/v2/tasks/${encodeURIComponent(id)}/model`, body);
+        if (saved.warning) toast(saved.warning);
+        const data = await get(`/v2/tasks/${encodeURIComponent(id)}`);
+        if (TASKS_ST) void tasksCatchUp(TASKS_ST);
+        if (d.open && String(d.dataset.task) === id && data.task) void taskModalShow(data.task, d);
+      } catch (e) { toast(errorMessage(e, ''), true); }
+    }});
 }
 // The relations backend/task_relations.py relate writes (a parent is fixed when the task is filed).
 const TASK_REL_ADD: [string, string][] = [['related', 'Related'], ['duplicate_of', 'Duplicate of'], ['follow_up', 'Follow-up of'],
