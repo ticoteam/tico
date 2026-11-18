@@ -3411,7 +3411,7 @@ def install_views(app, store, auth, mutate, task_view):
         human_only(who)
         days, limit = max(1, min(int(days), 90)), max(1, min(int(limit), 30))
         since = H.shift(H.now(), days=-days)
-        with store.read() as c:
+        with store.read_transaction() as c:  # a snapshot, so Needs you reads the open tasks in batches
             return {
                 "actor": who.actor,
                 "since": since,

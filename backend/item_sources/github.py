@@ -346,6 +346,12 @@ def status_check(status: Row) -> Row:
     }
 
 
+def prime_prs(conn: "sqlite3.Connection", task_ids: list[str]) -> None:
+    """Read `prs_of` for many tasks together (item_metadata.prime_of_tasks), for the PR checks that follow in this
+    snapshot."""
+    IM.prime_of_tasks(conn, task_ids, SOURCE, PR)
+
+
 def prs_of(conn: "sqlite3.Connection", task_id: str) -> list[Row]:
     """The PRs linked to a task, oldest link first: [{repo, number, url, created_at, metadata}] where `metadata` is
     `pr()` or None."""
