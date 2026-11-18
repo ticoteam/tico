@@ -352,6 +352,11 @@ def attachment_files(store, app, auth, who, refs):
     return found, [(f["name"], f["content_type"] or "application/octet-stream", blobs.get(f["digest"])) for f in found]
 
 
+def _verdict(review):
+    """The second reviewer's verdict in a word: send, stop, or None when it gave none."""
+    return None if review is None else ("send" if review else "stop")
+
+
 def install_mail(app, store, auth):
     @app.post(
         "/api/v2/mail/messages/organize",
@@ -581,14 +586,17 @@ def install_mail(app, store, auth):
                 ask = SimpleNamespace(reply_to_id=original["id"] if original else "", thread_id=thread, approval_id="")
                 review = ES.review_context(c, auth, bot, ask, addr, snap)
         made = mail_compose.ensure_draft(store, addr, raw, thread, mid)
-        verdict = ES.classify(app, store, snap, review)["review"] if bot else None
+        checked = ES.classify(app, store, snap, review) if bot else {}
+        verdict = checked.get("review")
+        # The verdict a bot's draft got, with its reason, is kept beside the draft: what the bot was told can be read back.
+        said = {"review": _verdict(verdict), "review_reason": checked.get("review_reason", "")} if bot else {}
         with store.transaction() as c:
             H.event(
                 c,
                 who.actor,
                 "mail.draft",
                 addr,
-                {"mailbox": addr, "draft": made["id"], "thread": made["thread"], "created": made["created"]},
+                {"mailbox": addr, "draft": made["id"], "thread": made["thread"], "created": made["created"], **said},
             )
         return {
             "mailbox": addr,
@@ -601,7 +609,9 @@ def install_mail(app, store, auth):
             "attachments": [{k: f[k] for k in ("ref", "name", "content_type", "size")} for f in found],
             "created": made["created"],
             # The second reviewer on a bot's own draft: send, stop (rewrite it), or None when it could not answer.
-            "review": None if verdict is None else ("send" if verdict else "stop"),
+            # `review_reason` says why in words whenever it is not send (backend/email_sending.py `reviewed`).
+            "review": _verdict(verdict),
+            "review_reason": checked.get("review_reason", ""),
         }
 
     @app.delete("/api/v2/mail/drafts/{draft_id}")

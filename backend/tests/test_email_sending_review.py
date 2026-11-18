@@ -246,6 +246,90 @@ def test_the_classifier_reads_the_choice_the_judge_answers(inbox):
     assert S.classify(inbox.app, inbox.app.state.store, snap, review=second)["review"] is False
 
 
+def test_a_stop_always_says_why_in_words(inbox):
+    """The decision model writes no prose: the reason is a second choice in the same call, and a stop that names none
+    of them, or a review that gave no verdict, says so and what to do. A send carries no reason."""
+    from clients.judge import JudgeError
+
+    snap = S.snapshot(mime(body="We will refund the full $400 by Friday."), BOX)
+    second = {"thread": "", "approver_instruction": ""}
+
+    def review(**choices):
+        engine = fake(inbox, legal_or_money="yes", **choices)
+        return S.classify(inbox.app, inbox.app.state.store, snap, review=second), engine
+
+    found, engine = review(review="stop", review_reason="commitment")
+    assert (found["review"], found["review_reason"]) == (False, S.STOPPED["commitment"])
+    (call,) = engine.calls
+    assert set(call["questions"]) == {"legal_or_money", "review", "review_reason"} and found["questions"] == 3
+    assert set(call["questions"]["review_reason"]["criteria"]) == {*S.STOPPED, "none"}
+    assert call["state"]["attachments"] == "(no files attached)"
+    for named in ("none", None):  # the reviewer stopped it but named none of the reasons
+        found, _ = review(review="stop", **({"review_reason": named} if named else {}))
+        assert found["review"] is False and found["review_reason"] == S.NO_REASON
+    found, _ = review(review="send", review_reason="commitment")
+    assert (found["review"], found["review_reason"]) == (True, "")
+    found, engine = review(review="maybe")  # an answer that is not one of the options is no verdict
+    assert found["review"] is None and found["review_reason"] == S.UNANSWERED["unavailable"]
+    engine.fail = JudgeError("unavailable", "down")
+    found = S.classify(inbox.app, inbox.app.state.store, snap, review=second)
+    assert (found["status"], found["review"], found["review_reason"]) == (
+        "unavailable",
+        None,
+        S.UNANSWERED["unavailable"],
+    )
+    whole = S.snapshot(mime(body="a" * 16001), BOX)
+    found = S.classify(inbox.app, inbox.app.state.store, whole, review=second)
+    assert found["review"] is None and found["review_reason"] == S.UNANSWERED["incomplete_content"]
+    # A person's own email has no second reviewer, so no reason either.
+    assert "review_reason" not in S.classify(inbox.app, inbox.app.state.store, snap)
+
+
+@pytest.mark.parametrize(
+    "body,files,stopped",
+    [
+        ("Please find attached the records you asked for.", False, True),
+        ("The signed declaration is enclosed.", False, True),
+        ("Attachments: records.zip", False, True),
+        ("Please find attached the records you asked for.", True, False),
+        ("The files are not attached yet; they follow tomorrow.", False, False),
+        ("Thanks, see you Monday.\n\n> Please send the attached form back.", False, False),
+        (
+            "Thanks, will do.\n\nOn Mon, 16 Nov 2026 at 09:00, Dana <dana@vendor.example> wrote:\nForm attached.",
+            False,
+            False,
+        ),
+    ],
+)
+def test_an_email_that_says_files_are_attached_and_has_none_is_stopped_for_that(inbox, body, files, stopped):
+    """Whatever the model answers: a reviewed email whose own words say files are attached, with none attached, is
+    stopped with exactly that reason. Quoted lines and a negation are not a claim."""
+    fake(inbox, legal_or_money="no", review="send", review_reason="none")
+    snap = S.snapshot(mime(body=body, files=files), BOX)
+    assert S.says_attached_without_files(snap) is stopped
+    found = S.classify(inbox.app, inbox.app.state.store, snap, review={"thread": "", "approver_instruction": ""})
+    assert found["review"] is (not stopped)
+    assert found["review_reason"] == (S.STOPPED["missing_file"] if stopped else "")
+    if files:
+        assert inbox.app.state.judge.calls[-1]["state"]["attachments"] == ["proof.pdf"]
+    # With no decision model at all, the deterministic check still says it.
+    inbox.app.state.judge.fail = __import__("clients.judge", fromlist=["JudgeError"]).JudgeError("unavailable", "x")
+    found = S.classify(inbox.app, inbox.app.state.store, snap, review={"thread": "", "approver_instruction": ""})
+    assert found["review_reason"] == (S.STOPPED["missing_file"] if stopped else S.UNANSWERED["unavailable"])
+
+
+def test_a_queued_send_keeps_the_reviewers_reason_for_the_person_it_asks(inbox):
+    autonomous(inbox, second_review=True)
+    fake(inbox, legal_or_money="no", review="stop", review_reason="confirmed_time")
+    _, _, attempt = setup_attempt(inbox, "ops")
+    message = {"mailbox": BOX, "raw": mime(body="Confirmed: we meet Tuesday at 3pm.")}
+    queued = post(inbox, "email/sends", message, token=attempt["token"])["send"]
+    assert queued["state"] == "waiting_approval" and "second_review" in queued["decision"]["reasons"]
+    assert queued["classification"]["review_reason"] == S.STOPPED["confirmed_time"]
+    preview = inbox.get("/api/v2/email/sends/" + queued["id"], headers=headers("ana-test")).json()
+    assert preview["send"]["classification"]["review_reason"] == S.STOPPED["confirmed_time"]
+
+
 def test_nested_email_attachment_headers_and_mime_charset_are_bound_to_the_proof():
     inner = EmailMessage()
     inner["Subject"] = "Approved attachment"

@@ -148,7 +148,7 @@ tico email discard ana@acme.example r-882...
 new one. `--cc` adds copies; Tico decides whether an outside Cc needs a person.
 
 The lint refuses a draft with an error: rewrite it once, and never route around it. The answer carries the draft id,
-the thread and the second reviewer's verdict. Running the same draft again **finds the same Gmail draft** instead of
+the thread and the second reviewer's verdict (`review`) with its reason (`review_reason`). Running the same draft again **finds the same Gmail draft** instead of
 leaving two. Change a word and it is a new draft. The thread gets `hub/drafted`, so Ana can see it in Gmail. A draft is
 harmless: it sits in Gmail Drafts until someone sends it.
 
@@ -320,7 +320,9 @@ What is left in the inbox is the part that needs judgement. Lists carry headers 
 about to act on with `tico email thread`, never a whole list.
 
 `tico email draft` runs a second reviewer on the text. Its verdict is advisory: a flagged draft is still written, and
-Tico still decides the send. Rewrite a flagged draft once before you try again.
+Tico still decides the send. A stop always says why in `review_reason` (a commitment, a confirmed time, a claim the
+thread does not support, files it says are attached but are not, or wording that is not the company's); a review that
+gave no verdict says that too. Rewrite a flagged draft once before you try again.
 
 If you keep sorting the same kind of message by hand, that is a rule. Propose it as a change to the inbox's Message
 automation: `tico automation update <id> --file <json> --summary "..."`. A bot's change to a person's automation is a

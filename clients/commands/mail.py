@@ -318,7 +318,8 @@ def _draft_fields(args, **more):
     'tico_email_draft',
     'Write a Gmail draft: a new email (to, subject) or a reply in a thread (reply_to: it answers the newest message '
     'from someone else). Asked again, the same draft is found. A bot\'s draft meets the lint (an error refuses it: '
-    'rewrite once) and the second reviewer (review). Nothing is sent: tico_email_send queues a draft.',
+    'rewrite once) and the second reviewer (review: send or stop; review_reason says why whenever it is not send). '
+    'Nothing is sent: tico_email_send queues a draft.',
     {
         'mailbox': _s('Mailbox address'),
         'to': {**_ADDRESSES, 'description': 'Recipients; a reply goes to its sender when this is left out'},

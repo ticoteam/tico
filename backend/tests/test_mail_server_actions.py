@@ -20,6 +20,7 @@ from backend.tests.helpers.automation_mail_actions import BOX, automate, later, 
 from backend.tests.helpers.email_sending import autonomous
 from backend.tests.helpers.fake_gmail import fake_gmail  # noqa: F401
 
+REAL_CLASSIFY = S.classify  # before the autouse fixture below swaps it
 SENDER = "billing@vendor.example"
 LIST = "https://lists.vendor.example/u/token-123"
 
@@ -550,3 +551,49 @@ def test_the_cli_attaches_a_path_and_a_file_id(api, box, monkeypatch, tmp_path, 
     made = json.loads(capsys.readouterr().out)
     assert [f["name"] for f in made["attachments"]] == ["packet.pdf", "log.csv"]
     assert files_of(box.drafts(BOX)[made["draft"]])[1] == [("packet.pdf", b"%PDF-1.4 packet"), ("log.csv", "a,b\n")]
+
+
+def test_a_bots_stopped_draft_says_why_to_the_bot_and_keeps_it(api, box, monkeypatch, tmp_path, capsys):
+    """The second reviewer's stop reaches the bot in words, over the route and the CLI, and the mail.draft event keeps
+    the verdict and the reason. An email that says files are attached and has none is stopped for exactly that."""
+    from backend.tests.helpers.automation_cli import Client
+    from backend.tests.helpers.files import turn
+    from backend.tests.helpers.judge import fake
+    from clients import hubcli, remotecli
+
+    monkeypatch.setattr(S, "classify", REAL_CLASSIFY)
+    _, attempt = turn(api, bot="ops")
+    token = attempt["token"]
+    grant(api, "ops", "read_write")
+    fake(api, legal_or_money="no", review="stop", review_reason="commitment")
+    made = post(api, "mail/drafts", {**REPLY, "body": "We will pay the invoice by Friday.\n\nOps"}, token)
+    assert (made["review"], made["review_reason"]) == ("stop", S.STOPPED["commitment"])
+    with api.app.state.store.read() as c:
+        (kept,) = [
+            json.loads(r[0])
+            for r in c.execute(
+                "SELECT detail FROM events WHERE action='mail.draft' AND json_extract(detail,'$.draft')=?",
+                (made["draft"],),
+            )
+        ]
+    assert (kept["review"], kept["review_reason"]) == ("stop", S.STOPPED["commitment"])
+    fake(api, legal_or_money="no", review="send", review_reason="none")
+    claim = {**REPLY, "body": "The records you asked for are attached.\n\nOps"}
+    unfiled = post(api, "mail/drafts", claim, token)
+    assert (unfiled["review"], unfiled["review_reason"]) == ("stop", S.STOPPED["missing_file"])
+    filed = post(
+        api,
+        "mail/drafts",
+        {**claim, "attachments": [tico_file(api, as_bot(api, "ops"), "records.pdf", b"%PDF-1.4")]},
+        token,
+    )
+    assert (filed["review"], filed["review_reason"]) == ("send", "")
+    # `tico email draft` prints the route's answer: the reason is in what the bot reads.
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example")
+    monkeypatch.setenv("HUB_TOKEN", token)
+    monkeypatch.setattr(remotecli, "Client", lambda url, token, **kwargs: Client(api, token))
+    monkeypatch.chdir(tmp_path)
+    capsys.readouterr()
+    assert hubcli.main(["email", "draft", BOX, "--reply-to", "t1", "--body", claim["body"]]) == 0
+    printed = json.loads(capsys.readouterr().out)
+    assert (printed["review"], printed["review_reason"]) == ("stop", S.STOPPED["missing_file"])
