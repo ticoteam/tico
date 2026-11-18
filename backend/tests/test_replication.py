@@ -1594,6 +1594,32 @@ class VersionedS3:
     def get_object(self, **kw):
         raise AssertionError("an object's bytes were read")
 
+    def head_object(self, Bucket, Key, ChecksumMode, VersionId="null"):
+        assert ChecksumMode == "ENABLED"
+        self.heads = getattr(self, "heads", 0) + 1
+        return (
+            {"ChecksumSHA256": getattr(self, "checksums", {}).get((Key, VersionId))}
+            if (
+                Key,
+                VersionId,
+            )
+            in self.versions
+            else {}
+        )
+
+    def add_copy(self, key, data, versions=1, markers=0):
+        """A bundle key copy as upload_bundle writes it: each version with its stored SHA-256."""
+        import base64
+        import hashlib
+
+        self.checksums = getattr(self, "checksums", {})
+        for n in range(versions):
+            version = "c%d-%s" % (len(self.versions), key) if self.versioned else "null"
+            self.versions.append((key, version))
+            self.checksums[(key, version)] = base64.b64encode(hashlib.sha256(data).digest()).decode()
+        for n in range(markers):
+            self.markers.append((key, "m%d-%s" % (n, key)))
+
     def get_public_access_block(self, Bucket):
         from botocore.exceptions import ClientError
 
@@ -1630,6 +1656,48 @@ def test_deleting_the_key_copies_works_on_an_unversioned_bucket_and_stops_on_a_r
     s3.delete_objects = lambda Bucket, Delete: {"Errors": [{"Key": "company/credential-key/x", "Code": "AccessDenied"}]}
     with pytest.raises(RuntimeError, match="AccessDenied"):
         replication.delete_key_copies(s3, "bucket", "company")
+
+
+def test_deleting_bundle_key_copies_takes_only_this_companys_copies_with_every_version(tmp_path, monkeypatch):
+    # Review blocker on #617: a hand-run bundle (backup.upload_bundle) keeps its key files at
+    # backups/<...>.sqlite.keys/<name>, outside credential-key/; they must go too, but never another company's.
+    monkeypatch.setattr(replication, "DELETE_BATCH", 2)
+    mine, theirs = os.urandom(32), os.urandom(32)
+    github = os.urandom(32)
+    (tmp_path / "credential.key").write_bytes(mine)
+    (tmp_path / "github-app.key").write_bytes(github)
+    digests = replication.key_file_digests(tmp_path)
+    s3 = VersionedS3(page_size=3)
+    s3.add_copy("backups/hourly/2026-11-01.sqlite.keys/credential.key", mine, versions=2, markers=1)
+    s3.add_copy("backups/daily/2026-10-01.sqlite.keys/github-app.key", github)
+    s3.add_copy("backups/2026-09-01.sqlite.keys/credential.key", theirs)  # another company's bundle, shared bucket
+    s3.add("backups/2026-08-01.sqlite.keys/credential.key")  # no stored checksum: cannot tell whose
+    s3.add_copy("backups/2026-07-01.sqlite.keys/slack.key", mine)  # not a key file this retires
+    s3.add_copy("backups/2026-11-01.sqlite", mine)  # a database, even with the same bytes
+    s3.add_copy("other/x.sqlite.keys/credential.key", mine)  # not a bundle
+    before = set(s3.versions)
+    assert replication.delete_bundle_key_copies(s3, "bucket", digests) == (4, 2)
+    gone = before - set(s3.versions)
+    assert {k for k, _ in gone} == {
+        "backups/hourly/2026-11-01.sqlite.keys/credential.key",
+        "backups/daily/2026-10-01.sqlite.keys/github-app.key",
+    }
+    assert not s3.markers
+    assert all(n <= 2 for n in s3.delete_calls)
+    # Again (a run after an interruption): nothing of this company's is left; the others are still kept.
+    assert replication.delete_bundle_key_copies(s3, "bucket", digests) == (0, 2)
+    # With no digests (nothing to tell this company's copies by) nothing is deleted.
+    s3.add_copy("backups/2026-11-02.sqlite.keys/credential.key", mine)
+    assert replication.delete_bundle_key_copies(s3, "bucket", set()) == (0, 3)
+
+
+def test_deleting_bundle_key_copies_stops_on_a_refused_key(tmp_path):
+    (tmp_path / "credential.key").write_bytes(b"k" * 32)
+    s3 = VersionedS3(versioned=False)
+    s3.add_copy("backups/a.sqlite.keys/credential.key", b"k" * 32)
+    s3.delete_objects = lambda Bucket, Delete: {"Errors": [{"Key": "x", "Code": "AccessDenied"}]}
+    with pytest.raises(RuntimeError, match="AccessDenied"):
+        replication.delete_bundle_key_copies(s3, "bucket", replication.key_file_digests(tmp_path))
 
 
 def test_a_bucket_blocks_public_access_only_with_all_four_flags_on():

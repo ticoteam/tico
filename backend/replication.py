@@ -23,6 +23,7 @@ vault on the first start (backend/migrations/20261117075941_slack_tokens_into_va
 sessions themselves are in the database), so a new one costs nobody their session and one less secret leaves the server.
 """
 
+import base64
 import hashlib
 import json
 import os
@@ -503,6 +504,68 @@ def delete_key_copies(s3, bucket, prefix):
                 flush()
     flush()
     return deleted
+
+
+BUNDLE_PREFIX = "backups/"
+BUNDLE_KEY_SUFFIX = ".sqlite.keys/"
+
+
+def key_file_digests(data_dir):
+    """The SHA-256 (hex) of each key file (credential.key, github-app.key) present in `data_dir`: what identifies this
+    company's copies in a bundle backup without reading them. A digest opens nothing; the key bytes stay here."""
+    found = set()
+    for name in (CREDENTIAL_KEY,) + KEY_FILES:
+        path = Path(data_dir) / name
+        if path.is_file():
+            found.add(hashlib.sha256(path.read_bytes()).hexdigest())
+    return found
+
+
+def _bundle_key_copy(key):
+    """True for a bundle's key file copy, backups/<...>.sqlite.keys/<credential.key or github-app.key>
+    (backup.key_file_copy)."""
+    _, sep, name = key.rpartition(BUNDLE_KEY_SUFFIX)
+    return bool(sep) and key.startswith(BUNDLE_PREFIX) and name in (CREDENTIAL_KEY,) + KEY_FILES
+
+
+def delete_bundle_key_copies(s3, bucket, digests):
+    """Deletes every version of a bundle backup's key file copy in `bucket` (backups/**.sqlite.keys/credential.key or
+    github-app.key, written by backup.upload_bundle) whose stored SHA-256 is one of `digests` (key_file_digests of this
+    company's key files), and the delete markers of a copy once all its versions are gone. Returns (deleted, kept):
+    kept counts the versions left alone because their SHA-256 is another one or S3 holds none (another company's
+    bundle in a shared bucket, or a copy this cannot attribute). Reads listings and HeadObject checksums only, never an
+    object's bytes. Run with the cell host's role, as delete_key_copies. A key that S3 refuses to delete is an error."""
+    wanted = {base64.b64encode(bytes.fromhex(d)).decode() for d in digests}
+    copies = {}
+    for page in s3.get_paginator("list_object_versions").paginate(Bucket=bucket, Prefix=BUNDLE_PREFIX):
+        for kind in ("Versions", "DeleteMarkers"):
+            for item in page.get(kind) or []:
+                if _bundle_key_copy(item["Key"]):
+                    copies.setdefault(item["Key"], {"Versions": [], "DeleteMarkers": []})[kind].append(
+                        item.get("VersionId") or "null"
+                    )
+    doomed, kept = [], 0
+    for key, found in sorted(copies.items()):
+        mine = 0
+        for version in found["Versions"]:
+            ask = {"Bucket": bucket, "Key": key, "ChecksumMode": "ENABLED"}
+            if version != "null":
+                ask["VersionId"] = version
+            if wanted and s3.head_object(**ask).get("ChecksumSHA256") in wanted:
+                doomed.append({"Key": key, "VersionId": version})
+                mine += 1
+        kept += len(found["Versions"]) - mine
+        if mine == len(found["Versions"]) and (mine or wanted):
+            doomed += [{"Key": key, "VersionId": marker} for marker in found["DeleteMarkers"]]
+    for start in range(0, len(doomed), DELETE_BATCH):
+        batch = doomed[start : start + DELETE_BATCH]
+        errors = s3.delete_objects(Bucket=bucket, Delete={"Objects": batch, "Quiet": True}).get("Errors") or []
+        if errors:
+            raise RuntimeError(
+                "could not delete %d bundle key copy version(s) in s3://%s/%s: %s"
+                % (len(errors), bucket, BUNDLE_PREFIX, errors[0].get("Code") or "error")
+            )
+    return len(doomed), kept
 
 
 PUBLIC_ACCESS_FLAGS = ("BlockPublicAcls", "IgnorePublicAcls", "BlockPublicPolicy", "RestrictPublicBuckets")

@@ -249,6 +249,12 @@ class S3System(FakeSystem):
         n, self.copies = self.copies, 0
         return n
 
+    def delete_bundle_key_copies(self, bucket, digests, region):
+        self.s3_calls.append(("delete_bundle_key_copies", bucket, region))
+        self.digests = list(digests)
+        n, self.bundle_copies = getattr(self, "bundle_copies", 2), 0
+        return n, 1
+
 
 def use_s3(host):
     host.system.__class__ = S3System  # the fixture's FakeSystem, with S3 and the step on top
@@ -294,6 +300,8 @@ def test_rewrap_runs_the_step_on_the_stopped_server_then_deletes_the_key_copies(
         "resealed": {"api_key": 2},
         "deleted": ["credential.key"],
         "deleted_key_copies": 3,
+        "deleted_bundle_key_copies": 2,
+        "kept_bundle_key_copies": 1,
         "state": "running",
         "ready_ms": answer["ready_ms"],
     }
@@ -323,6 +331,7 @@ def test_rewrap_runs_the_step_on_the_stopped_server_then_deletes_the_key_copies(
     assert company.system.s3_calls == [
         ("public_access_blocked", BUCKET, "us-west-2"),
         ("delete_key_copies", BUCKET, "boatyard", "us-west-2"),
+        ("delete_bundle_key_copies", BUCKET, "us-west-2"),
     ]
     printed = json.dumps(answer) + company.system.argv_text()
     assert KMS_SECRET not in printed and BACKUP_SECRET not in printed
@@ -330,6 +339,35 @@ def test_rewrap_runs_the_step_on_the_stopped_server_then_deletes_the_key_copies(
     company.system.step = (0, {"status": "already_done", "resealed": {}, "failed": {}, "deleted": []})
     again = company("rewrap", "--company", "boatyard")
     assert again["ok"] and again["step"] == "already_done" and again["deleted_key_copies"] == 0
+    assert again["deleted_bundle_key_copies"] == 0
+
+
+def test_rewrap_finds_this_companys_bundle_key_copies_by_digest_also_after_the_files_are_gone(company):
+    # Review blocker on #617: bundle key copies are picked out by the key files' SHA-256, recorded before the step
+    # deletes the files, so a run after an interruption still deletes them; the key bytes never leave data/.
+    import hashlib
+    import os
+    import stat
+
+    data = (company.root / "companies" / "boatyard") / "data"
+    data.mkdir(parents=True, exist_ok=True)
+    key, github = os.urandom(32), os.urandom(32)
+    (data / "credential.key").write_bytes(key)
+    (data / "github-app.key").write_bytes(github)
+    want = sorted(hashlib.sha256(b).hexdigest() for b in (key, github))
+    company.system.step = (3, {"status": "stopped", "reason": "1 secret does not open", "failed": {"api_key": 1}})
+    assert company("rewrap", "--company", "boatyard")["error"] == "rewrap_failed"
+    recorded = (company.root / "companies" / "boatyard") / ".key-digests.json"
+    assert json.loads(recorded.read_text()) == want
+    assert stat.S_IMODE(recorded.stat().st_mode) == 0o600
+    assert key.hex() not in recorded.read_text() and github.hex() not in recorded.read_text()
+    # The step deletes the files, then the run is cut off before the bucket; the next run still knows the digests.
+    (data / "credential.key").unlink()
+    (data / "github-app.key").unlink()
+    company.system.step = (0, {"status": "already_done", "resealed": {}, "failed": {}, "deleted": []})
+    answer = company("rewrap", "--company", "boatyard")
+    assert answer["ok"] and answer["deleted_bundle_key_copies"] == 2
+    assert company.system.digests == want
 
 
 def test_a_stopped_step_deletes_nothing_and_the_company_runs_again(company):
@@ -364,7 +402,7 @@ def test_an_asleep_company_is_not_started_after_the_step(company):
     calls = company.system.calls
     assert not any("up" in c for c in calls[step_index(calls) :])
     assert company.system.ps["boatyard"][0] != "running" and record(company)["state"] == "sleeping"
-    assert company.system.s3_calls[-1][0] == "delete_key_copies"
+    assert [c[0] for c in company.system.s3_calls[-2:]] == ["delete_key_copies", "delete_bundle_key_copies"]
 
 
 def test_an_s3_error_is_s3_failed_and_stops_the_run(company):

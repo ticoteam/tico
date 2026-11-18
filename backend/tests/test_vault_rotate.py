@@ -343,3 +343,58 @@ def test_the_kms_client_uses_the_companys_own_access_key_and_never_half_a_pair(m
     assert refused.value.code == "vault_unavailable"
     CredentialCipher(KMS_KEY, access=("", "", "")).kms_client()
     assert "aws_access_key_id" not in made[1][1]
+
+
+def test_a_bundle_taken_after_the_step_restores_and_every_secret_opens_under_kms(company, tmp_path, monkeypatch):
+    # Spec criterion 9 (review blocker on #617): rotate, back up as `manage.py backup` does (key_dir beside the
+    # database), restore into a new database, and open every secret there with KMS alone; the old key files open
+    # nothing the restored database holds, and the bundle carries no key file to put back.
+    from backend.backup import restore_bundle, upload_bundle
+    from backend.blobs import Blobs
+    from backend.store import Store
+    from backend.tests.helpers.backup_bundle import ObjectStore, target
+
+    old = fill(company)
+    kms = ContextKMS()
+    report, code = vault_rotate.run(kms_settings(company), kms)
+    assert (code, report["status"]) == (0, "done")
+    monkeypatch.setenv("TICO_CREDENTIAL_KMS_KEY", KMS_KEY)
+    for name, data in old.items():  # a leftover copy beside the database: never carried after the step
+        (folder(company) / name).write_bytes(data)
+    s3 = ObjectStore()
+    db = Path(company.settings.db_path)
+    upload = upload_bundle(
+        db, "backup-bucket", "backups/after.sqlite", s3, Blobs(company.settings, s3), key_dir=db.parent
+    )
+    assert upload["key_files"] == [] and not any(".keys/" in key for _, key in s3.objects)
+    restored_at = target(tmp_path / "restored")
+    recovered = restore_bundle("backup-bucket", "backups/after.sqlite", restored_at, s3)
+    assert recovered["verified"] and recovered["key_files"] == {}
+    assert not any((restored_at.db_path.parent / name).exists() for name in old)
+    restored = Store(dataclasses.replace(company.settings, db_path=restored_at.db_path, blob_dir=restored_at.blob_dir))
+    try:
+        opened = all_open(restored, kms)
+        assert {k: opened[k] for k in ("gateway", "ticket", "pem", "entra")} == {
+            "gateway": "gw-synthetic-123",
+            "ticket": "hq-synthetic-secret",
+            "pem": PEM,
+            "entra": "entra-synthetic",
+        }
+        with restored.read() as c:
+            assert key_files_retired(c)
+            row = c.execute("SELECT * FROM credentials WHERE id='gateway-key'").fetchone()
+            ticket = c.execute("SELECT hq_secret FROM support_tickets").fetchone()[0]
+            app = c.execute("SELECT * FROM github_app").fetchone()
+        for key in old.values():
+            with pytest.raises(Exception):
+                AESGCM(key).decrypt(row["nonce"], row["ciphertext"], b"tico-credential:v1:gateway-key")
+            with pytest.raises(Exception):
+                vault_rotate._open_sealed(key, "support_tickets:t1", ticket)
+            with pytest.raises(Exception):
+                AESGCM(key).decrypt(app["nonce"], app["ciphertext"], b"tico-github-app:v1")
+        # Another company's KMS access (its context) opens nothing in the restored database either.
+        other = server_vault(restored, kms, company="other")
+        with restored.read() as c, pytest.raises(Exception):
+            other.cipher.key(c)
+    finally:
+        restored.close()

@@ -251,12 +251,19 @@ the next:
    step failed; a sleeping one sleeps on.
 4. With the host's role, deletes every version and delete marker of the key copies under
    `<backup prefix>/credential-key/` in the bucket.
+5. With the host's role, deletes every version of a bundle backup's key copy in the same bucket
+   (`backups/**.sqlite.keys/credential.key` or `github-app.key`, from a hand-run `manage.py backup`) whose SHA-256,
+   as S3 stored it, is one of this company's key files', and the copy's delete markers. Another company's copy in a
+   shared bucket, or one S3 holds no SHA-256 for, is left alone and counted in `kept_bundle_key_copies`. The key
+   files' SHA-256s are written to `.key-digests.json` (0600) beside `.env` before step 3, so a run after an
+   interruption still finds the copies. A bundle written to another bucket is not looked for.
 
 It answers `{"ok": true, "company", "public_access_blocked": true, "step": "done", "resealed", "deleted",
-"deleted_key_copies", "state", "ready_ms"}` (`public_access_blocked` is null for a company without a backup bucket).
+"deleted_key_copies", "deleted_bundle_key_copies", "kept_bundle_key_copies", "state", "ready_ms"}` (`public_access_blocked` is null for a company without a backup bucket).
 It is idempotent: run it again after a failure or an interruption, and the step answers `already_done` and nothing is
 left to delete. It needs boto3 on the host (`pip install boto3`) and a host role that may read the bucket's public
-access block, list object versions and delete object versions under the companies' prefixes.
+access block, list object versions, read object checksums (`HeadObject`) and delete object versions under the
+companies' prefixes and `backups/`.
 
 ## Sleep, wake and the hold
 

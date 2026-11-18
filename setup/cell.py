@@ -214,6 +214,7 @@ SECRET_ENV_KEYS = contract.SECRET_KEYS | {KMS_SECRET}
 # image, .env and /data, while the server is stopped. Exit 0 done or already done, 3 stopped with nothing deleted.
 REWRAP_STEP = ("-m", "backend.manage", "vault-rotate", "--json")
 REWRAP_DONE = ("done", "already_done")
+KEY_DIGESTS = ".key-digests.json"  # rewrap: the key files' SHA-256s, found in bundle backups after the files are gone
 CELL_ENV_KEYS = frozenset(
     {
         "TICO_TEAM_NAME",
@@ -511,6 +512,13 @@ class System:
         from backend import replication
 
         return replication.delete_key_copies(self._s3(region), bucket, prefix)
+
+    def delete_bundle_key_copies(self, bucket: str, digests: list[str], region: str) -> tuple[int, int]:
+        """Every version of a bundle key copy under backups/ whose SHA-256 is one of `digests` deleted with the host's
+        role: (deleted, kept), kept being other companies' or unattributable copies left alone."""
+        from backend import replication
+
+        return replication.delete_bundle_key_copies(self._s3(region), bucket, set(digests))
 
 
 # --- inputs ----------------------------------------------------------------------------------------------------
@@ -3286,6 +3294,10 @@ class Cell:
            files deleted from data/. A company that was running is started again, also when the step failed. A step
            that does not answer done is rewrap_failed with its `failed` kinds and counts: nothing deleted.
         4. With the host's role, every version of the key file copies under <backup prefix>/credential-key/ deleted.
+        5. With the host's role, every version of a bundle backup's key file copy (backups/**.sqlite.keys/, hand-run
+           `manage.py backup`) whose SHA-256 is one of this company's key files' deleted; other copies are counted as
+           kept and left alone. The SHA-256s are recorded beside .env before step 3, so a run after an interruption
+           still finds them.
 
         Run again, each step finds its work done (the step answers already_done; nothing is left to delete)."""
         started = self.system.monotonic()
@@ -3317,6 +3329,9 @@ class Cell:
                     f"{slug} has no KMS settings: run `update` with --kms-key and --kms-credentials-file first",
                 )
             running = c.get("state") == "running"  # asleep or stopped: its server stays down after
+            # The key files' SHA-256s, kept beside .env before the step deletes the files: they pick out this company's
+            # copies in a bundle backup (step 5), also on a run after an interruption, when the files are gone.
+            digests = self.key_digests(slug) if bucket else []
             self.pull(c["version"])
             out, failed = {}, None
             try:
@@ -3350,11 +3365,15 @@ class Cell:
                     failed.detail += f"; starting {slug} again failed too: {e.detail}"
             if failed is not None:
                 raise failed
-            deleted = 0
+            deleted, bundles, kept = 0, 0, 0
             if bucket:
                 deleted = self.s3(
                     f"deleting the key file copies under s3://{bucket}/{prefix + '/' if prefix else ''}credential-key/",
                     lambda: self.system.delete_key_copies(bucket, prefix, region),
+                )
+                bundles, kept = self.s3(
+                    f"deleting this company's bundle key copies under s3://{bucket}/backups/",
+                    lambda: self.system.delete_bundle_key_copies(bucket, digests, region),
                 )
         return {
             "ok": True,
@@ -3364,9 +3383,26 @@ class Cell:
             "resealed": out.get("resealed") or {},
             "deleted": out.get("deleted") or [],
             "deleted_key_copies": deleted,
+            "deleted_bundle_key_copies": bundles,
+            "kept_bundle_key_copies": kept,
             "state": c.get("state"),
             "ready_ms": ready,
         }
+
+    def key_digests(self, slug: str) -> list[str]:
+        """The SHA-256s of the company's key files, now in data/ or recorded by an earlier run (KEY_DIGESTS, 0600,
+        beside .env), merged and recorded again. Digests only: they open nothing."""
+        from backend import replication
+
+        path = self.dir(slug) / KEY_DIGESTS
+        try:
+            known = set(json.loads(_read(path) or "[]"))
+        except ValueError:
+            known = set()
+        found = sorted(known | replication.key_file_digests(self.dir(slug) / "data"))
+        if found:
+            _write_atomic(path, json.dumps(found) + "\n", 0o600)
+        return found
 
     def s3(self, what: str, call):
         """`call()` (an S3 call with the host's role); any error but our own is s3_failed, saying what it did."""
