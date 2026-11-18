@@ -474,9 +474,16 @@ pub async fn pull_repo(path: &Path, env: &Env) -> String {
         Some(_) => return String::new(),
         None => return "timed out".into(),
     }
-    // A turn's second refresh of this repository and upstream merges what its first fetch brought (crate::fetch_fresh).
+    // A turn's second refresh of this repository and upstream merges what its first fetch brought, and a chat turn
+    // merges what the runner's fetch from moments ago brought while it fetches again in the background (crate::fetch_fresh).
     let upstream = crate::fetch_fresh::upstream(path, &env).await;
-    if !upstream.as_ref().is_some_and(|u| u.fresh()) {
+    if let Some(u) = upstream.as_ref().filter(|u| !u.fresh() && u.recent()) {
+        u.refresh_behind(path, &env);
+    } else if !upstream.as_ref().is_some_and(|u| u.fresh()) {
+        let _one = match &upstream {
+            Some(u) => Some(u.one_at_a_time().await),
+            None => None,
+        };
         let began = Instant::now();
         match git(path, &env, &["fetch", "--quiet", "--no-tags"], 45).await {
             Some((true, _, _)) => {
@@ -552,10 +559,18 @@ pub async fn push_repo(path: &Path, env: &Env) -> (i64, String) {
         args.push(&remote);
         args.push(&dest);
     }
+    // Never beside a chat turn's background fetch of the repository: both move its remote-tracking ref (crate::fetch_fresh).
+    let upstream = crate::fetch_fresh::upstream(path, &env).await;
+    let _one = match &upstream {
+        Some(u) => Some(u.one_at_a_time().await),
+        None => None,
+    };
     let began = Instant::now();
     match git(path, &env, &args, 60).await {
         Some((true, _, _)) => {
-            crate::fetch_fresh::note(path, &env, began).await;
+            if let Some(u) = &upstream {
+                u.fetched(began);
+            }
             (ahead, String::new())
         }
         Some((false, _, err)) => {
@@ -2395,9 +2410,11 @@ impl Runner {
                 }
             }
             let start_attempt = attempt.clone();
+            mark("prepared", &aid);
             // The turn's refreshes share their fetches (crate::fetch_fresh): a repository fetched a moment ago by this
-            // turn is not fetched again for its worktree.
-            let placed = crate::fetch_fresh::in_turn(&aid, async {
+            // turn is not fetched again for its worktree, and a chat turn starts on the runner's fetch from moments ago.
+            let chat = crate::sessions::chat_refresh(p, &attempt["config"]);
+            let placed = crate::fetch_fresh::in_turn(&aid, chat, async {
                 if p.has_checkout() {
                     // A returning bot's old clone is caught up to GitHub once per placement (crate::placement).
                     crate::placement::catch_up(&bot, &attempt["generation"], &execution_path, &env).await;
