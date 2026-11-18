@@ -120,6 +120,17 @@ def seed(api):
 
 
 @contextlib.contextmanager
+class Timed:
+    """A trace sink that keeps each statement and when it started."""
+
+    def __init__(self, seen, started):
+        self.seen, self.started = seen, started
+
+    def append(self, statement):
+        self.started.append(time.perf_counter())
+        self.seen.append(statement)
+
+
 def counting(store, seen):
     originals = {name: getattr(store, name) for name in ("read", "read_transaction")}
 
@@ -178,13 +189,19 @@ def report(api):
         Path(os.environ["ANSWERS"]).write_text(json.dumps(answers, sort_keys=True, default=str))
     if os.environ.get("STATEMENTS"):
         for token in ("ana-test", "ben-test"):
-            seen = []
-            with counting(api.app.state.store, seen):
+            seen, started = [], []
+            with counting(api.app.state.store, Timed(seen, started)):
                 api.get(os.environ["STATEMENTS"], headers=headers(token))
+                started.append(time.perf_counter())
             print(f"--- {token}: {len(seen)} statements")
             shapes = collections.Counter(re.sub(r"'[^']*'|\b\d+\b", "?", q)[:200] for q in seen)
             for q, k in shapes.most_common(25):
                 print(f"{k:5d}  {q}")
+            # Until the next statement starts: the statement's own time and the Python after it, so slow SQL stands out.
+            gaps = sorted(((b - a) * 1000, q) for a, b, q in zip(started[:-1], started[1:], seen, strict=True))[::-1]
+            print(f"    slowest (ms until the next statement; {sum(g for g, _ in gaps):.0f} ms in all):")
+            for ms, q in gaps[:8]:
+                print(f"{ms:8.1f}  {re.sub(r'\s+', ' ', q)[:400]}")
     if os.environ.get("PROFILE"):
         import cProfile
         import pstats
