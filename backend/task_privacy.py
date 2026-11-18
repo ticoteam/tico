@@ -1608,13 +1608,34 @@ def tag_attaches(c, tags):
     return out
 
 
+# The tags of a batch on at least one company-visible task: one any reader reads (H.task_private_readable), so such a
+# tag needs none of its links or attach events. A task a Rules Owner page copy gates (counsel.page_copies) is left
+# out: its copy decides who reads it. EXISTS stops at a tag's first such task (TIDY, 387 tags on 68K links: 2 ms; a
+# DISTINCT over every link took 130 ms).
+TAGS_ON_OPEN_TASKS_SQL = (
+    "SELECT g.id FROM tags g WHERE g.id IN ({marks}) AND EXISTS (SELECT 1 FROM task_tags tt JOIN tasks t "
+    "ON t.id=tt.task_id WHERE tt.tag_id=g.id AND t.private=0 AND t.id NOT IN (SELECT value FROM json_each(?)))"
+)
+
+
 def tags_readable(c, who, rows):
-    """The rows tag_readable passes, with every tag's task links and attach events read together and the tasks they
-    name looked up together first: one query per tag and per attachment was most of a tag list's SQL."""
+    """The rows tag_readable passes. A tag on a company-visible task passes on its own content alone; for the rest,
+    every tag's task links and attach events are read together and the tasks they name looked up together first: one
+    query per tag and per attachment was most of a tag list's SQL. Reading them for every tag held tens of MB per
+    call on a big install (TIDY: 68K links, 68K attach events), which a burst of tag lists turned into an OOM."""
+    from . import counsel
+
     snapshot(c)
     rows = list(rows)
+    gated = json.dumps(sorted(counsel.page_copies(c)))
+    open_tags = set()
+    for part in H.chunks([row["id"] for row in rows if not row.get("is_template")]):
+        sql = TAGS_ON_OPEN_TASKS_SQL.format(marks=",".join("?" * len(part)))
+        open_tags.update(tag for (tag,) in c.execute(sql, [*part, gated]))
+    # A template passes on its content alone too (_tag_readable): neither needs its links read.
+    rest = [row for row in rows if row["id"] not in open_tags and not row.get("is_template")]
     linked, attached = {}, {}
-    for part in H.chunks([row["id"] for row in rows]):
+    for part in H.chunks([row["id"] for row in rest]):
         marks = ",".join("?" * len(part))
         for tag, tid in c.execute(f"SELECT tag_id,task_id FROM task_tags WHERE tag_id IN ({marks})", part):
             linked.setdefault(tag, set()).add(tid)
@@ -1622,7 +1643,13 @@ def tags_readable(c, who, rows):
     prime_references(c, [detail for found in attached.values() for detail in found] + rows)
     _task_rows(c, set().union(*linked.values()))
     return [
-        row for row in rows if _tag_readable(c, who, row, linked.get(row["id"], set()), attached.get(row["id"], ()))
+        row
+        for row in rows
+        if (
+            content_readable(c, actor(who), row)
+            if row["id"] in open_tags or row.get("is_template")
+            else _tag_readable(c, who, row, linked.get(row["id"], set()), attached.get(row["id"], ()))
+        )
     ]
 
 
