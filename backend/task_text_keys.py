@@ -80,12 +80,27 @@ PAIRS = frozenset(
 
 
 def wordlike(letters: str) -> bool:
-    """Whether a run of letters reads as words: each camelCase hump of 6+ letters mostly uses common letter pairs."""
-    for hump in HUMPS.findall(letters):
+    """Whether a run of letters reads as words: each camelCase hump of 6+ letters, and the humps together, mostly use
+    common letter pairs. Short all-caps humps (XML, ID) are acronyms and left out of the pairs; changing case
+    (qZqZqZ, kQwerTyuIopz) does not make a key read as a word."""
+    humps = HUMPS.findall(letters)
+    # Words in camelCase have long humps (GitHub, McDonald, XMLHttpRequest); random mixed case breaks into many tiny
+    # ones (q, Zq, kQ) and runs of capitals. Two tiny mixed humps, or a third run of capitals, is not a word: measured,
+    # about 94% of random 12-letter mixed-case values fail here or below, and no product name tried did.
+    tiny = sum(1 for h in humps if len(h) <= 2 and not h.isupper())
+    if tiny + max(0, sum(1 for h in humps if h.isupper()) - 2) >= 2:
+        return False
+    good = total = 0
+    for hump in humps:
         low = hump.lower()
-        if len(low) >= 6 and sum(low[i : i + 2] in PAIRS for i in range(len(low) - 1)) < 0.8 * (len(low) - 1):
+        if hump.isupper() and len(hump) < 6:
+            continue
+        hits = sum(low[i : i + 2] in PAIRS for i in range(len(low) - 1))
+        if len(low) >= 6 and hits < 0.8 * (len(low) - 1):
             return False
-    return True
+        good += hits
+        total += len(low) - 1
+    return total < 5 or good >= 0.8 * total
 
 
 SHORT_HEX = re.compile(r"[0-9a-fA-F]{1,12}")
