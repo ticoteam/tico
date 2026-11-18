@@ -49,6 +49,9 @@ from . import bot_settings as BS
 # A run's tokens: its input (uncached, cached and written to the cache) and output, as its usage records them.
 RUN_TOKENS = "coalesce(a.input_tokens,0)+coalesce(a.cached_tokens,0)+coalesce(a.cache_write_tokens,0)+coalesce(a.output_tokens,0)"
 
+# A turn that reached the model, and so warmed the cache: the idle clock and the forked session both count only these.
+WARMED = f"({RUN_TOKENS})>0"
+
 # The labels past runs recorded (`jobs.wake_preset`, `attempts.wake.preset`): history only, never written now.
 CURRENT = "current"
 TOKEN_SAVER = "token_saver"
@@ -339,12 +342,9 @@ def idle_seconds(c, bot, at, forked=False):
     if c.execute("SELECT 1 FROM attempts WHERE bot_id=? AND state IN ('leased','running') LIMIT 1", (bot,)).fetchone():
         return None
     # Only a turn that reached the model warmed the cache: one that failed before any request did not.
-    shared = (
-        " AND thread_id IS NOT NULL AND task_id IN (SELECT id FROM tasks WHERE coalesce(private,0)=0)" if forked else ""
-    )
+    shared = " AND a.thread_id IS NOT NULL AND a.task_id IN (SELECT id FROM tasks WHERE coalesce(private,0)=0)"
     last = c.execute(
-        "SELECT max(finished_at) FROM attempts WHERE bot_id=? AND coalesce(input_tokens,0)+coalesce(cached_tokens,0)"
-        "+coalesce(cache_write_tokens,0)+coalesce(output_tokens,0)>0" + shared,
+        f"SELECT max(a.finished_at) FROM attempts a WHERE a.bot_id=? AND {WARMED}" + (shared if forked else ""),
         (bot,),
     ).fetchone()[0]
     return _seconds(last, at) if last else None
@@ -464,7 +464,8 @@ def replan(c, bot):
 
 def fork_thread(c, job_id, bot, runner_id):
     """The session a released job with session `fork` continues from: the thread of the bot's latest finished turn on
-    this computer (a fork reads it from there) on a task that is not private, or None. A private task's session and a
+    this computer (a fork reads it from there) on a task that is not private, that reached the model (the same turn
+    `idle_seconds` counts from with `forked`), or None. A private task's session and a
     chat's are never forked into a routine's run, whose task others may read; the runner keeps those apart too."""
     row = c.execute("SELECT release FROM jobs WHERE id=?", (job_id,)).fetchone()
     if not row or policy_of(row[0])["session"] != FORK:
@@ -472,7 +473,7 @@ def fork_thread(c, job_id, bot, runner_id):
     found = c.execute(
         "SELECT a.thread_id FROM attempts a JOIN tasks t ON t.id=a.task_id WHERE a.bot_id=? AND a.runner_id=? "
         "AND a.thread_id IS NOT NULL AND a.finished_at IS NOT NULL AND coalesce(a.job_id,'')<>? "
-        "AND coalesce(t.private,0)=0 ORDER BY a.finished_at DESC LIMIT 1",
+        f"AND coalesce(t.private,0)=0 AND {WARMED} ORDER BY a.finished_at DESC LIMIT 1",
         (bot, runner_id, job_id),
     ).fetchone()
     return found[0] if found else None
