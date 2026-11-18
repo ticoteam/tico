@@ -319,6 +319,24 @@ def _rail_next(rows, items, more):
     return [last["t_blank"], last["t_key"], last["id"]]
 
 
+_RAIL_KIND = f"({_audience()} IN ('company','team','members') OR {_group_dm()})"  # a thread or a group DM
+
+
+def _rail_lists(c, v, marks):
+    """(FROM, Pinned's WHERE, Threads' WHERE) for the rail's two title-ordered lists: open threads and group DMs the
+    reader reads, pinned for them or (Threads) not pinned and theirs (`marks`: their member names). Both read the
+    open-thread index (_RAIL_KIND admits only its audiences, so its terms change no answer) and test the finished-task
+    check last, after every cheaper term."""
+    readable = T.readable_sql(c, v, "r")
+    base = [OPEN_THREADS, _RAIL_KIND, readable]
+    open_task = task_open(c, v, " AND ".join(base), source=OPEN_THREADS_FROM)
+    return (
+        OPEN_THREADS_FROM,
+        " AND ".join([*base, PINNED_SQL, open_task]),
+        " AND ".join([*base, _in(marks), f"NOT {PINNED_SQL}", open_task]),
+    )
+
+
 def rail(c, v, *, cursor=None, limit=RAIL_LIMIT):
     """The reader's threads by title: {"pinned", "threads", "catch_up", "catch_up_ids", "dms", "next_cursor"}.
     `pinned` holds the ones pinned for them (threads pinned for everyone they read but never joined among them), at most
@@ -332,32 +350,14 @@ def rail(c, v, *, cursor=None, limit=RAIL_LIMIT):
     pinned_at, threads_at = (None, None) if first else _rail_cursor(cursor)
     extra, marks = _names(v, c)
     args = {"me": v.actor, **extra}
-    kind = f"({_audience()} IN ('company','team','members') OR {_group_dm()})"
-    readable = T.readable_sql(c, v, "r")
-    # Both lists read the open-thread index (`kind` admits only its audiences), and test the finished-task check last.
-    base = [OPEN_THREADS, kind, readable]
-    open_task = task_open(c, v, " AND ".join(base), source=OPEN_THREADS_FROM)
+    source, pinned_where, threads_where = _rail_lists(c, v, marks)
     v._members = {}
     try:
         pinned_rows, pinned_more = (
-            ([], False)
-            if pinned_at == DONE
-            else _title_page(
-                c, v, " AND ".join([*base, PINNED_SQL, open_task]), args, pinned_at, PINNED_MAX, OPEN_THREADS_FROM
-            )
+            ([], False) if pinned_at == DONE else _title_page(c, v, pinned_where, args, pinned_at, PINNED_MAX, source)
         )
         threads_rows, threads_more = (
-            ([], False)
-            if threads_at == DONE
-            else _title_page(
-                c,
-                v,
-                " AND ".join([*base, _in(marks), f"NOT {PINNED_SQL}", open_task]),
-                args,
-                threads_at,
-                limit,
-                OPEN_THREADS_FROM,
-            )
+            ([], False) if threads_at == DONE else _title_page(c, v, threads_where, args, threads_at, limit, source)
         )
         rows = pinned_rows + threads_rows
         pairs = T._one_dm_pairs(c, v) if first else {}
@@ -377,7 +377,7 @@ def rail(c, v, *, cursor=None, limit=RAIL_LIMIT):
         "threads": thread_items,
         "catch_up": len(found) if first else None,
         "catch_up_ids": [it["row"]["id"] for it in found],
-        "unread": _unread_items(c, v, found, kind, args, marks),
+        "unread": _unread_items(c, v, found, _RAIL_KIND, args, marks),
         "dms": T.one_dm_unread(c, v, pairs=pairs, summaries=summaries) if first else {},
         "next_cursor": None if position == [DONE, DONE] else _encode(position),
     }
@@ -903,9 +903,7 @@ def _walk(c, v, flags, after=None):
         f"({is_mention} OR NOT EXISTS (SELECT 1 FROM thread_followers mf WHERE mf.thread_id=r.id "
         "AND mf.actor=:me AND mf.notify='muted'))",
     ]
-    # Only the finished-task roots this walk could list have their posts checked: the reader's, with something new.
-    # That check (the task's finish and its posts since) goes last, after every cheaper term.
-    where, open_task = [OPEN_ROOT, *rest], task_open(c, v, " AND ".join(rest), args)
+    where, open_task = _walk_where(c, v, rest, args)
     scanned = int(after[3]) if after else 0
     left = [CATCH_UP_HIDDEN]
     for rank, phase in ((0, is_mention), (1, f"NOT {is_mention}")):
@@ -960,6 +958,13 @@ def _walk(c, v, flags, after=None):
                 }
             if len(found) < batch:
                 break
+
+
+def _walk_where(c, v, rest, args):
+    """(the walk's WHERE terms, its finished-task check): open roots that pass `rest`, the check to be tested last, after
+    every cheaper term. Only the finished-task roots this walk could list have their posts checked: the reader's, with
+    something new."""
+    return [OPEN_ROOT, *rest], task_open(c, v, " AND ".join(rest), args)
 
 
 def _is_bot_home(row, v):
