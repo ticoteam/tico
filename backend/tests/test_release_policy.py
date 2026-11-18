@@ -627,3 +627,46 @@ def test_a_turn_that_never_reached_the_model_does_not_restart_the_idle_count(api
     tick(api, t0)
     row = job(api, routine["id"])
     assert row["held"] == 0 and released(row)["warm"] is True
+
+
+def _turn_on(api, bot, task_id, ended, thread):
+    """A finished turn of the bot on `task_id` (None: a chat) that reached the model."""
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO attempts(id,bot_id,state,created_at,finished_at,lane,last_seq,thread_id,task_id,input_tokens) "
+            "VALUES(?,?,?,?,?,?,0,?,?,100)",
+            (H.new_id(), bot, "completed", H.shift(ended, minutes=-5), ended, "default", thread, task_id),
+        )
+
+
+def test_a_forking_job_counts_idle_from_the_turn_it_continues_not_a_later_private_or_chat_turn(api):
+    """Product #545: the idle clock and the forked session come from one turn. A private task's or a chat's turn
+    since does not restart it, so the job goes in the window of the turn it reads."""
+    shared = new_task(api, "shared work")
+    settle_all(api)
+    t0 = H.shift(H.now(), hours=-6)
+    with api.app.state.store.transaction() as c:
+        secret = H.task_create(c, "bot:assistant", "Private matter", "x", "bot:ops", private=True)
+    settle_all(api)
+    _turn_on(api, "ops", shared["id"], H.shift(t0, minutes=-46), "shared-thread")
+    _turn_on(api, "ops", secret["id"], H.shift(t0, minutes=-10), "private-thread")
+    _turn_on(api, "ops", None, H.shift(t0, minutes=-5), "chat-thread")
+    routine = held(api, shared, wait=DAY, warm=True, session=W.FORK)
+    queued_at(api, routine["id"], t0)
+    tick(api, t0)
+    row = job(api, routine["id"])
+    assert row["held"] == 0 and released(row)["warm"] is True
+
+
+def test_a_forking_job_whose_last_turn_is_shared_goes_at_minute_45_as_before(api):
+    shared = new_task(api, "shared work")
+    settle_all(api)
+    t0 = H.shift(H.now(), hours=-6)
+    _turn_on(api, "ops", shared["id"], H.shift(t0, minutes=-30), "shared-thread")
+    routine = held(api, shared, wait=DAY, warm=True, session=W.FORK)
+    queued_at(api, routine["id"], t0)
+    tick(api, t0)  # idle 30 minutes: not yet
+    assert job(api, routine["id"])["held"] == 1
+    tick(api, H.shift(t0, minutes=15))  # idle 45 minutes
+    row = job(api, routine["id"])
+    assert row["held"] == 0 and released(row)["warm"] is True

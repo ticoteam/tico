@@ -5,8 +5,9 @@ A queued job that can wait carries four values (`jobs.release`, JSON, see `polic
 - `due`: the earliest time it may start (null: when it was queued).
 - `wait`: how long after Due it may wait, in seconds (0: it starts at Due).
 - `warm` (Prefers warm): released the first time after Due that the bot has been idle WARM_AFTER (no turn running, its
-  last model request that long ago), and before WARM_BEFORE, while the 1-hour cache is still warm. Several jobs of one
-  bot released by the same window run one after another, oldest Due first (`release_after` chains them).
+  last model request that long ago; for a job that forks, the turn it continues), and before WARM_BEFORE, while the
+  1-hour cache is still warm. Several jobs of one bot released by the same window run one after another, oldest Due
+  first (`release_after` chains them).
 - `deadline` (at Due + wait): `run` starts it cold, as before; `skip` drops it and records it as skipped.
 - `session`: `fork` asks the runner to fork the bot's latest session (execution.py hands `fork_thread`), `fresh` (or
   null) starts a new one.
@@ -330,15 +331,20 @@ def _repeat_slot(c, job, due):
     return max(due, H.shift(last, seconds=REPEAT_SECONDS)) if last else due
 
 
-def idle_seconds(c, bot, at):
+def idle_seconds(c, bot, at, forked=False):
     """How long the bot has been idle at `at`: None while a turn of it is running, or when it never ran (no warm cache
-    to wait for). Its last model request is read as its last turn's end."""
+    to wait for). Its last model request is read as its last turn's end. With `forked`, for a job that continues the
+    bot's latest session, idle counts from the turn `fork_thread` continues (the newest on a task that is not private),
+    so a private task's or a chat's turn since does not restart the count: its cache is not the one the job reads."""
     if c.execute("SELECT 1 FROM attempts WHERE bot_id=? AND state IN ('leased','running') LIMIT 1", (bot,)).fetchone():
         return None
     # Only a turn that reached the model warmed the cache: one that failed before any request did not.
+    shared = (
+        " AND thread_id IS NOT NULL AND task_id IN (SELECT id FROM tasks WHERE coalesce(private,0)=0)" if forked else ""
+    )
     last = c.execute(
         "SELECT max(finished_at) FROM attempts WHERE bot_id=? AND coalesce(input_tokens,0)+coalesce(cached_tokens,0)"
-        "+coalesce(cache_write_tokens,0)+coalesce(output_tokens,0)>0",
+        "+coalesce(cache_write_tokens,0)+coalesce(output_tokens,0)>0" + shared,
         (bot,),
     ).fetchone()[0]
     return _seconds(last, at) if last else None
@@ -365,11 +371,18 @@ def _release_policy(c, bot, jobs, at):
                 _let_go(c, job, at, warm=False)
     if not free:
         return
-    idle = idle_seconds(c, bot, at)
-    window = idle is not None and WARM_AFTER <= idle < WARM_BEFORE
+    windows = {}
+
+    def in_window(forked):
+        if forked not in windows:
+            idle = idle_seconds(c, bot, at, forked=forked)
+            windows[forked] = idle is not None and WARM_AFTER <= idle < WARM_BEFORE
+        return windows[forked]
+
     chain = []
     for job in free:
         given = policy_of(job["release"])
+        window = in_window(given["session"] == FORK)
         if not given["warm"]:
             _let_go(c, job, at, warm=window)
         elif window:
