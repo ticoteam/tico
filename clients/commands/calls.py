@@ -461,8 +461,8 @@ def call_note(api, args):
     {
         "thread_id": _s("The thread's id"),
         "title": _s("What the call is called, up to 200 characters"),
-        "model": _s("Subscription model override for this voice call"),
-        "effort": _s("Effort for the chosen voice model. Defaults to low where supported"),
+        "model": _s("Deprecated. A bot keeps its own model."),
+        "effort": _s("Deprecated. Voice replies use low effort."),
         "speak_replies": {
             "type": "boolean",
             "description": "Bots answer aloud as well as in the thread: true makes the call Tico Meet. Left out, "

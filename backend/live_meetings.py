@@ -553,7 +553,8 @@ def _meeting_run(c, settings, bot, model, runner_id, job_id):
 
 
 def turn_config(c, settings, config, bot, rid, runner_id, job_id=None, turn_id=None):
-    """The bot's config for one live-meeting reply: the meeting's model (its own, else the company's meeting model) at
+    """Voice calls keep the bot's own model at low effort with concise output. For another live-meeting reply, use
+    the meeting's model (its own, else the company's meeting model) at
     low effort, on that model's harness and runtime, as a task model is applied. Any other turn and a meeting that sets
     no model keep the bot's own model. A Gateway meeting model that cannot run on the bot's computer (a Mac runs no
     Gateway model) is tried next as OpenRouter's Mercury when the company has OpenRouter on; a model that cannot be
@@ -569,16 +570,17 @@ def turn_config(c, settings, config, bot, rid, runner_id, job_id=None, turn_id=N
     if not row:
         return config
     config = {**config, "session": "task"}
-    from . import calls, call_sessions
+    from . import calls
 
-    voice = calls.voice_call(c, rid)
-    if voice:
-        choice = call_sessions.choice(c, settings, bot, row[0], call_sessions.effort(c, voice["id"]))
-        if choice:
-            if turn_id:
-                c.execute("UPDATE live_meeting_turns SET ran_model=? WHERE id=?", (choice["model"], turn_id))
-            return task_models.apply({k: v for k, v in config.items() if k != task_models.KEY}, choice)
-        return config
+    if calls.voice_call(c, rid):
+        if turn_id:
+            model = providers.bot_choice(c, settings, config)[1]
+            c.execute("UPDATE live_meeting_turns SET ran_model=? WHERE id=?", (model or None, turn_id))
+        return {
+            **{k: v for k, v in config.items() if k != task_models.KEY},
+            "reasoning_effort": "low",
+            "output_style": "Concise",
+        }
     turn = c.execute("SELECT retries FROM live_meeting_turns WHERE id=? AND meeting_id=?", (turn_id, rid)).fetchone()
     ran_on = lambda name: turn and c.execute("UPDATE live_meeting_turns SET ran_model=? WHERE id=?", (name, turn_id))
     model = row[0] if row[0] is not None else providers.load(c, settings)["meeting_model"]

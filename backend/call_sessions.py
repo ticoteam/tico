@@ -10,10 +10,8 @@ from . import harnesses as _harnesses
 from . import live_meetings as _live_meetings
 from . import providers as _providers
 from . import shared_bots as _shared_bots
-from . import task_models as _task_models
 from .auth import Identity
 from .store import H as _H
-from .store import Problem
 
 # The execution and model catalogs still return untyped rows and configuration records.
 H: Any = _H
@@ -21,7 +19,6 @@ harnesses: Any = _harnesses
 live_meetings: Any = _live_meetings
 providers: Any = _providers
 shared_bots: Any = _shared_bots
-task_models: Any = _task_models
 
 CAPABILITY = "voice_sessions_v1"
 CLOSED_COMPLETION: dict[str, Any] = {"outcome": "interrupted", "message": None}
@@ -34,42 +31,6 @@ def model_spec(model: str | None) -> dict[str, Any] | None:
         if harnesses.harness_caps(spec.get("harness"), spec["runtime"]).get("voice_session"):
             return spec
     return None
-
-
-def validate(model: str | None, effort: str | None) -> None:
-    if model is None and effort is None:
-        return
-    spec = model_spec(model)
-    if not spec or effort is not None and effort not in (spec.get("efforts") or ()):
-        raise Problem("voice_model", "Choose a supported voice subscription model and effort", 422)
-
-
-def effort(c: Any, call_id: str) -> str | None:
-    row = c.execute("SELECT effort FROM call_voice_options WHERE call_id=?", (call_id,)).fetchone()
-    return row[0] if row else None
-
-
-def choice(
-    c: Any, settings: Any, bot: str, model_override: str | None, effort_override: str | None
-) -> dict[str, Any] | None:
-    record = providers.load(c, settings)
-    if model_override:
-        model = model_override
-    elif model_spec(record["meeting_model"]):
-        model = record["meeting_model"]
-    else:
-        raw = c.execute(BS.ONE_SQL, (bot,)).fetchone()
-        model = (
-            providers.bot_choice(c, settings, shared_bots.follow(c, bot, json.loads(raw[0])), record=record)[1]
-            if raw
-            else None
-        )
-    spec = model_spec(model)
-    if not spec:
-        return None
-    effort = effort_override or ("low" if "low" in (spec.get("efforts") or ()) else None)
-    picked: dict[str, Any] = task_models.choice_of(model, effort)
-    return {**picked, "compact_at": None}
 
 
 def note_stamp(text: str) -> str:
@@ -116,8 +77,8 @@ def ensure(c: Any, settings: Any, row: Any, bot: str) -> bool:
     ).fetchone()
     if not runner or CAPABILITY not in json.loads(runner[0] or "[]"):
         return False
-    meeting = live_meetings._meeting(c, rid)
-    if not choice(c, settings, bot, meeting["meeting_model"], effort(c, row["id"])):
+    raw = c.execute(BS.ONE_SQL, (bot,)).fetchone()
+    if not raw or not model_spec(providers.bot_choice(c, settings, shared_bots.follow(c, bot, json.loads(raw[0])))[1]):
         return False
     from . import call_notes
 

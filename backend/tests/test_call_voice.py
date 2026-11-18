@@ -14,6 +14,7 @@ import httpx
 import pytest
 
 from backend import call_media, call_voice, calls, live_meetings, threads
+from backend import bot_settings as BS
 from backend.store import H
 from backend.tests.helpers.api import assign, get, headers, post, put, ready, runner
 from backend.tests.helpers.call_media import CONFIG, fake_rtc, wait_until  # noqa: F401 - pytest discovers the RTC fixture
@@ -370,11 +371,11 @@ def test_call_warms_one_subscription_run_and_speaks_before_the_final_reply(meet,
     give(meet, worker, "claude", add(meet)["id"])
     token = worker["token"]
     cid = _dm(meet)
-    call = start_call(meet, cid, model="claude-opus-5-5", effort="medium")
+    call = start_call(meet, cid)
     post(meet, f"calls/{call['id']}/bots", {"bots": ["ops"]})
     attempt = _claim(meet, worker, "ops")
     path = f"attempts/{attempt['id']}"
-    assert [attempt["config"][k] for k in ("model", "reasoning_effort")] == ["claude-opus-5-5", "medium"]
+    assert attempt["config"]["model"] == "claude-sonnet-5-5"
     assert len(attempt["subscriptions"]) == 1 and attempt["gateway"] is False
     assert post(meet, f"{path}/inputs", {}, token)["call_voice"] == {"closed": False}
     heard = threading.Event()
@@ -438,7 +439,7 @@ def test_call_warms_one_subscription_run_and_speaks_before_the_final_reply(meet,
     with meet.app.state.store.read() as c:
         assert (
             c.execute("SELECT ran_model FROM live_meeting_turns WHERE id=?", (turn["id"],)).fetchone()[0]
-            == "claude-opus-5-5"
+            == "claude-sonnet-5-5"
         )
 
     _speak(meet, call["id"], 10_000)
@@ -459,10 +460,14 @@ def test_call_warms_one_subscription_run_and_speaks_before_the_final_reply(meet,
     assert len(media.said) == 2 and "Too late." not in thread_texts(meet, cid)
 
 
-def test_voice_uses_the_company_subscription_meeting_model_at_low_effort(meet):
+@pytest.mark.parametrize("resident", [True, False], ids=["resident", "legacy"])
+def test_voice_uses_the_bots_model_with_low_effort_and_concise_output(meet, resident):
     credential_setup(meet)
     company(meet)
-    on(meet, "ops", "claude", "claude-sonnet-5-5")
+    model = "claude-sonnet-5-5"
+    on(meet, "ops", "claude", model)
+    with meet.app.state.store.transaction() as c:
+        BS.update(c, "ops", {"reasoning_effort": "high", "output_style": "Explanatory"})
     settings = get(meet, "providers")
     put(
         meet,
@@ -473,14 +478,30 @@ def test_voice_uses_the_company_subscription_meeting_model_at_low_effort(meet):
             "expected_revision": settings["revision"],
         },
     )
-    worker = machine(meet, caps=("model_subscriptions_v1", "private_lanes_v1", "voice_sessions_v1"))
+    caps = ("model_subscriptions_v1", "private_lanes_v1") + (("voice_sessions_v1",) if resident else ())
+    worker = machine(meet, caps=caps)
     give(meet, worker, "claude", add(meet)["id"])
     cid = _dm(meet)
-    post(meet, f"threads/{cid}/calls", {"model": "unknown-model"}, expected=422)
-    start_call(meet, cid, bots=["ops"])
+    call = start_call(meet, cid, bots=["ops"], model="claude-opus-5-5", effort="medium")
+    if not resident:
+        _speak(meet, call["id"], 0)
     attempt = _claim(meet, worker, "ops")
-    assert (attempt["config"]["model"], attempt["config"]["reasoning_effort"]) == ("claude-haiku-5-5", "low")
-    assert post(meet, f"attempts/{attempt['id']}/inputs", {}, worker["token"])["call_voice"] == {"closed": False}
+    keys = ("model", "reasoning_effort", "output_style")
+    assert [attempt["config"][key] for key in keys] == [model, "low", "Concise"]
+
+    prep = _claim(meet, worker, "ops")
+    assert prep["message"]["refs"]["call_prep"] == call["id"]
+    _complete(meet, worker, prep, "Prepared for the call.")
+    followup = post(
+        meet,
+        "tasks",
+        {"owner": "ops", "title": "Check the review schedule", "body": "Follow up from the call."},
+        token=attempt["token"],
+    )
+    post(meet, f"tasks/{followup['id']}/comments", {"text": "Please check the schedule.", "needs_action": True})
+    task = _claim(meet, worker, "ops")
+    assert task["task"]["id"] == followup["id"]
+    assert [task["config"][key] for key in keys] == [model, "high", "Explanatory"]
 
 
 def test_call_end_stops_a_leased_resident_before_it_can_start(meet):

@@ -235,8 +235,9 @@ class StartCall(Contract):
     # the call a Tico Meet one: only there can a bot speak.
     speak_replies: bool | None = None
     provider: Literal["auto", "google_meet", "tico"] = "auto"
-    model: str | None = Field(default=None, max_length=120)
-    effort: str | None = Field(default=None, max_length=20)
+    # Retained in the request hash for callers retrying a start across the change to per-bot voice settings.
+    model: str | None = Field(default=None, max_length=120, description="Deprecated. A bot keeps its own model.")
+    effort: str | None = Field(default=None, max_length=20, description="Deprecated. Voice replies use low effort.")
     bots: list[str] = Field(default_factory=list, max_length=BOT_LIMIT)  # bots in the call from its start
     # Both given: the call is booked for then (docs/meet.md, Scheduled calls), not started. ISO 8601 with an offset.
     starts_at: str | None = Field(default=None, max_length=40)
@@ -536,8 +537,8 @@ class Calls:
             "participants": people,
             "bots": bots,
             "speak_replies": bool(row["speak_replies"]),
-            "model": live_meetings._meeting(c, row["live_meeting_id"])["meeting_model"] or None,
-            "effort": call_sessions.effort(c, call_id),
+            "model": None,
+            "effort": "low" if voiced else None,
             "voice": self.voice.view(call_id, bots, voiced),
             "holds": holds,
             "stage": self._stage_view(c, row, who),
@@ -772,8 +773,6 @@ class Calls:
         bots=(),
         *,
         scheduled=None,
-        model=None,
-        effort=None,
     ):
         """Store a call, its live meeting, its card in the thread, who it rings and the bots it starts with. A Google
         Meet start brings the space `make_space` made before this write; a Tico Meet one needs LiveKit set up.
@@ -784,9 +783,6 @@ class Calls:
         self._may_start(c, who, thread_id, scheduled=scheduled is not None)
         if speak_replies is None:
             speak_replies = provider == "tico"
-        call_sessions.validate(model, effort)
-        if model and not speak_replies:
-            raise Problem("voice_model", "A model override requires spoken replies", 422)
         if (speak_replies or bots) and provider != "tico":
             raise Problem("voice_needs_tico_meet", "Bots join and speak in Tico Meet calls only", 422)
         if provider == "tico" and self.media is None:
@@ -799,8 +795,8 @@ class Calls:
         state = "scheduled" if scheduled else "live"
         c.execute(
             "INSERT INTO live_meetings(id,owner_actor,title,state,client_id,window_ms,cooldown_ms,reply_cap,"
-            "threshold,created_at,updated_at,started_at,visibility,meeting_model,thread_id) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "threshold,created_at,updated_at,started_at,visibility,thread_id) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 meeting_id,
                 who.actor,
@@ -815,7 +811,6 @@ class Calls:
                 stamp,
                 stamp,
                 "private",
-                model,
                 thread_id,
             ),
         )
@@ -852,8 +847,6 @@ class Calls:
                 scheduled["end"] if scheduled else None,
             ),
         )
-        if effort is not None:
-            c.execute("INSERT INTO call_voice_options(call_id,effort) VALUES(?,?)", (call_id, effort))
         if scheduled:
             calendar_api.record_call_event(c, who, scheduled["event"], call_id, scheduled.get("occurrence"))
             self._record(
@@ -2531,9 +2524,7 @@ def install_calls(app, store, auth, write):
                 provider, space = "tico", None
                 if not replayed:
                     with store.read() as c:
-                        provider = calls.choose(
-                            c, who, thread_id, body.provider, body.speak_replies or body.model, body.bots
-                        )
+                        provider = calls.choose(c, who, thread_id, body.provider, body.speak_replies, body.bots)
                     if provider == "google_meet":
                         try:
                             space = calls.make_space(who)
@@ -2556,8 +2547,6 @@ def install_calls(app, store, auth, write):
                         provider=provider,
                         space=space,
                         bots=body.bots,
-                        model=body.model,
-                        effort=body.effort,
                     ),
                 )
         finally:
@@ -2594,8 +2583,6 @@ def install_calls(app, store, auth, write):
                             provider="tico",
                             bots=plan["bots"] if plan else body.bots,
                             scheduled=plan,
-                            model=body.model,
-                            effort=body.effort,
                         ),
                     )
                 except BaseException:
