@@ -71,6 +71,9 @@ interface ChatElsewhere {
 // A message of a conversation (GET /v2/conversations/<id>/messages).
 interface ChatMessage {
   id?: string | undefined;
+  seq?: number | undefined;
+  source?: RowSource | undefined;
+  task_activity?: ChatTaskActivity;
   kind?: string | undefined;
   body?: string | null | undefined;
   created_at?: string | undefined;
@@ -130,6 +133,7 @@ interface ChatGoal {
 interface ChatPage {
   conversations?: ChatConversation[] | undefined;
   messages?: ChatMessage[] | undefined;
+  task_activity?: ChatTaskActivity[];
   next_before?: string | undefined;
   has_more?: boolean | undefined;
   execution?: ChatExecution | null | undefined;
@@ -156,6 +160,9 @@ interface ChatState {
   liveCid?: string | null | undefined;
   waitTimer?: number | undefined;
   openFolds?: Set<string> | undefined;
+  openLines?: Set<string>;
+  taskActivity?: ChatTaskActivity[];
+  olderActivity?: boolean;
   openSteps?: Set<string | null | undefined> | undefined;
   steps?: Record<string, string> | undefined;
   dismissed?: string | undefined;
@@ -389,6 +396,9 @@ async function v2ChatMessages(state: ChatState) {
   // live turn to the stream (this copy has not seen it start).
   const late = state.mine.slice(sent).filter(m => !(d.messages || []).some(x => x.id === m.id));
   state.messages = [...(d.messages || []), ...late];
+  state.latestIds = new Set((d.messages || []).map(m => m.id));
+  state.taskActivity = d.task_activity || [];
+  state.olderActivity = false;
   state.nextBefore = d.next_before;
   if (S.me && !late.length) {
     state.execution = d.execution;
@@ -794,13 +804,16 @@ function chatSideHTML(messages: ChatMessage[], slug: string | undefined) {
 // last thing in the conversation join the line just above it, so the conversation's last message stays at the bottom
 // and a bot-to-bot exchange arriving while you read changes a count instead of pushing the chat up.
 // One line of the thread before it is drawn: the goal line's HTML, or a message and where it goes.
-interface ChatFeedItem { html?: string | undefined; message?: ChatMessage; side?: boolean; task?: boolean }
-function v2MessagesHTML(messages: ChatMessage[], goalLine: {at?: number; html?: string} | null | undefined, slug: string | undefined = V2C?.slug) {
+interface ChatFeedItem { html?: string | undefined; message?: ChatMessage; side?: boolean; task?: boolean; activity?: boolean }
+function v2MessagesHTML(messages: ChatMessage[], goalLine: {at?: number; html?: string} | null | undefined, slug: string | undefined = V2C?.slug,
+  openLines?: Set<string>) {
   const feed: ChatFeedItem[] = [];
+  const hasActivity = messages.some(m => m.task_activity);
   messages.forEach((message, i) => {
     if (goalLine?.at === i) feed.push({html: goalLine.html});
     const kind = chatSideKind(message, slug);
-    feed.push({message, side: !!kind && kind !== 'task', task: kind === 'task'});
+    const activity = hasActivity && (kind === 'task' || isSourceLine(message) && rowSource(message).kind === 'task_update');
+    feed.push({message, activity, side: !activity && !!kind && kind !== 'task', task: kind === 'task'});
   });
   if (goalLine?.at === messages.length) feed.push({html: goalLine.html});
   const lastMain = feed.findLastIndex((item: ChatFeedItem) => !item.side);
@@ -816,6 +829,14 @@ function v2MessagesHTML(messages: ChatMessage[], goalLine: {at?: number; html?: 
     const item = feed[i];
     if (!item) break;
     dayLine(item.message);
+    if (item.activity) {
+      const run: ChatMessage[] = [];
+      for (let next = feed[i]; next?.activity && next.message; next = feed[i]) { run.push(next.message); i++; }
+      rows.push(sourceRunsHTML(run, {min: run.some(m => m.task_activity) ? 1 : 2, isUpdate: () => true, draw: () => '',
+        open: group => group.some(m => !!m.id && openLines?.has(m.id)),
+        line: m => m.task_activity ? sourceActivityLineHTML(m, m.task_activity) : chatTaskMark(m) ? chatTaskRowHTML(m) : sourceLineHTML(m)}));
+      continue;
+    }
     if (item.task && item.message) {
       const run: ChatMessage[] = [], from = item.message.sender_id;
       for (let next = feed[i]; next?.task && next.message && next.message.sender_id === from; next = feed[i]) { run.push(next.message); i++; }
@@ -922,6 +943,10 @@ function v2ChatRender(state: ChatState) {
       if (V2C !== state) return;
       const target = eventElement(ev);
       if (target instanceof HTMLDetailsElement && target.matches('details.run-steps')) v2StepsOpen(state, target);
+      if (target instanceof HTMLDetailsElement && target.matches('details.src-group')) {
+        state.openLines ||= new Set();
+        sourceGroupToggle(state.openLines, target);
+      }
       const fold = target instanceof HTMLElement ? target.dataset.fold : undefined;
       if (fold) { state.openFolds ||= new Set(); state.openFolds[target instanceof HTMLDetailsElement && target.open ? 'add' : 'delete'](fold); }
     }, true);
@@ -943,8 +968,11 @@ function v2ChatRender(state: ChatState) {
   if (state.loaded && state.holdsFor !== state.conv?.id) { state.holdsFor = state.conv?.id; void ruleChatHoldsLoad(state); }
   const shown = v2WithBotTalk(state, state.messages.filter(m => m.refs?.maintenance !== 'checkpoint' && !chatGoalControl(m)));
   state.lastMain = shown.findLast(m => !chatSideKind(m, state.slug)) || null;
-  const goalLine = chatGoalLine(state, shown);
-  const groups = v2MessagesHTML(shown, goalLine, state.slug);
+  const feed = sourceMergeActivity<ChatMessage>(shown, (state.taskActivity || []).map(sourceActivityRow), (a, m) =>
+    Number(new Date(a.created_at || '')) < Number(new Date(m.created_at || '')) ||
+    a.created_at === m.created_at && Number(a.seq) < Number(m.seq));
+  const goalLine = chatGoalLine(state, feed);
+  const groups = v2MessagesHTML(feed, goalLine, state.slug, state.openLines);
   const pending = state.live && !state.live.text ? v2PendingHTML(state) : '';
   if (!pending) clearTimeout(state.waitTimer);
   // The reply on its way is the bot's row like any other, with no time until it lands.
@@ -1040,6 +1068,9 @@ async function v2ChatOlder(state: ChatState) {
   const got = d.messages;
   if (!got) throw new Error('the page has no messages');
   state.messages = [...got, ...state.messages.filter(m => !got.some(x => x.id === m.id))]; state.nextBefore = d.next_before;
+  const activity = state.taskActivity || [], have = new Set(activity.map(m => m.id));
+  state.taskActivity = [...(d.task_activity || []).filter(m => !have.has(m.id)), ...activity];
+  state.olderActivity ||= !!state.taskActivity.length;
   state.older = state.messages.filter(m => !state.latestIds?.has(m.id));
   state.stick?.release(); state.prepending = true;
   return true;
@@ -1232,9 +1263,14 @@ function v2ChatApply(state: ChatState, d: ChatPage) {
   // A snapshot the server built just before a message of mine landed does not list it yet. What I sent stays on
   // the page, and the run the send started stays live; the next snapshot lists it and this copy drops away.
   const newest = String((d.messages || []).at(-1)?.created_at || '');
-  const late = state.mine.filter(m => !latestIds.has(m.id) && String(m.created_at || '') >= newest);
-  state.messages = [...(state.older || []).filter(m => !latestIds.has(m.id)), ...(d.messages || []), ...late];
-  if (!state.older?.length) state.nextBefore = d.next_before;
+  const kept = (state.older || []).filter(m => !latestIds.has(m.id)), keptIds = new Set(kept.map(m => m.id));
+  const late = state.mine.filter(m => !latestIds.has(m.id) && !keptIds.has(m.id) && String(m.created_at || '') >= newest);
+  state.messages = [...kept, ...(d.messages || []), ...late];
+  const activity = d.task_activity || [], older = state.taskActivity || [];
+  const before = String(d.next_before || '');
+  const floor = activity.find(m => 'task-activity:' + m.id === before)?.seq ?? d.messages?.find(m => m.id === before)?.seq ?? 0;
+  state.taskActivity = [...(state.olderActivity ? older.filter(m => m.seq < floor) : []), ...activity];
+  if (!state.older?.length && !state.olderActivity) state.nextBefore = d.next_before;
   const wasRunning = !!state.live;
   if (!late.length) {
     state.execution = d.execution;

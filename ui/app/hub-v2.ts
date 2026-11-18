@@ -53,6 +53,15 @@ interface SourceLineOptions {
   cls?: string | undefined;
   attrs?: string | undefined;
   tail?: string | undefined;
+  lead?: string | undefined;
+}
+interface ChatTaskActivity {
+  id: string;
+  seq: number;
+  created_at: string;
+  task_id: string;
+  title: string;
+  excerpt: string;
 }
 /** The task fields the task text helpers read. */
 interface HubTask {
@@ -200,12 +209,32 @@ function sourceLeadHTML(src: RowSource) {
 }
 // One gray line for a row no person or bot wrote. `cls` and `attrs` let each surface keep its own row hooks; the
 // hover says what made it and when, and the whole text when the line may be cut.
-function sourceLineHTML(m: SourceRow, {src = rowSource(m), at = m.created_at, text = m.body, cls = '', attrs = '', tail = ''}: SourceLineOptions = {}) {
+function sourceLineHTML(m: SourceRow, {src = rowSource(m), at = m.created_at, text = m.body, cls = '', attrs = '', tail = '', lead = sourceLeadHTML(src)}: SourceLineOptions = {}) {
   const words = sourcePlain(text || ''), first = words.split('\n').map(s => s.trim()).find(Boolean) || '';
   const tip = [src.name, at ? fmt(at) : ''].filter(Boolean).join(' · ') + (words.length > first.length || first.length > 60 ? '\n\n' + words.slice(0, 600) : '');
   const when = at ? `<time class="src-time" data-ago="${esc(at)}">${esc(ago(at))}</time>` : '';
   return `<div class="src-line src-${esc(src.kind)}${cls ? ' ' + cls : ''}"${m.id ? ` data-message="${esc(m.id)}"` : ''}${attrs} title="${esc(tip)}">${
-    sourceLeadHTML(src)}<span class="src-text">${esc(first)}</span>${when}${tail}</div>`;
+    lead}<span class="src-text">${esc(first)}</span>${when}${tail}</div>`;
+}
+const sourceActivityRow = (activity: ChatTaskActivity) => ({
+  id: 'task-activity:' + activity.id, seq: activity.seq, created_at: activity.created_at, body: activity.excerpt,
+  source: {kind: 'task_update', name: '', link: null}, task_activity: activity,
+});
+function sourceActivityLineHTML(m: SourceRow, activity: ChatTaskActivity) {
+  return sourceLineHTML(m, {
+    lead: `<a class="src-name" href="#/task/${esc(encodeURIComponent(activity.task_id))}">${esc(activity.title)}</a>`,
+  });
+}
+// Keep the chat's own ordering while inserting the activity from the same page window.
+function sourceMergeActivity<T>(messages: T[], activity: T[], before: (a: T, m: T) => boolean): T[] {
+  if (!activity.length) return messages;
+  const rows: T[] = [];
+  let i = 0;
+  for (const m of messages) {
+    while (i < activity.length && before(activity[i]!, m)) rows.push(activity[i++]!);
+    rows.push(m);
+  }
+  return rows.concat(activity.slice(i));
 }
 // Consecutive task updates (two or more) are one gray "N task updates" row, shut by default; open shows a line each.
 // Every other row is drawn by `draw`. `open(run)` says whether a group is open, so a redraw keeps it: the surface keeps
@@ -226,7 +255,7 @@ function sourceRunsHTML<T extends SourceRunRow>(items: T[], {line, draw, open = 
     else {
       const key = String(first.id || first.message?.id || ''), last = run.at(-1)!, at = last.created_at || last.ts || last.message?.created_at;
       out.push(`<details class="src-group" data-src-group="${esc(key)}"${open(run) ? ' open' : ''}><summary class="src-line src-task_update">${
-        run.length} ${esc(noun)}<span class="src-chev" aria-hidden="true">▸</span>${at ? `<time class="src-time" data-ago="${esc(at)}" title="${esc(fmt(at))}">${esc(ago(at))}</time>` : ''}</summary>${
+        run.length} ${esc(run.length === 1 ? 'task update' : noun)}<span class="src-chev" aria-hidden="true">▸</span>${at ? `<time class="src-time" data-ago="${esc(at)}" title="${esc(fmt(at))}">${esc(ago(at))}</time>` : ''}</summary>${
         run.map(line).join('')}</details>`);
     }
     i = end;

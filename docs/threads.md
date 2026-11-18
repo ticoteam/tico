@@ -218,6 +218,9 @@ person or bot did; that actor is not shown as a name.
 
 A gray line is always one line. Text that does not fit ends in "…"; hover over a long line to read its text.
 
+In a direct chat with a bot, its task messages you can read appear among your chat messages as collapsed task updates.
+Open a group to see each task's title and a short excerpt of the bot's message. The title opens the task.
+
 Which label a line gets changes what you see only. Who or what wakes a bot, what is delivered and what counts as
 unread stay as they were. A bot's turn reads the same labels ("Task update", "Stuck check"), never Tico's stored actor.
 Task

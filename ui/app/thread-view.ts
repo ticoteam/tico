@@ -88,6 +88,7 @@ interface ThvMessage {
   run?: ChatRun;
   refs?: ThvRefs;
   reactions?: ThvReaction[];
+  task_activity?: ChatTaskActivity;
   [key: string]: unknown;
 }
 // A message the stream or a send brings, wrapped with where it belongs.
@@ -234,6 +235,7 @@ interface ThvConv {
   thread: ThvThread | null;
   breadcrumb: ThvCrumb[];
   messages: ThvMessage[];
+  taskActivity: ChatTaskActivity[];
   next: string | null;
   state: 'loading' | 'empty' | 'ready' | 'gone' | 'error';
   execution: ChatExecution | null | undefined;
@@ -296,6 +298,7 @@ interface ThvTimeline {
   thread?: ThvThread;
   breadcrumb?: ThvCrumb[];
   messages?: ThvMessage[];
+  task_activity?: ChatTaskActivity[];
   next_cursor?: string | null;
   read_marks?: Record<string, number | string>;
   bot_status?: ThvBotRow[];
@@ -383,7 +386,7 @@ function threadMount(host: HTMLElement, opts: ThvOpts = {}): ThvView {
   return view;
 }
 // Everything that belongs to one conversation: a view that moves to another (a fresh DM) starts from this again.
-const thvConvFresh = (): ThvConv => ({id: '', thread: null, breadcrumb: [], messages: [], next: null, state: 'loading', execution: null,
+const thvConvFresh = (): ThvConv => ({id: '', thread: null, breadcrumb: [], messages: [], taskActivity: [], next: null, state: 'loading', execution: null,
   readAt: 0, openSeq: 0, readSent: new Map(), marks: new Map(), pending: [], replyTo: null, botStatus: null, openUpdates: new Set(), openLines: new Set(),
   flash: '', focus: '', error: '', memberList: null, memberMore: false, run: {openSteps: new Set(), steps: {}, openFolds: new Set()}, live: new Map()});
 function threadUnmount(view: ThvView | null | undefined) {
@@ -442,11 +445,12 @@ async function thvLoad(view: ThvView): Promise<void> {
     view.breadcrumb = r.breadcrumb || [];
     thvStatusTake(view, r);
     view.messages = thvMerge(view, r.messages || []);
+    view.taskActivity = r.task_activity || [];
     view.next = r.next_cursor || null;
     view.readAt = Number(r.read_marks?.[id] ?? view.thread?.me?.last_read_seq) || 0;
     view.openSeq = thvMaxSeq(view.messages);
     thvLearnMarks(view, r);
-    view.state = view.messages.length ? 'ready' : 'empty';
+    view.state = view.messages.length || view.taskActivity.length ? 'ready' : 'empty';
     thvDraw(view, {stick: !view.opts.focus});
     thvMarkRead(view);
     void callLoad(view);
@@ -520,8 +524,13 @@ async function thvRefresh(view: ThvView): Promise<void> {
     const olderIds = new Set(older.map(m => m.id));
     const merged = thvMerge({messages: view.messages.filter(m => !olderIds.has(m.id))}, fresh);
     view.messages = [...older, ...merged];
+    const floor = Number(r.next_cursor) || 0;
+    view.taskActivity = [
+      ...(view.olderRead ? view.taskActivity.filter(m => m.seq < floor) : []),
+      ...(r.task_activity || []),
+    ];
     if (!view.olderRead) view.next = r.next_cursor || null;
-    view.state = view.messages.length ? 'ready' : 'empty';
+    view.state = view.messages.length || view.taskActivity.length ? 'ready' : 'empty';
     thvDraw(view, {stick: thvAtBottom(view)});
     thvMarkRead(view);
   } catch (e) {
@@ -535,6 +544,8 @@ async function thvPageOlder(view: ThvView) {
   thvLearnMarks(view, r);
   const have = new Set(view.messages.map(m => m.id));
   view.messages = [...(r.messages || []).filter(m => !have.has(m.id)), ...view.messages];
+  const activityIds = new Set(view.taskActivity.map(m => m.id));
+  view.taskActivity = [...(r.task_activity || []).filter(m => !activityIds.has(m.id)), ...view.taskActivity];
   view.next = r.next_cursor || null;
   view.olderRead = true;
   return true;
@@ -661,7 +672,9 @@ async function thvDelete(view: ThvView, button: HTMLButtonElement) {
 // messages" row; two such rows meet where one page of it ends and the next begins.
 function thvRows(view: ThvView) {
   const rows: ThvRow[] = [];
-  for (const m of view.messages) {
+  const messages = sourceMergeActivity<ThvMessage>(view.messages, (view.taskActivity || []).map(sourceActivityRow),
+    (a, m) => Number(a.seq) < Number(m.seq));
+  for (const m of messages) {
     if (m.hidden) {
       const fold = m.earlier ? 'earlier' : 'hidden', last = rows[rows.length - 1];
       if (last?.fold === fold) { last.ids!.push(m.id); continue; }
@@ -1032,20 +1045,22 @@ function thvUpdateReveal(view: ThvView, id: string) {
 // line, or a system line has no avatar or sender row; two or more task updates in a row are one "N task updates" row,
 // shut until opened. A normal message after them starts its own group.
 const thvTaskUpdate = (row: ThvRow | undefined) => !!row?.m && !row.m.deleted && isSourceLine(row.m) && rowSource(row.m).kind === 'task_update';
-// Each task update in a run of two or more, by id, mapped to its run's key (the first one's id).
-function thvLineGroups(view: ThvView) {
-  const of = new Map<string, string>(), rows = thvRows(view).filter(r => !(view.opts.home && r.m && thvIsUpdateCard(r.m)));
+// Each folded task update, by id, mapped to its run's key (the first one's id).
+function thvLineGroups(view: ThvView, rendered = thvRows(view)) {
+  const of = new Map<string, string>(), rows = rendered.filter(r => !(view.opts.home && r.m && thvIsUpdateCard(r.m)));
   for (let i = 0; i < rows.length;) {
     if (!thvTaskUpdate(rows[i])) { i++; continue; }
     let end = i;
     while (end < rows.length && thvTaskUpdate(rows[end])) end++;
-    if (end - i > 1) for (const r of rows.slice(i, end)) of.set(r.m!.id, rows[i]!.m!.id);
+    const run = rows.slice(i, end);
+    if (run.length > 1 || run[0]?.m?.task_activity) for (const r of run) of.set(r.m!.id, rows[i]!.m!.id);
     i = end;
   }
   return of;
 }
 // The old notice about a Home's closed history keeps its Open button on the line.
-const thvLineHTML = (view: ThvView, m: ThvMessage) => sourceLineHTML(m, {cls: 'th-line' + (view.flash === m.id ? ' th-flash' : ''),
+const thvLineHTML = (view: ThvView, m: ThvMessage) => m.task_activity ? sourceActivityLineHTML(m, m.task_activity)
+  : sourceLineHTML(m, {cls: 'th-line' + (view.flash === m.id ? ' th-flash' : ''),
   attrs: ` data-mid="${esc(m.id)}" data-tid="${esc(m.thread_id || view.id)}" data-seq="${esc(m.seq ?? '')}"`,
   tail: m.refs?.earlier_messages?.thread_id ? `<button type="button" class="linkish th-earlier-open" data-th-earlier="${esc(m.refs.earlier_messages.thread_id)}">Open earlier messages to Read</button>` : ''});
 // The line stands for its group: a button that opens or shuts it. Its panel is always in the markup (empty while shut),
@@ -1064,7 +1079,7 @@ function thvRowsHTML(view: ThvView) {
   if (view.state === 'loading') return '<div class="th-empty muted">Loading…</div>';
   if (view.state === 'gone') return '<div class="th-empty muted">Not found</div>';
   if (view.state === 'error') return `<div class="th-empty err">${esc(view.error || 'Could not load')}</div>`;
-  const rows = thvRows(view), out = [], groups = thvUpdateGroups(view), lineGroups = thvLineGroups(view);
+  const rows = thvRows(view), out = [], groups = thvUpdateGroups(view), lineGroups = thvLineGroups(view, rows);
   let divided = false, prev: ThvMessage | null = null, day = '';
   // One line names the day wherever it changes; the first message of a day starts with its full header.
   const dayLine = (m: ThvMessage | undefined) => {
@@ -1098,7 +1113,8 @@ function thvRowsHTML(view: ThvView) {
         ms.push(r.m);
       }
       dayLine(ms[0]);
-      out.push(sourceRunsHTML(ms, {line: (m: ThvMessage) => thvLineHTML(view, m), draw: () => '', open: (run: ThvMessage[]) => run.some(m => view.openLines.has(m.id))}));
+      out.push(sourceRunsHTML(ms, {min: 1, line: (m: ThvMessage) => thvLineHTML(view, m), draw: () => '',
+        open: (run: ThvMessage[]) => run.some(m => view.openLines.has(m.id))}));
       prev = null;
       i = end - 1;
       continue;

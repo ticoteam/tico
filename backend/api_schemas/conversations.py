@@ -15,6 +15,10 @@ SOURCE_SCHEMA = obj(
 SCHEMAS.update(
     {
         "MessageSource": SOURCE_SCHEMA,
+        "ChatTaskActivity": obj(
+            {"id": "s", "seq": "i", "created_at": "s", "task_id": "s", "title": "s", "excerpt": "s"},
+            required=["id", "seq", "created_at", "task_id", "title", "excerpt"],
+        ),
         "ChatGoal": obj(
             {
                 "id": "s",
@@ -155,6 +159,7 @@ SCHEMAS.update(
             {
                 "conversation": ref("Conversation"),
                 "messages": items(ref("Message")),
+                "task_activity": items(ref("ChatTaskActivity")),
                 "has_more": "b",
                 "next_before": "n",
             },
@@ -164,6 +169,7 @@ SCHEMAS.update(
         "Snapshot": obj(
             {
                 "messages": items(ref("Message")),
+                "task_activity": items(ref("ChatTaskActivity")),
                 "has_more": "b",
                 "next_before": "n",
                 "execution": {
@@ -171,7 +177,8 @@ SCHEMAS.update(
                     "description": "The latest run: state, label, "
                     "text (the reply so far; separate messages are joined by a blank line), parts, bot",
                 },
-            }
+            },
+            required=["messages", "has_more", "next_before", "execution"],
         ),
         "MessageResult": obj({"message": ref("Message")}),
         "ChatResult": obj({"conversation": ref("Conversation"), "message": ref("Message")}),

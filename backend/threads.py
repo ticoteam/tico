@@ -230,7 +230,7 @@ def _row(c, value, table="conversations"):
     if value is None:
         return None
     if isinstance(value, str):
-        row = c.execute(f"SELECT * FROM {table} WHERE id=?", (value,)).fetchone()
+        row = read_cache.one(c, f"SELECT * FROM {table} WHERE id=?", (value,))
         return dict(row) if row else None
     return dict(value)
 
@@ -5111,11 +5111,14 @@ def timeline(c, v, thread_id, *, cursor=None, limit=50, max_bytes=None, flat=Fal
     `flat`: the thread and its whole readable open subtree in time order, every message at depth 0, paged by the same
     cursor (a seq) and caps, with `read_marks` for the root and each thread a message on the page is in. Each shown
     message has `reply_to` (reply_quotes) in both modes; the first page also has `bot_status` (thread_bot_status)."""
+    from . import task_privacy
+
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     row = require(c, v, thread_id)
     limit = max(1, min(int(limit or 50), MAX_PAGE))
     max_bytes = min(int(max_bytes or MAX_PAGE_BYTES), MAX_PAGE_BYTES)
     below = int(cursor) if cursor not in (None, "") else (1 << 62)
+    bot = task_privacy.chat_peer(c, v, row)
     # An old reader of a migrated Home opens only its root, for the history they read: there is no branch for them.
     old_only = legacy_reader_only(c, v, row)
     only_old = " AND legacy_audience IS NOT NULL" if old_only else ""
@@ -5181,12 +5184,20 @@ def timeline(c, v, thread_id, *, cursor=None, limit=50, max_bytes=None, flat=Fal
         size += bytes_of
         pages.append(rows_of)
     next_cursor = pages[-1][0]["seq"] if more and pages else None
+    activity = []
+    if bot:
+        activity, cutoff = task_privacy.chat_activity(c, v, bot, next_cursor or 0, below)
+        if cutoff is not None:
+            pages = [block_rows for block_rows in pages if block_rows[0]["seq"] >= cutoff]
+            next_cursor = cutoff
     out = {
         "thread": {**view(c, v, row), **_earlier(c, v, row)},
         "breadcrumb": breadcrumb(c, v, row),
         "messages": [r for rows_of in reversed(pages) for r in rows_of],
         "next_cursor": next_cursor,
     }
+    if activity:
+        out["task_activity"] = activity
     if flat:
         out["read_marks"] = read_marks(c, v, [row["id"], *(r.get("thread_id") for r in out["messages"])])
     if cursor in (None, ""):
