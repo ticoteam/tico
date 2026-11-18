@@ -20,11 +20,14 @@ const monthsAgo = (n: number) => { const d = new Date(HUB_NOW); d.setUTCDate(1);
 const MONTH = monthsAgo(0);
 // The month with no row at all, and the one where spend went unrecorded: gaps stay gaps.
 const NO_ROW = 6, NO_SPEND = 3;
-// A Growth page nobody arranged (backend/cards.py DEFAULTS): the Growth line over it says the month numbers and channels.
-const DEFAULT_CARDS = ['Funnel', 'Retention', 'Growth board'];
+// A Growth page nobody arranged (backend/cards.py DEFAULTS): the Growth line over it says the month numbers and channels,
+// and the Growth Manager asks for the rest by chat.
+const DEFAULT_CARDS = ['Growth board'];
 // The cards as a team that pinned them before the line keeps them; the rest of this script reads them.
 const CARDS = ['Funnel', 'New customers', 'CAC', 'Spend', 'LTV:CAC', 'Payback', 'Kept 30 days', 'Channels', 'Retention', 'Growth board'];
 const CLASSIC_ADDED: Array<[string, string, Record<string, string>]> = [
+  ['growth_funnel', 'large', {}],
+  ['growth_retention', 'medium', {}],
   ...['new_customers', 'cac', 'spend', 'ltv_cac', 'payback_months', 'kept_d30'].map((metric): [string, string, Record<string, string>] => ['growth_number', 'small', {metric}]),
   ['growth_channels', 'large', {}],
 ];

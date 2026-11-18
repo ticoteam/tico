@@ -19,15 +19,12 @@ there is no link. The owner and admins get **Settings**, which holds the channel
 numbers come from** link to Sources; anyone else gets a **Sources** link.
 
 The page is the place `growth` (`backend/cards.py`, the same grid and card forms as the Dashboard). Over the cards sits
-**The Growth line** (below). A Growth page nobody arranged shows these cards under it, each a template below:
+**The Growth line** (below). A Growth page nobody arranged shows one card under it: the **Growth board**, medium (the
+open marketing tests by stage). The Growth Manager asks people for the rest by chat.
 
-- **Funnel**, large: the five stages (Reach, Acquire, Activate, Retain, Refer), each with its KPI's reading and the share
-  of the stage before (only between stages counted in the same unit), and the North Star.
-- **Retention**, medium: the share kept at 30, 90 and 180 days, cohort by cohort.
-- **Growth board**, medium: the open marketing tests by stage.
-
-The **Number** and **Channels** cards are still templates anyone may add; the line says what they said, so a new page
-does not repeat them. A page someone already arranged keeps its own pins.
+The **Number**, **Funnel**, **Channels** and **Retention** cards are still templates anyone may add (Funnel: the five
+stages' KPIs and the North Star; Retention: the share kept at 30, 90 and 180 days, cohort by cohort). A page someone
+already arranged keeps its own pins.
 
 The first change saves them as real pins. A **month** picker reads the cards for one month: the page offers the newest 24
 months that have cohort rows, and the newest one is the default. A month with no cohorts yet shows the last month that
@@ -38,8 +35,8 @@ has one for the figures that carry back (retention, LTV, LTV:CAC), saying which 
 One block over the cards reads the picked month left to right: **Sources** → **Channels** → **This month** (spend, new
 customers, kept to day 30) → **Unit economics** (CAC, LTV:CAC, payback) → **KPIs**. One sentence over it says the month,
 for example "October brought 132 new customers, up 12%. Each cost $151 to win and pays back in 4 months. One channel is
-over its guardrail. One source has not synced since 10 Jan, so 3 numbers below are from then." While the line shows, the
-stale-sources banner gives way to it.
+over its guardrail. One source has not synced since 10 Jan, so 3 numbers below are from then." There is no separate
+stale-sources banner: the line's sentence and its marks say it.
 
 - **At rest** it is one row per channel, then Unknown and All channels. Each row shows the sources that fill it on the
   left and the KPIs it moves on the right. A source that is stale or failing says since when, and every number it fills
@@ -181,8 +178,9 @@ figures.
 **Computed beside typed.** A channel's month with customer facts shows the computed figures, each marked computed and
 with the number of customers it comes from and the customers source(s) they were loaded from (`origins` in
 `tico growth cohort list --json`: `computed`, `computed_from`, `sources`). A typed estimate for the same month is
-replaced. A typed actual that differs is kept beside it, on the Number cards and the Retention card, and the channel's
-owner or an admin keeps one (`tico growth cohort resolve ... --keep typed|computed --against computed`). After a load,
+replaced. A typed actual that differs is shown beside it on the Retention card, with nothing to choose there: the
+Growth Manager asks whoever typed it which is right, and it, the channel's owner or an admin keeps one
+(`tico growth cohort resolve ... --keep typed|computed --against computed`, MCP `tico_growth_cohort_resolve`). After a load,
 and after a number is typed as actual, the channel's owner gets one notice naming the numbers that differ; each
 channel, month and figure is asked about once. A channel with no owner is asked once an owner is set, at the next load.
 On the Retention card, LTV uses the computed shares even where a typed number was kept.
@@ -236,8 +234,8 @@ tico growth source sync <id>      # starts the bot's run now
   under `origins`.
 - **Who wins.** A number a synced source filled belongs to it: typing it is refused, naming the source, until the source
   is retired. A sync never overwrites a number someone typed as actual. When the two differ, the typed number stays and
-  the source's value is held beside it, and the source's owner or an admin keeps one
-  (`tico growth cohort resolve ... --keep typed|source`). A value they chose not to use is not raised again. A typed
+  the source's value is held beside it; the Growth Manager asks whoever typed it which is right, and it, the source's
+  owner or an admin keeps one (`tico growth cohort resolve ... --keep typed|source`). A value they chose not to use is not raised again. A typed
   estimate is replaced by the synced actual.
 - **One source per number.** Two live synced sources never fill the same number.
 - **Health.** `tico growth source list` shows each synced source as fresh, waiting (never run), stale (no good run in
@@ -272,12 +270,12 @@ another bot and keeps the columns it maps. The owner, an admin, the source's own
 **On the web.** Sources shows each synced source's numbers and health (Fresh, Stale or Failing, and since when), and a
 source typed by hand as "not synced". **Connect a source** takes a name, a CSV and the column for each number (a picked
 file's columns that match a number's name are filled in), and runs the file at once, saying what it wrote, held and
-could not write. Opening a synced source changes its columns, takes a new file or runs its last one again. On Growth, a
-banner over the cards names each Stale or Failing source and the numbers it fills; each Number card has a line saying
+could not write. Opening a synced source changes its columns, takes a new file or runs its last one again. On Growth,
+each Number card has a line saying
 where its figure came from (the source and how long ago it synced, marked stale or failing, or who typed it, actual or
-estimate; CAC, LTV and payback name the sources of the numbers they are worked out from). A number a source disagrees
-with shows both values, and the source's owner or an admin picks **Keep** or **Use**, on the card or in a month's
-numbers under Settings, where a synced number is locked.
+estimate; CAC, LTV and payback name the sources of the numbers they are worked out from). A month a source disagrees
+with is marked **Source differs** in its numbers under Settings, where a synced number is locked; the page offers no
+Keep or Use, since the Growth Manager asks whoever typed it.
 
 **A signed address for a file source.** `POST /api/v2/growth/sources/<id>/address` (the owner, an admin or the source's
 owner) gives a file source an address and a signing secret, shown once; a new one stops the old. A script posts the CSV
@@ -377,18 +375,21 @@ steps are done). The Growth activation rate is read from these dates. A team who
 steps done (set up before this was counted) is marked `set_up_before_first_open`, so the rate can leave it out. A Tico
 support session reading Growth records nothing.
 
-On the web, the Growth page shows a **Get started** panel over its cards while any step is not done: the four steps in
-order, each done step with what was set, and the next one with a button that opens its form (Settings, a new channel,
-the channel's source picker or Sources when there is no source yet, and the Months form on the channel and the last full
-month). Someone who may not do the next step sees who may, by name, instead of the button. A team that finishes the
-steps after first opening Growth is told once that it is set up, with a link to the channel's numbers
-(`POST /api/v2/growth/setup/shown`); after that the panel does not come back. Each empty card names the step that fills
-it, with a link; the Funnel, which reads the growth KPIs, links to Goals.
+On the web, Growth gets its numbers by chat, not forms. Under the header is one row with the Growth Manager: **Chat**
+opens your chat with it and, while setup is not done, asks it to set Growth up ("Help me set up Growth."). Its
+`growth-interview` skill asks whoever knows (founder, sales, finance, marketing, support), one question at a time, takes
+answers in any shape (a guess is saved as an estimate), routes "ask Ana" to Ana, and writes each answer as it arrives
+(`numbers-from-chat`); things that already work become Growth Monitoring tasks (`what-already-works`), and person sources
+are asked again when a month closes (`keep-numbers-fresh`). **Call** calls the Growth Manager by voice once voice calls
+with bots ship; until then it says they are coming. Once set up, the row is a quiet line. With no Growth Manager on the
+team there is no row. Each empty card says what fills it; the Funnel, which reads the growth KPIs, links to Goals.
+Settings and Sources stay in ⋯ for anyone who would rather type.
 
 ## Who may do what
 
 A channel's stage and budget are its owner's, and the owning bot may change its why, stage, budget and KPI. Anyone else
-proposes the change. The owner and admins may change any channel, source or setting.
+proposes the change. The owner, admins and the Growth Manager (`bot:growth-manager`, which writes what people tell it)
+may change any channel, source or setting; only the owner and admins retire one.
 
 Every Growth read carries `you_may`: per action, what this caller may do: change settings (`settings`), add or change
 any channel (`channels`), add or change sources (`sources`), record months (`months`). `channels` false does not stop a

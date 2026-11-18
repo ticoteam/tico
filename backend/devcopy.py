@@ -650,7 +650,6 @@ KEEP = (
             "growth_settings",
             "growth_sync_runs",
             "growth_setup",  # the first-run dates the activation rate is read from: the team's history, not work
-            "growth_setup_shown",  # when the Get started panel said "you're set up": history, not work
             "growth_alert_state",  # which line each channel was last on (backend/growth_brief.py): history, no customer keys
             "growth_crossings",  # each crossing and how its owner was told: history, no customer keys
             "growth_view_reads",  # how many times agents read a scoped view each day: counts only

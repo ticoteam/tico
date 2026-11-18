@@ -77,8 +77,9 @@ def marketing(api, title, channel, stage="idea:on-deck", owner="ops", **more):
 def test_the_growth_page_starts_with_its_cards_and_admins_and_bots_arrange_it(api):
     view = growth(api)
     assert view["saved"] is False and view["can_edit"] is True and view["kind"] == "growth"
-    # The month numbers and channels are the Growth line's (backend/growth_line.py), so not cards by default.
-    assert [p["card"]["template"] for p in view["pins"]] == ["growth_funnel", "growth_retention", "growth_board"]
+    # The month numbers and channels are the Growth line's (backend/growth_line.py) and the rest is asked for by chat,
+    # so only the board by default.
+    assert [p["card"]["template"] for p in view["pins"]] == ["growth_board"]
     assert view["months"] == []
     assert growth(api, token="cara-test")["can_edit"] is False  # a member reads it, arranges nothing
     put(api, "places/growth", {}, "cara-test", expected=403)
@@ -94,8 +95,8 @@ def test_the_growth_page_starts_with_its_cards_and_admins_and_bots_arrange_it(ap
     # Everyone sees it, so an audience is refused; the first change saved the defaults as real pins.
     put(api, "places/growth", {"audience": {"everyone": False}}, expected=422)
     saved = growth(api)
-    assert saved["saved"] is True and all(p["id"] for p in saved["pins"]) and len(saved["pins"]) == 4
-    assert len(growth(api, token="cara-test")["pins"]) == 4
+    assert saved["saved"] is True and all(p["id"] for p in saved["pins"]) and len(saved["pins"]) == 2
+    assert len(growth(api, token="cara-test")["pins"]) == 2
 
 
 @pytest.mark.usefixtures("classic_cards")

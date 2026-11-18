@@ -11,7 +11,8 @@ Steps:
 1. Name the outcome and the system of record that counts it (scheduler, CRM, billing). Count it
    there, not in the platform that ran the ads.
 2. Name what each source says about the channel: a platform's attributed conversions, a
-   self-reported first source, or a tagged link. Keep each in its own column.
+   self-reported first source, or a tagged link. Keep each in its own column. No self-reported
+   source yet: `skills/ask-how-they-heard/SKILL.md`.
 3. Check that each platform claim covers only that platform's own ads or links. Never add two
    platforms' attributed numbers together.
 4. Check the tagging. Untagged or wrongly tagged traffic counts as unattributed, and its share is

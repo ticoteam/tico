@@ -23,6 +23,8 @@ were inconclusive and which were stopped.
 A failed or inconclusive idea is the best source of a follow-up. A follow-up tests the same customer belief another way.
 It is not a retry of the same test.
 
+Then pick which kinds of idea to look for with `skills/pick-what-to-try-next/SKILL.md`.
+
 ## 3. Write each idea
 
 Every idea has all of these, or you do not file it:

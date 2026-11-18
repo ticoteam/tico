@@ -5,9 +5,8 @@
 // its tasks and "+N more"; Retention's shaded cells with dark text on light shades; the Growth board's lanes); a month
 // picked reads the cards again for it and the address keeps it; a Number added from its form sends its metric and
 // channel; Settings lists the channels with their months; a member reads and arranges nothing; a phone has one
-// column and no sideways scroll, in both themes. With synced sources (task #309): the banner names the failing and stale
-// sources and what they fill, each Number's line says where it came from, a conflict's Use sends the choice and goes,
-// Sources shows each source's health, Connect a source maps a file's columns and reports the run, and a month's synced
+// column and no sideways scroll, in both themes. With synced sources (task #309): no banner, each Number's line says where
+// it came from, a number a source disagrees with is marked with nothing to choose (the Growth Manager asks), Sources shows each source's health, Connect a source maps a file's columns and reports the run, and a month's synced
 // number is locked while its typed ones save alone. TICO_UI_SHOTS=<dir> saves screenshots.
 import type {Browser, Locator, Page, Route} from 'playwright';
 import type * as PageSupport from './support/page.cts';
@@ -43,9 +42,9 @@ const GENERAL = pipe('general', 'General', null, 'general');
 const PIPELINES = [GENERAL, pipe('lead', 'Lead', 'growth', 'lead'), pipe('growth-experiments', 'Growth Experiments', 'growth', 'growth-experiments')];
 const BOARD = '#/tasks?pipeline=growth-experiments&who=all';
 const upTo = (month: string) => MONTHS.slice(0, MONTHS.indexOf(month) + 1);
-// Synced sources (backend/growth_sync.py), on for one block: one Fresh, one Failing, one Stale, one typed by hand; and a
-// conflict on October's new customers for Search (typed 120, the warehouse says 131) until someone chooses.
-const SYNC = {on: false, conflict: true, may: true, many: false, rowsFail: 0};
+// Synced sources (backend/growth_sync.py), on for one block: one Fresh, one Failing, one Stale, one typed by hand; and
+// October's new customers for Search typed 48 while the warehouse says 131.
+const SYNC = {on: false, conflict: true, rowsFail: 0};
 // A typed actual of 70% beside Search's computed day 30 (backend/growth.py typed_beside): `chosen` once its owner chose.
 const DIFFERS = {on: false, chosen: null as string | null, may: true};
 const hoursAgo = (h: number) => new Date(Date.now() - h * 3600e3).toISOString();
@@ -58,15 +57,13 @@ const SOURCES = () => [
     health_since: '2026-11-17T09:00:00Z', last_good_run: '2026-11-03T09:00:00Z', last_error: null, has_file: true},
   {id: 's4', system: 'HubSpot', truth_for: 'leads', reach_kind: 'mcp', may: 'read', owner_ref: null, kind: null, fills: [], health: 'not_synced'},
 ];
-const CONFLICT = () => ({channel: 'search', channel_name: 'Search', month: '2026-10', field: 'new_customers', typed: 120, value: 131, source: 'Signups (warehouse)', may: SYNC.may});
 const ORIGIN: Record<string, () => unknown> = {
   new_customers: () => ({fields: [], synced: [{source_id: 's2', source: 'Signups (warehouse)', at: '2026-11-11T06:00:00Z', health: 'failing', since: '2026-11-12T06:00:00Z'}],
-    typed: {count: 1, by: 'human:ana', at: '2026-11-02T10:00:00Z', quality: 'actual'},
-    conflicts: !SYNC.conflict ? [] : SYNC.many ? Array.from({length: 5}, CONFLICT) : [CONFLICT()], conflict_count: !SYNC.conflict ? 0 : SYNC.many ? 7 : 1}),
+    typed: {count: 1, by: 'human:ana', at: '2026-11-02T10:00:00Z', quality: 'actual'}}),
   cac: () => ({fields: ['spend', 'bot_cost', 'new_customers'], synced: [{source_id: 's1', source: 'Finance ad spend', at: hoursAgo(2), health: 'fresh', since: null}],
-    typed: {count: 3, by: 'human:ana', at: '2026-11-02T10:00:00Z', quality: 'estimate'}, conflicts: [], conflict_count: 0}),
+    typed: {count: 3, by: 'human:ana', at: '2026-11-02T10:00:00Z', quality: 'estimate'}}),
   kept_d30: () => ({fields: [], synced: [{source_id: 's3', source: 'Retention sheet', at: '2026-11-03T09:00:00Z', health: 'stale', since: '2026-11-17T09:00:00Z'}],
-    typed: null, conflicts: [], conflict_count: 0}),
+    typed: null}),
 };
 const DATA: Record<string, (s: CardSettings, month: string) => unknown> = {
   growth_number: (s, month) => {
@@ -130,16 +127,18 @@ const DEFAULTS: [string, string, CardSettings][] = [['growth_funnel', 'large', {
   ['growth_number', 'small', {metric: 'kept_d30'}], ['growth_channels', 'large', {count: 10}], ['growth_retention', 'medium', {months: 6}],
   ['growth_board', 'medium', {count: 3}]];
 
+// The Growth Manager the default org has (templates/catalog/growth-manager): the row under the header chats with it.
+const GM = {name: 'growth-manager', display_name: 'Growth Manager', org_parent: '', host: 'keeper', status: 'active', can_chat: true};
 // GET /api/v2/growth/setup (backend/growth_setup.py show) with the first `done` steps done, as the panel reads it.
 const STEPS = ['settings', 'channel', 'source', 'month'];
 const SEARCH = {slug: 'search', name: 'Search'};
-interface Setup {done: boolean; celebrate: boolean; steps: {step: string; done: boolean}[]; next: Record<string, unknown> | null; channel: typeof SEARCH | null;
+interface Setup {done: boolean; steps: {step: string; done: boolean}[]; next: Record<string, unknown> | null; channel: typeof SEARCH | null;
   set: Record<string, unknown>; you_may: Record<string, boolean>}
-function setupAt(done: number, {may = true, sources = 1, celebrate = false}: {may?: boolean; sources?: number; celebrate?: boolean} = {}): Setup {
+function setupAt(done: number, {may = true, sources = 1}: {may?: boolean; sources?: number} = {}): Setup {
   const step = STEPS[done];
   const next = step ? {step, number: done + 1, says: '', you_may: may, ...(may ? {} : {who_may: [{ref: 'human:ana', name: 'Ana Silva'}, {ref: 'human:ben', name: 'Ben Ode'}]}),
     ...(step === 'source' ? {sources} : {}), ...(step === 'month' ? {month: '2026-10'} : {})} : null;
-  return {done: done >= 4, celebrate, steps: STEPS.map((s, i) => ({step: s, done: i < done})), next, channel: done >= 1 ? SEARCH : null,
+  return {done: done >= 4, steps: STEPS.map((s, i) => ({step: s, done: i < done})), next, channel: done >= 1 ? SEARCH : null,
     set: {settings: done >= 1 ? {unit: 'customers', revenue_month: 80, margin_pct: 70} : null, channel: done >= 2 ? SEARCH : null,
       source: done >= 3 ? {system: 'Google Ads', truth_for: 'ad spend'} : null, month: done >= 4 ? {month: '2026-10', spend: 1800, new_customers: 6} : null},
     you_may: {settings: may, channels: may, sources: may, months: may}};
@@ -197,7 +196,6 @@ function server(me: Person, pipelines: unknown[] = PIPELINES, setup: Setup = set
       return [200, {customers: 2, removed: 0, unknown_channel: 1}];
     }
     if (p === '/api/v2/growth/setup') return [200, setup];
-    if (p === '/api/v2/growth/setup/shown') { if (setup.done) setup.celebrate = false; return [200, setup]; }
     // A channel added finishes step 2: the panel reads its steps again after the save.
     if (p === '/api/v2/growth/channels' && method === 'POST') { Object.assign(setup, setupAt(2)); return [200, {slug: 'search', name: 'Search'}]; }
     if (p === '/api/v2/growth/settings') return [200, {unit: 'customers', revenue_month: 49, margin_pct: 80}];
@@ -218,16 +216,11 @@ function server(me: Person, pipelines: unknown[] = PIPELINES, setup: Setup = set
     if (/^\/api\/v2\/growth\/sources\/[^/]+\/rows$/.test(p) && SYNC.rowsFail > 0) { SYNC.rowsFail--; return [422, {error: {code: 'validation', detail: 'The file has no rows'}}]; }
     if (/^\/api\/v2\/growth\/sources\/[^/]+\/rows$/.test(p)) return [200, {ok: true, error: null, written: 4, held: 1,
       not_written: [{row: 4, channel: 'podcast', month: '2026-10', reason: 'no such channel'}], not_written_count: 1}];
-    if (p === '/api/v2/growth/cohorts/conflicts' && method === 'POST' && (body as unknown as {against?: string}).against === 'computed') {
-      DIFFERS.chosen = String((body as unknown as {keep: string}).keep);
-      return [200, {kept: DIFFERS.chosen, value: DIFFERS.chosen === "typed" ? 70 : 81.3}];
-    }
-    if (p === '/api/v2/growth/cohorts/conflicts' && method === 'POST') { SYNC.conflict = false; return [200, {kept: 'source', value: 131}]; }
     return null;
   }};
 }
 
-async function open(browser: Browser, {viewport = DESKTOP, hash = '#/growth', me = OWNER, theme = 'dark', pipelines = PIPELINES as unknown[], setup = setupAt(4), emptyCards = [] as string[], computed = false} = {}) {
+async function open(browser: Browser, {viewport = DESKTOP, hash = '#/growth', me = OWNER, theme = 'dark', pipelines = PIPELINES as unknown[], setup = setupAt(4), emptyCards = [] as string[], computed = false, gm = true} = {}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport === PHONE, timezoneId: 'UTC'});
   const errors: string[] = [], fake = server(me, pipelines, setup, emptyCards, computed);
   page.on('pageerror', (e: Error) => errors.push(e.message));
@@ -243,7 +236,8 @@ async function open(browser: Browser, {viewport = DESKTOP, hash = '#/growth', me
     if (p === '/api/v2/events' || p.endsWith('/watch')) return;
     if (p === '/api/v2/config') return json(config);
     if (p === '/api/me') return json({...me, config});
-    if (p === '/api/employees') return json(roster.employees);
+    if (p === '/api/employees') return json(gm ? [...roster.employees, GM] : roster.employees);
+    if (p === '/api/v2/chat/growth-manager' && method === 'POST') { fake.writes.push([method, p, JSON.parse(req.postData() || '{}')]); return json({ok: true}); }
     if (p === '/api/humans') return json(roster.humans);
     if (p === '/api/status') return json({active: [], employees: []});
     if (p === '/api/v2/status') return json({bots: []});
@@ -302,7 +296,7 @@ async function shot(page: Page, name: string) {
       assert.deepEqual(await page.locator('[data-gr-month] option').allInnerTexts(), ['Oct 2026', 'Sep 2026', 'Aug 2026', 'Jul 2026'], 'newest first');
       assert.deepEqual((await boardLinks(page))[0], [BOARD, true], 'the Growth board opens Growth Experiments');
       assert.equal(await page.locator('[data-gr-settings]').count(), 1);
-      assert.equal(await page.locator('#gr-start').isVisible(), false, 'a set-up Growth has no Get started panel');
+      await page.locator('#gr-start.grs-won').waitFor();   // set up: the Growth Manager row is quiet
       assert.equal(await page.locator('#dash-grid .grs-fill').count(), 0);
       assert.equal(await page.locator('#main header.ph .ph-menu [data-dash-mode="edit"]').count(), 1, 'the owner arranges: Edit in ⋯');
       assert.equal(await page.locator('#main header.ph .ph-menu [data-gr-settings]').count(), 1, 'Settings in ⋯');
@@ -580,57 +574,13 @@ async function shot(page: Page, name: string) {
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // ---- Growth's first run (ui/app/growth-start.ts): the Get started panel and the empty cards.
-    const panel = (page: Page) => page.locator('#gr-start');
-    const stepKinds = (page: Page) => page.locator('#gr-start .grs-step .grs-k').evaluateAll(els => els.map(el => (el.firstChild?.textContent || '').trim()));
-    const panelButtons = (page: Page) => page.locator('#gr-start button.grs-go');
     {
-      // AC-1: an admin, nothing set: four steps in order, none done, step 1 next with one button that opens Settings.
-      // AC-7: every empty card names the step that fills it; the Funnel names Goals; none says only "No ... yet".
-      const {page, errors} = await open(browser, {setup: setupAt(0)});
-      await panel(page).locator('.grs-step').first().waitFor();
-      assert.equal(await panel(page).getAttribute('aria-label'), 'Get started');
-      assert.match(await panel(page).locator('.grs-h').innerText(), /Get started/);
-      assert.deepEqual(await page.locator('#gr-start .grs-step').evaluateAll(els => els.map(el => el.getAttribute('data-grs-step'))), STEPS);
-      assert.deepEqual(await stepKinds(page), ['Next', 'Step 2', 'Step 3', 'Step 4']);
-      assert.equal(await page.locator('#gr-start .grs-done').count(), 0);
-      assert.equal(await page.locator('#gr-start [aria-current="step"]').getAttribute('data-grs-step'), 'settings');
-      assert.match(await page.locator('#gr-start .grs-prog').innerText(), /0 of 4 done/);
-      assert.equal(await panelButtons(page).count(), 1, 'one button');
-      // The panel sits between the head and the cards.
-      const [headBottom, panelTop, panelBottom, gridTop] = await page.evaluate(() => [document.querySelector('.dash-head')!.getBoundingClientRect().bottom,
-        ...(() => { const r = document.querySelector('#gr-start')!.getBoundingClientRect(); return [r.top, r.bottom]; })(), document.querySelector('#dash-grid')!.getBoundingClientRect().top]);
-      assert.ok(headBottom! <= panelTop! && panelBottom! <= gridTop!, 'under the head, over the cards');
-      const fills = page.locator('#dash-grid .grs-fill');
-      assert.equal(await fills.count(), 7, 'every card says what fills it');
-      assert.deepEqual(await fills.evaluateAll(els => els.map(el => el.getAttribute('data-grs-fill'))), ['goals', 'month', 'month', 'month', 'channel', 'month', 'board']);
-      assert.match(await fills.nth(1).innerText(), /step 4/);
-      assert.match(await fills.nth(3).innerText(), /kept 30 days/, 'a kept share waits for 30 days');
-      assert.match(await fills.nth(4).innerText(), /step 2/);
-      assert.equal(await fills.nth(0).locator('a').getAttribute('href'), '#/strategy/goals', 'the Funnel opens Goals');
-      assert.equal(await page.locator('#dash-grid .dash-none').evaluateAll(els => els.filter(el => /^No .* yet$/.test((el.textContent || '').trim())).length), 0);
-      // A card's step that is not next yet points at the panel's next step instead of a form.
-      await fills.nth(1).locator('[data-gr-step]').click();
-      await page.waitForFunction(() => document.querySelector('#gr-start .grs-next')?.classList.contains('grs-flash'));
-      assert.equal(await page.locator('dialog.gr-dlg[open]').count(), 0);
-      await shot(page, 'desktop-growth-start');
-      await panelButtons(page).click();
-      await page.locator('dialog.gr-dlg[open][aria-label="Settings"] [name="revenue_month"]').waitFor();
-      await page.keyboard.press('Escape');
-      assert.deepEqual(errors, []);
-      await page.close();
-    }
-    {
-      // Synced sources: the banner, each Number's origin line, a conflict chosen on its card.
-      Object.assign(SYNC, {on: true, conflict: true, may: true});
+      // Synced sources: each Number's origin line, with no banner and no Keep / Use (the Growth Manager asks whoever typed
+      // a number a source disagrees with).
+      Object.assign(SYNC, {on: true, conflict: true});
       const {page, errors, fake} = await open(browser);
       await page.locator('#dash-grid .grc-funnel').waitFor();
-      const banner = page.locator('[data-gr-health]');
-      await banner.waitFor();
-      const said = await banner.innerText();
-      assert.match(said, /^1 source failing, 1 stale · Signups \(warehouse\) since Nov 12[^:]*: column "channel" not found; Retention sheet no good run since Nov 3/, 'the banner names them');
-      assert.match(said, /New customers, revenue \/ customer, kept 30 days and kept 90 days are marked where shown\./, 'and what they fill');
-      assert.equal(await banner.locator('a[data-gr-health-sources]').getAttribute('href'), '#/growth/sources');
+      assert.equal(await page.locator('[data-gr-health]').count(), 0, 'no stale-sources banner');
       const pin = (name: string) => page.locator('#dash-grid .dash-pin').filter({has: page.locator('.dash-pin-head h2', {hasText: new RegExp(`^${name}$`)})});
       const newLine = pin('New customers').locator('[data-gr-origin]');
       assert.match(await newLine.innerText(), /^Signups \(warehouse\) · [A-Z][a-z]{2} \d{1,2}(, \d{4})? failing · typed · actual$/, 'a failing source is marked on the number it fills');
@@ -638,17 +588,11 @@ async function shot(page: Page, name: string) {
       assert.match(await cacLine.innerText(), /^from Finance ad spend · 2h · 3 typed · estimate$/, 'a worked-out figure names its sources');
       assert.equal(await cacLine.getAttribute('title'), 'Worked out from spend, bot cost and new customers');
       assert.match(await pin('Kept 30 days').locator('[data-gr-origin]').innerText(), /^Retention sheet · [A-Z][a-z]{2} \d{1,2}(, \d{4})? stale · actual$/, 'a synced number says actual');
-      const conflict = pin('New customers').locator('[data-gr-conflict]');
-      assert.match(await conflict.innerText(), /Search · Oct · new customers: typed 120, Signups \(warehouse\) says 131\s*Keep 120\s*Use 131/);
+      assert.equal(await page.locator('#dash-grid [data-gr-conflict], #dash-grid [data-gr-resolve]').count(), 0, 'no Keep or Use on a card');
       await shot(page, 'desktop-growth-synced');
-      await conflict.getByRole('button', {name: 'Use 131'}).click();
-      await page.waitForFunction(() => !document.querySelector('#dash-grid [data-gr-conflict]'));
-      assert.deepEqual(fake.writes.find(([m, p]) => m === 'POST' && p === '/api/v2/growth/cohorts/conflicts')![2],
-        {channel: 'search', month: '2026-10', field: 'new_customers', keep: 'source'}, 'the choice is sent');
 
-      // Settings → Months → October: spend is the source's, locked; new customers were typed, and Keep / Use show
-      // while the warehouse disagrees; a save sends only what changed.
-      SYNC.conflict = true;
+      // Settings → Months → October: spend is the source's, locked; new customers were typed, and the month is marked
+      // while the warehouse disagrees, with nothing to choose; a save sends only what changed.
       await headTool(page, '[data-gr-settings]');
       await page.locator('dialog.gr-dlg[open] [data-gs-months="search"]').click();
       const months = page.locator('dialog.gr-dlg[open]', {hasText: 'Search · Months'});
@@ -661,7 +605,7 @@ async function shot(page: Page, name: string) {
       assert.equal(await oct.locator('[name="kept_d30"]').isDisabled(), false, 'a number its source no longer fills is typed again');
       assert.match(await oct.locator('[data-gc-origin="spend"]').innerText(), /^From Finance ad spend · 2h · actual$/);
       assert.match(await oct.locator('[data-gc-origin="new_customers"]').innerText(), /^Typed by .+, Nov 2 · actual$/);
-      assert.match(await oct.locator('.gr-conflict').innerText(), /typed 48, Signups \(warehouse\) says 131\s*Keep 48\s*Use 131/);
+      assert.equal(await oct.locator('[data-gr-resolve]').count(), 0, 'no Keep or Use in the month');
       await shot(page, 'desktop-growth-month-synced');
       await oct.locator('[name="bot_cost"]').fill('120');
       await oct.locator('[type="submit"]').click();
@@ -718,32 +662,26 @@ async function shot(page: Page, name: string) {
       await page.close();
     }
     {
-      // A typed actual that differs shows under the computed figure (AC-14): the channel's owner keeps one, and once the
-      // typed number is kept it is the cell's figure with the computed one under it. A reader who may not choose sees both.
+      // A typed actual that differs shows under the computed figure (AC-14), with nothing to choose: the Growth Manager
+      // asks whoever typed it. Once the typed number is kept it is the cell's figure with the computed one under it.
       Object.assign(DIFFERS, {on: true, chosen: null, may: true});
-      const {page, errors, fake} = await open(browser, {computed: true});
+      const {page, errors} = await open(browser, {computed: true});
       const card = page.locator('#dash-grid [data-grx]');
       const cell = card.locator('tr[data-grx-row="search"] td.grc-k').first();
       await cell.waitFor();
-      assert.match(await cell.innerText(), /^81%\s+typed 70%\s*Keep\s*Use 81%$/, 'both values show, with Keep and Use');
-      assert.match(await card.locator('.grx-foot').innerText(), /A number typed as actual that differs shows under the computed one until the channel’s owner keeps one\./);
-      await cell.locator('button[data-keep="typed"]').click();
-      await page.waitForFunction(() => document.querySelector('#dash-grid tr[data-grx-row="search"] td[data-grx-typed="kept"]'));
-      const posted = fake.writes.filter(([m, p]) => m === 'POST' && p === '/api/v2/growth/cohorts/conflicts').map(w => w[2]);
-      assert.deepEqual(posted, [{channel: 'search', month: '2026-09', field: 'kept_d30', keep: 'typed', against: 'computed'}]);
-      const kept = card.locator('tr[data-grx-row="search"] td[data-grx-typed="kept"]');
-      assert.match(await kept.innerText(), /^70% typed\s*computed\s*81%$/, 'the kept typed number is the figure, the computed one under it');
-      assert.equal(await kept.locator('button[data-keep]').count(), 0, 'chosen: nothing more to choose');
-      assert.match(await card.locator('.grx-foot').innerText(), /A kept typed number shows as typed; LTV here uses the computed shares\./);
+      assert.match(await cell.innerText(), /^81%\s+typed 70%$/, 'both values show, no buttons');
+      assert.equal(await cell.locator('button[data-keep]').count(), 0);
+      assert.match(await card.locator('.grx-foot').innerText(), /A number typed as actual that differs shows under the computed one until whoever typed it says which is right\./);
       assert.deepEqual(errors, []);
       await page.close();
-      Object.assign(DIFFERS, {chosen: null, may: false});
-      const member = await open(browser, {computed: true, me: MEMBER});
-      const seen = member.page.locator('#dash-grid tr[data-grx-row="search"] td.grc-k').first();
-      await seen.waitFor();
-      assert.match(await seen.innerText(), /^81%\s+typed 70%$/, 'a reader who may not choose sees both values, no buttons');
-      assert.deepEqual(member.errors, []);
-      await member.page.close();
+      DIFFERS.chosen = 'typed';
+      const kept = await open(browser, {computed: true});
+      const keptCell = kept.page.locator('#dash-grid tr[data-grx-row="search"] td[data-grx-typed="kept"]');
+      await keptCell.waitFor();
+      assert.match(await keptCell.innerText(), /^70% typed\s*computed\s*81%$/, 'the kept typed number is the figure, the computed one under it');
+      assert.match(await kept.page.locator('#dash-grid [data-grx] .grx-foot').innerText(), /A kept typed number shows as typed; LTV here uses the computed shares\./);
+      assert.deepEqual(kept.errors, []);
+      await kept.page.close();
       Object.assign(DIFFERS, {on: false, chosen: null, may: true});
     }
     {
@@ -760,97 +698,51 @@ async function shot(page: Page, name: string) {
       assert.deepEqual(errors, []);
       await page.close();
     }
+    // ---- Growth by chat (ui/app/growth-start.ts): the Growth Manager row, Chat and Call, and the empty cards.
+    const row = (page: Page) => page.locator('#gr-start');
     {
-      // A member sees the banner, the lines and the conflicts, but no Keep or Use; with 7 conflicts the list shows 5
-      // and says there are more.
-      Object.assign(SYNC, {on: true, conflict: true, may: false, many: true});
-      const {page, errors} = await open(browser, {me: MEMBER});
-      await page.locator('#dash-grid [data-gr-conflict]').waitFor();
-      await page.locator('[data-gr-health]').waitFor();
-      assert.match(await page.locator('#dash-grid [data-gr-conflict]').innerText(), /7 numbers differ from their source/);
-      await page.locator('#dash-grid [data-gr-conflicts]').click();
-      const list = page.locator('dialog.gr-dlg[open]');
-      assert.equal(await list.locator('li.gr-conflict').count(), 5);
-      assert.equal(await list.locator('[data-gr-conflicts-more]').innerText(), 'And 2 more, shown here once these are chosen.');
-      assert.equal(await page.locator('[data-gr-resolve]').count(), 0, 'no Keep or Use for a member');
-      assert.deepEqual(errors, []);
-      await page.close();
-      Object.assign(SYNC, {on: false, conflict: true, may: true, many: false, rowsFail: 0});
-    }
-    {
-      // AC-2: step 1 done shows what was set; step 2 next opens the new channel form. Adding it marks step 2 done at once.
-      const {page, errors} = await open(browser, {setup: setupAt(1)});
-      await panel(page).locator('.grs-next').waitFor();
-      assert.deepEqual(await stepKinds(page), ['Done', 'Next', 'Step 3', 'Step 4']);
-      assert.equal(await page.locator('#gr-start [data-grs-step="settings"] .grs-l').innerText(), '$80 per customer a month · 70% margin');
-      assert.match(await page.locator('#gr-start .grs-prog').innerText(), /1 of 4 done/);
-      assert.equal(await panelButtons(page).getAttribute('data-gr-step'), 'channel');
-      await page.locator('#dash-grid .grs-fill[data-grs-fill="channel"] [data-gr-step]').click();
-      const dlg = page.locator('dialog.gr-dlg[open][aria-label="New channel"]');
-      await dlg.locator('[name="name"]').waitFor();
-      await page.keyboard.press('Escape');
-      await panelButtons(page).click();
-      await dlg.locator('[name="name"]').fill('Search');
-      await dlg.locator('[type="submit"]').click();
-      await page.waitForFunction(() => document.querySelector('#gr-start [data-grs-step="channel"]')?.classList.contains('grs-done'));
-      assert.match(await page.locator('#gr-start [data-grs-step="channel"]').getAttribute('class') || '', /grs-just/, 'the step just done pops');
-      assert.equal(await page.locator('#gr-start [data-grs-step="channel"] .grs-l').innerText(), 'Search');
-      assert.equal(await page.locator('#gr-start [aria-current="step"]').getAttribute('data-grs-step'), 'source');
+      // Not set up: the row sits between the head and the cards; Chat asks the Growth Manager to set Growth up and opens
+      // its chat; every empty card says what fills it, with no step and no form.
+      const {page, errors, fake} = await open(browser, {setup: setupAt(0)});
+      await row(page).locator('.grs-l').waitFor();
+      assert.equal(await row(page).getAttribute('aria-label'), 'Growth Manager');
+      assert.equal(await row(page).locator('.grs-t').innerText(), 'Growth Manager');
+      assert.equal(await row(page).locator('.grs-l').innerText(), 'Tell me how you grow');
+      const [headBottom, rowTop, rowBottom, gridTop] = await page.evaluate(() => [document.querySelector('.dash-head')!.getBoundingClientRect().bottom,
+        ...(() => { const r = document.querySelector('#gr-start')!.getBoundingClientRect(); return [r.top, r.bottom]; })(), document.querySelector('#dash-grid')!.getBoundingClientRect().top]);
+      assert.ok(headBottom! <= rowTop! && rowBottom! <= gridTop!, 'under the head, over the cards');
+      const fills = page.locator('#dash-grid .grs-fill');
+      assert.equal(await fills.count(), 7, 'every card says what fills it');
+      assert.equal(await page.locator('#dash-grid [data-gr-step]').count(), 0, 'no step links');
+      assert.ok((await fills.allInnerTexts()).every(w => !/step \d/i.test(w)));
+      assert.equal(await fills.nth(0).locator('a').getAttribute('href'), '#/strategy/goals', 'the Funnel opens Goals');
+      await shot(page, 'desktop-growth-start');
+      // Call: a voice call with the Growth Manager (callBot, ui/app/thread-call.ts), stood in for here.
+      await page.evaluate(() => { (window as unknown as {callBot: (s: string) => Promise<void>}).callBot = async s => { document.body.dataset.called = s; }; });
+      await row(page).locator('[data-grs-call]').click();
+      await page.waitForFunction(() => document.body.dataset.called === 'growth-manager');
+      await row(page).locator('[data-grs-chat]').click();
+      await page.waitForFunction(() => location.hash === '#/bot/growth-manager/dm');
+      assert.deepEqual(fake.writes.filter(w => w[1] === '/api/v2/chat/growth-manager').map(w => w[2]), [{text: 'Help me set up Growth.'}]);
       assert.deepEqual(errors, []);
       await page.close();
     }
     {
-      // AC-3: step 3 next opens Search's form at its source picker; with no source yet, it opens Sources.
-      const {page, errors} = await open(browser, {setup: setupAt(2)});
-      await panel(page).locator('.grs-next').waitFor();
-      assert.equal(await panelButtons(page).innerText(), 'Choose the source');
-      await panelButtons(page).click();
-      const dlg = page.locator('dialog.gr-dlg[open][aria-label="Search"]');
-      await dlg.locator('[name="source_id"]').waitFor();
-      await page.waitForFunction(() => document.activeElement?.getAttribute('name') === 'source_id');
-      await page.keyboard.press('Escape');
-      await page.close();
-      const none = await open(browser, {setup: setupAt(2, {sources: 0})});
-      await panel(none.page).locator('.grs-next').waitFor();
-      assert.equal(await panelButtons(none.page).innerText(), 'Add a source');
-      await panelButtons(none.page).click();
-      await none.page.waitForFunction(() => location.hash === '#/growth/sources');
-      assert.deepEqual([...errors, ...none.errors], []);
-      await none.page.close();
-    }
-    {
-      // AC-4: step 4 next opens the Months form on Search and the last full month.
-      const {page, errors} = await open(browser, {setup: setupAt(3)});
-      await panel(page).locator('.grs-next').waitFor();
-      assert.equal(await page.locator('#gr-start [data-grs-step="source"] .grs-l').innerText(), 'Google Ads · ad spend');
-      assert.equal(await panelButtons(page).innerText(), 'Add Oct 2026');
-      await panelButtons(page).click();
-      const dlg = page.locator('dialog.gr-dlg[open][aria-label="Search · New month"]');
-      assert.equal(await dlg.locator('[name="month"]').inputValue(), '2026-10');
-      assert.equal(await dlg.locator('[name="spend"]').count(), 1);
-      assert.equal(await dlg.locator('[name="new_customers"]').count(), 1);
+      // Set up: Chat only opens the chat, with no message sent for the person.
+      const {page, errors, fake} = await open(browser, {setup: setupAt(4)});
+      await page.locator('#gr-start.grs-won').waitFor();
+      assert.equal(await row(page).locator('.grs-l').count(), 0);
+      await row(page).locator('[data-grs-chat]').click();
+      await page.waitForFunction(() => location.hash === '#/bot/growth-manager/dm');
+      assert.equal(fake.writes.filter(w => w[1] === '/api/v2/chat/growth-manager').length, 0);
       assert.deepEqual(errors, []);
       await page.close();
     }
     {
-      // AC-5: all four done says so once and points at Search's numbers; the next open has no panel.
-      const setup = setupAt(4, {celebrate: true});
-      const {page, errors, fake} = await open(browser, {setup});
-      await panel(page).locator('.grs-yay').waitFor();
-      assert.match(await panel(page).innerText(), /You’re set up/);
-      assert.match(await panel(page).innerText(), /Search’s first numbers are in/);
-      await page.locator('#dash-grid .grc-ch tbody tr').first().waitFor();
-      await shot(page, 'desktop-growth-start-done');
-      assert.ok(fake.writes.some(([m, p]) => m === 'POST' && p === '/api/v2/growth/setup/shown'), 'said once: recorded');
-      await panel(page).locator('[data-grs-see]').click();
-      await page.waitForFunction(() => document.querySelector('#dash-grid tr[data-channel="search"]')?.classList.contains('grs-flash'));
-      assert.equal(await panel(page).isVisible(), false);
-      await page.evaluate(() => { location.hash = '#/home'; });
-      await page.getByRole('heading', {name: 'Company', exact: true}).waitFor();
-      await page.evaluate(() => { location.hash = '#/growth'; });
-      await page.locator('#dash-grid .grc-funnel').waitFor();
-      await page.waitForTimeout(200);
-      assert.equal(await panel(page).isVisible(), false, 'it does not come back');
+      // No Growth Manager on the team: no row.
+      const {page, errors} = await open(browser, {setup: setupAt(0), gm: false});
+      await page.locator('#dash-grid .grs-fill').first().waitFor();
+      assert.equal(await row(page).count(), 0);
       assert.deepEqual(errors, []);
       await page.close();
     }
@@ -861,28 +753,12 @@ async function shot(page: Page, name: string) {
       await page.locator('#dash-grid .grc-funnel').waitFor();
       const lines = page.locator('#dash-grid .dash-none');
       await lines.first().waitFor();
-      assert.equal(await panel(page).isVisible(), false);
-      assert.equal(await page.locator('#dash-grid [data-gr-step]').count(), 0, `${me.id}: no step links once set up`);
+            assert.equal(await page.locator('#dash-grid [data-gr-step]').count(), 0, `${me.id}: no step links once set up`);
       const words = await lines.allInnerTexts();
       assert.ok(words.every(w => !/step \d/i.test(w)), `${me.id}: no step named once set up: ${words}`);
       assert.ok(words.some(w => /kept 30 days/.test(w)), `${me.id}: Retention says what fills it`);
       assert.equal(await page.locator('.toast').count(), 0);
       if (me === OWNER) await shot(page, 'desktop-growth-set-up-empty-card');
-      assert.deepEqual(errors, []);
-      await page.close();
-    }
-    {
-      // AC-6: a member with step 2 next sees the owner and admins by name, and no button.
-      const {page, errors} = await open(browser, {me: MEMBER, setup: setupAt(1, {may: false})});
-      await panel(page).locator('.grs-next').waitFor();
-      assert.equal(await page.locator('#gr-start [aria-current="step"]').getAttribute('data-grs-step'), 'channel');
-      assert.equal(await page.locator('#gr-start [data-grs-who]').innerText(), 'Only Ana Silva and Ben Ode can do this.');
-      assert.equal(await panelButtons(page).count(), 0, 'no button');
-      // An empty card's link points at the panel rather than a form they may not use.
-      await page.locator('#dash-grid .grs-fill[data-grs-fill="channel"] [data-gr-step]').click();
-      await page.waitForFunction(() => document.querySelector('#gr-start .grs-next')?.classList.contains('grs-flash'));
-      assert.equal(await page.locator('dialog.gr-dlg[open]').count(), 0);
-      await shot(page, 'desktop-growth-start-member');
       assert.deepEqual(errors, []);
       await page.close();
     }
@@ -903,19 +779,18 @@ async function shot(page: Page, name: string) {
       await page.close();
     }
     for (const theme of ['dark', 'light']) {
-      // A phone: the steps stack in one column, nothing past the edge, the button in reach.
+      // A phone: the row fits, nothing past the edge, Chat and Call in reach.
       const {page, errors} = await open(browser, {viewport: PHONE, theme, setup: setupAt(1)});
-      await panel(page).locator('.grs-next').waitFor();
-      const lefts = await page.locator('#gr-start .grs-step').evaluateAll(els => els.map(el => Math.round(el.getBoundingClientRect().left)));
-      assert.equal(new Set(lefts).size, 1, 'one column');
+      await row(page).locator('.grs-l').waitFor();
       assert.equal(await sideways(page), false, 'no sideways scroll');
-      const box = (await panelButtons(page).boundingBox())!;
-      assert.ok(box.x >= 0 && box.x + box.width <= PHONE.width, 'the button fits');
-      assert.ok(await contrast(page.locator('#gr-start .grs-next .grs-n')) >= 3, `the next step's number reads (${theme})`);
+      for (const b of [row(page).locator('[data-grs-chat]'), row(page).locator('[data-grs-call]')]) {
+        const box = (await b.boundingBox())!;
+        assert.ok(box.x >= 0 && box.x + box.width <= PHONE.width && box.height >= 24, 'fits and can be tapped');
+      }
       await shot(page, `phone-growth-start-${theme}`);
       assert.deepEqual(errors, []);
       await page.close();
     }
-    console.log('Growth cards: computed retention (cut, grain, not yet, too few, typed beside computed and the owner choosing, foot, trace with and without keys, upload refused and loaded, phone); head (North Star, month, board, Settings), Number/Funnel/Channels/Retention/Board renderers, month picker and address, add a Number with metric and channel, form fields, Settings and months, member, phone in both themes, contrast, old routes; Get started panel (AC-1 to AC-7) on desktop and phone');
+    console.log('Growth cards: computed retention (cut, grain, not yet, too few, typed beside computed with nothing to choose, foot, trace with and without keys, upload refused and loaded, phone); head (North Star, month, board, Settings), Number/Funnel/Channels/Retention/Board renderers, month picker and address, add a Number with metric and channel, form fields, Settings and months, member, phone in both themes, contrast, old routes; synced sources (origin lines, no banner, no Keep/Use, Sources, Connect a source); Growth Manager row (Chat, Call placeholder, set up, none) on desktop and phone');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

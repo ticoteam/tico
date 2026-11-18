@@ -48,9 +48,9 @@ function grxSaidShare(f: GrxFigure) {
   return `${f.count} of ${f.denominator}, too few for a rate`;
 }
 // A retention cell: the share (shaded by it) or the counts, each opening its customers; "not yet" with its fill date.
-// A typed actual that differs shows under it, with Keep and Use for the channel's owner or an admin; once they kept the
-// typed number, it is the cell's figure and the computed one shows under it.
-function grxKept(f: GrxFigure, at: number, field: GrxWindow, days: number, c?: GrxCohort, month?: string | null) {
+// A typed actual that differs shows under it (the Growth Manager asks whoever typed it which is right); once the typed
+// number was kept, it is the cell's figure and the computed one shows under it.
+function grxKept(f: GrxFigure, at: number, field: GrxWindow, days: number, c?: GrxCohort) {
   if (f.status === 'not_yet') return `<td class="grx-not muted">not yet · ${esc(grxDay(f.fills_on))}</td>`;
   const open = (text: string, title: string) => `<button type="button" class="grx-open" data-grx-open="${at}" data-grx-field="${field}" title="${esc(title)}">${esc(text)}</button>`;
   if (f.status === 'too_few') return `<td class="grx-few">${open(`${f.count} of ${f.denominator}`, `Too few for a rate. Open the customers kept to day ${days}`)}</td>`;
@@ -58,10 +58,7 @@ function grxKept(f: GrxFigure, at: number, field: GrxWindow, days: number, c?: G
   const shade = (v: number | null) => `style="--k:${Math.max(0, Math.min(100, Math.round(Number(v))))}"`;
   if (t?.chosen === 'typed') return `<td class="grc-k" data-grx-typed="kept" ${shade(t.typed)}>${esc(grPct(t.typed))} <span class="grx-tag">typed</span><span class="grx-beside">computed ${open(grPct(f.value), `Open the customers kept to day ${days}`)}</span></td>`;
   let beside = '';
-  if (t && !t.chosen) {
-    const ask: GrConflict = {channel: c?.value || 'unknown', channel_name: '', month: month || c?.period || '', field, typed: t.typed, value: f.value, source: `${c?.computed_from ?? 0} customers`, may: t.may, against: 'computed'};
-    beside = `<span class="grx-beside gr-conflict" data-grx-typed="differs">typed ${esc(grPct(t.typed))}${t.may ? `<span class="gr-c-acts"><button type="button" class="ghost small" ${grResolveAttrs(ask)} data-keep="typed" title="Keep the typed ${esc(grPct(t.typed))}">Keep</button><button type="button" class="ghost small" ${grResolveAttrs(ask)} data-keep="computed" title="Use the computed ${esc(grPct(f.value))}">Use ${esc(grPct(f.value))}</button></span>` : ''}</span>`;
-  }
+  if (t && !t.chosen) beside = `<span class="grx-beside" data-grx-typed="differs">typed ${esc(grPct(t.typed))}</span>`;
   return `<td class="grc-k" ${shade(f.value)}>${open(grPct(f.value), `Open the customers kept to day ${days}`)}${beside}</td>`;
 }
 const GRX_SAID: Record<string, string> = {too_few: 'too few', not_yet: 'not yet', not_split: 'not split', spend_monthly: 'monthly'};
@@ -96,13 +93,13 @@ function grxCard(v: GrxView) {
     const head = week && c.period !== lastWeek ? `<tr class="grx-wk"><th scope="rowgroup" colspan="7">${esc(grxPeriod('week', c))}</th></tr>` : '';
     lastWeek = c.period;
     return `${head}<tr data-grx-row="${esc(c.value ?? '')}"><th scope="row">${esc(grxName(v.by, c.value))}</th><td class="grc-n">${esc(grX(c.new_customers.value ?? c.computed_from, 0))}</td>
-      ${GRX_WINDOWS.map(([f, days]) => grxKept(c[f], i, f, days, c, v.month)).join('')}${grxMoney(c.ltv)}${grxMoney(c.cac)}</tr>`;
+      ${GRX_WINDOWS.map(([f, days]) => grxKept(c[f], i, f, days, c)).join('')}${grxMoney(c.ltv)}${grxMoney(c.cac)}</tr>`;
   }).join('') + (byChannelMonth ? typed.map(grxTypedRow).join('') : '');
   const notes = [`Computed from ${grX(v.computed_from, 0)} customers${grxLoaded(v.loads)}.`];
   const typedNames = typed.map(t => grxName('channel', t.value)).join(', ');
   if (typed.length) notes.push(byChannelMonth ? 'Rows marked typed were typed by the team: those channels have no customers loaded.'
     : `Typed retention for ${typedNames} shows under Cut by Channel, Monthly.`);
-  if (v.cohorts.some(c => Object.values(c.typed || {}).some(t => t && !t.chosen))) notes.push('A number typed as actual that differs shows under the computed one until the channel’s owner keeps one.');
+  if (v.cohorts.some(c => Object.values(c.typed || {}).some(t => t && !t.chosen))) notes.push('A number typed as actual that differs shows under the computed one until whoever typed it says which is right.');
   if (v.cohorts.some(c => Object.values(c.typed || {}).some(t => t?.chosen === 'typed'))) notes.push('A kept typed number shows as typed; LTV here uses the computed shares.');
   if (v.cohorts.some(c => c.too_few)) notes.push(`Under ${v.min_cohort} customers a cohort shows counts only: too few for a rate.`);
   if (v.cohorts.some(c => c.kept_d30.status === 'not_yet' || c.kept_d90.status === 'not_yet')) notes.push('A day fills once every customer in the cohort has reached it.');
