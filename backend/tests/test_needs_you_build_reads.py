@@ -11,7 +11,7 @@ import json
 import pytest
 
 from backend import item_metadata as IM
-from backend import needs_cache
+from backend import needs_cache, read_cache
 from backend import question_marks as Q
 from backend import task_engine as E
 from backend import task_pages as P
@@ -128,13 +128,19 @@ def more(store, pages, questions, idle, start=0):
 
 def build(api, person, how, **kw):
     """(the person's Needs you, the statements it took): `how` "snapshot" in one read transaction, as the route
-    reads it; "rows" outside any, where nothing is kept between reads and each item reads its own rows."""
+    reads it; "rows" with no snapshot cache (read_cache.cache gives None, as outside a snapshot), where nothing is
+    primed or kept between reads and each item reads its own rows."""
     store, seen = api.app.state.store, []
-    with store.read_transaction() if how == "snapshot" else store.read() as c:
-        c.set_trace_callback(seen.append)
-        items = V.needs_items(c, api.app.state.auth, WHO[person], **kw)
-        c.set_trace_callback(None)
-    return items, len(seen)
+    with pytest.MonkeyPatch.context() as patched:
+        if how == "rows":
+            patched.setattr(read_cache, "cache", lambda c: None)
+        with store.read_transaction() as c:
+            c.set_trace_callback(seen.append)
+            items = V.needs_items(c, api.app.state.auth, WHO[person], **kw)
+            c.set_trace_callback(None)
+    if how == "rows":  # the reference read each PR's metadata on its own, never in a batch
+        assert not any("FROM item_metadata" in sql and "json_each" in sql for sql in seen)
+    return items, (len(seen) if how == "snapshot" else seen)
 
 
 @pytest.mark.parametrize("count_only", [False, True])
@@ -142,8 +148,10 @@ def test_the_batched_build_is_the_row_by_row_build_byte_for_byte(api, count_only
     company(api, pages=6, questions=6, idle=4)
     for person in (ANA, BEN):
         batched, _ = build(api, person, "snapshot", count_only=count_only)
-        rows, _ = build(api, person, "rows", count_only=count_only)
+        rows, read = build(api, person, "rows", count_only=count_only)
         assert json.dumps(batched, sort_keys=True, default=str) == json.dumps(rows, sort_keys=True, default=str)
+        if person == ANA and not count_only:
+            assert any("FROM item_metadata WHERE source=" in sql for sql in read)
     if not count_only:
         mine, _ = build(api, ANA, "snapshot")
         kinds = {item["kind"] for item in mine}
@@ -267,9 +275,10 @@ def test_a_build_that_began_before_another_never_takes_its_place(monkeypatch):
 
 
 def test_a_page_cut_from_a_held_build_leaves_out_a_task_the_caller_no_longer_reads(api, monkeypatch):
-    """Ben loses a task on his next page (it is made private) after he read the first: his next cursor does not show
-    it from the held build. The page is built again without it, starting from the top (`restart`), as before the
-    cache. A cursor hit while he still reads every task on it checks them in one statement besides the rules."""
+    """Ben loses a task in his list (it is made private) after he read the first page: his next cursor does not give a
+    page of the held build, whose counts still hold it. The list is built again without it, starting from the top
+    (`restart`), as before the cache. A cursor hit while he still reads every task in it checks them all in one
+    statement besides his task rules."""
     company(api, pages=0, questions=0, idle=0)
     store = api.app.state.store
     first = api.get("/api/v2/needs-you?limit=2", headers=headers("ben-test")).json()
@@ -298,7 +307,8 @@ def test_a_page_cut_from_a_held_build_leaves_out_a_task_the_caller_no_longer_rea
     page_reads = [sql for sql in seen if "FROM tasks WHERE id IN" in sql]
     print(f"\n  a cursor hit's statements: {len(seen)}", *seen, sep="\n    ")
     assert len(page_reads) == 1 and len(seen) <= 12, seen
-    gone = second["items"][0]["task_id"]
+    gone = whole["items"][-1]["task_id"]  # on his last page, not the one he asks for: only the counts hold it
+    assert gone and gone not in {item.get("task_id") for item in second["items"]}
     with store.transaction() as c:
         c.execute("UPDATE tasks SET private=1 WHERE id=?", (gone,))
     later = api.get(f"/api/v2/needs-you?limit=2&cursor={first['next']}", headers=headers("ben-test")).json()

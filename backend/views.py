@@ -2053,7 +2053,8 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
                     # A task filed for the OK is titled by its kind alone (task_asks.FILED_TITLES); the row says what
                     # this one is about, to its party, in place of that title (task #389).
                     title = str((item.get("task") or {}).get("title") or "")
-                    if title in task_asks.FILED_TITLES.values():
+                    # Only to a party of the OK: one handed the ask reads its line as PRIVATE_LINE, and no more here.
+                    if title in task_asks.FILED_TITLES.values() and item["line"] != task_asks.PRIVATE_LINE:
                         said = task_asks.about(c, item["requirement_id"], item["line"])
                         if said:
                             item["about"] = said
@@ -2103,15 +2104,10 @@ def needs_page(items, version, limit, cursor):
     return items[offset:end], (needs_cursor(version, end) if end < len(items) else None), restarted
 
 
-def needs_still_readable(c, auth, who, items):
-    """Whether the caller still reads every task these Needs-you items name (`auth.task_sql`, as needs_items read them):
-    one statement for them all, before a page cut from a held build (backend/needs_cache.py) is given."""
-    wanted = set()
-    for it in items:
-        wanted.update(it.get("task_ids") or ())
-        if it.get("task_id"):
-            wanted.add(it["task_id"])
-    return not wanted or _readable_task_ids(c, auth.task_sql(c, who), wanted) == wanted
+def needs_still_readable(c, auth, who, task_ids):
+    """Whether the caller still reads every one of these tasks (`auth.task_sql`, as needs_items read them): one
+    statement for up to 500, before a page is cut from a held build (backend/needs_cache.py)."""
+    return not task_ids or _readable_task_ids(c, auth.task_sql(c, who), task_ids) == task_ids
 
 
 def needs_bots(items, me):
@@ -3465,15 +3461,16 @@ def install_views(app, store, auth, mutate, task_view):
         viewer = needs_cache.viewer(who)
         if cursor and not count and ids is None:
             # A next page of a list built in the last few seconds is cut from that build (backend/needs_cache.py), once
-            # the caller is seen still to read every task on it; when one is gone, the list is built again.
+            # the caller is seen still to read every task the list names; when one is gone, the list is built again.
             built = held.get(viewer, cursor.partition(".")[0])
             if built is not None:
-                out = needs_paged(who, built.items, built.version, limit, cursor, built.snoozed_until, built.counts)
                 with store.read_transaction() as c:
-                    readable = needs_still_readable(c, auth, who, out["items"])
+                    readable = needs_still_readable(c, auth, who, built.task_ids)
                 if readable:
-                    return out
-                held.drop(viewer)
+                    return needs_paged(
+                        who, built.items, built.version, limit, cursor, built.snoozed_until, built.counts
+                    )
+                held.drop(viewer, built)
         began = needs_cache.begin()
         with store.read_transaction() as c:
             if count:

@@ -290,5 +290,6 @@ def test_needs_you_on_the_hosted_companys_shape(api, monkeypatch):
             print(f"\n  EXPLAIN QUERY PLAN {shape}")
             for line in plan:
                 print(f"    {line}")
-            scans = [line for line in plan if line.startswith("SCAN ") and "json_each" not in line]
+            # The JSON list of keys is read through (`SCAN k VIRTUAL TABLE`); every table is looked up by an index.
+            scans = [line for line in plan if line.startswith("SCAN ") and "VIRTUAL TABLE" not in line]
             assert not scans, (shape, plan)
