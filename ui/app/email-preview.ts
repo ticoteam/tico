@@ -19,6 +19,9 @@ interface EmailSendPreviewSend {
   recipients: string[];
   attachments?: EmailSendPreviewAttachment[];
   content_sha256: string;
+  /** The checks the send was queued with: the second reviewer's verdict on a bot's own email, and why when not send. */
+  classification?: {review?: boolean | null; review_reason?: string};
+  decision?: {reasons?: string[]};
 }
 interface EmailSendPreviewAttachment {
   part: number;
@@ -33,7 +36,10 @@ function emailSendPreviewHTML(data: EmailSendPreview | null | undefined): string
   // Who it goes to and from which mailbox, then what it says. The hashes the approval is bound to are not part of the
   // message, so they are not shown: Approve sends them (shown_hash) without the person reading them.
   const from = send.mailbox && send.mailbox.includes('@') ? `<p><span class="muted">From</span> ${esc(send.mailbox)}</p>` : '';
-  return `<div class="email-send-preview"><strong>${esc(send.subject)}</strong><p><span class="muted">To</span> ${esc(send.recipients.join(', '))}</p>${from}
+  // Why the second reviewer did not pass a bot's email, when that is a reason this OK is asked.
+  const why = send.decision?.reasons?.includes('second_review') && send.classification?.review_reason
+    ? `<p data-review-reason><span class="muted">Second review</span> ${esc(send.classification.review_reason)}</p>` : '';
+  return `<div class="email-send-preview"><strong>${esc(send.subject)}</strong><p><span class="muted">To</span> ${esc(send.recipients.join(', '))}</p>${from}${why}
     ${(data.bodies || [{type: 'text/plain', text: data.body}]).map(body => `<section><span class="muted">${esc(body.type === 'text/html' ? 'HTML text' : 'Plain text')}</span><pre>${esc(body.text)}</pre></section>`).join('')}
     <ul>${(send.attachments || []).map(file => `<li><a href="/api/v2/email/sends/${encodeURIComponent(send.id)}/attachments/${Number(file.part)}" download>${esc(file.name)}</a> · ${esc(emailSize(file.size))}</li>`).join('')}</ul></div>`;
 }

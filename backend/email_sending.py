@@ -78,6 +78,33 @@ REVIEW = (
     "a meeting time, states facts about the recipient or the thread that the thread shown does not support, or "
     "does not read as the company. An approver's instruction, when shown, authorizes only what it says."
 )
+# Why the second reviewer stopped a bot's own email. The decision model writes no prose (clients/judge.py), so the reason
+# is a second choice asked in the same call, and each option is the sentence the bot and the person read.
+STOPPED = {
+    "commitment": "It makes a commitment: money, a discount, a date, a deliverable, a legal position or a guarantee.",
+    "confirmed_time": "It confirms a meeting time.",
+    "unsupported_claim": "It states something about the recipient or the thread that the thread does not support.",
+    "missing_file": "It says files are attached, but the email has no attachments. Attach them, or take the line out.",
+    "voice": "It does not read as the company.",
+}
+REVIEW_WHY = "If a careful reviewer stopped this email, which is the main reason?"
+# A stop that names none of the reasons above, and a review that did not answer: still said in words, with what to do.
+NO_REASON = (
+    "The second reviewer stopped it without naming a reason. Check it for a commitment, a confirmed time, a claim the "
+    "thread does not support, a file it mentions but lacks, or wording that is not the company's; rewrite and draft it "
+    "again to review it again. Queued as it is, it waits for a person's OK."
+)
+UNANSWERED = {
+    "incomplete_content": "The second reviewer could not read the whole email (a part that is not plain text or HTML, "
+    "or over 16,000 characters), so it gave no verdict. Queued as it is, it waits for a person's OK.",
+    "unavailable": "The second reviewer did not answer (the decision model is off, at its spend cap or did not reply), "
+    "so it gave no verdict. Draft it again with the same words to review it again; queued as it is, it waits for a "
+    "person's OK.",
+}
+# A sentence of the email's own (not a quoted line) that says something is attached or enclosed.
+SAYS_ATTACHED = re.compile(r"\b(?:attached|attaching|attachments?|enclosed|enclosing|enclosures?)\b", re.I)
+NOT_ATTACHED = re.compile(r"\b(?:not|no|without|never)\s+(?:\w+\s+){0,2}(?:attached|attachments?|enclosed)\b", re.I)
+QUOTE_START = re.compile(r"^\s*(?:On .{0,300}wrote:|-{2,} ?Original Message ?-{2,}|From: .+)\s*$", re.I | re.M)
 THREAD_CHARS = 6000
 INSTRUCTION_CHARS = 2000
 
@@ -856,20 +883,51 @@ def review_context(c, auth, actor, body, mailbox, snap):
     return {"thread": thread, "approver_instruction": instruction}
 
 
+def says_attached_without_files(snap):
+    """The email's own words say files are attached or enclosed, and it carries none. Quoted lines (`>`) and an earlier
+    message quoted below the reply are not its own words."""
+    if snap["attachments"]:
+        return False
+    text = str(snap.get("body") or "")
+    found = QUOTE_START.search(text)
+    own = text[: found.start()] if found else text
+    return any(
+        SAYS_ATTACHED.search(line) and not NOT_ATTACHED.search(line)
+        for line in own.splitlines()
+        if not line.lstrip().startswith(">")
+    )
+
+
+def reviewed(found, snap, why=None):
+    """The second reviewer's verdict with the words that go with it: `review_reason` is empty on a send and a sentence
+    on anything else. An email that says files are attached and has none is stopped for exactly that, whatever the
+    model answered; a stop without one of `STOPPED` and a review that gave no verdict say so, and what to do."""
+    if says_attached_without_files(snap):
+        return {**found, "review": False, "review_reason": STOPPED["missing_file"]}
+    if found["review"] is True:
+        return {**found, "review_reason": ""}
+    if found["review"] is False:
+        return {**found, "review_reason": STOPPED.get(why or "") or NO_REASON}
+    return {**found, "review_reason": UNANSWERED.get(found["status"], UNANSWERED["unavailable"])}
+
+
 def classify(app, store, snap, review=None):
     """One decision-model call: whether the email concerns legal or money matters and, for a bot's own email
-    (`review`, its thread and approver's instruction), the second reviewer's verdict. Unknown asks a person: this is
-    triage, not a defense against malicious mail."""
+    (`review`, its thread and approver's instruction), the second reviewer's verdict and its reason (`reviewed`).
+    Unknown asks a person: this is triage, not a defense against malicious mail."""
     from .judge import audit_detail, server_engine
     from clients.judge import JudgeError
+
+    def done(found, why=None):
+        return found if review is None else reviewed(found, snap, why)
 
     with store.read() as c:
         engine = server_engine(store, c, app.state.judge)
     visible = snap["visible_bodies"]
     if not snap["classification_complete"] or not visible or sum(len(part["text"]) for part in visible) > 16000:
-        return {"legal_or_money": None, "review": None, "status": "incomplete_content"}
+        return done({"legal_or_money": None, "review": None, "status": "incomplete_content"})
     if engine is None:
-        return {"legal_or_money": None, "review": None, "status": "unavailable"}
+        return done({"legal_or_money": None, "review": None, "status": "unavailable"})
     questions = {
         "legal_or_money": {
             "type": "choice",
@@ -887,8 +945,14 @@ def classify(app, store, snap, review=None):
                 "stop": "A commitment, an unsupported claim or a confirmed time",
             },
         }
+        questions["review_reason"] = {
+            "type": "choice",
+            "instructions": REVIEW_WHY,
+            "criteria": {**STOPPED, "none": "None of these: nothing a careful reviewer would stop"},
+        }
         state.update(
             thread=review["thread"] or "(no incoming thread: a first contact)",
+            attachments=[f["name"] for f in snap["attachments"]] or "(no files attached)",
             **({"approver_instruction": review["approver_instruction"]} if review["approver_instruction"] else {}),
         )
     try:
@@ -896,15 +960,18 @@ def classify(app, store, snap, review=None):
         answers = result.get("answers") or {}
         value = (answers.get("legal_or_money") or {}).get("choice")
         verdict = (answers.get("review") or {}).get("choice")
-        return {
-            "legal_or_money": value == "yes" if value in ("yes", "no") else None,
-            "review": verdict == "send" if verdict in ("send", "stop") else None,
-            "questions": len(questions),
-            "status": "classified",
-            **audit_detail(result),
-        }
+        return done(
+            {
+                "legal_or_money": value == "yes" if value in ("yes", "no") else None,
+                "review": verdict == "send" if verdict in ("send", "stop") else None,
+                "questions": len(questions),
+                "status": "classified",
+                **audit_detail(result),
+            },
+            (answers.get("review_reason") or {}).get("choice"),
+        )
     except (JudgeError, ValueError, TypeError):
-        return {"legal_or_money": None, "review": None, "status": "unavailable"}
+        return done({"legal_or_money": None, "review": None, "status": "unavailable"})
 
 
 def _queued(c, mailbox, lease=True):
