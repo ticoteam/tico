@@ -479,6 +479,18 @@ def respond(c, actor, batch_id, kind, text="", n=None, decision=None, heard="", 
     }
 
 
+def item_task(c, actor, batch_id, n=None):
+    """The id of the task a response to an item (the current one unless `n` names another) goes on: its words are
+    then task text (backend/task_text_keys.py). None for an item with no task, or one `respond` refuses anyway."""
+    batch = _load(c, actor, batch_id)
+    items = _items(batch)
+    idx = (int(n) - 1) if n else int(batch["cursor"] or 0)
+    if not 0 <= idx < len(items):
+        return None
+    task = _task_of_key(c, items[idx]["key"])
+    return task["id"] if task else None
+
+
 def summary(batch):
     """What the commit will do, counted, OKs named: the read-back before a yes."""
     items = {it["key"]: it for it in _items(batch)}
