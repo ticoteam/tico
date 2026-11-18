@@ -231,8 +231,14 @@ const shot = async (page: Page, name: string, selector?: string) => {
     const tab = phone.locator('.pv-tab.side');
     assert.equal(await tab.locator('.side-mark').innerText(), '↳');
     assert.match(await tab.getAttribute('aria-label') ?? '', /^Side stage Rejected /, 'its name says it is a side stage');
-    assert.equal(await tab.evaluate(el => getComputedStyle(el).borderTopStyle), 'dashed');
-    assert.notEqual(await phone.locator('.pv-tab[data-pv-tab="qa"]').evaluate(el => getComputedStyle(el).borderTopStyle), 'dashed');
+    // A board refresh replaces the tabs. Look them up and read their styles in the same browser turn.
+    await phone.waitForFunction(() => {
+      const side = document.querySelector('.pv-tab.side');
+      const main = document.querySelector('.pv-tab[data-pv-tab="qa"]');
+      if (!side || !main) return false;
+      const mainBorder = getComputedStyle(main).borderTopStyle;
+      return getComputedStyle(side).borderTopStyle === 'dashed' && mainBorder !== '' && mainBorder !== 'dashed';
+    });
     assert.ok(await phone.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'nothing scrolls sideways');
     await shot(phone, 'phone');
     await phone.close();

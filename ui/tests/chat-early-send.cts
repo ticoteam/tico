@@ -58,7 +58,10 @@ async function whileLoading(browser: import('playwright').Browser) {
     await page.keyboard.press('Enter');
     await page.waitForFunction(() => !document.querySelector<HTMLTextAreaElement>('#chat-composer textarea')!.value);
     assert.deepEqual(sends, [text], 'Return sends it once');
+    await page.locator('#conv-thread').getByText(text, {exact: true}).waitFor();
+    const snapshot = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/snapshot'));
     release();                                       // the load that started before the send finishes
+    await snapshot;
     await page.waitForFunction(() => V2C.loaded);
     const thread = await page.locator('#conv-thread').innerText();
     assert.match(thread, /A long message typed/, 'the sent message stays in the chat');

@@ -65,13 +65,13 @@ jobs:
           python-version: '3.15'
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '22'
+          node-version: '24.22.3'
           cache: npm
       - name: Install the demo's Python and Node dependencies
         run: |
           python3 -m venv "$RUNNER_TEMP/shots-venv"
           # uv installs the same pinned lock as pip, as ci.yml does.
-          python3 -m pip install --disable-pip-version-check uv==0.13.1
+          python3 -m pip install --disable-pip-version-check uv==0.13.9
           python3 -m uv pip install --python "$RUNNER_TEMP/shots-venv/bin/python" -r backend/requirements-dev.txt
           npm ci --no-audit --no-fund
       - name: Install Chromium

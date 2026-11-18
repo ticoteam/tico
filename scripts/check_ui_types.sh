@@ -16,5 +16,5 @@ cd "$(dirname "$0")/.."
 python3 scripts/gen_ui_types.py
 python3 scripts/ui_baseline.py tsc --check "$@"
 python3 scripts/check_ui_strict.py --worker-only
-npx --yes -p typescript@5.9.3 -c 'node scripts/check_ui_parts.cjs'
+node scripts/check_ui_parts.cjs
 echo "ui types: ok"

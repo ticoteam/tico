@@ -1431,7 +1431,7 @@ function thvWayPick(view: ThvView, mode: string) {
 function thvWaysWire(view: ThvView) {
   const C = view.composer, q = <T extends HTMLElement = HTMLElement>(sel: string) => C.el.querySelector(sel) as T, menu = q('.p-ways'), caret = q('.p-way');
   // The caret, a right-click or a long press on Send open the menu.
-  caret.onclick = () => thvWaysMenu(view, menu.hidden);
+  caret.onclick = () => thvWaysMenu(view, Boolean(menu.hidden));
   sendWayHold(q('.p-send'), () => thvWaysMenu(view, true), () => !q<HTMLButtonElement>('.p-send').disabled);
   menu.onclick = ev => { const b = eventElement(ev)?.closest<HTMLElement>('[data-deliver]'); if (b) thvWayPick(view, b.dataset.deliver!); };
   menu.addEventListener('keydown', ev => deliveryMenuKeys(menu, ev));

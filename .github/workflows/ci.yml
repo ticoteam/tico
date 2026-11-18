@@ -383,7 +383,7 @@ jobs:
         run: |
           python3 -m venv "$RUNNER_TEMP/release-venv"
           # uv installs the same pinned lock as pip, in seconds instead of about a minute.
-          python3 -m pip install --disable-pip-version-check uv==0.13.1
+          python3 -m pip install --disable-pip-version-check uv==0.13.9
           python3 -m uv pip install --python "$RUNNER_TEMP/release-venv/bin/python" -r backend/requirements-dev.txt
           # The UI's TypeScript, compiled as the image compiles it (backend/ui_build.py refuses a missing build). A
           # candidate from before the build step has nothing to compile.
@@ -411,7 +411,7 @@ jobs:
       - if: steps.browsers.outputs.needed == 'true'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '22'
+          node-version: '24.22.3'
           cache: npm
           cache-dependency-path: candidate/package-lock.json
       - if: steps.browsers.outputs.needed == 'true'
@@ -620,7 +620,7 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         if: steps.has.outputs.check == 'true'
         with:
-          node-version: '22'
+          node-version: '24.22.3'
       - name: Install Rust
         if: steps.has.outputs.check == 'true'
         run: rustup toolchain install 1.92 --profile minimal && rustup default 1.92

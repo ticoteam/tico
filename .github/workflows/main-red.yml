@@ -85,7 +85,7 @@ jobs:
           cache-dependency-path: backend/requirements-dev.txt
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '22'
+          node-version: '24.22.3'
           cache: npm
           cache-dependency-path: package-lock.json
       - name: Check out the red candidate
