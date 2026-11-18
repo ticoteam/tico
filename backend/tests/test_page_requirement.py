@@ -1775,5 +1775,3 @@ def test_a_part_that_is_no_on_a_bots_stage_still_goes_back_to_the_pages_bot(stor
         (told,) = _jev_wakes(r, row, WRITER)
         assert "Doesn't say what was run or looked at in production" in told
         assert _jev_wakes(r, row, "bot:manager") == []
-
-

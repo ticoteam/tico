@@ -238,5 +238,3 @@ def test_on_ice_is_gone_from_what_the_board_and_task_page_say(product):
     with product.read() as c:
         purpose = c.execute("SELECT purpose, by_hand FROM stages WHERE id='product-ideas'").fetchone()
     assert purpose[1] == 0 and "by hand" not in purpose[0]
-
-

@@ -3,7 +3,6 @@ changed the same line; the order "B6, then B7" lived on a side task, both were q
 conflict and B7 merged first. With the order on B7 itself, Merge holds B7 until B6 has merged, then queues it (or says
 to rebase it onto B6). GitHub is backend/tests/helpers/fake_github.py."""
 
-
 import pytest
 
 from backend import merge_order as MO

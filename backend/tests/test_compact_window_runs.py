@@ -167,5 +167,3 @@ def test_the_bots_window_is_kept_for_a_task_without_one(api):
         BS.write(c, "ops", config)
     filed(api, model="claude-haiku-5-5", effort="low")
     assert claim(api, machine)["config"]["compact_at"] == 800_000
-
-
