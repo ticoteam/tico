@@ -292,7 +292,8 @@ def test_jevs_unsure_wakes_the_manager_with_the_line_not_the_bot(store, seeded, 
         'The decision model is unsure of "Spec page": you decide it, as the pipeline\'s manager' in asked
         and R.DECIDE in asked
     )
-    assert "Says what done looks like" not in asked, "the line, never the whole check"
+    # A one-sentence rubric is its own only item and is named (task #614); the line still says what to decide.
+    assert 'Can\'t tell if it meets: "Says what done looks like"' in asked
 
 
 def test_unsure_goes_to_a_person_when_no_manager_bot_can_decide(c, store):
@@ -1180,7 +1181,8 @@ def test_a_review_page_sent_back_names_the_unmet_rubric_item_on_the_task_and_in_
         return row
 
     def ask(model, state, questions, label):
-        answers = {q: {"noul": {"met": 0.05, "part_models": 0.05}.get(q, 0.95)} for q in questions}
+        answers = {q: {"noul": {"met": 0.05, "part_models": 0.05}.get(q, 0.95)} for q in questions if q != PJ.READ}
+        answers[PJ.READ] = {"choice": PJ.NO_LINE, "confidence": 0.9}
         return PJ._read({"answers": answers, "model": "tico-decide-low"}, list(questions), model)
 
     row = seeded(build)
@@ -1195,13 +1197,14 @@ def test_a_review_page_sent_back_names_the_unmet_rubric_item_on_the_task_and_in_
             )
         ]
         line = _standing(r, row).line
-    assert line.startswith("Decision model sent it back: ") and item in line and "on the page" in line, line
+    assert line.startswith("Decision model sent it back: ") and item in line and "Read: " in line, line
     assert len(bodies) == 1 and item in bodies[0], bodies
 
 
 def test_jev_with_no_words_of_its_own_still_gives_every_verdict_a_reason(store, seeded, monkeypatch):
     """Jev answers a probability and no prose (Acme, Nov 11: three Review pages "Jev is unsure" with nothing after it).
-    The verdict, its history line and the standing the manager reads all name the requirement, never its rubric."""
+    The verdict, its history line and the standing the manager reads all name the requirement, and a rubric of one
+    sentence as its only item (task #614)."""
 
     def build(c):
         _pipeline(c, page_settings={"rubric": "Says what done looks like"})
@@ -1221,8 +1224,8 @@ def test_jev_with_no_words_of_its_own_still_gives_every_verdict_a_reason(store, 
                 (row["id"],),
             )
         ]
-    said = 'Can\'t tell if it meets "Spec page". Nothing on the page mentions it.'
-    assert line == f"{R.DECIDE} Decision model is unsure: {said}", line
+    said = 'Can\'t tell if it meets "Spec page". Can\'t tell if it meets: "Says what done looks like"'
+    assert line == f"{R.DECIDE} Decision model is unsure: {said}.", line
     assert notes == [said], notes
 
 
@@ -1492,6 +1495,8 @@ class RawJev:
         self.ps, self.drop, self.fail, self.calls = ps or {}, drop, fail, []
 
     def answer(self, one, own):
+        if own == PJ.READ:  # the page line the answer rests on (task #614)
+            return {"type": "choice", "choice": PJ.NO_LINE, "confidence": 0.9}
         requirement = one["requirement"] if own == "met" else one["requirements"]["requirement" + own[3:]]
         return {"type": "noul", "noul": self.ps.get(requirement["rubric"], 0.95)}
 
@@ -1577,7 +1582,7 @@ def test_as_shipped_one_page_on_three_requirements_is_three_calls_as_before(stor
     monkeypatch.setattr(PJ, "ASK", jev)
     assert PJ.SAME_PAGE is False
     assert V.run(store, H.shift(H.now(), seconds=1)) == 3
-    assert [call["questions"] for call in jev.calls] == [["met"], ["met"], ["met"]]
+    assert [call["questions"] for call in jev.calls] == [["met", PJ.READ]] * 3
 
 
 def _five(c, store):
@@ -1610,7 +1615,7 @@ def test_five_pages_at_one_per_call_are_five_calls_as_before(store, seeded, monk
     jev = RawJev()
     monkeypatch.setattr(PJ, "ASK", jev)
     assert V.run(store, H.shift(H.now(), seconds=1)) == 5
-    assert len(jev.calls) == 5 and all(call["questions"] == ["met"] for call in jev.calls)
+    assert len(jev.calls) == 5 and all(call["questions"] == ["met", PJ.READ] for call in jev.calls)
     assert all("requirement" in call["state"] for call in jev.calls)
 
 
@@ -1633,7 +1638,7 @@ def test_a_page_whose_answer_is_missing_in_a_group_is_asked_again_alone(store, s
     monkeypatch.setattr(PJ, "ASK", jev)
     assert V.run(store, H.shift(H.now(), seconds=1)) == 5
     assert len(jev.calls) == 2
-    assert "Page 2:" in jev.calls[1]["state"]["attachment"]["text"] and jev.calls[1]["questions"] == ["met"]
+    assert "Page 2:" in jev.calls[1]["state"]["attachment"]["text"] and jev.calls[1]["questions"] == ["met", PJ.READ]
     assert all(v["verdict"] == "met" for v in _verdicts(store).values())
 
 
