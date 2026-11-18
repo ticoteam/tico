@@ -411,12 +411,14 @@ def _unread_items(c, v, found, kind, args, marks):
 
 
 def _prime_names(c, v, rows):
-    """Read together the names `T._name` gives these rows one at a time: each untitled root's members and each Home's
-    owner, so naming them reads no bot or person again (names.lookup keeps them for the snapshot)."""
+    """Read together the names `T._name` gives these rows one at a time: each untitled root's members, or its owner for
+    a Home, so naming them reads no bot or person again (names.lookup keeps them for the snapshot). A row named by its
+    title or task needs neither; one missed here is still named, by its own read."""
     from . import names
 
-    homes = [r for r in rows if T.audience_of(r) == "home"]
-    members = T._member_rows(c, v, [r["id"] for r in rows if T.audience_of(r) != "home"])
+    untitled = [r for r in rows if not r.get("subject") and not r.get("task_id")]
+    homes = [r for r in untitled if T.audience_of(r) == "home"]
+    members = T._member_rows(c, v, [r["id"] for r in untitled if T.audience_of(r) != "home"])
     actors = {a for r in homes if (a := T.home_owner(r))}
     actors.update(a for found in members.values() for a in found)
     names.lookup(c, [a for a in actors if str(a).startswith(("human:", "bot:"))])
