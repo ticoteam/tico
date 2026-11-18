@@ -73,6 +73,14 @@ def get(conn: "sqlite3.Connection", file_id: str, version: int, key: str) -> Row
     return found
 
 
+# `get` of many keys: only the asked (file id, version, rubric hash), each found by the unique key's index, never every
+# verdict a page ever had (a page revised often has many).
+PRIME_SQL = (
+    "SELECT v.* FROM json_each(?) AS k CROSS JOIN page_verdicts AS v WHERE v.file_id = json_extract(k.value, '$[0]') "
+    "AND v.version = json_extract(k.value, '$[1]') AND v.rubric_hash = json_extract(k.value, '$[2]')"
+)
+
+
 def prime(conn: "sqlite3.Connection", keys: Iterable[tuple[str, int, str]]) -> None:
     """Read `get` of many (file id, version, rubric hash) in one statement, misses too, for the reads that follow in
     this snapshot. Nothing outside a snapshot."""
@@ -86,10 +94,7 @@ def prime(conn: "sqlite3.Connection", keys: Iterable[tuple[str, int, str]]) -> N
     if not wanted:
         return
     found: dict[tuple[str, int, str], Row] = {}
-    cursor = conn.execute(
-        "SELECT * FROM page_verdicts WHERE file_id IN (SELECT value FROM json_each(?))",
-        (json.dumps(sorted({f for f, _, _ in wanted})),),
-    )
+    cursor = conn.execute(PRIME_SQL, (json.dumps(sorted(wanted)),))
     names = [d[0] for d in cursor.description]
     for raw in cursor.fetchall():
         row = dict(zip(names, raw, strict=True))

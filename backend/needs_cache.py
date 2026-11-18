@@ -10,9 +10,17 @@ before, and starts again from the top when the list moved (`restart`).
 
 - Viewers never share an entry: the key holds the caller's whole identity (actor, role, token, scope, view, ...), so
   any difference in what a caller may see is a different key.
-- A viewer keeps only their newest version: storing a build drops the same viewer's older ones, so after a live
-  `needs` event mends a page (`ids=`, which builds) a cursor from before it starts again from the top.
-- Memory is bounded: at most MAX_ENTRIES lists, oldest used first out, each kept TTL seconds at most.
+- A viewer keeps only their newest build: storing one drops the same viewer's others, so after a live `needs` event
+  mends a page (`ids=`, which builds) a cursor from before it starts again from the top. Newest is by when the build's
+  read snapshot began (`begin`, taken before it opens), not when it finished: two builds can run at once, and a slow
+  one that began before a change never replaces one that began after it. A build that began before the viewer's
+  newest is not kept.
+- Memory is bounded: at most MAX_ENTRIES lists, oldest used first out, each kept until TTL seconds after its snapshot
+  began.
+- Before a page is cut from here, the route checks that the caller may still read every task the held list names
+  (backend/views.py `needs_still_readable`, one statement for up to 500 tasks); when one is gone it builds as before,
+  so neither the page nor the whole list's counts show it. What a build decides beyond a task's read (a mention's or
+  ❓'s chat and message, an OK's earlier page, the task a brief's turn names) only a build checks.
 
 A page cut from here can be up to TTL seconds older than the database. It is the same list the first page came from,
 which is what its cursor asks for; the live `needs` event brings the changes in between, as it does for a held list."""
@@ -35,22 +43,44 @@ class Built:
     items: list[dict[str, Any]]
     version: str
     snoozed_until: Any
-    at: float
+    at: float  # when its read snapshot began (`begin`)
+    counts: dict[str, Any]  # what every page of it carries over the whole list, worked out by its first page
+    task_ids: frozenset[str]  # every task its items name, which the caller must still read for a page to be cut
 
 
 class NeedsCache:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._held: OrderedDict[tuple[str, str], Built] = OrderedDict()
+        # Each viewer's newest snapshot kept in the last TTL seconds, whether or not its list is still held (evicted
+        # for room): a build that began earlier never takes its place.
+        self._newest: dict[str, float] = {}
 
-    def keep(self, viewer: str, version: str, items: list[dict[str, Any]], snoozed_until: Any) -> None:
-        """Hold a list the viewer was just given, in place of any older version of theirs."""
-        built = Built(list(items), version, snoozed_until, clock())
+    def keep(
+        self,
+        viewer: str,
+        version: str,
+        items: list[dict[str, Any]],
+        snoozed_until: Any,
+        began: float,
+        counts: dict[str, Any] | None = None,
+    ) -> None:
+        """Hold a list the viewer was just given, from a read snapshot that began at `began` (`begin`), in place of
+        the viewer's others; not when the viewer has one from a snapshot that began later, or it is TTL old already.
+        `counts` is the list's page counts, shared with the caller, who may fill it in after."""
+        named = frozenset(task_ids(items))
+        now = clock()
         with self._lock:
-            for key in [k for k in self._held if k[0] == viewer and k[1] != version]:
+            for seen in [v for v, at in self._newest.items() if now - at > TTL]:
+                del self._newest[seen]
+            if now - began > TTL or began < self._newest.get(viewer, began):
+                return
+            self._newest[viewer] = began
+            for key in [k for k in self._held if k[0] == viewer]:
                 del self._held[key]
-            self._held[(viewer, version)] = built
-            self._held.move_to_end((viewer, version))
+            self._held[(viewer, version)] = Built(
+                list(items), version, snoozed_until, began, {} if counts is None else counts, named
+            )
             while len(self._held) > MAX_ENTRIES:
                 self._held.popitem(last=False)
 
@@ -64,6 +94,12 @@ class NeedsCache:
             if built is not None:
                 self._held.move_to_end((viewer, version))
             return built
+
+    def drop(self, viewer: str, built: Built) -> None:
+        """Hold no more this list of the viewer's (and not a newer one kept since): their next cursor builds."""
+        with self._lock:
+            if self._held.get((viewer, built.version)) is built:
+                del self._held[(viewer, built.version)]
 
     def __len__(self) -> int:
         with self._lock:
@@ -80,6 +116,22 @@ def of(app: Any) -> NeedsCache:
                 cache = NeedsCache()
                 app.state.needs_cache = cache
     return cache
+
+
+def task_ids(items: list[dict[str, Any]]) -> set[str]:
+    """Every task a Needs-you list's items name: an item's task, and each task a Paused cause holds up."""
+    out: set[str] = set()
+    for item in items:
+        out.update(str(t) for t in item.get("task_ids") or ())
+        if item.get("task_id"):
+            out.add(str(item["task_id"]))
+    return out
+
+
+def begin() -> float:
+    """The time a build's read snapshot begins, taken before it opens: the snapshot holds every write that ended before
+    it, so of two builds of a viewer the one that began later holds all the earlier one may lack."""
+    return clock()
 
 
 def viewer(who: Any) -> str:

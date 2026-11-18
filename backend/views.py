@@ -2057,7 +2057,8 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
                     # A task filed for the OK is titled by its kind alone (task_asks.FILED_TITLES); the row says what
                     # this one is about, to its party, in place of that title (task #389).
                     title = str((item.get("task") or {}).get("title") or "")
-                    if title in task_asks.FILED_TITLES.values():
+                    # Only to a party of the OK: one handed the ask reads its line as PRIVATE_LINE, and no more here.
+                    if title in task_asks.FILED_TITLES.values() and item["line"] != task_asks.PRIVATE_LINE:
                         said = task_asks.about(c, item["requirement_id"], item["line"])
                         if said:
                             item["about"] = said
@@ -2105,6 +2106,12 @@ def needs_page(items, version, limit, cursor):
     limit = max(1, min(int(limit or NEEDS_PAGE), NEEDS_PAGE_MAX))
     end = offset + limit
     return items[offset:end], (needs_cursor(version, end) if end < len(items) else None), restarted
+
+
+def needs_still_readable(c, auth, who, task_ids):
+    """Whether the caller still reads every one of these tasks (`auth.task_sql`, as needs_items read them): one
+    statement for up to 500, before a page is cut from a held build (backend/needs_cache.py)."""
+    return not task_ids or _readable_task_ids(c, auth.task_sql(c, who), task_ids) == task_ids
 
 
 def needs_bots(items, me):
@@ -3457,10 +3464,18 @@ def install_views(app, store, auth, mutate, task_view):
         held = needs_cache.of(app)
         viewer = needs_cache.viewer(who)
         if cursor and not count and ids is None:
-            # A next page of a list built in the last few seconds is cut from that build (backend/needs_cache.py).
+            # A next page of a list built in the last few seconds is cut from that build (backend/needs_cache.py), once
+            # the caller is seen still to read every task the list names; when one is gone, the list is built again.
             built = held.get(viewer, cursor.partition(".")[0])
             if built is not None:
-                return needs_paged(who, built.items, built.version, limit, cursor, built.snoozed_until)
+                with store.read_transaction() as c:
+                    readable = needs_still_readable(c, auth, who, built.task_ids)
+                if readable:
+                    return needs_paged(
+                        who, built.items, built.version, limit, cursor, built.snoozed_until, built.counts
+                    )
+                held.drop(viewer, built)
+        began = needs_cache.begin()
         with store.read_transaction() as c:
             if count:
                 items = needs_items(c, auth, who, count_only=True)
@@ -3471,7 +3486,8 @@ def install_views(app, store, auth, mutate, task_view):
             from . import ask_snoozes
 
             woken = {"snoozed_until": ask_snoozes.next_end(c, who)}
-        held.keep(viewer, current, items, woken["snoozed_until"])
+        counts = {}  # the page counts, worked out by the first page, kept for the next ones
+        held.keep(viewer, current, items, woken["snoozed_until"], began, counts)
         if version and version == current and not cursor:
             return {"actor": who.actor, "count": len(items), "version": current, "unchanged": True, **woken}
         if ids is not None:
@@ -3487,7 +3503,7 @@ def install_views(app, store, auth, mutate, task_view):
                 "items": [x for x in items if str(x["id"]) in positions],
             }
         if limit is not None or cursor:
-            return needs_paged(who, items, current, limit, cursor, woken["snoozed_until"])
+            return needs_paged(who, items, current, limit, cursor, woken["snoozed_until"], counts)
         return {
             "actor": who.actor,
             "count": len(items),
@@ -3498,18 +3514,20 @@ def install_views(app, store, auth, mutate, task_view):
             **woken,
         }
 
-    def needs_paged(who, items, current, limit, cursor, snoozed_until):
+    def needs_paged(who, items, current, limit, cursor, snoozed_until, counts):
         page, after, restarted = needs_page(items, current, limit, cursor)
+        if not counts:  # over the whole list: once a build, however many of its pages are read
+            counts.update(by_kind=needs_kinds(items), bots=needs_bots(items, who.actor), stages=needs_stages(items))
         out = {
             "actor": who.actor,
             "count": len(items),
-            "by_kind": needs_kinds(items),
+            "by_kind": counts["by_kind"],
             "items": page,
             "version": current,
             "next": after,
             "snoozed_until": snoozed_until,
-            "bots": needs_bots(items, who.actor),
-            "stages": needs_stages(items),
+            "bots": counts["bots"],
+            "stages": counts["stages"],
         }
         if restarted:
             out["restart"] = True
