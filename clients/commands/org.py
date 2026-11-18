@@ -181,6 +181,9 @@ def bot_list(api, args):
     return {"bots": rows, "counts": counts}
 
 
+GO_LIVE = "slug,state,onboarding_state"  # all go-live-all reads of a bot: its activity is not read
+
+
 @tool(
     "tico_bot_go_live_all",
     "Take every planned bot live in one call, as `tico_bot_go_live` does for one: placed if it has no computer, turned "
@@ -198,7 +201,7 @@ def bot_list(api, args):
 )
 def bot_go_live_all(api, args):
     who = _person_api(api)
-    bots = who.get("bots")
+    bots = who.get("bots", fields=GO_LIVE)
     planned = [b["slug"] for b in bots if b.get("state") == "planned"]
     onboarding = [
         b["slug"] for b in bots if b.get("state") != "archived" and b.get("onboarding_state") == "needs_setup"
@@ -226,7 +229,7 @@ def bot_go_live_all(api, args):
         (waiting if (answer or {}).get("state") == "waiting_for_repository" else went).append(slug)
     if setup_done:
         # Read again: going live may have changed a bot's setup state.
-        now = {b["slug"]: b for b in who.get("bots")}
+        now = {b["slug"]: b for b in who.get("bots", fields=GO_LIVE)}
         for slug, row in now.items():
             if row.get("state") == "archived" or row.get("onboarding_state") != "needs_setup":
                 continue
@@ -294,7 +297,7 @@ def _stage_holder(owner, slugs):
 )
 def org_show(api, args):
     org = api.get("org")
-    bots = api.get("bots")
+    bots = api.get("bots", fields="id,slug,state")
     slugs = _actor_names(bots)
     live = {b.get("slug"): b for b in bots}
     roles = _roles(api)
@@ -592,7 +595,7 @@ def reach_show(api, args):
     if party not in effective:
         bot_id = None
         if party.startswith("bot:"):  # stored by the bot's id; a slug is accepted on the way in
-            row = next((b for b in api.get("bots") if b.get("slug") == party[4:]), None)
+            row = next((b for b in api.get("bots", fields="id,slug") if b.get("slug") == party[4:]), None)
             bot_id = "bot:" + str(row.get("id")) if row else None
         if bot_id not in effective:
             raise APIError("not_found", f"No party {args['party']!r} you may see on the reach map", 404)

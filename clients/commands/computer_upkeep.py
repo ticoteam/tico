@@ -26,7 +26,7 @@ OWNER_ONLY = PEOPLE
 
 
 def _bots(api):
-    rows = api.get("bots")
+    rows = api.get("bots", fields="id,slug")  # only the slugs: the bots' activity is not read
     return rows.get("bots", []) if isinstance(rows, dict) else rows or []
 
 

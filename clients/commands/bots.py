@@ -88,7 +88,14 @@ def bot_set(api, args):
     delegated = _for_person(api)
     on_behalf = args.get("on_behalf_of") or "turn" if delegated else None
     # The bot's own revision, read as the person: BotOps may not see a bot they own but it does not.
-    row = next((b for b in api.get("bots") if args["slug"] in (b.get("id"), b.get("slug") or b.get("name"))), None)
+    row = next(
+        (
+            b
+            for b in api.get("bots", fields="id,slug,name,revision")
+            if args["slug"] in (b.get("id"), b.get("slug") or b.get("name"))
+        ),
+        None,
+    )
     if not row or row.get("revision") is None:
         row = api.get(f"bots/{args['slug']}", **({"on_behalf_of": on_behalf} if delegated else {}))
         if not row:

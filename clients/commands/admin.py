@@ -406,7 +406,14 @@ def org_reports_to(api, args):
         return who.post(f"humans/{quote(ref, safe='')}", {"reports_to": boss.removeprefix("human:")}, key=_key(args))
     if kind != "bot" or not ref:
         raise ValueError("Name the teammate as bot:<slug> or human:<id>")
-    row = next((b for b in api.get("bots") if ref in (b.get("id"), b.get("slug") or b.get("name"))), None)
+    row = next(
+        (
+            b
+            for b in api.get("bots", fields="id,slug,name,revision")
+            if ref in (b.get("id"), b.get("slug") or b.get("name"))
+        ),
+        None,
+    )
     if not row:
         raise ValueError("No bot " + ref)
     return who.post(
