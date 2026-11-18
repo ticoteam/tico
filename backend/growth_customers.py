@@ -353,10 +353,11 @@ def load(
     G: Any = _growth_untyped
     settings: dict[str, Any] = G.settings(c)
     spells = check(headers, rows, zone(settings.get("time_zone")))
-    first_seen: dict[tuple[str, str], tuple[str | None, str | None, str | None]] = {
-        (r[0], r[1]): (r[2], r[3], r[4])
+    first_seen: dict[tuple[str, str], tuple[str | None, str | None, str | None, str | None]] = {
+        (r[0], r[1]): (r[2], r[3], r[4], r[5])
         for r in c.execute(
-            "SELECT customer_key, became, channel, segment, plan FROM growth_customers WHERE source=?", (source,)
+            "SELECT customer_key, became, channel, segment, plan, attribution FROM growth_customers WHERE source=?",
+            (source,),
         )
     }
     at: str = H.now()
@@ -364,7 +365,11 @@ def load(
     values: list[tuple[Any, ...]] = []
     for s in spells:
         became = s.became_customer.isoformat() if s.became_customer else ""
-        channel, segment, plan = first_seen.get((s.customer_key, became), (s.channel, s.segment, s.plan))
+        channel, segment, plan, attribution = first_seen.get(
+            (s.customer_key, became), (s.channel, s.segment, s.plan, s.attribution)
+        )
+        if channel == s.channel and s.attribution:  # how the kept channel was named; a new channel's rung is not
+            attribution = s.attribution
         values.append(
             (
                 source,
@@ -380,7 +385,7 @@ def load(
                 s.net_d90,
                 s.net_d180,
                 s.net_d365,
-                s.attribution,
+                attribution,
             )
         )
     c.executemany(

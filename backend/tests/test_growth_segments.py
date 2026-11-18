@@ -127,6 +127,43 @@ def test_direct_and_loaded_cac_split_company_spend_by_each_segments_new_customer
     assert [r["value"] for r in one["cohorts"]] == ["rental"] and one["cohorts"][0]["cac_loaded"]["value"] == 31.67
     # By plan, spend is still not split.
     assert get(api, "growth/computed?by=plan&month=2026-09")["cac_note"] == "spend is not split by plan"
+    # Cut to a channel, a segment's spend cannot be split to it: no CAC, never its whole spend over a few.
+    cut = get(api, "growth/computed?by=segment&month=2026-09&channel=search-ads")
+    assert cut["cac_note"] == "spend is not split by channel or plan within a segment"
+    assert (
+        {r["cac"]["status"] for r in cut["cohorts"]}
+        == {r["cac_loaded"]["status"] for r in cut["cohorts"]}
+        == {"not_split"}
+    )
+
+
+def test_slugs_and_names_share_one_namespace_and_none_is_taken(api):
+    team(api)
+    post(api, "growth/segments", {"slug": "hosts", "name": "None"}, expected=422)
+    post(api, "growth/segments", {"slug": "hosts", "name": "rental"}, expected=409)
+    post(api, "growth/segments", {"slug": "rental-2", "name": "Consumer"}, expected=409)
+    patch(api, "growth/segments/rental", {"name": "consumer"}, expected=409)
+
+
+def test_a_renamed_segment_keeps_the_customers_loaded_under_its_old_name(api):
+    team(api)
+    load(api, september())
+    patch(api, "growth/segments/rental", {"name": "Short stays"})
+    result = get(api, "growth/computed?by=segment&month=2026-09")
+    assert cohort(result, "rental", "2026-09")["new_customers"]["value"] == 20
+    assert result["health"]["no_segment"] == 10
+
+
+def test_a_reload_keeps_the_first_channel_and_the_attribution_that_named_it(api):
+    team(api)
+    sep = date(2026, 9, 1)
+    load(api, people(0, 30, sep, attribution="utm", channel="search-ads", segment="consumer"))
+    load(api, people(0, 30, sep, attribution="asked", channel="brand", segment="consumer"))
+    row = cohort(get(api, "growth/computed?by=channel&month=2026-09"), "search-ads", "2026-09")
+    assert row["attribution"] == {"utm": 30}
+    load(api, people(0, 30, sep, attribution="code", channel="search-ads", segment="consumer"))
+    row = cohort(get(api, "growth/computed?by=channel&month=2026-09"), "search-ads", "2026-09")
+    assert row["attribution"] == {"code": 30}
 
 
 def test_churn_days_delays_every_kept_window_of_the_segment(api):

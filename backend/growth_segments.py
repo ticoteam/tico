@@ -98,14 +98,25 @@ def _shown(c: sqlite3.Connection, slug: str) -> Row:
     return next(s for s in listed(c, include_retired=True) if s["slug"] == slug)
 
 
+def _clash(c: sqlite3.Connection, slug: str, name: str | None, own_id: str | None = None) -> None:
+    """Slugs and names share one namespace (a customer label may give either), and none is No segment."""
+    said = (name or "").strip().lower()
+    if said == NO_SEGMENT:
+        raise Problem("validation", f"{NO_SEGMENT} is how customers with no segment read; pick another name", 422)
+    for other in H._rows(c.execute("SELECT id, slug, name FROM growth_segments WHERE id<>?", (own_id or "",))):
+        if said and said in (str(other["slug"]), str(other["name"]).strip().lower()):
+            raise Problem("conflict", f"There is already a segment named or slugged {name}", 409)
+        if not own_id and slug == str(other["name"]).strip().lower():
+            raise Problem("conflict", f"There is already a segment named {slug}", 409)
+
+
 def create(c: sqlite3.Connection, actor: str, body: M.GrowthSegmentCreate) -> Row:
     H._writer(c, actor)
     if body.slug == NO_SEGMENT:
         raise Problem("validation", f"{NO_SEGMENT} is how customers with no segment read; pick another slug", 422)
     if find(c, body.slug):
         raise Problem("conflict", f"There is already a segment {body.slug}", 409)
-    if H._one(c, "SELECT id FROM growth_segments WHERE lower(name)=lower(?)", (body.name,)):
-        raise Problem("conflict", f"There is already a segment named {body.name}", 409)
+    _clash(c, body.slug, body.name)
     at: str = H.now()
     row: Row = {
         "id": H.new_id(),
@@ -129,10 +140,8 @@ def update(c: sqlite3.Connection, actor: str, slug: str, fields: Row) -> Row:
     for required in ("name", "customer_rule", "churn_days", "sort"):
         if required in fields and fields[required] is None:
             raise Problem("validation", f"{required} cannot be cleared", 422)
-    if fields.get("name") and H._one(
-        c, "SELECT id FROM growth_segments WHERE lower(name)=lower(?) AND id<>?", (fields["name"], row["id"])
-    ):
-        raise Problem("conflict", f"There is already a segment named {fields['name']}", 409)
+    if fields.get("name"):
+        _clash(c, slug, fields["name"], str(row["id"]))
     if "owner_ref" in fields:
         fields["owner_ref"] = _owner(c, fields["owner_ref"])
     changed = {k: v for k, v in fields.items() if row.get(k) != v}
@@ -141,6 +150,10 @@ def update(c: sqlite3.Connection, actor: str, slug: str, fields: Row) -> Row:
             f"UPDATE growth_segments SET {', '.join(k + '=?' for k in changed)}, updated_at=? WHERE id=?",
             [*changed.values(), H.now(), row["id"]],
         )
+        old = str(row["name"]).strip().lower()
+        if "name" in changed and old != slug:
+            # customers loaded under the old name keep their segment: their label becomes the slug, which never changes
+            c.execute("UPDATE growth_customers SET segment=? WHERE lower(trim(segment))=?", (slug, old))
         H.event(c, actor, "growth.segment.update", row["id"], {"slug": slug, **changed})
     return _shown(c, slug)
 
