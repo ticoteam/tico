@@ -5,10 +5,10 @@ approves that it could not place became the QA report, and bot-checked pages kep
 - A live page approval on a stage named Proposal that approves the QA report approves the Proposal, and its line is
   Proposal. An open task in that stage whose document (a page linked to it with that role) is named QA report has it
   renamed Proposal, unless that page is already its Proposal.
-- A live page whose line is "Results page" and that names no document approves the Results; its line is Results.
-- A live page whose line is "Checked in production" and that names no document approves that document.
 
-A review of the newest commit (`at_head`) is never a document and is left alone. Running it again changes nothing.
+Results page and Checked in production stay plain pages the decision model checks: they are held by bots, and a
+document approval there cannot yet be decided by the pipeline's manager bot when the decision model is unsure (it is
+refused the page), which would leave the task stuck. Running it again changes nothing.
 """
 
 import json
@@ -27,34 +27,24 @@ def _settings(text):
     return found if isinstance(found, dict) else {}
 
 
-def _document(stage_name, line, settings):
+def _document(stage_name, settings):
     """The document this approval should name now, or None to leave it."""
-    if settings.get("at_head"):
+    if settings.get("at_head") or settings.get("document") != "QA report":
         return None
-    named = settings.get("document")
-    if named == "QA report" and (stage_name or "").strip().lower() == "proposal":
-        return "Proposal"
-    if named:
-        return None
-    said = " ".join((line or "").split()).lower()
-    if said == "results page":
-        return "Results"
-    if said == "checked in production":
-        return "Checked in production"
-    return None
+    return "Proposal" if (stage_name or "").strip().lower() == "proposal" else None
 
 
 def up(conn):
     if not all(_table(conn, name) for name in ("stages", "requirements")):
         return
     rows = conn.execute(
-        "SELECT r.id, r.stage_id, s.name, r.line, r.settings FROM requirements r JOIN stages s ON s.id = r.stage_id "
+        "SELECT r.id, r.stage_id, s.name, r.settings FROM requirements r JOIN stages s ON s.id = r.stage_id "
         "WHERE r.withdrawn_at IS NULL AND s.retired_at IS NULL AND r.kind = 'page'"
     ).fetchall()
     proposal_stages = set()
-    for requirement_id, stage_id, stage_name, line, text in rows:
+    for requirement_id, stage_id, stage_name, text in rows:
         settings = _settings(text)
-        document = _document(stage_name, line, settings)
+        document = _document(stage_name, settings)
         if not document:
             continue
         conn.execute(
