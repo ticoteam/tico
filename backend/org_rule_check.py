@@ -631,19 +631,23 @@ def _start_parts(c, verdict, hold_id):
 
 def _fill_parts(store, engine, output, rules, hold_id, digest):
     """One `_parts` call for a written hold: the parts its reviewer's copy holds go on the hold's detail, and every
-    part found beside its cached verdict, so a repeat asks nothing more. Never raises."""
+    part found beside its cached verdict, so a repeat asks nothing more. Found or not, the hold stops saying a part
+    is coming (`parts_pending`), so an open card reads it once more and stops asking. Never raises."""
     try:
         parts = _parts(store, engine, output, rules)
-        if not parts:
-            return
         with store.transaction() as c:
             row = c.execute("SELECT payload, verdict FROM org_rule_holds WHERE id=?", (hold_id,)).fetchone()
             if row:
-                shown = _shown_parts(parts, (json.loads(row[0] or "{}") or {}).get("text"))
+                detail = {k: v for k, v in json.loads(row[1] or "{}").items() if k != "parts_pending"}
+                shown = _shown_parts(parts, (json.loads(row[0] or "{}") or {}).get("text")) if parts else {}
                 if shown:
-                    detail = {**json.loads(row[1] or "{}"), "parts": shown}
-                    c.execute("UPDATE org_rule_holds SET verdict=? WHERE id=?", (json.dumps(detail), hold_id))
-            hit = c.execute("SELECT broken FROM org_rule_verdicts WHERE digest=?", (digest,)).fetchone()
+                    detail["parts"] = shown
+                c.execute("UPDATE org_rule_holds SET verdict=? WHERE id=?", (json.dumps(detail), hold_id))
+            hit = (
+                c.execute("SELECT broken FROM org_rule_verdicts WHERE digest=?", (digest,)).fetchone()
+                if parts
+                else None
+            )
             if hit and not _cached(hit[0])[1]:
                 kept = {"broken": _cached(hit[0])[0], "parts": parts}
                 c.execute("UPDATE org_rule_verdicts SET broken=? WHERE digest=?", (json.dumps(kept), digest))
@@ -1813,6 +1817,8 @@ def _write_hold(
         # part the reviewer's copy holds is kept: one from words it leaves out (a private task's) is never shown.
         **({"parts": shown} if (shown := _shown_parts(verdict.get("parts"), text)) else {}),
     }
+    if verdict.get("parts_later") and not detail.get("parts"):
+        detail["parts_pending"] = True  # the part call runs after this write; an open card reads the hold again
     if check == "structured":
         detail.update({"check": check, "error": error})
     c.execute(
@@ -1835,7 +1841,7 @@ def _write_hold(
             check,
         ),
     )
-    if verdict.get("parts_later") and not detail.get("parts"):
+    if detail.get("parts_pending"):
         _start_parts(c, verdict, hold_id)  # the pointer to the part is found after this write, never before it
     action = "rules.escalated" if mode == "escalate" else "rules.blocked"
     H.event(
@@ -2359,6 +2365,8 @@ def view_hold(c, who, hold, role=None, summary=False, auth=None):
         "decided_by": hold["decided_by"],
         "can_send": reviewer and hold["state"] == "held" and hold["operation"] in REPLAY,
         "can_withdraw": (author or stands_in) and hold["state"] == "held",
+        # The part call still runs: the card reads this hold again once it stops saying so (ui/app/org-rule-holds.ts).
+        "part_pending": bool(verdict.get("parts_pending")) and hold["state"] == "held",
     }
     if summary:
         out["appealed"] = bool(hold["why"])

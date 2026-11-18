@@ -80,7 +80,8 @@ def test_a_part_call_that_fails_still_holds_and_names_no_part(ruled):
     held = say(api, SPLIT)["held"]
     row = hold_row(api, held["id"])
     assert row["state"] == "held" and row["task_id"]
-    assert view(api, held["id"])["rules"][0]["part"] is None
+    shown = view(api, held["id"])
+    assert shown["rules"][0]["part"] is None and not shown["part_pending"]  # an open card stops asking for it
 
 
 def test_a_repeat_of_a_cached_verdict_keeps_its_part_with_no_call(ruled):
@@ -233,9 +234,15 @@ def test_a_slow_part_call_never_delays_the_hold(ruled):
     held = say(api, SPLIT, settle=False)["held"]  # answered while the part call still waits
     row = hold_row(api, held["id"])
     assert row["state"] == "held" and row["task_id"] and "parts" not in json.loads(row["verdict"])
+    # A card opened now says the part is coming, in the list too, so it reads the hold again once the call ends.
+    assert view(api, held["id"])["part_pending"]
+    assert [h["part_pending"] for h in get(api, f"rule-holds?task={row['task_id']}", token="ben-test")["holds"]] == [
+        True
+    ]
     judge.part_gate.set()
     K.settle_parts()
-    assert view(api, held["id"])["rules"][0]["part"] == "Our favorite color is gold."
+    shown = view(api, held["id"])
+    assert shown["rules"][0]["part"] == "Our favorite color is gold." and not shown["part_pending"]
 
 
 def test_an_appealed_hold_joins_the_rules_open_review(ruled):

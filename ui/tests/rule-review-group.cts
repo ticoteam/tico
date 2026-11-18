@@ -77,7 +77,9 @@ async function world(browser: Browser, viewport: {width: number; height: number}
     });
   };
   const {page, errors} = await open(browser, {viewport, theme, hash, tasks: [REVIEW], needs: [NEED] as never, beforeGoto: routes});
-  return {page, errors, posted, failing, join: (h: Hold) => { holds = [...holds, h]; }};
+  return {page, errors, posted, failing, join: (h: Hold) => { holds = [...holds, h]; },
+    // The part call ends after the card was read: the hold gets its part and stops saying one is coming.
+    fill: (id: string, part: string) => { holds = holds.map(h => h.id === id ? {...h, part_pending: false, rules: h.rules.map(r => ({...r, part}))} : h); }};
 }
 
 const group = (page: Page) => page.locator('#need-card[open] .dc-thing .rh-group');
@@ -171,6 +173,23 @@ const group = (page: Page) => page.locator('#need-card[open] .dc-thing .rh-group
       assert.deepEqual(errors, []);
       await page.close();
     }
+    // A hold opened before its part call ends shows the part once the call ends, without reopening or deciding it.
+    {
+      const PART = "It quotes Lee Park's order from Brightway.";
+      const pending = () => HOLDS().map(h => h.id === 'h-1' ? {...h, part_pending: true, rules: h.rules.map(r => ({...r, part: null}))} : h);
+      const {page, errors, posted, fill} = await world(browser, {width: 1440, height: 900}, 'dark', '#/tasks', pending);
+      await page.evaluate(() => { decideOpen('rq'); });
+      const g = group(page);
+      await g.locator('[data-rh-brief="h-1"]').waitFor({timeout: t(5000)});
+      assert.equal(await g.locator('[data-rh-brief="h-1"] .rh-hit').count(), 0, 'no part yet');
+      fill('h-1', PART);
+      await page.evaluate(() => { ruleReviewTick(); });
+      await g.locator('[data-rh-brief="h-1"] .rh-hit').waitFor({timeout: t(5000)});
+      assert.equal(await g.locator('[data-rh-brief="h-1"] .rh-hit').innerText(), PART);
+      assert.deepEqual(posted, [], 'nothing decided');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
     // The task window: the same group over its cards.
     const {page, errors} = await world(browser, {width: 1440, height: 900}, 'dark', '#/task/t-review');
     const head = page.locator('#task-modal .rule-holds .rh-group, #task-modal [data-rule-holds] .rh-group');
@@ -180,6 +199,6 @@ const group = (page: Page) => page.locator('#need-card[open] .dc-thing .rh-group
     assert.equal(await page.locator('#task-modal [data-hold="h-1"] mark.rh-part').innerText(), "It quotes Lee Park's order from Brightway.");
     assert.deepEqual(errors, []);
     await page.close();
-    console.log('rule review group: brief holds with the part marked, one decision for the holds shown, phone stack, task window: ok');
+    console.log('rule review group: brief holds with the part marked, a late part drawn, one decision for the holds shown, phone stack, task window: ok');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

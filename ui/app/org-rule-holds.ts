@@ -33,6 +33,8 @@ interface RuleHold {
   can_send?: boolean;
   can_withdraw?: boolean;
   nonce?: string;
+  /** The part call still runs (backend `_fill_parts`): an open card reads the hold again until this goes false. */
+  part_pending?: boolean;
 }
 interface RuleHoldPage { holds: RuleHold[]; next_cursor?: string; }
 /** GET /v2/rules/stats: the Rules page header's checks line. */
@@ -227,7 +229,7 @@ const RH_PAGES = 40;
 // How often a review shown in Needs you reads its list again, so a hold that joins is counted while it is open.
 const RH_TICK_MS = 10000;
 /** Every hold of a review still held, each opened for its text; `known` are holds read before, opened again only when
-    their state changed. */
+    their state changed or their failing part was still coming when they were read. */
 async function ruleReviewRead(taskId: string, known: RuleHold[] = []): Promise<RuleHold[]> {
   const listed: RuleHold[] = [];
   let cursor = '';
@@ -241,7 +243,7 @@ async function ruleReviewRead(taskId: string, known: RuleHold[] = []): Promise<R
   const had = new Map(known.map(h => [h.id, h]));
   return Promise.all(listed.filter(h => (h.state || 'held') === 'held').map(h => {
     const old = had.get(h.id);
-    return old && (old.state || 'held') === 'held' ? old
+    return old && (old.state || 'held') === 'held' && !old.part_pending && !h.part_pending ? old
       : get<RuleHold>('/v2/rule-holds/' + encodeURIComponent(h.id), {fresh: true}).catch(() => h);
   }));
 }
@@ -259,7 +261,7 @@ async function ruleReviewRefresh(taskId: string, v: RuleReviewDc, always = false
   v.reading = true;
   try {
     const holds = await ruleReviewRead(taskId, always ? [] : v.holds);
-    const key = (hs: RuleHold[]) => hs.map(h => `${h.id}:${h.state || 'held'}`).join(' ');
+    const key = (hs: RuleHold[]) => hs.map(h => `${h.id}:${h.state || 'held'}:${h.part_pending ? 'p' : ''}`).join(' ');
     if (always || key(holds) !== key(v.holds)) { v.holds = holds; ruleReviewDraw(taskId, v); }
   } catch { if (!v.holds.length) v.el.innerHTML = '<p class="muted">The held items could not be read.</p>'; }
   finally { v.reading = false; }
