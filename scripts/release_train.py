@@ -138,7 +138,11 @@ def sleep(seconds):
 
 
 class Fail(Exception):
-    """A step failed: it is reported on the release-train issue."""
+    """A step failed: it is reported on the release-train issue. `status` is the HTTP code of a GitHub call that failed."""
+
+    def __init__(self, message, status=None):
+        super().__init__(message)
+        self.status = status
 
 
 # ---- versions, titles and the clock ----
@@ -312,7 +316,7 @@ class GitHub:
     def get(self, path):
         code, data, _ = self.call("GET", path)
         if code != 200:
-            raise Fail("GitHub GET %s: %s %s" % (path.split("?")[0], code, data.get("message", "")))
+            raise Fail("GitHub GET %s: %s %s" % (path.split("?")[0], code, data.get("message", "")), status=code)
         return data
 
     def pages(self, path, key=None, limit=10):
