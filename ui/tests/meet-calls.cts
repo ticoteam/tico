@@ -230,6 +230,12 @@ let browser: import('playwright').Browser | null = null;
       const tico = {id: 'x', provider: 'tico', status_source: null, participants: [{actor: 'human:ana', joined_at: 'x'}, {actor: 'human:bea', joined_at: 'x', left_at: 'y'}]};
       return [callCount(tico), callFaces(tico)];
     }), [1, ['human:ana']]);
+    // Once Tico Meet's room reports who is in it, the room's count and faces are what show; a DM with one bot calls it.
+    assert.deepEqual(await page.evaluate(() => {
+      const tico = {id: 'x', provider: 'tico', status_source: 'recorder', live_count: 1, participants: [{actor: 'human:ana', joined_at: 'x', in_call: true}, {actor: 'human:bea', joined_at: 'x', in_call: false}]};
+      const dm = (others: string[]) => callDmBot({id: 'd', audience: 'personal', dm_with: others.map(actor => ({actor})), dm_with_count: others.length} as unknown as ThreadRow);
+      return [callCount(tico), callFaces(tico), dm(['bot:ops']), dm(['bot:ops', 'human:bea']), dm(['human:bea'])];
+    }), [1, ['human:ana'], 'ops', '', '']);
     assert.match(await card.locator('.call-card-n').innerText(), /^4:1\d$/, 'the clock counts from when Google first saw someone');
     await page.waitForFunction(() => document.querySelector('.thv-head .thv-call.on')?.textContent?.trim() === '2');
     await themed(page, 'card-live');
@@ -375,6 +381,18 @@ let browser: import('playwright').Browser | null = null;
     // Joined here: the in-call code is a page part (ui/parts.json), so the join goes out once it has loaded.
     await page.waitForFunction(() => window.__order.some(e => e.endsWith('/join')));
     assert.deepEqual((await order()).slice(0, 2), ['open ', 'POST /api/v2/threads/t-plan/calls']);
+    // The bots' voice in the bar: dots while a bot thinks, its sentence while it speaks, a note when none answers.
+    assert.deepEqual(await page.evaluate(() => {
+      const box = document.createElement('div');
+      const shown = (voice: CallVoiceView | null) => { callVoiceDraw(box, voice); return box.hidden ? null : [box.querySelector('.typing') ? 'dots' : '', box.querySelector('.call-caption')?.textContent ?? '']; };
+      return [
+        shown(null),
+        shown({bots: [{slug: 'ops', state: 'listening'}], note: null}),
+        shown({bots: [{slug: 'ops', state: 'thinking'}], note: null}),
+        shown({bots: [{slug: 'ops', state: 'waiting'}, {slug: 'finance', state: 'speaking', caption: 'It costs less.'}], note: null}),
+        shown({bots: [{slug: 'ops', state: 'listening'}], note: 'Please repeat that'}),
+      ];
+    }), [null, null, ['dots', ''], ['', 'finance It costs less.'], ['', 'Please repeat that']]);
     // A Google Meet: the blank tab goes to it.
     mode.start = 'google_meet';
     opened = context.waitForEvent('page');

@@ -11,9 +11,16 @@ the thread when the call ends. The media runs on LiveKit (backend/call_media.py)
 Tico keeps the call's state and its transcript. A person's token grants audio and screen share, is good for five
 minutes, and is refreshed only while they are still in the call and may still read the thread.
 
-Speech reaches the transcript through the Gateway's speech-to-text, and no raw audio is kept. A call survives a Tico
-restart, because its state is in the database and the sweep picks it up; if LiveKit restarts and loses the room, the
-call ends with its transcript kept.
+Speech reaches the transcript through the Gateway's speech-to-text, and no raw audio is kept. Each person's speech is
+cut where they pause (call_voice.Segmenter), and each utterance takes its place in the transcript in the order it was
+heard, whichever transcription finishes first. In a voice call (`speak_replies`, the default for Tico Meet) the bots
+answer aloud as well as in the thread (backend/call_voice.py). A call survives a Tico restart, because its state is in
+the database and the sweep picks it up; if LiveKit restarts and loses the room, the call ends with its transcript kept.
+Who is in the room is read from LiveKit by the sweep (Tico voice left out): a room empty for EMPTY_SECONDS ends the
+call.
+
+One owner: the process that holds a call's recorder holds its media, its speech buffers and its voice. A process that
+does not hold a call's recorder never plays into it (call_voice.Voice.reply).
 
 The thread checks and posts are core's (backend/threads.py, docs/dev/threads-contract.md). A bot's rights on a teammate
 are teammate_access's, as they are everywhere else.
@@ -38,6 +45,7 @@ from . import (
     call_items,
     call_media,
     call_ring,
+    call_voice,
     gateway_connection,
     google_meet,
     google_workspace,
@@ -53,14 +61,16 @@ from .api_contract import api_v2
 log = logging.getLogger("tico.calls")
 
 ROOM_PREFIX = "tico-call-"
-FLUSH_SECONDS = 8  # speech from one person that goes to the Gateway at once
-IDLE_SECONDS = 3  # a person quiet this long has what they said sent
+IDLE_SECONDS = call_voice.SILENCE_MS / 1000  # a person who stopped sending audio this long has what they said sent
 TRANSCRIPT_BYTES = 12_000
 LIST_LIMIT = 50
 PARTICIPANT_LIMIT = 200
 PCM_BYTES_PER_SECOND = call_media.SAMPLE_RATE * 2
 WORKERS = 4  # clips transcribed at once: the Gateway waits on them, the recorder's audio must not
-DRAIN_SECONDS = 150  # the longest a call's end waits for its last clips (the Gateway itself stops at 120 s)
+DRAIN_SECONDS = call_media.TRANSCRIBE_TIMEOUT + 15  # the longest a call's end waits for its last clips
+END_WAIT_SECONDS = 2  # End answers with the call ended when its last clips are in by then, else with it ending
+BOT_LIMIT = 10  # bots in one call
+REPEAT_NOTE = "Please repeat that"
 CALL_LIST_BYTES = 262_144  # as the audit list: a page stays under 256 KB (backend/audit_log.py)
 START_GRACE_SECONDS = 120  # a call whose room never appeared this long after it started has failed to start
 
@@ -95,6 +105,7 @@ CHANGE_FIELDS = ("live_count", "status_source", "meet_seen_at")  # with in_call:
 
 # The auth module, set by install_calls: an actor becomes the identity that the thread rules read.
 AUTH = None
+CALLS = None  # the app's Calls, set by install_calls: the reply hook hands spoken replies to it
 
 
 def readable(c, actor, thread_id):
@@ -127,10 +138,15 @@ def cancel_bot_turns(c, meeting_id, slug, reason):
         live_meetings._finish_pass(c, meeting_id, turn, reason)
 
 
-def speak(c, call_id, text):
-    """A bot's reply read aloud in the call. Not built: `start` refuses speak_replies until the Gateway offers voice
-    (docs/meet.md), so no call has the flag and the reply goes to the thread as text only."""
-    return None
+def voice_call(c, rid):
+    """The call whose meeting is `rid`, when it is a voice call (a Tico Meet call with speak_replies), else None."""
+    row = c.execute("SELECT * FROM calls WHERE live_meeting_id=?", (rid,)).fetchone()
+    return row if row and row["provider"] == "tico" and row["speak_replies"] else None
+
+
+def spoken_prompt(c, rid):
+    """A bot's turn in a voice call is told that its answer is read aloud (live_meetings.PROMPT_HOOKS)."""
+    return call_voice.SPOKEN_PROMPT if voice_call(c, rid) else ""
 
 
 def project_reply(c, rid, reply, who):
@@ -165,8 +181,13 @@ def project_reply(c, rid, reply, who):
             "live_meeting": {"meeting_id": rid, "chat_id": reply["id"]},
         },
     )
-    if row["speak_replies"]:
-        speak(c, row["id"], reply["text"])
+    machine = CALLS
+    if machine is not None and voice_call(c, rid):
+        # Never spoken inside this transaction: once the reply has committed, it is handed to the call's voice, which
+        # makes the speech and plays it outside any transaction.
+        live_meetings._event(c, rid, "meeting.voice", {"reply_id": reply["id"], "bot": bot, "state": "requested"})
+        call_id, reply_id, text = row["id"], reply["id"], reply["text"]
+        c.after_commit.append(lambda: machine.voice.reply(call_id, bot, reply_id, text))
 
 
 class Empty(Contract):
@@ -175,12 +196,15 @@ class Empty(Contract):
 
 class StartCall(Contract):
     title: str = Field(default="Call", min_length=1, max_length=200)
-    speak_replies: bool = False  # a bot's reply read aloud: refused until the Gateway has text-to-speech
+    # Bots answer aloud as well as in the thread. Unset: on for Tico Meet, off for Google Meet. On (or any bots) makes
+    # the call a Tico Meet one: only there can a bot speak.
+    speak_replies: bool | None = None
     provider: Literal["auto", "google_meet", "tico"] = "auto"
+    bots: list[str] = Field(default_factory=list, max_length=BOT_LIMIT)  # bots in the call from its start
 
 
 class CallBots(Contract):
-    bots: list[str] = Field(min_length=1, max_length=10)
+    bots: list[str] = Field(min_length=1, max_length=BOT_LIMIT)
 
 
 def _call(c, call_id):
@@ -220,7 +244,7 @@ def _summary(row):
         "id": row["id"],
         "thread_id": row["thread_id"],
         "title": row["title"],
-        "state": row["state"],
+        "state": _state(row),
         "connector": row["connector_actor"],
         "started_at": row["started_at"],
         "ended_at": row["ended_at"],
@@ -258,6 +282,11 @@ def _google(row):
     return row["provider"] == "google_meet"
 
 
+def _state(row):
+    """A call's state as readers see it: `ending` from End until its last speech is in (Tico Meet), then `ended`."""
+    return "ending" if row["state"] == "live" and row["ending_at"] else row["state"]
+
+
 def _join_url(row, address):
     """The Meet link as one viewer opens it: `authuser` makes Meet open on their own Google account."""
     if not _google(row) or not row["meet_uri"]:
@@ -276,10 +305,17 @@ class Calls:
 
     def __init__(self, app, store, auth):
         self.app, self.store, self.auth = app, store, auth
-        self.buffers = {}  # (call_id, identity) -> {"pcm": bytearray, "start_ms": int, "at": float}
+        self.buffers = {}  # (call_id, identity) -> call_voice.Segmenter: one speaker's speech, cut at their pauses
         self.lock = threading.Lock()
         self.pending = {}  # call_id -> the clips it is still transcribing
+        # call_id -> {"next": the next clip's place, "due": the next place to store, "done": {place: transcribed clip}}:
+        # a clip takes its place when it is cut, so the transcript keeps the order speech was heard in.
+        self.order = {}
+        self.settling = {}  # call_id -> the lock held while its clips are stored
+        self.closing = set()  # calls whose End stopped their listening; their speech already heard is still stored
+        self.ending = {}  # call_id -> the thread finishing an ended call once its last clips are in
         self.workers = ThreadPoolExecutor(max_workers=WORKERS, thread_name_prefix="tico-meet-stt")
+        self.voice = call_voice.Voice(app, store, self)
         self.starting = {}  # (actor, idempotency key) -> the lock a Google Meet start holds while it makes its space
         self.pollers = ThreadPoolExecutor(max_workers=POLL_WORKERS, thread_name_prefix="tico-meet-poll")
         self.polling = {}  # call_id -> a status read a past pass left still out
@@ -313,6 +349,7 @@ class Calls:
             )
             if self._sees(c, who, f"bot:{r['bot']}")
         ]
+        voiced = row["provider"] == "tico" and bool(row["speak_replies"]) and row["state"] == "live"
         holds = (
             [
                 dict(r)
@@ -328,7 +365,7 @@ class Calls:
             "id": row["id"],
             "thread_id": row["thread_id"],
             "title": row["title"],
-            "state": row["state"],
+            "state": _state(row),
             "connector": row["connector_actor"],
             "meeting_id": row["live_meeting_id"],
             "started_at": row["started_at"],
@@ -337,17 +374,16 @@ class Calls:
             "participants": people,
             "bots": bots,
             "speak_replies": bool(row["speak_replies"]),
+            "voice": self.voice.view(call_id, bots, voiced),
             "holds": holds,
             **self.provider_fields(c, row, who),
         }
 
     @staticmethod
     def _in_call(row, participant):
-        """Whether the status source has the person in the call now. Tico Meet knows from its own room: joined and not
-        left."""
-        if _google(row):
-            return bool(participant["in_call"]) and row["state"] == "live"
-        return row["state"] == "live" and participant["left_at"] is None and participant["removed_at"] is None
+        """Whether the status source has the person in the call now. Tico Meet knows from its own room: a join puts the
+        person in, a leave takes them out, and the sweep sets both from who LiveKit has in the room."""
+        return bool(participant["in_call"]) and row["state"] == "live"
 
     def provider_fields(self, c, row, who, *, address=None):
         """What a call view adds for its provider and for this viewer (docs/dev/meet-calls-contract.md): the Meet link
@@ -360,8 +396,7 @@ class Calls:
             live_count = int(row["live_count"] or 0) if row["state"] == "live" else 0
         else:
             live_count = c.execute(
-                "SELECT COUNT(*) FROM call_participants WHERE call_id=? AND left_at IS NULL AND removed_at IS NULL",
-                (row["id"],),
+                "SELECT COUNT(*) FROM call_participants WHERE call_id=? AND in_call=1", (row["id"],)
             ).fetchone()[0]
         joined = c.execute(
             "SELECT 1 FROM call_participants WHERE call_id=? AND actor=?", (row["id"], who.actor)
@@ -441,19 +476,10 @@ class Calls:
             raise Problem("forbidden", "Only the person who started this call can do that", 403)
         return row
 
-    def _may_start(self, c, who, thread_id, speak_replies):
+    def _may_start(self, c, who, thread_id):
         """The checks a start makes before anything is made, whatever the provider, and again inside its write."""
         human_only(who)
         self.auth.domain(who)
-        if speak_replies:
-            # The Gateway offers no text-to-speech yet (docs/ai-gateway.md lists voice as coming soon), so the flag is
-            # refused rather than kept and ignored.
-            raise Problem(
-                "unavailable",
-                "Spoken replies are not available yet: the Gateway has no text-to-speech. "
-                "Start the call without speak_replies.",
-                422,
-            )
         threads.require(c, threads.viewer(self.auth, who), thread_id, write=True)
         live = c.execute("SELECT id FROM calls WHERE thread_id=? AND state='live'", (thread_id,)).fetchone()
         if live:
@@ -470,9 +496,16 @@ class Calls:
             offered.append("tico")
         return offered
 
-    def choose(self, c, who, thread_id, wanted, speak_replies=False):
-        """The provider a start uses: `auto` is the first the caller has (`providers`); a named one must be there."""
-        self._may_start(c, who, thread_id, speak_replies)
+    def choose(self, c, who, thread_id, wanted, speak_replies=None, bots=()):
+        """The provider a start uses: `auto` is the first the caller has (`providers`); a named one must be there. A
+        call with bots or spoken replies is Tico Meet's, whatever the default: only there can a bot speak."""
+        self._may_start(c, who, thread_id)
+        if speak_replies or bots:
+            if wanted == "google_meet":
+                raise Problem(
+                    "voice_needs_tico_meet", "Bots join and speak in Tico Meet calls only: start it as Tico Meet", 422
+                )
+            wanted = "tico"
         offered = self.providers(c, who)
         if wanted == "auto" and offered:
             return offered[0]
@@ -521,10 +554,15 @@ class Calls:
             return []
         return [actor for actor in people if actor != who.actor and readable(c, actor, thread_id)]
 
-    def start(self, c, who, thread_id, title, speak_replies=False, provider="tico", space=None):
-        """Store a call, its live meeting, its card in the thread and who it rings. A Google Meet start brings the space
-        `make_space` made before this write; a Tico Meet one needs LiveKit set up."""
-        self._may_start(c, who, thread_id, speak_replies)
+    def start(self, c, who, thread_id, title, speak_replies=None, provider="tico", space=None, bots=()):
+        """Store a call, its live meeting, its card in the thread, who it rings and the bots it starts with. A Google
+        Meet start brings the space `make_space` made before this write; a Tico Meet one needs LiveKit set up. A voice
+        call's bots answer on their own models (`meeting_model` ''), as they do in their chats."""
+        self._may_start(c, who, thread_id)
+        if speak_replies is None:
+            speak_replies = provider == "tico"
+        if (speak_replies or bots) and provider != "tico":
+            raise Problem("voice_needs_tico_meet", "Bots join and speak in Tico Meet calls only", 422)
         if provider == "tico" and self.media is None:
             raise Problem("meet_unavailable", "Tico Meet is not set up on this server", 503)
         if provider == "google_meet" and not space:
@@ -549,7 +587,7 @@ class Calls:
                 stamp,
                 stamp,
                 "private",
-                None,
+                "" if speak_replies else None,
                 thread_id,
             ),
         )
@@ -581,8 +619,13 @@ class Calls:
                 json.dumps(self._ring_for(c, who, thread_id)),
             ),
         )
-        c.execute("INSERT INTO call_participants(call_id,actor,joined_at) VALUES(?,?,?)", (call_id, who.actor, stamp))
+        c.execute(
+            "INSERT INTO call_participants(call_id,actor,joined_at,in_call) VALUES(?,?,?,?)",
+            (call_id, who.actor, stamp, int(provider == "tico")),
+        )
         self._record(c, who.actor, call_id, thread_id, "call.started", {"meeting_id": meeting_id, "provider": provider})
+        if bots:
+            self._attach(c, who, _call(c, call_id), live_meetings._meeting(c, meeting_id), bots)
         # The call's card in the thread. A thread that refuses it still has the call: the card is its place in the
         # timeline, not the call, so the refusal is undone on its own and the start goes on without one.
         c.execute("SAVEPOINT call_card")
@@ -675,9 +718,9 @@ class Calls:
             )
         else:
             c.execute(
-                "INSERT INTO call_participants(call_id,actor,joined_at) VALUES(?,?,?) "
+                "INSERT INTO call_participants(call_id,actor,joined_at,in_call) VALUES(?,?,?,1) "
                 "ON CONFLICT(call_id,actor) DO UPDATE SET joined_at=excluded.joined_at,left_at=NULL,removed_at=NULL,"
-                "media_removed_at=NULL",
+                "media_removed_at=NULL,in_call=1",
                 (call_id, who.actor, stamp),
             )
         c.execute("INSERT OR IGNORE INTO live_meeting_humans VALUES(?,?,?)", (row["live_meeting_id"], who.actor, stamp))
@@ -698,8 +741,9 @@ class Calls:
             raise Problem("not_joined", "You are not in this call", 409)
         if participant["left_at"] is None:
             c.execute(
-                "UPDATE call_participants SET left_at=?,media_removed_at=NULL WHERE call_id=? AND actor=?",
-                (H.now(), call_id, who.actor),
+                "UPDATE call_participants SET left_at=?,media_removed_at=NULL,in_call=CASE WHEN ? THEN in_call ELSE 0 END "
+                "WHERE call_id=? AND actor=?",
+                (H.now(), int(_google(row)), call_id, who.actor),
             )
             self._record(c, who.actor, call_id, row["thread_id"], "call.left", {"actor": who.actor})
         if not current:
@@ -707,10 +751,18 @@ class Calls:
         return self.view(c, call_id, who)
 
     def end(self, c, who, call_id):
+        """End the call. A Google Meet one ends here. A Tico Meet one is marked ending: nothing more is heard or said in
+        it, its bots' open turns end, and it is ended once the speech already heard is in its transcript (wind_down)."""
         row = self._connector(c, who, call_id)
         if row["state"] == "ended":
             return self.view(c, call_id, who)
-        self.finish(c, call_id, "ended_by_connector", by=who.actor)
+        if _google(row):
+            self.finish(c, call_id, "ended_by_connector", by=who.actor)
+            return self.view(c, call_id, who)
+        if not row["ending_at"]:
+            c.execute("UPDATE calls SET ending_at=?,updated_at=? WHERE id=?", (H.now(), H.now(), call_id))
+            live_meetings._end_open_turns(c, row["live_meeting_id"])
+            self._record(c, who.actor, call_id, row["thread_id"], "call.ending", {})
         return self.view(c, call_id, who)
 
     def retry_action_items(self, c, who, call_id):
@@ -755,6 +807,7 @@ class Calls:
         )
         live_meetings._end_open_turns(c, row["live_meeting_id"])
         self._record(c, actor, call_id, row["thread_id"], "call.ended", {"reason": reason})
+        c.after_commit.append(lambda: self.voice.forget(call_id))
         return True
 
     def attach_bots(self, c, who, call_id, slugs):
@@ -764,12 +817,22 @@ class Calls:
         if not readable(c, who.actor, row["thread_id"]):
             raise Problem("not_found", "Call not found", 404)
         meeting = live_meetings._meeting(c, row["live_meeting_id"])
-        if row["state"] != "live" or meeting["state"] not in ("live", "paused"):
+        if row["state"] != "live" or row["ending_at"] or meeting["state"] not in ("live", "paused"):
             raise Problem("meeting_state", "Bots can only join a live call", 409)
         if not c.execute(
             "SELECT 1 FROM live_meeting_humans WHERE meeting_id=? AND actor=?", (meeting["id"], who.actor)
         ).fetchone():
             raise Problem("forbidden", "Join this call before attaching bots", 403)
+        self._attach(c, who, row, meeting, slugs)
+        return self.view(c, call_id, who)
+
+    def _attach(self, c, who, row, meeting, slugs):
+        """Attach bots `who` may write to, BOT_LIMIT in the call at most: the limit counts the bots already in it."""
+        call_id = row["id"]
+        present = {r[0] for r in c.execute("SELECT bot FROM live_meeting_bots WHERE meeting_id=?", (meeting["id"],))}
+        added = set(slugs) - present
+        if len(present) + len(added) > BOT_LIMIT:
+            raise Problem("bot_limit", f"A call has at most {BOT_LIMIT} bots", 422, extra={"limit": BOT_LIMIT})
         for slug in slugs:
             live_meetings._active_bot(c, slug)
             access = teammate_access.levels_for(c, who, f"bot:{slug}", self.auth)
@@ -791,7 +854,6 @@ class Calls:
                 self._record(
                     c, who.actor, call_id, row["thread_id"], "call.bot_attached", {"bot": slug, "joined_by": who.actor}
                 )
-        return self.view(c, call_id, who)
 
     def detach_bot(self, c, who, call_id, slug):
         human_only(who)
@@ -812,6 +874,7 @@ class Calls:
             cancel_bot_turns(c, row["live_meeting_id"], slug, "bot_detached")
             live_meetings._event(c, row["live_meeting_id"], "meeting.bot_left", {"bot": slug, "by": who.actor})
             self._record(c, who.actor, call_id, row["thread_id"], "call.bot_detached", {"bot": slug})
+            c.after_commit.append(lambda: self.voice.cancel(call_id, slug))
         return self.view(c, call_id, who)
 
     # --- media, transcript and the thread, around the writes above
@@ -840,36 +903,46 @@ class Calls:
         return on_audio
 
     def ingest(self, call_id, identity, pcm, start_ms):
-        """One piece of one person's speech from the recorder. It waits in memory until FLUSH_SECONDS have come in."""
+        """One piece of one person's speech from the recorder. It waits in memory until the person pauses
+        (call_voice.Segmenter); each utterance then goes to be transcribed. Nothing is heard once End was pressed."""
+        if call_media.is_voice(identity):
+            return
         key = (call_id, identity)
         with self.lock:
-            buffer = self.buffers.setdefault(key, {"pcm": bytearray(), "start_ms": start_ms, "at": 0.0})
-            buffer["pcm"] += pcm
-            buffer["at"] = time.monotonic()
-            if len(buffer["pcm"]) < FLUSH_SECONDS * PCM_BYTES_PER_SECOND:
+            if call_id in self.closing:
                 return
-            taken = self.buffers.pop(key)
-        self._submit(call_id, identity, taken)
+            segmenter = self.buffers.get(key)
+            if segmenter is None:
+                segmenter = self.buffers[key] = call_voice.Segmenter()
+            segmenter.at = time.monotonic()
+            clips = segmenter.feed(pcm, start_ms)
+            for start, clip in clips:
+                self._submit(call_id, identity, {"pcm": clip, "start_ms": start})
 
     def flush(self, call_id=None, *, idle=False):
-        """Send the speech that is waiting: all of it for the call (or every call), or only what has been quiet for
-        IDLE_SECONDS."""
+        """Send the speech that is waiting: all of it for the call (or every call), or only a speaker's whose audio
+        stopped coming IDLE_SECONDS ago (muted, or left mid-sentence)."""
         now = time.monotonic()
         with self.lock:
-            keys = [
-                key
-                for key, buffer in self.buffers.items()
-                if (call_id is None or key[0] == call_id) and (not idle or now - buffer["at"] >= IDLE_SECONDS)
-            ]
-            taken = [(key, self.buffers.pop(key)) for key in keys]
-        for (cid, identity), buffer in taken:
-            self._submit(cid, identity, buffer)
+            for key, segmenter in list(self.buffers.items()):
+                if call_id is not None and key[0] != call_id:
+                    continue
+                if idle and now - segmenter.at < IDLE_SECONDS:
+                    continue
+                clip = segmenter.flush()
+                if not segmenter.speaking:
+                    self.buffers.pop(key, None)
+                if clip:
+                    self._submit(key[0], key[1], {"pcm": clip[1], "start_ms": clip[0]})
 
     def _submit(self, call_id, identity, buffer):
-        """Transcribe a clip on a worker, so the recorder's audio never waits on the Gateway."""
-        future = self.workers.submit(self._transcribe_clip, call_id, identity, buffer)
-        with self.lock:
-            self.pending.setdefault(call_id, []).append(future)
+        """Transcribe a clip on a worker, so the recorder's audio never waits on the Gateway. The clip's place in the
+        transcript is taken now, when it is cut (self.lock held)."""
+        order = self.order.setdefault(call_id, {"next": 0, "due": 0, "done": {}})
+        place = order["next"]
+        order["next"] += 1
+        future = self.workers.submit(self._transcribe_clip, call_id, identity, buffer, place)
+        self.pending.setdefault(call_id, []).append(future)
 
     def drain(self, call_id):
         """Wait (up to DRAIN_SECONDS) for the clips a call is still transcribing, so its transcript has them all."""
@@ -882,58 +955,149 @@ class Calls:
         self.flush(call_id)
         self.drain(call_id)
 
-    def _transcribe_clip(self, call_id, identity, buffer):
+    def _transcribe_clip(self, call_id, identity, buffer, place):
+        text = None
         try:
-            self._transcribe(call_id, identity, buffer)
+            text = self._transcribe(call_id, buffer)
         except Exception as exc:  # noqa: BLE001 - a failed transcription is reported, the call goes on
             from .batch_work import report
 
             report("calls_transcribe", call_id, exc, logger="tico.calls")
+        finally:
+            self._settle(call_id, place, identity, buffer, text)
 
-    def _transcribe(self, call_id, identity, buffer):
+    def _transcribe(self, call_id, buffer):
+        """The clip's text: "" for none (the call ended, or nothing was said), None when it could not be transcribed."""
         pcm = bytes(buffer["pcm"])
         if not pcm:
-            return
+            return ""
         with self.store.read() as c:
             state = c.execute("SELECT state FROM calls WHERE id=?", (call_id,)).fetchone()
             if not state or state["state"] != "live":
-                return  # the call has ended: its speech was sent at the end, and nothing after it is kept
+                return ""  # the call has ended: its speech was sent at the end, and nothing after it is kept
             key, base, _fingerprint = gateway_connection.target(c, self.app.state.vault, self.store.settings)
         if not key:
             log.warning("A call's speech was not transcribed: no Gateway connection is set")
-            return
+            return ""
         try:
-            text = call_media.transcribe(base, key, call_media.wav_bytes(pcm))
-        except call_media.MediaUnavailable:
-            return  # this clip is lost and the call goes on; the Gateway's refusal is in its own log
+            return call_media.transcribe(base, key, call_media.wav_bytes(pcm))
+        except call_media.MediaUnavailable as exc:
+            log.warning("call_clip_not_transcribed call=%s status=%s", call_id, getattr(exc, "status", 0))
+            return None  # this clip is lost and the call goes on
+
+    def _settle(self, call_id, place, identity, buffer, text):
+        """Store transcribed clips in the order they were cut: a clip waits for the ones before it."""
+        with self.lock:
+            order = self.order.setdefault(call_id, {"next": place + 1, "due": place, "done": {}})
+            order["done"][place] = (identity, buffer, text)
+            gate = self.settling.setdefault(call_id, threading.Lock())
+        with gate:
+            while True:
+                with self.lock:
+                    item = order["done"].pop(order["due"], None)
+                    if item is None:
+                        return
+                    order["due"] += 1
+                try:
+                    self._store_clip(call_id, *item)
+                except Exception as exc:  # noqa: BLE001 - one clip that cannot be stored must not hold up the rest
+                    from .batch_work import report
+
+                    report("calls_transcribe", call_id, exc, logger="tico.calls")
+
+    def _store_clip(self, call_id, identity, buffer, text):
+        """One transcribed clip in the call's transcript, and in a voice call the bots it asks (call_voice.Voice.route).
+        A clip that could not be transcribed asks for a repeat where every utterance is a question (a 1:1 bot call)."""
         if not text:
+            if text is None:
+                with self.store.transaction() as c:
+                    row = _call(c, call_id)
+                    if voice_call(c, row["live_meeting_id"]) and not row["ending_at"]:
+                        if self.voice.answers_all(c, row):
+                            self.voice._note(self.voice._call(call_id), REPEAT_NOTE)
+                            self.voice.touch(call_id, c)
             return
-        duration_ms = len(pcm) * 1000 // PCM_BYTES_PER_SECOND
+        duration_ms = len(buffer["pcm"]) * 1000 // PCM_BYTES_PER_SECOND
+        voiced = False
         with self.store.transaction() as c:
             row = _call(c, call_id)
             meeting = live_meetings._meeting(c, row["live_meeting_id"])
             if row["state"] != "live" or meeting["state"] != "live":
                 return
+            voiced = bool(voice_call(c, meeting["id"]))
             previous = c.execute(
                 "SELECT COALESCE(MAX(start_ms),0) FROM live_meeting_chunks WHERE meeting_id=?", (meeting["id"],)
             ).fetchone()[0]
             start = max(buffer["start_ms"], previous)
-            live_meetings.append_chunks(
-                c,
-                meeting["id"],
-                meeting,
-                identity,
-                [
-                    {
-                        "seq": meeting["seq"] + 1,
-                        "speaker": H.actor_id(identity),
-                        "start_ms": start,
-                        "end_ms": start + duration_ms,
-                        "text": text,
-                    }
-                ],
-            )
-        self.app.state.live_meeting_routing.later(meeting["id"])
+            chunk = {
+                "seq": meeting["seq"] + 1,
+                "speaker": H.actor_id(identity),
+                "start_ms": start,
+                "end_ms": start + duration_ms,
+                "text": text,
+            }
+            live_meetings.append_chunks(c, meeting["id"], meeting, identity, [chunk], route=not voiced)
+            if voiced:
+                self.voice.route(c, row, chunk)
+        if not voiced:
+            self.app.state.live_meeting_routing.later(meeting["id"])
+
+    def stop_listening(self, call_id):
+        """End was pressed: nothing more is heard, and the bots stop speaking now."""
+        with self.lock:
+            self.closing.add(call_id)
+        self.voice.cancel(call_id)
+
+    def wind_down(self, call_id, by):
+        """After End: the speech already heard goes to be transcribed, and the call is ended once it is in. When that
+        takes more than END_WAIT_SECONDS the call stays `ending` and a thread of its own finishes it. Returns True when
+        the call is ended now."""
+        with self.lock:
+            if call_id in self.ending:
+                return False  # a second End: the first is finishing it
+        self.flush(call_id)
+        with self.lock:
+            waiting = list(self.pending.get(call_id, []))
+        _done, late = wait(waiting, timeout=END_WAIT_SECONDS)
+        if not late:
+            self._close(call_id, by)
+            return True
+        worker = threading.Thread(target=self._close, args=(call_id, by), name="tico-meet-end", daemon=True)
+        with self.lock:
+            self.ending[call_id] = worker
+        worker.start()
+        return False
+
+    def _close(self, call_id, by, reason="ended_by_connector"):
+        try:
+            self.drain(call_id)
+            with self.store.transaction() as c:
+                self.finish(c, call_id, reason, by=by)
+            self.after_end(call_id)
+        except Exception as exc:  # noqa: BLE001 - the sweep finishes a call whose end failed here
+            from .batch_work import report
+
+            report("calls_end", call_id, exc, logger="tico.calls")
+        finally:
+            with self.lock:
+                self.ending.pop(call_id, None)
+                self.closing.discard(call_id)
+
+    def settle(self, timeout: float = 60):
+        """Wait until every clip is stored, every call End finished is ended and every reply is spoken (tests)."""
+        deadline = time.monotonic() + timeout
+        while True:
+            with self.lock:
+                futures = [f for waiting in self.pending.values() for f in waiting if not f.done()]
+                enders = list(self.ending.values())
+            if not futures and not enders:
+                break
+            wait(futures, timeout=max(0.0, deadline - time.monotonic()))
+            for worker in enders:
+                worker.join(max(0.0, deadline - time.monotonic()))
+            if time.monotonic() > deadline:
+                return False
+        return self.voice.settle(max(0.0, deadline - time.monotonic()))
 
     def after_end(self, call_id):
         """What an ended call still owes: its room closed, its last windows, its transcript and its action items in the
@@ -965,6 +1129,11 @@ class Calls:
             return False
         with self.store.transaction() as c:
             c.execute("UPDATE calls SET finalized_at=? WHERE id=? AND finalized_at IS NULL", (H.now(), call_id))
+        with self.lock:
+            for key in [key for key in self.buffers if key[0] == call_id]:
+                self.buffers.pop(key, None)
+            self.order.pop(call_id, None)
+            self.settling.pop(call_id, None)
         return True
 
     def _post_in_thread(self, c, row, body):
@@ -1165,6 +1334,13 @@ class Calls:
             if row["finalized_at"] is None:
                 self.after_end(call_id)
             return
+        if row["ending_at"]:
+            with self.lock:
+                ours = call_id in self.closing
+            if not ours:
+                # Its End was pressed in a process that is gone (a restart): what it had heard went with it.
+                self._close(call_id, row["connector_actor"])
+            return
         with self.store.read() as c:
             people = [
                 r["actor"]
@@ -1194,26 +1370,83 @@ class Calls:
                 self.finish(c, call_id, "media_lost")
             self.after_end(call_id)
             return
+        try:
+            present = self.media.participants(room) if exists else None
+        except call_media.MediaUnavailable:
+            present = None  # a read LiveKit did not answer says nothing about who is in the room
+        ended = None
         with self.store.transaction() as c:
             if exists and row["media_seen_at"] is None:
                 c.execute("UPDATE calls SET media_seen_at=? WHERE id=?", (H.now(), call_id))
             self._keep_to_thread(c, row, revoked, stale_bots)
+            if present is not None:
+                ended = self._presence(c, _call(c, call_id), present)
+        if ended:
+            self.finish_speech(call_id)
+            with self.store.transaction() as c:
+                self.finish(c, call_id, ended)
+            self.after_end(call_id)
+            return
         self.drop_pending(call_id)
         if exists and not self.media.running(call_id):
             self.media.start_recorder(call_id, room, self._audio_for(call_id))
+
+    def _presence(self, c, row, present):
+        """Record who LiveKit has in a Tico Meet call's room (Tico voice left out), and say whether that ends the call:
+        `empty` once nobody has been in it for EMPTY_SECONDS after someone was (time to rejoin), `no_answer` when nobody
+        was in it within NO_ANSWER_SECONDS of its start. Returns the end reason, or None."""
+        before, in_call_before = dict(row), self._in_call_set(c, row["id"])
+        stamp = H.now()
+        actors = sorted({identity for identity in present if identity.startswith("human:")})
+        c.execute(
+            "UPDATE call_participants SET in_call=CASE WHEN actor IN (%s) THEN 1 ELSE 0 END "
+            "WHERE call_id=? AND (in_call=1 OR actor IN (%s))"
+            % (",".join("?" * len(actors)), ",".join("?" * len(actors))),
+            (*actors, row["id"], *actors),
+        )
+        count = len(present)
+        c.execute(
+            "UPDATE calls SET live_count=?,status_source='recorder',meet_seen_at=COALESCE(meet_seen_at,?),"
+            "meet_active_at=COALESCE(?,meet_active_at),meet_polled_at=?,"
+            "meet_empty_at=CASE WHEN ? OR meet_seen_at IS NULL AND ? IS NULL THEN NULL ELSE COALESCE(meet_empty_at,?) END,"
+            "updated_at=? WHERE id=?",
+            (
+                count,
+                stamp if count else None,
+                stamp if count else None,
+                stamp,
+                count,
+                stamp if count else None,
+                stamp,
+                stamp,
+                row["id"],
+            ),
+        )
+        self._changed(c, row, before, in_call_before)
+        row = _call(c, row["id"])
+        if count:
+            return None
+        if row["meet_seen_at"]:
+            if row["meet_empty_at"] and _seconds_since(row["meet_empty_at"]) >= EMPTY_SECONDS:
+                return "empty"
+            return None
+        if _seconds_since(row["started_at"]) > NO_ANSWER_SECONDS:
+            return "no_answer"
+        return None
 
     def _keep_to_thread(self, c, row, revoked, stale_bots):
         """Take out of the call the people who lost the thread, and the bots whose attacher did."""
         call_id = row["id"]
         for actor in revoked:
             cursor = c.execute(
-                "UPDATE call_participants SET removed_at=? WHERE call_id=? AND actor=? "
+                "UPDATE call_participants SET removed_at=?,in_call=0 WHERE call_id=? AND actor=? "
                 "AND left_at IS NULL AND removed_at IS NULL",
                 (H.now(), call_id, actor),
             )
             if cursor.rowcount:
                 self._record(c, actor, call_id, row["thread_id"], "call.participant_removed", {"actor": actor})
         for slug in stale_bots:
+            c.after_commit.append(lambda slug=slug: self.voice.cancel(call_id, slug))
             cancel_bot_turns(c, row["live_meeting_id"], slug, "attacher_lost_thread")
             c.execute("DELETE FROM live_meeting_bots WHERE meeting_id=? AND bot=?", (row["live_meeting_id"], slug))
             live_meetings._event(c, row["live_meeting_id"], "meeting.bot_left", {"bot": slug, "by": "access_ended"})
@@ -1560,14 +1793,18 @@ class Calls:
 def install_calls(app, store, auth, write):
     """The call routes and the media port. `write` is the app's idempotent write (as live meetings use). Tests set
     app.state.call_media to a fake before the first call; without the Tico Meet settings it is None and calls are off."""
-    global AUTH
+    global AUTH, CALLS
     AUTH = auth
     if project_reply not in live_meetings.REPLY_HOOKS:
         live_meetings.REPLY_HOOKS.append(project_reply)
+    if spoken_prompt not in live_meetings.PROMPT_HOOKS:
+        live_meetings.PROMPT_HOOKS.append(spoken_prompt)
+    if voice_call not in live_meetings.WINDOW_GATES:
+        live_meetings.WINDOW_GATES.append(voice_call)  # a voice call's bots answer when asked, never on their own
     if not hasattr(app.state, "call_media"):
         config = call_media.config_from_env()
         app.state.call_media = call_media.LiveKitMedia(config) if config else None
-    calls = app.state.calls = Calls(app, store, auth)
+    calls = app.state.calls = CALLS = Calls(app, store, auth)
 
     @app.get(
         "/api/v2/threads/{thread_id}/calls",
@@ -1636,7 +1873,7 @@ def install_calls(app, store, auth, write):
                 provider, space = "tico", None
                 if not replayed:
                     with store.read() as c:
-                        provider = calls.choose(c, who, thread_id, body.provider, body.speak_replies)
+                        provider = calls.choose(c, who, thread_id, body.provider, body.speak_replies, body.bots)
                     if provider == "google_meet":
                         try:
                             space = calls.make_space(who)
@@ -1650,7 +1887,14 @@ def install_calls(app, store, auth, write):
                     request,
                     body,
                     lambda c: calls.start(
-                        c, who, thread_id, body.title, body.speak_replies, provider=provider, space=space
+                        c,
+                        who,
+                        thread_id,
+                        body.title,
+                        body.speak_replies,
+                        provider=provider,
+                        space=space,
+                        bots=body.bots,
                     ),
                 )
         finally:
@@ -1741,14 +1985,23 @@ def install_calls(app, store, auth, write):
         **api_v2("Calls", "endCall", "End a call you started; its transcript is posted to the thread", "Call"),
     )
     def end_call(request: Request, call_id: str, body: Empty):
+        """End a call. Tico Meet: listening and the bots' voice stop at once; the call answers `ended` when the speech
+        already heard is transcribed within END_WAIT_SECONDS, else `ending`, and it ends on its own once that is in."""
         who = request.state.identity
         with store.read() as c:
             row = calls._connector(c, who, call_id)  # refuses before any speech is sent on the call's behalf
-        if _google(row) and row["state"] == "live":
-            calls.end_conference(call_id)  # best effort: Google removes everyone; the call ends either way
-        calls.finish_speech(call_id)
+        if _google(row):
+            if row["state"] == "live":
+                calls.end_conference(call_id)  # best effort: Google removes everyone; the call ends either way
+            result = write(request, body, lambda c: calls.end(c, who, call_id))
+            calls.after_end(call_id)
+            return result
+        if row["state"] == "live":
+            calls.stop_listening(call_id)
         result = write(request, body, lambda c: calls.end(c, who, call_id))
-        calls.after_end(call_id)
+        if row["state"] == "live" and calls.wind_down(call_id, who.actor):
+            with store.read() as c:
+                return calls.view(c, call_id, who)
         return result
 
     @app.post(

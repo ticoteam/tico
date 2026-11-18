@@ -67,11 +67,37 @@ class FakeLiveKit:
         asyncio.run_coroutine_threadsafe(room.emit("track_subscribed", track, publication, participant), loop).result(5)
 
 
+class FakeLocalParticipant:
+    def __init__(self, room):
+        self.room, self.published = room, []
+
+    async def publish_track(self, track, options=None):
+        self.published.append((track, options))
+        return SimpleNamespace(sid="TR_voice")
+
+
+class FakeAudioSource:
+    """The voice track's source: what was captured, in frames."""
+
+    def __init__(self, sample_rate, num_channels, queue_size_ms=1000, loop=None):
+        self.sample_rate, self.num_channels, self.frames, self.cleared = sample_rate, num_channels, [], 0
+
+    async def capture_frame(self, frame):
+        self.frames.append(frame)
+
+    def clear_queue(self):
+        self.cleared += 1
+
+    async def wait_for_playout(self):
+        pass
+
+
 class FakeRoom:
     def __init__(self, server):
         self.server, self.handlers, self.token, self.options = server, {}, None, None
         self.identity = self.room = None
         self.connected = False
+        self.local_participant = FakeLocalParticipant(self)
 
     def on(self, event, handler):
         self.handlers[event] = handler
@@ -118,6 +144,14 @@ def fake_rtc(monkeypatch):
     rtc.Room = lambda: FakeRoom(server)
     rtc.RoomOptions = lambda **options: SimpleNamespace(**options)
     rtc.AudioStream = FakeAudioStream
+    rtc.AudioSource = FakeAudioSource
+    rtc.AudioFrame = lambda data, sample_rate, num_channels, samples_per_channel: SimpleNamespace(
+        data=bytes(data), sample_rate=sample_rate, num_channels=num_channels, samples_per_channel=samples_per_channel
+    )
+    rtc.LocalAudioTrack = SimpleNamespace(
+        create_audio_track=lambda name, source: SimpleNamespace(name=name, source=source)
+    )
+    rtc.TrackPublishOptions = lambda **options: SimpleNamespace(**options)
     rtc.TrackKind = SimpleNamespace(KIND_AUDIO=KIND_AUDIO, KIND_VIDEO=KIND_VIDEO)
     rtc.TrackSource = SimpleNamespace(
         SOURCE_MICROPHONE=SOURCE_MICROPHONE,

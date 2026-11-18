@@ -1,6 +1,7 @@
 """Tico Meet against a real LiveKit server. A call is created, a person joins with the token Tico gives them and
 publishes a generated tone on a microphone track through LiveKit's own SDK, the server's recorder hears it, and the
-transcript is posted into the thread. Only the Gateway's speech-to-text relay is faked. The test runs only where
+transcript is posted into the thread; and the call's Tico voice, a participant of its own, speaks into the room and a
+person hears it. Only the Gateway's relays are faked. The test runs only where
 TICO_LIVE_LIVEKIT names a running server with its development keys; CI starts one with docker (docs/meet.md)."""
 
 import asyncio
@@ -9,6 +10,7 @@ import io
 import json
 import math
 import os
+import threading
 import wave
 from array import array
 
@@ -40,7 +42,8 @@ def real_media(live, monkeypatch):
 
 
 def speak(url, token, seconds):
-    """A person's microphone, published through LiveKit's SDK: a 440 Hz tone in 20 ms frames, in real time."""
+    """A person's microphone, published through LiveKit's SDK: a 440 Hz tone in 20 ms frames, in real time, then a
+    second of silence, the pause that ends an utterance."""
     from livekit import rtc
 
     async def publish():
@@ -57,7 +60,7 @@ def speak(url, token, seconds):
                 round(8000 * math.sin(2 * math.pi * 440 * n / call_media.SAMPLE_RATE))
                 for n in range(call_media.SAMPLE_RATE * seconds)
             ),
-        )
+        ) + array("h", bytes(call_media.SAMPLE_RATE * 2))
         frame = call_media.SAMPLE_RATE // 50
         for start in range(0, len(tone), frame):
             chunk = tone[start : start + frame]
@@ -116,3 +119,54 @@ def test_a_speaker_on_a_real_livekit_server_becomes_a_transcript_in_the_thread(l
     assert clips and all(loud(clip) for clip in clips)
     assert _restricted(live, "Call transcript") == [1]
     assert not real_media.room_exists(room) and not real_media.running(call_id)
+
+
+def listen(url, token, joined, done, heard):
+    """A person in the call, through LiveKit's SDK: the loudest sample of each frame the Tico voice sends goes in
+    `heard`. `joined` is set once connected; the person leaves when `done` is set."""
+    from livekit import rtc
+
+    async def run():
+        room, readers = rtc.Room(), []
+
+        async def read(track):
+            async for event in rtc.AudioStream(track, sample_rate=call_media.VOICE_RATE, num_channels=1):
+                samples = array("h", bytes(event.frame.data.cast("B")))
+                heard.append(max((abs(sample) for sample in samples), default=0))
+
+        def subscribed(track, _publication, who):
+            if track.kind == rtc.TrackKind.KIND_AUDIO and call_media.is_voice(who.identity):
+                readers.append(asyncio.ensure_future(read(track)))
+
+        room.on("track_subscribed", subscribed)
+        await room.connect(url, token, options=rtc.RoomOptions(auto_subscribe=True))
+        joined.set()
+        await asyncio.to_thread(done.wait, 60)
+        for reader in readers:
+            reader.cancel()
+        await room.disconnect()
+
+    asyncio.run(run())
+
+
+@pytest.mark.skipif(not LIVE, reason="needs a LiveKit server: set TICO_LIVE_LIVEKIT")
+def test_the_tico_voice_speaks_into_a_real_livekit_room_and_is_not_counted_as_a_person(live, real_media):
+    cid = thread(live)
+    call = start_call(live, cid)
+    call_id, room = call["id"], "tico-call-" + call["id"]
+    joined, done, heard = threading.Event(), threading.Event(), []
+    try:
+        ticket = join(live, call_id, "ana-test")
+        person = threading.Thread(target=listen, args=(ticket["url"], ticket["token"], joined, done, heard))
+        person.start()
+        assert joined.wait(20)
+        wait_until(lambda: real_media.participants(room) == ["human:ana"], seconds=20)  # the voice is not a person
+        tone = array("h", (round(8000 * math.sin(2 * math.pi * 330 * n / 24000)) for n in range(24000)))
+        started = threading.Event()
+        played = real_media.say(call_id, tone.tobytes(), 24000, started.set)
+        assert started.is_set() and played >= 900
+        wait_until(lambda: sum(1 for peak in heard if peak > 2000) >= 25, seconds=20)  # half a second heard, loud
+    finally:
+        done.set()
+        real_media.end_room(room)
+    person.join(20)

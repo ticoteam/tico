@@ -18,7 +18,10 @@ SCHEMAS.update(
                     "description": "The Meet link with authuser=<your Google address> when known; null for Tico Meet",
                 },
                 "live_count": {"type": "integer", "description": "People in the call now, as its status source says"},
-                "status_source": {"enum": ["google", None], "description": "Where live status comes from"},
+                "status_source": {
+                    "enum": ["google", "recorder", None],
+                    "description": "Where live status comes from: Google, or the Tico Meet room as LiveKit lists it",
+                },
                 "seen_at": {"type": ["string", "null"], "description": "When anyone was first seen in the Meet"},
                 "duration_s": {"type": ["integer", "null"], "description": "An ended call's length"},
                 "ring": {"type": "boolean", "description": "The call rings you: rung, not joined, still live"},
@@ -36,7 +39,7 @@ SCHEMAS.update(
                         "id": "s",
                         "thread_id": "s",
                         "title": "s",
-                        "state": {"enum": ["live", "ended"]},
+                        "state": {"enum": ["live", "ending", "ended"]},
                         "connector": "s",
                         "started_at": "s",
                         "ended_at": "n",
@@ -51,7 +54,10 @@ SCHEMAS.update(
                 "id": "s",
                 "thread_id": "s",
                 "title": "s",
-                "state": {"enum": ["live", "ended"]},
+                "state": {
+                    "enum": ["live", "ending", "ended"],
+                    "description": "ending: End was pressed and the speech already heard is being transcribed",
+                },
                 "connector": "s",
                 "meeting_id": "s",
                 "started_at": "s",
@@ -67,8 +73,36 @@ SCHEMAS.update(
             },
             speak_replies={
                 "type": "boolean",
-                "description": "Whether bots were asked to speak their replies "
-                "on this call; off unless the call asked. Spoken replies are not sent yet",
+                "description": "Whether the call's bots answer aloud as well as in the thread: on for Tico Meet unless "
+                "the start turned it off, off for Google Meet",
+            },
+            voice={
+                "anyOf": [
+                    obj(
+                        {
+                            "bots": items(
+                                obj(
+                                    {
+                                        "slug": "s",
+                                        "state": {
+                                            "enum": ["listening", "waiting", "thinking", "making_voice", "speaking"]
+                                        },
+                                        "caption": {
+                                            "type": ["string", "null"],
+                                            "description": "The sentence the bot is saying now",
+                                        },
+                                    }
+                                )
+                            ),
+                            "note": {
+                                "type": ["string", "null"],
+                                "description": "A short note for the people in the call, such as Please repeat that",
+                            },
+                        }
+                    ),
+                    {"type": "null"},
+                ],
+                "description": "A live voice call's bots: what each is doing and saying. null for any other call",
             },
         ),
         "Call": {"allOf": [ref("CallBase"), ref("CallProvider")]},

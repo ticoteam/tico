@@ -37,6 +37,7 @@ async function callJoinNow(threadId: string, call: CallRecord, title: string, ge
     if (gen !== CALL_GEN) return;
   }
   const j: CallJoinReply = await post(callPath(call.id) + '/join', {});
+  if (j.call?.id) callViewKeep(j.call);
   // Overtaken while joining: this seat is given back and the newer join goes on.
   const stale = (): boolean => { if (gen === CALL_GEN) return false; callSeatLeave(call.id); return true; };
   if (stale()) return;
@@ -136,14 +137,17 @@ function callBarDraw(): void {
   if (!bar) {
     bar = document.createElement('div');
     bar.id = 'call-bar'; bar.className = 'call-bar'; bar.setAttribute('role', 'region'); bar.setAttribute('aria-label', 'Call');
-    bar.innerHTML = '<div class="call-screen" hidden></div><div class="call-row"></div><div class="call-audio" hidden></div>';
+    bar.innerHTML = '<div class="call-screen" hidden></div><div class="call-voice" aria-live="polite" hidden></div><div class="call-row"></div><div class="call-audio" hidden></div>';
     bar.addEventListener('click', ev => {
       const b = eventElement(ev)?.closest<HTMLElement>('[data-cb]');
       if (b) void callBarAct(b.dataset.cb ?? '', b);
     });
     document.body.append(bar);
   }
-  const n = (CALL.room?.remoteParticipants?.size || 0) + 1, mine = CALL.connector === myActor();
+  // The call's Tico voice (the bots speaking) is a participant of the room, never a person: not counted.
+  const people = [...(CALL.room?.remoteParticipants?.values() ?? [])].filter(p => !p.identity.startsWith(CALL_VOICE_PREFIX));
+  const n = people.length + 1, mine = CALL.connector === myActor();
+  callVoiceDraw(bar.querySelector<HTMLElement>('.call-voice'), CALL_VIEWS.get(CALL.id)?.voice);
   const btn = (k: string, icon: string, label: string, extra = '') => `<button type="button" class="ghost small call-btn${extra}" data-cb="${k}" aria-label="${esc(label)}" title="${esc(label)}"><span class="nav-icon" aria-hidden="true">${icon}</span><span class="call-lbl">${esc(label)}</span></button>`;
   const row = bar.querySelector<HTMLElement>('.call-row');
   if (row) patchHTML(row, `<a class="call-title" href="${threadHref(CALL.threadId)}">${esc(CALL.title)}</a>
@@ -152,6 +156,21 @@ function callBarDraw(): void {
     ${callShareable() ? btn('share', CALL.sharing ? CALL_ICONS.stop : CALL_ICONS.share, CALL.sharing ? 'Stop sharing' : 'Share screen', CALL.sharing ? ' on' : '') : ''}
     ${btn('bot', CALL_ICONS.bot, 'Add bot')}
     ${btn('leave', CALL_ICONS.leave, 'Leave', ' danger')}${mine ? '<button type="button" class="ghost small call-btn danger" data-cb="end">End</button>' : ''}`);
+}
+// The bots' voice above the buttons: the bot answering, with dots while it thinks and its sentence while it speaks; a
+// short note (a question missed, a repeat asked for) when no bot is answering.
+function callVoiceDraw(box: HTMLElement | null, voice: CallVoiceView | null | undefined): void {
+  if (!box) return;
+  const busy = (voice?.bots || []).find(b => b.state === 'speaking') || (voice?.bots || []).find(b => b.state === 'thinking' || b.state === 'making_voice');
+  let html = '';
+  if (busy) {
+    const name = esc(actorName('bot:' + busy.slug));
+    html = busy.state === 'speaking' && busy.caption
+      ? `${actorAvatar('bot:' + busy.slug, 18)}<span class="call-caption"><b>${name}</b> ${esc(busy.caption)}</span>`
+      : `${actorAvatar('bot:' + busy.slug, 18)}<span class="typing" role="img" aria-label="${name} is thinking" title="${name}"><i></i><i></i><i></i></span>`;
+  } else if (voice?.note) html = `<span class="call-caption muted">${esc(voice.note)}</span>`;
+  box.hidden = !html;
+  patchHTML(box, html);
 }
 async function callBarAct(k: string, button: HTMLElement): Promise<void> {
   const here = CALL; if (!here) return;

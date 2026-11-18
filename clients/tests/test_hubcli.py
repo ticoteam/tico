@@ -1956,6 +1956,7 @@ def test_call_commands_run_the_call_tools_on_their_routes(monkeypatch):
     monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
     for words in (
         ["call", "start", "thread-1", "--title", "Acme standup"],
+        ["call", "start", "thread-1", "--bot", "ops", "--bot", "finance"],
         ["call", "bot", "add", "call-1", "ops", "finance"],
         ["call", "bot", "remove", "call-1", "ops"],
         ["call", "list", "thread-1", "--limit", "5"],
@@ -1963,6 +1964,7 @@ def test_call_commands_run_the_call_tools_on_their_routes(monkeypatch):
         remotecli.run(hubcli.parser().parse_args(words))
     assert sent == [
         ("POST", "threads/thread-1/calls", {"title": "Acme standup"}, None),
+        ("POST", "threads/thread-1/calls", {"bots": ["ops", "finance"]}, None),
         ("POST", "calls/call-1/bots", {"bots": ["ops", "finance"]}, None),
         ("DELETE", "calls/call-1/bots/ops", {}, None),
         ("GET", "threads/thread-1/calls", {"limit": 5}),
