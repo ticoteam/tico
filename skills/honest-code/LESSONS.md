@@ -95,6 +95,7 @@ Seeded 2026-11-18 from merged pull requests and commits on `origin/main` at `7e7
 | L31 | A module's test seam is a `def` that calls the stdlib (`def _sleep(seconds): time.sleep(seconds)`), not an assignment (`_sleep = time.sleep`) that binds the real function at import. | 2026-11-18 #4172 (an assignment seam hung a test that swaps the module's `time` for a fake clock) | script | 1 | encoded no-global-time-patch | `clients/tico.py` |
 | L32 | An assertion passes on one outcome. An `or` between two expectations hides which one the code produced, and that one can be wrong. | 2026-11-18 #4172 (`test_stage_rule_timers` expected the wrong text; the `or` passed it) | script | 1 | proposed or-assert | `backend/tests/test_stage_rule_timers.py` |
 | L33 | A ban matches every spelling of the call it bans (`setattr`, `patch.object`, `patch("a.b.c")`) and every attribute with the same harm, with a bad case for each in its test. | 2026-11-18 #4179 (`no-global-sleep-patch` was green with 7 `patch.object`/`patch(...)` sleep patches and 14 `time`/`monotonic` patches left) | script | 1 | encoded no-global-time-patch | `scripts/landmines.py` |
+| L34 | A skip that fires on every CI run is a deleted test with no record. Make its premise hold in CI, or delete the test and say what is unchecked. | 2026-11-18 #4179 (`test_safe_git` skipped on every run: no git we run refuses the clone it expected refused) | script | 1 | open | `runner_support/tests/test_safe_git.py` |
 
 ## Ids not used
 
