@@ -1201,6 +1201,14 @@ def version_review(c, fid, number, *, actor):
     return _review_view(c, actor, row["note"], row["comment_id"]) if row else {"note": None, "comment_id": None}
 
 
+TASK_UPLOAD_SERIES_SQL = (
+    "SELECT f.*,p.file_id IS NOT NULL AS is_page FROM bot_files f JOIN bot_file_versions v "
+    "ON v.file_id=f.id AND v.version=f.current_version LEFT JOIN pages p ON p.file_id=f.id "
+    "WHERE f.task_id=? AND f.archived=0 AND v.name=? AND NOT EXISTS "
+    "(SELECT 1 FROM page_links l WHERE l.page_id=f.id AND l.target=? AND l.role NOT IN ('writer','related')) "
+    "ORDER BY f.last_activity_at DESC"
+)
+
 TASK_VERSIONS_SQL = (
     "SELECT v.*,r.note,r.comment_id FROM json_each(?) ids JOIN bot_file_versions v ON v.file_id=ids.value "
     "AND v.version>=CASE WHEN ? > 0 THEN coalesce((SELECT older.version FROM bot_file_versions older "
@@ -1629,19 +1637,21 @@ class Files:
         return fid
 
     def attach_task(self, c, who, task_id, item, digest, bot, *, file=None, series=True):
-        """A visible ordinary file with the same task and display name continues its series. A document is
-        passed as `file` after cleaning its bytes. With `series` off and no `file`, a new one starts."""
+        """Continue a writable series on this task unless it is linked here as a document.
+        A named document is passed as `file` after cleaning. With `series` off and no `file`, start a new series."""
         row = file
         if row is None and series:
-            rows = c.execute(
-                "SELECT f.* FROM bot_files f JOIN bot_file_versions v "
-                "ON v.file_id=f.id AND v.version=f.current_version "
-                "WHERE f.task_id=? AND f.archived=0 AND v.name=? "
-                "AND NOT EXISTS (SELECT 1 FROM pages p WHERE p.file_id=f.id) "
-                "ORDER BY f.last_activity_at DESC",
-                (task_id, item["name"]),
-            ).fetchall()
-            row = next((r for r in rows if self.visible(c, who, r, {})), None)
+            from . import page_links
+
+            rows = c.execute(TASK_UPLOAD_SERIES_SQL, (task_id, item["name"], "task:" + task_id)).fetchall()
+            row = next(
+                (
+                    r
+                    for r in rows
+                    if self.visible(c, who, r, {}) and (not r["is_page"] or page_links.may_write(c, self.auth, who, r))
+                ),
+                None,
+            )
         created = row is None
         legacy = None
         if row is None:

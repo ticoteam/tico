@@ -112,16 +112,25 @@ def test_legacy_spec_checks_task_comment_permission_before_writing(api):
     assert get(api, f"pages/{fid}", finance)["page"]["version"] == 1
 
 
-def test_plain_attachment_skips_a_page_whose_document_link_was_removed(api):
+def test_plain_attachment_keeps_the_tasks_document_in_its_own_series(api):
     tid = task(api)
     fid = page(publish(api, task=tid, **{"as": "Spec"}))["file_id"]
+    uploaded = post(api, f"tasks/{tid}/files", {"name": "report.html", "text": "<p>Ordinary attachment</p>"})
+    assert uploaded["file_id"] != fid and uploaded["version"] == 1
+    assert get(api, f"pages/{fid}")["page"]["version"] == 1
+
+
+def test_plain_attachment_can_continue_a_page_used_as_another_tasks_document(api):
+    tid = task(api)
+    fid = page(publish(api, task=tid, **{"as": "Spec"}))["file_id"]
+    link_spec(api, fid, task(api))
     removed = api.delete(
         f"/api/v2/pages/{fid}/links", params={"target": "task:" + tid, "role": "Spec"}, headers=headers()
     )
     assert removed.status_code == 200, removed.text
     uploaded = post(api, f"tasks/{tid}/files", {"name": "report.html", "text": "<p>Ordinary attachment</p>"})
-    assert uploaded["file_id"] != fid
-    assert get(api, f"pages/{fid}")["page"]["version"] == 1
+    assert uploaded["file_id"] == fid and uploaded["version"] == 2
+    assert get(api, f"pages/{fid}")["page"]["version"] == 2
 
 
 def test_document_link_and_archive_changes_reconcile_the_open_approval(api):

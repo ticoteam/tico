@@ -276,14 +276,7 @@ def main():
             cases.extend(
                 [
                     ('attach/old', old_attach, ('t42', 'spec.html')),
-                    (
-                        'attach/new',
-                        old_attach.replace(
-                            'SELECT 1 FROM task_documents d WHERE d.file_id=f.id',
-                            "SELECT 1 FROM page_links pl WHERE pl.page_id=f.id AND pl.role NOT IN ('writer','related')",
-                        ),
-                        ('t42', 'spec.html'),
-                    ),
+                    ('attach/new', files.TASK_UPLOAD_SERIES_SQL, ('t42', 'spec.html', 'task:t42')),
                     (
                         'task-files/old',
                         "SELECT f.* FROM bot_files f WHERE f.locator='tico_blob' AND f.task_id=? ORDER BY f.last_activity_at DESC",
