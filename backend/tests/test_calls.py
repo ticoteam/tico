@@ -15,6 +15,7 @@ from backend.tests.helpers.live_meetings import live, settle  # noqa: F401
 from clients import gateway
 from backend.tests.helpers.calls import (
     PCM_EIGHT_SECONDS,
+    bot_reply_by_run,
     PCM_ONE_SECOND,
     SYNTHETIC_SPEECH,
     _restricted,
@@ -54,44 +55,18 @@ def drafted(items):
     return json.dumps({"choices": [{"message": {"content": content}}]}).encode()
 
 
-def private_lanes_ready(api, machine, bot):
-    """A current runner that takes a private meeting's turns: a call is a private meeting (execution.PRIVATE_LANES)."""
-    return post(
-        api,
-        "runners/heartbeat",
-        {"version": "test", "platform": "test", "capabilities": ["private_lanes_v1"], "readiness": {bot: True}},
-        token=machine["token"],
-    )
-
-
-def bot_reply_by_run(api, bot, text):
-    """The bot answers its meeting turn the way the runner does: the job is claimed, started and completed with its reply."""
-    machine = runner(api)
-    assign(api, machine, bot)
-    private_lanes_ready(api, machine, bot)
-    attempt = post(api, "jobs/claim", {"bot": bot}, token=machine["token"])["attempt"]
-    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "synthetic-call-turn"}, token=machine["token"])
-    post(
-        api,
-        f"attempts/{attempt['id']}/complete",
-        {"outcome": "completed", "text": text, "last_seq": 0},
-        token=machine["token"],
-    )
-    return attempt
-
-
 def test_the_recorder_hears_the_room_and_the_thread_gets_the_transcript_a_reply_and_the_action_items(
     meet, live_media, fake_rtc, monkeypatch
 ):
     cid = thread(meet)
-    call = start_call(meet, cid)
+    call = start_call(meet, cid, speak_replies=False)  # the router's windows decide who answers, as in a Google Meet
     call_id, meeting_id = call["id"], call["meeting_id"]
     room, recorder = "tico-call-" + call_id, call_media.RECORDER_PREFIX + call_id
     assert fake_rtc.rooms[room] == {recorder}
     join(meet, call_id, "ana-test")
     join(meet, call_id, "ben-test")
     post(meet, f"calls/{call_id}/bots", {"bots": ["ops"]}, token="ana-test")
-    fake_rtc.hear(live_media.loop, recorder, "human:ana", [PCM_ONE_SECOND] * 32)  # four 8-second clips
+    fake_rtc.hear(live_media.loop, recorder, "human:ana", [PCM_EIGHT_SECONDS] * 4)  # four utterances, each then a pause
     wait_until(lambda: len(_chunks(meet, meeting_id)) == 4)
     settle(meet)
     assert _chunks(meet, meeting_id) == [SYNTHETIC_SPEECH] * 4
@@ -325,17 +300,27 @@ def test_a_media_server_restart_ends_the_call_and_keeps_its_transcript(meet):
     assert any(text.startswith("Call transcript") and SYNTHETIC_SPEECH in text for text in thread_texts(meet, cid))
 
 
-def test_a_call_cannot_ask_for_spoken_replies_the_gateway_cannot_speak(meet):
-    """Text to speech is not offered by the Gateway yet, so the flag is refused, not kept and silently ignored."""
+def test_a_call_with_bots_or_voice_is_tico_meet_whatever_the_default_provider(meet, monkeypatch):
+    """Tico Meet calls speak by default; only there can a bot speak, so bots or speak_replies make a call Tico Meet."""
+    from backend import google_workspace
+
     cid = thread(meet)
-    quiet = start_call(meet, cid)
-    assert quiet["speak_replies"] is False
+    plain = start_call(meet, cid)
+    assert plain["provider"] == "tico" and plain["speak_replies"] is True and plain["voice"]["bots"] == []
+    post(meet, f"calls/{plain['id']}/end", {}, token="ana-test")
+    quiet = start_call(meet, cid, speak_replies=False)
+    assert quiet["speak_replies"] is False and quiet["voice"] is None
     post(meet, f"calls/{quiet['id']}/end", {}, token="ana-test")
-    refused = post(
-        meet, f"threads/{cid}/calls", {"title": "Acme call", "speak_replies": True}, token="ana-test", expected=422
-    )
-    assert "text-to-speech" in json.dumps(refused)
-    assert get(meet, f"calls/{quiet['id']}")["speak_replies"] is False
+
+    # Google Meet is the caller's default here, as `auto` would pick it.
+    monkeypatch.setattr(google_workspace, "meet_ready", lambda c: True)
+    monkeypatch.setattr(google_workspace, "workspace_mailbox", lambda c, actor: "ana@acme.example")
+    assert get(meet, f"threads/{cid}/calls")["providers"] == ["google_meet", "tico"]
+    refused = post(meet, f"threads/{cid}/calls", {"provider": "google_meet", "bots": ["ops"]}, expected=422)
+    assert refused["error"]["code"] == "voice_needs_tico_meet"
+    with_bot = start_call(meet, cid, bots=["ops"])
+    assert with_bot["provider"] == "tico" and with_bot["bots"] == ["ops"] and with_bot["speak_replies"] is True
+    assert with_bot["voice"]["bots"] == [{"slug": "ops", "state": "listening", "caption": None}]
 
 
 def test_the_call_list_pages_and_stays_under_its_byte_cap(meet, monkeypatch):

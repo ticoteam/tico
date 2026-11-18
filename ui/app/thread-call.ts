@@ -8,13 +8,16 @@
 
 // Someone in a call, as the call view lists them; `in_call` is what the status source (Google) says now.
 interface CallPerson { actor: string; joined_at?: string | null; left_at?: string | null; removed_at?: string | null; in_call?: boolean | number; }
+// A bot's voice in a Tico Meet call (docs/meet.md, Voice): what it is doing, and the sentence it is saying.
+interface CallVoiceBot { slug: string; state: 'listening' | 'waiting' | 'thinking' | 'making_voice' | 'speaking' | string; caption?: string | null; }
+interface CallVoiceView { bots: CallVoiceBot[]; note?: string | null; }
 // The server's call view (GET /v2/calls/{id}, list items, the start and join answers; a Start answer may wrap it in {call}).
 interface CallRecord {
   id: string; title?: string; state?: string; connector?: string; call?: CallRecord;
   thread_id?: string; provider?: string; meet_uri?: string | null; join_url?: string | null;
   live_count?: number; status_source?: string | null; seen_at?: string | null; started_at?: string | null; ended_at?: string | null;
   duration_s?: number | null; ring?: boolean; card_message_id?: string | null; transcript_message_id?: string | null;
-  participants?: CallPerson[];
+  participants?: CallPerson[]; bots?: string[]; voice?: CallVoiceView | null;
 }
 interface CallListReply { calls?: CallRecord[]; available?: boolean; providers?: string[]; }
 interface CallJoinReply { call?: CallRecord; token: string; url: string; }
@@ -75,6 +78,8 @@ const CALL_OWED = new Set<string>();
 const CALL_SETTLED = new Set<string>();
 // Named here so scripts/build-icon-font.py keeps them in the icon subset.
 const CALL_ICONS = {mic: 'mic', muted: 'mic_off', share: 'screen_share', stop: 'stop_screen_share', bot: 'smart_toy', leave: 'call_end'};
+// The call's Tico voice in the LiveKit room (backend/call_media.py RECORDER_PREFIX): never shown as a person.
+const CALL_VOICE_PREFIX = 'tico-recorder-';
 
 // body.error of a failed call request: its code when it is an object, or the message string itself. '' when there is none.
 function callCode(e: unknown): string {
@@ -150,7 +155,9 @@ async function callAction(view: ThvView, kind: string | undefined): Promise<void
   // Start may make a Google Meet unless the server said it starts Tico Meet here: a blank tab opens now, in the click and
   // before anything is awaited, so a pop-up blocker lets it through. It goes to the Meet once the start answers, and
   // closes when the answer is a Tico Meet call (joined here) or the start fails.
-  let tab = kind === 'start' && (!info.providers?.length || info.providers[0] === 'google_meet') ? callTabOpen() : null;
+  // A call in a DM with one bot is a voice call with that bot, always Tico Meet: no tab.
+  const bot = kind === 'start' ? callDmBot(view.thread) : '';
+  let tab = kind === 'start' && !bot && (!info.providers?.length || info.providers[0] === 'google_meet') ? callTabOpen() : null;
   const tabClose = (): void => { try { tab?.close(); } catch {} tab = null; };
   // Counted as a join on its way from the click, so a page hidden while the call is being made says it is in one,
   // and never joins the call once it is made.
@@ -159,7 +166,7 @@ async function callAction(view: ThvView, kind: string | undefined): Promise<void
   try {
     let call: CallRecord | null | undefined = info.call;
     if (kind === 'start') {
-      const made: CallRecord | null = await post(`/v2/threads/${encodeURIComponent(id)}/calls`, {provider: 'auto'});
+      const made: CallRecord | null = await post(`/v2/threads/${encodeURIComponent(id)}/calls`, bot ? {provider: 'tico', bots: [bot]} : {provider: 'auto'});
       call = made?.call || made;
       if (call?.provider === 'google_meet') {
         CALL_THREADS.set(id, {...CALL_THREADS.get(id), call});
@@ -187,6 +194,42 @@ async function callAction(view: ThvView, kind: string | undefined): Promise<void
     callNoted(id, e);
   } finally {
     tabClose();
+    CALL_JOINS--;
+  }
+}
+
+// The bot a DM is with, when it is a DM with exactly one bot ('' otherwise).
+function callDmBot(t: ThreadRow | null | undefined): string {
+  if (!threadIsDm(t) || t.parent_id || Number(t.dm_with_count || 1) !== 1) return '';
+  const others = threadOthers(t);
+  return others.length === 1 && others[0]?.startsWith('bot:') ? others[0].slice(4) : '';
+}
+// Call a bot from anywhere (the org chart): the viewer's DM with it (made when there is none), a Tico Meet call there
+// with the bot in it, joined here. A live call in that DM is joined instead.
+async function callBot(slug: string): Promise<void> {
+  const gen = ++CALL_GEN;
+  CALL_JOINS++;
+  try {
+    const r = await get<ThvThread & {thread?: ThvThread}>('/v2/threads/dm?with=' + encodeURIComponent('bot:' + slug), {fresh: true});
+    const t = (r?.thread !== undefined ? r.thread : r) || null;
+    if (!t?.id || gen !== CALL_GEN) return;
+    let call: CallRecord | null | undefined, started = false;
+    try {
+      const made: CallRecord | null = await post(`/v2/threads/${encodeURIComponent(t.id)}/calls`, {provider: 'tico', bots: [slug]});
+      call = made?.call || made; started = true;
+    } catch (e) {
+      if (callCode(e) !== 'call_in_progress') throw e;
+      const list = await get<CallListReply>(`/v2/threads/${encodeURIComponent(t.id)}/calls?limit=1`, {fresh: true});
+      call = (list.calls || []).find(c => c.state === 'live');
+    }
+    if (!call?.id) return;
+    if (call.provider === 'google_meet') { await callMeetJoin(call); return; }
+    // Hidden or overtaken while the call was being made: the seat the start took goes back.
+    if (gen !== CALL_GEN) { if (started && CALL?.id !== call.id) callSeatLeave(call.id); return; }
+    await callJoin(t.id, call, threadTitle(t), gen);
+  } catch (e) {
+    if (gen === CALL_GEN) toast(errorMessage(e, 'Could not call'), true);
+  } finally {
     CALL_JOINS--;
   }
 }
@@ -256,6 +299,8 @@ function callViewKeep(v: CallRecord): void {
     callRailMark(tid, v);
     if (JSON.stringify(was) !== JSON.stringify(v)) callViewsDraw(tid);
   }
+  // The bar shows the bots' voice (thread-call-live.ts; CALL is set only once that part has loaded).
+  if (CALL?.id === v.id) callBarDraw();
   if (typeof ringConsider === 'function') ringConsider(v);
 }
 // A call the viewer can no longer read: its mark and ring go.
