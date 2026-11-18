@@ -712,7 +712,7 @@ def test_a_check_saved_on_the_gateway_runs_on_the_bots_own_model_once_the_compan
             (sub["id"],),
         )
 
-    def choice(preset, check_models=()):
+    def choice(preset, listed=()):
         with api.app.state.store.transaction() as c:
             c.execute(
                 "UPDATE registry_metadata SET value=? WHERE key='providers'",
@@ -724,7 +724,7 @@ def test_a_check_saved_on_the_gateway_runs_on_the_bots_own_model_once_the_compan
                             "runtime": "claude",
                             "model": "claude-sonnet-5-5",
                             "preset": preset,
-                            "check_models": list(check_models),
+                            "check_models": list(listed),
                         }
                     ),
                 ),

@@ -38,7 +38,7 @@ def test_a_subscriptions_company_never_reviews_on_the_gateway():
     assert "tico" in [row["provider"] for row in P.check_order(P._record({**tico, "preset": "gateway"}))]
     for preset in ("subscriptions", "own-keys"):
         order = P.check_order(P._record({**tico, "preset": preset}))
-        assert [row["provider"] for row in order] == ["openai", "anthropic"]
+        assert [row["model"] for row in order] == ["gpt-6.2-sol", "claude-opus-5-5", "gpt-6-luna"]
         with pytest.raises(P.ProviderError):
             P.check_choice(P._record({**tico, "preset": preset}), "claude", available={"pi"})
     # A Tico model the owner lists runs checks there still.
