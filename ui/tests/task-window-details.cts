@@ -58,6 +58,33 @@ const RID = 'spec-ok-ana';
       assert.deepEqual(errors, []);
       await page.close();
     }
+    // The stage's owner and the developer both appear in Details, on desktop and phone.
+    for (const viewport of [{width: 1280, height: 800}, {width: 390, height: 844}]) {
+      const t = task('t-4', 'Fix checkout totals', 'review', {
+        stage: {id: 'review', name: 'Bot QA', kind: 'work', by_hand: false},
+        owner_id: 'bot:ops', assignee_id: 'bot:eng',
+      });
+      const {page, errors} = await open(browser, {viewport, hash: '#/task/t-4', tasks: [t], needs: []});
+      const win = page.locator('#task-modal[open]');
+      const details = win.getByRole('button', {name: /^Details/});
+      const owner = win.locator('[data-prop-row="owner"] .prop-v');
+      const developer = win.locator('[data-prop-row="developer"]');
+      await details.click();
+      await developer.waitFor({state: 'visible'});
+      assert.equal(await owner.getAttribute('aria-label'), 'Owner: Ops');
+      assert.equal(await developer.locator('.prop-v').getAttribute('aria-label'), 'Developer: Engineer');
+      const screenshots = process.env.TICO_TASK_DETAILS_SCREENSHOTS;
+      if (screenshots) await page.screenshot({path: `${screenshots}/developer-${viewport.width}.png`});
+
+      Object.assign(t, task(t.id, t.title, 'build', {owner_id: 'bot:eng', assignee_id: 'bot:eng', version: t.version + 1}));
+      await page.reload();
+      await details.click();
+      await owner.waitFor({state: 'visible'});
+      assert.equal(await owner.getAttribute('aria-label'), 'Owner: Engineer');
+      assert.equal(await developer.count(), 0);
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
     // ---- the banner
     {
       // The ask is one of the stage's requirements, and says who asked (PM): the row names them.

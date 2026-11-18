@@ -199,10 +199,12 @@ def owner_moved(conn: "sqlite3.Connection", before: Row, after: Row, by: str) ->
     owner (`_follow_owner`). The engine runs it first, before it wakes anyone or anything hears of the move, so a task
     the new owner keeps private is private by then. `moved` publishes `task.assigned` at the end."""
     if before.get("owner_id") != after.get("owner_id"):
-        _follow_owner(conn, before, after, cause(by))
+        # A task takes a place in the owner's queue on first entry or a delayed pick. A move keeps its rank.
+        stage = before.get("stage_id")
+        _follow_owner(conn, before, after, cause(by), rerank=not stage or stage == after.get("stage_id"))
 
 
-def _follow_owner(conn: "sqlite3.Connection", before: Row, after: Row, actor: str, *, rerank: bool = True) -> None:
+def _follow_owner(conn: "sqlite3.Connection", before: Row, after: Row, actor: str, *, rerank: bool) -> None:
     """What follows a task's owner, whichever way it changed (a reassignment, or a move into a stage someone else
     owns): the new owner's private default, the sessions and worktree, the per-task model, the followers, the old
     owner's goal on the task and, with `rerank`, its place at the end of the new owner's queue. Before anything about
@@ -238,7 +240,7 @@ def _follow_owner(conn: "sqlite3.Connection", before: Row, after: Row, actor: st
     models: Any = task_run_models
     models.moved(conn, actor, task_id)
     followers: Any = task_followers
-    followers.owner_moved(conn, before, old, new)
+    followers.owner_moved(conn, after, old, new)
     if rerank:
         conn.execute("UPDATE tasks SET rank=? WHERE id=?", (H._queue_end(conn, new) if new else None, task_id))
     reconnects_: Any = reconnects

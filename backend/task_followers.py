@@ -2,7 +2,7 @@
 
 The owner follows by default, at `live` (reason `owner`). Filing a task follows only with `follow` (reason
 `manual`), and posting in a task's thread follows nobody (threads.post). Changing the owner makes the new owner
-follow; the old owner's row goes unless they chose to follow (reason `manual`) or were @mentioned. A row that goes
+follow; the old owner's row goes unless they are still the assignee, chose to follow or were @mentioned. A row that goes
 keeps its read mark: it is a read mark only (following=0).
 
 Only someone who can read the task follows it. Anyone who reads it follows or unfollows themselves and sets their own
@@ -54,12 +54,12 @@ def seed_owner(conn, row, owner=None):
 
 
 def owner_moved(conn, row, old, new):
-    """The new owner follows; the old owner's row goes unless they chose to follow or were @mentioned."""
+    """The new owner follows. Keep the assignee's follow when another teammate takes the stage."""
     if old == new:
         return
     seed_owner(conn, row, new)
     tid = thread_id(conn, row)
-    if tid and old:
+    if tid and old and old != row.get("assignee_id"):
         conn.execute(
             f"UPDATE thread_followers SET following=0, reason='read', updated_at=? WHERE thread_id=? AND "
             f"actor=? AND following=1 AND reason NOT IN ({','.join('?' * len(KEPT))})",
