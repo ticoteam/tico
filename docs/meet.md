@@ -242,6 +242,12 @@ fits in what is left. A voice the Gateway does not make leaves the text as it is
 access and End stop a bot's voice at once, even a sentence cleared to play a moment before; taking out a bot that is
 only waiting leaves the bot speaking alone.
 
+**Timing.** Each turn ends in one INFO log line, `call_voice_turn`, with no words in it: `call_id`, `bot`, `turn`,
+`outcome` (`spoken`, `text_only` or `skipped`), `skip_reason` (why it was skipped or stayed text), and in ms
+`transcribe_ms` (the pause to the text stored), `queue_ms` (asked to picked up), `answer_ms` (picked up to the reply
+stored), `speech_ms` (the reply's commit to its first sentence starting on the call's track) and `total_ms` (the pause
+to that first audio). A step the turn never reached, or a question that was typed, logs `null`.
+
 **What the call shows.** A call's view has `voice`: each attached bot's `state` (`listening`, `waiting`, `thinking`,
 `making_voice` or `speaking`) and `caption` (the sentence being spoken), and `note`, the latest short note for 10
 seconds. The call bar shows the bot answering, dots while it thinks, and its sentence while it speaks.
