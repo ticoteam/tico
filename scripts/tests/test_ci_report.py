@@ -127,7 +127,7 @@ def test_unread_aws_is_not_read_never_zero():
         not_read=["AWS Cost Explorer, profile tico-ci (NoCredentialsError)"],
     )
     text = ci_report.report(numbers)
-    assert "| AWS $/day (tico-ci) | not read |" in text
+    assert "| AWS $/day | not read |" in text
     assert "Not read: AWS Cost Explorer, profile tico-ci (NoCredentialsError)." in text
 
 
@@ -139,7 +139,7 @@ def test_compare_prints_before_after_and_change():
     before.update(since="2026-11-03T00:00:00Z", until="2026-11-10T00:00:00Z", hosted_min_per_pr=20.5)
     text = ci_report.report(after, before)
     assert "| Measure | Before | After | Change |" in text
-    assert "| Hosted job-min per merged PR (target 150) | 20.5 | 15.0 | -5.5 |" in text
+    assert "| Hosted job-min per merged PR, all workflows | 20.5 | 15.0 | -5.5 |" in text
 
 
 def test_window_defaults_to_seven_whole_days_and_rejects_reversed():
@@ -169,3 +169,94 @@ def test_budget_is_a_hard_stop(monkeypatch):
     api = ci_report.GitHub("acme/tico", budget=0)
     with pytest.raises(ValueError, match="budget"):
         api.get("actions/runs")
+
+
+def step(name, conclusion):
+    return {"name": name, "conclusion": conclusion}
+
+
+def test_a_run_that_cancelled_itself_after_a_failed_suite_counts_as_failed():
+    leg = job("2026-11-10T10:00:00Z", "2026-11-10T10:05:00Z", conclusion="cancelled")
+    failed_leg = dict(leg, steps=[step("Run tests", "failure"), step(ci_report.FAIL_FAST_STEP, "success")])
+    newer_push = dict(leg, steps=[step("Run tests", "cancelled"), step(ci_report.FAIL_FAST_STEP, "skipped")])
+    checks_only = dict(leg, name="checks", steps=[step("Report", "failure")])
+    runs = [run(1, conclusion="cancelled"), run(2, conclusion="cancelled"), run(3, conclusion="cancelled"), run(4)]
+    counts = ci_report.fail_rate(runs, {1: [failed_leg], 2: [newer_push], 3: [checks_only]})
+    assert (counts["failed"], counts["cancelled"], counts["succeeded"], counts["fail_pct"]) == (1, 2, 1, 50.0)
+
+
+def test_jobs_copied_into_a_rerun_count_once():
+    passed = dict(job("2026-11-10T10:00:00Z", "2026-11-10T10:10:00Z"), name="plan")
+    failed = dict(job("2026-11-10T10:00:00Z", "2026-11-10T10:20:00Z", conclusion="failure"), name="tests")
+    rerun = dict(job("2026-11-10T11:00:00Z", "2026-11-10T11:20:00Z"), name="tests")
+    numbers = ci_report.summarize([run(1)], {1: [passed, failed, dict(passed), rerun]}, [{"number": 1}], None)
+    assert numbers["hosted_min"] == 50
+    assert numbers["pr_checks_hosted_min_per_pr"] == 50.0
+
+
+def test_runner_kind_by_label_alone_and_by_runner_name_alone():
+    assert ci_report.runner_kind(job(None, None, ["runs-on=9/runner=2cpu-linux-x64"], None)) == "runs_on"
+    assert ci_report.runner_kind(job(None, None, [], "runs-on--i-2--b-1")) == "runs_on"
+
+
+class FakeCostExplorer:
+    def __init__(self, pages):
+        self.pages, self.calls = list(pages), []
+
+    def client(self, service, region_name):
+        assert (service, region_name) == ("ce", "us-east-1")
+        return self
+
+    def get_cost_and_usage(self, **params):
+        self.calls.append(params)
+        return self.pages.pop(0)
+
+
+def cost_page(days, token=None):
+    rows = [{"TimePeriod": {"Start": day}, "Total": {"UnblendedCost": {"Amount": str(usd)}}} for day, usd in days]
+    return {"ResultsByTime": rows, **({"NextPageToken": token} if token else {})}
+
+
+def test_aws_cost_reads_whole_days_usage_only_and_every_page():
+    fake = FakeCostExplorer([cost_page([("2026-11-10", 4.0)], "next"), cost_page([("2026-11-11", 5.5)])])
+    since = datetime(2026, 11, 10, tzinfo=timezone.utc)
+    days = ci_report.aws_cost("tico-ci", since, since + timedelta(days=2), tag="team=ci", session=fake)
+    assert days == {"2026-11-10": 4.0, "2026-11-11": 5.5}
+    first, second = fake.calls
+    assert first["TimePeriod"] == {"Start": "2026-11-10", "End": "2026-11-12"}
+    assert first["Filter"] == {
+        "And": [
+            {"Tags": {"Key": "team", "Values": ["ci"]}},
+            {"Dimensions": {"Key": "RECORD_TYPE", "Values": ["Usage"]}},
+        ]
+    }
+    assert second["NextPageToken"] == "next"
+
+
+def test_aws_cost_skips_a_partial_first_day_and_can_keep_credits():
+    fake = FakeCostExplorer([cost_page([])])
+    since = datetime(2026, 11, 10, 6, tzinfo=timezone.utc)
+    ci_report.aws_cost("p", since, datetime(2026, 11, 12, tzinfo=timezone.utc), usage_only=False, session=fake)
+    assert fake.calls[0]["TimePeriod"] == {"Start": "2026-11-11", "End": "2026-11-12"}
+    assert "Filter" not in fake.calls[0]
+
+
+def test_github_reads_stop_one_second_before_the_window_ends():
+    api = ci_report.GitHub("acme/tico", budget=100)
+    seen = []
+    api.get = lambda path, **params: seen.append(params["created"]) or {"total_count": 0, "workflow_runs": []}
+    queries = []
+
+    def graphql(query, **variables):
+        queries.append(variables["q"])
+        return {"search": {"issueCount": 0, "nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}}}
+
+    api.graphql = graphql
+    start = datetime(2026, 11, 10, tzinfo=timezone.utc)
+    api.runs(start, start + timedelta(days=1))
+    api.merged_pulls(start, start + timedelta(days=2))
+    assert seen == ["2026-11-10T00:00:00Z..2026-11-10T23:59:59Z"]
+    assert [q.split("merged:")[1] for q in queries] == [
+        "2026-11-10T00:00:00Z..2026-11-10T23:59:59Z",
+        "2026-11-11T00:00:00Z..2026-11-11T23:59:59Z",
+    ]

@@ -10,17 +10,21 @@ What each row means (the window is [--since, --until), UTC, by creation time):
   (macOS also shown alone: GitHub bills it at 10x Linux on a private repository). Per merged PR divides by the PRs
   merged into main in the window.
 - PR fail % and queue fail %: completed pr-checks.yml runs on `pull_request` and on `merge_group`, failed (failure,
-  timed_out, startup_failure) over failed plus succeeded. Cancelled and skipped runs are counted apart. A run's
-  latest attempt only.
-- PR to green: a successful pull_request pr-checks.yml run, from its attempt's start to its end (the wait after a push).
+  timed_out, startup_failure) over failed plus succeeded. pr-checks.yml fails fast by cancelling its own run after a
+  failed suite, so a cancelled run whose fail-fast step ran, or with a failed step outside `checks`, counts as failed.
+  Other cancels (a newer push) and skipped runs are counted apart. A run's latest attempt only.
+- PR to green: a successful pull_request pr-checks.yml run, from its attempt's start to its end. A push whose first
+  run failed and was rerun shows only the green run's length.
 - Enqueue to merge: a PR merged in the window, from the first time it entered the merge queue to its merge (drops
   and re-enqueues included).
 - Full validations: ci.yml runs dispatched in the window whose title is not "(incremental on ...)"; incremental apart.
-- AWS $/day: Cost Explorer UnblendedCost over the window's whole UTC days, total over days.
+- AWS $/day: Cost Explorer UnblendedCost over the window's whole UTC days, record type Usage only (credits and refunds
+  left out; --aws-all-records keeps them), total over days. Cost Explorer can be up to a day late, so the last day
+  may read low.
 
 Every CI change posts its before and after from this: `--json before.json` on the week before the change, then
 `--compare before.json` on the week after. GitHub's API allows about 5,000 calls an hour for a person's or bot's token
-and 1,000 for an Actions token; a busy week takes 2,000 to 3,000 (one per run), so run it with a personal or bot token.
+and 1,000 for an Actions token; a busy week takes about 3,000 to 3,500 (one per run), so run it with a personal or bot token.
 """
 
 import argparse
@@ -39,6 +43,7 @@ from urllib.parse import urlencode
 FAILED = {"failure", "timed_out", "startup_failure"}
 QUEUE_BRANCH = re.compile(r"^gh-readonly-queue/[^/]+/pr-(\d+)-")
 INCREMENTAL = " (incremental on "
+FAIL_FAST_STEP = "Cancel the run when a suite failed"
 MERGED_QUERY = """
 query($q: String!, $after: String) {
   search(query: $q, type: ISSUE, first: 100, after: $after) {
@@ -153,6 +158,19 @@ def runner_kind(job):
     return "other"
 
 
+def unique_jobs(jobs):
+    """filter=all lists a run's earlier attempts too, and "Re-run failed jobs" lists the jobs that already passed again
+    under the new attempt with the same name, start and end. Count each such job once."""
+    seen, result = set(), []
+    for job in jobs:
+        key = (job.get("name"), job.get("started_at"), job.get("completed_at"))
+        if job.get("started_at") and key in seen:
+            continue
+        seen.add(key)
+        result.append(job)
+    return result
+
+
 def job_minutes(job):
     if not job.get("started_at") or not job.get("completed_at") or job.get("conclusion") == "skipped":
         return 0.0
@@ -167,10 +185,25 @@ def percentile(values, share):
     return values[max(0, math.ceil(share * len(values)) - 1)]
 
 
-def fail_rate(runs):
+def failed_fast(jobs):
+    """A run pr-checks.yml cancelled itself after a failed suite (its fail-fast step), or with a failed step in any job
+    but `checks` (which only reports the others). Cancels from a newer push have neither."""
+    for job in jobs:
+        for step in job.get("steps") or []:
+            if step.get("name") == FAIL_FAST_STEP and step.get("conclusion") not in (None, "skipped"):
+                return True
+            if job.get("name") != "checks" and step.get("conclusion") == "failure":
+                return True
+    return False
+
+
+def fail_rate(runs, jobs_by_run=None):
+    """Failed over failed plus passed. A run that cancelled itself after a failed suite counts as failed, not cancelled."""
     counts = {"failed": 0, "succeeded": 0, "cancelled": 0, "other": 0}
     for run in runs:
         conclusion = run.get("conclusion")
+        if conclusion == "cancelled" and failed_fast((jobs_by_run or {}).get(run["id"], [])):
+            conclusion = "failure"
         key = (
             "failed"
             if conclusion in FAILED
@@ -192,6 +225,7 @@ def summarize(runs, jobs_by_run, pulls, cost):
     """The report's numbers from plain API rows: no network here."""
     completed = [run for run in runs if run.get("status") == "completed"]
     totals = {"hosted": 0.0, "hosted_macos": 0.0, "runs_on": 0.0, "other": 0.0}
+    pr_checks_hosted = 0.0
     by_workflow = {}
     for run in completed:
         name = Path(run.get("path") or "unknown").name.split("@")[0]
@@ -199,10 +233,12 @@ def summarize(runs, jobs_by_run, pulls, cost):
             name, {"runs": 0, "hosted": 0.0, "hosted_macos": 0.0, "runs_on": 0.0, "other": 0.0}
         )
         row["runs"] += 1
-        for job in jobs_by_run.get(run["id"], []):
+        for job in unique_jobs(jobs_by_run.get(run["id"], [])):
             kind, spent = runner_kind(job), job_minutes(job)
             totals[kind] += spent
             row[kind] += spent
+            if name == "pr-checks.yml" and kind in ("hosted", "hosted_macos"):
+                pr_checks_hosted += spent
     merged = len(pulls)
     hosted = totals["hosted"] + totals["hosted_macos"]
     checks = [run for run in completed if Path(run.get("path") or "").name.split("@")[0] == "pr-checks.yml"]
@@ -240,9 +276,10 @@ def summarize(runs, jobs_by_run, pulls, cost):
         "runs_on_min": round(totals["runs_on"]),
         "other_min": round(totals["other"]),
         "hosted_min_per_pr": per_pr(hosted),
+        "pr_checks_hosted_min_per_pr": per_pr(pr_checks_hosted),
         "runs_on_min_per_pr": per_pr(totals["runs_on"]),
-        "pr_checks": fail_rate(on_pr),
-        "queue_checks": fail_rate(in_queue),
+        "pr_checks": fail_rate(on_pr, jobs_by_run),
+        "queue_checks": fail_rate(in_queue, jobs_by_run),
         "pr_to_green_p50_min": rounded(percentile(green, 0.5)),
         "pr_to_green_p90_min": rounded(percentile(green, 0.9)),
         "pr_to_green_runs": len(green),
@@ -264,21 +301,30 @@ def summarize(runs, jobs_by_run, pulls, cost):
     }
 
 
-def aws_cost(profile, since, until, tag=None):
-    """Daily UnblendedCost over the window's whole UTC days: {date: usd}. Raises on any failure."""
-    import boto3  # Only this source needs it; a missing boto3 is reported as not read.
+def aws_cost(profile, since, until, tag=None, usage_only=True, session=None):
+    """Daily UnblendedCost over the window's whole UTC days: {date: usd}. Raises on any failure.
 
+    usage_only keeps record type Usage: credits, refunds and taxes left out, so the number is what CI used."""
+    if session is None:
+        import boto3  # Only this source needs it; a missing boto3 is reported as not read.
+
+        session = boto3.Session(profile_name=profile)
     first = since.date() if since.time() == time(0) else since.date() + timedelta(days=1)
     last = until.date()
     if first >= last:
         return {}
-    client = boto3.Session(profile_name=profile).client("ce", region_name="us-east-1")
+    client = session.client("ce", region_name="us-east-1")
     params = dict(
         TimePeriod={"Start": first.isoformat(), "End": last.isoformat()}, Granularity="DAILY", Metrics=["UnblendedCost"]
     )
+    filters = []
     if tag:
         key, _, value = tag.partition("=")
-        params["Filter"] = {"Tags": {"Key": key, "Values": [value]}}
+        filters.append({"Tags": {"Key": key, "Values": [value]}})
+    if usage_only:
+        filters.append({"Dimensions": {"Key": "RECORD_TYPE", "Values": ["Usage"]}})
+    if filters:
+        params["Filter"] = filters[0] if len(filters) == 1 else {"And": filters}
     days, token = {}, None
     while True:
         data = client.get_cost_and_usage(**params, **({"NextPageToken": token} if token else {}))
@@ -291,20 +337,21 @@ def aws_cost(profile, since, until, tag=None):
 
 ROWS = [
     ("Merged PRs (main)", "merged_prs", ""),
-    ("Hosted job-min per merged PR (target 150)", "hosted_min_per_pr", ""),
+    ("Hosted job-min per merged PR, all workflows", "hosted_min_per_pr", ""),
+    ("Hosted job-min per merged PR, PR checks and queue only", "pr_checks_hosted_min_per_pr", ""),
     ("RunsOn job-min per merged PR", "runs_on_min_per_pr", ""),
     ("Hosted job-min, total", "hosted_min", ""),
     ("of which macOS", "hosted_macos_min", ""),
     ("RunsOn job-min, total", "runs_on_min", ""),
     ("PR checks fail %", "pr_checks.fail_pct", "%"),
     ("Merge queue fail %", "queue_checks.fail_pct", "%"),
-    ("PR to green p50 (min)", "pr_to_green_p50_min", ""),
-    ("PR to green p90 (min)", "pr_to_green_p90_min", ""),
+    ("PR to green p50 (min, length of green runs)", "pr_to_green_p50_min", ""),
+    ("PR to green p90 (min, length of green runs)", "pr_to_green_p90_min", ""),
     ("Enqueue to merge p50 (min)", "enqueue_to_merge_p50_min", ""),
     ("Enqueue to merge p90 (min)", "enqueue_to_merge_p90_min", ""),
     ("Full validations", "full_validations", ""),
     ("Incremental validations", "incremental_validations", ""),
-    ("AWS $/day (tico-ci)", "aws_usd_per_day", "$"),
+    ("AWS $/day", "aws_usd_per_day", "$"),
     ("AWS $ total", "aws_usd_total", "$"),
 ]
 
@@ -358,6 +405,13 @@ def report(numbers, before=None):
     ]
     for name, row in numbers["by_workflow"].items():
         lines.append(f"| {name} | {row['runs']:,} | {row['hosted']:,} | {row['hosted_macos']:,} | {row['runs_on']:,} |")
+    if numbers.get("aws_usd_per_day") is not None:
+        records = "usage only" if numbers.get("aws_records", "usage") == "usage" else "credits and refunds included"
+        lines += [
+            "",
+            f"AWS: profile {numbers.get('aws_profile', 'tico-ci')}, {records}, {numbers['aws_days']} days; "
+            "Cost Explorer can be up to a day late, so the last day may read low.",
+        ]
     if numbers["not_read"]:
         lines += ["", "Not read: " + "; ".join(numbers["not_read"]) + "."]
     return "\n".join(lines) + "\n"
@@ -389,6 +443,7 @@ def main(argv=None):
     parser.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", "ticoteam/tico"))
     parser.add_argument("--aws-profile", default="tico-ci", help="AWS profile for Cost Explorer (default tico-ci)")
     parser.add_argument("--aws-tag", help="KEY=VALUE cost allocation tag filter (default: the whole account)")
+    parser.add_argument("--aws-all-records", action="store_true", help="keep credits, refunds and taxes in AWS $")
     parser.add_argument("--no-aws", action="store_true", help="skip Cost Explorer (reported as not read)")
     parser.add_argument("--budget", type=int, default=6000, help="most GitHub API calls (default 6000)")
     parser.add_argument("--json", type=Path, help="also write the numbers here, for a later --compare")
@@ -410,11 +465,19 @@ def main(argv=None):
             not_read.append("AWS Cost Explorer (--no-aws)")
         else:
             try:
-                cost = aws_cost(args.aws_profile, since, until, args.aws_tag)
+                cost = aws_cost(args.aws_profile, since, until, args.aws_tag, usage_only=not args.aws_all_records)
             except Exception as error:  # noqa: BLE001 - any AWS failure is one "not read", never a zero
                 not_read.append(f"AWS Cost Explorer, profile {args.aws_profile} ({type(error).__name__})")
         numbers = summarize(runs, jobs_by_run, pulls, cost)
-        numbers.update(repo=args.repo, since=iso(since), until=iso(until), not_read=not_read, github_calls=api.calls)
+        numbers.update(
+            repo=args.repo,
+            since=iso(since),
+            until=iso(until),
+            not_read=not_read,
+            github_calls=api.calls,
+            aws_profile=args.aws_profile,
+            aws_records="all" if args.aws_all_records else "usage",
+        )
     except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
         print(f"ci_report: cannot compute: {error}", file=sys.stderr)
         return 2
