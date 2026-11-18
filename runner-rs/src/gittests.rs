@@ -1965,6 +1965,105 @@ async fn a_checkout_is_not_replaced_when_githubs_copy_has_no_instructions_either
     );
 }
 
+/// A checkout with a live task worktree is not replaced, even when it cannot fast-forward: a task turn reuses only
+/// a worktree whose common Git folder is the bot's current checkout (sessions::ensure), so a replacement would cut
+/// the task off from its branch and unpushed commit. A worktree whose folder is gone does not hold it back.
+#[tokio::test]
+async fn a_checkout_with_a_live_task_worktree_is_not_replaced() {
+    let tmp = Tmp::new();
+    let (bare, _seed) = remote(&tmp.0, "bot-linked");
+    let env = turn_env(&tmp.0, &[]);
+    let path = tmp.0.join("projects/bot-linked");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let url = bare.display().to_string();
+    assert_eq!(
+        fetchrepo::clone_repository(&path, "org/bot-linked", &env, Some(&url)).await,
+        ("cloned", String::new())
+    );
+    let task = tmp.0.join("tasks/t1/bot-linked");
+    std::fs::create_dir_all(task.parent().unwrap()).unwrap();
+    let gone = tmp.0.join("tasks/t0/bot-linked");
+    sh(
+        &path,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "tico/t0",
+            gone.to_str().unwrap(),
+        ],
+    );
+    std::fs::remove_dir_all(&gone).unwrap();
+    sh(
+        &path,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "tico/t1",
+            task.to_str().unwrap(),
+        ],
+    );
+    std::fs::write(task.join("work.txt"), "task work\n").unwrap();
+    sh(&task, &["add", "work.txt"]);
+    sh(&task, &["commit", "-qm", "Unpushed task work"]);
+    let work = sh(&task, &["rev-parse", "HEAD"]);
+    sh(&path, &["rm", "-q", "AGENT.md"]);
+    sh(&path, &["commit", "-qm", "Local wipe"]);
+    let head = sh(&path, &["rev-parse", "HEAD"]);
+
+    let lanes = test_lanes(&tmp.0);
+    let problem = fetchrepo::heal_or_replace(
+        &lanes,
+        "bot-linked",
+        &path,
+        &env,
+        "org/bot-linked",
+        Some(&url),
+    )
+    .await;
+    assert!(problem.contains(task.to_str().unwrap()), "{problem}");
+    assert!(!problem.contains(gone.to_str().unwrap()), "{problem}");
+    assert_eq!(
+        sh(&path, &["rev-parse", "HEAD"]),
+        head,
+        "the checkout stays"
+    );
+    assert!(
+        beside(&path).is_empty(),
+        "no clone or copy is left beside it"
+    );
+    let common = sh(
+        &task,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    );
+    assert_eq!(
+        std::path::Path::new(&common).canonicalize().unwrap(),
+        path.join(".git").canonicalize().unwrap(),
+        "the task worktree still belongs to the bot's checkout"
+    );
+    assert_eq!(
+        sh(&path, &["rev-parse", "tico/t1"]),
+        work,
+        "the task's commit is reachable"
+    );
+
+    std::fs::remove_dir_all(&task).unwrap();
+    let problem = fetchrepo::heal_or_replace(
+        &lanes,
+        "bot-linked",
+        &path,
+        &env,
+        "org/bot-linked",
+        Some(&url),
+    )
+    .await;
+    assert_eq!(problem, "", "with no live worktree left it is replaced");
+    assert!(path.join("AGENT.md").is_file());
+}
+
 /// A clone whose own commit deleted AGENT.md and was pushed; then GitHub's copy is reverted from the seed.
 async fn wiped_clone(root: &Path, name: &str, env: &Env) -> (PathBuf, PathBuf) {
     let (bare, seed) = remote(root, name);

@@ -260,8 +260,9 @@ pub async fn heal_or_replace(
 
 /// A checkout with no instructions file that cannot fast-forward: clone `repository` fresh beside it, and only when
 /// that clone has the file, rename the old checkout aside (`<name>.set-aside-<unix seconds>`, nothing in it is
-/// deleted) and put the clone in its place. Task worktrees made from the old checkout are repaired to follow it to
-/// its new folder. The set-aside folder, or why the checkout was left as it is.
+/// deleted) and put the clone in its place. A checkout with live task worktrees is never replaced: a task turn only
+/// reuses a worktree of the bot's current checkout (sessions::ensure), so their branches and unpushed work would
+/// be cut off from the task. The set-aside folder, or why the checkout was left as it is.
 pub async fn replace_checkout(
     path: &Path,
     repository: &str,
@@ -273,6 +274,14 @@ pub async fn replace_checkout(
         .map_or(true, |m| m.file_type().is_symlink() || !m.is_dir())
     {
         return Err("it is not a plain folder, so it is not replaced".into());
+    }
+    let linked = linked_worktrees(path);
+    if !linked.is_empty() {
+        let list: Vec<String> = linked.iter().map(|p| p.display().to_string()).collect();
+        return Err(format!(
+            "it has task worktrees ({}), so it is not replaced: finish or remove those tasks' worktrees first",
+            list.join(", ")
+        ));
     }
     let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
         return Err("it has no parent folder to clone beside".into());
@@ -316,10 +325,24 @@ pub async fn replace_checkout(
         discard_partial(&fresh, true);
         return Err(format!("could not put the fresh clone in place: {e}"));
     }
-    // Linked worktrees still point at the old folder's .git: repair both directions from its new place.
-    let clean = crate::safegit::clean_environment(&crate::env::process_environment());
-    let _ = gitrun::git(&aside, &clean, &["worktree", "repair"], 30).await;
     Ok(aside)
+}
+
+/// The folders of `checkout`'s linked worktrees that still exist (`.git/worktrees/<name>/gitdir` names each one's
+/// `.git` file). A registration whose folder is gone holds no work and does not count.
+fn linked_worktrees(checkout: &Path) -> Vec<std::path::PathBuf> {
+    let Ok(entries) = std::fs::read_dir(checkout.join(".git").join("worktrees")) else {
+        return Vec::new();
+    };
+    let mut out: Vec<std::path::PathBuf> = entries
+        .flatten()
+        .filter_map(|e| std::fs::read_to_string(e.path().join("gitdir")).ok())
+        .map(|g| std::path::PathBuf::from(g.trim()))
+        .filter(|g| g.symlink_metadata().is_ok())
+        .map(|g| g.parent().map_or(g.clone(), Path::to_path_buf))
+        .collect();
+    out.sort();
+    out
 }
 
 /// The heal's fetch, run outside the repository's command gate (gitrun::fetch_ungated_as_bot) for the reason given there.
